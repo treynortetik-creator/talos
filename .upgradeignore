@@ -1,0 +1,260 @@
+# .upgradeignore — what an upgrade must NEVER overwrite.
+#
+# What an upgrade must not destroy on the way in. Everything the user owns is listed
+# here; everything else in the kit is code.
+#
+# THE BOUNDARY, in one sentence: everything in the kit is CODE and gets replaced
+# wholesale, EXCEPT what is listed here, which is the user's DATA and is never
+# touched. There is no third category and no per-file judgement at upgrade time —
+# if a decision is worth making, it is made here, once, in writing.
+#
+# WHY THIS FILE EXISTS. A first install copies the kit in (install.sh does it with a
+# tar pipe; the by-hand fallback uses `cp -n`, which "refuses to overwrite a file of
+# theirs that has the same name as a kit file"). Correct for a first install,
+# catastrophic for an upgrade: point an existing agent at a new kit
+# that way and it keeps every old hook and script, receives none of the fixes, and
+# reports success. A silent no-op. The opposite reflex — "just overwrite it" —
+# destroys a month of memory/ and wiki/. Neither failure announces itself, so the
+# boundary is enforced by tooling instead of by prose:
+#
+#     bash <new kit>/scripts/upgrade.sh --into <your agent folder> --dry-run
+#     bash <new kit>/scripts/upgrade.sh --explain wiki/me.md
+#
+# THE GUARANTEE THAT MAKES THIS FILE SMALL: upgrade.sh only ever ADDS files and
+# OVERWRITES files. It never deletes anything, ever. So this file does not need to
+# protect things the kit does not ship (your exports, your own notes at
+# the root) — nothing can reach them. Every pattern below protects a path where a
+# kit file and a user file genuinely collide.
+#
+# SYNTAX: gitignore-style, one pattern per line, `#` for comments.
+#   - trailing `/` means a directory and everything under it
+#   - a pattern with no `/` matches that basename at ANY depth
+#   - `!` re-includes: it hands a path back to the CODE side
+#   - LAST MATCHING PATTERN WINS, so a `!` line must come after the rule it carves
+#     out of (unlike gitignore, a `!` here DOES work inside an excluded directory —
+#     that is deliberate, and it is how wiki/ and .claude/ are split below)
+#
+# WHEN YOU ARE UNSURE, PROTECT IT. A file wrongly protected costs the user one
+# stale file and a line in the upgrade report telling them so. A file wrongly
+# replaced costs them work they cannot get back. Those are not the same mistake.
+
+
+# ---------------------------------------------------------------------------
+# 1. The config. The whole problem, in one file.
+# ---------------------------------------------------------------------------
+# CLAUDE.md ships as a placeholder, is rendered from templates/CLAUDE.md.tmpl at
+# install, and is then edited by hand for as long as the agent lives — persona,
+# NEVER_DO list, promoted rules. It is simultaneously a kit file and the single
+# most personal artefact in the folder, and it sits on the root allowlist in
+# the root, so the placeholder IS in the kit and a naive copy overwrites a
+# month of tuning with "# Setup is not finished."
+#
+# Unanchored on purpose: this protects a CLAUDE.md at any depth, including a
+# private vault's own config. There is no CLAUDE.md in the kit that we would ever
+# want to force. templates/CLAUDE.md.tmpl has a different basename and is updated
+# normally, which is what lets the agent diff the new template against the live
+# config and offer the new sections by hand.
+CLAUDE.md
+
+
+# ---------------------------------------------------------------------------
+# 2. Everything the agent remembers.
+# ---------------------------------------------------------------------------
+# STATE.md, tasks.md, HANDOFF.md, decisions-ledger.md, every daily log, and the
+# .last-* maintenance stamps. All four .md files are rendered from templates at
+# install and rewritten constantly after that. The kit ships only memory/.gitkeep
+# into this directory, so protecting the whole tree costs nothing and removes the
+# possibility of a future kit file landing on top of a daily log.
+#
+# ANCHORED (leading slash) on purpose: an unanchored `memory/` also matched scripts/memory/, the kit's own
+# semantic-search code, which would then never have been upgraded.
+/memory/
+
+
+# ---------------------------------------------------------------------------
+# 3. The wiki — content is theirs, the scaffolding is ours.
+# ---------------------------------------------------------------------------
+# This is the split that took the most thought, so here is the reasoning in full.
+#
+# PROTECTED (everything not carved out below), because these are template-then-
+# edited files and the edits are the entire point:
+#   wiki/_index.md              ships as an empty skeleton; every note the agent
+#                               writes appends a line. Overwriting it silently
+#                               orphans the whole graph — the notes survive, but
+#                               nothing can reach them, which is the failure the
+#                               index exists to prevent.
+#   wiki/_changelog.md          ships as a header and a table head; one row per
+#                               change forever after. Also linted for ordering,
+#                               so a replaced file would fail the kit's own linter.
+#   wiki/_onboarding-progress.md  rendered from a template, holds the interview
+#                               answers, and is the resume anchor for an
+#                               interrupted setup. BOOTSTRAP step 1 already calls
+#                               copying the template over it "the one action that
+#                               breaks resume." An upgrade must not do by accident
+#                               what setup is forbidden to do on purpose.
+#   wiki/me.md, wiki/people/, wiki/projects/, …   pure user content, plus any
+#                               folder they invented. Blanket-protected rather
+#                               than enumerated, because the next folder does not
+#                               exist yet to be named.
+#
+# CODE (carved out below), because they are reference material that must track the
+# shipped linter, and a stale copy is actively harmful:
+#   wiki/README.md              the note schema. If it drifts from wiki-lint.py,
+#                               the agent writes notes to yesterday's rules and
+#                               the linter rejects them. Kept current on purpose.
+#   wiki/_privacy-and-sharing.md  the "never write this here" list. A safety
+#                               document is one of the few files where the newest
+#                               version is unambiguously the right one.
+#   wiki/examples/              three fixture notes the linter and HOMEWORK week 2
+#                               both read. Nobody's work lives here.
+#
+# All three are reported in the upgrade diff, and the backup holds the previous
+# copies, so a user who did customise one can put it back in a single command.
+wiki/
+!wiki/README.md
+!wiki/_privacy-and-sharing.md
+!wiki/examples/
+
+
+# ---------------------------------------------------------------------------
+# 4. The corrections ledger.
+# ---------------------------------------------------------------------------
+# All four files ship pre-seeded with their own format block, and the agent
+# appends to them from the first week — ERRORS.md and LEARNINGS.md usually on day
+# one. Template-then-edited, so: protected. The cost is that a recipient never
+# receives an improved format block; the alternative is deleting the record of
+# every correction their agent has ever taken, which is not a trade worth making.
+.learnings/
+
+
+# ---------------------------------------------------------------------------
+# 5. Secrets.
+# ---------------------------------------------------------------------------
+# .env is never in the kit (the repo's .gitignore sees to that), so nothing in the kit can land
+# on it — but naming it here is not decoration. It states the rule for anyone
+# reading this file or writing the next tool against it, and it makes `--explain
+# .env` answer the question a nervous recipient will actually ask.
+#
+# .env.example is the opposite: a shipped template, copied to .env at install and
+# never edited in place. It gets updates. The negation must come after `.env.*`
+# or the wildcard eats it.
+.env
+.env.*
+!.env.example
+
+
+# ---------------------------------------------------------------------------
+# 6. Runtime state the agent generates.
+# ---------------------------------------------------------------------------
+# .agent-state/ was the job mailbox of the pre-CLI (Desktop-app era) kit: a pending job file
+# here is work a scheduled task had done and the agent had not yet read. The mailbox is gone,
+# but an upgraded old install may still hold a queue, so it stays protected. .seed-staging/ and
+# .dive-staging/ hold raw connector extracts mid-crawl, and a crawl can run for
+# hours. The kit ships nothing into any of them today; these lines are the
+# standing guarantee that a future kit shipping a README into .agent-state/ cannot
+# land on top of somebody's queue.
+.agent-state/
+.seed-staging/
+.dive-staging/
+# The optional semantic-search index (scripts/memory/setup.sh): derived data, per agent, rebuilt from the
+# notes. The kit ships nothing into it; protecting it keeps it out of the "only in your folder" report.
+.index/
+
+
+# ---------------------------------------------------------------------------
+# 7. .claude/ — half kit, half theirs, and the split matters.
+# ---------------------------------------------------------------------------
+# PROTECTED by default, because the valuable things in here are all user-owned:
+#   .claude/settings.json       copied from templates/dot-claude/settings.json at
+#                               install and then grown for months with permission
+#                               allows. BOOTSTRAP step 4 already tells the agent to
+#                               MERGE into it rather than overwrite, for the same
+#                               reason. This is the hardest call in the file: the
+#                               file is where new hook registrations live, so
+#                               protecting it means a new hook can ship and never
+#                               be registered — the silent no-op we are trying to
+#                               kill. It is still the right call, because
+#                               overwriting throws away grants a user cannot
+#                               reconstruct, and the miss is recoverable: upgrade.sh
+#                               diffs the shipped template against the live file and
+#                               prints every hook command that is not registered,
+#                               and verify-install.sh fails if the
+#                               pre-tool guard is missing. Preserve the data, force
+#                               the merge, and gate on the check.
+#   .claude/settings.local.json per-user permission grants. Never shipped.
+#   .claude/skills/            installed skills, rendered with their name in them.
+#                               The kit's copies live in optional/skills/ and are
+#                               updated there; upgrade.sh reports when an installed
+#                               skill has a newer source so they can re-copy and
+#                               re-render deliberately. Overwriting here would
+#                               reintroduce a raw {{USER_NAME}} into a working skill.
+#   .claude/agents/<their own>  people add agents. seed-puller-*.md is generated
+#                               per-install by SEED-WIKI and names one machine's
+#                               MCP tools.
+#
+# CODE (carved out): the two agents the kit ships by name. They are read-only
+# sub-agent briefs, referenced by BOOTSTRAP and SEED-WIKI, and self-test.sh checks
+# both exist. Nobody edits them; everybody wants the current ones.
+.claude/
+!.claude/agents/grunt.md
+!.claude/agents/reviewer.md
+!.claude/agents/qa-gate.md
+# Skills and agents the kit ships under the reserved `talos-` prefix are CODE: they track the scripts they
+# describe. Do not name your own skill talos-<anything>; that prefix belongs to the kit and is replaced.
+!.claude/skills/talos-*/
+!.claude/agents/talos-*.md
+
+
+# ---------------------------------------------------------------------------
+# 8. Version control and their ignore rules.
+# ---------------------------------------------------------------------------
+# .git/ is the undo history the day-zero commit exists to create, and it is the
+# thing a rollback leans on. The kit's own .git/ (the clone) is never copied either.
+.git/
+#
+# .gitignore ships and is edited: BOOTSTRAP and SEED-WIKI both add to it, and users
+# add their own paths. Protected because the failure modes are asymmetric. Losing
+# their new ignore rules can un-ignore a folder they deliberately excluded, and the
+# worst version of that is a secret or an export in a commit. Missing a new kit
+# ignore rule just means some junk shows up in `git status`. Reported in the diff
+# so the two can be merged by hand.
+.gitignore
+
+
+# ---------------------------------------------------------------------------
+# 9. Any private vault, anywhere.
+# ---------------------------------------------------------------------------
+# The kit ships optional/personal/ as a TEMPLATE and tells the user to copy it to
+# ~/private-agent-vault/, outside the folder and outside company storage. Followed
+# to the letter, the in-folder copy stays pristine and is safe to replace.
+#
+# It is protected anyway, unanchored, matching `personal/` at any depth including
+# optional/personal/. People do not follow instructions to the letter, and the
+# specific way they fail here is adopting the vault where it already sits. The
+# trade is: replacing it costs a recipient nothing if they followed the advice and
+# costs them their private life if they did not; protecting it costs a stale
+# template that gets copied out of the folder anyway. That is not a close call.
+# upgrade.sh reports when this copy differs from the kit's, so a user who never
+# adopted it in place can refresh it in one command.
+personal/
+
+
+# ---------------------------------------------------------------------------
+# NOT protected, and deliberately so — read this before adding a line here.
+# ---------------------------------------------------------------------------
+# .talos-version   the install's own version stamp. Protecting it would freeze the
+#                  version number at whatever shipped first and make every future
+#                  upgrade lie about what is installed. It is written BY the
+#                  upgrade, not preserved through it.
+# hooks/           the continuity layer. This is the code an upgrade exists to
+#                  deliver; the 2026-09-02 session-start.py fix is why.
+# scripts/         same. verify-install.sh and self-test.sh are the gates, and a
+#                  gate the user is holding an old copy of is not a gate.
+# templates/       the sources the rendered files were made from. Kept current so
+#                  the agent can diff the new template against the live file.
+# optional/skills/ the kit's copy of a skill. The user's rendered copy in
+#                  .claude/skills/ is protected; this one is the master.
+# README.md, BOOTSTRAP.md, HOMEWORK.md, START-HERE.md and every other root doc.
+#                  Documentation, not data. None of them is edited in place — there
+#                  is not a single checkbox or fill-in-the-blank among them (checked
+#                  2026-09-04), which is what makes them safe to replace.

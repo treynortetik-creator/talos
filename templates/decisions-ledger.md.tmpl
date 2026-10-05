@@ -1,0 +1,34 @@
+# Decisions ledger — is this agent's judgment any good?
+
+Every notable call {{FAMILIAR_NAME}} makes gets a row: a recommendation
+{{USER_NAME}} acted on, a read on a person or situation, a build-vs-buy, a
+prioritization. Not trivia — **the calls that would matter if they were wrong.**
+
+## The rule that makes this work
+
+**Write down what would prove you wrong, before the outcome exists.**
+
+**And pre-register the ASSUMPTION the condition rests on, not only the two outcomes.** A
+condition can be beautifully written and still have neither branch ever fire, because the thing it
+quietly assumed would happen never did. Name that assumption in the row, so a call that was never
+actually tested gets recorded as untested rather than quietly graded as a draw.
+
+A row without a pre-registered falsifiable condition can never be graded honestly,
+because hindsight will always find a way to call it a draw. "Grade after the
+meeting" is not a condition. "If the re-run goes green with zero code changes,
+I was right; if it fails again, I sent them past a real break" is.
+
+## The loop
+
+1. Log the call with `outcome: pending` and the grading condition.
+2. Weekly, surface the three oldest open rows for a one-word grade.
+   **Make grading cost three words, or it will not happen:** `1 landed, 2 skip, 3 faceplant`.
+3. Fill in the outcome and date.
+4. **Fold the lesson into `.learnings/`** — a graded faceplant that produces no
+   rule change was wasted.
+5. Ungraded after two askings? Ask a third time, then archive it as ungradable.
+   Chronically ungradable rows are a sign the call was too vague to be useful.
+
+| Date | The call | Context | Outcome | Graded | Grading condition / lesson |
+|---|---|---|---|---|---|
+| | | | pending | | |

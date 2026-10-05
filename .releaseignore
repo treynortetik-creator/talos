@@ -1,0 +1,5 @@
+# Files that are in the kit repo but are not part of the kit an agent folder receives.
+# upgrade.sh applies this to a plain git checkout; install.sh excludes the same paths.
+scripts/fixtures/
+docs/
+.releaseignore
