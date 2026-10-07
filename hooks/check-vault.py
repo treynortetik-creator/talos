@@ -13,15 +13,24 @@ is read from ~/.config/talos/vault-dir (written by the installer).
 HONEST SCOPE. A tripwire at the Write/Edit/MultiEdit tools, not a fence. It does not see `cat > file` through the
 shell, a chat message, or an MCP call, and it only knows the terms you listed. It catches carelessness, which is
 the usual case; it does not stop a determined leak. Matching is case-insensitive on whole words.
-Fails open on anything unexpected. Kill switch: check-vault.off
+On anything unexpected it fails OPEN in a live session and CLOSED (deny) in an unattended run; an `ask` becomes a
+deny when nobody is there to answer. Kill switch: check-vault.off
 """
 import json
 import os
 import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import _talos_common as C  # noqa: E402
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import _talos_common as C  # noqa: E402
+except Exception as _e:        # the shared helpers will not load: fail open in a live session, CLOSED when unattended
+    if os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1":
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+              "permissionDecisionReason": "Talos check-vault could not load hooks/_talos_common.py (" + type(_e).__name__ + ": " + str(_e)[:120] + ") and this run is unattended, so the action is blocked rather than allowed unchecked."}}))
+    else:
+        print("{}")
+    sys.exit(0)
 
 KILL_NAME = "check-vault.off"
 
@@ -40,8 +49,9 @@ def load_terms(vault):
     try:
         with open(os.path.join(vault, "_guard-terms.txt"), encoding="utf-8") as fh:
             return [l.strip() for l in fh if l.strip() and not l.lstrip().startswith("#")]
-    except OSError:
-        return []
+    except FileNotFoundError:
+        return []                 # no terms file: nothing to guard (this is configuration, not an error)
+    # any OTHER failure (permissions, an I/O error) propagates: guard_failed() allows it in a live session and blocks it unattended
 
 
 def strings(v):
@@ -86,17 +96,15 @@ def main():
         print("{}")
         return
     C.log_jsonl("vault-guard.jsonl", {"event": "ask", "target": os.path.relpath(full, C.ROOT) if full.startswith(C.ROOT + os.sep) else "(outside agent folder)", "n": len(hits)})
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse", "permissionDecision": "ask",
-        "permissionDecisionReason": (
-            "This write contains %d term%s from your personal vault's guard list (%s) and its destination is outside "
-            "the vault:\n  %s\n\nPersonal-vault content may be used as context but must never be copied into work notes, "
-            "commits, documents or messages. Allow it only if you are sure this text is not private."
-            % (len(hits), "" if len(hits) == 1 else "s", ", ".join(hits[:5]), path))}}))
+    print(C.pretool_json("ask", (
+        "This write contains %d term%s from your personal vault's guard list (%s) and its destination is outside "
+        "the vault:\n  %s\n\nPersonal-vault content may be used as context but must never be copied into work notes, "
+        "commits, documents or messages. Allow it only if you are sure this text is not private."
+        % (len(hits), "" if len(hits) == 1 else "s", ", ".join(hits[:5]), path))))
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        print("{}")
+    except Exception as e:
+        C.guard_failed("check-vault", e)

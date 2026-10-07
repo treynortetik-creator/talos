@@ -423,6 +423,15 @@ for k in t:
     if k in l and (t[k][0] or "") != (l[k][0] or ""):
         print("  ! %s matcher differs: kit '%s' vs yours '%s'" % (k, t[k][0], l[k][0]))
 
+# FAIL-CLOSED WRAPPER (1.1.2): the four safety guards' commands now block an unattended (Chronos) run when the script is
+# missing or crashes. A settings.json written by an older kit has the old wrapper: it works, but a missing or crashing guard
+# is silently skipped in a scheduled run. Report each guard whose registered command lacks the new wrapper.
+for k in t:
+    ev, script = k.split(":", 1)
+    if ev == "PreToolUse" and "TALOS_UNATTENDED" in t[k][1] and k in l and "TALOS_UNATTENDED" not in l[k][1]:
+        print("  ! %s on PreToolUse still has the pre-1.1.2 fail-open wrapper: copy its command from the kit's template" % script)
+        print("    so that a missing or crashing guard BLOCKS an unattended scheduled run (it is harmless in a live session).")
+
 # STALE: a registered command whose script does not exist (and will not after this upgrade). Without the
 # fail-open wrapper, python3 exits 2 on a missing file and a UserPromptSubmit/PreToolUse hook then BLOCKS every
 # prompt or every Bash call. The classic case is an old hooks/job-inbox.py registration after the file went.

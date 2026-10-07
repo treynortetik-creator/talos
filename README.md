@@ -9,13 +9,15 @@ for the Claude Code command line: a folder on your Mac that turns the CLI into s
 while you are typing.
 
 - **It works between conversations.** Chronos scheduled jobs (a weekday morning brief, a weekly wiki check) run
-  headless and report to Telegram or a macOS banner (the jobs ship switched off; you enable them). You can text it from your phone through a Telegram channel.
+  headless and report to Telegram or a macOS banner. The jobs ship switched off (you enable them) and
+  **restricted**: Claude Code starts them with a short tool list, so they cannot send, post or delete even if told
+  to ([details](#scheduled-jobs-are-restricted-by-default)). You can text it from your phone through a Telegram channel.
 - **It carries its context across restarts and compaction.** A SessionStart hook re-injects the handoff, the state
   file and today's log every time the session starts, resumes, clears, forks *or the context compacts*.
 - **It keeps a linked wiki.** Small notes with `[[links]]`, searchable by grep and, optionally, by meaning. Memory is
   one feature of the agent, not the headline.
 - **It has rules, enforced by hooks.** A short config of one-line triggers, plus hooks that refuse the shell moves
-  that are never right and flag claims with no evidence. It learns from being corrected.
+  that are never right and remind it when a claim names no evidence. It learns from being corrected.
 
 Setup is: clone, `./install.sh`, open the agent folder in Claude Code, say **`Read BOOTSTRAP.md and set me up.`**
 It interviews you and builds its own config.
@@ -26,7 +28,7 @@ It interviews you and builds its own config.
 
 - **macOS**, **Claude Code CLI**, Python 3.9+ and git. The core needs no pip and no npm; every dependency is
   an opt-in flag (semantic search needs Python 3.10+, the Telegram channel needs Bun).
-- Scheduling is done by [Chronos](https://github.com/treynortetik-creator/chronos) 0.2, installed for you
+- Scheduling is done by [Chronos](https://github.com/treynortetik-creator/chronos) 0.2.2, installed for you
   and **optional** (`--no-chronos`).
 - The config is a **hot file**: one-line triggers keyed `[R-nn]`, a ledger for the stories, a length lint, and
   hooks that enforce what prose could not.
@@ -96,7 +98,12 @@ Chronos ran the morning brief at 07:03; one fact was filed back. STATE.md says t
 ```
 
 If a job fails, you get a short failure message instead, and the Chronos dashboard (above) shows the red dot.
-Nothing sends, posts or deletes on its own: the jobs read, summarise and write notes.
+The shipped jobs read, summarise and write notes, and **they are not able to do more**: Chronos starts each one with
+a short tool list (read and search inside the agent folder, edits only in `memory/briefs/` and `wiki/` for the
+brief, and exactly the scripts the job runs), so a send, a post, a delete or a web fetch is refused by Claude
+Code's permission system, not merely discouraged in a prompt. What is enforced and what is only instructed is
+spelled out in [Scheduled jobs are restricted by default](#scheduled-jobs-are-restricted-by-default). If you
+give a job more (mail or chat tools for the brief), it can only do what you added.
 
 Away from the desk, you can text the agent from your phone if you started it with the Telegram channel on
 (`bash scripts/talos-chat.sh`; see [Talk to it from your phone](#talk-to-it-from-your-phone-optional)). The channel only
@@ -121,12 +128,12 @@ search). Everything in the folder:
 | [`MORNING-BRIEF.md`](MORNING-BRIEF.md) | optional weekday brief (a Chronos job) that also keeps the wiki fed |
 | `hooks/session-start.py` | **the continuity layer, the most important file here** |
 | `hooks/pre-tool-guard.py` | refuses five shell moves that are never right here (any command that names a `.env` file, recursive deletes, sweeping git adds, force pushes, curl-into-shell) |
-| `hooks/claim-gate.py`, `append-only-guard.py`, `timeline-guard.py`, `agent-log.py`, `channel-debt.py`, `hands-free.py`, `check-vault.py`, `statusline.py` | the enforcement layer: flag a claim with no evidence, protect logs from truncation, record sub-agent runs, make "reply on the channel" a mechanism, a status line (see [Hooks](#hooks-and-what-they-enforce)) |
+| `hooks/claim-gate.py`, `append-only-guard.py`, `timeline-guard.py`, `agent-log.py`, `channel-debt.py`, `hands-free.py`, `check-vault.py`, `statusline.py` | the enforcement layer: an evidence reminder for unsupported-looking claims, protect logs from truncation, record sub-agent runs, make "reply on the channel" a mechanism, a status line (see [Hooks](#hooks-and-what-they-enforce)) |
 | `scripts/recall.py`, `scripts/memory/` | hybrid memory search: grep always, semantic search opt-in ([`setup/memory-search.md`](setup/memory-search.md)) |
 | [`setup/telegram.md`](setup/telegram.md), `scripts/talos-chat.sh` | talk to the agent from your phone, and the one-command launcher |
 | `templates/rules-ledger.md.tmpl`, `scripts/claude-md-lint.sh` | the reasons behind each config rule, and the ceiling that keeps the config short |
 | `install.sh`, `uninstall.sh` | install the kit and Chronos; remove what they added |
-| `jobs/`, `notify/` | five Chronos job definitions (prompt + locked guard each) and Telegram / macOS delivery wrappers |
+| `jobs/`, `notify/` | five Chronos job definitions (a restricted tool list, prompt and locked guard each) and Telegram / macOS delivery wrappers |
 | `templates/` | config and memory scaffolding, filled in during setup |
 | `wiki/` | your knowledge base, with three worked examples |
 | `scripts/` | linter, verifier, upgrade tool, deep-dive selector, quote checker, self-tests |
@@ -136,14 +143,17 @@ search). Everything in the folder:
 
 ## The idea, in one page
 
-Claude Code is the engine. On its own it acts when you type, and it does not carry your working context from one
-session to the next. Talos is the wrapper around it that adds three things, so the CLI behaves like a personal agent:
+Claude Code is the engine. It has memory of its own: it reads `CLAUDE.md`, and recent versions keep an auto memory.
+What it does not do is act on its own schedule, reach you on your phone, or put your *current working state* back
+in front of itself when a session restarts or the context compacts. (Talos turns the built-in auto memory off in the
+agent folder so there is one memory, the files you can read and edit, not two.) Talos is the wrapper around it that
+adds three things, so the CLI behaves like a personal agent:
 
 - **It works without you.** Chronos runs scheduled jobs headless through `claude -p` and delivers the result to
   Telegram or a macOS banner.
 - **It reaches you where you are.** A Telegram channel lets you message it from your phone while a session is open.
-- **It does not start from zero.** The six file-backed layers below carry its context across restarts and
-  compaction, each with one job and one lifetime. The wiki is one of them, not the whole point.
+- **It picks up where it left off.** The six file-backed layers below carry its working context across restarts
+  and compaction, each with one job and one lifetime. The wiki is one of them, not the whole point.
 
 1. **Continuity.** A hook re-injects your state every time the session restarts *or the context compacts*.
    A notes file alone does not work: the agent has to remember to read it, and a compacted agent keeps its
@@ -201,8 +211,12 @@ single-writer rule: [`setup/memory-search.md`](setup/memory-search.md).
 
 ## Hooks, and what they enforce
 
-Prose has no instant at which it fires; a hook does. Registered in `.claude/settings.json`, each one fails open
-(a crash or a deleted script never blocks you). The enforcement hooks keep their state outside the agent folder; the
+Prose has no instant at which it fires; a hook does. Registered in `.claude/settings.json`, each one **fails open in
+a live session** (a crash or a deleted script never blocks you). The four safety guards (`pre-tool-guard`,
+`append-only-guard`, `timeline-guard`, `check-vault`) **fail closed in an unattended run**: when Chronos starts a
+headless job (it sets `CHRONOS_RUN=1`; `TALOS_UNATTENDED=1` marks one by hand) a guard that errors, cannot load or is
+missing blocks the action and says why, and an `ask` becomes a deny because nobody is there to answer. The reminder
+hooks stay fail-open in both modes. The enforcement hooks keep their state outside the agent folder; the
 continuity hook keeps its reminder stamps in `memory/.last-*`. The seven enforcement
 hooks (`claim-gate`, `append-only-guard`, `timeline-guard`, `agent-log`, `channel-debt`, `hands-free`, `check-vault`) also have a kill
 switch (`TALOS_<HOOK>_OFF=1`, a `<hook>.off` file in `~/.local/state/talos/<folder>-<hash>/`, or the Chronos Control
@@ -211,11 +225,11 @@ Room); the continuity hook, the pre-tool guard and the status line are turned of
 
 | Hook | Event | What it does |
 |---|---|---|
-| `session-start.py` | SessionStart | re-injects handoff, state and today's log; nudges for lint, ledger and commit; warns when `STATE.md` passes 30,000 characters; starts a detached index refresh when memory search is installed and the index is over 6 hours old |
+| `session-start.py` | SessionStart | re-injects handoff, state and today's log (reading only files that resolve inside the agent folder with no symlink on the way); nudges for lint, ledger and commit; warns when `STATE.md` passes 30,000 characters; starts a detached index refresh when memory search is installed and the index is over 6 hours old |
 | `pre-tool-guard.py` | PreToolUse (Bash) | refuses five dangerous shell moves |
 | `append-only-guard.py` | PreToolUse (Write) | asks before a whole-file write shrinks a daily log, `wiki/_changelog.md`, `memory/decisions-ledger.md` or `memory/agent-log.md` below 90% (files of 500 bytes or more) |
 | `timeline-guard.py` | PreToolUse (Write, Edit, MultiEdit) | refuses a write that puts a malformed entry below a wiki note's `<!-- TIMELINE:APPEND-ONLY -->` separator (a wrapped entry, a Related or open-question bullet, prose, a bad author or confidence, an out-of-order date), quoting the line and the one-line format; judges only the new lines, uses the lint's own rules |
-| `claim-gate.py` | Stop, UserPromptSubmit | flags an absolute claim ("there is no X", "it is broken") that names no evidence, and tells the agent on the *next* prompt (a Stop hook cannot unsay what is on screen, so it never blocks) |
+| `claim-gate.py` | Stop, UserPromptSubmit | an **evidence-hygiene reminder, not a truth checker**: it notices an absolute-sounding claim ("there is no X", "it is broken") that names nothing a reader could check, and reminds the agent on the *next* turn to prove it or soften it. It never looks at whether the claim is true, and a claim that cites a path passes whether or not the path is real (a Stop hook cannot unsay what is on screen, so it never blocks) |
 | `agent-log.py` | SubagentStop | writes `memory/agent-log.md`, listing an artifact only if the file exists |
 | `channel-debt.py` | SessionStart, UserPromptSubmit, PostToolUse, Stop | if you use Telegram: a reply owed on the channel blocks the turn from ending once, then lets it go; opt-in mirror mode |
 | `check-vault.py` | PreToolUse (Write, Edit, MultiEdit) | only with a personal vault: asks before a term from YOUR `<vault>/_guard-terms.txt` is written outside the vault (the kit ships no terms) |
@@ -285,7 +299,7 @@ launchd (every 5 min) -> Chronos tick -> claim the job -> claude -p in Chronos's
 |---|---|---|
 | `talos-morning-brief` | weekdays 07:03 | brief from your wiki and any read-only tools you name; files at most five facts back |
 | `talos-weekly-wiki-lint` | Monday 08:17 | runs the linter and the deep-dive selector; reports, fixes nothing |
-| `talos-weekly-snapshot` | Friday 16:11 | `git add memory wiki .learnings`, one local commit |
+| `talos-weekly-snapshot` | Friday 16:11 | `scripts/weekly-snapshot.sh`: stages `memory`, `wiki`, `.learnings` and makes one local commit |
 | `talos-memory-index` | daily 06:41 | refreshes the semantic search index. A plain command (needs Chronos 0.2.1): no Claude session, no usage. Only useful after `scripts/memory/setup.sh`, which enables it |
 | `talos-state-sweep` | weekdays 16:37 | read-only check of `memory/STATE.md`: size, rows that look finished, stale rows, dates coming up |
 
@@ -296,8 +310,12 @@ python3 scripts/talos-jobs.py enable talos-morning-brief --time 07:03 --days wee
 python3 scripts/talos-jobs.py list
 ```
 
-**What Chronos 0.2 adds** (this kit pins 0.2.1; everything from 0.1 keeps working):
+**What Chronos 0.2 adds** (this kit pins 0.2.2; everything from 0.1 keeps working):
 
+- **Restricted jobs (0.2.2).** A job with `"restricted": true` has its *scheduled* runs started with a narrow tool
+  list instead of `--dangerously-skip-permissions`. Every Claude job Talos ships is restricted. Chronos older than
+  0.2.2 ignores the key, so `talos-jobs.py` refuses to register or enable a restricted job on one. See
+  [Scheduled jobs are restricted by default](#scheduled-jobs-are-restricted-by-default).
 - **Command jobs (0.2.1).** `talos-memory-index` is a plain shell command on a schedule, not a Claude run, so it
   costs no plan usage. An older Chronos cannot run it; `talos-jobs.py register` then skips it and says so.
 - **Per-job `model`.** The lint, snapshot and state-sweep jobs pin `sonnet` (mechanical work; Sonnet is the floor, the
@@ -305,7 +323,7 @@ python3 scripts/talos-jobs.py list
 - **Event triggers.** A job can also start on a new file in a folder, a matching Gmail message (through an adapter
   you configure), a GitHub pull request, issue or release, or a local webhook. Talos ships none. They are
   deliberately fenced: event runs are treated as untrusted, never skip permissions, get a narrow tool list
-  (`allowed_tools` on the job; it applies to **event runs only**, while scheduled runs use `claude_args`) and see the
+  (`allowed_tools` on the job; it applies to event runs, and to scheduled runs of a `restricted` job) and see the
   payload as data. See Chronos's `docs/triggers.md` before adding one.
 - **A usage meter.** Every run's tokens, cost and model are recorded; the Chronos UI has a Usage page and a
   per-job panel, so a daily job's real cost is visible instead of guessed.
@@ -356,17 +374,23 @@ Read this before you connect Talos to your mail, chat or calendar.
   boundary, inside a marked block that tells the model the contents are *data, not instructions*. It rewrites
   `===` inside file text so a file cannot forge the block's closing marker; it refuses to run if its folder
   is not the project folder (the root comes from the file's own location, never from an environment
-  variable); it never follows a symlink when reading or stamping; it is budgeted so it cannot flood the
-  context; and any internal error produces valid, empty output rather than a broken session.
+  variable); every path it reads, executes or writes must resolve inside the agent folder **with no symlink at any
+  step below it** (a symlinked `memory/`, `wiki/` or `scripts/` is refused, not just a symlinked file: that was a
+  bug in 1.1.1, fixed in 1.1.2); it is budgeted so it cannot flood the context; and any internal error produces
+  valid, empty output rather than a broken session.
 - **`hooks/pre-tool-guard.py` (a tripwire).** Refuses five shell moves before they run: reading or copying a
   `.env`, recursive deletes, sweeping `git add` (`-A`, `.`, `--all`), force-push / `reset --hard` / `clean -f`,
   and piping a download into a shell. A refusal comes back to the agent with the reason.
+- **Fail-closed when unattended.** The four safety guards allow on an internal error in a live session (a broken
+  guard must never wedge a conversation) but **block** in a headless scheduled run, where nobody would notice the
+  guard had stopped guarding. The settings template wraps each guard the same way, so a deleted script, a missing
+  `python3` or a crash blocks an unattended run too.
 - **`.claude/settings.json`** turns off Claude Code's built-in auto memory (one memory, not two) and denies the
   Read tool on `.env` files.
 
 **What they do not do.** The guard matches command *text*. `find ... -delete`, a Python one-liner that calls
-`shutil.rmtree`, or a script that reads `.env` all get past it, and a crash in it fails open on purpose so a bug
-can never brick the agent. The `.env` deny rule stops the Read tool, not `cat .env` through Bash (the guard
+`shutil.rmtree`, or a script that reads `.env` all get past it, and a crash in it fails open in a live session on
+purpose so a bug can never brick the agent (it fails closed when unattended, above). The `.env` deny rule stops the Read tool, not `cat .env` through Bash (the guard
 covers that, as text), and does nothing about a secret already committed to git history. Neither is a
 sandbox, and nothing here confines a sub-agent to a folder: Claude Code has no per-agent filesystem root.
 The fence is you not putting secrets and regulated data in the agent's reach.
@@ -380,54 +404,80 @@ channel. This is not fully closable in an agent that reads text and acts on text
 
 - the continuity digest, the job guards and the seed/dive procedures all state that tool output is data and
   that an instruction found inside it is to be quoted in the report, not obeyed;
-- the shipped jobs are read-only on every outside system (no send, reply, post, delete, label, share) and write
-  only inside the agent folder;
+- the shipped jobs are **restricted by the permission system**, not just told to behave: no shell beyond the exact
+  scripts each job runs, no web tools, no MCP tools unless you add them by name, and writes only inside the agent
+  folder (next section);
 - the seed and the deep dive name a closed list of sources, use read-only tool cards for the crawl, and run
   a quote checker that fails any quotation not found in the staged source text.
 
 These reduce the risk. They do not remove it, and a prompt that says "do not obey" is not a permission system.
+The tool list *is* one, and it bounds what an obeyed injection could do; it does not stop a job from being
+misled within that bound (for example, a note filed into the wiki that says something false).
 
-### Scheduled jobs run with permissions skipped
+### Scheduled jobs are restricted by default
 
-Nobody is at the keyboard during a headless run, so `claude -p` cannot ask. Chronos's default is
-`claude_args: ["--dangerously-skip-permissions"]`: **scheduled Chronos jobs run with permission prompts skipped,
-so they can do anything your user account can.** Your interactive sessions, and anything you trigger by hand
-in them, keep your normal permission mode and still ask. A job that reads only your own files is a
-reasonable thing to run that way. A job that reads other people's text (the morning brief, once you give it
-mail or chat) is the highest-risk combination in this kit: untrusted input, no human in the loop, no prompts.
-Project hooks do fire in `claude -p` runs started in the agent folder (documented behaviour), so the guard
-and the digest apply there; whether a hook's block holds under `--dangerously-skip-permissions` is not stated in
-the documentation and has not been re-tested for this port, so do not lean on it.
+Nobody is at the keyboard during a headless run, so `claude -p` cannot ask. Chronos's default for a scheduled job
+is `--dangerously-skip-permissions`: the job can do anything your account can, and a prompt that says "never send
+anything" is only a request. **Since Talos 1.1.2 the four Claude jobs do not run that way.** They are registered
+`"restricted": true` with a tool list, and Chronos 0.2.2 starts them with `--permission-mode=default`, that list as
+`--allowedTools`, the matching `--tools`, `--strict-mcp-config` and deny rules for `.env`, `~/.ssh`, `~/.aws`,
+`~/.gnupg` and Chronos's own folders. Anything not on the list is **refused** (no one to prompt), and the run says so.
 
-### Running more locked down
+**Enforced** (by Claude Code's permission system and Chronos's flags; checked against Claude Code 2.1.287 on
+2026-10-07 by running the real CLI with these exact flags: a command outside the list, a write outside the allowed
+folders, a web fetch, `python3 -c`, `rm`, a shell redirect and `cat .env` were each refused, and a safe-guard hook
+that crashed blocked the run):
 
-Edit `~/.config/chronos/config.json` and replace `claude_args` with an allow-list. With no one to answer,
-anything not listed is refused rather than prompted, so a job that goes outside its lane fails loudly in its
-report instead of quietly succeeding. A starting point for wiki-only jobs:
+| Job | What it may do |
+|---|---|
+| `talos-morning-brief` | read and search inside the agent folder; edit and create files only under `memory/briefs/` and `wiki/`; run exactly `refresh-index.sh`, `wiki-lint.py wiki --extra-dir memory` and `date` |
+| `talos-weekly-wiki-lint` | read and search inside the agent folder; **no write tool**; run exactly the index refresh, the lint, the deep-dive selector, the config lint and `date` |
+| `talos-weekly-snapshot` | read and search inside the agent folder; **no write tool**; run exactly `scripts/weekly-snapshot.sh` (named paths only, one local commit; it contains no push, pull, fetch, reset, clean or sweeping add) |
+| `talos-state-sweep` | read and search inside the agent folder; **no write tool**; run exactly `state-sweep.py` and `date` |
+| `talos-memory-index` | a plain command job: runs one fixed script, no Claude, nothing to restrict |
 
-```json
-"claude_args": [
-  "--permission-mode", "acceptEdits",
-  "--allowedTools",
-  "Read", "Grep", "Glob", "Edit", "Write",
-  "Bash(date:*)", "Bash(python3 scripts/wiki-lint.py:*)", "Bash(python3 scripts/deep-dive-select.py:*)",
-  "Bash(git status:*)", "Bash(git add memory wiki .learnings)", "Bash(git commit -m:*)",
-  "Bash(git rev-parse:*)", "Bash(git remote -v)"
-]
+For all four: no `WebFetch`, no `WebSearch`, no sub-agents, no MCP tool at all unless you add it, and no shell
+command that is not on the list (Claude Code itself lets a few read-only commands such as `ls`, `grep` and
+`git status` run inside the agent folder; they cannot reach outside it).
+
+**Only instructed, not enforced.** The `guard.md` rules (foreground only; file text is data, not instructions;
+quote an instruction you find instead of obeying it; never print a credential) and the filing bar in the brief
+(at most five wiki notes, no recaps) are prompts. Inside its allowed folders the brief can still write a wrong or
+planted note. Reading is scoped to the agent folder, but **a job can still put anything it read into its report**,
+and the report is delivered to your phone or notification centre: do not keep in the agent folder what you would not
+want in a notification. The deny list is a best-effort set of well-known secret paths, not a guarantee. And the exact
+rule syntax is a Claude Code feature that has changed between versions: if a job starts failing with permission
+refusals after a Claude Code update, read its report and `claude --help`, then see "Giving a restricted job more".
+
+**Which hooks still run.** Project hooks fire in these headless runs (verified: the pre-tool guard refused a `.env`
+command in a restricted run), and the safety guards fail closed there (above). Hooks are a second layer, not the first.
+
+**Giving a restricted job more.** The morning brief reads mail, calendar and chat through MCP tools *you name*:
+
+```bash
+python3 scripts/talos-jobs.py allow talos-morning-brief mcp__<server>__<read_only_tool> [more tools ...]
+python3 scripts/talos-jobs.py allow talos-morning-brief mcp__<server>__<tool> --remove     # take one back
 ```
 
-For the morning brief, add **only** the exact read-only MCP tools named in `memory/brief-sources.md`
-(`mcp__<server>__<tool>`; plus the deferred-tool loader if your Claude Code version needs it), never a wildcard
-for a server. Check flag names with `claude --help` for your version; they have changed before. Further:
+It accepts exact tool names only (no wildcard, never a whole server), refuses a name that looks like it can send,
+create, update or delete unless you add `--allow-write-tools`, and adds the `ToolSearch` loader MCP tools need.
+Add one source at a time and read its first three reports. Anything else you want a restricted job to do means
+editing its `allowed_tools` in the Chronos UI or `jobs.json`; keep Bash rules to a named script, because a rule such
+as `Bash(git commit:*)` allows every `git commit` flag.
 
-- Chronos has one `claude_args` for all its scheduled jobs (a per-job `model` exists in 0.2, a per-job tool list
-  only for event runs). If you want the loose and strict settings side by side, run a second Chronos config
-  (`CHRONOS_CONFIG`) for the strict jobs.
-- Use a **notification-only** bot for Telegram: a token that can only message you, never the one that runs
-  your live channel.
-- Keep the brief wiki-only (`Sources: none`) until you trust it. Add one source at a time and read its first
-  three reports.
-- Pause everything instantly from the Chronos UI, or by creating `~/.chronos/PAUSED`.
+**The opt-out (off by default, your call).** If you want a job to keep the old full-access behaviour:
+
+```bash
+python3 scripts/talos-jobs.py access talos-weekly-snapshot --full --agent-dir ~/my-agent        # one job
+./install.sh --full-access-jobs ...                                                              # at install time
+python3 scripts/talos-jobs.py access talos-weekly-snapshot --restricted --agent-dir ~/my-agent  # and back
+```
+
+`list` shows `RESTRICTED` or `FULL ACCESS` for each job. A full-access job runs with prompts skipped and can do
+anything your account can; the risk is greatest for a job that reads other people's text (the brief, once it has mail
+or chat). Your own jobs, and any job without a `restricted` key, keep Chronos's default (`claude_args`); tighten
+those in `~/.config/chronos/config.json` if you want. Pause everything instantly from the Chronos UI or with
+`~/.chronos/PAUSED`. A job registered by Talos 1.1.1 is upgraded with `talos-jobs.py harden` (see UPGRADE.md).
 
 ### Your data still goes to a model
 
@@ -449,28 +499,35 @@ is you not pasting the data in.
   phrased as part of the real task, live connector content, headless runs with permissions skipped, or
   this CLI port, none of which have been measured. **Do not read it as "injection-proof".** If you
   can run a bigger test, please do and send it.
-- **The scheduled jobs have not been run against a real account in this repository's test suite.** The suites
-  build the exact prompts with real Chronos and check them, but never start `claude`.
+- **The test suites never start `claude`.** They build the exact prompts and tool lists with real Chronos and check
+  them. The restricted jobs were run once each against a real account on 2026-10-07 (Claude Code 2.1.287, a scratch
+  agent folder): all four finished, with no permission refusals, and the flags were exercised directly as described
+  above. That is a manual check, not a regression test: re-run it after a Claude Code update.
 - Chronos is macOS-only, ticks every five minutes, and a sleeping laptop runs nothing (catch-up covers the gap
   after wake, not a day-long absence).
 - The Chronos pin is a commit, not a signed release. Review what you clone.
 - Sub-agents inherit the agent's `CLAUDE.md` and can reach anything on disk; "isolation" in this kit means a
-  context boundary only.
+  context boundary only. (A restricted *job* is different: its tool list applies to the whole run.)
+- A restricted job's guarantee is Claude Code's permission system working as documented. A bug there, or an
+  agent folder whose path contains a space (untested: the exact-command rules compare command text, so the job may
+  be refused its own scripts and fail closed; `talos-jobs.py register` warns), would show up as a refused or failing
+  job, or in the worst case a tool call that should have been refused.
 
 ## Tests
 
 ```bash
 bash scripts/self-test.sh        # the whole suite: about 55 checks, 4-5 minutes (it runs the suites below too)
-bash scripts/test-jobs.sh        # job templates + register/enable/unregister, against a fake Chronos config
+bash scripts/test-jobs.sh        # job templates, the restricted tool lists, register/enable/access/allow/harden, the snapshot script, against a fake Chronos config
 bash scripts/test-install.sh     # install.sh / uninstall.sh in a fake HOME, with a launchctl tripwire
 bash scripts/test-pre-tool-guard.sh
-bash scripts/test-hooks.sh       # claim gate, append-only guard, agent log, statusline, channel debt, check-vault, hands-free, timeline guard
+bash scripts/test-hooks.sh       # claim gate, append-only guard, agent log, statusline, channel debt, check-vault, hands-free, timeline guard, symlink containment, fail-open vs fail-closed
 bash scripts/test-timeline-guard.sh   # the timeline guard alone (test-hooks.sh runs it too)
 bash scripts/test-recall.sh      # memory search without a venv: lexical arm, banners, exclusions
 bash scripts/test-notify.sh      # telegram.sh (token off argv, --file, word cap) and the chat launcher
 bash scripts/test-privacy.sh     # no secrets, personal emails, home paths or long ids in the kit
 bash scripts/test-extras.sh      # state-sweep, voice wrappers, md2html, yt-fetch (fake say/ffmpeg/whisper)
 TALOS_TEST_CHRONOS=/path/to/chronos bash scripts/test-install.sh   # same, against a real Chronos checkout
+TALOS_TEST_CHRONOS=/path/to/chronos bash scripts/test-jobs.sh      # also asks the real Chronos for each job's flags (needs 0.2.2)
 TALOS_TEST_SEMANTIC=1 bash scripts/test-recall.sh   # the real semantic stack (downloads a venv and a small model)
 ```
 
@@ -490,8 +547,11 @@ Chronos hook entry from `.claude/settings.json`.
 **Do I need Chronos?** No. Without it you have the memory, the wiki, the interview and the guard, and nothing
 runs on a timer. The installer says so plainly, and `--no-chronos` is a first-class option.
 
-**Is it autonomous?** No. It drafts, you approve. Anything irreversible asks first, and the scheduled jobs are
-built to read, summarise, file and report only.
+**Is it autonomous?** No. It drafts, you approve. Anything irreversible asks first in a live session. The scheduled
+jobs are *restricted*: Claude Code refuses anything outside a short tool list (no send, post, delete, web fetch or
+unlisted command), so they can read, summarise, file notes and report, and nothing more. The parts that are only
+instructed, not enforced, are listed in [Scheduled jobs are restricted by default](#scheduled-jobs-are-restricted-by-default).
+You can opt a job out to full access; it is off by default.
 
 **Will it work on Linux or Windows?** Not supported. The hooks are portable Python, but Chronos uses launchd and
 the installer checks for macOS.
@@ -505,6 +565,11 @@ plan's usage. A daily brief is a small recurring spend; read the reports or turn
 
 **Why a copy instead of running from the clone?** So `git pull` in the clone can update the kit without ever
 touching your memory, and so nothing you write can be pushed to the kit's remote by accident.
+
+**Doesn't Claude Code already have memory?** Yes: `CLAUDE.md`, and an auto memory on recent versions. Talos does not
+replace the idea; it turns the *auto* memory off in the agent folder so there is one memory you can read, grep and
+edit, and adds what the built-in one does not: a hook that re-injects your current working state after a restart or
+a compaction, a linked wiki, scheduled jobs and a phone channel.
 
 **Something broke.** Tell the agent in plain language, it has the whole kit available. Or run
 `bash scripts/verify-install.sh` and `bash scripts/self-test.sh` and read the first failure.

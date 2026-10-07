@@ -10,5 +10,5 @@ mkdir -p "$(dirname "$cfg")" "$HOME/.chronos"
 printf '{\n  "workspace": "%s",\n  "jobs_file": "~/.config/chronos/jobs.json",\n  "jobs_dir": "~/.config/chronos/jobs",\n  "notify": ""\n}\n' "$ws" > "$cfg"
 echo "[]" > "$HOME/.config/chronos/jobs.json"; mkdir -p "$HOME/.config/chronos/jobs"
 echo "install.sh --workspace $ws noload=$noload quiet=$quiet" >> "$HOME/.chronos/fake-install.log"
-if [ "$quiet" = 1 ]; then echo "chronos 0.2.1 installed: fake"
+if [ "$quiet" = 1 ]; then echo "chronos 0.2.2 installed: fake"
 else echo "no jobs yet: created an empty jobs.json"; echo "Chronos is installed."; fi

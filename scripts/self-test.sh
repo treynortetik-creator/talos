@@ -47,7 +47,7 @@ for f in START-HERE.md BOOTSTRAP.md SETUP-INTERVIEW.md HOMEWORK.md SEED-WIKI.md 
          templates/CLAUDE.md.tmpl templates/rules-ledger.md.tmpl scripts/claude-md-lint.sh \
          scripts/recall.py scripts/test-recall.sh scripts/memory/corpus.py scripts/memory/mem_common.py \
          scripts/memory/mem_index.py scripts/memory/mem_search.py scripts/memory/setup.sh \
-         scripts/memory/refresh-index.sh \
+         scripts/memory/refresh-index.sh scripts/weekly-snapshot.sh \
          .claude/skills/talos-memory-recall/SKILL.md .claude/skills/talos-meeting-prep/SKILL.md \
          .claude/skills/talos-transcript-ingest/SKILL.md .claude/skills/talos-agora/SKILL.md .claude/agents/qa-gate.md \
          scripts/state-sweep.py scripts/md2html.py scripts/tts.sh scripts/stt.sh scripts/voice/setup.sh scripts/test-extras.sh \

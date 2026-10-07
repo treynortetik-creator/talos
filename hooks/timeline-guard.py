@@ -18,8 +18,8 @@ imports them and restates nothing, so lint and guard cannot drift apart.
 
 Only a note that already contains the `<!-- TIMELINE:APPEND-ONLY -->` separator is checked (opt-in, as in the lint).
 wiki/_*.md bookkeeping files, README, CLAUDE, index and wiki/examples/ are skipped, as in the lint.
-Fails OPEN on anything unexpected: bad payload, unreadable file, an Edit that will not apply, a missing or broken
-wiki-lint.py. Kill switch: timeline-guard.off
+Unexpected errors (an unreadable file, a missing or broken wiki-lint.py) fail OPEN in a live session and CLOSED (deny)
+in an unattended run. An Edit that simply will not apply is not an error: the tool fails it by itself. Kill switch: timeline-guard.off
 """
 import importlib.util
 import json
@@ -27,8 +27,16 @@ import os
 import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import _talos_common as C  # noqa: E402
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import _talos_common as C  # noqa: E402
+except Exception as _e:        # the shared helpers will not load: fail open in a live session, CLOSED when unattended
+    if os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1":
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+              "permissionDecisionReason": "Talos timeline-guard could not load hooks/_talos_common.py (" + type(_e).__name__ + ": " + str(_e)[:120] + ") and this run is unattended, so the action is blocked rather than allowed unchecked."}}))
+    else:
+        print("{}")
+    sys.exit(0)
 
 KILL_NAME = "timeline-guard.off"
 LINT = os.path.join(C.ROOT, "scripts", "wiki-lint.py")
@@ -155,5 +163,5 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        print("{}")
+    except Exception as e:
+        C.guard_failed("timeline-guard", e)       # {} in a live session; a deny when unattended

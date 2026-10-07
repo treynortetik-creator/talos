@@ -1,14 +1,13 @@
 You are running the Talos weekly snapshot for the person who owns this agent.
 
-The agent folder is {{TALOS_HOME}}. If your working directory is not that folder, cd there first.
+The agent folder is {{TALOS_HOME}}, and it is your working directory. This job is RESTRICTED: Chronos starts it
+with read and search tools and exactly one command, and no write tool. Do not `cd`, and run no git command of
+your own: the script below does the whole job.
 
-1. Run `git rev-parse --is-inside-work-tree` in the agent folder. If that fails, the folder is not a git
-   repository: say so in the report and stop. Do not run `git init` here.
-2. Run `git remote -v`. If a remote is configured, that is fine, but you will not use it.
-3. Run `git status --porcelain -- memory wiki .learnings`. If there is nothing to commit, say so in the
-   report and stop.
-4. Check that no staged or changed path is a `.env` file or anything under a `personal/` folder. If one
-   is, stop and report it. Do not commit.
-5. Run `git add memory wiki .learnings`, then
-   `git commit -m "weekly snapshot $(date +%Y-%m-%d)"`.
-6. Report the number of files committed and the short commit hash.
+1. Run, exactly, `bash {{TALOS_HOME}}/scripts/weekly-snapshot.sh` in the FOREGROUND. It checks that the folder is a
+   git repository (it never runs `git init`), stages only `memory`, `wiki` and `.learnings`, refuses to commit
+   a `.env` file or anything under a `personal/` folder, makes one local commit, and prints one line saying what
+   it did. It never pushes, pulls, fetches, resets or touches history, and a configured remote is left alone.
+2. Your final message IS the report (Chronos writes the report file). If the script exited 0, say what its
+   line said (committed N files as <hash>, or nothing to commit, or not a git repository). If it exited 1,
+   say that it refused or failed and quote its message. Do not retry and do not try another way.

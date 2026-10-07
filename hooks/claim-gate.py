@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""claim-gate.py: an absolute claim about the world must name its evidence.
+"""claim-gate.py: an evidence-hygiene reminder. It flags an absolute claim that names no evidence.
+
+WHAT IT IS NOT: a truth checker. It never looks at whether a claim is TRUE; it only notices that a sentence sounded
+absolute ("there is no X", "it is broken") and carried nothing a reader could check, and it reminds the agent on the
+next turn to prove it or soften it. A claim with a path in it passes whether or not the path is real.
 
 TWO ROLES (argv[1]):
   (none)   Stop. Look at the message that just went out and QUEUE a notice. Never blocks.

@@ -52,10 +52,17 @@ grep -q "workspace $A noload=1" "$HOME/.chronos/fake-install.log" 2>/dev/null &&
 n=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(1 for j in d if j["id"].startswith("talos-") and not j["enabled"]))' "$HOME/.config/chronos/jobs.json" 2>/dev/null)
 [ "$n" = 5 ] && ok "five Talos jobs are registered, all disabled" || no "jobs registered: $n (want 5 disabled)"
 grep -q "$A" "$HOME/.config/chronos/jobs/talos-morning-brief/prompt.md" && ok "the job prompt names this agent folder" || no "job prompt does not name the agent folder"
+python3 - "$HOME/.config/chronos/jobs.json" "$A" <<'PY' && ok "a default install registers the Claude jobs RESTRICTED (tool list, agent folder filled in, no bare Bash)" || no "default install did not register restricted jobs"
+import json,sys
+d={j["id"]:j for j in json.load(open(sys.argv[1]))}
+for i in ("talos-morning-brief","talos-weekly-wiki-lint","talos-weekly-snapshot","talos-state-sweep"):
+    assert d[i]["restricted"] is True and "Bash" not in d[i]["allowed_tools"] and not any("{{" in t for t in d[i]["allowed_tools"]), i
+    assert any(sys.argv[2] in t for t in d[i]["allowed_tools"] if t.startswith("Bash(")), i
+PY
 python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["notify"].endswith("notify/macos.sh") else 1)' "$CHRONOS_CONFIG" && [ -x "$XDG_CONFIG_HOME/talos/notify/macos.sh" ] \
   && ok "--notify macos installs the wrapper and sets Chronos's notify" || no "notify not wired"
 grep -q 'chronos-session-start.py' "$A/.claude/settings.json" && ok "the Chronos session hook is registered in the agent's settings" || no "session hook not registered"
-{ printf '%s' "$out" | grep -q '   chronos: chronos 0.2.1 installed' && ! printf '%s' "$out" | grep -q 'empty jobs.json'; } \
+{ printf '%s' "$out" | grep -q '   chronos: chronos 0.2.2 installed' && ! printf '%s' "$out" | grep -q 'empty jobs.json'; } \
   && ok "Chronos's installer runs --quiet: one labelled summary line, and no stray \"created an empty jobs.json\" before the jobs are registered" || no "Chronos output not quiet/labelled" "$(printf '%s' "$out" | grep -i chronos | head -4)"
 grep -q 'quiet=1' "$HOME/.chronos/fake-install.log" && ok "install.sh passed --quiet to a Chronos that supports it" || no "--quiet not passed"
 { printf '%s' "$out" | grep -q 'NOT running (--no-load)' && printf '%s' "$out" | grep -q 'io.github.chronos.tick.plist' && printf '%s' "$out" | grep -q 'ui/server.py'; } \
@@ -72,6 +79,15 @@ OLD="$SB/old-chronos"; rm -rf "$OLD"; cp -R "$STUB" "$OLD"; sed -i.bak 's/--quie
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$OLD" --no-load 2>&1)"; rc=$?
 { [ "$rc" = 0 ] && grep -q 'quiet=0' "$HOME/.chronos/fake-install.log" && printf '%s' "$out" | grep -q '   chronos: no jobs yet'; } \
   && ok "a Chronos without --quiet is not passed it, and its output is still labelled" || no "old-Chronos fallback wrong (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+
+# ---- 2c. the documented opt-out: --full-access-jobs registers the Claude jobs unrestricted, and says so
+fresh_home h2c
+out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --no-load --full-access-jobs 2>&1)"; rc=$?
+python3 - "$HOME/.config/chronos/jobs.json" <<'PY' && [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'permission prompts SKIPPED' && ok "--full-access-jobs records restricted:false with no tool list, and the installer says prompts are skipped" || no "--full-access-jobs wrong (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+import json,sys
+d={j["id"]:j for j in json.load(open(sys.argv[1]))}
+assert all(d[i]["restricted"] is False and "allowed_tools" not in d[i] for i in ("talos-morning-brief","talos-weekly-wiki-lint","talos-weekly-snapshot","talos-state-sweep"))
+PY
 
 # ---- 3. second install is refused, with the upgrade hint
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load 2>&1)"; rc=$?

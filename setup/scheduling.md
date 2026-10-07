@@ -18,12 +18,14 @@ simply has no timers.
    folder** (a fresh Chronos install is set up with your agent folder as the workspace, so `CLAUDE.md` and
    the hooks load as usual). Caveat: if Chronos was already configured with a different workspace, the
    installer leaves it alone and warns, and the runs start THERE, so this agent's `CLAUDE.md`, hooks and
-   pre-tool guard do not load for them (the job prompt does tell the agent to `cd` to its own folder, but
-   only after the session has started). Fix it with `./install.sh --set-chronos-workspace` or by editing
+   pre-tool guard do not load for them (a restricted job cannot even `cd`: its prompt assumes the agent folder is
+   the working directory). Fix it with `./install.sh --set-chronos-workspace` or by editing
    `"workspace"` in `~/.config/chronos/config.json`. `verify-install.sh` flags a mismatch.
 3. The prompt is: a short Chronos preamble, the job's locked `guard.md`, then the job's `prompt.md`.
    `chronos prompt <id>` prints exactly what a run would receive.
-4. The job writes a short report and touches a done-marker. Chronos delivers the start of the report
+4. The job's final message is its report. A *restricted* job (every shipped Claude job) has no tool that can write
+   the report or the done-marker, so Chronos writes both from that message; an unrestricted job writes them
+   itself. Chronos delivers the start of the report
    through your `notify` command (a Telegram message or a macOS banner), and tells your next
    interactive session what ran, if its session hook is registered (the installer does that).
 
@@ -33,13 +35,13 @@ Talos ships five, in `jobs/`:
 
 | Job | When | What it does |
 |---|---|---|
-| `talos-morning-brief` | weekdays 07:03 | brief from your wiki and read-only tools; files at most five facts back |
+| `talos-morning-brief` | weekdays 07:03 | brief from your wiki and any read-only tools you add by name; files at most five facts back |
 | `talos-weekly-wiki-lint` | Monday 08:17 | runs the linter and the deep-dive selector, reports, fixes nothing |
-| `talos-weekly-snapshot` | Friday 16:11 | `git add memory wiki .learnings` and one local commit |
+| `talos-weekly-snapshot` | Friday 16:11 | `scripts/weekly-snapshot.sh`: `memory`, `wiki`, `.learnings`, one local commit |
 | `talos-memory-index` | daily 06:41 | refreshes the semantic search index; a plain command job, no Claude run; enabled by `scripts/memory/setup.sh`, useless without it |
 | `talos-state-sweep` | weekdays 16:37 | read-only report on `memory/STATE.md`: size, rows to close or evict, stale rows, dates coming up |
 
-All five ship **disabled**. Enable one with `python3 scripts/talos-jobs.py enable talos-morning-brief`
+All five ship **disabled**, and the four Claude jobs ship **restricted** (below). Enable one with `python3 scripts/talos-jobs.py enable talos-morning-brief`
 (add `--time 06:40 --days weekdays` to change the schedule), or tick Enabled in the Chronos web UI at
 <http://127.0.0.1:4747/>. Pause everything at once from the UI, or by touching `~/.chronos/PAUSED`.
 
@@ -81,28 +83,34 @@ not a story you want to be in.
 
 ## Permissions: read this before you enable a job
 
-Nobody is at the keyboard during a headless run, so `claude -p` cannot ask for approval. Chronos's
-default `claude_args` is `["--dangerously-skip-permissions"]`: **scheduled jobs run with permission
-prompts skipped**. Your interactive sessions, and anything you do by hand in them, keep your normal
-permission mode and still ask.
+Nobody is at the keyboard during a headless run, so `claude -p` cannot ask for approval. Chronos's default for a
+scheduled job is `--dangerously-skip-permissions`, which lets the job do anything your account can. **The four
+Claude jobs Talos ships do not use it** (Talos 1.1.2, Chronos 0.2.2): each is registered `"restricted": true` with
+a short tool list (read and search inside the agent folder, writes only where the job needs them, and exactly the
+scripts the job runs). Anything else is refused, not prompted, and the report says so. Your interactive sessions are
+unaffected.
 
-That is acceptable for a prompt you wrote reading only your own files, and a poor trade for a prompt
-that reads mail or chat, because that text is written by other people. The README's "Security model"
-section shows how to run the jobs locked down instead: an allow-list of tools in Chronos's
-`claude_args`, where anything not listed is refused (not prompted) and the run says so in its report.
+The README's "Scheduled jobs are restricted by default" lists what each job may do, what is enforced and what is
+only a prompt, how to give a job a read-only MCP tool (`talos-jobs.py allow`), and the opt-out
+(`talos-jobs.py access <job> --full`, or `install.sh --full-access-jobs`) for someone who wants the old behaviour.
+`talos-jobs.py list` shows each job as RESTRICTED or FULL ACCESS. A job you write yourself, or any job without the
+`restricted` key, still runs with Chronos's `claude_args`.
 
 ---
 
-## What Chronos 0.2 adds (this kit pins 0.2.1)
+## What Chronos 0.2 adds (this kit pins 0.2.2)
 
+- **Restricted jobs** (0.2.2): `"restricted": true` gives a job's scheduled runs a narrow tool list (`allowed_tools`)
+  and never skips permissions. An older Chronos ignores the key, so Talos refuses to register or enable a restricted
+  job on one.
 - **Command jobs** (0.2.1): `"kind": "command"` runs a shell command instead of `claude -p`, with the same claim,
   watchdog, log and notify. `talos-memory-index` is one, so it spends no Claude usage.
 - A job's optional **`model`** is passed to `claude --model`. The lint, snapshot and state-sweep jobs pin `sonnet`; the
   brief inherits your default. Chronos 0.1 ignores the key. Shipped jobs never pin Haiku.
 - **Event triggers** (a new file, a Gmail search, a GitHub PR/issue/release, a webhook) can start a job in addition
   to, or instead of, the clock (`"clock": false`). Talos ships none. Event runs are untrusted by design: default
-  permission mode, a narrow tool list from the job's `allowed_tools` (which applies **only to event runs**;
-  scheduled runs use `claude_args`), `--strict-mcp-config`, payloads wrapped as data, at most 6 per job per hour.
+  permission mode, a narrow tool list from the job's `allowed_tools` (which applies to event runs and to scheduled runs of a
+  `restricted` job; other scheduled runs use `claude_args`), `--strict-mcp-config`, payloads wrapped as data, at most 6 per job per hour.
   Read Chronos's `docs/triggers.md` before using one, and give an event-driven job its own tight `guard.md`.
 - A **usage meter**: tokens, cost and model per run, a Usage page and a per-job panel in the web UI. Use it to
   see what the brief really costs before deciding to keep them.

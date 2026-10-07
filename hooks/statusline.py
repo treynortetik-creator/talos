@@ -19,8 +19,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 def handoff_age():
     try:
-        s = time.time() - os.path.getmtime(os.path.join(ROOT, "memory", "HANDOFF.md"))
-    except OSError:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import _talos_common as C
+        f = C.contained(os.path.join(ROOT, "memory", "HANDOFF.md"))      # a link anywhere on the way: not ours, show nothing
+        if not f:
+            return ""
+        s = time.time() - os.path.getmtime(f)
+    except Exception:
         return ""
     h = int(s // 3600)
     return "handoff: %dm" % max(1, int(s // 60)) if h < 1 else ("handoff: %dh" % h if h < 48 else "handoff: %dd" % (h // 24))

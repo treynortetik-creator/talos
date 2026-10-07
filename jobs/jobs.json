@@ -10,6 +10,17 @@
     "in_session": false,
     "notify": "always",
     "once": null,
+    "restricted": true,
+    "allowed_tools": [
+      "Read(/{{TALOS_HOME}}/**)",
+      "Grep(/{{TALOS_HOME}}/**)",
+      "Glob(/{{TALOS_HOME}}/**)",
+      "Bash(date)",
+      "Edit(/{{TALOS_HOME}}/memory/briefs/**)",
+      "Edit(/{{TALOS_HOME}}/wiki/**)",
+      "Bash(bash {{TALOS_HOME}}/scripts/memory/refresh-index.sh)",
+      "Bash(python3 {{TALOS_HOME}}/scripts/wiki-lint.py wiki --extra-dir memory)"
+    ],
     "created": "2026-10-01T00:00:00",
     "updated": "2026-10-01T00:00:00"
   },
@@ -24,6 +35,17 @@
     "in_session": false,
     "notify": "always",
     "once": null,
+    "restricted": true,
+    "allowed_tools": [
+      "Read(/{{TALOS_HOME}}/**)",
+      "Grep(/{{TALOS_HOME}}/**)",
+      "Glob(/{{TALOS_HOME}}/**)",
+      "Bash(date)",
+      "Bash(bash {{TALOS_HOME}}/scripts/memory/refresh-index.sh)",
+      "Bash(python3 {{TALOS_HOME}}/scripts/wiki-lint.py wiki --extra-dir memory)",
+      "Bash(python3 {{TALOS_HOME}}/scripts/deep-dive-select.py wiki)",
+      "Bash(bash {{TALOS_HOME}}/scripts/claude-md-lint.sh)"
+    ],
     "created": "2026-10-01T00:00:00",
     "updated": "2026-10-01T00:00:00",
     "model": "sonnet"
@@ -39,6 +61,13 @@
     "in_session": false,
     "notify": "failure",
     "once": null,
+    "restricted": true,
+    "allowed_tools": [
+      "Read(/{{TALOS_HOME}}/**)",
+      "Grep(/{{TALOS_HOME}}/**)",
+      "Glob(/{{TALOS_HOME}}/**)",
+      "Bash(bash {{TALOS_HOME}}/scripts/weekly-snapshot.sh)"
+    ],
     "created": "2026-10-01T00:00:00",
     "updated": "2026-10-01T00:00:00",
     "model": "sonnet"
@@ -71,6 +100,14 @@
     "notify": "always",
     "once": null,
     "model": "sonnet",
+    "restricted": true,
+    "allowed_tools": [
+      "Read(/{{TALOS_HOME}}/**)",
+      "Grep(/{{TALOS_HOME}}/**)",
+      "Glob(/{{TALOS_HOME}}/**)",
+      "Bash(date)",
+      "Bash(python3 {{TALOS_HOME}}/scripts/state-sweep.py)"
+    ],
     "created": "2026-10-01T00:00:00",
     "updated": "2026-10-01T00:00:00"
   }

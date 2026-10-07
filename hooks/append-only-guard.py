@@ -12,7 +12,8 @@ WHAT IT GUARDS, by shape and not by author: the files that are history and must 
     memory/agent-log.md         the harness-written sub-agent log
 It asks (it does not forbid) only when a whole-file Write would shrink one of them below 90% of its current size
 (files of 500 bytes or more). Growth, small edits and the Edit tool pass untouched: only a whole-file
-replacement can truncate. Anything outside the agent folder is ignored. Fails open on anything unexpected.
+replacement can truncate. Anything outside the agent folder is ignored. On anything unexpected it fails OPEN in a live session and CLOSED
+(deny) in an unattended run; an `ask` becomes a deny when nobody is there to answer.
 Kill switch: append-only-guard.off
 """
 import json
@@ -20,8 +21,16 @@ import os
 import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import _talos_common as C  # noqa: E402
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import _talos_common as C  # noqa: E402
+except Exception as _e:        # the shared helpers will not load: fail open in a live session, CLOSED when unattended
+    if os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1":
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+              "permissionDecisionReason": "Talos append-only-guard could not load hooks/_talos_common.py (" + type(_e).__name__ + ": " + str(_e)[:120] + ") and this run is unattended, so the action is blocked rather than allowed unchecked."}}))
+    else:
+        print("{}")
+    sys.exit(0)
 
 KILL_NAME = "append-only-guard.off"
 PROTECTED = (
@@ -70,19 +79,16 @@ def main():
         print("{}")
         return
     pct = 100 * (1 - new_len / float(old_len))
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "ask",
-        "permissionDecisionReason": (
-            "This overwrite would SHRINK an append-only file by %.0f%% (%d -> %d bytes):\n  %s\n\n"
-            "Daily logs, the changelog and the ledgers are history. The usual cause is faking an append by "
-            "reading the file, concatenating and overwriting it, which loses everything written since the read.\n\n"
-            "Append instead (>> or an Edit that adds a line). If you genuinely mean to rewrite this file, "
-            "confirm here." % (pct, old_len, new_len, rel))}}))
+    print(C.pretool_json("ask", (
+        "This overwrite would SHRINK an append-only file by %.0f%% (%d -> %d bytes):\n  %s\n\n"
+        "Daily logs, the changelog and the ledgers are history. The usual cause is faking an append by "
+        "reading the file, concatenating and overwriting it, which loses everything written since the read.\n\n"
+        "Append instead (>> or an Edit that adds a line). If you genuinely mean to rewrite this file, "
+        "confirm here." % (pct, old_len, new_len, rel))))
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        print("{}")
+    except Exception as e:
+        C.guard_failed("append-only-guard", e)       # {} in a live session; a deny when unattended

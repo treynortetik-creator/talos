@@ -75,8 +75,8 @@ def existing_artifacts(text, limit=3):
     for cand in re.findall(r"[~\w./-]*/[\w./-]+|[\w-]+\.(?:md|py|sh|json|html|txt|csv)", text):
         cand = cand.strip(".,;:)")
         p = os.path.expanduser(cand)
-        full = os.path.realpath(p if os.path.isabs(p) else os.path.join(C.ROOT, p))
-        if full != C.ROOT and full.startswith(C.ROOT + os.sep) and os.path.exists(full):
+        full = C.contained(p)                   # inside the folder, no link on the way
+        if full and full != C.ROOT and os.path.exists(full):
             rel = os.path.relpath(full, C.ROOT)
             if rel not in out:
                 out.append(rel)
@@ -99,12 +99,14 @@ def main():
     ts = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
     arts = existing_artifacts(last)
     art = " · ".join(arts) if arts else "—"
-    os.makedirs(os.path.dirname(LOG), exist_ok=True)
+    row = "| %s | %s | %s | %s |\n" % (ts, clean(agent, 24) or "?", clean(desc, 80) or "?", clean(art, 90))
+    # C.append_contained: the log must resolve inside the agent folder with no symlink on the way (a symlinked memory/
+    # would otherwise append rows to a file somewhere else), and it only ever appends: several can stop in one minute.
+    if not C.contained(LOG):
+        return
     if not os.path.exists(LOG):
-        with open(LOG, "w", encoding="utf-8") as f:
-            f.write(HEADER)
-    with open(LOG, "a", encoding="utf-8") as f:       # append, never read-modify-write: several can stop in one minute
-        f.write("| %s | %s | %s | %s |\n" % (ts, clean(agent, 24) or "?", clean(desc, 80) or "?", clean(art, 90)))
+        C.append_contained(LOG, HEADER)
+    C.append_contained(LOG, row)
 
 
 if __name__ == "__main__":

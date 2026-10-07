@@ -264,6 +264,182 @@ HF on 99999 | grep -q '480 minutes' && ok "hands-free: the window is capped at 4
 HF on 20 >/dev/null; touch "$SD/hands-free.off"; rp "$LONG" '[]' | HF note; out="$(printf '{}' | HF check)"; rm -f "$SD/hands-free.off"; HF off >/dev/null
 [ -z "$out" ] && ok "hands-free: its kill switch works" || no "kill switch ignored" "$out"
 
+# ================================================================ v1.1.2: symlink containment (a symlinked PARENT is as bad as a symlinked file)
+OUT="$SB/outside"; rm -rf "$OUT"; mkdir -p "$OUT/memory" "$OUT/scripts"
+printf 'SECRET-OUTSIDE-STATE\n' > "$OUT/memory/STATE.md"; printf 'SECRET-OUTSIDE-HANDOFF\n' > "$OUT/memory/HANDOFF.md"
+printf 'SECRET-OUTSIDE-LOG\n' > "$OUT/memory/$(date +%Y-%m-%d).md"
+mkagent() { local d="$1"; rm -rf "$d"; mkdir -p "$d/hooks" "$d/wiki/people" "$d/scripts" "$d/.claude"; cp "$KIT"/hooks/*.py "$d/hooks/"; }
+SS() { printf '{"source":"startup"}' | ( cd "$1" && CLAUDE_PROJECT_DIR="$1" python3 hooks/session-start.py 2>/dev/null ); }
+
+# control: a REAL memory folder is injected (so the symlink cases below can fail)
+A2="$SB/agent2"; mkagent "$A2"; mkdir -p "$A2/memory"; printf 'REAL-STATE-MARK\n' > "$A2/memory/STATE.md"; printf 'REAL-HANDOFF-MARK\n' > "$A2/memory/HANDOFF.md"
+ctx="$(SS "$A2")"; { printf '%s' "$ctx" | grep -q 'REAL-STATE-MARK' && printf '%s' "$ctx" | grep -q 'REAL-HANDOFF-MARK'; } && ok "containment control: a normal memory/ folder is read and injected" || no "control failed: real memory not injected" "$ctx"
+
+# 1. memory/ is a symlink to a folder OUTSIDE the project: nothing from it reaches the context
+rm -rf "$A2/memory"; ln -s "$OUT/memory" "$A2/memory"
+ctx="$(SS "$A2")"
+{ ! printf '%s' "$ctx" | grep -q 'SECRET-OUTSIDE'; } && ok "session start: a symlinked PARENT (memory/ -> elsewhere) is not read: no STATE, HANDOFF or daily log leaks into the context" || no "a symlinked memory/ was READ" "$(printf '%s' "$ctx" | grep -o 'SECRET-OUTSIDE[A-Z-]*' | sort -u)"
+# 1b. a symlinked file inside a real folder (the old check) is still refused
+rm -f "$A2/memory"; mkdir -p "$A2/memory"; ln -s "$OUT/memory/STATE.md" "$A2/memory/STATE.md"; printf 'REAL-HANDOFF-MARK\n' > "$A2/memory/HANDOFF.md"
+ctx="$(SS "$A2")"; { ! printf '%s' "$ctx" | grep -q 'SECRET-OUTSIDE-STATE' && printf '%s' "$ctx" | grep -q 'REAL-HANDOFF-MARK'; } && ok "session start: a symlinked FILE is refused and its real neighbours still read" || no "symlinked file read, or the neighbour lost"
+# 1c. an in-project symlink that stays inside the project is refused too (reject ANY link below the root)
+rm -rf "$A2/memory"; mkdir -p "$A2/realmem"; printf 'INNER-LINK-MARK\n' > "$A2/realmem/STATE.md"; ln -s realmem "$A2/memory"
+ctx="$(SS "$A2")"; { ! printf '%s' "$ctx" | grep -q 'INNER-LINK-MARK'; } && ok "session start: even a symlink that points INSIDE the project is refused (no link anywhere below the root)" || no "an in-project symlinked folder was read"
+rm -f "$A2/memory"; rm -rf "$A2/realmem"; mkdir -p "$A2/memory"
+
+# 2. stamps: a write through a symlinked parent must not create or truncate anything outside
+sst() { ( cd "$1" && CLAUDE_PROJECT_DIR="$1" python3 - "$2" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ss", "hooks/session-start.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print("STAMPED" if m.safe_stamp(sys.argv[1]) else "REFUSED")
+PY
+); }
+mkdir -p "$A2/stamps"; [ "$(sst "$A2" "$A2/stamps/.ok")" = STAMPED ] && [ -e "$A2/stamps/.ok" ] && ok "stamp control: a stamp in a real folder is written" || no "stamp control failed"
+rm -rf "$A2/linkdir"; ln -s "$OUT" "$A2/linkdir"; printf 'KEEP-ME-INTACT\n' > "$OUT/.last-lint"
+r="$(sst "$A2" "$A2/linkdir/.new-stamp")"
+{ [ "$r" = REFUSED ] && [ ! -e "$OUT/.new-stamp" ]; } && ok "stamp write: a symlinked PARENT is refused and nothing is created outside the project" || no "a stamp was written through a symlinked parent" "$r"
+r="$(sst "$A2" "$A2/linkdir/.last-lint")"
+{ [ "$r" = REFUSED ] && [ "$(cat "$OUT/.last-lint")" = KEEP-ME-INTACT ]; } && ok "stamp write: an EXISTING file behind a symlinked parent is not truncated" || no "a file outside was truncated" "$(cat "$OUT/.last-lint")"
+ln -sf "$OUT/.last-lint" "$A2/stamps/.leaf-link"; r="$(sst "$A2" "$A2/stamps/.leaf-link")"
+{ [ "$r" = REFUSED ] && [ "$(cat "$OUT/.last-lint")" = KEEP-ME-INTACT ]; } && ok "stamp write: a symlinked leaf is still refused (the original O_NOFOLLOW case)" || no "leaf symlink followed"
+[ "$(sst "$A2" "$SB/elsewhere-stamp")" = REFUSED ] && [ ! -e "$SB/elsewhere-stamp" ] && ok "stamp write: a path outside the project is refused outright" || no "outside stamp written"
+
+# 3. the wiki linter is EXECUTED by session start: it must not run from behind a symlinked scripts/
+for i in 1 2 3 4 5 6; do printf -- '---\ntitle: n%s\ntype: concept\nupdated: 2026-10-01\ntags: [a]\n---\nbody [[n1]] [[n2]]\n' "$i" > "$A2/wiki/n$i.md"; done
+MARK="$SB/lint-ran"; rm -f "$MARK"
+printf 'import sys\nopen("%s","a").write("RAN\\n")\nprint("clean: 0 errors")\n' "$MARK" > "$OUT/scripts/wiki-lint.py"
+rm -rf "$A2/scripts"; ln -s "$OUT/scripts" "$A2/scripts"
+SS "$A2" >/dev/null; [ ! -e "$MARK" ] && ok "session start: a symlinked scripts/ is never executed (the wiki linter does not run from outside the project)" || no "EXECUTED a script behind a symlinked scripts/ folder"
+rm -f "$A2/scripts"; mkdir -p "$A2/scripts"; cp "$OUT/scripts/wiki-lint.py" "$A2/scripts/wiki-lint.py"; rm -f "$A2/memory/.last-lint"
+SS "$A2" >/dev/null; [ -e "$MARK" ] && ok "lint control: the same linter in a REAL scripts/ folder does run when due" || no "lint control failed: the linter never ran, so the symlink test above proves nothing"
+rm -f "$MARK"; rm -rf "$A2/wiki"; ln -s "$OUT" "$A2/wiki"; rm -f "$A2/memory/.last-lint"
+SS "$A2" >/dev/null; [ ! -e "$MARK" ] && ok "session start: a symlinked wiki/ is not scanned or linted" || no "linted a symlinked wiki/"
+rm -f "$A2/wiki"; mkdir -p "$A2/wiki"
+
+# 4. the other hooks: agent-log must not append through a symlinked memory/, the status line must not stat through one
+A3="$SB/agent3"; mkagent "$A3"; rm -rf "$OUT/memory/agent-log.md"; ln -s "$OUT/memory" "$A3/memory"
+printf '{"agent_type":"worker","description":"through a link","last_assistant_message":"done"}' | ( cd "$A3" && python3 hooks/agent-log.py 2>/dev/null )
+[ ! -e "$OUT/memory/agent-log.md" ] && ok "agent log: nothing is appended through a symlinked memory/" || no "agent-log wrote through a symlinked parent"
+rm -f "$A3/memory"; mkdir -p "$A3/memory"; printf '{"agent_type":"worker","description":"normal","last_assistant_message":"done"}' | ( cd "$A3" && python3 hooks/agent-log.py 2>/dev/null )
+grep -q 'normal' "$A3/memory/agent-log.md" 2>/dev/null && ok "agent log control: the same row is written when memory/ is a real folder" || no "agent-log control failed"
+rm -rf "$A3/memory"; ln -s "$OUT/memory" "$A3/memory"
+out="$(printf '{"model":{"display_name":"Opus"}}' | ( cd "$A3" && python3 hooks/statusline.py ))"; printf '%s' "$out" | grep -q 'handoff:' && no "status line stat()ed HANDOFF.md through a symlinked memory/" "$out" || ok "status line: no handoff age is read through a symlinked memory/"
+# the shared helper itself
+python3 - "$A3" "$OUT" <<'PY' && ok "contained(): in-root ok, '..' refused, outside refused, link refused, a missing file in a real folder is fine" || no "contained() misjudged a path"
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "hooks")); import _talos_common as C
+A, OUT = os.path.realpath(sys.argv[1]), sys.argv[2]
+os.makedirs(os.path.join(A, "real"), exist_ok=True)
+assert C.contained("real/new-file.md") == os.path.join(A, "real", "new-file.md")
+assert C.contained(os.path.join(A, "real", "x")) is not None
+assert C.contained("real/../real/x") is None and C.contained("../x") is None
+assert C.contained("/etc/passwd") is None and C.contained(OUT) is None
+assert C.contained("memory/STATE.md") is None                     # memory is a symlink here
+assert C.contained("") is None and C.contained("a\0b") is None
+assert C.contained(A) == A
+PY
+
+# session-start.py keeps its own private copy of the check (it must stay standalone): both must give the same verdicts
+mkdir -p "$A3/real"; printf 'x\n' > "$A3/real/f.md"; ln -sf "$A3/real" "$A3/linkreal"; ln -sf "$OUT" "$A3/linkout"
+( cd "$A3" && python3 - "$A3" "$OUT" <<'PY' ) && ok "session-start's private contained()/read_contained() agree with hooks/_talos_common.py on every path tried (no drift)" || no "the two containment implementations disagree"
+import importlib.util, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "hooks")); import _talos_common as K
+spec = importlib.util.spec_from_file_location("ss", os.path.join(sys.argv[1], "hooks", "session-start.py")); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+A, OUT = sys.argv[1], sys.argv[2]
+for p in ["real/f.md", "real/nope", "linkreal/f.md", "linkout/x", "memory/STATE.md", "../x", "real/../real/f.md", "/etc/passwd", OUT, A, os.path.join(A, "real", "f.md"),
+          os.path.join(A, "linkreal"), "", "a\0b", "wiki/n.md", ".index/index.log", "real//f.md", "./real/f.md"]:
+    a, b = K.contained(p), m.C.contained(p)
+    assert a == b, (p, a, b)
+    assert K.read_contained(p) == m.C.read_contained(p), p
+PY
+
+# ================================================================ v1.1.2: FAIL OPEN in a live session, FAIL CLOSED when unattended
+HU() { local hook="$1"; shift; ( cd "$A" && CHRONOS_RUN=1 python3 "hooks/$hook" "$@" 2>"$SB/stderr" ); }
+denied() { printf '%s' "$1" | python3 -c 'import json,sys; d=json.load(sys.stdin)["hookSpecificOutput"]; sys.exit(0 if d["permissionDecision"]=="deny" else 1)' 2>/dev/null; }
+
+# pre-tool-guard (exit code protocol): garbage input = an internal error
+printf 'not json' | ( cd "$A" && python3 hooks/pre-tool-guard.py 2>/dev/null ); r1=$?
+printf 'not json' | ( cd "$A" && CHRONOS_RUN=1 python3 hooks/pre-tool-guard.py 2>/dev/null ); r2=$?
+printf 'not json' | ( cd "$A" && TALOS_UNATTENDED=1 python3 hooks/pre-tool-guard.py 2>/dev/null ); r3=$?
+{ [ "$r1" = 0 ] && [ "$r2" = 2 ] && [ "$r3" = 2 ]; } && ok "pre-tool guard: an internal error fails OPEN in a live session (exit 0) and CLOSED when unattended (exit 2, CHRONOS_RUN or TALOS_UNATTENDED)" || no "pre-tool guard fail modes wrong (live=$r1 chronos=$r2 manual=$r3)"
+printf '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | ( cd "$A" && CHRONOS_RUN=1 python3 hooks/pre-tool-guard.py 2>/dev/null ); r4=$?
+printf '{"tool_name":"Bash","tool_input":{"command":"git add -A"}}' | ( cd "$A" && CHRONOS_RUN=1 python3 hooks/pre-tool-guard.py 2>/dev/null ); r5=$?
+{ [ "$r4" = 0 ] && [ "$r5" = 2 ]; } && ok "pre-tool guard: unattended it still allows a normal command and still refuses a bad one" || no "unattended verdicts wrong (ls=$r4 add -A=$r5)"
+
+# the three JSON guards: a payload that makes them raise (tool_input is a list)
+BADIN='{"tool_name":"Write","tool_input":["not","a","dict"]}'     # (timeline-guard treats a non-dict tool_input as "nothing to judge"; its error path is exercised below)
+for g in append-only-guard.py check-vault.py; do
+  if [ "$g" = check-vault.py ]; then mkdir -p "$V"; printf 'zebra-clinic\n' > "$V/_guard-terms.txt"; printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"; fi
+  live="$(printf '%s' "$BADIN" | H "$g")"; un="$(printf '%s' "$BADIN" | HU "$g")"
+  if [ "$g" = check-vault.py ]; then rm -f "$XDG_CONFIG_HOME/talos/vault-dir"; fi
+  { [ "$live" = "{}" ] && denied "$un" && printf '%s' "$un" | grep -q 'unattended'; } && ok "$g: an unexpected error is allowed in a live session and DENIED (with the reason) when unattended" || no "$g fail modes wrong" "live=[$live] unattended=[$un]"
+done
+# timeline-guard: a broken or missing wiki-lint.py is the realistic internal error
+mkdir -p "$A/wiki/people"; printf -- '---\ntitle: x\ntype: person\nupdated: 2026-10-01\ntags: [a]\n---\nbody\n\n<!-- TIMELINE:APPEND-ONLY -->\n' > "$A/wiki/people/tl.md"
+mv "$A/scripts/wiki-lint.py" "$SB/wiki-lint.hold" 2>/dev/null || true
+TLW="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s","content":"x\\n\\n<!-- TIMELINE:APPEND-ONLY -->\\n- 2026-10-02 | a | src | high\\n"}}' "$A/wiki/people/tl.md")"
+live="$(printf '%s' "$TLW" | H timeline-guard.py)"; un="$(printf '%s' "$TLW" | HU timeline-guard.py)"
+{ [ "$live" = "{}" ] && denied "$un"; } && ok "timeline guard: with wiki-lint.py missing a live session is allowed through and an unattended run is blocked" || no "timeline guard missing-lint modes wrong" "live=[$live] un=[$un]"
+mv "$SB/wiki-lint.hold" "$A/scripts/wiki-lint.py" 2>/dev/null || true
+
+# an `ask` has nobody to answer it when unattended: it becomes a deny
+out="$(W "$A/memory/2026-10-01.md" "short")"; un="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s","content":"short"}}' "$A/memory/2026-10-01.md" | HU append-only-guard.py)"
+{ printf '%s' "$out" | grep -q '"ask"' && denied "$un" && printf '%s' "$un" | grep -q 'nobody to ask'; } && ok "append-only guard: the shrink check asks in a live session and denies when unattended" || no "ask not converted" "live=[$out] un=[$un]"
+printf 'zebra-clinic\n' > "$V/_guard-terms.txt"; printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"
+un="$(printf '%s' "$(payload "$A/wiki/x.md" "Zebra-Clinic")" | HU check-vault.py)"; rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
+denied "$un" && ok "vault guard: a term headed outside the vault is denied (not asked) when unattended" || no "vault guard ask not converted" "$un"
+# a terms file that cannot be read is an error, not "no terms"
+if [ "$(id -u)" != 0 ]; then
+  printf 'zebra-clinic\n' > "$V/_guard-terms.txt"; chmod 000 "$V/_guard-terms.txt"; printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"
+  live="$(printf '%s' "$(payload "$A/wiki/x.md" "Zebra-Clinic")" | H check-vault.py)"; un="$(printf '%s' "$(payload "$A/wiki/x.md" "Zebra-Clinic")" | HU check-vault.py)"
+  chmod 600 "$V/_guard-terms.txt"; rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
+  { [ "$live" = "{}" ] && denied "$un"; } && ok "vault guard: an unreadable terms file is a guard failure (open live, blocked unattended), not silently 'no terms'" || no "unreadable terms file mishandled" "live=[$live] un=[$un]"
+fi
+
+# the shared helpers cannot even load (file deleted / corrupt): same two modes, from the guards' own import fallback
+A4="$SB/agent4"; mkagent "$A4"; printf 'def (:\n' > "$A4/hooks/_talos_common.py"
+for g in append-only-guard.py check-vault.py timeline-guard.py; do
+  live="$(printf '{}' | ( cd "$A4" && python3 "hooks/$g" 2>/dev/null ))"; un="$(printf '{}' | ( cd "$A4" && CHRONOS_RUN=1 python3 "hooks/$g" 2>/dev/null ))"
+  { [ "$live" = "{}" ] && denied "$un"; } && ok "$g: with hooks/_talos_common.py broken: live = allow, unattended = deny" || no "$g broken-helper modes wrong" "live=[$live] un=[$un]"
+done
+
+# the settings template wrapper: a MISSING or CRASHING guard script blocks an unattended run and never a live one
+python3 - "$KIT/templates/dot-claude/settings.json" "$SB" <<'PY' && ok "settings template: the four safety guards' wrappers fail open live and CLOSED unattended (missing script, python crash, syntax error); a real block (exit 2) passes through" || no "settings wrapper modes wrong"
+import json, os, subprocess, sys, tempfile
+d = json.load(open(sys.argv[1])); t = tempfile.mkdtemp(dir=sys.argv[2]); os.makedirs(t + "/hooks")
+guards = {}
+for ent in d["hooks"]["PreToolUse"]:
+    for h in ent["hooks"]:
+        n = h["command"].split("hooks/")[1].split('"')[0]; guards[n] = h["command"]
+assert sorted(guards) == ["append-only-guard.py", "check-vault.py", "pre-tool-guard.py", "timeline-guard.py"], sorted(guards)
+def run(cmd, name, env, script):
+    p = t + "/hooks/" + name
+    if script is None:
+        if os.path.exists(p): os.remove(p)
+    else: open(p, "w").write(script)
+    e = {k: v for k, v in os.environ.items() if k not in ("CHRONOS_RUN", "TALOS_UNATTENDED")}; e.update(env); e["CLAUDE_PROJECT_DIR"] = t
+    return subprocess.run(["bash", "-c", cmd], env=e, input="{}", capture_output=True, text=True).returncode
+for name, cmd in guards.items():
+    live = {}; un = {"CHRONOS_RUN": "1"}
+    assert run(cmd, name, live, None) == 0, (name, "missing, live")
+    assert run(cmd, name, un, None) == 2, (name, "missing, unattended")
+    assert run(cmd, name, {"TALOS_UNATTENDED": "1"}, None) == 2, (name, "missing, manual flag")
+    assert run(cmd, name, live, "import sys; sys.exit(1)") == 1, (name, "crash, live")          # non-blocking error: the tool proceeds
+    assert run(cmd, name, un, "import sys; sys.exit(1)") == 2, (name, "crash, unattended")
+    assert run(cmd, name, un, "def (:") == 2, (name, "syntax error, unattended")
+    assert run(cmd, name, un, "print('{}')") == 0, (name, "ok, unattended")
+    assert run(cmd, name, un, "import sys; sys.stderr.write('no'); sys.exit(2)") == 2, (name, "block passes through")
+PY
+# the reminder hooks stay fail-OPEN even unattended: they cannot cause harm by failing
+bad=""
+for spec in "claim-gate.py" "claim-gate.py inject" "agent-log.py" "statusline.py" "channel-debt.py arm" "channel-debt.py check" "channel-debt.py clear" "hands-free.py check" "hands-free.py note"; do
+  # shellcheck disable=SC2086
+  out="$(printf '\xff\xfe not json {' | ( cd "$A" && CHRONOS_RUN=1 python3 hooks/$spec 2>&1 ))"; rc=$?
+  { [ "$rc" = 0 ] && ! printf '%s' "$out" | grep -qi 'traceback\|"deny"\|"block"'; } || bad="$bad [$spec rc=$rc]"
+done
+[ -z "$bad" ] && ok "reminder hooks (claim gate, channel debt, agent log, status line, hands-free) stay fail-open when unattended" || no "a reminder hook blocked or crashed unattended:$bad"
+rm -f "$V/_guard-terms.txt"
+
 # ================================================================ every hook fails open on garbage
 bad=""
 for spec in "hands-free.py check" "hands-free.py note" "check-vault.py" "claim-gate.py" "claim-gate.py inject" "append-only-guard.py" "timeline-guard.py" "agent-log.py" "statusline.py" "channel-debt.py arm" "channel-debt.py check" "channel-debt.py clear" "channel-debt.py reset"; do

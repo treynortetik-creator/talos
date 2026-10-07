@@ -1,5 +1,76 @@
 # Changelog
 
+## 1.1.2-cli - 2026-10-07
+
+A trust-hardening release, after an external review. Nothing new to learn; three promises that were true in spirit are
+now true in code. **Chronos pin: 0.2.2** (the Chronos commit must be pushed before this kit's pin is, or a fresh install's
+pinned clone fails).
+
+### Security
+
+- **Symlinked parent directories are refused (hooks).** The 1.1.1 session hook rejected a symlink at a file itself and
+  `safe_stamp` used `O_NOFOLLOW`, but both only look at the LAST path component: with `memory/` (or `wiki/`, or
+  `scripts/`) symlinked to another folder, the hook read STATE, HANDOFF, the daily log and the ledger from outside the
+  project, stamped files there, and could execute a `wiki-lint.py` from there. Every path a hook reads, executes or
+  writes now goes through `_talos_common.contained()`: it must resolve inside the agent folder with **no symlink at any
+  step below the root** (and `..` is refused). Applied to `session-start.py` (all reads, stamps, the linter it runs, the
+  index script and log), `agent-log.py` (append through `append_contained`) and `statusline.py`. 9 regression checks
+  fail on the 1.1.1 hooks and pass now (symlinked memory/, a symlinked folder that points inside the project, stamp
+  creation and truncation through a symlinked parent, a symlinked scripts/ and wiki/, agent-log, status line).
+- **The shipped Claude jobs are restricted by tool list, not just told to behave.** README said "Nothing sends, posts or
+  deletes on its own", but scheduled Chronos jobs ran with `--dangerously-skip-permissions`, so that was an instruction.
+  Now the morning brief, wiki check, snapshot and state sweep register `"restricted": true` with an `allowed_tools`
+  list, and Chronos 0.2.2 starts them with `--permission-mode=default`, that list, `--tools`, `--strict-mcp-config` and
+  deny rules for secret paths: reads scoped to the agent folder, edits only in `memory/briefs/` and `wiki/` (brief only),
+  no web tools, no MCP tool unless you add it by name, and **no shell except the exact commands each job runs**.
+  Checked by running the real Claude Code CLI (2.1.287) with these flags against a scratch agent: unlisted commands,
+  writes outside the allowed folders, `WebFetch`, `python3 -c`, `rm`, a redirect, `cat .env` and reads outside the
+  agent folder were refused, and all four jobs completed with no refusals.
+- **Safety guards fail closed when unattended.** `pre-tool-guard`, `append-only-guard`, `timeline-guard` and `check-vault`
+  still fail open in a live session, but when `CHRONOS_RUN=1` (set by Chronos in every headless run; `TALOS_UNATTENDED=1`
+  marks one by hand) an internal error, a helper that will not load, a missing `wiki-lint.py` or an unreadable vault terms
+  file blocks the action and says why, and an `ask` becomes a `deny` (nobody to answer). The settings template wraps the
+  four guard commands so a missing script, missing `python3` or a crash blocks an unattended run (exit 2) and never a live
+  one. Reminder hooks (claim gate, channel debt, agent log, hands-free, status line, session start) stay fail-open.
+
+### Added
+
+- **`scripts/weekly-snapshot.sh`** is now the whole snapshot job: named paths only, one local commit of `memory`, `wiki`
+  and `.learnings` (only those paths, so anything else staged is left alone), refuses a `.env` or `personal/` among the
+  changes before staging, refuses when the git repository is a parent folder, never inits, pushes or touches history.
+  Also fixes the old job failing when `.learnings` did not exist.
+- **`talos-jobs.py`:** `access ID --restricted|--full` (the documented opt-out and the way back), `allow ID TOOL...` (exact
+  MCP tools only, refuses write-looking names without `--allow-write-tools`, adds `ToolSearch`), `harden` (upgrade jobs
+  registered by 1.1.1: sets the restriction, replaces an untouched 1.1.1 prompt/guard, keeps an edited one and says so),
+  `register --full-access`, and `list` now shows RESTRICTED / FULL ACCESS. `install.sh --full-access-jobs`. Registering or
+  enabling a restricted job on a Chronos older than 0.2.2 is refused (it would ignore the restriction).
+- `validate` now holds the shipped jobs to the policy: restricted, scoped read tools, no bare `Bash`, no web or MCP tools,
+  exact script rules, and every command in a prompt is covered by a rule.
+- `upgrade.sh` flags a `.claude/settings.json` whose guard commands still have the pre-1.1.2 wrapper. UPGRADE.md has a
+  1.1.1 to 1.1.2 section.
+
+### Changed
+
+- **Jobs' prompts** run scripts by full path and no longer `cd`; the job's final message is the report (Chronos writes the
+  report file and done-marker for a restricted run). The brief reaches mail, calendar and chat only through MCP tools you add
+  with `talos-jobs.py allow`; with none it writes a wiki-only brief and says so.
+- **Chronos pin: 0.2.2** (adds `"restricted": true`; backward compatible with 0.2.1 jobs).
+- **Wording.** The claim gate is described as an evidence-hygiene reminder that flags unsupported-looking claims on the next
+  turn, not a truth checker. README no longer implies Claude Code has no memory: it has `CLAUDE.md` and an auto memory, which
+  Talos turns off in the agent folder so there is one memory, and Talos adds what the built-in one does not.
+- README: "Scheduled jobs run with permissions skipped" is replaced by "Scheduled jobs are restricted by default", with an
+  enforced / only-instructed table.
+
+### Known gaps
+
+- The jobs' `guard.md` rules and the brief's filing bar are prompts, not enforcement. Inside its allowed folders the brief
+  can still write a wrong note, and a job can put anything it read into its report, which is delivered to your phone.
+- Reads are scoped to the agent folder, but the deny list for secrets is best-effort. A path with a space in the agent folder
+  is untested for the exact-command rules (it fails closed).
+- A restricted run's guarantee is Claude Code's permission system working as documented; rule syntax has changed between
+  versions. The test suites never start `claude`; the real-CLI check above is manual.
+
+
 ## 1.1.1-cli - 2026-10-05
 
 Re-cut for the public launch: one clean history, the timeline guard, and a Chronos pin that exists on GitHub.

@@ -349,6 +349,34 @@ automatic steps. Offer them, one at a time, and never do one without a yes.
 
 ---
 
+## Coming from 1.1.1: restricted jobs, symlink containment, fail-closed guards (1.1.2)
+
+1.1.2 is a trust-hardening release. The code (hooks, scripts, docs) arrives with the normal upgrade. Three things
+need a person, because they touch what the upgrade never writes:
+
+1. **Chronos must be 0.2.2 first.** Restricted jobs need it; an older Chronos ignores the setting and would run a
+   "restricted" job with permission prompts skipped. Pull the pinned Chronos (`git pull` in the Chronos clone, then
+   re-run its `install.sh`), or bump nothing and stay on 1.1.1's behaviour on purpose. `talos-jobs.py` refuses to
+   register, enable or harden restricted jobs on an older Chronos and says so.
+2. **Jobs already registered keep running exactly as before until you harden them.** Run
+   `python3 scripts/talos-jobs.py harden --agent-dir "<agent folder>" --kit-dir "<new kit>"`. It sets `restricted` and the
+   tool list on each registered `talos-*` Claude job, replaces a job's `prompt.md` / `guard.md` only if it is still
+   byte-for-byte what 1.1.1 shipped (an edited one is kept and reported, and you should check that every command it
+   runs is one the tool list allows), and never touches the index command job, your own jobs or a job that already has
+   a `restricted` key. To record that you want full access instead, pass `--full-access`. `talos-jobs.py list` then
+   shows RESTRICTED or FULL ACCESS per job. Read the first report of each job after hardening.
+   If the morning brief had MCP tools named in `memory/brief-sources.md`, it has none now: add them with
+   `talos-jobs.py allow talos-morning-brief mcp__<server>__<read tool>` (MORNING-BRIEF.md).
+3. **`.claude/settings.json` (step 6).** The four PreToolUse guard commands changed so that a missing or crashing guard
+   blocks an unattended run. `upgrade.sh` prints a `! ... still has the pre-1.1.2 fail-open wrapper` line for each one that
+   differs. Copy those four commands from `templates/dot-claude/settings.json`; leave the rest of their file alone.
+
+Nothing else changes: the hooks' own fixes (symlink containment, fail-closed guards) are code and arrive with the
+copy. A symlinked `memory/`, `wiki/` or `scripts/` was readable by the 1.1.1 session hook; if they deliberately
+symlink one of those, 1.1.2 refuses it and the continuity digest will be empty; move the real folder in.
+
+---
+
 ## Coming from the Desktop-app era
 
 Early builds of this kit (before the CLI port, 1.0.0-cli) were written for the Claude desktop app: scheduled

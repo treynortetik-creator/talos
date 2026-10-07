@@ -137,7 +137,7 @@ name in them; your own promoted rules go after them.
 
 **Why:** The most common way an agent becomes useless is confidently saying something untrue. Describe how a system works from its source, not its README. A claim about your own files is a lookup, not a memory; before citing one of your own notes, ask who wrote it and from what. If checking is too expensive, say "I believe" and mark it unverified.
 
-**Enforced by:** `hooks/claim-gate.py` flags an absolute claim with no evidence in the sentence and tells you on the next prompt.
+**Enforced by:** `hooks/claim-gate.py`, an evidence-hygiene reminder: it flags an absolute claim that names no evidence and tells you on the next prompt. It does not check whether a claim is true.
 
 ## R-16 · Confirm the artifact exists before reporting it done — RULE
 

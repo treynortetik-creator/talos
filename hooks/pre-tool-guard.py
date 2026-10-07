@@ -22,8 +22,9 @@ WHAT IT IS NOT
 --------------
 It matches the command TEXT. A determined agent could go around it (`find … -delete`,
 `python3 -c 'import shutil; shutil.rmtree(...)'`, a script that reads .env), and a crash in this
-file fails OPEN (a non-blocking hook error lets the tool proceed) so a bug here can never brick
-the agent. That is the trade: tripwire, not fence. The fence is the user not pasting secrets in.
+file fails OPEN in a live session (a non-blocking hook error lets the tool proceed) so a bug here can never
+brick the agent, and fails CLOSED when the run is unattended (Chronos sets CHRONOS_RUN=1): there nobody would
+ever notice the guard had stopped guarding. That is the trade: tripwire, not fence. The fence is the user not pasting secrets in.
 
 LESSON BAKED IN (2026-08-30): patterns meant for one FIELD must be anchored to argument
 position. A regex for `-r` run against the whole line matched `-r` inside folder names, and every
@@ -32,7 +33,13 @@ below require whitespace before them.
 
 INSTALL: registered in .claude/settings.json under PreToolUse with matcher "Bash".
 """
-import json, re, sys
+import json, os, re, sys
+
+
+def unattended():
+    # Standalone on purpose: this guard imports nothing from the kit, so a broken helper file cannot disable it.
+    # Same test as hooks/_talos_common.py unattended(): Chronos exports CHRONOS_RUN=1 into every headless run.
+    return os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1"
 
 # The kit's own procedures delete their two staging directories when a crawl is done. That is the
 # one recursive delete that is always right here, so it is allowed when it is the ONLY target and
@@ -86,8 +93,12 @@ def main():
             return 0
         sys.stderr.write("Talos guard refused this command: it %s\n" % why)
         return 2          # exit 2 = block, stderr goes back to the agent as the reason
-    except Exception:
-        return 0          # fail open: a broken guard must never brick the agent
+    except Exception as e:
+        if unattended():  # nobody is watching: an unchecked command is worse than a refused one
+            sys.stderr.write("Talos guard hit an internal error (%s: %s) in an unattended run, so this command is blocked "
+                             "rather than allowed unchecked.\n" % (type(e).__name__, str(e)[:160]))
+            return 2
+        return 0          # fail open in a live session: a broken guard must never brick the agent
 
 
 if __name__ == "__main__":

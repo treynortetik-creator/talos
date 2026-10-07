@@ -201,7 +201,7 @@ prompt opens with `CHRONOS RUN: job ...`, or `CHRONOS_RUN=1` is set, you are in 
 ## 10. Hooks, channels and what enforces what
 
 Hooks enforce what prose could not (`.claude/settings.json`; each names its kill switch). `session-start.py`
-re-injects state; `pre-tool-guard.py` refuses dangerous shell moves; `claim-gate.py` flags an absolute claim that
+re-injects state; `pre-tool-guard.py` refuses dangerous shell moves; `claim-gate.py` is a reminder, not a truth check: it flags an absolute claim that
 names no evidence and tells you on the NEXT prompt (do not re-send the old message; carry the proof in the next
 one); `append-only-guard.py` asks before a write shrinks a daily log; `timeline-guard.py` refuses a malformed wiki timeline entry (one line each, Related bullets above the separator); `agent-log.py` records sub-agent runs.
 

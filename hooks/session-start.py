@@ -4,8 +4,9 @@ Talos Agent SessionStart hook — the continuity layer.
 
 WHAT THIS IS, AND WHY IT IS THE MOST IMPORTANT FILE IN THE KIT
 ---------------------------------------------------------------
-An LLM agent has no memory between sessions, and its context gets destroyed
-mid-session by compaction. A handoff FILE does not fix that, because the agent
+Claude Code has memory of its own (CLAUDE.md, and an auto memory that this kit turns off in the agent
+folder so there is exactly one memory, not two). What none of that does is put the CURRENT working state back in front
+of the agent: a new session starts without it, and its context gets destroyed mid-session by compaction. A handoff FILE does not fix that, because the agent
 has to remember to read it, and a compacted agent does not remember anything.
 
 This hook fixes it structurally. It fires on FIVE events -- startup, resume,
@@ -108,6 +109,54 @@ if _env_root:
 
 PROJECT_DIR = KIT_ROOT
 
+# CONTAINMENT (v1.1.2-cli). Every path this hook reads, executes or writes goes through C.contained(): it must
+# resolve inside this folder AND have no symlink anywhere below the folder root. The older islink()/O_NOFOLLOW
+# checks only looked at the LAST component, so a symlinked PARENT (memory/ or wiki/ pointing at another folder)
+# still read, and could stamp, files outside the project.
+#
+# This file stays STANDALONE (its INSTALL note says "put this file at hooks/session-start.py"), so the check lives
+# here too, as a small private copy of hooks/_talos_common.py contained()/read_contained(), instead of an import
+# that would turn a missing helper into a dead continuity layer. scripts/test-hooks.sh runs both on the same
+# paths and fails if they ever disagree.
+class C(object):
+    @staticmethod
+    def contained(path, root=None):
+        try:
+            base_root = os.path.realpath(root or PROJECT_DIR)
+            s = str(path)
+            if not s or "\0" in s or ".." in s.replace("\\", "/").split("/"):
+                return None
+            p = os.path.normpath(s if os.path.isabs(s) else os.path.join(base_root, s))
+            parts = p.split(os.sep)
+            base, rest = None, []
+            for i in range(2, len(parts) + 1):
+                pre = os.sep.join(parts[:i]) or os.sep
+                if os.path.realpath(pre) == base_root:
+                    base, rest = pre, parts[i:]
+                    break
+            if base is None:
+                return None
+            cur = base
+            for seg in rest:
+                cur = os.path.join(cur, seg)
+                if os.path.islink(cur):
+                    return None
+            return cur
+        except Exception:
+            return None
+
+    @staticmethod
+    def read_contained(path, limit=None, root=None):
+        try:
+            full = C.contained(path, root)
+            if not full or not os.path.isfile(full):
+                return ""
+            fd = os.open(full, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as fh:
+                return fh.read() if not limit else fh.read(limit)
+        except Exception:
+            return ""
+
 MEMORY_DIR = os.path.join(PROJECT_DIR, "memory")
 # A LIST on purpose: the first readable, non-empty one wins. Keep your own handoff first.
 # ⚠️ If you add a second path here, make sure YOU own it. Never point this at a file some
@@ -160,10 +209,11 @@ def read_text(path, limit=None):
         # 🔴 2026-08-26 adversarial review: isfile() FOLLOWS symlinks, so a symlinked
         # HANDOFF.md or STATE.md silently read an arbitrary file on disk into the model's
         # context. Everything this hook injects must be a real file inside the project.
-        if os.path.islink(path) or not os.path.isfile(path):
+        # 2026-10 external review: that fix only saw the LAST component. A symlinked PARENT (memory/ -> elsewhere)
+        # passed it. C.read_contained resolves the path and refuses a link at any step below the project root.
+        data = C.read_contained(path)
+        if not data:
             return ""
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            data = fh.read()
         if limit and len(data) > limit:
             # keep the END of state files -- the newest lines matter most
             data = "...(truncated)...\n" + data[-limit:]
@@ -180,7 +230,7 @@ def safe_stamp(path):
     to destroy a file somewhere else on disk. O_NOFOLLOW makes that a hard error.
     """
     try:
-        if os.path.islink(path):
+        if not C.contained(path):        # a symlinked PARENT is as bad as a symlinked stamp (O_NOFOLLOW only covers the last component)
             return False
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(path, flags, 0o644)
@@ -196,7 +246,7 @@ def latest_daily_log():
         for offset in range(LOOK_BACK_DAYS + 1):
             day = (datetime.now() - timedelta(days=offset)).strftime("%Y-%m-%d")
             path = os.path.join(MEMORY_DIR, f"{day}.md")
-            if os.path.isfile(path):
+            if C.contained(path) and os.path.isfile(path):
                 text = read_text(path)
                 if text:
                     lines = text.splitlines()
@@ -300,10 +350,7 @@ def read_state(path, budget):
 def state_size_warning():
     """One line when memory/STATE.md is over STATE_CEILING_CHARS. Never throws; silent otherwise."""
     try:
-        if os.path.islink(STATE_FILE) or not os.path.isfile(STATE_FILE):
-            return None
-        with open(STATE_FILE, "r", encoding="utf-8", errors="replace") as fh:
-            n = len(fh.read())
+        n = len(C.read_contained(STATE_FILE))
         if n <= STATE_CEILING_CHARS:
             return None
         return ("--- STATE TOO LARGE ---\n"
@@ -332,21 +379,23 @@ def wiki_maintenance():
     Like everything else in this file, it must never throw.
     """
     try:
-        if not (os.path.isdir(WIKI_DIR) and os.path.isfile(LINT_SCRIPT)):
+        # LINT_SCRIPT is EXECUTED, so it and the folders it is pointed at must be inside the project with no link on the way
+        if not (C.contained(WIKI_DIR) and C.contained(LINT_SCRIPT) and os.path.isdir(WIKI_DIR) and os.path.isfile(LINT_SCRIPT)):
             return None
 
         # Real notes only: bookkeeping files (_index, _changelog, README) and the
         # shipped examples are not the user's knowledge and must not make an empty
         # wiki look populated enough to start nagging about.
         notes = [f for f in glob.glob(os.path.join(WIKI_DIR, "**", "*.md"), recursive=True)
-                 if os.sep + "examples" + os.sep not in f
+                 if C.contained(f)          # glob follows a symlinked sub-folder; a note reached through a link is not ours
+                 and os.sep + "examples" + os.sep not in f
                  and not os.path.basename(f).startswith("_")
                  and os.path.basename(f)[:-3] not in ("README", "CLAUDE", "CONTRIBUTING")]
         if len(notes) < LINT_MIN_NOTES:
             return None          # fresh install, still onboarding
 
         try:
-            stamped = os.path.getmtime(LINT_STAMP)
+            stamped = os.path.getmtime(LINT_STAMP) if C.contained(LINT_STAMP) else None
         except OSError:
             stamped = None
 
@@ -365,7 +414,7 @@ def wiki_maintenance():
         try:
             cmd = [sys.executable, LINT_SCRIPT, WIKI_DIR]
             for d in LINT_EXTRA_DIRS:
-                if os.path.isdir(d):
+                if C.contained(d) and os.path.isdir(d):
                     cmd += ["--extra-dir", d]
             r = subprocess.run(cmd,
                                capture_output=True, text=True,
@@ -411,16 +460,17 @@ def ledger_nudge():
     Never throws.
     """
     try:
-        if not os.path.isfile(LEDGER_FILE):
+        ledger = C.read_contained(LEDGER_FILE)
+        if not ledger:
             return None
         try:
-            if (time.time() - os.path.getmtime(LEDGER_STAMP)) / 86400.0 < LEDGER_EVERY_DAYS:
+            if C.contained(LEDGER_STAMP) and (time.time() - os.path.getmtime(LEDGER_STAMP)) / 86400.0 < LEDGER_EVERY_DAYS:
                 return None
         except OSError:
             pass          # never reviewed -- fall through and ask
 
         pending = 0
-        for line in open(LEDGER_FILE, encoding="utf-8", errors="replace"):
+        for line in ledger.splitlines():
             if not line.lstrip().startswith("|"):
                 continue
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -455,12 +505,12 @@ def commit_nudge():
     """
     try:
         try:
-            if (time.time() - os.path.getmtime(COMMIT_STAMP)) / 86400.0 < COMMIT_NUDGE_EVERY_DAYS:
+            if C.contained(COMMIT_STAMP) and (time.time() - os.path.getmtime(COMMIT_STAMP)) / 86400.0 < COMMIT_NUDGE_EVERY_DAYS:
                 return None                   # asked recently
         except OSError:
             pass
 
-        paths = [p for p in ("memory", "wiki") if os.path.isdir(os.path.join(PROJECT_DIR, p))]
+        paths = [p for p in ("memory", "wiki") if C.contained(os.path.join(PROJECT_DIR, p)) and os.path.isdir(os.path.join(PROJECT_DIR, p))]
         if not paths:
             return None
 
@@ -523,13 +573,17 @@ def refresh_index_in_background():
             return
         idx = os.path.join(PROJECT_DIR, ".index")
         stamp = os.path.join(idx, ".last-index-ok")
+        if not (C.contained(script) and C.contained(idx) and C.contained(os.path.join(idx, "index.log"))):
+            return                            # the script is EXECUTED and the log is WRITTEN: neither may sit behind a link
         try:
             if (time.time() - os.path.getmtime(stamp)) / 3600.0 < INDEX_REFRESH_HOURS:
                 return
         except OSError:
             pass
         os.makedirs(idx, exist_ok=True)
-        log = open(os.path.join(idx, "index.log"), "a")
+        if not C.contained(idx):
+            return
+        log = os.fdopen(os.open(os.path.join(idx, "index.log"), os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o644), "a")
         subprocess.Popen([py, script, "--quiet"], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                          cwd=PROJECT_DIR, start_new_session=True, preexec_fn=lambda: os.nice(10))
     except Exception:

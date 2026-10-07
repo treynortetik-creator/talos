@@ -72,6 +72,19 @@ Never use: any tool that sends, replies, forwards, deletes, labels, posts, sched
 lets the job load them with `ToolSearch` and what lets a locked-down run allow them one by one (README,
 "Security model"). If they have no sources, write a file that says `Sources: none (wiki only)`.
 
+**Then give the job those tools, by name.** The brief runs RESTRICTED: with no MCP tool on its list it reads the
+wiki and nothing else, and says so in the report. For each source, add the exact read-only tool:
+
+```bash
+python3 scripts/talos-jobs.py allow talos-morning-brief mcp__<server>__<read tool> [more ...]
+```
+
+The command accepts exact tool names only (no wildcards, no whole servers), refuses a name that looks like it can
+send, create, update or delete (override with `--allow-write-tools`, which you should not), and adds the
+`ToolSearch` loader that MCP tools need. Tell the user plainly which tools were added and that the job can still
+only read them. The file `memory/brief-sources.md` tells the job WHAT to read; the tool list is what is ALLOWED, and
+the second one wins.
+
 ---
 
 ## Step 3 — Enable it, and watch the first run
@@ -149,13 +162,15 @@ Say all of these out loud or they will think it is broken:
 
 ## Failure modes this job is built around
 
-1. **Assuming MCP tools are loaded.** The single most likely failure, and it fails *quietly*. The prompt
-   says to `ToolSearch` them first and to report what could not load.
+1. **Assuming MCP tools are loaded.** The single most likely failure, and it fails *quietly*. A restricted
+   run has an MCP tool only if you added it with `talos-jobs.py allow`; the prompt says to `ToolSearch` it first and
+   to report what could not load or was not available.
 2. **"Check against what you already know."** No memory. Silent no-op every time. State comes from files.
 3. **Filing everything.** The corpus fills with recaps and stops being worth reading.
 4. **Firing at weekends,** or on the hour with everyone else.
 5. **Pulling a meeting transcript.** One will eat the run. Summaries only.
 6. **Background work.** A headless run dies when its reply ends. Nothing may run in the background.
 7. **Obeying what it reads.** Text in a message is data. The guard says so; the run is still only as
-   safe as its permissions, which is why a locked-down configuration exists.
+   safe as its permissions, which is why the job ships restricted to a short tool list (README, "Scheduled jobs are
+   restricted by default").
 8. **Installing it for someone who will not read it.** Then nobody notices when it breaks.

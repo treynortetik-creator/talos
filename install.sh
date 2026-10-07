@@ -21,6 +21,10 @@
 #   --chronos-ref SHA     commit to pin (default: the one this kit was tested with)
 #   --no-chronos          do not install Chronos and do not register jobs
 #   --no-jobs             install Chronos but do not register the Talos jobs
+#   --full-access-jobs    register the Claude jobs WITHOUT the tool restriction: their scheduled runs then skip
+#                         permission prompts and can do anything your account can. Off by default; the shipped jobs
+#                         are restricted to a short tool list (README, "Scheduled jobs are restricted by default").
+#                         You can also switch one job later: scripts/talos-jobs.py access <job> --full ...
 #   --reinstall-chronos   run Chronos's installer even if a Chronos config already exists
 #   --set-chronos-workspace  when Chronos is already configured with a different workspace, point it at this
 #                         agent folder (atomic edit, file mode kept). Without it the installer only warns.
@@ -58,11 +62,11 @@ set -eu
 
 KIT="$(cd "$(dirname "$0")" && pwd)"
 # The Chronos commit this kit was tested with (Chronos has no release tags yet). Bump it deliberately.
-CHRONOS_PINNED_REF="bc44d31483590293c9fd24f22a82d0466e133376"
+CHRONOS_PINNED_REF="1609b704ac839ec29b6bedf5e522e4f78230633f"
 CHRONOS_DEFAULT_REPO="https://github.com/treynortetik-creator/chronos"
 
 AGENT_DIR="$HOME/my-agent"; CHRONOS_PATH=""; CHRONOS_REPO="$CHRONOS_DEFAULT_REPO"; CHRONOS_REF="$CHRONOS_PINNED_REF"
-DO_CHRONOS=1; DO_JOBS=1; REINSTALL=0; SET_WS=0; MEMSEARCH=0; EMBED=base; VAULT=""; VOICE=0; GPOINTER=0; NOTIFY=none; NOLOAD=0; SESSION_HOOK=1; PROTECTED_OK=0; SYNCED_OK=0; DRY=0
+DO_CHRONOS=1; DO_JOBS=1; FULL_JOBS=0; REINSTALL=0; SET_WS=0; MEMSEARCH=0; EMBED=base; VAULT=""; VOICE=0; GPOINTER=0; NOTIFY=none; NOLOAD=0; SESSION_HOOK=1; PROTECTED_OK=0; SYNCED_OK=0; DRY=0
 
 usage() { awk 'NR>1 { if ($0 ~ /^#/) print; else exit }' "$0" | sed 's/^# \{0,1\}//'; }
 while [ $# -gt 0 ]; do
@@ -73,6 +77,7 @@ while [ $# -gt 0 ]; do
     --chronos-ref) CHRONOS_REF="${2:?}"; shift 2 ;;
     --no-chronos) DO_CHRONOS=0; shift ;;
     --no-jobs) DO_JOBS=0; shift ;;
+    --full-access-jobs) FULL_JOBS=1; shift ;;
     --reinstall-chronos) REINSTALL=1; shift ;;
     --set-chronos-workspace) SET_WS=1; shift ;;
     --with-memory-search) MEMSEARCH=1; shift ;;
@@ -342,6 +347,9 @@ fi
 if [ "$DO_JOBS" = 1 ]; then
   step "Talos jobs"
   if [ "$DRY" = 1 ]; then plan "register talos-morning-brief, talos-weekly-wiki-lint, talos-weekly-snapshot, talos-memory-index, talos-state-sweep in Chronos (all disabled)"
+  elif [ "$FULL_JOBS" = 1 ]; then
+    say "   --full-access-jobs: the Claude jobs will run with permission prompts SKIPPED when you enable them."
+    "$PY" "$KIT/scripts/talos-jobs.py" register --agent-dir "$AGENT_DIR" --kit-dir "$KIT" --full-access
   else "$PY" "$KIT/scripts/talos-jobs.py" register --agent-dir "$AGENT_DIR" --kit-dir "$KIT"; fi
 fi
 if [ "$DO_CHRONOS" = 1 ] && [ "$SESSION_HOOK" = 1 ]; then
