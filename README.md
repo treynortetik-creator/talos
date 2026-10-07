@@ -2,13 +2,23 @@
 
 ![Talos: your own agent, built on Claude Code](docs/talos-banner.jpg)
 
-**A personal AI agent kit for the Claude Code command line, with memory that survives.**
+**A personal agent that runs on top of the Claude Code CLI, on your own Mac and your own Claude plan.**
 
-Not a chatbot you re-explain yourself to every morning. Talos is a folder on your Mac: a config the
-agent reads every session, a linked wiki it keeps, a hook that re-injects its state whenever the
-session restarts *or the context compacts*, and (optionally) a scheduler so it can do small, boring,
-rule-shaped jobs while you are away. It learns from being corrected, and it gradually takes over the
-parts of your job that are rules rather than judgment.
+Talos is an OpenClaw-style personal agent, built on Claude Code instead of its own runtime. It is an agent wrapper
+for the Claude Code command line: a folder on your Mac that turns the CLI into something that works for you, not only
+while you are typing.
+
+- **It works between conversations.** Chronos scheduled jobs (a weekday morning brief, a weekly wiki check) run
+  headless and report to Telegram or a macOS banner (the jobs ship switched off; you enable them). You can text it from your phone through a Telegram channel.
+- **It carries its context across restarts and compaction.** A SessionStart hook re-injects the handoff, the state
+  file and today's log every time the session starts, resumes, clears, forks *or the context compacts*.
+- **It keeps a linked wiki.** Small notes with `[[links]]`, searchable by grep and, optionally, by meaning. Memory is
+  one feature of the agent, not the headline.
+- **It has rules, enforced by hooks.** A short config of one-line triggers, plus hooks that refuse the shell moves
+  that are never right and flag claims with no evidence. It learns from being corrected.
+
+Setup is: clone, `./install.sh`, open the agent folder in Claude Code, say **`Read BOOTSTRAP.md and set me up.`**
+It interviews you and builds its own config.
 
 ![Chronos, the scheduler Talos installs: every scheduled job, whether it ran, and what it cost. Demo data.](docs/chronos-dashboard.png)
 
@@ -23,6 +33,9 @@ parts of your job that are rules rather than judgment.
 - MIT licensed. Read [the Security model](#security-model) before you connect it to anything.
 
 ## Quick start
+
+Setup is four steps: clone the repo, run `./install.sh`, open the agent folder in Claude Code, and type
+`Read BOOTSTRAP.md and set me up.` The agent then interviews you and builds its own config.
 
 ```bash
 git clone https://github.com/treynortetik-creator/talos.git
@@ -59,8 +72,9 @@ lines with your paths. `--no-load` does nothing when a Chronos config already ex
 
 ## What it looks like day to day
 
-Once you have enabled the morning brief, this is a weekday: a message like this lands in Telegram (or a macOS
-banner) around 07:03, before you have opened a laptop. *Synthetic example:*
+The agent runs between your conversations as well as during them. Once you have enabled the morning brief, this is a
+weekday: a message like this lands in Telegram (or a macOS banner) around 07:03, before you have opened a laptop.
+*Synthetic example:*
 
 ```
 Chronos: talos-morning-brief finished.
@@ -71,7 +85,8 @@ Morning brief, Tue 6 Oct
 - Filed back to memory: "Atlas review moved to Tuesday" (was Monday).
 ```
 
-You open a terminal at 09:30, and the agent already knows:
+You open a terminal at 09:30. Nothing to re-explain: the session-start hook has already put the handoff, the
+state file and today's log in front of it.
 
 ```
 $ cd ~/my-agent && claude
@@ -83,7 +98,16 @@ Chronos ran the morning brief at 07:03; one fact was filed back. STATE.md says t
 If a job fails, you get a short failure message instead, and the Chronos dashboard (above) shows the red dot.
 Nothing sends, posts or deletes on its own: the jobs read, summarise and write notes.
 
+Away from the desk, you can text the agent from your phone if you started it with the Telegram channel on
+(`bash scripts/talos-chat.sh`; see [Talk to it from your phone](#talk-to-it-from-your-phone-optional)). The channel only
+answers while a session is running.
+
 ## What you get
+
+The pieces, grouped by what they do for the agent: the on-ramp (`START-HERE.md`, `BOOTSTRAP.md`,
+`SETUP-INTERVIEW.md`), the work-while-you-are-away layer (`jobs/`, `notify/`, Chronos), the phone channel
+(`setup/telegram.md`), the continuity and enforcement hooks (`hooks/`), and the knowledge base (`wiki/`, memory
+search). Everything in the folder:
 
 | | |
 |---|---|
@@ -112,8 +136,14 @@ Nothing sends, posts or deletes on its own: the jobs read, summarise and write n
 
 ## The idea, in one page
 
-A language model has no memory, no continuity, and no way to know whether its own judgment is any good.
-Each of those gets its own file-backed layer, and each layer has one job and one lifetime:
+Claude Code is the engine. On its own it acts when you type, and it does not carry your working context from one
+session to the next. Talos is the wrapper around it that adds three things, so the CLI behaves like a personal agent:
+
+- **It works without you.** Chronos runs scheduled jobs headless through `claude -p` and delivers the result to
+  Telegram or a macOS banner.
+- **It reaches you where you are.** A Telegram channel lets you message it from your phone while a session is open.
+- **It does not start from zero.** The six file-backed layers below carry its context across restarts and
+  compaction, each with one job and one lifetime. The wiki is one of them, not the whole point.
 
 1. **Continuity.** A hook re-injects your state every time the session restarts *or the context compacts*.
    A notes file alone does not work: the agent has to remember to read it, and a compacted agent keeps its
