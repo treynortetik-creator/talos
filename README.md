@@ -430,7 +430,9 @@ those files. What Chronos passes back in through `--settings` is exactly: the ag
 `permissions.deny` merged from your user, project and local files (a deny can only narrow), and your own `apiKeyHelper`. No
 allow rule, no `env`, no plugin or MCP setting. Because **a hook can answer "allow"**, the files that define hooks are
 write-protected in restricted runs: `Edit` (which covers Write) is denied on the agent folder's `.claude/`, `.git/`,
-`.mcp.json` and `hooks/`, so even a job you give broad Edit on the folder cannot rewrite a guard or plant an approval.
+`.mcp.json` and `hooks/`, so a job cannot rewrite a hook file or plant an approval there. Hooks also run scripts from
+`scripts/`, which is not write-protected: the shipped jobs cannot edit it, but if you give a job broad Edit on the whole
+agent folder, it could change those scripts. Keep Edit grants narrow (the shipped jobs allow only `wiki/` and `memory/briefs/`).
 Checked live (2026-10-07, Claude Code 2.1.287): with `Bash(curl:*)` planted in `settings.local.json`, a run without the flag
 executed `curl`, and a restricted run refused it. One side effect: `CLAUDE.md` is **not** auto-loaded in a restricted run
 (the brief's prompt reads it explicitly; the other jobs do not need it). Also not loaded: a user-level plugin (and any MCP
