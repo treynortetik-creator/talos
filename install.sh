@@ -62,7 +62,7 @@ set -eu
 
 KIT="$(cd "$(dirname "$0")" && pwd)"
 # The Chronos commit this kit was tested with (Chronos has no release tags yet). Bump it deliberately.
-CHRONOS_PINNED_REF="1609b704ac839ec29b6bedf5e522e4f78230633f"
+CHRONOS_PINNED_REF="1da8f44c880dd27f987e8e160b009e6e8124ca2f"
 CHRONOS_DEFAULT_REPO="https://github.com/treynortetik-creator/chronos"
 
 AGENT_DIR="$HOME/my-agent"; CHRONOS_PATH=""; CHRONOS_REPO="$CHRONOS_DEFAULT_REPO"; CHRONOS_REF="$CHRONOS_PINNED_REF"
@@ -252,6 +252,8 @@ if [ "$DO_CHRONOS" = 1 ]; then
 
   if [ -f "$CFG" ] && [ "$REINSTALL" != 1 ]; then
     say "   Chronos is already configured ($CFG): not running its installer again."
+    say "   NOTE: that means the Chronos launchd runs may be OLDER than the pinned clone. Talos reads the version of the one launchd"
+    say "   actually runs; the restricted jobs need 0.2.2 and are skipped if it is older or unknown (--reinstall-chronos updates it)."
     # Chronos cd's into its OWN workspace before it starts `claude -p`, so a job's CLAUDE.md, hooks and the
     # pre-tool guard load from THAT folder, not from the agent folder. The job prompt tells the agent to cd
     # to its folder, but that happens after the session has already started. If the two differ, say so loudly.

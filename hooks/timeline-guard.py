@@ -67,6 +67,11 @@ def in_scope(rel):
 
 
 def load_lint():
+    # this EXECUTES scripts/wiki-lint.py: it must be a file inside the agent folder with no symlink on the way (a symlinked
+    # scripts/ would otherwise run someone else's code on every wiki write). Raising makes it a guard failure: allow in a
+    # live session, deny when unattended.
+    if not C.contained(LINT) or not os.path.isfile(LINT):
+        raise RuntimeError("scripts/wiki-lint.py is missing or is not a plain file inside the agent folder")
     spec = importlib.util.spec_from_file_location("wiki_lint_shared", LINT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -129,6 +134,7 @@ def deny_reason(lint, rel, viol):
 
 
 def main():
+    C.arm_guard_timeout("timeline-guard")
     if C.killed(KILL_NAME):
         return allow()
     d = C.read_stdin()

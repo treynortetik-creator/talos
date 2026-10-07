@@ -174,8 +174,8 @@ def check_job(j, where="job"):
             errs.append("%s: a command job runs on its clock schedule only (no triggers, clock stays on)" % jid)
         if j.get("model"):
             errs.append("%s: a command job does not use Claude, so it has no model" % jid)
-    if j.get("restricted") not in (None, True, False):
-        errs.append("%s: restricted must be true or false" % jid)
+    if "restricted" in j and not isinstance(j.get("restricted"), bool):
+        errs.append("%s: restricted must be true or false (a string or a number is invalid, never read as unrestricted)" % jid)
     if j.get("restricted") is True and j.get("kind") == "command":
         errs.append("%s: a command job runs one fixed shell command and has no tools to restrict" % jid)
     if j.get("restricted") is True and j.get("in_session") is True:
@@ -262,43 +262,66 @@ def legacy_hash(path, agent):
     return hashlib.sha256(text.replace(agent, PLACEHOLDER).encode("utf-8")).hexdigest()
 
 
-def chronos_too_old_for_restricted():
-    """The Chronos version string when it is known and older than 0.2.2, else None (unknown is treated as new enough:
-    install.sh pins a Chronos that has it)."""
-    cv = chronos_version()
-    if cv is not None and cv < RESTRICTED_MIN_CHRONOS:
-        return ".".join(str(x) for x in cv)
-    return None
-
-
 def parse_version(text):
     m = re.search(r"(\d+)\.(\d+)\.(\d+)", str(text or ""))
     return tuple(int(x) for x in m.groups()) if m else None
 
 
-def chronos_version():
-    """The version of the Chronos runtime that will run the jobs, or None when it cannot be found (then we assume it is new enough).
-    Reads lib/chronoslib.py (VERSION = "x.y.z") from the checkout install.sh recorded, or from the copied runtime."""
-    cfgdir = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    cands = []
+TICK_LABEL = "io.github.chronos.tick"
+UPDATE_CHRONOS_HELP = (
+    "To move the Chronos that actually runs your jobs to the version Talos pins: for a NEW agent folder, re-run ./install.sh "
+    "with --reinstall-chronos (it re-runs Chronos's own installer, which rewrites the launchd plist). For an agent you already "
+    "have: git -C ~/.local/share/talos/chronos fetch origin && git -C ~/.local/share/talos/chronos checkout --detach <the "
+    "CHRONOS_PINNED_REF at the top of install.sh> && bash ~/.local/share/talos/chronos/install.sh --workspace <your agent folder> "
+    "(the Chronos clone is a detached checkout, so `git pull` does nothing there).")
+
+
+def installed_chronos():
+    """(version tuple or None, description) for the Chronos that LAUNCHD actually runs.
+
+    The clone Talos made (recorded in ~/.config/talos/chronos-dir) is NOT authoritative: when a Chronos config already existed,
+    install.sh leaves Chronos's installer alone, so launchd can still be running an older copy than the pinned clone. The tick
+    agent's plist names the script it runs (<runtime>/bin/chronos-tick.sh), so the version is read from THAT runtime's
+    lib/chronoslib.py. Anything that cannot be read is None: the caller must treat None as unknown, not as new enough."""
+    import plistlib
+    agents = os.environ.get("CHRONOS_LAUNCHAGENTS_DIR") or os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents")
+    plist = os.path.join(agents, TICK_LABEL + ".plist")
     try:
-        d = open(os.path.join(cfgdir, "talos", "chronos-dir"), encoding="utf-8").read().strip()
+        with open(plist, "rb") as fh:
+            data = plistlib.load(fh)
+    except Exception:
+        return None, "no Chronos scheduler is installed (no %s)" % plist
+    script = next((str(x) for x in (data.get("ProgramArguments") or []) if str(x).endswith("chronos-tick.sh")), "")
+    if not script:
+        return None, "%s does not name a chronos-tick.sh" % plist
+    runtime = os.path.dirname(os.path.dirname(script))
+    try:
+        txt = open(os.path.join(runtime, "lib", "chronoslib.py"), encoding="utf-8").read(20000)
     except OSError:
-        d = ""
-    home = os.path.expanduser("~")
-    if d:
-        # Chronos copies its runtime out of Desktop/Documents/Downloads; that copy is what launchd runs
-        if any(d.startswith(os.path.join(home, f) + os.sep) for f in ("Desktop", "Documents", "Downloads")):
-            cands.append(os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(home, ".local", "share"), "chronos"))
-        cands.append(d)
-    for c in cands:
-        try:
-            txt = open(os.path.join(c, "lib", "chronoslib.py"), encoding="utf-8").read(20000)
-        except OSError:
-            continue
-        m = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', txt, re.M)
-        if m:
-            return parse_version(m.group(1))
+        return None, "cannot read the Chronos runtime that %s points at (%s)" % (TICK_LABEL, runtime)
+    m = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', txt, re.M)
+    v = parse_version(m.group(1)) if m else None
+    if v is None:
+        return None, "cannot read a version from %s/lib/chronoslib.py" % runtime
+    return v, "Chronos %s at %s" % (".".join(str(x) for x in v), runtime)
+
+
+def chronos_version():
+    """The version of the Chronos that launchd runs, or None when it cannot be determined (see installed_chronos)."""
+    return installed_chronos()[0]
+
+
+def restricted_blocker():
+    """None when the Chronos that launchd runs is known to be 0.2.2 or newer; otherwise the plain-English reason a restricted
+    job must not be registered or enabled. An older Chronos IGNORES "restricted": true and would run the job with permission
+    prompts skipped, and an UNKNOWN version cannot be trusted either: both refuse."""
+    v, where = installed_chronos()
+    if v is None:
+        return "I cannot tell which Chronos will run your jobs (%s). Restricted jobs need Chronos 0.2.2 or newer, and a Chronos that " \
+               "ignores the setting would run them with permission prompts skipped. %s" % (where, UPDATE_CHRONOS_HELP)
+    if v < RESTRICTED_MIN_CHRONOS:
+        return "the Chronos that runs your jobs is %s; restricted jobs need 0.2.2 (an older Chronos ignores the setting and would " \
+               "run them with permission prompts skipped). %s" % (where, UPDATE_CHRONOS_HELP)
     return None
 
 
@@ -420,7 +443,7 @@ def cmd_register(a):
     os.makedirs(jd, exist_ok=True)
     added, kept, skipped, restricted_skipped = [], [], [], []
     cv = chronos_version()
-    old_chronos = chronos_too_old_for_restricted()
+    old_chronos = None if a.full_access else restricted_blocker()
     if re.search(r"\s", agent) and not a.full_access:
         print("  WARNING: %r contains a space. A restricted job's command rules name the agent folder, and a path with a space "
               "cannot be matched reliably, so those jobs would be refused their own scripts (they fail closed, loudly). "
@@ -464,13 +487,11 @@ def cmd_register(a):
         print("  registered %s (disabled)" % jid)
     for jid in kept:
         print("  kept existing %s (not overwritten)" % jid)
-    for jid, ver in restricted_skipped:
-        print("  SKIPPED %s: it is a tool-restricted job and your Chronos is %s (restricted jobs need 0.2.2; an older Chronos would "
-              "ignore the restriction and run it with permissions skipped). Update Chronos (git pull, then re-run its install.sh) and "
-              "run this again, or pass --full-access to register it unrestricted." % (jid, ver))
+    for jid, why in restricted_skipped:
+        print("  SKIPPED %s (tool-restricted): %s Then run this again, or pass --full-access to register it unrestricted." % (jid, why))
     for jid, ver in skipped:
         print("  SKIPPED %s: it is a plain command job and your Chronos is %s (command jobs need 0.2.1). "
-              "Update Chronos (git pull, then re-run its install.sh) and run this again." % (jid, ver))
+              "%s Then run this again." % (jid, ver, UPDATE_CHRONOS_HELP))
     print("jobs file: %s" % jf)
     return 0
 
@@ -506,7 +527,8 @@ def cmd_list(a):
         print("no Talos jobs registered in %s" % jf)
         return 0
     for j in rows:
-        acc = "command" if is_command(j) else ("RESTRICTED" if is_restricted(j) else "FULL ACCESS")
+        acc = "command" if is_command(j) else ("INVALID" if ("restricted" in j and not isinstance(j["restricted"], bool))
+                                                else ("RESTRICTED" if is_restricted(j) else "FULL ACCESS"))
         print("%-26s %-8s %-11s %s %s" % (j["id"], "ON" if j.get("enabled") else "disabled", acc,
                                           j.get("time"), j.get("days")))
     return 0
@@ -523,10 +545,9 @@ def cmd_enable(a, on=True):
         if hit is None:
             die("no job %r in %s" % (a.id, jf))
         if on and is_restricted(hit):
-            old = chronos_too_old_for_restricted()
-            if old:
-                die("%s is a tool-restricted job and your Chronos is %s; restricted jobs need 0.2.2 (an older Chronos ignores the "
-                    "restriction and would run it with permissions skipped). Update Chronos first." % (a.id, old))
+            why = restricted_blocker()
+            if why:
+                die("%s is a tool-restricted job, not enabled: %s" % (a.id, why))
         hit["enabled"] = bool(on)
         if on and getattr(a, "time", None):
             hit["time"] = a.time
@@ -560,9 +581,9 @@ def cmd_access(a):
             hit["restricted"] = False
             hit.pop("allowed_tools", None)
         else:
-            old = chronos_too_old_for_restricted()
-            if old:
-                die("your Chronos is %s; restricted jobs need 0.2.2" % old)
+            why = restricted_blocker()
+            if why:
+                die("not changed: %s" % why)
             if a.id not in tmpl or not tmpl[a.id].get("allowed_tools"):
                 die("%s is not a shipped Talos job, so there is no default tool list for it. Set \"restricted\": true and "
                     "\"allowed_tools\" in jobs.json (or the Chronos UI) yourself." % a.id)
@@ -647,23 +668,34 @@ def cmd_harden(a):
     jf, jd = load_chronos(a.chronos_config)
     tmpl = {j["id"]: j for j in template_jobs(kit) if isinstance(j, dict)}
     if not a.full_access:
-        old = chronos_too_old_for_restricted()
-        if old:
-            die("your Chronos is %s; restricted jobs need 0.2.2. Update Chronos first (git pull, re-run its install.sh), "
-                "or pass --full-access to record that you want these jobs unrestricted." % old)
+        why = restricted_blocker()
+        if why:
+            die("nothing changed: %s Or pass --full-access to record that you want these jobs unrestricted." % why)
     changed = []
     with JobsLock(jf):
         jobs = read_jobs(jf)
+        plan = []                       # phase 1: work out and VALIDATE every change; nothing is written until all are valid
         for j in jobs:
             jid = str(j.get("id", "")) if isinstance(j, dict) else ""
             if not jid.startswith(PREFIX) or is_command(j) or "restricted" in j or jid not in tmpl:
                 continue
             new = render_job(tmpl[jid], agent, a.full_access)
-            j["restricted"] = new["restricted"] if "restricted" in new else True
+            upd = dict(j)
+            upd["restricted"] = new["restricted"] if "restricted" in new else True
             if "allowed_tools" in new:
-                j["allowed_tools"] = new["allowed_tools"]
-            j["updated"] = now_iso()
+                upd["allowed_tools"] = new["allowed_tools"]
+            upd["updated"] = now_iso()
             notes = []
+            if upd["restricted"] is True and upd.get("in_session") is True:
+                # a restricted job cannot also run in a live session (that run would use the session's own permissions, and
+                # Chronos refuses the pair): switch the live-session arming off rather than write an invalid job
+                upd["in_session"] = False
+                notes.append("in_session switched OFF (a restricted job cannot run in a live session; Chronos still runs it on schedule)")
+            errs = check_job(upd)
+            if errs:
+                die("nothing changed: %s would be invalid after hardening: %s" % (jid, "; ".join(errs)))
+            plan.append((j, upd, jid, notes))
+        for j, upd, jid, notes in plan:  # phase 2: write
             if not a.full_access:
                 for fname in ("prompt.md", "guard.md"):
                     dst = os.path.join(jd, jid, fname)
@@ -677,6 +709,8 @@ def cmd_harden(a):
                         notes.append("%s updated" % fname)
                     else:
                         notes.append("%s KEPT (you edited it: check that every command in it is one the tool list allows)" % fname)
+            j.clear()
+            j.update(upd)
             changed.append((jid, notes))
         if changed:
             write_jobs(jf, jobs)

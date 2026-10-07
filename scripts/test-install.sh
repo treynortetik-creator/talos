@@ -80,6 +80,24 @@ out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$OLD" --
 { [ "$rc" = 0 ] && grep -q 'quiet=0' "$HOME/.chronos/fake-install.log" && printf '%s' "$out" | grep -q '   chronos: no jobs yet'; } \
   && ok "a Chronos without --quiet is not passed it, and its output is still labelled" || no "old-Chronos fallback wrong (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
 
+# ---- 2d. THE REVIEW'S CASE: a Chronos config already exists, so Chronos's installer is not re-run; the pinned clone is 0.2.2
+# but launchd still runs an older copy. Talos must read the version of the copy launchd runs, and skip the restricted jobs.
+fresh_home h2d
+OLDRT="$SB/old-runtime"; rm -rf "$OLDRT"; mkdir -p "$OLDRT/lib" "$OLDRT/bin"; printf 'VERSION = "0.2.1"\n' > "$OLDRT/lib/chronoslib.py"
+python3 - "$CHRONOS_LAUNCHAGENTS_DIR/io.github.chronos.tick.plist" "$OLDRT" <<'PY'
+import plistlib,sys
+plistlib.dump({"Label":"io.github.chronos.tick","ProgramArguments":["/bin/bash",sys.argv[2]+"/bin/chronos-tick.sh"]},open(sys.argv[1],"wb"))
+PY
+mkdir -p "$HOME/.config/chronos/jobs" "$HOME/.chronos"; echo "[]" > "$HOME/.config/chronos/jobs.json"
+printf '{"workspace": "%s", "jobs_file": "~/.config/chronos/jobs.json", "jobs_dir": "~/.config/chronos/jobs", "notify": ""}\n' "$HOME/agent" > "$CHRONOS_CONFIG"
+out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --no-load 2>&1)"; rc=$?
+n=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j["id"].startswith("talos-")))' "$HOME/.config/chronos/jobs.json")
+r=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j.get("restricted") is True))' "$HOME/.config/chronos/jobs.json")
+{ [ "$rc" = 0 ] && [ "$r" = 0 ] && [ "$n" = 1 ] && ! grep -q 'install.sh --workspace' "$HOME/.chronos/fake-install.log" 2>/dev/null \
+  && printf '%s' "$out" | grep -q 'not running its installer again' && printf '%s' "$out" | grep -q 'SKIPPED talos-morning-brief' && printf '%s' "$out" | grep -q "$OLDRT"; } \
+  && ok "an existing Chronos config + an OLDER runtime under launchd: Chronos's installer is not re-run, and the restricted jobs are skipped (read from the runtime launchd runs, not the 0.2.2 clone), with the runtime named" \
+  || no "install trusted the clone's version or registered restricted jobs on an old runtime (rc=$rc jobs=$n restricted=$r)" "$(printf '%s' "$out" | tail -8)"
+
 # ---- 2c. the documented opt-out: --full-access-jobs registers the Claude jobs unrestricted, and says so
 fresh_home h2c
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --no-load --full-access-jobs 2>&1)"; rc=$?

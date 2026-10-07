@@ -438,6 +438,41 @@ for spec in "claim-gate.py" "claim-gate.py inject" "agent-log.py" "statusline.py
   { [ "$rc" = 0 ] && ! printf '%s' "$out" | grep -qi 'traceback\|"deny"\|"block"'; } || bad="$bad [$spec rc=$rc]"
 done
 [ -z "$bad" ] && ok "reminder hooks (claim gate, channel debt, agent log, status line, hands-free) stay fail-open when unattended" || no "a reminder hook blocked or crashed unattended:$bad"
+# a HUNG guard: Claude Code treats a hook that outlives its timeout as a non-blocking error, so the action would run unchecked.
+# Each guard arms an alarm well inside that: a live session is allowed through, an unattended run is blocked. (stdin is held
+# open for a few seconds so the guard sits in its read; the alarm is shortened to 1s for the test.)
+hang() { # $1 = hook, $2 = extra env assignment; prints "<stdout, newlines removed>|<exit code>|<seconds the guard itself ran>"
+  sleep 4 | ( cd "$A" && t=$SECONDS; out="$(env TALOS_GUARD_TIMEOUT_S=1 $2 python3 "hooks/$1" 2>/dev/null)"; rc=$?; printf '%s|%s|%s' "$(printf '%s' "$out" | tr -d '\n')" "$rc" "$((SECONDS - t))" )
+}
+r="$(hang pre-tool-guard.py CHRONOS_RUN=1)"; rl="$(hang pre-tool-guard.py FOO=1)"
+{ printf '%s' "$r" | grep -q '^|2|' && printf '%s' "$rl" | grep -q '^|0|'; } && ok "pre-tool guard: a hang is refused (exit 2) when unattended and allowed (exit 0) in a live session, within the alarm, not after 4 seconds" || no "pre-tool guard hang handling wrong" "unattended=[$r] live=[$rl]"
+{ [ "${r##*|}" -le 2 ] && [ "${rl##*|}" -le 2 ]; } && ok "pre-tool guard: the alarm, not the end of the held-open pipe, ended it (${r##*|}s unattended, ${rl##*|}s live)" || no "pre-tool guard waited for stdin to close (${r##*|}s)"
+printf 'zebra-clinic\n' > "$V/_guard-terms.txt"; printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"
+for g in append-only-guard.py check-vault.py; do
+  r="$(hang "$g" CHRONOS_RUN=1)"; rl="$(hang "$g" FOO=1)"
+  { denied "${r%%|*}" && printf '%s' "$r" | grep -q 'did not finish' && [ "${rl%%|*}" = "{}" ]; } && ok "$g: a hung run is DENIED when unattended and allowed in a live session (alarm, not the harness timeout)" || no "$g hang handling wrong" "unattended=[$r] live=[$rl]"
+  secs="${r##*|}"; [ "$secs" -le 3 ] && ok "$g: the alarm fired inside the shortened window ($secs s), not at the end of the held-open pipe" || no "$g took $secs seconds"
+done
+rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
+# timeline-guard hung inside wiki-lint.py (it executes that file)
+mkdir -p "$A/wiki/people"; printf -- '---\ntitle: x\ntype: person\nupdated: 2026-10-01\ntags: [a]\n---\nbody\n\n<!-- TIMELINE:APPEND-ONLY -->\n' > "$A/wiki/people/tl2.md"
+cp "$A/scripts/wiki-lint.py" "$SB/wiki-lint.keep" 2>/dev/null || true
+printf 'import time\ntime.sleep(30)\n' > "$A/scripts/wiki-lint.py"
+TLW2="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s","content":"x\\n\\n<!-- TIMELINE:APPEND-ONLY -->\\n- 2026-10-02 | a | src | high\\n"}}' "$A/wiki/people/tl2.md")"
+un="$(printf '%s' "$TLW2" | ( cd "$A" && TALOS_GUARD_TIMEOUT_S=1 CHRONOS_RUN=1 python3 hooks/timeline-guard.py 2>/dev/null ))"; live="$(printf '%s' "$TLW2" | ( cd "$A" && TALOS_GUARD_TIMEOUT_S=1 python3 hooks/timeline-guard.py 2>/dev/null ))"
+{ denied "$un" && [ "$live" = "{}" ]; } && ok "timeline guard: a hung wiki-lint.py is denied when unattended and allowed in a live session" || no "timeline guard hang handling wrong" "un=[$un] live=[$live]"
+cp "$SB/wiki-lint.keep" "$A/scripts/wiki-lint.py" 2>/dev/null || true
+
+# timeline-guard EXECUTES scripts/wiki-lint.py: not through a symlinked scripts/ folder
+A5="$SB/agent5"; mkagent "$A5"; mkdir -p "$A5/wiki/people"; rm -rf "$A5/scripts"; MARK5="$SB/tl-lint-ran"; rm -f "$MARK5"
+mkdir -p "$OUT/scripts5"; printf 'import sys\nopen("%s","a").write("RAN\\n")\nENTRY_FORMAT=ENTRY_GOOD=ENTRY_BAD=""\ndef new_timeline_violations(a,b): return []\n' "$MARK5" > "$OUT/scripts5/wiki-lint.py"; ln -s "$OUT/scripts5" "$A5/scripts"
+cp "$A/wiki/people/tl.md" "$A5/wiki/people/tl.md"
+TLW5="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s","content":"x\\n\\n<!-- TIMELINE:APPEND-ONLY -->\\n- 2026-10-02 | a | src | high\\n"}}' "$A5/wiki/people/tl.md")"
+live="$(printf '%s' "$TLW5" | ( cd "$A5" && python3 hooks/timeline-guard.py 2>/dev/null ))"; un="$(printf '%s' "$TLW5" | ( cd "$A5" && CHRONOS_RUN=1 python3 hooks/timeline-guard.py 2>/dev/null ))"
+{ [ ! -e "$MARK5" ] && [ "$live" = "{}" ] && denied "$un"; } && ok "timeline guard: a symlinked scripts/ is never executed (no wiki-lint.py runs from outside the project); live = allow, unattended = deny" || no "timeline guard executed or mishandled a symlinked scripts/" "ran=$([ -e "$MARK5" ] && echo yes || echo no) live=[$live] un=[$un]"
+rm -rf "$A5/scripts"; mkdir -p "$A5/scripts"; cp "$KIT/scripts/wiki-lint.py" "$A5/scripts/"
+printf '%s' "$TLW5" | ( cd "$A5" && python3 hooks/timeline-guard.py >/dev/null 2>&1 ) && ok "timeline guard control: with a real scripts/ folder it still runs" || no "timeline guard control failed"
+
 rm -f "$V/_guard-terms.txt"
 
 # ================================================================ every hook fails open on garbage

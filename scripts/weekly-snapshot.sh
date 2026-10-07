@@ -28,8 +28,11 @@ for p in memory wiki .learnings; do [ -d "$p" ] && [ ! -L "$p" ] && PATHS="$PATH
 # shellcheck disable=SC2086
 if [ -z "$(git status --porcelain -- $PATHS)" ]; then echo "snapshot: nothing to commit"; exit 0; fi
 
-# refuse BEFORE staging: a .env file or anything under a personal/ folder among the changes
-BAD="$(git status --porcelain --untracked-files=all -- $PATHS | sed 's/^...//' | grep -E '(^|/)\.env($|\.)|(^|/)personal/' | grep -v '\.env\.example"*$' | head -5)"
+# refuse BEFORE staging: a .env file or anything under a personal/ folder among the changes. `-z` gives NUL-separated,
+# UNQUOTED paths (plain porcelain output wraps a name with a space or a non-ASCII character in quotes, which would hide it
+# from this check). A record is "XY path" (a rename is followed by its original path), so the pattern allows a space before the name.
+BAD="$(git status --porcelain -z --untracked-files=all -- $PATHS | tr '\0' '\n' \
+  | grep -E '(^|[/ ])\.env($|\.)|(^|[/ ])personal/' | grep -v '\.env\.example$' | head -5)"
 if [ -n "$BAD" ]; then echo "snapshot: REFUSED, these changed paths must never be committed:"; echo "$BAD"; exit 1; fi
 
 # shellcheck disable=SC2086

@@ -55,6 +55,31 @@ def guard_failed(name, err):
         print("{}")
 
 
+def arm_guard_timeout(name, seconds=None):
+    """Call FIRST in a safety guard. A hook that outlives Claude Code's own hook timeout is a NON-blocking error, so a guard
+    that hangs (a stuck read, a runaway import) would let the action through. This alarm fires well before that: in a live
+    session it allows ({} and exit 0, as for any guard error); when unattended it DENIES. TALOS_GUARD_TIMEOUT_S overrides
+    the default of 20 seconds (the tests use 1)."""
+    try:
+        import signal
+        secs = int(seconds or os.environ.get("TALOS_GUARD_TIMEOUT_S") or 20)
+
+        def _fire(signum, frame):
+            try:
+                if unattended():
+                    sys.stdout.write(pretool_json("deny", "Talos %s did not finish within %ds and this run is unattended, so the action is "
+                                                  "blocked rather than allowed unchecked." % (name, secs)) + "\n")
+                else:
+                    sys.stdout.write("{}\n")
+                sys.stdout.flush()
+            finally:
+                os._exit(0)
+        signal.signal(signal.SIGALRM, _fire)
+        signal.alarm(max(1, secs))
+    except Exception:
+        pass
+
+
 # --------------------------------------------------------------------------- containment
 def contained(path, root=None):
     """The canonical path of `path` when it names something INSIDE `root` (default: the agent folder) and no

@@ -82,7 +82,28 @@ def check(command):
     return None
 
 
+def arm_timeout(seconds=None):
+    """A hook that outlives Claude Code's hook timeout is a non-blocking error (the command would run unchecked). Fire first:
+    live session = allow, unattended = refuse (exit 2). TALOS_GUARD_TIMEOUT_S overrides the 20 seconds (tests use 1)."""
+    try:
+        import signal
+        secs = int(seconds or os.environ.get("TALOS_GUARD_TIMEOUT_S") or 20)
+
+        def _fire(signum, frame):
+            if unattended():
+                sys.stderr.write("Talos guard did not finish within %ds in an unattended run, so this command is blocked rather "
+                                 "than allowed unchecked.\n" % secs)
+                sys.stderr.flush()
+                os._exit(2)
+            os._exit(0)
+        signal.signal(signal.SIGALRM, _fire)
+        signal.alarm(max(1, secs))
+    except Exception:
+        pass
+
+
 def main():
+    arm_timeout()
     try:
         payload = json.load(sys.stdin)
         if payload.get("tool_name") != "Bash":

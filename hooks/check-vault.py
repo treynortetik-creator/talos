@@ -65,6 +65,7 @@ def strings(v):
 
 
 def main():
+    C.arm_guard_timeout("check-vault")
     if C.killed(KILL_NAME):
         print("{}")
         return

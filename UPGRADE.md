@@ -339,8 +339,8 @@ automatic steps. Offer them, one at a time, and never do one without a yes.
    as over the cap. Do not shorten it behind their back.
 4. **Memory search is opt-in.** Mention `bash scripts/memory/setup.sh` and `setup/memory-search.md`; do not run it
    unasked (it downloads about 370 MB).
-5. **Chronos moves to 0.2.1 only if they update it** (`git pull` in the Chronos clone, then re-run its
-   `install.sh`). The upgrade never touches Chronos. New jobs arrive with `talos-jobs.py register`, disabled.
+5. **Chronos moves to 0.2.1 only if they update it** (the Chronos clone is a detached checkout, so `git pull` does
+   nothing there: see "Moving Chronos" in the 1.1.2 section below). The upgrade never touches Chronos. New jobs arrive with `talos-jobs.py register`, disabled.
    `talos-memory-index` is now a plain command job and needs Chronos 0.2.1; on an older one `register` skips it
    and says so. An already-registered `talos-memory-index` that still runs `claude -p` keeps working. To switch it
    to the command version: remove that one entry from `~/.config/chronos/jobs.json` and delete
@@ -354,16 +354,22 @@ automatic steps. Offer them, one at a time, and never do one without a yes.
 1.1.2 is a trust-hardening release. The code (hooks, scripts, docs) arrives with the normal upgrade. Three things
 need a person, because they touch what the upgrade never writes:
 
-1. **Chronos must be 0.2.2 first.** Restricted jobs need it; an older Chronos ignores the setting and would run a
-   "restricted" job with permission prompts skipped. Pull the pinned Chronos (`git pull` in the Chronos clone, then
-   re-run its `install.sh`), or bump nothing and stay on 1.1.1's behaviour on purpose. `talos-jobs.py` refuses to
-   register, enable or harden restricted jobs on an older Chronos and says so.
+1. **Chronos must be 0.2.2 first, and it is the Chronos that launchd RUNS that counts.** Restricted jobs need it; an
+   older Chronos ignores the setting and would run a "restricted" job with permission prompts skipped. `talos-jobs.py`
+   reads the version from the runtime named in `~/Library/LaunchAgents/io.github.chronos.tick.plist` (not from the clone
+   Talos made, which can be newer than what is installed), and refuses to register, enable or harden restricted jobs when
+   that version is older than 0.2.2 **or cannot be determined**. *Moving Chronos:* the clone at
+   `~/.local/share/talos/chronos` is a detached checkout, so `git pull` does nothing. Run
+   `git -C ~/.local/share/talos/chronos fetch origin && git -C ~/.local/share/talos/chronos checkout --detach <CHRONOS_PINNED_REF from the new kit's install.sh>`
+   then `bash ~/.local/share/talos/chronos/install.sh --workspace "<agent folder>"` (that rewrites the launchd plist). For a
+   brand-new agent folder, `./install.sh --reinstall-chronos` does the same. Or stay on 1.1.1's behaviour on purpose.
 2. **Jobs already registered keep running exactly as before until you harden them.** Run
    `python3 scripts/talos-jobs.py harden --agent-dir "<agent folder>" --kit-dir "<new kit>"`. It sets `restricted` and the
    tool list on each registered `talos-*` Claude job, replaces a job's `prompt.md` / `guard.md` only if it is still
    byte-for-byte what 1.1.1 shipped (an edited one is kept and reported, and you should check that every command it
    runs is one the tool list allows), and never touches the index command job, your own jobs or a job that already has
-   a `restricted` key. To record that you want full access instead, pass `--full-access`. `talos-jobs.py list` then
+   a `restricted` key. A job that was armed `in_session` has that switched off (a restricted job cannot run in a live
+   session). Every result is validated first; if any job would end up invalid, nothing is written. To record that you want full access instead, pass `--full-access`. `talos-jobs.py list` then
    shows RESTRICTED or FULL ACCESS per job. Read the first report of each job after hardening.
    If the morning brief had MCP tools named in `memory/brief-sources.md`, it has none now: add them with
    `talos-jobs.py allow talos-morning-brief mcp__<server>__<read tool>` (MORNING-BRIEF.md).

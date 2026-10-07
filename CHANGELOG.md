@@ -3,7 +3,7 @@
 ## 1.1.2-cli - 2026-10-07
 
 A trust-hardening release, after an external review. Nothing new to learn; three promises that were true in spirit are
-now true in code. **Chronos pin: 0.2.2** (the Chronos commit must be pushed before this kit's pin is, or a fresh install's
+now true in code. **Chronos pin: 0.2.2, commit `1da8f44`** (the Chronos commits must be pushed before this kit's pin is, or a fresh install's
 pinned clone fails).
 
 ### Security
@@ -32,6 +32,29 @@ pinned clone fails).
   file blocks the action and says why, and an `ask` becomes a `deny` (nobody to answer). The settings template wraps the
   four guard commands so a missing script, missing `python3` or a crash blocks an unattended run (exit 2) and never a live
   one. Reminder hooks (claim gate, channel debt, agent log, hands-free, status line, session start) stay fail-open.
+
+### Review fixes (same release, second pass)
+
+- **Saved permissions no longer widen a restricted job.** Claude Code merges `~/.claude/settings.json`, the agent's
+  `settings.json` and `settings.local.json` on top of `--allowedTools`; a saved `Bash(curl:*)` ran in a restricted run. Chronos
+  0.2.2 now starts restricted and event runs with `--setting-sources=` and passes the agent's hooks, `autoMemoryEnabled` and deny
+  rules back via `--settings`. Verified with the real CLI (planted allow: unrestricted-by-settings run executed curl, restricted
+  run refused it). `CLAUDE.md` is no longer auto-loaded in such a run.
+- **The Chronos version is read from the runtime launchd runs** (the tick plist), not from the clone: a pinned 0.2.2 clone next
+  to a launchd-run 0.2.1 used to pass. An undeterminable version now refuses restricted jobs too.
+- **`harden`** switches `in_session` off on a job that had it, validates every result and writes nothing if any would be invalid.
+- **A malformed `restricted`** (`"true"`, `1`) is invalid in Chronos (tick, Run now, run script) and in Talos (`list` shows
+  INVALID, `enable` refuses); it is never read as unrestricted.
+- **`weekly-snapshot.sh`** refuses a `.env` or `personal/` path that git quotes (spaces, non-ASCII, tabs), by using `-z`.
+- Update instructions no longer say `git pull` for the (detached) Chronos clone.
+- **Chronos deny list** adds `~/.config`, `~/.docker`, `~/.kube`, `~/.netrc`, `~/.npmrc` and other credential stores; folder-scoped
+  reads, which Talos ships, remain the real boundary.
+- **`timeline-guard.py`** refuses to execute `scripts/wiki-lint.py` through a symlinked folder (it is a guard failure: allow live,
+  deny unattended).
+- **A hung safety guard** no longer lets the action through: each guard arms a 20 s alarm (`TALOS_GUARD_TIMEOUT_S`) that denies when
+  unattended and allows in a live session.
+- **A restricted run in which every tool call was refused** (or whose usage record could not be written) is a failure and notifies,
+  instead of being marked done; refusals are appended to the report. (Chronos.)
 
 ### Added
 

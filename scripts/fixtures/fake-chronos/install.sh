@@ -10,5 +10,8 @@ mkdir -p "$(dirname "$cfg")" "$HOME/.chronos"
 printf '{\n  "workspace": "%s",\n  "jobs_file": "~/.config/chronos/jobs.json",\n  "jobs_dir": "~/.config/chronos/jobs",\n  "notify": ""\n}\n' "$ws" > "$cfg"
 echo "[]" > "$HOME/.config/chronos/jobs.json"; mkdir -p "$HOME/.config/chronos/jobs"
 echo "install.sh --workspace $ws noload=$noload quiet=$quiet" >> "$HOME/.chronos/fake-install.log"
+# like the real installer: write the tick plist. Talos reads the version from the runtime this plist names, never from its own clone.
+DIR="$(cd "$(dirname "$0")" && pwd)"; AGENTS="${CHRONOS_LAUNCHAGENTS_DIR:-$HOME/Library/LaunchAgents}"; mkdir -p "$AGENTS"
+printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>Label</key><string>io.github.chronos.tick</string><key>ProgramArguments</key><array><string>/bin/bash</string><string>%s/bin/chronos-tick.sh</string></array></dict></plist>\n' "$DIR" > "$AGENTS/io.github.chronos.tick.plist"
 if [ "$quiet" = 1 ]; then echo "chronos 0.2.2 installed: fake"
 else echo "no jobs yet: created an empty jobs.json"; echo "Chronos is installed."; fi

@@ -55,6 +55,7 @@ def relpath_in_root(path):
 
 
 def main():
+    C.arm_guard_timeout("append-only-guard")
     if C.killed(KILL_NAME):
         print("{}")
         return

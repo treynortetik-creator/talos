@@ -356,7 +356,8 @@ first argument works. `curl` never polls, so it cannot cause the Telegram HTTP 4
 Claude with the Telegram channel plugin enabled would; Chronos also disables those plugins in jobs.
 
 **One workspace.** Chronos starts every scheduled run in its configured workspace, so that folder must be your
-agent folder for the agent's `CLAUDE.md`, hooks and guard to load in a job. The installer warns when it is not
+agent folder for the agent's hooks and guard to load in a job (and, for an unrestricted job, its `CLAUDE.md`; a
+restricted run does not auto-load `CLAUDE.md`, see the security section). The installer warns when it is not
 (`--set-chronos-workspace` fixes it). Running a second agent needs a second Chronos config until Chronos grows a
 per-job workspace.
 
@@ -420,8 +421,16 @@ Nobody is at the keyboard during a headless run, so `claude -p` cannot ask. Chro
 is `--dangerously-skip-permissions`: the job can do anything your account can, and a prompt that says "never send
 anything" is only a request. **Since Talos 1.1.2 the four Claude jobs do not run that way.** They are registered
 `"restricted": true` with a tool list, and Chronos 0.2.2 starts them with `--permission-mode=default`, that list as
-`--allowedTools`, the matching `--tools`, `--strict-mcp-config` and deny rules for `.env`, `~/.ssh`, `~/.aws`,
-`~/.gnupg` and Chronos's own folders. Anything not on the list is **refused** (no one to prompt), and the run says so.
+`--allowedTools`, the matching `--tools`, `--strict-mcp-config`, **`--setting-sources=`** and deny rules for `.env`, `~/.ssh`, `~/.aws`, `~/.config`,
+`~/.gnupg` and other credential folders. Anything not on the list is **refused** (no one to prompt), and the run says so.
+`--setting-sources=` matters: Claude Code otherwise merges saved permissions from `~/.claude/settings.json`, the agent
+folder's `.claude/settings.json` and `settings.local.json` (where an "always allow" click is stored) on top of the job's
+list, so a saved `Bash(curl:*)` or a whole-MCP-server allow would widen a "restricted" job. A restricted run reads none of
+those files; the agent folder's hooks, `autoMemoryEnabled` and deny rules are passed back in explicitly, never an allow.
+Checked live (2026-10-07, Claude Code 2.1.287): with `Bash(curl:*)` planted in `settings.local.json`, a run without the flag
+executed `curl`, and a restricted run refused it. One side effect: `CLAUDE.md` is **not** auto-loaded in a restricted run
+(the brief's prompt reads it explicitly; the other jobs do not need it). Managed (organisation-installed) Claude Code
+settings, if you have any, still apply: no flag can switch those off.
 
 **Enforced** (by Claude Code's permission system and Chronos's flags; checked against Claude Code 2.1.287 on
 2026-10-07 by running the real CLI with these exact flags: a command outside the list, a write outside the allowed
@@ -449,8 +458,17 @@ want in a notification. The deny list is a best-effort set of well-known secret 
 rule syntax is a Claude Code feature that has changed between versions: if a job starts failing with permission
 refusals after a Claude Code update, read its report and `claude --help`, then see "Giving a restricted job more".
 
-**Which hooks still run.** Project hooks fire in these headless runs (verified: the pre-tool guard refused a `.env`
-command in a restricted run), and the safety guards fail closed there (above). Hooks are a second layer, not the first.
+**Which hooks still run.** The agent folder's hooks are passed to the run explicitly (verified: the pre-tool guard refused a
+`.env` command in a restricted run, and a guard with a syntax error blocked an unattended run but not a live one), and the
+safety guards fail closed there (above), including a guard that hangs: each arms a 20-second alarm that denies when
+unattended and allows in a live session (a hook that outlives Claude Code's own timeout would be a non-blocking error, i.e.
+the action would run unchecked). Hooks are a second layer, not the first.
+
+**Which Chronos counts.** Restricted jobs need Chronos 0.2.2. Talos reads the version from the runtime that the launchd tick
+agent (`io.github.chronos.tick.plist`) actually runs, not from the clone it made: if a Chronos config already existed,
+`install.sh` leaves Chronos's installer alone and launchd may still run an older copy. An older **or undeterminable** version
+makes `register` skip the restricted jobs, and `enable`, `access --restricted` and `harden` refuse, with the exact commands to
+move Chronos (its clone is a detached checkout, so `git pull` does nothing there).
 
 **Giving a restricted job more.** The morning brief reads mail, calendar and chat through MCP tools *you name*:
 

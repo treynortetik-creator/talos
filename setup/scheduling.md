@@ -19,7 +19,8 @@ simply has no timers.
    the hooks load as usual). Caveat: if Chronos was already configured with a different workspace, the
    installer leaves it alone and warns, and the runs start THERE, so this agent's `CLAUDE.md`, hooks and
    pre-tool guard do not load for them (a restricted job cannot even `cd`: its prompt assumes the agent folder is
-   the working directory). Fix it with `./install.sh --set-chronos-workspace` or by editing
+   the working directory). A restricted run reads no settings file at all, so `CLAUDE.md` is not auto-loaded in it; the
+   agent's hooks are passed in explicitly and still fire. Fix it with `./install.sh --set-chronos-workspace` or by editing
    `"workspace"` in `~/.config/chronos/config.json`. `verify-install.sh` flags a mismatch.
 3. The prompt is: a short Chronos preamble, the job's locked `guard.md`, then the job's `prompt.md`.
    `chronos prompt <id>` prints exactly what a run would receive.
