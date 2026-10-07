@@ -1,5 +1,7 @@
 # Talos
 
+![Talos: your own agent, built on Claude Code](docs/talos-banner.jpg)
+
 **A personal AI agent kit for the Claude Code command line, with memory that survives.**
 
 Not a chatbot you re-explain yourself to every morning. Talos is a folder on your Mac: a config the
