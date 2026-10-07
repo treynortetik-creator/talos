@@ -62,7 +62,7 @@ set -eu
 
 KIT="$(cd "$(dirname "$0")" && pwd)"
 # The Chronos commit this kit was tested with (Chronos has no release tags yet). Bump it deliberately.
-CHRONOS_PINNED_REF="1da8f44c880dd27f987e8e160b009e6e8124ca2f"
+CHRONOS_PINNED_REF="ac21e923c13e166df39d4bdb5fdd7551209711c6"
 CHRONOS_DEFAULT_REPO="https://github.com/treynortetik-creator/chronos"
 
 AGENT_DIR="$HOME/my-agent"; CHRONOS_PATH=""; CHRONOS_REPO="$CHRONOS_DEFAULT_REPO"; CHRONOS_REF="$CHRONOS_PINNED_REF"

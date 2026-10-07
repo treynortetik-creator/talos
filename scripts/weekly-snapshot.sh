@@ -25,14 +25,21 @@ PATHS=""
 for p in memory wiki .learnings; do [ -d "$p" ] && [ ! -L "$p" ] && PATHS="$PATHS $p"; done
 [ -n "$PATHS" ] || { echo "snapshot: none of memory, wiki, .learnings exists; nothing to do"; exit 0; }
 
-# shellcheck disable=SC2086
-if [ -z "$(git status --porcelain -- $PATHS)" ]; then echo "snapshot: nothing to commit"; exit 0; fi
+# Only paths git actually reports a change in: `git add -- <an existing but empty folder>` fails with "pathspec did not match",
+# and a commit naming an unchanged path is pointless. (An empty memory/ next to a dirty wiki/ must not stop the snapshot.)
+CH=""
+for p in $PATHS; do [ -n "$(git status --porcelain -- "$p")" ] && CH="$CH $p"; done
+[ -n "$CH" ] || { echo "snapshot: nothing to commit"; exit 0; }
+PATHS="$CH"
 
 # refuse BEFORE staging: a .env file or anything under a personal/ folder among the changes. `-z` gives NUL-separated,
 # UNQUOTED paths (plain porcelain output wraps a name with a space or a non-ASCII character in quotes, which would hide it
-# from this check). A record is "XY path" (a rename is followed by its original path), so the pattern allows a space before the name.
-BAD="$(git status --porcelain -z --untracked-files=all -- $PATHS | tr '\0' '\n' \
-  | grep -E '(^|[/ ])\.env($|\.)|(^|[/ ])personal/' | grep -v '\.env\.example$' | head -5)"
+# from this check). A record is "XY path" (a rename is followed by its original path), so the patterns allow a space before the
+# name. The `.env.example` exemption belongs to the .env pattern ONLY: memory/personal/x.env.example is still refused.
+# shellcheck disable=SC2086
+ST="$(git status --porcelain -z --untracked-files=all -- $PATHS | tr '\0' '\n')"
+BAD="$( { printf '%s\n' "$ST" | grep -E '(^|[/ ])personal/'
+          printf '%s\n' "$ST" | grep -E '(^|[/ ])\.env($|\.)' | grep -v '\.env\.example$'; } | head -5)"
 if [ -n "$BAD" ]; then echo "snapshot: REFUSED, these changed paths must never be committed:"; echo "$BAD"; exit 1; fi
 
 # shellcheck disable=SC2086

@@ -3,7 +3,7 @@
 ## 1.1.2-cli - 2026-10-07
 
 A trust-hardening release, after an external review. Nothing new to learn; three promises that were true in spirit are
-now true in code. **Chronos pin: 0.2.2, commit `1da8f44`** (the Chronos commits must be pushed before this kit's pin is, or a fresh install's
+now true in code. **Chronos pin: 0.2.2, commit `ac21e92`** (the Chronos commits must be pushed before this kit's pin is, or a fresh install's
 pinned clone fails).
 
 ### Security
@@ -55,6 +55,21 @@ pinned clone fails).
   unattended and allows in a live session.
 - **A restricted run in which every tool call was refused** (or whose usage record could not be written) is a failure and notifies,
   instead of being marked done; refusals are appended to the report. (Chronos.)
+
+### Review fixes (round 2)
+
+- **Hook files are write-protected in restricted runs** (Chronos denies `Edit` on `.claude/`, `.git/`, `.mcp.json`, `hooks/`): a hook
+  can answer "allow", so a job with broad Edit could otherwise have planted an approval. README now states exactly what is passed
+  back through `--settings` (hooks, `autoMemoryEnabled`, merged denies, the user's `apiKeyHelper`; never an allow).
+- Denies are merged from the user, project and local settings files. Tested live: a restricted job with broad Edit wrote a normal file
+  and was refused `hooks/` and `.claude/`.
+- MCP: a claude.ai connector tool named by `allow` loaded and ran in a restricted run (one live check). Plugin MCP servers and a project
+  `.mcp.json` that needs approval do not load (documented; fail-closed).
+- The guard alarm exits 2 when unattended even if its deny cannot be written (closed stdout).
+- `weekly-snapshot.sh`: the `.env.example` exemption no longer lets `memory/personal/x.env.example` through; an existing-but-empty
+  `memory/`, `wiki/` or `.learnings/` no longer breaks the snapshot (only folders git reports changes in are staged).
+- Docs: the version gate runs only at register/enable/access/harden; re-run `harden` after changing Chronos.
+- Pin: Chronos `ac21e92` (adds the above).
 
 ### Added
 

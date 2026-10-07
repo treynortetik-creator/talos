@@ -65,15 +65,20 @@ def arm_guard_timeout(name, seconds=None):
         secs = int(seconds or os.environ.get("TALOS_GUARD_TIMEOUT_S") or 20)
 
         def _fire(signum, frame):
+            code = 0
             try:
                 if unattended():
+                    code = 2        # if the deny cannot be written (closed or broken stdout) the exit code must still block
                     sys.stdout.write(pretool_json("deny", "Talos %s did not finish within %ds and this run is unattended, so the action is "
                                                   "blocked rather than allowed unchecked." % (name, secs)) + "\n")
+                    sys.stdout.flush()
+                    code = 0
                 else:
                     sys.stdout.write("{}\n")
-                sys.stdout.flush()
-            finally:
-                os._exit(0)
+                    sys.stdout.flush()
+            except Exception:
+                pass                # unattended: code stays 2 (block); live: 0 (allow)
+            os._exit(code)
         signal.signal(signal.SIGALRM, _fire)
         signal.alarm(max(1, secs))
     except Exception:

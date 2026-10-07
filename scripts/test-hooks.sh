@@ -454,6 +454,14 @@ for g in append-only-guard.py check-vault.py; do
   secs="${r##*|}"; [ "$secs" -le 3 ] && ok "$g: the alarm fired inside the shortened window ($secs s), not at the end of the held-open pipe" || no "$g took $secs seconds"
 done
 rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
+# the alarm's deny must still BLOCK when it cannot be written (stdout closed): exit code 2, not a fall-through to 0
+for g in append-only-guard.py check-vault.py; do
+  if [ "$g" = check-vault.py ]; then printf 'zebra-clinic\n' > "$V/_guard-terms.txt"; printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"; fi
+  sleep 4 | ( cd "$A" && CHRONOS_RUN=1 TALOS_GUARD_TIMEOUT_S=1 python3 "hooks/$g" >&- 2>/dev/null ); ru=$?
+  sleep 4 | ( cd "$A" && TALOS_GUARD_TIMEOUT_S=1 python3 "hooks/$g" >&- 2>/dev/null ); rl=$?
+  rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
+  { [ "$ru" = 2 ] && [ "$rl" = 0 ]; } && ok "$g: if the alarm's deny cannot be written (stdout closed) an unattended run still exits 2 (block); a live session exits 0" || no "$g alarm with a closed stdout: unattended rc=$ru (want 2), live rc=$rl (want 0)"
+done
 # timeline-guard hung inside wiki-lint.py (it executes that file)
 mkdir -p "$A/wiki/people"; printf -- '---\ntitle: x\ntype: person\nupdated: 2026-10-01\ntags: [a]\n---\nbody\n\n<!-- TIMELINE:APPEND-ONLY -->\n' > "$A/wiki/people/tl2.md"
 cp "$A/scripts/wiki-lint.py" "$SB/wiki-lint.keep" 2>/dev/null || true

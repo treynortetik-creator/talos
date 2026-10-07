@@ -426,10 +426,17 @@ anything" is only a request. **Since Talos 1.1.2 the four Claude jobs do not run
 `--setting-sources=` matters: Claude Code otherwise merges saved permissions from `~/.claude/settings.json`, the agent
 folder's `.claude/settings.json` and `settings.local.json` (where an "always allow" click is stored) on top of the job's
 list, so a saved `Bash(curl:*)` or a whole-MCP-server allow would widen a "restricted" job. A restricted run reads none of
-those files; the agent folder's hooks, `autoMemoryEnabled` and deny rules are passed back in explicitly, never an allow.
+those files. What Chronos passes back in through `--settings` is exactly: the agent folder's `hooks`, `autoMemoryEnabled`,
+`permissions.deny` merged from your user, project and local files (a deny can only narrow), and your own `apiKeyHelper`. No
+allow rule, no `env`, no plugin or MCP setting. Because **a hook can answer "allow"**, the files that define hooks are
+write-protected in restricted runs: `Edit` (which covers Write) is denied on the agent folder's `.claude/`, `.git/`,
+`.mcp.json` and `hooks/`, so even a job you give broad Edit on the folder cannot rewrite a guard or plant an approval.
 Checked live (2026-10-07, Claude Code 2.1.287): with `Bash(curl:*)` planted in `settings.local.json`, a run without the flag
 executed `curl`, and a restricted run refused it. One side effect: `CLAUDE.md` is **not** auto-loaded in a restricted run
-(the brief's prompt reads it explicitly; the other jobs do not need it). Managed (organisation-installed) Claude Code
+(the brief's prompt reads it explicitly; the other jobs do not need it). Also not loaded: a user-level plugin (and any MCP
+server it brings) and a project `.mcp.json` server that needed approval in a settings file. MCP tools that come from your
+account (claude.ai connectors) did load in a restricted run when named by `talos-jobs.py allow` (one live check, 2026-10-07);
+if a tool you added does not appear, the report says so and the brief carries on without it (fail-closed, by design). Managed (organisation-installed) Claude Code
 settings, if you have any, still apply: no flag can switch those off.
 
 **Enforced** (by Claude Code's permission system and Chronos's flags; checked against Claude Code 2.1.287 on
@@ -468,7 +475,10 @@ the action would run unchecked). Hooks are a second layer, not the first.
 agent (`io.github.chronos.tick.plist`) actually runs, not from the clone it made: if a Chronos config already existed,
 `install.sh` leaves Chronos's installer alone and launchd may still run an older copy. An older **or undeterminable** version
 makes `register` skip the restricted jobs, and `enable`, `access --restricted` and `harden` refuse, with the exact commands to
-move Chronos (its clone is a detached checkout, so `git pull` does nothing there).
+move Chronos (its clone is a detached checkout, so `git pull` does nothing there). **The version gate runs only when you
+register, enable, or change a job's access.** If you later re-point launchd at an older Chronos, restricted jobs would run
+unrestricted again (an old Chronos ignores the setting): re-run `talos-jobs.py harden --agent-dir ...` (or `list`) after any
+change to Chronos, and check that its version is 0.2.2 or newer.
 
 **Giving a restricted job more.** The morning brief reads mail, calendar and chat through MCP tools *you name*:
 

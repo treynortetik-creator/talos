@@ -392,6 +392,18 @@ done
 mkdir -p "$SN/memory/personal"; echo p > "$SN/memory/personal/p.md"; out="$(sn)"; rc=$?
 { [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'personal/p.md'; } && ok "snapshot script: anything under a personal/ folder is refused too" || no "personal/ not refused (rc=$rc)" "$out"
 rm -rf "$SN/memory/personal"
+# the .env.example exemption belongs to the .env pattern only: it must not let a personal/ path through
+mkdir -p "$SN/memory/personal"; echo x > "$SN/memory/personal/x.env.example"; before="$(git -C "$SN" rev-parse HEAD)"; out="$(sn)"; rc=$?
+{ [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'personal/x.env.example' && [ "$(git -C "$SN" rev-parse HEAD)" = "$before" ]; } && ok "snapshot script: memory/personal/x.env.example is still refused (the .env.example exemption does not apply to personal/)" || no "personal/x.env.example was not refused (rc=$rc)" "$out"
+rm -rf "$SN/memory/personal"; echo y > "$SN/memory/ok.env.example"
+out="$(sn)"; rc=$?; { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'committed'; } && ok "snapshot script: a plain .env.example outside personal/ is allowed" || no ".env.example wrongly refused (rc=$rc)" "$out"
+# an existing-but-EMPTY folder next to a changed one must not break the snapshot ("pathspec did not match")
+SE="$SB/snap-empty"; rm -rf "$SE"; mkdir -p "$SE/scripts" "$SE/memory" "$SE/wiki" "$SE/.learnings"; cp "$KIT/scripts/weekly-snapshot.sh" "$SE/scripts/"
+( cd "$SE" && git init -q . && git config user.email t@t && git config user.name t && echo base > memory/a.md && git add -A && git commit -q -m base && echo z >> memory/a.md )
+sn() { ( cd "${SNX:-$SN}" && bash scripts/weekly-snapshot.sh 2>&1 ); }
+SNX="$SE"; out="$(sn)"; rc=$?
+{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'committed 1 file'; } && ok "snapshot script: empty wiki/ and .learnings/ next to a changed memory/ do not break it" || no "empty folders broke the snapshot (rc=$rc)" "$out"
+out="$(sn)"; { [ $? = 0 ] && printf '%s' "$out" | grep -q 'nothing to commit'; } && ok "snapshot script: with only empty folders left it reports nothing to commit" || no "empty-only case wrong" "$out"
 # a parent repository must not be committed into: the repository has to BE the agent folder
 PAR="$SB/par"; rm -rf "$PAR"; mkdir -p "$PAR/agent/scripts" "$PAR/agent/memory"; cp "$KIT/scripts/weekly-snapshot.sh" "$PAR/agent/scripts/"; ( cd "$PAR" && git init -q . && git config user.email t@t && git config user.name t && echo a > agent/memory/a.md && git add -A && git commit -q -m b && echo b >> agent/memory/a.md )
 out="$( cd "$PAR/agent" && bash scripts/weekly-snapshot.sh 2>&1 )"; rc=$?; { [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'not this agent folder'; } && ok "snapshot script: refuses when the git repository is a PARENT folder, not the agent folder" || no "parent repo accepted (rc=$rc)" "$out"
