@@ -171,6 +171,14 @@ and never be registered** — the silent no-op, back by another door.
 So `upgrade.sh` prints a `HOOKS TO RECONCILE` section naming every hook the new kit registers
 that their settings.json does not. If it lists anything:
 
+**The tool for this (1.2.0):** `python3 "<new kit>/scripts/settings-merge.py" --agent-dir "<agent folder>" --template "<new kit>/templates/dot-claude/settings.json"`
+is a dry run that prints which hook registrations it would add; the same command with `--apply` writes them, after
+a timestamped backup next to the file, and touches nothing else (permissions, plugins, their own hooks and the
+Chronos hook stay exactly as they are). It never changes a matcher or rewrites a wrapper you already have: it reports
+those, and the by-hand steps below cover them. Use it, then run step 4 below to check the JSON.
+
+By hand, if you prefer:
+
 1. Open `<new kit>/templates/dot-claude/settings.json` and their `.claude/settings.json`.
 2. Merge the missing **hooks** entries into theirs. **Keep their `permissions` block exactly
    as it is** — that is the part that is theirs.
@@ -380,6 +388,39 @@ need a person, because they touch what the upgrade never writes:
 Nothing else changes: the hooks' own fixes (symlink containment, fail-closed guards) are code and arrive with the
 copy. A symlinked `memory/`, `wiki/` or `scripts/` was readable by the 1.1.1 session hook; if they deliberately
 symlink one of those, 1.1.2 refuses it and the continuity digest will be empty; move the real folder in.
+
+---
+
+## Coming from 1.1.2: new hooks, the optional extras, ten jobs (1.2.0)
+
+1.2.0 adds features; every one of them is opt-in or inert until you use it. The code arrives with the normal upgrade.
+What needs a person, because it touches what the upgrade never writes:
+
+1. **Register the new hooks (step 6).** Run `scripts/settings-merge.py` as described there. It adds `action-rules.py`
+   (a PreToolUse safety guard; it fails closed in an unattended run, like the other four), `bsd-sed-guard.py`,
+   `tg-claim-check.py` (Telegram reply tools; inert unless the channel is set up), `memory-reflex.py`
+   (UserPromptSubmit) and `compaction-guard.py` (PreCompact). `session-start.py` and `hands-free.py` are code and arrive
+   with the copy. Until you merge, the new hooks simply do not run; nothing breaks.
+2. **Register the new jobs.** `python3 scripts/talos-jobs.py register --agent-dir "<agent folder>" --kit-dir "<new kit>"` adds
+   `talos-dream-cycle` and the four `talos-watch-*` check-ins, **disabled**. The dream cycle is a restricted Claude job
+   (needs Chronos 0.2.2, like the others) and the check-ins are command jobs (Chronos 0.2.1+); `register` skips what your
+   Chronos cannot run and says so. Enable one only after reading its page: `setup/dream-cycle.md`, `setup/quiet-checkins.md`.
+3. **Your rules.** The starter `hooks/action-rules.yaml` is code and is replaced on upgrade. Put your own rules in
+   `~/.config/talos/action-rules.yaml` (read first, first match wins, so it can also override a starter rule); upgrades never
+   touch that file. Check both parse: `python3 hooks/action-rules.py test`.
+4. **CLAUDE.md is yours and is not changed.** The new template adds `[R-39]` (do not route around an action rule) and tightens
+   `[R-38]` (hands-free audio always travels with the full text). To adopt them, diff `templates/CLAUDE.md.tmpl` against
+   your `CLAUDE.md`, copy the two lines, add the matching entries from `templates/rules-ledger.md.tmpl` to
+   `memory/rules-ledger.md`, and run `bash scripts/claude-md-lint.sh`.
+5. **Optional, and only if you want them:** `bash scripts/memory/setup.sh --rerank` (reranker, about 571 MB),
+   `bash scripts/voice/setup.sh --qwen | --parakeet | --diarize` (the suggested local models, `setup/local-models.md`).
+   The Telegram guide in `setup/telegram.md` is rewritten as a full step-by-step with a failure table; nothing to do
+   if your channel already works.
+6. **Check.** `bash scripts/verify-install.sh` and `bash scripts/self-test.sh` in the clone. `python3 scripts/talos-jobs.py list`
+   should show ten `talos-*` jobs.
+
+A name list for the memory reflex builds itself at the next session start (in the background, from `wiki/`); to build it
+now: `python3 scripts/wiki-gazetteer.py`. Nothing else moves: no data file is written by the upgrade.
 
 ---
 

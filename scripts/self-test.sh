@@ -53,7 +53,19 @@ for f in START-HERE.md BOOTSTRAP.md SETUP-INTERVIEW.md HOMEWORK.md SEED-WIKI.md 
          scripts/state-sweep.py scripts/md2html.py scripts/tts.sh scripts/stt.sh scripts/voice/setup.sh scripts/test-extras.sh \
          hooks/check-vault.py jobs/talos-state-sweep/prompt.md jobs/talos-state-sweep/guard.md \
          templates/dot-claude/settings.json wiki/README.md wiki/_index.md \
-         .claude/agents/grunt.md .claude/agents/reviewer.md; do
+         .claude/agents/grunt.md .claude/agents/reviewer.md \
+         hooks/action-rules.py hooks/action-rules.yaml hooks/compaction-guard.py hooks/memory-reflex.py hooks/bsd-sed-guard.py \
+         hooks/tg-claim-check.py scripts/wiki-gazetteer.py scripts/settings-merge.py scripts/go-public.sh scripts/watcher.py \
+         scripts/watcher-adapters/macos-calendar.sh scripts/memory/mem_rerank.py scripts/memory/fetch-reranker.sh \
+         scripts/dream/common.py scripts/dream/collect.py scripts/dream/verify_quotes.py scripts/dream/apply.py \
+         scripts/dream/revert.py scripts/dream/digest.py scripts/dream/budget.py scripts/dream/tests/test_dream.py \
+         jobs/talos-dream-cycle/prompt.md jobs/talos-dream-cycle/guard.md \
+         scripts/voice/qwen_tts.py scripts/stt-diarize/diarize_transcribe.sh scripts/stt-diarize/parakeet_run.py \
+         scripts/stt-diarize/diar.py scripts/stt-diarize/merge_speakers.py \
+         setup/local-models.md setup/dream-cycle.md setup/quiet-checkins.md \
+         .claude/skills/talos-hands-free/SKILL.md .claude/skills/talos-go-public/SKILL.md \
+         scripts/test-action-rules.sh scripts/test-memory-reflex.sh scripts/test-tg-claim-check.sh scripts/test-bsd-sed-guard.sh \
+         scripts/test-dream.sh scripts/test-watcher.sh scripts/test-gopublic.sh scripts/test-localmodels.sh scripts/test-settings-merge.sh; do
   [ -e "$KIT/$f" ] || missing="$missing $f"
 done
 # docs/ is in the kit repo but deliberately not copied into an agent folder (.releaseignore), so its files are only required in the clone
@@ -562,6 +574,20 @@ bash "$KIT/scripts/test-extras.sh" >/dev/null 2>&1 \
 bash "$KIT/scripts/test-hooks.sh" >/dev/null 2>&1 \
   && ok "enforcement hooks: claim gate, append-only guard, sub-agent log, statusline, channel debt (and every one fails open)" \
   || bad "the hook suite fails -- run scripts/test-hooks.sh to see which check"
+
+# ---------- the 1.2 features: each has its own suite ----------
+for _t in "action-rules:the never/ask action table (starter rules, your own file, approvals, fail-open live / closed unattended)" \
+          "memory-reflex:the name-lookup reflex and its gazetteer (zero wrong pointers on a made-up wiki)" \
+          "tg-claim-check:the Telegram claim check (fakes fail, real claims pass, block once, shadow mode)" \
+          "bsd-sed-guard:the BSD sed -i guard" \
+          "dream:the nightly consolidation scripts (quote verification, seal, caps, revert, personal-path exclusion)" \
+          "watcher:the quiet check-ins (ICS, silence, change detection, dry run)" \
+          "gopublic:the go-public gate (account check, scan, never pushes in check mode)" \
+          "localmodels:the suggested local models degrade gracefully and install only on request" \
+          "settings-merge:merging new hook registrations into an existing settings.json"; do
+  _n="${_t%%:*}"; _d="${_t#*:}"
+  bash "$KIT/scripts/test-$_n.sh" >/dev/null 2>&1 && ok "$_d" || bad "scripts/test-$_n.sh fails -- run it to see which check"
+done
 
 # ---------- notifications and the chat launcher: the bot token never reaches argv ----------
 bash "$KIT/scripts/test-notify.sh" >/dev/null 2>&1 \

@@ -24,8 +24,9 @@ What to remove, in order. Nothing here happens automatically; that is on purpose
    (exactly that block, nothing else; a one-time backup `CLAUDE.md.bak-before-talos` stays beside it).
    Opt-in extras that live outside the agent folder are removed on request:
    `./uninstall.sh --remove-memory-search` deletes the semantic-search venv and model
-   (`~/.local/share/talos/venv` and `/models`); the optional voice models are in `~/.local/share/talos/models/`
-   (`kokoro/` and `ggml-*.bin`), delete them by hand. Hook state (claim-gate and channel-debt records, kill
+   (`~/.local/share/talos/venv` and `/models`, which also holds the optional reranker, voice and diarization models); the
+   voice environments `venv-qwen` and `venv-stt` in `~/.local/share/talos/` and your own voice clip in
+   `~/.config/talos/voice/` are removed by hand (see `setup/local-models.md`, "Removing things"). Hook state (claim-gate and channel-debt records, kill
    switches) is in `~/.local/state/talos/`; it is safe to delete. The Telegram plugin's own token and pairing live
    in `~/.claude/channels/telegram/`; remove them with `/plugin uninstall telegram@claude-plugins-official` and
    revoke the bot with @BotFather.

@@ -17,7 +17,11 @@ while you are typing.
 - **It keeps a linked wiki.** Small notes with `[[links]]`, searchable by grep and, optionally, by meaning. Memory is
   one feature of the agent, not the headline.
 - **It has rules, enforced by hooks.** A short config of one-line triggers, plus hooks that refuse the shell moves
-  that are never right and remind it when a claim names no evidence. It learns from being corrected.
+  that are never right, ask before the ones you list (deploys, publishing, sending as you), and remind it when a claim
+  names no evidence. It learns from being corrected.
+- **It is optional all the way down (new in 1.2).** A nightly memory-consolidation job, quiet check-ins, a hands-free
+  audio mode, a reranker, a phone setup guide and a list of *suggested* local models (voice, transcripts, search) all ship
+  switched off or uninstalled. Nothing needs a model you did not choose to install.
 
 Setup is: clone, `./install.sh`, open the agent folder in Claude Code, say **`Read BOOTSTRAP.md and set me up.`**
 It interviews you and builds its own config.
@@ -47,9 +51,11 @@ cd talos
 cd ~/my-agent && claude
 ```
 
-Opt-in flags, each explained below: `--with-memory-search` (semantic search), `--with-voice` (a neural voice),
-`--with-vault DIR` (a private personal vault), `--global-pointer` (point every Claude Code session at the agent's
-memory), `--notify telegram|macos`, `--no-chronos`. Nothing optional is on by default.
+Opt-in flags, each explained below: `--with-memory-search` (semantic search), `--with-reranker`, `--with-voice` (a neural
+voice), `--with-qwen-voice`, `--with-parakeet`, `--with-diarize` (the suggested local models,
+[`setup/local-models.md`](setup/local-models.md)), `--with-vault DIR` (a private personal vault), `--global-pointer`
+(point every Claude Code session at the agent's memory), `--notify telegram|macos`, `--no-chronos`. Nothing optional is on
+by default.
 
 Then tell it: **`Read BOOTSTRAP.md and set me up.`** It interviews you in short waves (about 25 minutes to a
 working agent, 45-60 to finish), builds its own config and memory, and tells you to restart it. Come back
@@ -129,11 +135,17 @@ search). Everything in the folder:
 | `hooks/session-start.py` | **the continuity layer, the most important file here** |
 | `hooks/pre-tool-guard.py` | refuses five shell moves that are never right here (any command that names a `.env` file, recursive deletes, sweeping git adds, force pushes, curl-into-shell) |
 | `hooks/claim-gate.py`, `append-only-guard.py`, `timeline-guard.py`, `agent-log.py`, `channel-debt.py`, `hands-free.py`, `check-vault.py`, `statusline.py` | the enforcement layer: an evidence reminder for unsupported-looking claims, protect logs from truncation, record sub-agent runs, make "reply on the channel" a mechanism, a status line (see [Hooks](#hooks-and-what-they-enforce)) |
-| `scripts/recall.py`, `scripts/memory/` | hybrid memory search: grep always, semantic search opt-in ([`setup/memory-search.md`](setup/memory-search.md)) |
-| [`setup/telegram.md`](setup/telegram.md), `scripts/talos-chat.sh` | talk to the agent from your phone, and the one-command launcher |
+| `hooks/action-rules.py`, `hooks/action-rules.yaml` | a "never / ask first / allow" table read before every tool call; starter rules for deploys, publishing, force-pushes and sending as you |
+| `hooks/memory-reflex.py`, `scripts/wiki-gazetteer.py` | names in your message are looked up in your own wiki and the matching notes are pointed at before the agent answers |
+| `hooks/compaction-guard.py`, `hooks/bsd-sed-guard.py`, `hooks/tg-claim-check.py` | carry recent corrections across a compaction; stop the GNU `sed -i` that breaks on a Mac; one look at unproven claims before a Telegram reply goes out |
+| `scripts/recall.py`, `scripts/memory/` | hybrid memory search: grep always, semantic search opt-in, optional `--rerank` ([`setup/memory-search.md`](setup/memory-search.md)) |
+| [`setup/telegram.md`](setup/telegram.md), `scripts/talos-chat.sh` | the Telegram setup guide (BotFather to a tested channel, with the failure table) and the one-command launcher |
+| [`setup/local-models.md`](setup/local-models.md) | **suggested, never required**: voice in (Parakeet, whisper.cpp), voice out (Qwen3-TTS cloning from your own clip, Kokoro, `say`), speaker labels, embeddings; RAM and disk for each |
+| [`setup/dream-cycle.md`](setup/dream-cycle.md), [`setup/quiet-checkins.md`](setup/quiet-checkins.md) | the nightly consolidation job and the silent-unless-it-matters check-ins (both off until you enable them) |
+| `.claude/skills/talos-hands-free/`, `.claude/skills/talos-go-public/`, `scripts/go-public.sh` | audio replies with the full text while you cannot look; the gate before a repository goes public |
 | `templates/rules-ledger.md.tmpl`, `scripts/claude-md-lint.sh` | the reasons behind each config rule, and the ceiling that keeps the config short |
 | `install.sh`, `uninstall.sh` | install the kit and Chronos; remove what they added |
-| `jobs/`, `notify/` | five Chronos job definitions (a restricted tool list, prompt and locked guard each) and Telegram / macOS delivery wrappers |
+| `jobs/`, `notify/` | ten Chronos job definitions (five Claude jobs with a restricted tool list, prompt and locked guard each; five plain commands) and Telegram / macOS delivery wrappers |
 | `templates/` | config and memory scaffolding, filled in during setup |
 | `wiki/` | your knowledge base, with three worked examples |
 | `scripts/` | linter, verifier, upgrade tool, deep-dive selector, quote checker, self-tests |
@@ -212,13 +224,14 @@ single-writer rule: [`setup/memory-search.md`](setup/memory-search.md).
 ## Hooks, and what they enforce
 
 Prose has no instant at which it fires; a hook does. Registered in `.claude/settings.json`, each one **fails open in
-a live session** (a crash or a deleted script never blocks you). The four safety guards (`pre-tool-guard`,
-`append-only-guard`, `timeline-guard`, `check-vault`) **fail closed in an unattended run**: when Chronos starts a
+a live session** (a crash or a deleted script never blocks you). The five safety guards (`pre-tool-guard`,
+`append-only-guard`, `timeline-guard`, `check-vault`, `action-rules`) **fail closed in an unattended run**: when Chronos starts a
 headless job (it sets `CHRONOS_RUN=1`; `TALOS_UNATTENDED=1` marks one by hand) a guard that errors, cannot load or is
 missing blocks the action and says why, and an `ask` becomes a deny because nobody is there to answer. The reminder
 hooks stay fail-open in both modes. The enforcement hooks keep their state outside the agent folder; the
-continuity hook keeps its reminder stamps in `memory/.last-*`. The seven enforcement
-hooks (`claim-gate`, `append-only-guard`, `timeline-guard`, `agent-log`, `channel-debt`, `hands-free`, `check-vault`) also have a kill
+continuity hook keeps its reminder stamps in `memory/.last-*`. Every enforcement
+hook (`claim-gate`, `append-only-guard`, `timeline-guard`, `agent-log`, `channel-debt`, `hands-free`, `check-vault`,
+`action-rules`, `memory-reflex`, `compaction-guard`, `bsd-sed-guard`, `tg-claim-check`) also has a kill
 switch (`TALOS_<HOOK>_OFF=1`, a `<hook>.off` file in `~/.local/state/talos/<folder>-<hash>/`, or the Chronos Control
 Room); the continuity hook, the pre-tool guard and the status line are turned off by removing their entry from
 `.claude/settings.json`.
@@ -233,7 +246,12 @@ Room); the continuity hook, the pre-tool guard and the status line are turned of
 | `agent-log.py` | SubagentStop | writes `memory/agent-log.md`, listing an artifact only if the file exists |
 | `channel-debt.py` | SessionStart, UserPromptSubmit, PostToolUse, Stop | if you use Telegram: a reply owed on the channel blocks the turn from ending once, then lets it go; opt-in mirror mode |
 | `check-vault.py` | PreToolUse (Write, Edit, MultiEdit) | only with a personal vault: asks before a term from YOUR `<vault>/_guard-terms.txt` is written outside the vault (the kit ships no terms) |
-| `hands-free.py` | PostToolUse, Stop | while the user has asked for audio replies (`hands-free.py on 60`), blocks a long text-only chat reply |
+| `hands-free.py` | PostToolUse, Stop | while the user has asked for audio replies (`hands-free.py on 60`), blocks a long text-only chat reply, and blocks once when audio went out with under about 200 characters of text (audio always travels with the full text) |
+| `action-rules.py` | PreToolUse (Bash, file writes, `mcp__*`) | looks every call up in `hooks/action-rules.yaml` (starter set) and `~/.config/talos/action-rules.yaml` (yours, read first): `never` is refused; `ask` shows Claude Code's permission prompt live and is refused when unattended. A table for the calls you list, not a sandbox |
+| `memory-reflex.py` | UserPromptSubmit | a name in your message that matches exactly one note in your wiki (title, `aliases:` or an unambiguous surname) gets up to three pointers injected before the agent answers. No model, no search, under 150 ms, never hard-coded names; a name that matches two notes gets nothing |
+| `compaction-guard.py` | PreCompact | writes the corrections logged in `.learnings/` over the last three days, an open hands-free window and an owed reply to the state folder; `session-start.py` hands them back in the same block as the digest after a compaction |
+| `bsd-sed-guard.py` | PreToolUse (Bash) | refuses the GNU form `sed -i 's/a/b/' file`, which on macOS treats the script as a backup suffix; stands down if your `sed` is not Apple's |
+| `tg-claim-check.py` | PreToolUse (Telegram reply tools) | only when the Telegram channel is set up: a reply asserting something this turn's tool results did not show (an absolute claim, "restored", "fixed") is blocked once; sending the identical text again passes |
 | `statusline.py` | status line (set at project level, so it applies when you work in the agent folder; delete the `statusLine` block in `.claude/settings.json` to use your own) | `Opus \| ██░░░░░░░░ 23% \| 7d: 12% \| handoff: 3h` (no jq needed) |
 
 ## Optional extras
@@ -244,8 +262,14 @@ Everything here is opt-in; none of it is needed for the memory, the wiki, the ho
 |---|---|
 | **A private vault** (personal life, outside any synced or work storage) | `./install.sh --with-vault ~/private-agent-vault` (new installs), plus an optional guard list you write yourself |
 | **One memory pointer for every project** | `./install.sh --global-pointer` adds a small marked block to `~/.claude/CLAUDE.md`; `./uninstall.sh` removes exactly that block |
-| **Voice out** | `bash scripts/tts.sh play "text"` or `file out.m4a "text"` works with macOS `say` and nothing else; `./install.sh --with-voice` (or `bash scripts/voice/setup.sh --kokoro`) adds the Kokoro neural voice (about 350 MB) |
-| **Voice in** | `brew install whisper-cpp ffmpeg`, then `bash scripts/voice/setup.sh --stt` and `bash scripts/stt.sh note.ogg` transcribes a voice note locally |
+| **Voice out** | `bash scripts/tts.sh play "text"` or `file out.m4a "text"` works with macOS `say` and nothing else. Optional upgrades, tried in order Qwen3-TTS, Kokoro, `say`: `bash scripts/voice/setup.sh --kokoro` (about 350 MB, or `./install.sh --with-voice`) and `--qwen` (voice cloning from a reference clip you supply yourself; Apple Silicon). `TALOS_TTS=qwen\|kokoro\|say\|auto` picks one. See [`setup/local-models.md`](setup/local-models.md) |
+| **Voice in** | `brew install whisper-cpp ffmpeg`, then `bash scripts/voice/setup.sh --stt` and `bash scripts/stt.sh note.ogg` transcribes a voice note locally. Optional better accuracy on Apple Silicon: `bash scripts/voice/setup.sh --parakeet` (Parakeet is then preferred automatically) |
+| **Speaker-labelled transcripts** | `bash scripts/voice/setup.sh --parakeet --diarize`, then `bash scripts/stt-diarize/diarize_transcribe.sh meeting.m4a 3` prints `Speaker 1` / `Speaker 2` lines (Apple Silicon, local; give the speaker count when you know it) |
+| **Hands-free mode** | tell the agent "I'm driving": `hooks/hands-free.py on 60` opens a window in which long chat replies must go out as audio plus the full text. The `talos-hands-free` skill carries the procedure |
+| **Better search ordering** | `python3 scripts/recall.py "what did we decide about X" --rerank` after `bash scripts/memory/setup.sh --rerank` (about 571 MB; helps vague questions, can hurt exact lookups) |
+| **A nightly consolidation job** | `python3 scripts/talos-jobs.py enable talos-dream-cycle`: at most 15 verified `## Related` links a night, everything else queued for you in `memory/dream/QUEUE.md`; [`setup/dream-cycle.md`](setup/dream-cycle.md) |
+| **Quiet check-ins** | four weekday command jobs that say nothing unless a calendar event is close, a date in STATE.md is inside 48 hours or an event moved; calendar source is none by default (an ICS URL or macOS Calendar by a documented adapter); [`setup/quiet-checkins.md`](setup/quiet-checkins.md) |
+| **A public-repo gate** | the `talos-go-public` skill and `scripts/go-public.sh`: account check, secret and personal-content scan, fresh squashed history, logged-out verification. Read-only unless you pass `--yes-i-reviewed` |
 | **Pretty reports** | `python3 scripts/md2html.py brief.md --audio narration.m4a` makes one self-contained HTML page (light and dark, optional brand colour and logo from `~/.config/talos/brand.json`, nothing fetched from outside, raw HTML in the source escaped) |
 | **YouTube transcripts** | `python3 scripts/yt-fetch.py --install` once, then `python3 scripts/yt-fetch.py <url>`; for "I watched X and it said Y": read X first |
 | **A daily STATE check** | the `talos-state-sweep` job (read-only): size, rows that look finished, stale rows, dates coming up. `python3 scripts/state-sweep.py` runs it by hand |
@@ -255,8 +279,9 @@ Everything here is opt-in; none of it is needed for the memory, the wiki, the ho
 
 ## Talk to it from your phone (optional)
 
-The CLI can take messages from a Telegram bot, so you can ask your agent something from the couch. One-time setup
-(Bun, a bot from @BotFather, `/plugin install telegram@claude-plugins-official`, pairing) is in
+The CLI can take messages from a Telegram bot, so you can ask your agent something from the couch. The step-by-step
+guide (Bun, a bot from @BotFather, `/plugin install telegram@claude-plugins-official`, the token, launching with
+`--channels`, pairing, locking it to an allowlist, a test, and a table of common failures) is
 [`setup/telegram.md`](setup/telegram.md); then `bash scripts/talos-chat.sh` starts the agent with the channel on.
 The rule to know: **only one process may poll a bot**, so a second `claude --channels`, a headless run with the
 plugin enabled, or `claude mcp list` all break the live channel with HTTP 409 (do not run that last one while a
@@ -287,9 +312,9 @@ launchd (every 5 min) -> Chronos tick -> claim the job -> claude -p in Chronos's
    (then it leaves your Chronos alone, and warns if that Chronos's workspace is a different folder, because
    scheduled runs start in the workspace and only load an agent's `CLAUDE.md` and hooks from there;
    `--set-chronos-workspace` repoints it, `--reinstall-chronos` runs Chronos's installer again);
-3. registers five jobs from [`jobs/`](jobs/) in your Chronos `jobs.json`, **all disabled** (`--with-memory-search`
-   enables `talos-memory-index`), each Claude job with a `prompt.md` and a locked `guard.md` (the index job is a plain
-   command), with your agent folder's path filled in. Existing jobs and any
+3. registers ten jobs from [`jobs/`](jobs/) in your Chronos `jobs.json`, **all disabled** (`--with-memory-search`
+   enables `talos-memory-index`), each Claude job with a `prompt.md` and a locked `guard.md` (the index job and the four
+   check-ins are plain commands), with your agent folder's path filled in. Existing jobs and any
    prompt you edited are never overwritten;
 4. registers Chronos's SessionStart hook in the agent's `.claude/settings.json`, so your next interactive
    session is told which jobs ran (`--no-session-hook` to skip);
@@ -302,6 +327,8 @@ launchd (every 5 min) -> Chronos tick -> claim the job -> claude -p in Chronos's
 | `talos-weekly-snapshot` | Friday 16:11 | `scripts/weekly-snapshot.sh`: stages `memory`, `wiki`, `.learnings` and makes one local commit |
 | `talos-memory-index` | daily 06:41 | refreshes the semantic search index. A plain command (needs Chronos 0.2.1): no Claude session, no usage. Only useful after `scripts/memory/setup.sh`, which enables it |
 | `talos-state-sweep` | weekdays 16:37 | read-only check of `memory/STATE.md`: size, rows that look finished, stale rows, dates coming up |
+| `talos-dream-cycle` | daily 02:30 | restricted Claude job: finds links, contradictions and stale facts in what changed, quote-verifies them by script, adds at most 15 `## Related` links and queues the rest in `memory/dream/QUEUE.md`. Sends nothing. [`setup/dream-cycle.md`](setup/dream-cycle.md) |
+| `talos-watch-am` / `-mid` / `-pm` / `-eve` | weekdays 09:45, 12:15, 14:45, 18:45 | plain commands (no Claude): silent unless a calendar event is close, a STATE.md date is inside 48 hours or an event changed; one short message through your notify command. Needs `~/.config/talos/watcher.json`. [`setup/quiet-checkins.md`](setup/quiet-checkins.md) |
 
 Enable one when setup is finished (the agent offers this at the end of BOOTSTRAP):
 
@@ -316,9 +343,9 @@ python3 scripts/talos-jobs.py list
   list instead of `--dangerously-skip-permissions`. Every Claude job Talos ships is restricted. Chronos older than
   0.2.2 ignores the key, so `talos-jobs.py` refuses to register or enable a restricted job on one. See
   [Scheduled jobs are restricted by default](#scheduled-jobs-are-restricted-by-default).
-- **Command jobs (0.2.1).** `talos-memory-index` is a plain shell command on a schedule, not a Claude run, so it
-  costs no plan usage. An older Chronos cannot run it; `talos-jobs.py register` then skips it and says so.
-- **Per-job `model`.** The lint, snapshot and state-sweep jobs pin `sonnet` (mechanical work; Sonnet is the floor, the
+- **Command jobs (0.2.1).** `talos-memory-index` and the four `talos-watch-*` check-ins are plain shell commands on a
+  schedule, not Claude runs, so they cost no plan usage. An older Chronos cannot run it; `talos-jobs.py register` then skips it and says so.
+- **Per-job `model`.** The lint, snapshot, state-sweep and dream-cycle jobs pin `sonnet` (mechanical work; Sonnet is the floor, the
   kit never ships a job pinned to Haiku). The brief inherits your default. A Chronos 0.1 ignores the key.
 - **Event triggers.** A job can also start on a new file in a folder, a matching Gmail message (through an adapter
   you configure), a GitHub pull request, issue or release, or a local webhook. Talos ships none. They are
@@ -382,6 +409,12 @@ Read this before you connect Talos to your mail, chat or calendar.
 - **`hooks/pre-tool-guard.py` (a tripwire).** Refuses five shell moves before they run: reading or copying a
   `.env`, recursive deletes, sweeping `git add` (`-A`, `.`, `--all`), force-push / `reset --hard` / `clean -f`,
   and piping a download into a shell. A refusal comes back to the agent with the reason.
+- **`hooks/action-rules.py` (a table, not a sandbox).** Looks every Bash call, file write and connector call up in a
+  never / ask / allow table (`hooks/action-rules.yaml` plus your own `~/.config/talos/action-rules.yaml`, read first).
+  `never` is refused; `ask` shows Claude Code's permission prompt, and is refused when no one is there. It only knows the
+  calls you list, matches command *text* like the pre-tool guard does, and its one-use approval command
+  (`action-rules.py approve`) is honour-system: an agent with a shell could run it, which is why the live path is the
+  native prompt, not the approval file.
 - **Fail-closed when unattended.** The four safety guards allow on an internal error in a live session (a broken
   guard must never wedge a conversation) but **block** in a headless scheduled run, where nobody would notice the
   guard had stopped guarding. The settings template wraps each guard the same way, so a deleted script, a missing
@@ -419,7 +452,7 @@ misled within that bound (for example, a note filed into the wiki that says some
 
 Nobody is at the keyboard during a headless run, so `claude -p` cannot ask. Chronos's default for a scheduled job
 is `--dangerously-skip-permissions`: the job can do anything your account can, and a prompt that says "never send
-anything" is only a request. **Since Talos 1.1.2 the four Claude jobs do not run that way.** They are registered
+anything" is only a request. **Since Talos 1.1.2 the Claude jobs do not run that way (five as of 1.2).** They are registered
 `"restricted": true` with a tool list, and Chronos 0.2.2 starts them with `--permission-mode=default`, that list as
 `--allowedTools`, the matching `--tools`, `--strict-mcp-config`, **`--setting-sources=`** and deny rules for `.env`, `~/.ssh`, `~/.aws`, `~/.config`,
 `~/.gnupg` and other credential folders. Anything not on the list is **refused** (no one to prompt), and the run says so.
@@ -432,7 +465,7 @@ allow rule, no `env`, no plugin or MCP setting. Because **a hook can answer "all
 write-protected in restricted runs: `Edit` (which covers Write) is denied on the agent folder's `.claude/`, `.git/`,
 `.mcp.json` and `hooks/`, so a job cannot rewrite a hook file or plant an approval there. Hooks also run scripts from
 `scripts/`, which is not write-protected: the shipped jobs cannot edit it, but if you give a job broad Edit on the whole
-agent folder, it could change those scripts. Keep Edit grants narrow (the shipped jobs allow only `wiki/` and `memory/briefs/`).
+agent folder, it could change those scripts. Keep Edit grants narrow (the shipped jobs allow only `wiki/`, `memory/briefs/` and `memory/dream/`).
 Checked live (2026-10-07, Claude Code 2.1.287): with `Bash(curl:*)` planted in `settings.local.json`, a run without the flag
 executed `curl`, and a restricted run refused it. One side effect: `CLAUDE.md` is **not** auto-loaded in a restricted run
 (the brief's prompt reads it explicitly; the other jobs do not need it). Also not loaded: a user-level plugin (and any MCP
@@ -452,9 +485,10 @@ that crashed blocked the run):
 | `talos-weekly-wiki-lint` | read and search inside the agent folder; **no write tool**; run exactly the index refresh, the lint, the deep-dive selector, the config lint and `date` |
 | `talos-weekly-snapshot` | read and search inside the agent folder; **no write tool**; run exactly `scripts/weekly-snapshot.sh` (named paths only, one local commit; it contains no push, pull, fetch, reset, clean or sweeping add) |
 | `talos-state-sweep` | read and search inside the agent folder; **no write tool**; run exactly `state-sweep.py` and `date` |
-| `talos-memory-index` | a plain command job: runs one fixed script, no Claude, nothing to restrict |
+| `talos-dream-cycle` | read and search inside the agent folder; edit and create files only under `memory/dream/` (never `wiki/`: the apply script, not the model, adds at most 15 `## Related` links); run exactly `date` and the five `scripts/dream/*.py` steps with no arguments |
+| `talos-memory-index`, `talos-watch-*` | plain command jobs: each runs one fixed script, no Claude, nothing to restrict (the check-ins send one short message through your own notify command, and only when a bar is crossed) |
 
-For all four: no `WebFetch`, no `WebSearch`, no sub-agents, no MCP tool at all unless you add it, and no shell
+For all five Claude jobs: no `WebFetch`, no `WebSearch`, no sub-agents, no MCP tool at all unless you add it, and no shell
 command that is not on the list (Claude Code itself lets a few read-only commands such as `ls`, `grep` and
 `git status` run inside the agent folder; they cannot reach outside it).
 
@@ -533,6 +567,13 @@ is you not pasting the data in.
   them. The restricted jobs were run once each against a real account on 2026-10-07 (Claude Code 2.1.287, a scratch
   agent folder): all four finished, with no permission refusals, and the flags were exercised directly as described
   above. That is a manual check, not a regression test: re-run it after a Claude Code update.
+- **The dream cycle's judge is the same session that extracted.** Restricted jobs cannot spawn sub-agents, so one session
+  proposes and then judges its own proposals (default reject, plus a sample spot-check). What is enforced by scripts is the
+  part that matters most: a quote not found verbatim in the cited note is dropped, the verified file is sealed, only links
+  can reach the wiki, at most 15 a night, with a byte-exact undo. Judgement quality and the wording of queue items are only
+  instructed. Details: [`setup/dream-cycle.md`](setup/dream-cycle.md).
+- **The memory reflex and the Telegram claim check are heuristics.** The first can miss a name (by design: precision over
+  recall) and the second reads only this turn's transcript; both fail open and both have a kill switch.
 - Chronos is macOS-only, ticks every five minutes, and a sleeping laptop runs nothing (catch-up covers the gap
   after wake, not a day-long absence).
 - The Chronos pin is a commit, not a signed release. Review what you clone.
@@ -546,7 +587,7 @@ is you not pasting the data in.
 ## Tests
 
 ```bash
-bash scripts/self-test.sh        # the whole suite: about 55 checks, 4-5 minutes (it runs the suites below too)
+bash scripts/self-test.sh        # the whole suite: about 65 checks, 6-8 minutes (it runs the suites below too)
 bash scripts/test-jobs.sh        # job templates, the restricted tool lists, register/enable/access/allow/harden, the snapshot script, against a fake Chronos config
 bash scripts/test-install.sh     # install.sh / uninstall.sh in a fake HOME, with a launchctl tripwire
 bash scripts/test-pre-tool-guard.sh
@@ -556,6 +597,15 @@ bash scripts/test-recall.sh      # memory search without a venv: lexical arm, ba
 bash scripts/test-notify.sh      # telegram.sh (token off argv, --file, word cap) and the chat launcher
 bash scripts/test-privacy.sh     # no secrets, personal emails, home paths or long ids in the kit
 bash scripts/test-extras.sh      # state-sweep, voice wrappers, md2html, yt-fetch (fake say/ffmpeg/whisper)
+bash scripts/test-action-rules.sh      # the never/ask table: starter rules, your own file, one-use approvals, fail-open vs fail-closed (run with and without PyYAML)
+bash scripts/test-memory-reflex.sh     # name lookup against a made-up wiki: zero wrong pointers allowed
+bash scripts/test-tg-claim-check.sh    # the Telegram claim check: fakes fail, real claims pass, block-once, shadow mode
+bash scripts/test-bsd-sed-guard.sh
+bash scripts/test-dream.sh             # the nightly consolidation scripts against a fake agent folder
+bash scripts/test-watcher.sh           # quiet check-ins: ICS parsing, silence, change detection, dry run
+bash scripts/test-gopublic.sh          # the public-repo gate with fake gh and git
+bash scripts/test-localmodels.sh       # the suggested-model fallbacks and setup flags, with fake programs (nothing is downloaded)
+bash scripts/test-settings-merge.sh    # adding new hook registrations to an existing settings.json
 TALOS_TEST_CHRONOS=/path/to/chronos bash scripts/test-install.sh   # same, against a real Chronos checkout
 TALOS_TEST_CHRONOS=/path/to/chronos bash scripts/test-jobs.sh      # also asks the real Chronos for each job's flags (needs 0.2.2)
 TALOS_TEST_SEMANTIC=1 bash scripts/test-recall.sh   # the real semantic stack (downloads a venv and a small model)

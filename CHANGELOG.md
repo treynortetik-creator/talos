@@ -1,5 +1,83 @@
 # Changelog
 
+## 1.2.0-cli - 2026-10-28
+
+A feature release. Everything new is opt-in, inert until used, or a reminder that fails open; nothing needs a dependency
+you did not choose to install, and a fresh install with none of the extras behaves like 1.1.2 plus the new hooks. **Chronos
+pin unchanged: 0.2.2.** Upgrading from 1.1.2: [UPGRADE.md](UPGRADE.md), "Coming from 1.1.2".
+
+### New hooks (registered by the settings template; kill switch on each)
+
+- **`action-rules.py` + `hooks/action-rules.yaml`: a never / ask / allow table.** Read before every Bash call, file write and
+  connector (`mcp__*`) call. `never` is refused; `ask` shows Claude Code's permission prompt in a live session and is refused
+  when unattended; one-use approvals exist for answering from a chat channel. Starter rules: recursive delete of home or
+  root, force-push to main, pattern kills, the MCP health-check command that starts a second Telegram poller (never); push to
+  main, deploys and package publishes, GitHub releases and going public, `gh auth` switches, sending / sharing / deleting
+  through a connector (ask); the agent's own chat reply tool is exempt. Your rules go in
+  `~/.config/talos/action-rules.yaml`, read first, so upgrades never overwrite them. A fifth safety guard: fails open live,
+  closed unattended. Reads YAML with a small built-in reader (PyYAML if present).
+- **`memory-reflex.py` + `scripts/wiki-gazetteer.py`.** A name in your message that matches exactly one note in your wiki
+  (title, `aliases:` frontmatter, or a surname only one person has) is pointed at before the agent answers. No model, no
+  search, no hard-coded names; a name that matches two notes gets nothing; your own name (the title of `wiki/me.md`) and
+  anything in `~/.config/talos/reflex-ignore.txt` never match. Only `wiki/` is read, never a private vault. The name list
+  rebuilds in the background at session start when a note is newer.
+- **`compaction-guard.py`.** At PreCompact it saves the corrections logged in `.learnings/` over the last three days, an open
+  hands-free window and an owed chat reply; `session-start.py` hands them back inside the same block as the digest after a
+  compaction (one injection, not two hooks).
+- **`bsd-sed-guard.py`.** Refuses the GNU form `sed -i 's/a/b/' file` that breaks on macOS's BSD sed; stands down if the `sed`
+  on your PATH is not Apple's.
+- **`tg-claim-check.py`.** Only when the Telegram channel is set up: a reply asserting something the turn's tool results did
+  not show is blocked once; the identical text sent again passes. Shadow mode: `tg-claim-check.shadow` in the state folder.
+- **`hands-free.py` upgraded.** Audio always goes out WITH the full text, not a caption: audio sent with under about 200
+  characters of text blocks once and asks for the text. New `talos-hands-free` skill carries the procedure.
+
+### New jobs (all ship disabled; `register` adds them to an existing Chronos)
+
+- **`talos-dream-cycle`** (restricted Claude job, 02:30): nightly memory consolidation. Collects what changed (small shards),
+  the model proposes links, contradictions, supersessions and stale facts, a script drops every proposal whose quotes are not
+  verbatim in the cited notes, the model judges what is left (default reject), and a script adds at most 15 `## Related` links
+  (dated, above any timeline separator, byte-exact undo with `scripts/dream/revert.py`) and queues everything else in
+  `memory/dream/QUEUE.md`. The model holds no wiki write tool and no sub-agents; the verified file is HMAC-sealed so the session
+  cannot forge proposals. Personal-vault names are filtered from daily logs using filenames only. Honest limit: one session
+  judging its own extraction is weaker than a separate judge (`setup/dream-cycle.md`). `memory/dream/QUEUE-ONLY` switches
+  link-applying off.
+- **`talos-watch-am` / `-mid` / `-pm` / `-eve`** (command jobs, no Claude): quiet check-ins. Silent unless a calendar event is
+  close, a STATE.md date is inside 48 hours, or an event moved; one short plain message through your notify command. The
+  calendar source is none by default; an ICS URL or file, or macOS Calendar through a documented adapter
+  (`scripts/watcher-adapters/macos-calendar.sh`). `setup/quiet-checkins.md`.
+
+### Search, voice and the suggested local models (suggest, never require)
+
+- **`recall.py --rerank`** (or `RECALL_RERANK=1`): opt-in cross-encoder re-sort of the top 15 files; needs the semantic stack
+  and `bash scripts/memory/setup.sh --rerank` (about 571 MB). Says on its banner line whether it ran; otherwise normal order.
+- **`setup/local-models.md`**: Parakeet TDT v2 and whisper.cpp (speech in), Qwen3-TTS voice cloning via mlx-audio, Kokoro and
+  macOS `say` (speech out), sherpa-onnx speaker labels, bge embeddings; RAM / disk / Apple Silicon notes; "checked versus
+  inferred". `scripts/tts.sh` tries Qwen3, then Kokoro, then `say`, skipping what is not installed (`TALOS_TTS=` forces one);
+  `scripts/stt.sh` tries Parakeet then whisper.cpp. Voice cloning needs YOUR own reference clip and your own licence check;
+  Talos ships no voice and no audio. New install flags `--with-qwen-voice`, `--with-parakeet`, `--with-diarize`,
+  `--with-reranker`, each just delegating to the setup scripts, each with a dry run. `scripts/stt-diarize/` prints
+  speaker-labelled transcripts.
+- **`talos-go-public` skill + `scripts/go-public.sh`**: the gate before a repository goes public (account from config, never
+  hard-coded and never switched for you; secret and personal-content scan of the tree and every commit; fresh squashed history;
+  logged-out verification). Read-only unless `--yes-i-reviewed`.
+
+### Docs and tooling
+
+- **`setup/telegram.md` rewritten as a step-by-step guide** checked against the official plugin's own files (BotFather, token,
+  `/plugin install`, `/telegram:configure`, `--channels`, pairing, allowlist, a test, writing for a phone, a failure table,
+  token rotation).
+- **`scripts/settings-merge.py`**: adds the hook registrations a new kit ships to an existing `.claude/settings.json` after a
+  backup, touching nothing else (the by-hand merge in UPGRADE step 6 is what people skipped).
+- Template: new rule `[R-39]` (do not route around an action rule); `[R-38]` says audio travels with the full text.
+- Tests: `test-action-rules.sh`, `test-memory-reflex.sh`, `test-tg-claim-check.sh`, `test-bsd-sed-guard.sh`, `test-dream.sh`,
+  `test-watcher.sh`, `test-gopublic.sh`, `test-localmodels.sh`, `test-settings-merge.sh`; `test-hooks.sh`, `test-jobs.sh`,
+  `test-install.sh` and `test-recall.sh` extended. The new suites also pass under Apple's stock Python 3.9.
+
+### Not ported, on purpose
+
+Liquid-model trials, image models, anything tied to one person's employer, mail or ticket systems, and any voice or
+reference audio. A shell prefilter for the action table was left out: it would make a rule you add silently inert.
+
 ## 1.1.2-cli - 2026-10-07
 
 A trust-hardening release, after an external review. Nothing new to learn; three promises that were true in spirit are
