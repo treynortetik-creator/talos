@@ -48,6 +48,13 @@
 #   --with-voice          also install the Kokoro neural voice for scripts/tts.sh (about 350 MB; needs Python 3.10+).
 #                         Without it, tts.sh uses macOS `say` and needs nothing. Speech-to-text is separate:
 #                         bash scripts/voice/setup.sh --stt
+#   --with-qwen-voice     also set up the Qwen3-TTS voice-cloning backend for scripts/tts.sh (Apple Silicon; a separate venv; you must
+#                         supply your OWN reference clip afterwards and check the model licence). Delegates to
+#                         bash scripts/voice/setup.sh --qwen. Needs Python 3.10+. Suggested, never required.
+#   --with-parakeet       also set up Parakeet TDT speech-to-text for scripts/stt.sh (Apple Silicon): bash scripts/voice/setup.sh --parakeet
+#   --with-diarize        also set up speaker-labelled transcription (scripts/stt-diarize/): bash scripts/voice/setup.sh --diarize
+#   --with-reranker       also download the opt-in reranker model for `recall.py --rerank` (about 571 MB; implies
+#                         --with-memory-search's stack: run that first or together)
 #   --with-vault DIR      also create a private personal vault at DIR from optional/personal/: a second folder for
 #                         your personal life that the agent may read but must never copy into work notes. DIR must
 #                         be new or empty, outside this agent folder and outside any synced or work storage. The
@@ -66,7 +73,7 @@ CHRONOS_PINNED_REF="ac21e923c13e166df39d4bdb5fdd7551209711c6"
 CHRONOS_DEFAULT_REPO="https://github.com/treynortetik-creator/chronos"
 
 AGENT_DIR="$HOME/my-agent"; CHRONOS_PATH=""; CHRONOS_REPO="$CHRONOS_DEFAULT_REPO"; CHRONOS_REF="$CHRONOS_PINNED_REF"
-DO_CHRONOS=1; DO_JOBS=1; FULL_JOBS=0; REINSTALL=0; SET_WS=0; MEMSEARCH=0; EMBED=base; VAULT=""; VOICE=0; GPOINTER=0; NOTIFY=none; NOLOAD=0; SESSION_HOOK=1; PROTECTED_OK=0; SYNCED_OK=0; DRY=0
+DO_CHRONOS=1; DO_JOBS=1; FULL_JOBS=0; REINSTALL=0; SET_WS=0; MEMSEARCH=0; EMBED=base; VAULT=""; VOICE=0; GPOINTER=0; QWEN=0; PARAKEET=0; DIARIZE=0; RERANKER=0; NOTIFY=none; NOLOAD=0; SESSION_HOOK=1; PROTECTED_OK=0; SYNCED_OK=0; DRY=0
 
 usage() { awk 'NR>1 { if ($0 ~ /^#/) print; else exit }' "$0" | sed 's/^# \{0,1\}//'; }
 while [ $# -gt 0 ]; do
@@ -83,6 +90,10 @@ while [ $# -gt 0 ]; do
     --with-memory-search) MEMSEARCH=1; shift ;;
     --with-voice) VOICE=1; shift ;;
     --global-pointer) GPOINTER=1; shift ;;
+    --with-qwen-voice) QWEN=1; shift ;;
+    --with-parakeet) PARAKEET=1; shift ;;
+    --with-diarize) DIARIZE=1; shift ;;
+    --with-reranker) RERANKER=1; shift ;;
     --with-vault) VAULT="${2:?--with-vault needs a folder}"; shift 2 ;;
     --embed-model) EMBED="${2:?--embed-model needs base or small}"; shift 2 ;;
     --notify) NOTIFY="${2:?}"; shift 2 ;;
@@ -428,6 +439,25 @@ if [ "$VOICE" = 1 ]; then
     bash "$AGENT_DIR/scripts/voice/setup.sh" --kokoro || _vrc=$?
     [ "$_vrc" = 0 ] || say "   The Kokoro voice was NOT installed (exit $_vrc). tts.sh still works with macOS say. Retry: bash $AGENT_DIR/scripts/voice/setup.sh --kokoro"
   fi
+fi
+
+# ---------------------------------------------------------------- 7b. suggested local models (opt-in, each delegates)
+voice_extra() {   # $1 = label, $2 = setup.sh flag
+  step "$1"
+  if [ "$DRY" = 1 ]; then bash "$KIT/scripts/voice/setup.sh" "$2" --dry-run
+  else
+    _xrc=0
+    bash "$AGENT_DIR/scripts/voice/setup.sh" "$2" || _xrc=$?
+    [ "$_xrc" = 0 ] || say "   $1 was NOT installed (exit $_xrc). Nothing else is affected; Talos falls back automatically. Retry: bash $AGENT_DIR/scripts/voice/setup.sh $2"
+  fi
+}
+[ "$QWEN" = 1 ] && voice_extra "Qwen3-TTS voice cloning" --qwen
+[ "$PARAKEET" = 1 ] && voice_extra "Parakeet speech-to-text" --parakeet
+[ "$DIARIZE" = 1 ] && voice_extra "Speaker-labelled transcription" --diarize
+if [ "$RERANKER" = 1 ]; then
+  step "Reranker model (recall.py --rerank)"
+  if [ "$DRY" = 1 ]; then bash "$KIT/scripts/memory/fetch-reranker.sh" --dry-run
+  else bash "$AGENT_DIR/scripts/memory/fetch-reranker.sh" || say "   the reranker model was not downloaded; search works without it. Retry: bash $AGENT_DIR/scripts/memory/fetch-reranker.sh"; fi
 fi
 
 # ---------------------------------------------------------------- done

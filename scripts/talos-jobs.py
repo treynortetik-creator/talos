@@ -3,7 +3,7 @@
 
 Chronos (https://github.com/treynortetik-creator/chronos) is the scheduler. A Chronos job is one entry in
 jobs.json plus a folder jobs/<id>/ holding prompt.md (and optionally a locked guard.md); a "command" job
-(Chronos 0.2.1) is just the entry and a shell command, no folder. Talos ships five of them in jobs/ in this kit. This script copies them into your Chronos config, fills in the path of your
+(Chronos 0.2.1) is just the entry and a shell command, no folder. Talos ships ten of them in jobs/ in this kit. This script copies them into your Chronos config, fills in the path of your
 agent folder, and never overwrites a job you have already edited.
 
   talos-jobs.py register   --agent-dir DIR [--chronos-config FILE] [--kit-dir DIR] [--full-access]

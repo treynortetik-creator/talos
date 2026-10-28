@@ -4,7 +4,7 @@ Your playbook says "Trigger: Fridays, 3pm." Here is how Friday at 3pm actually h
 you find out that it did.
 
 **Scheduling in Talos is Chronos.** Chronos is a small scheduler for Claude Code on macOS
-(<https://github.com/treynortetik-creator/chronos>). `./install.sh` installs it and registers five
+(<https://github.com/treynortetik-creator/chronos>). `./install.sh` installs it and registers ten
 Talos jobs. You do not have to use it: with `--no-chronos` the agent works exactly the same and
 simply has no timers.
 
@@ -32,7 +32,7 @@ simply has no timers.
 
 A job is a folder in `~/.config/chronos/jobs/<id>/` plus one entry in `~/.config/chronos/jobs.json`
 (a *command* job, Chronos 0.2.1, is just the entry and a shell command: no folder, no Claude).
-Talos ships five, in `jobs/`:
+Talos ships ten, in `jobs/`:
 
 | Job | When | What it does |
 |---|---|---|
@@ -41,8 +41,10 @@ Talos ships five, in `jobs/`:
 | `talos-weekly-snapshot` | Friday 16:11 | `scripts/weekly-snapshot.sh`: `memory`, `wiki`, `.learnings`, one local commit |
 | `talos-memory-index` | daily 06:41 | refreshes the semantic search index; a plain command job, no Claude run; enabled by `scripts/memory/setup.sh`, useless without it |
 | `talos-state-sweep` | weekdays 16:37 | read-only report on `memory/STATE.md`: size, rows to close or evict, stale rows, dates coming up |
+| `talos-dream-cycle` | daily 02:30 | nightly consolidation (a restricted Claude job): at most 15 verified `## Related` links, the rest queued in `memory/dream/QUEUE.md`; [dream-cycle.md](dream-cycle.md) |
+| `talos-watch-am`, `-mid`, `-pm`, `-eve` | weekdays 09:45, 12:15, 14:45, 18:45 | quiet check-ins: command jobs, silent unless something crosses a bar; [quiet-checkins.md](quiet-checkins.md) |
 
-All five ship **disabled**, and the four Claude jobs ship **restricted** (below). Enable one with `python3 scripts/talos-jobs.py enable talos-morning-brief`
+All ten ship **disabled**, and the five Claude jobs ship **restricted** (below). Enable one with `python3 scripts/talos-jobs.py enable talos-morning-brief`
 (add `--time 06:40 --days weekdays` to change the schedule), or tick Enabled in the Chronos web UI at
 <http://127.0.0.1:4747/>. Pause everything at once from the UI, or by touching `~/.chronos/PAUSED`.
 

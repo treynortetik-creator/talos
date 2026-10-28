@@ -50,7 +50,7 @@ python3 -m json.tool "$A/.claude/settings.json" >/dev/null 2>&1 && ok ".claude/s
 grep -q "^version=$(tr -d ' \t\r\n' < "$KIT/VERSION")\$" "$A/.talos-version" && grep -q '^kind=git-checkout$' "$A/.talos-version" && ok ".talos-version records the version" || no ".talos-version wrong: $(cat "$A/.talos-version" 2>/dev/null | tr '\n' ' ')"
 grep -q "workspace $A noload=1" "$HOME/.chronos/fake-install.log" 2>/dev/null && ok "Chronos's installer was run with the agent folder as workspace and --no-load" || no "Chronos installer args wrong: $(cat "$HOME/.chronos/fake-install.log" 2>/dev/null)"
 n=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(1 for j in d if j["id"].startswith("talos-") and not j["enabled"]))' "$HOME/.config/chronos/jobs.json" 2>/dev/null)
-[ "$n" = 5 ] && ok "five Talos jobs are registered, all disabled" || no "jobs registered: $n (want 5 disabled)"
+[ "$n" = 10 ] && ok "ten Talos jobs are registered, all disabled" || no "jobs registered: $n (want 10 disabled)"
 grep -q "$A" "$HOME/.config/chronos/jobs/talos-morning-brief/prompt.md" && ok "the job prompt names this agent folder" || no "job prompt does not name the agent folder"
 python3 - "$HOME/.config/chronos/jobs.json" "$A" <<'PY' && ok "a default install registers the Claude jobs RESTRICTED (tool list, agent folder filled in, no bare Bash)" || no "default install did not register restricted jobs"
 import json,sys
@@ -93,7 +93,7 @@ printf '{"workspace": "%s", "jobs_file": "~/.config/chronos/jobs.json", "jobs_di
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --no-load 2>&1)"; rc=$?
 n=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j["id"].startswith("talos-")))' "$HOME/.config/chronos/jobs.json")
 r=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j.get("restricted") is True))' "$HOME/.config/chronos/jobs.json")
-{ [ "$rc" = 0 ] && [ "$r" = 0 ] && [ "$n" = 1 ] && ! grep -q 'install.sh --workspace' "$HOME/.chronos/fake-install.log" 2>/dev/null \
+{ [ "$rc" = 0 ] && [ "$r" = 0 ] && [ "$n" = 5 ] && ! grep -q 'install.sh --workspace' "$HOME/.chronos/fake-install.log" 2>/dev/null \
   && printf '%s' "$out" | grep -q 'not running its installer again' && printf '%s' "$out" | grep -q 'SKIPPED talos-morning-brief' && printf '%s' "$out" | grep -q "$OLDRT"; } \
   && ok "an existing Chronos config + an OLDER runtime under launchd: Chronos's installer is not re-run, and the restricted jobs are skipped (read from the runtime launchd runs, not the 0.2.2 clone), with the runtime named" \
   || no "install trusted the clone's version or registered restricted jobs on an old runtime (rc=$rc jobs=$n restricted=$r)" "$(printf '%s' "$out" | tail -8)"

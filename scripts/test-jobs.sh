@@ -100,7 +100,7 @@ python3 "$TJ" validate --kit-dir "$SB/bad" >/dev/null 2>&1 && no "validator acce
 # 3. register: adds all four, disabled, with the agent path filled in, leaves the user's job alone
 python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" >/dev/null 2>&1
 n=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j["id"].startswith("talos-")))' "$JF")
-[ "$n" = 5 ] && ok "register adds the five Talos jobs" || no "register added $n jobs (want 5)"
+[ "$n" = 10 ] && ok "register adds the ten Talos jobs" || no "register added $n jobs (want 10)"
 python3 - "$JF" "$SB/agent" <<'PY' && ok "talos-memory-index registers as a command job with the agent path in the command and no prompt folder" || no "talos-memory-index not registered as a command job"
 import json,sys
 j={x["id"]:x for x in json.load(open(sys.argv[1]))}["talos-memory-index"]
@@ -123,7 +123,7 @@ else no "the agent folder path is missing from the registered prompt"; fi
 echo "I EDITED THIS" >> "$JD/talos-morning-brief/prompt.md"
 python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" >/dev/null 2>&1
 n=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j["id"].startswith("talos-")))' "$JF")
-{ [ "$n" = 5 ] && grep -q "I EDITED THIS" "$JD/talos-morning-brief/prompt.md"; } && ok "re-registering adds nothing and keeps the user's prompt edit" || no "re-register duplicated jobs or clobbered an edit (jobs=$n)"
+{ [ "$n" = 10 ] && grep -q "I EDITED THIS" "$JD/talos-morning-brief/prompt.md"; } && ok "re-registering adds nothing and keeps the user's prompt edit" || no "re-register duplicated jobs or clobbered an edit (jobs=$n)"
 
 # 5. enable / disable
 python3 "$TJ" enable talos-morning-brief --time 06:40 --days mon,wed,fri >/dev/null 2>&1
@@ -183,7 +183,7 @@ out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; n
   && ok "on Chronos 0.2.0 the command job and every restricted job are skipped with a message (nothing registers silently unrestricted)" || no "old-Chronos gate wrong (jobs=$n)" "$out"
 printf '%s' "$out" | grep -q 'git -C ~/.local/share/talos/chronos fetch' && printf '%s' "$out" | grep -q 'reinstall-chronos' && ok "the message says how to update the Chronos clone (detached: fetch + checkout the pin, or --reinstall-chronos), not 'git pull'" || no "update help missing or says git pull" "$out"
 out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" --full-access 2>&1)"; n=$(cnt)
-{ [ "$n" = 4 ] && python3 - "$JF" <<'PY'
+{ [ "$n" = 5 ] && python3 - "$JF" <<'PY'
 import json,sys
 d={j["id"]:j for j in json.load(open(sys.argv[1]))}
 assert all(d[i]["restricted"] is False and "allowed_tools" not in d[i] for i in ("talos-morning-brief","talos-weekly-wiki-lint","talos-weekly-snapshot","talos-state-sweep"))
@@ -192,11 +192,11 @@ PY
 python3 "$TJ" unregister >/dev/null 2>&1
 mkplist "$SB/rt" 0.2.1
 python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" >/dev/null 2>&1; n=$(cnt)
-[ "$n" = 1 ] && ok "on Chronos 0.2.1 only the command job registers (restricted jobs wait for 0.2.2)" || no "0.2.1 registered $n jobs (want 1)"
+[ "$n" = 5 ] && ok "on Chronos 0.2.1 only the five command jobs register (restricted jobs wait for 0.2.2)" || no "0.2.1 registered $n jobs (want 5)"
 python3 "$TJ" unregister >/dev/null 2>&1
 mkplist "$SB/rt" 0.2.2
 python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" >/dev/null 2>&1; n=$(cnt)
-[ "$n" = 5 ] && ok "on Chronos 0.2.2 all five register" || no "0.2.2 registered $n jobs (want 5)"
+[ "$n" = 10 ] && ok "on Chronos 0.2.2 all ten register" || no "0.2.2 registered $n jobs (want 10)"
 mkplist "$SB/rt" 0.2.1
 python3 "$TJ" enable talos-state-sweep >/dev/null 2>&1 && no "enable switched on a restricted job under Chronos 0.2.1" || ok "enable refuses a restricted job when Chronos is older than 0.2.2"
 python3 "$TJ" access talos-state-sweep --restricted --agent-dir "$SB/agent" --kit-dir "$KIT" >/dev/null 2>&1 && no "access --restricted accepted on 0.2.1" || ok "access --restricted refuses on an old Chronos"
@@ -206,7 +206,7 @@ python3 "$TJ" unregister >/dev/null 2>&1
 mkdir -p "$HOME/.config/talos" "$SB/clone022/lib"; printf 'VERSION = "0.2.2"\n' > "$SB/clone022/lib/chronoslib.py"; printf '%s\n' "$SB/clone022" > "$HOME/.config/talos/chronos-dir"
 mkplist "$SB/rt" 0.2.1
 out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; n=$(cnt)
-{ [ "$n" = 1 ] && printf '%s' "$out" | grep -q 'SKIPPED talos-state-sweep' && printf '%s' "$out" | grep -q "$SB/rt"; } && ok "a pinned 0.2.2 CLONE does not fool Talos: the version comes from the runtime launchd runs (0.2.1), so restricted jobs are skipped and the message names that runtime" || no "Talos trusted the clone's version" "$out"
+{ [ "$n" = 5 ] && printf '%s' "$out" | grep -q 'SKIPPED talos-state-sweep' && printf '%s' "$out" | grep -q "$SB/rt"; } && ok "a pinned 0.2.2 CLONE does not fool Talos: the version comes from the runtime launchd runs (0.2.1), so restricted jobs are skipped and the message names that runtime" || no "Talos trusted the clone's version" "$out"
 python3 "$TJ" unregister >/dev/null 2>&1
 # unknown: no plist at all, an unreadable runtime, a plist that names no tick script, a runtime with no VERSION
 for case in noplist noruntime badplist noversion; do
@@ -222,7 +222,7 @@ PY
     noversion) mkplist "$SB/rt" ""; printf '# no version here\n' > "$SB/rt/lib/chronoslib.py" ;;
   esac
   out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; n=$(cnt)
-  { [ "$n" = 1 ] && printf '%s' "$out" | grep -q 'SKIPPED talos-morning-brief' && printf '%s' "$out" | grep -q 'cannot tell which Chronos'; } && ok "unknown Chronos version ($case): restricted jobs are refused, not assumed fine" || no "unknown version ($case) accepted (jobs=$n)" "$out"
+  { [ "$n" = 5 ] && printf '%s' "$out" | grep -q 'SKIPPED talos-morning-brief' && printf '%s' "$out" | grep -q 'cannot tell which Chronos'; } && ok "unknown Chronos version ($case): restricted jobs are refused, not assumed fine" || no "unknown version ($case) accepted (jobs=$n)" "$out"
   python3 "$TJ" unregister >/dev/null 2>&1
 done
 rm -f "$HOME/.config/talos/chronos-dir"
@@ -265,9 +265,18 @@ for i in ("talos-morning-brief","talos-weekly-wiki-lint","talos-weekly-snapshot"
 assert "restricted" not in d["talos-memory-index"] and d["talos-memory-index"]["kind"]=="command"
 assert "Edit(/%s/memory/briefs/**)" % A in d["talos-morning-brief"]["allowed_tools"]
 assert not any(t.startswith("Edit") for t in d["talos-state-sweep"]["allowed_tools"]+d["talos-weekly-wiki-lint"]["allowed_tools"]+d["talos-weekly-snapshot"]["allowed_tools"]), "a read-only job has a write tool"
+dc = d["talos-dream-cycle"]
+assert dc["restricted"] is True and dc["enabled"] is False and dc["notify"] == "failure", "dream cycle must ship disabled, restricted, failure-only notify"
+RA = __import__("os").path.realpath(A)
+assert all(t.startswith(tuple("%s(/%s/memory/dream/" % (w, x) for w in ("Edit", "Write") for x in (A, RA))) for t in dc["allowed_tools"] if t.startswith(("Edit", "Write"))), "dream cycle may write only under memory/dream/"
+assert not any("wiki" in t for t in dc["allowed_tools"] if t.startswith(("Edit", "Write"))), "the dream cycle model must not hold a wiki write tool (the apply script writes the wiki)"
+assert not any(t.split("(")[0] in ("Agent", "Task", "WebFetch", "WebSearch") for t in dc["allowed_tools"]), "no sub-agents or web"
+for w in ("am", "mid", "pm", "eve"):
+    j = d["talos-watch-" + w]
+    assert j["kind"] == "command" and j["enabled"] is False and "restricted" not in j and "--job " + w in j["command"] and A in j["command"], w
 PY
 list="$(python3 "$TJ" list 2>&1)"
-{ [ "$(printf '%s' "$list" | grep -c RESTRICTED)" = 4 ] && printf '%s' "$list" | grep 'talos-memory-index' | grep -q command; } && ok "list shows RESTRICTED for the four Claude jobs and 'command' for the index job" || no "list does not show access" "$list"
+{ [ "$(printf '%s' "$list" | grep -c RESTRICTED)" = 5 ] && printf '%s' "$list" | grep 'talos-memory-index' | grep -q command; } && ok "list shows RESTRICTED for the five Claude jobs and command for the index job and the watch jobs" || no "list does not show access" "$list"
 # the chosen tool lists must be accepted by Chronos's own validator when a Chronos is around (real check below, section 9)
 # a restricted tool list must cover every command each prompt tells the job to run (validate checks it; prove the check bites)
 mkbad; python3 - "$SB/bad/jobs/jobs.json" <<'PY'
