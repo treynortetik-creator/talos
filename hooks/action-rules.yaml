@@ -1,0 +1,84 @@
+# action-rules.yaml: the STARTER set of "never" and "ask" rules, read by hooks/action-rules.py (PreToolUse).
+#
+# This file ships with the kit and is replaced by upgrades. Put YOUR rules in ~/.config/talos/action-rules.yaml:
+# that file is read first, first match wins, so it can add rules and also override any rule below (use
+# `decision: allow` to carve out an exception). Check both files parse with: python3 hooks/action-rules.py test
+#
+# decision:
+#   never  always refused; the agent is told to stop and report.
+#   ask    live session: Claude Code shows its normal permission prompt. Unattended (a scheduled job): refused.
+#   allow  matches first and lets the call through.
+#   (no rule matches = allowed. This is friction on a list, not a sandbox.)
+#
+# match fields (all optional, but at least one required; all given = all must match):
+#   tool     regex, full match on the tool name: Bash, Write|Edit, mcp__.*__send_message
+#   command  Bash only: regex SEARCHED in "<working directory>\n<command>". The patterns below begin with the
+#            command-position prefix (?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*  so a phrase that is
+#            only QUOTED (an echo, a log line, a commit message) does not trip them.
+#   path     Write/Edit tools: regex searched in the file path.
+# Write regexes in 'single quotes' (backslashes stay literal; a literal single quote is doubled: '').
+#
+# Pull a sentence out of your own CLAUDE.md prose ("deploys only when I say ship") and put it here: a rule in this
+# table fires at the moment of the call; a sentence in a config file only fires when the agent remembers it.
+
+rules:
+  # ---- the channel the agent talks to you on is never gated ----
+  - id: own-channel-reply
+    decision: allow
+    tool: 'mcp__plugin_(telegram|imessage)_.*'
+    why: "The agent replying to you on your own chat channel is the point of the channel."
+
+  # ---- never ----
+  - id: rm-home-or-root
+    decision: never
+    tool: Bash
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*rm\s+(?:-[A-Za-z-]+\s+)*(?:-[A-Za-z]*[rR][A-Za-z]*|--recursive)\s+(?:-[A-Za-z-]+\s+)*(?:~|\$HOME|\$\{HOME\}|"\$HOME"|/)/?\*?(?=\s|$|[;&|)])'
+    why: "Recursively deleting your home folder or the filesystem root is never the plan."
+
+  - id: force-push-main
+    decision: never
+    tool: Bash
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*git\s+(?:-C\s+\S+\s+)?push\b(?:(?=[^;&|\n]*(?:\s-f\b|--force(?:-with-lease)?\b))(?=[^;&|\n]*(?<![\w/.-])(?:main|master)(?![\w.-]))|[^;&|\n]*\s\+\S*(?<![\w/.-])(?:main|master)(?![\w.-]))'
+    why: "A force-push to the main branch rewrites shared history."
+
+  - id: kill-by-pattern
+    decision: never
+    tool: Bash
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*(pkill|killall)\b'
+    why: "Kill by process id only. A pattern kill takes out whatever else matches the name, including your own tools."
+
+  - id: mcp-list
+    decision: never
+    tool: Bash
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*claude\s+mcp\s+list'
+    why: "Its health check starts every configured MCP server, including a second Telegram poller (HTTP 409). Use /mcp inside a session."
+
+  # ---- ask ----
+  - id: push-to-main
+    decision: ask
+    tool: Bash
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*git\s+(?:-C\s+\S+\s+)?push\b[^;&|\n]*(?<![\w/.-])(?:main|master)(?![\w.-])'
+    why: "Pushing to the main branch usually deploys or publishes."
+
+  - id: deploy-or-publish
+    decision: ask
+    tool: Bash
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*(?:vercel\s+(?:deploy|--prod)|netlify\s+deploy|railway\s+(?:up|deploy|redeploy)|fly(?:ctl)?\s+deploy|wrangler\s+(?:deploy|publish)|firebase\s+deploy|heroku\s+(?:release|deploy)|terraform\s+apply|kubectl\s+(?:apply|delete)|(?:npm|pnpm|yarn)\s+publish|twine\s+upload|cargo\s+publish|gem\s+push|docker\s+push)\b'
+    why: "Deploys and package publishes reach other people and are hard to take back."
+
+  - id: github-release-or-public
+    decision: ask
+    tool: Bash
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*gh\s+(?:release\s+(?:create|delete|edit)|repo\s+(?:edit\b[^\n;&|]*--visibility[\s=]+public|create\b[^\n;&|]*--public|delete)|api\b[^\n;&|]*(?:private=false|visibility=public))'
+    why: "Releases, a public repository and a repository delete are one-way doors. Use the talos-go-public skill for the gate."
+
+  - id: github-account
+    decision: ask
+    tool: Bash
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*gh\s+auth\s+(?:switch|login|refresh|logout)\b'
+    why: "gh keeps one account for the whole machine; switching it changes who every other repository pushes as."
+
+  - id: send-or-publish-via-connector
+    decision: ask
+    tool: 'mcp__.*__[A-Za-z_]*(?:send|reply|forward|publish|share|trash|delete|schedule|post_)[A-Za-z_]*'
+    why: "Sending, sharing, deleting or posting through a connected account acts as you and reaches other people."

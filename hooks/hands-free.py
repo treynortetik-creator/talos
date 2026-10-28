@@ -14,8 +14,16 @@ ROLES (argv[1]):
   check          Stop: while the window is open, block a turn whose chat replies were substantive text with no audio
 
 Only replies of MIN_CHARS or more are required to be audio: a four-second clip saying "on it" is worse than reading
-it. Needs the Telegram channel (setup/telegram.md) and scripts/tts.sh to make the audio. Blocks at most twice, then
-gives up. FAILS OPEN, ALWAYS. Kill switch: hands-free.off
+it.
+
+THE OTHER HALF (1.2): audio ALWAYS goes out with the full text, never a caption. A listener who cannot look at the
+screen right now still wants to read it later, or skim it at a red light, and an audio-only message cannot be searched,
+copied or quoted. So `note` also counts the text that travelled with the audio in the same turn, and `check` blocks ONCE
+when audio went out with fewer than MIN_TEXT_WITH_AUDIO characters of text, telling the agent to send the narration text
+as chat messages (about 1,500 characters each) before finishing.
+
+Needs the Telegram channel (setup/telegram.md) and scripts/tts.sh to make the audio. Blocks at most twice for
+text-only replies, once for caption-only audio, then gives up. FAILS OPEN, ALWAYS. Kill switch: hands-free.off
 """
 import json
 import os
@@ -28,6 +36,7 @@ import _talos_common as C  # noqa: E402
 KILL_NAME = "hands-free.off"
 DEFAULT_MIN = 60
 MIN_CHARS = 320
+MIN_TEXT_WITH_AUDIO = 200       # audio must travel with at least this much text (the full narration, not a caption)
 MAX_BLOCKS = 2
 AUDIO_EXT = (".mp3", ".m4a", ".wav", ".ogg", ".opus", ".aiff")
 REPLY_TOOLS = ("plugin_telegram_telegram__reply", "plugin_imessage_imessage__reply")
@@ -39,6 +48,11 @@ def mode_path():
 
 def debt_path():
     return os.path.join(C.state_dir(), "hands-free-debt.json")
+
+
+def turn_path():
+    """Per-turn record: did audio go out, and how much text went with it. Deleted by `check` at the end of every turn."""
+    return os.path.join(C.state_dir(), "hands-free-turn.json")
 
 
 def active():
@@ -80,14 +94,34 @@ def role_note(data):
     text = str(ti.get("text") or "")
     files = ti.get("files") or []
     has_audio = any(str(f).lower().endswith(AUDIO_EXT) for f in files if isinstance(f, (str, os.PathLike)))
+    turn = C.load_json(turn_path()) or {}
+    turn["audio"] = bool(turn.get("audio")) or has_audio
+    turn["text"] = int(turn.get("text", 0)) + len(text)
+    turn["blocks"] = int(turn.get("blocks", 0))
+    C.save_json(turn_path(), turn)
     debt = C.load_json(debt_path())
-    if has_audio:
-        C.drop(debt_path())
+    if turn["audio"]:
+        C.drop(debt_path())              # audio met this turn; the full text may follow it
     elif len(text) >= MIN_CHARS:
+        # keep the block count: re-saving a fresh debt every call would reset it and defeat the give-up guard
         C.save_json(debt_path(), {"ts": time.time(), "blocks": int(debt.get("blocks", 0)), "chars": len(text)})
 
 
 def role_check(data):
+    turn = C.load_json(turn_path())
+    if turn and active() and turn.get("audio") and int(turn.get("text", 0)) < MIN_TEXT_WITH_AUDIO:
+        if int(turn.get("blocks", 0)) >= 1:
+            C.drop(turn_path())          # blocked once already: give up rather than trap the session
+            return
+        turn["blocks"] = 1
+        C.save_json(turn_path(), turn)
+        print(json.dumps({"decision": "block", "reason": (
+            "HANDS-FREE: audio went out with only a caption (%d characters of text). The rule is audio WITH the full "
+            "text, so it can be read later or skimmed: send the full narration text, word for word what the audio says, "
+            "as chat message(s) now (split near 1,500 characters on paragraph breaks), then finish. This blocks once."
+            % int(turn.get("text", 0)))}))
+        return
+    C.drop(turn_path())
     if not active():
         C.drop(debt_path())
         return
@@ -107,7 +141,8 @@ def role_check(data):
         "HANDS-FREE MODE is on: the user asked for listenable replies. Your last chat reply was %d characters of text "
         "with no audio attached. Write a short spoken version (what you would say out loud, not a raw read of the "
         "text), render it with `bash scripts/tts.sh file <name>.m4a \"<narration>\"`, and send it with the reply tool's "
-        "`files` argument, with the same words as text. This blocks at most once more, then gives up." % int(d.get("chars", 0)))}))
+        "`files` argument, THEN send the full narration text as chat message(s) too. This blocks at most once more, "
+        "then gives up." % int(d.get("chars", 0)))}))
 
 
 def main():
@@ -115,6 +150,7 @@ def main():
     if role == "off":
         C.drop(mode_path())
         C.drop(debt_path())
+        C.drop(turn_path())
         print("hands-free off")
         return
     if role == "on":

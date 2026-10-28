@@ -68,6 +68,33 @@
             "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/check-vault.py\"; u=0; { [ \"$CHRONOS_RUN\" = 1 ] || [ \"$TALOS_UNATTENDED\" = 1 ]; } && u=1; if [ ! -f \"$f\" ] || ! command -v python3 >/dev/null 2>&1; then [ \"$u\" = 1 ] && { echo \"Talos safety guard (check-vault.py) cannot run (script or python3 missing) and this run is unattended, so the action is blocked.\" >&2; exit 2; }; exit 0; fi; python3 \"$f\"; rc=$?; [ \"$u\" = 1 ] && [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ] && { echo \"Talos safety guard (check-vault.py) crashed (exit $rc) in an unattended run, so the action is blocked.\" >&2; exit 2; }; exit $rc"
           }
         ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/action-rules.py\"; u=0; { [ \"$CHRONOS_RUN\" = 1 ] || [ \"$TALOS_UNATTENDED\" = 1 ]; } && u=1; if [ ! -f \"$f\" ] || ! command -v python3 >/dev/null 2>&1; then [ \"$u\" = 1 ] && { echo \"Talos safety guard (action-rules.py) cannot run (script or python3 missing) and this run is unattended, so the action is blocked.\" >&2; exit 2; }; exit 0; fi; python3 \"$f\"; rc=$?; [ \"$u\" = 1 ] && [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ] && { echo \"Talos safety guard (action-rules.py) crashed (exit $rc) in an unattended run, so the action is blocked.\" >&2; exit 2; }; exit $rc"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/bsd-sed-guard.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; python3 \"$f\""
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_telegram_telegram__reply|mcp__plugin_telegram_telegram__edit_message",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/tg-claim-check.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; python3 \"$f\" pre"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -84,6 +111,14 @@
           {
             "type": "command",
             "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/channel-debt.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; python3 \"$f\" arm"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/memory-reflex.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; python3 \"$f\"; exit 0"
           }
         ]
       }
@@ -140,6 +175,16 @@
           {
             "type": "command",
             "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/agent-log.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; python3 \"$f\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/compaction-guard.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; python3 \"$f\" save"
           }
         ]
       }

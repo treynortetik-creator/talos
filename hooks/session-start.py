@@ -590,6 +590,23 @@ def refresh_index_in_background():
         pass
 
 
+def refresh_gazetteer_in_background():
+    """The memory-reflex hook (hooks/memory-reflex.py) reads a name list built from the wiki. Session start is a cheap
+    moment to rebuild it when a note is newer than it. DETACHED and low-priority, like the index refresh: this hook never
+    waits for it and a failure to launch is silent. A headless scheduled run skips it. Never throws."""
+    try:
+        if HEADLESS:
+            return
+        script = os.path.join(PROJECT_DIR, "scripts", "wiki-gazetteer.py")
+        if not (C.contained(script) and os.path.isfile(script) and C.contained(WIKI_DIR) and os.path.isdir(WIKI_DIR)):
+            return                            # the script is EXECUTED: it must sit inside the project with no link on the way
+        subprocess.Popen([sys.executable, script, "--if-stale", "--quiet"], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=PROJECT_DIR, start_new_session=True,
+                         preexec_fn=lambda: os.nice(10))
+    except Exception:
+        pass
+
+
 def hook_payload():
     """The SessionStart JSON from stdin (`source`: startup, resume, clear, compact, fork; `session_id`), or {}.
     Only reads when data is already waiting (a bare terminal or an open idle pipe must never hang session start)."""
@@ -623,6 +640,24 @@ def channel_debt_note(session_id=""):
                 "A message from %s is still waiting for a reply%s. The person cannot see this terminal. "
                 "Call the channel reply tool with the substance before anything else."
                 % (src, " (chat_id %s)" % d["chat_id"] if d.get("chat_id") else ""))
+    except Exception:
+        return None
+
+
+def compaction_carry_note():
+    """After a compaction: what hooks/compaction-guard.py (PreCompact) wrote down for this agent -- the last days' logged
+    corrections, an open hands-free window, a reply that was owed. One block with the digest, not a second hook racing
+    this one. The file is copied from .learnings, so the caller puts it inside the data wrapper. Never throws."""
+    try:
+        sys.path.insert(0, os.path.join(PROJECT_DIR, "hooks"))
+        import _talos_common as C
+        p = os.path.join(C.state_dir(), "compaction-carry.md")
+        if time.time() - os.path.getmtime(p) > 12 * 3600:
+            return None                       # a stale carry from an earlier day is not about this compaction
+        text = open(p, encoding="utf-8", errors="replace").read().strip()
+        if not text:
+            return None
+        return "--- CARRIED ACROSS THIS COMPACTION (by a hook; still in force) ---\n" + as_data(text[:5000])
     except Exception:
         return None
 
@@ -664,6 +699,9 @@ def build_context(source="", session_id=""):
         owed = channel_debt_note(session_id)
         if owed:
             blocks.append(owed)
+        carried = compaction_carry_note()
+        if carried:
+            blocks.append(carried)
 
     if not HEADLESS:
         upkeep = wiki_maintenance()
@@ -727,6 +765,7 @@ def main():
             pass  # if the guard itself fails, proceed rather than break startup
 
         refresh_index_in_background()
+        refresh_gazetteer_in_background()
         _p = hook_payload()
         context = build_context(str(_p.get("source") or ""), str(_p.get("session_id") or ""))
         print(json.dumps({

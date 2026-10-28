@@ -263,6 +263,68 @@ rp "$LONG" '[]' | HF note; out="$(printf '{}' | HF check)"; [ -z "$out" ] && [ !
 HF on 99999 | grep -q '480 minutes' && ok "hands-free: the window is capped at 480 minutes" || no "cap missing"; HF off >/dev/null
 HF on 20 >/dev/null; touch "$SD/hands-free.off"; rp "$LONG" '[]' | HF note; out="$(printf '{}' | HF check)"; rm -f "$SD/hands-free.off"; HF off >/dev/null
 [ -z "$out" ] && ok "hands-free: its kill switch works" || no "kill switch ignored" "$out"
+# 1.2: audio ALWAYS goes out with the full text, never a caption
+HF on 30 >/dev/null
+rp "Here is the audio" '["/tmp/x.m4a"]' | HF note; out="$(printf '{}' | HF check)"
+printf '%s' "$out" | grep -q '"block"' && printf '%s' "$out" | grep -q 'full' && ok "hands-free: audio with only a caption is blocked once and told to send the full text" || no "caption-only audio not blocked" "$out"
+rp "Here is the audio again" '["/tmp/x.m4a"]' | HF note; out="$(printf '{}' | HF check)"      # the agent resends a caption in the same turn
+[ -z "$out" ] && ok "hands-free: the caption-only block gives up after one block (never traps the session)" || no "caption-only block repeated" "$out"
+rp "$LONG" '["/tmp/x.m4a"]' | HF note; out="$(printf '{}' | HF check)"
+[ -z "$out" ] && ok "hands-free: audio WITH the full text in the same message passes" || no "audio plus text blocked" "$out"
+rp "short caption" '["/tmp/x.m4a"]' | HF note; rp "$LONG" '[]' | HF note; out="$(printf '{}' | HF check)"
+[ -z "$out" ] && ok "hands-free: audio, then the full text as a separate message in the same turn, passes" || no "audio then text blocked" "$out"
+HF off >/dev/null
+rp "Here is the audio" '["/tmp/x.m4a"]' | HF note; out="$(printf '{}' | HF check)"
+[ -z "$out" ] && ok "hands-free: with the mode off, audio with a caption is never blocked" || no "blocked while off" "$out"
+HF on 20 >/dev/null; touch "$SD/hands-free.off"; rp "Here is the audio" '["/tmp/x.m4a"]' | HF note; out="$(printf '{}' | HF check)"; rm -f "$SD/hands-free.off"; HF off >/dev/null
+[ -z "$out" ] && ok "hands-free: the kill switch also silences the caption-only check" || no "kill switch ignored (caption check)" "$out"
+
+# ================================================================ compaction guard (PreCompact) + session-start carry
+CG() { H compaction-guard.py "$@"; }
+cp "$KIT/hooks/session-start.py" "$A/hooks/"; mkdir -p "$A/.learnings" "$A/memory"
+TODAY="$(date +%Y-%m-%d)"; OLD="$(python3 -c 'import time; print(time.strftime("%Y-%m-%d", time.localtime(time.time()-86400*20)))')"
+cat > "$A/.learnings/LEARNINGS.md" <<EOF
+# LEARNINGS
+
+## $OLD — an old correction (correction)
+**What happened:** a long time ago.
+**Rule (apply every time):** this one is too old to carry.
+
+## $TODAY — never summarise the budget table (correction)
+**What happened:** I rounded the table. They said: "keep every row, no rounding".
+**Root cause:** I tidied.
+**Rule (apply every time):** 1. Paste tables whole.
+**Severity:** LOW
+EOF
+rm -f "$SD/compaction-carry.md"
+printf '{"session_id":"S1"}' | CG save
+{ [ -s "$SD/compaction-carry.md" ] && grep -q 'keep every row' "$SD/compaction-carry.md" && ! grep -q 'too old to carry' "$SD/compaction-carry.md"; } \
+  && ok "compaction guard: carries the last days' logged corrections, not old ones" || no "compaction guard carry wrong" "$(cat "$SD/compaction-carry.md" 2>/dev/null)"
+ctx="$(printf '{"source":"compact","session_id":"S1"}' | ( cd "$A" && CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py 2>/dev/null ))"
+{ printf '%s' "$ctx" | grep -q 'CARRIED ACROSS THIS COMPACTION' && printf '%s' "$ctx" | grep -q 'keep every row'; } && ok "session start after a compaction hands the carried corrections back inside the continuity block" || no "carry not injected after compact" "$ctx"
+ctx="$(printf '{"source":"startup"}' | ( cd "$A" && CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py 2>/dev/null ))"
+printf '%s' "$ctx" | grep -q 'CARRIED ACROSS' && no "carry shown on a fresh startup" || ok "session start does not show a carry on a fresh startup"
+HF on 30 >/dev/null; printf '{"session_id":"S1"}' | CG save
+grep -q 'HANDS-FREE is ON' "$SD/compaction-carry.md" && ok "compaction guard: an open hands-free window is carried" || no "hands-free not carried" "$(cat "$SD/compaction-carry.md")"
+HF off >/dev/null
+rm -f "$A/.learnings/LEARNINGS.md"; printf '{"session_id":"S1"}' | CG save
+[ ! -e "$SD/compaction-carry.md" ] && ok "compaction guard: nothing to carry leaves no stale file behind" || no "stale carry file left"
+touch -t 202001010000 "$SD/compaction-carry.md" 2>/dev/null || { mkdir -p "$SD"; printf 'old\n' > "$SD/compaction-carry.md"; touch -t 202001010000 "$SD/compaction-carry.md"; }
+ctx="$(printf '{"source":"compact"}' | ( cd "$A" && CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py 2>/dev/null ))"
+printf '%s' "$ctx" | grep -q 'CARRIED ACROSS' && no "a stale carry file was injected" || ok "session start ignores a carry file older than 12 hours"
+rm -f "$SD/compaction-carry.md"
+mkdir -p "$SD"; touch "$SD/compaction-guard.off"; printf '{"session_id":"S1"}' | CG save; rm -f "$SD/compaction-guard.off"
+[ ! -e "$SD/compaction-carry.md" ] && ok "compaction guard: its kill switch works" || no "kill switch ignored (compaction guard)"
+printf '\xff\xfe not json' | CG save; [ "$?" = 0 ] && ok "compaction guard: garbage input fails open" || no "compaction guard crashed on garbage"
+
+# session start rebuilds the memory-reflex name list in the background when a wiki note is newer than it
+cp "$KIT/scripts/wiki-gazetteer.py" "$A/scripts/"; mkdir -p "$A/wiki/people"; rm -f "$SD/gazetteer.json"
+printf -- '---\ntitle: Dana Ruiz\ntype: person\ndescription: a made-up vendor lead\n---\n\n# Dana Ruiz\n' > "$A/wiki/people/dana-ruiz.md"
+( cd "$A" && CHRONOS_RUN=1 CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py >/dev/null 2>&1 ); sleep 1
+[ ! -e "$SD/gazetteer.json" ] && ok "session start: a headless run does not rebuild the name list" || no "headless run built the gazetteer"
+( cd "$A" && CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py >/dev/null 2>&1 )
+for _i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$SD/gazetteer.json" ] && break; sleep 0.5; done
+grep -q 'dana ruiz' "$SD/gazetteer.json" 2>/dev/null && ok "session start rebuilds the memory-reflex name list in the background" || no "gazetteer not rebuilt at session start"
 
 # ================================================================ v1.1.2: symlink containment (a symlinked PARENT is as bad as a symlinked file)
 OUT="$SB/outside"; rm -rf "$OUT"; mkdir -p "$OUT/memory" "$OUT/scripts"
@@ -404,14 +466,16 @@ for g in append-only-guard.py check-vault.py timeline-guard.py; do
 done
 
 # the settings template wrapper: a MISSING or CRASHING guard script blocks an unattended run and never a live one
-python3 - "$KIT/templates/dot-claude/settings.json" "$SB" <<'PY' && ok "settings template: the four safety guards' wrappers fail open live and CLOSED unattended (missing script, python crash, syntax error); a real block (exit 2) passes through" || no "settings wrapper modes wrong"
+python3 - "$KIT/templates/dot-claude/settings.json" "$SB" <<'PY' && ok "settings template: the five safety guards' wrappers fail open live and CLOSED unattended (missing script, python crash, syntax error); a real block (exit 2) passes through" || no "settings wrapper modes wrong"
 import json, os, subprocess, sys, tempfile
 d = json.load(open(sys.argv[1])); t = tempfile.mkdtemp(dir=sys.argv[2]); os.makedirs(t + "/hooks")
 guards = {}
 for ent in d["hooks"]["PreToolUse"]:
     for h in ent["hooks"]:
+        if "CHRONOS_RUN" not in h["command"]:
+            continue          # only the safety-guard wrapper checks CHRONOS_RUN; reminder hooks (bsd-sed-guard, tg-claim-check) fail open
         n = h["command"].split("hooks/")[1].split('"')[0]; guards[n] = h["command"]
-assert sorted(guards) == ["append-only-guard.py", "check-vault.py", "pre-tool-guard.py", "timeline-guard.py"], sorted(guards)
+assert sorted(guards) == ["action-rules.py", "append-only-guard.py", "check-vault.py", "pre-tool-guard.py", "timeline-guard.py"], sorted(guards)
 def run(cmd, name, env, script):
     p = t + "/hooks/" + name
     if script is None:
