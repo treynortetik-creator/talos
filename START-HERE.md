@@ -146,7 +146,7 @@ also records the vault for the optional guard in `hooks/check-vault.py`. If you 
 ## Optional, whenever you like: talk to it from your phone
 
 If you want to message your agent from Telegram instead of sitting at the terminal, the one-time setup is in
-[`setup/telegram.md`](setup/telegram.md) (about 10 minutes), and afterwards `bash scripts/talos-chat.sh` starts it with
+[`setup/telegram.md`](setup/telegram.md) (about 10 minutes, step by step, with a table of common failures), and afterwards `bash scripts/talos-chat.sh` starts it with
 the channel on. Skip it for now if you are not sure; nothing else depends on it.
 
 ## Day two — the moment that matters
