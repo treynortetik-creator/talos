@@ -51,6 +51,12 @@ F="$SB/agent-a"; mkfixture "$F"
 out="$(R "vendor contract")"
 printf '%s' "$out" | grep -q 'wiki/people/dana-ruiz.md' && ok "lexical arm finds a note by its terms" || no "lexical arm did not find dana-ruiz.md" "$out"
 printf '%s' "$out" | grep -q 'semantic: NOT INSTALLED' && ok "with no venv the first line says NOT INSTALLED and names the fix" || no "no NOT INSTALLED banner" "$(printf '%s' "$out" | head -2)"
+out="$(cd "$F" && python3 scripts/recall.py "vendor contracts" --rerank 2>&1)"
+{ printf '%s' "$out" | grep -q 'rerank: requested but NOT applied' && printf '%s' "$out" | grep -q 'dana-ruiz'; } && ok "--rerank without the semantic stack says so on the banner line and still answers in the normal order" || no "--rerank without semantic misbehaved" "$(printf '%s' "$out" | head -3)"
+out="$(cd "$F" && RECALL_RERANK=1 python3 scripts/recall.py "vendor contracts" --json 2>&1)"
+printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["rerank"]["vendor contracts"]["applied"] is False' 2>/dev/null && ok "RECALL_RERANK=1 reports rerank status in --json (applied: false here)" || no "RECALL_RERANK=1 not honoured in --json" "$out"
+out="$(cd "$F" && python3 scripts/recall.py "vendor contracts" --json 2>&1)"
+printf '%s' "$out" | grep -q '"rerank"' && no "rerank status present although it was not requested" || ok "without --rerank nothing about reranking appears (default OFF)"
 
 out="$(R "vendor contract" --json)"
 printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["semantic"]=="not-installed" and d["results"][0]["file"].endswith("dana-ruiz.md")' 2>/dev/null \

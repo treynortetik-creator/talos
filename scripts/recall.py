@@ -5,6 +5,7 @@
     python3 scripts/recall.py "vendor contract" -k 8 --expand        # + the [[links]] of each top hit
     python3 scripts/recall.py --batch "q1" "q2" "q3"                  # many queries, one process, JSON out
     python3 scripts/recall.py "..." --json
+    python3 scripts/recall.py "what did we decide about X" --rerank   # OPT-IN cross-encoder rerank of the top 15 (below)
 
 Standard library only, so it runs on the system python3 (3.9). Two search arms run side by side and are fused
 with Reciprocal-Rank Fusion (semantic weighted a little higher for fuzzy questions), then recently edited notes
@@ -25,6 +26,12 @@ When the semantic arm is not available the output SAYS WHY on its first line, an
 A weak or empty result prints a diagnosis, because "nothing recorded" and "the search is broken" must not look
 alike: a control query for a term that has to exist (the title of wiki/me.md) separates `broken` from `stale`
 from `empty`. Absence is a claim about the query, not about the world.
+
+--rerank (or RECALL_RERANK=1) is an OPT-IN third step: a cross-encoder (bge-reranker-v2-m3, int8, CPU) re-sorts the top 15
+files by their best chunk. It needs the semantic stack AND the reranker model (bash scripts/memory/setup.sh --rerank, about
+571 MB), costs several seconds per query, and says on the banner line whether it ran. Without either it does nothing and
+the normal order stands. It helped vague "what did we decide" questions and slightly hurt exact name lookups, so ask for
+it on the former. See scripts/memory/mem_rerank.py.
 
 Single-writer caution: never fan this script out to parallel sub-agents. Gather with --batch in the main session
 and paste the results into their briefs.
@@ -47,6 +54,8 @@ INDEX_DB = os.path.join(ROOT, ".index", "memory.db")
 INDEX_STAMP = os.path.join(ROOT, ".index", ".last-index-ok")    # touched by mem_index.py only on a clean finish
 MEM_SEARCH = os.path.join(HERE, "memory", "mem_search.py")
 RRF_K = 60
+RERANK_TOP = 15            # files fed to the reranker; ranks 16+ keep their order
+RERANK_INFO = {}           # last rerank status per query, surfaced on the banner line and in --json
 W_LEXICAL, W_SEMANTIC = 1.0, 1.2
 STALE_HOURS = 48
 SEM_TIMEOUT = 60
@@ -220,7 +229,39 @@ def links_of(path):
     return sorted(set(re.findall(r"\[\[([^\]|#]+)", text_of(path))))
 
 
-def search_one(query, k, expand, sem_hits, sem_err, sem_state):
+def _rerank(query, fused, methods, sem_state):
+    """Opt-in cross-encoder re-sort of the top RERANK_TOP files. Fail soft: any problem leaves the order alone."""
+    info = {"applied": False}
+    RERANK_INFO[query] = info
+    if len(fused) < 2:
+        info["why"] = "fewer than two results"
+        return fused
+    if sem_state not in ("live", "stale"):
+        info["why"] = "needs the semantic search stack (bash scripts/memory/setup.sh)"
+        return fused
+    t0 = time.time()
+    try:
+        sys.path.insert(0, os.path.join(HERE, "memory"))
+        import mem_rerank
+        if not mem_rerank.installed():
+            info["why"] = "the reranker model is not downloaded (bash scripts/memory/setup.sh --rerank)"
+            return fused
+        head = fused[:RERANK_TOP]
+        new, sc = mem_rerank.rerank(query, head)
+        if sc is None:
+            info["why"] = "the reranker failed (see the note above); normal order"
+            return fused
+        before = {f: i for i, f in enumerate(head, 1)}
+        for f in new:
+            methods[f].add("rerank")
+        info.update(applied=True, n=len(head), moved=sum(before[f] != i for i, f in enumerate(new, 1)), seconds=round(time.time() - t0, 1))
+        return new + fused[RERANK_TOP:]
+    except Exception as e:  # noqa: BLE001
+        info["why"] = "%s: %s" % (type(e).__name__, e)
+        return fused
+
+
+def search_one(query, k, expand, sem_hits, sem_err, sem_state, rerank=False):
     lex = lexical_rank(query)
     sem, chunks = ([], {})
     if sem_state in ("live", "stale") and sem_err is None:
@@ -235,6 +276,8 @@ def search_one(query, k, expand, sem_hits, sem_err, sem_state):
             age_days = 180.0
         score[f] *= 1.0 + 0.15 * max(0.0, 1.0 - age_days / 180.0)
     fused = sorted(score, key=lambda f: (-score[f], f))
+    if rerank:
+        fused = _rerank(query, fused, methods, sem_state)
     results = []
     for f in fused[:k]:
         ch = chunks.get(f)
@@ -317,7 +360,7 @@ BANNERS = {"broken": "SEARCH DEGRADED -- this is NOT evidence of absence",
            "stale": "INDEX STALE -- recent material is not searchable semantically yet"}
 
 
-def run_queries(queries, k, expand):
+def run_queries(queries, k, expand, rerank=False):
     state, status_text = semantic_status()
     sem_by_q, sem_err = {}, None
     if state in ("live", "stale"):
@@ -326,7 +369,7 @@ def run_queries(queries, k, expand):
             state, status_text = "unavailable", "UNAVAILABLE: lexical only (%s)" % sem_err
     out = {}
     for q in queries:
-        out[q] = search_one(q, k, expand, sem_by_q.get(q, []), sem_err, state)
+        out[q] = search_one(q, k, expand, sem_by_q.get(q, []), sem_err, state, rerank)
     return out, state, status_text
 
 
@@ -346,7 +389,8 @@ def main(argv):
             print("recall: -k needs a positive number, e.g. -k 8", file=sys.stderr)
             return 2
         del argv[i:i + 2]
-    FLAGS = ("--expand", "--json", "--batch")
+    FLAGS = ("--expand", "--json", "--batch", "--rerank")
+    rerank = "--rerank" in argv or os.environ.get("RECALL_RERANK", "") in ("1", "true", "yes")
     expand = "--expand" in argv
     as_json = "--json" in argv
     batch = "--batch" in argv
@@ -361,11 +405,19 @@ def main(argv):
         print('usage: recall.py "<query>" [-k N] [--expand] [--json]  |  recall.py --batch "q1" "q2" ...', file=sys.stderr)
         return 2
 
-    results, state, status_text = run_queries(queries, k, expand)
+    results, state, status_text = run_queries(queries, k, expand, rerank)
+    if rerank:
+        try:
+            import mem_rerank
+            mem_rerank.close()
+        except Exception:
+            pass
 
     if batch or as_json:
         cov = {q: coverage(q, results[q]) for q in queries}
         payload = {"semantic": state, "semantic_status": status_text, "coverage": cov}
+        if rerank:
+            payload["rerank"] = {q: RERANK_INFO.get(q, {"applied": False}) for q in queries}
         zero = [q for q in queries if not results[q]]
         if zero:
             verdict, why = diagnose_empty(state)
@@ -379,7 +431,12 @@ def main(argv):
 
     q = queries[0]
     res = results[q]
-    print('recall: "%s"   (semantic: %s)\n' % (q, status_text))
+    rr_txt = ""
+    if rerank:
+        rr = RERANK_INFO.get(q, {})
+        rr_txt = ("   (rerank: applied to the top %s, %s moved, %ss)" % (rr.get("n"), rr.get("moved"), rr.get("seconds"))
+                  if rr.get("applied") else "   (rerank: requested but NOT applied: %s)" % rr.get("why", "unavailable"))
+    print('recall: "%s"   (semantic: %s)%s\n' % (q, status_text, rr_txt))
     for i, r in enumerate(res, 1):
         print("%d. [%-16s] %s" % (i, "+".join(r["via"]), r["file"]))
         if r.get("heading") or r.get("line"):

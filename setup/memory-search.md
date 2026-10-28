@@ -87,5 +87,15 @@ bash scripts/test-recall.sh                       # no venv needed: lexical arm,
 TALOS_TEST_SEMANTIC=1 bash scripts/test-recall.sh # the real stack: venv, model, index, a query with no shared word
 ```
 
+## Optional reranking (1.2)
+
+`python3 scripts/recall.py "what did we decide about X" --rerank` (or `RECALL_RERANK=1`) re-sorts the top 15 files with a
+cross-encoder (bge-reranker-v2-m3, int8, CPU) that reads each file's best chunk against the question. It needs this
+semantic stack plus the model: `bash scripts/memory/setup.sh --rerank` (about 571 MB; `./install.sh --with-reranker` does the same
+at install time). It costs several seconds a query, so it is per query, never always on; the first line of the output says
+whether it ran, and if the model or the stack is missing it says that and returns the normal order. It tended to help vague
+"what did we decide" questions and to hurt exact name and file lookups (one maintainer's 33-question test, so a hint).
+Code: `scripts/memory/mem_rerank.py`. More on the suggested local models: [`local-models.md`](local-models.md).
+
 Credit: the hybrid design (grep plus vectors, fused with reciprocal-rank fusion) follows common practice; the
 embedding model is BAAI's `bge` family (MIT), run through the `fastembed` library.

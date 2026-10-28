@@ -22,6 +22,7 @@
 #   --embed-model small  BAAI/bge-small-en-v1.5, about 67 MB, 384 dimensions (small Macs, impatient people)
 #   --dry-run            print exactly what would happen and create nothing
 #   --no-index           build the venv and model but do not run the first index
+#   --rerank             ALSO download the opt-in reranker model for `recall.py --rerank` (about 571 MB; see fetch-reranker.sh)
 #   --venv-only          just create the shared venv (no packages, no model, no index); used by scripts/voice/setup.sh
 #
 # Remove it again with ./uninstall.sh --remove-memory-search (the per-agent .index/ goes with the agent folder).
@@ -29,7 +30,7 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 AGENT_DIR="$(cd "$HERE/../.." && pwd)"
-MODEL=base; DRY=0; DO_INDEX=1; DO_JOB=1; PLAN_LABEL=""; VENV_ONLY=0
+MODEL=base; RERANK=0; DRY=0; DO_INDEX=1; DO_JOB=1; PLAN_LABEL=""; VENV_ONLY=0
 PKGS="fastembed==0.8.0 sqlite-vec==0.1.9 apsw==3.53.1.0"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -39,6 +40,7 @@ while [ $# -gt 0 ]; do
     --no-index) DO_INDEX=0; shift ;;
     --no-job) DO_JOB=0; shift ;;
     --venv-only) VENV_ONLY=1; shift ;;
+    --rerank) RERANK=1; shift ;;
     --as-agent-dir) PLAN_LABEL="${2:?}"; shift 2 ;;     # install.sh --dry-run only: what to print as the agent folder
     -h|--help) awk 'NR>1 { if ($0 ~ /^#/) print; else exit }' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -93,6 +95,7 @@ if [ -n "$PYSRC" ]; then
 else
   say "   python:        NONE FOUND (need 3.10+; Apple's python3 is 3.9)"
 fi
+say "   reranker:      $([ "$RERANK" = 1 ] && echo 'download bge-reranker-v2-m3 int8 (about 571 MB) for recall.py --rerank' || echo 'not requested (add --rerank for recall.py --rerank)')"
 say "   job:           $([ "$DO_JOB" = 1 ] && echo 'enable talos-memory-index in Chronos, if Chronos is installed' || echo 'skipped (--no-job)')"
 
 if [ -z "$PYSRC" ]; then
@@ -156,6 +159,11 @@ if [ "$DO_JOB" = 1 ] && [ -f "${CHRONOS_CONFIG:-$HOME/.config/chronos/config.jso
   python3 "$AGENT_DIR/scripts/talos-jobs.py" enable talos-memory-index && \
     say "   talos-memory-index enabled (daily 06:41; a plain command, no Claude usage). Disable: python3 scripts/talos-jobs.py disable talos-memory-index" \
     || say "   could not enable the job (register it first: python3 scripts/talos-jobs.py register --agent-dir \"$AGENT_DIR\")"
+fi
+
+if [ "$RERANK" = 1 ]; then
+  step "Reranker model"
+  bash "$AGENT_DIR/scripts/memory/fetch-reranker.sh" || say "   the reranker download failed; search works without it. Retry: bash scripts/memory/fetch-reranker.sh"
 fi
 
 step "Done"
