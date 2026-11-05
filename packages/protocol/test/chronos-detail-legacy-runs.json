@@ -1,0 +1,63 @@
+{
+  "schedule": {
+    "id": "example-job",
+    "name": "Example Job",
+    "description": "An example job.",
+    "kind": "claude",
+    "when": {
+      "type": "weekdays",
+      "time": "07:35"
+    },
+    "when_text": "Weekdays at 7:35 AM",
+    "catchup_min": 180,
+    "enabled": true,
+    "paused": false,
+    "runner": "session",
+    "permissions": "full",
+    "allowed_tools": [],
+    "model": null,
+    "notify": "failure",
+    "triggers_count": 0,
+    "next_run": "2026-11-03T07:35:00-07:00",
+    "today": "pending",
+    "ds": "2026-11-03",
+    "window_ends": null,
+    "last_run": {
+      "ds": "2026-11-02",
+      "status": "ok",
+      "has_report": true
+    },
+    "prompt_preview": "Do the example job.",
+    "prompt_bytes": 19,
+    "editable": true,
+    "read_only_reason": null,
+    "changed_outside": true,
+    "etag": "sha256:7566122d5e78d74480cb91295d36c4ef20849ef818ed07f7aad29d5650ef243b",
+    "content_hash": "sha256:91c5e09aabaaa147ef93f48037c7934a566c5a144c1346a2474fabf0dacd5460",
+    "state_rev": "sha256:69a0a43d258ff466e7224b6891b243767d6e4c7116ac11e3611c026b53342cea"
+  },
+  "prompt": "Do the example job.",
+  "prompt_truncated": false,
+  "guard": null,
+  "next_runs": ["2026-11-03T07:35:00-07:00", "2026-11-04T07:35:00-07:00", "2026-11-05T07:35:00-07:00"],
+  "runs": [
+    {
+      "run_id": null,
+      "ds": "2026-11-02",
+      "started_at": null,
+      "runner": null,
+      "trigger": "clock",
+      "status": "ok",
+      "has_report": true
+    },
+    {
+      "run_id": null,
+      "ds": "2026-10-30",
+      "started_at": null,
+      "runner": null,
+      "trigger": "clock",
+      "status": "ok",
+      "has_report": true
+    }
+  ]
+}

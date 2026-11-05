@@ -1,0 +1,25 @@
+name: Talos mod canary
+
+# Weekly: does the Talos mod still validate and pass its tests on the newest Claude Code? The mods API is early access
+# and changes between releases, so a red run here is the early warning, not a blocker for anyone's PR.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm install --global @anthropic-ai/claude-code@latest
+      - run: claude --version
+      - run: HOME="$(mktemp -d)" claude plugin validate plugins/talos-app-mod
+      - run: HOME="$(mktemp -d)" claude plugin test plugins/talos-app-mod

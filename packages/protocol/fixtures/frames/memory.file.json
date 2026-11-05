@@ -1,0 +1,23 @@
+{
+  "v": 1,
+  "type": "memory.file",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T43D",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T43C",
+  "root_id": "notes",
+  "path": "projects/overview.md",
+  "mime": "text/markdown",
+  "text": "# Overview\n\nSee [[Launch checklist]].\n",
+  "offset": 0,
+  "next_offset": null,
+  "size": 38,
+  "mtime": "2026-10-28T15:32:10.120Z",
+  "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "links": [
+    {
+      "text": "Launch checklist",
+      "root_id": "notes",
+      "path": "projects/launch-checklist.md"
+    }
+  ]
+}

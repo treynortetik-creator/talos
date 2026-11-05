@@ -1,0 +1,42 @@
+{
+  "exit": 0,
+  "out": {
+    "schedule": {
+      "id": "events-only",
+      "name": "events-only",
+      "description": "hand",
+      "kind": "claude",
+      "when": {
+        "type": "events"
+      },
+      "when_text": "On events only (clock schedule off)",
+      "catchup_min": 180,
+      "enabled": true,
+      "paused": false,
+      "runner": "headless",
+      "permissions": "full",
+      "allowed_tools": [],
+      "model": null,
+      "notify": "failure",
+      "triggers_count": 1,
+      "next_run": null,
+      "today": "not_due",
+      "ds": "2026-10-05",
+      "window_ends": null,
+      "last_run": null,
+      "prompt_preview": "Do it.\n",
+      "prompt_bytes": 7,
+      "editable": false,
+      "read_only_reason": "Runs on events only; edit it at the Mac",
+      "changed_outside": true,
+      "etag": "sha256:d27a92bb9a12c54f64c1bf377f29624beabeb691eef6eaa55c921e50417bcdd2",
+      "content_hash": "sha256:deec380627fdb2101b396f185f696e67d06ddf8c52df1c03e7722463b688895c",
+      "state_rev": "sha256:ca0827d3e764b1c2f92dc2ee6899d0c0872464ed085c45172f1ba2e2b73d0992"
+    },
+    "prompt": "Do it.\n",
+    "prompt_truncated": false,
+    "guard": null,
+    "next_runs": [],
+    "runs": []
+  }
+}

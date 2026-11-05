@@ -1,0 +1,7 @@
+{
+  "id": "evt_0EXAMPLE1",
+  "object": "event",
+  "type": "charge.dispute.created",
+  "created": 1793199600,
+  "data": { "object": { "id": "dp_1", "amount": 4999, "currency": "usd", "reason": "fraudulent" } }
+}

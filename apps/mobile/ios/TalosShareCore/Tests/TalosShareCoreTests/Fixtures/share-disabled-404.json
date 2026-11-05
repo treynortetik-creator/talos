@@ -1,0 +1,8 @@
+{
+  "recorded": "2026-10-29 NOT recorded: written from apps/relay/src/core/share.ts notFound() (SHARE_ENABLED=0)",
+  "status": 404,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"error\":\"not_found\"}"
+}

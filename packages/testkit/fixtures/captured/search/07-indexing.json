@@ -1,0 +1,127 @@
+{
+  "scenario": "07-indexing",
+  "title": "While the index is behind, results say so",
+  "steps": [
+    {
+      "label": "indexing",
+      "request": {
+        "request_id": "REQ",
+        "q": "release",
+        "filters": {
+          "thread_ids": [],
+          "from": "any",
+          "has_file": null,
+          "after": null,
+          "before": null
+        },
+        "sort": "relevance",
+        "cursor": null,
+        "limit": 5
+      },
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "type": "search.results",
+          "request_id": "REQ",
+          "hits": [
+            {
+              "message_id": "m_00000000000000000000000003",
+              "thread_id": "projects",
+              "seq": null,
+              "author": "owner",
+              "kind": "text",
+              "via": "app",
+              "created_at": "2026-10-28T09:00:00.000Z",
+              "match_in": "text",
+              "snippet": "Add a line about the release party.",
+              "marks": [
+                [
+                  21,
+                  28
+                ]
+              ]
+            },
+            {
+              "message_id": "m_00000000000000000000000005",
+              "thread_id": "general",
+              "seq": null,
+              "author": "owner",
+              "kind": "file",
+              "via": "app",
+              "created_at": "2026-10-28T10:00:00.000Z",
+              "match_in": "attachment_name",
+              "snippet": "release-notes.md",
+              "marks": [
+                [
+                  0,
+                  7
+                ]
+              ],
+              "attachment": {
+                "media_id": "md_00000000000000000000000005",
+                "name": "release-notes.md",
+                "mime": "text/markdown",
+                "kind": "file"
+              }
+            },
+            {
+              "message_id": "m_00000000000000000000000007",
+              "thread_id": "inbox",
+              "seq": null,
+              "author": "hook",
+              "kind": "event",
+              "via": "hook",
+              "created_at": "2026-10-29T07:00:00.000Z",
+              "match_in": "card",
+              "snippet": "Release pipeline finished",
+              "marks": [
+                [
+                  0,
+                  7
+                ]
+              ]
+            },
+            {
+              "message_id": "m_00000000000000000000000001",
+              "thread_id": "projects",
+              "seq": null,
+              "author": "owner",
+              "kind": "text",
+              "via": "app",
+              "created_at": "2026-10-27T14:00:00.000Z",
+              "match_in": "text",
+              "snippet": "Can you draft the release notes for v0.3?",
+              "marks": [
+                [
+                  18,
+                  25
+                ]
+              ]
+            },
+            {
+              "message_id": "m_00000000000000000000000002",
+              "thread_id": "projects",
+              "seq": null,
+              "author": "agent",
+              "kind": "text",
+              "via": "app",
+              "created_at": "2026-10-27T14:00:00.000Z",
+              "match_in": "text",
+              "snippet": "Draft is ready. The release notes cover search, health and driving mode.",
+              "marks": [
+                [
+                  20,
+                  27
+                ]
+              ]
+            }
+          ],
+          "next_cursor": "eyJvIjo1LCJzIjoicmVsZXZhbmNlIiwiaCI6IlVZdHQ2Sl9ieDg4UyJ9",
+          "total_estimate": 8,
+          "took_ms": 1,
+          "index": "indexing"
+        }
+      ]
+    }
+  ]
+}

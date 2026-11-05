@@ -1,0 +1,4 @@
+#!/bin/bash
+# Fake `talos-app` that fails: records the call, then exits non-zero like a relay that refused it.
+printf "%s\n" "$*" >> "${FAKE_POST_LOG:-/dev/null}"
+exit 1

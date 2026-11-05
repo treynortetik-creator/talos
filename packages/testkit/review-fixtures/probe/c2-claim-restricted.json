@@ -1,0 +1,10 @@
+{
+  "exit": 1,
+  "out": {
+    "error": {
+      "code": "schedule_invalid",
+      "message": "a restricted or command job never runs in a live session",
+      "fields": []
+    }
+  }
+}

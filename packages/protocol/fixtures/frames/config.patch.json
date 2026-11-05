@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "type": "config.patch",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T421",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "base_rev": 0,
+  "patch": {
+    "quiet_window": {
+      "start": "22:00",
+      "end": "06:00"
+    }
+  },
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "lEzxDeSLbQAz1IJ-qbpdt2RvGY_M2-3Bvp3OIBrZhidblsTYHgcnHE-H4utf56TdKv9LnqoVfhurTG6TFlnJ1A"
+}

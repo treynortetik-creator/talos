@@ -1,0 +1,26 @@
+{
+  "v": 1,
+  "type": "memory.listing",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T43A",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T439",
+  "root_id": "notes",
+  "path": "projects",
+  "entries": [
+    {
+      "name": "decisions",
+      "path": "projects/decisions",
+      "type": "dir"
+    },
+    {
+      "name": "overview.md",
+      "path": "projects/overview.md",
+      "type": "file",
+      "size": 2048,
+      "mtime": "2026-10-28T15:32:10.120Z",
+      "title": "Overview",
+      "previewable": true
+    }
+  ],
+  "next_cursor": null
+}

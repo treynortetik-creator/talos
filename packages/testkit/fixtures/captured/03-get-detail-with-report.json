@@ -1,0 +1,147 @@
+{
+  "scenario": "03-get-detail-with-report",
+  "title": "schedule.get: a detail with a finished run and its report; an unknown id",
+  "steps": [
+    {
+      "step": 1,
+      "label": "app asks for the detail and the run report",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.get",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:30:30.300Z",
+          "request_id": "00000000000000000000000002",
+          "schedule_id": "daily-digest",
+          "report_run_id": "r_00000000000000000000000003",
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000004",
+          "ts": "2026-10-05T11:30:30.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000001"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000005",
+          "ts": "2026-10-05T11:30:30.300Z",
+          "type": "schedule.detail",
+          "request_id": "00000000000000000000000002",
+          "detail": {
+            "schedule": {
+              "id": "daily-digest",
+              "name": "Daily Digest",
+              "description": "Example job",
+              "kind": "claude",
+              "when": {
+                "type": "daily",
+                "time": "07:30"
+              },
+              "when_text": "Every day at 7:30 AM",
+              "catchup_min": 180,
+              "enabled": true,
+              "paused": false,
+              "runner": "session",
+              "permissions": "full",
+              "allowed_tools": [],
+              "model": null,
+              "notify": "failure",
+              "triggers_count": 0,
+              "next_run": "2026-10-06T07:30:00-04:00",
+              "today": "ran",
+              "window_ends": null,
+              "last_run": {
+                "run_id": "r_00000000000000000000000003",
+                "ds": "2026-10-05",
+                "started_at": "2026-10-05T07:30:30-04:00",
+                "runner": "session",
+                "trigger": "clock",
+                "status": "ok",
+                "duration_s": 0,
+                "has_report": true
+              },
+              "prompt_preview": "Summarise yesterday and post it.\n",
+              "prompt_bytes": 33,
+              "editable": true,
+              "read_only_reason": null,
+              "changed_outside": false,
+              "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+              "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+              "thread_id": null,
+              "wait_reason": null
+            },
+            "prompt": "Summarise yesterday and post it.\n",
+            "prompt_truncated": false,
+            "guard": null,
+            "next_runs": [
+              "2026-10-06T07:30:00-04:00",
+              "2026-10-07T07:30:00-04:00",
+              "2026-10-08T07:30:00-04:00"
+            ],
+            "runs": [
+              {
+                "run_id": "r_00000000000000000000000003",
+                "ds": "2026-10-05",
+                "started_at": "2026-10-05T11:30:30.300Z",
+                "runner": "session",
+                "trigger": "clock",
+                "status": "ok",
+                "duration_s": 0,
+                "summary": "Posted the digest (3 items).",
+                "has_report": true
+              }
+            ]
+          },
+          "report": {
+            "run_id": "r_00000000000000000000000003",
+            "text": "Item one\nItem two\nItem three\n"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 2,
+      "label": "app asks for a job that does not exist",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.get",
+          "id": "00000000000000000000000006",
+          "ts": "2026-10-05T11:30:30.300Z",
+          "request_id": "00000000000000000000000007",
+          "schedule_id": "no-such-job",
+          "report_run_id": null,
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000008",
+          "ts": "2026-10-05T11:30:30.300Z",
+          "type": "error",
+          "code": "schedule_not_found",
+          "message": "No scheduled job \"no-such-job\".",
+          "ref": "00000000000000000000000006"
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    }
+  ]
+}

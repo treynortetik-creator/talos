@@ -1,0 +1,40 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`slack normalizer > turns the fixtures into plain-text events 1`] = `
+[
+  {
+    "actor": {
+      "id": "U0SENDER01",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "slack:Ev0EXAMPLE01",
+    "id": "<event id>",
+    "kind": "slack.dm",
+    "priority": "high",
+    "source": "slack",
+    "summary": "@U0SENDER01: Can you look at the draft & tell me by @here? cc @U0OWNER001 in #general",
+    "thread": "work",
+    "title": "Direct message from @U0SENDER01",
+    "ts": "2026-10-25T14:59:59.000Z",
+    "url": "https://app.slack.com/client/T0EXAMPLE1/D0EXAMPLE01",
+    "work": true,
+  },
+  {
+    "actor": {
+      "id": "U0SENDER02",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "slack:Ev0EXAMPLE02",
+    "id": "<event id>",
+    "kind": "slack.mention",
+    "priority": "high",
+    "source": "slack",
+    "summary": "@U0SENDER02: @U0OWNER001 the deploy is blocked",
+    "thread": "work",
+    "title": "@U0SENDER02 mentioned you",
+    "ts": "2026-10-25T15:01:40.000Z",
+    "url": "https://app.slack.com/client/T0EXAMPLE1/C0EXAMPLE01",
+    "work": true,
+  },
+]
+`;

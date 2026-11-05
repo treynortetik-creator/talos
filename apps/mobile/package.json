@@ -1,0 +1,24 @@
+{
+  "name": "@talos-app/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Capacitor iOS shell around the Talos web app (WP-I0). The shell loads the relay origin; it ships no web assets.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "cap:sync": "cap sync ios",
+    "xcodegen": "cd ios/App && xcodegen generate",
+    "check:generated": "node scripts/check-generated.ts",
+    "test:swift": "(cd ios/BridgeGuard && swift test) && (cd ios/TalosAudioCore && swift test) && (cd ios/TalosPushCore && swift test) && (cd ios/TalosCrashCore && swift test)"
+  },
+  "dependencies": {
+    "@capacitor/core": "8.5.3",
+    "@capacitor/haptics": "8.0.2",
+    "@capacitor/ios": "8.5.3",
+    "@capacitor/keyboard": "8.0.6"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  }
+}

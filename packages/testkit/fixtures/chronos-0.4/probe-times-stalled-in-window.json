@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "text": "Background runs work.",
+  "stalled_in_window": [
+    {
+      "id": "mon-wed",
+      "ds": "2026-10-05T1215"
+    }
+  ]
+}

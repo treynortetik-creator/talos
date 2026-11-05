@@ -1,0 +1,55 @@
+{
+  "scenario": "12-relay-without-schedules",
+  "title": "A relay that does not list schedules/1 yet (deploy order, S1.5): the bridge mints no card",
+  "steps": [
+    {
+      "step": 1,
+      "label": "app proposes a job",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.patch",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "change": {
+            "op": "create",
+            "draft": {
+              "id": "nightly-sync",
+              "name": "Nightly Sync",
+              "description": "Sync the notes folder.",
+              "when": {
+                "type": "weekdays",
+                "time": "22:00"
+              },
+              "catchup_min": 120,
+              "enabled": true,
+              "runner": "session",
+              "permissions": "full",
+              "allowed_tools": [],
+              "model": null,
+              "notify": "failure",
+              "thread_id": "inbox",
+              "prompt": "Sync the notes folder and post a one-line summary.\n"
+            }
+          },
+          "thread_id": "general",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000002",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "error",
+          "code": "scheduler_unavailable",
+          "message": "The relay doesn't support Schedules yet; update the relay first.",
+          "ref": "00000000000000000000000001"
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    }
+  ]
+}

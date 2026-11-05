@@ -1,0 +1,64 @@
+{
+  "scenario": "01-list-empty",
+  "title": "schedules.list with no jobs: ack{ref} (no seq), then an empty snapshot",
+  "steps": [
+    {
+      "step": 1,
+      "label": "app asks for the list",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedules.list",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "request_id": "00000000000000000000000002",
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000003",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000001"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000004",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "schedules.snapshot",
+          "request_id": "00000000000000000000000002",
+          "snapshot": {
+            "protocol": 1,
+            "health": {
+              "state": "ok",
+              "adapter": {
+                "id": "chronos",
+                "version": "0.3.0",
+                "api": 1
+              },
+              "tz": "America/New_York",
+              "host_label": "Example Mac",
+              "session_runner": "talos",
+              "paused_all": false,
+              "headless": "unknown",
+              "tick_age_s": null,
+              "issues": [],
+              "checked_at": "2026-10-05T07:00:00-04:00"
+            },
+            "schedules": [],
+            "unreadable": [],
+            "as_of": "2026-10-05T07:00:00-04:00"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    }
+  ]
+}

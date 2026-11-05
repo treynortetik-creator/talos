@@ -1,0 +1,31 @@
+{
+  "v": 1,
+  "type": "health.beat",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T434",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "beat": {
+    "bridge": {
+      "version": "0.4.1",
+      "started_at": "2026-10-28T15:32:10.120Z"
+    },
+    "mod": {
+      "state": "alive",
+      "last_seen": "2026-10-28T15:32:10.120Z",
+      "expected": true
+    },
+    "tts": true,
+    "stt": true,
+    "sqlite": {
+      "fts5": true
+    },
+    "search": {
+      "state": "ready",
+      "docs": 5000
+    },
+    "memory": {
+      "state": "ready",
+      "files": 42,
+      "truncated": false
+    }
+  }
+}

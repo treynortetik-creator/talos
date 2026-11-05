@@ -1,0 +1,10 @@
+{
+  "exit": 1,
+  "out": {
+    "error": {
+      "code": "internal",
+      "message": "time must be HH:MM, 24 hour",
+      "fields": []
+    }
+  }
+}

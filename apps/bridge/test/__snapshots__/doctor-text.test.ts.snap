@@ -1,0 +1,49 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`talos-app doctor text prints exactly these lines for a healthy setup 1`] = `
+"ok    bun version: <bun> (needs >= 1.3.11)
+ok    MCP SDK version: <sdk> (must be 1.x, never 2.x)
+ok    .mcp.json entry: command bun, points at this checkout
+ok    home dir mode: 700 (want 700)
+ok    bridge.key mode: 600 (want 600)
+ok    config.json mode: 600 (want 600)
+ok    devices.json mode: 600 (want 600)
+ok    bridge.env mode: missing
+ok    bridge key: id <keyid>
+ok    config.json: rev 0
+ok    search (FTS5): available
+ok    codex (optional): <varies>
+ok    other relaying channels: none found
+warn  ask rules: permission_relay is on but no permissions.ask rules were found. In bypass mode nothing prompts, so nothing reaches the phone. Run: talos-app install-ask-rules --agent-dir <dir> --dry-run
+ok    claude mods: none installed
+ok    talos mod: Talos mod not installed in Claude Code
+ok    kit files: no kit manifest yet (expected until the kit writes one; nothing to check)
+ok    claude doctor: not run here: run \`claude doctor\` in Terminal for Claude Code's own checks
+ok    relay /healthz: fake
+ok    relay accepts this Mac: a signed read-only call was accepted
+warn  live bridge (status.json): no status.json: no bridge has run here since this update, or none is running. Start your agent with: talos-app start (a bridge that was already running needs a restart to start writing it)
+If the app says the server turned away this Mac's key, put this line in the relay variables on Railway and deploy:
+BRIDGE_PUBKEY=<pubkey>
+If you have run \`talos-app rotate\`, also set BRIDGE_PUBKEY_FORCE=1 for that one deploy, then remove it."
+`;
+
+exports[`talos-app doctor text prints these lines, and exits 1, when the relay is down and nothing is set up 1`] = `
+"ok    bun version: <bun> (needs >= 1.3.11)
+ok    MCP SDK version: <sdk> (must be 1.x, never 2.x)
+FAIL  .mcp.json entry: no talos-app server in <agent>/.mcp.json (run apps/bridge/scripts/install.sh)
+ok    home dir mode: 700 (want 700)
+FAIL  bridge.key mode: missing
+FAIL  config.json mode: missing
+ok    devices.json: none pinned yet
+ok    bridge.env mode: missing
+FAIL  config.json: missing
+ok    search (FTS5): available
+ok    codex (optional): <varies>
+ok    other relaying channels: none found
+ok    claude mods: none installed
+ok    talos mod: Talos mod not installed in Claude Code
+ok    kit files: no kit manifest yet (expected until the kit writes one; nothing to check)
+ok    claude doctor: not run here: run \`claude doctor\` in Terminal for Claude Code's own checks
+FAIL  relay /healthz: <unreachable>
+warn  live bridge (status.json): no status.json: no bridge has run here since this update, or none is running. Start your agent with: talos-app start (a bridge that was already running needs a restart to start writing it)"
+`;

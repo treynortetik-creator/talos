@@ -1,0 +1,52 @@
+{
+  "exit": 0,
+  "out": {
+    "api": 1,
+    "chronos": "0.3.0-rc1",
+    "as_of": "2026-10-05T07:45:00-04:00",
+    "tz": "America/New_York",
+    "session_runner": "hook",
+    "approval_required": false,
+    "paused_all": false,
+    "session_beat_age_s": null,
+    "tick_age_s": null,
+    "jobs_file": "$HOME/.config/chronos/jobs.json",
+    "state_dir": "$HOME/.chronos/state",
+    "registry_synced_folder": false,
+    "schedules": [
+      {
+        "id": "huge-catchup",
+        "name": "huge-catchup",
+        "description": "hand",
+        "kind": "claude",
+        "when": {
+          "type": "daily",
+          "time": "07:30"
+        },
+        "when_text": "Every day at 7:30 AM",
+        "catchup_min": 5000,
+        "enabled": true,
+        "paused": false,
+        "runner": "headless",
+        "permissions": "full",
+        "allowed_tools": [],
+        "model": null,
+        "notify": "failure",
+        "triggers_count": 0,
+        "next_run": "2026-10-06T07:30:00-04:00",
+        "today": "waiting",
+        "ds": "2026-10-04",
+        "window_ends": "2026-10-07T18:50:00-04:00",
+        "last_run": null,
+        "prompt_preview": "Do it.\n",
+        "prompt_bytes": 7,
+        "editable": true,
+        "read_only_reason": null,
+        "changed_outside": true,
+        "etag": "sha256:1b6b27bce3d261cd5f5c75e1043a0bb8d5aa29bc16ef427c5acd359ae42a4696",
+        "content_hash": "sha256:deec380627fdb2101b396f185f696e67d06ddf8c52df1c03e7722463b688895c",
+        "state_rev": "sha256:5411efd082b52c0e42781a58137248bbf1a0224cb2e0a15501520065259740e1"
+      }
+    ]
+  }
+}

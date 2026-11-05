@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T4V6",
+  "ts": "2026-11-01T18:01:00.000Z",
+  "type": "native.act",
+  "device_id": "d_zl76bwrjhvuymdmz7fpg",
+  "grant": "{\"v\":1,\"type\":\"native.grant\",\"device_id\":\"d_zl76bwrjhvuymdmz7fpg\",\"enc_pub\":\"BOOhinnmteBhZ6MDN6TvwR6KAbFvtqJ24EqZ63PB0BCwyD1j9C0LKS5jvt-Wx4kvSMcXSWws83xIRbVHMmJOFA4\",\"act_pub\":\"BNPZZCi4AZbNOKpIUVjkY7PCDm_pS06tvcxzSYJCPuTiZpql3t5TS6o4dfgLxv6jEJqWdrAC4ThjduEXcuTWKps\",\"scopes\":[\"reply\",\"approve_low\"],\"ts\":\"2026-11-01T18:00:00.000Z\",\"exp\":\"2026-12-01T18:00:00.000Z\",\"nonce\":\"V2Dd_NVEp08tfVCYg0WIqI8p\",\"osig\":\"g9s9o1LhKas7HHYnLLm-2X71eJW2YT5uDH_gu2KWXdN6BbB8gz3TyVJsN1d9Wl3gj0cgte_H3yQ4jin0l2LkkA\"}",
+  "body": "{\"a\":\"reply\",\"thread_id\":\"general\",\"text\":\"On it — \\\"quoted\\\" 🚀\"}",
+  "asig": "tCpQpKxCjW899BB7pA0bOWyA5p9uxyyPrPylMU8H9iBp3rWP88kSPPWrKFESoa219j7EmutQGmLldES5TagwNA",
+  "relay": {
+    "seq": 4190,
+    "received_at": "2026-11-01T18:01:00.200Z"
+  }
+}

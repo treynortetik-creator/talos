@@ -1,0 +1,21 @@
+/* Phone drawers slide in from their edge; with reduced motion they simply appear. They leave at once: an exit animation here
+   left a stale overlay over the next open (Radix keeps a closing layer mounted until its animation ends). Only phone drawers carry .drawer-anim,
+   so the desktop session sheet is untouched. */
+@media (prefers-reduced-motion: no-preference) {
+  .drawer-anim[data-state="open"][data-side="left"] {
+    animation: drawer-in-left 200ms var(--ease);
+  }
+  .drawer-anim[data-state="open"][data-side="right"] {
+    animation: drawer-in-right 200ms var(--ease);
+  }
+}
+@keyframes drawer-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+}
+@keyframes drawer-in-right {
+  from {
+    transform: translateX(100%);
+  }
+}

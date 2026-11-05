@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "type": "voice.ended",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T41K",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "voice_session_id": "v_01JBF3V7Q8K2M4N6P8R0S2T426",
+  "thread_id": "general",
+  "duration_s": 360,
+  "transcript": [
+    {
+      "who": "owner",
+      "text": "What is on today?",
+      "at": "2026-10-28T15:32:10.120Z"
+    }
+  ]
+}

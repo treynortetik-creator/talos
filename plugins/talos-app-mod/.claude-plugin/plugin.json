@@ -1,0 +1,5 @@
+{
+  "name": "talos-app-mod",
+  "version": "0.1.0",
+  "description": "Optional Talos mod: reports session state and inventory to the Talos bridge and guards the bridge's mod-only tools."
+}

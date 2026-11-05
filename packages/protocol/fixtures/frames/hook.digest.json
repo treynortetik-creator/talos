@@ -1,0 +1,37 @@
+{
+  "v": 1,
+  "type": "hook.digest",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T411",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "window": {
+    "start": "2026-10-28T05:00:00.000Z",
+    "end": "2026-10-28T15:32:10.120Z"
+  },
+  "threads": [
+    {
+      "thread_id": "inbox",
+      "counts": {
+        "github": 1
+      }
+    }
+  ],
+  "events": [
+    {
+      "id": "e_01JBF3V7Q8K2M4N6P8R0S2T404",
+      "source": "github",
+      "connection": "cn_8fK2aBcDeFgHiJkLmNoPqR",
+      "kind": "github.review_requested",
+      "title": "Review requested: Fix reconnect backoff (#41)",
+      "summary": "octocat requested your review on example-org/example-repo#41",
+      "url": "https://github.com/example-org/example-repo/pull/41",
+      "actor": {
+        "name": "octocat"
+      },
+      "ts": "2026-10-28T15:32:10.120Z",
+      "thread": "inbox",
+      "work": false,
+      "priority": "high",
+      "dedup_key": "github:72d3162e-cc78-11e3-81ab-4c9367dc0958"
+    }
+  ]
+}

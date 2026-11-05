@@ -1,0 +1,32 @@
+{
+  "scenario": "05-bad-cursor",
+  "title": "A cursor from another query is bad_query",
+  "steps": [
+    {
+      "label": "wrong cursor",
+      "request": {
+        "request_id": "REQ",
+        "q": "garden",
+        "filters": {
+          "thread_ids": [],
+          "from": "any",
+          "has_file": null,
+          "after": null,
+          "before": null
+        },
+        "sort": "relevance",
+        "cursor": "eyJvIjo3LCJzIjoibmV3ZXN0IiwiaCI6IjBBRnBScGVkbmpFRCJ9",
+        "limit": 50
+      },
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "type": "error",
+          "code": "bad_query",
+          "message": "That page belongs to another search.",
+          "ref": "REF"
+        }
+      ]
+    }
+  ]
+}

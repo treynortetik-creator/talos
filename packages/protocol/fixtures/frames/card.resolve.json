@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "type": "card.resolve",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T420",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "card_id": "c_01JBF3V7Q8K2M4N6P8R0S2T403",
+  "action": "primary",
+  "payload_hash": "sha256:ddf2ed1892a29b0b2630f81285538a5fce707de0d4587d4028ccc9c77d89c214",
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "axsPWuPepH8DrTcxho51ufEU0JZRY71ytn9s_DWqgYv4e-E7sBC78vqJXYNjHVZPBEFG0mSIEe9rlKHq1pttUQ"
+}

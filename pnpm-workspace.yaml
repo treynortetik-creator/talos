@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+  - e2e
+
+# A version of a package must be a day old before pnpm will pick it. Most hijacked releases are pulled within hours, so
+# a fresh `pnpm add` or `pnpm update` cannot land one. Minutes, so 1440 is one day. Lockfile installs are unaffected.
+minimumReleaseAge: 1440

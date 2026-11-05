@@ -1,0 +1,212 @@
+{
+  "scenario": "03-filters",
+  "title": "Filters: has_file, from, thread",
+  "steps": [
+    {
+      "label": "has_file",
+      "request": {
+        "request_id": "REQ",
+        "q": "tomato",
+        "filters": {
+          "thread_ids": [],
+          "from": "any",
+          "has_file": true,
+          "after": null,
+          "before": null
+        },
+        "sort": "relevance",
+        "cursor": null,
+        "limit": 50
+      },
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "type": "search.results",
+          "request_id": "REQ",
+          "hits": [
+            {
+              "message_id": "m_00000000000000000000000008",
+              "thread_id": "projects",
+              "seq": null,
+              "author": "owner",
+              "kind": "text",
+              "via": "app",
+              "created_at": "2026-10-09T14:00:00.000Z",
+              "match_in": "text",
+              "snippet": "Tomato soup recipe photo",
+              "marks": [
+                [
+                  0,
+                  6
+                ]
+              ]
+            }
+          ],
+          "next_cursor": null,
+          "total_estimate": 1,
+          "took_ms": 1,
+          "index": "ready"
+        }
+      ]
+    },
+    {
+      "label": "voice reply is not a file",
+      "request": {
+        "request_id": "REQ",
+        "q": "garden",
+        "filters": {
+          "thread_ids": [],
+          "from": "any",
+          "has_file": true,
+          "after": null,
+          "before": null
+        },
+        "sort": "relevance",
+        "cursor": null,
+        "limit": 50
+      },
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "type": "search.results",
+          "request_id": "REQ",
+          "hits": [],
+          "next_cursor": null,
+          "total_estimate": 0,
+          "took_ms": 1,
+          "index": "ready"
+        }
+      ]
+    },
+    {
+      "label": "thread inbox",
+      "request": {
+        "request_id": "REQ",
+        "q": "release",
+        "filters": {
+          "thread_ids": [
+            "inbox"
+          ],
+          "from": "any",
+          "has_file": null,
+          "after": null,
+          "before": null
+        },
+        "sort": "relevance",
+        "cursor": null,
+        "limit": 50
+      },
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "type": "search.results",
+          "request_id": "REQ",
+          "hits": [
+            {
+              "message_id": "m_00000000000000000000000007",
+              "thread_id": "inbox",
+              "seq": null,
+              "author": "hook",
+              "kind": "event",
+              "via": "hook",
+              "created_at": "2026-10-29T07:00:00.000Z",
+              "match_in": "card",
+              "snippet": "Release pipeline finished",
+              "marks": [
+                [
+                  0,
+                  7
+                ]
+              ]
+            },
+            {
+              "message_id": "m_00000000000000000000000006",
+              "thread_id": "inbox",
+              "seq": null,
+              "author": "owner",
+              "kind": "voice_note",
+              "via": "app",
+              "created_at": "2026-10-26T08:00:00.000Z",
+              "match_in": "transcript",
+              "snippet": "remind me about the release party on Friday",
+              "marks": [
+                [
+                  20,
+                  27
+                ]
+              ]
+            }
+          ],
+          "next_cursor": null,
+          "total_estimate": 2,
+          "took_ms": 1,
+          "index": "ready"
+        }
+      ]
+    },
+    {
+      "label": "from agent",
+      "request": {
+        "request_id": "REQ",
+        "q": "release",
+        "filters": {
+          "thread_ids": [],
+          "from": "agent",
+          "has_file": null,
+          "after": null,
+          "before": null
+        },
+        "sort": "relevance",
+        "cursor": null,
+        "limit": 50
+      },
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "type": "search.results",
+          "request_id": "REQ",
+          "hits": [
+            {
+              "message_id": "m_00000000000000000000000002",
+              "thread_id": "projects",
+              "seq": null,
+              "author": "agent",
+              "kind": "text",
+              "via": "app",
+              "created_at": "2026-10-27T14:00:00.000Z",
+              "match_in": "text",
+              "snippet": "Draft is ready. The release notes cover search, health and driving mode.",
+              "marks": [
+                [
+                  20,
+                  27
+                ]
+              ]
+            },
+            {
+              "message_id": "m_00000000000000000000000004",
+              "thread_id": "projects",
+              "seq": null,
+              "author": "agent",
+              "kind": "text",
+              "via": "app",
+              "created_at": "2026-10-28T09:00:00.000Z",
+              "match_in": "text",
+              "snippet": "…I also looked at <img src=x onerror=alert(1)> in the old release page; it is plain text here.",
+              "marks": [
+                [
+                  58,
+                  65
+                ]
+              ]
+            }
+          ],
+          "next_cursor": null,
+          "total_estimate": 2,
+          "took_ms": 1,
+          "index": "ready"
+        }
+      ]
+    }
+  ]
+}

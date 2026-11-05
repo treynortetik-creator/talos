@@ -1,0 +1,8 @@
+{
+  "recorded": "2026-10-29 from apps/relay (test harness, local)",
+  "status": 401,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"error\":\"share_token_invalid\",\"message\":\"That share link is not valid.\"}"
+}

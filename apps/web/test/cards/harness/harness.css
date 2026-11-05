@@ -1,0 +1,10 @@
+/* Test-only stylesheet for the WP7 harness: Tailwind over the real tokens, so axe sees the real colours. */
+@import "tailwindcss";
+@import "../../../src/theme/tokens.css";
+@source "../../../src";
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+}

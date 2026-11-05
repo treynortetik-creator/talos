@@ -1,0 +1,47 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local state (memory/ is the agent's state and is meant to be committed)
+memory/*.local.md
+
+# The optional semantic search index (scripts/memory/setup.sh). Derived data: it can always be rebuilt
+# from the notes, it is per agent, and it must never be committed. Grep plus the link graph work without it.
+.index/
+*.duckdb
+
+# Connector extracts staged during SEED-WIKI and DEEP-DIVE. Kept OUTSIDE wiki/ so that
+# wiki-search.sh never returns raw staging as a matching note. Never committed, because
+# it is rawer than the notes distilled from it. Deleted at the end of each run.
+.seed-staging/
+.dive-staging/
+
+# OS / editor
+.DS_Store
+.obsidian/
+__pycache__/
+*.pyc
+
+# The private personal vault never belongs in a work repo. Unanchored on purpose so it
+# matches at any depth in an INSTALLED agent folder. No trailing comment on the pattern
+# line: gitignore would treat it as part of the pattern.
+personal/
+# ...except the vault TEMPLATE, which is part of this kit and has to be tracked in the kit's own
+# repo. (In an installed agent folder the copy under optional/personal/ is the template too.)
+!/optional/personal/
+
+# A kit archive left in the folder after a manual install
+Talos-Agent-*.zip
+
+# Per-install connector pullers generated in SEED-WIKI step 3. They name one machine's
+# exact MCP tool names and are deleted in step 6.
+.claude/agents/seed-puller-*.md
+
+# patch(1) backups and rejects: never kit content
+*.orig
+*.rej
+
+# Chronos-related local state, in case someone points a config at the repo
+.chronos/
+notify.env

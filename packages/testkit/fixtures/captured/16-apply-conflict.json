@@ -1,0 +1,225 @@
+{
+  "scenario": "16-apply-conflict",
+  "title": "The job changed after the card was drawn: PRIMARY fails the card and writes nothing",
+  "steps": [
+    {
+      "step": 1,
+      "label": "app renames the job",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.patch",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "change": {
+            "op": "update",
+            "id": "daily-digest",
+            "base_etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+            "set": {
+              "name": "Morning Digest"
+            }
+          },
+          "thread_id": "general",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000002",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000001"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000003",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "card.create",
+          "card": {
+            "id": "c_00000000000000000000000004",
+            "thread_id": "general",
+            "kind": "schedule",
+            "title": "Change scheduled job: Morning Digest",
+            "destination": [
+              {
+                "label": "Runs",
+                "value": "Every day at 7:30 AM"
+              },
+              {
+                "label": "Next",
+                "value": "2026-10-05T07:30:00-04:00"
+              },
+              {
+                "label": "As",
+                "value": "Full permissions, nobody watching"
+              },
+              {
+                "label": "Where",
+                "value": "In your live session"
+              },
+              {
+                "label": "Posts to",
+                "value": "General"
+              },
+              {
+                "label": "Proposed by",
+                "value": "your form"
+              }
+            ],
+            "body": "Name: Daily Digest → Morning Digest",
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Save change",
+            "kill_label": "Kill change",
+            "allow_edit": false,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload": {
+              "schema": "talos.schedule-change/1",
+              "change": {
+                "op": "update",
+                "id": "daily-digest",
+                "base_etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+                "set": {
+                  "name": "Morning Digest"
+                }
+              },
+              "expected_etag": "sha256:b833f3a40e5dd22c181992d7e52c730f2ad06d8d44fe3a03a52422b61e07e3ef",
+              "proposed_by": "owner_form",
+              "client_ref": "00000000000000000000000001",
+              "preview": {
+                "when_text": "Every day at 7:30 AM",
+                "next_runs": [
+                  "2026-10-05T07:30:00-04:00",
+                  "2026-10-06T07:30:00-04:00",
+                  "2026-10-07T07:30:00-04:00"
+                ],
+                "tz": "America/New_York"
+              }
+            },
+            "payload_hash": "sha256:8f68bd01d3e9b92f43ff328d5a765d92fb47b8bd6a144c685f4ec18f77397582",
+            "state": "pending",
+            "created_at": "2026-10-05T11:00:00.300Z",
+            "expires_at": "2026-10-06T11:00:00.300Z",
+            "warning": "Runs unattended with full permissions: it can do anything you can on this Mac."
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 2,
+      "label": "owner approves the stale card",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "00000000000000000000000005",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "card_id": "c_00000000000000000000000004",
+          "action": "primary",
+          "payload_hash": "sha256:8f68bd01d3e9b92f43ff328d5a765d92fb47b8bd6a144c685f4ec18f77397582",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000006",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000005",
+          "stage": "delivered"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000007",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000004",
+          "state": "resolved",
+          "resolution": {
+            "action": "primary",
+            "at": "2026-10-05T11:00:00.300Z",
+            "edited": false,
+            "payload_hash": "sha256:8f68bd01d3e9b92f43ff328d5a765d92fb47b8bd6a144c685f4ec18f77397582",
+            "taken_at": "2026-10-05T11:00:00.300Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000008",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000005",
+          "stage": "consumed"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000009",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000004",
+          "state": "failed",
+          "result": {
+            "ok": false,
+            "text": "The job changed on your Mac after this card was drawn. Nothing was saved. Ask again.",
+            "at": "2026-10-05T11:00:00.300Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000010",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:00:00-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:10acf1ac10356e5dc71f6a8840ce52aaef35b99c7277423bf71569a96860530a",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Card c_00000000000000000000000004 → PRIMARY. The bridge applied it: The job changed on your Mac after this card was drawn. Nothing was saved. Ask again. Nothing for you to do.",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "c_00000000000000000000000004-applied",
+            "ts": "2026-10-05T11:00:00.300Z",
+            "kind": "system",
+            "trust": "system"
+          }
+        }
+      ],
+      "agent_tool_calls": []
+    }
+  ]
+}

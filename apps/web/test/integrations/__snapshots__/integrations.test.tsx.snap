@@ -1,0 +1,108 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`IntegrationWizard > renders every catalog entry through all 5 screens (fake mode) 1`] = `
+{
+  "calendly": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "forward": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "gcal": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "generic": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "github": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "gmail": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "gmail_work": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "jira": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "linear": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "make": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "n8n": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "rss": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "salesforce": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "slack": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "stripe": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "zapier": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+  "zoom": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
+}
+`;

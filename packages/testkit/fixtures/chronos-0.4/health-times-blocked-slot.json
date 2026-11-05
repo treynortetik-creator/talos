@@ -1,0 +1,45 @@
+{
+  "as_of": "2026-10-05T12:40:00-04:00",
+  "tz": "America/New_York",
+  "session_runner": "talos",
+  "paused_all": false,
+  "tick_age_s": null,
+  "session_beat_age_s": 0,
+  "headless": "blocked",
+  "blocked": {
+    "since": "2026-10-05T12:20:00-04:00",
+    "id": "mon-wed",
+    "ds": "2026-10-05T1215",
+    "run_id": "r_00000000000000000000000007",
+    "source": "watchdog"
+  },
+  "tcc_suspected": false,
+  "claude_path_changed": false,
+  "registry_synced_folder": false,
+  "issues": [
+    {
+      "code": "launch_stalled",
+      "schedule_id": "mon-wed"
+    },
+    {
+      "code": "headless_blocked",
+      "schedule_id": null
+    },
+    {
+      "code": "run_hung",
+      "schedule_id": "mon-wed"
+    },
+    {
+      "code": "missed_recently",
+      "schedule_id": "daily-digest"
+    },
+    {
+      "code": "missed_recently",
+      "schedule_id": "tight"
+    },
+    {
+      "code": "held_jobs",
+      "schedule_id": "big-meta"
+    }
+  ]
+}

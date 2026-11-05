@@ -1,0 +1,214 @@
+{
+  "scenario": "06-patch-delete",
+  "title": "schedule.patch delete: a card; PRIMARY removes the job",
+  "steps": [
+    {
+      "step": 1,
+      "label": "app proposes deleting the job",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.patch",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "change": {
+            "op": "delete",
+            "id": "daily-digest",
+            "base_etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec"
+          },
+          "thread_id": "general",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000002",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000001"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000003",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "card.create",
+          "card": {
+            "id": "c_00000000000000000000000004",
+            "thread_id": "general",
+            "kind": "schedule",
+            "title": "Delete scheduled job: Daily Digest",
+            "destination": [
+              {
+                "label": "Runs",
+                "value": "Every day at 7:30 AM"
+              },
+              {
+                "label": "Next",
+                "value": "2026-10-05T07:30:00-04:00"
+              },
+              {
+                "label": "As",
+                "value": "Full permissions, nobody watching"
+              },
+              {
+                "label": "Where",
+                "value": "In your live session"
+              },
+              {
+                "label": "Posts to",
+                "value": "General"
+              },
+              {
+                "label": "Proposed by",
+                "value": "your form"
+              }
+            ],
+            "body": "Deletes this job. Its run history stays on the Mac.\n\nSummarise yesterday and post it.\n",
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Delete job",
+            "kill_label": "Keep the job",
+            "allow_edit": false,
+            "allow_revise": true,
+            "risk": "high",
+            "origin": "chat",
+            "payload": {
+              "schema": "talos.schedule-change/1",
+              "change": {
+                "op": "delete",
+                "id": "daily-digest",
+                "base_etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec"
+              },
+              "expected_etag": null,
+              "proposed_by": "owner_form",
+              "client_ref": "00000000000000000000000001",
+              "preview": {
+                "when_text": "Every day at 7:30 AM",
+                "next_runs": [
+                  "2026-10-05T07:30:00-04:00",
+                  "2026-10-06T07:30:00-04:00",
+                  "2026-10-07T07:30:00-04:00"
+                ],
+                "tz": "America/New_York"
+              }
+            },
+            "payload_hash": "sha256:bcb0af74d6bee3559d5f2435dd3eaae2c7271671f121f6cfdfaa8ef9aecf764c",
+            "state": "pending",
+            "created_at": "2026-10-05T11:00:00.300Z",
+            "expires_at": "2026-10-06T11:00:00.300Z"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 2,
+      "label": "owner approves the delete",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "00000000000000000000000005",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "card_id": "c_00000000000000000000000004",
+          "action": "primary",
+          "payload_hash": "sha256:bcb0af74d6bee3559d5f2435dd3eaae2c7271671f121f6cfdfaa8ef9aecf764c",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000006",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000005",
+          "stage": "delivered"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000007",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000004",
+          "state": "resolved",
+          "resolution": {
+            "action": "primary",
+            "at": "2026-10-05T11:00:00.300Z",
+            "edited": false,
+            "payload_hash": "sha256:bcb0af74d6bee3559d5f2435dd3eaae2c7271671f121f6cfdfaa8ef9aecf764c",
+            "taken_at": "2026-10-05T11:00:00.300Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000008",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000005",
+          "stage": "consumed"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000009",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000004",
+          "state": "done",
+          "result": {
+            "ok": true,
+            "text": "Deleted.",
+            "at": "2026-10-05T11:00:00.300Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000010",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:00:00-04:00"
+          },
+          "changed": [],
+          "removed": [
+            "daily-digest"
+          ],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Card c_00000000000000000000000004 → PRIMARY. The bridge applied it: Deleted. Nothing for you to do.",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "c_00000000000000000000000004-applied",
+            "ts": "2026-10-05T11:00:00.300Z",
+            "kind": "system",
+            "trust": "system"
+          }
+        }
+      ],
+      "agent_tool_calls": []
+    }
+  ]
+}

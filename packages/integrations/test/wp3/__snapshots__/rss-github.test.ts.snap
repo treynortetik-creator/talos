@@ -1,0 +1,95 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`github notifications poller > normalizes the fixture: kinds, priorities, html urls, and no javascript: urls 1`] = `
+[
+  {
+    "actor": {
+      "name": "example-org/example-repo",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "github:notif:7001:2026-10-28T14:50:00Z",
+    "id": "<event id>",
+    "kind": "github.review_requested",
+    "priority": "high",
+    "source": "github",
+    "summary": "requested your review on example-org/example-repo: Fix reconnect backoff",
+    "thread": "inbox",
+    "title": "Review requested: Fix reconnect backoff",
+    "ts": "2026-10-28T14:50:00.000Z",
+    "url": "https://github.com/example-org/example-repo/pull/41",
+    "work": false,
+  },
+  {
+    "actor": {
+      "name": "example-org/example-repo",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "github:notif:7002:2026-10-28T14:51:00Z",
+    "id": "<event id>",
+    "kind": "github.mention",
+    "priority": "high",
+    "source": "github",
+    "summary": "mentioned you in example-org/example-repo: Flaky test in CI",
+    "thread": "inbox",
+    "title": "Flaky test in CI",
+    "ts": "2026-10-28T14:51:00.000Z",
+    "url": "https://github.com/example-org/example-repo/issues/12",
+    "work": false,
+  },
+  {
+    "actor": {
+      "name": "example-org/example-repo",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "github:notif:7003:2026-10-28T14:52:00Z",
+    "id": "<event id>",
+    "kind": "github.ci_failed",
+    "priority": "high",
+    "source": "github",
+    "summary": "build update for example-org/example-repo: CI workflow run failed for main branch",
+    "thread": "inbox",
+    "title": "CI workflow run failed for main branch",
+    "ts": "2026-10-28T14:52:00.000Z",
+    "url": "https://github.com/example-org/example-repo",
+    "work": false,
+  },
+  {
+    "actor": {
+      "name": "example-org/other-repo",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "github:notif:7004:2026-10-28T14:53:00Z",
+    "id": "<event id>",
+    "kind": "github.event",
+    "priority": "low",
+    "source": "github",
+    "summary": "activity in example-org/other-repo: Release v0.3",
+    "thread": "inbox",
+    "title": "Release v0.3",
+    "ts": "2026-10-28T14:53:00.000Z",
+    "work": false,
+  },
+]
+`;
+
+exports[`rss poller > later polls deliver only new items, oldest first, using the guid or link+title hash 1`] = `
+[
+  {
+    "actor": {
+      "name": "Example Blog",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "rss:08b7a88ff82bf5eb19625c12c8b932bffaecb6364c1d301ae69198a9537f8fde",
+    "id": "<event id>",
+    "kind": "rss.item",
+    "priority": "low",
+    "source": "rss",
+    "summary": "No guid on this one.",
+    "thread": "inbox",
+    "title": "Third post",
+    "ts": "2026-10-29T12:00:00.000Z",
+    "url": "https://example.com/posts/3",
+    "work": false,
+  },
+]
+`;

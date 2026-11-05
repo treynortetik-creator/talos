@@ -1,0 +1,43 @@
+{
+  "exit": 0,
+  "out": {
+    "schedule": {
+      "id": "ctrl-name",
+      "name": "line1\nline2‮",
+      "description": "hand",
+      "kind": "claude",
+      "when": {
+        "type": "daily",
+        "time": "07:30"
+      },
+      "when_text": "Every day at 7:30 AM",
+      "catchup_min": 180,
+      "enabled": true,
+      "paused": false,
+      "runner": "headless",
+      "permissions": "full",
+      "allowed_tools": [],
+      "model": null,
+      "notify": "failure",
+      "triggers_count": 0,
+      "next_run": "2026-10-06T07:30:00-04:00",
+      "today": "waiting",
+      "ds": "2026-10-05",
+      "window_ends": "2026-10-05T10:30:00-04:00",
+      "last_run": null,
+      "prompt_preview": "Do it.\n",
+      "prompt_bytes": 7,
+      "editable": true,
+      "read_only_reason": null,
+      "changed_outside": true,
+      "etag": "sha256:9db23ca371e1133bb1b90b27b46e15fac82382f93b0d1278ca8f7d315a8a26ee",
+      "content_hash": "sha256:deec380627fdb2101b396f185f696e67d06ddf8c52df1c03e7722463b688895c",
+      "state_rev": "sha256:8b7925b9f5f9c6420b7fbcb30ed8a2a72a7769582f78d8b39a2c271b8e7c9714"
+    },
+    "prompt": "Do it.\n",
+    "prompt_truncated": false,
+    "guard": null,
+    "next_runs": ["2026-10-06T07:30:00-04:00", "2026-10-07T07:30:00-04:00", "2026-10-08T07:30:00-04:00"],
+    "runs": []
+  }
+}

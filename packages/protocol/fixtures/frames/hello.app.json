@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "type": "hello",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T40C",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "role": "app",
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "last_seq": 0,
+  "visible": true,
+  "client": {
+    "version": "0.0.0",
+    "standalone": true,
+    "platform": "ios"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "about": "Captured by `bun run capture:memory` (apps/bridge/scripts/capture-memory.ts): the REAL memory service over a synthetic notes folder. Do not edit by hand: re-run the capture.",
+  "scenarios": [
+    {
+      "file": "01-roots-and-top.json",
+      "frames": 3
+    },
+    {
+      "file": "02-note-links-frontmatter.json",
+      "frames": 2
+    },
+    {
+      "file": "03-search.json",
+      "frames": 2
+    },
+    {
+      "file": "04-listing-pages.json",
+      "frames": 2
+    },
+    {
+      "file": "05-big-note-chunks.json",
+      "frames": 2
+    },
+    {
+      "file": "06-refusals.json",
+      "frames": 3
+    }
+  ]
+}

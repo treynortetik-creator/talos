@@ -1,0 +1,36 @@
+{
+  "name": "@talos-app/relay",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "test:e2e": "playwright test --pass-with-no-tests"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.5",
+    "@simplewebauthn/server": "14.0.3",
+    "@talos-app/integrations": "workspace:*",
+    "@talos-app/protocol": "workspace:*",
+    "better-sqlite3": "13.0.3",
+    "canonicalize": "5.1.0",
+    "fast-xml-parser": "5.11.2",
+    "hono": "4.13.14",
+    "openai": "7.45.1",
+    "pino": "10.4.0",
+    "rss-parser": "3.13.0",
+    "ulid": "3.0.2",
+    "web-push": "3.6.7",
+    "ws": "8.22.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@talos-app/testkit": "workspace:*",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/web-push": "3.6.4",
+    "@types/ws": "8.18.2",
+    "esbuild": "0.28.2"
+  }
+}

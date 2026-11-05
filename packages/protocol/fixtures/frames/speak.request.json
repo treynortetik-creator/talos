@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "type": "speak.request",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T444",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T445",
+  "message_id": "m_01JBF3V7Q8K2M4N6P8R0S2T402",
+  "thread_id": "general",
+  "fresh": true,
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "iAuYVm8duSMSkZ7PieH_AJYpX-zjwtngeLz5Ny7B1oD4WH5EHnX3yat0Mky5QoJm-lRJV6SU9pBDXhT6wENFVw"
+}

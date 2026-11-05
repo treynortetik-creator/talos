@@ -1,0 +1,25 @@
+{
+  "name": "@talos-app/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./guarded-fetch": "./src/guarded-fetch.ts",
+    "./fixtures/*": "./fixtures/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:browser": "playwright test -c playwright.config.ts",
+    "gen:fixtures": "node scripts/gen-fixtures.ts"
+  },
+  "dependencies": {
+    "canonicalize": "5.1.0",
+    "ulid": "3.0.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

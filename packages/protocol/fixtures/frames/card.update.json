@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "type": "card.update",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T40Z",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "card_id": "c_01JBF3V7Q8K2M4N6P8R0S2T403",
+  "state": "resolved",
+  "resolution": {
+    "action": "primary",
+    "at": "2026-10-28T15:32:10.120Z",
+    "edited": false,
+    "payload_hash": "sha256:ddf2ed1892a29b0b2630f81285538a5fce707de0d4587d4028ccc9c77d89c214"
+  }
+}

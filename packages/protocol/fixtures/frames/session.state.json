@@ -1,0 +1,46 @@
+{
+  "v": 1,
+  "type": "session.state",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T42T",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "state": {
+    "session_id": "sess_cc_example",
+    "source": "mod",
+    "capabilities": [
+      "stop",
+      "compact",
+      "command",
+      "clear",
+      "model",
+      "effort",
+      "inventory"
+    ],
+    "version": "2.1.312",
+    "model": {
+      "id": "claude-opus-5-5",
+      "display": "Opus 5.5"
+    },
+    "effort": "high",
+    "permission_mode": "default",
+    "busy": true,
+    "turn_id": "turn_example_1",
+    "context": {
+      "tokens": 182000,
+      "window": 1000000,
+      "percent": 18.2
+    },
+    "cost_usd": 1.42,
+    "rate_limits": [
+      {
+        "kind": "five_hour",
+        "percent": 31,
+        "resets_at": "2026-10-29T15:32:10.120Z"
+      }
+    ],
+    "surfaces": [
+      "cli",
+      "talos"
+    ],
+    "at": "2026-10-28T15:32:10.120Z"
+  }
+}

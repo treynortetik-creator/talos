@@ -1,0 +1,66 @@
+{
+  "scenario": "02-note-links-frontmatter",
+  "frames": [
+    {
+      "asked": "memory.read",
+      "frame": {
+        "v": 1,
+        "id": "01J00000000000000000000004",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.file",
+        "request_id": "01J10000000000000000000004",
+        "root_id": "notes",
+        "path": "Overview.md",
+        "mime": "text/markdown",
+        "text": "---\ntitle: Project Overview\nstatus: draft\ntags: [alpha, beta]\n---\n# Overview\nSee [[Launch checklist]], [[Secret plan]], [[Missing note]] and [the plan](projects/example/plan.md).\n\n<script>alert(1)</script>\n\n```\n[[Not a link]]\n```\n",
+        "offset": 0,
+        "next_offset": null,
+        "size": 230,
+        "mtime": "2026-10-20T12:00:00.000Z",
+        "sha256": "fa2f24b249a4a637304d42f73d807b073e059b274d654d7ab4d908ac02060137",
+        "links": [
+          {
+            "text": "Launch checklist",
+            "root_id": "notes",
+            "path": "projects/example/Launch checklist.md"
+          },
+          {
+            "text": "Secret plan",
+            "root_id": null,
+            "path": null
+          },
+          {
+            "text": "Missing note",
+            "root_id": null,
+            "path": null
+          },
+          {
+            "text": "the plan",
+            "root_id": "notes",
+            "path": "projects/example/plan.md"
+          }
+        ]
+      }
+    },
+    {
+      "asked": "memory.read",
+      "frame": {
+        "v": 1,
+        "id": "01J00000000000000000000005",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.file",
+        "request_id": "01J10000000000000000000005",
+        "root_id": "notes",
+        "path": "page.html",
+        "mime": "text/html",
+        "text": "<h1>Source</h1><script>alert(1)</script>\n",
+        "offset": 0,
+        "next_offset": null,
+        "size": 41,
+        "mtime": "2026-10-20T12:00:00.000Z",
+        "sha256": "4560e0abb694c60603ddf5430606188296fbd5904d578c8565f9ed42176769fa",
+        "links": []
+      }
+    }
+  ]
+}

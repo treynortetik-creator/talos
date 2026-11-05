@@ -1,0 +1,5 @@
+#!/bin/bash
+# Fake `talos-app`: records each call in $FAKE_POST_LOG. A restore prints $FAKE_RESTORE_OUTPUT (\n for new lines), if set.
+printf '%s\n' "$*" >> "${FAKE_POST_LOG:-/dev/null}"
+case "$1" in restore-last-good) [ -n "$FAKE_RESTORE_OUTPUT" ] && printf '%b\n' "$FAKE_RESTORE_OUTPUT" ;; esac
+exit 0

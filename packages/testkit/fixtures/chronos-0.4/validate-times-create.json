@@ -1,0 +1,44 @@
+{
+  "ok": true,
+  "normalized": {
+    "op": "create",
+    "draft": {
+      "id": "new-times",
+      "name": "New Times",
+      "description": "Example job",
+      "when": {
+        "type": "times",
+        "days": "weekdays",
+        "times": [
+          "09:45",
+          "12:15",
+          "14:45",
+          "17:15"
+        ]
+      },
+      "catchup_min": 180,
+      "enabled": true,
+      "runner": "headless",
+      "permissions": "full",
+      "allowed_tools": [],
+      "model": null,
+      "notify": "failure",
+      "prompt": "Summarise yesterday's activity and post it.\n",
+      "meta": {
+        "sources": [
+          "inbox"
+        ]
+      }
+    }
+  },
+  "preview": {
+    "when_text": "Weekdays at 9:45 AM, 12:15 PM, 2:45 PM and 5:15 PM",
+    "next_runs": [
+      "2026-10-05T09:45:00-04:00",
+      "2026-10-05T12:15:00-04:00",
+      "2026-10-05T14:45:00-04:00"
+    ],
+    "tz": "America/New_York"
+  },
+  "expected_etag": "sha256:80a4da29eba80668f93a59807a4728deea5f89d0eddbb016dfd501eb957c3233"
+}

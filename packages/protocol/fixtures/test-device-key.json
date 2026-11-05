@@ -1,0 +1,21 @@
+{
+  "_comment": "TEST KEY ONLY. Signs the committed fixtures. Not a real device key.",
+  "deviceId": "d_rjxnk4xufxem5xago5zd",
+  "publicJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "1YyTPyvyUp8Tm9m6rp134Ab2411grtG6-qUgnNl4wY4",
+    "y": "XUnUhU82WOpvBEs5jDsTJ8eJdHALdjVoylxU3objB9c"
+  },
+  "privateJwk": {
+    "key_ops": [
+      "sign"
+    ],
+    "ext": true,
+    "kty": "EC",
+    "x": "1YyTPyvyUp8Tm9m6rp134Ab2411grtG6-qUgnNl4wY4",
+    "y": "XUnUhU82WOpvBEs5jDsTJ8eJdHALdjVoylxU3objB9c",
+    "crv": "P-256",
+    "d": "WFsZEKyNDSkWvsi6vsNOVb77R5QO9osF3lmazm5aOxE"
+  }
+}

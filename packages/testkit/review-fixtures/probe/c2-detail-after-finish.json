@@ -1,0 +1,52 @@
+{
+  "exit": 0,
+  "out": {
+    "schedule": {
+      "id": "j-sess",
+      "name": "J-Sess",
+      "description": "Example job",
+      "kind": "claude",
+      "when": {
+        "type": "daily",
+        "time": "07:30"
+      },
+      "when_text": "Every day at 7:30 AM",
+      "catchup_min": 180,
+      "enabled": true,
+      "paused": true,
+      "runner": "session",
+      "permissions": "full",
+      "allowed_tools": [],
+      "model": null,
+      "notify": "failure",
+      "triggers_count": 0,
+      "next_run": "2026-10-06T07:30:00-04:00",
+      "today": "ran",
+      "ds": "2026-10-05",
+      "window_ends": null,
+      "last_run": {
+        "run_id": "r_00000000000000000000000004",
+        "ds": "2026-10-05",
+        "started_at": "2026-10-05T07:45:00-04:00",
+        "runner": "session",
+        "trigger": "run_now",
+        "status": "ok",
+        "duration_s": 0,
+        "has_report": true
+      },
+      "prompt_preview": "Do it.\n",
+      "prompt_bytes": 7,
+      "editable": true,
+      "read_only_reason": null,
+      "changed_outside": false,
+      "etag": "sha256:ab3958bc2dabe0b5715f57ff0308553f5057f6bddba0d5cd1ef825fbcecaf391",
+      "content_hash": "sha256:9ff674769901846cf5b13570db2731f5f2bf79a62f62c3d1ad0162649914dc79",
+      "state_rev": "sha256:dd80f3eed8210024da446f1359be3950b302754ee837903264351cf80d81e148"
+    },
+    "prompt": "Do it.\n",
+    "prompt_truncated": false,
+    "guard": null,
+    "next_runs": ["2026-10-06T07:30:00-04:00", "2026-10-07T07:30:00-04:00", "2026-10-08T07:30:00-04:00"],
+    "runs": []
+  }
+}

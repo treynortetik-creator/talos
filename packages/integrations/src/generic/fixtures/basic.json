@@ -1,0 +1,8 @@
+{
+  "title": "Build finished",
+  "summary": "Deploy of example-app finished in 41s.",
+  "url": "https://example.com/builds/118",
+  "actor": { "name": "Alex Example", "email": "alex@example.com" },
+  "ts": "2026-10-28T15:00:00Z",
+  "priority": "normal"
+}

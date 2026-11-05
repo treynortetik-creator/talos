@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "schedule.control",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T42S",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "action": "pause",
+  "schedule_id": "daily-digest",
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "R5mTdJrAPQ8XLkFQn3Sq79q0wqviItbYc2I3_IztiY0iZsmS5M5U1eGn37ZBv9TNfqpb8ysks9663aSDQoXsjA"
+}

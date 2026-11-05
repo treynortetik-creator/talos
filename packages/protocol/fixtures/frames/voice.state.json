@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "type": "voice.state",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T41H",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "voice_session_id": "v_01JBF3V7Q8K2M4N6P8R0S2T426",
+  "state": "live"
+}

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter">
+  <!-- Running Greek key (meander), one 16x16 tile that repeats on x. Used as a CSS mask; colour comes from a token. -->
+  <path d="M0 .75H16M0 15.25H16"/>
+  <path d="M0 12.5H16M3 12.5V3.5H13V10H6.5V6.5H9.75"/>
+</svg>

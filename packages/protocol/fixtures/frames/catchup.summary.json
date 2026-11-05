@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "type": "catchup.summary",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T41B",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "since_seq": 4000,
+  "threads": [
+    {
+      "thread_id": "general",
+      "unread": 2,
+      "last_ts": "2026-10-28T15:32:10.120Z",
+      "needs_you": true
+    }
+  ],
+  "open_cards": 1,
+  "overnight": {
+    "counts": {
+      "github": 3
+    }
+  }
+}

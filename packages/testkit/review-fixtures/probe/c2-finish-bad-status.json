@@ -1,0 +1,10 @@
+{
+  "exit": 1,
+  "out": {
+    "error": {
+      "code": "bad_request",
+      "message": "status must be one of ok, failed, timed_out, session_ended",
+      "fields": []
+    }
+  }
+}

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# talos-agent-root: print the agent folder this shell is working for (CLAUDE_PROJECT_DIR, else the folder above the
+# working directory that holds .talos-version). See scripts/_agent_root.py for the rule.
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+exec python3 "$HERE/../scripts/_agent_root.py" "$HERE/talos-agent-root"

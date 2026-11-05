@@ -1,0 +1,17 @@
+{
+  "event": "recording.completed",
+  "event_ts": 1792940400000,
+  "payload": {
+    "account_id": "AAAAAAAA",
+    "object": {
+      "uuid": "abcdefghijklmnopqrstuv==",
+      "id": 1234567890,
+      "host_email": "host@example.com",
+      "topic": "Weekly sync",
+      "start_time": "2026-10-28T14:00:00Z",
+      "share_url": "https://example.com/rec/share/abc",
+      "recording_files": [{ "id": "f1", "download_url": "https://example.com/download/secret" }, { "id": "f2" }]
+    },
+    "download_token": "SHOULD_NEVER_APPEAR"
+  }
+}

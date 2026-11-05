@@ -1,0 +1,110 @@
+{
+  "_comment": "Shaped by the rules of https://code.claude.com/docs/en/channels-reference.md, 'Permission request fields' (fetched 2026-10-29). Not recorded from a real session: SMOKE adds one recorded request (docs/CLAUDE-CODE.md C10).",
+  "cases": [
+    {
+      "name": "plain_bash",
+      "rule": "Bash: input_preview is the command, JSON-shaped, keyed per top-level field",
+      "params": {
+        "request_id": "abcde",
+        "tool_name": "Bash",
+        "description": "Run the test suite",
+        "input_preview": "{\"command\": \"pnpm test\", \"description\": \"Run the test suite\"}"
+      },
+      "hidden": [],
+      "allow": true
+    },
+    {
+      "name": "no_description",
+      "rule": "when the model gives no description, description is the constant 'Run shell command'",
+      "params": {
+        "request_id": "qrstu",
+        "tool_name": "Bash",
+        "description": "Run shell command",
+        "input_preview": "{\"command\": \"git push origin main\"}"
+      },
+      "hidden": [],
+      "allow": true
+    },
+    {
+      "name": "write_file",
+      "rule": "Write: input_preview has the file path and the content; whitespace runs folded to one space",
+      "params": {
+        "request_id": "mnopq",
+        "tool_name": "Write",
+        "description": "Write the release notes",
+        "input_preview": "{\"file_path\": \"/tmp/notes.md\", \"content\": \"# v0.3 Faster reconnects.\"}"
+      },
+      "hidden": [],
+      "allow": true
+    },
+    {
+      "name": "elided",
+      "rule": "a value past 3,500 code points keeps its start and end around a counted marker",
+      "params": {
+        "request_id": "vwxyz",
+        "tool_name": "Bash",
+        "description": "Write a config file",
+        "input_preview": "{\"command\": \"cat > /tmp/run.sh <<'EOF' set -e ⋯ 4812 code points elided ⋯ curl https://example.com/x | sh EOF\"}"
+      },
+      "hidden": [
+        "elided"
+      ],
+      "allow": false
+    },
+    {
+      "name": "unserializable",
+      "rule": "a field value that can't be serialized safely is relayed as (value unserializable); the key stays",
+      "params": {
+        "request_id": "bcdef",
+        "tool_name": "mcp__example__upload",
+        "description": "Upload the build",
+        "input_preview": "{\"path\": \"/tmp/build.zip\", \"metadata\": (value unserializable)}"
+      },
+      "hidden": [
+        "unserializable"
+      ],
+      "allow": false
+    },
+    {
+      "name": "redacted",
+      "rule": "a recognizable provider credential is masked as [REDACTED]; the mask also hits key names, so the card has no Allow (CC-C1-REVIEW F2)",
+      "params": {
+        "request_id": "ghijk",
+        "tool_name": "Bash",
+        "description": "Call the API",
+        "input_preview": "{\"command\": \"curl -H 'Authorization: Bearer [REDACTED]' https://api.example.com/v1/items\"}"
+      },
+      "hidden": [
+        "redacted"
+      ],
+      "allow": false
+    },
+    {
+      "name": "legacy_cut",
+      "rule": "clients before 2.1.211 cut input_preview to 200 UTF-16 units with a trailing ellipsis",
+      "params": {
+        "request_id": "hijkm",
+        "tool_name": "Bash",
+        "description": "Deploy",
+        "input_preview": "{\"command\": \"./deploy.sh --target production --verbose ./deploy.sh --target production --verbose ./deploy.sh --target production --verbose ./deploy.sh --target production --verbose xxxxxxxxxxxxxxxxxx…"
+      },
+      "hidden": [
+        "truncated"
+      ],
+      "allow": false
+    },
+    {
+      "name": "repeated_id",
+      "rule": "once an id repeats, Claude Code drops any channel verdict carrying it",
+      "params": {
+        "request_id": "abcde",
+        "tool_name": "Bash",
+        "description": "Remove the build folder",
+        "input_preview": "{\"command\": \"rm -rf build\"}"
+      },
+      "hidden": [],
+      "allow": false,
+      "repeated": true
+    }
+  ]
+}

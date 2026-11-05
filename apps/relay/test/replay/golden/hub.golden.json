@@ -1,0 +1,3727 @@
+{
+  "owner_message": {
+    "steps": [
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ],
+          "agent_config": {
+            "version": 1,
+            "rev": 0,
+            "agent": {
+              "name": "Talos",
+              "voice": "meridian",
+              "voice_persona": ""
+            },
+            "owner": {
+              "display_name": "You"
+            },
+            "threads": [
+              {
+                "id": "general",
+                "name": "General",
+                "icon": "💬",
+                "kind": "fixed",
+                "order": 0,
+                "notify": "all",
+                "voice_context": "recent",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              },
+              {
+                "id": "inbox",
+                "name": "Inbox",
+                "icon": "📥",
+                "kind": "system",
+                "order": 1,
+                "notify": "all",
+                "voice_context": "none",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              }
+            ],
+            "default_thread": "general",
+            "timezone": "UTC",
+            "quiet_window": null,
+            "notifications": {
+              "master": true,
+              "show_thread_names": "fixed_only"
+            },
+            "work": {
+              "label": "Work systems",
+              "ask_note": "Ask your IT team before connecting these.",
+              "enabled": [],
+              "retention": "passthrough"
+            },
+            "voice_notes": {
+              "reply_with_voice": "when_voice",
+              "driving_until": null
+            },
+            "permission_relay": false,
+            "session_models": ["default", "opus", "sonnet", "haiku"],
+            "memory_browser": true,
+            "mirror": {
+              "telegram": "off"
+            }
+          },
+          "threads": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "open_cards": [],
+          "unread": {},
+          "read_upto": {},
+          "not_delivered": [],
+          "statuses": []
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id5>",
+          "seq": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "message",
+          "id": "<id5>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "thread_id": "general",
+          "client_msg_id": "m_<id6>",
+          "text": "Hello from Alex Example",
+          "attachments": [],
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "presence",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "bridge_online": true,
+          "last_seen": "2026-10-28T15:00:00.000Z",
+          "queue_depth": 1
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "message.stored",
+          "id": "<id8>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "client_msg_id": "m_<id6>",
+          "message": {
+            "id": "m_<id6>",
+            "thread_id": "general",
+            "seq": 1,
+            "author": "owner",
+            "kind": "text",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "receipt": "sent",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "text": "Hello from Alex Example"
+          }
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "bridge acks the message"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "presence",
+          "id": "<id9>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "bridge_online": true,
+          "last_seen": "2026-10-28T15:00:00.000Z",
+          "queue_depth": 0
+        }
+      }
+    ],
+    "state": {
+      "cards": {},
+      "max_seq": 1,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "bridge_online": true,
+      "app_sockets": 1,
+      "pending_cards": 0,
+      "events": [
+        {
+          "v": 1,
+          "type": "message",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "thread_id": "general",
+          "client_msg_id": "m_<id2>",
+          "text": "Hello from Alex Example",
+          "attachments": [],
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      ]
+    }
+  },
+  "card_approve": {
+    "steps": [
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ],
+          "agent_config": {
+            "version": 1,
+            "rev": 0,
+            "agent": {
+              "name": "Talos",
+              "voice": "meridian",
+              "voice_persona": ""
+            },
+            "owner": {
+              "display_name": "You"
+            },
+            "threads": [
+              {
+                "id": "general",
+                "name": "General",
+                "icon": "💬",
+                "kind": "fixed",
+                "order": 0,
+                "notify": "all",
+                "voice_context": "recent",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              },
+              {
+                "id": "inbox",
+                "name": "Inbox",
+                "icon": "📥",
+                "kind": "system",
+                "order": 1,
+                "notify": "all",
+                "voice_context": "none",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              }
+            ],
+            "default_thread": "general",
+            "timezone": "UTC",
+            "quiet_window": null,
+            "notifications": {
+              "master": true,
+              "show_thread_names": "fixed_only"
+            },
+            "work": {
+              "label": "Work systems",
+              "ask_note": "Ask your IT team before connecting these.",
+              "enabled": [],
+              "retention": "passthrough"
+            },
+            "voice_notes": {
+              "reply_with_voice": "when_voice",
+              "driving_until": null
+            },
+            "permission_relay": false,
+            "session_models": ["default", "opus", "sonnet", "haiku"],
+            "memory_browser": true,
+            "mirror": {
+              "telegram": "off"
+            }
+          },
+          "threads": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "open_cards": [],
+          "unread": {},
+          "read_upto": {},
+          "not_delivered": [],
+          "statuses": []
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id5>",
+            "kind": "generic",
+            "title": "Send the invoice to alex@example.com",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:dee81254d94f08abe27c5b3ea32dd449924b1546c052a95ec5a65095a8f08fb5",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id4>",
+          "seq": 1
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "a tap whose payload_hash is not the card’s is refused and the card stays pending"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id8>",
+          "code": "card_hash_mismatch",
+          "message": "the card changed since it was rendered"
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "the owner approves"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id9>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id10>",
+          "seq": 2
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "<id10>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id5>",
+          "action": "primary",
+          "payload_hash": "sha256:dee81254d94f08abe27c5b3ea32dd449924b1546c052a95ec5a65095a8f08fb5",
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 2,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "presence",
+          "id": "<id11>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "bridge_online": true,
+          "last_seen": "2026-10-28T15:00:00.000Z",
+          "queue_depth": 1
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "bridge reports the card done"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "card.update",
+          "id": "<id12>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id5>",
+          "state": "done",
+          "resolution": {
+            "action": "primary",
+            "at": "2026-10-28T15:00:00.000Z",
+            "edited": false,
+            "payload_hash": "sha256:dee81254d94f08abe27c5b3ea32dd449924b1546c052a95ec5a65095a8f08fb5"
+          },
+          "relay": {
+            "seq": 3,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id13>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id12>",
+          "seq": 3
+        }
+      }
+    ],
+    "state": {
+      "cards": {
+        "c_01HXTEST000000000000000007": {
+          "id": "c_<id1>",
+          "thread_id": "general",
+          "kind": "generic",
+          "title": "Send the invoice to alex@example.com",
+          "destination": [],
+          "body_format": "plain",
+          "fields": [],
+          "attachments": [],
+          "primary_label": "Approve",
+          "kill_label": "Kill example",
+          "allow_edit": true,
+          "allow_revise": true,
+          "risk": "low",
+          "origin": "chat",
+          "payload_hash": "sha256:dee81254d94f08abe27c5b3ea32dd449924b1546c052a95ec5a65095a8f08fb5",
+          "state": "done",
+          "created_at": "2026-10-28T15:00:00.000Z",
+          "expires_at": "2026-10-29T15:00:00.000Z",
+          "resolution": {
+            "action": "primary",
+            "at": "2026-10-28T15:00:00.000Z",
+            "edited": false,
+            "payload_hash": "sha256:dee81254d94f08abe27c5b3ea32dd449924b1546c052a95ec5a65095a8f08fb5"
+          }
+        }
+      },
+      "max_seq": 3,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 1
+      },
+      "bridge_online": true,
+      "app_sockets": 1,
+      "pending_cards": 0,
+      "events": [
+        {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id1>",
+            "kind": "generic",
+            "title": "Send the invoice to alex@example.com",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:dee81254d94f08abe27c5b3ea32dd449924b1546c052a95ec5a65095a8f08fb5",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        },
+        {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id1>",
+          "action": "primary",
+          "payload_hash": "sha256:dee81254d94f08abe27c5b3ea32dd449924b1546c052a95ec5a65095a8f08fb5",
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 2,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        },
+        {
+          "v": 1,
+          "type": "card.update",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id1>",
+          "state": "done",
+          "resolution": {
+            "action": "primary",
+            "at": "2026-10-28T15:00:00.000Z",
+            "edited": false,
+            "payload_hash": "sha256:dee81254d94f08abe27c5b3ea32dd449924b1546c052a95ec5a65095a8f08fb5"
+          },
+          "relay": {
+            "seq": 3,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      ]
+    }
+  },
+  "card_second_tap": {
+    "steps": [
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ],
+          "agent_config": {
+            "version": 1,
+            "rev": 0,
+            "agent": {
+              "name": "Talos",
+              "voice": "meridian",
+              "voice_persona": ""
+            },
+            "owner": {
+              "display_name": "You"
+            },
+            "threads": [
+              {
+                "id": "general",
+                "name": "General",
+                "icon": "💬",
+                "kind": "fixed",
+                "order": 0,
+                "notify": "all",
+                "voice_context": "recent",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              },
+              {
+                "id": "inbox",
+                "name": "Inbox",
+                "icon": "📥",
+                "kind": "system",
+                "order": 1,
+                "notify": "all",
+                "voice_context": "none",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              }
+            ],
+            "default_thread": "general",
+            "timezone": "UTC",
+            "quiet_window": null,
+            "notifications": {
+              "master": true,
+              "show_thread_names": "fixed_only"
+            },
+            "work": {
+              "label": "Work systems",
+              "ask_note": "Ask your IT team before connecting these.",
+              "enabled": [],
+              "retention": "passthrough"
+            },
+            "voice_notes": {
+              "reply_with_voice": "when_voice",
+              "driving_until": null
+            },
+            "permission_relay": false,
+            "session_models": ["default", "opus", "sonnet", "haiku"],
+            "memory_browser": true,
+            "mirror": {
+              "telegram": "off"
+            }
+          },
+          "threads": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "open_cards": [],
+          "unread": {},
+          "read_upto": {},
+          "not_delivered": [],
+          "statuses": []
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id5>",
+            "kind": "generic",
+            "title": "Post the update",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:7883e3c86ddc15ca0cecd2fa0451ec3d8280aa811711f3858fdcbb356bd15e43",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id4>",
+          "seq": 1
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id8>",
+          "seq": 2
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "<id8>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id5>",
+          "action": "primary",
+          "payload_hash": "sha256:7883e3c86ddc15ca0cecd2fa0451ec3d8280aa811711f3858fdcbb356bd15e43",
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 2,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "presence",
+          "id": "<id9>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "bridge_online": true,
+          "last_seen": "2026-10-28T15:00:00.000Z",
+          "queue_depth": 1
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id10>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id11>",
+          "code": "card_not_pending",
+          "message": "card is resolved"
+        }
+      }
+    ],
+    "state": {
+      "cards": {
+        "c_01HXTEST000000000000000007": {
+          "id": "c_<id1>",
+          "thread_id": "general",
+          "kind": "generic",
+          "title": "Post the update",
+          "destination": [],
+          "body_format": "plain",
+          "fields": [],
+          "attachments": [],
+          "primary_label": "Approve",
+          "kill_label": "Kill example",
+          "allow_edit": true,
+          "allow_revise": true,
+          "risk": "low",
+          "origin": "chat",
+          "payload_hash": "sha256:7883e3c86ddc15ca0cecd2fa0451ec3d8280aa811711f3858fdcbb356bd15e43",
+          "state": "resolved",
+          "created_at": "2026-10-28T15:00:00.000Z",
+          "expires_at": "2026-10-29T15:00:00.000Z"
+        }
+      },
+      "max_seq": 2,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 1
+      },
+      "bridge_online": true,
+      "app_sockets": 1,
+      "pending_cards": 0,
+      "events": [
+        {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id1>",
+            "kind": "generic",
+            "title": "Post the update",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:7883e3c86ddc15ca0cecd2fa0451ec3d8280aa811711f3858fdcbb356bd15e43",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        },
+        {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id1>",
+          "action": "primary",
+          "payload_hash": "sha256:7883e3c86ddc15ca0cecd2fa0451ec3d8280aa811711f3858fdcbb356bd15e43",
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 2,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      ]
+    }
+  },
+  "bad_signature": {
+    "steps": [
+      {
+        "to": "stranger",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "stranger",
+        "closed": 4401
+      },
+      {
+        "to": "forger",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "forger",
+        "closed": 4401
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id5>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ],
+          "agent_config": {
+            "version": 1,
+            "rev": 0,
+            "agent": {
+              "name": "Talos",
+              "voice": "meridian",
+              "voice_persona": ""
+            },
+            "owner": {
+              "display_name": "You"
+            },
+            "threads": [
+              {
+                "id": "general",
+                "name": "General",
+                "icon": "💬",
+                "kind": "fixed",
+                "order": 0,
+                "notify": "all",
+                "voice_context": "recent",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              },
+              {
+                "id": "inbox",
+                "name": "Inbox",
+                "icon": "📥",
+                "kind": "system",
+                "order": 1,
+                "notify": "all",
+                "voice_context": "none",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              }
+            ],
+            "default_thread": "general",
+            "timezone": "UTC",
+            "quiet_window": null,
+            "notifications": {
+              "master": true,
+              "show_thread_names": "fixed_only"
+            },
+            "work": {
+              "label": "Work systems",
+              "ask_note": "Ask your IT team before connecting these.",
+              "enabled": [],
+              "retention": "passthrough"
+            },
+            "voice_notes": {
+              "reply_with_voice": "when_voice",
+              "driving_until": null
+            },
+            "permission_relay": false,
+            "session_models": ["default", "opus", "sonnet", "haiku"],
+            "memory_browser": true,
+            "mirror": {
+              "telegram": "off"
+            }
+          },
+          "threads": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "open_cards": [],
+          "unread": {},
+          "read_upto": {},
+          "not_delivered": [],
+          "statuses": []
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id7>",
+          "code": "bad_frame",
+          "message": "invalid message frame at osig"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id8>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id9>",
+            "kind": "generic",
+            "title": "Pay the invoice",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:0d0c7a6226b499ac30c4c9e47fe6ac241a176be2e45222989dc0102ddfdaa7fd",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id10>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id8>",
+          "seq": 1
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id11>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id12>",
+          "seq": 2
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "<id12>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id9>",
+          "action": "primary",
+          "payload_hash": "sha256:0d0c7a6226b499ac30c4c9e47fe6ac241a176be2e45222989dc0102ddfdaa7fd",
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 2,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "presence",
+          "id": "<id13>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "bridge_online": true,
+          "last_seen": "2026-10-28T15:00:00.000Z",
+          "queue_depth": 1
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "the Mac refuses the signature: the card goes back to pending and the app is told"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "card.update",
+          "id": "<id14>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id9>",
+          "state": "pending",
+          "reason": "resolve_rejected",
+          "relay": {
+            "seq": 3,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id15>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id12>",
+          "code": "sig_invalid",
+          "message": "bad signature"
+        }
+      }
+    ],
+    "state": {
+      "cards": {
+        "c_01HXTEST000000000000000017": {
+          "id": "c_<id1>",
+          "thread_id": "general",
+          "kind": "generic",
+          "title": "Pay the invoice",
+          "destination": [],
+          "body_format": "plain",
+          "fields": [],
+          "attachments": [],
+          "primary_label": "Approve",
+          "kill_label": "Kill example",
+          "allow_edit": true,
+          "allow_revise": true,
+          "risk": "low",
+          "origin": "chat",
+          "payload_hash": "sha256:0d0c7a6226b499ac30c4c9e47fe6ac241a176be2e45222989dc0102ddfdaa7fd",
+          "state": "pending",
+          "created_at": "2026-10-28T15:00:00.000Z",
+          "expires_at": "2026-10-29T15:00:00.000Z"
+        }
+      },
+      "max_seq": 3,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 1
+      },
+      "bridge_online": true,
+      "app_sockets": 1,
+      "pending_cards": 1,
+      "events": [
+        {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id1>",
+            "kind": "generic",
+            "title": "Pay the invoice",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:0d0c7a6226b499ac30c4c9e47fe6ac241a176be2e45222989dc0102ddfdaa7fd",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        },
+        {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id1>",
+          "action": "primary",
+          "payload_hash": "sha256:0d0c7a6226b499ac30c4c9e47fe6ac241a176be2e45222989dc0102ddfdaa7fd",
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 2,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        },
+        {
+          "v": 1,
+          "type": "card.update",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id1>",
+          "state": "pending",
+          "reason": "resolve_rejected",
+          "relay": {
+            "seq": 3,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      ]
+    }
+  },
+  "wrong_device": {
+    "steps": [
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "stale-tab",
+        "closed": 4401,
+        "reason": "device_changed"
+      },
+      {
+        "to": "unpinned",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "unpinned",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id5>",
+          "code": "device_not_pinned",
+          "message": "this device is not pinned by your Mac yet"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ],
+          "agent_config": {
+            "version": 1,
+            "rev": 0,
+            "agent": {
+              "name": "Talos",
+              "voice": "meridian",
+              "voice_persona": ""
+            },
+            "owner": {
+              "display_name": "You"
+            },
+            "threads": [
+              {
+                "id": "general",
+                "name": "General",
+                "icon": "💬",
+                "kind": "fixed",
+                "order": 0,
+                "notify": "all",
+                "voice_context": "recent",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              },
+              {
+                "id": "inbox",
+                "name": "Inbox",
+                "icon": "📥",
+                "kind": "system",
+                "order": 1,
+                "notify": "all",
+                "voice_context": "none",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              }
+            ],
+            "default_thread": "general",
+            "timezone": "UTC",
+            "quiet_window": null,
+            "notifications": {
+              "master": true,
+              "show_thread_names": "fixed_only"
+            },
+            "work": {
+              "label": "Work systems",
+              "ask_note": "Ask your IT team before connecting these.",
+              "enabled": [],
+              "retention": "passthrough"
+            },
+            "voice_notes": {
+              "reply_with_voice": "when_voice",
+              "driving_until": null
+            },
+            "permission_relay": false,
+            "session_models": ["default", "opus", "sonnet", "haiku"],
+            "memory_browser": true,
+            "mirror": {
+              "telegram": "off"
+            }
+          },
+          "threads": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "open_cards": [],
+          "unread": {},
+          "read_upto": {},
+          "not_delivered": [],
+          "statuses": []
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id8>",
+          "code": "unauthorized",
+          "message": "frame signed by a device other than this session"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id9>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id10>",
+            "kind": "generic",
+            "title": "Post the update",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:291c3a1e6a81dccb6de8be0fa0c0bafa6f1ef4e26ad970fb579ca54bdaa62091",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id11>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id9>",
+          "seq": 1
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id12>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id13>",
+          "code": "unauthorized",
+          "message": "frame signed by a device other than this session"
+        }
+      }
+    ],
+    "state": {
+      "cards": {
+        "c_01HXTEST000000000000000021": {
+          "id": "c_<id1>",
+          "thread_id": "general",
+          "kind": "generic",
+          "title": "Post the update",
+          "destination": [],
+          "body_format": "plain",
+          "fields": [],
+          "attachments": [],
+          "primary_label": "Approve",
+          "kill_label": "Kill example",
+          "allow_edit": true,
+          "allow_revise": true,
+          "risk": "low",
+          "origin": "chat",
+          "payload_hash": "sha256:291c3a1e6a81dccb6de8be0fa0c0bafa6f1ef4e26ad970fb579ca54bdaa62091",
+          "state": "pending",
+          "created_at": "2026-10-28T15:00:00.000Z",
+          "expires_at": "2026-10-29T15:00:00.000Z"
+        }
+      },
+      "max_seq": 1,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "bridge_online": true,
+      "app_sockets": 2,
+      "pending_cards": 1,
+      "events": [
+        {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id1>",
+            "kind": "generic",
+            "title": "Post the update",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:291c3a1e6a81dccb6de8be0fa0c0bafa6f1ef4e26ad970fb579ca54bdaa62091",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      ]
+    }
+  },
+  "unknown_frame": {
+    "steps": [
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ],
+          "agent_config": {
+            "version": 1,
+            "rev": 0,
+            "agent": {
+              "name": "Talos",
+              "voice": "meridian",
+              "voice_persona": ""
+            },
+            "owner": {
+              "display_name": "You"
+            },
+            "threads": [
+              {
+                "id": "general",
+                "name": "General",
+                "icon": "💬",
+                "kind": "fixed",
+                "order": 0,
+                "notify": "all",
+                "voice_context": "recent",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              },
+              {
+                "id": "inbox",
+                "name": "Inbox",
+                "icon": "📥",
+                "kind": "system",
+                "order": 1,
+                "notify": "all",
+                "voice_context": "none",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              }
+            ],
+            "default_thread": "general",
+            "timezone": "UTC",
+            "quiet_window": null,
+            "notifications": {
+              "master": true,
+              "show_thread_names": "fixed_only"
+            },
+            "work": {
+              "label": "Work systems",
+              "ask_note": "Ask your IT team before connecting these.",
+              "enabled": [],
+              "retention": "passthrough"
+            },
+            "voice_notes": {
+              "reply_with_voice": "when_voice",
+              "driving_until": null
+            },
+            "permission_relay": false,
+            "session_models": ["default", "opus", "sonnet", "haiku"],
+            "memory_browser": true,
+            "mirror": {
+              "telegram": "off"
+            }
+          },
+          "threads": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "open_cards": [],
+          "unread": {},
+          "read_upto": {},
+          "not_delivered": [],
+          "statuses": []
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id5>",
+          "code": "bad_frame",
+          "message": "unknown frame type"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "code": "bad_frame",
+          "message": "not valid JSON"
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id8>",
+          "code": "bad_frame",
+          "message": "unknown frame type"
+        }
+      }
+    ],
+    "state": {
+      "cards": {},
+      "max_seq": 0,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "bridge_online": true,
+      "app_sockets": 1,
+      "pending_cards": 0,
+      "events": []
+    }
+  },
+  "reconnect": {
+    "steps": [
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ],
+          "agent_config": {
+            "version": 1,
+            "rev": 0,
+            "agent": {
+              "name": "Talos",
+              "voice": "meridian",
+              "voice_persona": ""
+            },
+            "owner": {
+              "display_name": "You"
+            },
+            "threads": [
+              {
+                "id": "general",
+                "name": "General",
+                "icon": "💬",
+                "kind": "fixed",
+                "order": 0,
+                "notify": "all",
+                "voice_context": "recent",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              },
+              {
+                "id": "inbox",
+                "name": "Inbox",
+                "icon": "📥",
+                "kind": "system",
+                "order": 1,
+                "notify": "all",
+                "voice_context": "none",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              }
+            ],
+            "default_thread": "general",
+            "timezone": "UTC",
+            "quiet_window": null,
+            "notifications": {
+              "master": true,
+              "show_thread_names": "fixed_only"
+            },
+            "work": {
+              "label": "Work systems",
+              "ask_note": "Ask your IT team before connecting these.",
+              "enabled": [],
+              "retention": "passthrough"
+            },
+            "voice_notes": {
+              "reply_with_voice": "when_voice",
+              "driving_until": null
+            },
+            "permission_relay": false,
+            "session_models": ["default", "opus", "sonnet", "haiku"],
+            "memory_browser": true,
+            "mirror": {
+              "telegram": "off"
+            }
+          },
+          "threads": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "open_cards": [],
+          "unread": {},
+          "read_upto": {},
+          "not_delivered": [],
+          "statuses": []
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "reply",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "message": {
+            "id": "m_<id5>",
+            "thread_id": "general",
+            "author": "agent",
+            "kind": "text",
+            "text": "Good morning Alex",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id4>",
+          "seq": 1
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "app is away; the agent posts twice"
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id8>",
+          "seq": 2
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id9>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id10>",
+          "seq": 3
+        }
+      },
+      {
+        "to": "app-back",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id11>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 3,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ],
+          "agent_config": {
+            "version": 1,
+            "rev": 0,
+            "agent": {
+              "name": "Talos",
+              "voice": "meridian",
+              "voice_persona": ""
+            },
+            "owner": {
+              "display_name": "You"
+            },
+            "threads": [
+              {
+                "id": "general",
+                "name": "General",
+                "icon": "💬",
+                "kind": "fixed",
+                "order": 0,
+                "notify": "all",
+                "voice_context": "recent",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              },
+              {
+                "id": "inbox",
+                "name": "Inbox",
+                "icon": "📥",
+                "kind": "system",
+                "order": 1,
+                "notify": "all",
+                "voice_context": "none",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              }
+            ],
+            "default_thread": "general",
+            "timezone": "UTC",
+            "quiet_window": null,
+            "notifications": {
+              "master": true,
+              "show_thread_names": "fixed_only"
+            },
+            "work": {
+              "label": "Work systems",
+              "ask_note": "Ask your IT team before connecting these.",
+              "enabled": [],
+              "retention": "passthrough"
+            },
+            "voice_notes": {
+              "reply_with_voice": "when_voice",
+              "driving_until": null
+            },
+            "permission_relay": false,
+            "session_models": ["default", "opus", "sonnet", "haiku"],
+            "memory_browser": true,
+            "mirror": {
+              "telegram": "off"
+            }
+          },
+          "threads": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "open_cards": [
+            {
+              "id": "c_<id12>",
+              "thread_id": "general",
+              "kind": "generic",
+              "title": "Missed 1",
+              "destination": [],
+              "body_format": "plain",
+              "fields": [],
+              "attachments": [],
+              "primary_label": "Approve",
+              "kill_label": "Kill example",
+              "allow_edit": true,
+              "allow_revise": true,
+              "risk": "low",
+              "origin": "chat",
+              "payload_hash": "sha256:24214f421a85d12b83741032d83254c313e21e4b34f08502d4281a18a6a6e9d4",
+              "state": "pending",
+              "created_at": "2026-10-28T15:00:00.000Z",
+              "expires_at": "2026-10-29T15:00:00.000Z"
+            },
+            {
+              "id": "c_<id13>",
+              "thread_id": "general",
+              "kind": "generic",
+              "title": "Missed 2",
+              "destination": [],
+              "body_format": "plain",
+              "fields": [],
+              "attachments": [],
+              "primary_label": "Approve",
+              "kill_label": "Kill example",
+              "allow_edit": true,
+              "allow_revise": true,
+              "risk": "low",
+              "origin": "chat",
+              "payload_hash": "sha256:0cad28a1197ac5549c23ee1ac76c21f49b2f55479cc377d6259090e39865a565",
+              "state": "pending",
+              "created_at": "2026-10-28T15:00:00.000Z",
+              "expires_at": "2026-10-29T15:00:00.000Z"
+            }
+          ],
+          "unread": {
+            "general": 1
+          },
+          "read_upto": {},
+          "not_delivered": [],
+          "statuses": []
+        }
+      },
+      {
+        "to": "app-back",
+        "frame": {
+          "v": 1,
+          "type": "catchup.batch",
+          "id": "<id14>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "from_seq": 2,
+          "to_seq": 3,
+          "frames": [
+            {
+              "v": 1,
+              "type": "card.create",
+              "id": "<id8>",
+              "ts": "2026-10-28T15:00:00.000Z",
+              "card": {
+                "id": "c_<id12>",
+                "kind": "generic",
+                "title": "Missed 1",
+                "destination": [],
+                "body_format": "plain",
+                "fields": [],
+                "attachments": [],
+                "primary_label": "Approve",
+                "kill_label": "Kill example",
+                "allow_edit": true,
+                "allow_revise": true,
+                "risk": "low",
+                "origin": "chat",
+                "payload_hash": "sha256:24214f421a85d12b83741032d83254c313e21e4b34f08502d4281a18a6a6e9d4",
+                "state": "pending",
+                "created_at": "2026-10-28T15:00:00.000Z",
+                "expires_at": "2026-10-29T15:00:00.000Z",
+                "thread_id": "general"
+              },
+              "relay": {
+                "seq": 2,
+                "received_at": "2026-10-28T15:00:00.000Z"
+              }
+            },
+            {
+              "v": 1,
+              "type": "card.create",
+              "id": "<id10>",
+              "ts": "2026-10-28T15:00:00.000Z",
+              "card": {
+                "id": "c_<id13>",
+                "kind": "generic",
+                "title": "Missed 2",
+                "destination": [],
+                "body_format": "plain",
+                "fields": [],
+                "attachments": [],
+                "primary_label": "Approve",
+                "kill_label": "Kill example",
+                "allow_edit": true,
+                "allow_revise": true,
+                "risk": "low",
+                "origin": "chat",
+                "payload_hash": "sha256:0cad28a1197ac5549c23ee1ac76c21f49b2f55479cc377d6259090e39865a565",
+                "state": "pending",
+                "created_at": "2026-10-28T15:00:00.000Z",
+                "expires_at": "2026-10-29T15:00:00.000Z",
+                "thread_id": "general"
+              },
+              "relay": {
+                "seq": 3,
+                "received_at": "2026-10-28T15:00:00.000Z"
+              }
+            }
+          ],
+          "more": false
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "the Mac drops and comes back"
+        }
+      },
+      {
+        "to": "app-back",
+        "frame": {
+          "v": 1,
+          "type": "presence",
+          "id": "<id15>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "bridge_online": false,
+          "last_seen": "2026-10-28T15:00:00.000Z",
+          "queue_depth": 0
+        }
+      },
+      {
+        "to": "bridge-2",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id16>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "bridge-2",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id17>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 3,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "app-back",
+        "frame": {
+          "v": 1,
+          "type": "presence",
+          "id": "<id18>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "bridge_online": true,
+          "last_seen": "2026-10-28T15:00:00.000Z",
+          "queue_depth": 0
+        }
+      }
+    ],
+    "state": {
+      "cards": {
+        "c_01HXTEST000000000000000011": {
+          "id": "c_<id1>",
+          "thread_id": "general",
+          "kind": "generic",
+          "title": "Missed 1",
+          "destination": [],
+          "body_format": "plain",
+          "fields": [],
+          "attachments": [],
+          "primary_label": "Approve",
+          "kill_label": "Kill example",
+          "allow_edit": true,
+          "allow_revise": true,
+          "risk": "low",
+          "origin": "chat",
+          "payload_hash": "sha256:24214f421a85d12b83741032d83254c313e21e4b34f08502d4281a18a6a6e9d4",
+          "state": "pending",
+          "created_at": "2026-10-28T15:00:00.000Z",
+          "expires_at": "2026-10-29T15:00:00.000Z"
+        },
+        "c_01HXTEST000000000000000015": {
+          "id": "c_<id2>",
+          "thread_id": "general",
+          "kind": "generic",
+          "title": "Missed 2",
+          "destination": [],
+          "body_format": "plain",
+          "fields": [],
+          "attachments": [],
+          "primary_label": "Approve",
+          "kill_label": "Kill example",
+          "allow_edit": true,
+          "allow_revise": true,
+          "risk": "low",
+          "origin": "chat",
+          "payload_hash": "sha256:0cad28a1197ac5549c23ee1ac76c21f49b2f55479cc377d6259090e39865a565",
+          "state": "pending",
+          "created_at": "2026-10-28T15:00:00.000Z",
+          "expires_at": "2026-10-29T15:00:00.000Z"
+        }
+      },
+      "max_seq": 3,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "bridge_online": true,
+      "app_sockets": 1,
+      "pending_cards": 2,
+      "events": [
+        {
+          "v": 1,
+          "type": "reply",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "message": {
+            "id": "m_<id4>",
+            "thread_id": "general",
+            "author": "agent",
+            "kind": "text",
+            "text": "Good morning Alex",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        },
+        {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id5>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id1>",
+            "kind": "generic",
+            "title": "Missed 1",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:24214f421a85d12b83741032d83254c313e21e4b34f08502d4281a18a6a6e9d4",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 2,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        },
+        {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id2>",
+            "kind": "generic",
+            "title": "Missed 2",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:0cad28a1197ac5549c23ee1ac76c21f49b2f55479cc377d6259090e39865a565",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 3,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      ]
+    }
+  },
+  "card_approve_high_risk": {
+    "steps": [
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ],
+          "agent_config": {
+            "version": 1,
+            "rev": 0,
+            "agent": {
+              "name": "Talos",
+              "voice": "meridian",
+              "voice_persona": ""
+            },
+            "owner": {
+              "display_name": "You"
+            },
+            "threads": [
+              {
+                "id": "general",
+                "name": "General",
+                "icon": "💬",
+                "kind": "fixed",
+                "order": 0,
+                "notify": "all",
+                "voice_context": "recent",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              },
+              {
+                "id": "inbox",
+                "name": "Inbox",
+                "icon": "📥",
+                "kind": "system",
+                "order": 1,
+                "notify": "all",
+                "voice_context": "none",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              }
+            ],
+            "default_thread": "general",
+            "timezone": "UTC",
+            "quiet_window": null,
+            "notifications": {
+              "master": true,
+              "show_thread_names": "fixed_only"
+            },
+            "work": {
+              "label": "Work systems",
+              "ask_note": "Ask your IT team before connecting these.",
+              "enabled": [],
+              "retention": "passthrough"
+            },
+            "voice_notes": {
+              "reply_with_voice": "when_voice",
+              "driving_until": null
+            },
+            "permission_relay": false,
+            "session_models": ["default", "opus", "sonnet", "haiku"],
+            "memory_browser": true,
+            "mirror": {
+              "telegram": "off"
+            }
+          },
+          "threads": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "open_cards": [],
+          "unread": {},
+          "read_upto": {},
+          "not_delivered": [],
+          "statuses": []
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id5>",
+            "kind": "generic",
+            "title": "Wire the deposit to alex@example.com",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "high",
+            "origin": "chat",
+            "payload_hash": "sha256:a900169ac81aead8eef923f496b79f3ccb2640afa5212a4c661775aaf692e3ff",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id4>",
+          "seq": 1
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "no step-up token"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id8>",
+          "code": "stepup_required",
+          "message": "step-up required for this card"
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "a token minted for another card"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id9>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id10>",
+          "code": "stepup_invalid",
+          "message": "step-up token is invalid for this card"
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "the right token"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id11>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id12>",
+          "seq": 2
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "<id12>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id5>",
+          "action": "primary",
+          "payload_hash": "sha256:a900169ac81aead8eef923f496b79f3ccb2640afa5212a4c661775aaf692e3ff",
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 2,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "presence",
+          "id": "<id13>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "bridge_online": true,
+          "last_seen": "2026-10-28T15:00:00.000Z",
+          "queue_depth": 1
+        }
+      }
+    ],
+    "state": {
+      "cards": {
+        "c_01HXTEST000000000000000007": {
+          "id": "c_<id1>",
+          "thread_id": "general",
+          "kind": "generic",
+          "title": "Wire the deposit to alex@example.com",
+          "destination": [],
+          "body_format": "plain",
+          "fields": [],
+          "attachments": [],
+          "primary_label": "Approve",
+          "kill_label": "Kill example",
+          "allow_edit": true,
+          "allow_revise": true,
+          "risk": "high",
+          "origin": "chat",
+          "payload_hash": "sha256:a900169ac81aead8eef923f496b79f3ccb2640afa5212a4c661775aaf692e3ff",
+          "state": "resolved",
+          "created_at": "2026-10-28T15:00:00.000Z",
+          "expires_at": "2026-10-29T15:00:00.000Z"
+        }
+      },
+      "max_seq": 2,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 1
+      },
+      "bridge_online": true,
+      "app_sockets": 1,
+      "pending_cards": 0,
+      "events": [
+        {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id1>",
+            "kind": "generic",
+            "title": "Wire the deposit to alex@example.com",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "high",
+            "origin": "chat",
+            "payload_hash": "sha256:a900169ac81aead8eef923f496b79f3ccb2640afa5212a4c661775aaf692e3ff",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        },
+        {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id1>",
+          "action": "primary",
+          "payload_hash": "sha256:a900169ac81aead8eef923f496b79f3ccb2640afa5212a4c661775aaf692e3ff",
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 2,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      ]
+    }
+  },
+  "message_retry": {
+    "steps": [
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ],
+          "agent_config": {
+            "version": 1,
+            "rev": 0,
+            "agent": {
+              "name": "Talos",
+              "voice": "meridian",
+              "voice_persona": ""
+            },
+            "owner": {
+              "display_name": "You"
+            },
+            "threads": [
+              {
+                "id": "general",
+                "name": "General",
+                "icon": "💬",
+                "kind": "fixed",
+                "order": 0,
+                "notify": "all",
+                "voice_context": "recent",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              },
+              {
+                "id": "inbox",
+                "name": "Inbox",
+                "icon": "📥",
+                "kind": "system",
+                "order": 1,
+                "notify": "all",
+                "voice_context": "none",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              }
+            ],
+            "default_thread": "general",
+            "timezone": "UTC",
+            "quiet_window": null,
+            "notifications": {
+              "master": true,
+              "show_thread_names": "fixed_only"
+            },
+            "work": {
+              "label": "Work systems",
+              "ask_note": "Ask your IT team before connecting these.",
+              "enabled": [],
+              "retention": "passthrough"
+            },
+            "voice_notes": {
+              "reply_with_voice": "when_voice",
+              "driving_until": null
+            },
+            "permission_relay": false,
+            "session_models": ["default", "opus", "sonnet", "haiku"],
+            "memory_browser": true,
+            "mirror": {
+              "telegram": "off"
+            }
+          },
+          "threads": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "open_cards": [],
+          "unread": {},
+          "read_upto": {},
+          "not_delivered": [],
+          "statuses": []
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id5>",
+          "seq": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "message",
+          "id": "<id5>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "thread_id": "general",
+          "client_msg_id": "m_<id6>",
+          "text": "Please send this once",
+          "attachments": [],
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "presence",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "bridge_online": true,
+          "last_seen": "2026-10-28T15:00:00.000Z",
+          "queue_depth": 1
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "message.stored",
+          "id": "<id8>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "client_msg_id": "m_<id6>",
+          "message": {
+            "id": "m_<id6>",
+            "thread_id": "general",
+            "seq": 1,
+            "author": "owner",
+            "kind": "text",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "receipt": "sent",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "text": "Please send this once"
+          }
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "the same message signed again under a new frame id"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id9>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id10>",
+          "seq": 1
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "the very same frame again"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id11>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id5>",
+          "seq": 1
+        }
+      }
+    ],
+    "state": {
+      "cards": {},
+      "max_seq": 1,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 1
+      },
+      "bridge_online": true,
+      "app_sockets": 1,
+      "pending_cards": 0,
+      "events": [
+        {
+          "v": 1,
+          "type": "message",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "thread_id": "general",
+          "client_msg_id": "m_<id2>",
+          "text": "Please send this once",
+          "attachments": [],
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      ]
+    }
+  },
+  "card_resolve_resend": {
+    "steps": [
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "challenge",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "<challenge-nonce>",
+          "server_time": 1793199600,
+          "relay_host": "relay.example.com",
+          "protocol": 1
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ]
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "features": [
+            "schedules/1",
+            "schedules/2",
+            "config-propose/1",
+            "custom-themes/1",
+            "health/1",
+            "problems/1",
+            "share/1",
+            "agents/1",
+            "thread-sessions/1"
+          ],
+          "agent_config": {
+            "version": 1,
+            "rev": 0,
+            "agent": {
+              "name": "Talos",
+              "voice": "meridian",
+              "voice_persona": ""
+            },
+            "owner": {
+              "display_name": "You"
+            },
+            "threads": [
+              {
+                "id": "general",
+                "name": "General",
+                "icon": "💬",
+                "kind": "fixed",
+                "order": 0,
+                "notify": "all",
+                "voice_context": "recent",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              },
+              {
+                "id": "inbox",
+                "name": "Inbox",
+                "icon": "📥",
+                "kind": "system",
+                "order": 1,
+                "notify": "all",
+                "voice_context": "none",
+                "archived": false,
+                "created_at": "2026-10-28T00:00:00.000Z"
+              }
+            ],
+            "default_thread": "general",
+            "timezone": "UTC",
+            "quiet_window": null,
+            "notifications": {
+              "master": true,
+              "show_thread_names": "fixed_only"
+            },
+            "work": {
+              "label": "Work systems",
+              "ask_note": "Ask your IT team before connecting these.",
+              "enabled": [],
+              "retention": "passthrough"
+            },
+            "voice_notes": {
+              "reply_with_voice": "when_voice",
+              "driving_until": null
+            },
+            "permission_relay": false,
+            "session_models": ["default", "opus", "sonnet", "haiku"],
+            "memory_browser": true,
+            "mirror": {
+              "telegram": "off"
+            }
+          },
+          "threads": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "open_cards": [],
+          "unread": {},
+          "read_upto": {},
+          "not_delivered": [],
+          "statuses": []
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id5>",
+            "kind": "generic",
+            "title": "Post the update",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:7883e3c86ddc15ca0cecd2fa0451ec3d8280aa811711f3858fdcbb356bd15e43",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id4>",
+          "seq": 1
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id8>",
+          "seq": 2
+        }
+      },
+      {
+        "to": "bridge",
+        "frame": {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "<id8>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id5>",
+          "action": "primary",
+          "payload_hash": "sha256:7883e3c86ddc15ca0cecd2fa0451ec3d8280aa811711f3858fdcbb356bd15e43",
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 2,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "presence",
+          "id": "<id9>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "bridge_online": true,
+          "last_seen": "2026-10-28T15:00:00.000Z",
+          "queue_depth": 1
+        }
+      },
+      {
+        "to": "#",
+        "frame": {
+          "note": "the same frame again"
+        }
+      },
+      {
+        "to": "app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id10>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id8>",
+          "seq": 2
+        }
+      }
+    ],
+    "state": {
+      "cards": {
+        "c_01HXTEST000000000000000007": {
+          "id": "c_<id1>",
+          "thread_id": "general",
+          "kind": "generic",
+          "title": "Post the update",
+          "destination": [],
+          "body_format": "plain",
+          "fields": [],
+          "attachments": [],
+          "primary_label": "Approve",
+          "kill_label": "Kill example",
+          "allow_edit": true,
+          "allow_revise": true,
+          "risk": "low",
+          "origin": "chat",
+          "payload_hash": "sha256:7883e3c86ddc15ca0cecd2fa0451ec3d8280aa811711f3858fdcbb356bd15e43",
+          "state": "resolved",
+          "created_at": "2026-10-28T15:00:00.000Z",
+          "expires_at": "2026-10-29T15:00:00.000Z"
+        }
+      },
+      "max_seq": 2,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 1
+      },
+      "bridge_online": true,
+      "app_sockets": 1,
+      "pending_cards": 0,
+      "events": [
+        {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id1>",
+            "kind": "generic",
+            "title": "Post the update",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:7883e3c86ddc15ca0cecd2fa0451ec3d8280aa811711f3858fdcbb356bd15e43",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        },
+        {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id1>",
+          "action": "primary",
+          "payload_hash": "sha256:7883e3c86ddc15ca0cecd2fa0451ec3d8280aa811711f3858fdcbb356bd15e43",
+          "device_id": "<device>",
+          "osig": "<secret>",
+          "relay": {
+            "seq": 2,
+            "received_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      ]
+    }
+  }
+}

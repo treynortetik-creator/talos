@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<soapenv:Body>
+<notifications xmlns="http://soap.sforce.com/2005/09/outbound">
+<OrganizationId>00D000000000062EAA</OrganizationId>
+<ActionId>04k000000000001AAA</ActionId>
+<SessionId xsi:nil="true"/>
+<EnterpriseUrl>https://example.my.salesforce.com/services/Soap/c/60.0/00D000000000062</EnterpriseUrl>
+<PartnerUrl>https://example.my.salesforce.com/services/Soap/u/60.0/00D000000000062</PartnerUrl>
+<Notification>
+<Id>04l000000000001AAA</Id>
+<sObject xsi:type="sf:Opportunity" xmlns:sf="urn:sobject.enterprise.soap.sforce.com">
+<sf:Id>006000000000001AAA</sf:Id>
+<sf:Name>Example &amp; Co renewal</sf:Name>
+<sf:StageName>Negotiation</sf:StageName>
+<sf:Amount>12000.0</sf:Amount>
+</sObject>
+</Notification>
+</notifications>
+</soapenv:Body>
+</soapenv:Envelope>

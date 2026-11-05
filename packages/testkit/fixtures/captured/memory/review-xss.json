@@ -1,0 +1,117 @@
+{
+  "scenario": "review-xss",
+  "frames": [
+    {
+      "asked": "memory.read",
+      "frame": {
+        "v": 1,
+        "id": "01J20000000000000000000001",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.file",
+        "request_id": "01J30000000000000000000001",
+        "root_id": "notes",
+        "path": "Overview.md",
+        "mime": "text/markdown",
+        "text": "# Overview\nhello\n",
+        "offset": 0,
+        "next_offset": null,
+        "size": 17,
+        "mtime": "2026-10-20T12:00:00.000Z",
+        "sha256": "747788cd172bedb9eaa4757bfbecb01b8b4d96494948021386c4acff38803a17",
+        "links": []
+      }
+    },
+    {
+      "asked": "memory.read",
+      "frame": {
+        "v": 1,
+        "id": "01J20000000000000000000002",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.file",
+        "request_id": "01J30000000000000000000002",
+        "root_id": "notes",
+        "path": "title-img.md",
+        "mime": "text/markdown",
+        "text": "# T\nSee [Overview](https://memory.invalid/i/0 \"x><img src=x onerror=window.__xss=(window.__xss||0)+1>\") now.\n",
+        "offset": 0,
+        "next_offset": null,
+        "size": 109,
+        "mtime": "2026-10-20T12:00:00.000Z",
+        "sha256": "07288b22a8369aa60261fbd1814f4746f0becd62be6edf8cd3746a3e6ab0f09e",
+        "links": []
+      }
+    },
+    {
+      "asked": "memory.read",
+      "frame": {
+        "v": 1,
+        "id": "01J20000000000000000000003",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.file",
+        "request_id": "01J30000000000000000000003",
+        "root_id": "notes",
+        "path": "title-svg.md",
+        "mime": "text/markdown",
+        "text": "# T\n[gone](https://memory.invalid/i/7 \"a><svg onload=window.__xss=(window.__xss||0)+1>\")\n",
+        "offset": 0,
+        "next_offset": null,
+        "size": 89,
+        "mtime": "2026-10-20T12:00:00.000Z",
+        "sha256": "e617cdb73c68dc2736be0e6873478587e2c0f856cd34e4988000cb5d3145524d",
+        "links": []
+      }
+    },
+    {
+      "asked": "memory.read",
+      "frame": {
+        "v": 1,
+        "id": "01J20000000000000000000004",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.file",
+        "request_id": "01J30000000000000000000004",
+        "root_id": "notes",
+        "path": "mixed.md",
+        "mime": "text/markdown",
+        "text": "# M\n[[Overview]] and [b](https://memory.invalid/i/0 \"q><img src=x onerror=window.__xss=(window.__xss||0)+1>\")\n",
+        "offset": 0,
+        "next_offset": null,
+        "size": 110,
+        "mtime": "2026-10-20T12:00:00.000Z",
+        "sha256": "fe695ab9c0841f465c50d0a23119cc922b1690517c057dcf89d1edc875e27940",
+        "links": [
+          {
+            "text": "Overview",
+            "root_id": "notes",
+            "path": "Overview.md"
+          }
+        ]
+      }
+    },
+    {
+      "asked": "memory.read",
+      "frame": {
+        "v": 1,
+        "id": "01J20000000000000000000005",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.file",
+        "request_id": "01J30000000000000000000005",
+        "root_id": "notes",
+        "path": "front.md",
+        "mime": "text/markdown",
+        "text": "---\ntitle: <img src=x onerror=window.__xss=1>\nx: <svg onload=window.__xss=1>\n---\n# F\n<script>window.__xss=1</script>\n[[Overview|<img src=x onerror=window.__xss=1>]]\n[j](javascript:window.__xss=1)\n",
+        "offset": 0,
+        "next_offset": null,
+        "size": 196,
+        "mtime": "2026-10-20T12:00:00.000Z",
+        "sha256": "8a1ebf14205cf900c96c199067a14c46d74f905bdb68fc095d1c3ce633a4ecbb",
+        "links": [
+          {
+            "text": "<img src=x onerror=window.__xss=1>",
+            "root_id": "notes",
+            "path": "Overview.md"
+          }
+        ]
+      }
+    }
+  ]
+}

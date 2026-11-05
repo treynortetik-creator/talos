@@ -1,0 +1,17 @@
+{
+  "token": "ignored",
+  "team_id": "T0EXAMPLE1",
+  "api_app_id": "A0EXAMPLE1",
+  "type": "event_callback",
+  "event_id": "Ev0EXAMPLE01",
+  "event_time": 1792940400,
+  "authorizations": [{ "enterprise_id": null, "team_id": "T0EXAMPLE1", "user_id": "U0OWNER001", "is_bot": false }],
+  "event": {
+    "type": "message",
+    "channel": "D0EXAMPLE01",
+    "channel_type": "im",
+    "user": "U0SENDER01",
+    "text": "Can you look at <https://example.com/doc|the draft> &amp; tell me by <!here>? cc <@U0OWNER001> in <#C0EXAMPLE01|general>",
+    "ts": "1792940399.000200"
+  }
+}

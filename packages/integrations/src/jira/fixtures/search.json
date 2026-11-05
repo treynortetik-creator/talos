@@ -1,0 +1,76 @@
+{
+  "issues": [
+    {
+      "key": "PROJ-12",
+      "fields": {
+        "summary": "Fix login <b>redirect</b>",
+        "updated": "2026-10-28T15:01:00.000+0000",
+        "created": "2026-10-20T10:00:00.000+0000",
+        "status": { "name": "In Progress" },
+        "assignee": { "accountId": "acct-me", "displayName": "Alex Example" },
+        "reporter": { "accountId": "acct-boss", "displayName": "Sam Sender" },
+        "comment": {
+          "comments": [
+            {
+              "id": "9001",
+              "created": "2026-10-28T15:00:30.000+0000",
+              "author": { "accountId": "acct-boss", "displayName": "Sam Sender" },
+              "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      { "type": "text", "text": "Please check " },
+                      { "type": "text", "text": "javascript:alert(1)" }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "id": "9000",
+              "created": "2026-10-20T10:30:00.000+0000",
+              "author": { "accountId": "acct-boss", "displayName": "Sam Sender" },
+              "body": {
+                "type": "doc",
+                "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "old comment" }] }]
+              }
+            },
+            {
+              "id": "9002",
+              "created": "2026-10-28T15:00:40.000+0000",
+              "author": { "accountId": "acct-me", "displayName": "Alex Example" },
+              "body": "my own comment"
+            }
+          ]
+        }
+      },
+      "changelog": {
+        "histories": [
+          {
+            "id": "7001",
+            "created": "2026-10-28T15:00:00.000+0000",
+            "author": { "accountId": "acct-boss", "displayName": "Sam Sender" },
+            "items": [
+              { "field": "assignee", "from": null, "to": "acct-me" },
+              { "field": "status", "fromString": "To Do", "toString": "In Progress" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "key": "PROJ-13",
+      "fields": {
+        "summary": "Brand new",
+        "updated": "2026-10-28T15:02:00.000+0000",
+        "created": "2026-10-28T15:01:30.000+0000",
+        "assignee": { "accountId": "acct-me", "displayName": "Alex Example" },
+        "reporter": { "displayName": "Sam Sender" }
+      },
+      "changelog": { "histories": [] }
+    }
+  ]
+}

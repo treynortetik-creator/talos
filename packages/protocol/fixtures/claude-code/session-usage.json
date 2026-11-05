@@ -1,0 +1,32 @@
+{
+  "_comment": "Shaped by the mods reference, Mods API methods, $.session row (fetched 2026-10-29): usage() returns { startedAt, context, rateLimits, cost }; context has tokens, window, percent; rateLimits is a list of { kind, percentUsed, resetsAt }. Value types of startedAt/resetsAt/cost are not documented: SMOKE S4 records a real one.",
+  "session": {
+    "id": "sess_example",
+    "model": "claude-opus-5-5",
+    "version": "2.1.312",
+    "surfaces": [
+      "cli"
+    ],
+    "usage": {
+      "startedAt": "2026-10-29T11:00:00.000Z",
+      "context": {
+        "tokens": 182000,
+        "window": 1000000,
+        "percent": 18.2
+      },
+      "rateLimits": [
+        {
+          "kind": "five_hour",
+          "percentUsed": 23.5,
+          "resetsAt": "2026-10-29T15:00:00.000Z"
+        },
+        {
+          "kind": "seven_day",
+          "percentUsed": 41.2,
+          "resetsAt": 1793260800000
+        }
+      ],
+      "cost": 1.42
+    }
+  }
+}

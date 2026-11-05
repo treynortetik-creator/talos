@@ -1,0 +1,123 @@
+{
+  "about": "Captured by `bun run capture:schedules` (apps/bridge/scripts/capture-schedules.ts): the REAL bridge against the REAL vendored Chronos CLI. Ids, timestamps, signatures and the machine name are normalized; card hashes are recomputed. Do not edit by hand: re-run the capture.",
+  "chronos": "chronos 0.3.0",
+  "scheduler_tz": "America/New_York",
+  "scheduler_clock_start": "2026-10-05T11:00:00Z",
+  "bridge_hello_features": [
+    "schedules/1"
+  ],
+  "scenarios": [
+    {
+      "file": "01-list-empty.json",
+      "steps": 1,
+      "frames": 3,
+      "notifications": 0,
+      "tool_calls": 0
+    },
+    {
+      "file": "02-list-three-jobs.json",
+      "steps": 1,
+      "frames": 3,
+      "notifications": 0,
+      "tool_calls": 0
+    },
+    {
+      "file": "03-get-detail-with-report.json",
+      "steps": 2,
+      "frames": 5,
+      "notifications": 0,
+      "tool_calls": 0
+    },
+    {
+      "file": "04-patch-create.json",
+      "steps": 2,
+      "frames": 9,
+      "notifications": 1,
+      "tool_calls": 0
+    },
+    {
+      "file": "05-patch-update.json",
+      "steps": 4,
+      "frames": 18,
+      "notifications": 2,
+      "tool_calls": 0
+    },
+    {
+      "file": "06-patch-delete.json",
+      "steps": 2,
+      "frames": 9,
+      "notifications": 1,
+      "tool_calls": 0
+    },
+    {
+      "file": "07-run-now.json",
+      "steps": 2,
+      "frames": 8,
+      "notifications": 2,
+      "tool_calls": 4
+    },
+    {
+      "file": "08-control.json",
+      "steps": 6,
+      "frames": 17,
+      "notifications": 0,
+      "tool_calls": 0
+    },
+    {
+      "file": "09-session-run.json",
+      "steps": 3,
+      "frames": 3,
+      "notifications": 1,
+      "tool_calls": 2
+    },
+    {
+      "file": "10-hold-and-adopt.json",
+      "steps": 4,
+      "frames": 13,
+      "notifications": 2,
+      "tool_calls": 0
+    },
+    {
+      "file": "11-errors.json",
+      "steps": 11,
+      "frames": 25,
+      "notifications": 2,
+      "tool_calls": 0
+    },
+    {
+      "file": "12-relay-without-schedules.json",
+      "steps": 1,
+      "frames": 2,
+      "notifications": 0,
+      "tool_calls": 0
+    },
+    {
+      "file": "13-states-and-health.json",
+      "steps": 8,
+      "frames": 20,
+      "notifications": 2,
+      "tool_calls": 2
+    },
+    {
+      "file": "14-registry-not-managed.json",
+      "steps": 3,
+      "frames": 7,
+      "notifications": 0,
+      "tool_calls": 0
+    },
+    {
+      "file": "15-background-stalled.json",
+      "steps": 1,
+      "frames": 3,
+      "notifications": 0,
+      "tool_calls": 0
+    },
+    {
+      "file": "16-apply-conflict.json",
+      "steps": 2,
+      "frames": 9,
+      "notifications": 1,
+      "tool_calls": 0
+    }
+  ]
+}

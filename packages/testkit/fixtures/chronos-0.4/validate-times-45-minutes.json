@@ -1,0 +1,37 @@
+{
+  "ok": true,
+  "normalized": {
+    "op": "create",
+    "draft": {
+      "id": "gap-45",
+      "name": "Gap 45",
+      "description": "Example job",
+      "when": {
+        "type": "times",
+        "days": "weekdays",
+        "times": [
+          "09:00",
+          "09:45"
+        ]
+      },
+      "catchup_min": 180,
+      "enabled": true,
+      "runner": "headless",
+      "permissions": "full",
+      "allowed_tools": [],
+      "model": null,
+      "notify": "failure",
+      "prompt": "Summarise yesterday's activity and post it.\n"
+    }
+  },
+  "preview": {
+    "when_text": "Weekdays at 9:00 AM and 9:45 AM",
+    "next_runs": [
+      "2026-10-05T09:00:00-04:00",
+      "2026-10-05T09:45:00-04:00",
+      "2026-10-06T09:00:00-04:00"
+    ],
+    "tz": "America/New_York"
+  },
+  "expected_etag": "sha256:8e63455cc3c57d6cd8cbb58b6256baee58344d009fe34e70f7daa8b65e6b7be4"
+}

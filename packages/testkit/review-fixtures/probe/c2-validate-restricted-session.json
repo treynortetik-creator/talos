@@ -1,0 +1,15 @@
+{
+  "exit": 1,
+  "out": {
+    "error": {
+      "code": "schedule_invalid",
+      "message": "a restricted job cannot also run in a live session (that run would use the session's permissions, not the restricted list)",
+      "fields": [
+        {
+          "path": "permissions",
+          "message": "a restricted job cannot also run in a live session (that run would use the session's permissions, not the restricted list)"
+        }
+      ]
+    }
+  }
+}

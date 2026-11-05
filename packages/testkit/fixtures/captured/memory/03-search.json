@@ -1,0 +1,49 @@
+{
+  "scenario": "03-search",
+  "frames": [
+    {
+      "asked": "memory.search",
+      "frame": {
+        "v": 1,
+        "id": "01J00000000000000000000006",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.results",
+        "request_id": "01J10000000000000000000006",
+        "hits": [
+          {
+            "root_id": "notes",
+            "path": "projects/example/plan.md",
+            "title": "Plan",
+            "snippet": "# Plan\nShip the quarterly release on Friday. Back to [[Overview]].\n",
+            "marks": [
+              [
+                16,
+                25
+              ],
+              [
+                26,
+                33
+              ]
+            ],
+            "mtime": "2026-10-20T12:00:00.000Z"
+          }
+        ],
+        "next_cursor": null,
+        "index": "ready"
+      }
+    },
+    {
+      "asked": "memory.search",
+      "frame": {
+        "v": 1,
+        "id": "01J00000000000000000000007",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.results",
+        "request_id": "01J10000000000000000000007",
+        "hits": [],
+        "next_cursor": null,
+        "index": "ready"
+      }
+    }
+  ]
+}

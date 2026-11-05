@@ -1,0 +1,66 @@
+{
+  "v": 1,
+  "type": "reply",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T43V",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "message": {
+    "id": "m_01JBF3V7Q8K2M4N6P8R0S2T43W",
+    "thread_id": "general",
+    "author": "app",
+    "kind": "app",
+    "text": "Here is your note.",
+    "format": "markdown",
+    "attachments": [],
+    "via": "app",
+    "created_at": "2026-10-28T15:32:10.120Z",
+    "app": {
+      "view_id": "av_01JBF3V7Q8K2M4N6P8R0S2T43R",
+      "thread_id": "general",
+      "label": "Notes",
+      "server": "probe-notes",
+      "tool": "show_note",
+      "resource_uri": "ui://probe/note.html",
+      "approval_key": "abababababababababababababababababababababababababababababababab",
+      "page": {
+        "media_id": "md_01JBF3V7Q8K2M4N6P8R0S2T43T",
+        "kind": "html",
+        "role": "attachment",
+        "mime": "text/html",
+        "name": "note.html",
+        "size": 245760,
+        "sha256": "abababababababababababababababababababababababababababababababab"
+      },
+      "csp": {
+        "connect_domains": [
+          "https://api.example.com"
+        ],
+        "resource_domains": [],
+        "frame_domains": [],
+        "base_uri_domains": [],
+        "script_hashes": [
+          "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        ],
+        "script_urls": [],
+        "style_urls": []
+      },
+      "tool_input": {
+        "id": "n1"
+      },
+      "tool_result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Buy milk"
+          }
+        ],
+        "structuredContent": {
+          "id": "n1",
+          "body": "Buy milk"
+        }
+      },
+      "calls_until": "2026-10-29T15:32:10.120Z",
+      "shown_at": "2026-10-28T15:32:10.120Z"
+    }
+  },
+  "silent": true
+}

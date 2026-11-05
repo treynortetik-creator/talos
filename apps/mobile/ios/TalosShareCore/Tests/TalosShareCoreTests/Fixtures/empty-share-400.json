@@ -1,0 +1,8 @@
+{
+  "recorded": "2026-10-29 from apps/relay (test harness, local)",
+  "status": 400,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"error\":\"empty_share\"}"
+}

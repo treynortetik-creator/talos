@@ -1,0 +1,34 @@
+{
+  "about": "Captured by `bun run capture:search` (apps/bridge/scripts/capture-search.ts): the REAL bridge, a fixed conversation, signed search.query and history.request frames. Ids, timestamps and signatures are normalised. Do not edit by hand: re-run the capture.",
+  "now": "2026-10-29T18:00:00.000Z",
+  "scenarios": [
+    {
+      "file": "01-relevance.json",
+      "steps": 1
+    },
+    {
+      "file": "02-newest-paged.json",
+      "steps": 2
+    },
+    {
+      "file": "03-filters.json",
+      "steps": 4
+    },
+    {
+      "file": "04-no-match-and-safety.json",
+      "steps": 4
+    },
+    {
+      "file": "05-bad-cursor.json",
+      "steps": 1
+    },
+    {
+      "file": "06-context.json",
+      "steps": 5
+    },
+    {
+      "file": "07-indexing.json",
+      "steps": 1
+    }
+  ]
+}

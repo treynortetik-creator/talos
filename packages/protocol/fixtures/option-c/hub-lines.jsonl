@@ -1,0 +1,5 @@
+{"t":"hello","thread_id":"trip","session_id":"6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c41","pid":5101,"nonce":"n0nce-0123456789abcdef"}
+{"t":"out","frame":{"v":1,"type":"reply","id":"01JBF3V7Q8K2M4N6P8R0S2T4A1","ts":"2026-10-28T15:32:10.120Z"}}
+{"t":"welcome","thread_id":"trip"}
+{"t":"ack","frame_id":"01JBF3V7Q8K2M4N6P8R0S2T4A1","state":"sent"}
+{"t":"refused","code":"not_owner","message":"pid 999 is not in thread trip's pane group"}

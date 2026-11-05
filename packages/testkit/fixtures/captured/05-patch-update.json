@@ -1,0 +1,444 @@
+{
+  "scenario": "05-patch-update",
+  "title": "schedule.patch update (a rename is low risk; a prompt change is high); PRIMARY writes the change",
+  "steps": [
+    {
+      "step": 1,
+      "label": "app renames the job",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.patch",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "change": {
+            "op": "update",
+            "id": "daily-digest",
+            "base_etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+            "set": {
+              "name": "Morning Digest"
+            }
+          },
+          "thread_id": "general",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000002",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "type": "ack",
+          "ref": "00000000000000000000000001"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000003",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "type": "card.create",
+          "card": {
+            "id": "c_00000000000000000000000004",
+            "thread_id": "general",
+            "kind": "schedule",
+            "title": "Change scheduled job: Morning Digest",
+            "destination": [
+              {
+                "label": "Runs",
+                "value": "Every day at 7:30 AM"
+              },
+              {
+                "label": "Next",
+                "value": "2026-10-05T07:30:00-04:00"
+              },
+              {
+                "label": "As",
+                "value": "Full permissions, nobody watching"
+              },
+              {
+                "label": "Where",
+                "value": "In your live session"
+              },
+              {
+                "label": "Posts to",
+                "value": "General"
+              },
+              {
+                "label": "Proposed by",
+                "value": "your form"
+              }
+            ],
+            "body": "Name: Daily Digest → Morning Digest",
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Save change",
+            "kill_label": "Kill change",
+            "allow_edit": false,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload": {
+              "schema": "talos.schedule-change/1",
+              "change": {
+                "op": "update",
+                "id": "daily-digest",
+                "base_etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+                "set": {
+                  "name": "Morning Digest"
+                }
+              },
+              "expected_etag": "sha256:b833f3a40e5dd22c181992d7e52c730f2ad06d8d44fe3a03a52422b61e07e3ef",
+              "proposed_by": "owner_form",
+              "client_ref": "00000000000000000000000001",
+              "preview": {
+                "when_text": "Every day at 7:30 AM",
+                "next_runs": [
+                  "2026-10-05T07:30:00-04:00",
+                  "2026-10-06T07:30:00-04:00",
+                  "2026-10-07T07:30:00-04:00"
+                ],
+                "tz": "America/New_York"
+              }
+            },
+            "payload_hash": "sha256:9224a8a334b957daf34421415b5540428793b39351934f3545a9fe04ed0f204a",
+            "state": "pending",
+            "created_at": "2026-10-05T11:00:02.400Z",
+            "expires_at": "2026-10-06T11:00:02.400Z",
+            "warning": "Runs unattended with full permissions: it can do anything you can on this Mac."
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 2,
+      "label": "owner approves the rename",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "00000000000000000000000005",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "card_id": "c_00000000000000000000000004",
+          "action": "primary",
+          "payload_hash": "sha256:9224a8a334b957daf34421415b5540428793b39351934f3545a9fe04ed0f204a",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000006",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "type": "ack",
+          "ref": "00000000000000000000000005",
+          "stage": "delivered"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000007",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000004",
+          "state": "resolved",
+          "resolution": {
+            "action": "primary",
+            "at": "2026-10-05T11:00:02.400Z",
+            "edited": false,
+            "payload_hash": "sha256:9224a8a334b957daf34421415b5540428793b39351934f3545a9fe04ed0f204a",
+            "taken_at": "2026-10-05T11:00:02.400Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000008",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "type": "ack",
+          "ref": "00000000000000000000000005",
+          "stage": "consumed"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000009",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000004",
+          "state": "done",
+          "result": {
+            "ok": true,
+            "text": "Saved. Next run Mon 7:30 AM.",
+            "at": "2026-10-05T11:00:02.400Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000010",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:00:00-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:b833f3a40e5dd22c181992d7e52c730f2ad06d8d44fe3a03a52422b61e07e3ef",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Card c_00000000000000000000000004 → PRIMARY. The bridge applied it: Saved. Next run Mon 7:30 AM. Nothing for you to do.",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "c_00000000000000000000000004-applied",
+            "ts": "2026-10-05T11:00:02.400Z",
+            "kind": "system",
+            "trust": "system"
+          }
+        }
+      ],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 3,
+      "label": "app rewrites the prompt",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.patch",
+          "id": "00000000000000000000000011",
+          "ts": "2026-10-05T11:00:04.500Z",
+          "change": {
+            "op": "update",
+            "id": "daily-digest",
+            "base_etag": "sha256:b833f3a40e5dd22c181992d7e52c730f2ad06d8d44fe3a03a52422b61e07e3ef",
+            "set": {
+              "prompt": "Summarise yesterday in one short paragraph and post it.\n"
+            }
+          },
+          "thread_id": "general",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000012",
+          "ts": "2026-10-05T11:00:04.500Z",
+          "type": "ack",
+          "ref": "00000000000000000000000011"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000013",
+          "ts": "2026-10-05T11:00:04.500Z",
+          "type": "card.create",
+          "card": {
+            "id": "c_00000000000000000000000014",
+            "thread_id": "general",
+            "kind": "schedule",
+            "title": "Change scheduled job: Morning Digest",
+            "destination": [
+              {
+                "label": "Runs",
+                "value": "Every day at 7:30 AM"
+              },
+              {
+                "label": "Next",
+                "value": "2026-10-05T07:30:00-04:00"
+              },
+              {
+                "label": "As",
+                "value": "Full permissions, nobody watching"
+              },
+              {
+                "label": "Where",
+                "value": "In your live session"
+              },
+              {
+                "label": "Posts to",
+                "value": "General"
+              },
+              {
+                "label": "Proposed by",
+                "value": "your form"
+              }
+            ],
+            "body": "Prompt:\n@@ -1,1 +1,1 @@\n-Summarise yesterday and post it.\n+Summarise yesterday in one short paragraph and post it.",
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Save change",
+            "kill_label": "Kill change",
+            "allow_edit": false,
+            "allow_revise": true,
+            "risk": "high",
+            "origin": "chat",
+            "payload": {
+              "schema": "talos.schedule-change/1",
+              "change": {
+                "op": "update",
+                "id": "daily-digest",
+                "base_etag": "sha256:b833f3a40e5dd22c181992d7e52c730f2ad06d8d44fe3a03a52422b61e07e3ef",
+                "set": {
+                  "prompt": "Summarise yesterday in one short paragraph and post it.\n"
+                }
+              },
+              "expected_etag": "sha256:ecd3fc76a0014df3ea62194e53a26d225d0fc1f7968a1e1ef40ddeea7769b074",
+              "proposed_by": "owner_form",
+              "client_ref": "00000000000000000000000011",
+              "preview": {
+                "when_text": "Every day at 7:30 AM",
+                "next_runs": [
+                  "2026-10-05T07:30:00-04:00",
+                  "2026-10-06T07:30:00-04:00",
+                  "2026-10-07T07:30:00-04:00"
+                ],
+                "tz": "America/New_York"
+              }
+            },
+            "payload_hash": "sha256:8df5e46b912c34b3c78a02bb09c5cdf3d0a275b87dbefbb4ad766fee29f26b55",
+            "state": "pending",
+            "created_at": "2026-10-05T11:00:04.500Z",
+            "expires_at": "2026-10-06T11:00:04.500Z",
+            "warning": "Runs unattended with full permissions: it can do anything you can on this Mac."
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 4,
+      "label": "owner approves the new prompt",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "00000000000000000000000015",
+          "ts": "2026-10-05T11:00:04.500Z",
+          "card_id": "c_00000000000000000000000014",
+          "action": "primary",
+          "payload_hash": "sha256:8df5e46b912c34b3c78a02bb09c5cdf3d0a275b87dbefbb4ad766fee29f26b55",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000016",
+          "ts": "2026-10-05T11:00:04.500Z",
+          "type": "ack",
+          "ref": "00000000000000000000000015",
+          "stage": "delivered"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000017",
+          "ts": "2026-10-05T11:00:04.500Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000014",
+          "state": "resolved",
+          "resolution": {
+            "action": "primary",
+            "at": "2026-10-05T11:00:04.500Z",
+            "edited": false,
+            "payload_hash": "sha256:8df5e46b912c34b3c78a02bb09c5cdf3d0a275b87dbefbb4ad766fee29f26b55",
+            "taken_at": "2026-10-05T11:00:04.500Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000018",
+          "ts": "2026-10-05T11:00:04.500Z",
+          "type": "ack",
+          "ref": "00000000000000000000000015",
+          "stage": "consumed"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000019",
+          "ts": "2026-10-05T11:00:04.500Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000014",
+          "state": "done",
+          "result": {
+            "ok": true,
+            "text": "Saved. Next run Mon 7:30 AM.",
+            "at": "2026-10-05T11:00:04.500Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000020",
+          "ts": "2026-10-05T11:00:04.500Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:00:00-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:ecd3fc76a0014df3ea62194e53a26d225d0fc1f7968a1e1ef40ddeea7769b074",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Card c_00000000000000000000000014 → PRIMARY. The bridge applied it: Saved. Next run Mon 7:30 AM. Nothing for you to do.",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "c_00000000000000000000000014-applied",
+            "ts": "2026-10-05T11:00:04.500Z",
+            "kind": "system",
+            "trust": "system"
+          }
+        }
+      ],
+      "agent_tool_calls": []
+    }
+  ]
+}

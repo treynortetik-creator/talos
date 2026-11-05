@@ -1,0 +1,261 @@
+{
+  "scenario": "07-run-now",
+  "title": "schedule.run_now: a session job (default), a headless job in the session (where:session)",
+  "steps": [
+    {
+      "step": 1,
+      "label": "Run now on a session job: ack, then the job is offered to the session",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.run_now",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "schedule_id": "daily-digest",
+          "again": false,
+          "where": "default",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000002",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000001"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000003",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "ok",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:00:00-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+            },
+            {
+              "id": "weekly-wrap",
+              "etag": "sha256:61c0c79d778f77938cfe3c6438a42c96a177b3464c8b6f3098fdc5941e2b7335",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000002"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000004",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "ok",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:00:00-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000003"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Scheduled job {\"id\":\"daily-digest\",\"name\":\"Daily Digest\"} is due now (run r_00000000000000000000000005).\n1. Call schedule_run_start with this run id. If it says SKIP, stop here.\n2. Hand the work to a sub-agent (Agent tool): pass the standing rules and then the job text below, both exactly and in\n   that order, plus the thread \"general\" and the due time; ask for a short result. Don't do the heavy work in this conversation.\n3. Post the result to thread general with reply, then call schedule_run_done with ok and a one-line summary.\n--- job ---\nSummarise yesterday and post it.\n",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "r_00000000000000000000000005",
+            "ts": "2026-10-05T11:00:00.300Z",
+            "kind": "schedule_run",
+            "trust": "owner",
+            "schedule_id": "daily-digest",
+            "run_id": "r_00000000000000000000000005",
+            "ds": "2026-10-05"
+          }
+        }
+      ],
+      "agent_tool_calls": [
+        {
+          "name": "schedule_run_start",
+          "args": {
+            "run_id": "r_00000000000000000000000005"
+          },
+          "result": "GO",
+          "is_error": false
+        },
+        {
+          "name": "schedule_run_done",
+          "args": {
+            "run_id": "r_00000000000000000000000005",
+            "ok": true,
+            "summary": "Done by hand."
+          },
+          "result": "recorded",
+          "is_error": false
+        }
+      ]
+    },
+    {
+      "step": 2,
+      "label": "Run now with where:session on a background job: offered to the session",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.run_now",
+          "id": "00000000000000000000000006",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "schedule_id": "weekly-wrap",
+          "again": false,
+          "where": "session",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000007",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000006"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000008",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "ok",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:00:00-04:00"
+          },
+          "changed": [
+            {
+              "id": "weekly-wrap",
+              "etag": "sha256:61c0c79d778f77938cfe3c6438a42c96a177b3464c8b6f3098fdc5941e2b7335",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000004"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000009",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "ok",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:00:00-04:00"
+          },
+          "changed": [
+            {
+              "id": "weekly-wrap",
+              "etag": "sha256:61c0c79d778f77938cfe3c6438a42c96a177b3464c8b6f3098fdc5941e2b7335",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000005"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Scheduled job {\"id\":\"weekly-wrap\",\"name\":\"Weekly Wrap\"} is due now (run r_00000000000000000000000010).\n1. Call schedule_run_start with this run id. If it says SKIP, stop here.\n2. Hand the work to a sub-agent (Agent tool): pass the standing rules and then the job text below, both exactly and in\n   that order, plus the thread \"general\" and the due time; ask for a short result. Don't do the heavy work in this conversation.\n3. Post the result to thread general with reply, then call schedule_run_done with ok and a one-line summary.\n--- job ---\nSummarise yesterday and post it.\n",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "r_00000000000000000000000010",
+            "ts": "2026-10-05T11:00:00.300Z",
+            "kind": "schedule_run",
+            "trust": "owner",
+            "schedule_id": "weekly-wrap",
+            "run_id": "r_00000000000000000000000010",
+            "ds": "2026-10-05"
+          }
+        }
+      ],
+      "agent_tool_calls": [
+        {
+          "name": "schedule_run_start",
+          "args": {
+            "run_id": "r_00000000000000000000000010"
+          },
+          "result": "GO",
+          "is_error": false
+        },
+        {
+          "name": "schedule_run_done",
+          "args": {
+            "run_id": "r_00000000000000000000000010",
+            "ok": true,
+            "summary": "Done by hand."
+          },
+          "result": "recorded",
+          "is_error": false
+        }
+      ]
+    }
+  ]
+}

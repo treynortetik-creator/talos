@@ -1,0 +1,713 @@
+{
+  "shell_api": 1,
+  "web_to_native": {
+    "ready": {
+      "sample": {
+        "type": "ready",
+        "shell_api": 1,
+        "features": [
+          "notify",
+          "badge",
+          "haptic"
+        ],
+        "signed_in": false
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "ready"
+          },
+          "shell_api": {
+            "type": "number",
+            "const": 1
+          },
+          "features": {
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          "signed_in": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type",
+          "shell_api",
+          "features",
+          "signed_in"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "notify": {
+      "sample": {
+        "type": "notify",
+        "title": "Talos",
+        "body": "Your build finished.",
+        "navigate": "/t/general",
+        "tag": "general"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "notify"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "navigate": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^\\/(?!\\/)[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]*$"
+          },
+          "tag": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "body",
+          "navigate"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "badge": {
+      "sample": {
+        "type": "badge",
+        "count": 3
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "badge"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99999
+          }
+        },
+        "required": [
+          "type",
+          "count"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "open_external": {
+      "sample": {
+        "type": "open_external",
+        "url": "https://example.com/page"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "open_external"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "pattern": "^(https?:\\/\\/|mailto:)"
+          }
+        },
+        "required": [
+          "type",
+          "url"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "haptic": {
+      "sample": {
+        "type": "haptic",
+        "kind": "success"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "haptic"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "light",
+              "medium",
+              "heavy",
+              "selection",
+              "success",
+              "warning",
+              "error"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "kind"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "threads": {
+      "sample": {
+        "type": "threads",
+        "items": [
+          {
+            "id": "general",
+            "name": "General"
+          }
+        ]
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "threads"
+          },
+          "items": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "type",
+          "items"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "pair_status": {
+      "sample": {
+        "type": "pair_status",
+        "state": "waiting_pin"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "pair_status"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "waiting_pin",
+              "pinned",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "state"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "companion_state": {
+      "sample": {
+        "type": "companion_state",
+        "link": "online",
+        "mac_online": true,
+        "busy": false,
+        "needs": 1,
+        "working": 2,
+        "queued": 0,
+        "on_call": 0,
+        "unread": 3,
+        "failed": 0,
+        "rows": [
+          {
+            "thread_id": "general",
+            "state": "needs_you"
+          },
+          {
+            "thread_id": "daily",
+            "state": "working"
+          }
+        ],
+        "last_reply": {
+          "thread_id": "general",
+          "seq": 48123
+        }
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "companion_state"
+          },
+          "link": {
+            "type": "string",
+            "enum": [
+              "connecting",
+              "online",
+              "offline",
+              "unreachable"
+            ]
+          },
+          "mac_online": {
+            "type": "boolean"
+          },
+          "busy": {
+            "type": "boolean"
+          },
+          "needs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99999
+          },
+          "working": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99999
+          },
+          "queued": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99999
+          },
+          "on_call": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99999
+          },
+          "unread": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99999
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99999
+          },
+          "rows": {
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "thread_id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "needs_you",
+                    "ready",
+                    "working",
+                    "queued",
+                    "on_call"
+                  ]
+                }
+              },
+              "required": [
+                "thread_id",
+                "state"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "last_reply": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "thread_id": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                  },
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "thread_id",
+                  "seq"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "link",
+          "mac_online",
+          "busy",
+          "needs",
+          "working",
+          "queued",
+          "on_call",
+          "unread",
+          "failed",
+          "rows",
+          "last_reply"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "companion_reply": {
+      "sample": {
+        "type": "companion_reply",
+        "req": "r12",
+        "thread_id": "general",
+        "text": "Plain text here.",
+        "truncated": true
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "companion_reply"
+          },
+          "req": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,32}$"
+          },
+          "thread_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type",
+          "req",
+          "thread_id",
+          "text",
+          "truncated"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "terminal_view": {
+      "sample": {
+        "type": "terminal_view",
+        "rect": {
+          "x": 240,
+          "y": 0,
+          "width": 880,
+          "height": 780
+        }
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "terminal_view"
+          },
+          "rect": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20000
+                  },
+                  "y": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20000
+                  },
+                  "width": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20000
+                  },
+                  "height": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20000
+                  }
+                },
+                "required": [
+                  "x",
+                  "y",
+                  "width",
+                  "height"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "rect"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "native_to_web": {
+    "navigate": {
+      "sample": {
+        "type": "navigate",
+        "path": "/t/general"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "navigate"
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^\\/(?!\\/)[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]*$"
+          }
+        },
+        "required": [
+          "type",
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "compose": {
+      "sample": {
+        "type": "compose",
+        "thread_id": "general",
+        "text": "Hello from the shell."
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "compose"
+          },
+          "thread_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          }
+        },
+        "required": [
+          "type",
+          "thread_id",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "voice_note": {
+      "sample": {
+        "type": "voice_note",
+        "thread_id": "general",
+        "mime": "audio/mp4",
+        "duration_ms": 1200,
+        "bytes_b64": "AAAA"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "voice_note"
+          },
+          "thread_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          },
+          "mime": {
+            "type": "string",
+            "pattern": "^audio\\/[a-z0-9.+-]{1,60}$"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600000
+          },
+          "bytes_b64": {
+            "type": "string",
+            "maxLength": 34952536,
+            "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+          }
+        },
+        "required": [
+          "type",
+          "thread_id",
+          "mime",
+          "duration_ms",
+          "bytes_b64"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "enroll_code": {
+      "sample": {
+        "type": "enroll_code",
+        "code": "0123456789ABCDEFGHJKMNPQRS"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "enroll_code"
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "type",
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "companion_reply_request": {
+      "sample": {
+        "type": "companion_reply_request",
+        "req": "r12",
+        "thread_id": "general"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "companion_reply_request"
+          },
+          "req": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,32}$"
+          },
+          "thread_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          }
+        },
+        "required": [
+          "type",
+          "req",
+          "thread_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "notify_permission": {
+      "sample": {
+        "type": "notify_permission",
+        "state": "granted"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "notify_permission"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "granted",
+              "denied",
+              "not_asked"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "state"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

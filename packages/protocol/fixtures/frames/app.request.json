@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "type": "app.request",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T43Z",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "thread_id": "general",
+  "view_id": "av_01JBF3V7Q8K2M4N6P8R0S2T43R",
+  "request_id": "ar_01JBF3V7Q8K2M4N6P8R0S2T43S",
+  "method": "tools/call",
+  "tool_name": "read_note",
+  "arguments": {
+    "id": "n1"
+  },
+  "user_gesture": true,
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "BFnpNBrb7BRrg3RC7QefkKdBTd9sFELxRjZE2G_PPjYJqDr9NHASx4-29zRDLoI2OWcb6Va6tvkCuO4ce1-5lA"
+}

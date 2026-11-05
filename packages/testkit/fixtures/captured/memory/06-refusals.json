@@ -1,0 +1,23 @@
+{
+  "scenario": "06-refusals",
+  "frames": [
+    {
+      "asked": "memory.read",
+      "error": {
+        "code": "memory_not_found"
+      }
+    },
+    {
+      "asked": "memory.read",
+      "error": {
+        "code": "memory_not_found"
+      }
+    },
+    {
+      "asked": "memory.tree",
+      "error": {
+        "code": "memory_not_found"
+      }
+    }
+  ]
+}

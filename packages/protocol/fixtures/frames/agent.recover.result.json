@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "agent.recover.result",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T444",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "control_id": "01JBF3V7Q8K2M4N6P8R0S2T443",
+  "ok": true,
+  "text": "Sent to your Mac, where the Talos app decides. It skips the restart if you stopped the agent there, or did a phone restart in the last 2 minutes. Nothing happens if the app is not running.",
+  "at": "2026-10-28T15:32:10.120Z"
+}

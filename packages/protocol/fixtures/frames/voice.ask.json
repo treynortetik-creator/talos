@@ -1,0 +1,18 @@
+{
+  "v": 1,
+  "type": "voice.ask",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T422",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "voice_session_id": "v_01JBF3V7Q8K2M4N6P8R0S2T426",
+  "delegation_id": "vd_example",
+  "thread_id": "general",
+  "question": "What is on my plate today?",
+  "transcript_tail": [
+    {
+      "who": "owner",
+      "text": "What is on my plate today?"
+    }
+  ],
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "LJNTMKsIXs11h0HE_ffVmg2J2Zx5ZSHfP38bXcV0eWT8ZzJg6FrAQn9HWNbU8DaJqPiSmpwirfJQFSffa4pblA"
+}

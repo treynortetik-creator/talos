@@ -1,0 +1,63 @@
+{
+  "v": 1,
+  "account": "owner@example.com",
+  "truncated": false,
+  "items": [
+    {
+      "message_id": "18c0aa11bb22cc01",
+      "thread_id": "18c0aa11bb22cc00",
+      "from": "Sam Sender <sam@example.com>",
+      "to": "owner@example.com",
+      "subject": "Lunch on Friday?",
+      "date": "2026-10-28T14:55:00.000Z",
+      "unread": true,
+      "starred": false,
+      "labels": [],
+      "forwarded": false,
+      "text": "Are you free around noon? The new place on Example Street has a table.",
+      "link": "https://mail.google.com/mail/u/0/#all/18c0aa11bb22cc00"
+    },
+    {
+      "message_id": "18c0aa11bb22cc02",
+      "thread_id": "18c0aa11bb22cc02",
+      "from": "billing@example.com",
+      "to": "owner@example.com",
+      "subject": "Your receipt",
+      "date": "2026-10-28T14:56:00.000Z",
+      "unread": true,
+      "starred": false,
+      "labels": ["Promotions"],
+      "forwarded": false,
+      "text": "Thanks for your order.",
+      "link": "javascript:alert(1)"
+    },
+    {
+      "message_id": "18c0aa11bb22cc03",
+      "thread_id": "18c0aa11bb22cc03",
+      "from": "vip@example.com",
+      "to": "owner@example.com",
+      "subject": "Contract draft",
+      "date": "2026-10-28T14:57:00.000Z",
+      "unread": true,
+      "starred": true,
+      "labels": [],
+      "forwarded": false,
+      "text": "Draft attached.",
+      "link": "https://mail.google.com/mail/u/0/#all/18c0aa11bb22cc03"
+    },
+    {
+      "message_id": "18c0aa11bb22cc04",
+      "thread_id": "18c0aa11bb22cc04",
+      "from": "Alex Example <alex@example.com>",
+      "to": "owner+talos@example.com",
+      "subject": "Fwd: Flight confirmation",
+      "date": "2026-10-28T14:58:00.000Z",
+      "unread": false,
+      "starred": false,
+      "labels": ["Talos/Inbound"],
+      "forwarded": true,
+      "text": "Flight EX123 departs 08:15 from Gate 4.",
+      "link": "https://mail.google.com/mail/u/0/#all/18c0aa11bb22cc04"
+    }
+  ]
+}

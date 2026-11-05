@@ -1,0 +1,24 @@
+# Generic personal-data shapes. Tab-separated; see check-no-personal.sh for the format.
+# Owner-specific strings (names, employer, thread names, timezone, quiet hours) NEVER go in this file: it is public.
+# They live in the private, gitignored scripts/personal-denylist.txt.
+# email addresses other than example.com / example.org / example.net / GitHub noreply / the commit trailer
+# kit/ is the public kit, copied unchanged (kit/SOURCE). Its docs and test fixtures use made-up people at acme.com, e.g. dana@acme.com, and example.com. Only those two domains are let through, and only inside kit/ (the ALLOW_RE below is anchored on a kit/ path); any other address in kit/ is still a hit. kit/ cannot be edited here without breaking scripts/kit-source.test.ts.
+!^third_party/	-	[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}	@(example\.(com|org|net)|users\.noreply\.github\.com|anthropic\.com)$|^kit/[^:]+:[0-9]+:[^:]*@acme\.com$
+# phone numbers
+!^third_party/	-	(\+?[0-9]{1,2}[ .-])?\(?[0-9]{3}\)?[ .-][0-9]{3}[ .-][0-9]{4}
+# home-directory paths
+!^third_party/	-	/Users/[A-Za-z][A-Za-z0-9._-]*	/Users/(alex|you|user|name|example)$
+# home-directory paths (Linux)
+!^third_party/	-	(^|[^A-Za-z0-9_./-])/home/[a-z][a-z0-9_-]*/	/home/(runner|node|app|user|you|alex|example)/$
+# chat ids
+!^third_party/	i	chat_?id[\"': =]+-?[0-9]{6,}
+# IANA zones other than UTC and Europe/Berlin inside examples and fixtures. One exception: America/New_York, the zone the
+# vendored Chronos goldens are recorded in (its DST contract test), in those goldens, the schedule frames built from them and the
+# bridge captures (packages/testkit/fixtures/captured/, recorded against that same Chronos).
+(^|/)(examples|fixtures)/	-	(Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific)/[A-Za-z_]+(/[A-Za-z_]+)?	(Europe/Berlin|^packages/(testkit/fixtures/(chronos-[^/]+|captured)/[^:]+|protocol/fixtures/frames/schedules?\.[^:]+):[0-9]+:America/New_York)$
+# gendered pronouns for the owner in UI copy and prompts
+^(apps/web/src|apps/relay/src/voice)/	i	owner[^.]{0,60}\b(he|she|his|her|him|hers|himself|herself)\b|\b(he|she)\b[^.]{0,40}\bowner\b
+# the committed TEST device id must never appear in app or relay source (it only signs fixtures)
+^apps/[^/]+/src/	-	d_rjxnk4xufxem5xago5zd
+# Talos message ids (m_ then a ULID) have no place in public docs. docs/SPEC.md keeps made-up ids in its frame examples.
+^docs/	-	m_01[0-9A-Z]{20,}	^docs/SPEC\.md:

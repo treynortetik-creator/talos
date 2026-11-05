@@ -1,0 +1,40 @@
+{
+  "ok": true,
+  "normalized": {
+    "op": "create",
+    "draft": {
+      "id": "two-days",
+      "name": "Two Days",
+      "description": "Example job",
+      "when": {
+        "type": "times",
+        "days": [
+          "mon",
+          "wed"
+        ],
+        "times": [
+          "09:45",
+          "12:15"
+        ]
+      },
+      "catchup_min": 180,
+      "enabled": true,
+      "runner": "headless",
+      "permissions": "full",
+      "allowed_tools": [],
+      "model": null,
+      "notify": "failure",
+      "prompt": "Summarise yesterday's activity and post it.\n"
+    }
+  },
+  "preview": {
+    "when_text": "Mon and Wed at 9:45 AM and 12:15 PM",
+    "next_runs": [
+      "2026-10-05T09:45:00-04:00",
+      "2026-10-05T12:15:00-04:00",
+      "2026-10-07T09:45:00-04:00"
+    ],
+    "tz": "America/New_York"
+  },
+  "expected_etag": "sha256:b2f107a724b258138fd6746ebaef4488d28be260d77e3a027e65dba80ce336d5"
+}

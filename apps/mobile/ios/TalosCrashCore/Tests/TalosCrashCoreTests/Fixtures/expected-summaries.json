@@ -1,0 +1,22 @@
+[
+  {
+    "kind": "crash",
+    "name": "EXC_BAD_ACCESS (SIGSEGV)",
+    "reason": "Namespace SIGNAL, Code 11 Segmentation fault: 11",
+    "appVersion": "1.0",
+    "appBuild": "12",
+    "frames": [
+      { "binary": "Talos", "offset": 4096 },
+      { "binary": "libsystem_kernel.dylib", "offset": 512 }
+    ]
+  },
+  { "kind": "crash", "name": "EXC_99", "reason": "", "appVersion": "", "appBuild": "", "frames": [] },
+  {
+    "kind": "hang",
+    "name": "hang",
+    "reason": "",
+    "appVersion": "1.0",
+    "appBuild": "12",
+    "frames": [ { "binary": "Talos", "offset": 8192 } ]
+  }
+]

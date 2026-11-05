@@ -1,0 +1,75 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`gmail normalizer > turns the batch fixture into the expected events 1`] = `
+[
+  {
+    "actor": {
+      "email": "sam@example.com",
+      "name": "Sam Sender",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "gmail:18c0aa11bb22cc01",
+    "id": "<event id>",
+    "kind": "gmail.message",
+    "priority": "normal",
+    "source": "gmail",
+    "summary": "Sam Sender: Are you free around noon? The new place on Example Street has a table.",
+    "thread": "inbox",
+    "title": "Lunch on Friday?",
+    "ts": "2026-10-28T14:55:00.000Z",
+    "url": "https://mail.google.com/mail/u/0/#all/18c0aa11bb22cc00",
+    "work": false,
+  },
+  {
+    "actor": {
+      "email": "billing@example.com",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "gmail:18c0aa11bb22cc02",
+    "id": "<event id>",
+    "kind": "gmail.message",
+    "priority": "low",
+    "source": "gmail",
+    "summary": "billing@example.com: Thanks for your order.",
+    "thread": "inbox",
+    "title": "Your receipt",
+    "ts": "2026-10-28T14:56:00.000Z",
+    "work": false,
+  },
+  {
+    "actor": {
+      "email": "vip@example.com",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "gmail:18c0aa11bb22cc03",
+    "id": "<event id>",
+    "kind": "gmail.message",
+    "priority": "high",
+    "source": "gmail",
+    "summary": "vip@example.com: Draft attached.",
+    "thread": "inbox",
+    "title": "Contract draft",
+    "ts": "2026-10-28T14:57:00.000Z",
+    "url": "https://mail.google.com/mail/u/0/#all/18c0aa11bb22cc03",
+    "work": false,
+  },
+  {
+    "actor": {
+      "email": "alex@example.com",
+      "name": "Alex Example",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "gmail:18c0aa11bb22cc04",
+    "id": "<event id>",
+    "kind": "email.forwarded",
+    "priority": "high",
+    "source": "gmail",
+    "summary": "Alex Example: Flight EX123 departs 08:15 from Gate 4.",
+    "thread": "inbox",
+    "title": "Fwd: Flight confirmation",
+    "ts": "2026-10-28T14:58:00.000Z",
+    "url": "https://mail.google.com/mail/u/0/#all/18c0aa11bb22cc04",
+    "work": false,
+  },
+]
+`;

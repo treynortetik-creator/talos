@@ -1,0 +1,14 @@
+{
+  "team_id": "T0EXAMPLE1",
+  "type": "event_callback",
+  "event_id": "Ev0EXAMPLE02",
+  "authorizations": [{ "user_id": "U0OWNER001", "is_bot": false }],
+  "event": {
+    "type": "message",
+    "channel": "C0EXAMPLE01",
+    "channel_type": "channel",
+    "user": "U0SENDER02",
+    "text": "<@U0OWNER001> the deploy is blocked",
+    "ts": "1792940500.000100"
+  }
+}

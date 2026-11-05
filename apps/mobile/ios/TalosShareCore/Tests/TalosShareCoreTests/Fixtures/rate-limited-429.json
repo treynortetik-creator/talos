@@ -1,0 +1,9 @@
+{
+  "recorded": "2026-10-29 from apps/relay (test harness, local)",
+  "status": 429,
+  "headers": {
+    "content-type": "application/json",
+    "retry-after": "6"
+  },
+  "body": "{\"error\":\"rate_limited\"}"
+}

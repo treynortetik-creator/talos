@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"0bbbbbbb-1111-7222-8333-444444444444"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5"}
+{"type":"turn.failed","error":{"message":"You've hit your usage limit."}}

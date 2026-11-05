@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "type": "schedule.run_now",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T42R",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "schedule_id": "daily-digest",
+  "again": false,
+  "where": "default",
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "ls4WODcl0qgQPPgW4MD0gUjNx96xgYtZT86V33Mmd3iCRpaoMeGRFBwvPakaiKn0Kg-7j9Bb5B2caFifecDB5w"
+}

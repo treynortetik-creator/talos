@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "type": "ack",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T40G",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "ref": "01JBF3V7Q8K2M4N6P8R0S2T40M",
+  "seq": 4182,
+  "stage": "consumed"
+}

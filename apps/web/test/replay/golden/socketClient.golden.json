@@ -1,0 +1,1634 @@
+{
+  "owner_message": {
+    "steps": [
+      {
+        "dir": "event",
+        "text": "socket 1 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          }
+        }
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "message",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "thread_id": "general",
+          "client_msg_id": "m_<id4>",
+          "text": "Hello from Alex Example",
+          "attachments": [],
+          "device_id": "<device>",
+          "osig": "<secret>"
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id5>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id3>",
+          "seq": 1
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "message.stored",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "client_msg_id": "m_<id4>",
+          "message": {
+            "id": "m_<id4>",
+            "thread_id": "general",
+            "seq": 1,
+            "author": "owner",
+            "kind": "text",
+            "text": "Hello from Alex Example",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "dir": "note",
+        "text": "the agent answers"
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "reply",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "message": {
+            "id": "m_<id8>",
+            "thread_id": "general",
+            "seq": 2,
+            "author": "agent",
+            "kind": "text",
+            "text": "Good morning Alex",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      }
+    ],
+    "state": {
+      "connection": "online",
+      "devicePinned": true,
+      "lastSeq": 1,
+      "serverSeq": 0,
+      "readySeq": 1,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "unread": {
+        "general": 1
+      },
+      "readUpto": {},
+      "messages": {
+        "general": [
+          {
+            "id": "m_<id1>",
+            "thread_id": "general",
+            "author": "owner",
+            "kind": "text",
+            "text": "Hello from Alex Example",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "seq": 1,
+            "receipt": "sent"
+          },
+          {
+            "id": "m_<id2>",
+            "thread_id": "general",
+            "seq": 2,
+            "author": "agent",
+            "kind": "text",
+            "text": "Good morning Alex",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          }
+        ]
+      },
+      "cards": [],
+      "statuses": {},
+      "catchup": null,
+      "outbox": 0,
+      "meta": {
+        "retryAt": null,
+        "authFailed": false,
+        "authReason": null,
+        "queuedIds": [],
+        "failed": {},
+        "networkOffline": false,
+        "lastCloseCode": null
+      }
+    }
+  },
+  "card_approve": {
+    "steps": [
+      {
+        "dir": "event",
+        "text": "socket 1 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id4>",
+            "kind": "generic",
+            "title": "Send the invoice to alex@example.com (1)",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:741541b2da51fe236b2f6b60b1b81bfae5c0e0cd5c9753d3e96251031a9cea1b",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1
+          }
+        }
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "id": "<id5>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "type": "card.resolve",
+          "card_id": "c_<id4>",
+          "action": "primary",
+          "payload_hash": "sha256:741541b2da51fe236b2f6b60b1b81bfae5c0e0cd5c9753d3e96251031a9cea1b",
+          "device_id": "<device>",
+          "osig": "<secret>"
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id5>"
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "card.update",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card_id": "c_<id4>",
+          "state": "done",
+          "resolution": {
+            "action": "primary",
+            "at": "2026-10-28T15:00:00.000Z",
+            "edited": false,
+            "payload_hash": "sha256:741541b2da51fe236b2f6b60b1b81bfae5c0e0cd5c9753d3e96251031a9cea1b"
+          },
+          "relay": {
+            "seq": 2
+          }
+        }
+      }
+    ],
+    "state": {
+      "connection": "online",
+      "devicePinned": true,
+      "lastSeq": 0,
+      "serverSeq": 0,
+      "readySeq": 1,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "unread": {},
+      "readUpto": {},
+      "messages": {},
+      "cards": [],
+      "statuses": {},
+      "catchup": null,
+      "outbox": 0,
+      "meta": {
+        "retryAt": null,
+        "authFailed": false,
+        "authReason": null,
+        "queuedIds": [],
+        "failed": {},
+        "networkOffline": false,
+        "lastCloseCode": null
+      }
+    }
+  },
+  "card_second_tap": {
+    "steps": [
+      {
+        "dir": "event",
+        "text": "socket 1 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id4>",
+            "kind": "generic",
+            "title": "Send the invoice to alex@example.com (2)",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:ff327b765800e297ba07fbf88e3806c563c541ea758b3d2a288a163bd4e835cc",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1
+          }
+        }
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "id": "<id5>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "type": "card.resolve",
+          "card_id": "c_<id4>",
+          "action": "primary",
+          "payload_hash": "sha256:ff327b765800e297ba07fbf88e3806c563c541ea758b3d2a288a163bd4e835cc",
+          "device_id": "<device>",
+          "osig": "<secret>"
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id5>"
+        }
+      },
+      {
+        "dir": "note",
+        "text": "second tap on the same card"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "type": "card.resolve",
+          "card_id": "c_<id4>",
+          "action": "kill",
+          "payload_hash": "sha256:ff327b765800e297ba07fbf88e3806c563c541ea758b3d2a288a163bd4e835cc",
+          "device_id": "<device>",
+          "osig": "<secret>"
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id8>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id7>",
+          "code": "card_not_pending",
+          "message": "card is resolved"
+        }
+      },
+      {
+        "dir": "note",
+        "text": "second tap outcome: rejected card_not_pending"
+      }
+    ],
+    "state": {
+      "connection": "online",
+      "devicePinned": true,
+      "lastSeq": 0,
+      "serverSeq": 0,
+      "readySeq": 1,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "unread": {},
+      "readUpto": {},
+      "messages": {},
+      "cards": [],
+      "statuses": {},
+      "catchup": null,
+      "outbox": 0,
+      "meta": {
+        "retryAt": null,
+        "authFailed": false,
+        "authReason": null,
+        "queuedIds": [],
+        "failed": {},
+        "networkOffline": false,
+        "lastCloseCode": null
+      }
+    }
+  },
+  "bad_signature": {
+    "steps": [
+      {
+        "dir": "event",
+        "text": "socket 1 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          }
+        }
+      },
+      {
+        "dir": "note",
+        "text": "a frame that fails the protocol schema is dropped"
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "message.stored",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "message": "not a message"
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "not-an-id"
+        }
+      },
+      {
+        "dir": "note",
+        "text": "the Mac refuses a message still held in the queue: it is kept with a retry"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "message",
+          "id": "<id5>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "thread_id": "general",
+          "client_msg_id": "m_<id6>",
+          "text": "Signed wrong",
+          "attachments": [],
+          "device_id": "<device>",
+          "osig": "<secret>"
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id5>",
+          "code": "sig_invalid",
+          "message": "signature does not verify"
+        }
+      },
+      {
+        "dir": "note",
+        "text": "the Mac refuses a card tap that is not held anywhere: the owner is told it was dropped"
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "card.create",
+          "id": "<id8>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "card": {
+            "id": "c_<id9>",
+            "kind": "generic",
+            "title": "Send the invoice to alex@example.com (4)",
+            "destination": [],
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve",
+            "kill_label": "Kill example",
+            "allow_edit": true,
+            "allow_revise": true,
+            "risk": "low",
+            "origin": "chat",
+            "payload_hash": "sha256:fa76adec012ea6a8a820bf359fa6b9a3c04986519e58382d239ebc11df97c9a5",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "expires_at": "2026-10-29T15:00:00.000Z",
+            "thread_id": "general"
+          },
+          "relay": {
+            "seq": 1
+          }
+        }
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "id": "<id10>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "type": "card.resolve",
+          "card_id": "c_<id9>",
+          "action": "primary",
+          "payload_hash": "sha256:fa76adec012ea6a8a820bf359fa6b9a3c04986519e58382d239ebc11df97c9a5",
+          "device_id": "<device>",
+          "osig": "<secret>"
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id11>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id10>",
+          "code": "sig_invalid",
+          "message": "signature does not verify"
+        }
+      },
+      {
+        "dir": "note",
+        "text": "card tap outcome: rejected sig_invalid"
+      },
+      {
+        "dir": "note",
+        "text": "an error for a frame this client never sent is dropped the same way"
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id12>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id13>",
+          "code": "sig_invalid",
+          "message": "signature does not verify"
+        }
+      },
+      {
+        "dir": "note",
+        "text": "held message outcome so far: sent"
+      },
+      {
+        "dir": "note",
+        "text": "the relay refuses the signature on the next sign-in: close 4401"
+      },
+      {
+        "dir": "event",
+        "text": "socket 1 closed 4401 bad signature"
+      }
+    ],
+    "state": {
+      "connection": "offline",
+      "devicePinned": true,
+      "lastSeq": 0,
+      "serverSeq": 0,
+      "readySeq": 1,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "unread": {},
+      "readUpto": {},
+      "messages": {
+        "general": [
+          {
+            "id": "m_<id1>",
+            "thread_id": "general",
+            "author": "owner",
+            "kind": "text",
+            "text": "Signed wrong",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          },
+          {
+            "id": "m_<id2>",
+            "thread_id": "general",
+            "author": "system",
+            "kind": "text",
+            "text": "A message failed its security check and was kept. Tap it to retry.",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          },
+          {
+            "id": "m_<id3>",
+            "thread_id": "general",
+            "author": "system",
+            "kind": "text",
+            "text": "A message failed its security check and was dropped.",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          },
+          {
+            "id": "m_<id4>",
+            "thread_id": "general",
+            "author": "system",
+            "kind": "text",
+            "text": "A message failed its security check and was dropped.",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          }
+        ]
+      },
+      "cards": [],
+      "statuses": {},
+      "catchup": null,
+      "outbox": 1,
+      "meta": {
+        "retryAt": null,
+        "authFailed": true,
+        "authReason": "bad signature",
+        "queuedIds": ["m_<id1>"],
+        "failed": {
+          "m_<id1>": "retry"
+        },
+        "networkOffline": false,
+        "lastCloseCode": 4401
+      }
+    }
+  },
+  "wrong_device": {
+    "steps": [
+      {
+        "dir": "event",
+        "text": "socket 1 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          }
+        }
+      },
+      {
+        "dir": "note",
+        "text": "another tab replaced this device key"
+      },
+      {
+        "dir": "event",
+        "text": "socket 1 closed 4401 device_changed"
+      },
+      {
+        "dir": "note",
+        "text": "a send while the relay does not know this device"
+      },
+      {
+        "dir": "note",
+        "text": "send result: queued"
+      }
+    ],
+    "state": {
+      "connection": "offline",
+      "devicePinned": true,
+      "lastSeq": 0,
+      "serverSeq": 0,
+      "readySeq": 1,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "unread": {},
+      "readUpto": {},
+      "messages": {
+        "general": [
+          {
+            "id": "m_<id1>",
+            "thread_id": "general",
+            "author": "owner",
+            "kind": "text",
+            "text": "Let me in",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:01:00.000Z"
+          }
+        ]
+      },
+      "cards": [],
+      "statuses": {},
+      "catchup": null,
+      "outbox": 1,
+      "meta": {
+        "retryAt": null,
+        "authFailed": true,
+        "authReason": "device_changed",
+        "queuedIds": ["m_<id1>"],
+        "failed": {},
+        "networkOffline": false,
+        "lastCloseCode": 4401
+      }
+    }
+  },
+  "wrong_device_not_pinned": {
+    "steps": [
+      {
+        "dir": "event",
+        "text": "socket 1 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          }
+        }
+      },
+      {
+        "dir": "note",
+        "text": "the relay says the Mac has not approved this device"
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "code": "device_not_pinned",
+          "message": "this device is not pinned by your Mac yet"
+        }
+      },
+      {
+        "dir": "note",
+        "text": "a send now waits for the Mac"
+      },
+      {
+        "dir": "note",
+        "text": "send result: held_unpinned"
+      }
+    ],
+    "state": {
+      "connection": "online",
+      "devicePinned": false,
+      "lastSeq": 0,
+      "serverSeq": 0,
+      "readySeq": 1,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "unread": {},
+      "readUpto": {},
+      "messages": {
+        "general": [
+          {
+            "id": "m_<id1>",
+            "thread_id": "general",
+            "author": "owner",
+            "kind": "text",
+            "text": "Is anyone there",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          }
+        ]
+      },
+      "cards": [],
+      "statuses": {},
+      "catchup": null,
+      "outbox": 1,
+      "meta": {
+        "retryAt": null,
+        "authFailed": false,
+        "authReason": null,
+        "queuedIds": ["m_<id1>"],
+        "failed": {},
+        "networkOffline": false,
+        "lastCloseCode": null
+      }
+    }
+  },
+  "unknown_frame": {
+    "steps": [
+      {
+        "dir": "event",
+        "text": "socket 1 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "no.such.frame",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "x": 1
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": "this is not json"
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ping",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "nonce": "abcd1234"
+        }
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "id": "<id5>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "type": "pong",
+          "nonce": "abcd1234"
+        }
+      }
+    ],
+    "state": {
+      "connection": "online",
+      "devicePinned": true,
+      "lastSeq": 0,
+      "serverSeq": 0,
+      "readySeq": 1,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "unread": {},
+      "readUpto": {},
+      "messages": {
+        "general": [
+          {
+            "id": "m_unknown-<id1>",
+            "thread_id": "general",
+            "author": "system",
+            "kind": "text",
+            "text": "Something arrived that this version of Talos can't show. Update the app to see it.",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          }
+        ]
+      },
+      "cards": [],
+      "statuses": {},
+      "catchup": null,
+      "outbox": 0,
+      "meta": {
+        "retryAt": null,
+        "authFailed": false,
+        "authReason": null,
+        "queuedIds": [],
+        "failed": {},
+        "networkOffline": false,
+        "lastCloseCode": null
+      }
+    }
+  },
+  "reconnect": {
+    "steps": [
+      {
+        "dir": "event",
+        "text": "socket 1 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          }
+        }
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "message",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "thread_id": "general",
+          "client_msg_id": "m_<id4>",
+          "text": "Sent just before the link dropped",
+          "attachments": [],
+          "device_id": "<device>",
+          "osig": "<secret>"
+        }
+      },
+      {
+        "dir": "note",
+        "text": "the link drops before the ack"
+      },
+      {
+        "dir": "event",
+        "text": "socket 1 closed 1006"
+      },
+      {
+        "dir": "event",
+        "text": "socket 2 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id5>",
+          "ts": "2026-10-28T15:00:01.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "note",
+        "text": "back online with a catch-up"
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id6>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 3,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          },
+          "open_cards": [
+            {
+              "id": "c_<id7>",
+              "kind": "generic",
+              "title": "Send the invoice to alex@example.com (3)",
+              "destination": [],
+              "body_format": "plain",
+              "fields": [],
+              "attachments": [],
+              "primary_label": "Approve",
+              "kill_label": "Kill example",
+              "allow_edit": true,
+              "allow_revise": true,
+              "risk": "low",
+              "origin": "chat",
+              "payload_hash": "sha256:c081cc44492f46f7cd14d7fed4b8e57f6caeb488bbf304b26ffa0797daee9024",
+              "state": "pending",
+              "created_at": "2026-10-28T15:00:00.000Z",
+              "expires_at": "2026-10-29T15:00:00.000Z",
+              "thread_id": "general"
+            }
+          ]
+        }
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "message",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "thread_id": "general",
+          "client_msg_id": "m_<id4>",
+          "text": "Sent just before the link dropped",
+          "attachments": [],
+          "device_id": "<device>",
+          "osig": "<secret>"
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "catchup.batch",
+          "id": "<id8>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "from_seq": 1,
+          "to_seq": 3,
+          "frames": [],
+          "more": false
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id9>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id3>",
+          "seq": 3
+        }
+      }
+    ],
+    "state": {
+      "connection": "online",
+      "devicePinned": true,
+      "lastSeq": 3,
+      "serverSeq": 3,
+      "readySeq": 2,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "unread": {},
+      "readUpto": {},
+      "messages": {
+        "general": [
+          {
+            "id": "m_<id1>",
+            "thread_id": "general",
+            "author": "owner",
+            "kind": "text",
+            "text": "Sent just before the link dropped",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "receipt": "sent"
+          }
+        ]
+      },
+      "cards": [
+        {
+          "id": "c_<id2>",
+          "thread_id": "general",
+          "kind": "generic",
+          "title": "Send the invoice to alex@example.com (3)",
+          "destination": [],
+          "body_format": "plain",
+          "fields": [],
+          "attachments": [],
+          "primary_label": "Approve",
+          "kill_label": "Kill example",
+          "allow_edit": true,
+          "allow_revise": true,
+          "risk": "low",
+          "origin": "chat",
+          "payload_hash": "sha256:c081cc44492f46f7cd14d7fed4b8e57f6caeb488bbf304b26ffa0797daee9024",
+          "state": "pending",
+          "created_at": "2026-10-28T15:00:00.000Z",
+          "expires_at": "2026-10-29T15:00:00.000Z"
+        }
+      ],
+      "statuses": {},
+      "catchup": null,
+      "outbox": 0,
+      "meta": {
+        "retryAt": null,
+        "authFailed": false,
+        "authReason": null,
+        "queuedIds": [],
+        "failed": {},
+        "networkOffline": false,
+        "lastCloseCode": null
+      }
+    }
+  },
+  "device_not_pinned_held": {
+    "steps": [
+      {
+        "dir": "event",
+        "text": "socket 1 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0
+          }
+        }
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "message",
+          "id": "<id3>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "thread_id": "general",
+          "client_msg_id": "m_<id4>",
+          "text": "Sent before the Mac said no",
+          "attachments": [],
+          "device_id": "<device>",
+          "osig": "<secret>"
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "error",
+          "id": "<id5>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id3>",
+          "code": "device_not_pinned",
+          "message": "this device is not pinned yet"
+        }
+      }
+    ],
+    "state": {
+      "connection": "online",
+      "devicePinned": false,
+      "lastSeq": 0,
+      "serverSeq": 0,
+      "readySeq": 1,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0
+      },
+      "unread": {},
+      "readUpto": {},
+      "messages": {
+        "general": [
+          {
+            "id": "m_<id1>",
+            "thread_id": "general",
+            "author": "owner",
+            "kind": "text",
+            "text": "Sent before the Mac said no",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          }
+        ]
+      },
+      "cards": [],
+      "statuses": {},
+      "catchup": null,
+      "outbox": 1,
+      "meta": {
+        "retryAt": null,
+        "authFailed": false,
+        "authReason": null,
+        "queuedIds": ["m_<id1>"],
+        "failed": {},
+        "networkOffline": false,
+        "lastCloseCode": null
+      }
+    }
+  },
+  "message_resign": {
+    "steps": [
+      {
+        "dir": "event",
+        "text": "socket 1 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id1>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id2>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0,
+            "features": ["original-ts/1"]
+          }
+        }
+      },
+      {
+        "dir": "note",
+        "text": "the link drops and a message is written while offline"
+      },
+      {
+        "dir": "event",
+        "text": "socket 1 closed 1006"
+      },
+      {
+        "dir": "note",
+        "text": "the phone sleeps for seven days"
+      },
+      {
+        "dir": "event",
+        "text": "socket 2 opened"
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "hello",
+          "id": "<id3>",
+          "ts": "2026-11-04T15:00:01.000Z",
+          "role": "app",
+          "device_id": "<device>",
+          "last_seq": 0,
+          "visible": true,
+          "client": {
+            "version": "0.0.0",
+            "standalone": true,
+            "platform": "replay"
+          }
+        }
+      },
+      {
+        "dir": "note",
+        "text": "back online: the queued message is signed again before it is sent"
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ready",
+          "id": "<id4>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "session_id": "<secret>",
+          "policy": {
+            "max_frame_bytes": 262144,
+            "ping_ms": 25000
+          },
+          "server_seq": 0,
+          "presence": {
+            "bridge_online": true,
+            "last_seen": "2026-10-28T15:00:00.000Z",
+            "queue_depth": 0,
+            "features": ["original-ts/1"]
+          }
+        }
+      },
+      {
+        "dir": "app->relay",
+        "frame": {
+          "v": 1,
+          "type": "message",
+          "id": "<id5>",
+          "ts": "2026-11-04T14:00:05.000Z",
+          "thread_id": "general",
+          "client_msg_id": "m_<id6>",
+          "text": "Written on the plane",
+          "attachments": [],
+          "device_id": "<device>",
+          "original_ts": "2026-10-28T15:00:00.000Z",
+          "osig": "<secret>"
+        }
+      },
+      {
+        "dir": "relay->app",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id7>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "ref": "<id5>",
+          "seq": 1
+        }
+      }
+    ],
+    "state": {
+      "connection": "online",
+      "devicePinned": true,
+      "lastSeq": 0,
+      "serverSeq": 0,
+      "readySeq": 2,
+      "presence": {
+        "bridge_online": true,
+        "last_seen": "2026-10-28T15:00:00.000Z",
+        "queue_depth": 0,
+        "features": ["original-ts/1"]
+      },
+      "unread": {},
+      "readUpto": {},
+      "messages": {
+        "general": [
+          {
+            "id": "m_<id1>",
+            "thread_id": "general",
+            "author": "owner",
+            "kind": "text",
+            "text": "Written on the plane",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z",
+            "receipt": "sent"
+          }
+        ]
+      },
+      "cards": [],
+      "statuses": {},
+      "catchup": null,
+      "outbox": 0,
+      "meta": {
+        "retryAt": null,
+        "authFailed": false,
+        "authReason": null,
+        "queuedIds": [],
+        "failed": {},
+        "networkOffline": false,
+        "lastCloseCode": null
+      }
+    }
+  }
+}

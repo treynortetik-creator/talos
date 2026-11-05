@@ -1,0 +1,49 @@
+{
+  "v": 1,
+  "cell": { "2x": [192, 208], "1x": [96, 104] },
+  "anchor": [96, 200],
+  "clips": {
+    "idle": { "atlas": "talos", "row": 0, "frames": [[0, 3000], [1, 110], [2, 110]], "loop": true, "still": 0 },
+    "running-right": {
+      "atlas": "talos",
+      "row": 1,
+      "frames": [[0, 140], [1, 140], [2, 140], [3, 140]],
+      "loop": true,
+      "still": 0
+    },
+    "running-left": {
+      "atlas": "talos",
+      "row": 2,
+      "frames": [[0, 140], [1, 140], [2, 140], [3, 140]],
+      "loop": true,
+      "still": 0
+    },
+    "waving": {
+      "atlas": "talos",
+      "row": 3,
+      "frames": [[0, 140], [1, 120], [2, 120], [3, 200]],
+      "loop": false,
+      "still": 0
+    },
+    "jumping": {
+      "atlas": "talos",
+      "row": 4,
+      "frames": [[0, 110], [1, 110], [2, 110], [3, 110], [4, 110], [5, 110]],
+      "loop": false,
+      "still": 0
+    },
+    "failed": { "atlas": "talos", "row": 5, "frames": [[0, 140], [1, 140], [2, 320]], "loop": false, "still": 2 },
+    "waiting": { "atlas": "talos", "row": 6, "frames": [[0, 300], [1, 300]], "loop": true, "still": 0 },
+    "running": {
+      "atlas": "talos",
+      "row": 7,
+      "frames": [[0, 200], [1, 200], [2, 200], [3, 200]],
+      "loop": false,
+      "still": 3
+    },
+    "review": { "atlas": "talos", "row": 8, "frames": [[0, 200], [1, 200], [2, 200]], "loop": false, "still": 0 },
+    "talking": { "atlas": "talos-ext", "row": 0, "frames": [[0, 150], [1, 150], [2, 150]], "loop": true, "still": 0 },
+    "statue": { "atlas": "talos-ext", "row": 1, "frames": [[0, 1000]], "loop": false, "still": 0 },
+    "landed": { "atlas": "talos-ext", "row": 2, "frames": [[0, 100], [1, 100], [2, 120]], "loop": false, "still": 2 }
+  }
+}

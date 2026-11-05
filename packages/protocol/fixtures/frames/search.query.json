@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "type": "search.query",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T435",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T436",
+  "q": "release notes",
+  "filters": {
+    "thread_ids": [],
+    "from": "any",
+    "has_file": null,
+    "after": null,
+    "before": null
+  },
+  "sort": "relevance",
+  "cursor": null,
+  "limit": 20,
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "DIPHfNbXXTNQxNmmheks34S2o4c2GT3FSUEIeIC2OGSALXVtZbe1zDiVpoPHkrHVgccXALLK75HwfDXMJFIdgQ"
+}

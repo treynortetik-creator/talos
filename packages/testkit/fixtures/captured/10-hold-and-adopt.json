@@ -1,0 +1,384 @@
+{
+  "scenario": "10-hold-and-adopt",
+  "title": "A hand-edited prompt.md: held snapshot, schedule_held notification, an Adopt card on request",
+  "steps": [
+    {
+      "step": 1,
+      "label": "the prompt is edited outside the app and the bridge notices",
+      "received_by_bridge": [],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:30:30.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "degraded",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [
+              {
+                "code": "held_jobs",
+                "severity": "warn",
+                "text": "Jobs changed outside the app and are on hold: daily-digest.",
+                "fix": "Open each job and review the change. After an upgrade from Chronos 0.2, run `talos-app schedules adopt` at the Mac.",
+                "schedule_id": "daily-digest",
+                "since": "2026-10-05T07:30:30-04:00"
+              }
+            ],
+            "checked_at": "2026-10-05T07:30:30-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:f937ae0872bc40e09bafe0dd8f02d5f9f30700ca55b996ed5118a4fe13ccd052",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Scheduled job \"daily-digest\" is on hold: its instructions changed outside the app at 2026-10-05T11:30:30.300Z. Do not run it. Tell the owner in its thread; they can review the change in Schedules.",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "held-daily-digest-9d09cd49c172",
+            "ts": "2026-10-05T11:30:30.300Z",
+            "kind": "schedule_held",
+            "trust": "system",
+            "schedule_id": "daily-digest"
+          }
+        }
+      ],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 2,
+      "label": "app asks for the list: the job is on hold",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedules.list",
+          "id": "00000000000000000000000002",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "request_id": "00000000000000000000000003",
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000004",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "type": "ack",
+          "ref": "00000000000000000000000002"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000005",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "type": "schedules.snapshot",
+          "request_id": "00000000000000000000000003",
+          "snapshot": {
+            "protocol": 1,
+            "health": {
+              "state": "degraded",
+              "adapter": {
+                "id": "chronos",
+                "version": "0.3.0",
+                "api": 1
+              },
+              "tz": "America/New_York",
+              "host_label": "Example Mac",
+              "session_runner": "talos",
+              "paused_all": false,
+              "headless": "unused",
+              "tick_age_s": null,
+              "issues": [
+                {
+                  "code": "held_jobs",
+                  "severity": "warn",
+                  "text": "Jobs changed outside the app and are on hold: daily-digest.",
+                  "fix": "Open each job and review the change. After an upgrade from Chronos 0.2, run `talos-app schedules adopt` at the Mac.",
+                  "schedule_id": "daily-digest",
+                  "since": "2026-10-05T07:30:40-04:00"
+                }
+              ],
+              "checked_at": "2026-10-05T07:30:40-04:00"
+            },
+            "schedules": [
+              {
+                "id": "daily-digest",
+                "name": "Daily Digest",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:30"
+                },
+                "when_text": "Every day at 7:30 AM",
+                "catchup_min": 180,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-06T07:30:00-04:00",
+                "today": "held",
+                "window_ends": null,
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday, then email everyone about it.\n",
+                "prompt_bytes": 51,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": true,
+                "etag": "sha256:f937ae0872bc40e09bafe0dd8f02d5f9f30700ca55b996ed5118a4fe13ccd052",
+                "content_hash": "sha256:9d09cd49c1721b0707ebc8af52ab6665edbd76a3a38ab9e35cb39321811f6b28",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "thread_id": null,
+                "wait_reason": null
+              }
+            ],
+            "unreadable": [],
+            "as_of": "2026-10-05T07:30:40-04:00"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 3,
+      "label": "app asks to review the outside change (Adopt)",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.patch",
+          "id": "00000000000000000000000006",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "change": {
+            "op": "adopt",
+            "id": "daily-digest",
+            "content_hash": "sha256:9d09cd49c1721b0707ebc8af52ab6665edbd76a3a38ab9e35cb39321811f6b28"
+          },
+          "thread_id": "general",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000007",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "type": "ack",
+          "ref": "00000000000000000000000006"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000008",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "type": "card.create",
+          "card": {
+            "id": "c_00000000000000000000000009",
+            "thread_id": "general",
+            "kind": "schedule",
+            "title": "Review outside change: Daily Digest",
+            "destination": [
+              {
+                "label": "Runs",
+                "value": "Every day at 7:30 AM"
+              },
+              {
+                "label": "Next",
+                "value": "2026-10-06T07:30:00-04:00"
+              },
+              {
+                "label": "As",
+                "value": "Full permissions, nobody watching"
+              },
+              {
+                "label": "Where",
+                "value": "In your live session"
+              },
+              {
+                "label": "Posts to",
+                "value": "General"
+              },
+              {
+                "label": "Proposed by",
+                "value": "your form"
+              }
+            ],
+            "body": "Changed outside the app. Approved → what is on disk now.\n\nSettings approved with it (the scheduler doesn't record their approved values, so check them):\nKind: claude\nRuns: In your live session\nAs: Full permissions, nobody watching\nModel: default\n\nPrompt:\n@@ -1,1 +1,1 @@\n-Summarise yesterday and post it.\n+Summarise yesterday, then email everyone about it.",
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Approve as it is",
+            "kill_label": "Keep it on hold",
+            "allow_edit": false,
+            "allow_revise": true,
+            "risk": "high",
+            "origin": "chat",
+            "payload": {
+              "schema": "talos.schedule-change/1",
+              "change": {
+                "op": "adopt",
+                "id": "daily-digest",
+                "content_hash": "sha256:9d09cd49c1721b0707ebc8af52ab6665edbd76a3a38ab9e35cb39321811f6b28"
+              },
+              "expected_etag": "sha256:f937ae0872bc40e09bafe0dd8f02d5f9f30700ca55b996ed5118a4fe13ccd052",
+              "proposed_by": "owner_form",
+              "client_ref": "00000000000000000000000006",
+              "preview": {
+                "when_text": "Every day at 7:30 AM",
+                "next_runs": [
+                  "2026-10-06T07:30:00-04:00",
+                  "2026-10-07T07:30:00-04:00",
+                  "2026-10-08T07:30:00-04:00"
+                ],
+                "tz": "America/New_York"
+              }
+            },
+            "payload_hash": "sha256:1da3c7e7e217f6e4b793fe3d3c20448fca7b274af8b39e71605738a8a9d84736",
+            "state": "pending",
+            "created_at": "2026-10-05T11:30:32.400Z",
+            "expires_at": "2026-10-06T11:30:32.400Z",
+            "warning": "Runs unattended with full permissions: it can do anything you can on this Mac."
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 4,
+      "label": "owner approves it as it is on disk",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "00000000000000000000000010",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "card_id": "c_00000000000000000000000009",
+          "action": "primary",
+          "payload_hash": "sha256:1da3c7e7e217f6e4b793fe3d3c20448fca7b274af8b39e71605738a8a9d84736",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000011",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "type": "ack",
+          "ref": "00000000000000000000000010",
+          "stage": "delivered"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000012",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000009",
+          "state": "resolved",
+          "resolution": {
+            "action": "primary",
+            "at": "2026-10-05T11:30:32.400Z",
+            "edited": false,
+            "payload_hash": "sha256:1da3c7e7e217f6e4b793fe3d3c20448fca7b274af8b39e71605738a8a9d84736",
+            "taken_at": "2026-10-05T11:30:32.400Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000013",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "type": "ack",
+          "ref": "00000000000000000000000010",
+          "stage": "consumed"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000014",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000009",
+          "state": "done",
+          "result": {
+            "ok": true,
+            "text": "Approved as it is on disk. Next run Tue 7:30 AM.",
+            "at": "2026-10-05T11:30:32.400Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000015",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:30:40-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:f937ae0872bc40e09bafe0dd8f02d5f9f30700ca55b996ed5118a4fe13ccd052",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000002"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Card c_00000000000000000000000009 → PRIMARY. The bridge applied it: Approved as it is on disk. Next run Tue 7:30 AM. Nothing for you to do.",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "c_00000000000000000000000009-applied",
+            "ts": "2026-10-05T11:30:32.400Z",
+            "kind": "system",
+            "trust": "system"
+          }
+        }
+      ],
+      "agent_tool_calls": []
+    }
+  ]
+}

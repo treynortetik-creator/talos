@@ -1,0 +1,47 @@
+{
+  "exit": 0,
+  "out": {
+    "schedule": {
+      "id": "old-job",
+      "name": "Old Job",
+      "description": "from 0.2",
+      "kind": "claude",
+      "when": {
+        "type": "daily",
+        "time": "07:00"
+      },
+      "when_text": "Every day at 7:00 AM",
+      "catchup_min": 180,
+      "enabled": true,
+      "paused": false,
+      "runner": "headless",
+      "permissions": "full",
+      "allowed_tools": [],
+      "model": null,
+      "notify": "failure",
+      "triggers_count": 0,
+      "next_run": "2026-10-06T07:00:00-04:00",
+      "today": "waiting",
+      "ds": "2026-10-05",
+      "window_ends": "2026-10-05T10:00:00-04:00",
+      "last_run": {
+        "ds": "2026-10-04",
+        "status": "ok",
+        "has_report": false
+      },
+      "prompt_preview": "Do the old thing.\n",
+      "prompt_bytes": 18,
+      "editable": true,
+      "read_only_reason": null,
+      "changed_outside": true,
+      "etag": "sha256:a2ffc465f479194a1b8855314e39277707e58e7a015258324567430527f7ad28",
+      "content_hash": "sha256:1e52c72d8954a9e2b3109a3ee78e449f3130ffa9db828e7a4ac8e8da7d7a7c62",
+      "state_rev": "sha256:8b7925b9f5f9c6420b7fbcb30ed8a2a72a7769582f78d8b39a2c271b8e7c9714"
+    },
+    "prompt": "Do the old thing.\n",
+    "prompt_truncated": false,
+    "guard": null,
+    "next_runs": ["2026-10-06T07:00:00-04:00", "2026-10-07T07:00:00-04:00", "2026-10-08T07:00:00-04:00"],
+    "runs": []
+  }
+}

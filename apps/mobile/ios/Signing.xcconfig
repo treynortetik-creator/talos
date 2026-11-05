@@ -1,0 +1,15 @@
+// Applied to every target through project.yml. Committed defaults only: no Apple team, no personal bundle id.
+// To build for a real iPhone, create the untracked file ios/Local.xcconfig (gitignored) next to this one:
+//   DEVELOPMENT_TEAM = <your 10-character Team ID, Xcode > Settings > Accounts > your team>
+//   TALOS_BUNDLE_ID = com.<you>.talos        // must be unique to you; the share extension becomes <id>.share
+//   TALOS_APP_ENTITLEMENTS = App/AppPush.entitlements   // ONLY with the paid Apple program: adds push (aps-environment)
+//   TALOS_RELAY_HOST = <relay host>   // ONLY with AppPush.entitlements: the relay's bare host (no https://, no path), equal to its RP_ID.
+//                                     // Passkeys in the app need it; the relay needs APNS_TEAM_ID + APNS_BUNDLE_ID (docs/IOS-PUSH.md).
+TALOS_BUNDLE_ID = app.talos.shell
+// Never resolves to a real host: with AppPush.entitlements and no TALOS_RELAY_HOST in Local.xcconfig the build still signs, the app
+// is simply not associated with your relay, and the passkey prompt is refused. The page cannot see entitlements (only the relay's
+// file), so it shows the "prompt didn't finish" line, which names both causes. Same for a free-tier build on a configured relay.
+TALOS_RELAY_HOST = unset.invalid
+// Free-tier default: Keychain sharing only. A free Personal Team cannot sign the push entitlement.
+TALOS_APP_ENTITLEMENTS = App/App.entitlements
+#include? "Local.xcconfig"

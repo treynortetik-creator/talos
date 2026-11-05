@@ -1,0 +1,43 @@
+{
+  "exit": 0,
+  "out": {
+    "schedule": {
+      "id": "tiny-catchup",
+      "name": "tiny-catchup",
+      "description": "hand",
+      "kind": "claude",
+      "when": {
+        "type": "daily",
+        "time": "07:30"
+      },
+      "when_text": "Every day at 7:30 AM",
+      "catchup_min": 5,
+      "enabled": true,
+      "paused": false,
+      "runner": "headless",
+      "permissions": "full",
+      "allowed_tools": [],
+      "model": null,
+      "notify": "failure",
+      "triggers_count": 0,
+      "next_run": "2026-10-06T07:30:00-04:00",
+      "today": "missed",
+      "ds": "2026-10-05",
+      "window_ends": null,
+      "last_run": null,
+      "prompt_preview": "Do it.\n",
+      "prompt_bytes": 7,
+      "editable": true,
+      "read_only_reason": null,
+      "changed_outside": true,
+      "etag": "sha256:0e837238dcd7281577df88b0e401a3bfbbcf0c7c057941de1f2bb0bc82b40284",
+      "content_hash": "sha256:deec380627fdb2101b396f185f696e67d06ddf8c52df1c03e7722463b688895c",
+      "state_rev": "sha256:e73ec4c7e6eb75693727f2e6b5fa4ff2be332c186c1c048c242d79b4c923f684"
+    },
+    "prompt": "Do it.\n",
+    "prompt_truncated": false,
+    "guard": null,
+    "next_runs": ["2026-10-06T07:30:00-04:00", "2026-10-07T07:30:00-04:00", "2026-10-08T07:30:00-04:00"],
+    "runs": []
+  }
+}

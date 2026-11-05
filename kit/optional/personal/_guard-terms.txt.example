@@ -1,0 +1,6 @@
+# Terms that only appear in your private life: one per line. This file is YOURS: it stays in the vault,
+# is never committed, and is never shipped. Example lines (delete them and write your own):
+#   a family members first name
+#   a clinic or a doctor
+#   a hometown
+# hooks/check-vault.py asks before any of these terms is written outside the vault.

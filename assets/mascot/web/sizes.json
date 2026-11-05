@@ -1,0 +1,81 @@
+{
+ "idle": {
+  "sheet_kb": 948.4,
+  "webp_kb": 720.9,
+  "webm_kb": 168.7,
+  "mov_kb": 431.7,
+  "json_kb": 0.4,
+  "frames": 72
+ },
+ "working": {
+  "sheet_kb": 678.6,
+  "webp_kb": 481.8,
+  "webm_kb": 192.7,
+  "mov_kb": 323.9,
+  "json_kb": 0.41,
+  "frames": 48
+ },
+ "talking": {
+  "sheet_kb": 672.9,
+  "webp_kb": 480.1,
+  "webm_kb": 173.2,
+  "mov_kb": 315.0,
+  "json_kb": 0.95,
+  "frames": 48
+ },
+ "talking-glow": {
+  "sheet_kb": 87.2,
+  "webp_kb": 67.0,
+  "webm_kb": 28.2,
+  "mov_kb": 110.3,
+  "json_kb": 0.47,
+  "frames": 48
+ },
+ "thinking": {
+  "sheet_kb": 815.3,
+  "webp_kb": 632.7,
+  "webm_kb": 141.5,
+  "mov_kb": 409.4,
+  "json_kb": 0.41,
+  "frames": 72
+ },
+ "beaming": {
+  "sheet_kb": 465.0,
+  "webp_kb": 288.5,
+  "webm_kb": 133.6,
+  "mov_kb": 224.3,
+  "json_kb": 0.42,
+  "frames": 36
+ },
+ "worried": {
+  "sheet_kb": 558.8,
+  "webp_kb": 266.8,
+  "webm_kb": 112.7,
+  "mov_kb": 246.8,
+  "json_kb": 0.42,
+  "frames": 48
+ },
+ "wave": {
+  "sheet_kb": 644.2,
+  "webp_kb": 475.0,
+  "webm_kb": 169.6,
+  "mov_kb": 313.0,
+  "json_kb": 0.41,
+  "frames": 48
+ },
+ "rounds": {
+  "sheet_kb": 444.0,
+  "webp_kb": 303.3,
+  "webm_kb": 161.3,
+  "mov_kb": 231.5,
+  "json_kb": 0.4,
+  "frames": 32
+ },
+ "_total": {
+  "sheet_kb": 5314.4,
+  "webp_kb": 3716.1,
+  "webm_kb": 1281.5,
+  "mov_kb": 2605.9,
+  "json_kb": 4.3
+ }
+}

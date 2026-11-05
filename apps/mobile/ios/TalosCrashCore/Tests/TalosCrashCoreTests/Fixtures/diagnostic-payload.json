@@ -1,0 +1,64 @@
+{
+  "timeStampBegin": "2026-11-01 08:00:00",
+  "timeStampEnd": "2026-11-02 08:00:00",
+  "crashDiagnostics": [
+    {
+      "version": "1.0.0",
+      "diagnosticMetaData": {
+        "appVersion": "1.0",
+        "appBuildVersion": "12",
+        "exceptionType": 1,
+        "exceptionCode": 1,
+        "signal": 11,
+        "terminationReason": "Namespace SIGNAL, Code 11 Segmentation fault: 11",
+        "platformArchitecture": "arm64",
+        "osVersion": "iPhone OS 17.6 (21G80)",
+        "deviceType": "iPhone15,2"
+      },
+      "callStackTree": {
+        "callStackPerThread": true,
+        "callStacks": [
+          {
+            "threadAttributed": false,
+            "callStackRootFrames": [
+              { "binaryUUID": "11111111-1111-1111-1111-111111111111", "offsetIntoBinaryTextSegment": 1, "sampleCount": 1, "binaryName": "Other", "address": 4300000001 }
+            ]
+          },
+          {
+            "threadAttributed": true,
+            "callStackRootFrames": [
+              {
+                "binaryUUID": "22222222-2222-2222-2222-222222222222",
+                "offsetIntoBinaryTextSegment": 4096,
+                "sampleCount": 1,
+                "binaryName": "Talos",
+                "address": 4300004096,
+                "subFrames": [
+                  { "binaryUUID": "33333333-3333-3333-3333-333333333333", "offsetIntoBinaryTextSegment": 512, "sampleCount": 1, "binaryName": "libsystem_kernel.dylib", "address": 6500000512 }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "this entry is not an object at all",
+    {
+      "version": "1.0.0",
+      "diagnosticMetaData": { "exceptionType": 99 },
+      "callStackTree": "a newer MetricKit that changed this field"
+    }
+  ],
+  "hangDiagnostics": [
+    {
+      "version": "1.0.0",
+      "diagnosticMetaData": { "appVersion": "1.0", "appBuildVersion": "12" },
+      "callStackTree": {
+        "callStacks": [
+          { "callStackRootFrames": [ { "binaryName": "Talos", "offsetIntoBinaryTextSegment": 8192, "sampleCount": 3, "address": 4300008192 } ] }
+        ]
+      }
+    }
+  ],
+  "someFutureDiagnostics": [ { "anything": true } ]
+}

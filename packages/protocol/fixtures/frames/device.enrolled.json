@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "type": "device.enrolled",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T41M",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "device": {
+    "id": "d_rjxnk4xufxem5xago5zd",
+    "name": "iPhone (Home Screen)",
+    "pubkey_jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "1YyTPyvyUp8Tm9m6rp134Ab2411grtG6-qUgnNl4wY4",
+      "y": "XUnUhU82WOpvBEs5jDsTJ8eJdHALdjVoylxU3objB9c"
+    }
+  },
+  "binding": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+  "code_id": "0123456789abcdef",
+  "credential_id": "cred_example"
+}

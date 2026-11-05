@@ -1,0 +1,8 @@
+{
+  "recorded": "2026-10-29 from apps/relay (test harness, local)",
+  "status": 202,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"share_id\":\"01M65E66VEB45C04FJ1PBTKRK6\"}"
+}

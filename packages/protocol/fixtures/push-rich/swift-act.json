@@ -1,0 +1,13 @@
+{
+  "note" : "Signed by TalosPushCore RichPush.signAct; verified by push-rich-vectors.test.ts",
+  "wire" : {
+    "asig" : "ofEyMWT_ZUrqZXV-plZ7JFIp9rUCOcn-L8gd_qrsqj-YQzX8rIFmODbofZW5jQa8nsTv4g1uz7K90zRQzOVB-w",
+    "body" : "{\"a\":\"reply\",\"text\":\"On my way — \\\"quoted\\\" 🚀\",\"thread_id\":\"general\"}",
+    "device_id" : "d_zl76bwrjhvuymdmz7fpg",
+    "grant" : "{\"v\":1,\"type\":\"native.grant\",\"device_id\":\"d_zl76bwrjhvuymdmz7fpg\",\"enc_pub\":\"BOOhinnmteBhZ6MDN6TvwR6KAbFvtqJ24EqZ63PB0BCwyD1j9C0LKS5jvt-Wx4kvSMcXSWws83xIRbVHMmJOFA4\",\"act_pub\":\"BNPZZCi4AZbNOKpIUVjkY7PCDm_pS06tvcxzSYJCPuTiZpql3t5TS6o4dfgLxv6jEJqWdrAC4ThjduEXcuTWKps\",\"scopes\":[\"reply\",\"approve_low\"],\"ts\":\"2026-11-01T18:00:00.000Z\",\"exp\":\"2026-12-01T18:00:00.000Z\",\"nonce\":\"V2Dd_NVEp08tfVCYg0WIqI8p\",\"osig\":\"g9s9o1LhKas7HHYnLLm-2X71eJW2YT5uDH_gu2KWXdN6BbB8gz3TyVJsN1d9Wl3gj0cgte_H3yQ4jin0l2LkkA\"}",
+    "id" : "01M6C4C34GMAKP3WVCP1E3WRFY",
+    "ts" : "2026-11-01T18:01:30.000Z",
+    "type" : "native.act",
+    "v" : 1
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "name": "talos-app",
+  "private": true,
+  "license": "MIT",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Talos app: an installable web app for talking to a Claude Code agent running on your own Mac.",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "prepare": "[ ! -f scripts/install-hooks.sh ] || bash scripts/install-hooks.sh",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "typecheck:mod": "tsc -p plugins/talos-app-mod/tsconfig.json",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "test:bun": "pnpm --filter @talos-app/bridge test",
+    "test:browser": "pnpm --filter @talos-app/protocol test:browser",
+    "test:e2e": "pnpm -r --workspace-concurrency=1 --if-present test:e2e",
+    "drive": "node e2e/drive.ts",
+    "check:personal": "bash scripts/check-no-personal.sh",
+    "capture:schedules": "bun run apps/bridge/scripts/capture-schedules.ts",
+    "capture:memory": "bun run apps/bridge/scripts/capture-memory.ts",
+    "capture:search": "bun run apps/bridge/scripts/capture-search.ts",
+    "dev:all": "bun run scripts/dev-all.ts",
+    "knip": "npx knip@6.44.1"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@biomejs/biome": "2.6.3",
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  }
+}

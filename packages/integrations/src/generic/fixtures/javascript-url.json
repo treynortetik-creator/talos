@@ -1,0 +1,5 @@
+{
+  "title": "Click me",
+  "summary": "A link that must not survive.",
+  "url": "javascript:alert(1)"
+}

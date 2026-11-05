@@ -1,0 +1,54 @@
+#!/bin/bash
+# Fake `claude` for the desktop integration tests. It is never Claude Code: it prints the 2.1.312 dev-channel dialog
+# text, answers `--version` and `agents --json`, and runs the scenario named by $FAKE_SCENARIO.
+# Env: FAKE_CLI_VERSION (or FAKE_CLI_VERSION_FILE, read at each call), FAKE_AGENTS_DIR (one <pid>.json per live fake session), FAKE_STATE_DIR (start counter),
+#      FAKE_LOG (one "start <pid> <argv>" line per start), FAKE_SCENARIO (script in this folder), FAKE_REPORT_SESSION_ID.
+set -u
+case "${1:-}" in
+  --version)
+    v="${FAKE_CLI_VERSION:-2.1.312}"
+    [ -n "${FAKE_CLI_VERSION_FILE:-}" ] && [ -f "$FAKE_CLI_VERSION_FILE" ] && v="$(cat "$FAKE_CLI_VERSION_FILE")"
+    echo "$v (Claude Code)"; exit 0 ;;
+  agents)
+    # A file named "fail" in the agents folder makes the listing fail, as `claude agents --json` can (nothing readable, not "no sessions").
+    [ -f "${FAKE_AGENTS_DIR:-/nonexistent}/fail" ] && exit 1
+    printf '['
+    first=1
+    if [ -n "${FAKE_AGENTS_DIR:-}" ] && [ -d "$FAKE_AGENTS_DIR" ]; then
+      for f in "$FAKE_AGENTS_DIR"/*.json; do
+        [ -f "$f" ] || continue
+        pid="$(basename "$f" .json)"
+        kill -0 "$pid" 2>/dev/null || continue
+        [ "$first" = 1 ] || printf ','
+        cat "$f"
+        first=0
+      done
+    fi
+    printf ']\n'
+    exit 0 ;;
+esac
+here="$(cd "$(dirname "$0")" && pwd)"
+sid="" prev=""
+for a in "$@"; do
+  case "$prev" in --resume|--session-id) sid="$a" ;; esac
+  prev="$a"
+done
+n=1
+if [ -n "${FAKE_STATE_DIR:-}" ]; then
+  mkdir -p "$FAKE_STATE_DIR"
+  n=$(( $(cat "$FAKE_STATE_DIR/starts" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$FAKE_STATE_DIR/starts"
+fi
+export FAKE_START_N="$n" FAKE_SESSION_ID="$sid"
+if [ -n "${FAKE_AGENTS_DIR:-}" ]; then
+  mkdir -p "$FAKE_AGENTS_DIR"
+  printf '{"pid":%d,"kind":"interactive","sessionId":"%s","cwd":"%s","status":"idle","startedAt":0}' \
+    "$$" "${FAKE_REPORT_SESSION_ID:-$sid}" "$PWD" > "$FAKE_AGENTS_DIR/$$.json"
+fi
+# FAKE_ENV_DUMP=<path>: the environment this start received, to <path>.<start number> (the env-strip tests read it).
+# Written to a temp name and renamed, so a reader sees the whole dump or no file, never an empty or half-written one.
+if [ -n "${FAKE_ENV_DUMP:-}" ]; then
+  /usr/bin/env > "$FAKE_ENV_DUMP.$n.tmp" && mv "$FAKE_ENV_DUMP.$n.tmp" "$FAKE_ENV_DUMP.$n"
+fi
+[ -n "${FAKE_LOG:-}" ] && printf 'start %s %s\n' "$$" "$*" >> "$FAKE_LOG"
+exec /bin/bash "$here/${FAKE_SCENARIO:-dev-dialog.sh}" "$@"

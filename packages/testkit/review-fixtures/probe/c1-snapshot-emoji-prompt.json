@@ -1,0 +1,52 @@
+{
+  "exit": 0,
+  "out": {
+    "api": 1,
+    "chronos": "0.3.0-rc1",
+    "as_of": "2026-10-05T07:45:00-04:00",
+    "tz": "America/New_York",
+    "session_runner": "hook",
+    "approval_required": false,
+    "paused_all": false,
+    "session_beat_age_s": null,
+    "tick_age_s": null,
+    "jobs_file": "$HOME/.config/chronos/jobs.json",
+    "state_dir": "$HOME/.chronos/state",
+    "registry_synced_folder": false,
+    "schedules": [
+      {
+        "id": "emoji-prompt",
+        "name": "emoji-prompt",
+        "description": "hand",
+        "kind": "claude",
+        "when": {
+          "type": "daily",
+          "time": "07:30"
+        },
+        "when_text": "Every day at 7:30 AM",
+        "catchup_min": 180,
+        "enabled": true,
+        "paused": false,
+        "runner": "headless",
+        "permissions": "full",
+        "allowed_tools": [],
+        "model": null,
+        "notify": "failure",
+        "triggers_count": 0,
+        "next_run": "2026-10-06T07:30:00-04:00",
+        "today": "waiting",
+        "ds": "2026-10-05",
+        "window_ends": "2026-10-05T10:30:00-04:00",
+        "last_run": null,
+        "prompt_preview": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+        "prompt_bytes": 2000,
+        "editable": true,
+        "read_only_reason": null,
+        "changed_outside": true,
+        "etag": "sha256:941bd245463a07fff8575a93a82310fca0390b82bf810dbee56ecf7aaf0c9f78",
+        "content_hash": "sha256:9a043e6abd041e005325a99947702b308410904ed53ff9e2b79679c6a2327374",
+        "state_rev": "sha256:8b7925b9f5f9c6420b7fbcb30ed8a2a72a7769582f78d8b39a2c271b8e7c9714"
+      }
+    ]
+  }
+}

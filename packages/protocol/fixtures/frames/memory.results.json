@@ -1,0 +1,24 @@
+{
+  "v": 1,
+  "type": "memory.results",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T43G",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T43F",
+  "hits": [
+    {
+      "root_id": "notes",
+      "path": "projects/launch-checklist.md",
+      "title": "Launch checklist",
+      "snippet": "Launch checklist for the example project",
+      "marks": [
+        [
+          0,
+          6
+        ]
+      ],
+      "mtime": "2026-10-28T15:32:10.120Z"
+    }
+  ],
+  "next_cursor": null,
+  "index": "ready"
+}

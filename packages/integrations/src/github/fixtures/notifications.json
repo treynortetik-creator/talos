@@ -1,0 +1,46 @@
+[
+  {
+    "id": "7001",
+    "unread": true,
+    "reason": "review_requested",
+    "updated_at": "2026-10-28T14:50:00Z",
+    "subject": {
+      "title": "Fix reconnect backoff",
+      "url": "https://api.github.com/repos/example-org/example-repo/pulls/41",
+      "type": "PullRequest"
+    },
+    "repository": { "full_name": "example-org/example-repo", "html_url": "https://github.com/example-org/example-repo" }
+  },
+  {
+    "id": "7002",
+    "unread": true,
+    "reason": "mention",
+    "updated_at": "2026-10-28T14:51:00Z",
+    "subject": {
+      "title": "Flaky test in CI",
+      "url": "https://api.github.com/repos/example-org/example-repo/issues/12",
+      "type": "Issue"
+    },
+    "repository": { "full_name": "example-org/example-repo", "html_url": "https://github.com/example-org/example-repo" }
+  },
+  {
+    "id": "7003",
+    "unread": true,
+    "reason": "ci_activity",
+    "updated_at": "2026-10-28T14:52:00Z",
+    "subject": {
+      "title": "CI workflow run failed for main branch",
+      "url": "https://api.github.com/repos/example-org/example-repo/actions/runs/99",
+      "type": "CheckSuite"
+    },
+    "repository": { "full_name": "example-org/example-repo", "html_url": "https://github.com/example-org/example-repo" }
+  },
+  {
+    "id": "7004",
+    "unread": true,
+    "reason": "subscribed",
+    "updated_at": "2026-10-28T14:53:00Z",
+    "subject": { "title": "Release v0.3", "url": "javascript:alert(1)", "type": "Release" },
+    "repository": { "full_name": "example-org/other-repo", "html_url": "javascript:alert(2)" }
+  }
+]

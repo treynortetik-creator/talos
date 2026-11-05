@@ -1,0 +1,343 @@
+# Changelog
+
+## Unreleased
+
+- Telegram removed from the kit (and the app's mirror with it). What changes for an existing install: a reply through the Telegram channel plugin now meets the `send-or-publish` ask rule like any other outbound send, and `channel-debt` no longer counts Telegram messages as owing a reply (only Talos owner messages do). `install.sh --notify talos` records the absolute path of `talos-app` and warns if it is missing; `notify/talos.sh` falls back to `~/.bun/bin` and `~/.local/bin` and, when it cannot find the binary, logs a line to `notify-errors.log` and exits 127 instead of vanishing. The app still sends a top-level `mirror: {telegram: "off"}` in its config frames for one release so an older app can read them; nothing reads or stores it.
+- Kit/Talos-app conflicts (K0): the app's reply and schedule tools are the kit's own channel (action rule, channel debt, settings matchers); uninstall deletes only the files the kit wrote in `~/.config/talos` and lists what it keeps (`--purge-app`, asked first on a terminal, adds the app's data, never unknown entries); a talos-app prompt owes a reply only for owner kinds, read from the opening tag; `--chronos-ref` needs the full sha; Chronos pin moves to `3cf20fc` (after v0.3.1).
+
+## 1.2.0-cli - 2026-10-28
+
+A feature release. Everything new is opt-in, inert until used, or a reminder that fails open; nothing needs a dependency
+you did not choose to install, and a fresh install with none of the extras behaves like 1.1.2 plus the new hooks. **Chronos
+pin unchanged: 0.2.2.** Upgrading from 1.1.2: [UPGRADE.md](UPGRADE.md), "Coming from 1.1.2".
+
+### New hooks (registered by the settings template; kill switch on each)
+
+- **`action-rules.py` + `hooks/action-rules.yaml`: a never / ask / allow table.** Read before every Bash call, file write and
+  connector (`mcp__*`) call. `never` is refused; `ask` shows Claude Code's permission prompt in a live session and is refused
+  when unattended; one-use approvals exist for answering from a chat channel. Starter rules: recursive delete of home or
+  root, force-push to main, pattern kills, the MCP health-check command that starts a second Telegram poller (never); push to
+  main, deploys and package publishes, GitHub releases and going public, `gh auth` switches, sending / sharing / deleting
+  through a connector (ask); the agent's own chat reply tool is exempt. Your rules go in
+  `~/.config/talos/action-rules.yaml`, read first, so upgrades never overwrite them. A fifth safety guard: fails open live,
+  closed unattended. Reads YAML with a small built-in reader (PyYAML if present).
+- **`memory-reflex.py` + `scripts/wiki-gazetteer.py`.** A name in your message that matches exactly one note in your wiki
+  (title, `aliases:` frontmatter, or a surname only one person has) is pointed at before the agent answers. No model, no
+  search, no hard-coded names; a name that matches two notes gets nothing; your own name (the title of `wiki/me.md`) and
+  anything in `~/.config/talos/reflex-ignore.txt` never match. Only `wiki/` is read, never a private vault. The name list
+  rebuilds in the background at session start when a note is newer.
+- **`compaction-guard.py`.** At PreCompact it saves the corrections logged in `.learnings/` over the last three days, an open
+  hands-free window and an owed chat reply; `session-start.py` hands them back inside the same block as the digest after a
+  compaction (one injection, not two hooks).
+- **`bsd-sed-guard.py`.** Refuses the GNU form `sed -i 's/a/b/' file` that breaks on macOS's BSD sed; stands down if the `sed`
+  on your PATH is not Apple's.
+- **`tg-claim-check.py`.** Only when the Telegram channel is set up: a reply asserting something the turn's tool results did
+  not show is blocked once; the identical text sent again passes. Shadow mode: `tg-claim-check.shadow` in the state folder.
+- **`hands-free.py` upgraded.** Audio always goes out WITH the full text, not a caption: audio sent with under about 200
+  characters of text blocks once and asks for the text. New `talos-hands-free` skill carries the procedure.
+
+### New jobs (all ship disabled; `register` adds them to an existing Chronos)
+
+- **`talos-dream-cycle`** (restricted Claude job, 02:30): nightly memory consolidation. Collects what changed (small shards),
+  the model proposes links, contradictions, supersessions and stale facts, a script drops every proposal whose quotes are not
+  verbatim in the cited notes, the model judges what is left (default reject), and a script adds at most 15 `## Related` links
+  (dated, above any timeline separator, byte-exact undo with `scripts/dream/revert.py`) and queues everything else in
+  `memory/dream/QUEUE.md`. The model holds no wiki write tool and no sub-agents; the verified file is HMAC-sealed so the session
+  cannot forge proposals. Personal-vault names are filtered from daily logs using filenames only. Honest limit: one session
+  judging its own extraction is weaker than a separate judge (`setup/dream-cycle.md`). `memory/dream/QUEUE-ONLY` switches
+  link-applying off.
+- **`talos-watch-am` / `-mid` / `-pm` / `-eve`** (command jobs, no Claude): quiet check-ins. Silent unless a calendar event is
+  close, a STATE.md date is inside 48 hours, or an event moved; one short plain message through your notify command. The
+  calendar source is none by default; an ICS URL or file, or macOS Calendar through a documented adapter
+  (`scripts/watcher-adapters/macos-calendar.sh`). `setup/quiet-checkins.md`.
+
+### Search, voice and the suggested local models (suggest, never require)
+
+- **`recall.py --rerank`** (or `RECALL_RERANK=1`): opt-in cross-encoder re-sort of the top 15 files; needs the semantic stack
+  and `bash scripts/memory/setup.sh --rerank` (about 571 MB). Says on its banner line whether it ran; otherwise normal order.
+- **`setup/local-models.md`**: Parakeet TDT v2 and whisper.cpp (speech in), Qwen3-TTS voice cloning via mlx-audio, Kokoro and
+  macOS `say` (speech out), sherpa-onnx speaker labels, bge embeddings; RAM / disk / Apple Silicon notes; "checked versus
+  inferred". `scripts/tts.sh` tries Qwen3, then Kokoro, then `say`, skipping what is not installed (`TALOS_TTS=` forces one);
+  `scripts/stt.sh` tries Parakeet then whisper.cpp. Voice cloning needs YOUR own reference clip and your own licence check;
+  Talos ships no voice and no audio. New install flags `--with-qwen-voice`, `--with-parakeet`, `--with-diarize`,
+  `--with-reranker`, each just delegating to the setup scripts, each with a dry run. `scripts/stt-diarize/` prints
+  speaker-labelled transcripts.
+- **`talos-go-public` skill + `scripts/go-public.sh`**: the gate before a repository goes public (account from config, never
+  hard-coded and never switched for you; secret and personal-content scan of the tree and every commit; fresh squashed history;
+  logged-out verification). Read-only unless `--yes-i-reviewed`.
+
+### Docs and tooling
+
+- **`setup/telegram.md` rewritten as a step-by-step guide** checked against the official plugin's own files (BotFather, token,
+  `/plugin install`, `/telegram:configure`, `--channels`, pairing, allowlist, a test, writing for a phone, a failure table,
+  token rotation).
+- **`scripts/settings-merge.py`**: adds the hook registrations a new kit ships to an existing `.claude/settings.json` after a
+  backup, touching nothing else (the by-hand merge in UPGRADE step 6 is what people skipped).
+- Template: new rule `[R-39]` (do not route around an action rule); `[R-38]` says audio travels with the full text.
+- Tests: `test-action-rules.sh`, `test-memory-reflex.sh`, `test-tg-claim-check.sh`, `test-bsd-sed-guard.sh`, `test-dream.sh`,
+  `test-watcher.sh`, `test-gopublic.sh`, `test-localmodels.sh`, `test-settings-merge.sh`; `test-hooks.sh`, `test-jobs.sh`,
+  `test-install.sh` and `test-recall.sh` extended. The new suites also pass under Apple's stock Python 3.9.
+
+### Not ported, on purpose
+
+Liquid-model trials, image models, anything tied to one person's employer, mail or ticket systems, and any voice or
+reference audio. A shell prefilter for the action table was left out: it would make a rule you add silently inert.
+
+## 1.1.2-cli - 2026-10-07
+
+A trust-hardening release, after an external review. Nothing new to learn; three promises that were true in spirit are
+now true in code. **Chronos pin: 0.2.2, commit `ac21e92`** (the Chronos commits must be pushed before this kit's pin is, or a fresh install's
+pinned clone fails).
+
+### Security
+
+- **Symlinked parent directories are refused (hooks).** The 1.1.1 session hook rejected a symlink at a file itself and
+  `safe_stamp` used `O_NOFOLLOW`, but both only look at the LAST path component: with `memory/` (or `wiki/`, or
+  `scripts/`) symlinked to another folder, the hook read STATE, HANDOFF, the daily log and the ledger from outside the
+  project, stamped files there, and could execute a `wiki-lint.py` from there. Every path a hook reads, executes or
+  writes now goes through `_talos_common.contained()`: it must resolve inside the agent folder with **no symlink at any
+  step below the root** (and `..` is refused). Applied to `session-start.py` (all reads, stamps, the linter it runs, the
+  index script and log), `agent-log.py` (append through `append_contained`) and `statusline.py`. 9 regression checks
+  fail on the 1.1.1 hooks and pass now (symlinked memory/, a symlinked folder that points inside the project, stamp
+  creation and truncation through a symlinked parent, a symlinked scripts/ and wiki/, agent-log, status line).
+- **The shipped Claude jobs are restricted by tool list, not just told to behave.** README said "Nothing sends, posts or
+  deletes on its own", but scheduled Chronos jobs ran with `--dangerously-skip-permissions`, so that was an instruction.
+  Now the morning brief, wiki check, snapshot and state sweep register `"restricted": true` with an `allowed_tools`
+  list, and Chronos 0.2.2 starts them with `--permission-mode=default`, that list, `--tools`, `--strict-mcp-config` and
+  deny rules for secret paths: reads scoped to the agent folder, edits only in `memory/briefs/` and `wiki/` (brief only),
+  no web tools, no MCP tool unless you add it by name, and **no shell except the exact commands each job runs**.
+  Checked by running the real Claude Code CLI (2.1.287) with these flags against a scratch agent: unlisted commands,
+  writes outside the allowed folders, `WebFetch`, `python3 -c`, `rm`, a redirect, `cat .env` and reads outside the
+  agent folder were refused, and all four jobs completed with no refusals.
+- **Safety guards fail closed when unattended.** `pre-tool-guard`, `append-only-guard`, `timeline-guard` and `check-vault`
+  still fail open in a live session, but when `CHRONOS_RUN=1` (set by Chronos in every headless run; `TALOS_UNATTENDED=1`
+  marks one by hand) an internal error, a helper that will not load, a missing `wiki-lint.py` or an unreadable vault terms
+  file blocks the action and says why, and an `ask` becomes a `deny` (nobody to answer). The settings template wraps the
+  four guard commands so a missing script, missing `python3` or a crash blocks an unattended run (exit 2) and never a live
+  one. Reminder hooks (claim gate, channel debt, agent log, hands-free, status line, session start) stay fail-open.
+
+### Review fixes (same release, second pass)
+
+- **Saved permissions no longer widen a restricted job.** Claude Code merges `~/.claude/settings.json`, the agent's
+  `settings.json` and `settings.local.json` on top of `--allowedTools`; a saved `Bash(curl:*)` ran in a restricted run. Chronos
+  0.2.2 now starts restricted and event runs with `--setting-sources=` and passes the agent's hooks, `autoMemoryEnabled` and deny
+  rules back via `--settings`. Verified with the real CLI (planted allow: unrestricted-by-settings run executed curl, restricted
+  run refused it). `CLAUDE.md` is no longer auto-loaded in such a run.
+- **The Chronos version is read from the runtime launchd runs** (the tick plist), not from the clone: a pinned 0.2.2 clone next
+  to a launchd-run 0.2.1 used to pass. An undeterminable version now refuses restricted jobs too.
+- **`harden`** switches `in_session` off on a job that had it, validates every result and writes nothing if any would be invalid.
+- **A malformed `restricted`** (`"true"`, `1`) is invalid in Chronos (tick, Run now, run script) and in Talos (`list` shows
+  INVALID, `enable` refuses); it is never read as unrestricted.
+- **`weekly-snapshot.sh`** refuses a `.env` or `personal/` path that git quotes (spaces, non-ASCII, tabs), by using `-z`.
+- Update instructions no longer say `git pull` for the (detached) Chronos clone.
+- **Chronos deny list** adds `~/.config`, `~/.docker`, `~/.kube`, `~/.netrc`, `~/.npmrc` and other credential stores; folder-scoped
+  reads, which Talos ships, remain the real boundary.
+- **`timeline-guard.py`** refuses to execute `scripts/wiki-lint.py` through a symlinked folder (it is a guard failure: allow live,
+  deny unattended).
+- **A hung safety guard** no longer lets the action through: each guard arms a 20 s alarm (`TALOS_GUARD_TIMEOUT_S`) that denies when
+  unattended and allows in a live session.
+- **A restricted run in which every tool call was refused** (or whose usage record could not be written) is a failure and notifies,
+  instead of being marked done; refusals are appended to the report. (Chronos.)
+
+### Review fixes (round 2)
+
+- **Hook files are write-protected in restricted runs** (Chronos denies `Edit` on `.claude/`, `.git/`, `.mcp.json`, `hooks/`): a hook
+  can answer "allow", so a job with broad Edit could otherwise have planted an approval. README now states exactly what is passed
+  back through `--settings` (hooks, `autoMemoryEnabled`, merged denies, the user's `apiKeyHelper`; never an allow).
+- Denies are merged from the user, project and local settings files. Tested live: a restricted job with broad Edit wrote a normal file
+  and was refused `hooks/` and `.claude/`.
+- MCP: a claude.ai connector tool named by `allow` loaded and ran in a restricted run (one live check). Plugin MCP servers and a project
+  `.mcp.json` that needs approval do not load (documented; fail-closed).
+- The guard alarm exits 2 when unattended even if its deny cannot be written (closed stdout).
+- `weekly-snapshot.sh`: the `.env.example` exemption no longer lets `memory/personal/x.env.example` through; an existing-but-empty
+  `memory/`, `wiki/` or `.learnings/` no longer breaks the snapshot (only folders git reports changes in are staged).
+- Docs: the version gate runs only at register/enable/access/harden; re-run `harden` after changing Chronos.
+- Pin: Chronos `ac21e92` (adds the above).
+
+### Added
+
+- **`scripts/weekly-snapshot.sh`** is now the whole snapshot job: named paths only, one local commit of `memory`, `wiki`
+  and `.learnings` (only those paths, so anything else staged is left alone), refuses a `.env` or `personal/` among the
+  changes before staging, refuses when the git repository is a parent folder, never inits, pushes or touches history.
+  Also fixes the old job failing when `.learnings` did not exist.
+- **`talos-jobs.py`:** `access ID --restricted|--full` (the documented opt-out and the way back), `allow ID TOOL...` (exact
+  MCP tools only, refuses write-looking names without `--allow-write-tools`, adds `ToolSearch`), `harden` (upgrade jobs
+  registered by 1.1.1: sets the restriction, replaces an untouched 1.1.1 prompt/guard, keeps an edited one and says so),
+  `register --full-access`, and `list` now shows RESTRICTED / FULL ACCESS. `install.sh --full-access-jobs`. Registering or
+  enabling a restricted job on a Chronos older than 0.2.2 is refused (it would ignore the restriction).
+- `validate` now holds the shipped jobs to the policy: restricted, scoped read tools, no bare `Bash`, no web or MCP tools,
+  exact script rules, and every command in a prompt is covered by a rule.
+- `upgrade.sh` flags a `.claude/settings.json` whose guard commands still have the pre-1.1.2 wrapper. UPGRADE.md has a
+  1.1.1 to 1.1.2 section.
+
+### Changed
+
+- **Jobs' prompts** run scripts by full path and no longer `cd`; the job's final message is the report (Chronos writes the
+  report file and done-marker for a restricted run). The brief reaches mail, calendar and chat only through MCP tools you add
+  with `talos-jobs.py allow`; with none it writes a wiki-only brief and says so.
+- **Chronos pin: 0.2.2** (adds `"restricted": true`; backward compatible with 0.2.1 jobs).
+- **Wording.** The claim gate is described as an evidence-hygiene reminder that flags unsupported-looking claims on the next
+  turn, not a truth checker. README no longer implies Claude Code has no memory: it has `CLAUDE.md` and an auto memory, which
+  Talos turns off in the agent folder so there is one memory, and Talos adds what the built-in one does not.
+- README: "Scheduled jobs run with permissions skipped" is replaced by "Scheduled jobs are restricted by default", with an
+  enforced / only-instructed table.
+
+### Known gaps
+
+- The jobs' `guard.md` rules and the brief's filing bar are prompts, not enforcement. Inside its allowed folders the brief
+  can still write a wrong note, and a job can put anything it read into its report, which is delivered to your phone.
+- Reads are scoped to the agent folder, but the deny list for secrets is best-effort. A path with a space in the agent folder
+  is untested for the exact-command rules (it fails closed).
+- A restricted run's guarantee is Claude Code's permission system working as documented; rule syntax has changed between
+  versions. The test suites never start `claude`; the real-CLI check above is manual.
+
+## 1.1.1-cli - 2026-10-05
+
+Re-cut for the public launch: one clean history, the timeline guard, and a Chronos pin that exists on GitHub.
+
+### Added
+
+- **`hooks/timeline-guard.py` (PreToolUse on Write, Edit, MultiEdit).** Refuses a wiki write that puts a malformed entry
+  below a note's append-only separator, with the offending line, the reason and the one-line format in the refusal.
+  It imports the lint's own rules (`wiki-lint.py` gained `timeline_findings` and `new_timeline_violations`; the lint's
+  output is unchanged) and judges only NEW lines, so old violations never block unrelated edits. Fails open; kill
+  switch `timeline-guard.off`. `scripts/test-timeline-guard.sh` (57 checks, also run by `test-hooks.sh`). The lint no
+  longer warns that a `<slug>-timeline-archive` note is over 40 entries. The entry format with correct and incorrect
+  examples is now in `wiki/README.md`, `SEED-WIKI.md` and the transcript-ingest skill.
+
+### Changed
+
+- **Chronos pin: `bc44d31`** (Chronos 0.2.1, republished as a fresh public repository). The earlier pin
+  pointed at a commit that no longer exists on GitHub, so a fresh install's pinned clone failed. Same Chronos
+  version, same code; only the commit id changed. The pin is `CHRONOS_PINNED_REF` at the top of `install.sh`.
+
+### Fixed
+
+- **`scripts/claude-md-lint.sh` no longer fails the shipped placeholder `CLAUDE.md`.** The placeholder
+  ("# Setup is not finished.") carries a red-circle line with no `[R-nn]` key, so running the lint in a fresh
+  checkout failed. The lint now says it is the setup placeholder and exits 0 (`verify-install.sh` already skipped
+  it); a self-test covers it. Its `--help` also stopped printing a few lines of the script body.
+- **`scripts/self-test.sh` no longer fails inside an installed agent folder** (the README FAQ, UPGRADE.md and
+  `upgrade.sh`'s own gate all run it there). Two checks only make sense in the kit clone: the `docs/` screenshot
+  (`docs/` is deliberately not copied into an agent folder) and the privacy scan (which would read the user's own
+  notes and the absolute paths the installer writes into `.claude/settings.json`). Both now run in the clone only.
+- `scripts/test-install.sh` no longer fails under the stock macOS Python 3.9: the python3.14 discovery check
+  wraps a real Python 3.10+ if the machine has one and skips with a message if not.
+
+## 1.1.0-cli - 2026-10-01
+
+The whole agent setup modelled on a long-running reference agent: a hot-file config with a ledger and a lint, memory search, enforcement hooks,
+a status line, and a two-way Telegram channel. Everything new that has a dependency is **opt-in**.
+
+### Fixed
+
+- **`claude mcp list` (HTTP 409 trap) is gone from the docs.** Its health check starts every MCP server, including
+  the Telegram plugin's, which is a second poller and breaks the live channel. The docs say `/mcp` inside a
+  session, and a self-test fails on the bare command.
+- The pre-tool guard no longer refuses BOOTSTRAP's own `cp .env.example .env`.
+- `install.sh --agent-dir` with a nonexistent parent folder is an error, not the filesystem root.
+- `uninstall.sh` clears Chronos's `notify` when it pointed into the deleted `~/.config/talos`, and finds the
+  agent folder from what the installer recorded.
+- **Hooks fail open.** Every hook command exits 0 if its script file is gone (`python3 <missing>` exits 2, which
+  blocks every prompt or every Bash call). `upgrade.sh` now diffs every `hooks/*` command, not two hard-coded
+  names, and flags a registration whose script no longer exists as `STALE`. `UPGRADE.md` says to remove the
+  registration before deleting the file, and drops a false sentence about the old behaviour.
+- A Chronos already configured with a different workspace is warned about (scheduled runs would not load this
+  agent's config or guard); `--set-chronos-workspace` repoints it; `verify-install.sh` notes a mismatch.
+- `.upgradeignore`: an unanchored `memory/` swallowed `scripts/memory/`; protective patterns may now be anchored
+  with a leading slash, and `talos-*` skills and agents are code.
+- Doc contradictions: BOOTSTRAP vs START-HERE pointers and step numbers, the `cp -n` wording, the
+  `.talos-version` fields, test counts, the Chronos path in MORNING-BRIEF, employer-flavoured framing in SEED-WIKI.
+- Tests set `PYTHONDONTWRITEBYTECODE` and no longer copy `scripts/fixtures/` into agent folders.
+
+### Added
+
+- **The hot-file config.** `templates/CLAUDE.md.tmpl` is rewritten as one trigger line per rule, keyed `[R-nn]`,
+  about 2,200 words; `templates/rules-ledger.md.tmpl` holds the reason for each key; `scripts/claude-md-lint.sh`
+  enforces a word cap, keyed red lines and a ledger entry per key, and lists expired observations. The promotion
+  pipeline is now: strikes 1-2 stay in `.learnings/`; strike 3 is one trigger line + a ledger entry + a
+  graduation-log row, after a yes. `session-start` warns when `memory/STATE.md` passes 30,000 characters.
+- **Memory search (opt-in).** `scripts/recall.py` (stdlib, hybrid, `--expand`, `--batch`, `--json`, honest status
+  line and zero-result diagnosis) and `scripts/memory/` (sqlite-vec + fastembed, apsw, a pinned model cache, an
+  incremental indexer with a lock and a memory guard). `./install.sh --with-memory-search`,
+  `scripts/memory/setup.sh`, `uninstall.sh --remove-memory-search`, a `talos-memory-index` Chronos job, a
+  detached refresh at session start, and the `talos-memory-recall` skill.
+- **Enforcement hooks.** `claim-gate.py`, `append-only-guard.py`, `timeline-guard.py`, `agent-log.py`, `channel-debt.py`, and
+  `statusline.py` (no jq), with per-agent state outside the agent folder and kill switches (including Chronos's
+  Control Room folder).
+- **Telegram, two ways.** `setup/telegram.md`, `scripts/talos-chat.sh`, an opt-in reply mirror, and
+  `notify/telegram.sh` with the token off argv, `--file`, and a word-cap warning.
+- **Optional extras.** `./install.sh --with-vault DIR` (a private vault, validated before anything is written) and
+  `hooks/check-vault.py` (asks before a term from the user's own `_guard-terms.txt` is written outside the vault);
+  `--global-pointer` (one marked block in `~/.claude/CLAUDE.md`, removed exactly by uninstall); the
+  `talos-state-sweep` job and `scripts/state-sweep.py`; `scripts/tts.sh` (macOS `say`, or Kokoro with `--with-voice`),
+  `scripts/stt.sh` (whisper.cpp) and `scripts/voice/setup.sh`; `scripts/md2html.py` (a self-contained, escaped,
+  light/dark page with an optional audio player); `scripts/yt-fetch.py`; `hooks/hands-free.py`; the
+  `talos-meeting-prep`, `talos-transcript-ingest` and `talos-agora` skills and the `qa-gate` agent.
+- Tests: `test-hooks.sh`, `test-recall.sh`, `test-notify.sh`, `test-privacy.sh`, `test-extras.sh`.
+
+### Changed
+
+- **Chronos pin: 0.2.1.** Jobs may carry a `model` (the lint and snapshot jobs pin `sonnet`;
+  shipped jobs never pin Haiku). Docs cover triggers, the usage meter and the Control Room.
+- **`talos-memory-index` is a plain command job**, not a Claude run: it runs `scripts/memory/refresh-index.sh`
+  directly, so the daily index refresh spends no plan usage. It needs Chronos 0.2.1; `talos-jobs.py register`
+  skips it with a message on an older Chronos. `talos-jobs.py validate` understands command jobs.
+- **Quieter installer.** Chronos's own installer output is one labelled line (`chronos: ...`) instead of a
+  mid-run block with "created an empty jobs.json". With `--no-load` the installer prints how to start the
+  scheduler and the web UI by hand (it used to print a UI address that nothing served).
+- **Python 3.10+ for memory search**: the README, `setup/memory-search.md` and the installer's error say the one
+  command to run (`brew install uv`, or the official uv installer; Homebrew `python@3.12` as the alternative).
+- **Protected folders**: with `--allow-protected-folder` (or `--no-chronos`) the installer now WARNS that every
+  Claude Code auto-update triggers a macOS "would like to access files in your Desktop folder" prompt that
+  silently blocks background runs; the README says to keep the agent in a folder like `~/agent`.
+- `uninstall.sh` no longer says the agent folder "was not touched" when it removed the Chronos hook line from
+  `.claude/settings.json`; it names that one edit.
+- README: a Chronos dashboard screenshot on the first screen (`docs/`, not copied into agent folders) and a
+  "What it looks like day to day" section with a synthetic morning brief.
+- The README no longer says "no pip": the core is stdlib-only and every dependency is an opt-in flag.
+
+## 1.0.0-cli - 2026-10-01
+
+First public release: Talos ported from the Claude desktop app to the Claude Code command line, and bundled
+with [Chronos](https://github.com/treynortetik-creator/chronos).
+
+### Changed (desktop app to CLI)
+
+- **Install:** `install.sh` / `uninstall.sh` replace the double-click-a-zip, open-in-the-app flow. The installer
+  copies the kit into an agent folder (never runs the agent from the clone), writes `.claude/settings.json` and a
+  `.talos-version` stamp, and refuses non-empty, cloud-synced and (with Chronos on) macOS-protected folders.
+- **Scheduling:** the desktop scheduled-tasks feature and its "leave a note, run it in the live session" job
+  mailbox are gone (`hooks/job-inbox.py`, `.agent-state/`, the in-session poller, `scripts/test-scheduled-task.sh`).
+  Scheduled work is now **Chronos jobs**: `jobs/jobs.json` plus a `prompt.md` and a locked `guard.md` per job,
+  in Chronos's format. Three jobs ship, all disabled: morning brief, weekly wiki check, weekly snapshot.
+- **Headless discipline:** every job runs its steps in the foreground (a `claude -p` run kills background work
+  when it exits), and every shipped `guard.md` says so. The test suite fails if one stops.
+- **The morning brief** no longer splits into a scheduled task that drops a note and a sub-agent that writes the
+  brief in a live session. The job does the work itself and delivers the report through a pluggable `notify`
+  command (Telegram Bot API over `curl`, or a macOS banner).
+- **Session hook:** `CHRONOS_RUN=1` (set by Chronos in headless runs) suppresses the wiki-lint, ledger and
+  commit nudges. Each one stamps itself as "asked", so a headless run that saw one would have used up the
+  weekly reminder with nobody there to answer. Regression test added.
+- **Connectors:** desktop-app connector instructions replaced by `/mcp` inside a session. The kit still
+  installs none.
+- **Docs rewritten for the CLI:** README, START-HERE, BOOTSTRAP, MORNING-BRIEF, `setup/scheduling.md`, UNINSTALL,
+  UPGRADE (with a section for installs from the desktop-app era).
+
+### Added
+
+- `scripts/talos-jobs.py` (register / unregister / list / enable / disable / validate jobs, add or remove the
+  Chronos SessionStart hook), `scripts/test-jobs.sh`, `scripts/test-install.sh` (fake HOME, launchctl tripwire,
+  stub and optional real Chronos), `notify/` wrappers, a "Scheduled runs" section in the config template.
+- A "Security model" section in the README, including an honest statement that the prompt-injection
+  follow-rate test is incomplete.
+
+### Kept
+
+The memory and wiki structure, setup interview, seed and deep dive, continuity and pre-tool hooks, wiki linter,
+quote checker, upgrade and uninstall procedures, and the self-test suite (updated for the CLI).
+
+### Removed
+
+Everything specific to the internal distribution of the earlier builds: release tooling, review and build logs,
+organisation-specific framing and examples.

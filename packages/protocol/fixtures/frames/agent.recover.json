@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "agent.recover",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T442",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "control_id": "01JBF3V7Q8K2M4N6P8R0S2T443",
+  "action": "restart",
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "5ABexFIUaepygdUdjr2sufcLxDh_Y4v2SucwaHOJ2J66WK-Lus6UHrKsdplsQxkjL-RzXr1YEVhPdtXESnIOZg"
+}

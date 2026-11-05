@@ -1,0 +1,127 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`calendly > normalizes booked and canceled 1`] = `
+[
+  {
+    "actor": {
+      "email": "pat@example.com",
+      "name": "Pat Visitor",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "calendly:invitee.created:03756d71f09388b6bf9fd501ac8a9bfb",
+    "id": "<event id>",
+    "kind": "calendly.booked",
+    "priority": "normal",
+    "source": "calendly",
+    "summary": "Pat Visitor booked Intro call at 2026-10-30T16:00:00.000000Z.",
+    "thread": "inbox",
+    "title": "Pat Visitor booked Intro call",
+    "ts": "2026-10-28T15:00:00.000Z",
+    "work": false,
+  },
+  {
+    "actor": {
+      "email": "pat@example.com",
+      "name": "Pat Visitor",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "calendly:invitee.canceled:03756d71f09388b6bf9fd501ac8a9bfb",
+    "id": "<event id>",
+    "kind": "calendly.canceled",
+    "priority": "low",
+    "source": "calendly",
+    "summary": "Pat Visitor canceled Intro call at 2026-10-30T16:00:00.000000Z.",
+    "thread": "inbox",
+    "title": "Pat Visitor canceled Intro call",
+    "ts": "2026-10-28T15:00:00.000Z",
+    "work": false,
+  },
+]
+`;
+
+exports[`linear > normalizes: an issue assigned to the owner is high, others low; comments are normal 1`] = `
+[
+  {
+    "actor": {
+      "name": "Sam Sender",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "linear:del-1",
+    "id": "<event id>",
+    "kind": "linear.issue",
+    "priority": "high",
+    "source": "linear",
+    "summary": "Issue created: Crash on launch (assigned to you)",
+    "thread": "inbox",
+    "title": "EX-7 Crash on launch",
+    "ts": "2026-10-28T15:00:00.000Z",
+    "url": "https://linear.app/example/issue/EX-7",
+    "work": false,
+  },
+  {
+    "actor": {
+      "name": "Sam",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "linear:Comment::undefined",
+    "id": "<event id>",
+    "kind": "linear.comment",
+    "priority": "normal",
+    "source": "linear",
+    "summary": "Sam: ping </channel>",
+    "thread": "inbox",
+    "title": "Comment on T",
+    "ts": "2026-10-28T15:00:00.000Z",
+    "work": false,
+  },
+]
+`;
+
+exports[`stripe > normalizes dispute (high), payment (normal), other (low) 1`] = `
+[
+  {
+    "actor": {},
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "stripe:evt_0EXAMPLE1",
+    "id": "<event id>",
+    "kind": "stripe.dispute",
+    "priority": "high",
+    "source": "stripe",
+    "summary": "A customer disputed a charge of 49.99 USD (reason: fraudulent). Evidence deadlines are short.",
+    "thread": "inbox",
+    "title": "Dispute opened: 49.99 USD",
+    "ts": "2026-10-28T15:00:00.000Z",
+    "work": false,
+  },
+  {
+    "actor": {
+      "email": "pat@example.com",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "stripe:evt_2",
+    "id": "<event id>",
+    "kind": "stripe.payment",
+    "priority": "normal",
+    "source": "stripe",
+    "summary": "Invoice paid: 15.00 EUR",
+    "thread": "inbox",
+    "title": "Payment received: 15.00 EUR",
+    "ts": "2026-10-28T15:00:00.000Z",
+    "work": false,
+  },
+  {
+    "actor": {},
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "stripe:evt_3",
+    "id": "<event id>",
+    "kind": "stripe.event",
+    "priority": "low",
+    "source": "stripe",
+    "summary": "Stripe event: customer.subscription.deleted",
+    "thread": "inbox",
+    "title": "customer.subscription.deleted",
+    "ts": "2026-10-28T15:00:00.000Z",
+    "work": false,
+  },
+]
+`;

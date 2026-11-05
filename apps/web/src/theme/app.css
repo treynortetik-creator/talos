@@ -1,0 +1,431 @@
+@import "tailwindcss";
+@import "@fontsource-variable/cinzel";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+@import "./tokens.css";
+
+/* Everything below uses tokens only (spec 8.10). */
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  line-height: var(--leading);
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+@layer base {
+  *:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+}
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ---- mascot (8.9): a tondo, black-figure Talos in a terracotta disc with a black ring ---- */
+.mascot {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--talos-terracotta);
+  box-shadow: inset 0 0 0 max(1.5px, 0.06em) var(--talos-black);
+  font-size: 16px;
+}
+.mascot-lg {
+  /* the large tondo gets the incised cream ring of a cup medallion */
+  box-shadow:
+    inset 0 0 0 3px var(--talos-black),
+    inset 0 0 0 6px var(--talos-terracotta),
+    inset 0 0 0 7.5px var(--talos-cream);
+}
+.mascot img,
+.mascot video {
+  position: absolute;
+  top: 9%;
+  left: 7%;
+  display: block;
+  width: 86%;
+  height: 86%;
+  max-width: none;
+  object-fit: contain;
+  pointer-events: none;
+}
+.mascot:not(.mascot-lg) img,
+.mascot:not(.mascot-lg) video {
+  /* small tondos crop to the bust (helmet, eyes, ichor core), so the robot still reads at 24-48 px */
+  top: -4%;
+  left: -50%;
+  width: 175%;
+  height: 175%;
+}
+.mascot-listening {
+  box-shadow:
+    inset 0 0 0 max(1.5px, 0.06em) var(--talos-black),
+    0 0 0 3px var(--glow);
+}
+.mascot-speaking {
+  box-shadow:
+    inset 0 0 0 max(1.5px, 0.06em) var(--talos-black),
+    0 0 0 calc(2px + 6px * var(--mascot-level, 0.4)) color-mix(in srgb, var(--glow) 70%, transparent);
+  transition: box-shadow var(--dur-1) var(--ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mascot-speaking {
+    transition: none;
+  }
+  .enter-up,
+  .highlight-pulse {
+    animation: none;
+  }
+}
+
+/* ---- markdown prose: agent text reads like a page (8.1) ---- */
+.prose-talos {
+  overflow-wrap: anywhere;
+}
+.prose-talos > :first-child {
+  margin-top: 0;
+}
+.prose-talos > :last-child {
+  margin-bottom: 0;
+}
+.prose-talos p,
+.prose-talos ul,
+.prose-talos ol,
+.prose-talos blockquote,
+.prose-talos pre,
+.prose-talos table {
+  margin: 0.6em 0;
+}
+.prose-talos h1,
+.prose-talos h2,
+.prose-talos h3,
+.prose-talos h4 {
+  margin: 1em 0 0.4em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.prose-talos h1 {
+  font-size: var(--text-xl);
+}
+.prose-talos h2 {
+  font-size: var(--text-lg);
+}
+.prose-talos h3,
+.prose-talos h4 {
+  font-size: var(--text-md);
+}
+.prose-talos ul,
+.prose-talos ol {
+  padding-left: 1.4em;
+}
+.prose-talos ul {
+  list-style: disc;
+}
+.prose-talos ol {
+  list-style: decimal;
+}
+.prose-talos li {
+  margin: 0.2em 0;
+}
+.prose-talos a {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-talos code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.prose-talos pre {
+  overflow-x: auto;
+  background: var(--surface);
+  border: var(--hairline) solid var(--line);
+  border-radius: var(--radius-button);
+  padding: var(--space-3);
+}
+.prose-talos pre:has(> [data-copy-code]) {
+  /* the Copy button sits in a band of its own above the code, so it never covers a character, however the lines wrap */
+  padding-top: 44px;
+}
+.prose-talos pre.run-block {
+  /* a script that can be run is shown whole: it wraps, it never scrolls away */
+  overflow-x: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.prose-talos pre code {
+  background: none;
+  padding: 0;
+}
+.prose-talos blockquote {
+  border-left: 3px solid var(--line);
+  padding-left: var(--space-3);
+  color: var(--text-2);
+}
+.prose-talos table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.prose-talos th,
+.prose-talos td {
+  border: var(--hairline) solid var(--line);
+  padding: var(--space-1) var(--space-2);
+  /* cells keep a readable width and the table scrolls sideways, instead of wrapping to a letter per line on a phone */
+  min-width: 8rem;
+}
+.prose-talos a.md-image-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0 var(--space-2);
+  border: var(--hairline) solid var(--line);
+  border-radius: var(--radius-pill, 999px);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* task lists (audit D34): the glyph is part of the text, so the list marker goes */
+.prose-talos li.md-task {
+  list-style: none;
+  margin-left: -1.25em;
+}
+.prose-talos li.md-task-done {
+  color: var(--text-2);
+}
+/* math (audit D34): Temml's MathML, drawn by the browser's own maths font; no font file ships with it. Each formula sits in a
+   box that scrolls sideways, because WebKit ignores `overflow` on <math> and lets a wide one push the whole timeline. The rules
+   below are the part of Temml-Local.css the sanitised markup needs (alignment, rules, cancel strokes); fonts are left out. */
+.prose-talos .md-math {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+  vertical-align: middle;
+}
+.prose-talos .md-math-display {
+  display: block;
+  margin: var(--space-2) 0;
+}
+.prose-talos math {
+  font-size: 1.1em;
+}
+.prose-talos .md-math-display math[display="block"] {
+  display: block math;
+}
+.prose-talos mtd {
+  padding: 0 0.4em;
+}
+.prose-talos math * {
+  border-color: currentColor;
+}
+.prose-talos mtd.tml-right {
+  text-align: right;
+}
+.prose-talos mtd.tml-left {
+  text-align: left;
+}
+/* Chromium alone needs its own keyword for a cell's contents (Temml-Local.css); Firefox and WebKit take the plain one. */
+@supports (not (-webkit-backdrop-filter: blur(1px))) and (not (-moz-appearance: none)) {
+  .prose-talos mtd.tml-right {
+    text-align: -webkit-right;
+  }
+  .prose-talos mtd.tml-left {
+    text-align: -webkit-left;
+  }
+}
+.prose-talos menclose {
+  display: inline-block;
+  position: relative;
+  padding: 0.5ex 0;
+}
+.prose-talos .tml-overline {
+  padding: 0.1em 0 0;
+  border-top: 0.065em solid;
+}
+.prose-talos .tml-underline {
+  padding: 0 0 0.1em;
+  border-bottom: 0.065em solid;
+}
+.prose-talos .tml-cancel {
+  display: inline-block;
+  position: absolute;
+  left: 0.5px;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  background-color: currentColor;
+}
+.prose-talos .upstrike {
+  clip-path: polygon(0.05em 100%, 0 calc(100% - 0.05em), calc(100% - 0.05em) 0, 100% 0.05em);
+}
+.prose-talos .downstrike {
+  clip-path: polygon(0 0.05em, 0.05em 0, 100% calc(100% - 0.05em), calc(100% - 0.05em) 100%);
+}
+.prose-talos .tml-fbox {
+  padding: 3pt;
+  border: 1px solid;
+}
+.prose-talos code.md-math-src {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.prose-talos code.md-math-block {
+  display: block;
+}
+
+/* ---- card enter / collapse motion (8.9) ---- */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.enter-up {
+  animation: slide-up var(--dur-2) var(--ease);
+}
+@keyframes pulse-hl {
+  0%,
+  60% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
+.highlight-pulse {
+  animation: pulse-hl 1.2s var(--ease);
+}
+/* agents panel (docs/SUBAGENTS.md 6.2): a running row's mark and the chip breathe; ichor is for alive states only */
+@keyframes agent-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    /* the trough keeps the running mark >= 3:1 on the panel surface in both schemes (WCAG 1.4.11) */
+    opacity: 0.75;
+  }
+}
+.agent-pulse {
+  animation: agent-breathe 1.6s var(--ease) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-pulse {
+    animation: none;
+  }
+}
+@layer components {
+  .meander-rule {
+    height: 14px;
+    flex: none;
+    background-color: var(--meander-ink);
+    -webkit-mask: var(--pattern-meander) repeat-x 0 0 / 14px 14px;
+    mask: var(--pattern-meander) repeat-x 0 0 / 14px 14px;
+  }
+  /* a horizontally scrolling strip fades at its trailing edge so a cut-off tab reads as "more" */
+  .fade-end {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+  }
+  /* the incised line: a fine keyline scratched just inside a card's border */
+  .incised {
+    border: var(--hairline) solid var(--line);
+    box-shadow: var(--keyline);
+  }
+  /* the black frieze (desktop sidebar, phone bottom bar): cream line work on black-figure ink */
+  .frieze {
+    background: var(--chrome);
+    color: var(--on-chrome);
+  }
+}
+::selection {
+  background: color-mix(in srgb, var(--talos-ichor) 45%, transparent);
+  color: var(--text);
+}
+html {
+  caret-color: var(--accent-text);
+  scrollbar-color: var(--line) transparent;
+}
+.dvh {
+  height: 100dvh;
+}
+/* On-screen keyboard (src/lib/keyboardViewport.ts). In the iPhone shell the web view itself shrinks to the space above
+   the keyboard (native resize), so 100dvh is the visible height and nothing is pinned. `data-kb` is set from layout. */
+:root {
+  --safe-b: env(safe-area-inset-bottom);
+}
+/* While the keyboard slides up the native resize lags it: the root is given the final height at once, so the composer
+   rises with the keyboard. min() with 100dvh means a stale value can never make it taller than the screen, and the
+   keyboard covers the home-indicator inset it would otherwise pad for. */
+html.kb-lift {
+  --safe-b: 0px;
+}
+html.kb-lift .app-root {
+  height: min(100dvh, var(--kb-lift-h, 100dvh));
+  transition: height 0.38s cubic-bezier(0.33, 1, 0.68, 1);
+}
+html.kb-lift .composer-root {
+  transition: padding-bottom 0.38s cubic-bezier(0.33, 1, 0.68, 1);
+}
+/* Four lines at most above the keyboard: the latest messages keep some room on a small phone. */
+html[data-kb] .composer-box {
+  max-height: min(6.5rem, 25dvh);
+}
+/* Landscape phone with the keyboard up leaves ~190 px: the header and banners give way to the box. */
+@media (max-height: 520px) {
+  html[data-kb] .kb-hide-short,
+  html[data-kb] .kb-hide-short-landscape {
+    display: none;
+  }
+}
+/* Any phone with little room left above the keyboard (a tall keyboard on a small screen reads the same). */
+@media (max-height: 339px) {
+  html[data-kb] .kb-hide-banner {
+    display: none;
+  }
+}
+@media (max-height: 299px) {
+  html[data-kb] .kb-hide-short {
+    display: none;
+  }
+}
+/* The chip list scrolls only while the keyboard is up; the box and chips are bounded by what is visible. */
+html[data-kb] .composer-chips {
+  max-height: min(5.5rem, 20dvh);
+  overflow-y: auto;
+}
+html[data-kb] .kb-hide {
+  display: none;
+}
+/* The scroller ends at the keyboard and sticky bars (Settings Save) sit on it: a revealed field stops above them. */
+html[data-kb] :is(input, textarea, select, [contenteditable]):not(.composer-box) {
+  scroll-margin-bottom: 5rem;
+}

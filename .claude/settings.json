@@ -1,0 +1,20 @@
+{
+  "claudeMdExcludes": [
+    "**/kit/**/CLAUDE.md",
+    "**/.*/**/kit/**/CLAUDE.md",
+    "**/.*/**/.*/**/kit/**/CLAUDE.md",
+    "**/kit/.claude/rules/**",
+    "**/.*/**/kit/.claude/rules/**",
+    "**/.*/**/.*/**/kit/.claude/rules/**"
+  ],
+  "skillOverrides": {
+    "talos-agora": "off",
+    "talos-go-public": "off",
+    "talos-hands-free": "off",
+    "talos-interview": "off",
+    "talos-meeting-prep": "off",
+    "talos-memory-recall": "off",
+    "talos-theme": "off",
+    "talos-transcript-ingest": "off"
+  }
+}

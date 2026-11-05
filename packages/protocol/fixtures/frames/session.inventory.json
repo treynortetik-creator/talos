@@ -1,0 +1,79 @@
+{
+  "v": 1,
+  "type": "session.inventory",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T42V",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "inventory": {
+    "commands": [
+      {
+        "name": "context",
+        "description": "Show context usage",
+        "source": "builtin",
+        "route": "control"
+      },
+      {
+        "name": "compact",
+        "description": "Compact the conversation",
+        "source": "builtin",
+        "route": "control"
+      },
+      {
+        "name": "model",
+        "description": "Switch model",
+        "source": "builtin",
+        "route": "control"
+      },
+      {
+        "name": "permissions",
+        "description": "Manage permissions",
+        "source": "builtin",
+        "route": "local_only"
+      },
+      {
+        "name": "release-notes",
+        "description": "Draft release notes",
+        "source": "user",
+        "route": "message"
+      }
+    ],
+    "models": [
+      {
+        "value": "default",
+        "label": "Default"
+      },
+      {
+        "value": "opus",
+        "label": "Opus"
+      },
+      {
+        "value": "sonnet",
+        "label": "Sonnet"
+      },
+      {
+        "value": "haiku",
+        "label": "Haiku"
+      }
+    ],
+    "efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "mcp_servers": [
+      {
+        "name": "talos-app",
+        "tools": 12,
+        "status": "connected"
+      }
+    ],
+    "plugins": [
+      {
+        "name": "talos-app-mod",
+        "enabled": true
+      }
+    ],
+    "at": "2026-10-28T15:32:10.120Z"
+  }
+}

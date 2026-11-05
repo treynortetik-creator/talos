@@ -1,0 +1,8 @@
+{
+  "recorded": "2026-10-29 from apps/relay (test harness, local)",
+  "status": 403,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"error\":\"files_not_allowed\",\"message\":\"This share link cannot send files.\"}"
+}

@@ -1,0 +1,84 @@
+{
+  "v": 1,
+  "type": "session.agents",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T432",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "agents": {
+    "session_id": "sess_cc_example",
+    "source": "mod+tee",
+    "can_stop": true,
+    "rows": [
+      {
+        "id": "a00f4f30ac1399f7f",
+        "kind": "subagent",
+        "type": "Explore",
+        "title": "research mods API",
+        "status": "running",
+        "activity": "Running memory and search vitest suites",
+        "activity_source": "summary",
+        "model": "claude-sonnet-5-5",
+        "tokens": 12300,
+        "started_at": "2026-10-28T15:29:56.000Z",
+        "background": true,
+        "stoppable": true,
+        "recent": [
+          {
+            "at": "2026-10-28T15:31:40.000Z",
+            "text": "Read register.ts"
+          },
+          {
+            "at": "2026-10-28T15:32:02.000Z",
+            "text": "Run vitest suites"
+          }
+        ]
+      },
+      {
+        "id": "tm_reviewer_1",
+        "kind": "teammate",
+        "type": "general-purpose",
+        "name": "reviewer",
+        "title": "Review the protocol diff",
+        "status": "idle",
+        "activity": "Search \"AgentsSnapshot\"",
+        "activity_source": "tool",
+        "parent_id": "a00f4f30ac1399f7f",
+        "tokens": 4100,
+        "started_at": "2026-10-28T15:30:00.000Z",
+        "background": true,
+        "stoppable": true,
+        "recent": []
+      },
+      {
+        "id": "b7c2e91d",
+        "kind": "shell",
+        "type": "shell",
+        "title": "Run the dev server",
+        "status": "running",
+        "started_at": "2026-10-28T15:30:00.000Z",
+        "background": true,
+        "stoppable": true,
+        "recent": []
+      },
+      {
+        "id": "a51d0c7e2f9b4a113",
+        "kind": "subagent",
+        "type": "general-purpose",
+        "title": "Draft release notes",
+        "status": "completed",
+        "model": "claude-haiku-5-5",
+        "tokens": 8800,
+        "started_at": "2026-10-28T15:20:00.000Z",
+        "ended_at": "2026-10-28T15:27:31.000Z",
+        "background": false,
+        "stoppable": false,
+        "recent": [
+          {
+            "at": "2026-10-28T15:27:20.000Z",
+            "text": "Write release-notes.md"
+          }
+        ]
+      }
+    ],
+    "at": "2026-10-28T15:32:10.120Z"
+  }
+}

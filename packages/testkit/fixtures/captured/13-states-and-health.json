@@ -1,0 +1,921 @@
+{
+  "scenario": "13-states-and-health",
+  "title": "A job through offered, agent_busy, no_session, running, failed and missed; the job_failed alert",
+  "steps": [
+    {
+      "step": 1,
+      "label": "the clock reaches 07:30: both due jobs are offered",
+      "received_by_bridge": [],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:30:30.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:30:30-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+            },
+            {
+              "id": "missed-job",
+              "etag": "sha256:9d81d9401e50fa31d45c1e9e185a1cbb59e6d016310303c7e91d28eef3fd698f",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Scheduled job {\"id\":\"missed-job\",\"name\":\"Missed Job\"} is due 2026-10-05T07:20:00-04:00 (run r_00000000000000000000000002, window ends 2026-10-05T07:35:00-04:00).\n1. Call schedule_run_start with this run id. If it says SKIP, stop here.\n2. Hand the work to a sub-agent (Agent tool): pass the standing rules and then the job text below, both exactly and in\n   that order, plus the thread \"general\" and the due time; ask for a short result. Don't do the heavy work in this conversation.\n3. Post the result to thread general with reply, then call schedule_run_done with ok and a one-line summary.\n--- job ---\nSummarise yesterday and post it.\n",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "r_00000000000000000000000002",
+            "ts": "2026-10-05T11:30:30.300Z",
+            "kind": "schedule_run",
+            "trust": "owner",
+            "schedule_id": "missed-job",
+            "run_id": "r_00000000000000000000000002",
+            "ds": "2026-10-05",
+            "fire_at": "2026-10-05T07:20:00-04:00",
+            "window_ends": "2026-10-05T07:35:00-04:00"
+          }
+        },
+        {
+          "content": "Scheduled job {\"id\":\"daily-digest\",\"name\":\"Daily Digest\"} is due 2026-10-05T07:30:00-04:00 (run r_00000000000000000000000003, window ends 2026-10-05T10:30:00-04:00).\n1. Call schedule_run_start with this run id. If it says SKIP, stop here.\n2. Hand the work to a sub-agent (Agent tool): pass the standing rules and then the job text below, both exactly and in\n   that order, plus the thread \"general\" and the due time; ask for a short result. Don't do the heavy work in this conversation.\n3. Post the result to thread general with reply, then call schedule_run_done with ok and a one-line summary.\n--- job ---\nSummarise yesterday and post it.\n",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "r_00000000000000000000000003",
+            "ts": "2026-10-05T11:30:30.300Z",
+            "kind": "schedule_run",
+            "trust": "owner",
+            "schedule_id": "daily-digest",
+            "run_id": "r_00000000000000000000000003",
+            "ds": "2026-10-05",
+            "fire_at": "2026-10-05T07:30:00-04:00",
+            "window_ends": "2026-10-05T10:30:00-04:00"
+          }
+        }
+      ],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 2,
+      "label": "list: waiting, offered a moment ago",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedules.list",
+          "id": "00000000000000000000000004",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "request_id": "00000000000000000000000005",
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000006",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "type": "ack",
+          "ref": "00000000000000000000000004"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000007",
+          "ts": "2026-10-05T11:30:32.400Z",
+          "type": "schedules.snapshot",
+          "request_id": "00000000000000000000000005",
+          "snapshot": {
+            "protocol": 1,
+            "health": {
+              "state": "ok",
+              "adapter": {
+                "id": "chronos",
+                "version": "0.3.0",
+                "api": 1
+              },
+              "tz": "America/New_York",
+              "host_label": "Example Mac",
+              "session_runner": "talos",
+              "paused_all": false,
+              "headless": "unused",
+              "tick_age_s": null,
+              "issues": [],
+              "checked_at": "2026-10-05T07:30:32-04:00"
+            },
+            "schedules": [
+              {
+                "id": "daily-digest",
+                "name": "Daily Digest",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:30"
+                },
+                "when_text": "Every day at 7:30 AM",
+                "catchup_min": 180,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-06T07:30:00-04:00",
+                "today": "waiting",
+                "window_ends": "2026-10-05T10:30:00-04:00",
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "thread_id": null,
+                "wait_reason": "offered"
+              },
+              {
+                "id": "missed-job",
+                "name": "Missed Job",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:20"
+                },
+                "when_text": "Every day at 7:20 AM",
+                "catchup_min": 15,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-06T07:20:00-04:00",
+                "today": "waiting",
+                "window_ends": "2026-10-05T07:35:00-04:00",
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:9d81d9401e50fa31d45c1e9e185a1cbb59e6d016310303c7e91d28eef3fd698f",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "thread_id": null,
+                "wait_reason": "offered"
+              }
+            ],
+            "unreadable": [],
+            "as_of": "2026-10-05T07:30:32-04:00"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 3,
+      "label": "list: waiting, the agent has not started it (agent_busy)",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedules.list",
+          "id": "00000000000000000000000008",
+          "ts": "2026-10-05T11:32:42.400Z",
+          "request_id": "00000000000000000000000009",
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000010",
+          "ts": "2026-10-05T11:32:42.400Z",
+          "type": "ack",
+          "ref": "00000000000000000000000008"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000011",
+          "ts": "2026-10-05T11:32:42.400Z",
+          "type": "schedules.snapshot",
+          "request_id": "00000000000000000000000009",
+          "snapshot": {
+            "protocol": 1,
+            "health": {
+              "state": "ok",
+              "adapter": {
+                "id": "chronos",
+                "version": "0.3.0",
+                "api": 1
+              },
+              "tz": "America/New_York",
+              "host_label": "Example Mac",
+              "session_runner": "talos",
+              "paused_all": false,
+              "headless": "unused",
+              "tick_age_s": null,
+              "issues": [],
+              "checked_at": "2026-10-05T07:33:10-04:00"
+            },
+            "schedules": [
+              {
+                "id": "daily-digest",
+                "name": "Daily Digest",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:30"
+                },
+                "when_text": "Every day at 7:30 AM",
+                "catchup_min": 180,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-06T07:30:00-04:00",
+                "today": "waiting",
+                "window_ends": "2026-10-05T10:30:00-04:00",
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "thread_id": null,
+                "wait_reason": "agent_busy"
+              },
+              {
+                "id": "missed-job",
+                "name": "Missed Job",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:20"
+                },
+                "when_text": "Every day at 7:20 AM",
+                "catchup_min": 15,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-06T07:20:00-04:00",
+                "today": "waiting",
+                "window_ends": "2026-10-05T07:35:00-04:00",
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:9d81d9401e50fa31d45c1e9e185a1cbb59e6d016310303c7e91d28eef3fd698f",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "thread_id": null,
+                "wait_reason": "agent_busy"
+              }
+            ],
+            "unreadable": [],
+            "as_of": "2026-10-05T07:33:10-04:00"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 4,
+      "label": "list: waiting with no session heard from for minutes (no_session); the other job is missed",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedules.list",
+          "id": "00000000000000000000000012",
+          "ts": "2026-10-05T11:32:44.500Z",
+          "request_id": "00000000000000000000000013",
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000014",
+          "ts": "2026-10-05T11:32:44.500Z",
+          "type": "ack",
+          "ref": "00000000000000000000000012"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000015",
+          "ts": "2026-10-05T11:32:44.500Z",
+          "type": "schedules.snapshot",
+          "request_id": "00000000000000000000000013",
+          "snapshot": {
+            "protocol": 1,
+            "health": {
+              "state": "ok",
+              "adapter": {
+                "id": "chronos",
+                "version": "0.3.0",
+                "api": 1
+              },
+              "tz": "America/New_York",
+              "host_label": "Example Mac",
+              "session_runner": "talos",
+              "paused_all": false,
+              "headless": "unused",
+              "tick_age_s": null,
+              "issues": [
+                {
+                  "code": "missed_recently",
+                  "severity": "info",
+                  "text": "Jobs were missed in the last day: missed-job.",
+                  "fix": "Missed jobs don't re-run on their own. Use Run now.",
+                  "schedule_id": "missed-job",
+                  "since": "2026-10-05T07:40:00-04:00"
+                }
+              ],
+              "checked_at": "2026-10-05T07:40:00-04:00"
+            },
+            "schedules": [
+              {
+                "id": "daily-digest",
+                "name": "Daily Digest",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:30"
+                },
+                "when_text": "Every day at 7:30 AM",
+                "catchup_min": 180,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-06T07:30:00-04:00",
+                "today": "waiting",
+                "window_ends": "2026-10-05T10:30:00-04:00",
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+                "thread_id": null,
+                "wait_reason": "no_session"
+              },
+              {
+                "id": "missed-job",
+                "name": "Missed Job",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:20"
+                },
+                "when_text": "Every day at 7:20 AM",
+                "catchup_min": 15,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-06T07:20:00-04:00",
+                "today": "missed",
+                "window_ends": null,
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:9d81d9401e50fa31d45c1e9e185a1cbb59e6d016310303c7e91d28eef3fd698f",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+                "thread_id": null,
+                "wait_reason": null
+              }
+            ],
+            "unreadable": [],
+            "as_of": "2026-10-05T07:40:00-04:00"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 5,
+      "label": "the agent claims the run",
+      "received_by_bridge": [],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000016",
+          "ts": "2026-10-05T11:32:44.500Z",
+          "type": "reply",
+          "message": {
+            "id": "m_00000000000000000000000017",
+            "thread_id": "general",
+            "author": "system",
+            "kind": "text",
+            "text": "Scheduled job \"Missed Job\" was missed: no session was running in its window. Open Schedules.",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-05T11:32:44.500Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000018",
+          "ts": "2026-10-05T11:32:44.500Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [
+              {
+                "code": "missed_recently",
+                "severity": "info",
+                "text": "Jobs were missed in the last day: missed-job.",
+                "fix": "Missed jobs don't re-run on their own. Use Run now.",
+                "schedule_id": "missed-job",
+                "since": "2026-10-05T07:40:00-04:00"
+              }
+            ],
+            "checked_at": "2026-10-05T07:40:00-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000004"
+            },
+            {
+              "id": "missed-job",
+              "etag": "sha256:9d81d9401e50fa31d45c1e9e185a1cbb59e6d016310303c7e91d28eef3fd698f",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000003"
+            }
+          ],
+          "removed": [],
+          "alert": {
+            "kind": "job_failed",
+            "key": "missed-job:2026-10-05"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": [
+        {
+          "name": "schedule_run_start",
+          "args": {
+            "run_id": "r_00000000000000000000000003"
+          },
+          "result": "GO",
+          "is_error": false
+        }
+      ]
+    },
+    {
+      "step": 6,
+      "label": "list: running",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedules.list",
+          "id": "00000000000000000000000019",
+          "ts": "2026-10-05T11:32:46.600Z",
+          "request_id": "00000000000000000000000020",
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000021",
+          "ts": "2026-10-05T11:32:46.600Z",
+          "type": "ack",
+          "ref": "00000000000000000000000019"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000022",
+          "ts": "2026-10-05T11:32:46.600Z",
+          "type": "schedules.snapshot",
+          "request_id": "00000000000000000000000020",
+          "snapshot": {
+            "protocol": 1,
+            "health": {
+              "state": "ok",
+              "adapter": {
+                "id": "chronos",
+                "version": "0.3.0",
+                "api": 1
+              },
+              "tz": "America/New_York",
+              "host_label": "Example Mac",
+              "session_runner": "talos",
+              "paused_all": false,
+              "headless": "unused",
+              "tick_age_s": null,
+              "issues": [
+                {
+                  "code": "missed_recently",
+                  "severity": "info",
+                  "text": "Jobs were missed in the last day: missed-job.",
+                  "fix": "Missed jobs don't re-run on their own. Use Run now.",
+                  "schedule_id": "missed-job",
+                  "since": "2026-10-05T07:40:05-04:00"
+                }
+              ],
+              "checked_at": "2026-10-05T07:40:05-04:00"
+            },
+            "schedules": [
+              {
+                "id": "daily-digest",
+                "name": "Daily Digest",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:30"
+                },
+                "when_text": "Every day at 7:30 AM",
+                "catchup_min": 180,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-06T07:30:00-04:00",
+                "today": "running",
+                "window_ends": "2026-10-05T10:30:00-04:00",
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000004",
+                "thread_id": null,
+                "wait_reason": null
+              },
+              {
+                "id": "missed-job",
+                "name": "Missed Job",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:20"
+                },
+                "when_text": "Every day at 7:20 AM",
+                "catchup_min": 15,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-06T07:20:00-04:00",
+                "today": "missed",
+                "window_ends": null,
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:9d81d9401e50fa31d45c1e9e185a1cbb59e6d016310303c7e91d28eef3fd698f",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+                "thread_id": null,
+                "wait_reason": null
+              }
+            ],
+            "unreadable": [],
+            "as_of": "2026-10-05T07:40:05-04:00"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 7,
+      "label": "the agent reports a failure: a system row and a job_failed alert",
+      "received_by_bridge": [],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000023",
+          "ts": "2026-10-05T11:32:46.600Z",
+          "type": "reply",
+          "message": {
+            "id": "m_00000000000000000000000024",
+            "thread_id": "general",
+            "author": "system",
+            "kind": "text",
+            "text": "Scheduled job \"Daily Digest\" didn't finish: it reported a failure. Open Schedules.",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-05T11:32:46.600Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000025",
+          "ts": "2026-10-05T11:32:46.600Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [
+              {
+                "code": "missed_recently",
+                "severity": "info",
+                "text": "Jobs were missed in the last day: missed-job.",
+                "fix": "Missed jobs don't re-run on their own. Use Run now.",
+                "schedule_id": "missed-job",
+                "since": "2026-10-05T07:40:05-04:00"
+              }
+            ],
+            "checked_at": "2026-10-05T07:40:05-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000005"
+            }
+          ],
+          "removed": [],
+          "alert": {
+            "kind": "job_failed",
+            "key": "daily-digest:2026-10-05"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": [
+        {
+          "name": "schedule_run_done",
+          "args": {
+            "run_id": "r_00000000000000000000000003",
+            "ok": false,
+            "summary": "The API said no."
+          },
+          "result": "recorded",
+          "is_error": false
+        }
+      ]
+    },
+    {
+      "step": 8,
+      "label": "list: failed",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedules.list",
+          "id": "00000000000000000000000026",
+          "ts": "2026-10-05T11:32:48.700Z",
+          "request_id": "00000000000000000000000027",
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000028",
+          "ts": "2026-10-05T11:32:48.700Z",
+          "type": "ack",
+          "ref": "00000000000000000000000026"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000029",
+          "ts": "2026-10-05T11:32:48.700Z",
+          "type": "schedules.snapshot",
+          "request_id": "00000000000000000000000027",
+          "snapshot": {
+            "protocol": 1,
+            "health": {
+              "state": "ok",
+              "adapter": {
+                "id": "chronos",
+                "version": "0.3.0",
+                "api": 1
+              },
+              "tz": "America/New_York",
+              "host_label": "Example Mac",
+              "session_runner": "talos",
+              "paused_all": false,
+              "headless": "unused",
+              "tick_age_s": null,
+              "issues": [
+                {
+                  "code": "missed_recently",
+                  "severity": "info",
+                  "text": "Jobs were missed in the last day: missed-job.",
+                  "fix": "Missed jobs don't re-run on their own. Use Run now.",
+                  "schedule_id": "missed-job",
+                  "since": "2026-10-05T07:40:08-04:00"
+                }
+              ],
+              "checked_at": "2026-10-05T07:40:08-04:00"
+            },
+            "schedules": [
+              {
+                "id": "daily-digest",
+                "name": "Daily Digest",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:30"
+                },
+                "when_text": "Every day at 7:30 AM",
+                "catchup_min": 180,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-06T07:30:00-04:00",
+                "today": "failed",
+                "window_ends": null,
+                "last_run": {
+                  "run_id": "r_00000000000000000000000003",
+                  "ds": "2026-10-05",
+                  "started_at": "2026-10-05T07:40:00-04:00",
+                  "runner": "session",
+                  "trigger": "clock",
+                  "status": "failed",
+                  "duration_s": 5,
+                  "has_report": true,
+                  "summary": "The API said no."
+                },
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000005",
+                "thread_id": null,
+                "wait_reason": null
+              },
+              {
+                "id": "missed-job",
+                "name": "Missed Job",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:20"
+                },
+                "when_text": "Every day at 7:20 AM",
+                "catchup_min": 15,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-06T07:20:00-04:00",
+                "today": "missed",
+                "window_ends": null,
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:9d81d9401e50fa31d45c1e9e185a1cbb59e6d016310303c7e91d28eef3fd698f",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+                "thread_id": null,
+                "wait_reason": null
+              }
+            ],
+            "unreadable": [],
+            "as_of": "2026-10-05T07:40:08-04:00"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    }
+  ]
+}

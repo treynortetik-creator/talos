@@ -1,0 +1,251 @@
+{
+  "scenario": "04-patch-create",
+  "title": "schedule.patch create: a card; PRIMARY writes it (card.update, schedule.status, the agent is told)",
+  "steps": [
+    {
+      "step": 1,
+      "label": "app proposes a new job",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.patch",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "change": {
+            "op": "create",
+            "draft": {
+              "id": "nightly-sync",
+              "name": "Nightly Sync",
+              "description": "Sync the notes folder.",
+              "when": {
+                "type": "weekdays",
+                "time": "22:00"
+              },
+              "catchup_min": 120,
+              "enabled": true,
+              "runner": "session",
+              "permissions": "full",
+              "allowed_tools": [],
+              "model": null,
+              "notify": "failure",
+              "thread_id": "inbox",
+              "prompt": "Sync the notes folder and post a one-line summary.\n"
+            }
+          },
+          "thread_id": "general",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000002",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000001"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000003",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "card.create",
+          "card": {
+            "id": "c_00000000000000000000000004",
+            "thread_id": "general",
+            "kind": "schedule",
+            "title": "New scheduled job: Nightly Sync",
+            "destination": [
+              {
+                "label": "Runs",
+                "value": "Weekdays at 10:00 PM"
+              },
+              {
+                "label": "Next",
+                "value": "2026-10-05T22:00:00-04:00"
+              },
+              {
+                "label": "As",
+                "value": "Full permissions, nobody watching"
+              },
+              {
+                "label": "Where",
+                "value": "In your live session"
+              },
+              {
+                "label": "Posts to",
+                "value": "Inbox"
+              },
+              {
+                "label": "Proposed by",
+                "value": "your form"
+              }
+            ],
+            "body": "On: on\nModel: default\nNotify: failure\nCatch-up: 120 min\nDescription: Sync the notes folder.\n\nPrompt:\nSync the notes folder and post a one-line summary.\n",
+            "body_format": "plain",
+            "fields": [],
+            "attachments": [],
+            "primary_label": "Create job",
+            "kill_label": "Kill new job",
+            "allow_edit": false,
+            "allow_revise": true,
+            "risk": "high",
+            "origin": "chat",
+            "payload": {
+              "schema": "talos.schedule-change/1",
+              "change": {
+                "op": "create",
+                "draft": {
+                  "id": "nightly-sync",
+                  "name": "Nightly Sync",
+                  "description": "Sync the notes folder.",
+                  "when": {
+                    "type": "weekdays",
+                    "time": "22:00"
+                  },
+                  "catchup_min": 120,
+                  "enabled": true,
+                  "runner": "session",
+                  "permissions": "full",
+                  "allowed_tools": [],
+                  "model": null,
+                  "notify": "failure",
+                  "prompt": "Sync the notes folder and post a one-line summary.\n",
+                  "thread_id": "inbox"
+                }
+              },
+              "expected_etag": "sha256:512efa8770d88c90ec74dcb02e257add60087baddfb4644e5a940e4d5448fef7",
+              "proposed_by": "owner_form",
+              "client_ref": "00000000000000000000000001",
+              "preview": {
+                "when_text": "Weekdays at 10:00 PM",
+                "next_runs": [
+                  "2026-10-05T22:00:00-04:00",
+                  "2026-10-06T22:00:00-04:00",
+                  "2026-10-07T22:00:00-04:00"
+                ],
+                "tz": "America/New_York"
+              }
+            },
+            "payload_hash": "sha256:3ea81adde4840efc97579df871196304eb94e5aac30937b956a2a0d022dd488c",
+            "state": "pending",
+            "created_at": "2026-10-05T11:00:00.300Z",
+            "expires_at": "2026-10-06T11:00:00.300Z",
+            "warning": "Runs unattended with full permissions: it can do anything you can on this Mac."
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 2,
+      "label": "owner approves the card",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "card.resolve",
+          "id": "00000000000000000000000005",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "card_id": "c_00000000000000000000000004",
+          "action": "primary",
+          "payload_hash": "sha256:3ea81adde4840efc97579df871196304eb94e5aac30937b956a2a0d022dd488c",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000006",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000005",
+          "stage": "delivered"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000007",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000004",
+          "state": "resolved",
+          "resolution": {
+            "action": "primary",
+            "at": "2026-10-05T11:00:00.300Z",
+            "edited": false,
+            "payload_hash": "sha256:3ea81adde4840efc97579df871196304eb94e5aac30937b956a2a0d022dd488c",
+            "taken_at": "2026-10-05T11:00:00.300Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000008",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000005",
+          "stage": "consumed"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000009",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "card.update",
+          "card_id": "c_00000000000000000000000004",
+          "state": "done",
+          "result": {
+            "ok": true,
+            "text": "Saved. Next run Mon 10:00 PM.",
+            "at": "2026-10-05T11:00:00.300Z"
+          }
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000010",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:00:00-04:00"
+          },
+          "changed": [
+            {
+              "id": "nightly-sync",
+              "etag": "sha256:512efa8770d88c90ec74dcb02e257add60087baddfb4644e5a940e4d5448fef7",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Card c_00000000000000000000000004 → PRIMARY. The bridge applied it: Saved. Next run Mon 10:00 PM. Nothing for you to do.",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "c_00000000000000000000000004-applied",
+            "ts": "2026-10-05T11:00:00.300Z",
+            "kind": "system",
+            "trust": "system"
+          }
+        }
+      ],
+      "agent_tool_calls": []
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "exit": 0,
+  "out": {
+    "ok": true,
+    "scope": "j-sess",
+    "paused": true,
+    "paused_all": false
+  }
+}

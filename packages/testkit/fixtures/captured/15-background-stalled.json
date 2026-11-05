@@ -1,0 +1,136 @@
+{
+  "scenario": "15-background-stalled",
+  "title": "A background run stalled and Chronos blocked headless runs: tcc_suspected, launch_stalled, headless_blocked, a stalled day",
+  "steps": [
+    {
+      "step": 1,
+      "label": "app asks for the list",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedules.list",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "request_id": "00000000000000000000000002",
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000003",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "type": "ack",
+          "ref": "00000000000000000000000001"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000004",
+          "ts": "2026-10-05T11:00:02.400Z",
+          "type": "schedules.snapshot",
+          "request_id": "00000000000000000000000002",
+          "snapshot": {
+            "protocol": 1,
+            "health": {
+              "state": "degraded",
+              "adapter": {
+                "id": "chronos",
+                "version": "0.3.0",
+                "api": 1
+              },
+              "tz": "America/New_York",
+              "host_label": "Example Mac",
+              "session_runner": "talos",
+              "paused_all": false,
+              "headless": "blocked",
+              "tick_age_s": null,
+              "issues": [
+                {
+                  "code": "launch_stalled",
+                  "severity": "warn",
+                  "text": "A background run is stuck.",
+                  "fix": "Read the run log in Schedules → Recent runs. If macOS is the cause, see \"Background runs are stuck\".",
+                  "schedule_id": "bg-job",
+                  "since": "2026-10-05T07:00:00-04:00"
+                },
+                {
+                  "code": "launch_stalled",
+                  "severity": "warn",
+                  "text": "A background run is stuck.",
+                  "fix": "Read the run log in Schedules → Recent runs. If macOS is the cause, see \"Background runs are stuck\".",
+                  "schedule_id": null,
+                  "since": "2026-10-05T07:00:00-04:00"
+                },
+                {
+                  "code": "headless_blocked",
+                  "severity": "warn",
+                  "text": "Background runs are off until this is fixed. Session jobs are unaffected.",
+                  "fix": "macOS is probably waiting for permission. 1. At the Mac, look for a dialog saying Claude Code would like to access a folder and click Allow (it may be behind other windows). 2. Or open System Settings → Privacy & Security → Files and Folders and allow it. 3. Lasting fix: keep your agent folder outside Desktop, Documents and Downloads. Then tap Retry background runs.",
+                  "schedule_id": null,
+                  "since": "2026-10-05T07:00:00-04:00"
+                },
+                {
+                  "code": "tcc_suspected",
+                  "severity": "warn",
+                  "text": "Background runs are stuck. macOS is probably waiting for your permission.",
+                  "fix": "macOS is probably waiting for permission. 1. At the Mac, look for a dialog saying Claude Code would like to access a folder and click Allow (it may be behind other windows). 2. Or open System Settings → Privacy & Security → Files and Folders and allow it. 3. Lasting fix: keep your agent folder outside Desktop, Documents and Downloads. 4. Tap Retry background runs. Session jobs aren't affected.",
+                  "schedule_id": null,
+                  "since": "2026-10-05T07:00:00-04:00"
+                }
+              ],
+              "checked_at": "2026-10-05T07:00:00-04:00"
+            },
+            "schedules": [
+              {
+                "id": "bg-job",
+                "name": "Background",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:30"
+                },
+                "when_text": "Every day at 7:30 AM",
+                "catchup_min": 180,
+                "enabled": true,
+                "paused": false,
+                "runner": "headless",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-05T07:30:00-04:00",
+                "today": "stalled",
+                "window_ends": null,
+                "last_run": {
+                  "ds": "2026-10-05",
+                  "status": "launch_stalled",
+                  "has_report": false
+                },
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:2d4e94ee3ee5ce679a156d8239afe9d5d2a860a560fe26eb9976d9c4a7ac0df4",
+                "content_hash": "sha256:c70b5940b9f8640ac0a66c4f853f269f8f79c3e122cebaa330de5241ea2d259b",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "thread_id": null,
+                "wait_reason": null
+              }
+            ],
+            "unreadable": [],
+            "as_of": "2026-10-05T07:00:00-04:00"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    }
+  ]
+}

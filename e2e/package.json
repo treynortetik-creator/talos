@@ -1,0 +1,19 @@
+{
+  "name": "@talos-app/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@talos-app/integrations": "workspace:*",
+    "@talos-app/protocol": "workspace:*",
+    "@talos-app/testkit": "workspace:*"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server-basic-vanillajs": "2.0.3",
+    "@modelcontextprotocol/server-system-monitor": "2.0.3"
+  }
+}

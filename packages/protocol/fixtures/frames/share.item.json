@@ -1,0 +1,29 @@
+{
+  "v": 1,
+  "type": "share.item",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T43H",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "relay": {
+    "seq": 4190,
+    "received_at": "2026-10-28T15:32:10.120Z"
+  },
+  "share_id": "01JBF3V7Q8K2M4N6P8R0S2T43J",
+  "token_id": "sh_01JBF3V7Q8K2M4N6P8R0S2T43K",
+  "token_label": "iPhone",
+  "message": {
+    "id": "m_01JBF3V7Q8K2M4N6P8R0S2T43M",
+    "thread_id": "inbox",
+    "seq": 4190,
+    "author": "owner",
+    "kind": "text",
+    "text": "Read this later",
+    "format": "plain",
+    "attachments": [],
+    "via": "share",
+    "created_at": "2026-10-28T15:32:10.120Z",
+    "share_content": {
+      "url": "https://example.com/article",
+      "title": "An example article"
+    }
+  }
+}

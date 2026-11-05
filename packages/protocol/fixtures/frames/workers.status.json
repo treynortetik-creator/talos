@@ -1,0 +1,29 @@
+{
+  "v": 1,
+  "type": "workers.status",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T43T",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "status": {
+    "supported": true,
+    "supervisor_online": true,
+    "threads": [
+      {
+        "thread_id": "trip",
+        "state": "live",
+        "model": "inherit",
+        "cwd": "/Users/example/Projects/trip",
+        "last_turn_at": "2026-10-28T15:32:10.120Z"
+      },
+      {
+        "thread_id": "garden",
+        "state": "parked",
+        "model": "sonnet",
+        "parked_at": "2026-10-28T15:32:10.120Z"
+      }
+    ],
+    "governor": {
+      "state": "ok"
+    },
+    "at": "2026-10-28T15:32:10.120Z"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "v": 1,
+  "type": "session.list",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T42Y",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "sessions": [
+    {
+      "id": "bg_example_1",
+      "kind": "background",
+      "title": "Run the test suite",
+      "status": "working",
+      "thread_id": "general",
+      "output": "available",
+      "updated_at": "2026-10-28T15:32:10.120Z"
+    },
+    {
+      "id": "cloud_example_1",
+      "kind": "cloud",
+      "title": "Nightly refactor",
+      "status": "done",
+      "thread_id": "general",
+      "url": "https://claude.ai/code/session_example",
+      "output": "not_available",
+      "updated_at": "2026-10-28T15:32:10.120Z"
+    }
+  ],
+  "at": "2026-10-28T15:32:10.120Z"
+}

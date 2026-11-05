@@ -1,0 +1,3 @@
+/* The shell's stylesheet (WP6) is not in this branch, so the harness pulls in Tailwind and scans the app source itself. */
+@import "tailwindcss";
+@source "../../../src";

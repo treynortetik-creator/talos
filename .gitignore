@@ -1,0 +1,40 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+!apps/mobile/.env.local.example
+*.sqlite
+# Apple APNs / signing keys: the owner downloads AuthKey_<KeyID>.p8 once (docs/IOS-PUSH.md); it never belongs in git
+*.p8
+*.p12
+*.mobileprovision
+*.sqlite-*
+.DS_Store
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.vite/
+.wrangler/
+# Private architect denylist (owner-specific strings). Never commit.
+scripts/personal-denylist.txt
+*.blend1
+assets/mascot/3d/__pycache__/
+assets/mascot/3d/tools/__pycache__/
+# Regenerable mascot outputs (bash assets/mascot/3d/build.sh)
+assets/mascot/frames/
+assets/mascot/preview/
+assets/mascot/web/*-sheet.webp
+assets/mascot/web/*-sheet.json
+.dev/
+# Private design docs whose "## Appendix P" must never appear in the repo (see check-no-personal.sh). Never commit.
+scripts/private-docs.txt
+
+# Python bytecode (the vendored Chronos is run by tests; never commit what the run writes)
+__pycache__/
+
+# Desktop app (SwiftPM build output, packed apps)
+apps/desktop/.build/
+*.app
+.desktop-out/

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# talos-migrate: run or reverse the Talos migrations for an agent folder. See scripts/talos-migrate.py (--help).
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+exec python3 "$HERE/../scripts/talos-migrate.py" "$@"

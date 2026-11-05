@@ -1,0 +1,105 @@
+{
+  "scenario": "01-roots-and-top",
+  "frames": [
+    {
+      "asked": "memory.tree",
+      "frame": {
+        "v": 1,
+        "id": "01J00000000000000000000001",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.listing",
+        "request_id": "01J10000000000000000000001",
+        "roots": [
+          {
+            "id": "notes",
+            "label": "Notes",
+            "files": 505
+          }
+        ],
+        "entries": [],
+        "next_cursor": null
+      }
+    },
+    {
+      "asked": "memory.tree",
+      "frame": {
+        "v": 1,
+        "id": "01J00000000000000000000002",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.listing",
+        "request_id": "01J10000000000000000000002",
+        "root_id": "notes",
+        "path": "",
+        "entries": [
+          {
+            "name": "big",
+            "path": "big",
+            "type": "dir"
+          },
+          {
+            "name": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "path": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "type": "dir"
+          },
+          {
+            "name": "projects",
+            "path": "projects",
+            "type": "dir"
+          },
+          {
+            "name": "Overview.md",
+            "path": "Overview.md",
+            "type": "file",
+            "size": 230,
+            "mtime": "2026-10-20T12:00:00.000Z",
+            "title": "Project Overview",
+            "previewable": true
+          },
+          {
+            "name": "page.html",
+            "path": "page.html",
+            "type": "file",
+            "size": 41,
+            "mtime": "2026-10-20T12:00:00.000Z",
+            "title": "page",
+            "previewable": true
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "asked": "memory.tree",
+      "frame": {
+        "v": 1,
+        "id": "01J00000000000000000000003",
+        "ts": "2026-10-29T12:00:00.000Z",
+        "type": "memory.listing",
+        "request_id": "01J10000000000000000000003",
+        "root_id": "notes",
+        "path": "projects/example",
+        "entries": [
+          {
+            "name": "Launch checklist.md",
+            "path": "projects/example/Launch checklist.md",
+            "type": "file",
+            "size": 54,
+            "mtime": "2026-10-20T12:00:00.000Z",
+            "title": "Launch checklist",
+            "previewable": true
+          },
+          {
+            "name": "plan.md",
+            "path": "projects/example/plan.md",
+            "type": "file",
+            "size": 67,
+            "mtime": "2026-10-20T12:00:00.000Z",
+            "title": "Plan",
+            "previewable": true
+          }
+        ],
+        "next_cursor": null
+      }
+    }
+  ]
+}

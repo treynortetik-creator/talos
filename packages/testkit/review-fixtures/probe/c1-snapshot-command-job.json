@@ -1,0 +1,52 @@
+{
+  "exit": 0,
+  "out": {
+    "api": 1,
+    "chronos": "0.3.0-rc1",
+    "as_of": "2026-10-05T07:45:00-04:00",
+    "tz": "America/New_York",
+    "session_runner": "hook",
+    "approval_required": false,
+    "paused_all": false,
+    "session_beat_age_s": null,
+    "tick_age_s": null,
+    "jobs_file": "$HOME/.config/chronos/jobs.json",
+    "state_dir": "$HOME/.chronos/state",
+    "registry_synced_folder": false,
+    "schedules": [
+      {
+        "id": "command-job",
+        "name": "command-job",
+        "description": "hand",
+        "kind": "command",
+        "when": {
+          "type": "daily",
+          "time": "07:30"
+        },
+        "when_text": "Every day at 7:30 AM",
+        "catchup_min": 180,
+        "enabled": true,
+        "paused": false,
+        "runner": "headless",
+        "permissions": "command",
+        "allowed_tools": [],
+        "model": null,
+        "notify": "failure",
+        "triggers_count": 0,
+        "next_run": "2026-10-06T07:30:00-04:00",
+        "today": "waiting",
+        "ds": "2026-10-05",
+        "window_ends": "2026-10-05T10:30:00-04:00",
+        "last_run": null,
+        "prompt_preview": "",
+        "prompt_bytes": 7,
+        "editable": false,
+        "read_only_reason": "Command jobs are edited at the Mac",
+        "changed_outside": true,
+        "etag": "sha256:bd4e38621cf77c10567fd9fa21caeed80e897816d5a1c627ef62e74f3f18cd99",
+        "content_hash": "sha256:932f0771a3dbe0def722db90775f850c5b8526e695f7cdda4abd17dfe2aab610",
+        "state_rev": "sha256:8b7925b9f5f9c6420b7fbcb30ed8a2a72a7769582f78d8b39a2c271b8e7c9714"
+      }
+    ]
+  }
+}

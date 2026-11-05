@@ -1,0 +1,170 @@
+{
+  "scenario": "02-list-three-jobs",
+  "title": "schedules.list with three jobs: a session job, a headless job and a one-shot",
+  "steps": [
+    {
+      "step": 1,
+      "label": "app asks for the list",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedules.list",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "request_id": "00000000000000000000000002",
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000003",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000001"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000004",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "schedules.snapshot",
+          "request_id": "00000000000000000000000002",
+          "snapshot": {
+            "protocol": 1,
+            "health": {
+              "state": "ok",
+              "adapter": {
+                "id": "chronos",
+                "version": "0.3.0",
+                "api": 1
+              },
+              "tz": "America/New_York",
+              "host_label": "Example Mac",
+              "session_runner": "talos",
+              "paused_all": false,
+              "headless": "ok",
+              "tick_age_s": null,
+              "issues": [],
+              "checked_at": "2026-10-05T07:00:00-04:00"
+            },
+            "schedules": [
+              {
+                "id": "daily-digest",
+                "name": "Daily Digest",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:30"
+                },
+                "when_text": "Every day at 7:30 AM",
+                "catchup_min": 180,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-05T07:30:00-04:00",
+                "today": "pending",
+                "window_ends": null,
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "thread_id": null,
+                "wait_reason": null
+              },
+              {
+                "id": "weekly-wrap",
+                "name": "Weekly Wrap",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "days",
+                  "days": [
+                    "fri"
+                  ],
+                  "time": "16:00"
+                },
+                "when_text": "Fridays at 4:00 PM",
+                "catchup_min": 180,
+                "enabled": true,
+                "paused": false,
+                "runner": "headless",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-09T16:00:00-04:00",
+                "today": "not_due",
+                "window_ends": null,
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:61c0c79d778f77938cfe3c6438a42c96a177b3464c8b6f3098fdc5941e2b7335",
+                "content_hash": "sha256:c70b5940b9f8640ac0a66c4f853f269f8f79c3e122cebaa330de5241ea2d259b",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+                "thread_id": null,
+                "wait_reason": null
+              },
+              {
+                "id": "one-time",
+                "name": "One Time",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "once",
+                  "at": "2026-10-09T10:00"
+                },
+                "when_text": "Once on Fri Oct 9 at 10:00 AM",
+                "catchup_min": 180,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-09T10:00:00-04:00",
+                "today": "not_due",
+                "window_ends": null,
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:b36941f176106115dc77b27fc26f50babcc38f6b7a6150b824f2d29fb43b2c55",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+                "thread_id": null,
+                "wait_reason": null
+              }
+            ],
+            "unreadable": [],
+            "as_of": "2026-10-05T07:00:00-04:00"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    }
+  ]
+}

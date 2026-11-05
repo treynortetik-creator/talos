@@ -1,0 +1,901 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		06BE7C3516820E643E160B22 /* TalosShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 49FD8D75437A55C1CD73853B /* TalosShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		087E6D105C620FF7B95608A9 /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D163170C704202077DDEE6E5 /* KeychainTokenStore.swift */; };
+		0E2FF62B81581BE8921E482B /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D163170C704202077DDEE6E5 /* KeychainTokenStore.swift */; };
+		0EEA270D01DA507221C27B0F /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F13EA46D65C6DD380E027527 /* ShareViewController.swift */; };
+		1C2828AB6F056A7680FC41D9 /* TalosAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = B1529373780317034FB668BF /* TalosAudioCore */; };
+		1CA998C627766237F2232BEB /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = FD127B870EFB46EFAC91834E /* CapApp-SPM */; };
+		1F5F0D3BAE328BCA1F73A160 /* MediaViewerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E74F8C3FCBA3B4AE97C68C2 /* MediaViewerController.swift */; };
+		26E51AC20D9FE4119F144870 /* public in Resources */ = {isa = PBXBuildFile; fileRef = 7E5BBB12596EE01767A6151A /* public */; };
+		35BD895BE3DCF16E0C717AD5 /* CompiledRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F8675814FAF64984E33686 /* CompiledRelay.swift */; };
+		3ADAB4B2470A531DAC1D3760 /* TalosQuickAct.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E244550EE6C5966F3E211ED /* TalosQuickAct.swift */; };
+		3EF75B20CDF46D5CBCADEDF8 /* TalosCrashCore in Frameworks */ = {isa = PBXBuildFile; productRef = BDFEBBD3CD6557ACDCFA3CAE /* TalosCrashCore */; };
+		3FB3C8C0634A765EE81D042E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 76989E05CECAD7B8B3C424A7 /* Assets.xcassets */; };
+		4FB34C264C0E482A4F3BA9EA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 23F8D68E28D07D16EB72E4AA /* LaunchScreen.storyboard */; };
+		50C3494C2BD46DCBB9C6B781 /* TalosAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9679C30F6E5386C1D9583F58 /* TalosAudio.swift */; };
+		58D8EB777AABC0F494EE6FB0 /* TalosShare.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FDCDCD29A7C84F740D263FC /* TalosShare.swift */; };
+		5E04533C01261A377D816DB8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 8776CD2CC1249496A6F18C86 /* config.xml */; };
+		67740B5377F807ABF1532F55 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2016878D44EAA9692D059F /* SceneDelegate.swift */; };
+		73784838AFD29BD30F587CE2 /* ShareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5234E389CA1D307F6DB335 /* ShareView.swift */; };
+		76D62AC129AAAD4B9F4DD90B /* TalosPluginGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 471A8C9169042696FD40141A /* TalosPluginGate.swift */; };
+		76E1541BDD920E715B804172 /* TalosShareCore in Frameworks */ = {isa = PBXBuildFile; productRef = CF1D6E09D22144855866DDD1 /* TalosShareCore */; };
+		81138B00431411BE1EF97D97 /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 68ED4E8FE0185474B6E8E85B /* capacitor.config.json */; };
+		88182210BD876CA2544859F5 /* TalosPushExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 441A3BD7070BE74658DC1469 /* TalosPushExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		8B4A61B613827B073FBB8AB9 /* CompiledRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F8675814FAF64984E33686 /* CompiledRelay.swift */; };
+		93820AFB0F413E2D1C8F583D /* TalosPushCore in Frameworks */ = {isa = PBXBuildFile; productRef = E608AFD233F8F2970D6247E3 /* TalosPushCore */; };
+		95C38BB4FB56187972591E16 /* BridgeGuard in Frameworks */ = {isa = PBXBuildFile; productRef = 1647F7D58578464A3DFBFABD /* BridgeGuard */; };
+		95D14867FFF071722164A29F /* NativeKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 076C04980F436BC6BD16B38C /* NativeKeyStore.swift */; };
+		964C752F52C50D0DA03BAA47 /* TalosShareCore in Frameworks */ = {isa = PBXBuildFile; productRef = 44F0627F1A0034ECF154A285 /* TalosShareCore */; };
+		A31EF66B6DF698C31B87CE63 /* ShareModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B3288FBC9BE0BA38026B618 /* ShareModel.swift */; };
+		A9B0B4B2A529B7950FE5CDB3 /* TalosPush.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA566E4C10699729F30E7729 /* TalosPush.swift */; };
+		B222B4241F9CCC801BD09990 /* TalosCrash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48A879D7486EC440EB48D3F5 /* TalosCrash.swift */; };
+		C784E38E198F2E6658588FB4 /* NativeKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 076C04980F436BC6BD16B38C /* NativeKeyStore.swift */; };
+		CF04BCB5897EE830F6D15FF6 /* NativeKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 912C05722891585DB67B1AB9 /* NativeKeyStoreTests.swift */; };
+		D0D35A9CB4F2631A49D259C1 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6795445F49DC0C5A08BCBDA /* NotificationService.swift */; };
+		D3595F6B764F0A8C5C5B394C /* TalosPushCore in Frameworks */ = {isa = PBXBuildFile; productRef = DD0D399B039396E58E56C071 /* TalosPushCore */; };
+		E8E03F4FB1BE61A377693A7C /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9420949282AB92AA28A975D3 /* AppDelegate.swift */; };
+		FD0E375194DF369490D1A4BC /* TalosBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E59561450E59E8689D6B17B /* TalosBridgeViewController.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		126C74824A7F534068A426FC /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6B590BF25178DC7D824D09CE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8E920D423D63FB7C9F8D5698;
+			remoteInfo = TalosPushExtension;
+		};
+		32EAB22E4CA94300DDDCDCCB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6B590BF25178DC7D824D09CE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 93E9E330FC2CE7458D9C925F;
+			remoteInfo = App;
+		};
+		8584B115589F6C3C872F53B8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6B590BF25178DC7D824D09CE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FAB4F0F1F10FA3728D760DFF;
+			remoteInfo = TalosShareExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		7C6B2DB89D01A1E9B8F2A565 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				06BE7C3516820E643E160B22 /* TalosShareExtension.appex in Embed Foundation Extensions */,
+				88182210BD876CA2544859F5 /* TalosPushExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		00974E067C806B76249CC31E /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		076C04980F436BC6BD16B38C /* NativeKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeKeyStore.swift; sourceTree = "<group>"; };
+		2E59561450E59E8689D6B17B /* TalosBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosBridgeViewController.swift; sourceTree = "<group>"; };
+		3B3288FBC9BE0BA38026B618 /* ShareModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareModel.swift; sourceTree = "<group>"; };
+		3E74F8C3FCBA3B4AE97C68C2 /* MediaViewerController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaViewerController.swift; sourceTree = "<group>"; };
+		441A3BD7070BE74658DC1469 /* TalosPushExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = TalosPushExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		471A8C9169042696FD40141A /* TalosPluginGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosPluginGate.swift; sourceTree = "<group>"; };
+		48A879D7486EC440EB48D3F5 /* TalosCrash.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosCrash.swift; sourceTree = "<group>"; };
+		49D88A349FD70A9153DD2C03 /* App.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		49FD8D75437A55C1CD73853B /* TalosShareExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = TalosShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		4C189F6AC751EAB1820AAB59 /* TalosPushCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TalosPushCore; path = ../TalosPushCore; sourceTree = SOURCE_ROOT; };
+		4D6A28A8C686BE348A566D25 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		5FDCDCD29A7C84F740D263FC /* TalosShare.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosShare.swift; sourceTree = "<group>"; };
+		603E421DF5523BA58B8E3E32 /* TalosShareCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TalosShareCore; path = ../TalosShareCore; sourceTree = SOURCE_ROOT; };
+		68ED4E8FE0185474B6E8E85B /* capacitor.config.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
+		6B04ADF7B81E144C4949AE51 /* CapApp-SPM */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "CapApp-SPM"; path = "CapApp-SPM"; sourceTree = SOURCE_ROOT; };
+		76989E05CECAD7B8B3C424A7 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7E5BBB12596EE01767A6151A /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; name = public; path = App/public; sourceTree = SOURCE_ROOT; };
+		8776CD2CC1249496A6F18C86 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
+		912C05722891585DB67B1AB9 /* NativeKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeKeyStoreTests.swift; sourceTree = "<group>"; };
+		9420949282AB92AA28A975D3 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		9679C30F6E5386C1D9583F58 /* TalosAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosAudio.swift; sourceTree = "<group>"; };
+		96ADD8C88522DD2549F74158 /* BridgeGuard */ = {isa = PBXFileReference; lastKnownFileType = folder; name = BridgeGuard; path = ../BridgeGuard; sourceTree = SOURCE_ROOT; };
+		9E244550EE6C5966F3E211ED /* TalosQuickAct.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosQuickAct.swift; sourceTree = "<group>"; };
+		A9CDDDC47163CCD1A6F601C4 /* TalosCrashCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TalosCrashCore; path = ../TalosCrashCore; sourceTree = SOURCE_ROOT; };
+		B1F8675814FAF64984E33686 /* CompiledRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompiledRelay.swift; sourceTree = "<group>"; };
+		C8A9A2F9E029400EE1562218 /* AppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CFB356DF0401F842E4EACA65 /* TalosAudioCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TalosAudioCore; path = ../TalosAudioCore; sourceTree = SOURCE_ROOT; };
+		D163170C704202077DDEE6E5 /* KeychainTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTokenStore.swift; sourceTree = "<group>"; };
+		D6795445F49DC0C5A08BCBDA /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		ED2016878D44EAA9692D059F /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		F13EA46D65C6DD380E027527 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		FA566E4C10699729F30E7729 /* TalosPush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosPush.swift; sourceTree = "<group>"; };
+		FF5234E389CA1D307F6DB335 /* ShareView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7278A34C5B3FB18E9E58093D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				93820AFB0F413E2D1C8F583D /* TalosPushCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B127220B5E9765975226C3C1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				76E1541BDD920E715B804172 /* TalosShareCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BC0DC3536DED64E0E8C9923E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1CA998C627766237F2232BEB /* CapApp-SPM in Frameworks */,
+				95C38BB4FB56187972591E16 /* BridgeGuard in Frameworks */,
+				1C2828AB6F056A7680FC41D9 /* TalosAudioCore in Frameworks */,
+				964C752F52C50D0DA03BAA47 /* TalosShareCore in Frameworks */,
+				D3595F6B764F0A8C5C5B394C /* TalosPushCore in Frameworks */,
+				3EF75B20CDF46D5CBCADEDF8 /* TalosCrashCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		2477C78C660157702946D1CD /* TalosShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				3B3288FBC9BE0BA38026B618 /* ShareModel.swift */,
+				FF5234E389CA1D307F6DB335 /* ShareView.swift */,
+				F13EA46D65C6DD380E027527 /* ShareViewController.swift */,
+			);
+			path = TalosShareExtension;
+			sourceTree = "<group>";
+		};
+		4102E3E068508DD683953C7D = {
+			isa = PBXGroup;
+			children = (
+				443E9F32F0EC65EEBF466F3B /* App */,
+				92ACA850132D7931F18F9889 /* ios */,
+				A09E2501204CB86B4B2B6562 /* Packages */,
+				E9C3DB3EC6D7655028A9C0D3 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		443E9F32F0EC65EEBF466F3B /* App */ = {
+			isa = PBXGroup;
+			children = (
+				9420949282AB92AA28A975D3 /* AppDelegate.swift */,
+				76989E05CECAD7B8B3C424A7 /* Assets.xcassets */,
+				68ED4E8FE0185474B6E8E85B /* capacitor.config.json */,
+				8776CD2CC1249496A6F18C86 /* config.xml */,
+				3E74F8C3FCBA3B4AE97C68C2 /* MediaViewerController.swift */,
+				7E5BBB12596EE01767A6151A /* public */,
+				ED2016878D44EAA9692D059F /* SceneDelegate.swift */,
+				2E59561450E59E8689D6B17B /* TalosBridgeViewController.swift */,
+				23F8D68E28D07D16EB72E4AA /* LaunchScreen.storyboard */,
+				77DC4614F7D5E4C3289AA3F8 /* Plugins */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		5298DC36C9E2D4FFC41319D0 /* TalosShareShared */ = {
+			isa = PBXGroup;
+			children = (
+				B1F8675814FAF64984E33686 /* CompiledRelay.swift */,
+				D163170C704202077DDEE6E5 /* KeychainTokenStore.swift */,
+			);
+			path = TalosShareShared;
+			sourceTree = "<group>";
+		};
+		579C795C3FC868CD411303DA /* TalosPushShared */ = {
+			isa = PBXGroup;
+			children = (
+				076C04980F436BC6BD16B38C /* NativeKeyStore.swift */,
+			);
+			path = TalosPushShared;
+			sourceTree = "<group>";
+		};
+		67E6ABD228D08FA903D459A3 /* AppTests */ = {
+			isa = PBXGroup;
+			children = (
+				912C05722891585DB67B1AB9 /* NativeKeyStoreTests.swift */,
+			);
+			path = AppTests;
+			sourceTree = "<group>";
+		};
+		77DC4614F7D5E4C3289AA3F8 /* Plugins */ = {
+			isa = PBXGroup;
+			children = (
+				9679C30F6E5386C1D9583F58 /* TalosAudio.swift */,
+				48A879D7486EC440EB48D3F5 /* TalosCrash.swift */,
+				471A8C9169042696FD40141A /* TalosPluginGate.swift */,
+				FA566E4C10699729F30E7729 /* TalosPush.swift */,
+				9E244550EE6C5966F3E211ED /* TalosQuickAct.swift */,
+				5FDCDCD29A7C84F740D263FC /* TalosShare.swift */,
+			);
+			path = Plugins;
+			sourceTree = "<group>";
+		};
+		79BBF47105B280D35AF1A319 /* TalosPushExtension */ = {
+			isa = PBXGroup;
+			children = (
+				D6795445F49DC0C5A08BCBDA /* NotificationService.swift */,
+			);
+			path = TalosPushExtension;
+			sourceTree = "<group>";
+		};
+		92ACA850132D7931F18F9889 /* ios */ = {
+			isa = PBXGroup;
+			children = (
+				4D6A28A8C686BE348A566D25 /* Signing.xcconfig */,
+				67E6ABD228D08FA903D459A3 /* AppTests */,
+				79BBF47105B280D35AF1A319 /* TalosPushExtension */,
+				579C795C3FC868CD411303DA /* TalosPushShared */,
+				2477C78C660157702946D1CD /* TalosShareExtension */,
+				5298DC36C9E2D4FFC41319D0 /* TalosShareShared */,
+			);
+			name = ios;
+			path = ..;
+			sourceTree = "<group>";
+		};
+		A09E2501204CB86B4B2B6562 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				96ADD8C88522DD2549F74158 /* BridgeGuard */,
+				6B04ADF7B81E144C4949AE51 /* CapApp-SPM */,
+				CFB356DF0401F842E4EACA65 /* TalosAudioCore */,
+				A9CDDDC47163CCD1A6F601C4 /* TalosCrashCore */,
+				4C189F6AC751EAB1820AAB59 /* TalosPushCore */,
+				603E421DF5523BA58B8E3E32 /* TalosShareCore */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		E9C3DB3EC6D7655028A9C0D3 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				49D88A349FD70A9153DD2C03 /* App.app */,
+				C8A9A2F9E029400EE1562218 /* AppTests.xctest */,
+				441A3BD7070BE74658DC1469 /* TalosPushExtension.appex */,
+				49FD8D75437A55C1CD73853B /* TalosShareExtension.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		8E920D423D63FB7C9F8D5698 /* TalosPushExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0A16DC0B03253DBC78E80F71 /* Build configuration list for PBXNativeTarget "TalosPushExtension" */;
+			buildPhases = (
+				45BC72659DA5375495E3DAD4 /* Sources */,
+				7278A34C5B3FB18E9E58093D /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TalosPushExtension;
+			packageProductDependencies = (
+				E608AFD233F8F2970D6247E3 /* TalosPushCore */,
+			);
+			productName = TalosPushExtension;
+			productReference = 441A3BD7070BE74658DC1469 /* TalosPushExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		93E9E330FC2CE7458D9C925F /* App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FFC1863BD4026D2C17CBE82B /* Build configuration list for PBXNativeTarget "App" */;
+			buildPhases = (
+				B77F0AF073564580D75A2CF1 /* Sources */,
+				37BFF6A8CB5CC7FA21AD3FA3 /* Resources */,
+				BC0DC3536DED64E0E8C9923E /* Frameworks */,
+				7C6B2DB89D01A1E9B8F2A565 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E84A261D4E5786F24ECF142C /* PBXTargetDependency */,
+				A7C4D731DF0986130F1E4BC0 /* PBXTargetDependency */,
+			);
+			name = App;
+			packageProductDependencies = (
+				FD127B870EFB46EFAC91834E /* CapApp-SPM */,
+				1647F7D58578464A3DFBFABD /* BridgeGuard */,
+				B1529373780317034FB668BF /* TalosAudioCore */,
+				44F0627F1A0034ECF154A285 /* TalosShareCore */,
+				DD0D399B039396E58E56C071 /* TalosPushCore */,
+				BDFEBBD3CD6557ACDCFA3CAE /* TalosCrashCore */,
+			);
+			productName = App;
+			productReference = 49D88A349FD70A9153DD2C03 /* App.app */;
+			productType = "com.apple.product-type.application";
+		};
+		99DCC7BD0ABB09C467644299 /* AppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E5F9A71B7F6D259DCE5E1FD0 /* Build configuration list for PBXNativeTarget "AppTests" */;
+			buildPhases = (
+				F2209317AB8C886394D02ACA /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				96AA6D50C1AA746282D306B3 /* PBXTargetDependency */,
+			);
+			name = AppTests;
+			packageProductDependencies = (
+			);
+			productName = AppTests;
+			productReference = C8A9A2F9E029400EE1562218 /* AppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		FAB4F0F1F10FA3728D760DFF /* TalosShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 63B58D005744F9A4433F3ABC /* Build configuration list for PBXNativeTarget "TalosShareExtension" */;
+			buildPhases = (
+				8C4A465E056108C698A27FD1 /* Sources */,
+				B127220B5E9765975226C3C1 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TalosShareExtension;
+			packageProductDependencies = (
+				CF1D6E09D22144855866DDD1 /* TalosShareCore */,
+			);
+			productName = TalosShareExtension;
+			productReference = 49FD8D75437A55C1CD73853B /* TalosShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		6B590BF25178DC7D824D09CE /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					8E920D423D63FB7C9F8D5698 = {
+						ProvisioningStyle = Automatic;
+					};
+					93E9E330FC2CE7458D9C925F = {
+						ProvisioningStyle = Automatic;
+					};
+					FAB4F0F1F10FA3728D760DFF = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = B3FD05C59F197F398A0B04AB /* Build configuration list for PBXProject "App" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 4102E3E068508DD683953C7D;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				24237241AA1BFB8F7868B8EA /* XCLocalSwiftPackageReference "../BridgeGuard" */,
+				397805CC4E683B158816CC6E /* XCLocalSwiftPackageReference "CapApp-SPM" */,
+				E817D241CDB9628AD76FD737 /* XCLocalSwiftPackageReference "../TalosAudioCore" */,
+				675EC3E6341DE227DA7CD7B9 /* XCLocalSwiftPackageReference "../TalosCrashCore" */,
+				B98D2BA550E1BC2D3FC45861 /* XCLocalSwiftPackageReference "../TalosPushCore" */,
+				476B6B70F0C15D12DB142006 /* XCLocalSwiftPackageReference "../TalosShareCore" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = E9C3DB3EC6D7655028A9C0D3 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				93E9E330FC2CE7458D9C925F /* App */,
+				99DCC7BD0ABB09C467644299 /* AppTests */,
+				FAB4F0F1F10FA3728D760DFF /* TalosShareExtension */,
+				8E920D423D63FB7C9F8D5698 /* TalosPushExtension */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		37BFF6A8CB5CC7FA21AD3FA3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3FB3C8C0634A765EE81D042E /* Assets.xcassets in Resources */,
+				4FB34C264C0E482A4F3BA9EA /* LaunchScreen.storyboard in Resources */,
+				81138B00431411BE1EF97D97 /* capacitor.config.json in Resources */,
+				5E04533C01261A377D816DB8 /* config.xml in Resources */,
+				26E51AC20D9FE4119F144870 /* public in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		45BC72659DA5375495E3DAD4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C784E38E198F2E6658588FB4 /* NativeKeyStore.swift in Sources */,
+				D0D35A9CB4F2631A49D259C1 /* NotificationService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8C4A465E056108C698A27FD1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				35BD895BE3DCF16E0C717AD5 /* CompiledRelay.swift in Sources */,
+				0E2FF62B81581BE8921E482B /* KeychainTokenStore.swift in Sources */,
+				A31EF66B6DF698C31B87CE63 /* ShareModel.swift in Sources */,
+				73784838AFD29BD30F587CE2 /* ShareView.swift in Sources */,
+				0EEA270D01DA507221C27B0F /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B77F0AF073564580D75A2CF1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E8E03F4FB1BE61A377693A7C /* AppDelegate.swift in Sources */,
+				8B4A61B613827B073FBB8AB9 /* CompiledRelay.swift in Sources */,
+				087E6D105C620FF7B95608A9 /* KeychainTokenStore.swift in Sources */,
+				1F5F0D3BAE328BCA1F73A160 /* MediaViewerController.swift in Sources */,
+				95D14867FFF071722164A29F /* NativeKeyStore.swift in Sources */,
+				67740B5377F807ABF1532F55 /* SceneDelegate.swift in Sources */,
+				50C3494C2BD46DCBB9C6B781 /* TalosAudio.swift in Sources */,
+				FD0E375194DF369490D1A4BC /* TalosBridgeViewController.swift in Sources */,
+				B222B4241F9CCC801BD09990 /* TalosCrash.swift in Sources */,
+				76D62AC129AAAD4B9F4DD90B /* TalosPluginGate.swift in Sources */,
+				A9B0B4B2A529B7950FE5CDB3 /* TalosPush.swift in Sources */,
+				3ADAB4B2470A531DAC1D3760 /* TalosQuickAct.swift in Sources */,
+				58D8EB777AABC0F494EE6FB0 /* TalosShare.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F2209317AB8C886394D02ACA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CF04BCB5897EE830F6D15FF6 /* NativeKeyStoreTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		96AA6D50C1AA746282D306B3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 93E9E330FC2CE7458D9C925F /* App */;
+			targetProxy = 32EAB22E4CA94300DDDCDCCB /* PBXContainerItemProxy */;
+		};
+		A7C4D731DF0986130F1E4BC0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 8E920D423D63FB7C9F8D5698 /* TalosPushExtension */;
+			targetProxy = 126C74824A7F534068A426FC /* PBXContainerItemProxy */;
+		};
+		E84A261D4E5786F24ECF142C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FAB4F0F1F10FA3728D760DFF /* TalosShareExtension */;
+			targetProxy = 8584B115589F6C3C872F53B8 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXVariantGroup section */
+		23F8D68E28D07D16EB72E4AA /* LaunchScreen.storyboard */ = {
+			isa = PBXVariantGroup;
+			children = (
+				00974E067C806B76249CC31E /* Base */,
+			);
+			name = LaunchScreen.storyboard;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin XCBuildConfiguration section */
+		0C8A32FA2925A89BB7F91941 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ../TalosShareExtension/TalosShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = ../TalosShareExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TALOS_BUNDLE_ID).share";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		2EF40DF1E108E618D0D1371B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TALOS_BUNDLE_ID).tests";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/App";
+			};
+			name = Release;
+		};
+		33A95629D3115DC03304CC13 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ../TalosPushExtension/TalosPushExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = ../TalosPushExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TALOS_BUNDLE_ID).push";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		4A0C935808978B5A7673E412 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CAPACITOR_DEBUG = YES;
+				CODE_SIGN_ENTITLEMENTS = "$(TALOS_APP_ENTITLEMENTS)";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_BITCODE = NO;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TALOS_BUNDLE_ID)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		5C9EF0E6AF4F9491454DE177 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4D6A28A8C686BE348A566D25 /* Signing.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E8D703594B18D360433E4667 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TALOS_BUNDLE_ID).tests";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/App";
+			};
+			name = Debug;
+		};
+		EB1CC3A930E09FEBECF9195D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CAPACITOR_DEBUG = NO;
+				CODE_SIGN_ENTITLEMENTS = "$(TALOS_APP_ENTITLEMENTS)";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_BITCODE = NO;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TALOS_BUNDLE_ID)";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		F4973733537E4724F9DB2A32 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ../TalosPushExtension/TalosPushExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = ../TalosPushExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TALOS_BUNDLE_ID).push";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		F61063B78755D98B1B9C3697 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4D6A28A8C686BE348A566D25 /* Signing.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		F998B5EB025F6ABE1282D5EA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ../TalosShareExtension/TalosShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = ../TalosShareExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TALOS_BUNDLE_ID).share";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0A16DC0B03253DBC78E80F71 /* Build configuration list for PBXNativeTarget "TalosPushExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				33A95629D3115DC03304CC13 /* Debug */,
+				F4973733537E4724F9DB2A32 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		63B58D005744F9A4433F3ABC /* Build configuration list for PBXNativeTarget "TalosShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F998B5EB025F6ABE1282D5EA /* Debug */,
+				0C8A32FA2925A89BB7F91941 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B3FD05C59F197F398A0B04AB /* Build configuration list for PBXProject "App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F61063B78755D98B1B9C3697 /* Debug */,
+				5C9EF0E6AF4F9491454DE177 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E5F9A71B7F6D259DCE5E1FD0 /* Build configuration list for PBXNativeTarget "AppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E8D703594B18D360433E4667 /* Debug */,
+				2EF40DF1E108E618D0D1371B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		FFC1863BD4026D2C17CBE82B /* Build configuration list for PBXNativeTarget "App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4A0C935808978B5A7673E412 /* Debug */,
+				EB1CC3A930E09FEBECF9195D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		24237241AA1BFB8F7868B8EA /* XCLocalSwiftPackageReference "../BridgeGuard" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../BridgeGuard;
+		};
+		397805CC4E683B158816CC6E /* XCLocalSwiftPackageReference "CapApp-SPM" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "CapApp-SPM";
+		};
+		476B6B70F0C15D12DB142006 /* XCLocalSwiftPackageReference "../TalosShareCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../TalosShareCore;
+		};
+		675EC3E6341DE227DA7CD7B9 /* XCLocalSwiftPackageReference "../TalosCrashCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../TalosCrashCore;
+		};
+		B98D2BA550E1BC2D3FC45861 /* XCLocalSwiftPackageReference "../TalosPushCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../TalosPushCore;
+		};
+		E817D241CDB9628AD76FD737 /* XCLocalSwiftPackageReference "../TalosAudioCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../TalosAudioCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		1647F7D58578464A3DFBFABD /* BridgeGuard */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BridgeGuard;
+		};
+		44F0627F1A0034ECF154A285 /* TalosShareCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TalosShareCore;
+		};
+		B1529373780317034FB668BF /* TalosAudioCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TalosAudioCore;
+		};
+		BDFEBBD3CD6557ACDCFA3CAE /* TalosCrashCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TalosCrashCore;
+		};
+		CF1D6E09D22144855866DDD1 /* TalosShareCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TalosShareCore;
+		};
+		DD0D399B039396E58E56C071 /* TalosPushCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TalosPushCore;
+		};
+		E608AFD233F8F2970D6247E3 /* TalosPushCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TalosPushCore;
+		};
+		FD127B870EFB46EFAC91834E /* CapApp-SPM */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = "CapApp-SPM";
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 6B590BF25178DC7D824D09CE /* Project object */;
+}

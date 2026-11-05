@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Opt-in (paid Apple program only): see Signing.xcconfig. `development` is rewritten to `production` by Xcode when
+	     you archive for TestFlight or the App Store. Never the default: a free Personal Team cannot sign it. -->
+	<key>aps-environment</key>
+	<string>development</string>
+	<!-- Passkeys in the web view (IOS-SPEC WP-I6). iOS 16+ lets a WKWebView run WebAuthn for a relying party the app is
+	     associated with. TALOS_RELAY_HOST is the relay's bare host, the same value as its RP_ID (Signing.xcconfig); the relay
+	     must serve /.well-known/apple-app-site-association (it does when APNS_TEAM_ID and APNS_BUNDLE_ID are set). Lives in
+	     this file ONLY: a free Personal Team cannot sign Associated Domains, so App.entitlements (the default) must not have it. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>webcredentials:$(TALOS_RELAY_HOST)</string>
+	</array>
+	<!-- Approval pushes (cards) go out as `interruption-level: time-sensitive` so Focus and Scheduled Summary do not hold them.
+	     Paid program only, like push itself. A build without this entitlement treats such a push as an ordinary alert (the
+	     key is ignored), so nothing breaks. Needs the "Time Sensitive Notifications" capability on the App ID in the Apple
+	     Developer portal, then a fresh provisioning profile. -->
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)app.talos.shared</string>
+	</array>
+</dict>
+</plist>

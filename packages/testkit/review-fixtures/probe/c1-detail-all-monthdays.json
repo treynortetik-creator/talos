@@ -1,0 +1,47 @@
+{
+  "exit": 0,
+  "out": {
+    "schedule": {
+      "id": "all-monthdays",
+      "name": "all-monthdays",
+      "description": "hand",
+      "kind": "claude",
+      "when": {
+        "type": "monthdays",
+        "days": [
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+          31
+        ],
+        "time": "07:30"
+      },
+      "when_text": "On the 1st, 2nd, 3rd, 4th, 5th, 6th, 7th, 8th, 9th, 10th, 11th, 12th, 13th, 14th, 15th, 16th, 17th, 18th, 19th, 20th, 21st, 22nd, 23rd, 24th, 25th, 26th, 27th, 28th, 29th, 30th and 31st at 7:30 AM",
+      "catchup_min": 180,
+      "enabled": true,
+      "paused": false,
+      "runner": "headless",
+      "permissions": "full",
+      "allowed_tools": [],
+      "model": null,
+      "notify": "failure",
+      "triggers_count": 0,
+      "next_run": "2026-10-06T07:30:00-04:00",
+      "today": "waiting",
+      "ds": "2026-10-05",
+      "window_ends": "2026-10-05T10:30:00-04:00",
+      "last_run": null,
+      "prompt_preview": "Do it.\n",
+      "prompt_bytes": 7,
+      "editable": true,
+      "read_only_reason": null,
+      "changed_outside": true,
+      "etag": "sha256:0d2315c24622e64ffd829cbeb908efa382711862654a2dbe99d7f0dbe10532f8",
+      "content_hash": "sha256:deec380627fdb2101b396f185f696e67d06ddf8c52df1c03e7722463b688895c",
+      "state_rev": "sha256:8b7925b9f5f9c6420b7fbcb30ed8a2a72a7769582f78d8b39a2c271b8e7c9714"
+    },
+    "prompt": "Do it.\n",
+    "prompt_truncated": false,
+    "guard": null,
+    "next_runs": ["2026-10-06T07:30:00-04:00", "2026-10-07T07:30:00-04:00", "2026-10-08T07:30:00-04:00"],
+    "runs": []
+  }
+}

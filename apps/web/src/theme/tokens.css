@@ -1,0 +1,249 @@
+/* apps/web/src/theme/tokens.css: the only file that knows the brand (spec 8.10).
+   Components use only var(--...). A new brand = a new [data-brand="..."] block + its assets folder; switch with
+   VITE_BRAND at build time. Talos is "Greek black-figure pottery": light mode = black-figure (cream ground, black
+   ink), dark mode = red-figure (black ground, cream and terracotta). Ichor glow is for "alive" states only. */
+
+:root[data-brand="talos"] {
+  /* locked brand primitives (assets/brand/README.md) */
+  --talos-terracotta: #d9692b;
+  --talos-black: #141110;
+  --talos-cream: #f3e6cf;
+  --talos-ichor: #ffb15c;
+
+  --font-display: "Cinzel Variable", "Cinzel", Georgia, serif; /* wordmark, thread headers, empty-state titles */
+  --font-ui: "Inter Variable", "Inter", system-ui, sans-serif; /* UI and body */
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace; /* timestamps, status pills, ids */
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 1rem;
+  --text-lg: 1.1875rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+  --leading: 1.5;
+  --tracking-mono: 0.05em; /* mono data labels uppercase 12 px +0.05em */
+  --tracking-caps: 0.08em; /* status words and small-caps labels in Inter */
+
+  --radius-card: 12px;
+  --radius-bubble: 18px;
+  --radius-button: 10px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --hairline: 1px;
+  --inset-highlight: inset 0 1px 0 rgb(255 255 255 / 0.04); /* depth without shadows */
+
+  --dur-1: 140ms;
+  --dur-2: 180ms;
+  --dur-3: 200ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --accent: var(--talos-terracotta); /* primary fill: buttons, live states, both modes */
+  --on-accent: var(--talos-black); /* 5.37:1 on terracotta */
+  --glow: var(--talos-ichor); /* alive states only; 10.5:1 on black */
+  --pattern-meander: url("/brand/talos/meander.svg"); /* Greek key mask; at most once per screen (8.10) */
+
+  /* the black frieze: desktop sidebar + phone bottom bar, black-figure ink with cream line work, both modes */
+  --on-chrome: var(--talos-cream); /* 15.2:1 */
+  --on-chrome-2: #b8a68e; /* 8.0:1 */
+  --chrome-line: #3a3128;
+  --chrome-hover: #241e19;
+  --chrome-active: #2e261f; /* on-chrome 12.6:1 on it */
+  --chrome-accent-text: #ec8a52; /* terracotta lifted for text on black, 7.1:1 */
+}
+
+/* black-figure (light) is the default */
+:root[data-brand="talos"],
+:root[data-brand="talos"][data-theme="light"] {
+  --bg: var(--talos-cream); /* #F3E6CF */
+  --surface: #fbf4e6;
+  --surface-2: #e8d6b6;
+  --line: #d3bf9c;
+  --text: var(--talos-black); /* 15.2:1 on bg, 17.2:1 on surface */
+  --text-2: #5a4a3c; /* 6.9:1 on bg, 5.9:1 on surface-2 */
+  --accent-text: #9a3f12; /* links and accents as text on cream, 5.5:1 (terracotta itself is 2.8:1: never text) */
+  --tint: #f1cfae; /* owner bubbles; text 12.8:1 */
+  --ok: #2e6a3a;
+  --warn: #7a4f00; /* 4.5:1 or better on bg and on surface-2 (the "Not confirmed" badge sits on surface-2) */
+  --danger: #a3241a;
+  --info: #2b5a8c; /* 5.3 / 5.0 / 6.0 / 5.8 :1 on bg */
+  --focus: var(--talos-black);
+  --meander-ink: var(--talos-black);
+  --chrome: var(--talos-black);
+  --wave: #8a7660; /* unplayed waveform bars, 3.96:1 on surface */
+  --figure-bg: var(--talos-black); /* owner bubbles: black-figure ground */
+  --figure-text: #f3e6cf; /* owner bubbles and the phone top band: text, secondary text, link colour */
+  --figure-text-2: #c2b199; /* 9.0:1 on the black-figure ground, 7.1:1 on #2e261f */
+  --figure-accent-text: #ec8a52;
+  --frieze-warn: #e9b44c; /* the warning colour inside .frieze; light's darker --warn is 2.6:1 on the black chrome */
+  --figure-surface: #1c1815; /* the scoped parts (.figure-ground, .top-band) read these; each is a theme token */
+  --figure-surface-2: #272119;
+  --figure-line: #4a3f33;
+  --figure-ok: #6cc08e;
+  --figure-danger: #ff6b5e;
+  --figure-info: #7fb0f0;
+  --figure-wave: #8f7b64;
+  --figure-focus: #f3e6cf;
+  --figure-meander-ink: #d9692b;
+  --keyline: inset 0 0 0 3px var(--surface), inset 0 0 0 4px var(--line); /* the incised line on cards */
+}
+
+/* red-figure (dark): follows the system unless the user picked light */
+@media (prefers-color-scheme: dark) {
+  :root[data-brand="talos"]:not([data-theme="light"]) {
+    --bg: var(--talos-black); /* #141110 */
+    --surface: #1c1815;
+    --surface-2: #272119;
+    --line: #3a3128;
+    --text: var(--talos-cream); /* 15.2:1 on bg, 14.3:1 on surface */
+    --text-2: #b8a68e; /* 8.0:1 on bg, 6.7:1 on surface-2 */
+    --accent-text: var(--talos-terracotta); /* 5.37:1 on black */
+    --tint: #3a2315; /* owner bubbles; text 11.9:1 */
+    --ok: #6cc08e;
+    --warn: #e9b44c;
+    --danger: #ff6b5e;
+    --info: #7fb0f0; /* 8.6 / 9.9 / 6.7 / 8.4 :1 */
+    --focus: var(--talos-cream);
+    --meander-ink: var(--talos-terracotta); /* red-figure */
+    --keyline: inset 0 0 0 3px var(--surface), inset 0 0 0 4px var(--line);
+    --chrome: #0c0a09;
+    --wave: #8f7b64; /* 3.9:1 on surface-2 */
+    --figure-bg: #2e261f;
+    --figure-text: #f3e6cf; /* owner bubbles and the phone top band: text, secondary text, link colour */
+    --figure-text-2: #c2b199; /* 9.0:1 on the black-figure ground, 7.1:1 on #2e261f */
+    --figure-accent-text: #ec8a52;
+    --frieze-warn: #e9b44c; /* the warning colour inside .frieze; light's darker --warn is 2.6:1 on the black chrome */
+    --figure-surface: #1c1815; /* the scoped parts (.figure-ground, .top-band) read these; each is a theme token */
+    --figure-surface-2: #272119;
+    --figure-line: #4a3f33;
+    --figure-ok: #6cc08e;
+    --figure-danger: #ff6b5e;
+    --figure-info: #7fb0f0;
+    --figure-wave: #8f7b64;
+    --figure-focus: #f3e6cf;
+    --figure-meander-ink: #d9692b;
+  }
+}
+
+/* identical to the dark block above; test/tokens.test.ts fails if the two ever differ */
+:root[data-brand="talos"][data-theme="dark"] {
+  --bg: var(--talos-black);
+  --surface: #1c1815;
+  --surface-2: #272119;
+  --line: #3a3128;
+  --text: var(--talos-cream);
+  --text-2: #b8a68e;
+  --accent-text: var(--talos-terracotta);
+  --tint: #3a2315;
+  --ok: #6cc08e;
+  --warn: #e9b44c;
+  --danger: #ff6b5e;
+  --info: #7fb0f0;
+  --focus: var(--talos-cream);
+  --meander-ink: var(--talos-terracotta);
+  --keyline: inset 0 0 0 3px var(--surface), inset 0 0 0 4px var(--line);
+  --chrome: #0c0a09;
+  --wave: #8f7b64;
+  --figure-bg: #2e261f;
+  --figure-text: #f3e6cf; /* owner bubbles and the phone top band: text, secondary text, link colour */
+  --figure-text-2: #c2b199; /* 9.0:1 on the black-figure ground, 7.1:1 on #2e261f */
+  --figure-accent-text: #ec8a52;
+  --frieze-warn: #e9b44c; /* the warning colour inside .frieze; light's darker --warn is 2.6:1 on the black chrome */
+  --figure-surface: #1c1815; /* the scoped parts (.figure-ground, .top-band) read these; each is a theme token */
+  --figure-surface-2: #272119;
+  --figure-line: #4a3f33;
+  --figure-ok: #6cc08e;
+  --figure-danger: #ff6b5e;
+  --figure-info: #7fb0f0;
+  --figure-wave: #8f7b64;
+  --figure-focus: #f3e6cf;
+  --figure-meander-ink: #d9692b;
+}
+
+/* A black-figure ground inside a light page (owner bubbles, the phone's top-level headers): the red-figure token set,
+   scoped. Everything inside reads its colours from these, so nested parts (players, receipts) stay legible. */
+:root[data-brand="talos"] .figure-ground {
+  --surface: var(--figure-surface);
+  --surface-2: var(--figure-surface-2);
+  --line: var(--figure-line);
+  --text: var(--figure-text);
+  --text-2: var(--figure-text-2);
+  --accent-text: var(--figure-accent-text);
+  --ok: var(--figure-ok);
+  --warn: var(--frieze-warn);
+  --danger: var(--figure-danger);
+  --info: var(--figure-info);
+  --focus: var(--figure-focus);
+  --wave: var(--figure-wave);
+  --meander-ink: var(--figure-meander-ink);
+  --keyline: inset 0 0 0 3px var(--surface), inset 0 0 0 4px var(--line);
+  background-color: var(--figure-bg);
+  color: var(--text);
+}
+
+/* The black frieze (phone header, bottom bar, drawer, desktop sidebar) is black in both themes, so it takes the lifted
+   warning colour the dark theme uses. The light theme's darker --warn is 2.6:1 on it, and the needs-you dot is the only
+   cue in the phone header. test/tokens.test.ts checks the pair. */
+:root[data-brand="talos"] .frieze {
+  --warn: var(--frieze-warn);
+}
+
+/* Tailwind 4: utilities map to the variables above (bg-bg, text-text-2, bg-accent, rounded-card, font-display, ...) */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-accent-text: var(--accent-text);
+  --color-glow: var(--glow);
+  --color-tint: var(--tint);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-focus: var(--focus);
+  --color-wave: var(--wave);
+  --color-figure: var(--figure-bg);
+  --color-chrome: var(--chrome);
+  --color-on-chrome: var(--on-chrome);
+  --color-on-chrome-2: var(--on-chrome-2);
+  --color-chrome-line: var(--chrome-line);
+  --color-chrome-hover: var(--chrome-hover);
+  --color-chrome-active: var(--chrome-active);
+  --color-chrome-accent-text: var(--chrome-accent-text);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-mono);
+  --radius-card: var(--radius-card);
+  --radius-bubble: var(--radius-bubble);
+  --radius-button: var(--radius-button);
+  --radius-pill: var(--radius-pill);
+  --ease-talos: var(--ease);
+}
+
+/* Phone: the top-level screens (Threads, Needs you, Settings) open under a black-figure band with a terracotta meander,
+   like the banner's top frieze. Same scoped token set as .figure-ground. On tablet and up the sidebar is the frieze. */
+@media (max-width: 767.98px) {
+  :root[data-brand="talos"] .top-band {
+    --surface: var(--figure-surface);
+    --surface-2: var(--figure-surface-2);
+    --line: var(--figure-line);
+    --text: var(--figure-text);
+    --text-2: var(--figure-text-2);
+    --accent-text: var(--figure-accent-text);
+    --focus: var(--figure-focus);
+    --meander-ink: var(--figure-meander-ink);
+    background-color: var(--chrome);
+    color: var(--text);
+  }
+}

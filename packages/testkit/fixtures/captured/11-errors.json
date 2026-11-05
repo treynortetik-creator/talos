@@ -1,0 +1,496 @@
+{
+  "scenario": "11-errors",
+  "title": "Every error the bridge can answer a schedule frame with",
+  "steps": [
+    {
+      "step": 1,
+      "label": "schedule_invalid with fields: a read-only job cannot run in the session",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.patch",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "change": {
+            "op": "create",
+            "draft": {
+              "id": "nightly-sync",
+              "name": "Nightly Sync",
+              "description": "Sync the notes folder.",
+              "when": {
+                "type": "weekdays",
+                "time": "22:00"
+              },
+              "catchup_min": 120,
+              "enabled": true,
+              "runner": "session",
+              "permissions": "restricted",
+              "allowed_tools": [],
+              "model": null,
+              "notify": "failure",
+              "thread_id": "inbox",
+              "prompt": "Sync the notes folder and post a one-line summary.\n"
+            }
+          },
+          "thread_id": "general",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000002",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "error",
+          "code": "schedule_invalid",
+          "message": "schedule_invalid: permissions: a restricted job cannot also run in a live session (that run would use the session's permissions, not the restricted list)",
+          "ref": "00000000000000000000000001",
+          "fields": [
+            {
+              "path": "permissions",
+              "message": "a restricted job cannot also run in a live session (that run would use the session's permissions, not the restricted list)"
+            }
+          ]
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 2,
+      "label": "schedule_conflict: the id already exists",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.patch",
+          "id": "00000000000000000000000003",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "change": {
+            "op": "create",
+            "draft": {
+              "id": "daily-digest",
+              "name": "Nightly Sync",
+              "description": "Sync the notes folder.",
+              "when": {
+                "type": "weekdays",
+                "time": "22:00"
+              },
+              "catchup_min": 120,
+              "enabled": true,
+              "runner": "session",
+              "permissions": "full",
+              "allowed_tools": [],
+              "model": null,
+              "notify": "failure",
+              "thread_id": "inbox",
+              "prompt": "Sync the notes folder and post a one-line summary.\n"
+            }
+          },
+          "thread_id": "general",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000004",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "error",
+          "code": "schedule_conflict",
+          "message": "schedule_conflict: draft.id: already exists",
+          "ref": "00000000000000000000000003",
+          "fields": [
+            {
+              "path": "draft.id",
+              "message": "already exists"
+            }
+          ]
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 3,
+      "label": "schedule_conflict: a stale etag",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.patch",
+          "id": "00000000000000000000000005",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "change": {
+            "op": "update",
+            "id": "daily-digest",
+            "base_etag": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "set": {
+              "name": "x"
+            }
+          },
+          "thread_id": "general",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000006",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "error",
+          "code": "schedule_conflict",
+          "message": "The job changed on your Mac. Reload it and try again.",
+          "ref": "00000000000000000000000005"
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 4,
+      "label": "schedule_not_found",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.get",
+          "id": "00000000000000000000000007",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "request_id": "00000000000000000000000008",
+          "schedule_id": "no-such-job",
+          "report_run_id": null,
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000009",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "error",
+          "code": "schedule_not_found",
+          "message": "No scheduled job \"no-such-job\".",
+          "ref": "00000000000000000000000007"
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 5,
+      "label": "held: Run now on a job whose files changed outside the app",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.run_now",
+          "id": "00000000000000000000000010",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "schedule_id": "held-job",
+          "again": false,
+          "where": "default",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000011",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "error",
+          "code": "held",
+          "message": "The job is on hold because its files changed outside the app.",
+          "ref": "00000000000000000000000010"
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 6,
+      "label": "schedule_read_only: where:session on a restricted job",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.run_now",
+          "id": "00000000000000000000000012",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "schedule_id": "read-only-job",
+          "again": false,
+          "where": "session",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000013",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "error",
+          "code": "schedule_read_only",
+          "message": "That job can't run in the live session (read-only or restricted).",
+          "ref": "00000000000000000000000012"
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 7,
+      "label": "stale: a Run now older than 2 minutes",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.run_now",
+          "id": "00000000000000000000000014",
+          "ts": "2026-10-05T10:58:32.400Z",
+          "schedule_id": "daily-digest",
+          "again": false,
+          "where": "default",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000015",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "error",
+          "code": "stale",
+          "message": "That request is too old. Try again.",
+          "ref": "00000000000000000000000014"
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 8,
+      "label": "already_running: the job is running right now",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.run_now",
+          "id": "00000000000000000000000016",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "schedule_id": "running-job",
+          "again": false,
+          "where": "default",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000017",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "error",
+          "code": "already_running",
+          "message": "That job is already running.",
+          "ref": "00000000000000000000000016"
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 9,
+      "label": "headless_blocked: background runs are off",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.run_now",
+          "id": "00000000000000000000000018",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "schedule_id": "read-only-job",
+          "again": false,
+          "where": "default",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000019",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "error",
+          "code": "headless_blocked",
+          "message": "background runs are off until the launch problem is fixed",
+          "ref": "00000000000000000000000018"
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 10,
+      "label": "rate_limited: Run now twice in a row",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.run_now",
+          "id": "00000000000000000000000020",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "schedule_id": "daily-digest",
+          "again": false,
+          "where": "default",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        {
+          "v": 1,
+          "type": "schedule.run_now",
+          "id": "00000000000000000000000021",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "schedule_id": "daily-digest",
+          "again": false,
+          "where": "default",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000022",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "ack",
+          "ref": "00000000000000000000000020"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000023",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "degraded",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "blocked",
+            "tick_age_s": null,
+            "issues": [
+              {
+                "code": "launch_stalled",
+                "severity": "warn",
+                "text": "A background run is stuck.",
+                "fix": "Read the run log in Schedules → Recent runs. If macOS is the cause, see \"Background runs are stuck\".",
+                "schedule_id": null,
+                "since": "2026-10-05T07:00:00-04:00"
+              },
+              {
+                "code": "headless_blocked",
+                "severity": "warn",
+                "text": "Background runs are off until this is fixed. Session jobs are unaffected.",
+                "fix": "macOS is probably waiting for permission. 1. At the Mac, look for a dialog saying Claude Code would like to access a folder and click Allow (it may be behind other windows). 2. Or open System Settings → Privacy & Security → Files and Folders and allow it. 3. Lasting fix: keep your agent folder outside Desktop, Documents and Downloads. Then tap Retry background runs.",
+                "schedule_id": null,
+                "since": "2026-10-05T07:00:00-04:00"
+              },
+              {
+                "code": "held_jobs",
+                "severity": "warn",
+                "text": "Jobs changed outside the app and are on hold: held-job.",
+                "fix": "Open each job and review the change. After an upgrade from Chronos 0.2, run `talos-app schedules adopt` at the Mac.",
+                "schedule_id": "held-job",
+                "since": "2026-10-05T07:00:00-04:00"
+              }
+            ],
+            "checked_at": "2026-10-05T07:00:00-04:00"
+          },
+          "changed": [
+            {
+              "id": "running-job",
+              "etag": "sha256:0ff2748e3e6244afe86dd14450b974858279b57c7e3f3b6ccae1ac0e02306892",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000024",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "error",
+          "code": "rate_limited",
+          "message": "That job was just started. Give it a couple of minutes.",
+          "ref": "00000000000000000000000021"
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Scheduled job {\"id\":\"daily-digest\",\"name\":\"Daily Digest\"} is due now (run r_00000000000000000000000025).\n1. Call schedule_run_start with this run id. If it says SKIP, stop here.\n2. Hand the work to a sub-agent (Agent tool): pass the standing rules and then the job text below, both exactly and in\n   that order, plus the thread \"general\" and the due time; ask for a short result. Don't do the heavy work in this conversation.\n3. Post the result to thread general with reply, then call schedule_run_done with ok and a one-line summary.\n--- job ---\nSummarise yesterday and post it.\n",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "r_00000000000000000000000025",
+            "ts": "2026-10-05T11:01:32.400Z",
+            "kind": "schedule_run",
+            "trust": "owner",
+            "schedule_id": "daily-digest",
+            "run_id": "r_00000000000000000000000025",
+            "ds": "2026-10-05"
+          }
+        }
+      ],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 11,
+      "label": "sig_invalid: a list with a wrong signature",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedules.list",
+          "id": "00000000000000000000000026",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "request_id": "00000000000000000000000027",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000028",
+          "ts": "2026-10-05T11:01:32.400Z",
+          "type": "error",
+          "code": "sig_invalid",
+          "message": "signature check failed",
+          "ref": "00000000000000000000000026"
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "A message from device d_aaaaaaaaaaaaaaaaaaaa failed its signature check and was dropped.",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "00000000000000000000000026",
+            "ts": "2026-10-05T11:01:32.400Z",
+            "kind": "system",
+            "trust": "system"
+          }
+        }
+      ],
+      "agent_tool_calls": []
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`jira poller (fake fetch) > normalizes polled issues: assignment, status, comment by others; not the owner's own comment or old comments 1`] = `
+[
+  {
+    "actor": {
+      "id": "acct-boss",
+      "name": "Sam Sender",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "jira:PROJ-12:cl7001:assignee",
+    "id": "<event id>",
+    "kind": "jira.assigned",
+    "priority": "high",
+    "source": "jira",
+    "summary": "Sam Sender assigned PROJ-12 to you: Fix login <b>redirect</b>",
+    "thread": "work",
+    "title": "PROJ-12 Fix login <b>redirect</b>",
+    "ts": "2026-10-28T15:00:00.000Z",
+    "url": "https://example.atlassian.net/browse/PROJ-12",
+    "work": true,
+  },
+  {
+    "actor": {
+      "name": "Sam Sender",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "jira:PROJ-12:cl7001:status",
+    "id": "<event id>",
+    "kind": "jira.status",
+    "priority": "normal",
+    "source": "jira",
+    "summary": "PROJ-12 moved from To Do to In Progress by Sam Sender",
+    "thread": "work",
+    "title": "PROJ-12 Fix login <b>redirect</b>",
+    "ts": "2026-10-28T15:00:00.000Z",
+    "url": "https://example.atlassian.net/browse/PROJ-12",
+    "work": true,
+  },
+  {
+    "actor": {
+      "id": "acct-boss",
+      "name": "Sam Sender",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "jira:PROJ-12:c9001",
+    "id": "<event id>",
+    "kind": "jira.comment",
+    "priority": "normal",
+    "source": "jira",
+    "summary": "Sam Sender commented on PROJ-12: Please check javascript:alert(1)",
+    "thread": "work",
+    "title": "PROJ-12 Fix login <b>redirect</b>",
+    "ts": "2026-10-28T15:00:30.000Z",
+    "url": "https://example.atlassian.net/browse/PROJ-12",
+    "work": true,
+  },
+  {
+    "actor": {
+      "name": "Sam Sender",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "jira:PROJ-13:created",
+    "id": "<event id>",
+    "kind": "jira.assigned",
+    "priority": "high",
+    "source": "jira",
+    "summary": "Sam Sender created PROJ-13 for you: Brand new",
+    "thread": "work",
+    "title": "PROJ-13 Brand new",
+    "ts": "2026-10-28T15:01:30.000Z",
+    "url": "https://example.atlassian.net/browse/PROJ-13",
+    "work": true,
+  },
+]
+`;

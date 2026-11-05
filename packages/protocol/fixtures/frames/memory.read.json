@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "type": "memory.read",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T43B",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T43C",
+  "root_id": "notes",
+  "path": "projects/overview.md",
+  "offset": 0,
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "a4broewT6C5e74ykp3J1SlQ1j3fRWdMANpWm_XKB1Yq9pEH8HfwlL4D8fGYeiB-rSFA4TdpQulhzmCt_gxCJew"
+}

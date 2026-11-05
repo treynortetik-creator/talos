@@ -1,0 +1,12 @@
+#!/bin/bash
+# Fake `talos-app` whose restore waits (up to 30 s) for $FAKE_STATE_DIR/release, so a test can act while it runs.
+# It writes what it was started with and what it saw to restore-env.txt next to $FAKE_POST_LOG, so a run that never saw the
+# release can be told apart from one that was started with the wrong environment.
+printf "%s\n" "$*" >> "${FAKE_POST_LOG:-/dev/null}"
+case "$1" in restore-last-good)
+  dump="$(dirname "${FAKE_POST_LOG:-/dev/null}")/restore-env.txt"
+  { echo "started $(date +%s) pid $$"; echo "polling ${FAKE_STATE_DIR:-<unset>}/release"; env | sort; } > "$dump" 2>/dev/null
+  for _ in $(seq 300); do [ -e "$FAKE_STATE_DIR/release" ] && break; sleep 0.1; done
+  echo "ended $(date +%s) release_seen=$([ -e "$FAKE_STATE_DIR/release" ] && echo yes || echo no)" >> "$dump" 2>/dev/null ;;
+esac
+exit 0

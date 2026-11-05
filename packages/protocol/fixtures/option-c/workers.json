@@ -1,0 +1,53 @@
+{
+  "v": 1,
+  "supervisor": {
+    "pid": 4242,
+    "heartbeat_at": "2026-10-28T15:32:10.120Z",
+    "workers_supported": true,
+    "main_pane_pid": 5000
+  },
+  "threads": {
+    "trip": {
+      "state": "live",
+      "session_id": "6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c41",
+      "previous_ids": [],
+      "tmux": "t-trip",
+      "pane_pid": 5100,
+      "cwd": "/Users/example/Projects/trip",
+      "model": "inherit",
+      "started_at": "2026-10-28T15:00:00.000Z",
+      "last_turn_at": "2026-10-28T15:30:00.000Z",
+      "parked_at": null,
+      "restarts": [],
+      "error": null
+    },
+    "garden": {
+      "state": "parked",
+      "session_id": "0b7d9e21-5a6c-4f3b-8d2e-7c1a9b4e6f02",
+      "previous_ids": ["3e2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"],
+      "tmux": "t-garden",
+      "pane_pid": 0,
+      "cwd": "/Users/example/talos-agent",
+      "model": "sonnet",
+      "started_at": "2026-10-28T09:00:00.000Z",
+      "last_turn_at": "2026-10-28T09:40:00.000Z",
+      "parked_at": "2026-10-28T10:10:00.000Z",
+      "restarts": [],
+      "error": null
+    },
+    "taxes": {
+      "state": "failed",
+      "session_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "previous_ids": [],
+      "tmux": "t-taxes",
+      "pane_pid": 0,
+      "cwd": "/Users/example/talos-agent",
+      "model": "inherit",
+      "started_at": null,
+      "last_turn_at": null,
+      "parked_at": null,
+      "restarts": [],
+      "error": { "code": "resume_missing", "detail": "No session found with ID", "at": "2026-10-28T11:00:00.000Z" }
+    }
+  }
+}

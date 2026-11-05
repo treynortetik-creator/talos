@@ -1,0 +1,130 @@
+name: CI
+
+# Manual only. The same jobs run on a Mac by scripts/ci-local.sh, which posts `local-ci/<job>` commit statuses.
+# To run this in the cloud: `gh workflow run CI --ref <branch>`.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: install, personal-data check, typecheck, lint, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # version comes from "packageManager" in package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/setup-python@v5 # the companion-art checks (scripts/companion-art.test.ts) are Python
+        with:
+          python-version: "3.12"
+      - name: Python deps of the companion-art checks
+        run: python3 -m pip install -r assets/mascot/3d/requirements.txt
+      - name: No personal data (generic list; warns by default, see docs/CI-LOCAL.md, "The personal-data scan")
+        continue-on-error: true
+        run: pnpm check:personal
+      - run: pnpm typecheck
+      - name: Type-check the Talos mod's logic (plugins/talos-app-mod/hooks/lib)
+        run: pnpm typecheck:mod
+      - run: pnpm lint
+      - name: Build (web bundle, relay bundle)
+        run: pnpm build
+      - name: Vitest (protocol, testkit, integrations, relay, web, scripts)
+        run: pnpm test
+      - name: bun test (bridge)
+        run: pnpm test:bun
+      - name: Bridge contract suite (real bridge process under Bun, driven by the testkit's FakeRelay)
+        run: pnpm --filter @talos-app/bridge test:contract
+      - name: Schedules captures (the real bridge against the real Chronos CLI; fails if traffic changed without re-recording)
+        run: bun run apps/bridge/scripts/capture-schedules.ts --check
+      # Last, and run even when a step above failed, so an advisory never hides test results and a red test never hides one.
+      # High and critical only; production dependencies only (the dev tools never ship). It warns: an advisory or a registry
+      # outage says nothing about this commit's code.
+      - name: Known-vulnerability audit of what ships
+        continue-on-error: true
+        if: ${{ !cancelled() }}
+        run: pnpm audit --prod --audit-level high
+
+  mod:
+    # The Talos mod (docs/CLAUDE-CODE.md C10): `claude plugin validate` and `claude plugin test` fire events with no
+    # session, sign-in or network. Pinned CLI gates the PR; the latest CLI is advisory (the mods API is early access
+    # and moves between releases), and a weekly canary (mod-canary.yml) watches it too.
+    name: Talos mod (claude plugin validate and test, CLI ${{ matrix.cli }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: ${{ matrix.cli == 'latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cli: [pinned, latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install Claude Code (${{ matrix.cli }})
+        run: |
+          if [ "${{ matrix.cli }}" = pinned ]; then v="$(tr -d '[:space:]' < plugins/talos-app-mod/CLAUDE_CODE_VERSION)"; else v=latest; fi
+          npm install --global "@anthropic-ai/claude-code@$v"
+          claude --version
+      - name: Validate (empty HOME, so nothing of any user's is read)
+        run: HOME="$(mktemp -d)" claude plugin validate plugins/talos-app-mod
+      - name: Test
+        run: HOME="$(mktemp -d)" claude plugin test plugins/talos-app-mod
+
+  browser:
+    name: Playwright (Chromium and WebKit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: pnpm install --frozen-lockfile
+      - name: Install browsers
+        run: pnpm exec playwright install --with-deps chromium webkit
+      - name: Owner-signature round trips in real browsers
+        run: pnpm test:browser
+      - name: Web specs, relay specs and the end-to-end suite (e2e/ builds the relay and the web app itself)
+        run: pnpm test:e2e
+
+  image:
+    name: Docker image builds and serves /healthz and the app
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -f apps/relay/Dockerfile -t talos-relay .
+      - name: Run it the way Railway does and check it
+        run: |
+          key="$(openssl rand -base64 32)"
+          docker run -d --name relay -p 8080:8080 \
+            -e NODE_ENV=production -e PUBLIC_ORIGIN=https://relay.example.com -e RP_ID=relay.example.com \
+            -e DATA_KEY="$key" -e VAPID_PUBLIC_KEY=pub -e VAPID_PRIVATE_KEY=priv -e VAPID_SUBJECT=mailto:owner@example.com \
+            talos-relay
+          for i in $(seq 1 30); do curl -fsS localhost:8080/healthz && break; sleep 1; done
+          curl -fsS localhost:8080/healthz
+          curl -fsS localhost:8080/ | grep -q '<div id="root">'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Test-Session: none' localhost:8080/api/me)" = 401
+          docker exec relay sh -c 'grep -q "^Uid:\s*10001" /proc/1/status'
+          docker logs relay

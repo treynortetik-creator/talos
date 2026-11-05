@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "type": "voice_note",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T41Y",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "thread_id": "general",
+  "client_msg_id": "m_01JBF3V7Q8K2M4N6P8R0S2T41Z",
+  "attachment": {
+    "media_id": "md_01JBF3V7Q8K2M4N6P8R0S2T401",
+    "kind": "voice_note",
+    "role": "attachment",
+    "mime": "audio/mp4",
+    "name": "voice.m4a",
+    "size": 245760,
+    "sha256": "abababababababababababababababababababababababababababababababab",
+    "duration_ms": 4200
+  },
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "qGgaGn7iOzZ-AkkZy4R7jCL5-l1yQFU7OFpmcdRq-nqkLW9tqi2fHT9CJX4ww1PV3KIZy0OkOR-eRg8pTCsL1g"
+}

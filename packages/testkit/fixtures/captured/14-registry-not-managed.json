@@ -1,0 +1,186 @@
+{
+  "scenario": "14-registry-not-managed",
+  "title": "Chronos still arms its own session timers (session_runner hook): listed read-only, session_runner_conflict, nothing edits",
+  "steps": [
+    {
+      "step": 1,
+      "label": "app asks for the list",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedules.list",
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "request_id": "00000000000000000000000002",
+          "app_features": [
+            "schedules/2"
+          ],
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000003",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "ack",
+          "ref": "00000000000000000000000001"
+        },
+        {
+          "v": 1,
+          "id": "00000000000000000000000004",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "schedules.snapshot",
+          "request_id": "00000000000000000000000002",
+          "snapshot": {
+            "protocol": 1,
+            "health": {
+              "state": "stuck",
+              "adapter": {
+                "id": "chronos",
+                "version": "0.3.0",
+                "api": 1
+              },
+              "tz": "America/New_York",
+              "host_label": "Example Mac",
+              "session_runner": "hook",
+              "paused_all": false,
+              "headless": "unused",
+              "tick_age_s": null,
+              "issues": [
+                {
+                  "code": "session_runner_conflict",
+                  "severity": "error",
+                  "text": "Chronos's own session timers are still on, so Talos won't run jobs (to avoid running them twice).",
+                  "fix": "At the Mac run `talos-app schedules adopt`, then restart your session.",
+                  "schedule_id": null,
+                  "since": "2026-10-05T07:00:00-04:00"
+                }
+              ],
+              "checked_at": "2026-10-05T07:00:00-04:00"
+            },
+            "schedules": [
+              {
+                "id": "daily-digest",
+                "name": "Daily Digest",
+                "description": "Example job",
+                "kind": "claude",
+                "when": {
+                  "type": "daily",
+                  "time": "07:30"
+                },
+                "when_text": "Every day at 7:30 AM",
+                "catchup_min": 180,
+                "enabled": true,
+                "paused": false,
+                "runner": "session",
+                "permissions": "full",
+                "allowed_tools": [],
+                "model": null,
+                "notify": "failure",
+                "triggers_count": 0,
+                "next_run": "2026-10-05T07:30:00-04:00",
+                "today": "pending",
+                "window_ends": null,
+                "last_run": null,
+                "prompt_preview": "Summarise yesterday and post it.\n",
+                "prompt_bytes": 33,
+                "editable": true,
+                "read_only_reason": null,
+                "changed_outside": false,
+                "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+                "content_hash": "sha256:a0f07b584867e8ca3f4ec3751b72cfb3601eccc67053dd0b6bf2d831a87ab593",
+                "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "thread_id": null,
+                "wait_reason": null
+              }
+            ],
+            "unreadable": [],
+            "as_of": "2026-10-05T07:00:00-04:00"
+          }
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 2,
+      "label": "app tries to pause a job",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.control",
+          "id": "00000000000000000000000005",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "action": "pause",
+          "schedule_id": "daily-digest",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000006",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "error",
+          "code": "schedule_read_only",
+          "message": "Talos does not manage this scheduler yet. At the Mac run `talos-app schedules adopt`, then restart your session.",
+          "ref": "00000000000000000000000005"
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 3,
+      "label": "app proposes a new job",
+      "received_by_bridge": [
+        {
+          "v": 1,
+          "type": "schedule.patch",
+          "id": "00000000000000000000000007",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "change": {
+            "op": "create",
+            "draft": {
+              "id": "nightly-sync",
+              "name": "Nightly Sync",
+              "description": "Sync the notes folder.",
+              "when": {
+                "type": "weekdays",
+                "time": "22:00"
+              },
+              "catchup_min": 120,
+              "enabled": true,
+              "runner": "session",
+              "permissions": "full",
+              "allowed_tools": [],
+              "model": null,
+              "notify": "failure",
+              "thread_id": "inbox",
+              "prompt": "Sync the notes folder and post a one-line summary.\n"
+            }
+          },
+          "thread_id": "general",
+          "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
+          "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000008",
+          "ts": "2026-10-05T11:00:00.300Z",
+          "type": "error",
+          "code": "schedule_read_only",
+          "message": "Talos does not manage this scheduler yet. At the Mac run `talos-app schedules adopt`, then restart your session.",
+          "ref": "00000000000000000000000007"
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": []
+    }
+  ]
+}

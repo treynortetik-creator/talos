@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "type": "speak.result",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T446",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T445",
+  "state": "ready",
+  "media": {
+    "media_id": "md_01JBF3V7Q8K2M4N6P8R0S2T447",
+    "kind": "audio",
+    "role": "voice_reply",
+    "mime": "audio/mp4",
+    "name": "read-aloud.m4a",
+    "size": 48213,
+    "sha256": "abababababababababababababababababababababababababababababababab"
+  },
+  "chars": 66,
+  "total_chars": 66,
+  "truncated": false
+}

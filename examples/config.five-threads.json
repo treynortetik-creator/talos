@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "rev": 0,
+  "agent": {
+    "name": "Talos",
+    "voice": "meridian",
+    "voice_persona": ""
+  },
+  "owner": {
+    "display_name": "Alex Example"
+  },
+  "threads": [
+    {
+      "id": "projects",
+      "name": "Projects",
+      "icon": "🛠",
+      "kind": "fixed",
+      "order": 0,
+      "notify": "all",
+      "voice_context": "recent",
+      "archived": false,
+      "created_at": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "work",
+      "name": "Work",
+      "icon": "💼",
+      "kind": "fixed",
+      "order": 1,
+      "notify": "all",
+      "voice_context": "recent",
+      "archived": false,
+      "created_at": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "errands",
+      "name": "Errands",
+      "icon": "🧺",
+      "kind": "fixed",
+      "order": 2,
+      "notify": "all",
+      "voice_context": "recent",
+      "archived": false,
+      "created_at": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "reading",
+      "name": "Reading",
+      "icon": "📚",
+      "kind": "fixed",
+      "order": 3,
+      "notify": "all",
+      "voice_context": "recent",
+      "archived": false,
+      "created_at": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "inbox",
+      "name": "Inbox",
+      "icon": "📥",
+      "kind": "system",
+      "order": 4,
+      "notify": "all",
+      "voice_context": "none",
+      "archived": false,
+      "created_at": "2026-10-28T00:00:00.000Z"
+    }
+  ],
+  "default_thread": "projects",
+  "timezone": "Europe/Berlin",
+  "quiet_window": {
+    "start": "22:00",
+    "end": "06:00"
+  },
+  "notifications": {
+    "master": true,
+    "show_thread_names": "fixed_only"
+  },
+  "work": {
+    "label": "Work systems",
+    "ask_note": "Check with your IT team first",
+    "enabled": [],
+    "thread": "work",
+    "retention": "passthrough"
+  },
+  "voice_notes": {
+    "reply_with_voice": "when_voice",
+    "driving_until": null
+  },
+  "permission_relay": true,
+  "session_models": ["default", "opus", "sonnet", "haiku"],
+  "memory_browser": true
+}

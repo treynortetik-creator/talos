@@ -1,0 +1,24 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`generic normalizer > uses title, summary and url as given 1`] = `
+[
+  {
+    "actor": {
+      "email": "alex@example.com",
+      "name": "Alex Example",
+    },
+    "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
+    "dedup_key": "generic:id:msg_1",
+    "id": "<event id>",
+    "kind": "generic.event",
+    "priority": "normal",
+    "source": "generic",
+    "summary": "Deploy of example-app finished in 41s.",
+    "thread": "inbox",
+    "title": "Build finished",
+    "ts": "2026-10-28T15:00:00.000Z",
+    "url": "https://example.com/builds/118",
+    "work": false,
+  },
+]
+`;

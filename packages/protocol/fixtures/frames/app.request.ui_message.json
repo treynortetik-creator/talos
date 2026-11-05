@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "type": "app.request",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T440",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "thread_id": "general",
+  "view_id": "av_01JBF3V7Q8K2M4N6P8R0S2T43R",
+  "request_id": "ar_01JBF3V7Q8K2M4N6P8R0S2T441",
+  "method": "ui/message",
+  "text": "remind me tomorrow",
+  "user_gesture": true,
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "5nTfmd7AEW3wDa139v_6py7D12iqxKAVY4lhwk5q9O-5VYcEjHkhmKwUAblRoOwIZKo6si2PJ4j5FFD7WZ8Lbw"
+}

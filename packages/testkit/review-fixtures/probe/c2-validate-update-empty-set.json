@@ -1,0 +1,15 @@
+{
+  "exit": 1,
+  "out": {
+    "error": {
+      "code": "schedule_invalid",
+      "message": "update takes {op, id, base_etag, set} with at least one field in set",
+      "fields": [
+        {
+          "path": "set",
+          "message": "update takes {op, id, base_etag, set} with at least one field in set"
+        }
+      ]
+    }
+  }
+}

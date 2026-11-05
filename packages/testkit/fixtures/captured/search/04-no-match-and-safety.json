@@ -1,0 +1,140 @@
+{
+  "scenario": "04-no-match-and-safety",
+  "title": "Nothing found; odd characters are literal",
+  "steps": [
+    {
+      "label": "no match",
+      "request": {
+        "request_id": "REQ",
+        "q": "zzzzzz",
+        "filters": {
+          "thread_ids": [],
+          "from": "any",
+          "has_file": null,
+          "after": null,
+          "before": null
+        },
+        "sort": "relevance",
+        "cursor": null,
+        "limit": 50
+      },
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "type": "search.results",
+          "request_id": "REQ",
+          "hits": [],
+          "next_cursor": null,
+          "total_estimate": 0,
+          "took_ms": 1,
+          "index": "ready"
+        }
+      ]
+    },
+    {
+      "label": "quote",
+      "request": {
+        "request_id": "REQ",
+        "q": "\"",
+        "filters": {
+          "thread_ids": [],
+          "from": "any",
+          "has_file": null,
+          "after": null,
+          "before": null
+        },
+        "sort": "relevance",
+        "cursor": null,
+        "limit": 50
+      },
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "type": "search.results",
+          "request_id": "REQ",
+          "hits": [],
+          "next_cursor": null,
+          "total_estimate": 0,
+          "took_ms": 1,
+          "index": "ready"
+        }
+      ]
+    },
+    {
+      "label": "lone minus",
+      "request": {
+        "request_id": "REQ",
+        "q": "-x",
+        "filters": {
+          "thread_ids": [],
+          "from": "any",
+          "has_file": null,
+          "after": null,
+          "before": null
+        },
+        "sort": "relevance",
+        "cursor": null,
+        "limit": 50
+      },
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "type": "search.results",
+          "request_id": "REQ",
+          "hits": [],
+          "next_cursor": null,
+          "total_estimate": 0,
+          "took_ms": 1,
+          "index": "ready"
+        }
+      ]
+    },
+    {
+      "label": "html in a snippet",
+      "request": {
+        "request_id": "REQ",
+        "q": "onerror",
+        "filters": {
+          "thread_ids": [],
+          "from": "any",
+          "has_file": null,
+          "after": null,
+          "before": null
+        },
+        "sort": "relevance",
+        "cursor": null,
+        "limit": 50
+      },
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "type": "search.results",
+          "request_id": "REQ",
+          "hits": [
+            {
+              "message_id": "m_00000000000000000000000004",
+              "thread_id": "projects",
+              "seq": null,
+              "author": "agent",
+              "kind": "text",
+              "via": "app",
+              "created_at": "2026-10-28T09:00:00.000Z",
+              "match_in": "text",
+              "snippet": "Done. I also looked at <img src=x onerror=alert(1)> in the old release page; it is plain text here.",
+              "marks": [
+                [
+                  34,
+                  41
+                ]
+              ]
+            }
+          ],
+          "next_cursor": null,
+          "total_estimate": 1,
+          "took_ms": 1,
+          "index": "ready"
+        }
+      ]
+    }
+  ]
+}

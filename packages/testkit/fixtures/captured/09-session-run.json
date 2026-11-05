@@ -1,0 +1,165 @@
+{
+  "scenario": "09-session-run",
+  "title": "A due session job: schedule_run notification, schedule_run_start, schedule_run_done, schedule.status",
+  "steps": [
+    {
+      "step": 1,
+      "label": "the clock reaches 07:30 and the bridge offers the job",
+      "received_by_bridge": [],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000001",
+          "ts": "2026-10-05T11:30:30.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:30:30-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [
+        {
+          "content": "Scheduled job {\"id\":\"daily-digest\",\"name\":\"Daily Digest\"} is due 2026-10-05T07:30:00-04:00 (run r_00000000000000000000000002, window ends 2026-10-05T10:30:00-04:00).\n1. Call schedule_run_start with this run id. If it says SKIP, stop here.\n2. Hand the work to a sub-agent (Agent tool): pass the standing rules and then the job text below, both exactly and in\n   that order, plus the thread \"general\" and the due time; ask for a short result. Don't do the heavy work in this conversation.\n3. Post the result to thread general with reply, then call schedule_run_done with ok and a one-line summary.\n--- job ---\nSummarise yesterday and post it.\n",
+          "meta": {
+            "chat_id": "general",
+            "thread_id": "general",
+            "thread_name": "General",
+            "message_id": "r_00000000000000000000000002",
+            "ts": "2026-10-05T11:30:30.300Z",
+            "kind": "schedule_run",
+            "trust": "owner",
+            "schedule_id": "daily-digest",
+            "run_id": "r_00000000000000000000000002",
+            "ds": "2026-10-05",
+            "fire_at": "2026-10-05T07:30:00-04:00",
+            "window_ends": "2026-10-05T10:30:00-04:00"
+          }
+        }
+      ],
+      "agent_tool_calls": []
+    },
+    {
+      "step": 2,
+      "label": "the agent claims the run",
+      "received_by_bridge": [],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000003",
+          "ts": "2026-10-05T11:30:30.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:30:30-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000002"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": [
+        {
+          "name": "schedule_run_start",
+          "args": {
+            "run_id": "r_00000000000000000000000002"
+          },
+          "result": "GO",
+          "is_error": false
+        }
+      ]
+    },
+    {
+      "step": 3,
+      "label": "the agent finishes it",
+      "received_by_bridge": [],
+      "sent_by_bridge": [
+        {
+          "v": 1,
+          "id": "00000000000000000000000004",
+          "ts": "2026-10-05T11:30:30.300Z",
+          "type": "schedule.status",
+          "health": {
+            "state": "ok",
+            "adapter": {
+              "id": "chronos",
+              "version": "0.3.0",
+              "api": 1
+            },
+            "tz": "America/New_York",
+            "host_label": "Example Mac",
+            "session_runner": "talos",
+            "paused_all": false,
+            "headless": "unused",
+            "tick_age_s": null,
+            "issues": [],
+            "checked_at": "2026-10-05T07:30:30-04:00"
+          },
+          "changed": [
+            {
+              "id": "daily-digest",
+              "etag": "sha256:4777289d890d0e38009a63764f6a192488771d2363edad75e01a7c63962788ec",
+              "state_rev": "sha256:0000000000000000000000000000000000000000000000000000000000000003"
+            }
+          ],
+          "removed": [],
+          "alert": null
+        }
+      ],
+      "channel_notifications": [],
+      "agent_tool_calls": [
+        {
+          "name": "schedule_run_done",
+          "args": {
+            "run_id": "r_00000000000000000000000002",
+            "ok": true,
+            "summary": "Posted the digest (3 items).",
+            "report": "Item one\nItem two\nItem three\n"
+          },
+          "result": "recorded",
+          "is_error": false
+        }
+      ]
+    }
+  ]
+}

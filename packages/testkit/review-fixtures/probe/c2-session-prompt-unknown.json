@@ -1,0 +1,10 @@
+{
+  "exit": 1,
+  "out": {
+    "error": {
+      "code": "not_found",
+      "message": "no such job",
+      "fields": []
+    }
+  }
+}

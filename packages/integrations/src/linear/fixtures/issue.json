@@ -1,0 +1,9 @@
+{
+  "action": "create",
+  "type": "Issue",
+  "createdAt": "2026-10-28T15:00:00.000Z",
+  "url": "https://linear.app/example/issue/EX-7",
+  "data": { "id": "iss1", "identifier": "EX-7", "title": "Crash on launch", "assigneeId": "user-me" },
+  "actor": { "name": "Sam Sender" },
+  "webhookTimestamp": 1793199600000
+}
