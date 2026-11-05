@@ -84,7 +84,7 @@ New rows for SPEC 4.2 (bridge env):
 
 #### S1.5a `schedules/2`: several fire times a day, and `meta` (HB1)
 
-This is the pre-release tolerance part of HB1. `heartbeat.ts` and the Heartbeat card rows come later (HB2 onward).
+This is the tolerance part of HB1. The Heartbeat contract and card rows are S1.7 (HB1b); the runner is HB2.
 
 Chronos with `features: ['times','meta']` in `chronos api version` lets one job fire at several times a day
 (`when: {type:'times', days, times}`) and carry an opaque `meta` object. Talos reads that safely before any such Chronos is
@@ -120,6 +120,79 @@ There's no built-in registry, in v1 or as a fallback (owner decision e).
 - The agent tools answer: `No scheduler is installed on this Mac. Tell the owner they can install Chronos from the
   Schedules tab. Don't create cron, launchd or in-session timer jobs yourself.`
 - Later: S11.2.
+
+### S1.7 Heartbeat contract (HB1b)
+
+A heartbeat is a Chronos job with `times` (4 weekday slots: 09:45, 12:15, 14:45, 17:15) that checks a list of sources
+without waking the agent, and wakes it only when an item crosses a level. `packages/protocol/src/heartbeat.ts` holds the
+shapes; **the runner that uses them is HB2 and comes next.** Nothing here runs a source. This contract is frozen: HB2
+builds on it as written.
+
+- **Where it lives.** In the job's `meta` under the key `talos.heartbeat` (`heartbeatMetaOf`), so it is in `content_hash`
+  and every card shows it. Other keys beside it are allowed and are not Heartbeat's. `meta` is 4 KiB for the whole job; a
+  config that doesn't fit is refused in plain words ("too big to save (N of 4096 bytes)"). A heartbeat config is refused on
+  a job without `times`.
+- **`HeartbeatConfig`**: `{schema: 'talos.heartbeat/1', mode, sources[], mutes[], wake_cap_per_day, run_timeout_s}`.
+  `mode` is `shadow` (the default: it records and reports, and never wakes the agent) or `live`. `wake_cap_per_day` is 1 to
+  6, default 3. `run_timeout_s` is 30 to 150, default 120. At most 12 sources. `configHash(config)` is the canonical
+  (sorted-key) `sha256:` hash of a config. There is no digest slot.
+- **Sources.** `{id, kind, enabled, args, timeout_s}`; `timeout_s` is 5 to 60. The kinds and their `args`:
+  - `github`: `{repos: ['owner/name', ...]}`, 1 to 20 repos.
+  - `schedule-failures` and `inbox`: `{}`.
+  - `command`: `{argv, cwd?, env?}`. `argv` is 1 to 20 strings and `argv[0]` is an absolute path. It is run directly, never
+    through a shell. `cwd`, if given, is an absolute path. `env` has at most 10 names, each matching `[A-Z_][A-Z0-9_]*`.
+    **`env` is shown on the approval card and stored in the job file, so never put a credential in it.** A value that
+    starts with `ghp_`, `gho_`, `github_pat_`, `xoxb-`, `xoxp-`, `sk-` or `AKIA`, or is over 32 characters of letters,
+    digits and `_+=.-` with at least one of each and high entropy, is refused as a likely secret. A name that changes how a
+    program loads code or finds things is refused: `LD_*`, `DYLD_*`, `NODE_OPTIONS`, `NODE_PATH`, `PYTHON*`, `PERL5*`,
+    `RUBYOPT`, `BASH_ENV`, `ENV`, `PATH`, `HOME`, `SHELL`, `IFS`. The program reads its own credentials from its own files.
+    A mute is `{source, key?, until}`; without a `key` it mutes the whole source. **A mute key matches by exact string
+  equality and is never a pattern** (no prefix, wildcard, regex, case-folding or trimming; `heartbeatMuteMatches`), and a
+    mute whose `until` is not after the current time matches nothing.
+- **How a source runs.** It is a process. Talos writes one JSON request to its stdin:
+  `{schema: 'talos.heartbeat-source/1', now, since | null, cursor | null, dry}`. It prints one JSON answer:
+  `{schema, status: 'ok' | 'error', error?, cursor | null, items}`. An `ok` answer carries items and a cursor and no
+  `error`; an `error` answer carries `error`. The answer is at most 256 KiB and 50 items. **Going over either limit is a
+  source error, never a cut-off list.** Inside a good answer, an item that doesn't parse costs that one item and is
+  counted; keys it doesn't know are ignored. (`HeartbeatSourceRequest`, `parseHeartbeatSourceResponse`; examples in
+  `packages/testkit/fixtures/heartbeat/`.)
+- **`HeartbeatItem`**: `{source, key, sig, title, url?, level, class, why, deadline, first_seen, last_seen, count,
+  detail?}`, deduped by `(source, key)`. `sig` is a content signature: the same key with a new `sig` is the same thing,
+  changed; key plus `sig` is the identity. `class` is `work` or `own`. `why` is a short plain reason. `deadline` is an
+  ISO time or `null`. Levels: `silent` (record only), `fyi` (one digest row, no notification), `act` (wake the agent and
+  notify). **There is no `hold` level:** an item that carries over to the next digest is `fyi`. `title` (120 code points)
+  and `detail` (500) are untrusted: capped (cut text ends with "…") and escaped like `visibleMetaText`, once, where they
+  enter. `url` is https only, and must read the same after escaping (no hidden, bidi or control characters).
+- **Escape once, at the source parse.** Untrusted text (an item's `title`, `detail` and `why`, and a source's `error`) is
+  capped and escaped in exactly one place: `parseHeartbeatSourceResponse`. Everything after it only CHECKS. `HeartbeatItem`
+  (also exported as `HeartbeatItemStore`) is the schema HB2 stores through: it refuses a raw hidden or control character
+  and an escape token the escaper would not make, and never rewrites text. The path is: parse the source's answer, add
+  `source`, `first_seen`, `last_seen` and `count`, `HeartbeatItem.parse`, store; the text is identical on every run.
+  `HeartbeatItemRead` reads a stored row the same way (loose on unknown keys). `HeartbeatSourceItem` is the escaping
+  schema for what a source prints; use it only at that entry. A stored row holding a raw hidden character is unreadable
+  and counted, not shown.
+- **`HeartbeatResult`**: `{run_key, outcome, items_seen, items_new, seen_by_level, new_by_level, sources[{id, ok, ms,
+  unreadable, error?}]}`. `outcome` is `silent`, `fyi`, `woke`, `capped` (wake cap reached), `quiet` (quiet window, no source ran),
+  `partial` (some sources answered, some failed) or `failed`. The by-level counts must add up to the totals; a source
+  that is `ok` cannot carry an error; `ms` is at most 150000. `unreadable` is how many of a source's items were dropped
+  as unreadable; a run that dropped any cannot be `silent` (a source whose items were all unreadable makes the run
+  `partial`).
+- **Strict where Talos writes, tolerant where it reads.** Reading ignores unknown keys at every depth (sources, args,
+  mutes, items) and skips a source kind from a newer Talos, counting it. Writing refuses an unknown key or kind.
+- **Strict check before any card.** `heartbeatMetaProblem` runs in the bridge's one card path, so the agent's
+  `schedule_propose`, the owner's `schedule.patch` frame and an adopt all pass through it. A heartbeat Talos can't read in
+  full (an unknown kind, an unknown key, a bad value), or one on a job without `times`, is refused with `schedule_invalid`
+  and a plain message; no card is made.
+- **Cards.** A heartbeat job's create, update and adopt cards add a Heartbeat block ahead of the full meta: the mode, the
+  slots, the sources by kind, id and repos, each command source's exact argv (JSON-quoted after the escape, with cwd and
+  env), timeouts, mutes (with their end instant and zone) and the wake cap, in plain words. The header says `(new)` for a
+  create, `(unchanged)` only for an update whose heartbeat is byte for byte what the job has now (slots too), and nothing
+  for the rest. A change is `before → after` on its row. An adopt shows the full current config; the scheduler records no
+  approved copy of `meta`, so the card says every line is what is on disk now (and marks what moved if a copy is ever
+  supplied).
+- **Risk.** Any change to the heartbeat is high, like any `meta` change, with one exception: a change that differs only in
+  `mutes`, where each new mute names an exact `key` and ends within 30 days of the card's time. The comparison is on the
+  raw objects, so an unknown key, a whole-source mute or a longer mute is high.
 
 ---
 

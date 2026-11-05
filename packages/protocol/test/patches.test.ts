@@ -102,3 +102,20 @@ describe('turning the quiet window off (audit D33)', () => {
     expect(r.success && r.data.quiet_window).toBeNull()
   })
 })
+
+describe('R2-2: work.enabled is read leniently and written strictly', () => {
+  const cfg = (enabled: unknown) => ({ ...defaultConfig, work: { ...defaultConfig.work, enabled } })
+  it('reading drops an id this build does not know, and keeps the rest (a newer peer does not kill the frame)', () => {
+    const r = AgentConfig.safeParse(cfg(['gmail_work', 'some-future-switch', 'heartbeat']))
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data.work.enabled).toEqual(['gmail_work', 'heartbeat'])
+  })
+  it('a list that is not a list is still refused on read', () => {
+    expect(AgentConfig.safeParse(cfg('heartbeat')).success).toBe(false)
+  })
+  it('writing: a patch with an unknown id in work.enabled is refused', () => {
+    expect(checkConfigPatch({ work: { enabled: ['heartbeat'] } }).ok).toBe(true)
+    expect(checkConfigPatch({ work: { enabled: ['some-future-switch'] } })).toEqual({ ok: false, path: 'work.enabled' })
+    expect(checkConfigPatch({ work: { enabled: 'heartbeat' } })).toEqual({ ok: false, path: 'work.enabled' })
+  })
+})

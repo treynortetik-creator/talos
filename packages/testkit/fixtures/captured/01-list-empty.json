@@ -39,14 +39,14 @@
               "state": "ok",
               "adapter": {
                 "id": "chronos",
-                "version": "0.3.0",
+                "version": "0.4.0",
                 "api": 1
               },
               "tz": "America/New_York",
               "host_label": "Example Mac",
               "session_runner": "talos",
               "paused_all": false,
-              "headless": "unknown",
+              "headless": "unused",
               "tick_age_s": null,
               "issues": [],
               "checked_at": "2026-10-05T07:00:00-04:00"

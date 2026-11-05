@@ -181,16 +181,16 @@ describe('fake client seam: voice, frames, API', () => {
     expect(n).toBe(1)
   })
 
-  it('api.catalog serves the integration catalog (17 entries) for the wizard in fake mode', async () => {
+  it('api.catalog serves the integration catalog (18 entries) for the wizard in fake mode', async () => {
     const c = createFakeClient()
     const cat = await c.api.catalog()
-    expect(cat).toHaveLength(17)
+    expect(cat).toHaveLength(18)
     expect(
       cat
         .filter((s) => s.category === 'work')
         .map((s) => s.id)
         .sort(),
-    ).toEqual(['gmail_work', 'jira', 'salesforce', 'slack', 'zoom'])
+    ).toEqual(['gmail_work', 'heartbeat', 'jira', 'salesforce', 'slack', 'zoom'])
   })
 
   it('api.connections is an in-memory CRUD with the shapes of the route table', async () => {

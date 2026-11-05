@@ -1,5 +1,9 @@
 # Setting up Talos on your own accounts
 
+> **The ordered path is [`SETUP.md`](../SETUP.md) in the repository root** (prerequisites, the installer, the relay, the bridge,
+> starting the agent, the phone, then the extras, with a check after each step). This page is the detailed reference for the
+> relay, the bridge and the phone; `SETUP.md` links here for them.
+
 This guide takes you from nothing to your first message on your phone. You do not need to be an engineer, but you will
 paste a few commands into a terminal on your Mac. Allow about an hour the first time.
 
@@ -87,7 +91,9 @@ Do not turn on Railway's "sleep when idle" setting. The Mac's connection has to 
 
 ## Step 3. Set up the bridge on your Mac
 
-Pick the agent folder you want to talk to (it can be any folder you use with Claude Code), then:
+If you ran the root `./install.sh`, the agent folder is `~/talos-agent` and its `talos-app` server is already registered, so
+this step only adds the bridge key and your relay address (or run `./install.sh --relay-url https://<your relay address>` again, which
+runs the same script). Otherwise pick the agent folder you want to talk to (it can be any folder you use with Claude Code), then:
 
 ```bash
 apps/bridge/scripts/install.sh --agent-dir /path/to/your/agent-folder --relay-url https://<your relay address>
@@ -109,7 +115,13 @@ prints the exact line to add to your shell profile (for example
 
 ## Step 4. Start your agent with the bridge on
 
-The short way: from anywhere, run
+If you used the root `./install.sh`, start the agent with the launch script it wrote. It adds the Talos mod and the channel flag for you:
+
+```bash
+~/talos-agent/start-talos.sh
+```
+
+For any other agent folder, the short way: from anywhere, run
 
 ```bash
 talos-app start --agent-dir /path/to/your/agent-folder -- <your existing flags>
@@ -224,10 +236,12 @@ More in [`bridge.md`](bridge.md), "Permission prompts on the phone".
 
 ### Schedules: jobs that run on their own
 
-Schedules needs a scheduler on the Mac; v1 uses [Chronos](https://github.com/treynortetik-creator/chronos). Install it,
-then restart the agent: the bridge looks for it at start and every five minutes. Open the **Schedules** tab in the app.
-You can also ask your agent for "every weekday at 07:30, summarise yesterday's commits"; it proposes a card and one tap
-creates the job. `TALOS_APP_SCHEDULER=off` in `bridge.env` switches the whole feature off. More in
+Schedules needs a scheduler on the Mac; v1 uses [Chronos](https://github.com/treynortetik-creator/chronos), which is public. The
+working sequence, for an agent that already exists, is in [`SETUP.md`](../SETUP.md), step 9.1: `./install.sh --with-chronos
+--notify talos` from the repository root, enable the jobs you want with `python3 ~/talos-agent/scripts/talos-jobs.py enable <job>`,
+restart the agent (the bridge looks for the scheduler at start and every five minutes), then run `talos-app schedules adopt`.
+Open the **Schedules** tab in the app. You can also ask your agent for "every weekday at 07:30, summarise yesterday's commits"; it
+proposes a card and one tap creates the job. `TALOS_APP_SCHEDULER=off` in `bridge.env` switches the whole feature off. More in
 [`SCHEDULES.md`](SCHEDULES.md).
 
 ### The Talos mod: live session details in the app
@@ -268,11 +282,11 @@ before you share it.
 
 You can use Talos from any of these. They talk to the same relay and the same Mac.
 
-| App            | What it is                                                                                     | Set up                                                                                                   |
-| -------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| **Web app**    | The installable web app in any browser. On iPhone, add it to the Home Screen first.            | Nothing to build. Open your relay address and use the link from `talos-app enroll` (Step 5).             |
-| **iPhone app** | A native shell around the same web app, with a share extension and optional native push.       | You build it yourself with Xcode and need an Apple developer account for TestFlight: [`ios.md`](ios.md). |
-| **Mac app**    | A menu-bar app that runs and restarts your agent, shows bridge status and opens quick compose. | Built on your Mac with the Swift command line tools: [`desktop.md`](desktop.md). Optional.               |
+| App            | What it is                                                                                         | Set up                                                                                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Web app**    | The installable web app in any browser. On iPhone, add it to the Home Screen first.                | Nothing to build. Open your relay address and use the link from `talos-app enroll` (Step 5).                                                               |
+| **iPhone app** | Optional. A native shell around the same web app, with a share extension and optional native push. | You build and sign it yourself, free (7-day re-sign) or with a paid account: [`ios.md`](ios.md). The web app on the Home Screen is the default phone path. |
+| **Mac app**    | A menu-bar app that runs and restarts your agent, shows bridge status and opens quick compose.     | Built on your Mac with the Swift command line tools: [`desktop.md`](desktop.md). Optional.                                                                 |
 
 The Mac app does not replace Step 3 or Step 4: it needs the bridge, and it starts the agent in place of
 `talos-app start`. Add devices with `talos-app enroll` whichever app you use (the Mac app's **Sign in** runs it for you).
@@ -301,6 +315,15 @@ TALOS_APP_STT_CMD=["/path/to/transcribe","{in}"]
 TALOS_APP_TTS_CMD=["/path/to/speak","{out}","{text}"]
 TALOS_APP_TTS_EXT=mp3
 TALOS_APP_FFMPEG=/path/to/ffmpeg
+```
+
+To use the speech tools of the kit's agent folder (`~/talos-agent`), these are the real lines (`stt.sh` takes the audio file and
+prints the transcript; `tts.sh file <out> "<text>"` writes the audio; the paths are absolute because no shell expands `~`):
+
+```bash
+printf 'TALOS_APP_STT_CMD=["%s/talos-agent/scripts/stt.sh","{in}"]\n' "$HOME" >> ~/.config/talos/app/bridge.env
+printf 'TALOS_APP_TTS_CMD=["%s/talos-agent/scripts/tts.sh","file","{out}","{text}"]\n' "$HOME" >> ~/.config/talos/app/bridge.env
+printf 'TALOS_APP_TTS_EXT=m4a\n' >> ~/.config/talos/app/bridge.env
 ```
 
 `TALOS_APP_FFMPEG` is optional: when set, spoken replies are transcoded to a small AAC file before they are sent.
@@ -365,15 +388,22 @@ on a commit rather than a branch, which is common in a worktree), when the branc
 branch has commits of its own and cannot fast-forward. `talos-app status` and `talos-app doctor` show the commit the running bridge started from (it records it in
 `status.json`), warn when the folder has moved on since (restart needed) and when the relay is on a different commit.
 
-Four things are still yours to do. The command lists them when it finishes:
+Six things are still yours to do. The command lists them when it finishes:
 
+0. **Sync your fork first.** The relay builds from your fork, and `talos-app update` pulls from the branch your clone follows
+   (your fork). With the original added as `upstream`: `git fetch upstream`, `git switch main`, `git merge --ff-only upstream/main`,
+   `git push origin main` (or GitHub's **Sync fork** button, then `git pull --ff-only`). The push also deploys the relay.
 1. **Restart the agent.** A bridge that is already running keeps the old code in memory; `talos-app update` never restarts
    it, because that would end the live conversation. When you are ready, stop the agent and run `talos-app start` again.
    Until you do, the Mac keeps running the old version, and `talos-app doctor` will say so if the relay has moved on.
 2. **The relay** deploys from Railway, not from this Mac. Push to your GitHub copy; Railway builds it.
 3. **The Mac app** (if you use it): run `apps/desktop/scripts/build-app.sh`, then `apps/desktop/scripts/install.sh`, which
    copies the new app to `~/Applications` and opens it. The build alone leaves the old app in place.
-4. **The iPhone app** arrives through TestFlight.
+4. **The agent folder (the kit).** `talos-app update` does not touch it. Run `bash kit/scripts/upgrade.sh --into ~/talos-agent
+   --dry-run`, read the plan, then run it again without `--dry-run`. It backs the folder up first and never writes your memory,
+   wiki or `CLAUDE.md`; [`kit/UPGRADE.md`](../kit/UPGRADE.md) has the checks and the rollback.
+5. **The iPhone app.** The web app on the Home Screen updates itself. A native app you built yourself is rebuilt and installed again
+   after a native change ([`ios.md`](ios.md)); if you use your own TestFlight, upload a new build.
 
 If you update by hand instead, the same two commands apply: `git pull --ff-only`, then `pnpm install --frozen-lockfile`, then
 restart the agent. Skipping the install can leave a command that needs a new library unable to start. The relay's database

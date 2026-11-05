@@ -1429,7 +1429,10 @@ export class Hub implements Bus {
               thread_id: frame.message.thread_id,
             },
             frame.message.text && !frame.voice_delegation_id
-              ? { text: frame.message.format === 'plain' ? frame.message.text : markdownToPlain(frame.message.text) }
+              ? {
+                  // a heartbeat digest carries outside text: the push says so first, so it cannot read as Talos itself
+                  text: `${frame.message.heartbeat ? 'Heartbeat: ' : ''}${frame.message.format === 'plain' ? frame.message.text : markdownToPlain(frame.message.text)}`,
+                }
               : undefined,
           )
         }

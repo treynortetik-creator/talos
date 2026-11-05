@@ -16,7 +16,7 @@
             "state": "ok",
             "adapter": {
               "id": "chronos",
-              "version": "0.3.0",
+              "version": "0.4.0",
               "api": 1
             },
             "tz": "America/New_York",
@@ -119,7 +119,7 @@
               "state": "ok",
               "adapter": {
                 "id": "chronos",
-                "version": "0.3.0",
+                "version": "0.4.0",
                 "api": 1
               },
               "tz": "America/New_York",
@@ -246,7 +246,7 @@
               "state": "ok",
               "adapter": {
                 "id": "chronos",
-                "version": "0.3.0",
+                "version": "0.4.0",
                 "api": 1
               },
               "tz": "America/New_York",
@@ -373,7 +373,7 @@
               "state": "ok",
               "adapter": {
                 "id": "chronos",
-                "version": "0.3.0",
+                "version": "0.4.0",
                 "api": 1
               },
               "tz": "America/New_York",
@@ -503,7 +503,7 @@
             "state": "ok",
             "adapter": {
               "id": "chronos",
-              "version": "0.3.0",
+              "version": "0.4.0",
               "api": 1
             },
             "tz": "America/New_York",
@@ -592,7 +592,7 @@
               "state": "ok",
               "adapter": {
                 "id": "chronos",
-                "version": "0.3.0",
+                "version": "0.4.0",
                 "api": 1
               },
               "tz": "America/New_York",
@@ -722,7 +722,7 @@
             "state": "ok",
             "adapter": {
               "id": "chronos",
-              "version": "0.3.0",
+              "version": "0.4.0",
               "api": 1
             },
             "tz": "America/New_York",
@@ -808,7 +808,7 @@
               "state": "ok",
               "adapter": {
                 "id": "chronos",
-                "version": "0.3.0",
+                "version": "0.4.0",
                 "api": 1
               },
               "tz": "America/New_York",
@@ -860,6 +860,7 @@
                   "trigger": "clock",
                   "status": "failed",
                   "duration_s": 5,
+                  "ended_at": "2026-10-05T07:40:05-04:00",
                   "has_report": true,
                   "summary": "The API said no."
                 },

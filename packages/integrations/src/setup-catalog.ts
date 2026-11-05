@@ -12,6 +12,7 @@ import { githubSetup } from './github/setup.ts'
 import { renderGmailScript } from './gmail/apps-script.ts'
 import { gmailPersonalSetup } from './gmail/setup.ts'
 import { gmailWorkSetup } from './gmail_work/setup.ts'
+import { heartbeatSetup } from './heartbeat/setup.ts'
 import { jiraSetup } from './jira/setup.ts'
 import { linearSetup } from './linear/setup.ts'
 import { makeSetup } from './make/setup.ts'
@@ -41,6 +42,7 @@ export const setupCatalog: Record<IntegrationIdT, SetupSpecT> = {
   gmail_work: gmailWorkSetup,
   zoom: zoomSetup,
   salesforce: salesforceSetup,
+  heartbeat: heartbeatSetup,
 }
 
 export function listSetupSpecs(): SetupSpecT[] {

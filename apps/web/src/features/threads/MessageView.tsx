@@ -528,6 +528,20 @@ export function MessageView({
       </div>
     )
   }
+  if (m.author === 'system' && m.heartbeat) {
+    // Text from outside (an issue title, a subject) is quoted under a label the app fixes itself, so it cannot pass as a Talos
+    // notice, and a body that mentions a security check does not get the worried mascot. Newlines are kept.
+    return (
+      <div role="status" className="px-4 py-2 text-sm text-text-2" data-testid="msg-heartbeat" data-msg-id={m.id}>
+        <p className="m-0 font-mono text-xs font-semibold" data-testid="heartbeat-label">
+          Heartbeat
+        </p>
+        <blockquote className="m-0 mt-1 border-l-2 border-line pl-3 whitespace-pre-wrap" data-testid="heartbeat-body">
+          {m.text}
+        </blockquote>
+      </div>
+    )
+  }
   if (m.author === 'system' && m.handoff) {
     // The label is data the bridge set, drawn apart from the body, so the body cannot pass itself off as a label or as a
     // bridge notice (and a body that mentions a security check does not get the worried mascot).

@@ -1,5 +1,20 @@
 # Changelog
 
+## Heartbeat runner
+
+- A heartbeat job's slot is now checked by the bridge itself, with no agent turn: it runs the job's sources (GitHub PRs and CI, failed scheduled jobs, the shared inbox, or your own command) with a time limit each, kills any that hang, and posts one quiet digest row for fyi items, nothing at all when there is nothing new, and a plain line asking for your reply for items that need you (the agent wake itself comes later). It follows the quiet hours, stops at the daily wake limit, shows work items only if you allow them in Integrations ("Heartbeat (work items)", with a passkey), draws its digest under a fixed "Heartbeat" label so a title from outside can't pass as a Talos notice, can't post the same digest twice after a crash, and in shadow mode only records what it would have posted. See docs/HEARTBEAT.md.
+
+## Heartbeat contract
+
+- Schedules now vendors Chronos 0.4.0 and has the Heartbeat contract (items, sources, a shadow or live mode, config in the job's meta, results), so a heartbeat job's approval card lists its mode, slots, sources, each command's exact argv, mutes and wake cap in plain words, says `(new)` or `(unchanged)` only when that is true, and a change to its sources or wake cap is high risk (only a short mute of one exact item is low). A heartbeat Talos can't read in full, or on a job without several fire times, is refused before any card is made, whether the agent or the owner's form proposed it. The runner that checks the sources comes later.
+
+## Set Talos up from one guide
+
+- New `SETUP.md` in the repository root: one ordered path from prerequisites to the phone, with `[YOU]` marks for the steps only a person can do and a check after each step. `CLAUDE.md` and `AGENTS.md` now start by pointing an agent that is setting Talos up for a user at it.
+- The root `./install.sh` passes the kit's flags through (`--with-vault`, `--with-memory-search`, `--notify talos` and the rest), `--with-chronos` now adds Chronos to an agent that already exists, and `--relay-url https://<host>` also sets up the bridge. The agent folder is `~/talos-agent` everywhere.
+- The web app on the Home Screen is the default phone path. The free Personal Team build steps moved to `docs/ios.md`, and `scripts/testflight.sh` now requires `TALOS_RELAY_HOST` for a push build and passes it on (the throwaway checkout has no `Local.xcconfig`).
+- `talos-app update` also prints the kit upgrade step. The public export fails if a setup doc names a file the export leaves out.
+
 ## Lead kit
 
 - New `talos-app lead init <thread> --folder <dir>` makes a thread lead's own folder (standing brief, board rewritten at every stop, append-only decisions) with a privacy fence that keeps it out of whole folders (the main agent folder, the whole Claude Code config folder and `~/.claude.json`, the Talos folder, your vault and any `--protect` folder), enforced by Claude Code's own OS sandbox (Seatbelt) for Bash and everything it starts, locked on so claude refuses to start without it, plus deny rules for the Read tool, and switches off the browser, computer use, account connectors, every plugin's MCP servers and every MCP server your main agent has off; a lead can now read and list only its own thread, cannot send files from the Talos folder or any protected folder, cannot edit your shell start-up files, launch agents, ssh or git config or the folders on your PATH, and cannot run `digest`, `post` or `inbox`.

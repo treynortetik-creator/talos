@@ -224,6 +224,9 @@ CV() { printf '%s' "$1" | H check-vault.py; }
 payload() { printf '{"tool_name":"Write","tool_input":{"file_path":%s,"content":%s}}' "$(js "$1")" "$(js "$2")"; }
 out="$(CV "$(payload "$A/wiki/x.md" "She goes to Zebra-Clinic on Fridays.")")"
 [ "$out" = "{}" ] && ok "vault guard: with no vault configured it is inert" || no "vault guard acted with no vault" "$out"
+mkdir -p "$SB/hm/private-agent-vault"; echo marker > "$SB/hm/private-agent-vault/.talos-vault"
+warn="$(printf '%s' "$(payload "$A/wiki/x.md" "hello")" | ( cd "$A" && HOME="$SB/hm" XDG_CONFIG_HOME="$SB/hm/.config" python3 hooks/check-vault.py 2>&1 >/dev/null ))"
+printf '%s' "$warn" | grep -q 'vault-dir' && ok "vault guard: a vault marker with no vault-dir record prints a one-line warning" || no "no warning for an unrecorded vault" "$warn"
 printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"
 out="$(CV "$(payload "$A/wiki/x.md" "She goes to Zebra-Clinic on Fridays.")")"
 printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin)["hookSpecificOutput"]; assert d["permissionDecision"]=="ask" and "zebra-clinic" in d["permissionDecisionReason"].lower()' 2>/dev/null \

@@ -23,7 +23,7 @@ describe('catalog and connections API', () => {
   it('serves a valid setup spec for every integration', async () => {
     const s = setup()
     const specs = (await (await s.api('GET', '/api/integrations/catalog')).json()) as unknown[]
-    expect(specs).toHaveLength(17)
+    expect(specs).toHaveLength(18)
     for (const sp of specs) expect(SetupSpec.safeParse(sp).success).toBe(true)
   })
 

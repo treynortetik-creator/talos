@@ -1,20 +1,24 @@
-// HB1 against the REAL Chronos CLI with `times` (PR #6). Chronos's own decisions (which slot is due, what Run now claims,
-// when a slot is superseded) are not something a replay can make, so this suite runs the bridge on a real checkout.
+// HB1 against the REAL Chronos CLI with `times` and `meta`. Chronos's own decisions (which slot is due, what Run now claims,
+// when a slot is superseded) are not something a replay can make, so this suite runs the bridge on a real checkout: the
+// vendored copy (third_party/chronos, tag v0.4.0) by default.
 //
-//   TALOS_CHRONOS_TIMES_SRC=/path/to/chronos-checkout bun test test/schedules/times-real.test.ts
+//   TALOS_CHRONOS_TIMES_SRC=/path/to/other-checkout bun test test/schedules/times-real.test.ts   # optional: try another one
 //
-// Without that variable the suite is skipped and says so; CI for this repo has no such checkout until Chronos tags the
-// release and `third_party/chronos` is re-vendored (HEARTBEAT-SPEC 15, HB1 "re-vendor"). The always-on coverage of the
-// same answers is times.test.ts, from recorded output of this CLI.
+// The always-on coverage of the same answers is times.test.ts, from recorded output of this CLI.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { ChronosBox, draft, longTimeouts, type SchedHarness, startSched, waitFor } from './harness.ts'
+import { CHRONOS_SRC, ChronosBox, draft, longTimeouts, type SchedHarness, startSched, waitFor } from './harness.ts'
 
 longTimeouts()
 
-const SRC = process.env.TALOS_CHRONOS_TIMES_SRC
-const real = SRC && existsSync(`${SRC}/bin/chronos`) ? describe : describe.skip
-if (!SRC) console.warn('times-real.test.ts: TALOS_CHRONOS_TIMES_SRC not set, the real-Chronos times suite is skipped')
+const SRC = process.env.TALOS_CHRONOS_TIMES_SRC || CHRONOS_SRC
+const found = Boolean(SRC) && existsSync(`${SRC}/bin/chronos`)
+// A skipped suite must not read as a pass: say so, loudly, where the run output is read.
+if (!found)
+  console.warn(
+    `WARNING: times-real.test.ts is SKIPPED, not passed: no Chronos checkout at "${SRC ?? ''}" (looked for bin/chronos). Set TALOS_CHRONOS_TIMES_SRC or restore third_party/chronos.`,
+  )
+const real = found ? describe : describe.skip
 
 let h = undefined as unknown as SchedHarness
 afterEach(async () => {

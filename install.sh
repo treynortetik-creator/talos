@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Talos installer: a working agent from a fresh clone of this repo.
 #
-#   ./install.sh [--agent-dir PATH] [--no-app] [--dry-run] [--yes] [--with-chronos] [--repoint]
+#   ./install.sh [--agent-dir PATH] [--no-app] [--dry-run] [--yes] [--with-chronos] [--repoint] [--relay-url URL] [kit flags]
 #
 #   --agent-dir PATH  where the agent lives (default ~/talos-agent). Must be new, empty, or already a Talos agent.
 #                     Any other non-empty folder is refused, and an existing CLAUDE.md is never overwritten.
@@ -10,7 +10,17 @@
 #   --yes             no confirmation prompt (required when there is no terminal to ask on)
 #   --repoint         an agent whose .mcp.json or start-talos.sh points at ANOTHER clone of this repo is refused unless you
 #                     pass this; it then points both at this clone
-#   --with-chronos    also install Chronos, the scheduler (macOS; fetches it from GitHub). Off by default.
+#   --with-chronos    also install Chronos, the scheduler (macOS; fetches it from GitHub). Off by default. On an agent that
+#                     already exists it adds Chronos and registers the jobs (kit/install.sh --add-to-existing).
+#   --no-chronos      accepted for the kit docs; it is the default
+#   --relay-url URL   also set up the bridge (its key and settings) for your relay: a bare https origin, https://<host>, no path, query or user name. Without it
+#                     the installer prints the exact command to run once the relay exists (docs: SETUP.md).
+#
+# Kit flags are passed to kit/install.sh unchanged: --with-vault DIR, --with-memory-search, --embed-model base|small,
+# --with-reranker, --with-voice, --with-qwen-voice, --with-parakeet, --with-diarize, --global-pointer, --allow-protected-folder,
+# --allow-synced-folder, and the Chronos-only ones (need --with-chronos): --notify talos|macos|none, --no-jobs,
+# --full-access-jobs, --no-load, --no-session-hook, --reinstall-chronos, --set-chronos-workspace, --chronos-path DIR,
+# --chronos-repo URL, --chronos-ref SHA. See kit/install.sh --help for what each does.
 #
 # Steps: prerequisites; JS dependencies of this clone; the agent folder (the kit, default CLAUDE.md); a first git commit
 # there; the talos-app MCP server for that folder; a launch script that loads the Talos mod with --plugin-dir; the Mac app
@@ -31,20 +41,73 @@ CLI=(bun run "$REPO/apps/bridge/src/cli.ts")
 DESKTOP="${TALOS_INSTALL_DESKTOP_SCRIPTS:-$REPO/apps/desktop/scripts}"
 OS="${TALOS_INSTALL_OS:-$(uname -s)}"
 
-AGENT_DIR="$HOME/talos-agent"; WANT_APP=1; DRY=0; YES=0; CHRONOS=0; REPOINT=0
+AGENT_DIR="$HOME/talos-agent"; AGENT_DIR_GIVEN=0; VAULT_RAW=""; WANT_APP=1; DRY=0; YES=0; CHRONOS=0; NO_CHRONOS=0; REPOINT=0; RELAY_URL=""
+KIT_ARGS=()          # kit/install.sh flags given on our command line, passed through unchanged
+KIT_CHRONOS_ONLY=()  # the subset that means nothing without Chronos (refused without --with-chronos, never silently dropped)
 usage() { awk 'NR>1 { if ($0 ~ /^#/) print; else exit }' "$0" | sed 's/^# \{0,1\}//'; }
+# A flag's value is never the next flag: `--with-vault --dry-run` must not make "--dry-run" a folder name.
+need_value() { { [ $# -ge 2 ] && [ -n "$2" ] && [ "${2#--}" = "$2" ]; } || { echo "$1 needs a value (got '${2-}')" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --agent-dir) [ $# -ge 2 ] || { echo "--agent-dir needs a path" >&2; exit 2; }; AGENT_DIR="$2"; shift 2 ;;
+    --agent-dir) need_value "$@"; AGENT_DIR="$2"; AGENT_DIR_GIVEN=1; shift 2 ;;
     --no-app) WANT_APP=0; shift ;;
     --dry-run) DRY=1; shift ;;
     --yes|-y) YES=1; shift ;;
     --with-chronos) CHRONOS=1; shift ;;
+    --no-chronos) NO_CHRONOS=1; shift ;;
     --repoint) REPOINT=1; shift ;;
+    --relay-url) need_value "$@"; RELAY_URL="$2"; shift 2 ;;
+    # kit/install.sh flags that take a value
+    --with-vault) need_value "$@"; VAULT_RAW="$2"; shift 2 ;;   # resolved and checked below, then passed on
+    --embed-model) need_value "$@"; KIT_ARGS+=("$1" "$2"); shift 2 ;;
+    --notify|--chronos-path|--chronos-repo|--chronos-ref)
+      need_value "$@"; KIT_ARGS+=("$1" "$2"); KIT_CHRONOS_ONLY+=("$1"); shift 2 ;;
+    # kit/install.sh flags without a value
+    --with-memory-search|--with-reranker|--with-voice|--with-qwen-voice|--with-parakeet|--with-diarize|--global-pointer|--allow-protected-folder|--allow-synced-folder)
+      KIT_ARGS+=("$1"); shift ;;
+    --no-jobs|--full-access-jobs|--no-load|--no-session-hook|--reinstall-chronos|--set-chronos-workspace)
+      KIT_ARGS+=("$1"); KIT_CHRONOS_ONLY+=("$1"); shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
+if [ "$CHRONOS" = 1 ] && [ "$NO_CHRONOS" = 1 ]; then echo "--with-chronos and --no-chronos contradict each other; pick one." >&2; exit 2; fi
+if [ "$CHRONOS" != 1 ] && [ ${#KIT_CHRONOS_ONLY[@]} -gt 0 ]; then
+  echo "${KIT_CHRONOS_ONLY[*]} only does something with Chronos, which is off unless you pass --with-chronos. Add --with-chronos, or drop the flag. Nothing was changed." >&2
+  exit 2
+fi
+if [ -n "$RELAY_URL" ]; then
+  # A bare https origin only: no query, fragment, user info, path (one trailing slash is dropped), ';' or space.
+  relay_re='^https://[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*(:[0-9]{1,5})?/?$'
+  [[ "$RELAY_URL" =~ $relay_re ]] || { echo "--relay-url must be a bare https origin, https://<host> or https://<host>:<port>, with no path, query, fragment, user name or ';', and no empty label such as '..' (got '$RELAY_URL')." >&2; exit 2; }
+  RELAY_URL="${RELAY_URL%/}"
+fi
+# The vault is private. Resolve it to an absolute path against where you run this, and refuse anything at or under this clone
+# (a clone can be pushed: one `git add -A && git push` from public). kit/install.sh checks other repositories too.
+if [ -n "$VAULT_RAW" ]; then
+  case "$VAULT_RAW" in "~"|"~/"*) VAULT_RAW="$HOME${VAULT_RAW#\~}" ;; esac
+  case "$VAULT_RAW" in /*) ;; *) VAULT_RAW="$PWD/$VAULT_RAW" ;; esac
+  _rest=""; _anc="${VAULT_RAW%/}"
+  while [ ! -d "$_anc" ] && [ "$_anc" != "/" ] && [ -n "$_anc" ]; do _rest="/$(basename "$_anc")$_rest"; _anc="$(dirname "$_anc")"; done
+  case "$_rest/" in */../*|*/./*) echo "--with-vault: '$VAULT_RAW' has a . or .. in a part that does not exist yet; give a plain path." >&2; exit 2 ;; esac
+  VAULT_ABS="$(cd "$_anc" 2>/dev/null && pwd -P)$_rest"
+  REPO_REAL="$(cd "$REPO" && pwd -P)"
+  # macOS volumes ignore letter case, and bash's pwd -P does not fold it, so compare lower-cased there.
+  _lc() { if [ "$OS" = Darwin ]; then printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; else printf '%s' "$1"; fi; }
+  _va="$(_lc "$VAULT_ABS/")"; _r1="$(_lc "$REPO_REAL/")"; _r2="$(_lc "$REPO/")"
+  case "$_va" in "$_r1"*|"$_r2"*)
+    echo "--with-vault: $VAULT_ABS is inside this clone ($REPO_REAL). The vault is private and a clone can be pushed to GitHub. Pick a folder outside it, for example ~/private-agent-vault." >&2; exit 2 ;;
+  esac
+  KIT_ARGS+=(--with-vault "$VAULT_ABS")
+fi
+# Version 1.x used ~/my-agent as the default. With no --agent-dir, do not quietly start a second agent beside it.
+if [ "$AGENT_DIR_GIVEN" = 0 ] && [ -e "$HOME/my-agent" ] && [ ! -e "$HOME/talos-agent" ]; then
+  echo "Found an agent at ~/my-agent (the old default folder) and none at ~/talos-agent (the new default). Nothing was changed. Say which you mean:" >&2
+  echo "  keep using the old one:   ./install.sh --agent-dir ~/my-agent ..." >&2
+  echo "  move it to the new name:  mv ~/my-agent ~/talos-agent, then ./install.sh --repoint ..." >&2
+  echo "  start a second, new one:  ./install.sh --agent-dir ~/talos-agent ..." >&2
+  exit 1
+fi
 
 DONE=()      # steps that changed something
 CHANGED=0
@@ -191,12 +254,29 @@ fi
 
 # ---------------------------------------------------------------- 4. the kit
 step "4/7 The agent (kit, default CLAUDE.md, first commit)"
-if [ "$ALREADY" = 1 ]; then skip "the kit is installed in $AGENT_DIR"
+# Flags for kit/install.sh: Chronos stays off unless asked for, and everything else you passed goes through unchanged.
+KARGS=(--agent-dir "$AGENT_DIR"); [ "$CHRONOS" = 1 ] || KARGS+=(--no-chronos)
+KARGS+=(${KIT_ARGS[@]+"${KIT_ARGS[@]}"})
+DRYARGS=(--dry-run); [ -e "$PARENT" ] || DRYARGS+=(--parent-will-exist)   # a plan of an install that would create the parent first
+if [ "$ALREADY" = 1 ]; then
+  # An agent that exists is left alone, unless you asked for something the first install can still add later:
+  # Chronos, or one of the kit's opt-in extras. That runs the kit installer in its add-only mode (no copy, no overwrite).
+  if [ "$CHRONOS" = 1 ] || [ ${#KIT_ARGS[@]} -gt 0 ]; then
+    KARGS+=(--add-to-existing)
+    if [ "$DRY" = 1 ]; then
+      plan "bash kit/install.sh ${KARGS[*]} --dry-run   (adds only what you asked for to the existing agent: no copy, CLAUDE.md untouched)"
+      # Run the kit's own dry run so its refusals (a bad --notify, a vault that is not empty) fail this dry run too.
+      bash "$KIT/install.sh" "${KARGS[@]}" "${DRYARGS[@]}" || fail 1 "the kit refused this combination in its dry run (its message is above). Nothing was changed."
+    else
+      bash "$KIT/install.sh" "${KARGS[@]}" || fail 1 "kit/install.sh --add-to-existing failed (its output is above). It does not copy or overwrite anything in the agent folder; fix the problem and run ./install.sh again with the same flags."
+      did "added to the existing agent: ${KIT_ARGS[*]-} $([ "$CHRONOS" = 1 ] && echo '--with-chronos')"
+    fi
+  else skip "the kit is installed in $AGENT_DIR"; fi
 elif [ "$DRY" = 1 ]; then
-  plan "bash kit/install.sh --agent-dir $AGENT_DIR$([ "$CHRONOS" = 1 ] || echo ' --no-chronos')   (builds the Talos plugin release under ~/.local/share/talos/kit, copies the data and docs, renders the default CLAUDE.md)"
+  plan "bash kit/install.sh ${KARGS[*]}   (builds the Talos plugin release under ~/.local/share/talos/kit, copies the data and docs, renders the default CLAUDE.md)"
+  bash "$KIT/install.sh" "${KARGS[@]}" "${DRYARGS[@]}" || fail 1 "the kit refused this combination in its dry run (its message is above). Nothing was changed."
 else
   mkdir -p "$PARENT" || fail 1 "could not create $PARENT."
-  KARGS=(--agent-dir "$AGENT_DIR"); [ "$CHRONOS" = 1 ] || KARGS+=(--no-chronos)
   if ! bash "$KIT/install.sh" "${KARGS[@]}"; then
     if [ -n "$(ls -A "$AGENT_DIR" 2>/dev/null || true)" ]; then
       did "started copying the kit into $AGENT_DIR (it holds a partial copy)"
@@ -242,14 +322,28 @@ else
 fi
 
 # ---------------------------------------------------------------- 5. MCP server
-step "5/7 The talos-app MCP server for this folder"
-if [ "$DRY" = 1 ]; then plan "talos-app install-mcp --agent-dir $AGENT_DIR   (writes $AGENT_DIR/.mcp.json)"
+step "5/7 The talos-app MCP server for this folder (and the bridge, with --relay-url)"
+BRIDGE_HOME="${TALOS_APP_HOME:-$HOME/.config/talos/app}"
+BRIDGE_CMD="apps/bridge/scripts/install.sh --agent-dir $AGENT_DIR --relay-url https://<your relay host>"
+if [ "$DRY" = 1 ]; then
+  plan "talos-app install-mcp --agent-dir $AGENT_DIR   (writes $AGENT_DIR/.mcp.json)"
+  if [ -n "$RELAY_URL" ]; then plan "bash apps/bridge/scripts/install.sh --agent-dir $AGENT_DIR --relay-url $RELAY_URL   (creates the bridge key and settings in $BRIDGE_HOME; prints the BRIDGE_PUBKEY= line for Railway)"
+  else plan "print the bridge command to run once your relay exists: $BRIDGE_CMD"; fi
 else
   OUT="$("${CLI[@]}" install-mcp --agent-dir "$AGENT_DIR" 2>&1)" || { printf '%s\n' "$OUT" >&2; fail 1 "talos-app install-mcp failed."; }
   case "$OUT" in
     "already up to date"*) skip "$OUT" ;;
     *) say "   $OUT"; did "registered the talos-app MCP server" ;;
   esac
+  if [ -n "$RELAY_URL" ]; then
+    BOUT="$(bash "$REPO/apps/bridge/scripts/install.sh" --agent-dir "$AGENT_DIR" --relay-url "$RELAY_URL" 2>&1)" || { printf '%s\n' "$BOUT" >&2; fail 1 "the bridge installer (apps/bridge/scripts/install.sh) failed."; }
+    printf '%s\n' "$BOUT" | sed 's/^/   bridge: /'
+    did "set up the bridge for $RELAY_URL"
+  elif [ -f "$BRIDGE_HOME/bridge.env" ]; then skip "the bridge is already configured ($BRIDGE_HOME/bridge.env)"
+  else
+    say "   the bridge is not set up yet: it needs your relay address, so it waits for the Railway step (SETUP.md, step 4)."
+    say "   Once the relay exists, run:  $BRIDGE_CMD"
+  fi
 fi
 
 # ---------------------------------------------------------------- 6. launch script with the Talos mod
@@ -431,9 +525,18 @@ if [ "$VERIFY_WARNED" = 1 ]; then say "Note: verify-install.sh reported problems
 cat <<EOF
 
 What next:
-  Terminal:  $LAUNCH
-$([ "$WANT_APP" = 1 ] && printf '  Mac app:   open ~/Applications/Talos.app\n')  First run: tell the agent "Read BOOTSTRAP.md and set me up." The interview is optional.
-  Phone:     docs/SETUP.md covers the relay and pairing.
-  Update:    bun run $(printf '%q' "$REPO/apps/bridge/src/cli.ts") update
+  Start:     $LAUNCH      (the way to start it: it loads the Talos mod and the channel)
+EOF
+if [ "$WANT_APP" = 1 ]; then
+  printf '  Mac app:   open ~/Applications/Talos.app   (the same agent; it keeps it running and can start at login)\n'
+  if [ -f "$DESKTOP/make-signing-identity.sh" ] && ! bash "$DESKTOP/make-signing-identity.sh" --status >/dev/null 2>&1; then
+    printf '  Optional:  bash %q   (one password prompt; then rebuild the app so macOS privacy grants survive rebuilds)\n' "$DESKTOP/make-signing-identity.sh"
+  fi
+fi
+cat <<EOF
+  First run: tell the agent "Read BOOTSTRAP.md and set me up." The interview is optional.
+  Phone:     SETUP.md, steps 4 to 7 (relay, bridge, start, pair the phone)$([ -n "$RELAY_URL" ] || printf '; the bridge command comes first: %s' "$BRIDGE_CMD")
+  Chronos:   $([ "$CHRONOS" = 1 ] && echo 'installed; its jobs are off until you enable them (SETUP.md, step 9.1)' || echo './install.sh --with-chronos adds the scheduler to this agent later (SETUP.md, step 9.1)')
+  Update:    bun run $(printf '%q' "$REPO/apps/bridge/src/cli.ts") update   (then SETUP.md, "Updating")
 EOF
 exit 0

@@ -1,4 +1,4 @@
-// A real Chronos install in a temp HOME (third_party/chronos at v0.3.0), reachable through a wrapper script the bridge
+// A real Chronos install in a temp HOME (third_party/chronos at v0.4.0), reachable through a wrapper script the bridge
 // can use as TALOS_APP_CHRONOS_BIN. No bridge imports here: the vitest contract suites (Node) use it too.
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'

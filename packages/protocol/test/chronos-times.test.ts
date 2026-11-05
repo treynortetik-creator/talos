@@ -384,3 +384,21 @@ describe('R1-3: the app says what it can read, in the signed request', () => {
     expect(SchedulesListFrame.shape.app_features.safeParse(['x'.repeat(41)]).success).toBe(false)
   })
 })
+
+describe('R1-15: the fixtures print the version of the Chronos that is vendored', () => {
+  const vendored = /^VERSION = "([^"]+)"/m.exec(
+    readFileSync(join(here, '..', '..', '..', 'third_party', 'chronos', 'lib', 'chronoslib.py'), 'utf8'),
+  )?.[1]
+  it('the vendored copy is 0.4.0', () => {
+    expect(vendored).toBe('0.4.0')
+  })
+  it('version.json and every "chronos" key in a snapshot say so', () => {
+    expect(load('version').chronos).toBe(vendored)
+    const stale: string[] = []
+    for (const f of files) {
+      const v = JSON.parse(readFileSync(join(dir, f), 'utf8'))?.chronos
+      if (typeof v === 'string' && v !== vendored) stale.push(`${f}: ${v}`)
+    }
+    expect(stale).toEqual([])
+  })
+})

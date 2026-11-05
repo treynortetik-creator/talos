@@ -49,7 +49,12 @@ export const AgentConfig = z.object({
   work: z.object({
     label: z.string().max(40).default('Work systems'),
     ask_note: z.string().max(120).default('Ask your IT team before connecting these.'),
-    enabled: z.array(IntegrationId).default([]), // work integrations the owner switched on
+    // work integrations the owner switched on. Read leniently: an id this build does not know (a newer peer added one) is dropped,
+    // so one new id never costs a whole config frame. Writing stays strict (`checkConfigPatch` refuses an unknown id).
+    enabled: z
+      .array(z.unknown())
+      .transform((a) => a.filter((x): x is z.infer<typeof IntegrationId> => IntegrationId.safeParse(x).success))
+      .default([]),
     thread: ThreadId.optional(), // where work events land; falls back to 'inbox'
     retention: z.enum(['passthrough', 'buffer']).default('passthrough'),
   }),

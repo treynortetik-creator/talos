@@ -2,7 +2,7 @@
 """global-pointer.py: add or remove a small marked block in your GLOBAL Claude config (~/.claude/CLAUDE.md) that
 points every Claude Code session on this Mac at your Talos agent's memory.
 
-    python3 scripts/global-pointer.py add --agent-dir ~/my-agent [--claude-dir ~/.claude] [--dry-run]
+    python3 scripts/global-pointer.py add --agent-dir ~/talos-agent [--claude-dir ~/.claude] [--dry-run]
     python3 scripts/global-pointer.py remove [--claude-dir ~/.claude]
 
 Why it is opt-in: it edits a file that belongs to you and applies to EVERY project, not just the agent. What it

@@ -74,6 +74,8 @@ export const IntegrationId = z.enum([
   'gmail_work',
   'zoom',
   'salesforce',
+  /** Not an inbound integration: the owner-signed switch for work-class Heartbeat items (config.work.enabled). */
+  'heartbeat',
 ])
 
 // ---- v2 features (docs/V2-FEATURES.md V1.1) -----------------------------------------------------------------------

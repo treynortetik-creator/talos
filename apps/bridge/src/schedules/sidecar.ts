@@ -3,6 +3,7 @@
 // It holds NO approval state (N1): deleting or editing it can lose a result thread or an offer timestamp, never an
 // approval, and every loss falls back safely (default_thread; the job is offered again; the orphan sweep reads Chronos).
 import { join } from 'node:path'
+import type { HeartbeatResultT } from '@talos-app/protocol'
 import { readJsonFile, writeJsonAtomic } from '../fsutil.ts'
 
 export const SIDECAR_RETENTION_MS = 8 * 24 * 3600_000
@@ -42,6 +43,8 @@ export type RunNote = {
   report?: string
   finished_at?: string
   duration_s?: number
+  /** A heartbeat run's result: the outcome and, per source, ok / ms / unreadable / error (never item text). */
+  heartbeat?: HeartbeatResultT
   at: number
 }
 

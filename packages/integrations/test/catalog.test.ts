@@ -10,12 +10,12 @@ describe('integration catalog (seam)', () => {
   it('every setup spec is valid', () => {
     for (const s of listSetupSpecs()) expect(SetupSpec.safeParse(s).success, s.id).toBe(true)
   })
-  it('work sources are the five in spec 7.5 and route to the work thread', () => {
+  it('work sources are the five in spec 7.5, plus the Heartbeat work switch, and route to the work thread', () => {
     const work = listSetupSpecs()
       .filter((s) => s.category === 'work')
       .map((s) => s.id)
       .sort()
-    expect(work).toEqual(['gmail_work', 'jira', 'salesforce', 'slack', 'zoom'])
+    expect(work).toEqual(['gmail_work', 'heartbeat', 'jira', 'salesforce', 'slack', 'zoom'])
     for (const s of listSetupSpecs()) expect(s.default_thread).toBe(s.category === 'work' ? 'work' : 'inbox')
   })
   it('every module refuses a delivery with no headers, whether or not it has a secret, and none is a stub', async () => {

@@ -151,6 +151,11 @@ export const Message = z.object({
     .object({ label: z.string().min(1).max(160), type: z.enum(['TASK', 'RESULT', 'BLOCK']) })
     .optional()
     .catch(undefined),
+  /**
+   * A heartbeat digest row (system rows the live bridge writes). Its text came from outside (an issue title, a subject), so
+   * the app draws it under a fixed "Heartbeat" label as a quote, never as a Talos notice. Anything but `true` reads as absent.
+   */
+  heartbeat: z.literal(true).optional().catch(undefined),
 })
 
 /**

@@ -8,7 +8,7 @@
 #                      ~/.config/talos (agent-dir, chronos-dir, vault-dir, notify/, talos-app-bin, notify-errors.log, and the notify.env,
 #                      notify.env.example, telegram.json, telegram-mirror.on files older kit versions wrote). Anything else there is kept and listed, never deleted.
 #   --agent-dir DIR    the agent folder whose settings.json carries the Chronos hook (default: the folder
-#                      install.sh recorded in ~/.config/talos/agent-dir, else ~/my-agent)
+#                      install.sh recorded in ~/.config/talos/agent-dir, else ~/talos-agent)
 #   --remove-chronos   also run Chronos's own uninstaller (unloads and removes its two launchd agents; keeps data)
 #   --purge-chronos    same, plus delete ~/.chronos and ~/.config/chronos. Takes ANY jobs you added yourself with it.
 #   --keep-clone       leave the pinned Chronos clone in ~/.local/share/talos
@@ -25,7 +25,7 @@ KIT="$(cd "$(dirname "$0")" && pwd)"
 AGENT_DIR=""; RM_CHRONOS=0; PURGE=0; KEEP_CLONE=0; YES=0; RM_MEM=0; PURGE_APP=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --agent-dir) AGENT_DIR="${2:?}"; shift 2 ;;
+    --agent-dir) case "${2-}" in ""|--*) echo "--agent-dir needs a value (got '${2-}')" >&2; exit 2 ;; esac; AGENT_DIR="$2"; shift 2 ;;
     --remove-chronos) RM_CHRONOS=1; shift ;;
     --purge-chronos) RM_CHRONOS=1; PURGE=1; shift ;;
     --keep-clone) KEEP_CLONE=1; shift ;;
@@ -46,7 +46,7 @@ fi
 if [ -z "$AGENT_DIR" ]; then
   _rec="${XDG_CONFIG_HOME:-$HOME/.config}/talos/agent-dir"
   [ -f "$_rec" ] && AGENT_DIR="$(head -1 "$_rec")"
-  [ -n "$AGENT_DIR" ] || AGENT_DIR="$HOME/my-agent"
+  [ -n "$AGENT_DIR" ] || { if [ -e "$HOME/my-agent" ] && [ ! -e "$HOME/talos-agent" ]; then AGENT_DIR="$HOME/my-agent"; else AGENT_DIR="$HOME/talos-agent"; fi; }
 fi
 case "$AGENT_DIR" in "~"|"~/"*) AGENT_DIR="$HOME${AGENT_DIR#\~}" ;; esac
 PY="$(command -v python3 || echo /usr/bin/python3)"

@@ -115,6 +115,20 @@ describe('export-public.sh', () => {
     expect(existsSync(join(target, 'untracked-secret.txt'))).toBe(false)
   })
 
+  it('fails when a setup doc names a file the export leaves out, and passes once it is reworded', () => {
+    const { repo } = fixtureRepo()
+    writeFileSync(join(repo, 'SETUP.md'), 'Run the list in scripts/smoke/ios.md on a phone.\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-q', '-m', 'doc points at an excluded folder')
+    const bad = run([join(tmp('export-out-'), 'public')], repo)
+    expect(bad.code).toBe(1)
+    expect(bad.out).toContain('SETUP.md names scripts/smoke/')
+    writeFileSync(join(repo, 'SETUP.md'), 'Run the checks on a phone.\n')
+    git(repo, 'commit', '-q', '-am', 'reworded')
+    const good = run([join(tmp('export-out-'), 'public')], repo)
+    expect(good.code, good.out).toBe(0)
+  })
+
   it('refuses a target that already holds files, and writes nothing into it', () => {
     const { repo } = fixtureRepo()
     const target = tmp('export-out-')

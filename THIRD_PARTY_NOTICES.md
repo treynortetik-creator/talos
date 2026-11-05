@@ -2,12 +2,12 @@
 
 Reference files vendored under `third_party/` (read-only, not part of the build). The table below gives the upstream and
 licence of each; the sources listed under "Sources no longer vendored" were removed, and their licence texts are kept in
-this file. `third_party/chronos` carries no licence file of its own: its licence is MIT, the same owner as this
-repository. Copied code keeps a header comment naming its source file and licence.
+this file. `third_party/chronos` carries upstream's `LICENSE` (MIT, the same owner as this
+repository). Copied code keeps a header comment naming its source file and licence.
 
-| Path                                                  | Upstream                                                          | Licence                            |
-| ----------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------- |
-| `third_party/chronos/` (bin, lib, two test stand-ins) | github.com/treynortetik-creator/chronos tag `v0.3.0` @ `eafbb85e` | MIT, same owner as this repository |
+| Path                                                           | Upstream                                                          | Licence                            |
+| -------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------- |
+| `third_party/chronos/` (bin, lib, LICENSE, two test stand-ins) | github.com/treynortetik-creator/chronos tag `v0.4.0` @ `fe9bb516` | MIT, same owner as this repository |
 
 ## Sources no longer vendored
 

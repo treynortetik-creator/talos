@@ -16,7 +16,7 @@
             "state": "degraded",
             "adapter": {
               "id": "chronos",
-              "version": "0.3.0",
+              "version": "0.4.0",
               "api": 1
             },
             "tz": "America/New_York",
@@ -102,7 +102,7 @@
               "state": "degraded",
               "adapter": {
                 "id": "chronos",
-                "version": "0.3.0",
+                "version": "0.4.0",
                 "api": 1
               },
               "tz": "America/New_York",
@@ -341,7 +341,7 @@
             "state": "ok",
             "adapter": {
               "id": "chronos",
-              "version": "0.3.0",
+              "version": "0.4.0",
               "api": 1
             },
             "tz": "America/New_York",

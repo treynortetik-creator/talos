@@ -44,6 +44,12 @@ exports[`IntegrationWizard > renders every catalog entry through all 5 screens (
     "Test",
     "Connected",
   ],
+  "heartbeat": [
+    "What should reach you?",
+    "Connect",
+    "Test",
+    "Connected",
+  ],
   "jira": [
     "What should reach you?",
     "Connect",

@@ -33,29 +33,34 @@ It interviews you and builds its own config.
 - **macOS**, **Claude Code CLI**, Python 3.9+ and git. The core needs no pip and no npm; every dependency is
   an opt-in flag (semantic search needs Python 3.10+, the Talos app needs Bun on the Mac).
 - Scheduling is done by [Chronos](https://github.com/treynortetik-creator/chronos) 0.2.2 or later (pinned to a commit on its main branch after 0.3.1, `3cf20fc`; `--chronos-ref` needs the full 40-character sha), installed for you
-  and **optional** (`--no-chronos`).
+  when you ask (`./install.sh --with-chronos` at the repository root; the kit's own `kit/install.sh` installs it unless you pass
+  `--no-chronos`). It is **optional**.
 - The config is a **hot file**: one-line triggers keyed `[R-nn]`, a ledger for the stories, a length lint, and
   hooks that enforce what prose could not.
 - MIT licensed. Read [the Security model](#security-model) before you connect it to anything.
 
 ## Quick start
 
-Setup is four steps: clone the repo, run `./install.sh`, open the agent folder in Claude Code, and type
-`Read BOOTSTRAP.md and set me up.` The agent then interviews you and builds its own config.
+Setting this up with an agent's help? Point it at [`SETUP.md`](../SETUP.md) in the repository root: one ordered guide, from
+prerequisites to the phone. This page is the kit on its own.
+
+Setup is four steps: clone the repo, run `./install.sh` (the one in the repository root), open the agent folder in Claude Code,
+and type `Read BOOTSTRAP.md and set me up.` The agent then interviews you and builds its own config.
 
 ```bash
 git clone https://github.com/treynortetik-creator/talos.git
 cd talos
 ./install.sh --dry-run        # see the plan, change nothing
-./install.sh                  # install into ~/my-agent (use --agent-dir to choose)
-cd ~/my-agent && claude
+./install.sh                  # install into ~/talos-agent (use --agent-dir to choose); kit flags below pass through
+cd ~/talos-agent && claude
 ```
 
 Opt-in flags, each explained below: `--with-memory-search` (semantic search), `--with-reranker`, `--with-voice` (a neural
 voice), `--with-qwen-voice`, `--with-parakeet`, `--with-diarize` (the suggested local models,
 [`setup/local-models.md`](setup/local-models.md)), `--with-vault DIR` (a private personal vault), `--global-pointer`
-(point every Claude Code session at the agent's memory), `--notify talos|macos`, `--no-chronos`. Nothing optional is on
-by default.
+(point every Claude Code session at the agent's memory), `--notify talos|macos` (needs `--with-chronos`). Chronos is off unless you
+pass `--with-chronos`; to add it later to an agent that exists, run `./install.sh --with-chronos` again. Nothing optional is on by
+default.
 
 Then tell it: **`Read BOOTSTRAP.md and set me up.`** It interviews you in short waves (about 25 minutes to a
 working agent, 45-60 to finish), builds its own config and memory, and tells you to restart it. Come back
@@ -66,7 +71,7 @@ The installer **copies** the kit into your agent folder. Your memory and wiki ne
 so a stray `git push` from the clone cannot publish them.
 
 > **Keep the agent folder out of `~/Desktop`, `~/Documents` and `~/Downloads`** (use `~/agent` or the default
-> `~/my-agent`). If the agent's workspace lives in one of them, every Claude Code auto-update triggers a macOS
+> `~/talos-agent`). If the agent's workspace lives in one of them, every Claude Code auto-update triggers a macOS
 > "would like to access files in your Desktop folder" prompt that silently blocks background runs until you
 > click Allow. The installer refuses those folders when Chronos is on, and warns if you override it.
 
@@ -97,7 +102,7 @@ You open a terminal at 09:30. Nothing to re-explain: the session-start hook has 
 state file and today's log in front of it.
 
 ```
-$ cd ~/my-agent && claude
+$ cd ~/talos-agent && claude
 > Where did we leave off?
 Yesterday you were drafting the Atlas rollout plan. Done: sections 1-3. Open: the risks table and who signs off.
 Chronos ran the morning brief at 07:03; one fact was filed back. STATE.md says the vendor quote is still pending.
@@ -138,6 +143,7 @@ search). Everything in the folder:
 | `hooks/compaction-guard.py`, `hooks/bsd-sed-guard.py` | carry recent corrections across a compaction; stop the GNU `sed -i` that breaks on a Mac |
 | `scripts/recall.py`, `scripts/memory/` | hybrid memory search: grep always, semantic search opt-in, optional `--rerank` ([`setup/memory-search.md`](setup/memory-search.md)) |
 | [`setup/local-models.md`](setup/local-models.md) | **suggested, never required**: voice in (Parakeet, whisper.cpp), voice out (Qwen3-TTS cloning from your own clip, Kokoro, `say`), speaker labels, embeddings; RAM and disk for each |
+| [`setup/chatgpt-helper.md`](setup/chatgpt-helper.md) | **optional**: use your own ChatGPT plan through the Codex CLI as an extra agent, for images and second opinions; cost, limits and what not to send |
 | [`setup/dream-cycle.md`](setup/dream-cycle.md), [`setup/quiet-checkins.md`](setup/quiet-checkins.md) | the nightly consolidation job and the silent-unless-it-matters check-ins (both off until you enable them) |
 | `.claude/skills/talos-hands-free/`, `.claude/skills/talos-go-public/`, `scripts/go-public.sh` | audio replies with the full text while you cannot look; the gate before a repository goes public |
 | `templates/rules-ledger.md.tmpl`, `scripts/claude-md-lint.sh` | the reasons behind each config rule, and the ceiling that keeps the config short |
@@ -279,7 +285,7 @@ real `claude`. Skills and agents of the plugin load once you trust the folder (t
 A fresh `./install.sh` activates `current` only when there is none yet; a second agent installed from another kit version leaves it alone and
 prints how to move every agent (`plugin-release.py activate --version V`). That second agent runs the release `current` points at (its
 settings template and version), not the newer kit's, so it works with the code it loads; a `current` whose release folder is gone counts as
-absent and a fresh install repairs it. Reconciling each agent's hook list with the active release when it changes is done by `talos update` (K8b).
+absent and a fresh install repairs it. Reconciling each agent's hook list with the active release when it changes is a manual step today: [`UPGRADE.md`](UPGRADE.md), "Step 6 — Reconcile the hooks by hand", after `bash kit/scripts/upgrade.sh --into ~/talos-agent --dry-run`.
 
 ## Optional extras
 
@@ -319,9 +325,9 @@ memory and a boot file in its **own folder outside the agent folder** (for examp
 the main agent's rules, memory or hooks.
 
 ```bash
-talos-app lead init trip --folder ~/leads/trip --agent-dir ~/my-agent    # type it in Terminal; agents cannot run it
+talos-app lead init trip --folder ~/leads/trip --agent-dir ~/talos-agent    # type it in Terminal; agents cannot run it
                                                                          # --agent-dir defaults from TALOS_AGENT_DIR; --protect <dir> adds a root
-talos-app lead check ~/leads/trip --agent-dir ~/my-agent                 # sizes and fence, safe to script
+talos-app lead check ~/leads/trip --agent-dir ~/talos-agent                 # sizes and fence, safe to script
 ```
 
 `lead init` writes, from `kit/templates/lead/`: `CLAUDE.md` (the standing brief, 6 KB cap), `BOARD.md` (now / next / waiting
@@ -481,7 +487,7 @@ restricted run does not auto-load `CLAUDE.md`, see the security section). The in
 (`--set-chronos-workspace` fixes it). Running a second agent needs a second Chronos config until Chronos grows a
 per-job workspace.
 
-**Skipping Chronos.** `./install.sh --no-chronos`, or run `./uninstall.sh` later. You lose scheduled jobs
+**Skipping Chronos.** Do not pass `--with-chronos` to the root `./install.sh` (or pass `--no-chronos` to `kit/install.sh`), or run `./uninstall.sh` later. You lose scheduled jobs
 and nothing else; the continuity hook, the wiki, the interview and the scripts do not depend on it. Talos adds
 no launchd agent of its own (Chronos's two are `io.github.chronos.tick` and `io.github.chronos.ui`).
 
@@ -628,9 +634,9 @@ as `Bash(git commit:*)` allows every `git commit` flag.
 **The opt-out (off by default, your call).** If you want a job to keep the old full-access behaviour:
 
 ```bash
-python3 scripts/talos-jobs.py access talos-weekly-snapshot --full --agent-dir ~/my-agent        # one job
+python3 scripts/talos-jobs.py access talos-weekly-snapshot --full --agent-dir ~/talos-agent        # one job
 ./install.sh --full-access-jobs ...                                                              # at install time
-python3 scripts/talos-jobs.py access talos-weekly-snapshot --restricted --agent-dir ~/my-agent  # and back
+python3 scripts/talos-jobs.py access talos-weekly-snapshot --restricted --agent-dir ~/talos-agent  # and back
 ```
 
 `list` shows `RESTRICTED` or `FULL ACCESS` for each job. A full-access job runs with prompts skipped and can do
@@ -721,7 +727,7 @@ Chronos hook entry from `.claude/settings.json`.
 ## FAQ
 
 **Do I need Chronos?** No. Without it you have the memory, the wiki, the interview and the guard, and nothing
-runs on a timer. The installer says so plainly, and `--no-chronos` is a first-class option.
+runs on a timer. Skipping it is the default at the repository root, and you can add it later with `./install.sh --with-chronos`.
 
 **Is it autonomous?** No. It drafts, you approve. Anything irreversible asks first in a live session. The scheduled
 jobs are *restricted*: Claude Code refuses anything outside a short tool list (no send, post, delete, web fetch or
@@ -732,7 +738,7 @@ You can opt a job out to full access; it is off by default.
 **Will it work on Linux or Windows?** Not supported. The hooks are portable Python, but Chronos uses launchd and
 the installer checks for macOS.
 
-**Where do my notes live?** In the agent folder (default `~/my-agent`), as plain markdown. Keep it out of
+**Where do my notes live?** In the agent folder (default `~/talos-agent`), as plain markdown. Keep it out of
 Google Drive, OneDrive, Dropbox and iCloud: two processes editing it mid-sync corrupts it. Local git is the undo
 history; it is not an offsite backup.
 

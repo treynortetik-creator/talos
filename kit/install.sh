@@ -5,7 +5,7 @@
 #
 # What it does, in order. Every step is skipped cleanly if it has already happened:
 #   1. checks python3, git and the claude CLI
-#   2. copies this kit into your agent folder (default ~/my-agent): a COPY, never the clone itself, so
+#   2. copies this kit into your agent folder (default ~/talos-agent): a COPY, never the clone itself, so
 #      your memory and wiki never sit inside a git checkout that has a remote
 #   3. builds the Talos plugin release (hooks, skills, agents, scripts) under ~/.local/share/talos/kit, links hooks/ and scripts/ to it,
 #      writes .claude/settings.json (the local marketplace and enabledPlugins) and stamps .talos-version
@@ -16,7 +16,7 @@
 #
 # Skip Chronos entirely with --no-chronos. You lose scheduled jobs and nothing else.
 #
-#   --agent-dir DIR       where the agent will live (default ~/my-agent). Must not exist or must be empty.
+#   --agent-dir DIR       where the agent will live (default ~/talos-agent). Must not exist or must be empty.
 #   --chronos-path DIR    use this local Chronos checkout instead of cloning
 #   --chronos-repo URL    clone source (default: the Chronos repo on GitHub)
 #   --chronos-ref SHA     full 40-character commit sha to pin (default: the one this kit was tested with)
@@ -60,6 +60,11 @@
 #                         your personal life that the agent may read but must never copy into work notes. DIR must
 #                         be new or empty, outside this agent folder and outside any synced or work storage. The
 #                         installer records it for hooks/check-vault.py and prints the block to add to CLAUDE.md.
+#   --add-to-existing     the agent folder is ALREADY a Talos agent (it has .talos-version): skip the copy and add only what
+#                         the other flags ask for (Chronos and its jobs, --notify, --with-vault, the opt-in extras). Refuses a
+#                         folder that is not a Talos agent. This is how to add Chronos after the first install.
+#   --parent-will-exist   only with --dry-run: accept an agent folder whose parent folder does not exist yet (a real install
+#                         still refuses it; this is for a plan of an install that would create the parent first)
 #   --dry-run             print the plan and change nothing
 #   -h, --help            this text
 #
@@ -75,14 +80,17 @@ KIT="$(cd "$(dirname "$0")" && pwd)"
 CHRONOS_PINNED_REF="3cf20fc191d39f8247d4a740d6c663dc25136c2a"
 CHRONOS_DEFAULT_REPO="https://github.com/treynortetik-creator/chronos"
 
-AGENT_DIR="$HOME/my-agent"; CHRONOS_PATH=""; CHRONOS_REPO="$CHRONOS_DEFAULT_REPO"; CHRONOS_REF="$CHRONOS_PINNED_REF"
-DO_CHRONOS=1; DO_JOBS=1; FULL_JOBS=0; REINSTALL=0; SET_WS=0; MEMSEARCH=0; EMBED=base; VAULT=""; VOICE=0; GPOINTER=0; QWEN=0; PARAKEET=0; DIARIZE=0; RERANKER=0; NOTIFY=none; NOLOAD=0; SESSION_HOOK=1; PROTECTED_OK=0; SYNCED_OK=0; DRY=0
+AGENT_DIR="$HOME/talos-agent"; CHRONOS_PATH=""; CHRONOS_REPO="$CHRONOS_DEFAULT_REPO"; CHRONOS_REF="$CHRONOS_PINNED_REF"
+DO_CHRONOS=1; DO_JOBS=1; FULL_JOBS=0; REINSTALL=0; SET_WS=0; MEMSEARCH=0; EMBED=base; VAULT=""; VAULT_EXISTS=0; VOICE=0; GPOINTER=0; QWEN=0; PARAKEET=0; DIARIZE=0; RERANKER=0; NOTIFY=none; NOLOAD=0; SESSION_HOOK=1; PROTECTED_OK=0; SYNCED_OK=0; DRY=0; ADD_ONLY=0; PARENT_OK=0
 
 usage() { awk 'NR>1 { if ($0 ~ /^#/) print; else exit }' "$0" | sed 's/^# \{0,1\}//'; }
+# A flag's value is never the next flag: `--with-vault --dry-run` must not make "--dry-run" a folder name.
+val() { case "${2-}" in ""|--*) echo "$1 needs a value (got '${2-}')" >&2; exit 2 ;; esac; }
+AGENT_DIR_GIVEN=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --agent-dir) AGENT_DIR="${2:?--agent-dir needs a value}"; shift 2 ;;
-    --chronos-path) CHRONOS_PATH="${2:?--chronos-path needs a value}"; shift 2 ;;
+    --agent-dir) val "$@"; AGENT_DIR="$2"; AGENT_DIR_GIVEN=1; shift 2 ;;
+    --chronos-path) val "$@"; CHRONOS_PATH="$2"; shift 2 ;;
     --chronos-repo) CHRONOS_REPO="${2:?}"; shift 2 ;;
     --chronos-ref) CHRONOS_REF="${2:?}"; shift 2 ;;
     --no-chronos) DO_CHRONOS=0; shift ;;
@@ -97,18 +105,29 @@ while [ $# -gt 0 ]; do
     --with-parakeet) PARAKEET=1; shift ;;
     --with-diarize) DIARIZE=1; shift ;;
     --with-reranker) RERANKER=1; shift ;;
-    --with-vault) VAULT="${2:?--with-vault needs a folder}"; shift 2 ;;
-    --embed-model) EMBED="${2:?--embed-model needs base or small}"; shift 2 ;;
-    --notify) NOTIFY="${2:?}"; shift 2 ;;
+    --with-vault) val "$@"; VAULT="$2"; shift 2 ;;
+    --embed-model) val "$@"; EMBED="$2"; shift 2 ;;
+    --notify) val "$@"; NOTIFY="$2"; shift 2 ;;
     --no-load) NOLOAD=1; shift ;;
     --no-session-hook) SESSION_HOOK=0; shift ;;
     --allow-protected-folder) PROTECTED_OK=1; shift ;;
     --allow-synced-folder) SYNCED_OK=1; shift ;;
+    --add-to-existing) ADD_ONLY=1; shift ;;
+    --parent-will-exist) PARENT_OK=1; shift ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
+# Version 1.x installed into ~/my-agent by default. With no --agent-dir, do not quietly start a second agent next to it.
+if [ "$AGENT_DIR_GIVEN" = 0 ] && [ -e "$HOME/my-agent" ] && [ ! -e "$HOME/talos-agent" ]; then
+  echo "found an agent at ~/my-agent (the old default folder) and none at ~/talos-agent (the new default)." >&2
+  echo "Nothing was changed. Say which you mean:" >&2
+  echo "  keep using the old one:   $0 --agent-dir ~/my-agent ...   (an upgrade: bash $KIT/scripts/upgrade.sh --into ~/my-agent --dry-run)" >&2
+  echo "  move it to the new name:  mv ~/my-agent ~/talos-agent   (then re-run; run talos-app install-mcp --agent-dir ~/talos-agent --repoint if the bridge was set up)" >&2
+  echo "  start a second, new one:  $0 --agent-dir ~/talos-agent ..." >&2
+  exit 1
+fi
 case "$NOTIFY" in none|macos|talos) ;; *) echo "--notify must be macos, talos or none" >&2; exit 2 ;; esac
 # The pin is a security boundary: a short or symbolic ref can resolve to a different commit later. Full sha only.
 case "$CHRONOS_REF" in
@@ -141,7 +160,11 @@ case "$AGENT_DIR" in /*) ;; *) AGENT_DIR="$PWD/$AGENT_DIR" ;; esac
 # The parent is resolved on its own line: `A="$(cd ... && pwd)/$(basename ...)" || die` never fires, because the
 # exit status of an assignment comes from the LAST command substitution (basename), so a missing parent used to
 # silently turn into the filesystem root.
+if [ "$PARENT_OK" = 1 ] && [ "$DRY" = 1 ] && [ ! -d "$(dirname "$AGENT_DIR")" ]; then
+  PARENT="$(dirname "$AGENT_DIR")"; say "   (dry run) the parent folder $PARENT does not exist yet and would be created first"
+else
 PARENT="$(cd "$(dirname "$AGENT_DIR")" 2>/dev/null && pwd)" || { echo "the parent folder of $AGENT_DIR does not exist. Create it first, or pick another --agent-dir." >&2; exit 1; }
+fi
 AGENT_DIR="$PARENT/$(basename "$AGENT_DIR")"
 say "   $AGENT_DIR"
 case "$AGENT_DIR/" in "$KIT"/*) echo "refusing: the agent folder cannot be this kit's own folder or inside it." >&2; exit 1 ;; esac
@@ -150,14 +173,14 @@ case "$AGENT_DIR" in
   *CloudStorage*|*"Google Drive"*|*OneDrive*|*Dropbox*|*"Mobile Documents"*)
     if [ "$SYNCED_OK" != 1 ]; then
       echo "refusing: $AGENT_DIR looks like cloud-synced storage. Two processes editing memory/ mid-sync corrupts it." >&2
-      echo "Pick a plain folder in your home directory (the default ~/my-agent), or pass --allow-synced-folder if you know why." >&2
+      echo "Pick a plain folder in your home directory (the default ~/talos-agent), or pass --allow-synced-folder if you know why." >&2
       exit 1
     fi ;;
 esac
 case "$AGENT_DIR" in "$HOME/Desktop"/*|"$HOME/Documents"/*|"$HOME/Downloads"/*)
   if [ "$DO_CHRONOS" = 1 ] && [ "$PROTECTED_OK" != 1 ]; then
     echo "refusing: macOS privacy (TCC) can stop launchd jobs from reading files under Desktop, Documents and Downloads," >&2
-    echo "so scheduled jobs would fail silently. Use ~/my-agent or ~/agent, or pass --allow-protected-folder (or --no-chronos)." >&2
+    echo "so scheduled jobs would fail silently. Use ~/talos-agent or ~/agent, or pass --allow-protected-folder (or --no-chronos)." >&2
     exit 1
   fi
   say "   WARNING: this folder is inside a macOS-protected folder (Desktop, Documents or Downloads)."
@@ -165,10 +188,14 @@ case "$AGENT_DIR" in "$HOME/Desktop"/*|"$HOME/Documents"/*|"$HOME/Downloads"/*)
   say "   and until you click Allow, background runs (scheduled jobs) are silently blocked."
   say "   Put the agent outside those folders to avoid it, for example ~/agent (re-run with --agent-dir ~/agent). Continuing anyway." ;;
 esac
-if [ -e "$AGENT_DIR" ]; then
+if [ "$ADD_ONLY" = 1 ]; then
+  [ -f "$AGENT_DIR/.talos-version" ] || { echo "refusing: --add-to-existing needs an agent folder that already has a Talos install, and $AGENT_DIR has no .talos-version. Run the installer without --add-to-existing to create it." >&2; exit 1; }
+  say "   adding to the existing Talos install (no copy)"
+elif [ -e "$AGENT_DIR" ]; then
   if [ -f "$AGENT_DIR/.talos-version" ]; then
     echo "$AGENT_DIR already has a Talos install (see .talos-version). To take a newer kit version, run:" >&2
     echo "    bash $KIT/scripts/upgrade.sh --into \"$AGENT_DIR\" --dry-run" >&2
+    echo "To add Chronos or an opt-in extra to this agent instead, re-run with --add-to-existing." >&2
     exit 1
   fi
   if [ -n "$(ls -A "$AGENT_DIR" 2>/dev/null | grep -v '^\.DS_Store$' || true)" ]; then
@@ -183,8 +210,11 @@ if [ -n "$VAULT" ]; then
   case "$VAULT" in /*) ;; *) VAULT="$PWD/$VAULT" ;; esac
   _vparent="$(cd "$(dirname "$VAULT")" 2>/dev/null && pwd)" || { echo "the parent folder of the vault $VAULT does not exist" >&2; exit 1; }
   VAULT="$_vparent/$(basename "$VAULT")"
-  case "$VAULT/" in "$AGENT_DIR"/*|"$KIT"/*) echo "refusing: the vault cannot be inside the agent folder or the kit (it would travel with their git history)." >&2; exit 1 ;; esac
-  case "$AGENT_DIR/" in "$VAULT"/*) echo "refusing: the vault cannot contain the agent folder." >&2; exit 1 ;; esac
+  _vl="$(if [ "$(uname -s)" = Darwin ]; then printf '%s' "$VAULT/" | tr '[:upper:]' '[:lower:]'; else printf '%s' "$VAULT/"; fi)"
+  _al="$(if [ "$(uname -s)" = Darwin ]; then printf '%s' "$AGENT_DIR/" | tr '[:upper:]' '[:lower:]'; else printf '%s' "$AGENT_DIR/"; fi)"
+  _kl="$(if [ "$(uname -s)" = Darwin ]; then printf '%s' "$KIT/" | tr '[:upper:]' '[:lower:]'; else printf '%s' "$KIT/"; fi)"
+  case "$_vl" in "$_al"*|"$_kl"*) echo "refusing: the vault cannot be inside the agent folder or the kit (it would travel with their git history)." >&2; exit 1 ;; esac
+  case "$_al" in "$_vl"*) echo "refusing: the vault cannot contain the agent folder." >&2; exit 1 ;; esac
   case "$VAULT" in
     *CloudStorage*|*"Google Drive"*|*OneDrive*|*Dropbox*|*"Mobile Documents"*|*iCloud*)
       echo "refusing: $VAULT looks like synced or company storage. The whole point of the vault is that it is NOT there." >&2
@@ -196,8 +226,28 @@ if [ -n "$VAULT" ]; then
       echo "(and to your employer, if it manages this Mac). Pick a plain folder like ~/private-agent-vault, or pass --allow-synced-folder." >&2; exit 1
     fi ;;
   esac
+  # Never inside a git work tree that can reach GitHub (one `git add -A && git push` from public), nor inside the clone this
+  # kit came from. Walk up to the nearest folder that exists, then ask git about it.
+  _anc="$VAULT"; while [ ! -d "$_anc" ] && [ "$_anc" != "/" ]; do _anc="$(dirname "$_anc")"; done
+  _top="$(git -C "$_anc" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$_top" ]; then
+    _kittop="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null || true)"
+    # macOS volumes ignore letter case, so compare lower-cased there
+    _lc() { if [ "$(uname -s)" = Darwin ]; then printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; else printf '%s' "$1"; fi; }
+    if [ -n "$_kittop" ] && [ "$(_lc "$(cd "$_top" && pwd -P)")" = "$(_lc "$(cd "$_kittop" && pwd -P)")" ]; then
+      echo "refusing: $VAULT is inside the clone this kit came from ($_kittop). The vault is private and a clone can be pushed." >&2; exit 1
+    fi
+    if [ -n "$(git -C "$_top" config --get-regexp '^remote\..*\.url$' 2>/dev/null)" ]; then
+      echo "refusing: $VAULT is inside a git work tree ($_top) that has a remote. The vault is private; one git add -A and git push would publish it. Pick a folder outside any repository with a remote, for example ~/private-agent-vault." >&2; exit 1
+    fi
+  fi
+  # A vault this installer made earlier is recognised (its marker, or the vault-dir record) and left alone on a re-run;
+  # any other non-empty folder is not ours and is refused.
+  VAULT_EXISTS=0
   if [ -e "$VAULT" ] && [ -n "$(ls -A "$VAULT" 2>/dev/null | grep -v '^\.DS_Store$' || true)" ]; then
-    echo "refusing: $VAULT exists and is not empty." >&2; exit 1
+    _rec="$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/talos/vault-dir" 2>/dev/null || true)"
+    if [ -f "$VAULT/.talos-vault" ] || [ "$_rec" = "$VAULT" ]; then VAULT_EXISTS=1
+    else echo "refusing: $VAULT exists, is not empty and was not made by this installer." >&2; exit 1; fi
   fi
 fi
 
@@ -205,8 +255,10 @@ VERSION="$(tr -d ' \t\r\n' < "$KIT/VERSION" 2>/dev/null || echo unknown)"
 COMMIT="$(git -C "$KIT" rev-parse --short HEAD 2>/dev/null || echo none)"
 say "   kit version $VERSION (commit $COMMIT)"
 
-run mkdir -p "$AGENT_DIR"
-if [ "$DRY" = 1 ]; then
+[ "$ADD_ONLY" = 1 ] || run mkdir -p "$AGENT_DIR"
+if [ "$ADD_ONLY" = 1 ]; then
+  say "   the kit is already installed here; nothing is copied"
+elif [ "$DRY" = 1 ]; then
   plan "copy the kit's data and docs into $AGENT_DIR (excluding .git and caches), build the Talos plugin release under $("$PY" "$KIT/scripts/plugin-release.py" paths | sed -n 's/^vendor=//p'), link hooks/ and scripts/ to it, write .claude/settings.json (marketplace + enabledPlugins), then render the default CLAUDE.md with scripts/render-default.py"
 else
   # tar pipe: portable, preserves dotfiles and modes, and lets us exclude without rsync
@@ -286,8 +338,8 @@ if [ "$DO_CHRONOS" = 1 ]; then
         say "   cloning $CHRONOS_REPO"
         git clone --quiet "$CHRONOS_REPO" "$CHRONOS_DIR" || {
           echo >&2
-          echo "Could not clone Chronos. If the repository is private you need access (gh auth login), or pass a" >&2
-          echo "local checkout with --chronos-path DIR, or skip it with --no-chronos." >&2
+          echo "Could not clone Chronos from $CHRONOS_REPO. It is a public repository, so check your network or proxy" >&2
+          echo "(git ls-remote $CHRONOS_REPO), or pass a local checkout with --chronos-path DIR, or skip it with --no-chronos." >&2
           exit 1
         }
       fi
@@ -407,7 +459,7 @@ fi
 # ---------------------------------------------------------------- 5. jobs and hook
 if [ "$DO_JOBS" = 1 ]; then
   step "Talos jobs"
-  if [ "$DRY" = 1 ]; then plan "register talos-morning-brief, talos-weekly-wiki-lint, talos-weekly-snapshot, talos-memory-index, talos-state-sweep in Chronos (all disabled)"
+  if [ "$DRY" = 1 ]; then plan "register the Talos jobs from jobs/ (see scripts/talos-jobs.py list after) in Chronos, all disabled"
   elif [ "$FULL_JOBS" = 1 ]; then
     say "   --full-access-jobs: the Claude jobs will run with permission prompts SKIPPED when you enable them."
     "$PY" "$KIT/scripts/talos-jobs.py" register --agent-dir "$AGENT_DIR" --kit-dir "$KIT" --full-access
@@ -426,12 +478,23 @@ fi
 # ---------------------------------------------------------------- 5b. personal vault (opt-in)
 if [ -n "$VAULT" ]; then
   step "Personal vault"
-  if [ "$DRY" = 1 ]; then
+  if [ "$VAULT_EXISTS" = 1 ]; then
+    say "   $VAULT was already made by this installer: its files are left exactly as they are."
+    # Found by its marker, it may have lost its record (uninstall.sh, a new Mac): the guard hooks read the record, and without it
+    # they quietly allow everything. Write it again.
+    if [ "$DRY" = 1 ]; then plan "record $VAULT in ${XDG_CONFIG_HOME:-$HOME/.config}/talos/vault-dir"
+    else
+      mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/talos"; chmod 700 "${XDG_CONFIG_HOME:-$HOME/.config}/talos"
+      printf '%s\n' "$VAULT" > "${XDG_CONFIG_HOME:-$HOME/.config}/talos/vault-dir"
+      say "   recorded it in ${XDG_CONFIG_HOME:-$HOME/.config}/talos/vault-dir (hooks/check-vault.py reads it)"
+    fi
+  elif [ "$DRY" = 1 ]; then
     plan "create $VAULT from optional/personal/ (mode 700), add an empty _guard-terms.txt, record it in ~/.config/talos/vault-dir"
   else
     mkdir -p "$VAULT" && chmod 700 "$VAULT"
     ( cd "$KIT/optional/personal" && tar --exclude='.DS_Store' --exclude='_guard-terms.txt.example' -cf - . ) | ( cd "$VAULT" && tar -xf - )
     cp "$KIT/optional/personal/_guard-terms.txt.example" "$VAULT/_guard-terms.txt"
+    printf 'Made by the Talos kit installer. Its presence tells a re-run that this folder is the vault, not somebody else'"'"'s.\n' > "$VAULT/.talos-vault"
     mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/talos"; chmod 700 "${XDG_CONFIG_HOME:-$HOME/.config}/talos"
     printf '%s\n' "$VAULT" > "${XDG_CONFIG_HOME:-$HOME/.config}/talos/vault-dir"
     say "   created $VAULT"

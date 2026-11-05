@@ -30,6 +30,8 @@ export type BridgeOptions = {
   relaySilence?: { tickMs?: number; silenceMs?: number; fetchFn?: typeof fetch }
   /** Test seam: how long discovery waits for `chronos api version` (ms). */
   discoveryTimeoutMs?: number
+  /** Test seams for the heartbeat runner (wake, work gate, time scale, crash hooks, the `gh` path). Production passes nothing. */
+  heartbeat?: import('./heartbeat/runner.ts').HeartbeatSeams
   /** Test seam: wraps the scheduler adapter the service discovered. */
   wrapSchedulerAdapter?: (
     a: import('./schedules/adapter.ts').SchedulerAdapter,

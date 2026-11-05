@@ -70,6 +70,13 @@ def main():
         print("{}")
         return
     vault = vault_dir()
+    if not vault and not C.killed(KILL_NAME):
+        # A vault the installer made carries a .talos-vault marker. If one sits in the usual place but nothing records it, this
+        # guard is silently doing nothing: say so once per call, on stderr (the hook's answer on stdout stays valid JSON).
+        guess = os.path.join(os.path.expanduser("~"), "private-agent-vault")
+        if os.path.isfile(os.path.join(guess, ".talos-vault")):
+            sys.stderr.write("check-vault: %s looks like your vault but ~/.config/talos/vault-dir does not name it, so nothing is guarded. "
+                             "Re-run ./install.sh --with-vault %s to record it.\n" % (guess, guess))
     if not vault or not os.path.isdir(vault):
         print("{}")
         return

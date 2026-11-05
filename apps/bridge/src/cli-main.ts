@@ -973,7 +973,12 @@ async function cmdUpdate(args: string[], io: CliIO, deps: CliDeps) {
   io.out(
     `  3. Mac app: run ${join(repo, 'apps', 'desktop', 'scripts', 'build-app.sh')}, then ${join(repo, 'apps', 'desktop', 'scripts', 'install.sh')} (it copies the new app to ~/Applications and opens it). build-app.sh alone leaves the old app in place.`,
   )
-  io.out('  4. iPhone: the new build arrives through TestFlight.')
+  io.out(
+    `  4. Agent folder (the kit: hooks, scripts, skills, migrations): run ${join(repo, 'kit', 'scripts', 'upgrade.sh')} --into <your agent folder> --dry-run, read the plan, then run it again without --dry-run. It backs the folder up first and never touches your memory or wiki. The agent folder is not changed by this command.`,
+  )
+  io.out(
+    '  5. iPhone: the web app (the Home Screen icon) picks up web changes on its next launch. A native iPhone app is one you built yourself (docs/ios.md): rebuild and install it again after a native change, or if you use TestFlight, upload a new build.',
+  )
 }
 
 const CODEX_USAGE =

@@ -131,6 +131,86 @@ PY
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load 2>&1)"; rc=$?
 { [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'upgrade.sh'; } && ok "re-running install on an installed folder is refused and points at upgrade.sh" || no "second install was not refused (rc=$rc)"
 
+# ---- 3b. --add-to-existing: Chronos and the jobs are added to an agent that exists, and nothing in the folder is overwritten
+fresh_home h3b2; A="$HOME/agent"
+bash "$KIT/install.sh" --agent-dir "$A" --no-chronos >/dev/null 2>&1 || no "setup for --add-to-existing failed"
+echo "my tuned notes, do not touch" >> "$A/CLAUDE.md"; echo "mine" > "$A/memory/mine.md"
+sum_before="$(cat "$A/CLAUDE.md" "$A/memory/mine.md" "$A/.talos-version" | shasum | cut -d' ' -f1)"
+[ ! -e "$CHRONOS_CONFIG" ] && ok "(setup) the agent was installed without Chronos" || no "(setup) Chronos config exists already"
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --add-to-existing --dry-run 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && [ ! -e "$CHRONOS_CONFIG" ]; } && ok "--add-to-existing --dry-run prints a plan and changes nothing" || no "--add-to-existing --dry-run wrong (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --add-to-existing --notify macos 2>&1)"; rc=$?
+n=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j["id"].startswith("talos-")))' "$HOME/.config/chronos/jobs.json" 2>/dev/null || echo 0)
+{ [ "$rc" = 0 ] && [ -f "$CHRONOS_CONFIG" ] && [ "$n" -ge 1 ] && printf '%s' "$out" | grep -q 'nothing is copied'; } \
+  && ok "--add-to-existing on an installed agent installs Chronos, registers the Talos jobs (disabled) and copies nothing" || no "--add-to-existing did not add Chronos (rc=$rc jobs=$n)" "$(printf '%s' "$out" | tail -5)"
+grep -q "workspace $A noload=1" "$HOME/.chronos/fake-install.log" 2>/dev/null && ok "Chronos's installer got the existing agent folder as its workspace" || no "workspace not passed" "$(cat "$HOME/.chronos/fake-install.log" 2>/dev/null)"
+grep -q 'chronos-session-start' "$A/.claude/settings.json" && ok "the Chronos session hook was registered in the existing agent's settings" || no "session hook missing"
+sum_after="$(cat "$A/CLAUDE.md" "$A/memory/mine.md" "$A/.talos-version" | shasum | cut -d' ' -f1)"
+[ "$sum_before" = "$sum_after" ] && ok "CLAUDE.md, memory/ and .talos-version are byte-identical after --add-to-existing" || no "--add-to-existing changed the owner's files"
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --add-to-existing 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'kept existing talos-morning-brief'; } && ok "running --add-to-existing twice keeps the jobs it registered (no duplicate, no overwrite)" || no "second --add-to-existing misbehaved (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+fresh_home h3b3; mkdir -p "$HOME/plain"; echo x > "$HOME/plain/a.txt"
+bash "$KIT/install.sh" --agent-dir "$HOME/plain" --chronos-path "$STUB" --no-load --add-to-existing >/dev/null 2>&1; rc=$?
+{ [ "$rc" != 0 ] && [ ! -e "$CHRONOS_CONFIG" ] && [ ! -e "$HOME/plain/.talos-version" ]; } && ok "--add-to-existing refuses a folder that is not a Talos agent, and writes nothing" || no "--add-to-existing touched a plain folder (rc=$rc)"
+
+# ---- 3c. review fixes: vault safety, idempotent re-runs, flag values, the old default folder
+fresh_home h3c; A="$HOME/agent"
+mkdir -p "$HOME/work"; ( cd "$HOME/work" && git init -q clone && git -C clone remote add origin https://github.com/someone/talos.git )
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$HOME/work/clone/vault" --dry-run 2>&1)"; rc=$?
+{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'git work tree'; } && ok "a vault inside a git work tree with a GitHub remote is refused" || no "vault inside a GitHub clone was not refused (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$HOME/work/clone/sub/deeper/vault" --dry-run 2>&1)"; rc=$?
+[ "$rc" != 0 ] && ok "so is one in a folder that does not exist yet under it" || no "nested path under a GitHub clone accepted"
+( cd "$HOME/work" && git init -q local-only )
+bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$HOME/work/local-only/vault" --dry-run >/dev/null 2>&1 && ok "a git work tree with no GitHub remote is not refused by that rule" || no "local-only repo refused"
+( cd "$KIT/.." && pwd ) >/dev/null
+fresh_home h3d; A="$HOME/agent"; V="$HOME/private-vault"
+bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$V" >/dev/null 2>&1 || no "(setup) first install with a vault failed"
+echo "keep me" > "$V/note.md"
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$V" --add-to-existing 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && [ "$(cat "$V/note.md")" = "keep me" ] && printf '%s' "$out" | grep -q 'already made by this installer'; } && ok "a vault this installer made is recognised on a re-run: skipped, nothing overwritten" || no "re-run with the same vault failed (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --with-vault "$V" --add-to-existing 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && [ -f "$CHRONOS_CONFIG" ]; } && ok "the same vault flag plus Chronos reaches Chronos (the step 3 then step 9.1 sequence)" || no "vault flag blocked the Chronos step (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+mkdir -p "$HOME/foreign"; echo x > "$HOME/foreign/a.txt"
+bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$HOME/foreign" --add-to-existing --dry-run >/dev/null 2>&1 && no "a foreign non-empty folder was accepted as the vault" || ok "a foreign non-empty folder is still refused as the vault"
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault --dry-run 2>&1)"; rc=$?
+{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'needs a'; } && ok "--with-vault followed by another flag is refused, not read as the folder" || no "flag taken as a value (rc=$rc)"
+fresh_home h3e
+mkdir -p "$HOME/my-agent"; echo "version=1.0.0" > "$HOME/my-agent/.talos-version"
+out="$(bash "$KIT/install.sh" --no-chronos 2>&1)"; rc=$?
+{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'my-agent' && printf '%s' "$out" | grep -q -- '--agent-dir' && [ ! -e "$HOME/talos-agent" ]; } && ok "an old ~/my-agent with no --agent-dir stops and asks; no second agent is created" || no "silently created a second agent (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+bash "$KIT/install.sh" --no-chronos --agent-dir "$HOME/my-agent" --add-to-existing --dry-run >/dev/null 2>&1 && ok "naming the old folder on purpose is fine" || no "explicit old folder refused"
+
+# ---- 3d. round-2 review fixes
+fresh_home h3f; A="$HOME/agent"; V="$HOME/private-vault"
+bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$V" >/dev/null 2>&1 || no "(setup) install with a vault failed"
+rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$V" --add-to-existing 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && [ "$(cat "$XDG_CONFIG_HOME/talos/vault-dir" 2>/dev/null)" = "$V" ]; } && ok "a vault found only by its marker is recorded again (vault-dir restored; the guard hooks need it)" || no "vault-dir not restored (rc=$rc)" "$(cat "$XDG_CONFIG_HOME/talos/vault-dir" 2>&1)"
+rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
+bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$V" --add-to-existing --dry-run >/dev/null 2>&1
+[ ! -e "$XDG_CONFIG_HOME/talos/vault-dir" ] && ok "a dry run does not write the vault record" || no "dry run wrote vault-dir"
+
+fresh_home h3g; A="$HOME/agent"
+mkdir -p "$HOME/work/gl"; ( cd "$HOME/work" && git init -q gl && git -C gl remote add origin https://gitlab.com/someone/x.git )
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$HOME/work/gl/vault" --dry-run 2>&1)"; rc=$?
+{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'git work tree'; } && ok "a vault inside a git work tree with ANY remote is refused (not only GitHub)" || no "gitlab-remote work tree accepted (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
+
+fresh_home h3h
+CL="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)"; SW="$(dirname "$CL")/$(basename "$CL" | tr 'A-Za-z' 'a-zA-Z')"
+if [ -n "$CL" ] && [ -d "$SW" ] && [ "$SW" != "$CL" ] && [ "$(uname -s)" = Darwin ]; then
+  out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos --with-vault "$SW/zz-vault" --dry-run 2>&1)"; rc=$?
+  [ "$rc" != 0 ] && ok "a vault under the clone is refused even when its path differs only in letter case (macOS)" || no "case-swapped clone path accepted" "$(printf '%s' "$out" | tail -2)"
+else echo "  skip case-insensitive clone check (needs a git clone on a case-insensitive macOS volume)"; fi
+
+fresh_home h3i
+out="$(bash "$KIT/install.sh" --agent-dir "$HOME/no/such/parent/agent" --no-chronos --dry-run --parent-will-exist 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && [ ! -e "$HOME/no" ]; } && ok "--dry-run --parent-will-exist accepts a parent folder that does not exist yet, and creates nothing" || no "dry run refused a missing parent (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
+bash "$KIT/install.sh" --agent-dir "$HOME/no/such/parent/agent" --no-chronos --parent-will-exist >/dev/null 2>&1 && no "--parent-will-exist let a REAL install go ahead" || ok "--parent-will-exist does nothing outside --dry-run: a real install still refuses a missing parent"
+
+fresh_home h3j
+out="$(bash "$KIT/uninstall.sh" --agent-dir --yes 2>&1)"; rc=$?
+{ [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'needs a value'; } && ok "uninstall.sh refuses a flag as the value of --agent-dir" || no "uninstall took --yes as a folder (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
+
 # ---- 4. other refusals
 fresh_home h3
 mkdir -p "$HOME/full"; echo x > "$HOME/full/mine.txt"
@@ -172,7 +252,7 @@ head="$(git -C "$TALOS_VENDOR_DIR/chronos" rev-parse HEAD 2>/dev/null)"
 fresh_home h6
 bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$R" --chronos-ref 0000000000000000000000000000000000000000 --no-load >/dev/null 2>&1 && no "installed with a commit that does not exist" || ok "a pinned commit that does not exist aborts the install"
 fresh_home h7
-cl="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$SB/does-not-exist" --no-load 2>&1)"; printf '%s' "$cl" | grep -q 'Could not clone' && ok "a failed clone says what to do (private repo, --chronos-path, --no-chronos)" || no "failed clone gave no guidance"
+cl="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$SB/does-not-exist" --no-load 2>&1)"; printf '%s' "$cl" | grep -q 'Could not clone' && ok "a failed clone says what to do (check the network, --chronos-path, --no-chronos)" || no "failed clone gave no guidance"
 
 # ---- 4b. a nonexistent parent folder is a hard error, never the filesystem root (A3)
 fresh_home h3b

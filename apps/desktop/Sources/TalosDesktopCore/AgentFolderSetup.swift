@@ -109,7 +109,7 @@ public enum AgentFolderSetup {
   static func appWording(_ text: String) -> String {
     let swaps: [(String, String)] = [
       ("To point the agent at this clone, run ./install.sh --repoint; otherwise run the install.sh in the clone it points at.", "To point it at this clone, use Adopt, which asks first."),
-      ("(the default ~/my-agent), or pass --allow-synced-folder if you know why.", "(for example ~/talos-agent)."),
+      ("(the default ~/talos-agent), or pass --allow-synced-folder if you know why.", "(for example ~/talos-agent)."),
       ("Pick a new folder with --agent-dir.", "Pick a new folder."),
       ("run ./install.sh again", "press Create again"),
     ]

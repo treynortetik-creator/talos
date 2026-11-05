@@ -19,7 +19,7 @@ below would appear to work, and tomorrow the agent would have no memory.
 `Mobile Documents`, stop and say so before writing anything: two processes editing `memory/`
 mid-sync corrupts it. The fix is to move the folder into their home folder and restart `claude` there.
 If it is under `~/Desktop`, `~/Documents` or `~/Downloads`, tell them scheduled jobs (Chronos, launchd)
-may be unable to read it because of macOS privacy rules; `~/my-agent` is the safe default.
+may be unable to read it because of macOS privacy rules; `~/talos-agent` is the safe default.
 
 1. 🔴 **Check where the kit landed.** `./install.sh` copies the kit into the agent folder and writes
    `.claude/settings.json` and `.talos-version`, so on the normal path `ls -a` shows `BOOTSTRAP.md`,
@@ -256,10 +256,10 @@ list` says so), say that the brief needs it and point at the README section "Chr
 `MORNING-BRIEF.md`: it asks three questions, writes `memory/brief-sources.md`, and enables the
 `talos-morning-brief` job with one command.
 
-## Step 7.58 — Offer the phone channel and the suggested local models (optional, one sentence each)
+## Step 7.58 — Offer the phone channel, the suggested local models and the ChatGPT helper (optional, one sentence each)
 
-Both are optional and neither is needed for anything above. Offer each once, in one sentence, and move on if they
-are not interested; the guides are there any day.
+All three are optional and neither is needed for anything above. Offer each once, in one sentence, and move on if they
+are not interested; the guides are there any day, and `.claude/rules/talos-defaults.md` points you back to them.
 
 - **Phone channel.** "You can message me from the Talos app on your phone while a session is open." If yes: the app is
   set up on the Mac side by the owner (`talos-app enroll` in Terminal); do not enroll a device for them, and **never
@@ -268,6 +268,10 @@ are not interested; the guides are there any day.
   local models. None are required." If yes: [`setup/local-models.md`](setup/local-models.md) lists each with its disk and RAM
   cost; every install is a flag or a command they run, with a dry run first. The voice-cloning model needs a reference
   clip of a voice they have the right to clone and a licence check; say so before they start.
+
+- **ChatGPT as a helper.** If they pay for ChatGPT and have (or want) the Codex CLI, one sentence: "I can hand image
+  requests, or a request for a second opinion, to your own ChatGPT through Codex, if you want that." If yes:
+  [`setup/chatgpt-helper.md`](setup/chatgpt-helper.md) says what it needs, what it costs and what to keep out of it.
 
 ## Step 7.6 — Close out
 
@@ -368,6 +372,7 @@ Before you finish, mention these once, because nothing else will:
 - `scripts/wiki-lint.py` — run it every couple of weeks to catch rot.
 - `setup/scheduling.md` — how to make a playbook fire on a schedule with Chronos.
 - `setup/local-models.md` — the suggested (never required) local models.
+- `setup/chatgpt-helper.md` — optional: your own ChatGPT, through Codex, for images and second opinions.
 - `setup/dream-cycle.md` and `setup/quiet-checkins.md` — two optional jobs, off until you enable them.
 - `.claude/agents/` — two sub-agents (a cheap one for bulk work, an expensive one for adversarial review). Both are read-only by design; that is deliberate.
 - `optional/personal/` — a private life vault, **only if they want it, and only outside synced or shared storage.**

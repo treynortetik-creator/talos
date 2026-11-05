@@ -1,0 +1,49 @@
+{
+  "schema": "talos.heartbeat-source/1",
+  "status": "ok",
+  "cursor": {
+    "etag": "W/\"a2\""
+  },
+  "items": [
+    {
+      "key": "pr:acme/widgets#12",
+      "sig": "000c",
+      "title": "Add widget number 12",
+      "level": "act",
+      "class": "own",
+      "why": "github.review-requested",
+      "url": "https://example.com/acme/widgets/pull/12",
+      "deadline": "2026-10-06T17:00:00-04:00",
+      "detail": "CI is green. A review was requested."
+    },
+    {
+      "key": "pr:acme/widgets#13",
+      "sig": "000d",
+      "title": "Add widget number 13",
+      "level": "fyi",
+      "class": "own",
+      "why": "github.pr-open",
+      "url": "https://example.com/acme/widgets/pull/13",
+      "deadline": null
+    },
+    {
+      "key": "mail:7",
+      "sig": "9f",
+      "title": "Quarterly numbers",
+      "level": "silent",
+      "class": "work",
+      "why": "inbox.unread",
+      "deadline": null
+    },
+    {
+      "key": "future:1",
+      "sig": "01",
+      "title": "An item from a newer source",
+      "level": "urgent",
+      "class": "own",
+      "why": "x",
+      "deadline": null,
+      "extra_field": 1
+    }
+  ]
+}

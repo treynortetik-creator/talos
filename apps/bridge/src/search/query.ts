@@ -164,6 +164,7 @@ export function createQuery(d: QueryDeps) {
       match_in: MATCH_IN[colName],
       snippet,
       marks,
+      ...(msg.heartbeat ? { heartbeat: true as const } : {}),
     }
     if (colName === 'names') {
       const files = (msg.attachments ?? []).filter((a) => a.role !== 'voice_reply')

@@ -19,22 +19,8 @@ Capacitor is SPM-only (`ios/App/CapApp-SPM`, managed by `cap sync`); no CocoaPod
 
 ## Build and install on your own iPhone (free Personal Team)
 
-Needs: Xcode with your Apple ID added (Settings > Accounts), Developer Mode on the phone (Settings > Privacy & Security),
-the phone connected and trusted. Nothing about your team goes in the repo: two gitignored files carry it.
-
-```bash
-cd apps/mobile
-printf 'TALOS_RELAY_URL=https://<your-relay-host>\n' > .env.local          # origin only, https
-printf 'DEVELOPMENT_TEAM = <TeamID>\nTALOS_BUNDLE_ID = com.<you>.talos\n' > ios/Local.xcconfig   # ids you own; share extension = <id>.share
-pnpm cap:sync && pnpm xcodegen
-xcrun devicectl list devices                                             # note the phone's identifier
-cd ios/App && xcodebuild -project App.xcodeproj -scheme App -destination 'id=<device-id>' \
-  -derivedDataPath /tmp/talos-dd -allowProvisioningUpdates build
-xcrun devicectl device install app --device <device-id> /tmp/talos-dd/Build/Products/Debug-iphoneos/App.app
-```
-
-First launch: on the phone, Settings > General > VPN & Device Management > your Apple ID > Trust. Free-tier installs stop
-launching after 7 days: rebuild and install again.
+The steps are in [`docs/ios.md`](../../docs/ios.md), "Build and install on your own iPhone (free Personal Team)". The web app on the
+Home Screen is the default phone path; this native app is optional.
 
 ## Security model (IOS-SPEC rev 2)
 

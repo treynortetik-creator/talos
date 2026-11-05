@@ -41,6 +41,8 @@ export const SearchHit = z.object({
   snippet: z.string().max(320), // plain text, never HTML
   marks: Marks,
   attachment: AttachmentRef.pick({ media_id: true, name: true, mime: true, kind: true }).optional(),
+  /** A heartbeat digest row: its text came from outside, so the app attributes it to "Heartbeat". */
+  heartbeat: z.literal(true).optional().catch(undefined),
 })
 
 export const SearchSort = z.enum(['relevance', 'newest'])

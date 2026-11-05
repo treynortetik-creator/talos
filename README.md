@@ -27,9 +27,18 @@
 
 ## What you need
 
-- A **Mac** with the [Claude Code](https://claude.com/claude-code) CLI and a Claude plan. Linux works for the terminal-only setup.
-- **Node 24, pnpm, Bun, git and python3.** `./install.sh` checks them and says what is missing.
-- An **iPhone or any browser** for the app. The web app is all you need to start; the iPhone app and the Mac menu-bar app are optional.
+| Needed                                        | Version                                               | Notes                                                                          |
+| --------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| A **Mac**                                     | macOS 14+                                             | Linux works for the terminal-only setup (`./install.sh --no-app`).             |
+| Homebrew, Xcode command line tools            | any                                                   | `xcode-select --install`; Homebrew for `tmux` and the optional extras.         |
+| **python3**, **git**                          | 3.9+ (3.10+ for the optional search and voice extras) | Come with the command line tools.                                              |
+| **Node**, **pnpm**, **Bun**                   | Node 24, pnpm 10.33 (`corepack enable`), Bun 1.3.11+  | `./install.sh` checks them and says what is missing.                           |
+| [Claude Code](https://claude.com/claude-code) | 2.1.304+ for the Talos mod                            | Signed in, with a Claude plan.                                                 |
+| **tmux**                                      | 3.2+                                                  | For the Mac app and thread sessions.                                           |
+| **Railway** and **GitHub** accounts           |                                                       | For the relay, which builds from your fork.                                    |
+| An **iPhone or any browser**                  | iOS 18.4+ for Home Screen notifications               | The web app is all you need; the iPhone app and Mac menu-bar app are optional. |
+
+The full list, with install and check commands, is in [`SETUP.md`](SETUP.md), step 1.
 
 ## How it is built
 
@@ -62,38 +71,41 @@
 
 The same relay and Mac serve all three; the web app is all you need to start.
 
-- **Web app**: any browser; on iPhone, add it to the Home Screen. Nothing to build ([`docs/SETUP.md`](docs/SETUP.md)).
-- **iPhone app**: a native shell around the web app, built with Xcode and shipped through TestFlight ([`docs/ios.md`](docs/ios.md)).
+- **Web app**: any browser; on iPhone, add it to the Home Screen. Nothing to build ([`SETUP.md`](SETUP.md), step 7).
+- **iPhone app** (optional): a native shell around the web app that you build and sign yourself, free or with a paid Apple account ([`docs/ios.md`](docs/ios.md)). The web app on the Home Screen is the default phone path.
 - **Mac app**: a menu-bar app that runs and restarts your agent and shows bridge status ([`docs/desktop.md`](docs/desktop.md)).
 
 ## Quick start
 
-Clone, then run one script. It checks what you have, sets up an agent folder, registers the `talos-app` server for it and
-writes a launch script that loads the Talos mod with `--plugin-dir`. Run it again any time: it only does what is missing.
+**Setting this up for yourself, or pointing your own coding agent at it?** Follow [`SETUP.md`](SETUP.md): one ordered guide from
+prerequisites to your phone, with the steps only you can do marked `[YOU]` and a check after each step. The first part of it:
 
 ```bash
-git clone https://github.com/treynortetik-creator/talos.git && cd talos
+git clone https://github.com/<you>/talos.git && cd talos   # your own fork; SETUP.md step 2
 ./install.sh --dry-run          # print every step, change nothing
 ./install.sh                    # agent in ~/talos-agent, plus the Mac app on macOS
 ./install.sh --no-app           # terminal only (the only option on Linux)
 ~/talos-agent/start-talos.sh    # start the agent from a terminal
 ```
 
+That gets you an agent on your Mac. The relay on Railway, the bridge key and your phone are `SETUP.md` steps 4 to 7. Kit options
+(`--with-vault DIR`, `--with-memory-search`, `--with-parakeet` and the rest of the list in `kit/install.sh --help`) pass straight
+through, and `--with-chronos` adds the scheduler; `--relay-url https://<host>` also sets up the bridge.
+
 `--agent-dir <path>` picks another folder (a non-empty folder that is not a Talos agent is refused, and a CLAUDE.md you
-tuned is never overwritten); `--yes` skips the prompt. It needs Node, pnpm (`corepack enable`), Bun, git, python3 and the
-`claude` CLI, and on a Mac the Xcode command line tools for the app. It says what is missing and how to get it.
+tuned is never overwritten); `--yes` skips the prompt.
 
 ## Start here
 
 | I want to...                                 | Read                                                                                        |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Set it up for myself (Railway, Mac, phone)   | [`docs/SETUP.md`](docs/SETUP.md)                                                            |
+| Set it up for myself (Railway, Mac, phone)   | [`SETUP.md`](SETUP.md) (the ordered path), then [`docs/SETUP.md`](docs/SETUP.md) for detail |
 | Know what is protected, and what is not      | [`docs/SECURITY.md`](docs/SECURITY.md)                                                      |
 | Understand the bridge on the Mac             | [`docs/bridge.md`](docs/bridge.md)                                                          |
 | See how live voice works                     | [`docs/voice.md`](docs/voice.md)                                                            |
 | Set up webhooks (Gmail, GitHub, Slack, more) | [`docs/integrations/`](docs/integrations)                                                   |
 | Use connector apps in a thread (opt-in)      | [`docs/APPS.md`](docs/APPS.md)                                                              |
-| Build the iPhone app, or use TestFlight      | [`docs/ios.md`](docs/ios.md)                                                                |
+| Build the iPhone app (optional)              | [`docs/ios.md`](docs/ios.md)                                                                |
 | Run the Mac menu-bar app                     | [`docs/desktop.md`](docs/desktop.md)                                                        |
 | Test on a real iPhone                        | [`docs/iphone-checklist.md`](docs/iphone-checklist.md)                                      |
 | Fix something that stopped working           | [`docs/SETUP.md`](docs/SETUP.md) ("Next: turn on the rest", "When something does not work") |

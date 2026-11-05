@@ -7,6 +7,7 @@ import { integration as generic } from './generic/index.ts'
 import { integration as github } from './github/index.ts'
 import { integration as gmail } from './gmail/index.ts'
 import { integration as gmail_work } from './gmail_work/index.ts'
+import { integration as heartbeat } from './heartbeat/index.ts'
 import { integration as jira } from './jira/index.ts'
 import { integration as linear } from './linear/index.ts'
 import { integration as make } from './make/index.ts'
@@ -37,6 +38,7 @@ export const catalog: Record<IntegrationIdT, IntegrationModule> = {
   gmail_work,
   zoom,
   salesforce,
+  heartbeat,
 }
 
 export function getIntegration(id: IntegrationIdT): IntegrationModule {

@@ -377,7 +377,7 @@ describe('IntegrationWizard', () => {
 
   it('renders every catalog entry through all 5 screens (fake mode)', async () => {
     const real = listSetupSpecs()
-    expect(real.length).toBeGreaterThanOrEqual(17)
+    expect(real.length).toBeGreaterThanOrEqual(18)
     const outline: Record<string, string[]> = {}
     for (const entry of real) {
       const client = setup()
@@ -387,7 +387,7 @@ describe('IntegrationWizard', () => {
               ...s,
               config: {
                 ...s.config,
-                work: { ...s.config.work, enabled: ['slack', 'jira', 'gmail_work', 'zoom', 'salesforce'] },
+                work: { ...s.config.work, enabled: ['slack', 'jira', 'gmail_work', 'zoom', 'salesforce', 'heartbeat'] },
               },
             }
           : s,

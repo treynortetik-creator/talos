@@ -200,7 +200,7 @@ struct AgentFolderSetupTests {
   }
 
   /// The installer's own sentences, as the scripts print them. The next test pins them to the scripts.
-  static let syncedText = "refusing: /h/Dropbox/a looks like cloud-synced storage. Two processes editing memory/ mid-sync corrupts it.\nPick a plain folder in your home directory (the default ~/my-agent), or pass --allow-synced-folder if you know why.\nFAILED at \"4/7 The agent (kit, default CLAUDE.md, first commit)\": the kit installer failed before copying anything (its output is above). Fix that, then run ./install.sh again."
+  static let syncedText = "refusing: /h/Dropbox/a looks like cloud-synced storage. Two processes editing memory/ mid-sync corrupts it.\nPick a plain folder in your home directory (the default ~/talos-agent), or pass --allow-synced-folder if you know why.\nFAILED at \"4/7 The agent (kit, default CLAUDE.md, first commit)\": the kit installer failed before copying anything (its output is above). Fix that, then run ./install.sh again."
   static let otherCloneText = "FAILED at \"2/7 Agent folder\": this agent is set up from a different clone of the repo, or this installer cannot tell which (listed above). This clone is /h/me. Nothing was changed. To point the agent at this clone, run ./install.sh --repoint; otherwise run the install.sh in the clone it points at."
   static let notEmptyText = "FAILED at \"2/7 Agent folder\": /h/a exists, is not empty and is not a Talos agent. Nothing was touched. Pick a new folder with --agent-dir. If it is a partial copy from an earlier run of this script, move it aside (for example: mv /h/a /h/a.partial) and run ./install.sh again."
 
@@ -223,7 +223,7 @@ struct AgentFolderSetupTests {
     let kit = try String(contentsOfFile: repo + "/kit/install.sh", encoding: .utf8)
     let root = try String(contentsOfFile: repo + "/install.sh", encoding: .utf8)
     #expect(kit.contains("looks like cloud-synced storage. Two processes editing memory/ mid-sync corrupts it."))
-    #expect(kit.contains("Pick a plain folder in your home directory (the default ~/my-agent), or pass --allow-synced-folder if you know why."))
+    #expect(kit.contains("Pick a plain folder in your home directory (the default ~/talos-agent), or pass --allow-synced-folder if you know why."))
     #expect(root.contains("To point the agent at this clone, run ./install.sh --repoint; otherwise run the install.sh in the clone it points at."))
     #expect(root.contains("Pick a new folder with --agent-dir."))
   }

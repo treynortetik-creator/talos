@@ -65,6 +65,8 @@ exit 1
     b.answer('health', fixture('chronos-0.3', 'health'))
     b.answer('due', { due: [], beat: '2026-10-05T09:50:00-04:00' })
     b.answer('orphans', { orphans: [] })
+    // the bridge reads a job's detail before it offers it (a heartbeat is never offered to the agent), so a slot test needs one
+    b.answer('detail', fixture('chronos-0.4', 'detail-times-meta'))
     return b
   }
 }

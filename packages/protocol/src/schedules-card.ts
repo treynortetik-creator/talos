@@ -3,6 +3,8 @@
 // real bridge's `card.create` equals it for the same inputs.
 import { payloadHash } from './canonical.ts'
 import { riskForTrust } from './config.ts'
+import { heartbeatMuteOnlyChange } from './heartbeat.ts'
+import { heartbeatSection } from './heartbeat-card.ts'
 import { bindingFrom, type CardT } from './models.ts'
 import {
   type JobMetaT,
@@ -39,6 +41,8 @@ export type ScheduleApproved = {
   fields?: Partial<Pick<ScheduleT, 'kind' | 'runner' | 'permissions' | 'allowed_tools' | 'model'>> & {
     command?: string | null
   }
+  /** The meta as approved, if the scheduler ever records it (Chronos 0.4 does not). Lets an adopt card show what moved. */
+  meta?: unknown
 }
 
 /** Thrown when the card would show one version and bind another (F4). The bridge re-reads and retries; never mints. */
@@ -130,7 +134,12 @@ export function runnerWords(r: ScheduleT['runner']): string {
  * sets permissions to full; or adds an allowed tool. Everything else narrows or moves approved behaviour: low.
  * An update with no base to compare against is high (fail closed).
  */
-export function scheduleCardRisk(change: ScheduleChangeT, base: ScheduleCardBase | null): 'low' | 'high' {
+export function scheduleCardRisk(
+  change: ScheduleChangeT,
+  base: ScheduleCardBase | null,
+  /** The card's clock (ISO). A heartbeat mute is low risk only when it ends within 30 days of it; without one it is high. */
+  now?: string,
+): 'low' | 'high' {
   if (change.op !== 'update') return 'high'
   if (!base) return 'high'
   const s = change.set
@@ -144,12 +153,18 @@ export function scheduleCardRisk(change: ScheduleChangeT, base: ScheduleCardBase
   // several fire times replaced by one: a silent loss of runs the owner approved
   if (s.when !== undefined && cur.when.type === 'times' && s.when.type !== 'times') return 'high'
   // meta is in content_hash (Chronos holds the job when it changes), so a change to it is never "just a setting"
-  if (s.meta !== undefined && JSON.stringify(s.meta) !== JSON.stringify(cur.meta ?? null)) return 'high'
+  // (a heartbeat change that only adds short, exact-key mutes or removes mutes can only quiet items, so it is low: HB1b)
+  if (
+    s.meta !== undefined &&
+    JSON.stringify(s.meta) !== JSON.stringify(cur.meta ?? null) &&
+    !heartbeatMuteOnlyChange(cur.meta, s.meta, now)
+  )
+    return 'high'
   return 'low'
 }
 
-/** "4 a day: 09:45, 12:15, 14:45, 17:15 (weekdays)" for a times job, else null. Days as Chronos prints them: words or integers. */
-function timesWords(w: ScheduleWhenT | undefined | null): string | null {
+/** "09:45, 12:15, 14:45, 17:15 (weekdays)" for a times job, else null. Days as Chronos prints them: words or integers. */
+function slotsWords(w: ScheduleWhenT | undefined | null): string | null {
   if (!w || w.type !== 'times') return null
   const days =
     typeof w.days === 'string'
@@ -157,7 +172,13 @@ function timesWords(w: ScheduleWhenT | undefined | null): string | null {
       : w.days.every((d) => typeof d === 'string')
         ? w.days.map((d) => safeLine(String(d))).join(', ')
         : `days ${w.days.map((d) => safeLine(String(d))).join(', ')}`
-  return `${w.times.length} a day: ${w.times.join(', ')} (${days})`
+  return `${w.times.join(', ')} (${days})`
+}
+
+/** "4 a day: 09:45, 12:15, 14:45, 17:15 (weekdays)" for a times job, else null. */
+function timesWords(w: ScheduleWhenT | undefined | null): string | null {
+  const s = slotsWords(w)
+  return s === null || !w || w.type !== 'times' ? null : `${w.times.length} a day: ${s}`
 }
 
 function whenOf(change: ScheduleChangeT, base: ScheduleCardBase | null): ScheduleWhenT | undefined {
@@ -194,7 +215,7 @@ function metaPretty(m: JobMetaT): string {
  * shows as a visible `⟦U+XXXX⟧` escape (never dropped, never a space) and the text is JSON-quoted, so nothing in one can start a
  * line of the card or pass for another key.
  */
-function metaSection(change: ScheduleChangeT, base: ScheduleCardBase | null): string | null {
+function metaOnlySection(change: ScheduleChangeT, base: ScheduleCardBase | null): string | null {
   const cur = base?.schedule.meta
   if (change.op === 'update' && change.set.meta !== undefined) {
     if (change.set.meta === null) return cur ? `Meta: removed. It was:\n${metaPretty(cur)}` : null
@@ -206,6 +227,39 @@ function metaSection(change: ScheduleChangeT, base: ScheduleCardBase | null): st
   const m = change.op === 'create' ? change.draft.meta : cur
   if (!m) return null
   return `${META_HEAD}${change.op === 'update' ? ', unchanged' : ''}):\n${metaPretty(m)}`
+}
+
+/** The Heartbeat rows (if any), then the whole meta they summarise. */
+function metaSection(
+  change: ScheduleChangeT,
+  base: ScheduleCardBase | null,
+  approved: ScheduleApproved | null = null,
+): string | null {
+  const parts = [heartbeatRows(change, base, approved), metaOnlySection(change, base)].filter((p) => p !== null)
+  return parts.length ? parts.join('\n\n') : null
+}
+
+/** The Heartbeat rows (HB1b) when the job is or becomes a heartbeat: placed ahead of the full meta they summarise. */
+function heartbeatRows(
+  change: ScheduleChangeT,
+  base: ScheduleCardBase | null,
+  approved: ScheduleApproved | null,
+): string | null {
+  if (change.op === 'delete') return null
+  const cur = base?.schedule
+  const metaSet = change.op === 'update' && change.set.meta !== undefined
+  const after =
+    change.op === 'create' ? change.draft.meta : metaSet ? (change as { set: { meta?: unknown } }).set.meta : cur?.meta
+  const moved = change.op === 'update' && change.set.when !== undefined
+  const none = '(this job does not fire several times a day)'
+  return heartbeatSection({
+    op: change.op,
+    after,
+    before: change.op === 'update' ? (cur?.meta ?? null) : change.op === 'adopt' ? approved?.meta : undefined,
+    metaSet,
+    slotsAfter: slotsWords(whenOf(change, base)) ?? none,
+    slotsBefore: moved ? (slotsWords(cur?.when) ?? none) : undefined,
+  })
 }
 
 const utf8 = (s: string) => new TextEncoder().encode(s).length
@@ -420,7 +474,7 @@ function body(
       const now = settings.map((k) => `${FIELD_LABEL[k]}: ${fieldWords(k, cur)}`)
       const tl = timesLine(change, base)
       if (tl) now.push(tl)
-      const meta = metaSection(change, base)
+      const meta = metaSection(change, base, approved)
       if (meta) now.push('', meta)
       if (cur.kind === 'command') now.push('Command: edited at the Mac (not shown here; review it at the Mac first)')
       if (!approved)
@@ -524,7 +578,7 @@ export function composeScheduleCard(
     kill_label: labels.kill,
     allow_edit: false,
     allow_revise: true,
-    risk: riskForTrust(opts.trust === true, 'schedule', scheduleCardRisk(change, opts.base)),
+    risk: riskForTrust(opts.trust === true, 'schedule', scheduleCardRisk(change, opts.base, opts.now)),
     origin: opts.origin,
     payload,
     payload_hash: '',

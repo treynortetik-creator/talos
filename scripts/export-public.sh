@@ -7,7 +7,8 @@
 #
 # An EXCLUDE entry ending in "/" is a folder (everything under it); any other entry is one exact file. An entry that is not
 # tracked is fine (a private list may exist on one machine only). The export is checked after it is written: no excluded path
-# may exist in TARGET_DIR and the file count must equal tracked minus excluded, or the script says so and exits 1.
+# may exist in TARGET_DIR, the setup docs (README.md, SETUP.md, AGENTS.md, CLAUDE.md, docs/SETUP.md, docs/ios.md, kit/START-HERE.md,
+# kit/README.md) must not name one, and the file count must equal tracked minus excluded, or the script says so and exits 1.
 #
 # Exit codes: 0 ok, 1 the written tree failed its own check or a copy failed, 2 bad usage or a refused target.
 set -euo pipefail
@@ -89,6 +90,14 @@ tar -C "$SRC" -cf - --null -T "$LIST" | tar -C "$TARGET" -xf - || die "copy fail
 # After the write: read the result back instead of trusting the copy.
 for e in "${EXCLUDE[@]}"; do
   [ ! -e "${TARGET}/${e%/}" ] || die "excluded path is present in the export: $e" 1
+done
+# A doc a stranger follows to set Talos up must not send them to a file this export leaves out. Reword the doc (preferred) or
+# drop the link; the unit test scripts/setup-docs-public.test.ts checks a wider list of docs before the export is ever run.
+for d in README.md SETUP.md AGENTS.md CLAUDE.md docs/SETUP.md docs/ios.md kit/START-HERE.md kit/README.md; do
+  [ -f "${TARGET}/$d" ] || continue
+  for e in "${EXCLUDE[@]}"; do
+    if grep -qF -- "$e" "${TARGET}/$d"; then die "$d names $e, which is not in the public export; reword it" 1; fi
+  done
 done
 GOT="$(cd "$TARGET" && find . \( -type f -o -type l \) | wc -l | tr -d ' ')"
 [ "$GOT" = "$KEPT" ] || die "the export holds $GOT files, expected $KEPT" 1

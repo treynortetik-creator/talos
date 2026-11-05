@@ -63,4 +63,4 @@ Contract suites in `packages/testkit/src/contract` run against the real relay, b
 They are proven satisfiable in this repo by running them against `FakeRelay` and a stub bridge. The relay contract authenticates
 exactly like production: session headers and Origin (`RelayHandle.appHeaders`), the relay's own bridge key
 (`RelayHandle.bridgeKey`, always enforced), and step-up tokens minted through the harness (`RelayHandle.mintStepup`).
-The reasoning behind the test plan is in SPEC.md section 10 (history).
+The reasoning behind the test plan lives in the maintainer's private build spec, which is not published.

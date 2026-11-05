@@ -251,6 +251,7 @@ export class Bridge {
           : {}),
       ...(opts.discoveryTimeoutMs ? { discoveryTimeoutMs: opts.discoveryTimeoutMs } : {}),
       ...(opts.wrapSchedulerAdapter ? { wrapAdapter: opts.wrapSchedulerAdapter } : {}),
+      ...(opts.heartbeat ? { heartbeat: opts.heartbeat } : {}),
     })
     if (live) {
       // WP-V1: the health beat (docs/V2-FEATURES.md V2.2); advertised as health/1 once it exists

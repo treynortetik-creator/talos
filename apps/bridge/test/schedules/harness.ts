@@ -50,6 +50,10 @@ export async function startSched(
     headless?: boolean
     /** Edits the starting config.json (trust mode, say) before the bridge reads it. */
     config?: NonNullable<Parameters<typeof startHarness>[0]>['config']
+    /** Test seam: wraps the scheduler adapter the bridge discovered. */
+    wrapAdapter?: NonNullable<import('../../src/bridge-options.ts').BridgeOptions['wrapSchedulerAdapter']>
+    /** The heartbeat runner's test seams (wake, work gate, time scale, crash hooks, the `gh` path). */
+    heartbeat?: NonNullable<import('../../src/bridge-options.ts').BridgeOptions['heartbeat']>
     /** Discovery's budget for `chronos api version` (ms); a test that stalls it passes a short one. */
     discoveryTimeoutMs?: number
     /** Chronos's clock when it should NOT follow the injected clock (the capture step pins it per step). */
@@ -78,6 +82,8 @@ export async function startSched(
       ...(opts.scheduleWatch === false ? { scheduleWatch: false } : {}),
       instance: opts.instance ?? `bi_${newUlid().slice(-10)}`,
       ...(opts.headless ? { headless: true } : {}),
+      ...(opts.heartbeat ? { heartbeat: opts.heartbeat } : {}),
+      ...(opts.wrapAdapter ? { wrapSchedulerAdapter: opts.wrapAdapter } : {}),
       ...(opts.discoveryTimeoutMs ? { discoveryTimeoutMs: opts.discoveryTimeoutMs } : {}),
     },
   })

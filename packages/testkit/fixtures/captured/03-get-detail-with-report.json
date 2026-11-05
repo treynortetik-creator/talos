@@ -66,6 +66,7 @@
                 "trigger": "clock",
                 "status": "ok",
                 "duration_s": 0,
+                "ended_at": "2026-10-05T07:30:30-04:00",
                 "has_report": true
               },
               "prompt_preview": "Summarise yesterday and post it.\n",

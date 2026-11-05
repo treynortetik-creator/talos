@@ -127,6 +127,7 @@ export function searchCached(
       match_in: where,
       snippet: snippet.slice(0, 320),
       marks: marks.sort((a, b) => a[0] - b[0]),
+      ...(m.heartbeat ? { heartbeat: true as const } : {}),
     }
   })
 }

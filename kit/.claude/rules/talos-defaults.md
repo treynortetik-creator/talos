@@ -7,6 +7,7 @@ replaces it; put your own rules in `CLAUDE.md` or in your own file under `.claud
 - Push back while planning, support once the owner decides; flag a surviving risk once, then drop it.
 - Before any date or date arithmetic, run `date`. Before any stated fact, check it against the real source or label it an inference.
 - Before reporting something done, confirm it exists (`ls`, a command and its exit code). A sub-agent's report is a claim too.
+- Asked for better speech-in, voice-out or memory search, or whether something can run locally? Read `setup/local-models.md` first; everything there is optional. Want an image made, or a second opinion from ChatGPT? Read `setup/chatgpt-helper.md`.
 - Search `wiki/` before answering about a person, project or past decision (`scripts/wiki-search.sh`, `scripts/recall.py`).
 - Write material changes to `memory/STATE.md` and today's `memory/YYYY-MM-DD.md` in the same turn.
 - Anything irreversible (send, publish, delete, spend, change who can see something): draft it and ask first. One approval is not the next.

@@ -7,12 +7,16 @@ Python 3.9+, standard library only.
           {"error": {"code": "...", "message": "...", "fields": [{"path": "...", "message": "..."}]}}.
   Times   every instant is RFC 3339 with an offset (2026-07-15T09:00:00-04:00); `tz` is an IANA zone name.
 
-Verbs (0.3.0): version, snapshot, detail <id>, validate, apply, pause, disable <id>, config set, due --for session,
-session-beat, approved <id>, migrate. The run verbs (claim, finish, start, session-prompt, health, probe, orphans) arrive in
-the next release candidate.
+Verbs: version, snapshot, detail <id>, validate, apply, pause, disable <id>, config set, due --for session,
+session-beat, approved <id>, migrate, and the run verbs (claim, finish, start, session-prompt, health, probe, orphans).
+`report <id> [--date <date_key>] [--run <run_id>]` reads one stored run report and writes nothing.
 """
+import codecs
+import datetime
 import json
 import os
+import re
+import stat
 import sys
 
 import chronoslib as C
@@ -48,7 +52,7 @@ def _last_run(cfg, jid, rows=None):
         for prefix, status in (("ran-", "ok"), ("failed-", "failed"), ("stalled-", "launch_stalled")):
             if n.startswith(prefix + jid + "-"):
                 ds = n[len(prefix) + len(jid) + 1:]
-                if len(ds) == 10 and ds[4] == "-" and ds[7] == "-" and (best is None or ds >= best[0]):
+                if C.SLOT_RE.match(ds) and (best is None or ds >= best[0]):
                     best = (ds, status)
     if best is None:
         return None
@@ -58,6 +62,37 @@ def _last_run(cfg, jid, rows=None):
     if mine:
         out = RL.schedule_run(cfg, mine[-1])
     return out
+
+
+DETAIL_RUNS_MAX = 20
+
+
+def _recent_runs(cfg, jid, rows=None):
+    """Newest first, at most DETAIL_RUNS_MAX: every run row of this job, plus a bare entry for a day that only has a
+    failed-/stalled-/ran- marker (no run row)."""
+    rows = [r for r in (rows if rows is not None else RL.run_rows(cfg, jid)) if r.get("job") == jid]
+    out = []
+    for r in rows:
+        try:
+            ts = float(r.get("start_ts") or 0)
+        except (ValueError, TypeError):
+            ts = 0.0             # a hand-edited or old row: keep it, sort it first within its day
+        out.append((str(r.get("ds") or ""), ts, RL.schedule_run(cfg, r)))
+    seen = set(x[0] for x in out)
+    try:
+        names = os.listdir(cfg["state_dir"])
+    except OSError:
+        names = []
+    for n in names:
+        for prefix, status in (("ran-", "ok"), ("failed-", "failed"), ("stalled-", "launch_stalled")):
+            if n.startswith(prefix + jid + "-"):
+                ds = n[len(prefix) + len(jid) + 1:]
+                if C.SLOT_RE.match(ds) and ds not in seen:
+                    seen.add(ds)
+                    out.append((ds, 0.0, {"run_id": None, "ds": ds, "started_at": None, "runner": None, "trigger": "clock", "status": status,
+                                          "has_report": os.path.isfile(C.report_path(cfg, jid, ds))}))
+    out.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [x[2] for x in out[:DETAIL_RUNS_MAX]]
 
 
 def _editable(cfg, job, runner, prompt_bytes):
@@ -79,6 +114,9 @@ def describe(cfg, job, at, beat_age, rows=None):
     pb, gb = C._read_bytes(C.prompt_file(cfg, jid)), C._read_bytes(C.guard_file(cfg, jid))
     runner = C.job_runner(job)
     d, state = C.current_day(cfg, job, at)
+    slot_ds, slot_f = None, None
+    if C.is_times(job) and not job.get("once"):
+        slot_ds, _d, slot_f, _st = C.current_slot(cfg, job, at)      # the slot the job is "at"; its key is the run key (ds)
     paused = C.is_paused(cfg, jid)
     held = state == "held"
     enabled = job.get("enabled") is True
@@ -86,7 +124,7 @@ def describe(cfg, job, at, beat_age, rows=None):
     fire_end = None
     if state in ("waiting", "running") and C.clock_on(job):
         try:
-            fire_end = C.aware_iso(C.fire_dt(job, d) + C.datetime.timedelta(minutes=C.window_minutes(job)))
+            fire_end = C.aware_iso((slot_f or C.fire_dt(job, d)) + C.datetime.timedelta(minutes=C.window_minutes(job)))
         except Exception:
             fire_end = None
     editable, why = _editable(cfg, job, runner, len(pb))
@@ -98,11 +136,12 @@ def describe(cfg, job, at, beat_age, rows=None):
     etag, chash = C.record_etag(job, pb, gb), C.record_content_hash(job, pb, gb)
     rec = C.read_approved(cfg, jid)
     beat_bucket = "stale" if beat_age is None or beat_age > 180 else "fresh"
-    own = RL.read_owner(cfg, jid, C.day_str(d)) if state == "running" else None
+    run_ds = slot_ds or C.day_str(d)
+    own = RL.read_owner(cfg, jid, run_ds) if state == "running" else None
     last = _last_run(cfg, jid, rows)
-    state_rev = C.sha256_ref(C.canon([C.day_str(d), state, (own or {}).get("run_id") or "", (last or {}).get("run_id") or "", paused, held, beat_bucket]))
+    state_rev = C.sha256_ref(C.canon([run_ds, state, (own or {}).get("run_id") or "", (last or {}).get("run_id") or "", paused, held, beat_bucket]))
     prompt_text = pb.decode("utf-8", "replace")
-    return {
+    out = {
         "id": jid, "name": job.get("name") or jid, "description": job.get("description") or "",
         "kind": "command" if C.is_command(job) else "claude",
         "when": when, "when_text": when_text, "catchup_min": C.window_minutes(job),
@@ -110,13 +149,16 @@ def describe(cfg, job, at, beat_age, rows=None):
         "runner": runner or "headless", "permissions": C.job_permissions(job),
         "allowed_tools": list(job.get("allowed_tools") or []), "model": job.get("model") or None,
         "notify": C.job_notify_mode(job), "triggers_count": len(job.get("triggers") or []),
-        "next_run": C.aware_iso(nf[0]) if nf else None, "today": state, "ds": C.day_str(d), "window_ends": fire_end,
+        "next_run": C.aware_iso(nf[0]) if nf else None, "today": state, "ds": run_ds, "date_key": C.date_key(job, at) if job.get("once") else run_ds, "window_ends": fire_end,
         "last_run": last,
         "prompt_preview": _strip_controls(prompt_text)[:PREVIEW_CHARS] if not C.is_command(job) else "",
         "prompt_bytes": len(pb), "editable": editable, "read_only_reason": why,
         "changed_outside": rec is None or rec["content_hash"] != chash,
         "etag": etag, "content_hash": chash, "state_rev": state_rev,
     }
+    if job.get("meta") is not None:
+        out["meta"] = C.check_meta(job["meta"])       # a hand-edited NaN would make the whole snapshot invalid JSON: that job gets an error row instead
+    return out
 
 
 def _beat_age(path, at):
@@ -175,7 +217,135 @@ def detail(cfg, jid):
     prompt, truncated = _trim_bytes(pb, DETAIL_PROMPT_MAX)
     guard = _trim_bytes(gb, DETAIL_GUARD_MAX)[0] if os.path.isfile(C.guard_file(cfg, jid)) else None
     nf = [C.aware_iso(x) for x in C.next_fires(job, at, 3)] if job.get("enabled") is True else []
-    return {"schedule": s, "prompt": prompt, "prompt_truncated": truncated, "guard": guard, "next_runs": nf, "runs": []}
+    return {"schedule": s, "prompt": prompt, "prompt_truncated": truncated, "guard": guard, "next_runs": nf, "runs": _recent_runs(cfg, jid)}
+
+
+REPORT_MAX = 256 * 1024
+_DATE_KEY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{4})?\Z")
+_RUN_ID = re.compile(r"r_[0-9A-HJKMNP-TV-Z]{26}\Z")
+
+
+def _valid_date(v):
+    if not isinstance(v, str) or not _DATE_KEY.match(v):
+        return False
+    try:
+        datetime.date(int(v[:4]), int(v[5:7]), int(v[8:10]))
+        if len(v) > 10 and (int(v[11:13]) > 23 or int(v[13:15]) > 59):
+            return False
+    except ValueError:
+        return False
+    return True
+
+
+def _valid_run_id(v):
+    return isinstance(v, str) and _RUN_ID.match(v) is not None
+
+
+def _report_args(args, stdin):
+    """-> (job id, date_key or None, run id or None); anything else is bad_request. With no arguments the same fields come as
+    JSON on stdin ({"id": ..., "date": ..., "run": ...}), like `detail`."""
+    usage = "usage: chronos api report <job id> [--date <date_key>] [--run <run_id>]"
+    jid, ds, rid = None, None, None
+    if not args:
+        req = _read_stdin(stdin)
+        if not isinstance(req, dict) or not set(req) <= {"id", "date", "run"}:
+            raise W.WriteError("bad_request", usage)
+        jid, ds, rid = req.get("id"), req.get("date"), req.get("run")
+    else:
+        i = 0
+        while i < len(args):
+            a = args[i]
+            if a in ("--date", "--run"):
+                if i + 1 >= len(args) or args[i + 1].startswith("--"):
+                    raise W.WriteError("bad_request", "%s needs a value" % a)
+                if (a == "--date" and ds is not None) or (a == "--run" and rid is not None):
+                    raise W.WriteError("bad_request", "%s given more than once" % a)
+                if a == "--date":
+                    ds = args[i + 1]
+                else:
+                    rid = args[i + 1]
+                i += 2
+            elif a.startswith("--") or jid is not None:
+                raise W.WriteError("bad_request", usage)
+            else:
+                jid = a
+                i += 1
+    if not isinstance(jid, str) or not C.ID_RE.match(jid):
+        raise W.WriteError("bad_request", "report takes a job id")
+    if ds is not None and not _valid_date(ds):
+        raise W.WriteError("bad_request", "--date must be a real date like YYYY-MM-DD")
+    if rid is not None and not _valid_run_id(rid):
+        raise W.WriteError("bad_request", "--run must look like r_ followed by 26 characters of a ULID")
+    return jid, ds, rid
+
+
+def _read_capped(cfg, path):
+    """-> (text, truncated) from a regular file that really lives inside the reports folder, or None when it is missing or unsafe
+    (a symlink, or anything whose realpath leaves reports/). Reads at most REPORT_MAX + 1 bytes."""
+    if not os.path.lexists(path):
+        return None
+    root = os.path.realpath(cfg["reports_dir"])
+    if os.path.islink(path) or os.path.dirname(os.path.realpath(path)) != root:
+        raise W.WriteError("not_found", "no report stored for that run")
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        raise W.WriteError("not_found", "no report stored for that run")
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise W.WriteError("not_found", "no report stored for that run")
+        data = fh.read(REPORT_MAX + 1)
+    truncated = len(data) > REPORT_MAX
+    dec = codecs.getincrementaldecoder("utf-8")("replace")
+    return dec.decode(data[:REPORT_MAX], final=not truncated), truncated      # a character cut at the cap is dropped, bad bytes become U+FFFD
+
+
+def report(cfg, args, stdin=None):
+    """The stored report of one run, read only. Which run: --run (its date_key comes from its row), else the latest run of --date,
+    else the newest run. A run's own report file is preferred; the per-day copy is used when this run is the latest of its day."""
+    jid, ds, rid = _report_args(args, stdin if stdin is not None else sys.stdin)
+    if not any(isinstance(j, dict) and j.get("id") == jid for j in W.read_jobs(cfg)):
+        raise W.WriteError("not_found", "no such job")
+    # ids that come from the run log are validated exactly like --run before any path is built from them
+    rows = [r for r in RL.run_rows(cfg, jid) if _valid_date(r.get("ds")) and _valid_run_id(r.get("run_id"))]
+    rows.sort(key=lambda r: (str(r.get("ds")), float(r.get("start_ts") or 0)))
+    row = None
+    if rid is not None:
+        row = next((r for r in reversed(rows) if r.get("run_id") == rid), None)
+        if row is None:
+            raise W.WriteError("not_found", "no such run")
+        if ds is not None and row.get("ds") != ds:
+            raise W.WriteError("not_found", "that run belongs to another date_key")
+        ds = row["ds"]
+    elif ds is not None:
+        row = next((r for r in reversed(rows) if r.get("ds") == ds), None)
+    else:
+        newest = _recent_runs(cfg, jid, rows)
+        if not newest:
+            raise W.WriteError("not_found", "no runs for this job")
+        ds = newest[0]["ds"]
+        row = next((r for r in reversed(rows) if r.get("ds") == ds), None)
+    latest = next((r for r in reversed(rows) if r.get("ds") == ds), None)
+    got = _read_capped(cfg, RL.run_report_path(cfg, jid, ds, row["run_id"])) if row is not None else None
+    if got is None and (row is None or row is latest):
+        got = _read_capped(cfg, C.report_path(cfg, jid, ds))
+    if got is None:
+        raise W.WriteError("not_found", "no report stored for that run")
+    text, truncated = got
+    run = RL.schedule_run(cfg, row) if row is not None else {}
+    out = {"job_id": jid, "date_key": ds, "run_id": row.get("run_id") if row else None, "status": run.get("status"),
+           "runner": run.get("runner"), "started_at": run.get("started_at"), "ended_at": run.get("ended_at"),
+           "report": text, "truncated": truncated}
+    if row is not None:
+        try:
+            note = _read_capped(cfg, os.path.join(cfg["reports_dir"], "%s-%s-%s.late.md" % (jid, ds, row["run_id"])))
+        except W.WriteError:
+            note = None
+        if note is not None and note[0].strip():
+            out["late_note"] = note[0].strip()
+            if note[1]:
+                out["late_note_truncated"] = True
+    return out
 
 
 def approved(cfg, jid):
@@ -357,7 +527,8 @@ def dispatch(argv, cfg, stdin, stderr):
     verb = argv[0] if argv else ""
     args = argv[1:]
     if verb == "version":
-        return {"api": C.API_VERSION, "chronos": C.CHRONOS_API_VERSION, "session_runner": cfg["session_runner"], "approval_required": cfg["approval_required"]}
+        return {"api": C.API_VERSION, "chronos": C.CHRONOS_API_VERSION, "session_runner": cfg["session_runner"], "approval_required": cfg["approval_required"],
+                "features": list(C.FEATURES)}
     if verb == "snapshot":
         return snapshot(cfg)
     if verb == "detail":
@@ -387,7 +558,11 @@ def dispatch(argv, cfg, stdin, stderr):
         if args[:2] != ["--for", "session"]:
             raise W.WriteError("bad_request", "usage: chronos api due --for session")
         beat = C.write_session_beat(cfg)
-        return {"due": C.due_for_session(cfg), "beat": beat}
+        try:
+            due = C.due_for_session(cfg)
+        except (ValueError, OSError) as e:
+            raise W.WriteError("registry_unreadable", "jobs file unreadable (%s): %s" % (cfg["jobs_file"], e))
+        return {"due": due, "beat": beat}
     if verb == "session-beat":
         return {"ok": True, "beat": C.write_session_beat(cfg)}
     if verb == "approved":
@@ -395,6 +570,8 @@ def dispatch(argv, cfg, stdin, stderr):
         return approved(cfg, jid)
     if verb == "migrate":
         return migrate(cfg, args, stdin, stderr)
+    if verb == "report":
+        return report(cfg, args, stdin)
     if verb in RUN_VERBS:
         try:
             return RUN_VERBS[verb](cfg, args, stdin)

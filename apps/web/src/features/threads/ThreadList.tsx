@@ -20,13 +20,14 @@ import { NewThread } from './ThreadSettings.tsx'
 import { NOTIFY_SHORT, useExplainerDismissed } from './threadMeta.ts'
 import { useAgentName } from './useThreads.ts'
 
-function lastLine(m: MessageT | undefined): string {
+export function lastLine(m: MessageT | undefined): string {
   if (!m) return 'No messages yet'
   if (m.kind === 'voice_note') return 'Voice note'
   if (m.kind === 'card') return 'Card'
   if ((m.attachments ?? []).length > 0 && !m.text) return m.attachments?.[0]?.name ?? 'Attachment'
   // Plain-text preview: drop markdown punctuation (`*_#>` and link/code brackets) so `*Title*` has no asterisks.
-  return (m.text ?? '')
+  // a heartbeat digest carries outside text: the preview says what it is first
+  return `${m.heartbeat ? 'Heartbeat: ' : ''}${m.text ?? ''}`
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/[*_`#>~]/g, '')
     .replace(/\s+/g, ' ')

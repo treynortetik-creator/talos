@@ -2,6 +2,10 @@
 
 You are about to give yourself a working memory that survives across sessions.
 
+**Setting this up with an agent's help, or want the whole path (phone included) in one place?** Use
+[`SETUP.md`](../SETUP.md) in the repository root: one ordered guide. This page is the kit on its own: the agent's
+memory, no phone.
+
 **Read this whole page before you type anything.** It is short. Talos runs in the Claude Code
 command-line tool, in a Terminal window, on a Mac.
 
@@ -74,12 +78,12 @@ cd talos
 
 That does the mechanical parts:
 
-- **Copies** the kit into `~/my-agent` (change it with `--agent-dir`). Your agent lives in the copy,
+- **Copies** the kit into `~/talos-agent` (change it with `--agent-dir`). Your agent lives in the copy,
   not in the clone, so your memory never sits inside a git checkout that has a remote.
 - Writes `.claude/settings.json` (the hooks) and `.talos-version` in the copy.
-- **Installs Chronos**, the scheduler that lets the agent do things on a schedule, and registers five
-  Talos jobs, all switched off for now. **Do not want scheduling? Run `./install.sh --no-chronos`.** The agent
-  works the same; nothing runs on a timer. See the README, "Chronos".
+- **Does not install Chronos** unless you ask. Chronos is the scheduler that lets the agent do things on a timer. Add it with
+  `./install.sh --with-chronos` (now, or any time later on this agent): it registers the Talos jobs, all switched off for
+  now. Not wanting scheduling is the default; the agent works the same and nothing runs on a timer. See the README, "Chronos".
 
 Run `./install.sh --dry-run` first if you want to see the plan without changing anything.
 
@@ -92,7 +96,7 @@ Run `./install.sh --dry-run` first if you want to see the plan without changing 
 ## Step 3 — Let the agent set itself up
 
 ```
-cd ~/my-agent
+cd ~/talos-agent
 claude
 ```
 
@@ -129,14 +133,14 @@ first if you are still in the agent):
 
 ```
 mkdir -p ~/private-agent-vault
-cp -R ~/my-agent/optional/personal/. ~/private-agent-vault/
+cp -R ~/talos-agent/optional/personal/. ~/private-agent-vault/
 ```
 
 Then tell your agent: `My personal vault is at ~/private-agent-vault. Read its CLAUDE.md.` It shows you
 a short block to add to its config; say yes. **Skip this if you are unsure.** A work-only agent is
 useful on its own.
 
-(On a brand-new install you can do the copy in one step: `./install.sh --with-vault ~/private-agent-vault`. It
+(On a brand-new install you can do the copy in one step: `./install.sh --with-vault ~/private-agent-vault` (the root installer passes it to the kit). It
 also records the vault for the optional guard in `hooks/check-vault.py`. If you copied by hand, record it with
 `mkdir -p ~/.config/talos && echo ~/private-agent-vault > ~/.config/talos/vault-dir`. The guard asks before a term from
 `<vault>/_guard-terms.txt`, a list **you** write, is saved anywhere outside the vault.)
@@ -145,7 +149,7 @@ also records the vault for the optional guard in `hooks/check-vault.py`. If you 
 
 ## Optional, whenever you like: talk to it from your phone
 
-If you want to message your agent from your phone instead of sitting at the terminal, use the Talos app (the owner enrolls the phone with `talos-app enroll` in Terminal). Setup is in [docs/SETUP.md](../docs/SETUP.md). If you want scheduled jobs to deliver there, `./install.sh --notify talos` checks that `talos-app` exists and records where it lives, and warns if it can't find it. Skip all of this for now if you are not sure; nothing else depends on it.
+If you want to message your agent from your phone instead of sitting at the terminal, use the Talos app (the owner enrolls the phone with `talos-app enroll` in Terminal). Setup is in [SETUP.md](../SETUP.md) (steps 4 to 7). If you want scheduled jobs to deliver there, `./install.sh --with-chronos --notify talos` checks that `talos-app` exists and records where it lives, and warns if it can't find it (do the phone steps first, so `talos-app` is on your PATH). Skip all of this for now if you are not sure; nothing else depends on it.
 
 ## Day two — the moment that matters
 
@@ -155,7 +159,7 @@ At the end of your first session, say:
 Update the handoff file before I go.
 ```
 
-Then **exit, and come back tomorrow.** Run `cd ~/my-agent && claude` and ask:
+Then **exit, and come back tomorrow.** Run `cd ~/talos-agent && claude` and ask:
 
 ```
 Where did we leave off?
@@ -183,7 +187,7 @@ Confirm you are in the right folder: `pwd` should show your agent folder and `ls
 
 **`cd: too many arguments`**
 Your path has a space in it. Put quotes around the whole path, and use `$HOME` instead of `~` inside the
-quotes (a tilde inside quotes is not expanded): `cd "$HOME/some folder/my-agent"`. Easiest of all: type
+quotes (a tilde inside quotes is not expanded): `cd "$HOME/some folder/talos-agent"`. Easiest of all: type
 `cd ` (with the space), then **drag the folder from Finder into Terminal**.
 
 **I cannot type a new line in my message, Enter just sends it**
@@ -199,8 +203,9 @@ It tells you why: a non-empty folder, cloud-synced storage, or a macOS-protected
 fix in the message.
 
 **The installer cannot clone Chronos**
-The Chronos repository may still be private. Use a local checkout with `--chronos-path DIR`, or skip it
-with `--no-chronos`.
+Chronos is a public repository, so this is usually the network (or a proxy that blocks GitHub). Check that
+`git ls-remote https://github.com/treynortetik-creator/chronos` works, or use a local checkout with `--chronos-path DIR`,
+or leave Chronos out (it is off unless you pass `--with-chronos`).
 
 **Something else**
 Tell your agent what happened, in plain language. It has this whole kit available and can usually

@@ -1,5 +1,6 @@
 // RFC 7386 JSON merge patch and the config.patch allowlist walk (spec 3.4). Shared by the bridge (enforces), the web
 // app (builds) and the testkit fakes, so all of them agree on which paths a patch may touch.
+import { IntegrationId } from './ids.ts'
 import { PHONE_PATCH_ENTRIES, SESSION_STEPUP_TOP_FIELDS, WORK_STEPUP_PATHS } from './settings-table.ts'
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -63,6 +64,12 @@ export function checkConfigPatch(patch: unknown): ConfigPatchCheck {
     if (!allowed || !isObject(v)) return { ok: false, path: k } // includes `null`, which would delete the whole section
     for (const sub of Object.keys(v)) {
       if (!allowed.has(sub)) return { ok: false, path: `${k}.${sub}` }
+    }
+    // a work list is written strictly: every entry is an id this build knows
+    if (k === 'work' && 'enabled' in v) {
+      const e = (v as Record<string, unknown>).enabled
+      const known = (x: unknown) => IntegrationId.safeParse(x).success
+      if (e !== null && (!Array.isArray(e) || !e.every(known))) return { ok: false, path: 'work.enabled' }
     }
     // what leaves a work system and how long the relay keeps it: both need the work step-up
     if (WORK_STEPUP_PATHS.some((p) => p.startsWith(`${k}.`) && p.slice(k.length + 1) in v)) touchesWorkEnabled = true

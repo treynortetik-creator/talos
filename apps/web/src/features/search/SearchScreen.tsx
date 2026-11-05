@@ -147,15 +147,17 @@ export function SearchScreen() {
 
   const threadName = useMemo(() => new Map(threads.map((t) => [t.id, t.name])), [threads])
   const who = (h: SearchHitT) =>
-    h.via === 'share'
-      ? 'Shared'
-      : h.author === 'owner'
-        ? 'You'
-        : h.author === 'agent'
-          ? agent
-          : h.author === 'hook'
-            ? 'Integration'
-            : 'System'
+    h.heartbeat
+      ? 'Heartbeat'
+      : h.via === 'share'
+        ? 'Shared'
+        : h.author === 'owner'
+          ? 'You'
+          : h.author === 'agent'
+            ? agent
+            : h.author === 'hook'
+              ? 'Integration'
+              : 'System'
 
   return (
     <section

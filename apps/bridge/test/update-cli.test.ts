@@ -82,7 +82,10 @@ describe('talos-app update', () => {
     expect(text).toContain('never restarts the agent')
     expect(text).toContain('Railway')
     expect(text).toContain('apps/desktop/scripts/build-app.sh')
-    expect(text).toContain('TestFlight')
+    expect(text).toContain('kit/scripts/upgrade.sh')
+    expect(text).toContain('--into <your agent folder> --dry-run')
+    expect(text).toContain('docs/ios.md')
+    expect(text).not.toContain('arrives through TestFlight')
     // it ran git and pnpm and nothing else: no kill, no restart, no push
     expect(h.calls.every((c) => c[0] === 'git' || c[0] === 'pnpm')).toBe(true)
     expect(h.calls.some((c) => c[0] === 'git' && c[1] === 'push')).toBe(false)

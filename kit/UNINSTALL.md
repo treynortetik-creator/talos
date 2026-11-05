@@ -5,7 +5,7 @@ What to remove, in order. Nothing here happens automatically; that is on purpose
 1. **The scheduler pieces Talos added.** From the clone you installed from:
 
    ```
-   ./uninstall.sh --agent-dir ~/my-agent
+   ./uninstall.sh --agent-dir ~/talos-agent
    ```
 
    That unregisters the `talos-*` jobs from Chronos (their entries and prompt folders), removes the
@@ -42,7 +42,7 @@ What to remove, in order. Nothing here happens automatically; that is on purpose
    added for the agent with `claude mcp remove <name>`. (Do not run `claude mcp list` for this while a
    channel session is open: its health check starts a second copy of the channel server.) Connectors from a claude.ai account are
    disconnected at `claude.ai/customize/connectors`.
-4. **The agent folder** (`~/my-agent`, or wherever you put it). This is the wiki, the memory, and the git
+4. **The agent folder** (`~/talos-agent`, or wherever you put it). This is the wiki, the memory, and the git
    history of both. **If anyone else should keep the knowledge, hand the folder over before deleting it.**
    The personal vault is not in it and must never be.
 5. **The personal vault** (`~/private-agent-vault/`, if you made one). Yours to keep or delete. If you keep

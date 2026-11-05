@@ -69,7 +69,7 @@ describe('ids', () => {
   it('DeviceId / IntegrationId shapes', () => {
     expect(DeviceId.safeParse('d_k3j2h4g5f6d7s2a7q2w3').success).toBe(true)
     expect(DeviceId.safeParse('d_K3j2h4g5f6d7s2a7q2w3').success).toBe(false)
-    expect(IntegrationId.options).toHaveLength(17)
+    expect(IntegrationId.options).toHaveLength(18)
   })
 })
 

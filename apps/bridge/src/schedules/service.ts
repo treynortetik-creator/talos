@@ -19,6 +19,8 @@ import {
   type Frame,
   fromChronosChange,
   type HealthIssueT,
+  heartbeatConfigFromMeta,
+  heartbeatMetaProblem,
   type MessageT,
   needsSchedulesV2,
   newUlid,
@@ -54,6 +56,7 @@ import {
   scheduleStatusFrame,
   schedulesSnapshotFrame,
 } from '../frames-out.ts'
+import { HeartbeatRunner, type HeartbeatSeams, type RunOutput } from '../heartbeat/runner.ts'
 import {
   cardActionNotification,
   scheduleHeldNotification,
@@ -143,6 +146,8 @@ export type ScheduleServiceDeps = {
   discoveryTimeoutMs?: number
   /** Test seam: wraps the discovered adapter. */
   wrapAdapter?: (a: SchedulerAdapter) => SchedulerAdapter
+  /** Test seams for the heartbeat runner. Production passes nothing. */
+  heartbeat?: HeartbeatSeams
 }
 
 type Problem = { code: 'adapter_timeout' | 'registry_unreadable'; text: string; at: number }
@@ -177,6 +182,56 @@ const SKIP_WORDS: Record<string, string> = {
   schedule_not_found: 'no such job',
 }
 
+/** The meta and `when` the job will have after `change`, checked as a heartbeat (`heartbeatMetaProblem`). */
+function heartbeatProblemOf(change: ScheduleChangeT, base: ScheduleCardBase | null): string | null {
+  if (change.op === 'delete') return null
+  if (change.op === 'create')
+    return heartbeatProblem(
+      change.draft.meta,
+      change.draft.when,
+      change.draft.runner,
+      change.draft.permissions,
+      'claude',
+    )
+  const cur = base?.schedule
+  // Switching a job off, or moving its result thread, never starts anything: a heartbeat that is already headless or restricted
+  // must stay switch-off-able. Anything that keeps it enabled is judged in full.
+  if (
+    change.op === 'update' &&
+    Object.entries(change.set).every(([k, v]) => k === 'thread_id' || (k === 'enabled' && v === false))
+  )
+    return null
+  if (change.op === 'adopt') return heartbeatProblem(cur?.meta, cur?.when, cur?.runner, cur?.permissions, cur?.kind)
+  const meta = change.set.meta === undefined ? cur?.meta : change.set.meta
+  return heartbeatProblem(
+    meta,
+    change.set.when ?? cur?.when,
+    change.set.runner ?? cur?.runner,
+    change.set.permissions ?? cur?.permissions,
+    cur?.kind,
+  )
+}
+
+/**
+ * The contract's check (`heartbeatMetaProblem`), plus one rule of the runner: a heartbeat is checked by THIS bridge, in the
+ * live session. A job that runs headless, is restricted (always headless) or is a command would be started by Chronos with the
+ * job's prompt: an agent run on every slot, which is what a heartbeat is there to avoid. Refused before any card exists.
+ */
+function heartbeatProblem(
+  meta: unknown,
+  when: { type?: string } | null | undefined,
+  runner: string | undefined,
+  permissions: string | undefined,
+  kind: string | undefined,
+): string | null {
+  const p = heartbeatMetaProblem(meta, when)
+  if (p) return p
+  if (!heartbeatConfigFromMeta(meta)) return null
+  if (runner !== 'session' || permissions === 'restricted' || kind === 'command')
+    return 'A heartbeat has to run in the live session (runner "session", full permissions, a Claude job): any other kind would start the agent in the background on every slot. Nothing was saved.'
+  return null
+}
+
 export class ScheduleService {
   readonly sidecar: Sidecar
   private readonly instances: InstanceRegistry
@@ -199,6 +254,9 @@ export class ScheduleService {
   private runNowAt = new Map<string, number>()
   private proposalAt: number[] = []
   private probing = false
+  /** Heartbeat jobs with a run in flight: one at a time per job, and never awaited by the runner tick (S3.1 own queue). */
+  private readonly hbRunning = new Set<string>()
+  private readonly heartbeat: HeartbeatRunner
 
   constructor(
     private readonly ctx: BridgeContext,
@@ -210,6 +268,32 @@ export class ScheduleService {
       () => this.gate(),
       (e) => this.log('schedules-meta.json not written; trying again next tick', { error: e.message }),
     )
+    const seams = deps.heartbeat ?? {}
+    this.heartbeat = new HeartbeatRunner({
+      ctx,
+      builtin: (selfJobId) => ({
+        home: ctx.paths.home,
+        userHome: ctx.env.userHome,
+        runs: () => Object.entries(this.sidecar.all.runs),
+        missed: () =>
+          (this.lastGood?.schedules ?? [])
+            .filter((j) => j.today === 'missed')
+            .map((j) => ({
+              id: j.id,
+              name: j.name,
+              ds: dateOfRunKey(this.chronos()?.dayOf(j.id) ?? this.iso().slice(0, 10)),
+            })),
+        jobName: (id) => safeLine(this.lastGood?.schedules.find((j) => j.id === id)?.name ?? id),
+        selfJobId,
+        ...(seams.ghBin ? { ghBin: seams.ghBin } : {}),
+      }),
+      threadFor: (id) => this.threadOfJob(id),
+      alive: () => !this.stopped,
+      ...(seams.workAllowed ? { workAllowed: seams.workAllowed } : {}),
+      ...(seams.wake ? { wake: seams.wake } : {}),
+      ...(seams.secondMs ? { secondMs: seams.secondMs } : {}),
+      ...(seams.hooks ? { hooks: seams.hooks } : {}),
+    })
   }
 
   // ---- gate, queue, clocks --------------------------------------------------------------------------------------
@@ -325,6 +409,7 @@ export class ScheduleService {
   /** `final` false = superseded: the process lives on and may still finish its run, so its instance is not stamped stopped. */
   stop(final = true) {
     this.stopped = true
+    this.heartbeat.abortAll() // sources are killed by process group; a run that was in flight writes and posts nothing
     if (final) this.instances.markStopped(this.deps.instance, this.now())
     this.chronos()?.close()
     for (const k of Object.keys(this.timers) as Array<keyof typeof this.timers>) {
@@ -707,6 +792,20 @@ export class ScheduleService {
       if (sp.code === 'held') await this.noticeHeldById(id)
       return { ok: false, code: sp.code }
     }
+    // A heartbeat job never reaches the agent through here: its slot is a check the bridge runs itself (HEARTBEAT-SPEC 4). This is
+    // the one place every route to a `schedule_run` notification passes (the clock, Run now, a re-offer after an edit).
+    // Fail closed: if the job cannot be read, nobody can say it is not a heartbeat, so it is not offered to the agent either.
+    let detail: Awaited<ReturnType<SchedulerAdapter['detail']>> | undefined
+    try {
+      detail = await d.detail(id, null)
+    } catch (e) {
+      this.log('job not readable at its slot; not offered', { job: id, error: (e as Error).message })
+      await this.noticeUnreadableAtSlot(id, ds)
+      return { ok: false, code: 'schedule_invalid' }
+    }
+    if (!detail) return { ok: false, code: 'schedule_not_found' }
+    const hb = heartbeatConfigFromMeta(detail.detail.schedule.meta)
+    if (hb) return this.startHeartbeat({ id, ds, fireAt, windowEnds, trigger, again, hb, contentHash: sp.contentHash })
     const snap = this.lastGood ?? (await this.safeSnapshot())
     const job = snap.schedules.find((s) => s.id === id)
     const runId = `r_${newUlid()}`
@@ -739,6 +838,126 @@ export class ScheduleService {
       }),
     )
     return { ok: true, runId }
+  }
+
+  /**
+   * A heartbeat slot: record the offer first (so the next tick does not start it again), then claim and run it in the
+   * background. Returns at once; the run closes itself with `finish`, like a session run that reports done.
+   */
+  private startHeartbeat(a: {
+    id: string
+    ds: string | null
+    fireAt: string | null
+    windowEnds: string | null
+    trigger: 'clock' | 'run_now'
+    again: boolean
+    hb: NonNullable<ReturnType<typeof heartbeatConfigFromMeta>>
+    contentHash: string
+  }): { ok: true; runId: string } | { ok: false; code: 'schedule_invalid' } {
+    if (this.hbRunning.has(a.id)) return { ok: false, code: 'schedule_invalid' }
+    const runId = `r_${newUlid()}`
+    const o: Offer = {
+      id: a.id,
+      ds: a.ds ?? '',
+      run_id: runId,
+      fire_at: a.fireAt,
+      window_ends: a.windowEnds,
+      trigger: a.trigger,
+      again: a.again,
+      content_hash: a.contentHash,
+      instance: this.deps.instance,
+      at: this.now(),
+    }
+    if (!this.sidecar.recordOffer(o)) return { ok: false, code: 'schedule_invalid' }
+    this.hbRunning.add(a.id)
+    void this.heartbeatRun(a, runId)
+      .catch((e) => this.log('heartbeat run failed', { job: a.id, error: (e as Error).message }))
+      .finally(() => this.hbRunning.delete(a.id))
+    return { ok: true, runId }
+  }
+
+  private async heartbeatRun(a: Parameters<ScheduleService['startHeartbeat']>[0], runId: string): Promise<void> {
+    const claimed = await this.enqueue(async () => {
+      if (this.stopped) return null
+      const r = await this.adapter.claim(a.id, {
+        runId,
+        ds: a.trigger === 'run_now' ? null : a.ds,
+        fireAt: a.fireAt,
+        manual: a.trigger === 'run_now',
+        again: a.again,
+        bridgeInstance: this.deps.instance,
+      })
+      if (!r.ok) return null // another runner has it, or it is done: nothing to close
+      this.sidecar.setInflight(runId, {
+        id: a.id,
+        ds: r.ds,
+        fire_at: a.fireAt,
+        instance: this.deps.instance,
+        claimed_at: this.now(),
+      })
+      this.sidecar.setNote(
+        runId,
+        { id: a.id, ds: r.ds, status: 'running', trigger: a.trigger, started_at: this.iso() },
+        this.now(),
+      )
+      return r
+    })
+    if (!claimed) return
+    const name = this.lastGood?.schedules.find((s) => s.id === a.id)?.name ?? a.id
+    const started = this.now()
+    let out: RunOutput | null = null
+    try {
+      out = await this.heartbeat.run({
+        jobId: a.id,
+        jobName: safeLine(name),
+        runKey: claimed.ds,
+        config: 'config' in a.hb ? { config: a.hb.config, skipped: a.hb.skipped } : { problem: a.hb.problem },
+        trigger: a.trigger,
+      })
+    } catch (e) {
+      this.log('heartbeat run threw', { job: a.id, error: (e as Error).message })
+    }
+    if (out?.aborted) return // stopped mid-run: Chronos's claim is for the next bridge's orphan sweep, not for this one to close
+    const status: 'ok' | 'failed' = out ? out.status : 'failed'
+    const summary = out?.summary ?? 'Check failed'
+    const report = out?.report ?? 'The heartbeat run stopped with an error before it could report.'
+    await this.enqueue(async () => {
+      if (this.stopped) return
+      const r = await this.adapter.finish(a.id, { runId, status, report })
+      if (!r.ok) return
+      this.sidecar.closeInflight(runId, status)
+      this.sidecar.setNote(
+        runId,
+        {
+          id: a.id,
+          ds: claimed.ds,
+          status,
+          summary: summary.slice(0, 280),
+          report: excerptOf(report),
+          finished_at: this.iso(),
+          duration_s: Math.max(0, Math.round((this.now() - started) / 1000)),
+          ...(out ? { heartbeat: out.result } : {}),
+        },
+        this.now(),
+      )
+      // The run said what failed in its own words; the generic "didn't finish" notice would repeat it. Without its own
+      // line (the post itself failed), the generic notice is the only way the owner hears, so it is left to noticesFor.
+      if (status === 'failed' && out?.said && this.markAll(failKeys(a.id, runId, claimed.ds, 'failed')))
+        this.pendingAlerts.push({ kind: 'job_failed', key: `${a.id}:${claimed.ds}`.slice(0, 80) })
+      await this.refresh()
+    })
+  }
+
+  /** One plain line per job and slot when the job could not be read at its slot (it is tried again on the next tick). */
+  private async noticeUnreadableAtSlot(id: string, ds: string | null) {
+    const key = `unreadable|${id}|${ds ?? ''}`
+    if (this.sidecar.wasNotified(key) || !this.sidecar.markNotified(key, this.now())) return
+    const name = this.lastGood?.schedules.find((s) => s.id === id)?.name ?? id
+    await postSystemNotice(
+      this.ctx,
+      `Scheduled job "${safeLine(name)}" couldn't be read at its time, so it was not started. It is tried again shortly.`,
+      { thread: this.threadOfJob(id) },
+    )
   }
 
   private async noticeHeldById(id: string) {
@@ -1169,6 +1388,12 @@ export class ScheduleService {
         approved = ap ? { prompt: ap.prompt, guard: ap.guard } : null
       }
     }
+    // A heartbeat in the meta has to be one this Talos reads in full, on a job that fires at several times a day. This is the
+    // one place the agent's propose tool, the owner's schedule.patch frame and an adopt all pass through, so no card ever
+    // offers an unreadable or unknown-kind heartbeat for approval (HB1b).
+    const hbProblem = heartbeatProblemOf(change, base)
+    if (hbProblem)
+      return { ok: false, error: hbProblem, code: 'schedule_invalid', fields: [{ path: 'meta', message: hbProblem }] }
     // Only the result thread changes (a Talos-only field): Chronos has nothing to validate or write, and refuses an empty change.
     const threadOnly = isThreadOnly(split)
     if (change.op === 'update' && change.set.thread_id && !this.ctx.config.thread(change.set.thread_id))
@@ -1578,10 +1803,12 @@ export class ScheduleService {
     if (job.today === 'held')
       return this.err('held', 'The job is on hold because its files changed outside the app.', f.id)
     if (job.today === 'running') return this.err('already_running', 'That job is already running.', f.id)
-    const sessionable = job.permissions !== 'restricted' && job.kind === 'claude'
-    if (f.where === 'session' && (!sessionable || job.runner === 'both'))
+    // A heartbeat is never an agent run: Run now always means "check now", in this bridge, whatever the job's runner says.
+    const isHeartbeat = heartbeatConfigFromMeta(job.meta) !== null
+    const sessionable = isHeartbeat || (job.permissions !== 'restricted' && job.kind === 'claude')
+    if (!isHeartbeat && f.where === 'session' && (!sessionable || job.runner === 'both'))
       return this.err('schedule_read_only', "That job can't run in the live session (read-only or restricted).", f.id)
-    const inSession = job.runner === 'session' || f.where === 'session'
+    const inSession = isHeartbeat || job.runner === 'session' || f.where === 'session'
     this.runNowAt.set(job.id, this.now())
     if (inSession) {
       if (!sessionable) return this.err('schedule_read_only', "That job can't run in the live session.", f.id)
