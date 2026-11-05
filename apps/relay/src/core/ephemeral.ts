@@ -35,6 +35,8 @@ type Pending = {
   ttlMs: number
   /** Survives its socket closing (a Heartbeat test runs for minutes); the answer waits in memory for the owner's next socket. */
   keep: boolean
+  /** The device behind the asking socket, when the relay proved one (the session's own); a re-ask by the SAME device may take a kept request over. */
+  deviceId: string | null
   held?: Record<string, unknown>
 }
 
@@ -89,6 +91,7 @@ export class EphemeralRouter {
       frameId: frame.id,
       ttlMs: EPHEMERAL_TTL_MS,
       keep: false,
+      deviceId: null,
     })
     this.byFrame.set(frame.id, { rid: frame.request_id, at: h.clock.now() })
     h.sendBridge(raw)
@@ -106,12 +109,13 @@ export class EphemeralRouter {
     frameId: string,
     ttlMs = EPHEMERAL_TTL_MS,
     keep = false,
+    deviceId: string | null = null,
   ): boolean {
     this.prune()
     let mine = 0
     for (const p of this.reqs.values()) if (p.socketId === socketId) mine++
     if (mine >= EPHEMERAL_MAX_PER_SOCKET) return false
-    this.reqs.set(requestId, { socketId, at: this.h.clock.now(), want, frameId, ttlMs, keep })
+    this.reqs.set(requestId, { socketId, at: this.h.clock.now(), want, frameId, ttlMs, keep, deviceId })
     this.byFrame.set(frameId, { rid: requestId, at: this.h.clock.now() })
     return true
   }
@@ -120,6 +124,12 @@ export class EphemeralRouter {
   liveOwner(requestId: string): string | undefined {
     const p = this.reqs.get(requestId)
     return p && this.h.clock.now() - p.at <= p.ttlMs ? p.socketId : undefined
+  }
+
+  /** The device that asked a live request, or undefined (no such request, or no proven device). */
+  ownerDevice(requestId: string): string | undefined {
+    const p = this.reqs.get(requestId)
+    return p && this.h.clock.now() - p.at <= p.ttlMs ? (p.deviceId ?? undefined) : undefined
   }
 
   /** An answer from the bridge: only to the socket that asked; unknown, expired or wrong-type answers are dropped. */
@@ -175,11 +185,13 @@ export class EphemeralRouter {
   /**
    * The owner's new socket takes over a kept request whose socket is gone: the answer goes to it, at once if it already
    * came, else when it does. False when there is no such live request.
+   * `deviceId` is the asking socket's proven device; it becomes the request's device, and the caller has checked it is the same one.
    */
-  rebind(requestId: string, socketId: string): boolean {
+  rebind(requestId: string, socketId: string, deviceId: string | null = null): boolean {
     const p = this.reqs.get(requestId)
     if (!p || !p.keep || this.h.clock.now() - p.at > p.ttlMs) return false
     p.socketId = socketId
+    if (deviceId) p.deviceId = deviceId
     const held = p.held
     if (held) {
       delete p.held

@@ -10,7 +10,13 @@ export type PidRecord = { pid: number; started_at: string; instance: string }
 export type PsInfo = { lstart: string; command: string }
 export const BRIDGE_ENTRY = 'apps/bridge/src/server.ts'
 
-/** `ps -p <pid> -o lstart=,command=`: lstart is a fixed 24 characters, the command follows. Undefined when the pid is gone. */
+/** One line of `ps -o lstart=,command=`: lstart is a fixed 24 characters, the command follows. */
+export const parsePsLine = (line: string): PsInfo => ({
+  lstart: line.slice(0, 24).trim(),
+  command: line.slice(24).trim(),
+})
+
+/** `ps -p <pid> -o lstart=,command=`. Undefined when the pid is gone. */
 export function psInfo(pid: number): PsInfo | undefined {
   try {
     const r = Bun.spawnSync(['ps', '-p', String(pid), '-o', 'lstart=,command='], {
@@ -21,7 +27,7 @@ export function psInfo(pid: number): PsInfo | undefined {
     if (r.exitCode !== 0) return undefined
     const line = r.stdout.toString().replace(/\n$/, '')
     if (line.trim() === '') return undefined
-    return { lstart: line.slice(0, 24).trim(), command: line.slice(24).trim() }
+    return parsePsLine(line)
   } catch {
     return undefined
   }

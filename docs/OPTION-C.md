@@ -70,13 +70,13 @@ last `workers.status` for `ready.workers_status`, and each thread session's last
 
 ### Files shared by the bridge and the supervisor
 
-| File                                     | Writer                                              | Schema                                                                                                                                |
-| ---------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `$TALOS_APP_HOME/workers.json`           | supervisor only (atomic, 0600, heartbeat every 5 s) | `WorkersFile`; a torn or unknown-version file parses to `null` and the hub treats the supervisor as down                              |
-| `$TALOS_APP_HOME/workers/<thread>/wake`  | hub                                                 | `WakeFile`: message ids only, never content                                                                                           |
-| `$TALOS_APP_HOME/workers/<thread>/nonce` | supervisor, before each start (0600)                | the same value goes in the worker's env as `TALOS_APP_WORKER_NONCE`; the hub refuses a `hello` without it                             |
-| `$TALOS_APP_HOME/workers/<thread>/ready` | hub, on a good `hello`                              | `WorkerReady`; the supervisor's start is done when it appears                                                                         |
-| `hub.sock` lines                         | both                                                | `HubWorkerLine` (`hello`, `out`, `mod`), `HubHubLine` (`welcome`, `ack`, `refused`, `controls`); `mod` and `controls` are P1 (WP-OC5) |
+| File                                     | Writer                                              | Schema                                                                                                                                                                                                                  |
+| ---------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$TALOS_APP_HOME/workers.json`           | supervisor only (atomic, 0600, heartbeat every 5 s) | `WorkersFile`; a torn or unknown-version file parses to `null` and the hub treats the supervisor as down                                                                                                                |
+| `$TALOS_APP_HOME/workers/<thread>/wake`  | hub                                                 | `WakeFile`: message ids only, never content                                                                                                                                                                             |
+| `$TALOS_APP_HOME/workers/<thread>/nonce` | supervisor, before each start (0600)                | the same value goes in the worker's env as `TALOS_APP_WORKER_NONCE`; the hub refuses a `hello` without it                                                                                                               |
+| `$TALOS_APP_HOME/workers/<thread>/ready` | hub, on a good `hello`                              | `WorkerReady`; the supervisor's start is done when it appears                                                                                                                                                           |
+| `hub.sock` lines                         | both                                                | `HubWorkerLine` (`hello`, `out`, `mod`, `rpc`), `HubHubLine` (`welcome`, `ack`, `refused`, `controls`, `rpc_result`); `mod` and `controls` are P1 (WP-OC5); `rpc` carries the four Schedules tools ("Thread schedules") |
 
 Fixtures for all three: `packages/protocol/fixtures/option-c/`. Shared constants: `WORKER_POINTER_TEXT`,
 `WORKER_BRIDGE_TOOLS`, `WORKER_FORBIDDEN_ARGS` (`--channels`, `--dangerously-load-development-channels`, `-p`, `--bg`),
@@ -84,17 +84,17 @@ Fixtures for all three: `packages/protocol/fixtures/option-c/`. Shared constants
 
 ## The bridge (WP-OC1 and WP-OC2, PR #65)
 
-| Piece            | File                                              | What                                                                                                                                                                                                                                                                                                                           |
-| ---------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Worker mode      | `src/server.ts`, `src/instructions.ts`            | `TALOS_APP_WORKER_THREAD` set: never live (exit 2 with `TALOS_APP_BRIDGE=1` or a bad id), no channel capability, no permission relay, `WORKER_INSTRUCTIONS`                                                                                                                                                                    |
-| Tools            | `src/tools/index.ts`, `src/tools/read-inbound.ts` | `WORKER_BRIDGE_TOOLS` only; `reply`, `attach`, `card`, `set_status` refuse any other thread and name only the worker's own; `card_result` only for its own cards                                                                                                                                                               |
-| Worker transport | `src/worker/transport.ts`, `src/hub/client.ts`    | hub up: every frame goes to the hub and waits for its ack; hub down: `reply`/`card.create` over `POST /bridge/post`, nothing else                                                                                                                                                                                              |
-| Hub socket       | `src/hub/server.ts`                               | live bridge only; `hello` needs a fresh `workers.json` entry, the nonce, and a pid in the recorded pane's process group (`ps -o pgid=`); `out` frames are re-parsed, size-checked and thread-checked (`reply`, `card.create`, `card.update`, `status`, `receipt` only, no permission cards), then sent and mirrored by the hub |
-| Router           | `src/router/router.ts`                            | wraps the live bridge's notification emit. Owner `text`/`file`/`voice_note` in a dedicated thread, and `card_action` on a card that thread's worker raised, are held as `worker_routes` rows and named in the wake file. Voice calls, hooks, digests, schedules, shares and `backlog` stay with main                           |
-| Claims           | `src/worker/store.ts`                             | `inbound_claims` (`INSERT OR IGNORE`): the worker's `read_inbound` or the hub's deadline, whoever is first. Deadlines are re-armed after a bridge restart                                                                                                                                                                      |
-| Governor         | `src/router/governor.ts`                          | from main's rate limits (`five_hour`, `seven_day`); no reading = `unknown`, never blocks. Paused: parked threads fall back with `usage_governor`, live workers keep their pointers. Park-all: a `park` wake for every live worker, once per crossing                                                                           |
-| Controls         | `src/router/controls.ts`                          | `thread.session.control` → a wake with that action; the result is a `session.control.result`, stored and replayed like `session.control`                                                                                                                                                                                       |
-| Status           | `Bridge.optionCTick()` (every poll)               | `workers.status` when it changes, and on every `ready`                                                                                                                                                                                                                                                                         |
+| Piece            | File                                              | What                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker mode      | `src/server.ts`, `src/instructions.ts`            | `TALOS_APP_WORKER_THREAD` set: never live (exit 2 with `TALOS_APP_BRIDGE=1` or a bad id), no channel capability, no permission relay, `WORKER_INSTRUCTIONS`                                                                                                                                                                                                                                         |
+| Tools            | `src/tools/index.ts`, `src/tools/read-inbound.ts` | `WORKER_BRIDGE_TOOLS` only; `reply`, `attach`, `card`, `set_status` refuse any other thread and name only the worker's own; `card_result` only for its own cards                                                                                                                                                                                                                                    |
+| Worker transport | `src/worker/transport.ts`, `src/hub/client.ts`    | hub up: every frame goes to the hub and waits for its ack; hub down: `reply`/`card.create` over `POST /bridge/post`, nothing else                                                                                                                                                                                                                                                                   |
+| Hub socket       | `src/hub/server.ts`                               | live bridge only; `hello` needs a fresh `workers.json` entry, the nonce, and a pid in the recorded pane's process group (`ps -o pgid=`); `out` frames are re-parsed, size-checked and thread-checked (`reply`, `card.create`, `card.update`, `status`, `receipt` only, no permission cards), then sent and mirrored by the hub                                                                      |
+| Router           | `src/router/router.ts`                            | wraps the live bridge's notification emit. Owner `text`/`file`/`voice_note` in a dedicated thread, and `card_action` on a card that thread's worker raised, are held as `worker_routes` rows and named in the wake file. A `schedule_run` for a job of that thread is held the same way (see "Thread schedules"); voice calls, hooks, digests, heartbeat wakes, shares and `backlog` stay with main |
+| Claims           | `src/worker/store.ts`                             | `inbound_claims` (`INSERT OR IGNORE`): the worker's `read_inbound` or the hub's deadline, whoever is first. Deadlines are re-armed after a bridge restart                                                                                                                                                                                                                                           |
+| Governor         | `src/router/governor.ts`                          | from main's rate limits (`five_hour`, `seven_day`); no reading = `unknown`, never blocks. Paused: parked threads fall back with `usage_governor`, live workers keep their pointers. Park-all: a `park` wake for every live worker, once per crossing                                                                                                                                                |
+| Controls         | `src/router/controls.ts`                          | `thread.session.control` → a wake with that action; the result is a `session.control.result`, stored and replayed like `session.control`                                                                                                                                                                                                                                                            |
+| Status           | `Bridge.optionCTick()` (every poll)               | `workers.status` when it changes, and on every `ready`                                                                                                                                                                                                                                                                                                                                              |
 
 Rules the reviews added:
 
@@ -144,11 +144,28 @@ a worker never gets channels or a Telegram token. Plugins off, an empty state di
 
 Rules as built:
 
-- **Ready** = the hub's `workers/<id>/ready` file (written on a good `hello`) appears. 90 s without it, or any dialog on
-  screen while starting, stops the worker: `failed` with `start_failed` or `needs_mac`. Nothing is ever typed into a
-  dialog.
-- **Pointer**: `send-keys -l` then `Enter`, only at a screen with no dialog and only when no attached client typed in the
-  last 10 s; one line per wake batch. A worker's screen is a conversation, so a dialog needs its shape
+- **Ready** = the hub's `workers/<id>/ready` file (written on a good `hello`) appears. 90 s without it stops the worker
+  as `start_failed`. Nothing is ever typed into a dialog.
+- **A dialog on a worker's pane** (workspace trust, MCP consent, login) is watched in every state that
+  has a pane. A worker's screen is a conversation that may quote any of these words, so it counts only as a whole dialog
+  (`DialogMatcher.liveDialog`): a rule row, then the dialog's phrase and its options with exactly one `❯` cursor (numbered or not:
+  Claude's trust and MCP dialogs hide the numbers) and the footer `Enter to confirm · Esc to cancel`, in the bottom rows of
+  the screen, unchanged for 5 s. The worker's own question menu is not one. The shapes come from real Claude Code 2.1.318
+  captures (`apps/desktop/Tests/Fixtures/real-2.1.318`). A start waiting on such a dialog does not run out the 90 s ready timer. The worker is flagged needs-you (memory only, `WorkerManager.needsYou()`; the Terminals window shows the
+  badge), and its own thread gets one plain line through `talos-app post` (the same signed path main's notices use): which
+  prompt, and "open Terminals → <thread> on the Mac to answer". One line per dialog, and at most one per thread per kind of dialog in 10 minutes (kept in `workers/<id>/notice.json`, so a
+  relaunch with the same dialog still open says nothing more; a record whose dialog is gone is closed at the first settled
+  look after a relaunch and at every start). A clear failure of the post is tried three times and then shown
+  in the Mac menu; a timeout is not retried, since `talos-app post` has no message key and it may have been sent. While starting, the pane is kept for the owner and the 90 s timer waits; a dialog nobody
+  answers for 15 minutes (`dialogLimit`) stops the worker as `needs_mac`. A flagged worker is never idle-parked.
+- **A new thread folder shows Claude Code's trust prompt once.** Talos does not pre-trust folders: Claude Code applies a
+  folder's trust to every non-git folder under it, in every session, for good, and a write to its config could lose a save
+  Claude Code makes at the same moment. The prompt is the owner's to answer; the Terminals window shows the thread as
+  **Needs you**, and its thread gets the notice above.
+- **Pointer**: `send-keys -l` then `Enter`, only at a screen with no dialog, only when Claude's input line holds no draft
+  (the input box is the last pair of rule rows with a `❯` row between them, drawn `❯` + U+00A0; read from the pane with or
+  without a client attached; a draft held for 2 minutes puts one line in the thread and shows the thread as Needs you), and only when
+  no attached client typed in the last 10 s; one line per wake batch. A worker's screen is a conversation, so a dialog needs its shape
   (`DialogMatcher.workerScreen`): a selection cursor, or a line that is the login message, not one that quotes it.
 - **One copy runs workers**: the holder of `flock` on `$TALOS_APP_HOME/workers.lock`. A second copy of the app stays passive
   and writes nothing until it can take the lock.
@@ -334,6 +351,42 @@ has (its own folder, what a thread hands it); and the owner's user settings or `
 (`lead check` reports the known keys). `talos-app digest`, `post` and `inbox*` also refuse from a lead's shell; that marker
 check is a backstop (`cd /` gets past it), and the real block is the sandbox denying the Talos home. A lead can
 read what the Mac user can read outside the roots. Run `talos-app lead check` after a Claude Code update.
+
+## Thread schedules
+
+A job that runs in a thread with its own session runs in that session; main keeps everything else. One Chronos, one
+Schedules service, on main's bridge (owner decision 2026-11-05). Everything is off with the rest of Option C: a shared thread's
+jobs fire in main exactly as before.
+
+- **Routing.** The service offers a job as it always did (`schedule_run`, trust `owner`, the thread is the job's result
+  thread). The router now treats `schedule_run` like an owner message: if the thread is `dedicated`, the notification is
+  held in `worker_routes`, a wake file names the run id (the supervisor resumes a parked session, even at 3 am), and the
+  session fetches it with `read_inbound`. Claimed in time, main is never told. Not claimed within the usual deadline
+  (90 s, 120 s after a cold start), or the supervisor is down, the session failed, or the governor refuses a start: main
+  gets the same notification (`routed=fallback`) and the thread gets "Thread session didn't pick this up (…). Main answered."
+  Never both. **A heartbeat wake (`heartbeat` in its meta), a `schedule_held` notice, and a job in the default or a shared
+  thread always go to main.** A session that took a run and stopped before reporting leaves "This thread's session stopped
+  before it finished a scheduled job. Open Schedules to see how the run ended." (the run itself times out as for main).
+- **The claim protocol from the worker.** `schedule_run_start` / `schedule_run_done` in worker mode are hub requests
+  (`rpc` / `rpc_result` lines, `packages/protocol/src/thread-sessions.ts`). The hub answers as the thread the connection proved
+  at `hello` (nonce and process group); the request cannot name another. The hub only accepts a run that is routed to that
+  thread and claimed by `worker:<thread>` in `inbound_claims`; the Schedules service then does the Chronos claim exactly as
+  for main (same instance id, same time-outs and orphan sweep).
+- **Tool scope** is in docs/SCHEDULES.md S6.1 ("In a thread's own session"): list, propose, update, delete only for the
+  session's own thread, every create an owner-approved card in that thread. The rules live in
+  `apps/bridge/src/schedules/worker-scope.ts` and `ScheduleService`, so the hub, not the agent's tool wrapper, enforces them.
+- **Which jobs, which workers.** Only a plain session job (runner `session`, not a command, not a heartbeat) is handed to a
+  session; any other job of a dedicated thread is main's. A worker's `hello` carries `features: ["schedules/1"]`
+  (`HubHello`, optional and read tolerantly); a session that is connected without it (an older worker) is not handed a run, main
+  gets it with the usual note, and a parked or not-yet-connected one is assumed current. A worker whose hub refuses a hello that
+  carries `features` (an older hub's strict schema) says hello again without it.
+- **Old and new together.** An older hub ignores an `rpc` line (it is not in its schema): the worker's tool waits 60 s and
+  reports that it may or may not have run. A worker that predates this has no schedule tools, so nothing asks. Nothing in the
+  card payload changed, so an older app shows the card with its old wording and buttons.
+- **App.** Schedules is grouped by thread (docs/SCHEDULES.md S5.2a), each group saying who runs it.
+- **The worker preamble.** `WORKER_INSTRUCTIONS` now tells a thread session how to use schedules (see `WORKER_SCHEDULE_TEXT`).
+  A per-agent `WORKER.md` or the desktop supervisor's built-in preamble that says workers do not own schedules should be
+  changed to match (the supervisor's text is in `apps/desktop`).
 
 ## Work packages (numbering as in the spec, section 10)
 

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
+import { exitWithin } from '../apps/bridge/scripts/test-parallel.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const bridge = join(here, '..', 'apps', 'bridge')
@@ -75,6 +76,73 @@ test('leaves a child with our stdout', () => {
       } catch {}
     }
   }, 90_000)
+
+  it('a file that hangs inside one call is killed with its children, named, and the other files still run', () => {
+    // Atomics.wait blocks the whole process, so bun's own --timeout can never fire. The fixture writes the ids of itself and
+    // of a child it started, then waits 40 s: far longer than the 5 s file limit, short enough that a runner without the
+    // kill comes back (green, wrongly) and fails the checks below instead of leaving the process behind for good.
+    const ids = mkdtempSync(join(tmpdir(), 'tp-hang-'))
+    dirs.push(ids)
+    const [selfPid, kidPid] = [join(ids, 'self.pid'), join(ids, 'kid.pid')]
+    const hangs = `import { spawn } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
+import { test } from 'bun:test'
+test('blocks the process', () => {
+  const kid = spawn('sleep', ['60'], { stdio: 'ignore' })
+  writeFileSync(${JSON.stringify(kidPid)}, String(kid.pid))
+  writeFileSync(${JSON.stringify(selfPid)}, String(process.pid))
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40_000)
+})
+`
+    const alive = (file: string) => {
+      try {
+        process.kill(Number(readFileSync(file, 'utf8')), 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    try {
+      const r = run(
+        suite({ 'a.test.ts': PASS, 'hang.test.ts': hangs, 'c.test.ts': PASS }),
+        '--jobs',
+        '2',
+        '--file-timeout',
+        '5',
+      )
+      expect(r.code).toBe(1)
+      expect(r.out).toContain('hang.test.ts: killed, it ran past the file limit of 5 s')
+      expect(r.out).toContain('FAILED (1 of 3)')
+      expect(r.out).toContain('- hang.test.ts')
+      expect(r.out).toContain('Ran 4 tests across 3 files.') // the two other files ran to the end
+      expect(alive(selfPid)).toBe(false)
+      expect(alive(kidPid)).toBe(false)
+    } finally {
+      for (const f of [selfPid, kidPid])
+        try {
+          process.kill(Number(readFileSync(f, 'utf8')), 'SIGKILL') // by its id, so nothing is left behind
+        } catch {}
+    }
+  }, 60_000)
+
+  it('the file limit comes from --file-timeout or BUN_TEST_FILE_TIMEOUT, and a bad value is refused', () => {
+    const d = suite({ 'a.test.ts': PASS })
+    expect(run(d, '--file-timeout', '0').code).toBe(64)
+    expect(run(d, '--file-timeout', 'soon').code).toBe(64)
+    const env = (v: string) =>
+      spawnSync('bun', ['run', runner, d], { encoding: 'utf8', env: { ...process.env, BUN_TEST_FILE_TIMEOUT: v } })
+    expect(env('-3').status).toBe(64)
+    expect(env('120').status).toBe(0)
+    // above 2147483 s setTimeout overflows and fires at once, which would kill every file after 1 ms
+    expect(run(d, '--file-timeout', '2147484').code).toBe(64)
+    expect(run(d, '--file-timeout', '2147483').code).toBe(0)
+    expect(
+      spawnSync('bun', ['run', runner, '--file-timeout', '120', d], {
+        encoding: 'utf8',
+        env: { ...process.env, BUN_TEST_FILE_TIMEOUT: 'x' },
+      }).status,
+    ).toBe(0) // the flag wins
+  })
 
   it('leaves out what `bun test` leaves out', () => {
     const d = suite({
@@ -152,4 +220,17 @@ test('leaves a child with our stdout', () => {
     expect(new Set(bun).size).toBeGreaterThan(50)
     expect([...new Set(bun)].sort()).toEqual(ours.trim().split('\n'))
   }, 60_000)
+})
+
+describe('exitWithin', () => {
+  it('gives the exit code when the process ends in time, 0 included', async () => {
+    expect(await exitWithin(Promise.resolve(0), 1000)).toBe(0)
+    expect(await exitWithin(Promise.resolve(137), 1000)).toBe(137)
+  })
+
+  it('gives null when the process never ends, so a kernel wait SIGKILL cannot break does not hold a worker slot', async () => {
+    const start = Date.now()
+    expect(await exitWithin(new Promise<number>(() => {}), 50)).toBeNull()
+    expect(Date.now() - start).toBeLessThan(1000)
+  })
 })

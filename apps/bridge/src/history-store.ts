@@ -212,6 +212,12 @@ export class HistoryStore {
     }
   }
 
+  /** Removes one message (a row whose frame was never accepted). Listeners hear it as a prune: they drop what no longer exists. */
+  deleteMessage(id: string) {
+    const r = this.db.query('DELETE FROM messages WHERE id = ?').run(id)
+    if (r.changes > 0 && this.listeners.length) this.told({ op: 'prune', before_iso: new Date(0).toISOString() })
+  }
+
   setSeq(id: string, seq: number) {
     this.db.query('UPDATE messages SET seq = ? WHERE id = ?').run(seq, id)
   }

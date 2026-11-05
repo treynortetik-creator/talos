@@ -47,21 +47,69 @@ afterEach(async () => {
 })
 
 const fileFor = (path: string) => `${path.replace(/[/?&=#]/g, '_')}.json`
-/** A fake `gh`: answers from <dir>/answers/, logs every call to <dir>/calls.log. */
-function fakeGh(answers: Record<string, unknown>, opts: { signedOut?: boolean; hang?: boolean } = {}): string {
+/**
+ * A fake `gh` (a small bun script): logs every call to <dir>/calls.log and answers like GitHub's API.
+ * - `notifications`: the whole list. A request is answered the way GitHub does: only rows updated after `since` and before
+ *   `before` (both exclusive, to the second), newest first, `per_page` rows of page `page`. `opts.shift` swaps the list for another
+ *   once that many notification calls have been made, so a list can change while it is being read.
+ * - every other key is an exact path -> body (a path with no answer is a 404 and exit 1).
+ */
+function fakeGh(
+  answers: Record<string, unknown>,
+  opts: {
+    signedOut?: boolean
+    hang?: boolean
+    commitDelaySec?: number
+    shift?: { after: number; notes: unknown[] }
+  } = {},
+): string {
   const ans = join(dir, 'answers')
   mkdirSync(ans, { recursive: true })
-  for (const [path, body] of Object.entries(answers)) writeFileSync(join(ans, fileFor(path)), JSON.stringify(body))
+  const { notifications, ...exact } = answers
+  for (const [path, body] of Object.entries(exact)) writeFileSync(join(ans, fileFor(path)), JSON.stringify(body))
+  writeFileSync(join(dir, 'notifications.json'), JSON.stringify(notifications ?? []))
+  if (opts.shift) writeFileSync(join(dir, 'shift.json'), JSON.stringify(opts.shift))
   const bin = join(dir, 'gh')
   writeFileSync(
     bin,
-    `#!/bin/sh
-echo "$@" >> '${join(dir, 'calls.log')}'
-[ "$1" = api ] || { echo "unknown command" >&2; exit 2; }
-${opts.signedOut ? 'echo "To get started with GitHub CLI, please run:  gh auth login" >&2; exit 4' : ''}
-${opts.hang ? 'sleep 300' : ''}
-f="${ans}/$(printf '%s' "$2" | tr '/?&=#' '_____').json"
-if [ -f "$f" ]; then cat "$f"; else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+    `#!${process.execPath}
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+const dir = ${JSON.stringify(dir)}
+const [cmd, path = ''] = process.argv.slice(2)
+const logFile = dir + '/calls.log'
+const before = existsSync(logFile) ? readFileSync(logFile, 'utf8').split('\\n').filter((l) => l.startsWith('api notifications?per_page=50')).length : 0
+appendFileSync(logFile, process.argv.slice(2).join(' ') + '\\n')
+if (cmd !== 'api') { console.error('unknown command'); process.exit(2) }
+if (${JSON.stringify(Boolean(opts.signedOut))}) { console.error('To get started with GitHub CLI, please run:  gh auth login'); process.exit(4) }
+if (${JSON.stringify(Boolean(opts.hang))}) await Bun.sleep(300000)
+if (path.startsWith('notifications?')) {
+  const q = new URLSearchParams(path.slice('notifications?'.length))
+  if (q.get('per_page') === '1') { process.stdout.write('[]'); process.exit(0) }
+  let list = JSON.parse(readFileSync(dir + '/notifications.json', 'utf8'))
+  if (existsSync(dir + '/shift.json')) {
+    const sh = JSON.parse(readFileSync(dir + '/shift.json', 'utf8'))
+    if (before >= sh.after) list = sh.notes
+  }
+  const at = (n) => Date.parse(n.updated_at)
+  if (q.get('since')) list = list.filter((n) => at(n) > Date.parse(q.get('since')))
+  if (q.get('before')) list = list.filter((n) => at(n) < Date.parse(q.get('before')))
+  list = [...list].sort((a, b) => at(b) - at(a) || String(b.id).localeCompare(String(a.id)))
+  const per = Number(q.get('per_page') ?? 30)
+  const page = Number(q.get('page') ?? 1)
+  process.stdout.write(JSON.stringify(list.slice((page - 1) * per, page * per)))
+  process.exit(0)
+}
+if (path.startsWith('repos/') && path.includes('/commits/') && ${JSON.stringify(opts.commitDelaySec ?? 0)} > 0) {
+  // a commit lookup takes a while, and the log says how many were in flight at the same moment
+  mkdirSync(dir + '/inflight', { recursive: true })
+  writeFileSync(dir + '/inflight/' + process.pid, '')
+  appendFileSync(dir + '/inflight.log', readdirSync(dir + '/inflight').length + '\\n')
+  await Bun.sleep(${JSON.stringify((opts.commitDelaySec ?? 0) * 1000)})
+  rmSync(dir + '/inflight/' + process.pid, { force: true })
+}
+const f = dir + '/answers/' + path.replace(/[/?&=#]/g, '_') + '.json'
+if (existsSync(f)) process.stdout.write(readFileSync(f, 'utf8'))
+else { console.error('gh: Not Found (HTTP 404)'); process.exit(1) }
 `,
   )
   chmodSync(bin, 0o755)
@@ -72,6 +120,15 @@ const calls = () => {
     return readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n')
   } catch {
     return []
+  }
+}
+
+/** The most commit lookups that were running at the same moment. */
+const mostAtOnce = () => {
+  try {
+    return Math.max(...readFileSync(join(dir, 'inflight.log'), 'utf8').trim().split('\n').map(Number))
+  } catch {
+    return 0
   }
 }
 
@@ -88,7 +145,7 @@ const note = (repo: string, id: string, reason: string, title: string, over: Rec
   id,
   unread: true,
   reason,
-  updated_at: ago(1),
+  updated_at: new Date(NOW + 60_000).toISOString(), // after the first look, like a notification that came in since
   last_read_at: null,
   url: `https://api.github.com/notifications/threads/${id}`,
   subscription_url: `https://api.github.com/notifications/threads/${id}/subscription`,
@@ -125,8 +182,7 @@ const checks = (
 
 describe('github', () => {
   const answersFor = (nowNotes: unknown[], prs: unknown[], per: Record<string, [unknown, unknown]>) => ({
-    'notifications?per_page=1': [],
-    [`notifications?per_page=50&since=${encodeURIComponent(MON_1000_UTC)}`]: nowNotes,
+    notifications: nowNotes,
     'repos/acme/widgets/pulls?state=open&sort=updated&direction=desc&per_page=10': prs,
     ...Object.fromEntries(
       Object.entries(per).flatMap(([sha, [s, c]]) => [
@@ -225,6 +281,148 @@ describe('github', () => {
     expect(k.store().items[keys[1] as string].level).toBe('fyi')
     expect(out.result.items_new).toBe(3)
     expect(calls().some((c) => c.includes('sha5'))).toBe(false) // drafts are not looked at
+  })
+
+  describe('more notifications than one page', () => {
+    const at = (sec: number) => new Date(NOW + sec * 1000).toISOString()
+    /** A notification updated `sec` seconds after the first look. */
+    const mk = (id: string, sec: number, reason = 'subscribed') =>
+      note('acme/widgets', id, reason, `${reason} ${id}`, { updated_at: at(sec) })
+    const mine = (id: string, sec: number) => mk(id, sec, 'review_requested')
+    const notifCalls = () => calls().filter((c) => c.startsWith('api notifications?per_page=50'))
+    const found = () =>
+      Object.keys(k.store().items)
+        .filter((i) => i.startsWith('gh|gh:') && !i.includes('truncated'))
+        .map((i) => i.slice(6))
+        .sort()
+    const src = ghSource({ timeout_s: 20 }) // 4 s in these tests: every call starts a process
+    const cursor = () => k.store().sources.gh.cursor
+    const iso = () => new Date(clock.now()).toISOString()
+    const HOUR = 3600_000
+
+    test('120 notifications over three pages are all read', async () => {
+      const all = Array.from({ length: 120 }, (_, i) => mk(`n${i + 1}`, 3500 - i))
+      all[3] = mine('p1', 3500 - 3)
+      all[60] = mine('p2', 3500 - 60)
+      all[119] = mine('p3', 3500 - 119)
+      await start({ ghBin: fakeGh(answersFor(all, [], {})) })
+      await k.run(config([src]))
+      clock.advance(HOUR)
+      const out = await k.run(config([src]))
+      expect(out.result.items_new).toBe(3)
+      expect(found()).toEqual(['p1', 'p2', 'p3'])
+      expect(notifCalls().length).toBe(3) // a short last page ends it
+      expect(cursor()).toEqual({ since: iso() })
+    })
+
+    test('a page cap says so and leaves the cursor behind what was not read; the next look reads the rest', async () => {
+      const all = Array.from({ length: 300 }, (_, i) => mk(`n${i + 1}`, 3500 - i))
+      all[9] = mine('near', 3500 - 9)
+      all[279] = mine('far', 3500 - 279)
+      await start({ ghBin: fakeGh(answersFor(all, [], {})) })
+      await k.run(config([src]))
+      clock.advance(HOUR)
+      const runAt = iso()
+      await k.run(config([src]))
+      expect(notifCalls().length).toBe(5)
+      const truncated = k.store().items['gh|gh:notifications-truncated']
+      expect(truncated.level).toBe('fyi')
+      expect(truncated.title).toContain('5 pages')
+      expect(found()).toEqual(['near'])
+      // 5 pages of 50, each starting at the row the last one ended on, reach the 246th row: everything older is unread, and
+      // `before` is one second past that row, so a tie at its second is read again
+      expect(cursor()).toEqual({ since: MON_1000_UTC, before: at(3500 - 245 + 1), upto: runAt })
+      clock.advance(HOUR)
+      await k.run(config([src]))
+      expect(found()).toEqual(['far', 'near'])
+      expect(cursor()).toEqual({ since: iso() })
+    })
+
+    test('notifications that share a second across the cut are not skipped, and the ones read twice are not raised twice', async () => {
+      // ranks 244 to 252 all carry the same time, and the page cap (which reaches the 246th row) cuts through them
+      const tie = (i: number) => i >= 243 && i <= 251
+      const all = Array.from({ length: 300 }, (_, i) =>
+        tie(i) ? mine(`n${1000 - i}`, 3253) : mk(`n${1000 - i}`, 3500 - i),
+      )
+      const ties = all.filter((_, i) => tie(i)).map((n) => (n as { id: string }).id)
+      await start({ ghBin: fakeGh(answersFor(all, [], {})) })
+      await k.run(config([src]))
+      clock.advance(HOUR)
+      await k.run(config([src]))
+      expect(found().length).toBe(3) // the cut fell inside the tie
+      clock.advance(HOUR)
+      const out = await k.run(config([src]))
+      expect(found()).toEqual([...ties].sort())
+      expect(out.result.items_new).toBe(6) // the three read twice are the same items, not new ones
+    })
+
+    test('more than 50 act items: the answer stops at the cap, says so, and the rest come on the next looks', async () => {
+      const all = Array.from({ length: 70 }, (_, i) => mine(`a${i + 1}`, 3500 - i))
+      await start({ ghBin: fakeGh(answersFor(all, [], {})) })
+      await k.run(config([src]))
+      clock.advance(HOUR)
+      await k.run(config([src]))
+      expect(found().length).toBe(49) // one slot of the 50 is kept for the line that says so
+      expect(k.store().items['gh|gh:notifications-truncated']).toBeDefined()
+      expect(cursor()).toMatchObject({ since: MON_1000_UTC, before: at(3500 - 48 + 1) })
+      clock.advance(HOUR)
+      await k.run(config([src]))
+      expect(found().length).toBe(70)
+      expect(cursor()).toEqual({ since: iso() })
+    })
+
+    test('a list that changes between pages loses nothing', async () => {
+      const all = Array.from({ length: 120 }, (_, i) => mk(`n${i + 1}`, 3500 - i))
+      for (let i = 50; i < 55; i++) all[i] = mine(`m${i}`, 3500 - i) // ranks 51 to 55: the ones a page-number walk would skip
+      // after the first page is read, five notes from page 1 are marked read
+      const shifted = all.filter((_, i) => i < 2 || i > 6)
+      await start({ ghBin: fakeGh(answersFor(all, [], {}), { shift: { after: 1, notes: shifted } }) })
+      await k.run(config([src]))
+      clock.advance(HOUR)
+      await k.run(config([src]))
+      expect(found()).toEqual(['m50', 'm51', 'm52', 'm53', 'm54'])
+    })
+
+    test('two unread spans merge into one, and every item is found by the end', async () => {
+      const olds = Array.from({ length: 300 }, (_, i) => mk(`o${String(i).padStart(3, '0')}`, 399 - i))
+      olds[299] = mine('old-first', 100) // the oldest of the first batch
+      olds[150] = mine('old-mid', 399 - 150)
+      const news = Array.from({ length: 300 }, (_, i) => mk(`w${String(i).padStart(3, '0')}`, 7599 - i))
+      news[299] = mine('new-first', 7300)
+      news[0] = mine('new-last', 7599)
+      const all = [...olds]
+      await start({ ghBin: fakeGh(answersFor(all, [], {})) })
+      await k.run(config([src]))
+      clock.advance(2 * HOUR) // 7200 s
+      await k.run(config([src])) // reads the newest 250 of the first batch
+      expect(cursor()).toMatchObject({ since: MON_1000_UTC, upto: iso() })
+      expect(found()).toEqual(['old-mid'])
+      // 300 more arrive; the budget goes to the newer span, and the older one is still unread
+      const ans = JSON.parse(readFileSync(join(dir, 'notifications.json'), 'utf8'))
+      writeFileSync(join(dir, 'notifications.json'), JSON.stringify([...ans, ...news]))
+      clock.advance(HOUR)
+      await k.run(config([src]))
+      expect(cursor()).toMatchObject({ since: MON_1000_UTC, upto: iso() }) // one span, from the older start
+      expect(found()).toEqual(['new-last', 'old-mid'])
+      for (let i = 0; i < 3; i++) {
+        clock.advance(HOUR)
+        await k.run(config([src]))
+      }
+      expect(found()).toEqual(['new-first', 'new-last', 'old-first', 'old-mid'])
+      expect(cursor()).toEqual({ since: iso() })
+    })
+
+    test('PR lookups run side by side, a few at a time', async () => {
+      const prs = Array.from({ length: 8 }, (_, i) => pr(i + 1))
+      const per = Object.fromEntries(prs.map((p) => [`sha${p.number}`, [status(`sha${p.number}`, []), checks([])]]))
+      const bin = fakeGh(answersFor([], prs, per as never), { commitDelaySec: 0.2 })
+      await start({ ghBin: bin })
+      await k.run(config([src]))
+      const out = await k.run(config([src]))
+      expect(sourceOf(out.result, 'gh')?.ok).toBe(true)
+      expect(mostAtOnce()).toBeGreaterThan(1)
+      expect(mostAtOnce()).toBeLessThanOrEqual(6)
+    })
   })
 
   test('signed out is a source error that names the problem, never a silent slot', async () => {

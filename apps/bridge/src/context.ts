@@ -198,7 +198,10 @@ export type BridgeContext = {
   /** Problem reports (docs/ERRORS.md): the live main bridge files them; absent elsewhere. */
   problems?: import('./problems/service.ts').ProblemService
   /** Option C worker mode (docs/OPTION-C.md): this process is the named thread's own session. */
-  worker?: { thread: string }
+  worker?: {
+    thread: string /** The connection to main's hub: the Schedules tools ask main through it. */
+    hub?: import('./hub/client.ts').HubClient
+  }
   /** Live bridge only: reaches thread leads for the `handoff` tool (router.ts). */
   leads?: { unreachable(thread: string): string | undefined; deliver(): Promise<void> }
   /** Pushes a channel notification into the Claude session. A no-op in headless mode. */

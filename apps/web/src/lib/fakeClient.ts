@@ -535,9 +535,11 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
           'config_field_forbidden',
           `field ${check.path || '(patch)'} cannot be changed from the app`,
         )
-      // like the relay: trust mode (the synced config) drops these two passkey steps
+      // like the relay: trust mode (the synced config) drops these two passkey steps, except turning trust mode ON, which
+      // always asks
       if (check.touchesWorkEnabled && !trustOn(cfg)) consumeStepup(popts?.stepupToken, 'config:work')
-      if (check.stepupPurpose === 'config:session' && !trustOn(cfg)) consumeStepup(popts?.stepupToken, 'config:session')
+      if (check.stepupPurpose === 'config:session' && (check.turnsOnTrust || !trustOn(cfg)))
+        consumeStepup(popts?.stepupToken, 'config:session')
       // the bridge's per-thread patch semantics and patch-time rules (apps/bridge/src/config-file.ts)
       const effective = Array.isArray(patch.threads)
         ? { ...patch, threads: resolveThreadsPatch(cfg.threads, patch.threads) }
@@ -558,7 +560,9 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         patch,
         ...(popts?.stepupToken ? { stepup_token: popts.stepupToken } : {}),
       })
-      const next: AgentConfigT = parsed.data
+      // like the bridge: trust mode on is `true`, off is no key at all
+      const { trust_mode: tm, ...rest } = parsed.data
+      const next: AgentConfigT = tm === true ? { ...rest, trust_mode: true } : rest
       set(() => ({ config: next, threads: next.threads }))
     },
     async updateInbox(eventId, patch) {

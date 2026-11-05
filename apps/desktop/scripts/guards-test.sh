@@ -12,7 +12,7 @@ warn() { echo "  warn $1"; } # reported, never fails by default (docs/CI-LOCAL.m
 # 0a. clean tests are green
 CTL_OUT="$(mktemp)"
 if bash scripts/test.sh >"$CTL_OUT" 2>&1; then ok "control: test.sh green with the canary off"
-else bad "control: test.sh is red with the canary off"; grep -E '✘|error:|Expectation failed' "$CTL_OUT" | head -20; fi
+else bad "control: test.sh is red with the canary off"; grep -E '✘|error:|Expectation failed|^↳' "$CTL_OUT" | grep -vE '^↳ (Testing Library|Target Platform)' | head -40; fi
 rm -f "$CTL_OUT"
 # 0b. a clean build passes (selftest included)
 CTL="$(mktemp -d)"

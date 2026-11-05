@@ -126,6 +126,13 @@ const ACT_REASONS = new Set(['review_requested', 'mention', 'assign', 'security_
 /** Open PRs looked at per repo, and in all per run: each one costs two `gh` calls. */
 const PRS_PER_REPO = 10
 const PR_CHECK_BUDGET = 30
+/** PRs whose status is asked for at the same time: 30 PRs one after another took ~40 s, against a limit of 60. */
+const PR_LOOKUPS_AT_ONCE = 6
+/** Notification pages (of 50) read in one run. A run that hits it says so and picks up where it stopped. */
+const NOTIFICATION_PAGES = 5
+const NOTIFICATIONS_PER_PAGE = 50
+/** Notification items in one answer: one slot of the answer's 50 is kept for the line that says it was cut short. */
+const NOTIFICATION_ITEMS = HEARTBEAT_SOURCE_MAX_ITEMS - 1
 
 type Json = Record<string, unknown>
 const isObj = (x: unknown): x is Json => x !== null && typeof x === 'object' && !Array.isArray(x)
@@ -172,6 +179,96 @@ function htmlUrlOf(subjectUrl: string | undefined, repoUrl: string | undefined):
   return httpsOnly(repoUrl)
 }
 
+/** `fn` over `xs`, `size` at a time, results in the order of `xs`. After a failure nothing new starts; the first error is thrown once everything running has ended. */
+async function inPool<T, R>(xs: readonly T[], size: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(xs.length)
+  let next = 0
+  let failed: { e: unknown } | null = null
+  const worker = async () => {
+    while (!failed && next < xs.length) {
+      const i = next++
+      try {
+        out[i] = await fn(xs[i] as T)
+      } catch (e) {
+        failed ??= { e }
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(size, xs.length) }, worker))
+  if (failed) throw (failed as { e: unknown }).e
+  return out
+}
+
+/** Notifications updated after `since` and before `before` (GitHub's `before` leaves out the second it names), newest first. */
+type Span = { since: string; before?: string | undefined }
+/** What one run's walk over the notification list has collected, shared by the spans it walks. */
+type Walk = { seen: Set<string>; items: Answer['items']; pages: number; read: number }
+
+function notificationItem(n: unknown, repos: string[]): Answer['items'][number] | null {
+  if (!isObj(n) || !isObj(n.repository) || !isObj(n.subject)) return null
+  const reason = str(n.reason)
+  const repo = str(n.repository.full_name)
+  const id = str(n.id)
+  if (!reason || !ACT_REASONS.has(reason) || !repo || !id || !repos.includes(repo)) return null
+  return {
+    key: `gh:${id}`,
+    sig: str(n.updated_at) ?? '1',
+    title: `${repo}: ${str(n.subject.title) ?? 'a notification'}`,
+    level: 'act',
+    class: 'own',
+    why: `github.${reason}`.replace(/_/g, '-'),
+    url: htmlUrlOf(str(n.subject.url), str(n.repository.html_url)),
+    deadline: null,
+  }
+}
+
+/**
+ * Reads a span newest first, until it ends or the run's page or item limit is reached. Returns the part left unread, or null.
+ * It always asks for page 1 with `before` set one second past the oldest row so far: a walk by page number skips rows when the
+ * list changes under it (a notification gets a comment, or is read), and `before` leaves out its whole second, so a second is
+ * included again and the rows already seen are skipped by id. Whatever is not put into the answer counts as unread.
+ */
+async function walkSpan(
+  span: Span,
+  w: Walk,
+  repos: string[],
+  d: BuiltinDeps,
+  deadline: number,
+  signal: AbortSignal,
+): Promise<Span | null> {
+  const unread = (at: number | null): Span | null =>
+    at === null
+      ? { since: span.since, before: span.before }
+      : { since: span.since, before: new Date(at + 1000).toISOString() }
+  let before = span.before
+  while (w.pages < NOTIFICATION_PAGES && w.items.length < NOTIFICATION_ITEMS) {
+    const q = `notifications?per_page=${NOTIFICATIONS_PER_PAGE}&since=${encodeURIComponent(span.since)}${before ? `&before=${encodeURIComponent(before)}` : ''}`
+    const page = await ghJson(q, d, deadline, signal)
+    if (!Array.isArray(page)) throw new Error('gh notifications did not come back as a list')
+    w.pages++
+    let oldest: number | null = null
+    let fresh = 0
+    for (const n of page) {
+      const id = isObj(n) ? str(n.id) : undefined
+      if (id !== undefined) {
+        if (w.seen.has(id)) continue
+        w.seen.add(id)
+      }
+      fresh++
+      w.read++
+      const t = isObj(n) ? Date.parse(str(n.updated_at) ?? '') : Number.NaN
+      if (Number.isFinite(t)) oldest = Math.min(oldest ?? t, t)
+      const item = notificationItem(n, repos)
+      if (item) w.items.push(item)
+      if (w.items.length >= NOTIFICATION_ITEMS) return unread(Number.isFinite(t) ? t : oldest)
+    }
+    if (page.length < NOTIFICATIONS_PER_PAGE) return null
+    if (fresh === 0 || oldest === null) return unread(null) // a whole page of rows already seen, or none dated: it cannot go on
+    before = new Date(oldest + 1000).toISOString()
+  }
+  return { since: span.since, before }
+}
+
 type Ci = { red: Array<{ name: string; at: number }>; pending: boolean; total: number }
 async function prCi(repo: string, sha: string, d: BuiltinDeps, deadline: number, signal: AbortSignal): Promise<Ci> {
   const status = await ghJson(`repos/${repo}/commits/${sha}/status`, d, deadline, signal)
@@ -209,26 +306,37 @@ async function github(
     return { cursor: { since: req.now }, items: [] }
   }
   const items: Answer['items'] = []
-  const notes = await ghJson(`notifications?per_page=50&since=${encodeURIComponent(since)}`, d, deadline, signal)
-  if (!Array.isArray(notes)) throw new Error('gh notifications did not come back as a list')
-  for (const n of notes) {
-    if (!isObj(n) || !isObj(n.repository) || !isObj(n.subject)) continue
-    const reason = str(n.reason)
-    const repo = str(n.repository.full_name)
-    const id = str(n.id)
-    if (!reason || !ACT_REASONS.has(reason) || !repo || !id || !args.repos.includes(repo)) continue
-    items.push({
-      key: `gh:${id}`,
-      sig: str(n.updated_at) ?? '1',
-      title: `${repo}: ${str(n.subject.title) ?? 'a notification'}`,
-      level: 'act',
+  // The list is newest first, so a run that cannot read it all has read the NEWER part. `since` stays where it was, `before` names
+  // the span still unread, and `upto` is where the newer part starts: the next run reads both and nothing between them is missed.
+  const before = typeof req.cursor?.before === 'string' ? req.cursor.before : null
+  const upto = typeof req.cursor?.upto === 'string' ? req.cursor.upto : null
+  const backlog: Span | null = before && upto ? { since, before } : null
+  const walk: Walk = { seen: new Set(), items: [], pages: 0, read: 0 }
+  const unread: Span[] = []
+  for (const span of backlog ? [{ since: upto as string }, backlog] : [{ since }]) {
+    const rest = await walkSpan(span, walk, args.repos, d, deadline, signal)
+    if (rest) unread.push(rest)
+  }
+  items.push(...walk.items)
+  // two unread spans (the limit hit twice) become one, from the older start to the newer end: a little is read again, none is missed
+  const left: Span | undefined = unread.length
+    ? { since: unread.at(-1)?.since as string, before: unread[0]?.before }
+    : undefined
+  let truncated: Answer['items'][number] | null = null
+  if (left) {
+    const pages = `${walk.pages} ${walk.pages === 1 ? 'page' : 'pages'}`
+    truncated = {
+      key: 'gh:notifications-truncated',
+      sig: left.before ?? left.since, // the same unread boundary is said once
+      title: `GitHub notifications were cut off after ${pages} (${walk.read} read); the older ones are read at the next check`,
+      level: 'fyi',
       class: 'own',
-      why: `github.${reason}`.replace(/_/g, '-'),
-      url: htmlUrlOf(str(n.subject.url), str(n.repository.html_url)),
+      why: 'github.truncated',
       deadline: null,
-    })
+    }
   }
   let budget = PR_CHECK_BUDGET
+  const looks: Array<{ repo: string; n: number; sha: string; pr: Json }> = []
   for (const repo of args.repos) {
     if (budget <= 0) break
     const prs = await ghJson(
@@ -245,42 +353,52 @@ async function github(
       const sha = str(pr.head.sha)
       if (n === undefined || !sha) continue
       budget--
-      const ci = await prCi(repo, sha, d, deadline, signal)
-      const url = httpsOnly(str(pr.html_url))
-      const title = str(pr.title) ?? `PR ${n}`
-      // "red for 24 h" is counted from the LATEST failure: a fresh red is someone mid-work, not a stuck PR
-      const redSince = ci.red.length ? Math.max(...ci.red.map((r) => r.at)) : Number.NaN
-      if (ci.red.length && Number.isFinite(redSince) && nowMs - redSince >= DAY_MS) {
-        for (const r of ci.red)
-          items.push({
-            key: `gh:pr:${repo}#${n}:${r.name}`,
-            sig: sha,
-            title: `${repo}#${n} ${r.name} red for over 24 h: ${title}`,
-            level: 'act',
-            class: 'own',
-            why: 'github.ci-red-24h',
-            url,
-            deadline: null,
-          })
-      } else if (!ci.red.length && !ci.pending && ci.total > 0) {
-        const touched = Date.parse(str(pr.updated_at) ?? '')
-        if (Number.isFinite(touched) && nowMs - touched >= DAY_MS)
-          items.push({
-            key: `gh:pr:${repo}#${n}:green`,
-            sig: sha,
-            title: `${repo}#${n} is green and untouched for a day: ${title}`,
-            level: 'fyi',
-            class: 'own',
-            why: 'github.pr-green-24h',
-            url,
-            deadline: null,
-          })
-      }
+      looks.push({ repo, n, sha, pr })
+    }
+  }
+  const cis = await inPool(looks, PR_LOOKUPS_AT_ONCE, (l) => prCi(l.repo, l.sha, d, deadline, signal))
+  for (const [i, { repo, n, sha, pr }] of looks.entries()) {
+    const ci = cis[i] as Ci
+    const url = httpsOnly(str(pr.html_url))
+    const title = str(pr.title) ?? `PR ${n}`
+    // "red for 24 h" is counted from the LATEST failure: a fresh red is someone mid-work, not a stuck PR
+    const redSince = ci.red.length ? Math.max(...ci.red.map((r) => r.at)) : Number.NaN
+    if (ci.red.length && Number.isFinite(redSince) && nowMs - redSince >= DAY_MS) {
+      for (const r of ci.red)
+        items.push({
+          key: `gh:pr:${repo}#${n}:${r.name}`,
+          sig: sha,
+          title: `${repo}#${n} ${r.name} red for over 24 h: ${title}`,
+          level: 'act',
+          class: 'own',
+          why: 'github.ci-red-24h',
+          url,
+          deadline: null,
+        })
+    } else if (!ci.red.length && !ci.pending && ci.total > 0) {
+      const touched = Date.parse(str(pr.updated_at) ?? '')
+      if (Number.isFinite(touched) && nowMs - touched >= DAY_MS)
+        items.push({
+          key: `gh:pr:${repo}#${n}:green`,
+          sig: sha,
+          title: `${repo}#${n} is green and untouched for a day: ${title}`,
+          level: 'fyi',
+          class: 'own',
+          why: 'github.pr-green-24h',
+          url,
+          deadline: null,
+        })
     }
   }
   const rank = (i: Json) => (i.level === 'act' ? 0 : 1)
   items.sort((a, b) => rank(a) - rank(b))
-  return { cursor: { since: req.now }, items: items.slice(0, HEARTBEAT_SOURCE_MAX_ITEMS) }
+  const cursor: Record<string, unknown> = !left
+    ? { since: req.now }
+    : left.before === undefined
+      ? (req.cursor as Record<string, unknown>) // nothing names where the unread part ends: stay where it was
+      : { since: left.since, before: left.before, upto: req.now }
+  const kept = items.slice(0, HEARTBEAT_SOURCE_MAX_ITEMS - (truncated ? 1 : 0))
+  return { cursor, items: truncated ? [...kept, truncated] : kept }
 }
 
 /** The JSON text a built-in source "prints". Throws a plain Error for a source error. */

@@ -1,6 +1,6 @@
 // `/schedules` (docs/SCHEDULES.md S5.2): grouped job rows with a pause switch, the health banner, the offline cache and
 // every empty state. Times and plain words are Chronos's own; this file only lays them out.
-import { SCHEDULES_FEATURE_V2, type ScheduleT } from '@talos-app/protocol'
+import { SCHEDULES_FEATURE_V2, type ScheduleT, threadSessionMode } from '@talos-app/protocol'
 import { useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
@@ -10,12 +10,22 @@ import { Button, Sheet, SheetClose, SheetContent, SheetTitle, Switch } from '../
 import { Meander } from '../../ui/Meander.tsx'
 import { ScrollRegion } from '../../ui/ScrollRegion.tsx'
 import { prefillComposer } from '../composer/composerStore.ts'
+import { useThreadSessionsSupported, useWorkersStatus } from '../thread-sessions/store.ts'
 import { useAgentName } from '../threads/useThreads.ts'
 import { EmptyState } from './Empty.tsx'
 import { HealthBanner, OfflineBanner } from './Health.tsx'
 import { HeartbeatSection } from './heartbeat/HeartbeatRow.tsx'
 import { isHeartbeat } from './heartbeat/logic.ts'
-import { emptyKind, groupSchedules, pickBanner, type RowStatus } from './logic.ts'
+import {
+  emptyKind,
+  groupByThread,
+  jobRunnerText,
+  pickBanner,
+  type RowStatus,
+  RUNNER_WORDS,
+  type Runner,
+  runnerOf,
+} from './logic.ts'
 import { ProposalSheet } from './Proposal.tsx'
 import { CAPS, Notice, refusalWords, StatusText, useSchedTime } from './shared.tsx'
 import { refreshSchedules } from './sync.ts'
@@ -30,7 +40,17 @@ export function useTellAgent() {
   }
 }
 
-function Row({ s, onNotice }: { s: ScheduleT; onNotice: (t: string) => void }) {
+function Row({
+  s,
+  runner,
+  threadName,
+  onNotice,
+}: {
+  s: ScheduleT
+  runner: Runner
+  threadName: string
+  onNotice: (t: string) => void
+}) {
   const client = useTalosClient()
   const snap = useTalos((st) => st.schedules.snapshot)
   const t = useSchedTime(snap?.health ?? null)
@@ -64,6 +84,7 @@ function Row({ s, onNotice }: { s: ScheduleT; onNotice: (t: string) => void }) {
     .filter(Boolean)
     .join(' · ')
   const [turnOn, setTurnOn] = useState(false)
+  const who = jobRunnerText(s, runner, threadName)
 
   const toggle = async () => {
     setBusy(true)
@@ -86,6 +107,13 @@ function Row({ s, onNotice }: { s: ScheduleT; onNotice: (t: string) => void }) {
           <StatusText st={st} />
         </span>
         <span className="line-clamp-2 text-sm text-text-2">{sub}</span>
+        <span
+          className="block truncate text-sm text-text-2"
+          data-testid="row-runner"
+          data-runner={who.own ? runner : 'main'}
+        >
+          {who.text}
+        </span>
       </Link>
       {off && s.kind !== 'command' && (!s.enabled || eventsOnly) ? (
         <Switch
@@ -114,8 +142,6 @@ function Row({ s, onNotice }: { s: ScheduleT; onNotice: (t: string) => void }) {
     </li>
   )
 }
-
-const GROUP_LABEL = { today: 'Today', later: 'Later', off: 'Off' } as const
 
 export function SchedulesScreen() {
   const client = useTalosClient()
@@ -148,9 +174,28 @@ export function SchedulesScreen() {
 
   // the heartbeat is pinned above the groups, never inside them
   const hbRows = useMemo(() => snap?.schedules.filter(isHeartbeat) ?? [], [snap])
+  // grouped by the thread a job runs in: Main first, then each thread, each saying who runs its jobs
+  const config = useTalos((s) => s.config)
+  const threads = useTalos((s) => s.threads)
+  const workers = useWorkersStatus()
+  const sessionsSupported = useThreadSessionsSupported(workers)
   const groups = useMemo(
-    () => (snap ? groupSchedules({ ...snap, schedules: snap.schedules.filter((x) => !isHeartbeat(x)) }, t.now) : null),
-    [snap, t.now],
+    () =>
+      snap
+        ? groupByThread({ ...snap, schedules: snap.schedules.filter((x) => !isHeartbeat(x)) }, t.now, {
+            threads,
+            defaultThread: config?.default_thread ?? 'general',
+            runner: (id) =>
+              id === null
+                ? 'main'
+                : runnerOf({
+                    dedicated: config ? threadSessionMode(config, id) === 'dedicated' : false,
+                    supported: sessionsSupported,
+                    worker: workers?.threads.find((w) => w.thread_id === id),
+                  }),
+          })
+        : null,
+    [snap, t.now, threads, config, workers, sessionsSupported],
   )
   // "Heartbeat" in [+ New]: only when none exists and the Mac reports several-times-a-day jobs (schedules/2)
   const features = useTalos((s) => s.presence.features)
@@ -209,20 +254,35 @@ export function SchedulesScreen() {
           groups && (
             <>
               <HeartbeatSection rows={hbRows} onNotice={setNotice} />
-              {(['today', 'later', 'off'] as const).map((g) =>
-                groups[g].length === 0 ? null : (
-                  <section key={g} data-group={g} aria-labelledby={`sg-${g}`}>
-                    <h2 id={`sg-${g}`} className={cn(CAPS, 'px-4 pt-4 pb-1 text-text-2')}>
-                      {GROUP_LABEL[g]}
+              {groups.map((g) => (
+                <section
+                  key={g.key}
+                  data-group={g.key}
+                  data-runner={g.runner}
+                  aria-labelledby={`sg-${g.key}`}
+                  aria-describedby={`sr-${g.key}`}
+                  data-testid={`thread-group-${g.key}`}
+                >
+                  <div className="flex flex-wrap items-baseline gap-x-2 px-4 pt-4 pb-1">
+                    <h2 id={`sg-${g.key}`} className={cn(CAPS, 'm-0 text-text-2')} data-testid="group-name">
+                      {g.name}
                     </h2>
-                    <ul className="m-0 list-none divide-y divide-line p-0">
-                      {groups[g].map((s) => (
-                        <Row key={s.id} s={s} onNotice={setNotice} />
-                      ))}
-                    </ul>
-                  </section>
-                ),
-              )}
+                    <span
+                      id={`sr-${g.key}`}
+                      className={cn('text-sm', g.runner === 'main' ? 'text-text-2' : 'text-accent-text')}
+                      data-testid="group-runner"
+                      data-runner={g.runner}
+                    >
+                      {RUNNER_WORDS[g.runner]}
+                    </span>
+                  </div>
+                  <ul className="m-0 list-none divide-y divide-line p-0">
+                    {g.rows.map((s) => (
+                      <Row key={s.id} s={s} runner={g.runner} threadName={g.name} onNotice={setNotice} />
+                    ))}
+                  </ul>
+                </section>
+              ))}
             </>
           )
         )}

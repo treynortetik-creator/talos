@@ -208,7 +208,7 @@ export const HELP_SECTIONS: Section[] = [
           },
           {
             q: 'See the agent’s terminal',
-            where: [w('menubar', 'Show Terminal'), w('topmenu', 'Window', 'Show Terminal')],
+            where: [w('menubar', 'Terminals…'), w('topmenu', 'Window', 'Terminals…')],
           },
         ],
       },
@@ -278,7 +278,7 @@ export const HELP_SECTIONS: Section[] = [
             id: 'dialog',
             q: 'The agent is stuck on a dialog',
             steps: [
-              'A dot on the Talos icon in the Mac menu bar means something needs you. Choose [[Show Terminal]] and answer the dialog in the pane yourself.',
+              'A dot on the Talos icon in the Mac menu bar means something needs you. Choose [[Terminals…]] and answer the dialog in the pane yourself.',
               'To have Talos bring the terminal forward for you, turn on [[Open the terminal when the agent needs you]] in ((Mac settings → Session)).',
             ],
           },
@@ -313,8 +313,8 @@ export const HELP_SECTIONS: Section[] = [
               { keys: '⌘T', what: 'Show Talos', when: 'Same as above.' },
               {
                 keys: '⌘K',
-                what: 'Show Terminal',
-                when: 'The key shown beside the item in the Window menu. To be sure of it, choose Window, then Show Terminal.',
+                what: 'Terminals…',
+                when: 'The key shown beside the item in the Window menu. To be sure of it, choose Window, then Terminals….',
               },
               { keys: '⌘N', what: 'Quick compose…', when: 'Same as above.' },
               { keys: '⌘W', what: 'Close', when: 'Same as above.' },
@@ -339,7 +339,7 @@ export const HELP_SECTIONS: Section[] = [
             rows: [
               { keys: '⌘T', what: 'Show Talos', when: 'Shown beside the item in the Talos icon’s menu.' },
               { keys: '⌘N', what: 'Quick compose…', when: 'Shown beside the item in the Talos icon’s menu.' },
-              { keys: '⌘K', what: 'Show Terminal', when: 'Shown beside the item in the Talos icon’s menu.' },
+              { keys: '⌘K', what: 'Terminals…', when: 'Shown beside the item in the Talos icon’s menu.' },
               { keys: '⌘,', what: 'Settings…', when: 'Shown beside the item in the Talos icon’s menu.' },
               { keys: '⌘Q', what: 'Quit Talos', when: 'The item’s name goes on to say what happens to the agent.' },
             ],

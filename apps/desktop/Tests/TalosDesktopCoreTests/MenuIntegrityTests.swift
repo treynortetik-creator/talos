@@ -15,7 +15,7 @@ struct MenuIntegrityTests {
     ["# Edit", "Undo|z|1048576|chain", "-", "Cut|x|1048576|chain", "Paste|v|1048576|chain"],
     [
       "# Window", "Close|w|1048576|chain", "Minimize|m|1048576|chain", "-", "Show Talos|t|1048576|menu",
-      "Show Terminal|k|1048576|menu", "Permissions\u{2026}||0|menu",
+      "Terminals…|k|1048576|menu", "Permissions\u{2026}||0|menu",
     ],
     ["# Help", "Talos Help||0|menu", "Report a problem||0|menu"],
   ]

@@ -15,7 +15,7 @@ trap 'rm -f "$out"' EXIT
 TALOS_STARVATION_TESTS=1 $runner --filter 'DispatchPoolIsStarved' >"$out" 2>&1 </dev/null
 rc=$?
 if [ "$rc" -ne 0 ]; then
-  echo "  FAIL starvation tests: the test process exited $rc"; grep -E '✘|error:|Expectation failed' "$out" | head -10; exit 1
+  echo "  FAIL starvation tests: the test process exited $rc"; grep -E '✘|error:|Expectation failed|^↳' "$out" | grep -vE '^↳ (Testing Library|Target Platform)' | head -20; exit 1
 fi
 if [ "$(grep -E '^✔ Test ' "$out" | grep -vc '^✔ Test run ')" = 0 ]; then
   echo "  FAIL starvation tests: nothing ran (every test was skipped, or the filter matched none)"; tail -5 "$out"; exit 1

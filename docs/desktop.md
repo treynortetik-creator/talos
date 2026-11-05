@@ -106,32 +106,39 @@ and the Bridge line leaves "unknown". `talos-app status` and `talos-app status -
 | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | Open the app in a window                                       | Menu, **Show Talos**. Closing the window only hides it.                                                          |
 | Read Help                                                      | Menu, **Talos Help** (or Help, Talos Help at the top of the screen). It opens the Help page in the Talos window. |
-| See or type into the agent                                     | Menu, **Show Terminal**. It is the real session; closing the window does not stop the agent.                     |
+| See or type into the agent                                     | Menu, **Terminals…**. It is the real session; closing the window does not stop the agent.                        |
 | See the agent in the Talos window                              | Sidebar, **Terminal** (Mac app only). Leaving it ends only the view; the agent keeps running.                    |
 | Send a quick message from any app                              | The compose hotkey, type or dictate, Command-Return. Esc closes without sending. Change it in Hotkeys.           |
-| See a thread's own session, or answer a question it stopped on | Menu, **Show Terminal**, then the **Thread sessions** tab (below).                                               |
+| See a thread's own session, or answer a question it stopped on | Menu, **Terminals…**, then pick the thread in the sidebar (below).                                               |
 | Stop or restart the agent                                      | Menu, **Stop session** / **Restart session**. **Quit and stop the agent** also ends the session.                 |
 | Start Talos when I log in                                      | Settings, General. Off by default.                                                                               |
 | Turn the companion on                                          | Settings, **Talos on screen**, or the menu.                                                                      |
 | Update Talos                                                   | Build again and run `install.sh`; a tmux agent keeps running through it.                                         |
 | Go back to running it in Terminal                              | Menu, **Copy Terminal command**, then **Quit and stop the agent**, then paste the command in Terminal.           |
 
-## Thread sessions in the terminal window
+## The Terminals window: Main and every thread session
 
-A thread set to **Own session** runs its own Claude session in tmux. **Show Terminal** has a **Thread sessions** tab for
-those (it appears when this Mac uses the tmux host). A picker lists every thread session with its state in plain words
-(Not started, Starting, Live, Working, Parking, Parked, Needs attention) and, under it, why it stopped:
+**Terminals…** (menu bar item, or Window → Terminals…, ⌘K) is one window. The **Sessions** tab has a sidebar listing Main and
+every thread session, each with a state badge: Working, Idle, Parked, Stopping, Failed or Needs you (Main shows Live, Starting,
+Stopping or Not started). Click an entry, or press ⌘1 to ⌘9 while the window is in front, and the terminal beside the list
+switches to that tmux session. The list follows the sessions live. Switching ends only our own viewer: every session keeps
+running. The tab appears with the tmux host; with the owned-pty fallback the window shows Main's screen as before.
 
-- **Live or working:** press **Attach** to watch its pane. It is the real session; closing the window only detaches.
-- **Parked or not started:** nothing is running, so there is nothing to attach to. It starts with the next message.
-- **Needs attention because it stopped at a question only this Mac can answer:** the worker has no way to answer a trust
-  prompt, a login or a consent dialog, so it was stopped when one appeared (nothing is waiting in a pane). The tab shows
-  what the dialog said and a button, **Open claude in this folder**, which starts a plain `claude` in the thread's folder in
-  the tab. You read the dialog and answer it yourself; Talos never types into a dialog. Closing the window ends that
-  claude. Then open the thread's settings in the app and press **Restart**: that resumes the same conversation. (A message alone
-  does not start it; while the thread shows Needs attention, main answers. **Start fresh** begins a new conversation.)
+- **Live, idle, working or starting:** the terminal is that session's real pane.
+- **Needs you:** the pane is waiting on a Claude Code prompt (such as "trust this folder"). Answer it in the terminal; Talos
+  never types into a dialog. The thread also got one plain line saying so.
+- **Parked or not started:** nothing is running, so a **Resume** (or **Start**) button stands in for the terminal. It asks the
+  session to start, resuming the same conversation.
+- **Failed:** the error in words, no terminal.
 
-The menu bar's own **Thread sessions** entry comes with the settings work; this tab is the way in until then.
+The **Thread sessions** tab is still there for the one case below.
+
+- **Needs attention because it stopped at a question only this Mac can answer** (a session from before a prompt was kept for
+  you, or one nobody answered for 15 minutes): nothing is waiting in a pane. The tab shows what the dialog said and a button,
+  **Open claude in this folder**, which starts a plain `claude` in the thread's folder in the tab. You read the dialog and
+  answer it yourself. Closing the window ends that claude. Then open the thread's settings in the app and press **Restart**:
+  that resumes the same conversation. (A message alone does not start it; while the thread shows Needs attention, main
+  answers. **Start fresh** begins a new conversation.)
 
 ## When something is wrong
 

@@ -167,13 +167,20 @@ export class ConfigFile {
     const next = clearArchivedSessions(checked.config)
     const optionC = optionCPatchIssue(cur, next, this.roots)
     if (optionC) return { ok: false, code: 'thread_session_refused', message: optionC }
-    this.write(next)
+    // Trust mode is the one setting `write` keeps from the file rather than from memory. A patch that names it is the
+    // owner's signed change (the relay already asked for the passkey on `true`), so its value is written as it stands, in the
+    // same shape `talos-app trust off` leaves: on is `true`, off is no key at all.
+    if ('trust_mode' in patch) {
+      const { trust_mode: _t, ...rest } = next
+      this.write((next.trust_mode === true ? { ...rest, trust_mode: true } : rest) as AgentConfigT, true)
+    } else this.write(next)
     return { ok: true, config: this.current }
   }
 
   /**
-   * `trust_mode` is written only by `talos-app trust` (the Mac's shell), never from the copy in memory: a write made
-   * between that edit and the next reload must not put the old value back, or `trust off` would silently undo itself.
+   * `trust_mode` is written only by `talos-app trust` (the Mac's shell) or by a patch that names it (`applyPatch`), never
+   * from a stale copy in memory: a write made between that edit and the next reload must not put the old value back, or
+   * `trust off` would silently undo itself.
    */
   private write(c: AgentConfigT, fromMemory = false) {
     if (!fromMemory) {

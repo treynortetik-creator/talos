@@ -1,6 +1,10 @@
 import Foundation
 import TalosDesktopCore
 
+/// What a `talos-app post` came to. A timeout says nothing about whether the line was sent, so it is neither a success nor a
+/// failure that may be retried: a retry could post it twice.
+public enum PostOutcome: Equatable, Sendable { case sent, failed, unknown }
+
 /// Everything the supervisor reads from the machine, behind a protocol so unit tests can stub it. All reads; the only
 /// writes are `post` (a headless signed bridge call) and the signals in `GroupSignaller`.
 public protocol SystemProbe: AnyObject, Sendable {
@@ -17,6 +21,14 @@ public protocol SystemProbe: AnyObject, Sendable {
   func loginShellEnv() -> [String: String]?
   /// `talos-app post <thread> <text>` (headless; no claude, no channel poller).
   func post(command: [String], thread: String, text: String, env: [String: String]) -> Bool
+  /// `post`, with the timeout told apart. The default reads a refusal as `failed` (a probe that can't tell never says `unknown`).
+  func postOutcome(command: [String], thread: String, text: String, env: [String: String]) -> PostOutcome
+}
+
+extension SystemProbe {
+  public func postOutcome(command: [String], thread: String, text: String, env: [String: String]) -> PostOutcome {
+    post(command: command, thread: thread, text: text, env: env) ? .sent : .failed
+  }
 }
 
 public final class LiveSystem: SystemProbe, @unchecked Sendable {
@@ -68,6 +80,11 @@ public final class LiveSystem: SystemProbe, @unchecked Sendable {
 
   public func post(command: [String], thread: String, text: String, env: [String: String]) -> Bool {
     ProcessRunner.run(command + ["post", thread, text], env: env, timeout: 60).ok
+  }
+
+  public func postOutcome(command: [String], thread: String, text: String, env: [String: String]) -> PostOutcome {
+    let r = ProcessRunner.run(command + ["post", thread, text], env: env, timeout: 60)
+    return r.timedOut ? .unknown : (r.ok ? .sent : .failed)
   }
 }
 

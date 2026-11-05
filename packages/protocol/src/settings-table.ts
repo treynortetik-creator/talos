@@ -38,10 +38,18 @@ type Dotted = `${string}.${string}`
  * be ignored, leaving the phone path open. `string` (the loose row the derived lists walk) allows either.
  */
 type PathRules<P extends string> = string extends P
-  ? { readonly stepup?: SettingStepup; readonly phoneOffOnly?: string }
+  ? { readonly stepup?: SettingStepup; readonly phoneOffOnly?: string; readonly stepupOnTrue?: SettingStepup }
   : P extends Dotted
-    ? { readonly stepup?: 'config:work'; readonly phoneOffOnly?: undefined }
-    : { readonly stepup?: 'config:session'; readonly phoneOffOnly?: string }
+    ? { readonly stepup?: 'config:work'; readonly phoneOffOnly?: undefined; readonly stepupOnTrue?: undefined }
+    : {
+        readonly stepup?: 'config:session'
+        readonly phoneOffOnly?: string
+        /**
+         * A boolean the phone may write, where only `true` needs the step-up (`false` and `null` are free). Never skipped
+         * by trust mode. Read for top-level rows only; the value must be a boolean or null (`checkConfigPatch`).
+         */
+        readonly stepupOnTrue?: 'config:session'
+      }
 
 export type SettingRow<P extends string = string> = PathRules<P> & {
   /**
@@ -130,8 +138,9 @@ export const SETTINGS_TABLE = defineSettingsTable({
   // The applied theme: a stock id picked in Settings, or a custom theme the agent proposed and the owner approved on a card
   // (null over the patch = back to talos).
   theme: { phone: 'leaf', agent: true, default: undefined },
-  // Mac only: written by `talos-app trust on|off`, never by a patch or a proposal.
-  trust_mode: { phone: false, agent: false, refusedByName: true, default: undefined },
+  // The owner, not the agent: off from the app is free, on needs the passkey (the session step-up, never skipped), and
+  // `talos-app trust on|off` still works on the Mac. A proposal from the agent is refused by name.
+  trust_mode: { phone: 'leaf', agent: false, refusedByName: true, stepupOnTrue: 'config:session', default: undefined },
 } as const)
 
 type Table = typeof SETTINGS_TABLE
@@ -154,6 +163,11 @@ export const PHONE_PATCH_ENTRIES: readonly string[] = unique(
 /** Top-level fields whose change needs the session step-up. */
 export const SESSION_STEPUP_TOP_FIELDS: readonly string[] = rows
   .filter(([path, r]) => r.stepup === 'config:session' && !path.includes('.'))
+  .map(([path]) => path)
+
+/** Top-level booleans the phone may write whose `true` needs the session step-up (`false` and `null` are free). */
+export const STEPUP_ON_TRUE_TOP_FIELDS: readonly string[] = rows
+  .filter(([path, r]) => r.stepupOnTrue === 'config:session' && !path.includes('.'))
   .map(([path]) => path)
 
 /** `section.child` paths whose change needs the work step-up. */
@@ -200,6 +214,8 @@ export function settingsTableProblems(table: Readonly<Record<string, SettingRow>
     if (r.stepup === 'config:work' && (!dotted || r.phone !== 'leaf'))
       out.push(`${path}: config:work is only read on dotted rows that are phone: 'leaf'`)
     if (r.phoneOffOnly !== undefined && dotted) out.push(`${path}: phoneOffOnly is only read on top-level rows`)
+    if (r.stepupOnTrue !== undefined && (dotted || r.phone !== 'leaf'))
+      out.push(`${path}: stepupOnTrue is only read on top-level rows that are phone: 'leaf'`)
   }
   return out
 }

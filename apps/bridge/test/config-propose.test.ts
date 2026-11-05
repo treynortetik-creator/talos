@@ -663,3 +663,51 @@ describe('default_thread and notifications.show_thread_names stay the owner’s'
     expect(JSON.stringify(cfg(h))).toBe(before)
   })
 })
+
+describe('trust_mode stays out of the agent paths, now that the owner can patch it', () => {
+  // the app's config.patch is the only writer from outside the Mac: a card the agent forged, bound to trust_mode, goes
+  // through ConfigProposer.apply on approval and must fail with nothing written, trust mode on or off
+  test.each([true, false])(
+    'a forged card naming trust_mode (new value %p) is refused at apply and nothing is written',
+    async (value) => {
+      h = await start()
+      await ownerAsks(h)
+      const base = configCardCandidate({
+        cardId: 'c_01JBF3V7Q8K2M4N6P8R0S2T4V6',
+        threadId: 'general',
+        now: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        origin: 'chat',
+        baseRev: 0,
+        reason: 'forged',
+        changes: [{ path: 'agent.name', old: 'Talos', new: 'Hal' }],
+      })
+      const id = 'c_01JBF3V7Q8K2M4N6P8R0S9T9T8'
+      const payload = {
+        v: 1,
+        base_rev: 0,
+        reason: 'forged',
+        changes: [{ path: 'trust_mode', old: undefined, new: value }],
+      }
+      const card = Card.parse({ ...base, id, payload })
+      card.payload_hash = payloadHash(bindingFrom(card))
+      h.bridge.ctx.ledger.create(card, 'bridge')
+      const before = JSON.stringify(cfg(h))
+      await pushCardResolvePastRelay(h, card, card.payload_hash)
+      await eventually(() => expect((h as Harness).bridge.ctx.ledger.get(id)?.state).toBe('failed'))
+      expect(JSON.stringify(cfg(h))).toBe(before)
+      expect('trust_mode' in cfg(h)).toBe(false)
+    },
+  )
+
+  test('the direct path (trust mode on, owner asked) refuses it too', async () => {
+    h = await start()
+    await ownerAsks(h)
+    h.bridge.ctx.config.update((c) => ({ ...c, trust_mode: true }), { setsTrustMode: true })
+    const before = JSON.stringify(cfg(h))
+    const r = await propose(h, [{ path: 'trust_mode', value: false }])
+    expect(r.isError).toBe(true)
+    noCardMinted(h)
+    expect(JSON.stringify(cfg(h))).toBe(before)
+  })
+})

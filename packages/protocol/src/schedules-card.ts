@@ -50,6 +50,15 @@ export class ScheduleCardBindingError extends Error {}
 
 const ADOPT_FIELDS = ['kind', 'runner', 'permissions', 'allowed_tools', 'model'] as const
 
+/**
+ * Does this job run in a Claude session? Only a session-runner job with its permissions not restricted: a restricted job is
+ * always headless (read-only, no session), whatever its runner says. The one rule behind "own session" everywhere: which jobs a
+ * thread session may touch, which runs the router hands it, what its card says, and what the app shows.
+ */
+export function runsInSession(j: { runner: string; permissions: string }): boolean {
+  return j.runner === 'session' && j.permissions !== 'restricted'
+}
+
 export type ComposeScheduleCardOpts = {
   cardId: string
   /** Thread the card is posted in. */
@@ -73,6 +82,11 @@ export type ComposeScheduleCardOpts = {
   supersedes?: string
   /** Trust mode on at the Mac: the card is low (no passkey). Absent = the S8.2 rule, byte-identical to before. */
   trust?: boolean
+  /**
+   * The proposal came from a thread's own session (docs/OPTION-C.md "Thread schedules"): its thread's name. The card then names
+   * that session, says where the job runs, and uses the Approve / Not now buttons. Absent = the card is byte-identical to before.
+   */
+  sessionName?: string
 }
 
 type Effective = Pick<
@@ -514,6 +528,27 @@ const LABELS = {
   adopt: { title: 'Review outside change', primary: 'Approve as it is', kill: 'Keep it on hold' },
 } as const
 
+const SESSION_RUNS_IN = "This thread's own session (wakes it if parked), or Main if that session can't take it"
+const SESSION_VERB = { create: 'schedule', update: 'change', delete: 'delete', adopt: 'review' } as const
+
+/** The first line of what the job does, for the "Does" row of a thread session's card. */
+function doesLine(change: ScheduleChangeT, base: ScheduleCardBase | null): string {
+  const text =
+    change.op === 'create'
+      ? change.draft.prompt
+      : change.op === 'update'
+        ? (change.set.prompt ?? base?.prompt ?? '')
+        : (base?.prompt ?? '')
+  const line =
+    text
+      .split('\n')
+      .map((l) => l.trim())
+      .find((l) => l) ?? ''
+  const cut = line.length > 200 ? `${line.slice(0, 199)}…` : line
+  if (change.op === 'delete') return `Stops running${cut ? `: ${cut}` : ''}`.slice(0, 500)
+  return cut || 'Runs the job as it stands'
+}
+
 export function composeScheduleCard(
   change: ScheduleChangeT,
   preview: SchedulePreviewT,
@@ -540,14 +575,25 @@ export function composeScheduleCard(
     client_ref: opts.clientRef,
     preview,
   }
-  const destination = [
-    { label: 'Runs', value: preview.when_text },
-    { label: 'Next', value: preview.next_runs[0] ?? 'Not scheduled' },
-    { label: 'As', value: permissionWords(eff.permissions, eff.allowed_tools) },
-    { label: 'Where', value: runnerWords(eff.runner) },
-    { label: 'Posts to', value: opts.threadName(eff.thread_id).slice(0, 500) },
-    { label: 'Proposed by', value: opts.proposedBy === 'agent' ? opts.agentName : 'your form' },
-  ]
+  const session = opts.sessionName
+  const destination = session
+    ? [
+        // the claim is only made for a job that runs in a session; any other runner says what it really is
+        { label: 'Runs in', value: runsInSession(eff) ? SESSION_RUNS_IN : runnerWords(eff.runner) },
+        { label: 'When', value: preview.when_text },
+        { label: 'Does', value: doesLine(change, opts.base) },
+        { label: 'As', value: permissionWords(eff.permissions, eff.allowed_tools) },
+        { label: 'Posts to', value: opts.threadName(eff.thread_id).slice(0, 500) },
+        { label: 'Proposed by', value: `${session}'s session`.slice(0, 500) },
+      ]
+    : [
+        { label: 'Runs', value: preview.when_text },
+        { label: 'Next', value: preview.next_runs[0] ?? 'Not scheduled' },
+        { label: 'As', value: permissionWords(eff.permissions, eff.allowed_tools) },
+        { label: 'Where', value: runnerWords(eff.runner) },
+        { label: 'Posts to', value: opts.threadName(eff.thread_id).slice(0, 500) },
+        { label: 'Proposed by', value: opts.proposedBy === 'agent' ? opts.agentName : 'your form' },
+      ]
   const fullBody = body(change, preview, approved, opts)
   // F8: when the body is cut, the full new text still travels in the bound card (a read-only field = "Details")
   const newText = change.op === 'update' ? change.set.prompt : change.op === 'create' ? change.draft.prompt : undefined
@@ -558,7 +604,10 @@ export function composeScheduleCard(
     id: opts.cardId,
     thread_id: opts.threadId,
     kind: 'schedule',
-    title: `${labels.title}: ${eff.name}`.slice(0, 120),
+    title: (session
+      ? `${session}'s session wants to ${SESSION_VERB[change.op]} ${eff.name}`
+      : `${labels.title}: ${eff.name}`
+    ).slice(0, 120),
     destination,
     body: capBody(fullBody),
     body_format: 'plain',
@@ -574,8 +623,8 @@ export function composeScheduleCard(
         ]
       : [],
     attachments: [],
-    primary_label: labels.primary,
-    kill_label: labels.kill,
+    primary_label: session ? 'Approve' : labels.primary,
+    kill_label: session ? 'Not now' : labels.kill,
     allow_edit: false,
     allow_revise: true,
     risk: riskForTrust(opts.trust === true, 'schedule', scheduleCardRisk(change, opts.base, opts.now)),

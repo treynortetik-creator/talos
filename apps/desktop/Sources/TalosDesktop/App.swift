@@ -107,7 +107,7 @@ struct TalosApp: App {
       if let until = companion.snoozedUntil {
         Button(MacSettingsText.snoozeEntry(until: until.formatted(date: .omitted, time: .shortened))) { companion.endSnooze() }
       }
-      Button("Show Terminal") {
+      Button("Terminals…") {
         TerminalWindowController.shared.attach(model: model)
         TerminalWindowController.shared.show()
       }

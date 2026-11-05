@@ -172,6 +172,23 @@ extension Supervisor {
     }
   }
 
+  /// `talos-app post <thread> <text>` for a thread session's notice (a worker waiting on a prompt). Blocking, so callers run it
+  /// off the main thread and off the worker queue. Returns whether it was sent; a missing `talos-app` is a no, and the audit
+  /// log says which.
+  public func postToThread(_ thread: String, text: String) -> PostOutcome {
+    let (found, env) = q.sync { () -> ((command: [String]?, why: String), [String: String]) in
+      let env = launchEnv()
+      return (resolveTalosApp(env: env), env)
+    }
+    guard let cmd = found.command else {
+      q.sync { audit("worker_post_skipped", ["why": found.why, "thread": thread]) }
+      return .failed
+    }
+    let outcome = probe.postOutcome(command: cmd, thread: thread, text: text, env: env)
+    q.sync { audit("worker_post", ["result": "\(outcome)", "thread": thread]) }
+    return outcome
+  }
+
   private static func name(of r: AgentRecovery.Reason) -> String {
     switch r {
     case .crashLoop: return "crash_loop"

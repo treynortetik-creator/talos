@@ -264,11 +264,11 @@ test.describe('phone', () => {
   })
 })
 
-test('desktop and tablet: the full header, tabs and no edge swipes', async ({ page }) => {
+test('desktop and tablet: the full header, no tab strip and no edge swipes', async ({ page }) => {
   test.skip(isPhone(page), 'wide layouts only')
   await openThread(page)
   await expect(page.getByTestId('phone-header')).toHaveCount(0)
-  await expect(page.getByTestId('thread-tabs')).toBeVisible()
+  await expect(page.getByTestId('thread-tabs')).toHaveCount(0)
   await expect(page.getByTestId('session-chip')).toContainText('wk 60% used')
   const l = leftEdge(page)
   await swipe(page, l.from, l.to)

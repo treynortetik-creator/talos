@@ -1,5 +1,5 @@
-// `talos-app trust on|off|show`: trust mode is switched on this Mac only (docs/SECURITY.md "Trust mode"). No frame, no
-// config.patch and no agent tool writes it. The running bridge notices the edit and says so in the default thread.
+// `talos-app trust on|off|show`: the owner's shell route to trust mode (docs/SECURITY.md "Trust mode"). The other route is a
+// signed config.patch from the app (off is free, on needs the passkey, checked by the relay). No agent tool writes it. The running bridge notices the edit and says so in the default thread.
 import { trustOn } from '@talos-app/protocol'
 import type { BridgeEnv } from './config.ts'
 import { paths } from './config.ts'

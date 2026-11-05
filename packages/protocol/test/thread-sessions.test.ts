@@ -317,12 +317,16 @@ describe('worker constants', () => {
     expect(WORKER_POINTER_TEXT).toContain('read_inbound')
   })
 
-  it('worker tools: no thread lifecycle, inbox, schedules or voice; the locked set is a subset', () => {
+  it('worker tools: no thread lifecycle, inbox or voice; the schedule tools are there (they ask main); the locked set is a subset', () => {
     for (const n of ['create_thread', 'archive_thread', 'inbox_triage', 'inbox_raw', 'voice_progress'])
       expect(WORKER_BRIDGE_TOOLS as readonly string[]).not.toContain(n)
-    for (const n of SCHEDULE_BRIDGE_TOOLS) expect(WORKER_BRIDGE_TOOLS as readonly string[]).not.toContain(n)
+    // all four ask main's Schedules service over the hub; `schedule_propose` names a thread, so it is locked to the worker's own
+    for (const n of SCHEDULE_BRIDGE_TOOLS) expect(WORKER_BRIDGE_TOOLS as readonly string[]).toContain(n)
+    expect(WORKER_THREAD_LOCKED_TOOLS as readonly string[]).toContain('schedule_propose')
     for (const n of WORKER_THREAD_LOCKED_TOOLS) expect(WORKER_BRIDGE_TOOLS as readonly string[]).toContain(n)
-    for (const n of WORKER_BRIDGE_TOOLS.filter((x) => x !== 'read_inbound' && x !== 'handoff'))
+    for (const n of WORKER_BRIDGE_TOOLS.filter(
+      (x) => x !== 'read_inbound' && x !== 'handoff' && !(SCHEDULE_BRIDGE_TOOLS as readonly string[]).includes(x),
+    ))
       expect(BRIDGE_TOOLS as readonly string[]).toContain(n)
   })
 

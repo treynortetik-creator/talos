@@ -8,6 +8,7 @@ import {
   CLAIM_DEADLINE_MS,
   dedicatedSettings,
   type ErrorCodeT,
+  HUB_FEATURE_SCHEDULES,
   supervisorFresh,
   THREAD_SESSIONS_FEATURE,
   threadSessionMode,
@@ -36,7 +37,7 @@ import { allowsStart, type GovernorReading, governor } from './governor.ts'
 
 export type Emit = (n: Notification) => Promise<void>
 
-/** Owner notification kinds a worker can take. Voice calls, hooks, digests, schedules, shares and backlog stay with main. */
+/** Owner notification kinds a worker can take. Voice calls, hooks, digests, shares and backlog stay with main. */
 const WORKER_KINDS = new Set(['text', 'file', 'voice_note'])
 
 export type Decision =
@@ -78,6 +79,7 @@ export class ThreadRouter {
   private lastStatusKey = ''
   private parkAllSent = false
   private relayListsFeature = false
+  private readonly workerFeatures: (thread: string) => readonly string[] | undefined
   private readonly onCardUndelivered: (cardId: string, told?: false | 'unknown') => void
 
   constructor(
@@ -88,8 +90,11 @@ export class ThreadRouter {
       workers?: WorkersReader
       /** A card's decision was held for a worker and never acted on (main could not be told, or the worker stopped): the owner must hear it. */
       onCardUndelivered?: (cardId: string, told?: false | 'unknown') => void
+      /** What the connected worker for a thread can do (undefined: none connected). The hub knows; tests may not have one. */
+      workerFeatures?: (thread: string) => readonly string[] | undefined
     } = {},
   ) {
+    this.workerFeatures = opts.workerFeatures ?? (() => undefined)
     this.onCardUndelivered = opts.onCardUndelivered ?? (() => {})
     this.store = opts.store ?? new WorkerStore(ctx.store.db)
     this.workers = opts.workers ?? new WorkersReader(ctx.paths.home)
@@ -221,8 +226,19 @@ export class ThreadRouter {
       const raiser = n.meta.card_id ? this.store.cardRaiser(n.meta.card_id) : undefined
       if (!raiser) return { to: 'main' }
       thread = raiser
+    } else if (kind === 'schedule_run') {
+      // A job firing in a thread that has its own session runs there (docs/OPTION-C.md "Thread schedules"). A heartbeat wake is the
+      // bridge's own check-in and stays main's, whichever thread it posts to; so does a held notice or anything not `trust=owner`.
+      if (n.meta.trust !== 'owner' || n.meta.heartbeat !== undefined) return { to: 'main' }
+      // only a plain session job: a headless or "both" job, a command and a job nobody can read are main's
+      if (!ctx.schedules?.sessionOnly(n.meta.schedule_id ?? '')) return { to: 'main' }
     } else if (!WORKER_KINDS.has(kind) || n.meta.trust !== 'owner') return { to: 'main' }
     if (threadSessionMode(ctx.config.config, thread) !== 'dedicated') return { to: 'main' }
+    // a session that is already running and did not say it can take a scheduled run (an older worker) is not handed one: main runs it
+    if (kind === 'schedule_run') {
+      const f = this.workerFeatures(thread)
+      if (f && !f.includes(HUB_FEATURE_SCHEDULES)) return { to: 'fallback', thread, reason: 'worker_unavailable' }
+    }
     return this.reach(thread)
   }
 
@@ -338,8 +354,9 @@ export class ThreadRouter {
   private async fallback(n: Notification, thread: string, reason: ErrorCodeT) {
     const { ctx } = this
     ctx.log.info('thread session fallback', { thread, reason })
-    // main has it now: a main session that dies with it in flight must be reported (D39)
-    if (n.meta.message_id) ctx.seen.track(thread, n.meta.message_id)
+    // main has it now: a main session that dies with it in flight must be reported (D39). A scheduled run is not an owner message:
+    // the Schedules service reports a run nobody finished.
+    if (n.meta.message_id && n.meta.kind !== 'schedule_run') ctx.seen.track(thread, n.meta.message_id)
     await this.mainEmit({ content: n.content, meta: { ...n.meta, routed: 'fallback', reason } })
     try {
       await postSystemNotice(
@@ -387,6 +404,7 @@ export class ThreadRouter {
     const { ctx } = this
     const settled: string[] = []
     const report = new Map<string, string[]>()
+    const jobs = new Map<string, string[]>()
     const unfinished: string[] = []
     for (const c of this.store.openClaims()) {
       if (c.kind === 'card_action') {
@@ -407,11 +425,24 @@ export class ThreadRouter {
       }
       const e = file.threads[c.thread_id]
       if (!e || !runEnded(e, c.at)) continue
+      if (c.kind === 'schedule_run') {
+        jobs.set(c.thread_id, [...(jobs.get(c.thread_id) ?? []), c.message_id])
+        continue
+      }
       report.set(c.thread_id, [...(report.get(c.thread_id) ?? []), c.message_id])
     }
     // end the cards first: a crash between the two leaves the claim open, and the next tick tries again
     for (const id of unfinished) this.onCardUndelivered(id, 'unknown')
     this.store.settleClaims(settled, now)
+    // a scheduled run the session took and never reported on: say so (the run list shows it as it stands), never "send it again"
+    for (const [thread, ids] of jobs) {
+      this.store.settleClaims(ids, now)
+      postSystemNotice(
+        ctx,
+        "This thread's session stopped before it finished a scheduled job. Open Schedules to see how the run ended.",
+        { thread: threadRef(ctx, thread) },
+      ).catch((e) => ctx.log.warn('unfinished job notice not posted', { error: (e as Error).message }))
+    }
     for (const [thread, ids] of report) {
       this.store.settleClaims(ids, now)
       postSystemNotice(ctx, "This thread's session stopped before it answered. Send the message again to carry on.", {

@@ -26,7 +26,6 @@ import { Banners } from './Banners.tsx'
 import { ItemSheet } from './ItemSheet.tsx'
 import { StatusWord } from './StatusPill.tsx'
 import { ThreadSettings } from './ThreadSettings.tsx'
-import { ThreadTabs } from './ThreadTabs.tsx'
 import { Timeline } from './Timeline.tsx'
 import { useDescription } from './threadMeta.ts'
 import { useAgentName } from './useThreads.ts'
@@ -140,7 +139,6 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
           {/* Compact while the keyboard is up (keyboardViewport.ts, app.css): the box and the latest messages need the room. */}
           <div className="kb-hide">
             <ThreadPurpose threadId={thread.id} topic={thread.topic} />
-            <ThreadTabs />
           </div>
         </>
       )}

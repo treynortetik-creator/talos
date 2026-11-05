@@ -158,6 +158,14 @@ export class ConfigProposals {
     })
     const v = verifyConfigPayload(candidate.payload, cur)
     if (!v.ok) return { ok: false, text: `Nothing was changed: ${v.error}` }
+    // The agent never writes trust_mode, whatever a card or a direct call says: the app's config.patch (with the passkey
+    // checked by the relay) and `talos-app trust` are the only writers. applyPatch accepts the field for the owner's patch,
+    // so this is the explicit second layer behind the payload schema.
+    if ('trust_mode' in v.patch)
+      return {
+        ok: false,
+        text: "Nothing was changed: trust_mode can't be changed by you. The owner changes it in Settings.",
+      }
     const r = ctx.config.applyPatch(cur.rev, v.patch, ctx.clock.now())
     if (!r.ok) return { ok: false, text: `Your Mac didn't accept it: ${r.message}. Nothing was changed.` }
     await ctx.transport
@@ -246,6 +254,11 @@ export class ConfigProposals {
     if (!v.ok) {
       if (!v.stale) ctx.log.security('config card refused at apply', { card: cardId })
       return this.end(row, cardId, false, v.error)
+    }
+    // the agent never writes trust_mode (see applyDirect): the explicit layer behind the payload schema
+    if ('trust_mode' in v.patch) {
+      ctx.log.security('config card naming trust_mode refused at apply', { card: cardId })
+      return this.end(row, cardId, false, "trust_mode is the owner's to change, in Settings. Nothing was changed.")
     }
     const r = ctx.config.applyPatch(cur.rev, v.patch, ctx.clock.now())
     if (!r.ok) {

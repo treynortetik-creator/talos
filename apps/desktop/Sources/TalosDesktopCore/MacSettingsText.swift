@@ -103,7 +103,7 @@ public enum MacAbout {
 /// What Import and Adopt say (U6, U7).
 public enum SetupText {
   public static let importSaved =
-    "Saved. Your launch command is now your setup. Starting the session; if Claude asks you to confirm anything, answer it in Show Terminal in the menu bar item."
+    "Saved. Your launch command is now your setup. Starting the session; if Claude asks you to confirm anything, answer it in Terminals… in the menu bar item."
   /// Import that did not start the session (it was refused, see the menu bar item).
   public static let importSavedNotStarted =
     "Saved. Your launch command is now your setup. Nothing has started yet: choose Start session in the menu bar item when you are ready."

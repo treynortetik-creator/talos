@@ -8,7 +8,7 @@ public struct CompanionTray: Equatable, Sendable {
   public enum Action: Equatable, Sendable {
     /// Open this thread in Talos: `web.show()` then `navigate("/t/<id>")`.
     case thread(String)
-    /// The Mac session itself: Show Terminal.
+    /// The Mac session itself: Terminals….
     case terminal
   }
   public struct Row: Equatable, Sendable {

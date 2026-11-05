@@ -89,10 +89,8 @@ for (const scheme of ['light', 'dark'] as const) {
       await inside(page.getByRole('button', { name: 'Send', exact: true }), page, 'send button')
       await inside(page.getByRole('button', { name: 'Attach' }), page, 'attach button')
       await inside(page.getByRole('button', { name: 'Remove IMG_8114.png' }), page, 'chip')
-      // the room goes to the box and the thread: the phone has no tab strip at all (the left menu lists the threads);
-      // a wide screen has one, and the keyboard hides it
-      if ((page.viewportSize()?.width ?? 0) < 768) await expect(page.getByTestId('thread-tabs')).toHaveCount(0)
-      else await expect(page.getByTestId('thread-tabs')).toBeHidden()
+      // the room goes to the box and the thread: there is no tab strip at any width (the thread list is the left menu)
+      await expect(page.getByTestId('thread-tabs')).toHaveCount(0)
       await expect.poll(async () => (await page.getByTestId('timeline').boundingBox())?.height ?? 0).toBeGreaterThan(40)
       await page.screenshot({ path: shot(`keyboard-chip-${scheme}`, info.project.name) })
       await keyboard(page, 0)

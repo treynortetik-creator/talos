@@ -42,7 +42,7 @@ while IFS= read -r name; do
   rc=$?
   summary="$(grep -E 'Test run with [0-9]+ tests? ' "$out" | tail -1)"
   if [ "$rc" -ne 0 ]; then
-    echo "  FAIL $name: the test process exited $rc"; grep -E '✘|error:|Expectation failed' "$out" | head -10; fail=1
+    echo "  FAIL $name: the test process exited $rc"; grep -E '✘|error:|Expectation failed|^↳' "$out" | grep -vE '^↳ (Testing Library|Target Platform)' | head -20; fail=1
   elif [ -z "$summary" ]; then
     echo "  FAIL $name: the process exited 0 but never printed the run summary (it ended early)"; tail -5 "$out"; fail=1
   elif ! printf '%s' "$summary" | grep -q ' passed '; then

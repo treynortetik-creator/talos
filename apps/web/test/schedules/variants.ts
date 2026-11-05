@@ -219,7 +219,36 @@ export const REPORTS: Record<string, Record<string, string>> = {
   heartbeatPartial: { r_01JBF3V7Q8K2M4N6P8R0S2T4HB: HB_REPORT_PARTIAL },
 }
 
+/** Jobs that run in a thread (docs/OPTION-C.md "Thread schedules"): the trip and garden threads, a shared thread, and Main's. */
+const inThread = (id: string, name: string, thread: string | null, over: Partial<ScheduleT> = {}) =>
+  job({
+    id,
+    name,
+    thread_id: thread,
+    when_text: 'Weekdays at 8:00 AM',
+    today: 'not_due',
+    wait_reason: null,
+    window_ends: null,
+    next_run: '2026-10-06T08:00:00-04:00',
+    ...over,
+  })
+
 export const VARIANTS = {
+  /** Jobs in two threads with their own sessions, one shared thread and Main. */
+  byThread: () =>
+    snap({
+      health: health(),
+      schedules: [
+        ranToday,
+        inThread('packing-check', 'Packing check', 'trip'),
+        inThread('hotel-watch', 'Hotel watch', 'trip', { enabled: false }),
+        inThread('trip-backup', 'Trip backup', 'trip', { runner: 'headless' }),
+        inThread('trip-both', 'Trip both', 'trip', { runner: 'both' }),
+        inThread('water-plants', 'Water plants', 'garden'),
+        inThread('rota-nudge', 'Rota nudge', 'shared_one'),
+        inThread('gone-thread-job', 'Orphan job', 'archived_one'),
+      ],
+    }),
   /** The fixture as it is: three jobs, `session_runner_conflict` (stuck). */
   stuck: () => base,
   healthy: () =>

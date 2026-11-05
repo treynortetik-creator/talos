@@ -52,7 +52,7 @@ public enum AppMenuSpec {
       Item(.closeWindow, "Close", key: "w"),
       Item(.minimize, "Minimize", key: "m"), nil,
       Item(.showTalos, "Show Talos", key: "t"),
-      Item(.showTerminal, "Show Terminal", key: "k"),
+      Item(.showTerminal, "Terminals…", key: "k"),
       Item(.quickCompose, "Quick compose\u{2026}", key: "n"), nil,
       Item(.companionToggle, "Show Companion"),
       Item(.signIn, "Sign in\u{2026}"),

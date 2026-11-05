@@ -58,7 +58,7 @@ an ordinary edit. Anything else in that file needs the owner. Start with [`AGENT
   `config-propose.ts` (`AGENT_CONFIG_VALUE`, `AGENT_CONFIG_LABEL`) and a reader in `CONFIG_READER` (what `readConfigPath` uses); all three are
   records keyed by the agent rows, so `pnpm typecheck` fails until you add them. Keep `refusedByName` on a setting the agent should be told is the owner's to change.
 - A rename in Settings (agent name, owner name, timezone, quiet hours) reaches the agent at its next session start: the kit's session-start hook reads `config.json` and prints an identity block, so `CLAUDE.md` is not rewritten.
-- `trust_mode` stays Mac only (`talos-app trust on|off`).
+- `trust_mode` is the owner's: `talos-app trust on|off` at the Mac, or the Settings switch (off is free, on needs the passkey). The agent can never change it.
 - The screen: `apps/web/src/features/settings/SettingsScreen.tsx` and `sections.tsx`. The voice picker is in
   `apps/web/src/features/voice/index.tsx`.
 - Bridge side: `apps/bridge/src/config-file.ts` reads and writes the file. Before each write it saves the file as it was to

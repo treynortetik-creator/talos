@@ -82,10 +82,13 @@ final class SupervisorController: ObservableObject {
     supervisor = sup
     workers = Self.makeWorkers(cfg: cfg, env: env, probe: probe, mainPid: { sup.status.childPid ?? 0 }, current: { sup.currentConfig() })
     box.manager = workers
+    // a worker stuck on a prompt gets one line in its own thread, through the same signed `talos-app post` main's notices use
+    workers?.postNotice = { [weak sup] thread, text in sup?.postToThread(thread, text: text) ?? .failed }
     status = supervisor.status
     // Before setup the file doesn't exist and the supervisor would start from the defaults: hand it the held values.
     if !start.hasFile { sup.updateConfig(cfg) }
     supervisor.onEvent = { [weak self] e in Task { @MainActor in self?.handle(e) } }
+    workers?.onEvent = { [weak self] e in Task { @MainActor in self?.handleWorker(e) } }
     refresh = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in
         guard let self else { return }
@@ -187,6 +190,17 @@ final class SupervisorController: ObservableObject {
       case .crashedNoAutoRestart: notice = SupervisorNotice.crashedNoRestart
       default: break
       }
+    default: break
+    }
+  }
+
+  /// What the menu says about a thread session. The thread's own line goes out through `postNotice`; this is the Mac's side.
+  func handleWorker(_ e: WorkerManager.Event) {
+    switch e {
+    case .needsYou(let thread, let prompt):
+      notice = "\(SupervisorNotice.needsYou): the \(thread) session is waiting on a '\(prompt)' prompt. Open Terminals…"
+    case .noticeFailed(let thread):
+      notice = "Couldn't tell the \(thread) thread its session is waiting on a prompt. Open Terminals… to answer it."
     default: break
     }
   }

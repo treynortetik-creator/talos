@@ -63,6 +63,10 @@ async function openSchedules(page: Page) {
 }
 
 const row = (page: Page, id: string) => page.getByTestId(`schedule-row-${id}`)
+// The list is grouped by the thread a job runs in; a job with no thread (or the default one) is in Main's group.
+const MAIN = '__main__'
+const inGroup = (page: Page, key: string, id: string) =>
+  page.getByTestId(`thread-group-${key}`).getByTestId(`schedule-row-${id}`)
 
 /** The agent's side of a fired job (S6.2): claim, hand the job to a sub-agent, post the result, finish. */
 async function runAsAgent(
@@ -134,7 +138,7 @@ test('happy path: created from chat, approved with step-up, fires on the clock, 
   await openSchedules(page)
   await expect(row(page, 'commit-digest')).toContainText('Pending')
   await expect(row(page, 'commit-digest')).toContainText(/Every day at \d{1,2}:\d\d [AP]M/)
-  await expect(page.locator('section[data-group="today"]')).toContainText('Commit digest')
+  await expect(inGroup(page, MAIN, 'commit-digest')).toContainText('Commit digest')
 
   // The fire time passes on Chronos's clock; the live bridge's 60 s runner loop offers it to the session.
   const t0 = Date.now()
@@ -197,9 +201,10 @@ test('list: Chronos jobs in groups with their words; pause and resume are signed
 
   await expect(row(page, 'standup-prep')).toContainText('Pending')
   await expect(row(page, 'standup-prep')).toContainText(`next`)
-  await expect(page.locator('section[data-group="today"]')).toContainText('Standup prep')
-  await expect(page.locator('section[data-group="off"]')).toContainText('Old report')
-  await expect(row(page, 'old-report')).toContainText('Off')
+  await expect(inGroup(page, MAIN, 'standup-prep')).toContainText('Standup prep')
+  // a paused job stays in its thread's group and says Off on its own row (there is no separate off section)
+  await expect(inGroup(page, MAIN, 'old-report')).toContainText('Old report')
+  await expect(inGroup(page, MAIN, 'old-report')).toContainText('Off')
   // the words under the name are Chronos's own (chronos list), not computed in the app
   await expect(row(page, 'standup-prep')).toContainText(mac.listedWhenText('standup-prep'))
 

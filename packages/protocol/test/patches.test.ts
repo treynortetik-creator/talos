@@ -44,7 +44,11 @@ describe('applyMergePatch (RFC 7386 appendix A vectors)', () => {
 describe('checkConfigPatch', () => {
   it('accepts every top-level entry of the allowlist', () => {
     for (const k of CONFIG_PATCH_ALLOWLIST.filter((e) => !e.includes('.'))) {
-      expect(checkConfigPatch({ [k]: {} }), k).toMatchObject({ ok: true, touchesWorkEnabled: false })
+      // trust_mode is a boolean: an object there is refused on purpose (trust-toggle.test.ts)
+      expect(checkConfigPatch({ [k]: k === 'trust_mode' ? false : {} }), k).toMatchObject({
+        ok: true,
+        touchesWorkEnabled: false,
+      })
     }
     expect(checkConfigPatch({ quiet_window: null, timezone: 'UTC', default_thread: 'general' })).toMatchObject({
       ok: true,

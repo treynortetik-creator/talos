@@ -31,5 +31,5 @@ export async function threadSwitcher(page: Page) {
     await openPhoneMenu(page)
     return page.getByTestId('phone-menu').getByRole('navigation', { name: 'Threads' })
   }
-  return page.getByRole('navigation', { name: 'Threads' })
+  return page.getByRole('navigation', { name: 'Primary' }) // the sidebar's list (the tab strip under the header is gone)
 }

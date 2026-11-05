@@ -32,17 +32,24 @@ describe('trust_mode in the config', () => {
   })
 })
 
-describe('nobody but the Mac writes trust_mode', () => {
-  it('is on neither allowlist and a patch naming it is refused', () => {
-    expect(CONFIG_PATCH_ALLOWLIST as readonly string[]).not.toContain('trust_mode')
+describe('who writes trust_mode', () => {
+  it('the owner may patch it from the app, the agent may not propose it', () => {
+    expect(CONFIG_PATCH_ALLOWLIST as readonly string[]).toContain('trust_mode')
     expect(AGENT_CONFIG_ALLOWLIST as readonly string[]).not.toContain('trust_mode')
     expect(AGENT_CONFIG_REFUSED as readonly string[]).toContain('trust_mode')
-    expect(checkConfigPatch({ trust_mode: true }).ok).toBe(false)
-    expect(checkConfigPatch({ trust_mode: false }).ok).toBe(false)
   })
-  it('an agent proposal for it is refused', () => {
-    const r = resolveConfigChanges([{ path: 'trust_mode', value: true }], AgentConfig.parse(defaultConfig))
-    expect(r.ok).toBe(false)
+  it('turning it on from the app needs the session step-up; off does not', () => {
+    const on = checkConfigPatch({ trust_mode: true })
+    expect(on).toMatchObject({ ok: true, stepupPurpose: 'config:session', turnsOnTrust: true })
+    const off = checkConfigPatch({ trust_mode: false })
+    expect(off).toEqual({ ok: true, touchesWorkEnabled: false })
+  })
+  it('an agent proposal for it is refused, by name', () => {
+    for (const value of [true, false]) {
+      const r = resolveConfigChanges([{ path: 'trust_mode', value }], AgentConfig.parse(defaultConfig))
+      expect(r.ok).toBe(false)
+      expect(JSON.stringify(r)).toContain("trust_mode can't be changed by you")
+    }
   })
 })
 

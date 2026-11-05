@@ -618,14 +618,14 @@ struct FirstRunHomesTests {
     #expect(FirstRun.trust(setupDone: true, confirmedAt: "2026-11-01T10:00:00Z") == true)
     let rows = FirstRun.rows(.init(agentDirTrusted: FirstRun.trust(setupDone: true, confirmedAt: nil), home: home, setupDone: true))
     guard case .fix(let fix)? = rows.first(where: { $0.id == "trust" })?.state else { Issue.record("fix row reachable"); return }
-    #expect(fix.contains("Show Terminal") && fix.contains("Start session"), "it names the real controls: \(fix)")
+    #expect(fix.contains("Terminals…") && fix.contains("Start session"), "it names the real controls: \(fix)")
     let before = FirstRun.rows(.init(home: home, setupDone: false)).first { $0.id == "trust" }
     if case .unknown(let m)? = before?.state { #expect(m.contains("first step above")) } else { Issue.record("waits for setup") }
   }
 
   @Test func importSaysItSavedAndThatItIsStarting() {
     #expect(SetupText.importSaved.hasPrefix("Saved."))
-    #expect(SetupText.importSaved.contains("Starting") && SetupText.importSaved.contains("Show Terminal"))
+    #expect(SetupText.importSaved.contains("Starting") && SetupText.importSaved.contains("Terminals…"))
     #expect(!SetupText.importSaved.contains("Nothing has started"))
     #expect(SetupText.importSavedNotStarted.contains("Nothing has started") && SetupText.importSavedNotStarted.contains("Start session"))
     #expect(SetupText.importNotSaved(path: "/home/alex/x/desktop.json").contains("Couldn't save"))

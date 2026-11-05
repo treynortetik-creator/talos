@@ -203,9 +203,13 @@ struct WorkerManagerTests {
     #expect(r.entry("trip")?.session_id != sid)
   }
 
-  @Test func aDialogAtStartIsNeedsMacAndNothingIsTyped() throws {
-    let r = try WorkerRig(scenario: "trust-dialog.sh")
+  @Test func aDialogNobodyAnswersAtStartEndsAsNeedsMacAndNothingIsTyped() throws {
+    let r = try WorkerRig(scenario: "worker-real.sh", extraEnv: ["FAKE_REAL_START": "trust"])
     defer { r.teardown() }
+    r.mgr.tune {
+      $0.dialogLimit = 1.5
+      $0.dialogSettle = 0.5
+    }  // nobody answers it here; the pane is kept for the owner until this limit
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(10) { r.state("trip") == "failed" })

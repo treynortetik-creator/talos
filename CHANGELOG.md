@@ -1,5 +1,20 @@
 # Changelog
 
+## Thread row menu and trust mode toggle
+
+- Each thread in the sidebar (and each row of the Threads list on a phone) now has a "..." at its right end that opens that thread's settings: name, icon, color, notifications and, where it applies, Own session with Park now, Restart and Start fresh. It shows on hover or keyboard focus with a mouse and always on touch; it never opens the thread, and Schedules (not a thread) has none. General and Inbox get settings without an Own session section. The pencil at the top of the list stays for reordering and renaming.
+- Trust mode is now a switch in Settings, Account. Turning it off needs nothing. Turning it on asks for your passkey (the same step as permission settings), checked by the relay, and the relay asks even if it believes trust mode is already on. The agent still cannot change it. `talos-app trust on|off` still works on the Mac, and the note the Mac posts in your thread on every change now also names Settings as a way back. An older relay or Mac that does not know the setting refuses it in words and nothing changes; an older app is unaffected.
+
+## Terminals window: switch between sessions
+
+- **Terminals…** (menu bar item and the Window menu, ⌘K) is now one window with a sidebar: Main and every thread session, each with a state badge (Working, Idle, Parked, Stopping, Failed, Needs you). Click an entry, or press ⌘1 to ⌘9 while the window is up, and the terminal beside it switches to that session. A parked thread shows a Resume button instead of an empty terminal, and a failed one shows its error. The list follows the sessions live as they start, park and stop. It replaces "Show Terminal".
+- A thread session that stops at a Claude Code prompt (such as "trust this folder") no longer waits unseen. Its entry shows Needs you and its own thread gets one plain line saying which prompt and where to answer it. The session stays up so you can answer it in the Terminals window, and a prompt nobody answers for 15 minutes still ends the start as before.
+- A thread given its own folder shows Claude Code's trust prompt once, the first time it starts there. The Terminals window shows that thread as Needs you, and you answer the prompt in it. Talos does not pre-trust folders: Claude Code applies a folder's trust to everything under it, for good.
+
+## Thread schedules
+
+- A thread with its own session now owns its schedules: its jobs fire in that session (waking it if it is parked), its session can propose, change and delete jobs for its own thread only (each one an approval card in that thread that reads "<Thread>'s session wants to schedule …", with Approve / Not now), and Schedules is grouped by thread with a line saying who runs each group; a job whose session is down falls back to Main with a plain note, and the heartbeat and every other job stay Main's. See docs/OPTION-C.md "Thread schedules".
+
 ## Heartbeat test
 
 - Your Mac now answers the Heartbeat test: it acks at once, really runs the sources (a dry run that writes, posts and wakes nothing, with the same time limits and the same kill of anything left running), and sends back what each source found and what would wake the agent or post. It lists `heartbeat/1`, so the app's Test sheet and Turn on work. Settings that fail the strict check are refused in plain words, testing "with the agent" is refused until it exists, and one test runs at a time. In shadow mode the test says the heartbeat would only record and shows what live mode would do, and a test that breaks partway still reports the sources that answered.
@@ -315,8 +330,8 @@
 
 ## The Mac app has a Terminal item that shows the agent inside the Talos window
 
-- In the Mac app, the sidebar now has **Terminal**, next to Search, Memory and Settings. It shows the agent's live terminal inside the Talos window, so you can watch it and type to it without opening **Show Terminal**. It is the same session: leaving the item or closing the Talos window ends only the view, and the agent keeps running in the background. The item does not exist in a browser or on the phone, and the Terminal screen is not a relay route: nothing the terminal shows or types goes to the relay.
-- The separate **Show Terminal** window works as before. If both are open they are two views of one session, and the agent's screen takes the size of the view you opened, resized or typed in last. If the agent is starting you see the same note the window shows until it is up; if it stopped you see its last screen. A Mac without tmux 3.2 or newer says so in the view and points to **Show Terminal**.
+- In the Mac app, the sidebar now has **Terminal**, next to Search, Memory and Settings. It shows the agent's live terminal inside the Talos window, so you can watch it and type to it without opening **Terminals…**. It is the same session: leaving the item or closing the Talos window ends only the view, and the agent keeps running in the background. The item does not exist in a browser or on the phone, and the Terminal screen is not a relay route: nothing the terminal shows or types goes to the relay.
+- The separate **Terminals…** window works as before. If both are open they are two views of one session, and the agent's screen takes the size of the view you opened, resized or typed in last. If the agent is starting you see the same note the window shows until it is up; if it stopped you see its last screen. A Mac without tmux 3.2 or newer says so in the view and points to **Terminals…**.
 - The view shows only when the window has room for 80 columns and 24 rows, so it never squeezes the agent's own screen (tmux keeps the size a viewer gave it, and a very narrow screen hides the dialog the app needs to confirm a restart). Below that, the page says so. A page message never gives the view the keyboard: you click in it to type. The view closes while a sheet or dialog is open, and when you sign out. A page the relay controls could still show the view; it cannot read or type into it (`docs/SECURITY.md`).
 - Needs the matching Mac app. An older Mac app shows the Terminal item with a line saying to update it, and nothing else.
 - Tried: the page and its messages in tests and a browser, and the Mac app's rules for where the terminal goes. Not tried on screen: the terminal over the real window, typing into it, resizing it, or two views at once.

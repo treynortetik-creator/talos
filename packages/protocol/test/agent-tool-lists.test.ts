@@ -49,9 +49,21 @@ describe('agent tool name lists', () => {
       'set_status',
       'list_threads',
       'read_thread',
+      'schedules_list',
+      'schedule_propose',
+      'schedule_run_start',
+      'schedule_run_done',
       'read_inbound',
       'handoff',
     ])
-    expect([...WORKER_THREAD_LOCKED_TOOLS]).toEqual(['reply', 'attach', 'card', 'set_status', 'read_thread', 'handoff'])
+    expect([...WORKER_THREAD_LOCKED_TOOLS]).toEqual([
+      'reply',
+      'attach',
+      'card',
+      'set_status',
+      'read_thread',
+      'schedule_propose',
+      'handoff',
+    ])
   })
 })

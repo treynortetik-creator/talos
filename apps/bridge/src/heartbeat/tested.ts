@@ -142,3 +142,23 @@ export function testRequiredProblem(
   }
   return hasFreshPass(home, hash, nowMs) ? null : `${TEST_REQUIRED} (Schedules, Heartbeat, Test). Nothing was saved.`
 }
+
+/**
+ * Run now on a heartbeat (docs/HEARTBEAT.md "A test before turning on"): the words to refuse with, or null. Run now on a heartbeat
+ * that is switched OFF would otherwise be a way round the gate on turning it on: it reads the sources and, in live mode, wakes the
+ * agent and posts. So a disabled heartbeat is held to the same rule as enabling it: its exact settings need a fresh passing test.
+ * A job that is on keeps running by hand (existing heartbeats keep running), and shadow mode only records, so it runs freely.
+ * Settings that cannot be read in full are not shadow: they need the test, and no test can match them.
+ */
+export function runNowProblem(home: string, nowMs: number, job: { enabled: boolean; meta?: unknown }): string | null {
+  if (job.enabled) return null
+  const raw = rawOf(job.meta)
+  if (raw === undefined) return null
+  try {
+    if (HeartbeatConfig.parse(raw).mode === 'shadow') return null
+    if (hasFreshPass(home, heartbeatConfigHashOf(raw), nowMs)) return null
+  } catch {
+    // unreadable settings: fall through to the refusal
+  }
+  return `${TEST_REQUIRED} (Schedules, Heartbeat, Test) before Run now on a heartbeat that is off.`
+}

@@ -37,9 +37,46 @@ const cardArgs = (kind: string, risk: 'low' | 'high') => ({
   destination: [{ label: 'To', value: 'somewhere' }],
 })
 
-describe('nobody but the Mac switches it', () => {
-  test.each([{ trust_mode: true }, { trust_mode: false }, { trust_mode: null }])(
-    'a signed config.patch %j is config_field_forbidden and the file is untouched',
+describe('who switches it: the owner, from the Mac or from the app; never the agent', () => {
+  test('a signed config.patch { trust_mode: true } is applied: the file says true, rev moves, every app is synced', async () => {
+    h = await startHarness()
+    const f = await pushConfigPatchPastRelay(h, 0, { trust_mode: true })
+    await h.relay.expectFrame('ack', (a) => a.ref === f.id, { direction: 'from_bridge' })
+    expect(onDisk(h).trust_mode).toBe(true)
+    expect(onDisk(h).rev).toBe(1)
+    expect(trustOn(h.bridge.ctx.config.config)).toBe(true)
+    const sync = await h.relay.expectFrame('config.sync', (c) => c.rev === 1, { direction: 'from_bridge' })
+    expect((sync.config as { trust_mode?: boolean }).trust_mode).toBe(true)
+  })
+
+  test('the thread note and the agent hear it, once, when the app turns it on', async () => {
+    h = await startHarness()
+    await pushConfigPatchPastRelay(h, 0, { trust_mode: true })
+    await h.bridge.poll()
+    await h.bridge.poll()
+    await waitFor(() => h?.notes.filter((n) => /Trust mode is on/.test(n.content)).length === 1, 4000, 'the on note')
+    expect(h.notes.filter((n) => /Trust mode is on/.test(n.content))).toHaveLength(1)
+    // the note names the app as a way back, not only the Mac's shell
+    expect(h.notes.find((n) => /Trust mode is on/.test(n.content))?.content).toMatch(/Settings/)
+  })
+
+  test('{ trust_mode: false } and { trust_mode: null } turn it off and take the key out of the file, like `trust off`', async () => {
+    for (const off of [false, null]) {
+      h = await startHarness({ config: ON })
+      const before = onDisk(h)
+      const f = await pushConfigPatchPastRelay(h, before.rev, { trust_mode: off })
+      await h.relay.expectFrame('ack', (a) => a.ref === f.id, { direction: 'from_bridge' })
+      expect('trust_mode' in onDisk(h), `off=${off}`).toBe(false)
+      expect(trustOn(h.bridge.ctx.config.config)).toBe(false)
+      await h.bridge.poll()
+      await waitFor(() => h?.notes.some((n) => /Trust mode is off/.test(n.content)) === true, 4000, 'the off note')
+      await h.stop()
+      h = undefined
+    }
+  })
+
+  test.each([{ trust_mode: 'yes' }, { trust_mode: 1 }, { trust_mode: { on: true } }])(
+    'a value that is not a boolean, %j, is refused by the Mac too and the file is untouched',
     async (patch) => {
       h = await startHarness()
       const f = await pushConfigPatchPastRelay(h, 0, patch)
@@ -49,10 +86,10 @@ describe('nobody but the Mac switches it', () => {
     },
   )
 
-  test('the same refusal when trust mode is already on: the phone cannot turn it off either', async () => {
+  test('a patch that leaves trust_mode out keeps what the Mac set, and one that sets it wins over a stale copy', async () => {
     h = await startHarness({ config: ON })
-    const f = await pushConfigPatchPastRelay(h, 0, { trust_mode: false })
-    expect(await errFor(h, f.id)).toBe('config_field_forbidden')
+    const f = await pushConfigPatchPastRelay(h, 0, { agent: { name: 'Hal' } })
+    await h.relay.expectFrame('ack', (a) => a.ref === f.id, { direction: 'from_bridge' })
     expect(onDisk(h).trust_mode).toBe(true)
   })
 

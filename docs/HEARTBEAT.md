@@ -18,7 +18,13 @@ the bridge wires the real one (`heartbeat/wake.ts`).
 3. Each enabled source is started at once, with its own `timeout_s`; the whole run has `run_timeout_s`. Anything still
    running at its limit is killed together with everything it started (by process group). A source that hangs costs only
    itself. A child it leaves running after a clean exit is killed with the group too. A process that leaves the group on
-   purpose (`setsid`) is out of reach: a known limit.
+   purpose (`setsid`) is out of reach: a known limit. While a source runs, its group id and command line are in the job's
+   store (`running`) with its start time, cleared when it ends. If the bridge crashed in between, the next start (before
+   any slot) kills a recorded group only if it is alive and either its leader is gone (a group id cannot be handed out again
+   while the group has a member) or its leader still has the recorded command and start time (pids get reused); a `ps`
+   that cannot answer leaves the record for the next start; a group nobody recorded is never touched. Only `command`
+   sources are recorded: the `gh` calls of the built-in `github` source are not, so one of those left running by a crash is
+   not found, and a test run records nothing.
 4. Each answer is read with `parseHeartbeatSourceResponse`. Over 256 KiB, over 50 items, not JSON, a wrong schema or a
    non-zero exit is a **source error**, never an empty list. One item that does not parse is dropped and counted.
 5. Items are merged and deduped by `(source, key)`. The same `sig` is the same item; a new `sig` raises it again. Mutes
@@ -49,8 +55,8 @@ the bridge wires the real one (`heartbeat/wake.ts`).
 
 A failure outranks a quiet word: `failed` and `partial` win over `capped`, `woke`, `fyi` and `silent`. The run still
 delivers what it found. A run that closes `failed` says why in the thread, once. A source that has failed three checks in
-a row is said once more; recovery resets the count. If the heartbeat itself has not completed a run for 72 hours, every
-source starts over with no cursor instead of flooding you with a backlog (see "A big or cold wake"). A source that was down
+a row is said once more; recovery resets the count. If the heartbeat itself has been off longer than its own schedule
+allows, every source starts over with no cursor instead of flooding you with a backlog (see "A big or cold wake"). A source that was down
 while the heartbeat kept running keeps its cursor and delivers normally when it recovers.
 
 The wake cap counts per local day (your time zone). A stored day later than today (a clock once set forward) is ignored, so it never pins the count.
@@ -127,9 +133,13 @@ cannot be removed does not stop the rest.
 
 **A big or cold wake.** One wake carries at most 10 items (nearest deadline first, then oldest). The rest stay `new` for the
 next wake and the thread says "N more items are waiting for the next check-in". The store keeps `last_run`, when this
-heartbeat last completed a live run. If that was over 72 hours ago, every source starts over with no cursor, what they report
-on that first look is recorded as shown and not woken, and the thread gets one line, "Heartbeat was off for N days. Skipped
-the backlog (M items)." A source's own silence does not trigger this: one that failed for three days while the heartbeat
+heartbeat last completed a live run (a store written before `last_run` was kept, with sources but no `last_run`, starts over
+once the same way, with the line "Heartbeat started over."). If it was longer ago than twice the job's largest gap
+between two of its weekly times (counting the wrap from the last time of the week to the first), and never under 48 hours,
+every source starts over with no cursor, what they report on that first look is recorded as shown and not woken, and the
+thread gets one line, "Heartbeat was off for N days. Skipped the backlog (M items)." A Monday and Thursday job may be off
+8 days, a daily one 48 hours, a job with one weekly time 14 days; a job whose days or times cannot be read, 14 days. A
+source's own silence does not trigger this: one that failed for three days while the heartbeat
 kept running keeps its cursor and delivers normally. The bridge can see its own state file only; it cannot see Chronos's
 history or the agent's last turn.
 
@@ -145,6 +155,12 @@ made in that thread follows the heartbeat's rules, **whatever `run_id` or `origi
 - At most **3 are pending** in the thread. The 4th is posted as a plain line and no card is made. The pending cards are
   counted from the card ledger at the moment the card is made, in the same step that makes it, so there is no list to drift
   and two cards made at once cannot both pass. An expired or answered card frees a place; the rule holds after a restart.
+  Which thread is a heartbeat's comes from the last scheduler list the bridge read, kept on disk
+  (`$TALOS_APP_HOME/heartbeat-threads.json`) so the rule still holds after a restart while Chronos cannot be read. A card waits
+  at most 2 seconds for Chronos to say. With no list in memory and no saved one, a thread whose job has ever kept a heartbeat
+  store file is treated as a heartbeat's. **The gap that is left:** a heartbeat that was created, and then the bridge restarted
+  with Chronos unreadable before the bridge ever read the list again (and the job never ran), has neither; its thread is not
+  limited until Chronos answers.
 - `supersedes` has to name a pending card **in the same thread** (any thread, not only a heartbeat's). A card that replaces a
   pending one takes no new place, and one card cannot be replaced twice at once.
 
@@ -179,7 +195,14 @@ A source is either a built-in (`github`, `schedule-failures`, `inbox`) or a `com
 - `github` reads PRs and CI for the configured repos with `gh api`: CI red for over 24 h is `act`, a PR green and untouched
   for 24 h is `fyi`, and notifications for review requested, mention, assigned and security alert are `act`.
   `ci_activity` and every other reason raise nothing. It needs `gh` signed in on this Mac; if it is not, that is a source
-  error that says so. At most 30 PRs are checked per run.
+  error that says so. At most 30 PRs are checked per run, six at a time. Notifications are read newest first, 50 a page,
+  5 pages at most, and at most 49 act items go into one answer. Each page after the first asks for the rows before the
+  oldest one so far (one second past it, so rows that share a second are read again and skipped by id), because walking by
+  page number skips rows when the list changes meanwhile. A run that stops at a limit adds an `fyi` saying how many pages it
+  read, treats everything it did not put into the answer as unread, and keeps its cursor behind it (`since` stays, `before`
+  names where the unread part ends, `upto` is where the newer part starts); the next run reads both, so nothing is
+  skipped silently. Two unread parts merge into one, from the older start to the newer end, which reads a little twice.
+  A burst of more than 50 notifications in one second cannot be walked past, and is said again only if the boundary moves.
 - `schedule-failures` reports failed, timed-out, restarted and missed runs of the bridge's own scheduled jobs (`fyi`).
 - `inbox` reports things filed into the shared inbox since the last look (`fyi`).
 - Every source baselines first: with no cursor it records where it is and raises nothing.
@@ -206,13 +229,13 @@ is capped and escaped once, when your answer is read, so control and bidi charac
 
 ## Files
 
-| File in `$TALOS_APP_HOME`              | What                                                                                                                      |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `heartbeat-state.<job id>.json`        | live store: items, per-source cursor / `last_ok` / `fail_streak`, `wakes_today`, `last_run`, an open wake, a pending post |
-| `heartbeat-state.<job id>.shadow.json` | the same, for shadow mode                                                                                                 |
-| `heartbeat-shadow.jsonl`               | what shadow would have posted                                                                                             |
-| `heartbeat/runs/<run id>.json`         | the run pack for a wake; deleted when the wake ends, pruned after 14 days                                                 |
-| `heartbeat/tests.json`                 | the last passing test of each config hash (hash and time); a pass is good for 24 hours                                    |
+| File in `$TALOS_APP_HOME`              | What                                                                                                                                                        |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `heartbeat-state.<job id>.json`        | live store: items, per-source cursor / `last_ok` / `fail_streak`, `wakes_today`, `last_run`, an open wake, a pending post, the source processes running now |
+| `heartbeat-state.<job id>.shadow.json` | the same, for shadow mode                                                                                                                                   |
+| `heartbeat-shadow.jsonl`               | what shadow would have posted                                                                                                                               |
+| `heartbeat/runs/<run id>.json`         | the run pack for a wake; deleted when the wake ends, pruned after 14 days                                                                                   |
+| `heartbeat/tests.json`                 | the last passing test of each config hash (hash and time); a pass is good for 24 hours                                                                      |
 
 One store per heartbeat job: two jobs never share cursors, dedupe, wakes or a pending post.
 
@@ -262,6 +285,9 @@ approved (a pass can age out between drawing the card and tapping it; then the c
   settings and needs a pass for them.
 - An **adopt** of an enabled heartbeat always needs one, and so does `talos-app schedules adopt` at the Mac, which leaves such a
   job on hold and says why.
+- **Run now is held to the same rule.** Run now on a heartbeat that is **off** and in **live** mode is refused with
+  `schedule_invalid` (field `test_required`) unless its exact settings have a fresh pass; with one, it runs as a normal check.
+  Run now on a heartbeat that is on, or in shadow mode (which only records), runs as before.
 - **Existing heartbeats keep running.** A heartbeat that was already on before this rule is not switched off and is not asked
   for a test; only a changed setting needs one.
 - **If the current job cannot be read** (Chronos did not answer), a change to an existing job is refused with "Couldn't read the
@@ -286,6 +312,8 @@ of the raw `talos.heartbeat` object, and the bridge calls that one function on t
    heartbeat settings can't be tested") and nothing runs. So is `with_agent: true` ("isn't available yet"), and a third test while
    one is already running (`rate_limited`, "A heartbeat test is already running"); a request more than two minutes old is
    refused as `stale`, like Run now. The same `request_id` asked again while it runs is acked and not run again.
+   The same **device** asking again from a new socket (a phone that changed networks, while the relay still counts the old socket
+   as live) takes the test over: the result goes to the new socket and the Mac is not asked twice. Another device is refused while the asking socket is live, and may take it over once that socket has closed.
 2. **The Mac acks as soon as the request is accepted**, before any source starts, outside the schedule queue (a Chronos call
    in progress does not delay it). So an ack means "this Mac took the test"; a socket that drops before the ack never reached the
    Mac, and the app can ask again with the same `request_id`. The result follows when the sources are done, which can be up to

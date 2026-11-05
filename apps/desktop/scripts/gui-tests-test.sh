@@ -20,6 +20,7 @@ mk allskipped 'echo "➜ Test a() skipped."; echo "✔ Test run with 2 tests in 
 mk gated_skip 'case "$*" in *.SnapshotTests*|*.ScreenShotTests*) echo "➜ Test a() skipped."; echo "✔ Test run with 1 test in 1 suite passed after 0.001 seconds."; exit 0;; esac; echo "✔ Test a() passed after 0.1 seconds."; echo "✔ Test run with 1 test in 1 suite passed after 0.1 seconds."'
 mk only_one_bad 'case "$*" in *CompanionLiveGuiTests*) echo "◇ Test run started."; exit 0;; esac; echo "✔ Test a() passed after 0.1 seconds."; echo "✔ Test run with 1 test in 1 suite passed after 0.1 seconds."'
 mk needs_env 'if [ "$TALOS_GUI_TESTS" != 1 ]; then echo "✘ gate off"; exit 1; fi; echo "✔ Test a() passed after 0.1 seconds."; echo "✔ Test run with 1 test in 1 suite passed after 0.1 seconds."'
+mk redcomment 'echo "◇ Test run started."; echo "↳ Testing Library Version: 2403"; echo "↳ Target Platform: arm64e-apple-macos14.0"; echo "✘ Test a() recorded an issue at A.swift:9:5: Expectation failed: n == 4"; echo "↳ start_failed: the tmux socket was gone"; echo "✘ Test run with 1 test in 1 suite failed after 0.1 seconds with 1 issue."; exit 1'
 mk eater 'cat >/dev/null; echo "✔ Test a() passed after 0.1 seconds."; echo "✔ Test run with 1 test in 1 suite passed after 0.1 seconds."'
 
 [ "$(bash scripts/gui-tests.sh --list | wc -l | tr -d ' ')" -ge 20 ] && ok "lists the suites" || bad "suite list is short: $(bash scripts/gui-tests.sh --list | wc -l)"
@@ -28,6 +29,10 @@ bash scripts/gui-tests.sh --list | grep -qx CrashAlertChainGuiTests && ok "lists
 run good && ok "control: a proper summary passes" || { bad "control: a proper summary failed"; cat "$T/out"; }
 run early && bad "exit 0 with no summary counted as a pass" || { grep -q "never printed the run summary" "$T/out" && ok "exit 0 with no summary fails" || bad "failed for the wrong reason"; }
 run red && bad "a red run counted as a pass" || ok "a red run fails"
+# A red names the real error: the ↳ comment a test attaches to its expectation is kept, the run's header lines are not.
+run redcomment
+grep -q "↳ start_failed: the tmux socket was gone" "$T/out" && ok "a red keeps the test's own comment line" || { bad "a red dropped the test's comment line"; cat "$T/out"; }
+grep -q "Testing Library" "$T/out" && bad "the run header's ↳ lines are shown as if they were errors" || ok "the run header's ↳ lines are left out"
 run redsummary && bad "a failed summary with exit 0 counted as a pass" || ok "a failed summary fails even at exit 0"
 run none && bad "a filter that matched no tests counted as a pass" || ok "an empty run fails"
 run only_one_bad && bad "one suite ending early did not fail the whole run" || { grep -q "FAIL CompanionLiveGuiTests" "$T/out" && ok "one early-ending suite fails the run and is named" || bad "the early suite was not named"; }

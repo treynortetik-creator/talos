@@ -134,9 +134,15 @@ describe('card checks', () => {
     await bridge.expectFrame('config.patch', (f) => f.id === w2.id, { direction: 'in' })
     const r2 = await app.sendConfigPatch(1, { permission_relay: true })
     await bridge.expectFrame('config.patch', (f) => f.id === r2.id, { direction: 'in' })
-    // the lock is not loosened: trust_mode itself can never come from a phone
-    const t = await app.sendConfigPatch(1, { trust_mode: false })
-    expect((await app.expectFrame('error', (f) => f.ref === t.id)).code).toBe('config_field_forbidden')
+    // turning trust mode ON is never skipped, even while the relay believes it is already on: its copy of the Mac's
+    // config can be stale, and a patch queued for a Mac that has since turned it off would otherwise switch it on untapped
+    const t = await app.sendConfigPatch(1, { trust_mode: true })
+    expect((await app.expectFrame('error', (f) => f.ref === t.id)).code).toBe('stepup_required')
+    const mixed = await app.sendConfigPatch(1, { trust_mode: true, permission_relay: true })
+    expect((await app.expectFrame('error', (f) => f.ref === mixed.id)).code).toBe('stepup_required')
+    // off is free
+    const t2 = await app.sendConfigPatch(1, { trust_mode: false })
+    await bridge.expectFrame('config.patch', (f) => f.id === t2.id, { direction: 'in' })
     // and the Mac switching it off brings the step-up back
     bridge.send({ type: 'config.sync', config: { ...cfg, rev: 2 }, rev: 2 })
     await app.expectFrame('config.sync', (f) => f.rev === 2)

@@ -25,6 +25,7 @@ import { useAwaitingOwner } from '../cards/useAwaitingOwner.ts'
 import { useSchedulesDot, useSchedulesSync } from '../schedules/sync.ts'
 import { ThreadManageList } from './manage/ThreadManageList.tsx'
 import { onBeforeSidebarChange, toggleSidebar, useSidebarCollapsed } from './sidebarPref.ts'
+import { ThreadRowWithSettings } from './ThreadMoreButton.tsx'
 import { NewThread } from './ThreadSettings.tsx'
 import { useAgentName, useVisibleThreads } from './useThreads.ts'
 
@@ -253,23 +254,50 @@ export function Sidebar() {
         {!editing &&
           threads
             .filter((t) => t.id !== 'inbox')
-            .map((t, i) => (
-              <NavLink key={t.id} to={`/t/${t.id}`} className={link} {...tip(t.name)}>
-                <ThreadIcon id={t.id} icon={t.icon} color={t.color} size={28} framed />
-                <span className={collapsed ? 'sr-only' : 'truncate'}>{t.name}</span>
-                {freshStatus(ownValue(statuses, t.id), Date.now())?.state === 'working' && (
-                  <span className="sr-only">working</span>
-                )}
-                {(ownValue(unread, t.id) ?? 0) > 0 &&
-                  count(ownValue(unread, t.id) ?? 0, `${ownValue(unread, t.id)} unread`)}
-                <span className="sr-only">Ctrl+{i + 1}</span>
-              </NavLink>
-            ))}
-        <NavLink to="/t/inbox" className={link} {...tip('Inbox')}>
-          <ThreadIcon id="inbox" icon={inbox?.icon} color={inbox?.color} size={28} framed />
-          {text('Inbox')}
-          {(unread.inbox ?? 0) > 0 && count(unread.inbox ?? 0, `${unread.inbox} unread`)}
-        </NavLink>
+            .map((t, i) => {
+              const row = (
+                <NavLink
+                  key={t.id}
+                  to={`/t/${t.id}`}
+                  className={(st) => cn(link(st), !collapsed && 'pr-14')}
+                  {...tip(t.name)}
+                >
+                  <ThreadIcon id={t.id} icon={t.icon} color={t.color} size={28} framed />
+                  <span className={collapsed ? 'sr-only' : 'truncate'}>{t.name}</span>
+                  {freshStatus(ownValue(statuses, t.id), Date.now())?.state === 'working' && (
+                    <span className="sr-only">working</span>
+                  )}
+                  {(ownValue(unread, t.id) ?? 0) > 0 &&
+                    count(ownValue(unread, t.id) ?? 0, `${ownValue(unread, t.id)} unread`)}
+                  <span className="sr-only">Ctrl+{i + 1}</span>
+                </NavLink>
+              )
+              // the folded rail shows icons only: no room for a "...", and the pencil is not there either
+              return collapsed ? (
+                row
+              ) : (
+                <ThreadRowWithSettings key={t.id} thread={t} tone="chrome">
+                  {row}
+                </ThreadRowWithSettings>
+              )
+            })}
+        {(() => {
+          const row = (
+            <NavLink to="/t/inbox" className={(st) => cn(link(st), !collapsed && inbox && 'pr-14')} {...tip('Inbox')}>
+              <ThreadIcon id="inbox" icon={inbox?.icon} color={inbox?.color} size={28} framed />
+              {text('Inbox')}
+              {(unread.inbox ?? 0) > 0 && count(unread.inbox ?? 0, `${unread.inbox} unread`)}
+            </NavLink>
+          )
+          // no thread in the synced config yet (or the rail is folded): nothing to open settings for
+          return collapsed || !inbox ? (
+            row
+          ) : (
+            <ThreadRowWithSettings thread={inbox} tone="chrome">
+              {row}
+            </ThreadRowWithSettings>
+          )
+        })()}
         <NavLink to="/schedules" className={link} {...tip('Schedules')}>
           <span className="relative grid size-7 place-items-center">
             <IconClock width={20} height={20} />

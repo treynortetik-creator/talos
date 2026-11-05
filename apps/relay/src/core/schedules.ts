@@ -36,6 +36,8 @@ export interface ScheduleHost {
   bridgeHas(feature: string): boolean
   /** True while the app socket is connected and authed. */
   socketLive(socketId: string): boolean
+  /** The device behind an authed socket: its session's when it has one, else the AppConn's (checked against the session at hello). Null when none. */
+  deviceOf(socketId: string): string | null
   /** Sends to one authed app socket; false when it is gone. */
   sendToApp(socketId: string, raw: Record<string, unknown>): boolean
   fanOut(raw: Record<string, unknown>): void
@@ -139,13 +141,20 @@ export class ScheduleRouter {
     const owner = h.requests.liveOwner(rid)
     if (owner === socketId) return 'handled' // the same socket asking again: it is already running
     if (owner !== undefined) {
-      // another socket: refused while that one is connected; once it is gone this is the owner's reconnect, and the answer
-      // (kept in memory for the request's lifetime, never stored) goes to the new socket
-      if (h.socketLive(owner)) {
+      // Another socket. It may take the request over when the old one is gone, or when it is the SAME device: a phone that changed
+      // networks leaves a half-open socket the relay still counts as live for a while (HB5 R2-1). A different device is refused
+      // while the owner is connected. The answer (kept in memory for the request's lifetime, never stored) goes to the new socket.
+      const mine = h.deviceOf(socketId)
+      // the frame's own (signed) device id must agree with the socket's, so a claim on one side alone is not enough
+      const sameDevice = mine !== null && frame.device_id === mine && h.requests.ownerDevice(rid) === mine
+      if (h.socketLive(owner) && !sameDevice) {
         h.appError(socketId, 'bad_frame', 'that request id is already in use', frame.id)
         return 'refused'
       }
-      h.requests.rebind(rid, socketId)
+      if (!h.requests.rebind(rid, socketId, mine)) {
+        h.appError(socketId, 'bad_frame', 'that request id is already in use', frame.id)
+        return 'refused'
+      }
       return 'handled'
     }
     if (!h.requests.hasRoom(socketId)) {
@@ -157,7 +166,15 @@ export class ScheduleRouter {
       h.appError(socketId, 'rate_limited', limited, frame.id)
       return 'refused'
     }
-    h.requests.expect(socketId, rid, 'heartbeat.test_result', frame.id, HEARTBEAT_ANSWER_TTL_MS, true)
+    h.requests.expect(
+      socketId,
+      rid,
+      'heartbeat.test_result',
+      frame.id,
+      HEARTBEAT_ANSWER_TTL_MS,
+      true,
+      h.deviceOf(socketId),
+    )
     return 'forward'
   }
 

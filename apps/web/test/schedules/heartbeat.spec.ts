@@ -51,10 +51,12 @@ for (const scheme of ['light', 'dark'] as const) {
   test.describe(`${scheme} theme`, () => {
     test.use({ colorScheme: scheme })
 
-    test('the row is pinned above Today and says how the last check went, in words', async ({ page }, info) => {
+    test('the row is pinned above the job groups and says how the last check went, in words', async ({
+      page,
+    }, info) => {
       await open(page, '/schedules', 'heartbeatOn')
       await expect(row(page)).toBeVisible()
-      await expect(page.locator('section[data-group] h2')).toHaveText(['Heartbeat', 'Today'])
+      await expect(page.locator('section[data-group] h2')).toHaveText(['Heartbeat', 'Main'])
       // pinned, not also listed as an ordinary job
       await expect(page.getByTestId('schedule-row-heartbeat')).toHaveCount(0)
       await expect(outcome(page)).toHaveText(/Nothing new/)

@@ -35,11 +35,11 @@ describe('what the agent is told', () => {
       },
       '09ed42965abf9a2146f1870182ca03e3bbb881d574872066ebdcc25eb70b1a85',
     ],
-    ['worker', { worker: true, trust: false }, '2c69923b500574c07236f568d5c6cf7b058e2db0f25d78c05b00cf82a4321d64'],
+    ['worker', { worker: true, trust: false }, '6b89cc7bf824d6bebad5c1190aeb764c29da6b05fd189ed23df4194c85632bd4'],
     [
       'worker, trust and apps (neither reaches it)',
       { worker: true, trust: true, appInstructions: APPS },
-      '2c69923b500574c07236f568d5c6cf7b058e2db0f25d78c05b00cf82a4321d64',
+      '6b89cc7bf824d6bebad5c1190aeb764c29da6b05fd189ed23df4194c85632bd4',
     ],
   ]
   for (const [name, opts, hash] of cases)

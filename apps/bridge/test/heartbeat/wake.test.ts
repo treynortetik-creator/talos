@@ -1,11 +1,12 @@
 // HB4: the wake, driven through the REAL runner and the REAL wake (pack file, notification builder) against a real bridge
 // context. The agent is a recorder behind `emit`; the closes the service would send (done ok, killed) are called directly.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fakeClock } from '@talos-app/testkit'
 import { MAX_PACK_ITEMS, packDir, packPath } from '../../src/heartbeat/pack.ts'
 import { type RunnerDeps, WAKE_STALE_MS } from '../../src/heartbeat/runner.ts'
+import { emptyStore, storeFile } from '../../src/heartbeat/store.ts'
 import { makeWake, triageAvailable } from '../../src/heartbeat/wake.ts'
 import type { Notification } from '../../src/notify.ts'
 import { type Harness, startHarness } from '../helpers.ts'
@@ -263,12 +264,15 @@ describe('the big cold wake', () => {
     expect(left.length).toBe(15)
   })
 
-  test('after a gap over 72 hours the backlog is skipped with one line, not woken: "Heartbeat was off for 4 days"', async () => {
+  test('after a gap over the job\'s limit the backlog is skipped with one line, not woken: "Heartbeat was off for 4 days"', async () => {
     await start()
     const cfg = src([])
     await k.run(cfg, { runId: runId() }) // records last_ok
     clock.advance(4 * 24 * 3600_000 + 60_000)
-    const r = await k.run(src([act('old1'), act('old2'), item('f1')]), { runId: runId() })
+    const r = await k.run(src([act('old1'), act('old2'), item('f1')]), {
+      runId: runId(),
+      coldAfterMs: 3 * 24 * 3600_000,
+    })
     expect(sent).toEqual([])
     expect(r.result.outcome).not.toBe('woke')
     const text = sysRows()
@@ -340,28 +344,24 @@ describe('a missing triage agent (R1-4)', () => {
   })
 })
 
-describe("the 72 hour gap is the heartbeat's own (R1-8)", () => {
+describe("the cold limit is the heartbeat's own (R1-8)", () => {
+  const HOUR = 3600_000
+  const COLD_AFTER = 3 * 24 * HOUR // what a job's own schedule would allow
+  /** A store as a heartbeat leaves it: one source known, the heartbeat itself last run `ranAgoH` hours ago. */
+  const seed = (ranAgoH: number, sourceOkAgoH: number) => {
+    const iso = (agoH: number) => new Date(clock.now() - agoH * HOUR).toISOString()
+    const st = emptyStore()
+    st.sources.ss = { cursor: null, last_ok: iso(sourceOkAgoH), fail_streak: 0 }
+    st.last_run = iso(ranAgoH)
+    writeFileSync(storeFile(h.home, false, 'beat'), JSON.stringify(st))
+  }
+
   test('a source that failed for 3 days while the heartbeat kept running delivers its items normally', async () => {
     await start()
-    const good = (items: unknown[]) => config([cmd('ss', printing(tmpDir(), 'g', ok(items)))])
-    const bad = config([
-      cmd(
-        'ss',
-        printing(
-          tmpDir(),
-          'b',
-          JSON.stringify({ schema: 'talos.heartbeat-source/1', status: 'error', error: 'no token' }),
-        ),
-      ),
-    ])
-    await k.run(good([]), { runId: runId() })
-    for (let i = 0; i < 4; i++) {
-      clock.advance(18 * 3600_000)
-      await k.run(bad, { runId: runId() }) // the heartbeat runs; its source is down
-    }
-    clock.advance(3600_000)
-    expect(Date.parse(new Date(clock.now()).toISOString()) - Date.parse(MON_1000_UTC)).toBeGreaterThan(72 * 3600_000)
-    const r = await k.run(good([act('back', { title: 'Back after outage' })]), { runId: runId() })
+    clock.advance(4 * 24 * HOUR)
+    seed(18, 4 * 24) // the heartbeat ran 18 hours ago; its source has not answered for four days
+    const good = config([cmd('ss', printing(tmpDir(), 'g', ok([act('back', { title: 'Back after outage' })])))])
+    const r = await k.run(good, { runId: runId(), coldAfterMs: COLD_AFTER })
     expect(r.result.outcome).toBe('woke')
     expect(sent.length).toBe(1)
     expect(
@@ -369,21 +369,20 @@ describe("the 72 hour gap is the heartbeat's own (R1-8)", () => {
         .map((x) => x.text)
         .join('\n'),
     ).not.toContain('was off')
-  })
+  }, 20_000)
 
-  test('a heartbeat that did not run for 72 hours skips the backlog, whatever each source last said', async () => {
+  test('a heartbeat that did not run for longer than its limit skips the backlog, whatever each source last said', async () => {
     await start()
-    await k.run(src([]), { runId: runId() })
-    expect(typeof k.store().last_run).toBe('string')
-    clock.advance(4 * 24 * 3600_000)
-    await k.run(src([act('old')]), { runId: runId() })
+    clock.advance(4 * 24 * HOUR)
+    seed(4 * 24, 1) // its source answered an hour ago, but the heartbeat itself has been off for four days
+    await k.run(src([act('old')]), { runId: runId(), coldAfterMs: COLD_AFTER })
     expect(sent).toEqual([])
     expect(
       sysRows()
         .map((x) => x.text)
         .join('\n'),
     ).toContain('Heartbeat was off for 4 days')
-  })
+  }, 20_000)
 })
 
 describe('packs and ended wakes (R1-7, R1-12)', () => {

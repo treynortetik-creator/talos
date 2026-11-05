@@ -176,8 +176,8 @@ test.describe('on-screen keyboard', () => {
     await expect(page.locator('html')).toHaveAttribute('data-kb', 'open')
     await frames(page)
     await expect(page.getByTestId('thread-screen').locator('header')).toBeHidden()
-    await expect(page.getByTestId('thread-tabs')).toBeHidden()
-    // 190 px is all there is. With a 66 px header and the tabs still up the thread gets almost none of it.
+    await expect(page.getByTestId('thread-tabs')).toHaveCount(0)
+    // 190 px is all there is. With a 66 px header up the thread gets almost none of it.
     expect((await timeline.boundingBox())?.height ?? 0, 'timeline height').toBeGreaterThan(90)
   })
 })

@@ -10,7 +10,7 @@ import type {
   ScheduleSnapshotT,
   ScheduleT,
 } from '@talos-app/protocol'
-import { dateOfRunKey, safeLine } from '@talos-app/protocol'
+import { dateOfRunKey, runsInSession, safeLine, type WorkerStatusItemT } from '@talos-app/protocol'
 import { FAILED_DOT_WINDOW_MS } from './constants.ts'
 
 export const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
@@ -156,6 +156,98 @@ export function groupSchedules(snap: ScheduleSnapshotT, nowMs: number): Groups {
   g.later.sort(byNext)
   g.off.sort((a, b) => a.name.localeCompare(b.name))
   return g
+}
+
+// ---- by thread (docs/OPTION-C.md "Thread schedules") ------------------------------------------------------------------
+
+/** Who runs a thread's jobs: its own session (live, parked, or between), or the main session. */
+export type Runner = 'own_live' | 'own_parked' | 'own' | 'main'
+
+export const RUNNER_WORDS: Record<Runner, string> = {
+  own_live: 'own session · live',
+  own_parked: 'own session · parked',
+  own: 'own session',
+  main: 'run by Main',
+}
+
+/**
+ * Who runs a thread's jobs right now. A thread with its own session runs them there, waking it when it is parked; when the Mac
+ * cannot host sessions, or the session has failed or is stopping, main runs them (the router falls back to main the same way).
+ */
+export function runnerOf(o: {
+  dedicated: boolean
+  supported: boolean
+  worker: Pick<WorkerStatusItemT, 'state'> | undefined
+}): Runner {
+  if (!o.dedicated || !o.supported) return 'main'
+  const state = o.worker?.state
+  if (state === 'failed' || state === 'stopping') return 'main'
+  if (state === 'live' || state === 'busy') return 'own_live'
+  // never started, parked, or parking: a job wakes it
+  if (state === undefined || state === 'off' || state === 'parked') return 'own_parked'
+  return 'own'
+}
+
+/** The group key of Main. A thread id starts with a letter (ThreadId), so no thread can ever have this key. */
+export const MAIN_GROUP = '__main__'
+
+/**
+ * Who runs ONE job, from the job's own runner first: only a session job (not a command) runs in a thread's own session. A job
+ * that runs in the background, or in the session with a background backup, never reads as "own session".
+ */
+export function jobRunnerText(
+  s: Pick<ScheduleT, 'runner' | 'kind' | 'permissions'>,
+  group: Runner,
+  threadName: string,
+): { text: string; own: boolean } {
+  if (s.kind === 'command') return { text: 'Runs as a command on the Mac', own: false }
+  // a restricted job is always headless, whatever its runner field says (runsInSession)
+  if (s.runner === 'headless' || (s.runner === 'session' && !runsInSession(s)))
+    return { text: 'Runs in the background, no session', own: false }
+  if (s.runner === 'both') return { text: 'Run by Main, with a background backup', own: false }
+  return group === 'main'
+    ? { text: 'Run by Main', own: false }
+    : { text: `Runs in ${threadName}'s own session`, own: true }
+}
+
+export type ThreadLite = { id: string; name: string; archived?: boolean | undefined }
+export type ThreadGroup = {
+  /** MAIN_GROUP, or the thread id. */
+  key: string
+  name: string
+  runner: Runner
+  rows: ScheduleT[]
+}
+
+/**
+ * The jobs grouped by the thread they run in: Main first (no thread, the default thread, or a thread that is gone), then each
+ * other thread in the order the app lists threads. Inside a group: today, then later, then off, as the list always ordered them.
+ * A group with no jobs is left out.
+ */
+export function groupByThread(
+  snap: ScheduleSnapshotT,
+  nowMs: number,
+  o: { threads: readonly ThreadLite[]; defaultThread: string; runner: (threadId: string | null) => Runner },
+): ThreadGroup[] {
+  const live = new Map(o.threads.filter((t) => !t.archived).map((t) => [t.id, t]))
+  const keyOf = (s: ScheduleT) =>
+    s.thread_id && s.thread_id !== o.defaultThread && live.has(s.thread_id) ? s.thread_id : MAIN_GROUP
+  const by = new Map<string, ScheduleT[]>()
+  for (const s of snap.schedules) by.set(keyOf(s), [...(by.get(keyOf(s)) ?? []), s])
+  const order = [MAIN_GROUP, ...o.threads.map((t) => t.id).filter((id) => id !== o.defaultThread)]
+  const out: ThreadGroup[] = []
+  for (const key of order) {
+    const rows = by.get(key)
+    if (!rows?.length) continue
+    const g = groupSchedules({ ...snap, schedules: rows }, nowMs)
+    out.push({
+      key,
+      name: key === MAIN_GROUP ? 'Main' : (live.get(key)?.name ?? key),
+      runner: o.runner(key === MAIN_GROUP ? null : key),
+      rows: [...g.today, ...g.later, ...g.off],
+    })
+  }
+  return out
 }
 
 /** Words for the run kind: S5.3 "How it runs". */

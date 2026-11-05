@@ -59,7 +59,15 @@ test.describe('navigation', () => {
 test.describe('list', () => {
   test('groups and status words follow the data', async ({ page }) => {
     await open(page)
-    await expect(page.locator('section[data-group] h2')).toHaveText(['Today', 'Later', 'Off'])
+    // jobs are grouped by the thread they run in (test/schedules/thread-groups.spec.ts): none here has a thread, so one Main group
+    await expect(page.locator('section[data-group] h2')).toHaveText(['Main'])
+    await expect(page.getByTestId('group-runner')).toHaveText('run by Main')
+    const order = await page
+      .locator('li[data-testid^="schedule-row-"]')
+      .evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
+    // today's jobs first, then later ones, then the ones that are off
+    expect(order.indexOf('schedule-row-daily-summary')).toBeLessThan(order.indexOf('schedule-row-remind-me'))
+    expect(order.indexOf('schedule-row-remind-me')).toBeLessThan(order.indexOf('schedule-row-pdf-digest'))
     const row = (id: string) => page.getByTestId(`schedule-row-${id}`)
     await expect(row('daily-summary')).toContainText('Ran')
     await expect(row('daily-summary')).toContainText('7:31 AM')

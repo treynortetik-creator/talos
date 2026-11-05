@@ -165,13 +165,49 @@ export function defineRelayContract(name: string, harness: RelayHarness) {
       })
     })
 
+    describe('trust mode from the app: off is free, on needs the passkey step-up', () => {
+      it('on without a token is stepup_required and never reaches the Mac; with the config:session token it does, once', async () => {
+        const k = kit(relay)
+        const app = await k.connectedApp()
+        const bridge = k.bridge({ verifyOwner: false, consume: 'manual' })
+        await bridge.connect()
+        const bare = await app.sendConfigPatch(0, { trust_mode: true })
+        expect((await app.expectFrame('error', (f) => f.ref === bare.id)).code).toBe('stepup_required')
+        const wrong = await app.sendConfigPatch(
+          0,
+          { trust_mode: true },
+          { stepup_token: await relay.mintStepup('config:work') },
+        )
+        expect((await app.expectFrame('error', (f) => f.ref === wrong.id)).code).toBe('stepup_invalid')
+        const token = await relay.mintStepup('config:session')
+        const ok = await app.sendConfigPatch(0, { trust_mode: true }, { stepup_token: token })
+        await bridge.expectFrame('config.patch', (f) => f.id === ok.id, { direction: 'in' })
+        const reuse = await app.sendConfigPatch(0, { trust_mode: true }, { stepup_token: token })
+        expect((await app.expectFrame('error', (f) => f.ref === reuse.id)).code).toMatch(/^stepup_(invalid|required)$/)
+        expect(
+          bridge.rec.of('config.patch', 'in').filter((f) => [bare.id, wrong.id, reuse.id].includes(f.id)),
+        ).toHaveLength(0)
+      })
+
+      it('off needs no token and reaches the Mac; a value that is not a boolean is config_field_forbidden', async () => {
+        const k = kit(relay)
+        const app = await k.connectedApp()
+        const bridge = k.bridge({ verifyOwner: false, consume: 'manual' })
+        await bridge.connect()
+        const off = await app.sendConfigPatch(0, { trust_mode: false })
+        await bridge.expectFrame('config.patch', (f) => f.id === off.id, { direction: 'in' })
+        const junk = await app.sendConfigPatch(0, { trust_mode: 'yes' })
+        expect((await app.expectFrame('error', (f) => f.ref === junk.id)).code).toBe('config_field_forbidden')
+      })
+    })
+
     describe('what the relay refuses before the Mac sees it', () => {
       it('config.patch on a field the app may not change is config_field_forbidden and is not forwarded', async () => {
         const k = kit(relay)
         const app = await k.connectedApp()
         const bridge = k.bridge({ verifyOwner: false, consume: 'manual' })
         await bridge.connect()
-        const bad = await app.sendConfigPatch(0, { trust_mode: true })
+        const bad = await app.sendConfigPatch(0, { mirror: { telegram: 'on' } })
         expect((await app.expectFrame('error', (f) => f.ref === bad.id)).code).toBe('config_field_forbidden')
         // A later allowed patch reaching the bridge shows the forbidden one was decided (and dropped) before it.
         const plain = await app.sendConfigPatch(0, { quiet_window: null })

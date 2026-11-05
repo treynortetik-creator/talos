@@ -59,6 +59,16 @@ const Wake = z.object({
 })
 export type Wake = z.infer<typeof Wake>
 
+/** A source process that is running now: its group, command and start time, so a crash leaves a way to find it. */
+const Running = z.object({
+  pgid: z.number().int().min(2).max(4_194_304),
+  command: z.string().min(1).max(2000),
+  /** The start time `ps` showed for it: a reused pid has another one. */
+  lstart: z.string().min(1).max(64).optional(),
+  at: IsoTs,
+})
+export type Running = z.infer<typeof Running>
+
 export type HeartbeatStore = {
   schema: typeof STORE_SCHEMA
   items: Record<string, StoredItem>
@@ -69,7 +79,9 @@ export type HeartbeatStore = {
   pending: Pending | null
   /** The wake in flight, if any. Written BEFORE the notification is sent, so a crash never loses track of it. */
   wake: Wake | null
-  /** When this heartbeat last completed a live run. A gap of over 72 hours here (not a source's own silence) skips the backlog. */
+  /** Source processes running now, by source id. Cleared as each ends; a bridge start kills what a crash left (orphans.ts). */
+  running: Record<string, Running>
+  /** When this heartbeat last completed a live run. A gap here (not a source's own silence) longer than the job's limit (cold.ts) skips the backlog. */
   last_run: string | null
   /** "Install talos-app-mod" has been said and the agent has not been available since, so it is not said again. */
   triage_said: boolean
@@ -87,6 +99,7 @@ export const emptyStore = (): HeartbeatStore => ({
   wakes_today: { date: '0000-00-00', count: 0 },
   pending: null,
   wake: null,
+  running: {},
   last_run: null,
   triage_said: false,
   triage_unknown: 0,
@@ -138,6 +151,11 @@ export function loadStore(path: string, setAside = true): LoadedStore {
   if (pend.success) store.pending = pend.data
   const wk = Wake.safeParse(r.wake)
   if (wk.success) store.wake = wk.data
+  if (r.running && typeof r.running === 'object' && !Array.isArray(r.running))
+    for (const [id, x] of Object.entries(r.running)) {
+      const p = Running.safeParse(x)
+      if (p.success) store.running[id] = p.data
+    }
   const lr = IsoTs.safeParse(r.last_run)
   if (lr.success) store.last_run = lr.data
   if (r.triage_said === true) store.triage_said = true

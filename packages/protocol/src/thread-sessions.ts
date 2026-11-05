@@ -361,6 +361,9 @@ export type WorkerReadyT = z.infer<typeof WorkerReady>
 
 // ---- the hub socket (`$TALOS_APP_HOME/hub.sock`, JSON lines; OPTION-C 5.1) ------------------------------------------
 
+/** The worker's bridge runs the Schedules tools over the hub (`rpc`) and can be handed a `schedule_run`. */
+export const HUB_FEATURE_SCHEDULES = 'schedules/1'
+
 export const HUB_MAX_LINE_BYTES = 300 * 1024
 
 /** worker → hub. The hub accepts `hello` only from a pid in the recorded pane's process group. */
@@ -370,6 +373,8 @@ export const HubHello = z.strictObject({
   session_id: z.string().min(1).max(64).optional(),
   pid: z.number().int().positive(),
   nonce: z.string().min(16).max(64),
+  /** What this worker's bridge can do beyond the first hub (HUB_FEATURE_*). Absent from an older worker; unknown names are ignored. */
+  features: z.array(z.string().max(40)).max(20).optional(),
 })
 /** worker → hub: a reply/attach/card/status frame the worker built. The hub re-validates thread, size and schema. */
 export const HubOut = z.strictObject({
@@ -386,7 +391,20 @@ export const HubMod = z.strictObject({
   inventory: z.looseObject({}).optional(),
   results: z.array(z.looseObject({})).max(20).optional(),
 })
-export const HubWorkerLine = z.discriminatedUnion('t', [HubHello, HubOut, HubMod])
+/**
+ * The tools a thread session cannot run in its own process because they need main's live bridge (the Schedules service and
+ * its Chronos): it asks the hub, and the hub answers as the thread the connection proved, never one the request names.
+ */
+export const HUB_RPC_TOOLS = ['schedules_list', 'schedule_propose', 'schedule_run_start', 'schedule_run_done'] as const
+export const HUB_RPC_MAX_TEXT = 100_000
+/** worker → hub: run one of HUB_RPC_TOOLS. `tool` is a plain string so a newer worker's tool is refused as one answer, not dropped. */
+export const HubRpc = z.strictObject({
+  t: z.literal('rpc'),
+  id: z.string().min(1).max(64),
+  tool: z.string().min(1).max(40),
+  args: z.looseObject({}),
+})
+export const HubWorkerLine = z.discriminatedUnion('t', [HubHello, HubOut, HubMod, HubRpc])
 export type HubWorkerLineT = z.infer<typeof HubWorkerLine>
 
 /** hub → worker. */
@@ -408,7 +426,14 @@ export const HubControls = z.strictObject({
   t: z.literal('controls'),
   controls: z.array(z.looseObject({})).max(20).default([]),
 })
-export const HubHubLine = z.discriminatedUnion('t', [HubWelcome, HubAck, HubRefused, HubControls])
+/** hub → worker: the answer to one `rpc`. `ok:false` is the tool's own refusal or failure, in words for the agent. */
+export const HubRpcResult = z.strictObject({
+  t: z.literal('rpc_result'),
+  id: z.string().min(1).max(64),
+  ok: z.boolean(),
+  text: z.string().max(HUB_RPC_MAX_TEXT),
+})
+export const HubHubLine = z.discriminatedUnion('t', [HubWelcome, HubAck, HubRefused, HubControls, HubRpcResult])
 export type HubHubLineT = z.infer<typeof HubHubLine>
 
 // ---- what the app sees (bridge → relay → app) -------------------------------------------------------------------------

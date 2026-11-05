@@ -14,9 +14,10 @@ import {
 const paths = Object.keys(SETTINGS_TABLE) as SettingPath[]
 
 describe('the settings table', () => {
-  it('trust_mode is Mac only', () => {
-    expect(SETTINGS_TABLE.trust_mode.phone).toBe(false)
+  it('trust_mode: the owner may write it from the app (the passkey rule is on turning it on), the agent never', () => {
+    expect(SETTINGS_TABLE.trust_mode.phone).toBe('leaf')
     expect(SETTINGS_TABLE.trust_mode.agent).toBe(false)
+    expect(SETTINGS_TABLE.trust_mode.stepupOnTrue).toBe('config:session')
   })
 
   it('a setting with no row does not typecheck', () => {

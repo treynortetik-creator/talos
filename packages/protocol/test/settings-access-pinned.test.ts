@@ -25,6 +25,7 @@ function patchFor(path: string, value: unknown): Record<string, unknown> {
 const PLAIN = { ok: true, touchesWorkEnabled: false } as const
 const WORK = { ok: true, touchesWorkEnabled: true } as const
 const SESSION = { ok: true, touchesWorkEnabled: false, stepupPurpose: 'config:session' } as const
+const TRUST_ON = { ok: true, touchesWorkEnabled: false, stepupPurpose: 'config:session', turnsOnTrust: true } as const
 const refused = (path: string) => ({ ok: false, path }) as const
 
 describe('phone path: checkConfigPatch result for every field', () => {
@@ -63,12 +64,18 @@ describe('phone path: checkConfigPatch result for every field', () => {
     ['memory_browser', false, PLAIN],
     ['dedicated', {}, PLAIN],
     ['theme', 'paper', PLAIN],
-    ['trust_mode', true, refused('trust_mode')],
+    // trust mode: off is free, on needs the session step-up, anything else is refused (docs/SECURITY.md "Trust mode")
+    ['trust_mode', true, TRUST_ON],
+    ['trust_mode', false, PLAIN],
+    ['trust_mode', null, PLAIN],
+    ['trust_mode', 'yes', refused('trust_mode')],
+    ['trust_mode', 1, refused('trust_mode')],
+    ['trust_mode', { on: true }, refused('trust_mode')],
     ['permission_stepup', 'off', refused('permission_stepup')],
     ['sessions_view', true, refused('sessions_view')],
     ['no_such_setting', 1, refused('no_such_setting')],
   ]
-  it.each(cases)('%s', (path, value, expected) => {
+  it.each(cases)('%s = %j', (path, value, expected) => {
     expect(checkConfigPatch(patchFor(path, value))).toEqual(expected)
   })
 
@@ -98,7 +105,7 @@ describe('phone path: checkConfigPatch result for every field', () => {
     expect(checkConfigPatch({ permission_relay: true, timezone: 'UTC' })).toEqual(SESSION)
   })
   it('the first forbidden path is the one named', () => {
-    expect(checkConfigPatch({ timezone: 'UTC', trust_mode: true, bogus: 1 })).toEqual(refused('trust_mode'))
+    expect(checkConfigPatch({ timezone: 'UTC', mirror: {}, bogus: 1 })).toEqual(refused('mirror'))
   })
   it('a hostile key name is refused like any other unlisted name', () => {
     expect(checkConfigPatch(JSON.parse('{"__proto__":{"x":1}}'))).toEqual(refused('__proto__'))
@@ -126,9 +133,10 @@ describe('phone path: the exported lists', () => {
       'memory_browser',
       'dedicated',
       'theme',
+      'trust_mode',
     ])
   })
-  it('only permission_relay needs the session step-up', () => {
+  it('only permission_relay needs the session step-up every time; trust_mode needs it only to turn on', () => {
     expect([...CONFIG_SESSION_STEPUP_FIELDS]).toEqual(['permission_relay'])
   })
 })

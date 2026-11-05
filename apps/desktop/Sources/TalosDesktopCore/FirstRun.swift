@@ -110,7 +110,7 @@ public enum FirstRun {
     // whether Claude trusts a folder, so this row says only what it knows.
     case .some(true): r.append(Row(id: "trust", title: "First start confirmed", state: .ok))
     case .some(false):
-      r.append(Row(id: "trust", title: "First start confirmed", state: .fix("Choose Start session in the menu bar item if it isn't running, then press Enter on the dev-channel dialog in Show Terminal.")))
+      r.append(Row(id: "trust", title: "First start confirmed", state: .fix("Choose Start session in the menu bar item if it isn't running, then press Enter on the dev-channel dialog in Terminals….")))
     case .none:
       r.append(
         Row(
@@ -118,7 +118,7 @@ public enum FirstRun {
           state: .unknown(
             i.setupDone == false
               ? "Comes after the first step above."
-              : "Not started yet. The first time, Claude asks about the folder and the dev-channel: answer both in Show Terminal.")))
+              : "Not started yet. The first time, Claude asks about the folder and the dev-channel: answer both in Terminals….")))
     }
     if protectedFolder(i.agentDir, home: i.home) != nil {
       r.append(

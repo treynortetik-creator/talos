@@ -124,7 +124,15 @@ describe('fake client is as strict as the spec (WP7 tests must not pass vacuousl
 
   it('patchConfig: allowlist, work.enabled step-up, config_conflict simulation, and a good patch', async () => {
     const c = createFakeClient()
-    await rejects(c.patchConfig({ trust_mode: true }), 'config_field_forbidden')
+    await rejects(c.patchConfig({ trust_mode: 'yes' }), 'config_field_forbidden')
+    await rejects(c.patchConfig({ trust_mode: true }), 'stepup_required')
+    await rejects(c.patchConfig({ trust_mode: true }, { stepupToken: await c.stepup('config:work') }), 'stepup_invalid')
+    await c.patchConfig({ trust_mode: true }, { stepupToken: await c.stepup('config:session') })
+    expect(c.store.getState().config?.trust_mode).toBe(true)
+    // on already: turning it on again still asks (the relay's copy can be stale); off never does
+    await rejects(c.patchConfig({ trust_mode: true }), 'stepup_required')
+    await c.patchConfig({ trust_mode: false })
+    expect('trust_mode' in (c.store.getState().config ?? {})).toBe(false)
     await rejects(c.patchConfig({ rev: 9 }), 'config_field_forbidden')
     await rejects(c.patchConfig({ work: { enabled: ['slack'] } }), 'stepup_required')
     await c.patchConfig({ work: { enabled: ['slack'] } }, { stepupToken: await c.stepup('config:work') })

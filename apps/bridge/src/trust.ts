@@ -1,5 +1,5 @@
-// Trust mode on the bridge (docs/SECURITY.md "Trust mode"). The setting lives in config.json and only the Mac writes it
-// (`talos-app trust on|off`); everything that relaxes a check asks `trustOn` here, so there is one place to look.
+// Trust mode on the bridge (docs/SECURITY.md "Trust mode"). The setting lives in config.json. The owner writes it: `talos-app trust on|off` at the Mac, or a signed
+// config.patch from the app (the relay asks for the passkey on `on`); the agent never does; everything that relaxes a check asks `trustOn` here, so there is one place to look.
 import { type MessageT, riskForTrust, trustOn } from '@talos-app/protocol'
 import { type BridgeContext, postSystemNotice } from './context.ts'
 import { isShareOnly } from './share-only.ts'
@@ -52,8 +52,8 @@ export function ownerAskedIn(ctx: Pick<BridgeContext, 'store' | 'clock' | 'confi
 
 /**
  * Says so in the default thread when trust mode is not what the owner was last told: a flip while the bridge ran, or one
- * made while it was down. The lock is the same as for the other Mac-only settings, so the shell on the Mac can still edit the file;
- * this note is how the owner finds out.
+ * made while it was down. The agent runs as the same user, so its shell can still edit the file; this note, which the owner
+ * sees whether the flip came from the app, the Mac's shell or a file edit, is how the owner finds out.
  */
 export async function noteTrustFlip(ctx: BridgeContext): Promise<boolean> {
   if (ctx.mode !== 'live' || ctx.worker) return false
@@ -64,7 +64,7 @@ export async function noteTrustFlip(ctx: BridgeContext): Promise<boolean> {
   await postSystemNotice(
     ctx,
     on
-      ? 'Trust mode is on. Your own messages now run without a card or passkey unless they send as you, spend money or delete for good. Turn it off with: talos-app trust off'
+      ? 'Trust mode is on. Your own messages now run without a card or passkey unless they send as you, spend money or delete for good. Turn it off in the app (Settings) or with: talos-app trust off'
       : 'Trust mode is off. Cards and passkey steps are back to the standard rules.',
     { toAgent: true },
   )

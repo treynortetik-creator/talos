@@ -1,7 +1,12 @@
 // RFC 7386 JSON merge patch and the config.patch allowlist walk (spec 3.4). Shared by the bridge (enforces), the web
 // app (builds) and the testkit fakes, so all of them agree on which paths a patch may touch.
 import { IntegrationId } from './ids.ts'
-import { PHONE_PATCH_ENTRIES, SESSION_STEPUP_TOP_FIELDS, WORK_STEPUP_PATHS } from './settings-table.ts'
+import {
+  PHONE_PATCH_ENTRIES,
+  SESSION_STEPUP_TOP_FIELDS,
+  STEPUP_ON_TRUE_TOP_FIELDS,
+  WORK_STEPUP_PATHS,
+} from './settings-table.ts'
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -33,7 +38,7 @@ export function applyMergePatch(target: unknown, patch: unknown): unknown {
 }
 
 export type ConfigPatchCheck =
-  | { ok: true; touchesWorkEnabled: boolean; stepupPurpose?: 'config:session' }
+  | { ok: true; touchesWorkEnabled: boolean; stepupPurpose?: 'config:session'; turnsOnTrust?: true }
   | { ok: false; path: string }
 
 /**
@@ -42,7 +47,9 @@ export type ConfigPatchCheck =
  * (the bridge answers `config_field_forbidden`) and whether the patch touches `work.enabled` or `work.retention` (needs step-up
  * `config:work`). `stepupPurpose: 'config:session'` is set when the patch touches a setting the table marks `config:session`
  * (docs/CLAUDE-CODE.md C3.6). A patch that would need both step-ups is refused at the session path, since one step-up
- * token carries one purpose: send them separately.
+ * token carries one purpose: send them separately. `trust_mode` is a boolean (or null) that needs the session step-up only
+ * when set to `true`: that sets `turnsOnTrust`, which a relay must honour even with trust mode already on (the copy of
+ * the Mac's config it holds can be stale). Any other value for it is refused.
  */
 export function checkConfigPatch(patch: unknown): ConfigPatchCheck {
   if (!isObject(patch)) return { ok: false, path: '' }
@@ -74,9 +81,24 @@ export function checkConfigPatch(patch: unknown): ConfigPatchCheck {
     // what leaves a work system and how long the relay keeps it: both need the work step-up
     if (WORK_STEPUP_PATHS.some((p) => p.startsWith(`${k}.`) && p.slice(k.length + 1) in v)) touchesWorkEnabled = true
   }
+  let turnsOnTrust = false
+  for (const k of STEPUP_ON_TRUE_TOP_FIELDS) {
+    if (!(k in patch)) continue
+    const v = patch[k]
+    if (v !== null && typeof v !== 'boolean') return { ok: false, path: k }
+    if (v === true) turnsOnTrust = true
+  }
   const session = Object.keys(patch).find((k) => SESSION_STEPUP_TOP_FIELDS.includes(k))
-  if (session && touchesWorkEnabled) return { ok: false, path: session }
-  if (session) return { ok: true, touchesWorkEnabled, stepupPurpose: 'config:session' }
+  const sessionPath =
+    session ?? (turnsOnTrust ? (STEPUP_ON_TRUE_TOP_FIELDS.find((k) => patch[k] === true) ?? '') : undefined)
+  if (sessionPath !== undefined && touchesWorkEnabled) return { ok: false, path: sessionPath }
+  if (sessionPath !== undefined)
+    return {
+      ok: true,
+      touchesWorkEnabled,
+      stepupPurpose: 'config:session',
+      ...(turnsOnTrust ? { turnsOnTrust: true as const } : {}),
+    }
   return { ok: true, touchesWorkEnabled }
 }
 

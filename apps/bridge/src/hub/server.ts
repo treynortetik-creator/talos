@@ -9,6 +9,7 @@ import { createServer, type Server, type Socket } from 'node:net'
 import {
   type Frame,
   HUB_MAX_LINE_BYTES,
+  HUB_RPC_MAX_TEXT,
   HubWorkerLine,
   MAX_FRAME_BYTES,
   parseFrame,
@@ -16,6 +17,7 @@ import {
   threadSessionMode,
 } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
+import { workerScheduleTool } from '../schedules/worker-scope.ts'
 import { frameBytes } from '../transport.ts'
 import { readNonce, WorkersReader, writeReady } from '../worker/files.ts'
 import type { WorkerStore } from '../worker/store.ts'
@@ -47,7 +49,7 @@ export type HubServerOptions = {
   pgidOf?: (pid: number) => number | undefined
 }
 
-type Conn = { sock: Socket; buf: string; thread?: string }
+type Conn = { sock: Socket; buf: string; thread?: string; features?: readonly string[] }
 
 /** Constant-time compare (the nonce is the real gate on `hello`; the pid is self-reported). */
 function sameText(a: string, b: string): boolean {
@@ -72,6 +74,12 @@ export class HubServer {
 
   get path(): string {
     return this.ctx.paths.hubSock
+  }
+
+  /** What the connected worker for this thread said it can do (an older worker says nothing: `[]`), or undefined with no connection. */
+  featuresOf(thread: string): readonly string[] | undefined {
+    for (const c of this.conns) if (c.thread === thread) return c.features ?? []
+    return undefined
   }
 
   /** Open connections, welcomed or not. */
@@ -170,6 +178,7 @@ export class HubServer {
       const why = this.checkHello(msg)
       if (why) return this.refuse(c, why.code, why.message)
       c.thread = msg.thread_id
+      c.features = msg.features ?? []
       try {
         writeReady(this.ctx.paths.home, {
           v: 1,
@@ -187,6 +196,7 @@ export class HubServer {
     if (!c.thread) return this.refuse(c, 'unauthorized', 'say hello first')
     // P1 (WP-OC5): the worker's mod state; forwarded per scope once OC5 lands, ignored until then
     if (msg.t === 'mod') return
+    if (msg.t === 'rpc') return this.onRpc(c, c.thread, msg)
     const frameId = typeof msg.frame.id === 'string' ? msg.frame.id.slice(0, 64) : ''
     const r = await this.onOut(c.thread, msg.frame)
     if (DURABLE.has(String(msg.frame.type)) || !r.ok)
@@ -196,6 +206,41 @@ export class HubServer {
         state: r.ok ? r.state : 'refused',
         ...(r.ok ? {} : { code: r.code, message: r.message.slice(0, 300) }),
       })
+  }
+
+  /**
+   * A thread session asks for one of the Schedules tools (docs/OPTION-C.md "Thread schedules"). The thread is the one this
+   * connection proved at `hello`; nothing in the request can name another. Always answered, so the worker never waits on silence.
+   */
+  private async onRpc(c: Conn, thread: string, msg: { id: string; tool: string; args: Record<string, unknown> }) {
+    const { ctx } = this
+    const answer = (ok: boolean, text: string) =>
+      this.write(c, { t: 'rpc_result', id: msg.id, ok, text: text.slice(0, HUB_RPC_MAX_TEXT) })
+    // Switched back to shared since its hello: main owns its jobs again. Finishing a run the session already claimed still lands (like
+    // a card.update): the run would otherwise sit open until it timed out, and the owner would be told the agent never reported.
+    if (msg.tool !== 'schedule_run_done' && threadSessionMode(ctx.config.config, thread) !== 'dedicated')
+      return answer(
+        false,
+        `Thread "${thread}" no longer has its own session; the main session handles its schedules now. Stop here.`,
+      )
+    if (!ctx.schedules) return answer(false, 'Schedules are not available on the main bridge right now.')
+    try {
+      const r = await workerScheduleTool(
+        {
+          schedules: ctx.schedules,
+          store: this.o.store,
+          thread,
+          now: () => ctx.clock.now(),
+          kv: { get: (k) => ctx.store.kvGet(k), set: (k, v) => ctx.store.kvSet(k, v) },
+        },
+        msg.tool,
+        msg.args,
+      )
+      answer(r.ok, r.text)
+    } catch (e) {
+      ctx.log.warn('hub: schedule tool failed', { tool: msg.tool.slice(0, 40), error: (e as Error).message })
+      answer(false, `The main bridge could not run ${msg.tool.slice(0, 40)}: ${(e as Error).message}`.slice(0, 300))
+    }
   }
 
   /** null when the hello is good, else why not. */

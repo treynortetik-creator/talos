@@ -206,11 +206,11 @@ struct WorkerRulesTests {
   }
 
   @Test func pointerNeverDuringADialogOrRecentTyping() {
-    #expect(PointerTyper.mayType(screen: .none, lastClientActivity: nil, now: 100))
-    #expect(PointerTyper.mayType(screen: .none, lastClientActivity: 80, now: 100))
-    #expect(!PointerTyper.mayType(screen: .none, lastClientActivity: 95, now: 100))
+    #expect(PointerTyper.mayType(screen: .none, lastClientActivity: nil, now: 100, draftPresent: false))
+    #expect(PointerTyper.mayType(screen: .none, lastClientActivity: 80, now: 100, draftPresent: false))
+    #expect(!PointerTyper.mayType(screen: .none, lastClientActivity: 95, now: 100, draftPresent: false))
     for s: DialogMatcher.Screen in [.trust, .mcpConsent, .loginExpired, .bypassDisclaimer, .unknownSelection] {
-      #expect(!PointerTyper.mayType(screen: s, lastClientActivity: nil, now: 100))
+      #expect(!PointerTyper.mayType(screen: s, lastClientActivity: nil, now: 100, draftPresent: false))
     }
   }
 

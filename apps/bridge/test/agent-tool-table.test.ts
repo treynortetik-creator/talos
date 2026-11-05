@@ -114,14 +114,16 @@ describe('a worker is held to its own thread, tool by tool (callTool -> workerRe
   const text = async (ctx: BridgeContext, name: string, args: Record<string, unknown>) =>
     (await callTool(ctx, name, args)).content[0]?.text ?? ''
 
-  const THREAD_ARG_TOOLS = ['reply', 'attach', 'card', 'set_status', 'read_thread', 'handoff']
+  const THREAD_ARG_TOOLS = ['reply', 'attach', 'card', 'set_status', 'read_thread', 'handoff', 'schedule_propose']
   // Every tool a worker has must be classified here, so a new worker tool cannot arrive unchecked.
   const READ_ONLY_TOOLS = ['list_threads', 'read_inbound']
   const CARD_TOOLS = ['card_result']
+  // main's Schedules service answers these over the hub, as the thread the connection proved (thread-schedules.test.ts)
+  const HUB_SCHEDULE_TOOLS = ['schedules_list', 'schedule_run_start', 'schedule_run_done']
 
   test('the table classes every worker tool into exactly one case above', () => {
     const workerTools = AGENT_TOOL_NAMES.filter((n) => AGENT_TOOLS[n].worker).sort()
-    expect([...THREAD_ARG_TOOLS, ...READ_ONLY_TOOLS, ...CARD_TOOLS].sort()).toEqual(workerTools)
+    expect([...THREAD_ARG_TOOLS, ...READ_ONLY_TOOLS, ...CARD_TOOLS, ...HUB_SCHEDULE_TOOLS].sort()).toEqual(workerTools)
     expect([...WORKER_THREAD_LOCKED_TOOLS].map(String).sort()).toEqual([...THREAD_ARG_TOOLS].sort())
   })
 

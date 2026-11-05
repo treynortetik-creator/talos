@@ -277,13 +277,34 @@ public enum PointerTyper {
   public static let text = "Talos: new message in this thread. Call read_inbound."
   public static let quietSeconds: Double = 10
 
-  /// Type only at the normal prompt (no dialog on screen), and only when no attached client typed in the last 10 s.
-  public static func mayType(screen: DialogMatcher.Screen, lastClientActivity: Double?, now: Double) -> Bool {
-    guard screen == .none else { return false }
+  /// Type only at the normal prompt (no dialog on screen), only when Claude's input box holds no draft, and only when no
+  /// attached client typed in the last 10 s. The draft check does not depend on a client being attached: the owner who typed
+  /// half a line and switched to another session has detached.
+  public static func mayType(screen: DialogMatcher.Screen, lastClientActivity: Double?, now: Double, draftPresent: Bool) -> Bool {
+    guard screen == .none, !draftPresent else { return false }
     if let t = lastClientActivity, t > 0, now - t < quietSeconds { return false }
     return true
   }
 
+  /// Whether Claude's input box holds text the owner typed. Read from real 2.1.318 captures (Tests/Fixtures/real-2.1.318): the box
+  /// is two rule rows with the input between them; its first row is `❯` + U+00A0 (not an ASCII space) + the text, and a long
+  /// draft continues on indented rows. Earlier user messages in the history are drawn `❯` + an ASCII space, outside the box, and
+  /// are never the input. An empty box shows nothing after the glyph (no placeholder was seen), so any text there is a draft; a
+  /// screen with no box found says no draft (the dialog and busy checks apply there).
+  public static func draftPresent(rows: [String]) -> Bool {
+    let rules = rows.indices.filter { DialogMatcher.isFrameRule(rows[$0]) }
+    guard rules.count >= 2 else { return false }
+    // the last pair of rules with a `❯` row between them is the box
+    for k in stride(from: rules.count - 2, through: 0, by: -1) {
+      let a = rules[k], b = rules[k + 1]
+      guard b - a >= 2 else { continue }
+      let inner = Array(rows[(a + 1)..<b])
+      guard let first = inner.first, first.drop(while: { $0 == " " }).first == DialogMatcher.Strings.pointer else { continue }
+      let text = ([String(first.drop(while: { $0 == " " }).dropFirst())] + inner.dropFirst()).joined(separator: " ")
+      return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    return false
+  }
 }
 
 public enum ISOTime {

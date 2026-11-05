@@ -2,12 +2,12 @@
 // bridge, and closed with `finish`, so Chronos writes the same `ran-` marker it writes for any finished run. The agent is
 // `h.notes`: a heartbeat slot that finds nothing, or only fyi, must leave it empty.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { HEARTBEAT_META_KEY } from '@talos-app/protocol'
 import { SHADOW_LOG } from '../../src/heartbeat/runner.ts'
-import { storeFile } from '../../src/heartbeat/store.ts'
-import { draft, longTimeouts, type SchedHarness, startSched, waitFor } from '../schedules/harness.ts'
+import { emptyStore, storeFile } from '../../src/heartbeat/store.ts'
+import { draft, longTimeouts, type SchedHarness, startSched, tempHome, waitFor } from '../schedules/harness.ts'
 import { cmd, config, errAnswer, item, ok, printing, script, tmpDir } from './kit.ts'
 
 longTimeouts()
@@ -180,7 +180,10 @@ describe('a heartbeat slot, claimed and closed by the bridge', () => {
     )
     await Bun.sleep(300)
     expect(ran()).toEqual([])
-    expect(existsSync(storeFile(h.home, false, 'beat'))).toBe(false)
+    // the stopped bridge leaves the source's record for the next start to sweep, and nothing else
+    const st = JSON.parse(readFileSync(storeFile(h.home, false, 'beat'), 'utf8'))
+    expect([st.items, st.sources, st.pending, st.last_run]).toEqual([{}, {}, null, null])
+    expect(Object.keys(st.running)).toEqual(['hang'])
     expect(rows()).toEqual([])
   })
 
@@ -248,5 +251,29 @@ describe('a heartbeat slot, claimed and closed by the bridge', () => {
     await h.advance(61_000)
     await waitFor(() => ran().length === 1 && closed(), 30_000, 'the slot to run once Chronos answers')
     expect(h.notesOf('schedule_run')).toEqual([])
+  })
+})
+
+describe("how long a heartbeat may be off comes from the job's own times", () => {
+  // weekdays at 09:45, 12:15, 14:45, 17:15: the longest gap is Friday 17:15 to Monday 09:45 (64.5 h), so the limit is 129 h
+  async function requestAfterOff(hours: number): Promise<{ cursor: unknown }> {
+    const home = tempHome()
+    const d = tmpDir()
+    const iso = new Date(Date.parse(T0950) - hours * 3600_000).toISOString()
+    const st = emptyStore()
+    st.last_run = iso
+    st.sources.news = { cursor: { n: 1 }, last_ok: iso, fail_streak: 0 }
+    writeFileSync(storeFile(home, false, 'beat'), JSON.stringify(st))
+    await begin(config([cmd('news', printing(d, 'n', ok([])))]), { home })
+    await waitFor(() => ran().length === 1 && closed(), 30_000, 'the slot to close')
+    return JSON.parse(readFileSync(join(d, 'n.stdin'), 'utf8'))
+  }
+
+  test('100 hours off is not cold for this job (it was 72 before): the source keeps its cursor', async () => {
+    expect((await requestAfterOff(100)).cursor).toEqual({ n: 1 })
+  })
+
+  test('130 hours off is cold: the source starts over', async () => {
+    expect((await requestAfterOff(130)).cursor).toBeNull()
   })
 })

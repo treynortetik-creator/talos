@@ -218,22 +218,22 @@ export const AGENT_TOOLS = {
   schedules_list: {
     group: 'schedule',
     headless: true,
-    ...NOT_FOR_WORKERS,
+    ...WORKER_NO_THREAD,
   },
   schedule_propose: {
     group: 'schedule',
     headless: false,
-    ...NOT_FOR_WORKERS,
+    ...OWN_THREAD,
   },
   schedule_run_start: {
     group: 'schedule',
     headless: false,
-    ...NOT_FOR_WORKERS,
+    ...WORKER_NO_THREAD,
   },
   schedule_run_done: {
     group: 'schedule',
     headless: false,
-    ...NOT_FOR_WORKERS,
+    ...WORKER_NO_THREAD,
   },
   config_propose: {
     group: 'config',
@@ -320,7 +320,8 @@ export const MOD_BRIDGE_TOOLS = inGroup('mod')
 export const HEADLESS_BRIDGE_TOOLS = where<{ headless: true }>((r) => r.headless)
 
 /**
- * Bridge tools a worker-mode `talos-app` server lists. No thread lifecycle, inbox, schedules or voice: main owns those.
+ * Bridge tools a worker-mode `talos-app` server lists. No thread lifecycle, inbox or voice: main owns those. The Schedules tools
+ * are main's service, so a worker's copy asks the hub and sees only its own thread's jobs (docs/OPTION-C.md "Thread schedules").
  * The ones that post into a thread only accept the worker's own (WORKER_THREAD_LOCKED_TOOLS).
  */
 export const WORKER_BRIDGE_TOOLS = where<{ worker: true }>((r) => r.worker)

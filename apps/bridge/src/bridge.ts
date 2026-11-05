@@ -220,7 +220,7 @@ export class Bridge {
       emit: (n) => this.emitFn(withDrivingMeta(n, drivingActive(config.config, this.clock.now()))),
       permission: undefined as unknown as PermissionRelay,
       session: undefined as unknown as SessionControls,
-      ...(worker ? { worker: { thread: worker } } : {}),
+      ...(worker ? { worker: { thread: worker, ...(hubClient ? { hub: hubClient } : {}) } } : {}),
     }
     this.hubClient = hubClient
     if (live) {
@@ -229,6 +229,7 @@ export class Bridge {
       const router = new ThreadRouter(this.ctx, (n) => this.emitFn(n), {
         store: workerStoreOf(this.ctx),
         onCardUndelivered: (id, told) => this.inbound?.cardNotDelivered(id, told),
+        workerFeatures: (thread) => this.hub?.featuresOf(thread),
       })
       this.router = router
       this.ctx.leads = {

@@ -6,7 +6,7 @@ import TalosSupervisor
 
 /// The agent's terminal inside the main window: the Terminal item in the page's sidebar. The page leaves an empty space and
 /// says where it is (`terminal_view`); this view is laid over that space. It is a second viewer on the agent's tmux session,
-/// the same `tmux attach` the Show Terminal window runs, so closing it ends only our own child and the agent keeps running.
+/// the same `tmux attach` the Terminals window runs, so closing it ends only our own child and the agent keeps running.
 /// While the view is open it looks again every 1.5 s, like the window does: a session that starts later is attached when it
 /// appears, and a viewer that ended (the agent stopped, tmux detached us) is replaced by the dead pane's last screen or by a note.
 @MainActor
@@ -15,7 +15,7 @@ final class EmbeddedTerminal: NSObject, LocalProcessTerminalViewDelegate {
   enum Host {
     /// No supervisor yet (Talos starts it at launch; this is only the moment before).
     case none
-    /// The owned-pty host: no tmux 3.2+, so there is nothing to attach to. The Show Terminal window mirrors it.
+    /// The owned-pty host: no tmux 3.2+, so there is nothing to attach to. The Terminals window mirrors it.
     case noTmux
     case tmux(attach: [String])
   }
@@ -42,7 +42,7 @@ final class EmbeddedTerminal: NSObject, LocalProcessTerminalViewDelegate {
   }
 
   static let noTmuxNote =
-    "This Mac has no tmux 3.2 or newer, so the agent runs in a pty Talos owns and can't be shown here. Menu → Show Terminal mirrors it."
+    "This Mac has no tmux 3.2 or newer, so the agent runs in a pty Talos owns and can't be shown here. Menu → Terminals… mirrors it."
 
   /// The smallest room the view is shown in: `TerminalViewRect.minColumns` by `minRows` cells of the viewer's own font, plus its
   /// scroller. Smaller, and the page's own text stays showing. The agent's screen takes the size of the last viewer and keeps it.

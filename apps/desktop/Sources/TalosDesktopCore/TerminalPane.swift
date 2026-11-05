@@ -36,11 +36,11 @@ public enum ThreadSessions {
   public static func rows(from file: WorkersFile?) -> [ThreadSessionRow] {
     guard let file else { return [] }
     return file.threads.keys.sorted().compactMap { id in
-      guard let e = file.threads[id], TmuxCommands.isValidSessionName(e.tmux) else { return nil }
+      guard let e = file.threads[id], WorkerSpec.isThreadId(id) else { return nil }
       let needsMac = e.state == "failed" && e.error?.code == "needs_mac"
       let label = needsMac ? e.error?.detail.flatMap { $0.isEmpty ? nil : $0 } : nil
       return ThreadSessionRow(
-        threadId: id, tmuxSession: e.tmux, cwd: e.cwd, sessionId: e.session_id.flatMap { WorkerSpec.isUUID($0) ? $0 : nil },
+        threadId: id, tmuxSession: WorkerSpec.tmuxName(id), cwd: e.cwd, sessionId: e.session_id.flatMap { WorkerSpec.isUUID($0) ? $0 : nil },
         stateText: stateText(e.state), detail: detail(e), canAttach: !WorkersFile.restingStates.contains(e.state),
         needsMac: needsMac, dialogLabel: label)
     }

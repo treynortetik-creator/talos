@@ -5,10 +5,8 @@
 //   default one hands nothing over, so act items become plain lines the owner can answer (HB4 wires the real wake).
 //
 // Nothing here talks to Chronos. The caller (ScheduleService) claims the slot before and closes it after.
-import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import {
-  type Frame,
   type HeartbeatConfigT,
   HeartbeatItem,
   type HeartbeatItemT,
@@ -18,19 +16,18 @@ import {
   type HeartbeatSourceItemT,
   heartbeatMuteMatches,
   isQuiet,
-  type MessageT,
   newId,
   newUlid,
   parseHeartbeatSourceResponse,
 } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
-import { replyFrame } from '../frames-out.ts'
-import { ensureDir, writeFileAtomic } from '../fsutil.ts'
 import type { ThreadRef } from '../notify.ts'
 import { type BuiltinDeps, runBuiltin } from './builtin.ts'
+import { COLD_UNKNOWN_MS, coldNote, coldness } from './cold.ts'
 import { composeDigest, type DigestInput } from './digest.ts'
 import { pickForPack, prunePacks, removePack } from './pack.ts'
 import {
+  appendShadow,
   countsOnly,
   plainError,
   type SrcOut,
@@ -42,6 +39,7 @@ import {
   updateSources,
   zero,
 } from './run-parts.ts'
+import { sendRow } from './send.ts'
 import { baseEnv, runSource } from './spawn.ts'
 import {
   addWake,
@@ -51,18 +49,14 @@ import {
   loadStore,
   localDate,
   prune,
+  type Running,
   type StoredItem,
   saveStore,
   storeFile,
   wakesOn,
 } from './store.ts'
 
-/** A source not heard from for this long starts over (no cursor) instead of flooding the owner with a backlog. */
-export const REBASELINE_AFTER_MS = 72 * 3600_000
-export { FAIL_STREAK_SAY } from './run-parts.ts'
-export const SHADOW_LOG = 'heartbeat-shadow.jsonl'
-const SHADOW_LOG_MAX_BYTES = 512 * 1024
-const SHADOW_LOG_KEEP_LINES = 200
+export { FAIL_STREAK_SAY, SHADOW_LOG } from './run-parts.ts'
 
 /**
  * What the agent wake gets (HB4: the real one builds the run pack from `items`). The answer says what happened to the hand-over:
@@ -93,8 +87,6 @@ export const stubWake: HeartbeatWake = async () => ({ delivered: false })
 
 /** A wake that has not come back after this long is treated as killed (the run timeout is under 45 minutes). */
 export const WAKE_STALE_MS = 2 * 3600_000
-/** The most backlog days said in the "was off" line. */
-const DAY_MS = 24 * 3600_000
 
 export type RunnerDeps = {
   ctx: Pick<BridgeContext, 'paths' | 'clock' | 'config' | 'store' | 'transport' | 'log' | 'env'>
@@ -129,6 +121,8 @@ export type RunInput = {
     windowH: number /** Called as each source answers, so a run that breaks later can still report them. */
     onSource?: (o: SrcOut) => void
   }
+  /** How long this heartbeat may be off before it starts over (`coldAfterMs` of its schedule). Unset: the longest any job allows. */
+  coldAfterMs?: number
   /** The run id of this slot (the Chronos claim's). Needed for a wake; a run without one cannot wake. */
   runId?: string
   signal?: AbortSignal
@@ -309,12 +303,9 @@ export class HeartbeatRunner {
     }
 
     // How long THIS HEARTBEAT has gone without a completed run (its own last_run, not a source's silence: a source that was down
-    // while the heartbeat kept running holds its cursor and delivers normally when it recovers). Past 72 h every source starts
-    // over with no cursor, and whatever it reports on that first look is the backlog, recorded and not shown.
-    const coldMs =
-      store.last_run && nowMs - Date.parse(store.last_run) > REBASELINE_AFTER_MS
-        ? nowMs - Date.parse(store.last_run)
-        : 0
+    // while the heartbeat kept running holds its cursor and delivers normally when it recovers). Past the job's own limit
+    // (cold.ts) every source starts over with no cursor, and whatever it reports on that first look is the backlog, recorded and not shown.
+    const { ms: coldMs, cold } = coldness(store, nowMs, input.coldAfterMs ?? COLD_UNKNOWN_MS)
 
     // ---- the sources
     const runMs = config.run_timeout_s * this.secondMs
@@ -327,7 +318,9 @@ export class HeartbeatRunner {
     try {
       outs.push(
         ...(await Promise.all(
-          enabled.map((s) => this.runSource(s, store, nowMs, dry, input.jobId, lim, ac, coldMs > 0, input.test)),
+          enabled.map((s) =>
+            this.runSource(s, store, dry ? null : file, nowMs, dry, input.jobId, lim, ac, cold, input.test),
+          ),
         )),
       )
     } finally {
@@ -387,7 +380,7 @@ export class HeartbeatRunner {
         old.level = it.level
         continue
       }
-      const skipped = it.level !== 'silent' && coldMs > 0
+      const skipped = it.level !== 'silent' && cold
       if (skipped) backlog++
       else newBy[it.level]++
       store.items[id] = {
@@ -399,12 +392,7 @@ export class HeartbeatRunner {
         attempts: 0,
       }
     }
-    if (coldMs > 0 && outs.some((o) => o.ok)) {
-      const days = Math.floor(coldMs / DAY_MS)
-      notes.push(
-        `Heartbeat was off for ${days} ${days === 1 ? 'day' : 'days'}. Skipped the backlog${backlog ? ` (${backlog} ${backlog === 1 ? 'item' : 'items'})` : ''}.`,
-      )
-    }
+    if (cold && outs.some((o) => o.ok)) notes.push(coldNote(coldMs, backlog))
 
     // ---- sources' own state
     const failures = updateSources(store, outs, nowIso)
@@ -476,7 +464,7 @@ export class HeartbeatRunner {
       }
       try {
         saveStore(file, store)
-        this.appendShadow({
+        appendShadow(this.home, {
           at: nowIso,
           run_key: input.runKey,
           job_id: input.jobId,
@@ -693,6 +681,7 @@ export class HeartbeatRunner {
   private async runSource(
     cfg: HeartbeatSourceConfigT,
     store: HeartbeatStore,
+    file: string | null,
     nowMs: number,
     dry: boolean,
     jobId: string,
@@ -701,7 +690,7 @@ export class HeartbeatRunner {
     cold: boolean,
     test?: RunInput['test'],
   ): Promise<SrcOut> {
-    const out = await this.runSourceOne(cfg, store, nowMs, dry, jobId, lim, run, cold, test?.windowH)
+    const out = await this.runSourceOne(cfg, store, file, nowMs, dry, jobId, lim, run, cold, test?.windowH)
     test?.onSource?.(out)
     return out
   }
@@ -709,6 +698,7 @@ export class HeartbeatRunner {
   private async runSourceOne(
     cfg: HeartbeatSourceConfigT,
     store: HeartbeatStore,
+    file: string | null,
     nowMs: number,
     dry: boolean,
     jobId: string,
@@ -749,6 +739,13 @@ export class HeartbeatRunner {
           stdin: JSON.stringify(req),
           timeoutMs: limitMs,
           signal: own.signal,
+          ...(file
+            ? {
+                onStart: (p) =>
+                  this.markRunning(store, file, cfg.id, { ...p, at: new Date(ctx.clock.now()).toISOString() }),
+                onEnd: () => this.markRunning(store, file, cfg.id, null),
+              }
+            : {}),
         })
         if (!r.ok) {
           if (r.reason === 'aborted' || r.reason === 'timeout')
@@ -795,6 +792,21 @@ export class HeartbeatRunner {
     }
   }
 
+  /**
+   * Keeps the store's `running` record of a source process: set when it starts, cleared when it ends. Written at once, so a crash
+   * leaves it for the next start to find (orphans.ts). A superseded bridge writes nothing: the store is the next one's.
+   */
+  private markRunning(store: HeartbeatStore, file: string, id: string, r: Running | null) {
+    if (r) store.running[id] = r
+    else delete store.running[id]
+    if (!this.alive()) return
+    try {
+      saveStore(file, store)
+    } catch (e) {
+      this.d.ctx.log.warn('heartbeat store not saved', { error: (e as Error).message })
+    }
+  }
+
   // ---- posting
 
   /** A row with no store behind it (an unreadable config). Never throws. */
@@ -810,38 +822,17 @@ export class HeartbeatRunner {
     )
   }
 
-  /**
-   * One row, idempotent on its message id: the history row is made first, then the frame goes through the outbox (which
-   * keeps it until the relay acks, across reconnects). A message that already exists is never made or sent again. Throws
-   * when the frame cannot be accepted (too big, refused).
-   */
-  private async send(
-    p: { message_id: string; frame_id: string; thread_id: string; text: string; silent: boolean },
-    nowMs: number,
-  ) {
-    const { ctx } = this.d
-    if (ctx.store.getMessage(p.message_id)) return
-    const message: MessageT = {
-      id: p.message_id,
-      thread_id: p.thread_id,
-      author: 'system',
-      kind: 'text',
-      text: p.text,
-      format: 'plain',
-      attachments: [],
-      via: 'app',
-      created_at: new Date(nowMs).toISOString(),
-      heartbeat: true,
-    }
-    ctx.store.addMessage(message)
-    const frame = { ...replyFrame(nowMs, message, p.silent ? { silent: true } : {}), id: p.frame_id } as Frame
-    await ctx.transport.sendDurable(frame)
+  /** One row, idempotent on its message id (send.ts). Throws when the frame cannot be accepted. */
+  private send(p: Parameters<typeof sendRow>[1], nowMs: number) {
+    return sendRow(this.d.ctx, p, nowMs)
   }
 
   /**
-   * A crash between the store write and the post leaves `pending`. The post is retried ONCE: if its message already exists
-   * (the crash came after the post began) nothing is sent; otherwise it is sent now. Either way its items are then marked
-   * shown. A second leftover (a crash during the retry) is dropped and its items go out in the next digest.
+   * A crash between the store write and the post leaves `pending`. The post is retried ONCE: if its history row already exists
+   * the post is taken as made and nothing is sent; otherwise it is sent now. Either way its items are then marked shown. The row
+   * is made just before its frame goes to the outbox, so a crash in the few statements between the two leaves a row with no
+   * frame, and that digest is not sent (known gap). A second leftover (a crash during the retry) is dropped and its items go out
+   * in the next digest.
    */
   private async recoverPending(
     store: HeartbeatStore,
@@ -971,20 +962,5 @@ export class HeartbeatRunner {
       { message_id: newId('m'), frame_id: newUlid(), thread_id: this.d.threadFor(jobId).id, text, silent },
       this.d.ctx.clock.now(),
     )
-  }
-
-  private appendShadow(row: Record<string, unknown>) {
-    const path = join(this.home, SHADOW_LOG)
-    ensureDir(this.home)
-    appendFileSync(path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
-    try {
-      if (existsSync(path) && statSync(path).size > SHADOW_LOG_MAX_BYTES) {
-        const lines = readFileSync(path, 'utf8').split('\n').filter(Boolean)
-        const keep = lines.slice(-SHADOW_LOG_KEEP_LINES).join('\n')
-        writeFileAtomic(path, `${keep}\n`, 0o600)
-      }
-    } catch {
-      // trimming is housekeeping; the row above is already written
-    }
   }
 }

@@ -1,8 +1,9 @@
 // Runs one heartbeat source as a process (docs/HEARTBEAT.md, docs/SCHEDULES.md S1.7): argv exactly as configured, never a
 // shell, an own process group so a hung source and everything it started can be killed by PID, a minimal base environment
 // (no inherited secrets), and a hard cap on what it may print. Never throws: every way it can go wrong is a plain result.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { HEARTBEAT_SOURCE_MAX_BYTES } from '@talos-app/protocol'
+import { type PsInfo, parsePsLine } from '../lifecycle.ts'
 
 /** Not a secret, and enough for a source to find its own tools and its own credential files. Nothing else is inherited. */
 const BASE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin'
@@ -24,6 +25,27 @@ export type SpawnOptions = {
   timeoutMs: number
   signal?: AbortSignal | undefined
   maxBytes?: number
+  /** The process started: its group id, the command line and the start time the system shows for it. Not called when that cannot be read. */
+  onStart?: (p: { pgid: number; command: string; lstart: string }) => void
+  /** The source is over and its group is gone (or was signalled). Called once, only after `onStart`. */
+  onEnd?: () => void
+}
+
+/**
+ * What `ps` shows for `pid` (start time and command line, parsed like the instance registry does): `gone` when there is no such
+ * process, `unknown` when ps itself could not answer (it timed out or could not run), which is not proof of anything.
+ */
+export function processInfo(pid: number): PsInfo | 'gone' | 'unknown' {
+  const r = spawnSync('ps', ['-p', String(pid), '-o', 'lstart=,command='], {
+    encoding: 'utf8',
+    timeout: 2000,
+    env: { ...process.env, LC_ALL: 'C' }, // lstart text must not depend on the shell's locale
+  })
+  if (r.error || r.signal) return 'unknown'
+  const line = r.status === 0 ? r.stdout.replace(/\n$/, '') : ''
+  if (line.trim() === '') return 'gone'
+  const info = parsePsLine(line)
+  return { lstart: info.lstart, command: info.command.slice(0, 2000) }
 }
 
 /**
@@ -41,6 +63,15 @@ export function killGroup(pid: number | undefined, leaderGone = false) {
     } catch {
       // already gone
     }
+  }
+}
+
+/** A bookkeeping callback must never break the run it watches. */
+const tell = (f: (() => void) | undefined) => {
+  try {
+    f?.()
+  } catch {
+    // the caller logs its own failures
   }
 }
 
@@ -65,12 +96,14 @@ export function runSource(o: SpawnOptions): Promise<SpawnResult> {
     let bytes = 0
     let stderr = ''
     let settled = false
+    let started = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const done = (r: SpawnResult) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       o.signal?.removeEventListener('abort', onAbort)
+      if (started) tell(o.onEnd)
       resolve(r)
     }
     const stop = (r: Extract<SpawnResult, { ok: false }>) => {
@@ -81,6 +114,12 @@ export function runSource(o: SpawnOptions): Promise<SpawnResult> {
       done(r) // the caller never waits for a pipe a grandchild may hold open
     }
     const onAbort = () => stop({ ok: false, reason: 'aborted', message: 'stopped' })
+    // Recorded before the source can read its input, so a crash at any later point leaves a way to find the group.
+    const info = o.onStart && child.pid ? processInfo(child.pid) : null
+    if (child.pid && info && typeof info !== 'string') {
+      started = true
+      tell(() => o.onStart?.({ pgid: child.pid as number, ...info }))
+    }
     o.signal?.addEventListener('abort', onAbort, { once: true })
     timer = setTimeout(
       () => stop({ ok: false, reason: 'timeout', message: `no answer within ${Math.round(o.timeoutMs / 1000)} s` }),

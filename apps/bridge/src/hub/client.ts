@@ -3,13 +3,34 @@
 // every frame it would have sent the relay. The hub validates, sends and acks. When the socket is down the
 // worker falls back to the signed HTTP path (worker/transport.ts); it never opens the relay socket itself.
 import { createConnection, type Socket } from 'node:net'
-import { HUB_MAX_LINE_BYTES, HubHubLine, type HubHubLineT } from '@talos-app/protocol'
+import { HUB_FEATURE_SCHEDULES, HUB_MAX_LINE_BYTES, HubHubLine, type HubHubLineT, newUlid } from '@talos-app/protocol'
 import type { Logger } from '../log.ts'
 
 export type HubAckT = Extract<HubHubLineT, { t: 'ack' }>
 
 const HELLO_TIMEOUT_MS = 5_000
 export const OUT_TIMEOUT_MS = 15_000
+/** A Schedules tool waits in main's schedule queue behind Chronos; give it longer than a frame ack. */
+export const RPC_TIMEOUT_MS = 60_000
+/** Longer for the tools that wait in main's schedule queue behind a Chronos call or a slow card write. */
+const RPC_TIMEOUT_BY_TOOL: Record<string, number> = {
+  schedule_run_start: 150_000,
+  schedule_run_done: 150_000,
+  schedule_propose: 120_000,
+}
+
+/** What to do after an answer that never came: the action may or may not have run, and the next step differs per tool. */
+function unansweredText(tool: string, why: string): string {
+  const next: Record<string, string> = {
+    schedule_run_start:
+      "Check schedules_list for the run's state before doing anything else. Calling schedule_run_start again for a run you already claimed is safe: it answers GO.",
+    schedule_run_done:
+      "Check schedules_list for the run's state. Calling schedule_run_done again is safe: a run that is already closed answers that it is.",
+    schedule_propose:
+      "A card may be waiting in this thread: look at it, and don't propose the same thing again until you have. Use schedules_list to see the job's current state.",
+  }
+  return `${why} It may or may not have run. ${next[tool] ?? 'Check with schedules_list before trying again.'}`
+}
 const RECONNECT_MS = 3_000
 
 export type HubClientOptions = {
@@ -20,6 +41,8 @@ export type HubClientOptions = {
   log: Logger
   /** Test seam. */
   reconnectMs?: number
+  /** Test seam: what the hello advertises (default: everything this build does). `[]` plays an older worker. */
+  features?: string[]
 }
 
 export class HubClient {
@@ -27,8 +50,11 @@ export class HubClient {
   private welcomed = false
   private buf = ''
   private waiters = new Map<string, (a: HubAckT) => void>()
+  private rpcWaiters = new Map<string, { tool: string; done: (r: { ok: boolean; text: string }) => void }>()
   private helloWait: ((ok: boolean) => void) | undefined
   private closed = false
+  /** The hub refused a hello that carried `features` (an older hub's strict schema): say hello the old way from now on. */
+  private plainHello = false
   private timer: ReturnType<typeof setTimeout> | undefined
   /** The hub's last refusal of our hello (shown in the log; a refused worker keeps retrying slowly). */
   lastRefusal: { code: string; message: string } | undefined
@@ -64,7 +90,13 @@ export class HubClient {
       sock.setEncoding('utf8')
       sock.on('connect', () => {
         sock.write(
-          `${JSON.stringify({ t: 'hello', thread_id: this.o.threadId, pid: this.o.pid ?? process.pid, nonce: this.o.nonce })}\n`,
+          `${JSON.stringify({
+            t: 'hello',
+            thread_id: this.o.threadId,
+            pid: this.o.pid ?? process.pid,
+            nonce: this.o.nonce,
+            ...(this.features().length && !this.plainHello ? { features: this.features() } : {}),
+          })}\n`,
         )
       })
       sock.on('data', (chunk: string) => this.onData(chunk))
@@ -76,11 +108,18 @@ export class HubClient {
         for (const w of this.waiters.values())
           w({ t: 'ack', frame_id: '', state: 'refused', code: 'hub_closed', message: 'the hub closed' })
         this.waiters.clear()
+        for (const w of this.rpcWaiters.values())
+          w.done({ ok: false, text: unansweredText(w.tool, 'The hub closed before the main bridge answered.') })
+        this.rpcWaiters.clear()
         finish(false)
         if (wasUp) this.o.log.warn('hub socket closed; replies fall back to HTTP until it is back')
         this.scheduleReconnect()
       })
     })
+  }
+
+  private features(): string[] {
+    return this.o.features ?? [HUB_FEATURE_SCHEDULES]
   }
 
   private scheduleReconnect() {
@@ -125,12 +164,19 @@ export class HubClient {
       this.helloWait?.(true)
     } else if (msg.t === 'refused') {
       this.lastRefusal = { code: msg.code, message: msg.message }
+      if (msg.code === 'bad_frame' && this.features().length) this.plainHello = true
       this.o.log.warn('hub refused this session', { code: msg.code })
       this.helloWait?.(false)
       this.sock?.destroy()
     } else if (msg.t === 'controls') {
       // P1 (WP-OC5): controls for this worker's mod; nothing here runs them yet
       this.o.log.info('hub: controls line ignored (no mod in this worker)')
+    } else if (msg.t === 'rpc_result') {
+      const w = this.rpcWaiters.get(msg.id)
+      if (w) {
+        this.rpcWaiters.delete(msg.id)
+        w.done({ ok: msg.ok, text: msg.text })
+      }
     } else {
       const w = this.waiters.get(msg.frame_id)
       if (w) {
@@ -155,6 +201,41 @@ export class HubClient {
         resolve(a)
       })
       sock.write(`${JSON.stringify({ t: 'out', frame })}\n`)
+    })
+  }
+
+  /**
+   * Asks main's bridge to run a Schedules tool for this thread (the hub decides the thread, not the request). Never rejects:
+   * no hub, a hub too old to know `rpc`, or a slow one reads as `ok:false` in words the agent can act on, never as an empty answer.
+   */
+  rpc(tool: string, args: Record<string, unknown>, timeoutMs?: number): Promise<{ ok: boolean; text: string }> {
+    const sock = this.sock
+    if (!this.connected || !sock)
+      return Promise.resolve({
+        ok: false,
+        text: "The main bridge isn't reachable from this thread session (no hub socket). Nothing was done; try again shortly.",
+      })
+    const id = `rpc_${newUlid()}`
+    const wait = timeoutMs ?? RPC_TIMEOUT_BY_TOOL[tool] ?? RPC_TIMEOUT_MS
+    return new Promise((resolve) => {
+      const t = setTimeout(() => {
+        this.rpcWaiters.delete(id)
+        resolve({
+          ok: false,
+          text: unansweredText(
+            tool,
+            'The main bridge did not answer in time (an older main bridge ignores this request).',
+          ),
+        })
+      }, wait)
+      this.rpcWaiters.set(id, {
+        tool,
+        done: (r) => {
+          clearTimeout(t)
+          resolve(r)
+        },
+      })
+      sock.write(`${JSON.stringify({ t: 'rpc', id, tool, args })}\n`)
     })
   }
 

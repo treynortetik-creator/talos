@@ -25,9 +25,37 @@ final class SafeTerminalView: LocalProcessTerminalView {
   }
 }
 
+/// A plain area that paints the window colour in whichever theme is showing, so the notes drawn on it read in both.
+final class WindowBackgroundView: NSView {
+  override init(frame: NSRect) {
+    super.init(frame: frame)
+    wantsLayer = true
+  }
+  required init?(coder: NSCoder) { fatalError("not used") }
+  override var wantsUpdateLayer: Bool { true }
+  override func updateLayer() { layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor }
+}
+
+/// The Terminals window. Cmd+1 … Cmd+9 pick the sidebar's entries while it is the key window; nothing else is intercepted, so
+/// the terminal inside still gets every other key.
+final class TerminalNSWindow: NSWindow {
+  var onShortcut: (Int) -> Bool = { _ in false }
+
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    if mods == .command, let c = event.charactersIgnoringModifiers, c.count == 1, let n = Int(c), (1...9).contains(n), onShortcut(n) {
+      return true
+    }
+    return super.performKeyEquivalent(with: event)
+  }
+}
+
 /// The terminal window (DESKTOP-SPEC 4.6, WP-D2). Tab 1 is a viewer on the agent's tmux session: a SwiftTerm view running
 /// `tmux -L talos attach -t agent`. Closing the window ends only that viewer (our own child); the agent keeps running in
 /// tmux and the pane re-attaches next time. Tab 2 appears while the sign-in pane (Pairing) is open.
+///
+/// Tab 1 is the session switcher: a sidebar lists Main and every thread session with a state badge, and picking one attaches
+/// the embedded terminal to that tmux session (a parked thread shows Resume, a failed one its error).
 @MainActor
 final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTerminalViewDelegate {
   static let shared = TerminalWindowController()
@@ -45,6 +73,46 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
   private var timer: Timer?
   private var lastViewerStart = Date.distantPast
   private var wantsKeyboard = true
+  // the switcher
+  private let sidebar = SessionSidebar()
+  private var holder: NSView?
+  private let infoTitle = NSTextField(labelWithString: "")
+  private let infoDetail = NSTextField(wrappingLabelWithString: "")
+  private let resumeButton = NSButton(title: "Resume", target: nil, action: nil)
+  private let infoBox = NSStackView()
+  private(set) var selectedId = SessionSwitcher.mainId
+  private(set) var entries: [SwitcherEntry] = []
+  private var workersFile: WorkersFile?
+  /// The tmux session the running viewer is attached to.
+  private var viewerSession: String?
+
+  /// Where the switcher gets thread sessions and what its buttons run. `live` reads the worker manager; tests hand in their own
+  /// (a private tmux socket, a fake worker file).
+  struct SwitcherSource {
+    var workers: () -> WorkersFile?
+    var needsYou: () -> [String: String]
+    var names: () -> [String: String]
+    /// The `tmux attach` for a picked entry, nil when it has nothing to attach to or this Mac has no worker manager.
+    var attach: (SwitcherEntry) -> [String]?
+    var resume: (String) -> WorkerManager.ResumeRequest
+
+    @MainActor static func live(_ model: SupervisorController) -> SwitcherSource {
+      SwitcherSource(
+        workers: { model.workers?.snapshot() },
+        needsYou: { model.workers?.needsYou() ?? [:] },
+        names: {
+          SessionSwitcher.names(
+            fromConfig: model.workers.flatMap { FileManager.default.contents(atPath: $0.options.talosHome + "/config.json") })
+        },
+        attach: { e in
+          guard let o = model.workers?.options else { return nil }
+          return SessionSwitcher.attachArgv(for: e, tmux: o.tmux, socket: o.socket, configPath: o.tmuxConf)
+        },
+        resume: { model.workers?.requestResume($0) ?? .failed })
+    }
+  }
+  var switcherSourceOverride: SwitcherSource?
+  private func switcherSource(_ model: SupervisorController) -> SwitcherSource { switcherSourceOverride ?? .live(model) }
 
   func attach(model: SupervisorController) { self.model = model }
   func isAttached(to m: SupervisorController) -> Bool { model === m }
@@ -81,20 +149,21 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
   }
 
   private func build() {
-    let w = NSWindow(
+    let w = TerminalNSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
       styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
     w.title = "Talos Terminal"
     w.isReleasedWhenClosed = false
     w.delegate = self
+    w.onShortcut = { [weak self] n in self?.selectShortcut(n) ?? false }
     w.setFrameAutosaveName("TalosTerminalWindow")
     let tv = NSTabView()
     let item = NSTabViewItem(identifier: "agent")
-    item.label = "Agent"
+    item.label = "Sessions"
     let n = NSTextField(wrappingLabelWithString: "")
     n.textColor = .secondaryLabelColor
     note = n
-    let holder = NSView()
+    let holder = WindowBackgroundView()
     n.translatesAutoresizingMaskIntoConstraints = false
     holder.addSubview(n)
     NSLayoutConstraint.activate([
@@ -102,11 +171,62 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
       n.trailingAnchor.constraint(equalTo: holder.trailingAnchor, constant: -16),
       n.topAnchor.constraint(equalTo: holder.topAnchor, constant: 16),
     ])
-    item.view = holder
+    self.holder = holder
+    // sidebar on the left, the terminal (or the parked/failed panel) on the right
+    infoTitle.font = .systemFont(ofSize: 16, weight: .semibold)
+    infoDetail.textColor = .secondaryLabelColor
+    resumeButton.target = self
+    resumeButton.action = #selector(resumeTapped)
+    resumeButton.bezelStyle = .rounded
+    infoBox.orientation = .vertical
+    infoBox.alignment = .leading
+    infoBox.spacing = 10
+    infoBox.setViews([infoTitle, infoDetail, resumeButton], in: .top)
+    infoBox.translatesAutoresizingMaskIntoConstraints = false
+    infoBox.isHidden = true
+    holder.addSubview(infoBox)
+    NSLayoutConstraint.activate([
+      infoBox.leadingAnchor.constraint(equalTo: holder.leadingAnchor, constant: 20),
+      infoBox.trailingAnchor.constraint(lessThanOrEqualTo: holder.trailingAnchor, constant: -20),
+      infoBox.topAnchor.constraint(equalTo: holder.topAnchor, constant: 20),
+    ])
+    let root = NSView()
+    sidebar.onPick = { [weak self] id in self?.select(id, takeKeyboard: true) }
+    for v in [sidebar, holder] {
+      v.translatesAutoresizingMaskIntoConstraints = false
+      root.addSubview(v)
+    }
+    let rule = NSBox()
+    rule.boxType = .separator
+    rule.translatesAutoresizingMaskIntoConstraints = false
+    root.addSubview(rule)
+    NSLayoutConstraint.activate([
+      sidebar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+      sidebar.topAnchor.constraint(equalTo: root.topAnchor),
+      sidebar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+      sidebar.widthAnchor.constraint(equalToConstant: SessionSidebar.width),
+      rule.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+      rule.topAnchor.constraint(equalTo: root.topAnchor),
+      rule.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+      rule.widthAnchor.constraint(equalToConstant: 1),
+      holder.leadingAnchor.constraint(equalTo: rule.trailingAnchor),
+      holder.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+      holder.topAnchor.constraint(equalTo: root.topAnchor),
+      holder.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+    ])
+    item.view = root
     tv.addTabViewItem(item)
     tabs = tv
     w.contentView = tv
+    // The sidebar's constraints give the content a smallest size it can't go under, so the window can never collapse to a strip
+    // (a saved frame from a build that did is ignored when it's too small to be the owner's choice).
+    w.contentMinSize = NSSize(width: 560, height: 320)
+    root.heightAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
     w.center()
+    if w.contentLayoutRect.height < 320 || w.contentLayoutRect.width < 560 {
+      w.setContentSize(NSSize(width: 900, height: 600))
+      w.center()
+    }
     window = w
   }
 
@@ -114,8 +234,14 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
 
   /// Starts the tmux viewer when there is a session to look at and none running; says why when there isn't.
   private func tick() {
-    guard let model, let holder = tabs?.tabViewItem(at: 0).view else { return }
+    guard let model, let holder else { return }
     refreshThreadsTab(model)
+    refreshSwitcher(model)
+    if selectedId != SessionSwitcher.mainId, let entry = entries.first(where: { $0.id == selectedId }) {
+      tickThread(entry, model)
+      return
+    }
+    infoBox.isHidden = true
     guard model.hostKind == .tmux, let argv = model.tmuxAttach else {
       showDirect(model, in: holder)  // no tmux 3.2+: the agent runs in a pty Talos owns; mirror it here
       return
@@ -132,24 +258,150 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
     }
     guard Date().timeIntervalSince(lastViewerStart) > 1.0 else { return }
     lastViewerStart = Date()
+    startViewer(argv: argv, session: TmuxCommands.mainSession, in: holder, takeKeyboard: wantsKeyboard)
+  }
+
+  /// A `tmux attach` child shown in the right-hand side. Closing it ends only our own client; the session keeps running.
+  private func startViewer(argv: [String], session: String, in holder: NSView, takeKeyboard: Bool) {
     removeViewer()
     let v = SafeTerminalView(frame: holder.bounds)
     v.autoresizingMask = [.width, .height]
     v.processDelegate = self
     holder.addSubview(v)
     viewer = v
+    viewerSession = session
     note?.isHidden = true
-    var env = ProcessInfo.processInfo.environment
-    for k in ["TMUX", "TMUX_PANE", "TMUX_TMPDIR", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID"] { env.removeValue(forKey: k) }
-    env["TERM"] = "xterm-256color"
-    env["COLORTERM"] = "truecolor"
-    // A Finder or login-item launch has no locale; give the viewer one so every program in the pane sees UTF-8 too.
-    if env["LC_ALL"] == nil, env["LC_CTYPE"] == nil, env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
+    infoBox.isHidden = true
+    let env = ThreadSessionsPane.tmuxViewerEnvironment()
     v.startProcess(
       executable: argv[0], args: Array(argv.dropFirst()), environment: env.keys.sorted().map { "\($0)=\(env[$0] ?? "")" })
-    // Only take the keyboard when the agent tab is the one showing: a re-attach behind the sign-in tab must not pull it
+    // Only take the keyboard when the sessions tab is the one showing: a re-attach behind the sign-in tab must not pull it
     // away from the pane where the owner is typing `y`.
-    if tabs?.selectedTabViewItem === tabs?.tabViewItem(at: 0), wantsKeyboard { window?.makeFirstResponder(v) }
+    if tabs?.selectedTabViewItem === tabs?.tabViewItem(at: 0), takeKeyboard { window?.makeFirstResponder(v) }
+  }
+
+  // MARK: the switcher
+
+  /// Main's facts as the switcher lists them.
+  private func mainFacts(_ model: SupervisorController) -> SessionSwitcher.MainFacts {
+    let state: SessionSwitcher.MainState
+    if !model.configured {
+      state = .notSetUp
+    } else {
+      switch model.status.phase {
+      case .idle: state = .notStarted
+      case .starting, .cleaningUp, .waitingToRestart: state = .starting
+      case .running: state = .running
+      case .stopping: state = .stopping
+      case .blocked: state = .stopped(failure: SupervisorNotice.blocked)
+      case .stopped(let r): state = .stopped(failure: r.isFailure ? r.plainSentence : nil)
+      }
+    }
+    var waiting: String?
+    switch model.status.needsYou {
+    case .dialog(let what)?: waiting = what
+    case let n?: waiting = SupervisorController.describe(n)
+    case nil: break
+    }
+    return .init(state: state, hasScreen: model.status.childPid != nil || viewerSession == TmuxCommands.mainSession, needsYou: waiting)
+  }
+
+  /// Reads the worker file and the flags and redraws the list. Cheap: the rows are rebuilt only when something they show changed.
+  func refreshSwitcher(_ model: SupervisorController) {
+    let src = switcherSource(model)
+    workersFile = src.workers()
+    entries = SessionSwitcher.entries(main: mainFacts(model), workers: workersFile, names: src.names(), needsYou: src.needsYou())
+    if !entries.contains(where: { $0.id == selectedId }) { setSelected(SessionSwitcher.mainId) }
+    sidebar.update(entries: entries, selected: selectedId)
+  }
+
+  private func setSelected(_ id: String) {
+    guard id != selectedId else { return }
+    selectedId = id
+    removeViewer()
+    lastViewerStart = .distantPast
+  }
+
+  /// The owner picked an entry (a click, Return/Space on a focused row, or Cmd+N).
+  func select(_ id: String, takeKeyboard: Bool) {
+    guard entries.contains(where: { $0.id == id }) else { return }
+    wantsKeyboard = takeKeyboard
+    setSelected(id)
+    if let model { sidebar.update(entries: entries, selected: selectedId); refreshSwitcher(model) }
+    tick()
+  }
+
+  /// Cmd+1 … Cmd+9. False (the key goes on) when there is no such entry.
+  @discardableResult
+  func selectShortcut(_ n: Int) -> Bool {
+    guard let e = SessionSwitcher.entry(forShortcut: n, in: entries) else { return false }
+    select(e.id, takeKeyboard: true)
+    return true
+  }
+
+  /// A thread entry: the terminal for a live one, Resume for a parked one, the error for a failed one.
+  private func tickThread(_ entry: SwitcherEntry, _ model: SupervisorController) {
+    guard let holder else { return }
+    switch SessionSwitcher.content(for: entry, workers: workersFile) {
+    case .attach(let session):
+      if viewer?.process.running == true, viewerSession == session { note?.isHidden = true; infoBox.isHidden = true; return }
+      guard let argv = switcherSource(model).attach(entry) else { return showInfo(entry.id, entry.title, "This Mac can't show that session here.", resume: nil) }
+      guard Date().timeIntervalSince(lastViewerStart) > 1.0 else { return }
+      lastViewerStart = Date()
+      startViewer(argv: argv, session: session, in: holder, takeKeyboard: wantsKeyboard)
+    case .resume(_, let label):
+      showInfo(entry.id, entry.title, entry.detail, resume: label)
+    case .failed(let title, let detail):
+      showInfo(entry.id, title, detail, resume: nil)
+    case .note(let text):
+      showInfo(entry.id, entry.title, text, resume: nil)
+    }
+  }
+
+  private func showInfo(_ id: String, _ title: String, _ detail: String, resume: String?) {
+    removeViewer()
+    note?.isHidden = true
+    infoTitle.stringValue = title
+    // what the last Resume tap said stays until the entry changes state; it is never carried to another entry
+    infoDetail.stringValue = (resume != nil && resumeNote?.0 == id) ? resumeNote!.1 : detail
+    if resume == nil { resumeNote = nil }
+    resumeButton.title = resume ?? "Resume"
+    resumeButton.isHidden = resume == nil
+    infoBox.isHidden = false
+  }
+
+  /// The entry the last Resume tap was for, and what it said.
+  private var resumeNote: (String, String)?
+
+  @objc private func resumeTapped() {
+    guard selectedId != SessionSwitcher.mainId, let model else { return }
+    let verb = resumeButton.title.lowercased()
+    let said: String
+    switch switcherSource(model).resume(selectedId) {
+    case .asked: said = "Asked to \(verb) the session. It shows here as soon as it is up."
+    case .alreadyPending: said = "A \(verb) is already waiting. It shows here as soon as the session is up."
+    case .parkPending: said = "A park is pending; try again in a moment."
+    case .failed: said = "Couldn't ask to \(verb) the session: Talos couldn't write to its folder. Send the thread a message instead."
+    }
+    resumeNote = (selectedId, said)
+    infoDetail.stringValue = said
+  }
+
+  /// Tests: the switcher as the owner sees it.
+  var sidebarRowsForTest: [String] { sidebar.rowSummariesForTest }
+  var infoTextForTest: String? { infoBox.isHidden ? nil : infoTitle.stringValue + " | " + infoDetail.stringValue }
+  var resumeVisibleForTest: Bool { !infoBox.isHidden && !resumeButton.isHidden }
+  func tapResumeForTest() { resumeTapped() }
+  var viewerSessionForTest: String? { viewer?.process.running == true ? viewerSession : nil }
+  func refreshForTest() { tick() }
+  /// The window is a process-wide singleton: a test starts from Main with nothing carried over.
+  func resetSelectionForTest() {
+    if pairingItem != nil { setPairingTab(nil) }
+    if let tabs, tabs.numberOfTabViewItems > 0 { tabs.selectTabViewItem(at: 0) }
+    selectedId = SessionSwitcher.mainId
+    resumeNote = nil
+    removeViewer()
+    lastViewerStart = .distantPast
   }
 
   /// The owned-pty fallback: what the pty shows, and the keys the dev-channel dialog and a trust prompt need.
@@ -209,6 +461,7 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
     if v.process.running { v.terminate() }  // our own `tmux attach` child; the agent is a different process in tmux
     v.removeFromSuperview()
     viewer = nil
+    viewerSession = nil
   }
 
   func windowShouldClose(_ sender: NSWindow) -> Bool {

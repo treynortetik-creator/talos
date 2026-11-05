@@ -25,6 +25,7 @@ import {
   needsSchedulesV2,
   newUlid,
   REPORT_MAX_BYTES,
+  runsInSession,
   SCHEDULES_FEATURE,
   SCHEDULES_FEATURE_V2,
   type ScheduleApproved,
@@ -57,7 +58,9 @@ import {
   scheduleStatusFrame,
   schedulesSnapshotFrame,
 } from '../frames-out.ts'
-import { ensureDir } from '../fsutil.ts'
+import { readJsonFile, writeJsonAtomic } from '../fsutil.ts'
+import { coldAfterMs } from '../heartbeat/cold.ts'
+import { reapOrphans } from '../heartbeat/orphans.ts'
 import { WAKE_ENDED_TEXT } from '../heartbeat/prompt.ts'
 import { BUSY_SUMMARY } from '../heartbeat/run-parts.ts'
 import {
@@ -69,7 +72,7 @@ import {
 } from '../heartbeat/runner.ts'
 import { storeFile } from '../heartbeat/store.ts'
 import { HeartbeatTester } from '../heartbeat/test-run.ts'
-import { TEST_REQUIRED_FIELD, testRequiredProblem } from '../heartbeat/tested.ts'
+import { runNowProblem, TEST_REQUIRED_FIELD, testRequiredProblem } from '../heartbeat/tested.ts'
 import { makeWake, triageAvailable } from '../heartbeat/wake.ts'
 import {
   cardActionNotification,
@@ -85,6 +88,7 @@ import { type Discovered, discover, hostLabel, localZone } from './discovery.ts'
 import { detailText, listText, shortWhen } from './format.ts'
 import { InstanceRegistry } from './instances.ts'
 import { type Offer, Sidecar } from './sidecar.ts'
+import { hasHeartbeatMeta, notYourJob, pendingFor, scopedSnapshot, type WorkerScope } from './worker-scope.ts'
 
 export const RUNNER_EVERY_MS = 60_000
 export const REFRESH_EVERY_MS = 30_000
@@ -139,8 +143,12 @@ export function readChronosLimits(
   return null
 }
 export const STALE_MS = 2 * 60_000
+/** How long a card waits for Chronos to say which thread is a heartbeat's (HB4 R2-5). */
+const HB_THREAD_LOOKUP_MS = 2000
+const THREAD_MAP_SCHEMA = 'talos.heartbeat-threads/1'
 const RUN_NOW_GAP_MS = 2 * 60_000
 const PROPOSALS_PER_HOUR = 10
+const proposerKey = (cardId: string) => `schedule_card_proposer/${cardId}`
 const MAX_PENDING_SCHEDULE_CARDS = 20
 /** A failure older than this (by its job date) is history, not news, when the bridge first sees it. */
 const NOTICE_MAX_AGE_MS = 48 * 3600_000
@@ -296,7 +304,8 @@ export class ScheduleService {
   private pendingAlerts: Array<{ kind: 'job_failed' | 'scheduler_stuck'; key: string }> = []
   private wasStuck = false
   private runNowAt = new Map<string, number>()
-  private proposalAt: number[] = []
+  /** Proposal times per lane: 'main', or a thread session's thread id. One looping lane cannot use up another's hour. */
+  private proposalAt = new Map<string, number[]>()
   private probing = false
   /** Heartbeat jobs with a run in flight: one at a time per job, and never awaited by the runner tick (S3.1 own queue). */
   private readonly hbRunning = new Set<string>()
@@ -472,6 +481,11 @@ export class ScheduleService {
     if (this.started || !this.gate()) return
     this.started = true
     this.instances.register(this.deps.instance) // before any claim, so another bridge's sweep can see this one is alive
+    try {
+      reapOrphans(this.ctx.paths.home, (m, f) => this.log(m, f)) // before any slot: sources a crash left running
+    } catch (e) {
+      this.log('heartbeat orphan sweep failed', { error: (e as Error).message })
+    }
     await this.enqueue(async () => {
       await this.ensure()
       if (this.stopped) return
@@ -491,7 +505,7 @@ export class ScheduleService {
   stop(final = true) {
     this.stopped = true
     this.wakeRuns.clear() // a wake open at shutdown is the next bridge's orphan sweep to settle; no card is believed after this
-    this.heartbeat.abortAll() // sources are killed by process group; a run that was in flight writes and posts nothing
+    this.heartbeat.abortAll() // sources are killed by process group; a run in flight posts nothing and saves no result (a source's record stays for the next start)
     this.tester.abortAll() // the same for a test the owner is waiting on: its sources die with the bridge
     if (final) this.instances.markStopped(this.deps.instance, this.now())
     this.chronos()?.close()
@@ -596,7 +610,10 @@ export class ScheduleService {
       const snap = this.overlay(await d.adapter.snapshot())
       if (this.problem && (this.problem.code === 'adapter_timeout' || this.problem.code === 'registry_unreadable'))
         this.problem = null
-      if (d.state === 'ready') this.lastGood = snap
+      if (d.state === 'ready') {
+        this.lastGood = snap
+        this.saveThreadMap(snap)
+      }
       return snap
     } catch (e) {
       const err = e as AdapterError
@@ -868,7 +885,10 @@ export class ScheduleService {
     windowEnds: string | null,
     trigger: 'clock' | 'run_now',
     again: boolean,
-  ): Promise<{ ok: true; runId: string } | { ok: false; code: 'held' | 'schedule_invalid' | 'schedule_not_found' }> {
+  ): Promise<
+    | { ok: true; runId: string }
+    | { ok: false; code: 'held' | 'schedule_invalid' | 'schedule_not_found'; testRequired?: string }
+  > {
     const d = this.adapter
     const sp = await d.sessionPrompt(id)
     if (!sp.ok) {
@@ -888,6 +908,12 @@ export class ScheduleService {
     }
     if (!detail) return { ok: false, code: 'schedule_not_found' }
     const hb = heartbeatConfigFromMeta(detail.detail.schedule.meta)
+    // Run now is judged on the job as it is NOW (this fresh read), never on a snapshot that may be stale: every route to a manual
+    // heartbeat run, the tool re-offer included, passes here (docs/HEARTBEAT.md "A test before turning on").
+    if (hb && trigger === 'run_now') {
+      const testRequired = runNowProblem(this.ctx.paths.home, this.now(), detail.detail.schedule)
+      if (testRequired) return { ok: false, code: 'schedule_invalid', testRequired }
+    }
     if (hb) return this.startHeartbeat({ id, ds, fireAt, windowEnds, trigger, again, hb, contentHash: sp.contentHash })
     const snap = this.lastGood ?? (await this.safeSnapshot())
     const job = snap.schedules.find((s) => s.id === id)
@@ -1017,6 +1043,7 @@ export class ScheduleService {
         runKey: claimed.ds,
         config: 'config' in a.hb ? { config: a.hb.config, skipped: a.hb.skipped } : { problem: a.hb.problem },
         trigger: a.trigger,
+        coldAfterMs: coldAfterMs(this.lastGood?.schedules.find((s) => s.id === a.id)?.when),
         runId,
       })
     } catch (e) {
@@ -1299,11 +1326,87 @@ export class ScheduleService {
     return j ? heartbeatConfigFromMeta(j.meta) !== null : existsSync(storeFile(this.ctx.paths.home, false, id))
   }
 
-  /** The heartbeat job whose own thread this is, or null. The default thread is never a heartbeat's. */
+  /**
+   * The heartbeat job whose own thread this is, or null. The default thread is never a heartbeat's.
+   *
+   * A card must not wait on Chronos, and must not fail open when Chronos cannot be read (HB4 R2-5). The order is: the last good
+   * snapshot in memory; else a read of Chronos bounded by HB_THREAD_LOOKUP_MS; else the thread map saved on disk from the last
+   * good snapshot; and with neither, any thread whose job has a heartbeat store file is taken to be a heartbeat's (limited).
+   */
   async heartbeatJobOfThread(threadId: string): Promise<string | null> {
     if (threadId === defaultThreadRef(this.ctx).id) return null
-    const snap = this.lastGood ?? (await this.safeSnapshot())
-    return snap.schedules.find((s) => s.thread_id === threadId && heartbeatConfigFromMeta(s.meta) !== null)?.id ?? null
+    if (!this.lastGood) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          this.lookupSnapshot(),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, HB_THREAD_LOOKUP_MS)
+          }),
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    const live = this.lastGood
+    if (live)
+      return (
+        live.schedules.find((s) => s.thread_id === threadId && heartbeatConfigFromMeta(s.meta) !== null)?.id ?? null
+      )
+    return this.savedThreadMap().get(threadId) ?? this.threadFromStores(threadId)
+  }
+
+  /**
+   * The read a card's thread lookup waits on. The lookup gives up after HB_THREAD_LOOKUP_MS but the read it started keeps going,
+   * so a burst of cards while Chronos is slow would start one read each. Callers share the one in flight; it clears when it settles.
+   */
+  private lookupRead: Promise<ScheduleSnapshotT> | null = null
+  private lookupSnapshot(): Promise<ScheduleSnapshotT> {
+    this.lookupRead ??= this.safeSnapshot().finally(() => {
+      this.lookupRead = null
+    })
+    return this.lookupRead
+  }
+
+  private threadMapFile(): string {
+    return join(this.ctx.paths.home, 'heartbeat-threads.json')
+  }
+  private savedMapJson = ''
+  /** Remembers which thread belongs to which heartbeat job, from a snapshot Chronos answered. Only written when it changed. */
+  private saveThreadMap(snap: ScheduleSnapshotT): void {
+    const threads: Record<string, string> = {}
+    for (const j of snap.schedules)
+      if (j.thread_id && heartbeatConfigFromMeta(j.meta) !== null) threads[j.thread_id] = j.id
+    const json = JSON.stringify({ schema: THREAD_MAP_SCHEMA, threads })
+    if (json === this.savedMapJson) return
+    try {
+      writeJsonAtomic(this.threadMapFile(), { schema: THREAD_MAP_SCHEMA, threads })
+      this.savedMapJson = json
+    } catch (e) {
+      this.log('could not save the heartbeat thread map', { error: (e as Error).message })
+    }
+  }
+  /** Never throws; a missing or damaged file is an empty map. */
+  private savedThreadMap(): Map<string, string> {
+    const out = new Map<string, string>()
+    try {
+      const raw = readJsonFile<{ schema?: unknown; threads?: unknown }>(this.threadMapFile())
+      if (raw?.schema === THREAD_MAP_SCHEMA && raw.threads && typeof raw.threads === 'object')
+        for (const [t, id] of Object.entries(raw.threads)) if (typeof id === 'string') out.set(t, id)
+    } catch {
+      // damaged: treated as no map
+    }
+    return out
+  }
+  /** The last resort: a job whose thread (in the sidecar) is this one and which has ever kept a heartbeat store. */
+  private threadFromStores(threadId: string): string | null {
+    for (const id of Object.keys(this.sidecar.jobThreads()))
+      if (
+        this.sidecar.threadOf(id) === threadId &&
+        (existsSync(storeFile(this.ctx.paths.home, false, id)) || existsSync(storeFile(this.ctx.paths.home, true, id)))
+      )
+        return id
+    return null
   }
 
   /** A run id that belonged to a heartbeat wake that is over: a card or a done carrying it must do nothing. */
@@ -1328,21 +1431,48 @@ export class ScheduleService {
 
   // ---- the agent's list and propose tools ------------------------------------------------------------------------
 
-  toolList(id?: string): Promise<ToolOut> {
+  /** With `scope` (a thread's own session, via the hub): only that thread's jobs, never a heartbeat, and no issues about other jobs. */
+  toolList(id?: string, scope?: WorkerScope): Promise<ToolOut> {
     return this.enqueue(async () => {
       const d = await this.ensure()
       if (d.state !== 'ready') return fail((d.adapter as ClosedAdapter).agentText())
       if (id) {
         const x = await d.adapter.detail(id, null)
-        if (!x) return fail(`no scheduled job "${id}"`)
+        // the same words for "no such job" and "someone else's job": a thread session learns nothing about other lanes
+        if (!x || (scope && !this.inScope(scope, x.detail.schedule))) return fail(`no scheduled job "${id}"`)
         return yes(detailText(this.withRuns(x.detail)))
       }
-      return yes(listText(await this.safeSnapshot()))
+      const snap = await this.safeSnapshot()
+      return yes(listText(scope ? scopedSnapshot(snap, scope, (j) => this.inScope(scope, j)) : snap))
     })
   }
 
+  /**
+   * Is this job one the thread's own session may see or change: it runs in that thread, only in a session (a headless or
+   * "both" job or a command runs outside it), and it is not a heartbeat.
+   */
+  private inScope(scope: WorkerScope, j: Pick<ScheduleT, 'id' | 'meta' | 'runner' | 'kind' | 'permissions'>): boolean {
+    return (
+      this.threadOfJob(j.id).id === scope.thread &&
+      runsInSession(j) &&
+      j.kind !== 'command' &&
+      !hasHeartbeatMeta(j.meta)
+    )
+  }
+
+  /** The thread session that proposed this card, or null when main (or the owner's form) did. */
+  private cardProposer(cardId: string): string | null {
+    return this.ctx.store.kvGet(proposerKey(cardId)) ?? null
+  }
+
+  /** Can the router hand this job's run to a thread session? Only a plain session job; an unknown job is main's. */
+  sessionOnly(jobId: string): boolean {
+    const j = this.lastGood?.schedules.find((x) => x.id === jobId)
+    return j !== undefined && runsInSession(j) && j.kind !== 'command' && !hasHeartbeatMeta(j.meta)
+  }
+
   /** The agent's proposal: validate, then mint a card (S6.1). It never writes the registry. */
-  toolPropose(args: Record<string, unknown>): Promise<ToolOut> {
+  toolPropose(args: Record<string, unknown>, scope?: WorkerScope): Promise<ToolOut> {
     return this.enqueue(async () => {
       const d = await this.ensure()
       if (d.state !== 'ready') return fail((d.adapter as ClosedAdapter).agentText())
@@ -1356,17 +1486,28 @@ export class ScheduleService {
           'Talos does not manage this scheduler yet. Tell the owner to run `talos-app schedules adopt` at the Mac.',
         )
       const now = this.now()
-      this.proposalAt = this.proposalAt.filter((t) => now - t < 3600_000)
-      if (this.proposalAt.length >= PROPOSALS_PER_HOUR)
+      const lane = scope?.thread ?? 'main'
+      const recent = (this.proposalAt.get(lane) ?? []).filter((t) => now - t < 3600_000)
+      this.proposalAt.set(lane, recent)
+      if (recent.length >= PROPOSALS_PER_HOUR)
         return fail(`At most ${PROPOSALS_PER_HOUR} proposals an hour. Ask the owner what they want and propose once.`)
+      // main and each thread session count their own waiting cards: one looping session cannot fill main's allowance
       const pending = this.ctx.ledger
         .list('pending')
-        .filter((r) => r.actor === 'bridge' && r.binding.kind === 'schedule')
-      if (pending.length >= MAX_PENDING_SCHEDULE_CARDS)
+        .filter(
+          (r) =>
+            r.actor === 'bridge' &&
+            r.binding.kind === 'schedule' &&
+            this.cardProposer(r.id) === (scope?.thread ?? null),
+        )
+      if (scope) {
+        const busy = pendingFor(pending.length, scope)
+        if (busy) return fail(busy)
+      } else if (pending.length >= MAX_PENDING_SCHEDULE_CARDS)
         return fail(
           `There are already ${MAX_PENDING_SCHEDULE_CARDS} schedule cards waiting for the owner. Wait for them.`,
         )
-      const built = await this.changeFromArgs(args)
+      const built = await this.changeFromArgs(args, scope)
       if (!built.ok) return fail(built.error)
       if (changeNeedsSchedulesV2(built.change) && !this.relaySupportsV2())
         return fail(
@@ -1379,10 +1520,13 @@ export class ScheduleService {
         origin,
         clientRef: null,
         reason: built.reason,
+        ...(scope ? { sessionName: threadRef(this.ctx, scope.thread).name } : {}),
         ...(built.supersedes ? { supersedes: built.supersedes } : {}),
       })
       if (!minted.ok) return fail(minted.error)
-      this.proposalAt.push(now)
+      recent.push(now)
+      // who proposed it, kept beside the card: supersede, the pending count and the apply-time check read it
+      if (scope) this.ctx.store.kvSet(proposerKey(minted.card.id), scope.thread)
       await this.publishCard(minted.card)
       return yes(`card ${minted.card.id} pending, expires ${minted.card.expires_at}`)
     })
@@ -1417,6 +1561,7 @@ export class ScheduleService {
 
   private async changeFromArgs(
     a: Record<string, unknown>,
+    scope?: WorkerScope,
   ): Promise<
     | { ok: true; change: ScheduleChangeT; threadId: string; reason: string; supersedes?: string }
     | { ok: false; error: string }
@@ -1437,6 +1582,8 @@ export class ScheduleService {
       const old = this.ctx.ledger.get(supersedes)
       const mine = ScheduleCardPayload.safeParse(old?.binding.payload)
       if (old?.actor !== 'bridge' || old.state !== 'pending' || !mine.success || mine.data.proposed_by !== 'agent')
+        return { ok: false, error: 'supersedes can only replace one of your own pending schedule proposals' }
+      if (scope && (old.thread_id !== scope.thread || this.cardProposer(supersedes) !== scope.thread))
         return { ok: false, error: 'supersedes can only replace one of your own pending schedule proposals' }
     }
     const resultThread = str('result_thread_id')
@@ -1481,6 +1628,8 @@ export class ScheduleService {
       if (!id) return { ok: false, error: `id is required for ${op}` }
       const x = await this.adapter.detail(id, null)
       if (!x) return { ok: false, error: `schedule_not_found: no scheduled job "${id}"` }
+      // checked on the job as it is NOW, inside the schedule queue: a thread session changes only its own thread's jobs
+      if (scope && !this.inScope(scope, x.detail.schedule)) return { ok: false, error: notYourJob(scope, id) }
       const etag = x.detail.schedule.etag
       if (op === 'delete') return { ok: true, change: { op: 'delete', id, base_etag: etag }, ...extra }
       const set: Record<string, unknown> = {}
@@ -1544,6 +1693,8 @@ export class ScheduleService {
       clientRef: string | null
       reason?: string
       supersedes?: string
+      /** A thread's own session proposed it: the thread's name (the card names that session). */
+      sessionName?: string
     },
   ): Promise<
     | { ok: true; card: CardT }
@@ -1648,6 +1799,7 @@ export class ScheduleService {
         ...(trustOn(this.ctx.config.config) ? { trust: true } : {}),
         ...(o.reason ? { reason: o.reason } : {}),
         ...(o.supersedes ? { supersedes: o.supersedes } : {}),
+        ...(o.sessionName ? { sessionName: o.sessionName } : {}),
       })
     } catch (e) {
       if (e instanceof ScheduleCardBindingError) return { ok: false, error: e.message, code: 'schedule_conflict' }
@@ -1780,6 +1932,14 @@ export class ScheduleService {
     const split = toChronosChange(change)
     const d = await this.ensure()
     if (d.state !== 'ready') return finish(false, 'The scheduler is not available. Nothing was saved. Ask again.')
+    // A thread session's change or delete is the owner's approval of THAT thread's job: if the job moved, was switched to a
+    // background runner or became a heartbeat since the card was drawn, it is no longer what was shown.
+    const proposer = this.cardProposer(cardId)
+    if (proposer && (change.op === 'update' || change.op === 'delete')) {
+      const cur = await d.adapter.detail(change.id, null).catch(() => null)
+      if (cur && !this.inScope({ thread: proposer }, cur.detail.schedule))
+        return finish(false, 'This job moved to another thread; nothing changed.')
+    }
     // The test that let this card be drawn may be a day old by the time it is approved: ask again, against the job as it is now.
     const baseNow = change.op === 'create' ? null : ((await this.baseOf(change.id).catch(() => null))?.base ?? null)
     const needTest = testRequiredProblem(ctx.paths.home, this.now(), change, baseNow)
@@ -2025,6 +2185,12 @@ export class ScheduleService {
     if (job.today === 'running') return this.err('already_running', 'That job is already running.', f.id)
     // A heartbeat is never an agent run: Run now always means "check now", in this bridge, whatever the job's runner says.
     const isHeartbeat = heartbeatConfigFromMeta(job.meta) !== null
+    // ...and Run now is not a way round the test gate: a heartbeat that is OFF needs the same fresh pass that turning it on needs.
+    if (isHeartbeat) {
+      const needTest = runNowProblem(this.ctx.paths.home, this.now(), job)
+      if (needTest)
+        return this.err('schedule_invalid', needTest, f.id, [{ path: TEST_REQUIRED_FIELD, message: needTest }])
+    }
     const sessionable = isHeartbeat || (job.permissions !== 'restricted' && job.kind === 'claude')
     if (!isHeartbeat && f.where === 'session' && (!sessionable || job.runner === 'both'))
       return this.err('schedule_read_only', "That job can't run in the live session (read-only or restricted).", f.id)
@@ -2036,6 +2202,10 @@ export class ScheduleService {
       const r = await this.offer(job.id, ds, null, null, 'run_now', f.again)
       if (!r.ok) {
         this.runNowAt.delete(job.id)
+        if (r.testRequired)
+          return this.err('schedule_invalid', r.testRequired, f.id, [
+            { path: TEST_REQUIRED_FIELD, message: r.testRequired },
+          ])
         return this.err(
           r.code === 'held' ? 'held' : r.code,
           r.code === 'held' ? 'The job is on hold.' : 'The scheduler refused that job.',

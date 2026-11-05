@@ -2,7 +2,23 @@
 // The agent never writes the registry: `schedule_propose` mints a card the owner approves, and the BRIDGE applies it.
 import { fail, needStr, ok, str, type Tool, ToolError } from './common.ts'
 
-function service(ctx: Parameters<Tool['handler']>[0]) {
+type Ctx = Parameters<Tool['handler']>[0]
+
+/**
+ * A thread's own session (worker mode) has no Schedules service of its own: main's bridge runs the tool for it over the hub
+ * socket, scoped to the thread the hub proved. Main's tools do not pass through here.
+ */
+async function viaMain(ctx: Ctx, tool: string, args: Record<string, unknown>) {
+  const hub = ctx.worker?.hub
+  if (!hub)
+    return fail(
+      'This thread session is not connected to the main bridge, so it cannot reach the schedules. Nothing was done.',
+    )
+  const r = await hub.rpc(tool, args)
+  return r.ok ? ok(r.text) : fail(r.text)
+}
+
+function service(ctx: Ctx) {
   if (!ctx.schedules) throw new ToolError('Schedules are not available in this process.')
   return ctx.schedules
 }
@@ -13,12 +29,13 @@ const WHEN_HELP =
 export const schedulesList: Tool = {
   name: 'schedules_list',
   description:
-    'List the scheduled jobs on this Mac as a plain-text table (id, name, when, next run, today, last result, runner, permissions, state), then any scheduler health issues. Pass `id` for one job in full: its prompt, standing rules and last 10 runs. Read-only.',
+    "List the scheduled jobs on this Mac as a plain-text table (id, name, when, next run, today, last result, runner, permissions, state), then any scheduler health issues. Pass `id` for one job in full: its prompt, standing rules and last 10 runs. Read-only. In a thread session: only that thread's jobs.",
   inputSchema: {
     type: 'object',
     properties: { id: { type: 'string', description: 'One job id, for its full prompt and recent runs.' } },
   },
   async handler(ctx, args) {
+    if (ctx.worker) return viaMain(ctx, 'schedules_list', args)
     try {
       const r = await service(ctx).toolList(str(args.id))
       return r.ok ? ok(r.text) : fail(r.text)
@@ -32,7 +49,7 @@ export const schedulePropose: Tool = {
   name: 'schedule_propose',
   liveOnly: true,
   description:
-    "Propose creating, changing or deleting a scheduled job. This NEVER writes anything: it validates the proposal and shows the owner a card; the bridge saves it only after they approve. Never create cron, launchd or in-session timer jobs yourself. Returns `card c_… pending, expires <ISO>`, or the scheduler's validation errors with field paths.",
+    "Propose creating, changing or deleting a scheduled job. This NEVER writes anything: it validates the proposal and shows the owner a card; the bridge saves it only after they approve. Never create cron, launchd or in-session timer jobs yourself. Returns `card c_… pending, expires <ISO>`, or the scheduler's validation errors with field paths. In a thread's own session you can only propose, change or delete jobs of your own thread: the job runs in this session (it wakes it if parked), and the card goes to this thread.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -79,6 +96,7 @@ export const schedulePropose: Tool = {
   async handler(ctx, args) {
     try {
       needStr(args, 'op')
+      if (ctx.worker) return await viaMain(ctx, 'schedule_propose', args)
       const r = await service(ctx).toolPropose(args)
       return r.ok ? ok(r.text) : fail(r.text)
     } catch (e) {
@@ -95,7 +113,9 @@ export const scheduleRunStart: Tool = {
   inputSchema: { type: 'object', properties: { run_id: { type: 'string' } }, required: ['run_id'] },
   async handler(ctx, args) {
     try {
-      const r = await service(ctx).toolRunStart(needStr(args, 'run_id', 64))
+      const runId = needStr(args, 'run_id', 64)
+      if (ctx.worker) return await viaMain(ctx, 'schedule_run_start', { run_id: runId })
+      const r = await service(ctx).toolRunStart(runId)
       return r.ok ? ok(r.text) : fail(r.text)
     } catch (e) {
       return fail((e as Error).message)
@@ -125,6 +145,13 @@ export const scheduleRunDone: Tool = {
       const summary = needStr(args, 'summary', 280)
       const report = str(args.report)
       if (report !== undefined && Buffer.byteLength(report) > 64 * 1024) throw new ToolError('report is over 64 KiB')
+      if (ctx.worker)
+        return await viaMain(ctx, 'schedule_run_done', {
+          run_id: runId,
+          ok: args.ok,
+          summary,
+          ...(report !== undefined ? { report } : {}),
+        })
       const r = await service(ctx).toolRunDone({
         runId,
         ok: args.ok,

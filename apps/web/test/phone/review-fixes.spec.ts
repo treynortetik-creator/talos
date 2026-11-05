@@ -90,10 +90,10 @@ test.describe('tablet width', () => {
   test.use({ viewport: { width: 900, height: 800 } })
   test.beforeEach(({ page }, info) => test.skip(info.project.name !== 'desktop', 'a desktop browser at tablet width'))
 
-  test('full header and tab strip, no phone chrome', async ({ page }) => {
+  test('full header, no tab strip, no phone chrome', async ({ page }) => {
     await openThread(page, '?fake_agents=demo')
     await expect(page.getByTestId('phone-header')).toHaveCount(0)
-    await expect(page.getByTestId('thread-tabs')).toBeVisible()
+    await expect(page.getByTestId('thread-tabs')).toHaveCount(0)
     await expect(page.getByTestId('session-chip')).toContainText('wk 60% used')
     await expect(page.getByTestId('agents-chip')).toBeVisible()
   })

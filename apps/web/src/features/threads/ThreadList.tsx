@@ -15,6 +15,7 @@ import { Banners } from './Banners.tsx'
 import { ThreadManageList } from './manage/ThreadManageList.tsx'
 import { readUpTo } from './readSeq.ts'
 import { StatusWord } from './StatusPill.tsx'
+import { ThreadRowWithSettings } from './ThreadMoreButton.tsx'
 import { ThreadRowMenu } from './ThreadRowMenu.tsx'
 import { NewThread } from './ThreadSettings.tsx'
 import { NOTIFY_SHORT, useExplainerDismissed } from './threadMeta.ts'
@@ -42,11 +43,18 @@ function Row({ t, by }: { t: ThreadT; by?: string | undefined }) {
   const attention = useTalos((s) => s.cards.some((c) => c.thread_id === t.id && c.state === 'pending'))
   return (
     <li>
-      <ThreadRowMenu thread={t} swipe>
+      <ThreadRowWithSettings
+        thread={t}
+        wrap={(inner) => (
+          <ThreadRowMenu thread={t} swipe>
+            {inner}
+          </ThreadRowMenu>
+        )}
+      >
         <Link
           to={`/t/${t.id}`}
           draggable={false}
-          className="flex min-h-[4.5rem] items-center gap-3.5 px-4 py-2.5 transition-colors duration-[var(--dur-1)] ease-talos hover:bg-surface-2"
+          className="flex min-h-[4.5rem] items-center gap-3.5 py-2.5 pr-14 pl-4 transition-colors duration-[var(--dur-1)] ease-talos hover:bg-surface-2"
           data-testid={`thread-row-${t.id}`}
         >
           <ThreadIcon id={t.id} icon={t.icon} color={t.color} size={44} />
@@ -86,7 +94,7 @@ function Row({ t, by }: { t: ThreadT; by?: string | undefined }) {
             )}
           </span>
         </Link>
-      </ThreadRowMenu>
+      </ThreadRowWithSettings>
     </li>
   )
 }

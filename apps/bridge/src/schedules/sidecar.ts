@@ -134,6 +134,10 @@ export class Sidecar {
     return !this.dirty || this.save()
   }
 
+  /** Every job the sidecar holds a thread for. */
+  jobThreads(): Record<string, { thread_id: string | null }> {
+    return this.data.jobs
+  }
   threadOf(id: string): string | null {
     return this.data.jobs[id]?.thread_id ?? null
   }

@@ -151,7 +151,10 @@ is in the job log as `[step] <seconds> exit <code>: <command>`, so the next audi
 `apps/bridge/scripts/test-parallel.ts` is the `bun test` runner: one process per file, one result per file, green only if every
 file exited 0 and reported at least one test. Its default test timeout is 20 s, not 5: that timeout only catches hangs, and
 fired on tests that passed every assertion but ran slowly beside other files. Explicit timeouts, waits and assertions stay as
-written. `scripts/test-parallel.test.ts` also asks `bun test` which files it would run and compares, so a file can't drop
+written. A file also has a wall-clock limit, 5 minutes (`--file-timeout <seconds>` or `BUN_TEST_FILE_TIMEOUT`): bun's test
+timeout cannot stop a file stuck in one synchronous call, so past the limit the runner kills that file's process tree, reports
+the file red and carries on; a file still alive 10 s after the kill is red as "did not die after SIGKILL" and left behind.
+`scripts/test-parallel.test.ts` also asks `bun test` which files it would run and compares, so a file can't drop
 out of CI unnoticed. `pnpm test:bun` is still the plain one.
 
 ## Before you push

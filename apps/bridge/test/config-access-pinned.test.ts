@@ -1,5 +1,5 @@
 // Pins what ConfigFile.applyPatch does with each kind of field today: the phone may change the listed ones, may only turn
-// the memory browser off, and never reaches trust_mode. Written by hand, not read from the
+// the memory browser off, and writes trust_mode (a boolean) only when the patch names it. Written by hand, not read from the
 // settings table.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -33,6 +33,8 @@ describe('ConfigFile.applyPatch: who may change what', () => {
     [{ permission_relay: true }],
     [{ session_models: ['default', 'opus'] }],
     [{ memory_browser: false }],
+    [{ trust_mode: true }],
+    [{ trust_mode: false }],
   ])('%j is applied', (patch) => {
     const r = file.applyPatch(0, patch as Record<string, unknown>)
     expect(r.ok).toBe(true)
@@ -40,8 +42,7 @@ describe('ConfigFile.applyPatch: who may change what', () => {
 
   test.each([
     [{ mirror: { telegram: 'on' } }, 'field not allowed: mirror'],
-    [{ trust_mode: true }, 'field not allowed: trust_mode'],
-    [{ trust_mode: false }, 'field not allowed: trust_mode'],
+    [{ trust_mode: 'yes' }, 'field not allowed: trust_mode'],
     [{ version: 2 }, 'field not allowed: version'],
     [{ rev: 9 }, 'field not allowed: rev'],
     [{ work: { surprise: 1 } }, 'field not allowed: work.surprise'],

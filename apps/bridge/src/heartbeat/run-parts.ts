@@ -1,4 +1,7 @@
 // Small pure parts of a heartbeat run, kept out of runner.ts (which has a size limit).
+
+import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   HEARTBEAT_ERROR_MAX_CHARS,
   HEARTBEAT_SOURCE_SCHEMA,
@@ -9,6 +12,7 @@ import {
   type HeartbeatSourceRequestT,
   parseHeartbeatSourceResponse,
 } from '@talos-app/protocol'
+import { ensureDir, writeFileAtomic } from '../fsutil.ts'
 import type { DigestInput } from './digest.ts'
 import type { HeartbeatStore, SourceState } from './store.ts'
 
@@ -173,4 +177,25 @@ export function plainError(s: string): string {
     }),
   )
   return r.ok ? 'the source failed' : r.error
+}
+
+// ---- moved from runner.ts (its size limit)
+
+export const SHADOW_LOG = 'heartbeat-shadow.jsonl'
+const SHADOW_LOG_MAX_BYTES = 512 * 1024
+const SHADOW_LOG_KEEP_LINES = 200
+
+export function appendShadow(home: string, row: Record<string, unknown>) {
+  const path = join(home, SHADOW_LOG)
+  ensureDir(home)
+  appendFileSync(path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
+  try {
+    if (existsSync(path) && statSync(path).size > SHADOW_LOG_MAX_BYTES) {
+      const lines = readFileSync(path, 'utf8').split('\n').filter(Boolean)
+      const keep = lines.slice(-SHADOW_LOG_KEEP_LINES).join('\n')
+      writeFileAtomic(path, `${keep}\n`, 0o600)
+    }
+  } catch {
+    // trimming is housekeeping; the row above is already written
+  }
 }

@@ -578,11 +578,8 @@ const CLAIMS: Record<string, Proof[]> = {
   'The top menu appears when a Talos window is open or the Dock icon is on.': [
     has(SPEC_F, '(showDockIcon || hasOpenWindow) ? .regular : .accessory'),
   ],
-  'The key shown beside the item in the Window menu.': [has(SPEC_F, 'Item(.showTerminal, "Show Terminal", key: "k")')],
-  'To be sure of it, choose Window, then Show Terminal.': [
-    has(SPEC_F, 'title: "Window"'),
-    has(SPEC_F, '"Show Terminal"'),
-  ],
+  'The key shown beside the item in the Window menu.': [has(SPEC_F, 'Item(.showTerminal, "Terminals…", key: "k")')],
+  'To be sure of it, choose Window, then Terminals….': [has(SPEC_F, 'title: "Window"'), has(SPEC_F, '"Terminals…"')],
   'From any app.': [has('apps/desktop/Sources/TalosDesktop/HotKeys.swift', 'RegisterEventHotKey(spec.keyCode')],
   'This is the default; change it in Mac settings → Hotkeys.': [
     has('apps/desktop/Sources/TalosDesktopCore/DesktopConfig.swift', 'compose: "ctrl+opt+space"'),

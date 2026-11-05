@@ -77,14 +77,23 @@ the built relay, the built app and the real bridge together; "unit" tests sit ne
 
 Trust mode is for an owner who has decided that their own words are enough. It is **off** in every fresh install and in the
 public default; a config without the setting behaves exactly as before. It is switched on at the Mac with
-`talos-app trust on` and off with `talos-app trust off` (`talos-app trust show` prints the state). It is stored as
+`talos-app trust on` and off with `talos-app trust off` (`talos-app trust show` prints the state), or from the app (see below). It is stored as
 `trust_mode` in `config.json`.
 
-**Who can change it.** Only the Mac. It is on neither the phone's `config.patch` allowlist nor the agent's `config_propose`
-list, so a signed patch from an enrolled phone and a proposal from the agent are both refused (`config_field_forbidden`, and
-named in `AGENT_CONFIG_REFUSED`). This is the same lock as the other Mac-only settings, and it has the same limit: the agent's
-own shell can edit `config.json`. Nothing stops that. What the bridge does instead is say so: every flip, including one made
-while the bridge was down, posts a note in the default thread and tells the agent.
+**Who can change it.** The owner, in two places. At the Mac: `talos-app trust on` and `talos-app trust off`. In the app:
+Settings, Account, Trust mode. Turning it **off** from the app needs nothing. Turning it **on** from the app needs the passkey
+step-up (`config:session`, the same mechanism as the permission relay), which the relay checks before the Mac sees the patch.
+The relay asks even when its own copy of the config says trust mode is already on, because that copy can be stale: a patch
+queued for a Mac that has since turned it off must not switch it on untapped. A patch that sets it to anything but true,
+false or null is refused (`config_field_forbidden`). The agent can never change it: it is not on the `config_propose` list and is
+named in `AGENT_CONFIG_REFUSED`, with trust mode on or off. An older relay or Mac does not know the setting and refuses the patch
+in words; an older app never sends it.
+
+**What it does not stop.** The Mac does not see the passkey tap, only the relay does, so the relay is trusted for this one
+check, as it is for `work.enabled`. The agent runs as the same macOS user as the owner, and its own shell can edit
+`config.json`: nothing stops that. What the bridge does instead is say so: every flip, including one made from the app or while
+the bridge was down, posts a note in the default thread and tells the agent. The Mac app's web view cannot tap a passkey, so
+turning it on there says to approve on the phone or in a browser; `talos-app trust on` at the Mac still works.
 
 **What it changes when on.**
 
@@ -250,7 +259,7 @@ the backstop: it cannot stop a change, it tells the owner about one.
   agent, Enter included, which could answer a prompt. That needs a real click and real typing from the owner; the page
   picks no bytes and reads nothing, and the view is opaque and at least 80 columns by 24 rows. There is no time guard: a
   fixed delay would only change the odds. The size floor also stops a page from squeezing the agent's own screen. The
-  separate Show Terminal window has no sign-in check either.
+  separate Terminals window has no sign-in check either.
 - **Unsigned rows can steer which old files the app asks for.** A `reply` or `message.stored` row carries no Mac
   signature, so a taken-over relay or database can insert one that names old media ids. When you open that thread the
   app fails to load the file and signs a `media.fetch` for that id, and the Mac uploads it (up to 10 files per row). You

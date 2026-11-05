@@ -266,6 +266,10 @@ export class Hub implements Bus {
       bridgeOnline: () => this.bridgeOnline(),
       bridgeHas: (feature) => this.bridgeFeatures.has(feature),
       socketLive: (id) => Boolean(this.apps.get(id)?.authed),
+      deviceOf: (id) => {
+        const c = this.apps.get(id)
+        return c?.authed ? (c.session?.deviceId ?? c.deviceId) : null
+      },
       sendBridge: (raw) => this.sendBridge(raw),
       sendToApp,
       fanOut: (raw) => this.fanOut(raw),

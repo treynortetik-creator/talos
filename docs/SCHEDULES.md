@@ -861,6 +861,22 @@ Times and plain words come from the real Chronos output (golden fixtures, S9), n
   passed and whose `fire + catchup_min` hasn't shows "Waiting: agent session isn't running". That's a timestamp
   comparison in the app, not schedule maths.
 
+#### S5.2a Grouped by thread
+
+The list is grouped by the thread each job runs in, not by day (docs/OPTION-C.md "Thread schedules"). The pinned Heartbeat row
+stays above the groups. Then **Main** first (its group key is `__main__`, which no thread id can be; jobs with no thread, the default thread, or a thread that is archived or gone),
+then each other thread in the app's thread order. A group with no jobs is not drawn. Inside a group the order is the old one:
+jobs that are active today, then later ones, then the ones that are off; each row's status word still says which.
+
+Each group header shows who runs its jobs: `own session · live`, `own session · parked`, `own session` (a session that is
+starting or parking, where neither word is true yet) or `run by Main`. The words are the app's reading of the thread's
+session setting and `workers.status`: a shared thread, a Mac that cannot host thread sessions, and a session that has failed
+or is stopping all read `run by Main`, because the router sends the job to main in those cases. A row also says who runs
+it, from the job's own runner: "Runs in Trip's own session" or "Run by Main" for a session job, "Runs in the background, no session"
+for a headless one, "Run by Main, with a background backup" for "both", and a command says so, so a job that is not a session job never
+reads as "own session". Nothing here is a new frame: the grouping reads `Schedule.thread_id`
+and `workers.status`, both already sent.
+
 ### S5.3 Detail (`/schedules/:id`; full sheet on phone, right panel on desktop)
 
 **Header:** name, status pill, and an overflow `…` with Copy id and Delete.
@@ -971,12 +987,41 @@ Accessibility follows SPEC 8.9:
 
 ### S6.1 Tools (`apps/bridge/src/tools/schedules.ts`)
 
-| Tool                 | Required                                                           | Optional                                                                                                                                                                                                                                                 | Behaviour / returns                                                                                                                                                                                                                                                                                        |
-| -------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schedules_list`     |                                                                    | `id` (one job, full prompt + last 10 runs)                                                                                                                                                                                                               | A plain-text table: id, name, when_text, next run, today's state, last result, runner, permissions, paused. Health issues follow. Works headless (read-only).                                                                                                                                              |
-| `schedule_propose`   | `op` (`create`, `update`, `delete`), `thread_id`, `reason` (≤ 280) | `id`, `name`, `description`, `when` (ScheduleWhenEditable JSON), `prompt`, `runner` (default `session`), `permissions` (default `full`), `allowed_tools`, `model`, `notify`, `catchup_min`, `enabled` (default `true`), `result_thread_id`, `supersedes` | **Live only.** Fills in `base_etag` for update and delete, runs `adapter.validate`, then mints a `kind:'schedule'` card (`actor='bridge'`, `proposed_by:'agent'`) in `thread_id` → `card c_… pending, expires <ISO>`. Validation errors come back verbatim with field paths. It never writes the registry. |
-| `schedule_run_start` | `run_id`                                                           |                                                                                                                                                                                                                                                          | Claims the job for the `ds` it was offered on (S3.3) → `GO`, or `SKIP: <reason>` (`already done`, `running elsewhere`, `window passed`, `on hold`, `paused`).                                                                                                                                              |
-| `schedule_run_done`  | `run_id`, `ok`, `summary` (≤ 280)                                  | `report` (≤ 64 KiB, plain)                                                                                                                                                                                                                               | Finishes the run (owner-checked) → `recorded`, `not yours: …` or `late: noted on the closed run`.                                                                                                                                                                                                          |
+| Tool                                                                                                                      | Required                                                           | Optional                                                                                                                                                                                                                                                 | Behaviour / returns                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schedules_list`                                                                                                          |                                                                    | `id` (one job, full prompt + last 10 runs)                                                                                                                                                                                                               | A plain-text table: id, name, when_text, next run, today's state, last result, runner, permissions, paused. Health issues follow. Works headless (read-only).                                                                                                                                              |
+| `schedule_propose`                                                                                                        | `op` (`create`, `update`, `delete`), `thread_id`, `reason` (≤ 280) | `id`, `name`, `description`, `when` (ScheduleWhenEditable JSON), `prompt`, `runner` (default `session`), `permissions` (default `full`), `allowed_tools`, `model`, `notify`, `catchup_min`, `enabled` (default `true`), `result_thread_id`, `supersedes` | **Live only.** Fills in `base_etag` for update and delete, runs `adapter.validate`, then mints a `kind:'schedule'` card (`actor='bridge'`, `proposed_by:'agent'`) in `thread_id` → `card c_… pending, expires <ISO>`. Validation errors come back verbatim with field paths. It never writes the registry. |
+| `schedule_run_start`                                                                                                      | `run_id`                                                           |                                                                                                                                                                                                                                                          | Claims the job for the `ds` it was offered on (S3.3) → `GO`, or `SKIP: <reason>` (`already done`, `running elsewhere`, `window passed`, `on hold`, `paused`).                                                                                                                                              |
+| `schedule_run_done`                                                                                                       | `run_id`, `ok`, `summary` (≤ 280)                                  | `report` (≤ 64 KiB, plain)                                                                                                                                                                                                                               | Finishes the run (owner-checked) → `recorded`, `not yours: …` or `late: noted on the closed run`.                                                                                                                                                                                                          |
+| **In a thread's own session (Option C).** The same four tools exist in a thread session, but main's bridge runs them over |
+| the hub socket (the worker has no Schedules service), scoped to the thread the connection proved:                         |
+- `schedules_list` lists only jobs that run in that thread **in a session** (a heartbeat, a background or "both" job and a
+  command are never listed or changeable by it; no unreadable-file lines, no health
+  issues, which name other jobs). `id` for another thread's job answers exactly as for a job that does not exist.
+- `schedule_propose`: `thread_id` (the card's thread) and `result_thread_id` (where the job runs and posts) can only be the
+  session's own thread; any other value is refused, and a `create` is pinned to the own thread. `update` and `delete` are
+  refused for a job that does not run in that thread (checked on the job as Chronos has it now, inside the schedule queue).
+  A heartbeat (`talos.heartbeat` in `meta`) is refused whole. A create is pinned to `runner: "session"`; any other runner, any
+  permissions other than the default, and any `allowed_tools` are refused (a session's job runs in its own session, not outside
+  it). `supersedes` can only name a card this same session proposed (the bridge keeps who proposed each card beside it, so main's
+  cards in the same thread are not replaceable). Main and each thread session have their own proposals-per-hour and their own
+  waiting-card count (a thread session: 3), so one looping session cannot use up another's, or main's. When the owner approves
+  an update or delete, the bridge checks again that the job still runs in that thread, in a session, and is not a heartbeat;
+  if not, the card ends "This job moved to another thread; nothing changed." Every card is still the owner's to approve.
+- Its card reads "<Thread>'s session wants to schedule <name>" with `Runs in` ("This thread's own session (wakes it if parked), or
+  Main if that session can't take it"; any other runner says what it really is), `When`, `Does` rows and **Approve** / **Not now**
+  (`sessionName` in `composeScheduleCard`; the payload and its hash are the same shape as any agent card).
+- `schedule_run_start` / `schedule_run_done` work only for a run the router handed to that thread's session and that the
+  session itself claimed (`read_inbound`). A run main took after the deadline, another thread's run, a heartbeat wake and an
+  unknown id answer `SKIP: …` / `not yours: …`. `schedule_run_start` is repeatable for the session's own open claim (it
+  answers `GO` again, so a lost answer costs nothing); after the run is closed it answers `SKIP: already done`. A successful
+  `schedule_run_done` settles the router's claim, so a session that parks afterwards is not reported as having stopped.
+- A request the hub cannot answer (no hub socket, a main bridge too old to know the request, no reply in 60 to 150 s depending on
+  the tool) comes back as a failure that says the action may or may not have run and what to do next (for a start: check
+  `schedules_list`, asking again is safe; for a propose: a card may be waiting, don't propose again until you've looked); it is
+  never an empty result.
+
+Main's tools do not change.
 - The generic `card` tool refuses `kind:'schedule'` (the enum at `card.ts:22` stays as it is).
 - `BRIDGE_TOOLS` (`channel-meta.ts:66`) grows to 16.
 - `HEADLESS_OK` (`tools/index.ts:28`) adds only `schedules_list`.

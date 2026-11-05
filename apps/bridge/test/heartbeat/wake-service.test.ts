@@ -149,7 +149,10 @@ describe('a wake through the real bridge', () => {
       30_000,
       'the plain line',
     )
-    expect(store().items['news|a'].state).toBe('surfaced')
+    // The row is sent BEFORE the store records the items as shown (endWake awaits the send, then saves), so the row can be seen
+    // a moment ahead of the file: wait for the file itself, never read it the instant the row appears.
+    await waitFor(() => store().items['news|a'].state === 'surfaced', 10_000, 'the items to be recorded as shown')
+    expect(store().pending).toBeNull()
     expect(h.notesOf('schedule_run').length).toBe(2)
   })
 
@@ -210,8 +213,11 @@ describe('a wake where one source failed is still a wake (R1-7)', () => {
     const note = await nextRun(h, 'beat')
     const runId = note.meta.run_id as string
     await waitFor(() => store().wake?.run_id === runId, 10_000, 'the wake record')
-    const saved = () => JSON.parse(readFileSync(join(h.home, 'schedules-meta.json'), 'utf8')).runs[runId] as J
-    expect(saved().heartbeat.outcome).toBe('partial') // not 'woke'
+    const saved = () =>
+      JSON.parse(readFileSync(join(h.home, 'schedules-meta.json'), 'utf8')).runs?.[runId] as J | undefined
+    // The sidecar note is written after the wake record lands in the store: wait for it, don't race it.
+    await waitFor(() => saved()?.heartbeat?.outcome !== undefined, 10_000, 'the run note')
+    expect(saved()?.heartbeat.outcome).toBe('partial') // not 'woke'
     await h.advance(41 * 60_000)
     await waitFor(() => store().wake === null, 20_000, 'the kill')
     const c = await card({ run_id: runId })

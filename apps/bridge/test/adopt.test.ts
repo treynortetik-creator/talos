@@ -21,6 +21,8 @@ import { approvedFixture, tmp } from './apps/helpers.ts'
 
 const BRIDGE_DIR = resolve(import.meta.dir, '..')
 const REPO = resolve(BRIDGE_DIR, '..', '..')
+// Another clone, in a fresh temp folder: adopt resolves it on disk, and a path under /home can stall on macOS (autofs).
+const otherClone = () => join(tmp('adopt-other-'), 'other-clone', 'apps', 'bridge')
 
 function run(argv: string[], opts: { home?: string; terminal?: boolean; answers?: string[]; userHome?: string } = {}) {
   const out: string[] = []
@@ -180,15 +182,13 @@ describe('talos-app adopt: a folder that has an .mcp.json', () => {
   })
 
   it('a talos-app entry that runs another clone is refused with exit 3, changing nothing', async () => {
-    const foreign = {
-      command: 'bun',
-      args: ['run', '--cwd', '/home/alex/other-clone/apps/bridge', '--silent', 'start'],
-    }
+    const clone = otherClone()
+    const foreign = { command: 'bun', args: ['run', '--cwd', clone, '--silent', 'start'] }
     const dir = ownerFolder({ '.mcp.json': JSON.stringify({ mcpServers: { 'talos-app': foreign } }) })
     const before = tree(dir)
     const r = await run(['adopt', '--agent-dir', dir, '--yes'])
     expect(r.code).toBe(3)
-    expect(r.err).toContain('/home/alex/other-clone/apps/bridge')
+    expect(r.err).toContain(clone)
     expect(r.err).toContain('--repoint')
     expect(tree(dir)).toEqual(before)
     const dry = await run(['adopt', '--agent-dir', dir, '--dry-run'])
@@ -198,7 +198,7 @@ describe('talos-app adopt: a folder that has an .mcp.json', () => {
 
   it('an entry whose shape cannot be read, or that uses another TALOS_APP_HOME, is refused the same way', async () => {
     const home = tmp('adopt-home-')
-    const same = mcpEntry(BRIDGE_DIR, '/home/alex/other-home')
+    const same = mcpEntry(BRIDGE_DIR, join(tmp('adopt-other-home-'), 'other-home'))
     for (const entry of [{ command: 'bun' }, same, { command: 'bun', args: 'run' }]) {
       const dir = ownerFolder({ '.mcp.json': JSON.stringify({ mcpServers: { 'talos-app': entry } }) })
       const before = tree(dir)
@@ -218,10 +218,7 @@ describe('talos-app adopt: a folder that has an .mcp.json', () => {
   })
 
   it('--repoint is the owner saying yes: the entry moves to this clone and the other servers stay', async () => {
-    const foreign = {
-      command: 'bun',
-      args: ['run', '--cwd', '/home/alex/other-clone/apps/bridge', '--silent', 'start'],
-    }
+    const foreign = { command: 'bun', args: ['run', '--cwd', otherClone(), '--silent', 'start'] }
     const other = { command: 'npx', args: ['x'] }
     const dir = ownerFolder({ '.mcp.json': JSON.stringify({ mcpServers: { 'talos-app': foreign, other } }) })
     const before = tree(dir)

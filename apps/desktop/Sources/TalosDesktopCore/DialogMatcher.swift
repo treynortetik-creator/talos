@@ -157,6 +157,44 @@ public enum DialogMatcher {
     }
   }
 
+  /// A rule row of a dialog's frame: the line Claude draws above it (`────────`), or a box edge (`╭──────╮`).
+  static func isFrameRule(_ row: String) -> Bool {
+    let box: Set<Character> = ["─", "━", "╭", "╮", "╰", "╯", "┌", "┐", "└", "┘", "═"]
+    let t = row.filter { $0 != " " && $0 != "\t" }
+    guard t.count >= 10 else { return false }
+    return t.filter { box.contains($0) }.count * 10 >= t.count * 8
+  }
+
+  /// A dialog that is really waiting on a worker (live, busy or starting), where a conversation is on screen and any of the
+  /// dialogs' words may be quoted in it. Read from real 2.1.318 captures (Tests/Fixtures/real-2.1.318): Claude's dialogs are a
+  /// rule row, their text, and a Select whose rows are numbered or NOT (the trust and MCP dialogs hide the numbers) with one `❯`
+  /// cursor, then `Enter to confirm · Esc to cancel`. All of these, or it is not one: the frame's rule row, one selection cursor
+  /// and either that footer or numbered options below it, the dialog's phrase below the rule (not in output above it), and all
+  /// of it in the bottom `region` rows. The worker's own question menu is not a dialog (its words are the worker's), and neither
+  /// is the input box (rule, `❯` row, rule: no cursor below the last rule).
+  public static func liveDialog(_ rows: [String], region: Int = 24) -> Screen {
+    var tail = rows
+    while let l = tail.last, l.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { tail.removeLast() }
+    let bottom = Array(tail.suffix(region))
+    guard let rule = bottom.lastIndex(where: { isFrameRule($0) }) else { return .none }
+    let block = Array(bottom[(rule + 1)...])
+    let cleaned = block.map(clean)
+    guard cleaned.filter({ $0.first == Strings.pointer }).count == 1 else { return .none }
+    let footer = cleaned.contains { $0.hasPrefix("Enter to confirm") || $0.contains("Esc to cancel") }
+    guard footer || cleaned.contains(where: isIndexedCursor) else { return .none }
+    let s = classify(block)
+    switch s {
+    case .trust, .mcpConsent, .bypassDisclaimer, .loginExpired: break
+    default: return .none
+    }
+    // the phrase is part of the dialog: one of its rows, below the rule, not a line that merely quotes it
+    let phraseRows = cleaned.filter { row in
+      Strings.trust.contains(where: row.contains) || Strings.mcpConsent.contains(where: row.contains)
+        || row.contains(Strings.bypass) || Strings.login.contains(where: { row.hasPrefix($0) || row.contains("\u{00B7} \($0)") })
+    }
+    return phraseRows.isEmpty ? .none : s
+  }
+
   /// The registration notice is on screen (channels are live: the dialog was answered).
   public static func noticeSeen(_ rows: [String]) -> Bool {
     // Joined with spaces: a narrow pane may wrap the notice across rows.

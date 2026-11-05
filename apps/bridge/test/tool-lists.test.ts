@@ -41,6 +41,7 @@ describe('which tools each kind of session lists, in order', () => {
       'set_status',
       'list_threads',
       'read_thread',
+      ...SCHEDULES,
       'read_inbound',
       'handoff',
     ])
@@ -55,9 +56,14 @@ describe('which tools each kind of session lists, in order', () => {
     expect(names(toolsFor({ scheduler: 'off' }))).toEqual(off)
     expect(names(toolsFor({ scheduler: 'auto', apps: true }))).toEqual([...on, ...APPS])
     expect(names(toolsFor({ scheduler: 'off', apps: true }))).toEqual([...off, ...APPS])
-    for (const scheduler of ['auto', 'off']) {
-      expect(names(toolsFor({ scheduler, workerThread: 'trip' }))).toEqual(names(WORKER_TOOLS))
-      expect(names(toolsFor({ scheduler, workerThread: 'trip', apps: true }))).toEqual(names(WORKER_TOOLS))
+    // a thread session has the schedule tools (they ask main's bridge), unless the scheduler is switched off
+    const noSchedules = names(WORKER_TOOLS).filter((n) => !SCHEDULES.includes(n))
+    for (const [scheduler, want] of [
+      ['auto', names(WORKER_TOOLS)],
+      ['off', noSchedules],
+    ] as const) {
+      expect(names(toolsFor({ scheduler, workerThread: 'trip' }))).toEqual(want)
+      expect(names(toolsFor({ scheduler, workerThread: 'trip', apps: true }))).toEqual(want)
     }
   })
 })
@@ -109,7 +115,7 @@ describe('which tools are locked to a worker thread', () => {
       const r = await callTool(worker(), name, { thread_id: 'garden', chat_id: 'garden' })
       if (/can only post there/.test(r.content[0]?.text ?? '')) locked.push(name)
     }
-    expect(locked).toEqual(['reply', 'attach', 'card', 'set_status', 'read_thread', 'handoff'])
+    expect(locked).toEqual(['reply', 'attach', 'card', 'set_status', 'read_thread', 'schedule_propose', 'handoff'])
   })
 
   test('a worker that names no thread is told it is required on those same tools', async () => {
@@ -118,7 +124,7 @@ describe('which tools are locked to a worker thread', () => {
       const r = await callTool(worker(), name, {})
       if (/thread_id is required\. Valid thread ids: trip/.test(r.content[0]?.text ?? '')) required.push(name)
     }
-    expect(required).toEqual(['reply', 'attach', 'card', 'set_status', 'read_thread', 'handoff'])
+    expect(required).toEqual(['reply', 'attach', 'card', 'set_status', 'read_thread', 'schedule_propose', 'handoff'])
   })
 
   test('a tool a worker does not have is unknown to it', async () => {

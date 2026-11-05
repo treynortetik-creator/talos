@@ -52,10 +52,19 @@ export const configFrames = {
       const ok = await consumeStepupToken({ token: frame.stepup_token, purpose: 'config:work', session: a.session })
       if (!ok) return this.appError(a, 'stepup_invalid', 'step-up token is invalid', frame.id)
     }
-    // permission_relay decides who can approve tool calls (docs/CLAUDE-CODE.md C3.6)
-    if (check.stepupPurpose === 'config:session' && !trust) {
+    // permission_relay decides who can approve tool calls (docs/CLAUDE-CODE.md C3.6). Turning trust mode ON asks the same
+    // passkey step, and trust mode never skips it: the relay's copy of the Mac's config can be stale (a patch queued for a
+    // Mac that has since turned trust off must not switch it on untapped). Turning it off needs none.
+    if (check.stepupPurpose === 'config:session' && (check.turnsOnTrust || !trust)) {
       if (typeof frame.stepup_token !== 'string')
-        return this.appError(a, 'stepup_required', 'step-up required to change permission settings', frame.id)
+        return this.appError(
+          a,
+          'stepup_required',
+          check.turnsOnTrust
+            ? 'step-up required to turn on trust mode'
+            : 'step-up required to change permission settings',
+          frame.id,
+        )
       const ok = await consumeStepupToken({
         token: frame.stepup_token,
         purpose: 'config:session',

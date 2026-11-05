@@ -41,6 +41,11 @@ beforeEach(() => {
 afterEach(async () => {
   await h?.stop()
 })
+/** The heartbeat rows in the history of the default thread. */
+const history = () =>
+  h.bridge.ctx.store
+    .page({ thread_id: h.bridge.ctx.config.config.default_thread, limit: 50 })
+    .messages.filter((m) => m.heartbeat)
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0)
@@ -605,6 +610,81 @@ describe('crash safety', () => {
     expect(k.store().items['cc|a'].state).toBe('surfaced')
   })
 
+  test('a refused post leaves no history row, so the retry makes exactly one row under one id', async () => {
+    await start()
+    const real = h.bridge.ctx.transport.sendDurable.bind(h.bridge.ctx.transport)
+    h.bridge.ctx.transport.sendDurable = async () => {
+      throw new Error('relay refused the row')
+    }
+    const cfg = config([cmd('cc', printing(dir, 'c', ok([item('a')])))])
+    expect((await k.run(cfg)).result.outcome).toBe('failed')
+    expect(history()).toEqual([]) // nothing was delivered, so nothing is in the history
+    h.bridge.ctx.transport.sendDurable = real
+    expect((await k.run(cfg)).result.outcome).toBe('fyi')
+    await waitFor(() => k.rows().length === 1, 5000, 'the retried digest')
+    expect(history().length).toBe(1)
+    expect(new Set(history().map((m) => m.id)).size).toBe(1)
+    // and the relay saw the same id the history holds
+    const sent = h.relay.frames.filter((r) => r.frame.type === 'reply' && r.direction === 'from_bridge')
+    expect(sent.map((r) => (r.frame as unknown as { message: { id: string } }).message.id)).toEqual([history()[0]?.id])
+  })
+
+  test('a digest that goes out leaves one history row, carrying the seq the relay acked', async () => {
+    await start()
+    const real = h.bridge.ctx.transport.sendDurable.bind(h.bridge.ctx.transport)
+    h.bridge.ctx.transport.sendDurable = async (f) => {
+      await real(f)
+      return { state: 'acked', seq: 7 }
+    }
+    await k.run(config([cmd('cc', printing(dir, 'c', ok([item('a')])))]))
+    const rows = h.bridge.ctx.store
+      .page({ thread_id: h.bridge.ctx.config.config.default_thread, limit: 50 })
+      .messages.filter((m) => m.heartbeat)
+    expect(rows.length).toBe(1)
+    expect(rows[0]?.seq).toBe(7)
+  })
+
+  test('an ack that lands before the send returns still sets the seq on the row', async () => {
+    await start()
+    const t = h.bridge.ctx.transport as unknown as { onAck(ref: string, seq: number): void }
+    h.bridge.ctx.transport.sendDurable = async (f) => {
+      h.bridge.ctx.store.outboxAdd(f.id, f.type, JSON.stringify(f), 0)
+      t.onAck(f.id, 9) // the relay's ack, before sendDurable gives its answer
+      return { state: 'acked' } // an answer that carries no seq
+    }
+    await k.run(config([cmd('cc', printing(dir, 'c', ok([item('a')])))]))
+    expect(history().map((m) => m.seq)).toEqual([9])
+  })
+
+  test('a send that fails after the frame is in the outbox is not posted again: the outbox delivers it', async () => {
+    await start()
+    h.bridge.ctx.transport.sendDurable = async (f) => {
+      h.bridge.ctx.store.outboxAdd(f.id, f.type, JSON.stringify(f), 0)
+      throw new Error('something broke after the frame was kept')
+    }
+    const cfg = config([cmd('cc', printing(dir, 'c', ok([item('a')])))])
+    expect((await k.run(cfg)).result.outcome).toBe('fyi')
+    expect(k.store().items['cc|a'].state).toBe('surfaced')
+    expect(history().length).toBe(1)
+    expect((await k.run(cfg)).result.outcome).toBe('silent') // not a second digest
+    expect(history().length).toBe(1)
+  })
+
+  test('a history store that throws leaves nothing sent, and the retry makes one row', async () => {
+    await start()
+    const real = h.bridge.ctx.store.addMessage.bind(h.bridge.ctx.store)
+    h.bridge.ctx.store.addMessage = () => {
+      throw new Error('disk full')
+    }
+    const cfg = config([cmd('cc', printing(dir, 'c', ok([item('a')])))])
+    expect((await k.run(cfg)).result.outcome).toBe('failed')
+    expect(k.rows()).toEqual([])
+    h.bridge.ctx.store.addMessage = real
+    expect((await k.run(cfg)).result.outcome).toBe('fyi')
+    await waitFor(() => k.rows().length === 1, 5000, 'the retried digest')
+    expect(history().length).toBe(1)
+  })
+
   test('a store that cannot be saved fails the run: nothing is posted from state that was not kept', async () => {
     await start()
     const cfg = config([cmd('cc', printing(dir, 'c', ok([item('a')])))])
@@ -859,7 +939,7 @@ describe('the store', () => {
     expect((statSync(storeFile(h.home, false, 'beat')).mode & 0o777).toString(8)).toBe('600')
   })
 
-  test('a source not heard from for 72 hours starts over with no cursor', async () => {
+  test("a heartbeat off for longer than its job's limit starts over with no cursor", async () => {
     await start()
     const src = printing(dir, 'c', ok([], { n: 1 }))
     const cfg = config([cmd('cc', src)])
@@ -867,10 +947,41 @@ describe('the store', () => {
     await k.run(cfg)
     expect(JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8')).cursor).toEqual({ n: 1 })
     clock.advance(73 * 3600_000)
+    await k.run(cfg, { coldAfterMs: 3 * 24 * 3600_000 })
+    const req = JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8'))
+    expect(req.cursor).toBeNull()
+    expect(req.since).toBeNull()
+  })
+
+  test('a store from before last_run was kept (sources known, no last_run) starts over once, like a long gap', async () => {
+    await start()
+    const src = printing(dir, 'c', ok([item('a')], { n: 1 }))
+    const cfg = config([cmd('cc', src)])
+    await k.run(cfg)
+    await k.run(cfg)
+    expect(JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8')).cursor).toEqual({ n: 1 })
+    const old = k.store()
+    old.last_run = null // what an earlier version wrote
+    writeFileSync(storeFile(h.home, false, 'beat'), JSON.stringify(old))
+    const rowsBefore = k.rows().length
     await k.run(cfg)
     const req = JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8'))
     expect(req.cursor).toBeNull()
     expect(req.since).toBeNull()
+    await waitFor(() => k.rows().length === rowsBefore + 1, 5000, 'the note')
+    expect(k.rows().at(-1)?.text).toContain('started over')
+    expect(k.store().last_run).toBe(MON_1000_UTC)
+    // and it is once: the run after that is a normal one
+    await k.run(cfg)
+    expect(JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8')).cursor).toEqual({ n: 1 })
+  })
+
+  test('a heartbeat that has never run is not cold: its first look shows what it finds, with no note', async () => {
+    await start()
+    await k.run(config([cmd('cc', printing(dir, 'c', ok([item('a')])))]))
+    expect(k.rows().length).toBe(1)
+    expect(k.rows()[0]?.text).toContain('Item a')
+    expect(k.rows()[0]?.text).not.toContain('started over')
   })
 
   test('the request carries the cursor and the time of the last good look', async () => {
@@ -951,7 +1062,10 @@ describe('hostile text and the process boundary', () => {
     const out = await p
     expect(out.aborted).toBe(true)
     await waitFor(() => !alive(pid), 3000, 'the source to be killed')
-    expect(existsSync(storeFile(h.home, false, 'beat'))).toBe(false)
+    // the only thing the store ever held was the source's own record, and that is gone
+    const st = k.store()
+    expect([st.items, st.sources, st.running]).toEqual([{}, {}, {}])
+    expect([st.pending, st.last_run]).toEqual([null, null])
     expect(k.rows()).toEqual([])
   })
 
@@ -962,5 +1076,39 @@ describe('hostile text and the process boundary', () => {
     const p = k.run(config([cmd('hang', hang, { timeout_s: 60 })]), { signal: ac.signal })
     setTimeout(() => ac.abort(), 100)
     expect((await p).aborted).toBe(true)
+  })
+})
+
+describe('the group of a running source is recorded in the store', () => {
+  test('while a source runs its group and command are in the store; when it ends the record is gone', async () => {
+    await start()
+    const seen = join(dir, 'during.json')
+    const pidFile = join(dir, 'pid')
+    const src = script(
+      dir,
+      'rec',
+      `echo $$ > '${pidFile}'\ncp '${storeFile(h.home, false, 'beat')}' '${seen}'\ncat <<'JSON_END'\n${ok([])}\nJSON_END`,
+    )
+    await k.run(config([cmd('rec', src)]))
+    const during = JSON.parse(readFileSync(seen, 'utf8'))
+    const rec = during.running.rec
+    expect(rec.pgid).toBe(Number(readFileSync(pidFile, 'utf8')))
+    expect(rec.command).toContain(src)
+    expect(rec.lstart).toMatch(/\d{4}$/) // the start time ps shows, so a reused pid can be told apart
+    expect(k.store().running).toEqual({})
+  })
+
+  test('a source that is killed at its time limit leaves no record behind', async () => {
+    await start()
+    const hang = script(dir, 'hang', 'sleep 300')
+    const out = await k.run(config([cmd('hang', hang)]))
+    expect(sourceOf(out.result, 'hang')?.ok).toBe(false)
+    expect(k.store().running).toEqual({})
+  })
+
+  test('a dry run records nothing and writes no file', async () => {
+    await start()
+    await k.run(config([cmd('dd', printing(dir, 'dd', ok([])))]), { dry: true })
+    expect(k.storeBytes()).toBeNull()
   })
 })

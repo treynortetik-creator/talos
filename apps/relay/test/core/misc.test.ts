@@ -90,7 +90,7 @@ describe('owner frames', () => {
     const k = kit(relay)
     const app = await k.connectedApp()
     const bridge = await k.bridge({ verifyOwner: false, consume: 'manual' }).connect()
-    const bad = await app.sendConfigPatch(0, { trust_mode: true })
+    const bad = await app.sendConfigPatch(0, { mirror: { telegram: 'on' } })
     expect((await app.expectFrame('error', (f) => f.ref === bad.id)).code).toBe('config_field_forbidden')
     await sleep(80)
     expect(bridge.rec.of('config.patch', 'in')).toHaveLength(0)

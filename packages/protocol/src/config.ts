@@ -85,9 +85,9 @@ export const AgentConfig = z.object({
     .optional()
     .catch(undefined),
   /**
-   * Trust mode (docs/SECURITY.md "Trust mode"). Absent or anything but `true` = off, the public default. Set only on the
-   * Mac (`talos-app trust on|off`): no `config.patch` and no agent proposal can write it, the same lock as
-   * the other Mac-only settings. On, the owner's own words are trusted further: fewer cards and fewer passkey steps.
+   * Trust mode (docs/SECURITY.md "Trust mode"). Absent or anything but `true` = off, the public default. Written by
+   * the owner only: `talos-app trust on|off` on the Mac, or a signed `config.patch` from the app (off is free; on needs the
+   * passkey step-up, checked by the relay). No agent proposal can write it. On, the owner's own words are trusted further: fewer cards and fewer passkey steps.
    */
   trust_mode: z.boolean().optional().catch(undefined),
 })

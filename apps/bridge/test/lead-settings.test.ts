@@ -100,21 +100,23 @@ describe('leadSettings: connectors', () => {
   })
   test("readOwnerMcp reads the owner's main project entry and user scope from ~/.claude.json", () => {
     const home = mkdtempSync(join(realpathSync(tmpdir()), 'lm-'))
+    // Inside the test's own home and never created: readOwnerMcp resolves it on disk, and a path under /home can stall on macOS (autofs).
+    const agent = join(home, 'My-Agent')
     try {
       writeFileSync(
         join(home, '.claude.json'),
         JSON.stringify({
           mcpServers: { 'talos-browser': {}, blender: {}, 'talos-app': {} },
           projects: {
-            '/home/alex/My-Agent': {
+            [agent]: {
               disabledMcpServers: ['old-mail', 'plugin:zoom-plugin:zoom-mcp'],
               mcpServers: { x: {} },
             },
-            '/home/alex/other': { disabledMcpServers: ['nope'] },
+            [join(home, 'other')]: { disabledMcpServers: ['nope'] },
           },
         }),
       )
-      const r = readOwnerMcp(home, '/home/alex/My-Agent', join(home, '.claude'))
+      const r = readOwnerMcp(home, agent, join(home, '.claude'))
       expect(r.disabled.sort()).toEqual(['old-mail', 'plugin:zoom-plugin:zoom-mcp'])
       expect(r.userScope.sort()).toEqual(['blender', 'talos-app', 'talos-browser'])
       expect(readOwnerMcp(join(home, 'none'), '/x', join(home, 'none', '.claude'))).toEqual({

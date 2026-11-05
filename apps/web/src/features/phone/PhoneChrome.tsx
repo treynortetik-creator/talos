@@ -26,6 +26,7 @@ import { useMediaQuery } from '../settings/useMedia.ts'
 import { ThreadEditor } from '../threads/manage/ThreadEditor.tsx'
 import { useNeedsYouCount } from '../threads/Nav.tsx'
 import { StatusWord } from '../threads/StatusPill.tsx'
+import { ThreadRowWithSettings } from '../threads/ThreadMoreButton.tsx'
 import { ThreadRowMenu } from '../threads/ThreadRowMenu.tsx'
 import { useDescription } from '../threads/threadMeta.ts'
 import { useAgentName, useVisibleThreads } from '../threads/useThreads.ts'
@@ -272,22 +273,37 @@ function MenuBody({
         {threads
           .filter((t) => t.id !== 'inbox' && t.id !== threadId)
           .map((t) => (
-            <ThreadRowMenu key={t.id} thread={t}>
-              <NavLink to={`/t/${t.id}`} className={link} onClick={onClose} draggable={false}>
+            <ThreadRowWithSettings
+              key={t.id}
+              thread={t}
+              tone="chrome"
+              wrap={(inner) => <ThreadRowMenu thread={t}>{inner}</ThreadRowMenu>}
+            >
+              <NavLink to={`/t/${t.id}`} className={(st) => cn(link(st), 'pr-14')} onClick={onClose} draggable={false}>
                 <ThreadIcon id={t.id} icon={t.icon} color={t.color} size={24} framed />
                 <span className="truncate">{t.name}</span>
                 {(ownValue(unread, t.id) ?? 0) > 0 &&
                   count(ownValue(unread, t.id) ?? 0, `${ownValue(unread, t.id)} unread`)}
               </NavLink>
-            </ThreadRowMenu>
+            </ThreadRowWithSettings>
           ))}
-        {threadId !== 'inbox' && (
-          <NavLink to="/t/inbox" className={link} onClick={onClose}>
-            <ThreadIcon id="inbox" icon={inbox?.icon} color={inbox?.color} size={24} framed />
-            Inbox
-            {(unread.inbox ?? 0) > 0 && count(unread.inbox ?? 0, `${unread.inbox} unread`)}
-          </NavLink>
-        )}
+        {threadId !== 'inbox' &&
+          (() => {
+            const row = (
+              <NavLink to="/t/inbox" className={(st) => cn(link(st), inbox && 'pr-14')} onClick={onClose}>
+                <ThreadIcon id="inbox" icon={inbox?.icon} color={inbox?.color} size={24} framed />
+                Inbox
+                {(unread.inbox ?? 0) > 0 && count(unread.inbox ?? 0, `${unread.inbox} unread`)}
+              </NavLink>
+            )
+            return inbox ? (
+              <ThreadRowWithSettings thread={inbox} tone="chrome">
+                {row}
+              </ThreadRowWithSettings>
+            ) : (
+              row
+            )
+          })()}
         {driving !== 'off' && (
           <NavLink to="/drive" className={link} onClick={onClose} data-testid="menu-driving">
             <IconMic width={20} height={20} />

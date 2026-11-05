@@ -178,7 +178,7 @@ final class AgentFolderFlow: ObservableObject {
     } else {
       note =
         model.beginSession(model)
-        ? "Set up, and the session is starting. The first time, Claude asks you to confirm a few things: open Show Terminal in the menu bar item and answer them there."
+        ? "Set up, and the session is starting. The first time, Claude asks you to confirm a few things: open Terminals… in the menu bar item and answer them there."
         : "Set up, but the session did not start (the menu bar item says why). Choose Start session when you are ready."
     }
     if let f = FirstRun.protectedFolder(dir, home: NSHomeDirectory()) {

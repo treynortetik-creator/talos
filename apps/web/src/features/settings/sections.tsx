@@ -24,6 +24,7 @@ import { NOTIFY_LABEL } from '../threads/threadMeta.ts'
 import { useAgentName } from '../threads/useThreads.ts'
 import { DeviceRow } from './DeviceRow.tsx'
 import { ThemePicker } from './ThemePicker.tsx'
+import { TrustModeSwitch } from './TrustModeSwitch.tsx'
 
 const http = createHttp()
 const FAKE = import.meta.env.VITE_FAKE === '1'
@@ -187,6 +188,10 @@ export function AccountSection(_p: SectionProps) {
           Run <code>talos-app enroll</code> on your Mac and open the link on the new device. {agent} asks you to confirm
           the device there (y/N) before it can send anything.
         </p>
+      </div>
+      <div>
+        <h3 className="m-0 mb-1 text-base font-medium">Trust mode</h3>
+        <TrustModeSwitch />
       </div>
       <div className="flex flex-wrap gap-2">
         <Button

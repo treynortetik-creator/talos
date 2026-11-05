@@ -99,6 +99,9 @@ export const ALL_TOOLS: Tool[] = toolsOf(inGroups(...MAIN_GROUPS))
 /** Option C worker mode (docs/OPTION-C.md): its own thread's tools only, plus `read_inbound`. */
 export const WORKER_TOOLS: Tool[] = toolsOf((n) => AGENT_TOOLS[n].worker)
 
+const WORKER_WITHOUT_SCHEDULER: Tool[] = toolsOf(
+  (n) => AGENT_TOOLS[n].worker && !NEEDS_SCHEDULER.includes(AGENT_TOOLS[n].group),
+)
 const WITHOUT_SCHEDULER = toolsOf(inGroups(...MAIN_GROUPS.filter((g) => !NEEDS_SCHEDULER.includes(g))))
 const APPS = toolsOf(inGroups('apps'))
 
@@ -107,7 +110,7 @@ export function toolsFor(env: {
   workerThread?: string | undefined
   apps?: boolean | undefined
 }): Tool[] {
-  if (env.workerThread) return WORKER_TOOLS
+  if (env.workerThread) return env.scheduler === 'off' ? WORKER_WITHOUT_SCHEDULER : WORKER_TOOLS
   const base = env.scheduler === 'off' ? WITHOUT_SCHEDULER : ALL_TOOLS
   return env.apps ? [...base, ...APPS] : base
 }

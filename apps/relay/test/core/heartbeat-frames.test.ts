@@ -250,6 +250,38 @@ describe('heartbeat.test through the real relay', () => {
     expect(e.code).toBe('bad_frame')
   })
 
+  it('R2-1: the old socket is half-open (never closed), the SAME device reconnects and re-asks: the result goes to the new socket, the old one gets none, and the Mac is asked once', async () => {
+    const { k, app, bridge } = await world({ delayMs: 600 })
+    const f = await app.testHeartbeat(CONFIG)
+    await app.expectFrame('ack', (x) => x.ref === f.id, { direction: 'in' })
+    // no app.close(): the phone changed networks and the relay still sees the old socket as live
+    const again = await k.connectedApp({ deviceKey: app.device })
+    const g = await again.testHeartbeat(CONFIG, { requestId: rid(f) })
+    await again.expectFrame('ack', (x) => x.ref === g.id, { direction: 'in' })
+    await again.expectFrame('heartbeat.test_result', (x) => x.request_id === rid(f), {
+      direction: 'in',
+      timeoutMs: 5000,
+    })
+    await sleep(150)
+    expect(inFrames(again, 'error').filter((e) => e.ref === g.id)).toEqual([])
+    expect(inFrames(app, 'heartbeat.test_result')).toHaveLength(0)
+    expect(bridge?.rec.frames.filter((r) => r.direction === 'in' && r.raw.type === 'heartbeat.test')).toHaveLength(1)
+  })
+
+  it('R2-1: a different device cannot take a request over while the owner is connected', async () => {
+    const { k, app, bridge } = await world({ delayMs: 500 })
+    const other = await k.connectedApp() // a different device key
+    const f = await app.testHeartbeat(CONFIG)
+    await app.expectFrame('ack', (x) => x.ref === f.id, { direction: 'in' })
+    const thief = await other.testHeartbeat(CONFIG, { requestId: rid(f) })
+    const e = await other.expectFrame('error', (x) => x.ref === thief.id, { direction: 'in', timeoutMs: 2000 })
+    expect(e.code).toBe('bad_frame')
+    await app.expectFrame('heartbeat.test_result', (x) => x.request_id === rid(f), { direction: 'in' })
+    await sleep(150)
+    expect(inFrames(other, 'heartbeat.test_result')).toHaveLength(0)
+    expect(bridge?.rec.frames.filter((r) => r.direction === 'in' && r.raw.type === 'heartbeat.test')).toHaveLength(1)
+  })
+
   it('R1-10: a refused request_id collision does not spend a rate-limit token', async () => {
     const { k, app } = await world({ delayMs: 200 })
     const other = await k.connectedApp()
