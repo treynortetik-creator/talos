@@ -1,5 +1,5 @@
 // The app shell: sidebar + center + optional detail panel on tablet/desktop, content + bottom bar on phones.
-import { type CSSProperties, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation, useMatch, useNavigate } from 'react-router'
 import { AgentsRail } from './features/agents/AgentsRail.tsx'
 import { PhoneChrome } from './features/phone/PhoneChrome.tsx'
@@ -50,6 +50,20 @@ export function Shell() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: the panel closes on navigation
   useEffect(() => setDetail(null), [loc.pathname])
 
+  // The sheet's own Escape handler removes it before this window listener runs, so look at the key in the capture phase,
+  // which runs first, and remember whether a dialog was open when it went down.
+  const dialogWasOpenAtEscape = useRef(false)
+  useEffect(() => {
+    const seen = (e: KeyboardEvent) => {
+      if (e.key === 'Escape')
+        dialogWasOpenAtEscape.current = Boolean(
+          document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]'),
+        )
+    }
+    window.addEventListener('keydown', seen, true)
+    return () => window.removeEventListener('keydown', seen, true)
+  }, [])
+
   const handlers = useMemo(
     () => ({
       onThread: (i: number) => {
@@ -65,7 +79,12 @@ export function Shell() {
           return
         toggleSidebar()
       },
-      onEscape: () => setDetail(null),
+      // Escape belongs to an open sheet or dialog first: it closes that, not the panel behind it (a Heartbeat test sheet over
+      // a job's detail would otherwise take the detail away with it).
+      onEscape: () => {
+        if (dialogWasOpenAtEscape.current) return
+        setDetail(null)
+      },
     }),
     [threads, nav],
   )

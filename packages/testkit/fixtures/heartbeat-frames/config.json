@@ -1,0 +1,31 @@
+{
+  "config": {
+    "schema": "talos.heartbeat/1",
+    "mode": "shadow",
+    "sources": [
+      {
+        "id": "github",
+        "enabled": true,
+        "class": "own",
+        "kind": "github",
+        "args": {
+          "repos": [
+            "example-org/example-repo"
+          ]
+        },
+        "timeout_s": 30
+      },
+      {
+        "id": "inbox",
+        "enabled": true,
+        "kind": "inbox",
+        "args": {},
+        "timeout_s": 30
+      }
+    ],
+    "mutes": [],
+    "wake_cap_per_day": 3,
+    "run_timeout_s": 120
+  },
+  "config_hash": "sha256:5e9f3a96d3a4c26a925fa70fb358ce6577aee096d84cc68e8cdcdc74c0373a0a"
+}

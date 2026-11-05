@@ -21,6 +21,8 @@ import {
   type FrameType,
   fromChronosChange,
   generateBridgeKey,
+  HEARTBEAT_FEATURE,
+  HEARTBEAT_OWNER_FRAME_TYPES,
   type JwkP256T,
   newId,
   parseFrameText,
@@ -78,8 +80,14 @@ export type FakeBridgeOptions = {
   clientName?: string
   /** Answer schedule frames from this adapter (and advertise 'schedules/1'). Without it they get scheduler_unavailable. */
   scheduler?: SchedulerAdapter
-  /** `hello.client.features`. Default: ['schedules/1'] when a scheduler is set, else none. */
+  /** `hello.client.features`. Default: ['schedules/1'] when a scheduler is set, plus 'heartbeat/1' with `heartbeatTest`. */
   features?: string[]
+  /**
+   * Answer `heartbeat.test` (and advertise 'heartbeat/1'): the `result` of the `heartbeat.test_result`, or `{ error: code }`.
+   * The bridge acks at once, as the real one will (the test can take 150 s); `delayMs` holds the result back.
+   */
+  heartbeatTest?: (frame: Record<string, unknown>) => Record<string, unknown> | { error: string; message?: string }
+  heartbeatDelayMs?: number
   /**
    * Answers to the signed v2 reads, by frame type: the body of the answer frame (request_id is filled in), or
    * `{ error: code }`. Unset types get a valid empty answer.
@@ -115,7 +123,7 @@ const EMPTY_READ: Record<FakeReadType, (f: Record<string, unknown>) => Record<st
 const OWNER_TYPES = new Set(['message', 'voice_note', 'card.resolve', 'voice.ask'])
 const MAX_AGE_MS = 8 * 24 * 3600_000
 const MAX_FUTURE_MS = 2 * 60_000
-const SCHEDULE_OWNER = new Set<string>(SCHEDULE_OWNER_FRAME_TYPES)
+const SCHEDULE_OWNER = new Set<string>([...SCHEDULE_OWNER_FRAME_TYPES, ...HEARTBEAT_OWNER_FRAME_TYPES])
 const V2_READ = new Set<string>(V2_READ_OWNER_FRAME_TYPES)
 const SCHEDULE_FRESH_MS = 2 * 60_000 // run_now / control (S2.2)
 
@@ -287,7 +295,12 @@ export class FakeBridge {
   }
 
   get features(): string[] {
-    return this.opts.features ?? (this.opts.scheduler ? [SCHEDULES_FEATURE] : [])
+    return (
+      this.opts.features ?? [
+        ...(this.opts.scheduler ? [SCHEDULES_FEATURE] : []),
+        ...(this.opts.heartbeatTest ? [HEARTBEAT_FEATURE] : []),
+      ]
+    )
   }
 
   // ---- schedules -----------------------------------------------------------------------------------------------
@@ -308,6 +321,17 @@ export class FakeBridge {
       if (this.scheduleSeen.has(id)) return err('sig_invalid', 'replayed frame')
     }
     this.scheduleSeen.add(id)
+    if (frame.type === 'heartbeat.test') {
+      const answer = this.opts.heartbeatTest?.(raw)
+      if (!answer) return err('scheduler_unavailable', 'This Mac cannot test a heartbeat.')
+      if ('error' in answer && typeof answer.error === 'string')
+        return err(answer.error, typeof answer.message === 'string' ? answer.message : answer.error)
+      this.send({ type: 'ack', ref: id })
+      const send = () => void this.send({ type: 'heartbeat.test_result', request_id: raw.request_id, result: answer })
+      if (this.opts.heartbeatDelayMs) setTimeout(send, this.opts.heartbeatDelayMs)
+      else send()
+      return
+    }
     const sch = this.opts.scheduler
     if (!sch) return err('scheduler_unavailable', 'No scheduler is installed on this Mac.')
     switch (frame.type) {

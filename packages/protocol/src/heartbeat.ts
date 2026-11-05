@@ -293,6 +293,15 @@ export function configHash(config: HeartbeatConfigT): string {
   return payloadHash(config as unknown as Record<string, unknown>)
 }
 
+/**
+ * The hash a Heartbeat test is bound to: `configHash` of the STRICT parse of the raw `talos.heartbeat` object, so defaults (mode,
+ * caps, timeouts) are part of it. The app and the bridge both call this, so they cannot disagree. Throws when `raw` is not a
+ * heartbeat this Talos could write: it never hashes something it could not have produced.
+ */
+export function heartbeatConfigHashOf(raw: unknown): string {
+  return configHash(HeartbeatConfig.parse(raw))
+}
+
 // ---- source process I/O
 
 /** What the runner writes to a source's stdin. */

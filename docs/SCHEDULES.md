@@ -2,7 +2,7 @@
 
 > Extends the original build spec (not published) (v1 rev 2 + WP8 addendum) and follows its builder rules (section 0) unchanged. Section
 > numbers are this addendum's own (`S1`...); where it changes a SPEC section it says so ("adds to 3.4"). The SPEC tables
-> it changes are already updated in SPEC.md. Copied from the design spec by `scripts/schedules-doc.ts`.
+> it changes are already folded into the main spec, which is not published. Copied from the design spec by `scripts/schedules-doc.ts`.
 
 ## S1. Goals, non-goals, integration contract
 
@@ -82,9 +82,9 @@ New rows for SPEC 4.2 (bridge env):
   licence kept). They also run against WP-C's committed golden outputs (S9). Hand-written fixtures are never the
   source of truth.
 
-#### S1.5a `schedules/2`: several fire times a day, and `meta` (HB1)
+#### S1.5a `schedules/2`: several fire times a day, and `meta`
 
-This is the tolerance part of HB1. The Heartbeat contract and card rows are S1.7 (HB1b); the runner is HB2.
+This is the tolerance part. The Heartbeat contract and card rows are S1.7; the runner is described in `docs/HEARTBEAT.md`.
 
 Chronos with `features: ['times','meta']` in `chronos api version` lets one job fire at several times a day
 (`when: {type:'times', days, times}`) and carry an opaque `meta` object. Talos reads that safely before any such Chronos is
@@ -121,12 +121,12 @@ There's no built-in registry, in v1 or as a fallback (owner decision e).
   Schedules tab. Don't create cron, launchd or in-session timer jobs yourself.`
 - Later: S11.2.
 
-### S1.7 Heartbeat contract (HB1b)
+### S1.7 Heartbeat contract
 
 A heartbeat is a Chronos job with `times` (4 weekday slots: 09:45, 12:15, 14:45, 17:15) that checks a list of sources
 without waking the agent, and wakes it only when an item crosses a level. `packages/protocol/src/heartbeat.ts` holds the
-shapes; **the runner that uses them is HB2 and comes next.** Nothing here runs a source. This contract is frozen: HB2
-builds on it as written.
+shapes; **the runner that uses them is described in `docs/HEARTBEAT.md`.** Nothing in this section runs a source. This contract is frozen: the
+runner builds on it as written.
 
 - **Where it lives.** In the job's `meta` under the key `talos.heartbeat` (`heartbeatMetaOf`), so it is in `content_hash`
   and every card shows it. Other keys beside it are allowed and are not Heartbeat's. `meta` is 4 KiB for the whole job; a
@@ -165,7 +165,7 @@ builds on it as written.
   enter. `url` is https only, and must read the same after escaping (no hidden, bidi or control characters).
 - **Escape once, at the source parse.** Untrusted text (an item's `title`, `detail` and `why`, and a source's `error`) is
   capped and escaped in exactly one place: `parseHeartbeatSourceResponse`. Everything after it only CHECKS. `HeartbeatItem`
-  (also exported as `HeartbeatItemStore`) is the schema HB2 stores through: it refuses a raw hidden or control character
+  (also exported as `HeartbeatItemStore`) is the schema the runner stores through: it refuses a raw hidden or control character
   and an escape token the escaper would not make, and never rewrites text. The path is: parse the source's answer, add
   `source`, `first_seen`, `last_seen` and `count`, `HeartbeatItem.parse`, store; the text is identical on every run.
   `HeartbeatItemRead` reads a stored row the same way (loose on unknown keys). `HeartbeatSourceItem` is the escaping
@@ -1474,7 +1474,7 @@ now calls the shared writer, and `write_prompt` moves under the jobs flock), `ho
     `proposeScheduleChange(change, threadId)`, `runScheduleNow(id, {again, where})`, `controlSchedule(action, id)`,
     and a `schedules` store slice.
 - **Vendored code:** `third_party/chronos` at `v0.3.0` plus its goldens.
-- **SPEC tables:** the `docs/SPEC.md` edits to 3.4, 3.7, 4.2, 4.3, 4.4, 4.8 and 10.4.
+- **SPEC tables:** the main spec's edits to 3.4, 3.7, 4.2, 4.3, 4.4, 4.8 and 10.4.
 
 **Acceptance:**
 
@@ -1599,7 +1599,7 @@ WP-S1 captures, including the captured `card.create`, as the FakeBridge's respon
 ### WP-S4: integration, e2e, docs, Mac smoke (architect, after S1-S3)
 
 **Owns:** `e2e/schedules.spec.ts`, `docs/SCHEDULES.md` (this file minus its private appendix; the copy script fails if the
-heading is present), the `docs/SECURITY.md` rows (S8) and `scripts/smoke/schedules.md`.
+heading is present), the `docs/SECURITY.md` rows (S8) and a written Mac smoke script.
 
 **e2e** (real relay + real bridge + vendored Chronos under `CHRONOS_NOW`):
 

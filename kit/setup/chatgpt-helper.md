@@ -22,6 +22,8 @@ tells you in one line and carries on without it.
 
 ## How the agent calls it
 
+The agent may run Codex without asking; whatever it sends (the task and any thread text it includes) goes to OpenAI under your ChatGPT login.
+
 Through the `codex-delegate` skill, one run per request. It runs `talos-app codex run`, with the request in your
 thread, and a message starting "Codex:" arrives there with any images attached. The agent does not loop on failures;
 it reports the error. Codex runs in a read-only sandbox unless a coding job needs more, and it does not load your own
@@ -29,7 +31,7 @@ Codex settings, plugins or servers.
 
 ## Cost
 
-It uses your ChatGPT plan's limits, not API credits. Heavy image use can hit those limits, so the agent asks Codex for
+It uses your ChatGPT plan's limits when Codex is signed in with ChatGPT; API credits if it's signed in with an API key. Heavy image use can hit those limits, so the agent asks Codex for
 an image only when you asked or it clearly helps, never as a guess.
 
 ## Limits and honest notes

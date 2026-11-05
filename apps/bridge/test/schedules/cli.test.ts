@@ -1,8 +1,10 @@
 // WP-S1 acceptance: `talos-app schedules`, `schedules adopt` (S3.7) and `schedules notify` (S7.4), against the real Chronos CLI.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { HEARTBEAT_META_KEY, heartbeatConfigHashOf } from '@talos-app/protocol'
 import { runCli } from '../../src/cli.ts'
+import { recordPass } from '../../src/heartbeat/tested.ts'
 import { startHarness } from '../helpers.ts'
 import { ChronosBox, draft, MON_0700_EDT } from './chronos-box.ts'
 import { longTimeouts, sleep } from './harness.ts'
@@ -128,6 +130,42 @@ describe('talos-app schedules adopt (S3.7)', () => {
     expect(s.session_runner).toBe('talos')
     expect(s.schedules[0]?.runner).toBe('session')
     expect(s.schedules[0]?.today).not.toBe('held') // a job adopt converts is never held (N2)
+  })
+
+  test('an enabled heartbeat edited outside the app is approved only with a passing test of its settings; without one it stays on hold and the words say why', async () => {
+    const beat = {
+      schema: 'talos.heartbeat/1',
+      mode: 'shadow',
+      sources: [{ id: 'gh-main', kind: 'github', enabled: true, args: { repos: ['acme/widgets'] }, timeout_s: 30 }],
+      mutes: [],
+      wake_cap_per_day: 3,
+      run_timeout_s: 120,
+    }
+    const box = new ChronosBox(MON_0700_EDT)
+    cleanup.push(() => box.dispose())
+    box.configure({ sessionRunner: 'talos', approvalRequired: true })
+    box.create(
+      draft({
+        id: 'beat',
+        name: 'Beat',
+        when: { type: 'times', days: 'weekdays', times: ['09:45', '12:15', '14:45', '17:15'] },
+        meta: { [HEARTBEAT_META_KEY]: beat },
+      }),
+      MON_0700_EDT,
+    )
+    box.editPromptOutside('beat', 'Something else.\n') // now it is "changed outside": adopt is asked about it
+    expect(snapshot(box).schedules.find((j) => j.id === 'beat')?.changed_outside).toBe(true)
+    const home = join(box.dir, 'talos-home')
+    mkdirSync(home, { recursive: true })
+    const no = cliIO(['y'])
+    await runCli(['schedules', 'adopt'], no.io, env(box, home))
+    expect(no.err.join('\n')).toContain('Run a heartbeat test for these settings first')
+    expect(snapshot(box).schedules.find((j) => j.id === 'beat')?.changed_outside).toBe(true) // not approved
+    // a passing test of exactly these settings (what the bridge writes after a real test) lets it through
+    recordPass(home, heartbeatConfigHashOf(beat), Date.now())
+    const yes = cliIO(['y'])
+    await runCli(['schedules', 'adopt'], yes.io, env(box, home))
+    expect(snapshot(box).schedules.find((j) => j.id === 'beat')?.changed_outside).toBe(false)
   })
 
   test('adopt writes nothing in $TALOS_APP_HOME', async () => {

@@ -49,6 +49,16 @@ const Pending = z.object({
 })
 export type Pending = z.infer<typeof Pending>
 
+/** An agent wake that was handed over and has not come back (HB4). Its items stay `new` until the run reports done ok. */
+const Wake = z.object({
+  run_id: z.string().min(1).max(64),
+  run_key: RunKey,
+  /** Item ids in the run pack. */
+  ids: z.array(z.string()).max(2000),
+  at: IsoTs,
+})
+export type Wake = z.infer<typeof Wake>
+
 export type HeartbeatStore = {
   schema: typeof STORE_SCHEMA
   items: Record<string, StoredItem>
@@ -57,6 +67,16 @@ export type HeartbeatStore = {
   refused: Record<string, string>
   wakes_today: { date: string; count: number }
   pending: Pending | null
+  /** The wake in flight, if any. Written BEFORE the notification is sent, so a crash never loses track of it. */
+  wake: Wake | null
+  /** When this heartbeat last completed a live run. A gap of over 72 hours here (not a source's own silence) skips the backlog. */
+  last_run: string | null
+  /** "Install talos-app-mod" has been said and the agent has not been available since, so it is not said again. */
+  triage_said: boolean
+  /** Slots in a row where the mod had not reported (unknown): a few are waited out, then the items become lines. */
+  triage_unknown: number
+  /** "Needs a thread of its own" has been said and no wake has gone out since. */
+  thread_said: boolean
 }
 
 export const emptyStore = (): HeartbeatStore => ({
@@ -66,6 +86,11 @@ export const emptyStore = (): HeartbeatStore => ({
   refused: {},
   wakes_today: { date: '0000-00-00', count: 0 },
   pending: null,
+  wake: null,
+  last_run: null,
+  triage_said: false,
+  triage_unknown: 0,
+  thread_said: false,
 })
 
 export type LoadedStore = {
@@ -111,6 +136,14 @@ export function loadStore(path: string, setAside = true): LoadedStore {
   if (w.success) store.wakes_today = w.data
   const pend = Pending.safeParse(r.pending)
   if (pend.success) store.pending = pend.data
+  const wk = Wake.safeParse(r.wake)
+  if (wk.success) store.wake = wk.data
+  const lr = IsoTs.safeParse(r.last_run)
+  if (lr.success) store.last_run = lr.data
+  if (r.triage_said === true) store.triage_said = true
+  if (r.thread_said === true) store.thread_said = true
+  if (typeof r.triage_unknown === 'number' && Number.isInteger(r.triage_unknown) && r.triage_unknown >= 0)
+    store.triage_unknown = Math.min(r.triage_unknown, 1000)
   return { store, corrupt: false, unreadable }
 }
 

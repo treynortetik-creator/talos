@@ -3,7 +3,13 @@
 //   is wired into fakeClient. WP-S3 implements the socket version and makes `TalosClient.schedules` required.
 // Every method sends one signed owner frame (S2.2) and rejects with `TalosClientError` on `error{code}`
 // (`mac_offline`, `schedule_not_found`, `schedule_invalid` with `fields`, `stale`, `held`, ...).
-import type { ScheduleChangeT, ScheduleControlActionT, ScheduleDetailT, ScheduleSnapshotT } from '@talos-app/protocol'
+import type {
+  HeartbeatConfigT,
+  ScheduleChangeT,
+  ScheduleControlActionT,
+  ScheduleDetailT,
+  ScheduleSnapshotT,
+} from '@talos-app/protocol'
 
 export type SchedulesSlice = {
   /** Last snapshot (also cached in IndexedDB by WP-S3). */
@@ -37,4 +43,11 @@ export interface SchedulesClient {
   runScheduleNow(id: string, opts: { again: boolean; where: 'default' | 'session' }): Promise<void>
   /** `schedule_id` is required for pause, resume and disable, and must be null for the global actions. */
   controlSchedule(action: ScheduleControlActionT, id: string | null): Promise<void>
+  /**
+   * `heartbeat.test` -> `heartbeat.test_result` (docs/HEARTBEAT.md). Runs the sources for real on the Mac with nothing
+   * written, posted or woken. Resolves with the raw `result` (read it with parseHeartbeatTestResult). Waits up to
+   * HEARTBEAT_TEST_WAIT_MS for it; the Mac acks at once. Rejects like the other calls (`mac_offline`, `scheduler_unavailable`
+   * when the Mac or the relay is too old, `rate_limited`, `no_answer`).
+   */
+  testHeartbeat(config: HeartbeatConfigT, opts: { windowH: number; withAgent: boolean }): Promise<unknown>
 }

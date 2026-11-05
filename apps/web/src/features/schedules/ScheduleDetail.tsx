@@ -23,6 +23,8 @@ import { useMediaQuery } from '../settings/useMedia.ts'
 import { useDetailPanel } from '../threads/DetailPanel.tsx'
 import { useAgentName } from '../threads/useThreads.ts'
 import { PROMPT_PREVIEW_LINES, RECENT_RUNS } from './constants.ts'
+import { HeartbeatDetailBody, HeartbeatStatus } from './heartbeat/HeartbeatDetail.tsx'
+import { isHeartbeat } from './heartbeat/logic.ts'
 import { permissionWords, runKeyLabel, runNowAsk, runnerWords } from './logic.ts'
 import { ProposalSheet } from './Proposal.tsx'
 import { ScheduleForm } from './ScheduleForm.tsx'
@@ -275,9 +277,14 @@ function Detail({ s, embedded = false }: { s: ScheduleT; embedded?: boolean }) {
       </div>
       {/* outside .top-band: on a phone that band re-themes the text tokens but not --ok/--warn/--danger */}
       <div className="px-4 py-2" data-testid="detail-status">
-        <StatusText
-          st={off && !s.enabled ? { glyph: '', word: 'Off', time: null, tone: 'muted', running: false } : st}
-        />
+        {isHeartbeat(s) ? (
+          // a heartbeat's status is how its last CHECK went ("Couldn't check github"), not whether the run process finished
+          <HeartbeatStatus s={s} pausedAll={health?.paused_all ?? false} />
+        ) : (
+          <StatusText
+            st={off && !s.enabled ? { glyph: '', word: 'Off', time: null, tone: 'muted', running: false } : st}
+          />
+        )}
       </div>
 
       <ScrollRegion label="Job details" className={cn('min-h-0 flex-1', embedded ? '' : 'overflow-y-auto')}>
@@ -305,6 +312,8 @@ function Detail({ s, embedded = false }: { s: ScheduleT; embedded?: boolean }) {
             </Button>
           </div>
         ) : null}
+
+        {isHeartbeat(s) ? <HeartbeatDetailBody s={s} detail={detail} canWrite={canWrite} /> : null}
 
         <Section title="When">
           <p className="m-0 text-md">{s.when_text}</p>
@@ -389,7 +398,8 @@ function Detail({ s, embedded = false }: { s: ScheduleT; embedded?: boolean }) {
               {s.paused ? 'Resume' : 'Pause'}
             </Button>
           ) : null}
-          {!s.enabled && s.editable ? (
+          {/* a heartbeat's Turn on lives in its own section, behind the test */}
+          {!s.enabled && s.editable && !isHeartbeat(s) ? (
             <Button
               variant="outline"
               disabled={!canWrite}

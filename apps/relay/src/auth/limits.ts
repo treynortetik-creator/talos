@@ -51,6 +51,8 @@ export const LIMITS: Record<string, Limit[]> = {
   sched_run_now: [{ capacity: 20, windowMs: HOUR }],
   sched_control: [{ capacity: 60, windowMs: HOUR }],
   sched_retry: [{ capacity: 6, windowMs: HOUR }],
+  // Heartbeat test runs (docs/HEARTBEAT.md): each one starts real programs on the Mac, so 6 an hour for the owner.
+  heartbeat_test: [{ capacity: 6, windowMs: HOUR }],
   // v2 features (docs/V2-FEATURES.md V3.4, V4.5, V5.4). search and memory are keyed per socket; share per IP / token.
   search: [{ capacity: 120, windowMs: MIN }],
   memory: [{ capacity: 60, windowMs: MIN }],
@@ -78,6 +80,7 @@ const GLOBAL = new Set([
   'sched_run_now',
   'sched_control',
   'sched_retry',
+  'heartbeat_test',
   'app_request',
 ])
 

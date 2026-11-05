@@ -3,6 +3,8 @@
 // tests can verify what would go on the wire. Cards come from composeScheduleCard(), the same function the bridge uses.
 import {
   composeScheduleCard,
+  configHash,
+  type HeartbeatConfigT,
   newId,
   newUlid,
   SCHEDULES_FEATURE_V2,
@@ -38,17 +40,50 @@ export function seedSchedules(): { snapshot: ScheduleSnapshotT; details: Record<
   return { snapshot, details: { [detail.schedule.id]: detail } }
 }
 
+/** What the fake "Mac" answers to a Heartbeat test: the raw `result`, or a rejection. It may take as long as it likes. */
+export type FakeHeartbeatTest = (
+  config: HeartbeatConfigT,
+  opts: { windowH: number; withAgent: boolean },
+) => unknown | Promise<unknown>
+
 /** The fake's test hooks: replace what the "Mac" holds (health variants, extra jobs), then the next list returns it. */
 export type FakeSchedulesClient = SchedulesClient & {
-  setData(snapshot: ScheduleSnapshotT, details?: Record<string, ScheduleDetailT>): void
-  readonly sentCount: { list: number }
+  /** `reports` are the run reports `schedule.get` returns for a run id. */
+  setData(
+    snapshot: ScheduleSnapshotT,
+    details?: Record<string, ScheduleDetailT>,
+    reports?: Record<string, string>,
+  ): void
+  /** Replace how the Mac answers `heartbeat.test`. The default passes every enabled source with nothing found. */
+  setHeartbeatTest(fn: FakeHeartbeatTest | null): void
+  readonly sentCount: { list: number; heartbeatTest: number }
+}
+
+/** A passing test for exactly this config: every enabled source ok, nothing found. */
+export function passingTestResult(config: HeartbeatConfigT, windowH: number, at: string): Record<string, unknown> {
+  return {
+    config_hash: configHash(config),
+    at,
+    window_h: windowH,
+    with_agent: false,
+    sources: config.sources
+      .filter((s) => s.enabled)
+      .map((s) => ({ id: s.id, ok: true, ms: 800, read: 0, act: 0, fyi: 0, dropped: 0, held: 0, unreadable: 0 })),
+    would_wake: [],
+    would_post: [],
+    held: 0,
+    est_wakes: 0,
+    est_tokens: 0,
+  }
 }
 
 export function createFakeSchedules(d: FakeSchedulesDeps): FakeSchedulesClient {
   const seed = seedSchedules()
   let snapshot = seed.snapshot
   let details = seed.details
-  const sentCount = { list: 0 }
+  let reports: Record<string, string> = {}
+  let hbTest: FakeHeartbeatTest | null = null
+  const sentCount = { list: 0, heartbeatTest: 0 }
   const offline = () => {
     if (!d.macOnline()) throw new TalosClientError('mac_offline', 'Your Mac is offline.')
   }
@@ -66,9 +101,13 @@ export function createFakeSchedules(d: FakeSchedulesDeps): FakeSchedulesClient {
     })
   }
   return {
-    setData(next, nextDetails) {
+    setData(next, nextDetails, nextReports) {
       snapshot = next
       if (nextDetails) details = nextDetails
+      if (nextReports) reports = nextReports
+    },
+    setHeartbeatTest(fn) {
+      hbTest = fn
     },
     sentCount,
     async listSchedules() {
@@ -97,7 +136,10 @@ export function createFakeSchedules(d: FakeSchedulesDeps): FakeSchedulesClient {
         runs: s.last_run ? [s.last_run] : [],
       }
       d.setSlice({ details: { ...d.getSlice().details, [id]: detail } })
-      return { detail, report: runId ? 'Fake report: the job ran and posted its result.' : null }
+      return {
+        detail,
+        report: runId ? (reports[runId] ?? 'Fake report: the job ran and posted its result.') : null,
+      }
     },
     async proposeScheduleChange(change: ScheduleChangeT, threadId) {
       const f = await d.sign({ type: 'schedule.patch', change, thread_id: threadId })
@@ -143,6 +185,18 @@ export function createFakeSchedules(d: FakeSchedulesDeps): FakeSchedulesClient {
       const s = job(id)
       if (s.today === 'held') throw new TalosClientError('held', 'On hold: review the change first')
       if (s.today === 'running') throw new TalosClientError('already_running', 'Already running')
+    },
+    async testHeartbeat(config, opts) {
+      sentCount.heartbeatTest++
+      await d.sign({
+        type: 'heartbeat.test',
+        request_id: newUlid(),
+        config,
+        window_h: opts.windowH,
+        with_agent: opts.withAgent,
+      })
+      offline()
+      return hbTest ? await hbTest(config, opts) : passingTestResult(config, opts.windowH, d.now())
     },
     async controlSchedule(action, id) {
       await d.sign({ type: 'schedule.control', action, schedule_id: id })

@@ -474,6 +474,7 @@ export class FakeRelay {
         return
       }
       case 'schedules.snapshot':
+      case 'heartbeat.test_result':
       case 'schedule.detail': {
         const sock = this.scheduleReqs.get(frame.request_id)
         if (!sock) return // unknown or expired request id: dropped

@@ -24,7 +24,12 @@ import {
   SearchScreen,
   ShareScreen,
 } from './features/registry.ts'
-import { NewScheduleScreen, ScheduleDetailScreen, SchedulesScreen } from './features/schedules/index.tsx'
+import {
+  HeartbeatSetupScreen,
+  NewScheduleScreen,
+  ScheduleDetailScreen,
+  SchedulesScreen,
+} from './features/schedules/index.tsx'
 import { useSessionController } from './features/session/store.ts'
 import { SettingsScreen } from './features/settings/SettingsScreen.tsx'
 import { ThemeSync } from './features/settings/ThemeSync.tsx'
@@ -323,6 +328,7 @@ export function App({ client, storage }: { client: TalosClient; storage: Storage
                   <Route path="open/:ref" element={<PushRefRoute />} />
                   <Route path="schedules" element={<SchedulesScreen />} />
                   <Route path="schedules/new" element={<NewScheduleScreen />} />
+                  <Route path="schedules/heartbeat/new" element={<HeartbeatSetupScreen />} />
                   <Route path="schedules/:id" element={<ScheduleDetailScreen />} />
                   <Route path="settings" element={<SettingsScreen />} />
                   <Route

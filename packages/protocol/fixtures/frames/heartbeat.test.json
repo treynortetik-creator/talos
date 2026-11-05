@@ -1,0 +1,31 @@
+{
+  "v": 1,
+  "type": "heartbeat.test",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T42Z",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T430",
+  "config": {
+    "schema": "talos.heartbeat/1",
+    "mode": "shadow",
+    "sources": [
+      {
+        "id": "github",
+        "kind": "github",
+        "enabled": true,
+        "args": {
+          "repos": [
+            "example-org/example-repo"
+          ]
+        },
+        "timeout_s": 30
+      }
+    ],
+    "mutes": [],
+    "wake_cap_per_day": 3,
+    "run_timeout_s": 120
+  },
+  "window_h": 24,
+  "with_agent": false,
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "KuAULuzTTIb9JixWjyrtG_omOvAjRirorVbvLVc0xZhtPBOxXKdKLFJIERohsdUIKDgwpFDAlc0Duz_Ujy-JGQ"
+}

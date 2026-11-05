@@ -256,6 +256,18 @@ export class FakeApp {
   controlSchedule(action: string, schedule_id: string | null) {
     return this.sendSchedule('schedule.control', { action, schedule_id })
   }
+  /** A signed `heartbeat.test` (docs/HEARTBEAT.md). */
+  testHeartbeat(
+    config: Record<string, unknown>,
+    opts: { windowH?: number; withAgent?: boolean; requestId?: string } = {},
+  ) {
+    return this.sendSchedule('heartbeat.test', {
+      request_id: opts.requestId ?? newUlid(),
+      config,
+      window_h: opts.windowH ?? 24,
+      with_agent: opts.withAgent ?? false,
+    })
+  }
 
   async sendVoiceAsk(
     thread_id: string,

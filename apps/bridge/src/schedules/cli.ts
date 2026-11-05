@@ -4,6 +4,7 @@ import { safeLine } from '@talos-app/protocol'
 import { Bridge } from '../bridge.ts'
 import type { CliIO } from '../cli.ts'
 import type { BridgeEnv } from '../config.ts'
+import { testRequiredProblem } from '../heartbeat/tested.ts'
 import { ClosedAdapter } from './closed-adapter.ts'
 import { discover } from './discovery.ts'
 import { listText } from './format.ts'
@@ -80,6 +81,21 @@ async function adopt(env: BridgeEnv, io: CliIO) {
     if (!j.changed_outside) continue
     const a = await io.prompt(`Approve ${JSON.stringify(j.name)} as it is on disk now? [y/N] `)
     if (!yes(a)) {
+      left++
+      continue
+    }
+    // An enabled heartbeat is approved only with a passing test of these exact settings (the same rule as the app's adopt card).
+    const x = await chronos.detail(j.id, null)
+    const needTest = x
+      ? testRequiredProblem(
+          env.home,
+          Date.now(),
+          { op: 'adopt', id: j.id, content_hash: j.content_hash },
+          { schedule: x.detail.schedule, prompt: x.detail.prompt, guard: x.detail.guard },
+        )
+      : null
+    if (needTest) {
+      io.err(`not approving ${j.id}: ${needTest} It stays on hold until you test it in the app, then approve it there.`)
       left++
       continue
     }

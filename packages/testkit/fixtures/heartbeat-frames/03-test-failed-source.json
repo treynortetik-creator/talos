@@ -1,0 +1,35 @@
+{
+  "_note": "One source failed: the test must not pass.",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T4AA",
+  "result": {
+    "config_hash": "sha256:5e9f3a96d3a4c26a925fa70fb358ce6577aee096d84cc68e8cdcdc74c0373a0a",
+    "at": "2026-10-28T15:32:10.120Z",
+    "window_h": 24,
+    "with_agent": false,
+    "sources": [
+      {
+        "id": "github",
+        "ok": false,
+        "ms": 900,
+        "read": 0,
+        "act": 0,
+        "fyi": 0,
+        "dropped": 0,
+        "held": 0,
+        "unreadable": 0,
+        "error": "gh is not signed in"
+      },
+      {
+        "id": "inbox",
+        "ok": true,
+        "ms": 900,
+        "read": 3,
+        "act": 0,
+        "fyi": 1,
+        "dropped": 2,
+        "held": 0,
+        "unreadable": 0
+      }
+    ]
+  }
+}

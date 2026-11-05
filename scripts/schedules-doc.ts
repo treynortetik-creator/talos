@@ -15,13 +15,33 @@ const HEADER = `# Talos app: Schedules addendum (rev 3.1)
 
 > Extends the original build spec (not published) (v1 rev 2 + WP8 addendum) and follows its builder rules (section 0) unchanged. Section
 > numbers are this addendum's own (\`S1\`...); where it changes a SPEC section it says so ("adds to 3.4"). The SPEC tables
-> it changes are already updated in SPEC.md. Copied from the design spec by \`scripts/schedules-doc.ts\`.
+> it changes are already folded into the main spec, which is not published. Copied from the design spec by \`scripts/schedules-doc.ts\`.
 `
 
 /** Known references to the private appendix in the public text, and what replaces them. */
-const SCRUB: Array<[RegExp, string]> = [
+const SCRUB: Array<[RegExp | string, string]> = [
   [/; dates in Appendix P\)/g, ')'],
   [/minus Appendix P;/g, 'minus its private appendix;'],
+  // Internal milestone labels and links to files the public export leaves out.
+  ['and `meta` (HB1)\n', 'and `meta`\n'],
+  [
+    'This is the tolerance part of HB1. The Heartbeat contract and card rows are S1.7 (HB1b); the runner is HB2.',
+    'This is the tolerance part. The Heartbeat contract and card rows are S1.7; the runner is described in `docs/HEARTBEAT.md`.',
+  ],
+  ['### S1.7 Heartbeat contract (HB1b)', '### S1.7 Heartbeat contract'],
+  [
+    '**the runner that uses them is HB2 and comes next.** Nothing here runs a source. This contract is frozen: HB2\nbuilds on it as written.',
+    '**the runner that uses them is described in `docs/HEARTBEAT.md`.** Nothing in this section runs a source. This contract is frozen: the\nrunner builds on it as written.',
+  ],
+  ['is the schema HB2 stores through', 'is the schema the runner stores through'],
+  [
+    '- **SPEC tables:** the `docs/SPEC.md` edits to 3.4, 3.7, 4.2, 4.3, 4.4, 4.8 and 10.4.',
+    "- **SPEC tables:** the main spec's edits to 3.4, 3.7, 4.2, 4.3, 4.4, 4.8 and 10.4.",
+  ],
+  [
+    'the `docs/SECURITY.md` rows (S8) and `scripts/smoke/schedules.md`.',
+    'the `docs/SECURITY.md` rows (S8) and a written Mac smoke script.',
+  ],
 ]
 
 export function build(spec: string): string {
@@ -34,7 +54,7 @@ export function build(spec: string): string {
     .slice(s1, end)
     .join('\n')
     .replace(/\s*(\n---\s*)*$/, '')
-  for (const [re, to] of SCRUB) body = body.replace(re, to)
+  for (const [re, to] of SCRUB) body = typeof re === 'string' ? body.replaceAll(re, to) : body.replace(re, to)
   const out = `${HEADER}\n${body}\n`
   if (out.includes(APPENDIX)) {
     const at = out.split('\n').findIndex((l) => l.includes(APPENDIX)) + 1

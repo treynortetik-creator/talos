@@ -83,18 +83,24 @@ describe('talos commands', () => {
       'memory on',
       'memory off',
       'memory init',
-      'codex run',
       // A parent that only holds sensitive subcommands is owner only too.
       'apps',
       'share',
       'memory',
-      'codex',
     ]) {
       expect(byName.get(name), `${name} is listed`).toBeDefined()
       expect(byName.get(name)?.agent_may_run, name).toBe(false)
     }
     // The read-only subcommands stay open to the agent.
-    for (const name of ['apps list', 'memory show', 'memory reindex', 'search reindex', 'codex check'])
+    for (const name of [
+      'apps list',
+      'memory show',
+      'memory reindex',
+      'search reindex',
+      'codex',
+      'codex check',
+      'codex run',
+    ])
       expect(byName.get(name)?.agent_may_run, name).toBe(true)
   })
 

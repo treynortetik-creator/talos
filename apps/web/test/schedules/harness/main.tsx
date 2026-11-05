@@ -6,16 +6,22 @@ import { createRoot } from 'react-dom/client'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { CardView } from '../../../src/features/cards/CardView.tsx'
 import { HomeScreen } from '../../../src/features/registry.ts'
-import { NewScheduleScreen, ScheduleDetailScreen, SchedulesScreen } from '../../../src/features/schedules/index.tsx'
+import {
+  HeartbeatSetupScreen,
+  NewScheduleScreen,
+  ScheduleDetailScreen,
+  SchedulesScreen,
+} from '../../../src/features/schedules/index.tsx'
 import { ThreadScreen } from '../../../src/features/threads/ThreadScreen.tsx'
-import { ClientProvider, useTalos } from '../../../src/lib/client.ts'
+import { ClientProvider, TalosClientError, useTalos } from '../../../src/lib/client.ts'
 import { createFakeClient, type FakeClient } from '../../../src/lib/fakeClient.ts'
+import { passingTestResult } from '../../../src/lib/fakeSchedules.ts'
 import { createIdbStorage } from '../../../src/lib/storage.ts'
 import { StorageProvider } from '../../../src/lib/storageContext.tsx'
 import { Shell } from '../../../src/Shell.tsx'
 import '../../../src/theme/app.css'
 import { cards as capturedCards, snapshots as capturedSnapshots } from '../captured.ts'
-import { VARIANTS, type VariantName } from '../variants.ts'
+import { REPORTS, VARIANTS, type VariantName } from '../variants.ts'
 
 declare global {
   interface Window {
@@ -26,6 +32,11 @@ declare global {
     __push(name: VariantName): void
     /** Load the Nth snapshot the real bridge sent in a captured scenario, then re-list. */
     __captured(scenario: string, index: number): Promise<void>
+    /** How the fake Mac answers `heartbeat.test`; `release` lets a `hang` finish. */
+    __hb: {
+      mode: 'pass' | 'hang' | 'fail' | 'partial' | 'other_config' | 'no_answer' | 'junk'
+      release: (() => void) | null
+    }
     /** Add the Nth card the real bridge minted in a scenario to the store (as card.create would). */
     __captureCard(scenario: string, index: number): string
   }
@@ -35,14 +46,39 @@ const params = new URLSearchParams(location.search)
 const storage = createIdbStorage()
 const client = createFakeClient({ macOffline: params.has('offline') })
 const first = params.get('variant') as VariantName | null
-if (first) client.schedules.setData(VARIANTS[first]())
+if (first) client.schedules.setData(VARIANTS[first](), undefined, REPORTS[first] ?? {})
 // the owner is in the scheduler's zone unless a spec says otherwise (the fake config is UTC)
 client.store.setState((s) => (s.config ? { ...s, config: { ...s.config, timezone: 'America/New_York' } } : s))
 window.__talos = client
 window.__variant = async (name) => {
-  client.schedules.setData(VARIANTS[name]())
+  client.schedules.setData(VARIANTS[name](), undefined, REPORTS[name] ?? {})
   await client.schedules.listSchedules()
 }
+
+window.__hb = { mode: 'pass', release: null }
+client.schedules.setHeartbeatTest(async (config, opts) => {
+  const at = new Date(Date.now()).toISOString()
+  const ok = passingTestResult(config, opts.windowH, at) as { sources: Array<Record<string, unknown>> } & Record<
+    string,
+    unknown
+  >
+  const mode = window.__hb.mode
+  if (mode === 'hang')
+    await new Promise<void>((r) => {
+      window.__hb.release = r
+    })
+  if (mode === 'no_answer') throw new TalosClientError('internal', 'no_answer')
+  if (mode === 'junk') return { nothing: 'useful' }
+  if (mode === 'other_config') return { ...ok, config_hash: `sha256:${'0'.repeat(64)}` }
+  if (mode === 'fail')
+    return {
+      ...ok,
+      sources: ok.sources.map((x, i) => (i === 0 ? { ...x, ok: false, error: 'gh is not signed in \u202e' } : x)),
+    }
+  if (mode === 'partial')
+    return { ...ok, sources: ok.sources.map((x, i) => (i === 0 ? { ...x, read: 4, unreadable: 2 } : x)) }
+  return ok
+})
 
 window.__push = (name) => {
   const next = VARIANTS[name]()
@@ -109,6 +145,7 @@ if (root)
                 <Route path="t/:thread" element={<ThreadScreen />} />
                 <Route path="schedules" element={<SchedulesScreen />} />
                 <Route path="schedules/new" element={<NewScheduleScreen />} />
+                <Route path="schedules/heartbeat/new" element={<HeartbeatSetupScreen />} />
                 <Route path="schedules/:id" element={<ScheduleDetailScreen />} />
                 <Route path="cards" element={<CardsPage />} />
                 <Route path="settings" element={<p className="p-4">Settings</p>} />

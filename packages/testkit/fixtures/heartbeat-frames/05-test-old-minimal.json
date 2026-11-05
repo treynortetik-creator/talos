@@ -1,0 +1,21 @@
+{
+  "_note": "An older Mac: only the keys every version sends.",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T4AA",
+  "result": {
+    "config_hash": "sha256:5e9f3a96d3a4c26a925fa70fb358ce6577aee096d84cc68e8cdcdc74c0373a0a",
+    "at": "2026-10-28T15:32:10Z",
+    "window_h": 8,
+    "sources": [
+      {
+        "id": "github",
+        "ok": true,
+        "ms": 10
+      },
+      {
+        "id": "inbox",
+        "ok": true,
+        "ms": 10
+      }
+    ]
+  }
+}

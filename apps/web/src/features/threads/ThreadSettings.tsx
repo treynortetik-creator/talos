@@ -52,7 +52,9 @@ export function NewThread({
   tone = 'surface',
   onCreated,
   className,
+  defaultName,
 }: {
+  defaultName?: string
   compact?: boolean
   tone?: 'surface' | 'chrome'
   onCreated?: (id: string) => void
@@ -79,7 +81,12 @@ export function NewThread({
         <IconPlus width={20} height={20} />
         {!compact && 'New thread'}
       </button>
-      <ThreadEditor open={open} onOpenChange={setOpen} {...(onCreated ? { onCreated } : {})} />
+      <ThreadEditor
+        open={open}
+        onOpenChange={setOpen}
+        {...(onCreated ? { onCreated } : {})}
+        {...(defaultName ? { defaultName } : {})}
+      />
     </>
   )
 }

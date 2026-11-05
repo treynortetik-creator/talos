@@ -97,6 +97,7 @@ export function seedState(): ClientState {
       features: [
         'schedules/1',
         'schedules/2',
+        'heartbeat/1',
         'session/1',
         'driving/1',
         'search/1',
@@ -107,7 +108,7 @@ export function seedState(): ClientState {
       ],
       features_at: '2026-10-28T15:00:00.000Z',
     },
-    relayFeatures: ['schedules/1', 'schedules/2', 'health/1', 'share/1'],
+    relayFeatures: ['schedules/1', 'schedules/2', 'heartbeat/1', 'health/1', 'share/1'],
     config,
     threads: config.threads,
     messages: { general: [hello] },

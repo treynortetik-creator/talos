@@ -1,0 +1,62 @@
+{
+  "_note": "A newer Mac: unknown keys, one source row this app cannot read, a source id that is not in the config.",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T4AA",
+  "result": {
+    "config_hash": "sha256:5e9f3a96d3a4c26a925fa70fb358ce6577aee096d84cc68e8cdcdc74c0373a0a",
+    "at": "2026-10-28T15:32:10.120Z",
+    "window_h": 24,
+    "with_agent": false,
+    "future_flag": true,
+    "sources": [
+      {
+        "id": "github",
+        "ok": true,
+        "ms": 900,
+        "read": 3,
+        "act": 0,
+        "fyi": 1,
+        "dropped": 2,
+        "held": 0,
+        "unreadable": 0,
+        "extra_counter": 7
+      },
+      {
+        "id": "inbox",
+        "ok": true,
+        "ms": 900,
+        "read": 3,
+        "act": 0,
+        "fyi": 1,
+        "dropped": 2,
+        "held": 0,
+        "unreadable": 0
+      },
+      {
+        "id": "gh-v2",
+        "ok": "maybe",
+        "ms": "soon"
+      },
+      {
+        "id": "calendar-v9",
+        "ok": true,
+        "ms": 900,
+        "read": 3,
+        "act": 0,
+        "fyi": 1,
+        "dropped": 2,
+        "held": 0,
+        "unreadable": 0
+      }
+    ],
+    "would_wake": [
+      {
+        "source": "github",
+        "title": "x",
+        "why": "y",
+        "priority": "p0"
+      }
+    ],
+    "est_wakes": 2,
+    "est_tokens": null
+  }
+}

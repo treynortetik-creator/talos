@@ -9,8 +9,6 @@ import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   type Frame,
-  HEARTBEAT_ERROR_MAX_CHARS,
-  HEARTBEAT_SOURCE_SCHEMA,
   type HeartbeatConfigT,
   HeartbeatItem,
   type HeartbeatItemT,
@@ -18,7 +16,6 @@ import {
   type HeartbeatResultT,
   type HeartbeatSourceConfigT,
   type HeartbeatSourceItemT,
-  type HeartbeatSourceRequestT,
   heartbeatMuteMatches,
   isQuiet,
   type MessageT,
@@ -32,9 +29,23 @@ import { ensureDir, writeFileAtomic } from '../fsutil.ts'
 import type { ThreadRef } from '../notify.ts'
 import { type BuiltinDeps, runBuiltin } from './builtin.ts'
 import { composeDigest, type DigestInput } from './digest.ts'
+import { pickForPack, prunePacks, removePack } from './pack.ts'
+import {
+  countsOnly,
+  plainError,
+  type SrcOut,
+  SUMMARY,
+  sourceRequest,
+  sum,
+  type TestDetail,
+  testDetail,
+  updateSources,
+  zero,
+} from './run-parts.ts'
 import { baseEnv, runSource } from './spawn.ts'
 import {
   addWake,
+  emptyStore,
   type HeartbeatStore,
   itemId,
   loadStore,
@@ -48,21 +59,42 @@ import {
 
 /** A source not heard from for this long starts over (no cursor) instead of flooding the owner with a backlog. */
 export const REBASELINE_AFTER_MS = 72 * 3600_000
-/** A source failing this many checks in a row is said once, in the thread. */
-export const FAIL_STREAK_SAY = 3
+export { FAIL_STREAK_SAY } from './run-parts.ts'
 export const SHADOW_LOG = 'heartbeat-shadow.jsonl'
 const SHADOW_LOG_MAX_BYTES = 512 * 1024
 const SHADOW_LOG_KEEP_LINES = 200
 
-/** What the agent wake gets (HB4 builds the run pack from it). Delivered = the agent took it; anything else degrades to lines. */
+/**
+ * What the agent wake gets (HB4: the real one builds the run pack from `items`). The answer says what happened to the hand-over:
+ *   awaiting  - the agent was sent the pack. The items stay `new` until the run reports done ok (`wakeEnded`).
+ *   delivered - the hand-over is already complete (a test seam): the items are marked shown at once.
+ *   neither   - nothing was sent. `retry` keeps the items for the next slot (two tries at most); without it they become lines now.
+ *               `unavailable` (no triage agent) is the same, and the owner is told once to install talos-app-mod.
+ */
 export type HeartbeatWake = (req: {
   run_key: string
   job_id: string
   thread_id: string
+  /** The run id of this slot (the claim's), which the pack and every card of this wake carry. */
+  run_id: string
+  /** At most MAX_PACK_ITEMS; the rest wait for the next wake and are counted here. */
   items: StoredItem[]
-}) => Promise<{ delivered: boolean; retry?: boolean }>
-/** HB2's wake: there is no agent path yet, so it never claims to have woken anyone. */
+  left_for_next_wake: number
+}) => Promise<{
+  delivered: boolean
+  awaiting?: boolean
+  retry?: boolean
+  unavailable?: boolean
+  unknown?: boolean
+  no_thread?: boolean
+}>
+/** HB2's wake: there is no agent path, so it never claims to have woken anyone. */
 export const stubWake: HeartbeatWake = async () => ({ delivered: false })
+
+/** A wake that has not come back after this long is treated as killed (the run timeout is under 45 minutes). */
+export const WAKE_STALE_MS = 2 * 3600_000
+/** The most backlog days said in the "was off" line. */
+const DAY_MS = 24 * 3600_000
 
 export type RunnerDeps = {
   ctx: Pick<BridgeContext, 'paths' | 'clock' | 'config' | 'store' | 'transport' | 'log' | 'env'>
@@ -89,10 +121,22 @@ export type RunInput = {
   trigger: 'clock' | 'run_now'
   /** A test run: sources run with dry:true; nothing is written, posted or woken. */
   dry?: boolean
+  /**
+   * The owner's "test these settings" (docs/HEARTBEAT.md "In the app"): a dry run that reads NO store (a config that is not saved
+   * yet has none) and looks back `windowH` hours instead of at a cursor. `RunOutput.test` says what each source found.
+   */
+  test?: {
+    windowH: number /** Called as each source answers, so a run that breaks later can still report them. */
+    onSource?: (o: SrcOut) => void
+  }
+  /** The run id of this slot (the Chronos claim's). Needed for a wake; a run without one cannot wake. */
+  runId?: string
   signal?: AbortSignal
 }
 
 export type HeartbeatSeams = Pick<RunnerDeps, 'wake' | 'workAllowed' | 'secondMs' | 'hooks'> & {
+  /** Test seam: whether the triage agent is available (production asks the mod's inventory). */
+  triageAvailable?: () => boolean | 'unknown'
   /** Test seam: the `gh` binary the github source runs. */
   ghBin?: string
 }
@@ -108,44 +152,10 @@ export type RunOutput = {
   said: boolean
   /** The bridge was stopped mid-run: nothing was written or posted, and the slot is not for this call to close. */
   aborted: boolean
-}
-
-type SrcOut = {
-  id: string
-  ok: boolean
-  ms: number
-  unreadable: number
-  error?: string
-  cursor: Record<string, unknown> | null
-  items: HeartbeatSourceItemT[]
-}
-
-const SUMMARY: Record<HeartbeatResultT['outcome'], (n: number, r: HeartbeatResultT) => string> = {
-  silent: () => 'Nothing new',
-  fyi: (n) => `${n} ${n === 1 ? 'update' : 'updates'} posted`,
-  woke: (n) => `Checked in, ${n} ${n === 1 ? 'item' : 'items'}`,
-  capped: () => 'Wake limit reached',
-  quiet: () => 'Quiet hours',
-  partial: (_n, r) => {
-    const bad = r.sources.filter((s) => !s.ok).map((s) => s.id)
-    return bad.length ? `Couldn't check ${bad.join(', ')}` : 'Some items could not be read'
-  },
-  failed: () => 'Check failed',
-}
-
-const zero = () => ({ silent: 0, fyi: 0, act: 0 })
-const sum = (c: { silent: number; fyi: number; act: number }) => c.silent + c.fyi + c.act
-
-/** An error string, capped and escaped by the same function that reads every source answer. */
-function plainError(s: string): string {
-  const r = parseHeartbeatSourceResponse(
-    JSON.stringify({
-      schema: HEARTBEAT_SOURCE_SCHEMA,
-      status: 'error',
-      error: s.slice(0, HEARTBEAT_ERROR_MAX_CHARS * 2),
-    }),
-  )
-  return r.ok ? 'the source failed' : r.error
+  /** A live wake is out: the slot stays open until the agent reports done (or the run times out). */
+  wakeOpen?: boolean
+  /** Only for a `test` run: what each source found and what the settings would do. Item words are already escaped. */
+  test?: TestDetail
 }
 
 export class HeartbeatRunner {
@@ -199,9 +209,14 @@ export class HeartbeatRunner {
 
   private finishWith(
     input: RunInput,
-    o: Omit<HeartbeatResultT, 'run_key'> & { aborted?: boolean; status?: 'ok' | 'failed' },
+    o: Omit<HeartbeatResultT, 'run_key'> & {
+      aborted?: boolean
+      status?: 'ok' | 'failed'
+      wakeOpen?: boolean
+      test?: TestDetail | undefined
+    },
   ): RunOutput {
-    const { aborted, status, ...rest } = o
+    const { aborted, status, wakeOpen, test, ...rest } = o
     const result = HeartbeatResult.parse({ run_key: input.runKey, ...rest })
     const n = result.new_by_level.fyi + result.new_by_level.act
     const report = [
@@ -218,6 +233,8 @@ export class HeartbeatRunner {
       status: status ?? (result.outcome === 'failed' ? 'failed' : 'ok'),
       aborted: aborted ?? false,
       said: false,
+      ...(wakeOpen ? { wakeOpen: true } : {}),
+      ...(test ? { test } : {}),
     }
   }
 
@@ -237,7 +254,7 @@ export class HeartbeatRunner {
     const { ctx } = this.d
     const nowMs = ctx.clock.now()
     const nowIso = new Date(nowMs).toISOString()
-    const dry = input.dry === true
+    const dry = input.dry === true || input.test !== undefined
 
     if ('problem' in input.config) {
       const text = `Heartbeat "${input.jobName}" can't run: ${input.config.problem}`
@@ -260,7 +277,7 @@ export class HeartbeatRunner {
       return this.empty(input, 'quiet')
 
     const file = storeFile(this.home, shadow, input.jobId)
-    const loaded = loadStore(file, !dry)
+    const loaded = input.test ? { store: emptyStore(), corrupt: false, unreadable: 0 } : loadStore(file, !dry)
     const store: HeartbeatStore = loaded.store
     const notes: string[] = []
     if (loaded.corrupt)
@@ -280,7 +297,24 @@ export class HeartbeatRunner {
     // With the gate off no work title stays on disk.
     if (!gateOn) for (const [id, t] of Object.entries(store.items)) if (isWork(t)) delete store.items[id]
 
-    if (!dry && !shadow) await this.recoverPending(store, file, nowMs, visible)
+    if (!dry && !shadow) {
+      prunePacks(this.home) // every run, not only one that writes a pack
+      await this.recoverPending(store, file, nowMs, visible)
+    }
+    // A wake that never came back (the clock moved, the close was lost): its attempt was already counted, so it is over.
+    if (!dry && !shadow && store.wake && Math.abs(nowMs - Date.parse(store.wake.at)) > WAKE_STALE_MS) {
+      ctx.log.warn('heartbeat wake abandoned', { run: store.wake.run_id })
+      removePack(this.home, store.wake.run_id)
+      store.wake = null
+    }
+
+    // How long THIS HEARTBEAT has gone without a completed run (its own last_run, not a source's silence: a source that was down
+    // while the heartbeat kept running holds its cursor and delivers normally when it recovers). Past 72 h every source starts
+    // over with no cursor, and whatever it reports on that first look is the backlog, recorded and not shown.
+    const coldMs =
+      store.last_run && nowMs - Date.parse(store.last_run) > REBASELINE_AFTER_MS
+        ? nowMs - Date.parse(store.last_run)
+        : 0
 
     // ---- the sources
     const runMs = config.run_timeout_s * this.secondMs
@@ -292,7 +326,9 @@ export class HeartbeatRunner {
     const outs: SrcOut[] = []
     try {
       outs.push(
-        ...(await Promise.all(enabled.map((s) => this.runSource(s, store, nowMs, nowIso, dry, input.jobId, lim, ac)))),
+        ...(await Promise.all(
+          enabled.map((s) => this.runSource(s, store, nowMs, dry, input.jobId, lim, ac, coldMs > 0, input.test)),
+        )),
       )
     } finally {
       clearTimeout(runTimer)
@@ -340,6 +376,7 @@ export class HeartbeatRunner {
 
     const seenBy = zero()
     const newBy = zero()
+    let backlog = 0
     for (const [id, it] of considered) {
       seenBy[it.level]++
       const old = store.items[id]
@@ -350,32 +387,28 @@ export class HeartbeatRunner {
         old.level = it.level
         continue
       }
-      newBy[it.level]++
+      const skipped = it.level !== 'silent' && coldMs > 0
+      if (skipped) backlog++
+      else newBy[it.level]++
       store.items[id] = {
         ...it,
         first_seen: old?.first_seen ?? nowIso,
         count: (old?.count ?? 0) + 1,
-        state: it.level === 'silent' ? 'surfaced' : 'new',
-        surfaced_at: null,
+        state: it.level === 'silent' || skipped ? 'surfaced' : 'new',
+        surfaced_at: skipped ? nowIso : null,
         attempts: 0,
       }
     }
+    if (coldMs > 0 && outs.some((o) => o.ok)) {
+      const days = Math.floor(coldMs / DAY_MS)
+      notes.push(
+        `Heartbeat was off for ${days} ${days === 1 ? 'day' : 'days'}. Skipped the backlog${backlog ? ` (${backlog} ${backlog === 1 ? 'item' : 'items'})` : ''}.`,
+      )
+    }
 
     // ---- sources' own state
-    const failures: DigestInput['failures'] = []
-    for (const o of outs) {
-      const s = store.sources[o.id] ?? { cursor: null, last_ok: null, fail_streak: 0 }
-      if (o.ok) {
-        s.cursor = o.cursor
-        s.last_ok = nowIso
-        s.fail_streak = 0
-      } else {
-        s.fail_streak += 1
-        if (s.fail_streak === FAIL_STREAK_SAY)
-          failures.push({ id: o.id, error: o.error ?? 'no details', streak: s.fail_streak })
-      }
-      store.sources[o.id] = s
-    }
+    const failures = updateSources(store, outs, nowIso)
+    store.last_run = nowIso
 
     const failedSrc = outs.filter((o) => !o.ok)
     const noSource = enabled.length === 0
@@ -391,43 +424,9 @@ export class HeartbeatRunner {
     const fyi = due.filter((t) => t.level === 'fyi')
     const date = localDate(nowMs, tz)
 
-    let woke = false
-    let capped = false
-    const rolled: StoredItem[] = []
-    const needYou: StoredItem[] = []
-    // Shadow never wakes and never spends a wake: it records what live would have done. A dry run only asks the cap.
-    if (act.length && !shadow) {
-      const atCap = wakesOn(store, date) >= config.wake_cap_per_day
-      if (dry) {
-        capped = atCap
-        woke = !atCap
-      } else if (atCap) {
-        capped = true
-        rolled.push(...act)
-      } else {
-        let w: { delivered: boolean; retry?: boolean } = { delivered: false }
-        try {
-          w = await (this.d.wake ?? stubWake)({
-            run_key: input.runKey,
-            job_id: input.jobId,
-            thread_id: this.d.threadFor(input.jobId).id,
-            items: act,
-          })
-        } catch (e) {
-          ctx.log.warn('heartbeat wake failed', { error: (e as Error).message })
-        }
-        for (const t of act) t.attempts += 1
-        if (w.delivered) {
-          woke = true
-          addWake(store, date)
-          for (const t of act) {
-            t.state = 'surfaced'
-            t.surfaced_at = nowIso
-          }
-        } else if (!(w.retry && act.every((t) => t.attempts < 2))) needYou.push(...act)
-        // a wake that asks to be retried leaves its items new: the next slot offers them again (two tries at most)
-      }
-    }
+    const ws = await this.wakeStep({ input, config, store, file, act, shadow, dry, date, nowIso, notes })
+    if (ws.saveError) return this.failedSave(input, ws.saveError, countsOnly(considered, outs))
+    const { woke, wakeOpen, capped, rolled, needYou } = ws
     if (this.stopped(input, ac, lim)) return this.empty(input, 'failed', { aborted: true })
 
     const failedRun = noSource
@@ -464,7 +463,9 @@ export class HeartbeatRunner {
       sources,
     }
 
-    if (dry) return this.finishWith(input, { outcome, ...counts })
+    // a test starts from an empty store, so `refusedNow` is exactly what the work gate held back
+    const test = input.test ? testDetail(outs, seen, considered, refusedNow) : undefined
+    if (dry) return this.finishWith(input, { outcome, ...counts, test })
 
     prune(store, nowMs)
     // ---- shadow: record everything, deliver nothing
@@ -510,7 +511,7 @@ export class HeartbeatRunner {
     try {
       saveStore(file, store)
     } catch (e) {
-      return this.failedSave(input, e as Error, counts)
+      return { ...this.failedSave(input, e as Error, counts), ...(wakeOpen ? { wakeOpen: true } : {}) }
     }
     this.d.hooks?.afterStoreWrite?.()
 
@@ -542,9 +543,139 @@ export class HeartbeatRunner {
     }
     if (postError) {
       ctx.log.warn('heartbeat post failed', { error: postError.message })
-      return this.finishWith(input, { outcome: 'failed', ...counts })
+      return this.finishWith(input, { outcome: 'failed', ...counts, wakeOpen })
     }
-    return { ...this.finishWith(input, { outcome, ...counts }), said: Boolean(digest && failedRun) }
+    return { ...this.finishWith(input, { outcome, ...counts, wakeOpen }), said: Boolean(digest && failedRun) }
+  }
+
+  /**
+   * The wake decision for this run's `act` items (HB4): cap, the one-at-a-time rule, the record written before the send, the send,
+   * and what happens to the items when nothing was sent. `notes` gets the "waiting for the next check-in" line.
+   */
+  private async wakeStep(a: {
+    input: RunInput
+    config: HeartbeatConfigT
+    store: HeartbeatStore
+    file: string
+    act: StoredItem[]
+    shadow: boolean
+    dry: boolean
+    date: string
+    nowIso: string
+    notes: string[]
+  }): Promise<{
+    woke: boolean
+    wakeOpen: boolean
+    capped: boolean
+    rolled: StoredItem[]
+    needYou: StoredItem[]
+    saveError?: Error
+  }> {
+    const { ctx } = this.d
+    const { input, config, store, file, act, shadow, dry, date, nowIso, notes } = a
+    let woke = false
+    let wakeOpen = false
+    let capped = false
+    const rolled: StoredItem[] = []
+    const needYou: StoredItem[] = []
+    // Shadow never wakes and never spends a wake: it records what live would have done. A dry run only asks the cap.
+    if (act.length && !shadow) {
+      const atCap = wakesOn(store, date) >= config.wake_cap_per_day
+      if (dry) {
+        capped = atCap
+        woke = !atCap
+      } else if (atCap) {
+        capped = true
+        rolled.push(...act)
+      } else {
+        // Items a wake still has out are not offered again; items that already had their two tries become lines.
+        const out = new Set(store.wake?.ids ?? [])
+        const eligible = act.filter((t) => !out.has(itemId(t.source, t.key)))
+        const stuck = eligible.filter((t) => t.attempts >= 2)
+        needYou.push(...stuck)
+        const fresh = eligible.filter((t) => t.attempts < 2)
+        // One wake at a time per job: while one is out, new act items wait (they stay `new`, and lead the next wake).
+        const { picked, left } = pickForPack(fresh)
+        if (picked.length && !store.wake) {
+          const runId = input.runId ?? `r_${newUlid()}`
+          // Recorded BEFORE the notification goes out: a crash after the send still knows a wake is out.
+          for (const t of picked) t.attempts += 1
+          store.wake = {
+            run_id: runId,
+            run_key: input.runKey,
+            ids: picked.map((t) => itemId(t.source, t.key)),
+            at: nowIso,
+          }
+          addWake(store, date)
+          try {
+            saveStore(file, store)
+          } catch (e) {
+            return { woke, wakeOpen, capped, rolled, needYou, saveError: e as Error }
+          }
+          let w: Awaited<ReturnType<HeartbeatWake>> = { delivered: false }
+          try {
+            w = await (this.d.wake ?? stubWake)({
+              run_key: input.runKey,
+              job_id: input.jobId,
+              thread_id: this.d.threadFor(input.jobId).id,
+              run_id: runId,
+              items: picked,
+              left_for_next_wake: left.length,
+            })
+          } catch (e) {
+            ctx.log.warn('heartbeat wake failed', { error: (e as Error).message })
+          }
+          if (w.awaiting) {
+            woke = true
+            wakeOpen = true
+            store.triage_said = false
+            store.triage_unknown = 0
+            store.thread_said = false
+          } else {
+            // nothing is out: take the record back (the attempt stays counted, the wake is spent only if it was sent)
+            if (store.wake?.run_id === runId) {
+              store.wake = null
+              store.wakes_today = { date, count: Math.max(0, wakesOn(store, date) - 1) }
+            }
+            if (w.delivered) {
+              woke = true
+              addWake(store, date)
+              for (const t of picked) {
+                t.state = 'surfaced'
+                t.surfaced_at = nowIso
+              }
+            } else if (w.unknown) {
+              // the mod has not reported (a restart, a reload): that is not proof it is missing. Nothing was sent and nothing is
+              // said; the attempt is given back and the items wait for the next slot. A few slots of this, then they become lines
+              // (without the install line, which would be a guess).
+              for (const t of picked) t.attempts = Math.max(0, t.attempts - 1)
+              store.triage_unknown += 1
+              if (store.triage_unknown >= 3) needYou.push(...picked)
+            } else if (w.no_thread) {
+              needYou.push(...picked)
+              if (!store.thread_said) {
+                store.thread_said = true
+                notes.push("Heartbeat can't wake you until it has a thread of its own. Pick one in Schedules.")
+              }
+            } else if (w.unavailable) {
+              store.triage_unknown = 0
+              // no triage agent: nobody is woken and nothing waits for one. The items are lines now, and the owner is told once.
+              needYou.push(...picked)
+              if (!store.triage_said) {
+                store.triage_said = true
+                notes.push('Install talos-app-mod for heartbeat triage')
+              }
+            } else if (!(w.retry && picked.every((t) => t.attempts < 2))) needYou.push(...picked)
+            // a wake that asks to be retried leaves its items new: the next slot offers them again (two tries at most)
+          }
+        }
+        if (left.length)
+          notes.push(
+            `${left.length} more ${left.length === 1 ? 'item is' : 'items are'} waiting for the next check-in.`,
+          )
+      }
+    }
+    return { woke, wakeOpen, capped, rolled, needYou }
   }
 
   /** The bridge was stopped (or the caller gave up) before the run could finish: not the run's own time limit. */
@@ -563,22 +694,31 @@ export class HeartbeatRunner {
     cfg: HeartbeatSourceConfigT,
     store: HeartbeatStore,
     nowMs: number,
-    nowIso: string,
     dry: boolean,
     jobId: string,
     lim: { hit: boolean },
     run: AbortController,
+    cold: boolean,
+    test?: RunInput['test'],
+  ): Promise<SrcOut> {
+    const out = await this.runSourceOne(cfg, store, nowMs, dry, jobId, lim, run, cold, test?.windowH)
+    test?.onSource?.(out)
+    return out
+  }
+
+  private async runSourceOne(
+    cfg: HeartbeatSourceConfigT,
+    store: HeartbeatStore,
+    nowMs: number,
+    dry: boolean,
+    jobId: string,
+    lim: { hit: boolean },
+    run: AbortController,
+    cold: boolean,
+    windowH?: number,
   ): Promise<SrcOut> {
     const { ctx } = this.d
-    const state = store.sources[cfg.id]
-    const stale = state?.last_ok ? nowMs - Date.parse(state.last_ok) > REBASELINE_AFTER_MS : false
-    const req: HeartbeatSourceRequestT = {
-      schema: HEARTBEAT_SOURCE_SCHEMA,
-      now: nowIso,
-      since: state?.last_ok && !stale ? state.last_ok : null,
-      cursor: stale ? null : (state?.cursor ?? null),
-      dry,
-    }
+    const req = sourceRequest(cfg, store.sources[cfg.id], nowMs, dry, cold, windowH)
     const t0 = performance.now()
     const limitMs = cfg.timeout_s * this.secondMs
     const own = new AbortController()
@@ -742,6 +882,95 @@ export class HeartbeatRunner {
     } catch (e) {
       this.d.ctx.log.warn('heartbeat store not saved', { error: (e as Error).message })
     }
+  }
+
+  /**
+   * The agent's wake came back (`ok`, or `failed` when it reported ok:false) or never will (`killed`: the run timed out, the
+   * session restarted, the close was refused). Only `ok` marks the items shown. Otherwise they stay `new` and the attempt
+   * already counted stands; items that have now had two tries are posted as plain lines, so nothing loops and nothing is lost.
+   * Matches the open wake by run id in the saved store, so it works after a restart and ignores any other run.
+   */
+  wakeEnded(jobId: string, runId: string, how: 'ok' | 'failed' | 'killed'): Promise<{ matched: boolean }> {
+    const next = this.tail.then(
+      () => this.endWake(jobId, runId, how),
+      () => this.endWake(jobId, runId, how),
+    )
+    this.tail = next.catch(() => {})
+    return next
+  }
+
+  private async endWake(jobId: string, runId: string, how: 'ok' | 'failed' | 'killed'): Promise<{ matched: boolean }> {
+    const { ctx } = this.d
+    if (!this.alive()) return { matched: false }
+    removePack(this.home, runId) // a wake that has ended leaves nothing for the agent to read
+    const file = storeFile(this.home, false, jobId)
+    if (!existsSync(file)) return { matched: false }
+    const loaded = loadStore(file, false)
+    const store = loaded.store
+    const w = store.wake
+    if (loaded.corrupt || !w || w.run_id !== runId) return { matched: false }
+    const nowMs = ctx.clock.now()
+    const nowIso = new Date(nowMs).toISOString()
+    store.wake = null
+    const items = w.ids
+      .map((id) => store.items[id])
+      .filter((t): t is StoredItem => t !== undefined && t.state === 'new')
+    if (how === 'ok') {
+      for (const t of items) {
+        t.state = 'surfaced'
+        t.surfaced_at = nowIso
+      }
+      saveStore(file, store)
+      return { matched: true }
+    }
+    const give = items.filter((t) => t.attempts >= 2)
+    const digest = give.length
+      ? composeDigest({ fyi: [], needYou: give, refused: {}, failures: [], failedRun: null, notes: [] })
+      : null
+    if (!digest) {
+      saveStore(file, store)
+      return { matched: true }
+    }
+    const thread = this.d.threadFor(jobId)
+    store.pending = {
+      run_key: w.run_key,
+      message_id: newId('m'),
+      thread_id: thread.id,
+      text: digest.text,
+      silent: false,
+      ids: digest.listed.map((t) => itemId(t.source, t.key)),
+      attempts: 1,
+      frame_id: newUlid(),
+      created_at: nowIso,
+    }
+    saveStore(file, store)
+    let posted = false
+    try {
+      await this.sendPending(store.pending, nowMs)
+      posted = true
+    } catch (e) {
+      ctx.log.warn('heartbeat degrade post failed', { error: (e as Error).message })
+    }
+    if (posted)
+      for (const id of store.pending.ids) {
+        const t = store.items[id]
+        if (t && t.state === 'new') {
+          t.state = 'surfaced'
+          t.surfaced_at = nowIso
+        }
+      }
+    // a failed post keeps `pending` in the file: the next run retries it once (recoverPending) and the items stay new
+    if (posted) store.pending = null
+    saveStore(file, store)
+    return { matched: true }
+  }
+
+  /** One plain heartbeat row in the job's thread (drawn under the fixed "Heartbeat" label). Throws when it cannot be sent. */
+  async postLine(jobId: string, text: string, silent = false): Promise<void> {
+    await this.send(
+      { message_id: newId('m'), frame_id: newUlid(), thread_id: this.d.threadFor(jobId).id, text, silent },
+      this.d.ctx.clock.now(),
+    )
   }
 
   private appendShadow(row: Record<string, unknown>) {

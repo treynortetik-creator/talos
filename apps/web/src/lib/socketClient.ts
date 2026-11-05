@@ -1645,6 +1645,14 @@ export function createSocketClient(opts: SocketClientOptions): SocketClient {
     features: () => store.getState().presence.features,
     relayFeatures: () => store.getState().relayFeatures,
     macOnline: () => store.getState().presence.bridge_online,
+    onOnline: (cb) => {
+      let was = store.getState().connection
+      return store.subscribe((s) => {
+        const now = s.connection
+        if (now === 'online' && was !== 'online') cb()
+        was = now
+      })
+    },
   })
 
   const memory = createSocketMemory({ ask: (frame, answer) => askRead(frame, answer) as never })

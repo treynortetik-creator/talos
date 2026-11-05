@@ -35,6 +35,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -66,6 +67,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -315,6 +317,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -346,6 +349,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -733,6 +737,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -764,6 +769,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -1111,6 +1117,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -1142,6 +1149,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -1502,6 +1510,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -1538,6 +1547,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -1581,6 +1591,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -1850,6 +1861,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -1881,6 +1893,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -2065,6 +2078,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -2096,6 +2110,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -2278,6 +2293,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -2545,6 +2561,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -2741,6 +2758,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -2772,6 +2790,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -3115,6 +3134,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -3146,6 +3166,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -3411,6 +3432,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",
@@ -3442,6 +3464,7 @@
           "features": [
             "schedules/1",
             "schedules/2",
+            "heartbeat/1",
             "config-propose/1",
             "custom-themes/1",
             "health/1",

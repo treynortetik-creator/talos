@@ -1,5 +1,14 @@
 # Changelog
 
+## Heartbeat test
+
+- Your Mac now answers the Heartbeat test: it acks at once, really runs the sources (a dry run that writes, posts and wakes nothing, with the same time limits and the same kill of anything left running), and sends back what each source found and what would wake the agent or post. It lists `heartbeat/1`, so the app's Test sheet and Turn on work. Settings that fail the strict check are refused in plain words, testing "with the agent" is refused until it exists, and one test runs at a time. In shadow mode the test says the heartbeat would only record and shows what live mode would do, and a test that breaks partway still reports the sources that answered.
+- A heartbeat can no longer be turned on without a passing test of those exact settings, under 24 hours old, whichever way it is asked for (the agent, the app, an adopt, or `talos-app schedules adopt` at the Mac), and the Mac checks again when you approve the card. A heartbeat saved off needs no test, turning one off never does, and a rename, a thread move or a mute on one that is already on does not either. A slot that cannot start because the last wake is still open now shows as Busy in the app. Heartbeats that were already on keep running, and only a changed setting needs a test; if the current job cannot be read, a change to it is refused rather than let through.
+
+## Heartbeat wake
+
+- A heartbeat that finds something for the agent to act on now wakes it with a private run pack file (its path and the item counts are all the notification carries, never a subject or body, and the pack marks every outside word as untrusted), a read-only `heartbeat-triage` agent summarises it, anything outward still needs your card, items show as handled only after the agent reports the run done, a wake that fails or is killed twice falls back to plain lines, and nothing is woken (and you are told once to install talos-app-mod) when the triage agent is not there. A heartbeat now needs a thread of its own, and every card made in that thread is a background card that expires within a day, with at most three waiting at once (the next is a plain line); a card can only replace a pending card in its own thread. A long backlog is capped and summarised in one line, a gap over 72 hours skips the backlog only when the heartbeat itself was off, a slot that cannot start because an earlier run holds it shows as Busy, an ended wake's pack is deleted and a card or done naming it is refused, and the agent's `read_thread` shows heartbeat rows as outside text. Shadow mode still never wakes. See docs/HEARTBEAT.md.
+
 ## Heartbeat runner
 
 - A heartbeat job's slot is now checked by the bridge itself, with no agent turn: it runs the job's sources (GitHub PRs and CI, failed scheduled jobs, the shared inbox, or your own command) with a time limit each, kills any that hang, and posts one quiet digest row for fyi items, nothing at all when there is nothing new, and a plain line asking for your reply for items that need you (the agent wake itself comes later). It follows the quiet hours, stops at the daily wake limit, shows work items only if you allow them in Integrations ("Heartbeat (work items)", with a passkey), draws its digest under a fixed "Heartbeat" label so a title from outside can't pass as a Talos notice, can't post the same digest twice after a crash, and in shadow mode only records what it would have posted. See docs/HEARTBEAT.md.
@@ -8,11 +17,15 @@
 
 - Schedules now vendors Chronos 0.4.0 and has the Heartbeat contract (items, sources, a shadow or live mode, config in the job's meta, results), so a heartbeat job's approval card lists its mode, slots, sources, each command's exact argv, mutes and wake cap in plain words, says `(new)` or `(unchanged)` only when that is true, and a change to its sources or wake cap is high risk (only a short mute of one exact item is low). A heartbeat Talos can't read in full, or on a job without several fire times, is refused before any card is made, whether the agent or the owner's form proposed it. The runner that checks the sources comes later.
 
+## Heartbeat in the app
+
+- The Schedules tab now has a pinned Heartbeat row that says how the last check went in words and colour (a failure never reads as "Nothing new"), a Heartbeat choice in [+ New], a setup form, a test sheet, and per-source detail with mutes you can add or remove, every change going through an approval card; Turn on stays disabled until a test passes for exactly those settings, and the relay passes the new test frames without storing them. Needs a Mac that lists `heartbeat/1` (see "Heartbeat test" above).
+
 ## Set Talos up from one guide
 
 - New `SETUP.md` in the repository root: one ordered path from prerequisites to the phone, with `[YOU]` marks for the steps only a person can do and a check after each step. `CLAUDE.md` and `AGENTS.md` now start by pointing an agent that is setting Talos up for a user at it.
 - The root `./install.sh` passes the kit's flags through (`--with-vault`, `--with-memory-search`, `--notify talos` and the rest), `--with-chronos` now adds Chronos to an agent that already exists, and `--relay-url https://<host>` also sets up the bridge. The agent folder is `~/talos-agent` everywhere.
-- The web app on the Home Screen is the default phone path. The free Personal Team build steps moved to `docs/ios.md`, and `scripts/testflight.sh` now requires `TALOS_RELAY_HOST` for a push build and passes it on (the throwaway checkout has no `Local.xcconfig`).
+- The web app on the Home Screen is the default phone path. The free Personal Team build steps moved to `docs/ios.md`, and `scripts/testflight.sh` now passes the relay host to a push build (`TALOS_RELAY_HOST` is optional; taken from `TALOS_RELAY_URL`, and if you set it, it must match) (the throwaway checkout has no `Local.xcconfig`).
 - `talos-app update` also prints the kit upgrade step. The public export fails if a setup doc names a file the export leaves out.
 
 ## Lead kit

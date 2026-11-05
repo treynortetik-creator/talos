@@ -400,7 +400,7 @@ export class ChronosAdapter implements SchedulerAdapter {
   // ---- the one writer -------------------------------------------------------------------------------------------
 
   async validate(change: ChronosChangeT): Promise<ValidateResult> {
-    // Chronos's own floor between fire times is 15 minutes; Talos's is 60 (HEARTBEAT-SPEC 7a). The owner form and the agent
+    // Chronos's own floor between fire times is 15 minutes; Talos's is 60 (docs/HEARTBEAT.md). The owner form and the agent
     // are held to it by the ScheduleChange schema; this is the same rule at the last door, so a change built any other way
     // is refused in words instead of being sent, or read back as an unreadable answer.
     const tooClose = changeTimesProblem(change)

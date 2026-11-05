@@ -25,6 +25,13 @@ What this package does (WP-C2, read side and guard):
 - Reports `prompt_open` / `prompt_closed` for the C3.4 closer. `input_hash` is sha256 of the call's input as compact JSON
   with all whitespace removed.
 
+## Agents
+
+- `heartbeat-triage` (`agents/heartbeat-triage.md`, see `docs/HEARTBEAT.md`): reads a Heartbeat run pack and returns a short
+  summary and suggestions. Its only tool is `Read`: it cannot post,
+  send or run a command, but it can read other files you can read, so its summary is treated as untrusted. The bridge's wake
+  notification names it as `talos-app-mod:heartbeat-triage`.
+
 ## The key (hygiene, not a boundary)
 
 The bridge writes a 0600 file, `mod.key`, under `$TALOS_APP_HOME`; the mod reads it with `$.fs`. The key never travels

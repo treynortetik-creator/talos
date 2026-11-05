@@ -12,8 +12,13 @@ const KIND_WORDS = {
 } as const
 
 const t = visibleMetaText
-/** One word of an argv or env value, shown JSON-quoted after the escape, so spaces and quotes cannot blur two words into one. */
-const q = (s: string) => JSON.stringify(t(s))
+/**
+ * One word of an argv, cwd or env value, shown JSON-quoted AFTER the escape: hidden and bidi characters become visible
+ * `⟦U+XXXX⟧` markers, and spaces and quotes cannot blur two words into one. The approval card and the app's detail page both
+ * use this one function, so what the owner approved is what they see afterwards.
+ */
+export const quoteVisible = (s: string): string => JSON.stringify(visibleMetaText(s))
+const q = quoteVisible
 
 type Src = HeartbeatConfigT['sources'][number]
 

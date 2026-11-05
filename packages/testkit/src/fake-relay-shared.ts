@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'node:http'
 import {
   type AgentConfigT,
   CONSUMABLE_FRAME_TYPES,
+  HEARTBEAT_OWNER_FRAME_TYPES,
   SCHEDULE_OWNER_FRAME_TYPES,
   V2_READ_OWNER_FRAME_TYPES,
 } from '@talos-app/protocol'
@@ -77,7 +78,7 @@ export const OWNER_FRAMES = new Set([
   'session.control',
 ])
 // docs/SCHEDULES.md S4: never stored or buffered, seq-less dedup, request/response by request_id, mac_offline at once.
-export const SCHEDULE_OWNER = new Set<string>(SCHEDULE_OWNER_FRAME_TYPES)
+export const SCHEDULE_OWNER = new Set<string>([...SCHEDULE_OWNER_FRAME_TYPES, ...HEARTBEAT_OWNER_FRAME_TYPES])
 export const V2_READ = new Set<string>(V2_READ_OWNER_FRAME_TYPES)
 export const CATCHUP_PAGE = 200
 

@@ -3,6 +3,7 @@ import {
   DRIVING_FEATURE,
   type Frame,
   HEALTH_FEATURE,
+  HEARTBEAT_FEATURE,
   MEMORY_FEATURE,
   NATIVE_ACT_FEATURE,
   newUlid,
@@ -36,6 +37,7 @@ export function bridgeFeatures(svc: {
   return [
     SCHEDULES_FEATURE,
     SCHEDULES_FEATURE_V2,
+    HEARTBEAT_FEATURE,
     NATIVE_ACT_FEATURE,
     SESSION_FEATURE,
     DRIVING_FEATURE,

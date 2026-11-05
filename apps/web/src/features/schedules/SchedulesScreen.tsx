@@ -1,6 +1,6 @@
 // `/schedules` (docs/SCHEDULES.md S5.2): grouped job rows with a pause switch, the health banner, the offline cache and
 // every empty state. Times and plain words are Chronos's own; this file only lays them out.
-import type { ScheduleT } from '@talos-app/protocol'
+import { SCHEDULES_FEATURE_V2, type ScheduleT } from '@talos-app/protocol'
 import { useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
@@ -13,6 +13,8 @@ import { prefillComposer } from '../composer/composerStore.ts'
 import { useAgentName } from '../threads/useThreads.ts'
 import { EmptyState } from './Empty.tsx'
 import { HealthBanner, OfflineBanner } from './Health.tsx'
+import { HeartbeatSection } from './heartbeat/HeartbeatRow.tsx'
+import { isHeartbeat } from './heartbeat/logic.ts'
 import { emptyKind, groupSchedules, pickBanner, type RowStatus } from './logic.ts'
 import { ProposalSheet } from './Proposal.tsx'
 import { CAPS, Notice, refusalWords, StatusText, useSchedTime } from './shared.tsx'
@@ -144,7 +146,15 @@ export function SchedulesScreen() {
     }
   }
 
-  const groups = useMemo(() => (snap ? groupSchedules(snap, t.now) : null), [snap, t.now])
+  // the heartbeat is pinned above the groups, never inside them
+  const hbRows = useMemo(() => snap?.schedules.filter(isHeartbeat) ?? [], [snap])
+  const groups = useMemo(
+    () => (snap ? groupSchedules({ ...snap, schedules: snap.schedules.filter((x) => !isHeartbeat(x)) }, t.now) : null),
+    [snap, t.now],
+  )
+  // "Heartbeat" in [+ New]: only when none exists and the Mac reports several-times-a-day jobs (schedules/2)
+  const features = useTalos((s) => s.presence.features)
+  const canNewHeartbeat = hbRows.length === 0 && (features ?? []).includes(SCHEDULES_FEATURE_V2)
   const banner = snap ? pickBanner(snap) : null
   const kind = emptyKind(snap, slice.error)
   const fullPage = kind !== null && kind !== 'no_jobs' && kind !== 'unreadable' ? kind : null
@@ -196,20 +206,24 @@ export function SchedulesScreen() {
         ) : kind ? (
           <EmptyState kind={kind} agent={agent} snapshot={snap} onTell={() => tell('Set up a scheduled job: ')} />
         ) : (
-          groups &&
-          (['today', 'later', 'off'] as const).map((g) =>
-            groups[g].length === 0 ? null : (
-              <section key={g} data-group={g} aria-labelledby={`sg-${g}`}>
-                <h2 id={`sg-${g}`} className={cn(CAPS, 'px-4 pt-4 pb-1 text-text-2')}>
-                  {GROUP_LABEL[g]}
-                </h2>
-                <ul className="m-0 list-none divide-y divide-line p-0">
-                  {groups[g].map((s) => (
-                    <Row key={s.id} s={s} onNotice={setNotice} />
-                  ))}
-                </ul>
-              </section>
-            ),
+          groups && (
+            <>
+              <HeartbeatSection rows={hbRows} onNotice={setNotice} />
+              {(['today', 'later', 'off'] as const).map((g) =>
+                groups[g].length === 0 ? null : (
+                  <section key={g} data-group={g} aria-labelledby={`sg-${g}`}>
+                    <h2 id={`sg-${g}`} className={cn(CAPS, 'px-4 pt-4 pb-1 text-text-2')}>
+                      {GROUP_LABEL[g]}
+                    </h2>
+                    <ul className="m-0 list-none divide-y divide-line p-0">
+                      {groups[g].map((s) => (
+                        <Row key={s.id} s={s} onNotice={setNotice} />
+                      ))}
+                    </ul>
+                  </section>
+                ),
+              )}
+            </>
           )
         )}
         {snap && !fullPage
@@ -280,6 +294,17 @@ export function SchedulesScreen() {
             >
               Fill in a form
             </Button>
+            {canNewHeartbeat ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setNewOpen(false)
+                  nav('/schedules/heartbeat/new')
+                }}
+              >
+                Heartbeat
+              </Button>
+            ) : null}
           </div>
           <SheetClose className="mt-3 min-h-11 text-sm text-text-2 underline">Cancel</SheetClose>
         </SheetContent>

@@ -33,6 +33,8 @@ function setupFacing(): string[] {
     'docs/OPTION-C.md',
     'docs/ARCHITECTURE.md',
     'docs/MEMORY.md',
+    'docs/SCHEDULES.md',
+    'docs/HEARTBEAT.md',
     'kit/START-HERE.md',
     'kit/README.md',
     'kit/BOOTSTRAP.md',

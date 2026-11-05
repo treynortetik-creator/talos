@@ -15,6 +15,7 @@ import {
   toHex,
   wrapExternal,
 } from '@talos-app/protocol'
+import { WAKE_STEPS } from './heartbeat/prompt.ts'
 import { cutToUnits } from './share/shortcut.ts'
 
 export type Notification = { content: string; meta: Record<string, string> }
@@ -514,6 +515,39 @@ export function scheduleRunNotification(a: {
       ds: a.ds,
       fire_at: a.fireAt,
       window_ends: a.windowEnds,
+    }),
+  }
+}
+
+/**
+ * A heartbeat wake (HB4): the bridge has already checked the sources and claimed the slot, and hands the agent a run pack. The
+ * notification carries a fixed instruction, the pack's path and integer counts, and nothing a source wrote: no subject, title,
+ * body or key. (`trust: owner` is what a schedule_run is, so any outside text here would arrive as the owner's own words.)
+ * Source ids are `[a-z0-9-]` by their schema; the job name is JSON-escaped like scheduleRunNotification's.
+ */
+export function heartbeatWakeNotification(a: {
+  thread: ThreadRef
+  runId: string
+  jobId: string
+  name: string
+  hitsPath: string
+  counts: { total: number; by_source: Record<string, number>; left_for_next_wake: number }
+  ts: string
+}): Notification {
+  const name = a.name.replace(/[\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, ' ')
+  const lines = [
+    `Heartbeat check-in for job ${JSON.stringify({ id: a.jobId, name })} (run ${a.runId}). The bridge already started this run: do not call schedule_run_start.`,
+    ...WAKE_STEPS.map((x, i) => `${i + 1}. ${x}`),
+    `${WAKE_STEPS.length + 1}. Post the result to thread ${a.thread.id} with reply, then call schedule_run_done with this run id, ok and a one-line summary. Call it with ok false if you could not finish.`,
+    `hits_path: ${JSON.stringify(a.hitsPath)}`,
+    `counts: ${JSON.stringify(a.counts)}`,
+  ]
+  return {
+    content: lines.join('\n'),
+    meta: base(a.thread, a.runId, a.ts, 'schedule_run', 'owner', {
+      schedule_id: a.jobId,
+      run_id: a.runId,
+      heartbeat: true,
     }),
   }
 }

@@ -12,6 +12,8 @@ import {
 } from '@talos-app/protocol'
 import { touchThread } from '../context.ts'
 import { cardCreateFrame, cardUpdateFrame } from '../frames-out.ts'
+import { CARD_EXPIRY_S, MAX_PENDING_CARDS } from '../heartbeat/cards.ts'
+import { WAKE_ENDED_TEXT } from '../heartbeat/prompt.ts'
 import { assertFrameFits, type DurableResult, RelayRejectedError } from '../transport.ts'
 import { mintRisk } from '../trust.ts'
 import { fail, needStr, ok, str, type Tool, ToolError, threadArg, threadProps } from './common.ts'
@@ -21,6 +23,9 @@ import { uploadAll } from './send.ts'
 // sends one reminder about an hour before it expires. (An app card's 10 minutes is a different thing: `APP_CARD_EXPIRY_MS`.)
 const DEFAULT_EXPIRY_S = { background: 86_400, chat: 86_400 } as const
 const MAX_EXPIRY_S = 604_800
+
+/** Cards a call is replacing right now: a second call cannot replace the same card while the first is in flight. */
+const superseding = new Set<string>()
 
 export const card: Tool = {
   name: 'card',
@@ -40,6 +45,11 @@ export const card: Tool = {
         description: 'high = leaves the app, irreversible, spends or deletes (the owner must re-authenticate).',
       },
       origin: { type: 'string', enum: ['chat', 'background'] },
+      run_id: {
+        type: 'string',
+        description:
+          'A Heartbeat check-in gives you a run id: pass it on every card you make for that run. It changes nothing about the card; a card naming a wake that already ended is refused.',
+      },
       destination: {
         type: 'array',
         items: {
@@ -77,6 +87,7 @@ export const card: Tool = {
     required: ['kind', 'title', 'primary_label', 'kill_label', 'risk', 'origin'],
   },
   async handler(ctx, args) {
+    let claimed: string | null = null
     try {
       // Only the bridge's schedule path mints kind:'schedule' (docs/SCHEDULES.md S6.1, S8.4); the agent uses schedule_propose.
       if (args.kind === 'schedule')
@@ -88,7 +99,15 @@ export const card: Tool = {
       const origin = args.origin
       if (origin !== 'chat' && origin !== 'background') throw new ToolError('origin must be chat or background')
       const nowMs = ctx.clock.now()
-      const expiresIn = typeof args.expires_in_s === 'number' ? args.expires_in_s : DEFAULT_EXPIRY_S[origin]
+      // A heartbeat has a thread of its own, and EVERY card made in it follows the heartbeat's rules, whatever run id or origin
+      // the agent names: background origin, a day to live at most, three pending at most. `run_id` gives no authority; it can only
+      // get a card refused, when it names a wake that is over.
+      const runIdArg = str(args.run_id)
+      if (args.run_id !== undefined && runIdArg === undefined) throw new ToolError('run_id must be a string')
+      if (runIdArg !== undefined && ctx.schedules?.heartbeatRunEnded(runIdArg)) throw new ToolError(WAKE_ENDED_TEXT)
+      const hbJob = (await ctx.schedules?.heartbeatJobOfThread(threadId)) ?? null
+      const asked = typeof args.expires_in_s === 'number' ? args.expires_in_s : DEFAULT_EXPIRY_S[origin]
+      const expiresIn = hbJob ? Math.min(asked, CARD_EXPIRY_S) : asked
       if (!(expiresIn >= 1) || expiresIn > MAX_EXPIRY_S)
         throw new ToolError(`expires_in_s must be between 1 and ${MAX_EXPIRY_S}`)
       const attachmentPaths = args.attachments
@@ -110,7 +129,7 @@ export const card: Tool = {
         primary_label: args.primary_label,
         kill_label: args.kill_label,
         risk: mintRisk(ctx.config.config, String(args.kind), args.risk),
-        origin,
+        origin: hbJob ? 'background' : origin,
         payload_hash: `sha256:${'0'.repeat(64)}`,
         state: 'pending',
         created_at: new Date(nowMs).toISOString(),
@@ -138,6 +157,29 @@ export const card: Tool = {
       c.payload_hash = payloadHash(bindingFrom(c))
       const createFrame = cardCreateFrame(nowMs, c)
       assertFrameFits(createFrame) // a schema-valid card can still be over the relay's frame limit; refuse it up front
+      // From here to `ledger.create` there is no await: the supersede check, the count of pending cards and the card itself are
+      // one step, so two cards made at the same moment cannot both pass a check the other has not yet changed.
+      if (typeof c.supersedes === 'string') {
+        const t = ctx.ledger.get(c.supersedes)
+        if (t && t.thread_id !== threadId) throw new ToolError('supersedes must name a pending card in the same thread')
+        const usable = t?.state === 'pending' && !superseding.has(c.supersedes)
+        if (hbJob && !usable) throw new ToolError('supersedes must name a pending card in the same thread')
+        if (usable) {
+          superseding.add(c.supersedes)
+          claimed = c.supersedes
+        }
+      }
+      if (hbJob && claimed === null) {
+        const waiting = ctx.ledger
+          .list('pending')
+          .filter((r) => r.thread_id === threadId && r.actor === 'agent' && r.binding.kind !== 'permission').length
+        if (waiting >= MAX_PENDING_CARDS) {
+          await ctx.schedules?.heartbeatPlainLine(hbJob, String(args.title ?? ''))
+          return ok(
+            'Three Heartbeat cards are already pending, so no card was made. The item was posted as a plain line in the thread instead.',
+          )
+        }
+      }
       ctx.ledger.create(c)
       let r: DurableResult
       try {
@@ -161,6 +203,8 @@ export const card: Tool = {
       return ok(`card ${c.id} pending, expires ${c.expires_at}, ${c.payload_hash}${tail}`)
     } catch (e) {
       return fail((e as Error).message)
+    } finally {
+      if (claimed !== null) superseding.delete(claimed)
     }
   },
 }

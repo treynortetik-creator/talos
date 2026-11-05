@@ -1,0 +1,37 @@
+{
+  "v": 1,
+  "type": "heartbeat.test_result",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T433",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T430",
+  "result": {
+    "config_hash": "sha256:5f1c5f1c5f1c5f1c5f1c5f1c5f1c5f1c5f1c5f1c5f1c5f1c5f1c5f1c5f1c5f1c",
+    "at": "2026-10-28T15:32:10.120Z",
+    "window_h": 24,
+    "with_agent": false,
+    "sources": [
+      {
+        "id": "github",
+        "ok": true,
+        "ms": 1200,
+        "read": 14,
+        "act": 1,
+        "fyi": 0,
+        "dropped": 13,
+        "held": 0,
+        "unreadable": 0
+      }
+    ],
+    "would_wake": [
+      {
+        "source": "github",
+        "title": "Review requested: example-org/example-repo#12",
+        "why": "github.review"
+      }
+    ],
+    "would_post": [],
+    "held": 0,
+    "est_wakes": 1,
+    "est_tokens": 180000
+  }
+}

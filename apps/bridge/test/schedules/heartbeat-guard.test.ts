@@ -2,7 +2,8 @@
 // changing a job passes through (prepareCard): the agent's schedule_propose, the owner's schedule.patch frame, and an adopt.
 // The bridge, relay and app frames are the real ones; Chronos is a replay of its recorded output.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { HEARTBEAT_META_KEY } from '@talos-app/protocol'
+import { HEARTBEAT_META_KEY, heartbeatConfigHashOf } from '@talos-app/protocol'
+import { recordPass } from '../../src/heartbeat/tested.ts'
 import { longTimeouts, type Req, type SchedHarness, startSched } from './harness.ts'
 import { fixture, ReplayBox } from './replay-box.ts'
 
@@ -101,7 +102,11 @@ describe('BUG 6: the agent tool schedule_propose', () => {
     const v = fixture<Record<string, unknown>>('chronos-0.4', 'validate-times-create')
     box.answer('validate', { ok: true, normalized: v.normalized, preview: v.preview, expected_etag: v.expected_etag })
     h = await start(box)
-    const r = await h.bridge.callTool('schedule_propose', propose({ [HEARTBEAT_META_KEY]: good, other: 1 }))
+    recordPass(h.home, heartbeatConfigHashOf(good), h.clock.now()) // test_required has its own tests (heartbeat-test-required.test.ts)
+    const r = await h.bridge.callTool(
+      'schedule_propose',
+      propose({ [HEARTBEAT_META_KEY]: good, other: 1 }, { result_thread_id: 'inbox' }),
+    )
     expect(r.isError).toBeFalsy()
     expect(box.callsOf('validate')).toHaveLength(1)
   })
@@ -257,7 +262,11 @@ describe('R1-4: a heartbeat job has to run in the live session', () => {
     const v = fixture<Record<string, unknown>>('chronos-0.4', 'validate-times-create')
     box.answer('validate', { ok: true, normalized: v.normalized, preview: v.preview, expected_etag: v.expected_etag })
     h = await start(box)
-    const r = await h.bridge.callTool('schedule_propose', propose({ [HEARTBEAT_META_KEY]: good }))
+    recordPass(h.home, heartbeatConfigHashOf(good), h.clock.now())
+    const r = await h.bridge.callTool(
+      'schedule_propose',
+      propose({ [HEARTBEAT_META_KEY]: good }, { result_thread_id: 'inbox' }),
+    )
     expect(r.isError).toBeFalsy()
   })
 })
@@ -287,7 +296,7 @@ describe('R2-3: turning off or moving a bad heartbeat is not blocked by the sess
     // a move of the result thread is Talos-only and never reaches Chronos; switching off does
     for (const [set, validates] of [
       [{ enabled: false }, 1],
-      [{ result_thread_id: 'general' }, 0],
+      [{ result_thread_id: 'inbox' }, 0],
     ] as const) {
       const box = badJob()
       h = await start(box)

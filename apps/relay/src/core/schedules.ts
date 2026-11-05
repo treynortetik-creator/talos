@@ -2,7 +2,14 @@
 // owner frames are forwarded to the live bridge WITHOUT appendEvent, request/response frames are routed back to the asking
 // socket by request_id, schedule.status is fanned out and never stored. The only things written are seq-less seen ids
 // (`sf:<frame id>`, `sa:<alert key>`) in core_dedup.
-import { type FrameOf, type PushIntent, SCHEDULE_OWNER_FRAME_TYPES } from '@talos-app/protocol'
+import {
+  type FrameOf,
+  HEARTBEAT_FEATURE,
+  HEARTBEAT_OWNER_FRAME_TYPES,
+  HEARTBEAT_TEST_WAIT_MS,
+  type PushIntent,
+  SCHEDULE_OWNER_FRAME_TYPES,
+} from '@talos-app/protocol'
 import { RateLimiter } from '../auth/limits.ts'
 import type { Clock, Logger } from '../services.ts'
 import type { EphemeralRouter } from './ephemeral.ts'
@@ -13,8 +20,10 @@ import type { Store } from './store.ts'
 const ALERT_REPEAT_MS = 24 * 3600_000
 const HOLD_POLL_MS = 60_000
 
-type OwnerType = (typeof SCHEDULE_OWNER_FRAME_TYPES)[number]
-const ANSWERS = ['schedules.snapshot', 'schedule.detail'] as const
+type OwnerType = (typeof SCHEDULE_OWNER_FRAME_TYPES)[number] | (typeof HEARTBEAT_OWNER_FRAME_TYPES)[number]
+const ANSWERS = ['schedules.snapshot', 'schedule.detail', 'heartbeat.test_result'] as const
+/** A test result is answerable for the 200 s the sheet waits (the test itself may run 150 s), plus a little. */
+const HEARTBEAT_ANSWER_TTL_MS = HEARTBEAT_TEST_WAIT_MS + 10_000
 
 /** What the router needs from the hub (it owns sockets, the ref map and push). */
 export interface ScheduleHost {
@@ -23,6 +32,10 @@ export interface ScheduleHost {
   log: Logger
   bridgeOnline(): boolean
   sendBridge(raw: Record<string, unknown>): void
+  /** True when the live bridge listed `feature` in its hello. */
+  bridgeHas(feature: string): boolean
+  /** True while the app socket is connected and authed. */
+  socketLive(socketId: string): boolean
   /** Sends to one authed app socket; false when it is gone. */
   sendToApp(socketId: string, raw: Record<string, unknown>): boolean
   fanOut(raw: Record<string, unknown>): void
@@ -38,7 +51,10 @@ export interface ScheduleHost {
 }
 
 export function isScheduleOwnerType(t: string): t is OwnerType {
-  return (SCHEDULE_OWNER_FRAME_TYPES as readonly string[]).includes(t)
+  return (
+    (SCHEDULE_OWNER_FRAME_TYPES as readonly string[]).includes(t) ||
+    (HEARTBEAT_OWNER_FRAME_TYPES as readonly string[]).includes(t)
+  )
 }
 
 export class ScheduleRouter {
@@ -73,10 +89,27 @@ export class ScheduleRouter {
       h.appError(socketId, 'mac_offline', 'your Mac is offline', frame.id)
       return
     }
-    const limited = this.rateLimit(socketId, frame)
-    if (limited) {
-      h.appError(socketId, 'rate_limited', limited, frame.id)
+    // An older bridge does not know this frame and would stay silent: say so now instead of leaving the sheet to time out.
+    if (frame.type === 'heartbeat.test' && !h.bridgeHas(HEARTBEAT_FEATURE)) {
+      h.appError(socketId, 'scheduler_unavailable', 'Update Talos on your Mac to test a heartbeat.', frame.id)
       return
+    }
+    if (frame.type === 'heartbeat.test') {
+      const admitted = this.admitTest(socketId, frame)
+      if (admitted !== 'forward') {
+        if (admitted === 'handled') {
+          h.store.rememberSeen(`sf:${frame.id}`)
+          h.rememberRef(frame.id, socketId)
+          h.appAck(socketId, frame.id)
+        }
+        return
+      }
+    } else {
+      const limited = this.rateLimit(socketId, frame)
+      if (limited) {
+        h.appError(socketId, 'rate_limited', limited, frame.id)
+        return
+      }
     }
     const isRead = frame.type === 'schedules.list' || frame.type === 'schedule.get'
     if (isRead) {
@@ -89,6 +122,43 @@ export class ScheduleRouter {
     h.store.rememberSeen(`sf:${frame.id}`)
     h.rememberRef(frame.id, socketId)
     h.sendBridge(raw)
+  }
+
+  /**
+   * `heartbeat.test`, in this order: who owns the request_id, room in flight, THEN the rate-limit token, so a refused request
+   * never spends one. 'forward' = new work for the Mac; 'handled' = the same test, already running or already answered, so the
+   * Mac is not asked again; 'refused' = the owner was told why.
+   */
+  private admitTest(
+    socketId: string,
+    frame: Record<string, unknown> & { id: string },
+  ): 'forward' | 'handled' | 'refused' {
+    const h = this.h
+    const rid = String(frame.request_id)
+    if (h.requests.wasDelivered(rid)) return 'handled' // answered already: not run again
+    const owner = h.requests.liveOwner(rid)
+    if (owner === socketId) return 'handled' // the same socket asking again: it is already running
+    if (owner !== undefined) {
+      // another socket: refused while that one is connected; once it is gone this is the owner's reconnect, and the answer
+      // (kept in memory for the request's lifetime, never stored) goes to the new socket
+      if (h.socketLive(owner)) {
+        h.appError(socketId, 'bad_frame', 'that request id is already in use', frame.id)
+        return 'refused'
+      }
+      h.requests.rebind(rid, socketId)
+      return 'handled'
+    }
+    if (!h.requests.hasRoom(socketId)) {
+      h.appError(socketId, 'rate_limited', 'too many requests in flight', frame.id)
+      return 'refused'
+    }
+    const limited = this.rateLimit(socketId, frame as never)
+    if (limited) {
+      h.appError(socketId, 'rate_limited', limited, frame.id)
+      return 'refused'
+    }
+    h.requests.expect(socketId, rid, 'heartbeat.test_result', frame.id, HEARTBEAT_ANSWER_TTL_MS, true)
+    return 'forward'
   }
 
   private rateLimit(socketId: string, frame: Record<string, unknown> & { type: OwnerType }): string | null {
@@ -104,6 +174,8 @@ export class ScheduleRouter {
         return take('sched_patch', '*')
       case 'schedule.run_now':
         return take('sched_run_now', '*')
+      case 'heartbeat.test':
+        return take('heartbeat_test', '*')
       case 'schedule.control':
         return (frame.action === 'retry_headless' ? take('sched_retry', '*') : null) ?? take('sched_control', '*')
     }
@@ -111,7 +183,7 @@ export class ScheduleRouter {
 
   /** schedules.snapshot / schedule.detail: only to the socket that asked; unknown or expired ids are dropped. */
   onBridgeResponse(
-    frame: FrameOf<'schedules.snapshot'> | FrameOf<'schedule.detail'>,
+    frame: FrameOf<'schedules.snapshot'> | FrameOf<'schedule.detail'> | FrameOf<'heartbeat.test_result'>,
     raw: Record<string, unknown>,
   ): void {
     this.h.requests.onResponse(frame, raw)

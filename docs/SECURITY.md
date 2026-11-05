@@ -212,9 +212,9 @@ the backstop: it cannot stop a change, it tells the owner about one.
 - Anything that edits `guards.json` and `settings.json` together, if it can get past the checks on those two files. The hash
   only catches a file edited alone.
 - A faked terminal, as above: the terminal check is not a boundary, and the guards' pattern for it is a pattern.
-- **Under the 30-second poll an undo goes unseen (R1-8).** The tripwire looks every 30 seconds. A change made and put back
+- **Under the 30-second poll an undo goes unseen.** The tripwire looks every 30 seconds. A change made and put back
   between two looks leaves no alert.
-- **An in-process import of the stores bypasses the gate (R1-7).** The terminal check lives in the CLI entry point. Code that
+- **An in-process import of the stores bypasses the gate.** The terminal check lives in the CLI entry point. Code that
   imports the device store or the config file directly (a script run with `bun`, a mod) writes them without it. A device
   change made that way still raises the Inbox notice (the owner sees every one and can revoke); a `config.json` security
   change made that way goes through the recorded path and is not reported.

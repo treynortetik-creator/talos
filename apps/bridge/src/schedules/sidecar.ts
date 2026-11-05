@@ -37,7 +37,11 @@ export type RunNote = {
   ds: string
   started_at: string
   trigger: 'clock' | 'run_now'
-  status?: 'ok' | 'failed' | 'timed_out' | 'session_ended' | 'running'
+  status?: 'ok' | 'failed' | 'timed_out' | 'session_ended' | 'running' | 'skipped'
+  /** A heartbeat slot that did not run because the earlier wake still held the claim: no source was read. */
+  busy?: boolean
+  /** The bridge sent the agent a wake for this run (whatever the run's outcome says: a failed source makes it `partial`). */
+  wake?: boolean
   summary?: string
   late_note?: string
   report?: string

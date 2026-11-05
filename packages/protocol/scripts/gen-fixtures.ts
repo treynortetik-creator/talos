@@ -390,6 +390,41 @@ signedSrc['schedule.control'] = {
   ...owner,
 }
 
+// ---- Heartbeat test run (docs/HEARTBEAT.md "In the app") ---------------------------------------------------------
+signedSrc['heartbeat.test'] = {
+  ...env('heartbeat.test', 95),
+  request_id: ulid(96),
+  config: {
+    schema: 'talos.heartbeat/1',
+    mode: 'shadow',
+    sources: [
+      { id: 'github', kind: 'github', enabled: true, args: { repos: ['example-org/example-repo'] }, timeout_s: 30 },
+    ],
+    mutes: [],
+    wake_cap_per_day: 3,
+    run_timeout_s: 120,
+  },
+  window_h: 24,
+  with_agent: false,
+  ...owner,
+}
+unsigned['heartbeat.test_result'] = {
+  ...env('heartbeat.test_result', 99),
+  request_id: ulid(96),
+  result: {
+    config_hash: HASH,
+    at: TS,
+    window_h: 24,
+    with_agent: false,
+    sources: [{ id: 'github', ok: true, ms: 1200, read: 14, act: 1, fyi: 0, dropped: 13, held: 0, unreadable: 0 }],
+    would_wake: [{ source: 'github', title: 'Review requested: example-org/example-repo#12', why: 'github.review' }],
+    would_post: [],
+    held: 0,
+    est_wakes: 1,
+    est_tokens: 180000,
+  },
+}
+
 // ---- Claude Code session (docs/CLAUDE-CODE.md C2.5, C4.6) ---------------------------------------------------------
 const sessionState = {
   session_id: 'sess_cc_example',

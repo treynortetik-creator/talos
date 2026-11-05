@@ -47,11 +47,11 @@ export const COMMANDS: readonly CommandInfo[] = [
   { name: 'schedules adopt', summary: 'Approve the schedules found on this Mac', agent_may_run: false },
   {
     name: 'codex',
-    summary: 'Check or run the Codex CLI; the subcommands below say which the agent may run',
-    agent_may_run: false,
+    summary: 'Check or run the Codex CLI; the agent may run both subcommands',
+    agent_may_run: true,
   },
   { name: 'codex check', summary: 'Check whether the Codex CLI is installed and logged in', agent_may_run: true },
-  { name: 'codex run', summary: 'Run Codex on a task in a thread', agent_may_run: false },
+  { name: 'codex run', summary: 'Run Codex on a task in a thread', agent_may_run: true },
   { name: 'digest', summary: 'Print the relay digest since a time', agent_may_run: true },
   { name: 'post', summary: 'Send a headless reply into a thread', agent_may_run: true },
   {

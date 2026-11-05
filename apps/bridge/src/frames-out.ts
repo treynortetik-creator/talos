@@ -284,3 +284,10 @@ export const appUpdateFrame = (
   state: u.state,
   ...(u.reason ? { reason: u.reason.slice(0, 200) } : {}),
 })
+
+/** The answer to a `heartbeat.test` (docs/HEARTBEAT.md "In the app"). The relay routes it to the asking socket by request_id. */
+export const heartbeatTestResultFrame = (
+  now: number,
+  requestId: string,
+  result: Record<string, unknown>,
+): Of<'heartbeat.test_result'> => ({ ...env(now), type: 'heartbeat.test_result', request_id: requestId, result })

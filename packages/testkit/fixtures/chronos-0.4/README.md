@@ -1,4 +1,4 @@
-# Chronos "times and meta" fixtures (HB1)
+# Chronos "times and meta" fixtures
 
 The exact stdout of `chronos api <verb>` from the vendored Chronos v0.4.0 (`third_party/chronos`; it prints
 `"chronos": "0.4.0"`), run against a throwaway HOME with `TZ=America/New_York` and a fixed

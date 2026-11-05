@@ -1,5 +1,5 @@
 // `list_threads`, `create_thread`, `archive_thread`, `read_thread` (spec 4.4).
-import { isInheritedName, THREAD_TOPIC_MAX, ThreadId, type ThreadT, trustOn } from '@talos-app/protocol'
+import { isInheritedName, THREAD_TOPIC_MAX, ThreadId, type ThreadT, trustOn, wrapExternal } from '@talos-app/protocol'
 import { configSyncFrame, threadArchiveFrame, threadUpsertFrame } from '../frames-out.ts'
 import { wrapShared } from '../notify.ts'
 import { fail, needStr, ok, str, type Tool, ToolError, threadArg, threadProps } from './common.ts'
@@ -167,6 +167,10 @@ export const readThread: Tool = {
         if (m.via === 'share')
           return `${m.id} ${m.created_at} share: ${wrapShared(m.share_content ?? {}, 'Shared via a share link', m.text || undefined)}${files}`
         const text = (m.text ?? m.transcript?.text ?? '').replace(/\r?\n/g, '\n  ')
+        // A heartbeat row (a digest or a degraded line) holds text from outside, an issue title or a subject: it is returned
+        // wrapped as outside text and labelled so, never as a system line the agent might take as Talos speaking.
+        if (m.heartbeat === true)
+          return `${m.id} ${m.created_at} heartbeat (outside text): ${wrapExternal(m.text ?? '', { source: 'Heartbeat' })}${files}`
         // A card row: the card's title (and summary), labelled as a card, never as anyone's words
         if (m.kind === 'card') return `${m.id} ${m.created_at} card: ${text}${files}`
         const shared = m.share_content ? `\n${wrapShared(m.share_content, 'Shared page')}` : ''

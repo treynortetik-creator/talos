@@ -10,6 +10,7 @@ import {
   type Frame,
   type FrameOf,
   type FrameType,
+  HEARTBEAT_FEATURE,
   isInheritedName,
   isQuiet,
   MAX_FRAME_BYTES,
@@ -263,6 +264,8 @@ export class Hub implements Bus {
       clock: d.clock,
       log: d.log,
       bridgeOnline: () => this.bridgeOnline(),
+      bridgeHas: (feature) => this.bridgeFeatures.has(feature),
+      socketLive: (id) => Boolean(this.apps.get(id)?.authed),
       sendBridge: (raw) => this.sendBridge(raw),
       sendToApp,
       fanOut: (raw) => this.fanOut(raw),
@@ -655,6 +658,7 @@ export class Hub implements Bus {
         ...new Set([
           SCHEDULES_FEATURE,
           SCHEDULES_FEATURE_V2,
+          HEARTBEAT_FEATURE,
           CONFIG_PROPOSE_FEATURE,
           CUSTOM_THEMES_FEATURE,
           ...relayFeatureList(),
@@ -946,7 +950,8 @@ export class Hub implements Bus {
       case 'schedule.get':
       case 'schedule.patch':
       case 'schedule.run_now':
-      case 'schedule.control': {
+      case 'schedule.control':
+      case 'heartbeat.test': {
         if (!this.ownerDeviceOk(a, frame.device_id, frame.id)) return
         if (!isScheduleOwnerType(frame.type)) return
         return this.schedules.onOwnerFrame(a.id, frame as never, raw)
@@ -1290,6 +1295,7 @@ export class Hub implements Bus {
         return this.appRouter.onResponse(frame, raw)
       case 'schedules.snapshot':
       case 'schedule.detail':
+      case 'heartbeat.test_result':
         return this.schedules.onBridgeResponse(frame, raw)
       case 'schedule.status':
         return this.schedules.onStatus(frame, raw)

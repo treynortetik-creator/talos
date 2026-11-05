@@ -531,6 +531,29 @@ export const ScheduleStatusFrame = frame('schedule.status', {
   alert: ScheduleStatusAlert.nullable(),
 })
 
+// ---- Heartbeat test run (docs/HEARTBEAT.md "In the app") ---------------------------------------------------------------
+// Same rules as the schedule frames above: signed by the owner device, never stored or buffered by the relay, answered by a
+// frame routed back to the asking socket, `mac_offline` at once with no Mac. The frame is read-tolerant on purpose: `config`
+// is an open object and `window_h` any small whole number, because the relay is not the judge of either (the Mac is), and a
+// closed list here would turn a newer app's frame away whole (the lesson of work.enabled). Gated by `HEARTBEAT_FEATURE`.
+export const HeartbeatTestFrame = ownerFrame('heartbeat.test', {
+  request_id: Ulid,
+  config: z
+    .record(z.string(), z.unknown())
+    .refine((c) => new TextEncoder().encode(JSON.stringify(c)).length <= 8192, 'config is too big'),
+  window_h: z.number().int().min(1).max(168),
+  with_agent: z.boolean(),
+})
+/** `result` is read by the app with parseHeartbeatTestResult(); here it only has to be an object. Routed to the asking socket. */
+export const HeartbeatTestResultFrame = frame('heartbeat.test_result', {
+  request_id: Ulid,
+  result: z.record(z.string(), z.unknown()),
+})
+/** The signed Heartbeat frame (app -> relay -> bridge). */
+export const HEARTBEAT_OWNER_FRAME_TYPES = ['heartbeat.test'] as const
+/** The answer (bridge -> relay -> app). */
+export const HEARTBEAT_BRIDGE_FRAME_TYPES = ['heartbeat.test_result'] as const
+
 /** The five signed schedule frames (app -> relay -> bridge). */
 export const SCHEDULE_OWNER_FRAME_TYPES = [
   'schedules.list',
@@ -940,6 +963,8 @@ export const frameSchemas = {
   'schedule.run_now': ScheduleRunNowFrame,
   'schedule.control': ScheduleControlFrame,
   'schedule.status': ScheduleStatusFrame,
+  'heartbeat.test': HeartbeatTestFrame,
+  'heartbeat.test_result': HeartbeatTestResultFrame,
   'session.state': SessionStateFrame,
   'session.inventory': SessionInventoryFrame,
   'session.control': SessionControlFrame,
@@ -983,6 +1008,7 @@ export const OWNER_FRAME_TYPES = [
   'config.patch',
   'voice.ask',
   ...SCHEDULE_OWNER_FRAME_TYPES,
+  ...HEARTBEAT_OWNER_FRAME_TYPES,
   ...SESSION_OWNER_FRAME_TYPES,
   ...THREAD_SESSION_OWNER_FRAME_TYPES,
   ...AGENT_RECOVER_OWNER_FRAME_TYPES,
@@ -1056,6 +1082,7 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     'visibility',
     'voice.ask',
     ...SCHEDULE_OWNER_FRAME_TYPES,
+    ...HEARTBEAT_OWNER_FRAME_TYPES,
     ...SESSION_OWNER_FRAME_TYPES,
     ...THREAD_SESSION_OWNER_FRAME_TYPES,
     ...AGENT_RECOVER_OWNER_FRAME_TYPES,
@@ -1089,6 +1116,7 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     'voice.state',
     'device.pinned',
     ...SCHEDULE_BRIDGE_FRAME_TYPES,
+    ...HEARTBEAT_BRIDGE_FRAME_TYPES,
     ...SESSION_BRIDGE_FRAME_TYPES,
     ...THREAD_SESSION_BRIDGE_FRAME_TYPES,
     ...AGENT_RECOVER_BRIDGE_FRAME_TYPES,
@@ -1114,6 +1142,7 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     'voice.progress',
     'device.pinned',
     ...SCHEDULE_BRIDGE_FRAME_TYPES,
+    ...HEARTBEAT_BRIDGE_FRAME_TYPES,
     ...SESSION_BRIDGE_FRAME_TYPES,
     ...THREAD_SESSION_BRIDGE_FRAME_TYPES,
     ...AGENT_RECOVER_BRIDGE_FRAME_TYPES,
@@ -1139,6 +1168,7 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     'device.enrolled',
     'device.revoked',
     ...SCHEDULE_OWNER_FRAME_TYPES,
+    ...HEARTBEAT_OWNER_FRAME_TYPES,
     ...SESSION_OWNER_FRAME_TYPES,
     ...THREAD_SESSION_OWNER_FRAME_TYPES,
     ...AGENT_RECOVER_OWNER_FRAME_TYPES,

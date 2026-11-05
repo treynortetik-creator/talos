@@ -10,7 +10,7 @@ export const SCHEDULES_PROTOCOL = 1
 export const SCHEDULES_FEATURE = 'schedules/1'
 /**
  * Jobs with several fire times a day (`when.type: 'times'`), an opaque `meta`, and run keys that carry a slot
- * (HEARTBEAT-SPEC section 9). `snapshot.protocol` stays 1 on purpose: bumping it would turn the whole tab into "Update
+ * (docs/HEARTBEAT.md). `snapshot.protocol` stays 1 on purpose: bumping it would turn the whole tab into "Update
  * the app" for an app that could still read every other job. The bridge sends a job that needs this only when the relay's
  * `ready.features` lists it (`needsSchedulesV2`).
  */
@@ -72,7 +72,7 @@ const TimesDaysRead = z.union([
     .max(31),
 ])
 const TimesDaysEditable = z.union([z.literal('daily'), z.literal('weekdays'), z.array(Weekday).min(1).max(7)])
-/** Chronos's own floor is 15 minutes (tick safety). Heartbeat's is 60 (HEARTBEAT-SPEC 7a), enforced for what the owner writes. */
+/** Chronos's own floor is 15 minutes (tick safety). Heartbeat's is 60 (docs/HEARTBEAT.md), enforced for what the owner writes. */
 export const TIMES_MIN_GAP_MIN = 60
 export const TIMES_MAX_EDITABLE = 12
 const minutesOf = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5))

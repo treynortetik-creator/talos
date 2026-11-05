@@ -33,7 +33,10 @@ export function ThreadEditor({
   thread,
   onCreated,
   onCloseAutoFocus,
+  defaultName,
 }: {
+  /** What the name field starts as when creating (the caller knows what the thread is for). */
+  defaultName?: string
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Absent = create a new thread. */
@@ -64,6 +67,7 @@ export function ThreadEditor({
             thread={thread}
             close={() => onOpenChange(false)}
             {...(onCreated ? { onCreated } : {})}
+            {...(defaultName ? { defaultName } : {})}
           />
         )}
       </SheetContent>
@@ -75,17 +79,19 @@ function EditorBody({
   thread,
   close,
   onCreated,
+  defaultName,
 }: {
   thread?: ThreadT | undefined
   close: () => void
   onCreated?: (id: string) => void
+  defaultName?: string
 }) {
   const agent = useAgentName()
   const { threads, defaultThread, macOnline, rich, err, busy, apply } = useThreadPatch()
   const localNote = useDescription(thread?.id ?? '')
   const creating = !thread
   const system = thread?.kind === 'system'
-  const [name, setName] = useState(thread?.name ?? '')
+  const [name, setName] = useState(thread?.name ?? defaultName ?? '')
   const [icon, setIcon] = useState(thread?.icon ?? '')
   const [color, setColor] = useState(thread?.color ?? '')
   const [topic, setTopic] = useState(thread?.topic ?? localNote)

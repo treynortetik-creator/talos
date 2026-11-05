@@ -7,6 +7,7 @@ import {
   ErrorCode,
   type ErrorCodeT,
   type Frame,
+  HEARTBEAT_OWNER_FRAME_TYPES,
   OWNER_FRAME_TYPES,
   SCHEDULE_OWNER_FRAME_TYPES,
   SESSION_CONSUMABLE_FRAME_TYPES,
@@ -42,7 +43,7 @@ const CONSUMABLE = new Set<string>([
   'thread.session.control',
   'agent.recover',
 ])
-const SCHEDULE_OWNER = new Set<string>(SCHEDULE_OWNER_FRAME_TYPES)
+const SCHEDULE_OWNER = new Set<string>([...SCHEDULE_OWNER_FRAME_TYPES, ...HEARTBEAT_OWNER_FRAME_TYPES])
 const V2_READ = new Set<string>(V2_READ_OWNER_FRAME_TYPES)
 /**
  * Signed owner READS that are ephemeral: never queued, never acked, answered on the read queue. A failed one is refused
