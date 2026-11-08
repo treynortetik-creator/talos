@@ -323,6 +323,7 @@ export const Schedule = z.strictObject({
   model: z.string().max(DISPLAY_LIMITS.model).nullable(),
   notify: ScheduleNotify,
   thread_id: ThreadId.nullable(), // Talos sidecar (S3.5); null = default_thread
+  memory: z.boolean().optional(), // job memory (S3.8): present only when on; absent = off
   triggers_count: z.number().int().nonnegative(),
   next_run: IsoTs.nullable(),
   today: DayState,
@@ -425,6 +426,7 @@ export const ScheduleDraft = z.strictObject({
   model: z.string().max(80).nullable(),
   notify: ScheduleNotify,
   thread_id: ThreadId.nullable(), // Talos-only, stripped before the scheduler (S3.4)
+  memory: z.boolean().optional(), // Talos-only like thread_id (S3.8): job memory; absent = off
   prompt: PromptText(PROMPT_MAX_BYTES), // <= 16 KiB UTF-8, no C0 controls except \n \t
   meta: JobMeta.optional(), // schedules/2
 })
@@ -504,13 +506,13 @@ export function changeTimesProblem(c: unknown): string | null {
   return timesGapProblem(t as string[])
 }
 
-/** Whether a job (as the app would receive it) or a change needs `schedules/2` to travel: times, or meta. */
-export function needsSchedulesV2(x: { when: { type: string }; meta?: unknown }): boolean {
-  return x.when.type === 'times' || x.meta !== undefined
+/** Whether a job (as the app would receive it) or a change needs `schedules/2` to travel: times, meta, or job memory. */
+export function needsSchedulesV2(x: { when: { type: string }; meta?: unknown; memory?: boolean | undefined }): boolean {
+  return x.when.type === 'times' || x.meta !== undefined || x.memory !== undefined
 }
 export function changeNeedsSchedulesV2(c: ScheduleChangeT): boolean {
   if (c.op === 'create') return needsSchedulesV2(c.draft)
-  if (c.op === 'update') return c.set.when?.type === 'times' || c.set.meta !== undefined
+  if (c.op === 'update') return c.set.when?.type === 'times' || c.set.meta !== undefined || c.set.memory !== undefined
   return false
 }
 

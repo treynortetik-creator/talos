@@ -496,6 +496,7 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         ...(input.edited ? { edited: input.edited } : {}),
         ...(input.editedHash ? { edited_hash: input.editedHash } : {}),
         ...(input.note ? { note: input.note } : {}),
+        ...(input.choice !== undefined ? { choice: input.choice } : {}),
       })
       const at = iso()
       // Like the real Mac: a killed or revised card is finished at once (nothing runs, so no result follows); only an

@@ -116,6 +116,12 @@ export const cardsFrames = {
       ctx.log.security('permission card resolve refused', { card_id: f.card_id, code: pre.code })
       return this.reject(it, pre.code, pre.reason)
     }
+    // A dialog card is answered by the Mac pressing a key, never by the agent. Refused here, before the ledger moves.
+    const dlg = ctx.dialogs?.precheck(f, f.device_id)
+    if (dlg?.handled && !dlg.ok) {
+      ctx.log.security('dialog card resolve refused', { card_id: f.card_id, code: dlg.code })
+      return this.reject(it, dlg.code, dlg.reason)
+    }
     const out = ctx.ledger.resolve(
       {
         card_id: f.card_id,
@@ -127,7 +133,7 @@ export const cardsFrames = {
         ts: f.ts,
       },
       nowMs,
-      { ...opts, frameId: it.frame.id },
+      { ...opts, frameId: it.frame.id, ...(dlg?.handled ? { by: dlg.by } : {}) },
     )
     if (!out.ok) {
       ctx.log.security('card resolve rejected', { card_id: f.card_id, code: out.code, reason: out.reason })
@@ -152,6 +158,11 @@ export const cardsFrames = {
     }
     this.expiry.cancel(f.card_id)
     const row = out.row
+    if (dlg?.handled && dlg.ok) {
+      this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
+      await ctx.dialogs?.onResolved(row, dlg.choice, it.raw)
+      return this.done(it)
+    }
     if (pre.handled) {
       this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
       const sent = await ctx.permission.onResolved(row, f.action)

@@ -14,7 +14,7 @@ export function SessionSettingsSection({ readOnly }: SettingsSectionProps) {
         Session
       </h2>
       {supported ? (
-        <SessionPanel threadId={threadId} />
+        <SessionPanel threadId={threadId} inline />
       ) : (
         <p className="m-0 text-text-2">Your Mac needs a newer Talos to show the Claude Code session.</p>
       )}

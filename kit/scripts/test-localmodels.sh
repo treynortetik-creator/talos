@@ -69,13 +69,13 @@ used() { grep -c "^$1:" "$LOG"; }
 : > "$LOG"; out="$(T file "$SB/a.wav" "plain")"
 { [ "$(used say)" = 1 ] && [ "$(used qwen)" = 0 ] && [ "$(used kokoro)" = 0 ] && [ -z "$(printf '%s' "$out" | grep -i qwen)" ]; } && ok "tts: nothing installed -> say, and no noise about Qwen" || no "nothing-installed chain wrong" "$out"
 mk_qwen; : > "$LOG"; out="$(T file "$SB/b.wav" "no clip")"
-{ [ "$(used qwen)" = 0 ] && [ "$(used say)" = 1 ] && printf '%s' "$out" | grep -q 'no reference voice is set' && printf '%s' "$out" | grep -q 'skipping'; } && ok "tts: Qwen installed but no reference clip -> skipped with a one-line note, falls to say" || no "no-clip skip wrong" "$out"
+{ [ "$(used qwen)" = 0 ] && [ "$(used say)" = 1 ] && <<<"$out" grep -q 'no reference voice is set' && <<<"$out" grep -q 'skipping'; } && ok "tts: Qwen installed but no reference clip -> skipped with a one-line note, falls to say" || no "no-clip skip wrong" "$out"
 mk_ref; : > "$LOG"; out="$(T file "$SB/c.wav" "with clip")"
 { [ "$(used qwen)" = 1 ] && [ "$(used say)" = 0 ] && grep -q 'qwen:.*qwen_tts.py .*with clip .*ref.wav .*ref.txt' "$LOG" && [ -s "$SB/c.wav" ]; } && ok "tts: Qwen + clip -> Qwen is preferred and gets the clip and transcript paths" || no "qwen not preferred" "$(cat "$LOG")"
 mk_kokoro; : > "$LOG"; T file "$SB/d.wav" "both" >/dev/null
 { [ "$(used qwen)" = 1 ] && [ "$(used kokoro)" = 0 ]; } && ok "tts: with Qwen and Kokoro both ready, Qwen goes first" || no "order wrong" "$(cat "$LOG")"
 : > "$LOG"; out="$(QFAIL=1 T file "$SB/e.wav" "qfail")"
-{ [ "$(used kokoro)" = 1 ] && [ "$(used say)" = 0 ] && printf '%s' "$out" | grep -q 'Qwen3-TTS failed'; } && ok "tts: a failing Qwen falls through to Kokoro with a note" || no "qwen failure not handled" "$out"
+{ [ "$(used kokoro)" = 1 ] && [ "$(used say)" = 0 ] && <<<"$out" grep -q 'Qwen3-TTS failed'; } && ok "tts: a failing Qwen falls through to Kokoro with a note" || no "qwen failure not handled" "$out"
 rm -f "$VD/ref.wav"; : > "$LOG"; T file "$SB/f.wav" "kokoro next" >/dev/null 2>&1
 { [ "$(used qwen)" = 0 ] && [ "$(used kokoro)" = 1 ]; } && ok "tts: Qwen skipped (clip gone) -> Kokoro" || no "kokoro not next" "$(cat "$LOG")"
 printf 'RIFFfake' > "$VD/ref.wav"; rm -rf "$D/venv"; : > "$LOG"; QFAIL=1 T file "$SB/g.wav" "say last" >/dev/null 2>&1
@@ -89,7 +89,7 @@ mk_kokoro; : > "$LOG"; TALOS_TTS=say T file "$SB/h.wav" "forced say" >/dev/null
 out="$(QFAIL=1 TALOS_TTS=qwen T file "$SB/k.wav" "x")"; rc=$?
 out="$(TALOS_TTS_ENGINE=say T file "$SB/l.wav" "legacy")"; [ -s "$SB/l.wav" ] && ok "tts: the older TALOS_TTS_ENGINE variable still works" || no "legacy var broke" "$out"
 out="$(TALOS_TTS=bogus T file "$SB/m.wav" "x")"; [ "$?" = 2 ] && ok "tts: an unknown TALOS_TTS value is refused (exit 2)" || no "bogus engine accepted" "$out"
-rm -rf "$D" "$VD"; out="$(TALOS_TTS=qwen T file "$SB/n.wav" "x")"; [ "$?" != 0 ] && printf '%s' "$out" | grep -q 'voice/setup.sh --qwen' && ok "tts: forcing Qwen when nothing is installed names the install command" || no "forced qwen hint missing" "$out"
+rm -rf "$D" "$VD"; out="$(TALOS_TTS=qwen T file "$SB/n.wav" "x")"; [ "$?" != 0 ] && <<<"$out" grep -q 'voice/setup.sh --qwen' && ok "tts: forcing Qwen when nothing is installed names the install command" || no "forced qwen hint missing" "$out"
 
 # ---------------- STT chain
 printf 'fakeaudio' > "$SB/note.ogg"; S() { ( cd "$A" && bash scripts/stt.sh "$@" 2>&1 ); }
@@ -105,17 +105,17 @@ FAKE
 }
 mv "$FB/whisper-cli" "$SB/whisper-cli.off"
 out="$(S "$SB/note.ogg")"; rc=$?
-{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'no speech-to-text engine installed' && printf '%s' "$out" | grep -q 'voice/setup.sh --parakeet' && printf '%s' "$out" | grep -q 'whisper-cpp'; } && ok "stt: nothing installed -> one clear message naming both options" || no "nothing-installed message wrong (rc=$rc)" "$out"
+{ [ "$rc" != 0 ] && <<<"$out" grep -q 'no speech-to-text engine installed' && <<<"$out" grep -q 'voice/setup.sh --parakeet' && <<<"$out" grep -q 'whisper-cpp'; } && ok "stt: nothing installed -> one clear message naming both options" || no "nothing-installed message wrong (rc=$rc)" "$out"
 mk_pk; : > "$LOG"; out="$(S "$SB/note.ogg")"
 { [ "$out" = "parakeet words" ] && grep -q '^parakeet:.*parakeet_run.py .*--text' "$LOG"; } && ok "stt: Parakeet alone works and prints its transcript" || no "parakeet alone wrong" "$out"
 mv "$SB/whisper-cli.off" "$FB/whisper-cli"; mkdir -p "$D/models"; printf m > "$D/models/ggml-base.en.bin"
 : > "$LOG"; out="$(S "$SB/note.ogg")"
 { [ "$out" = "parakeet words" ] && ! grep -q '^whisper:' "$LOG"; } && ok "stt: Parakeet is preferred over whisper.cpp" || no "parakeet not preferred" "$out"
 : > "$LOG"; out="$(PFAIL=1 S "$SB/note.ogg")"
-{ printf '%s' "$out" | grep -q 'trying whisper.cpp' && printf '%s' "$out" | grep -q 'whisper words'; } && ok "stt: Parakeet failing falls back to whisper.cpp with a note" || no "fallback wrong" "$out"
+{ <<<"$out" grep -q 'trying whisper.cpp' && <<<"$out" grep -q 'whisper words'; } && ok "stt: Parakeet failing falls back to whisper.cpp with a note" || no "fallback wrong" "$out"
 : > "$LOG"; out="$(TALOS_STT=whisper S "$SB/note.ogg")"; { [ "$out" = "whisper words" ] && ! grep -q '^parakeet:' "$LOG"; } && ok "stt: TALOS_STT=whisper forces whisper.cpp" || no "force whisper failed" "$out"
-out="$(PFAIL=1 TALOS_STT=parakeet S "$SB/note.ogg")"; [ "$?" != 0 ] && printf '%s' "$out" | grep -q 'Parakeet failed' && ok "stt: forced Parakeet that fails is an error" || no "forced parakeet failure swallowed" "$out"
-rm -rf "$D/venv-stt"; out="$(TALOS_STT=parakeet S "$SB/note.ogg")"; [ "$?" != 0 ] && printf '%s' "$out" | grep -q 'setup.sh --parakeet' && ok "stt: forcing Parakeet when it is not installed names the install command" || no "forced parakeet hint missing" "$out"
+out="$(PFAIL=1 TALOS_STT=parakeet S "$SB/note.ogg")"; [ "$?" != 0 ] && <<<"$out" grep -q 'Parakeet failed' && ok "stt: forced Parakeet that fails is an error" || no "forced parakeet failure swallowed" "$out"
+rm -rf "$D/venv-stt"; out="$(TALOS_STT=parakeet S "$SB/note.ogg")"; [ "$?" != 0 ] && <<<"$out" grep -q 'setup.sh --parakeet' && ok "stt: forcing Parakeet when it is not installed names the install command" || no "forced parakeet hint missing" "$out"
 out="$(TALOS_STT=nope S "$SB/note.ogg")"; [ "$?" = 2 ] && ok "stt: an unknown TALOS_STT value is refused (exit 2)" || no "bogus stt engine accepted" "$out"
 
 # ---------------- voice/setup.sh flags
@@ -123,26 +123,26 @@ V() { ( cd "$A" && bash scripts/voice/setup.sh "$@" 2>&1 ); }
 rm -rf "$XDG_DATA_HOME" "$XDG_CONFIG_HOME"
 for flag in qwen parakeet diarize; do
   out="$(V --$flag --dry-run)"; rc=$?
-  r_ok=0; printf '%s' "$out" | grep -q 'Reminder' && printf '%s' "$out" | grep -q 'disk:' && printf '%s' "$out" | grep -q 'licence:' && r_ok=1
+  r_ok=0; <<<"$out" grep -q 'Reminder' && <<<"$out" grep -q 'disk:' && <<<"$out" grep -q 'licence:' && r_ok=1
   first_reminder=$(printf '%s\n' "$out" | grep -n 'Reminder' | head -1 | cut -d: -f1); first_plan=$(printf '%s\n' "$out" | grep -n '^== [^R]' | head -1 | cut -d: -f1)
-  { [ "$rc" = 0 ] && [ "$r_ok" = 1 ] && [ "$first_reminder" -lt "$first_plan" ] && printf '%s' "$out" | grep -q 'Dry run: nothing was changed' && [ ! -e "$XDG_DATA_HOME" ] && [ ! -e "$XDG_CONFIG_HOME" ]; } && ok "setup --$flag --dry-run: disk/RAM/licence reminders come before the plan, nothing is created" || no "--$flag dry-run wrong (rc=$rc)" "$out"
+  { [ "$rc" = 0 ] && [ "$r_ok" = 1 ] && [ "$first_reminder" -lt "$first_plan" ] && <<<"$out" grep -q 'Dry run: nothing was changed' && [ ! -e "$XDG_DATA_HOME" ] && [ ! -e "$XDG_CONFIG_HOME" ]; } && ok "setup --$flag --dry-run: disk/RAM/licence reminders come before the plan, nothing is created" || no "--$flag dry-run wrong (rc=$rc)" "$out"
 done
-out="$(V --qwen --dry-run)"; printf '%s' "$out" | grep -q 'YOU supply the reference clip' && printf '%s' "$out" | grep -q 'no voice files and no reference audio' && printf '%s' "$out" | grep -q "$VD/ref.wav" && ok "setup --qwen: says the user supplies their own clip, and where it goes" || no "qwen clip reminder missing" "$out"
-out="$(V --qwen --dry-run)"; printf '%s' "$out" | grep -q 'venv-qwen' && ok "setup --qwen installs into its own venv under the Talos data folder" || no "qwen venv not named" "$out"
-out="$(V --diarize --dry-run)"; printf '%s' "$out" | grep -q 'needs --parakeet' && ok "setup --diarize alone warns that transcription needs --parakeet" || no "diarize note missing" "$out"
+out="$(V --qwen --dry-run)"; <<<"$out" grep -q 'YOU supply the reference clip' && <<<"$out" grep -q 'no voice files and no reference audio' && <<<"$out" grep -q "$VD/ref.wav" && ok "setup --qwen: says the user supplies their own clip, and where it goes" || no "qwen clip reminder missing" "$out"
+out="$(V --qwen --dry-run)"; <<<"$out" grep -q 'venv-qwen' && ok "setup --qwen installs into its own venv under the Talos data folder" || no "qwen venv not named" "$out"
+out="$(V --diarize --dry-run)"; <<<"$out" grep -q 'needs --parakeet' && ok "setup --diarize alone warns that transcription needs --parakeet" || no "diarize note missing" "$out"
 out="$(V --qwen --parakeet --diarize --dry-run)"; n=$(printf '%s' "$out" | grep -c 'Reminder'); [ "$n" = 3 ] && ok "setup: three new flags together print three reminders" || no "reminder count $n" "$out"
 for flag in qwen parakeet; do
   out="$(TALOS_FORCE_ARCH=x86_64 V --$flag --dry-run)"; rc=$?
-  { [ "$rc" = 4 ] && printf '%s' "$out" | grep -q 'Apple Silicon' && printf '%s' "$out" | grep -q 'x86_64' && ! printf '%s' "$out" | grep -q 'Reminder' && [ ! -e "$XDG_DATA_HOME" ]; } && ok "setup --$flag on a fake non-arm64 Mac: refused (exit 4), says what works instead, creates nothing" || no "--$flag arch refusal wrong (rc=$rc)" "$out"
+  { [ "$rc" = 4 ] && <<<"$out" grep -q 'Apple Silicon' && <<<"$out" grep -q 'x86_64' && ! <<<"$out" grep -q 'Reminder' && [ ! -e "$XDG_DATA_HOME" ]; } && ok "setup --$flag on a fake non-arm64 Mac: refused (exit 4), says what works instead, creates nothing" || no "--$flag arch refusal wrong (rc=$rc)" "$out"
 done
 out="$(TALOS_FORCE_ARCH=x86_64 V --diarize --dry-run)"; [ "$?" = 0 ] && ok "setup --diarize is not refused on Intel (the speaker half has no Apple Silicon need)" || no "diarize wrongly refused" "$out"
-out="$(V --kokoro --stt small.en --dry-run)"; printf '%s' "$out" | grep -q 'kokoro-v1.0.onnx' && printf '%s' "$out" | grep -q 'ggml-small.en.bin' && ok "setup: the existing --kokoro and --stt dry-runs are unchanged" || no "old flags broke" "$out"
-out="$(V)"; [ "$?" != 0 ] && printf '%s' "$out" | grep -q -- '--qwen' && ok "setup with no option lists the new flags" || no "no-option text wrong" "$out"
+out="$(V --kokoro --stt small.en --dry-run)"; <<<"$out" grep -q 'kokoro-v1.0.onnx' && <<<"$out" grep -q 'ggml-small.en.bin' && ok "setup: the existing --kokoro and --stt dry-runs are unchanged" || no "old flags broke" "$out"
+out="$(V)"; [ "$?" != 0 ] && <<<"$out" grep -q -- '--qwen' && ok "setup with no option lists the new flags" || no "no-option text wrong" "$out"
 
 # ---------------- diarize wrapper
 DT="$A/scripts/stt-diarize/diarize_transcribe.sh"; rm -rf "$XDG_DATA_HOME"
 out="$(bash "$DT" "$SB/note.ogg" 2>&1)"; rc=$?
-{ [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'missing:' && printf '%s' "$out" | grep -q 'parakeet-mlx' && printf '%s' "$out" | grep -q 'diarization-models' && printf '%s' "$out" | grep -q -- '--parakeet --diarize' && ! printf '%s' "$out" | grep -qi traceback; } && ok "diarize: with nothing installed it lists what is missing and the fix (no traceback)" || no "diarize missing message wrong (rc=$rc)" "$out"
+{ [ "$rc" = 1 ] && <<<"$out" grep -q 'missing:' && <<<"$out" grep -q 'parakeet-mlx' && <<<"$out" grep -q 'diarization-models' && <<<"$out" grep -q -- '--parakeet --diarize' && ! <<<"$out" grep -qi traceback; } && ok "diarize: with nothing installed it lists what is missing and the fix (no traceback)" || no "diarize missing message wrong (rc=$rc)" "$out"
 out="$(bash "$DT" 2>&1)"; [ "$?" = 2 ] && ok "diarize: no argument prints usage (exit 2)" || no "diarize usage wrong" "$out"
 out="$(bash "$DT" "$SB/note.ogg" abc 2>&1)"; [ "$?" = 2 ] && ok "diarize: a non-numeric speaker count is refused" || no "bad count accepted" "$out"
 # merge_speakers.py on a tiny hand-made pair of inputs (no models)
@@ -178,7 +178,7 @@ if grep -rIliF "${LEAK_ARGS[@]}" "$KIT/scripts/stt-diarize" "$KIT/scripts/voice"
 ls "$KIT"/scripts/stt-diarize | grep -qiE '\.(wav|npy|pt|onnx|m4a|mp3)$' && no "audio or model file in stt-diarize" || ok "no audio, voiceprint or model files are shipped"
 # qwen_tts.py without mlx-audio: a clear one-line message, no traceback
 out="$(python3 -I "$A/scripts/voice/qwen_tts.py" "$SB/q.wav" "hi" "$SB/note.ogg" "$SB/note.ogg" 2>&1)"; rc=$?
-{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'mlx-audio is not installed' && ! printf '%s' "$out" | grep -qi traceback; } && ok "qwen_tts.py: without mlx-audio it exits with a clear message" || no "qwen_tts.py message wrong" "$out"
+{ [ "$rc" != 0 ] && <<<"$out" grep -q 'mlx-audio is not installed' && ! <<<"$out" grep -qi traceback; } && ok "qwen_tts.py: without mlx-audio it exits with a clear message" || no "qwen_tts.py message wrong" "$out"
 
 export HOME="$REALHOME"
 echo "  localmodels: PASS $PASS FAIL $FAIL"

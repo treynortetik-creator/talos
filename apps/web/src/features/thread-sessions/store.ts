@@ -162,6 +162,9 @@ export const WORKER_ERROR_TEXT: Record<string, string> = {
   crash_loop: 'It kept crashing, so it was stopped',
   start_failed: "It didn't start",
   folder_claimed: 'Another thread session works in that folder',
+  unknown: "It stopped for a reason this version doesn't know. Open Talos Terminal on the Mac to see what happened",
+  mode_escalation_denied:
+    'It was not started: it would have more access than the main session. Narrow its settings, then press Restart',
 }
 
 export function workerLine(w: WorkerStatusItemT | undefined): string {

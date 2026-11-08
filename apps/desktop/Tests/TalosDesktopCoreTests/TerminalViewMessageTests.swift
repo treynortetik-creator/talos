@@ -11,8 +11,8 @@ struct TerminalViewMessageTests {
   let good: [String: Any] = ["type": "terminal_view", "rect": ["x": 240, "y": 0, "width": 880, "height": 780]]
 
   @Test func aRectangleOrNullDecodes() {
-    #expect(WebToNative.decode(good) == .terminalView(TerminalViewRect(x: 240, y: 0, width: 880, height: 780)))
-    #expect(WebToNative.decode(["type": "terminal_view", "rect": NSNull()]) == .terminalView(nil))
+    #expect(WebToNative.decode(good) == .terminalView(TerminalViewRect(x: 240, y: 0, width: 880, height: 780), session: "main"))
+    #expect(WebToNative.decode(["type": "terminal_view", "rect": NSNull()]) == .terminalView(nil, session: "main"))
   }
 
   @Test func anythingElseIsRefusedNotIgnored() {

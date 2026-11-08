@@ -78,6 +78,7 @@ async function world() {
       TALOS_APP_HOME: home,
       TALOS_APP_RELAY_URL: relay.httpBase,
       TALOS_APP_BRIDGE: '1',
+      TALOS_EXPLAINER: 'off',
       TALOS_APP_CHRONOS_BIN: box.bin,
     },
   }).start()

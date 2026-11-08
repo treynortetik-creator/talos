@@ -1,7 +1,7 @@
 // The lead's roots (docs/OPTION-C.md "Leads"). A lead lives outside the main agent folder and needs nothing in it, so the
 // fence does not list files: it names WHOLE ROOTS (the main agent folder, the whole Claude config folder with its
 // transcripts, history, settings and hooks, Claude Code's global config files, the Talos home, the kit's default vault and
-// any root the owner adds). settings.ts turns them into deny
+// credential folders such as ~/.ssh and any root the owner adds). settings.ts turns them into deny
 // rules, and Claude Code's OS sandbox (Seatbelt) turns those into kernel-enforced limits on every command the lead runs.
 // Nothing here reads a command line: the OS decides what a process can open.
 import { readFileSync } from 'node:fs'
@@ -10,6 +10,9 @@ import { real } from '../guards/rules.ts'
 
 const trim = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p)
 const uniq = (l: readonly string[]) => [...new Set(l)]
+
+/** Credential folders and files, under the owner's home, that every lead protects: a lead has no use for them, and open network could carry a key out. */
+export const LEAD_SECRET_PATHS = ['.ssh', '.config/gh', '.aws', '.npmrc', '.netrc'] as const
 
 /** Claude Code's config folder: `CLAUDE_CONFIG_DIR` when set, else `<home>/.claude`. A value that is not an absolute path (`~/x` included) is an error. The caller reads the variable once. */
 export function claudeConfigDir(home: string, configured?: string): string {
@@ -20,7 +23,7 @@ export function claudeConfigDir(home: string, configured?: string): string {
 }
 
 /** Claude Code's global config file(s): `<claudeDir>/.claude.json`, and `~/.claude.json` too when the folder is the default one. */
-export function claudeJsonFiles(home: string, claudeDir: string): string[] {
+function claudeJsonFiles(home: string, claudeDir: string): string[] {
   const h = trim(home)
   const c = trim(claudeDir)
   return c === join(h, '.claude') ? [join(h, '.claude.json'), join(c, '.claude.json')] : [join(c, '.claude.json')]
@@ -47,6 +50,7 @@ export function defaultLeadRoots(o: {
     join(home, '.claude.json.backup'),
     trim(o.talosHome),
     join(home, 'private-agent-vault'),
+    ...LEAD_SECRET_PATHS.map((p) => join(home, p)),
     ...(o.protect ?? []).map(trim),
   ])
 }

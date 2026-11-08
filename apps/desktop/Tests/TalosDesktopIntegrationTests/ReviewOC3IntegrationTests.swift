@@ -35,6 +35,7 @@ extension WorkerRig {
     } else {
       m = WorkerManager(options: o, probe: LiveSystem(loginEnv: { e }), baseEnv: { e }, mainPanePid: mainPanePid)
     }
+    record(m)
     if install {
       mgr?.detach()
       mgr = m
@@ -605,10 +606,12 @@ struct ReviewOC3Folders {
     let sid = r.entry("trip")?.session_id
     try r.wakeFile("trip", action: "restart", reason: "control")
     #expect(r.wait(10) { r.lines(r.log).count == 3 })
+    r.mgr.tickOnce()  // barrier: the fake logs its start before the tick that made it publishes; `check` reads the snapshot
     try check("restart")
     #expect(r.entry("trip")?.session_id == sid)
     try r.wakeFile("trip", action: "fresh", reason: "control")
     #expect(r.wait(10) { r.lines(r.log).count == 4 })
+    r.mgr.tickOnce()  // barrier, as above
     try check("fresh")
     #expect(r.entry("trip")?.session_id != sid)
     #expect(r.entry("trip")?.previous_ids == [sid].compactMap { $0 })

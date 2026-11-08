@@ -268,7 +268,7 @@ describe('the big cold wake', () => {
     await start()
     const cfg = src([])
     await k.run(cfg, { runId: runId() }) // records last_ok
-    clock.advance(4 * 24 * 3600_000 + 60_000)
+    clock.set(clock.now() + 4 * 24 * 3600_000 + 60_000) // time only: replaying four days of keepalive timers adds nothing here
     const r = await k.run(src([act('old1'), act('old2'), item('f1')]), {
       runId: runId(),
       coldAfterMs: 3 * 24 * 3600_000,
@@ -347,6 +347,9 @@ describe('a missing triage agent (R1-4)', () => {
 describe("the cold limit is the heartbeat's own (R1-8)", () => {
   const HOUR = 3600_000
   const COLD_AFTER = 3 * 24 * HOUR // what a job's own schedule would allow
+  // seed() writes the ages straight into the store, so these tests never need to move the clock. Advancing it four days
+  // fired thousands of keepalive timers (9-19 s), enough to hit the 20 s limit on a loaded machine and kill the source.
+  const MAX_FIRED = 100
   /** A store as a heartbeat leaves it: one source known, the heartbeat itself last run `ranAgoH` hours ago. */
   const seed = (ranAgoH: number, sourceOkAgoH: number) => {
     const iso = (agoH: number) => new Date(clock.now() - agoH * HOUR).toISOString()
@@ -358,10 +361,11 @@ describe("the cold limit is the heartbeat's own (R1-8)", () => {
 
   test('a source that failed for 3 days while the heartbeat kept running delivers its items normally', async () => {
     await start()
-    clock.advance(4 * 24 * HOUR)
     seed(18, 4 * 24) // the heartbeat ran 18 hours ago; its source has not answered for four days
     const good = config([cmd('ss', printing(tmpDir(), 'g', ok([act('back', { title: 'Back after outage' })])))])
     const r = await k.run(good, { runId: runId(), coldAfterMs: COLD_AFTER })
+    expect(clock.fired).toBeLessThan(MAX_FIRED)
+    expect(r.result.sources).toMatchObject([{ id: 'ss', ok: true }]) // a killed or failed source says so here, not as a missing text
     expect(r.result.outcome).toBe('woke')
     expect(sent.length).toBe(1)
     expect(
@@ -373,9 +377,10 @@ describe("the cold limit is the heartbeat's own (R1-8)", () => {
 
   test('a heartbeat that did not run for longer than its limit skips the backlog, whatever each source last said', async () => {
     await start()
-    clock.advance(4 * 24 * HOUR)
     seed(4 * 24, 1) // its source answered an hour ago, but the heartbeat itself has been off for four days
-    await k.run(src([act('old')]), { runId: runId(), coldAfterMs: COLD_AFTER })
+    const r = await k.run(src([act('old')]), { runId: runId(), coldAfterMs: COLD_AFTER })
+    expect(clock.fired).toBeLessThan(MAX_FIRED)
+    expect(r.result.sources).toMatchObject([{ id: 'ss', ok: true }])
     expect(sent).toEqual([])
     expect(
       sysRows()

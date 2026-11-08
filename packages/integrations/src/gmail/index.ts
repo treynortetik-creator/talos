@@ -4,8 +4,6 @@ import { gmailToggle, normalizeGmail } from './normalize.ts'
 import { gmailPersonalSetup } from './setup.ts'
 import { verifyGmail } from './verify.ts'
 
-export { DEFAULT_FORWARD_LABEL, DEFAULT_QUERY, GMAIL_SCRIPT_TEMPLATE, renderGmailScript } from './apps-script.ts'
-
 export const integration: IntegrationModule & ModuleExtras = {
   claim: true,
   id: 'gmail',

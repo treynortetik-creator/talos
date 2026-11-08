@@ -8,8 +8,6 @@
     "apps/bridge/src/cli-main.ts": 1101,
     "apps/bridge/src/schedules/service.ts": 1539,
     "apps/desktop/Sources/TalosDesktop/CompanionController.swift": 1254,
-    "apps/relay/src/core/hub.ts": 1683,
-    "apps/web/src/lib/socketClient.ts": 1833,
     "packages/protocol/src/frames.ts": 1145,
     "scripts/ci-local.sh": 1003
   },
@@ -26,12 +24,11 @@
     "apps/web/src/features/threads/Timeline.tsx::Timeline": 445,
     "apps/web/src/features/threads/manage/ThreadEditor.tsx::EditorBody": 323,
     "apps/web/src/lib/fakeClient.ts::createFakeClient": 461,
-    "apps/web/src/lib/socketClient.ts::createSocketClient": 1635,
     "packages/protocol/src/memory-links.ts::maskNote": 335,
     "plugins/talos-app-mod/hooks/register.ts::register": 313
   },
-  "filesListedCount": 9,
-  "filesListedLines": 11738,
-  "functionsListedCount": 15,
-  "functionsListedLines": 6834
+  "filesListedCount": 7,
+  "filesListedLines": 8222,
+  "functionsListedCount": 14,
+  "functionsListedLines": 5199
 }

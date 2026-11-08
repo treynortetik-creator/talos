@@ -1,6 +1,7 @@
 // Owner frames the Mac never took: the report before the sweep deletes them, and the day-6 warning.
-// Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks are in hub.ts; some
-// handlers here run their own device, seen-id, step-up or card-state checks, so read both when auditing trust.
+// Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks (session, pairing,
+// schema) are in hub-app-conn.ts and hub-app-frames.ts; some handlers here run their own device, seen-id, step-up
+// or card-state checks, so read both when auditing trust.
 import { type MessageT, NATIVE_ACT_TYPE, nativeReplyMessageId, newId } from '@talos-app/protocol'
 import type { RichPushInput } from '../services.ts'
 import type { DEFAULT_AGENT_CONFIG } from './default-config.ts'

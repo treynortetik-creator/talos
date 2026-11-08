@@ -24,7 +24,7 @@ struct NativeFixtureTests {
     #expect(
       Set(w.keys) == [
         "ready", "notify", "badge", "open_external", "haptic", "threads", "pair_status", "companion_state", "companion_reply",
-        "terminal_view",
+        "terminal_view", "terminal_resume", "terminal_leave",
       ])
     for (type, entry) in w {
       let sample = try #require((entry as? [String: Any])?["sample"])
@@ -34,19 +34,33 @@ struct NativeFixtureTests {
 
   @Test func nativeToWebMessagesMatchTheSamplesShape() throws {
     let n = try #require(try fixtures()["native_to_web"] as? [String: Any])
-    #expect(Set(n.keys) == ["navigate", "compose", "voice_note", "enroll_code", "companion_reply_request", "notify_permission"])
+    #expect(
+      Set(n.keys) == [
+        "navigate", "compose", "voice_note", "enroll_code", "companion_reply_request", "companion_replies", "notify_permission",
+        "terminal_sessions", "terminal_resume_result", "terminal_select",
+      ])
     let cases: [(String, NativeToWeb)] = [
       ("compose", .compose(threadId: "general", text: "Hello from the shell.")),
       ("navigate", .navigate(path: "/t/general")),
       ("enroll_code", .enrollCode("0123456789ABCDEFGHJKMNPQRS")),
       ("companion_reply_request", .companionReplyRequest(req: "r12", threadId: "general")),
+      ("companion_replies", .companionReplies(on: true, shown: [HeldReply(thread: "general", seq: 7)], epoch: 2)),
       ("notify_permission", .notifyPermission(.granted)),
+      ("terminal_resume_result", .terminalResumeResult(threadId: "general", outcome: .asked)),
+      ("terminal_select", .terminalSelect(session: "general")),
     ]
     for (type, msg) in cases {
       let sample = try #require(((n[type] as? [String: Any])?["sample"]) as? [String: Any])
       let ours = msg.object
       #expect(Set(ours.keys) == Set(sample.keys), "\(type) fields differ from the fixture")
-      for (k, v) in sample { #expect("\(ours[k] ?? "")" == "\(v)", "\(type).\(k)") }
+      for (k, v) in sample {
+        func canon(_ x: Any?) -> String {
+          guard let x, JSONSerialization.isValidJSONObject(x), let d = try? JSONSerialization.data(withJSONObject: x, options: [.sortedKeys])
+          else { return "\(x ?? "")" }
+          return String(decoding: d, as: UTF8.self)
+        }
+        if let b = ours[k] as? Bool { #expect(b == (v as? Bool), "\(type).\(k)") } else if v is [Any] { #expect(canon(ours[k]) == canon(v), "\(type).\(k)") } else { #expect("\(ours[k] ?? "")" == "\(v)", "\(type).\(k)") }
+      }
       #expect(NativeToWeb.validated(msg) == msg)
     }
   }
@@ -87,7 +101,8 @@ struct NativeFixtureTests {
           CompanionFeed(
             link: .online, macOnline: true, busy: false, needs: 1, working: 2, queued: 0, onCall: 0, unread: 3, failed: 0,
             rows: [.init(threadId: "general", state: .needsYou), .init(threadId: "daily", state: .working)],
-            lastReply: .init(threadId: "general", seq: 48123))))
+            lastReply: .init(threadId: "general", seq: 48123), viewing: "general", held: [HeldReply(thread: "daily", seq: 7)],
+            repliesEpoch: 2)))
     let reply = try #require(((w["companion_reply"] as? [String: Any])?["sample"]) as? [String: Any])
     #expect(
       WebToNative.decode(reply)
@@ -97,7 +112,21 @@ struct NativeFixtureTests {
   @Test func theTerminalViewFixtureSampleDecodes() throws {
     let w = try #require(try fixtures()["web_to_native"] as? [String: Any])
     let sample = try #require(((w["terminal_view"] as? [String: Any])?["sample"]) as? [String: Any])
-    #expect(WebToNative.decode(sample) == .terminalView(TerminalViewRect(x: 240, y: 0, width: 880, height: 780)))
+    #expect(WebToNative.decode(sample) == .terminalView(TerminalViewRect(x: 240, y: 0, width: 880, height: 780), session: "general"))
+    let r = try #require(((w["terminal_resume"] as? [String: Any])?["sample"]) as? [String: Any])
+    #expect(WebToNative.decode(r) == .terminalResume(threadId: "general"))
+    #expect(WebToNative.decode(["type": "terminal_leave"]) == .terminalLeave)
+    #expect(WebToNative.decode(["type": "terminal_leave", "rect": NSNull()]) == nil)
+    #expect(NativeToWeb.validated(.terminalSelect(session: "=agent")) == nil)
+  }
+
+  @Test func theTerminalSessionsFixtureSampleHasTheFieldsWeSend() throws {
+    let n = try #require(try fixtures()["native_to_web"] as? [String: Any])
+    let sample = try #require(((n["terminal_sessions"] as? [String: Any])?["sample"]) as? [String: Any])
+    let sampleItems = try #require(sample["items"] as? [[String: Any]])
+    let item = TerminalSessions.Item(id: "general", name: "General", state: "parked", key: "2", panel: "resume", action: "resume", detail: "x")
+    #expect(NativeToWeb.validated(.terminalSessions([item])) != nil)
+    for s in sampleItems { #expect(Set(s.keys) == Set(item.object.keys)) }
   }
 
   @Test func strictTypesAndRanges() {

@@ -8,7 +8,7 @@ import TalosDesktopCore
 /// House rules (OPTION-C 4.3, 4.4, R-19): a worker never gets channels, `-p`, `--bg` or a Telegram token (`WorkerSpec`
 /// refuses them); its environment is replaced wholesale with `env -i`, so nothing leaks in from the tmux server; only
 /// process groups this manager started are ever signalled, through `GroupSignaller`; the CLI's MCP health listing is
-/// never run; the only text ever typed is `PointerTyper.text`; and a worker is never stopped mid-turn on its own account:
+/// never run; the only text ever typed is `PointerTyper.text` (and a tap's Up, Down and Enter for a known dialog: WorkerDialogAnswer.swift); and a worker is never stopped mid-turn on its own account:
 /// every park (idle, governor, switch-off, restart) waits for the turn to end. The one exception is the owner's own: 15
 /// minutes after a tap (Restart, Start fresh, Park now, or switching the thread off), a turn that still hasn't ended is
 /// stopped, so a hung one can't hold the thread for ever. The governor never does this.
@@ -26,6 +26,11 @@ public final class WorkerManager: @unchecked Sendable {
     public var claudePath: String
     /// The owner's permission flag from desktop.json when main uses it (`--dangerously-skip-permissions`).
     public var permissionFlag: String?
+    /// Main's real launch arguments from desktop.json. Its permission mode is worked out from these (`--permission-mode X` as well as
+    /// `--dangerously-skip-permissions`); empty = just `permissionFlag`.
+    public var mainArgs: [String] = []
+    /// Where to write one line for every MCP server of a thread's own folder that a session is started with (nil = nowhere).
+    public var auditLogPath: String?
     public var tmux: String
     public var socket: String = TmuxCommands.defaultSocket
     public var tmuxConf: String
@@ -50,8 +55,15 @@ public final class WorkerManager: @unchecked Sendable {
     public var dialogSettle: Double = 5
     /// At most one notice per thread per kind of dialog in this time, whatever the screen does.
     public var noticeDebounce: Double = 600
+    public var promptDebounce: Double = 5  // the same, for prompts nobody named: each tool asks again
+    public var clientQuiet: Double = 30  // a prompt waits while an attached client typed this recently (the owner's own picker)
     /// A pointer held back by a draft this long gets one line in its thread.
     public var draftNoticeAfter: Double = 120
+    /// A known dialog offered to the bridge for a tap: how long the Mac waits for its card (`dialog-card.json`) before it posts its own line, and how long the card lives.
+    public var cardAckWait: Double = 15
+    public var cardLifetime: Double = 900
+    /// A change to a running session's folder, model, effort or MCP list is acted on once it has stood this long (awake clock).
+    public var launchChangeSettle: Double = 30
     /// Tests: park after this many seconds instead of the thread's `idle_park_min`.
     public var idleSecondsOverride: Double?
     public init(
@@ -102,8 +114,12 @@ public final class WorkerManager: @unchecked Sendable {
     var pgid: Int32 = 0
     var startedAt: Double = 0
     var readyAt: Double = 0
+    /// The last real activity: a pointer, a change in `body`, or an attached client's key (`WorkerIdle.swift`). Never raw pane output.
     var lastActive: Double = 0
-    var pendingPointer = false
+    /// The screen above the input box's lower rule at the last tick (`WorkerActivity.body`); nil before the first look.
+    var body: String?
+    var pendingPointer = false { didSet { if !pendingPointer { owed = OwedState() } } }  // nothing owed, nothing left of its hold
+    var owed = OwedState()  // the deadline of that pointer, and how a relaunch settles it (WorkerOwedPointer.swift)
     /// On the awake clock.
     var parkDeadline: Double?
     /// An owner's stop gives up waiting for the turn at this time, on the awake clock. Memory only: an adopted `stopping`
@@ -129,9 +145,10 @@ public final class WorkerManager: @unchecked Sendable {
     var needsYouPrompt: String?
     /// When (awake clock) the current dialog was first seen.
     var dialogSinceAwake: Double?
-    /// The notice for the dialog on screen now (`dlg`) and for a pointer held back by a draft (`held`).
+    /// The notice for the dialog on screen now (`dlg`), for a pointer held back by a draft (`held`) or by no input box (`noBox`).
     var dlg = NoticeState()
     var held = NoticeState()
+    var noBox = NoBoxHold()
     /// Since when (awake clock) the pointer has been held by text in Claude's input box; nil when it isn't.
     var draftSince: Double?
     /// Whether this worker's notice records were checked against its screen since this copy of the app took it over.
@@ -139,9 +156,29 @@ public final class WorkerManager: @unchecked Sendable {
     /// The last screen text read and since when (awake clock): a dialog counts once the screen has held still.
     var screenText: String?
     var screenSameSince: Double = 0
+    /// Prompts nobody named: the one announced, and its stillness (`PromptDetector`).
+    var promptWatch = PromptWatch()
+    /// The tap-answerable dialog on the pane: since when it was offered, which answers were taken (WorkerDialogOffer.swift).
+    var offer = OfferState()
+    /// A change to what the session was launched with, waiting out its settle time (WorkerLaunchChange.swift).
+    var change = LaunchChange.Debounce()
+    /// The folder a fresh restart is for: the thread is told about it once the new session has started.
+    var folderChangeTo: String?
+    /// The lines about the launch: a new folder, MCP servers not found, a refused spec. `fenceKinds` is the kind each slot last told.
+    var folderNote = NoticeState()
+    var missingNote = NoticeState()
+    var refusedNote = NoticeState()
+    var ceilingNote = NoticeState()
+    var fenceKinds: [AnyHashable: String] = [:]
   }
 
-  public private(set) var options: Options
+  /// Read under `publishedLock`: the tick rewrites the launch fields on the queue while the Terminals window reads this on the
+  /// main thread, so a plain stored struct was a data race. One value at a time, never half a launch source.
+  public private(set) var options: Options {
+    get { publishedLock.withLock { _options } }
+    set { publishedLock.withLock { _options = newValue } }
+  }
+  private var _options: Options
   /// The login environment workers run with (a hand-opened claude for a needs_mac row uses the same one).
   public func loginEnvironment() -> [String: String] { baseEnv() }
   /// What the next start launches, read at each tick instead of captured at launch (audit D10): the folder and the claude path
@@ -150,7 +187,9 @@ public final class WorkerManager: @unchecked Sendable {
     public var agentDir: String
     public var claudePath: String
     public var permissionFlag: String?
-    public init(agentDir: String, claudePath: String, permissionFlag: String?) {
+    public var mainArgs: [String]
+    public init(agentDir: String, claudePath: String, permissionFlag: String?, mainArgs: [String] = []) {
+      self.mainArgs = mainArgs
       self.agentDir = agentDir
       self.claudePath = claudePath
       self.permissionFlag = permissionFlag
@@ -161,6 +200,8 @@ public final class WorkerManager: @unchecked Sendable {
   /// Posts one plain line into a thread through the bridge (`talos-app post <thread> <text>`). Blocking; called off the worker
   /// queue. `talos-app post` takes no message key, so a timeout (`unknown`) is never retried: it may have been sent. nil = this build can't post (the notice then shows only in the Mac app).
   public var postNotice: (@Sendable (_ thread: String, _ text: String) -> PostOutcome)?
+  /// Brings the Terminals window to a thread (a tap on "Open on the Mac"); false when no window can be shown.
+  public var openTerminals: (@Sendable (_ thread: String) -> Bool)?
   public let signaller: GroupSignaller
   let probe: SystemProbe
   let baseEnv: @Sendable () -> [String: String]
@@ -174,11 +215,14 @@ public final class WorkerManager: @unchecked Sendable {
   var rt: [String: Runtime] = [:]
   private var adopted = false
   private var lastHeartbeat: Double = 0
-  private var dirty = false
+  var dirty = false
   /// nil until a config has been read: not knowing the settings is not the same as "off".
   private var lastSettings: DedicatedSettings?
   private var stopped = false
   private var lockFd: Int32 = -1
+  /// What `snapshot()` and `needsYou()` return; see WorkerPublished.swift.
+  let publishedLock = NSLock()
+  var _published: Published!
 
   public init(
     options: Options, probe: SystemProbe, baseEnv: @escaping @Sendable () -> [String: String],
@@ -186,13 +230,14 @@ public final class WorkerManager: @unchecked Sendable {
     now: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 },
     awake: @escaping @Sendable () -> Double = { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
   ) {
-    self.options = options
+    self._options = options
     self.probe = probe
     self.signaller = GroupSignaller(probe: probe)
     self.baseEnv = baseEnv
     self.mainPanePid = mainPanePid
     self.now = now
     self.awake = awake
+    publish()
   }
 
   // MARK: paths
@@ -205,10 +250,13 @@ public final class WorkerManager: @unchecked Sendable {
   /// Process groups of our live workers (main's TakeoverCheck whitelists them, OPTION-C 4.4).
   public var ownedGroups: Set<Int32> { signaller.ownedGroups }
 
-  public func snapshot() -> WorkersFile { queue.sync { fileModel() } }
-
   /// Changes the options (before ticking starts; tests tune the waits).
-  public func tune(_ edit: (inout Options) -> Void) { queue.sync { edit(&options) } }
+  public func tune(_ edit: (inout Options) -> Void) {
+    queue.sync {
+      edit(&options)
+      publish()
+    }
+  }
 
   /// This copy runs the workers. A second copy of the app stays passive.
   public var isActive: Bool { queue.sync { lockFd >= 0 } }
@@ -240,6 +288,7 @@ public final class WorkerManager: @unchecked Sendable {
   /// runs or starts with no supervisor. A passive copy runs nothing, so it stops nothing and writes nothing.
   public func stopAll() {
     queue.sync {
+      defer { publish() }
       timer?.cancel()
       timer = nil
       stopped = true
@@ -284,11 +333,15 @@ public final class WorkerManager: @unchecked Sendable {
   }
 
   private func tickLocked() {
+    defer { publish() }
     guard !stopped, tryLock() else { return }
     if let src = launchSource?() {
-      options.agentDir = src.agentDir
-      options.claudePath = src.claudePath
-      options.permissionFlag = src.permissionFlag
+      var o = options
+      o.agentDir = src.agentDir
+      o.claudePath = src.claudePath
+      o.permissionFlag = src.permissionFlag
+      o.mainArgs = src.mainArgs
+      options = o
     }
     let t = now()
     let settings = loadSettings()
@@ -308,11 +361,17 @@ public final class WorkerManager: @unchecked Sendable {
         }
       }
     }
-    for id in Array(rt.keys) { advance(id, settings: settings ?? .off, now: t) }
+    for id in Array(rt.keys) {
+      advance(id, settings: settings ?? .off, now: t)
+      publish()  // a long tick shows its progress
+    }
     if let settings {
+      reviveOwed(settings: settings, now: t)
       takeWakes(settings: settings, now: t)
+      publish()
       retryHeld(settings: settings, now: t)
       enforceCap(settings: settings, now: t)
+      checkLaunchChanges(settings: settings, now: t)
     }
     clearFolderClaims()
     // abs: after the clock goes back, a heartbeat must not wait for it to catch up
@@ -334,13 +393,13 @@ public final class WorkerManager: @unchecked Sendable {
 
   func fileModel() -> WorkersFile {
     var threads: [String: WorkersFile.Entry] = [:]
-    for (id, r) in rt { threads[id] = r.entry }
+    for (id, r) in rt { threads[id] = r.persisted }
     return WorkersFile(
       supervisor: .init(pid: getpid(), heartbeat_at: ISOTime.string(now()), workers_supported: true, main_pane_pid: mainPanePid()),
       threads: threads)
   }
 
-  private func writeFile() {
+  func writeFile() {
     do {
       try AtomicFile.write(try fileModel().encoded(), to: workersJson, mode: 0o600)
     } catch {
@@ -348,12 +407,12 @@ public final class WorkerManager: @unchecked Sendable {
     }
   }
 
-  private func tmux(_ id: String) -> TmuxCommands {
+  func tmux(_ id: String) -> TmuxCommands {
     TmuxCommands(tmux: options.tmux, socket: options.socket, configPath: options.tmuxConf, session: WorkerSpec.tmuxName(id))
       .withPane(rt[id]?.paneId)
   }
 
-  private func run(_ argv: [String]) -> RunResult { ProcessRunner.run(argv, env: baseEnv(), timeout: 10) }
+  func run(_ argv: [String]) -> RunResult { ProcessRunner.run(argv, env: baseEnv(), timeout: 10) }
 
   // MARK: adopt (app relaunch)
 
@@ -361,6 +420,7 @@ public final class WorkerManager: @unchecked Sendable {
     guard let d = FileManager.default.contents(atPath: workersJson), let f = WorkersFile.decode(d) else { return }
     for (id, e) in f.threads where WorkerSpec.isThreadId(id) {
       var r = Runtime(entry: e)
+      r.restoreOwed()
       r.restartTimes = e.restarts.compactMap(ISOTime.parse)
       r.adoptPending = !WorkersFile.restingStates.contains(e.state)
       rt[id] = r
@@ -410,77 +470,13 @@ public final class WorkerManager: @unchecked Sendable {
     r.startedAwake = awake()
     r.readyAt = e.state == "starting" ? 0 : r.startedAt
     r.seenActivity = ps.activity
-    // the clock carries on: a relaunch buys no extra idle time (spec 3.5)
-    r.lastActive = [ps.activity, e.last_turn_at.flatMap(ISOTime.parse), r.startedAt].compactMap { $0 }.max() ?? t
+    // the clock carries on: a relaunch buys no extra idle time (spec 3.5). The file's times, never the pane's own output.
+    let saved = e.last_active_at.flatMap(ISOTime.parse).map { min($0, t) }  // a time in the future is no later than now
+    r.lastActive = [saved, e.last_turn_at.flatMap(ISOTime.parse), r.startedAt].compactMap { $0 }.max() ?? t
     if e.state == "parking" { r.parkDeadline = awake() + options.parkGrace }
     // a state this build doesn't know: it runs, and that is all that's known
     if !WorkersFile.liveStates.contains(e.state), e.state != "parking", e.state != "stopping" { r.entry.state = "live" }
     rt[id] = r
-    dirty = true
-  }
-
-  // MARK: wakes
-
-  private func takeWakes(settings: DedicatedSettings, now t: Double) {
-    let base = options.talosHome + "/workers"
-    guard let ids = try? FileManager.default.contentsOfDirectory(atPath: base) else { return }
-    for id in ids.sorted() where WorkerSpec.isThreadId(id) && rt[id]?.adoptPending != true {
-      let wake = base + "/" + id + "/wake"
-      let taken = wake + ".taken"
-      guard rename(wake, taken) == 0 else { continue }  // taken atomically: a rewrite by the hub lands in a new file
-      let data = FileManager.default.contents(atPath: taken)
-      unlink(taken)
-      guard let data, let w = WakeFile.decode(data), w.thread_id == id else { continue }
-      guard let s = settings.threads[id] else { continue }  // not dedicated (any more): the hub won't route to it
-      if rt[id] == nil { rt[id] = Runtime(entry: .init(threadId: id, cwd: s.cwd ?? options.agentDir, model: s.model)) }
-      perform(w.action, reason: w.reason, id, s, settings, t)
-    }
-  }
-
-  private func perform(
-    _ action: String, reason: String, _ id: String, _ s: ThreadSessionSettings, _ settings: DedicatedSettings, _ t: Double
-  ) {
-    let state = rt[id]?.entry.state ?? "off"
-    let resting = state == "off" || state == "parked"
-    let leaving = state == "parking" || state == "stopping"
-    let resume = rt[id]?.entry.session_id != nil
-    switch action {
-    case "pointer":
-      if state == "failed" { return }  // main answers; [Start fresh] or the settings sheet clears it
-      rt[id]?.pendingPointer = true
-      if resting { requestStart(id, s, resume: resume, settings, t) }
-    case "park":
-      if WorkersFile.liveStates.contains(state) {
-        requestPark(id, reason: reason == "governor" ? "governor" : "control", byOwner: reason == "control")
-      } else if state == "stopping", reason == "control" {
-        armStopLimit(id)  // a tap can rescue a governor's stop
-      }
-    case "resume":
-      if leaving { rt[id]?.afterPark = action } else if resting { requestStart(id, s, resume: resume, settings, t) }
-    case "restart", "fresh":
-      // "park, then resume" (spec 6.4): never through a running turn
-      if WorkersFile.liveStates.contains(state) {
-        rt[id]?.afterPark = action
-        requestPark(id, reason: "control", byOwner: true)
-      } else if leaving {
-        rt[id]?.afterPark = action
-        if state == "stopping" { armStopLimit(id) }
-      } else {
-        if action == "fresh", var r = rt[id] {
-          if let old = r.entry.session_id { r.entry.previous_ids = Array((r.entry.previous_ids + [old]).suffix(5)) }
-          r.entry.session_id = nil
-          r.entry.state = "off"
-          r.restartTimes = []
-          r.entry.restarts = []
-          rt[id] = r
-        }
-        rt[id]?.entry.error = nil
-        if rt[id]?.entry.state == "failed" { rt[id]?.entry.state = "parked" }
-        requestStart(id, s, resume: action == "restart" && resume, settings, t)
-      }
-    default:
-      return
-    }
     dirty = true
   }
 
@@ -497,7 +493,7 @@ public final class WorkerManager: @unchecked Sendable {
     }
   }
 
-  private func requestStart(_ id: String, _ s: ThreadSessionSettings, resume: Bool, _ settings: DedicatedSettings, _ t: Double) {
+  func requestStart(_ id: String, _ s: ThreadSessionSettings, resume: Bool, _ settings: DedicatedSettings, _ t: Double) {
     // one worker per folder, except the agent folder (main's own; workers there don't touch git, OPTION-C 7.2)
     let cwd = s.cwd ?? options.agentDir
     if cwd != options.agentDir, folderClaimed(cwd, by: id) {
@@ -609,6 +605,16 @@ public final class WorkerManager: @unchecked Sendable {
     case .unknown: return hold(id, resume: resume, now: t)
     }
     closeNoticeRecord(id)  // a new start has no dialog open
+    let claudeDir = WorkerMcp.claudeDir(home: options.home, env: baseEnv())
+    // the guards' file is main's --settings unless main's own arguments carry one (then the guards are not active for main)
+    let guardsOff = options.mainArgs.contains { $0 == "--settings" || $0.hasPrefix("--settings=") }
+    var plan: WorkerMcp.Plan?
+    if let allow = s.mcpAllow {
+      plan = WorkerMcp.plan(
+        allow: allow, agentDir: options.agentDir, cwd: cwd, home: options.home, claudeDir: claudeDir, talosHome: options.talosHome,
+        threadId: id)
+      if plan == nil { return fail(id, "start_failed", "the MCP list needs a talos-app server in the agent folder's .mcp.json") }
+    }
     let sessionId = (resume ? r.entry.session_id : nil) ?? UUID().uuidString.lowercased()
     let nonce = Self.nonce()
     let d = dir(id)
@@ -622,10 +628,23 @@ public final class WorkerManager: @unchecked Sendable {
         .init(
           threadId: id, claudePath: options.claudePath, baseEnv: baseEnv(), talosHome: options.talosHome,
           agentDir: options.agentDir, cwd: cwd, model: s.model, effort: s.effort, permissionFlag: options.permissionFlag,
-          sessionId: sessionId, resume: resume, nonce: nonce, preamble: preamble(id), mcpConfigPath: mcpConfig(id, cwd: cwd)))
+          sessionId: sessionId, resume: resume, nonce: nonce, preamble: preamble(id),
+          mcpConfigPath: plan == nil ? mcpConfig(id, cwd: cwd) : nil, mcp: plan,
+          mainMcpServers: WorkerMcp.visibleNames(cwd: options.agentDir, home: options.home, claudeDir: claudeDir),
+          mainDenyRules: PrivilegeCeiling.mainDenyRules(agentDir: options.agentDir, talosHome: options.talosHome),
+          mainArgs: options.mainArgs.isEmpty ? nil : options.mainArgs,
+          mainDefaultMode: PrivilegeCeiling.mainDefaultMode(
+            agentDir: options.agentDir, talosHome: options.talosHome, claudeDir: claudeDir, guardsActive: !guardsOff)))
+      if let plan { try WorkerMcp.write(plan) }
       try AtomicFile.write(Data(spec.settingsJSON.utf8), to: WorkerSpec.settingsPath(talosHome: options.talosHome, threadId: id))
       try AtomicFile.write(Data(nonce.utf8), to: d + "/nonce", mode: 0o600)
       try AtomicFile.write(Data(spec.launchScript().utf8), to: launch, mode: 0o600)
+    } catch WorkerSpec.BuildError.escalation(let denial) {
+      // wider than main: not launched, and the thread is told once
+      unlink(launch)
+      fail(id, PrivilegeCeiling.code, denial.detail, axis: denial.axis.rawValue)
+      tell(id, slot: \.ceilingNote, kind: "ceiling: \(denial.axis.rawValue)", LaunchChange.ceilingLine(denial))
+      return
     } catch {
       unlink(launch)
       fail(id, "start_failed", "\(error)")
@@ -659,17 +678,21 @@ public final class WorkerManager: @unchecked Sendable {
     r.enterOwed = false
     r.seenActivity = nil
     r.activityChangedAwake = nil
+    r.forgetScreen()
     r.entry.state = "starting"
     r.entry.session_id = sessionId
     r.entry.pane_pid = 0
     r.entry.cwd = cwd
     r.entry.model = s.model
+    // `mcp_allow` here is the list as configured, names that were not found included: it is compared with the config, not with the file
+    r.entry.launched = .init(cwd: cwd, model: s.model, effort: s.effort, mcp_allow: s.mcpAllow)
     r.entry.started_at = ISOTime.string(t)
     r.entry.parked_at = nil
     r.entry.error = nil
     rt[id] = r
     dirty = true
     emit(.started(thread: id, resume: resume))
+    noteLaunch(id, missing: plan?.missing ?? [], refused: plan?.refused ?? [], ownFolder: plan?.ownFolder ?? [:])
     _ = claimPane(id)
   }
 
@@ -766,16 +789,17 @@ public final class WorkerManager: @unchecked Sendable {
       }
       let still = awake() - (rt[id]?.screenSameSince ?? awake()) >= options.dialogSettle
       let seen: DialogMatcher.Screen = still ? DialogMatcher.liveDialog(rows) : .none
-      noteScreen(id, seen, settled: still)
+      noteScreens(id, rows: rows, seen: seen, settled: still)
+      answerDialog(id)  // a tap's answer for the dialog just noted (WorkerDialogAnswer.swift)
       r = rt[id] ?? r
       if r.entry.state == "starting" {
-        if seen.isDialog {
+        if let waiting = seen.isDialog ? seen.label : r.promptWatch.current.map({ $0.title ?? "prompt" }) {
           // Workers have no dialog by design; one here (trust, MCP consent, login) needs the owner. The pane stays up so the
-          // owner can answer it in the Terminals window; nothing is typed. The ready timeout waits while it is on screen. A
+          // owner can answer it in the Terminals window (or with a tap); nothing else is typed. The ready timeout waits while it is on screen. A
           // dialog nobody answers for `dialogLimit` stops the worker as `needs_mac`, as before.
           if let since = r.dialogSinceAwake, awake() - since > options.dialogLimit {
             stopNow(id)
-            return fail(id, "needs_mac", seen.label)
+            return fail(id, "needs_mac", waiting)
           }
           rt[id]?.startedAwake = awake()
           return
@@ -795,7 +819,7 @@ public final class WorkerManager: @unchecked Sendable {
           return
         }
       }
-      if let a = ps.activity { r.lastActive = max(r.lastActive, a) }
+      noteScreen(&r, rows: rows, now: t)
       rt[id] = r
       let busy = readsBusy(id, ps, now: t)
       if r.entry.state == "stopping" {
@@ -811,36 +835,13 @@ public final class WorkerManager: @unchecked Sendable {
       if r.entry.state != next { dirty = true }
       r.entry.state = next
       rt[id]?.entry.state = next
-      if !r.pendingPointer { noteHeldPointer(id, held: false) }
-      if r.pendingPointer {
-        // the typing guard, like the screen: unread is not "nobody is typing"
-        let clients = run(tmux(id).listClientsActivity())
-        guard clients.ok, let activity = TmuxCommands.parseClientActivity(clients.out) else { return }
-        // Claude's input box: text the owner typed is theirs. Read from the pane whether or not a client is attached (switching
-        // away detaches). Our own text waiting for its Enter is not a draft. A held pointer is not silent (`noteHeldPointer`).
-        let draft = !r.enterOwed && PointerTyper.draftPresent(rows: rows)
-        if !r.enterOwed { noteHeldPointer(id, held: draft) }
-        // the typing guard looks at the screen without waiting for it to settle: a dialog just drawn must not get a line typed in
-        let shape = DialogMatcher.liveDialog(rows)
-        if PointerTyper.mayType(screen: scr == .none ? shape : scr, lastClientActivity: activity.max(), now: t, draftPresent: draft) {
-          if !r.enterOwed {
-            guard run(tmux(id).sendLiteral(PointerTyper.text)).ok else { return }
-            rt[id]?.enterOwed = true
-          }
-          guard run(tmux(id).sendEnter()).ok else { return }
-          rt[id]?.enterOwed = false
-          rt[id]?.pendingPointer = false
-          noteHeldPointer(id, held: false)
-          rt[id]?.lastActive = t
-          rt[id]?.entry.last_turn_at = ISOTime.string(t)
-          dirty = true
-          emit(.pointer(thread: id))
-          return
-        }
-      }
+      if !r.pendingPointer { noteHeldPointer(id, .none) }
+      if r.pendingPointer, typeOwedPointer(id, rows: rows, screen: scr, now: t) { return }
       let idle = options.idleSecondsOverride ?? Double((settings.threads[id]?.idleParkMin ?? 30) * 60)
       // a worker waiting on the owner is not parked for being quiet: the answer is what it is waiting for
-      if !busy, !r.pendingPointer, r.needsYouPrompt == nil, t - r.lastActive >= idle { beginPark(id, reason: "idle") }
+      if !busy, !r.pendingPointer, r.needsYouPrompt == nil, t - r.lastActive >= idle, idleLimitPassed(id, idle: idle, now: t) {
+        beginPark(id, reason: "idle")
+      }
     case "parking":
       // until the whole group is gone, not just the pane: a child that ignored SIGTERM must not outlive "parked"
       if r.pgid <= 0 || !signaller.alive(r.pgid) {
@@ -901,18 +902,19 @@ public final class WorkerManager: @unchecked Sendable {
     rt[id]?.needsYouPrompt = nil
     rt[id]?.dialogSinceAwake = nil
     rt[id]?.dlg.reset()
-    rt[id]?.held.reset()
-    rt[id]?.draftSince = nil
+    rt[id]?.promptWatch = PromptWatch()
+    resetHolds(id)
     closeNoticeRecord(id)
     unlink(dir(id) + "/ready")
     unlink(dir(id) + "/nonce")
     unlink(dir(id) + "/launch.sh")
   }
 
-  private func fail(_ id: String, _ code: String, _ detail: String) {
+  private func fail(_ id: String, _ code: String, _ detail: String, axis: String? = nil) {
     if rt[id] == nil { return }
     rt[id]?.entry.state = "failed"
-    rt[id]?.entry.error = .init(code: code, detail: String(detail.prefix(300)), at: ISOTime.string(now()))
+    rt[id]?.entry.error = .init(code: code, detail: String(detail.prefix(300)), at: ISOTime.string(now()), axis: axis)
+    rt[id]?.folderChangeTo = nil
     rt[id]?.pendingPointer = false
     rt[id]?.afterPark = nil
     rt[id]?.heldSince = nil
@@ -923,7 +925,7 @@ public final class WorkerManager: @unchecked Sendable {
   // MARK: park and stop
 
   /// Park after the current turn (spec 2.4, 6.3, section 8 row 13): `stopping` until the pane goes quiet.
-  private func requestPark(_ id: String, reason: String, byOwner: Bool) {
+  func requestPark(_ id: String, reason: String, byOwner: Bool) {
     guard let r = rt[id], !r.adoptPending, WorkersFile.liveStates.contains(r.entry.state) else { return }
     rt[id]?.entry.state = "stopping"
     rt[id]?.parkReason = reason
@@ -932,7 +934,7 @@ public final class WorkerManager: @unchecked Sendable {
   }
 
   /// From the first tap: a second one doesn't buy the turn more time.
-  private func armStopLimit(_ id: String) {
+  func armStopLimit(_ id: String) {
     if rt[id]?.stopDeadline == nil { rt[id]?.stopDeadline = awake() + options.stopLimit }
   }
 

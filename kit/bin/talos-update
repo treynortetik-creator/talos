@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# talos-update: update the Talos kit, roll it back, or restore one file. See scripts/talos-update.py (--help). Owner's Terminal only.
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+exec python3 "$HERE/../scripts/talos-update.py" "$@"

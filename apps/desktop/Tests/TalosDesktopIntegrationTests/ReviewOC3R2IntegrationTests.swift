@@ -11,7 +11,8 @@ extension WorkerRig {
   var faultDir: String { root + "/faults" }
 
   /// The real tmux, except that a verb with a file in `faults/` fails the way an overloaded server does: stderr, exit 1,
-  /// no timeout. File content: `once` (one failure), `hold` (until removed), `slow` (once, after 0.4 s).
+  /// no timeout. File content: `once` (one failure), `hold` (until removed), `slow` (once, after 0.4 s). The verb `-e` is the
+  /// `capture-pane` that reads the colours (the plain one is `capture-pane`).
   func faultShim() throws -> String {
     try FileManager.default.createDirectory(atPath: faultDir, withIntermediateDirectories: true)
     let p = root + "/tmux-fault"
@@ -20,7 +21,7 @@ extension WorkerRig {
     d='\(faultDir)'
     for a in "$@"; do
       case "$a" in
-        display-message|has-session|capture-pane|list-clients|Enter)
+        display-message|has-session|capture-pane|list-clients|Enter|-e)
           if [ -f "$d/$a" ]; then
             m=$(cat "$d/$a")
             [ "$m" = hold ] || rm -f "$d/$a"
@@ -42,13 +43,16 @@ extension WorkerRig {
 
   func clearFault(_ verb: String) { unlink(faultDir + "/" + verb) }
 
-  /// A live worker, then the app gone: tmux and the worker stay, `workers.json` stays.
-  func liveWorkerThenAppGone(_ id: String = "trip", tmux: String? = nil) throws -> Int32 {
+  /// A live worker, then the app gone: tmux and the worker stay, `workers.json` stays. `pointerTyped`: not until the first pointer
+  /// is in too (it waits for Claude's input box, which can be drawn after the worker is live). An owed pointer is in `workers.json` and
+  /// survives the app (PointerOwedTests); these tests are about something else, and want exactly one line typed before the app goes.
+  func liveWorkerThenAppGone(_ id: String = "trip", tmux: String? = nil, pointerTyped: Bool = false) throws -> Int32 {
     manager(tmux: tmux)
     mgr.startTicking()
     try wake(id)
     #expect(wait(8) { up(id) })
     #expect(wait(3) { (fileOnDisk?.threads[id]?.pane_pid ?? 0) > 1 })
+    if pointerTyped { #expect(wait(8) { typedLines.count == 1 }, "the first pointer was never typed: \(why(id))") }
     let pid = fileOnDisk?.threads[id]?.pane_pid ?? 0
     mgr.detach()
     return pid

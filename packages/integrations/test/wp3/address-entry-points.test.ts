@@ -18,6 +18,8 @@ const seen = <R>(calls: string[], u: unknown, answer: R): R => {
   calls.push(String(u))
   return answer
 }
+// every address any caller must refuse, as a host in a URL (a zone id cannot sit in a URL host)
+const everyBlocked = [...corpus.core, ...corpus.embedded, ...corpus.alsoBlocked.filter((a) => !a.includes('%'))]
 const hostOf = (a: string) => (a.includes(':') ? `[${a}]` : a)
 
 const ctx = (
@@ -39,12 +41,9 @@ const recorder = () => {
 }
 
 describe('saving a feed address (assertPublicFeedUrl)', () => {
-  it.each(corpus.core)('refuses %s as the host', (a) => {
+  it.each(everyBlocked)('refuses %s as the host', (a) => {
     expect(() => assertPublicFeedUrl(`http://${hostOf(a)}/feed`)).toThrow(/private host/)
     expect(() => assertPublicFeedUrl(`https://${hostOf(a)}:8443/feed`)).toThrow(/private host/)
-  })
-  it.each(corpus.alsoBlocked.filter((a) => !a.includes('%')))('refuses %s as the host', (a) => {
-    expect(() => assertPublicFeedUrl(`http://${hostOf(a)}/feed`)).toThrow(/private host/)
   })
   it.each(corpus.public)('allows %s as the host', (a) => {
     expect(assertPublicFeedUrl(`https://${hostOf(a)}/feed`).protocol).toBe('https:')
@@ -78,7 +77,7 @@ describe('saving a feed address (assertPublicFeedUrl)', () => {
 })
 
 describe('the address helpers every caller shares', () => {
-  it.each(corpus.core)('isPrivateAddress and assertPublicAddress refuse %s', (a) => {
+  it.each(everyBlocked)('isPrivateAddress and assertPublicAddress refuse %s', (a) => {
     expect(isPrivateAddress(a)).toBe(true)
     expect(() => assertPublicAddress(a)).toThrow(/private host/)
   })
@@ -91,12 +90,12 @@ describe('the address helpers every caller shares', () => {
 })
 
 describe('polling', () => {
-  it.each(corpus.core)('a feed name that resolves to %s is refused and nothing is fetched', async (a) => {
+  it.each(everyBlocked)('a feed name that resolves to %s is refused and nothing is fetched', async (a) => {
     const r = recorder()
     await expect(getIntegration('rss').poll?.(ctx(r.f, async () => [a]))).rejects.toThrow(/private host/)
     expect(r.calls).toEqual([])
   })
-  it.each(corpus.core)('a public feed that redirects to %s is refused on the hop', async (a) => {
+  it.each(everyBlocked)('a public feed that redirects to %s is refused on the hop', async (a) => {
     const calls: string[] = []
     const f = (async (u: string) =>
       seen(
@@ -107,7 +106,7 @@ describe('polling', () => {
     await expect(getIntegration('rss').poll?.(ctx(f, async () => ['93.184.216.34']))).rejects.toThrow(/private host/)
     expect(calls).toEqual(['https://feeds.example.org/rss'])
   })
-  it.each(corpus.core)('a redirect to a name that resolves to %s is refused on the hop', async (a) => {
+  it.each(everyBlocked)('a redirect to a name that resolves to %s is refused on the hop', async (a) => {
     const calls: string[] = []
     const f = (async (u: string) =>
       seen(

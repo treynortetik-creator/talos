@@ -42,6 +42,13 @@ export const PERMISSION_MAYBE_ANSWERED_MS = 60_000
 
 export const PERMISSION_HIDDEN_WARNING = 'Part of this call is hidden. Approve at the Mac.'
 export const PERMISSION_REPEAT_WARNING = 'This prompt can only be answered at the Mac.'
+/** The pinned "ends with:" line under every permission card's call. */
+export const PERMISSION_TAIL_CHARS = 120
+/**
+ * A notification can offer Approve only for a call it can show whole: one short visible line. Anything longer (or with a visible
+ * line-break glyph) shows Open, which goes to the full-screen approval sheet where the owner scrolls through all of it.
+ */
+export const PERMISSION_NOTICE_MAX_CHARS = 150
 export const PERMISSION_TOO_LONG_BODY = 'This call is too long to show here whole. Approve or deny it at the Mac.'
 export const PERMISSION_MAYBE_ANSWERED = 'May already be answered at the Mac'
 
@@ -49,13 +56,7 @@ export const PERMISSION_MAYBE_ANSWERED = 'May already be answered at the Mac'
 const MAX_SHOWN = 20_000
 const TITLE_MAX = 120
 
-export type PermissionHiddenReason =
-  | 'elided'
-  | 'unserializable'
-  | 'truncated'
-  | 'too_long'
-  | 'bidi_or_invisible'
-  | 'redacted'
+export type PermissionHiddenReason = 'elided' | 'unserializable' | 'truncated' | 'too_long' | 'redacted'
 
 /**
  * The oldest Claude Code whose permission relay is safe to approve from (CC-C1-REVIEW F1, channels reference fetched
@@ -84,12 +85,23 @@ export const PERMISSION_OLD_CLIENT_WARNING = "This Claude Code can't show the ca
  * Characters that make text render differently from its bytes: C0/C1 controls (the relay folds whitespace, so even a
  * newline means unsanitized text), bidi embeddings, overrides and isolates, zero-width and other invisible format
  * characters, variation selectors, and Unicode tag characters. `tool_name` is not sanitized by Claude Code at all.
+ * Beyond the listed ones it takes every Default_Ignorable_Code_Point, every format (Cf), unassigned (Cn), private-use (Co) and
+ * surrogate (Cs) code point, the object replacement character, and any run of more than three combining marks: an unlisted
+ * invisible code point is exactly what a padded command hides behind. The app's `revealHidden` is built from this source.
  */
 export const INVISIBLE_OR_BIDI =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
   // biome-ignore lint/suspicious/noMisleadingCharacterClass: single code points on purpose, combining marks included
-  /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u0334-\u0338\u0600-\u0604\u061c\u070f\u0890\u0891\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2028\u2029\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}\u{1bca0}-\u{1bca3}\u{1d173}-\u{1d17a}]/u
+  /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u0334-\u0338\u0600-\u0604\u061c\u070f\u0890\u0891\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2028\u2029\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}\u{1bca0}-\u{1bca3}\u{1d173}-\u{1d17a}]|[\p{Default_Ignorable_Code_Point}\p{Cf}\p{Cn}\p{Co}\p{Cs}\uFFFC]|\p{M}{4,}/u
 const INVISIBLE_OR_BIDI_ALL = new RegExp(INVISIBLE_OR_BIDI.source, 'gu')
+
+/**
+ * Blanks that draw as a gap and so can pad a command: no-break space, U+1680, U+2000 to U+200A, U+202F, U+205F, U+3000. They are
+ * marked as `[U+XXXX]` on a PERMISSION card only (`permissionVisibleText`); every other card, and every card push, keeps the
+ * shared class above, so an email draft with a no-break space reads as it always did.
+ */
+export const PERMISSION_EXTRA_MARKED = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/u
+const PERMISSION_MARKED_ALL = new RegExp(`${INVISIBLE_OR_BIDI.source}|${PERMISSION_EXTRA_MARKED.source}`, 'gu')
 
 /**
  * Control characters that would otherwise fold into a plain space or vanish, shown as a visible glyph so a multi-line
@@ -101,13 +113,37 @@ const CONTROL_GLYPHS: Record<string, string> = { '\n': '⏎', '\r': '␍', '\t':
  * Shows each such character as a visible glyph (newline `⏎`, return `␍`, tab `⇥`) or `[U+XXXX]` so the owner sees it is
  * there. Identity on clean text.
  */
+function markHidden(text: string, re: RegExp): string {
+  return text.replace(re, (run) =>
+    [...run]
+      .map((ch) => {
+        const glyph = CONTROL_GLYPHS[ch]
+        if (glyph) return glyph
+        const cp = ch.codePointAt(0) ?? 0
+        return `[U+${cp.toString(16).toUpperCase().padStart(4, '0')}]`
+      })
+      .join(''),
+  )
+}
+
 export function visibleText(text: string): string {
-  return text.replace(INVISIBLE_OR_BIDI_ALL, (ch) => {
-    const glyph = CONTROL_GLYPHS[ch]
-    if (glyph) return glyph
-    const cp = ch.codePointAt(0) ?? 0
-    return `[U+${cp.toString(16).toUpperCase().padStart(4, '0')}]`
-  })
+  return markHidden(text, INVISIBLE_OR_BIDI_ALL)
+}
+
+/** `visibleText` plus the exotic spaces: what a permission card shows (the hook render leaves them to this). */
+export function permissionVisibleText(text: string): string {
+  return markHidden(text, PERMISSION_MARKED_ALL)
+}
+
+/**
+ * The last PERMISSION_TAIL_CHARS visible characters of a call, behind an ellipsis when cut, for the line pinned under the call
+ * box: even a long call cannot hide its end. `visibleText` makes any hidden character show as [U+XXXX].
+ */
+export function permissionCallTail(body: string): string {
+  const chars = [...permissionVisibleText(body)]
+  return chars.length <= PERMISSION_TAIL_CHARS
+    ? chars.join('')
+    : `\u2026${chars.slice(-PERMISSION_TAIL_CHARS).join('')}`
 }
 
 function versionAtLeast(v: string | undefined, floor: string): boolean {
@@ -138,12 +174,10 @@ export function permissionHiddenReasons(r: PermissionRequestT): PermissionHidden
   if (/…\s*$/.test(r.input_preview)) out.push('truncated')
   // The mask also hits key names, so a displayed key may not be the real one (channels reference): a hidden part.
   if (r.description.includes('[REDACTED]') || r.input_preview.includes('[REDACTED]')) out.push('redacted')
-  if ([r.tool_name, r.description, r.input_preview].some((t) => INVISIBLE_OR_BIDI.test(t)))
-    out.push('bidi_or_invisible')
   if (
-    visibleText(r.input_preview).length > MAX_SHOWN ||
-    visibleText(r.description).length > MAX_SHOWN ||
-    permissionTitle(visibleText(r.tool_name)).length > TITLE_MAX ||
+    permissionVisibleText(r.input_preview).length > MAX_SHOWN ||
+    permissionVisibleText(r.description).length > MAX_SHOWN ||
+    permissionTitle(permissionVisibleText(r.tool_name)).length > TITLE_MAX ||
     new TextEncoder().encode(jcs(bindFields(r))).length > MAX_CARD_PAYLOAD_BYTES
   )
     out.push('too_long')
@@ -183,6 +217,14 @@ export type ComposePermissionCardInput = {
   client_version?: string
   /** Names of other loaded channels that can also answer a permission prompt; adds a one-line note, keeps Allow. */
   other_channels?: readonly string[]
+  /** An explainer is on: the card starts with `explain: pending` and the explanation follows as a card.update. */
+  explain?: boolean
+}
+
+/** The title the composer writes for a tool name (hidden characters shown as markers; a very long name gets a fixed title). */
+function shownTitle(toolName: string): string {
+  const t = permissionTitle(permissionVisibleText(toolName))
+  return t.length <= TITLE_MAX ? t : 'Allow a tool call?'
 }
 
 /** Builds the pending card. Pure: the caller writes it to the ledger before sending `card.create`. */
@@ -190,15 +232,14 @@ export function composePermissionCard(input: ComposePermissionCardInput): CardT 
   const r = PermissionRequestParams.parse(input.request)
   const hidden = permissionHiddenReasons(r)
   const tooLong = hidden.includes('too_long')
-  const title = permissionTitle(visibleText(r.tool_name))
   const card: CardT = {
     id: input.card_id,
     thread_id: input.thread_id,
     kind: 'permission',
-    title: title.length <= TITLE_MAX ? title : 'Allow a tool call?',
+    title: shownTitle(r.tool_name),
     destination: [],
-    // Invisible and bidi characters are shown as [U+XXXX]; such a card is deny-only anyway (bidi_or_invisible).
-    body: tooLong ? PERMISSION_TOO_LONG_BODY : visibleText(r.input_preview),
+    // Invisible and bidi characters are shown as [U+XXXX] and the card stays Allow-able: the owner sees every character.
+    body: tooLong ? PERMISSION_TOO_LONG_BODY : permissionVisibleText(r.input_preview),
     body_format: 'plain',
     fields: tooLong
       ? []
@@ -206,7 +247,7 @@ export function composePermissionCard(input: ComposePermissionCardInput): CardT 
           {
             key: 'summary',
             label: "Claude's summary",
-            value: visibleText(r.description),
+            value: permissionVisibleText(r.description),
             editable: false,
             multiline: true,
           },
@@ -225,6 +266,8 @@ export function composePermissionCard(input: ComposePermissionCardInput): CardT 
     created_at: new Date(input.now).toISOString(),
     expires_at: new Date(input.now + PERMISSION_CARD_TTL_S * 1000).toISOString(),
   }
+  // Beside the card, outside the binding: bindingFrom() does not pick it, so the hash below is the same with or without it.
+  if (input.explain) card.explain = { status: 'pending' }
   if (hidden.length > 0) card.warning = PERMISSION_HIDDEN_WARNING
   else if (!permissionClientVerified(input.client_version)) card.warning = PERMISSION_OLD_CLIENT_WARNING
   else if (input.repeated) card.warning = PERMISSION_REPEAT_WARNING
@@ -279,15 +322,15 @@ export function permissionCardAllowsPrimary(card: PermissionAllowView): boolean 
     if (permissionHiddenReasons(r).length > 0) return false
     const f = card.fields
     return (
-      card.title === permissionTitle(r.tool_name) &&
+      card.title === shownTitle(r.tool_name) &&
       card.summary === undefined &&
       card.risk === permissionRisk(r.tool_name) &&
-      card.body === r.input_preview &&
+      card.body === permissionVisibleText(r.input_preview) &&
       card.body_format === 'plain' &&
       f.length === 1 &&
       f[0]?.key === 'summary' &&
       f[0]?.label === "Claude's summary" &&
-      f[0]?.value === r.description &&
+      f[0]?.value === permissionVisibleText(r.description) &&
       f[0]?.editable === false &&
       card.allow_edit === false &&
       card.allow_revise === false &&
@@ -344,6 +387,10 @@ export class OpenPermissionIds {
     return { repeated: false }
   }
   isOpen = (requestId: string): boolean => this.open.has(requestId)
+  /** True once the id was opened in this session, open or not (a minted id must never reuse one Claude Code could send). */
+  hasSeen(requestId: string): boolean {
+    return this.seen.has(requestId)
+  }
   close(requestId: string): void {
     this.open.delete(requestId)
   }

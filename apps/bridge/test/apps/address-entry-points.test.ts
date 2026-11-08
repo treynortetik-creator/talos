@@ -34,6 +34,8 @@ const guardError = async (p: Promise<unknown>) => {
   expect(e).toBeInstanceOf(GuardError)
   return e as GuardError
 }
+// every address any caller must refuse, as a host in a URL (a zone id cannot sit in a URL host)
+const everyBlocked = [...corpus.core, ...corpus.embedded, ...corpus.alsoBlocked.filter((a) => !a.includes('%'))]
 const WILL_NOT = 'address Talos will not contact'
 
 describe('the sign-in guard refuses every core address, every way in', () => {
@@ -42,7 +44,7 @@ describe('the sign-in guard refuses every core address, every way in', () => {
     expect(corpus.gapsInOldOauthCheck.every((a) => corpus.core.includes(a))).toBe(true)
   })
 
-  it.each(corpus.core)('literal URL https://%s never gets a request', async (a) => {
+  it.each(everyBlocked)('literal URL https://%s never gets a request', async (a) => {
     const calls: string[] = []
     const g = guardedFetch({
       fetch: async (u) => seen(calls, u, json({})),
@@ -53,14 +55,14 @@ describe('the sign-in guard refuses every core address, every way in', () => {
     expect(calls).toEqual([])
   })
 
-  it.each(corpus.core)('a name that resolves to %s never gets a request', async (a) => {
+  it.each(everyBlocked)('a name that resolves to %s never gets a request', async (a) => {
     const calls: string[] = []
     const g = guardedFetch({ fetch: async (u) => seen(calls, u, json({})), resolve: async () => [a] })
     expect((await guardError(g('https://as.example.com/x'))).message).toContain(WILL_NOT)
     expect(calls).toEqual([])
   })
 
-  it.each(corpus.core)('a public name that redirects to %s: the second request is never made', async (a) => {
+  it.each(everyBlocked)('a public name that redirects to %s: the second request is never made', async (a) => {
     const calls: string[] = []
     const g = guardedFetch({
       fetch: async (u) =>
@@ -71,7 +73,7 @@ describe('the sign-in guard refuses every core address, every way in', () => {
     expect(calls).toEqual(['https://as.example.com/x'])
   })
 
-  it.each(corpus.core)('a redirect to a name that resolves to %s is refused on the hop', async (a) => {
+  it.each(everyBlocked)('a redirect to a name that resolves to %s is refused on the hop', async (a) => {
     const calls: string[] = []
     const g = guardedFetch({
       fetch: async (u) =>
@@ -314,7 +316,7 @@ describe('`talos-app apps login`, the command-line way in', () => {
     },
   )
 
-  it.each(corpus.core)('a stored server name that resolves to %s: login stops, no request is made', async (a) => {
+  it.each(everyBlocked)('a stored server name that resolves to %s: login stops, no request is made', async (a) => {
     const { calls, c } = await setup('https://mcp.example.com/mcp', (calls) => ({
       fetch: (async (u: string) => seen(calls, u, json({}))) as never,
       resolveHost: async () => [a],

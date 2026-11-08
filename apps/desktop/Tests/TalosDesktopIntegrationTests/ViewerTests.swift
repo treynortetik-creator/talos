@@ -34,14 +34,15 @@ struct ViewerTests {
     let r = try Rig(.tmux, scenario: "dev-dialog.sh")
     defer { r.teardown() }
     r.start()
-    #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) })
-    #expect(r.wait(5) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart })
+    // Every bound here only caps a hang: a real tmux costs a subprocess per read, and each poll below asks for a pass now.
+    #expect(r.wait(30) { r.screenContains(DialogMatcher.Strings.devTitle) })
+    #expect(r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart })
     let d = ViewerDelegate()
     let viewer = startViewer(r, d)
-    #expect(r.wait(5) { viewer.running })
+    #expect(r.wait(15) { viewer.running })
     usleep(800_000)
     #expect(r.config.session.confirmedAt == nil, "attaching presses nothing")
-    viewer.send(data: [0x0d][...])
+    #expect(viewer.typeDirectly([0x0d][...]))
     // Generous bounds: they only cap a hang. The whole suite runs beside Option C's suites, which load the machine.
     #expect(r.wait(30) { r.sup.tickNow(); return isRunning(r.phase()) }, "running after Enter through the viewer: \(r.phase())")
     #expect(r.wait(15) { r.config.session.confirmedAt != nil })

@@ -10,6 +10,7 @@ import {
   checkEditAllowed,
   type ErrorCodeT,
   editedHash,
+  isBridgeHandledCardKind,
   payloadHash,
 } from '@talos-app/protocol'
 import type { HistoryStore } from './history-store.ts'
@@ -42,6 +43,8 @@ export type ResolutionRecord = {
   note?: string
   /** The Mac's own clock when it took the decision; `at` is the owner's signed tap. */
   taken_at?: string
+  /** Which device took the decision, for cards that say so (dialog cards). */
+  by?: string
 }
 
 type RawRow = Omit<LedgerRow, 'binding' | 'resolution' | 'actor'> & {
@@ -94,8 +97,6 @@ export type ResolveOutcome =
       newlyExpired?: boolean
     }
 
-/** Card kinds whose decision the bridge acts on itself; the agent is never told about them. */
-const BRIDGE_HANDLED_KINDS = new Set(['permission', 'config'])
 const TELLING_PREFIX = 'card_telling:'
 
 export class CardLedger {
@@ -282,7 +283,11 @@ export class CardLedger {
    * and hashed right. (The owner signature was verified on the raw frame before this runs.) On success the card is set
    * `resolved` atomically, so a second resolve cannot also pass.
    */
-  resolve(input: ResolveInput, nowMs: number, opts: { ageAtMs?: number; frameId?: string } = {}): ResolveOutcome {
+  resolve(
+    input: ResolveInput,
+    nowMs: number,
+    opts: { ageAtMs?: number; frameId?: string; by?: string } = {},
+  ): ResolveOutcome {
     const row = this.get(input.card_id)
     if (!row) return { ok: false, code: 'card_not_pending', reason: 'unknown_card' }
     if (row.state === 'expired') return { ok: false, code: 'card_expired', reason: 'expired', row }
@@ -341,8 +346,9 @@ export class CardLedger {
       payload_hash: approvedHash,
       ...(input.note ? { note: input.note } : {}),
       taken_at: new Date(nowMs).toISOString(),
+      ...(opts.by ? { by: opts.by } : {}),
     }
-    const tells = row.actor === 'agent' && !BRIDGE_HANDLED_KINDS.has(row.binding.kind)
+    const tells = row.actor === 'agent' && !isBridgeHandledCardKind(row.binding.kind)
     const won = this.store.db.transaction(() => {
       if (!this.transition(row.id, 'pending', 'resolved', resolution.taken_at, resolution)) return false
       if (tells) this.store.kvSet(`${TELLING_PREFIX}${row.id}`, opts.frameId ?? '')

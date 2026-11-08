@@ -12,10 +12,9 @@ import { agentRowSample, defineAgentsViewContract } from '@talos-app/testkit'
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { createStore } from 'zustand/vanilla'
 import { AgentsList, useAgentsView } from '../../src/features/agents/AgentsList.tsx'
-import { AgentsRail, RAIL_PREF_KEY, railOpen, setRailPref } from '../../src/features/agents/AgentsRail.tsx'
 import {
   agentTree,
   chipLabel,
@@ -155,22 +154,16 @@ describe('row helpers', () => {
     const shellsOnly = { ...snap, rows: snap.rows.filter((r) => r.kind === 'shell') }
     expect(chipLabel(shellsOnly)).toMatchObject({ count: 2, unit: 'shells', agents: 0 })
   })
-  it('the rail opens by itself only while the owner has not chosen', () => {
-    expect(railOpen(null, true)).toBe(true)
-    expect(railOpen(null, false)).toBe(false)
-    expect(railOpen('closed', true)).toBe(false)
-    expect(railOpen('open', false)).toBe(true)
-  })
 })
 
 // ---- components ---------------------------------------------------------------------------------------------------
 
-function ListProbe({ threadId, mode }: { threadId: string; mode: 'inline' | 'push' }) {
+function ListProbe({ threadId }: { threadId: string }) {
   const view = useAgentsView()
-  return <AgentsList threadId={threadId} mode={mode} view={view} />
+  return <AgentsList threadId={threadId} view={view} />
 }
 
-function mount(opts: FakeClientOptions, ui: React.ReactElement = <ListProbe threadId="general" mode="inline" />) {
+function mount(opts: FakeClientOptions, ui: React.ReactElement = <ListProbe threadId="general" />) {
   const client = setup(opts)
   render(
     <StorageProvider storage={createMemoryStorage()}>
@@ -234,22 +227,14 @@ describe('the list', () => {
     expect(within(screen.getByRole('list', { name: 'Shells and monitors' })).getAllByRole('listitem')).toHaveLength(3)
   })
 
-  it('tap expands the recent lines (inline) with relative times', async () => {
+  it('a tap opens the detail in place of the list, with the recent lines and a way back', async () => {
     mount({ agents: 'demo' })
     const btn = await screen.findByRole('button', { name: /research mods API/ })
-    expect(btn).toHaveAttribute('aria-expanded', 'false')
     await userEvent.click(btn)
-    expect(btn).toHaveAttribute('aria-expanded', 'true')
     const recent = screen.getByTestId('agent-recent')
     expect(recent.textContent).toContain('Run vitest suites')
     expect(recent.textContent).toMatch(/\ds ago/)
     expect(screen.getByTestId('agent-detail').textContent).toContain('Sonnet 5.5')
-  })
-
-  it('push mode opens a detail view with a way back', async () => {
-    mount({ agents: 'demo' }, <ListProbe threadId="general" mode="push" />)
-    await userEvent.click(await screen.findByRole('button', { name: /research mods API/ }))
-    expect(screen.getByTestId('agent-detail')).toBeInTheDocument()
     expect(screen.queryByRole('list', { name: 'Agents' })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /All agents/ }))
     expect(screen.getByRole('list', { name: 'Agents' })).toBeInTheDocument()
@@ -257,10 +242,13 @@ describe('the list', () => {
 
   it('Stop shows only for a stoppable live row and sends a signed agent_stop', async () => {
     const client = mount({ agents: 'demo' })
+    const back = () => userEvent.click(screen.getByRole('button', { name: /All agents/ }))
     await userEvent.click(await screen.findByRole('button', { name: /Draft release notes/ }))
     expect(screen.queryByTestId('agent-stop')).toBeNull() // completed
+    await back()
     await userEvent.click(screen.getByRole('button', { name: /Fix the flaky e2e spec/ }))
     expect(screen.queryByTestId('agent-stop')).toBeNull() // failed
+    await back()
     await userEvent.click(screen.getByRole('button', { name: /research mods API/ }))
     await userEvent.click(screen.getByTestId('agent-stop'))
     await waitFor(() => expect(agentControls(client)).toHaveLength(1))
@@ -269,6 +257,7 @@ describe('the list', () => {
     expect(f).toMatchObject({ action: 'agent_stop', agent_id: 'a00f4f30ac1399f7f', thread_id: 'general' })
     expect(typeof f.osig).toBe('string')
     await waitFor(() => expect(screen.getByTestId('agent-outcome').textContent).toBe('Stopped.'))
+    await userEvent.click(screen.getByRole('button', { name: /All agents/ }))
     await waitFor(() =>
       expect(screen.getAllByTestId('agent-row').find((r) => r.dataset.id === 'a00f4f30ac1399f7f')?.dataset.status).toBe(
         'killed',
@@ -323,84 +312,30 @@ describe('the list', () => {
 
 describe('session sheet section', () => {
   it('Agents sits right after the meters, before the tabs', async () => {
-    mount({ agents: 'demo' }, <SessionPanel threadId="general" />)
+    mount({ agents: 'demo' }, <SessionPanel threadId="general" inline />)
     const section = await screen.findByTestId('session-agents')
     const panel = screen.getByTestId('session-panel')
     const order = [
-      ...panel.querySelectorAll('[data-testid="session-usage"],[data-testid="session-agents"],[role="tablist"]'),
+      ...panel.querySelectorAll(
+        '[data-testid="session-context"],[data-testid="session-usage"],[data-testid="session-agents"],[role="tablist"]',
+      ),
     ]
     expect(order.map((e) => e.getAttribute('data-testid') ?? e.getAttribute('role'))).toEqual([
+      'session-context',
       'session-usage',
       'session-agents',
       'tablist',
     ])
     expect(section.textContent).toContain('3 active') // the Agents group only; shells have their own count
   })
-  it('no snapshot (old relay or bridge, a mod without `agents`, no mod) shows no section and no claim', async () => {
+  it('no snapshot (old relay or bridge, a mod without `agents`, no mod) still shows the section, empty, and never blames the mod', async () => {
     mount({}, <SessionPanel threadId="general" />)
     await screen.findByTestId('session-panel')
-    expect(screen.queryByTestId('session-agents')).toBeNull()
+    expect((await screen.findByTestId('session-agents')).textContent).toContain(EMPTY_TEXT)
     expect(screen.queryByText(MOD_MISSING_TEXT)).toBeNull()
     cleanup()
     mount({ mod: 'absent' }, <SessionPanel threadId="general" />)
     await screen.findByTestId('session-panel')
-    expect(screen.queryByTestId('session-agents')).toBeNull()
-  })
-})
-
-describe('the rail', () => {
-  const wide = (on: boolean) => {
-    window.matchMedia = ((q: string) => ({
-      matches: on && q.includes('1280'),
-      media: q,
-      addEventListener() {},
-      removeEventListener() {},
-    })) as unknown as typeof window.matchMedia
-  }
-  beforeEach(() => {
-    setRailPref(null)
-    wide(true)
-  })
-
-  it('opens by itself with rows; collapse persists in localStorage and wins over new rows', async () => {
-    const client = mount({ agents: 'demo' }, <AgentsRail threadId="general" />)
-    const rail = await screen.findByTestId('agents-rail')
-    expect(rail).toHaveAttribute('data-state', 'open')
-    expect(screen.getByTestId('agents-count').getAttribute('aria-live')).toBe('polite')
-    await userEvent.click(screen.getByRole('button', { name: 'Hide agents' }))
-    expect(screen.getByTestId('agents-rail')).toHaveAttribute('data-state', 'collapsed')
-    expect(localStorage.getItem(RAIL_PREF_KEY)).toBe('closed')
-    act(() => client.session.setAgents([{ id: 'new', status: 'running' }]))
-    expect(screen.getByTestId('agents-rail')).toHaveAttribute('data-state', 'collapsed')
-    expect(screen.getByTestId('agents-count').textContent).toBe('1 agent')
-    await userEvent.click(screen.getByRole('button', { name: /Show agents/ }))
-    expect(screen.getByTestId('agents-rail')).toHaveAttribute('data-state', 'open')
-    expect(localStorage.getItem(RAIL_PREF_KEY)).toBe('open')
-  })
-
-  it('an empty snapshot rests as a strip; no snapshot or below 1280 px: no rail', async () => {
-    mount({ agents: 'empty' }, <AgentsRail threadId="general" />)
-    expect(await screen.findByTestId('agents-rail')).toHaveAttribute('data-state', 'collapsed')
-    cleanup()
-    mount({}, <AgentsRail threadId="general" />)
-    expect(screen.queryByTestId('agents-rail')).toBeNull()
-    cleanup()
-    wide(false)
-    mount({ agents: 'demo' }, <AgentsRail threadId="general" />)
-    expect(screen.queryByTestId('agents-rail')).toBeNull()
-  })
-
-  it('works when localStorage throws', async () => {
-    const orig = Storage.prototype.setItem
-    Storage.prototype.setItem = () => {
-      throw new Error('blocked')
-    }
-    try {
-      mount({ agents: 'demo' }, <AgentsRail threadId="general" />)
-      await userEvent.click(await screen.findByRole('button', { name: 'Hide agents' }))
-      expect(screen.getByTestId('agents-rail')).toHaveAttribute('data-state', 'collapsed')
-    } finally {
-      Storage.prototype.setItem = orig
-    }
+    expect((await screen.findByTestId('session-agents')).textContent).toContain(EMPTY_TEXT)
   })
 })

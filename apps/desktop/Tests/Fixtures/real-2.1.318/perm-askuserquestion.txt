@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Opus 5.5 · API Usage Billing
+ ▝▝   ▝▝   /private/tmp/tsw/perm/agent
+
+▎ Channels (experimental) messages from server:stub inject directly in this session · restart without 
+▎ --dangerously-load-development-channels to stop
+▎ server:stub · no MCP server configured with that name
+
+❯ CASE:d12 do it                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Pick 
+
+Pick one?
+
+❯ 1. One
+     first
+  2. Two
+     second
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+                                                                                                                      
+
+                                                                                                                      
+
+
+
+                                                                                 

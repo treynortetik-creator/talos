@@ -62,11 +62,11 @@ struct ReviewD2ViewerTests {
     usleep(600_000)
     let agentPane = tmux(r, "display-message", "-p", "-t", "=agent:", "#{pane_id}")
     let before = tmux(r, "list-panes", "-s", "-t", "=agent", "-F", "#{pane_id}").split(separator: "\n").count
-    v.send(data: sgr(16, 10, 10))
+    #expect(v.typeDirectly(sgr(16, 10, 10)))
     usleep(60_000)
-    v.send(data: sgr(48, 30, 20))
+    #expect(v.typeDirectly(sgr(48, 30, 20)))
     usleep(60_000)
-    v.send(data: sgr(16, 30, 20, press: false))
+    #expect(v.typeDirectly(sgr(16, 30, 20, press: false)))
     usleep(500_000)
     let after = tmux(r, "list-panes", "-s", "-t", "=agent", "-F", "#{pane_id}").split(separator: "\n").count
     #expect(after == before, "panes \(before) -> \(after)")
@@ -88,9 +88,9 @@ struct ReviewD2ViewerTests {
     #expect(r.wait(5) { v.running })
     usleep(600_000)
     _ = tmux(r, "set-buffer", "--", "anything\r")
-    v.send(data: sgr(1, 10, 10))
+    #expect(v.typeDirectly(sgr(1, 10, 10)))
     usleep(60_000)
-    v.send(data: sgr(1, 10, 10, press: false))
+    #expect(v.typeDirectly(sgr(1, 10, 10, press: false)))
     usleep(1_500_000)
     #expect(r.config.session.confirmedAt == nil, "a pasted Return answered the dev-channel dialog")
     #expect(r.screenContains(DialogMatcher.Strings.devTitle), "the dialog is still up")
@@ -110,7 +110,7 @@ struct ReviewD2ViewerTests {
     #expect(r.wait(5) { v.running })
     let end = Date().addingTimeInterval(9)
     while Date() < end {
-      v.send(data: Array("x".utf8)[...])
+      v.typeDirectly(Array("x".utf8)[...])
       usleep(100_000)
     }
     #expect(r.wait(10) { isRunning(r.phase()) }, "\(r.phase())")
@@ -134,7 +134,7 @@ struct ReviewD2ViewerTests {
     #expect(r.wait(5) { v.running })
     #expect(r.wait(15) { r.starts.count >= 2 })
     #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) || isRunning(r.phase()) })
-    v.send(data: [0x0d][...])
+    #expect(v.typeDirectly([0x0d][...]))
     // An Enter that beats the next tick leaves the supervisor at .starting until noticeWait, then running: slow, not wrong.
     #expect(r.wait(20) { isRunning(r.phase()) }, "\(r.phase())")
     usleep(1_500_000)
@@ -160,7 +160,7 @@ struct ReviewD2ViewerTests {
     let end = Date().addingTimeInterval(12)
     var sawMode = false
     while Date() < end, r.starts.count < 2 || !isRunning(r.phase()) {
-      v.send(data: sgr(64, 10, 10))  // the owner scrolling back to see what happened
+      v.typeDirectly(sgr(64, 10, 10))  // the owner scrolling back to see what happened
       usleep(50_000)
       if tmux(r, "display-message", "-p", "-t", "=agent:", "#{pane_in_mode}").hasPrefix("1") { sawMode = true }
     }

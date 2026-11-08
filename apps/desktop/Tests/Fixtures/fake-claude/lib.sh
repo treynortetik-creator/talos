@@ -27,6 +27,28 @@ print_notice() {  # the registration notice once channels are live
   printf '\n > \n'
 }
 
+# Claude Code's input box with nothing in it, as the real 2.1.318 capture draws it (../real-2.1.318/empty-input.txt): a rule row, `❯` + U+00A0
+# + a space, a rule row, and the footer. The worker fakes print it where they once printed a bare ` > `, because the supervisor types
+# its pointer only when this box is on the screen.
+input_box() {
+  local rule='────────────────────────────────────────────────'
+  printf '%s\n\342\235\257\302\240 \n%s\n  \342\217\265\342\217\265 auto mode on (shift+tab to cycle)\n' "$rule" "$rule"
+}
+
+# `input_box` with the cursor on its input row, after the `❯` and U+00A0, where the pane's tty echoes what is typed (a worker fake reads
+# its lines in cooked mode, so the echo is the only place the text could show): Claude draws a typed line in its box, and the
+# supervisor sends an owed Enter only onto a box that holds its line. Row 1 of the box is three lines above the cursor.
+typing_box() { input_box; printf '\033[3A\033[3G'; }
+
+# The lines typed into a worker fake: each is logged (FAKE_TYPED_LOG) and the screen drawn again with the box empty, as Claude's is after an Enter.
+log_typed_lines() {
+  local line
+  while IFS= read -r line; do
+    printf '%s %s\n' "$TALOS_APP_WORKER_THREAD" "$line" >> "${FAKE_TYPED_LOG:-/dev/null}"
+    printf '\033[2J\033[H\n'; typing_box
+  done
+}
+
 idle() { sleep "${FAKE_MAX_LIFETIME:-600}"; exit 0; }
 
 unregister() { [ -n "${FAKE_AGENTS_DIR:-}" ] && rm -f "$FAKE_AGENTS_DIR/$$.json"; }

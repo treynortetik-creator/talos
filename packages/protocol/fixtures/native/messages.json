@@ -278,7 +278,15 @@
         "last_reply": {
           "thread_id": "general",
           "seq": 48123
-        }
+        },
+        "viewing": "general",
+        "held": [
+          {
+            "thread_id": "daily",
+            "seq": 7
+          }
+        ],
+        "replies_epoch": 2
       },
       "json_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -386,6 +394,52 @@
                 "type": "null"
               }
             ]
+          },
+          "viewing": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,31}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "held": {
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "thread_id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                },
+                "seq": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "thread_id",
+                "seq"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "replies_epoch": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -462,7 +516,8 @@
           "y": 0,
           "width": 880,
           "height": 780
-        }
+        },
+        "session": "general"
       },
       "json_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -510,11 +565,67 @@
                 "type": "null"
               }
             ]
+          },
+          "session": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "main"
+              },
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,31}$"
+              }
+            ]
           }
         },
         "required": [
           "type",
           "rect"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "terminal_resume": {
+      "sample": {
+        "type": "terminal_resume",
+        "thread_id": "general"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "terminal_resume"
+          },
+          "thread_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          }
+        },
+        "required": [
+          "type",
+          "thread_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "terminal_leave": {
+      "sample": {
+        "type": "terminal_leave"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "terminal_leave"
+          }
+        },
+        "required": [
+          "type"
         ],
         "additionalProperties": false
       }
@@ -680,6 +791,65 @@
         "additionalProperties": false
       }
     },
+    "companion_replies": {
+      "sample": {
+        "type": "companion_replies",
+        "on": true,
+        "shown": [
+          {
+            "thread_id": "general",
+            "seq": 7
+          }
+        ],
+        "epoch": 2
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "companion_replies"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "shown": {
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "thread_id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                },
+                "seq": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "thread_id",
+                "seq"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "epoch": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "type",
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
     "notify_permission": {
       "sample": {
         "type": "notify_permission",
@@ -705,6 +875,116 @@
         "required": [
           "type",
           "state"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "terminal_sessions": {
+      "sample": {
+        "type": "terminal_sessions",
+        "items": [
+          {
+            "id": "main",
+            "name": "Main",
+            "state": "live",
+            "key": "1",
+            "panel": "terminal",
+            "action": null,
+            "detail": "Main is running."
+          },
+          {
+            "id": "general",
+            "name": "General",
+            "state": "parked",
+            "key": "2",
+            "panel": "resume",
+            "action": "resume",
+            "detail": "Parked to save memory."
+          }
+        ]
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "terminal_sessions"
+          },
+          "items": {}
+        },
+        "required": [
+          "type",
+          "items"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "terminal_resume_result": {
+      "sample": {
+        "type": "terminal_resume_result",
+        "thread_id": "general",
+        "outcome": "asked"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "terminal_resume_result"
+          },
+          "thread_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "asked",
+              "already_pending",
+              "park_pending",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "thread_id",
+          "outcome"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "terminal_select": {
+      "sample": {
+        "type": "terminal_select",
+        "session": "general"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "terminal_select"
+          },
+          "session": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "main"
+              },
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,31}$"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "session"
         ],
         "additionalProperties": false
       }

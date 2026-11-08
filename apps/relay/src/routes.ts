@@ -5,7 +5,7 @@ import { rateLimit } from './auth/contract.ts'
 import { routes as authRoutes } from './auth/index.ts'
 import { globalBodyCap } from './core/body-guard.ts'
 import { routes as coreRoutes } from './core/index.ts'
-import { recorderOf } from './core/problems.ts'
+import { isClientHangup, recorderOf } from './core/problems.ts'
 import { routes as dictateRoutes } from './dictate/index.ts'
 import { routes as hookRoutes } from './hooks/index.ts'
 import { assertRouteTable } from './route-table.ts'
@@ -22,10 +22,15 @@ export function buildApp(services: RelayServices): Hono<AppEnv> {
   // A blanket request-size cap: routes that take big bodies (media, share, frames, hooks) cap themselves and are skipped.
   app.onError((err, c) => {
     // Today's answer, unchanged: hono's own handler (an HTTPException keeps its response, anything else is a plain 500
-    // and a line on stderr). The only addition is telling the Mac, which never changes what the caller sees.
+    // and a line on stderr). The only addition is telling the Mac, which never changes what the caller sees. A client that
+    // hung up mid-request is the exception: a debug line, not a report.
     if ('getResponse' in err) {
       const res = (err as HTTPResponseError).getResponse()
       return c.newResponse(res.body, res)
+    }
+    if (isClientHangup(err)) {
+      services.log.debug({ err: (err as Error).message }, 'client hung up mid-request')
+      return c.text('Internal Server Error', 500)
     }
     console.error(err)
     recorderOf(services).record(err)

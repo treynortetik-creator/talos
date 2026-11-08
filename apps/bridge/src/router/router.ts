@@ -32,6 +32,7 @@ import {
   handoffNotification,
   type StoredHandoff,
 } from '../worker/handoff.ts'
+import { placeFilesInInbox } from '../worker/inbox.ts'
 import { type RouteRow, WorkerStore } from '../worker/store.ts'
 import { allowsStart, type GovernorReading, governor } from './governor.ts'
 
@@ -269,19 +270,33 @@ export class ThreadRouter {
       this.store.claim(messageId, 'main', this.ctx.clock.now())
       return this.fallback(n, d.thread, d.reason)
     }
+    // the thread's session reads files from its own inbox only: copy them there, or let main have the whole message
+    let held = n
+    try {
+      held = placeFilesInInbox(n, {
+        root: this.ctx.paths.inbox,
+        mediaDir: this.ctx.paths.media,
+        thread: d.thread,
+        now: this.ctx.clock.now(),
+      })
+    } catch (e) {
+      this.ctx.log.warn('files not placed in the thread inbox', { thread: d.thread, error: (e as Error).message })
+      this.store.claim(messageId, 'main', this.ctx.clock.now())
+      return this.fallback(n, d.thread, 'worker_unavailable')
+    }
     this.ctx.seen.routerOwns(messageId)
     const now = this.ctx.clock.now()
     const row: RouteRow = {
       message_id: messageId,
       thread_id: d.thread,
-      notification: n,
+      notification: held,
       woke_at: now,
       deadline_at: now + (d.cold ? CLAIM_DEADLINE_COLD_MS : CLAIM_DEADLINE_MS),
       cold: d.cold,
     }
     // A route still waiting on this thread means a worker start is already under way: only the first cold message starts it
     const startsWorker = d.cold && this.store.unclaimed(d.thread).length === 0
-    if (!this.store.addRoute(row)) return this.mainEmit(n) // the same id routed before: never hold it twice
+    if (!this.store.addRoute(row)) return this.mainEmit(held) // the same id routed before: never hold it twice
     this.wake(d.thread, n.meta.kind === 'card_action' ? 'card_action' : 'message')
     if (d.cold) {
       this.ctx.transport.sendEphemeral(statusFrame(now, d.thread, 'working', 'Starting a session for this thread…'))

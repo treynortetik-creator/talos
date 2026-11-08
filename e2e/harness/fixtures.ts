@@ -1,7 +1,6 @@
 import type { BrowserContext, Page } from '@playwright/test'
 import { test as base, expect } from '@playwright/test'
 import { signStandard } from '@talos-app/integrations'
-import { fingerprintWords } from '@talos-app/protocol'
 import { type Stack, startStack } from './stack.ts'
 
 export { waitUntil } from './stack.ts'
@@ -78,8 +77,6 @@ export async function enrollDevice(
   const deviceId = devices[0]?.id ?? ''
   return { deviceId, words: shown, cli }
 }
-
-export { fingerprintWords }
 
 const wire = new WeakMap<Page, string[]>()
 

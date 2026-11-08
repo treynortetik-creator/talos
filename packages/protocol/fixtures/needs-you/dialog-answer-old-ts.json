@@ -1,0 +1,15 @@
+{
+  "v": 2,
+  "dialog_id": "k3Xv9QpT2mLw8ZrNa5HdBe",
+  "choice": 1,
+  "label": "Yes, I trust this folder",
+  "by": "Alex's iPhone",
+  "at": "2026-11-07T10:00:09.000Z",
+  "control_id": "dc_01M6V2TGWJCH4P49F79Q2317CD",
+  "proof": {
+    "signed": "{\"action\":\"primary\",\"card_id\":\"c_01JBF3V7Q8K2M4N6P8R0S2T403\",\"choice\":1,\"device_id\":\"d_rjxnk4xufxem5xago5zd\",\"id\":\"01JBF3V7Q8K2M4N6P8R0S2T4AA\",\"payload_hash\":\"sha256:2837b76ff2259acf0442b54ce7ac031e739e139cc4687d18f5c7d82e0886b31d\",\"ts\":\"2026-11-07T08:55:00.000Z\",\"type\":\"card.resolve\",\"v\":1}",
+    "osig": "u5x-NleBL0BUNwVuQPQEFCGHWvKz03dNoi354FcsMh8tkgi35Xq7Jo7wc8p6BQBNPDzKTRTZhTRorN7LbwHDgg",
+    "device_id": "d_rjxnk4xufxem5xago5zd",
+    "binding": "{\"allow_edit\":false,\"allow_revise\":false,\"attachments\":[],\"body\":\"Trip's session wants to work in this folder. Claude will be able to read, change and run files in it, and in folders inside it.\",\"body_format\":\"plain\",\"destination\":[],\"expires_at\":\"2026-11-07T10:15:00.000Z\",\"fields\":[],\"id\":\"c_01JBF3V7Q8K2M4N6P8R0S2T403\",\"kill_label\":\"\",\"kind\":\"dialog\",\"origin\":\"background\",\"payload\":{\"dialog_id\":\"k3Xv9QpT2mLw8ZrNa5HdBe\",\"dialog_kind\":\"trust\",\"expires_at\":\"2026-11-07T10:15:00.000Z\",\"options\":[\"No, exit\",\"Yes, I trust this folder\"],\"subject\":\"/home/alex/trip\",\"thread\":\"trip\"},\"primary_label\":\"Answer\",\"risk\":\"low\",\"summary\":\"Trip's session is waiting for you.\",\"thread_id\":\"trip\",\"title\":\"Trust this folder?\"}"
+  }
+}

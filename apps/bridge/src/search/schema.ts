@@ -4,7 +4,6 @@ import type { Database } from 'bun:sqlite'
 
 /** One column per `match_in` value, in this order. rowid = messages.ord. */
 export const FTS_COLUMNS = ['text', 'transcript', 'names', 'files', 'card'] as const
-export type FtsColumn = (typeof FTS_COLUMNS)[number]
 /** `ORDER BY bm25(...)` weights, same order as FTS_COLUMNS. */
 export const BM25_WEIGHTS = '4.0, 3.0, 2.0, 1.0, 1.5'
 

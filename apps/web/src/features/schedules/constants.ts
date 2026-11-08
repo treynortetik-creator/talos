@@ -4,8 +4,6 @@ export const CHRONOS_INSTALL_URL = 'https://github.com/treynortetik-creator/chro
 export const CHRONOS_INSTALL_CMD = `git clone ${CHRONOS_INSTALL_URL} ~/chronos && ~/chronos/install.sh`
 export const CHRONOS_UPDATE_CMD = 'git pull && ./install.sh'
 
-/** No answer from the Mac within this long reads as "Your Mac didn't answer" (S5.6). */
-export const NO_ANSWER_MS = 20_000
 /** The create form's prompt cap (S2.4). */
 export const PROMPT_CAP_BYTES = 16 * 1024
 /** Lines of the prompt shown before "Show all" (S5.3). */

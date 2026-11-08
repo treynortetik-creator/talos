@@ -15,6 +15,7 @@ import {
   VoiceId,
 } from './ids.ts'
 import { MessageRef } from './memory.ts'
+import { PermissionExplain } from './permission-explain.ts'
 import { ShareContent } from './share.ts'
 import { ThreadSessionMode, ThreadSessionOpts } from './thread-sessions.ts'
 
@@ -53,7 +54,10 @@ export const Thread = z.object({
   created_at: IsoTs,
   /** Option C (docs/OPTION-C.md): `dedicated` = this thread's own worker session. Absent = `shared`. */
   session: ThreadSessionMode.optional().catch(undefined),
-  session_opts: ThreadSessionOpts.optional().catch(undefined),
+  /** A value that is present but not readable as session settings reads as the empty MCP list, never as none: see McpAllowRead. */
+  session_opts: ThreadSessionOpts.optional().catch((ctx) =>
+    ctx.input === undefined ? undefined : ThreadSessionOpts.parse({ mcp_allow: [] }),
+  ),
 })
 
 export const AttachmentRef = z.object({
@@ -158,41 +162,216 @@ export const Message = z.object({
   heartbeat: z.literal(true).optional().catch(undefined),
 })
 
-/**
- * Every card kind, in wire order, with who may mint it: 'agent' kinds come from the agent's `card` tool (and headless
- * `POST /bridge/post`; an allowlist, so a new kind is refused until it is listed as 'agent'), 'bridge' kinds only from the
- * live bridge's own data (a scheduler record, a Claude Code permission request, a settings proposal). This is the one list:
- * the two arrays below, the `Card.kind` enum and the app's labels and icons all follow it.
- */
-export const CARD_KIND_MINTER = {
-  email: 'agent',
-  message: 'agent',
-  deploy: 'agent',
-  publish: 'agent',
-  purchase: 'agent',
-  decision: 'agent',
-  generic: 'agent',
-  schedule: 'bridge',
-  permission: 'bridge',
-  app_action: 'bridge',
-  config: 'bridge', // an agent-proposed settings change the bridge applies on approval (docs/SETTINGS O1); relay feature config-propose/1
-} as const satisfies Record<string, 'agent' | 'bridge'>
+/** Icon keys a card kind may name. The app maps each key to a drawing; a key with no drawing fails its type check. */
+export type CardIconKey =
+  | 'mail'
+  | 'chat'
+  | 'rocket'
+  | 'megaphone'
+  | 'card-pay'
+  | 'scale'
+  | 'diamond'
+  | 'clock'
+  | 'alert'
+  | 'settings'
+  | 'keyboard'
 
-export type CardKind = keyof typeof CARD_KIND_MINTER
-export type AgentCardKind = { [K in CardKind]: (typeof CARD_KIND_MINTER)[K] extends 'agent' ? K : never }[CardKind]
+/** What the table records for one kind. Every field is required, so a new kind that leaves one out fails to compile. */
+type CardKindFacts = {
+  /** 'agent' kinds come from the agent's `card` tool (and headless `POST /bridge/post`; an allowlist, so a new kind is
+   *  refused until it is listed as 'agent'); 'bridge' kinds only from the live bridge's own data. */
+  minter: 'agent' | 'bridge'
+  /** The word the card header shows. */
+  label: string
+  /** The small glyph beside the label in text-only places. */
+  glyph: string
+  /** The drawing key for the card's icon. */
+  icon: CardIconKey
+  /** The owner may edit the body (when the card also allows edits). */
+  bodyEditable: boolean
+  /** A card of this kind may name no destination. Every other kind needs at least one. */
+  destinationOptional: boolean
+  /** A notification may offer Approve for this kind (the card must also be complete). The rest open in the app only. */
+  nativeApprovable: boolean
+  /** With trust mode on, a card of this kind still needs the passkey. */
+  highRiskUnderTrust: boolean
+  /** The bridge acts on the decision itself; the agent is never told about it. */
+  bridgeHandled: boolean
+}
+
+/**
+ * Every card kind, in wire order, with the facts each rule used to keep in its own list. This is the one list: the
+ * `Card.kind` enum, the agent and bridge-only arrays, the app's labels and icons, notification approval, body edits,
+ * the destination rule, the trust-mode passkey rule and the bridge's handled set all follow it.
+ */
+export const CARD_KIND_TABLE = {
+  email: {
+    minter: 'agent',
+    label: 'Email',
+    glyph: '✉',
+    icon: 'mail',
+    bodyEditable: true,
+    destinationOptional: false,
+    nativeApprovable: false,
+    highRiskUnderTrust: false,
+    bridgeHandled: false,
+  },
+  message: {
+    minter: 'agent',
+    label: 'Message',
+    glyph: '💬',
+    icon: 'chat',
+    bodyEditable: true,
+    destinationOptional: false,
+    nativeApprovable: false,
+    highRiskUnderTrust: false,
+    bridgeHandled: false,
+  },
+  deploy: {
+    minter: 'agent',
+    label: 'Deploy',
+    glyph: '🚀',
+    icon: 'rocket',
+    bodyEditable: false,
+    destinationOptional: false,
+    nativeApprovable: false,
+    highRiskUnderTrust: false,
+    bridgeHandled: false,
+  },
+  publish: {
+    minter: 'agent',
+    label: 'Publish',
+    glyph: '📣',
+    icon: 'megaphone',
+    bodyEditable: true,
+    destinationOptional: false,
+    nativeApprovable: false,
+    highRiskUnderTrust: false,
+    bridgeHandled: false,
+  },
+  purchase: {
+    minter: 'agent',
+    label: 'Purchase',
+    glyph: '💳',
+    icon: 'card-pay',
+    bodyEditable: false,
+    destinationOptional: false,
+    nativeApprovable: false,
+    highRiskUnderTrust: true,
+    bridgeHandled: false,
+  },
+  decision: {
+    minter: 'agent',
+    label: 'Decision',
+    glyph: '⚖',
+    icon: 'scale',
+    bodyEditable: false,
+    destinationOptional: true,
+    nativeApprovable: true,
+    highRiskUnderTrust: false,
+    bridgeHandled: false,
+  },
+  generic: {
+    minter: 'agent',
+    label: 'Card',
+    glyph: '◇',
+    icon: 'diamond',
+    bodyEditable: false,
+    destinationOptional: true,
+    nativeApprovable: true,
+    highRiskUnderTrust: false,
+    bridgeHandled: false,
+  },
+  schedule: {
+    minter: 'bridge',
+    label: 'Schedule',
+    glyph: '⏱',
+    icon: 'clock',
+    bodyEditable: false,
+    destinationOptional: false,
+    nativeApprovable: false,
+    highRiskUnderTrust: false,
+    bridgeHandled: false,
+  },
+  permission: {
+    minter: 'bridge',
+    label: 'Permission',
+    glyph: '⚠',
+    icon: 'alert',
+    bodyEditable: false,
+    destinationOptional: true, // the bound tool call is the whole card (docs/CLAUDE-CODE.md C3.2)
+    nativeApprovable: true,
+    highRiskUnderTrust: false,
+    bridgeHandled: true,
+  },
+  app_action: {
+    minter: 'bridge',
+    label: 'App request',
+    glyph: '◇',
+    icon: 'diamond',
+    bodyEditable: false,
+    destinationOptional: false,
+    nativeApprovable: false,
+    highRiskUnderTrust: false,
+    bridgeHandled: false,
+  },
+  // an agent-proposed settings change the bridge applies on approval (docs/SETTINGS O1); relay feature config-propose/1
+  config: {
+    minter: 'bridge',
+    label: 'Setting',
+    glyph: '⚙',
+    icon: 'settings',
+    bodyEditable: false,
+    destinationOptional: false,
+    nativeApprovable: false,
+    highRiskUnderTrust: false,
+    bridgeHandled: true,
+  },
+  // a known Claude Code dialog in a thread session (trust, MCP consent, login) answered with a tap (dialog-card.ts); relay feature needs-you/1
+  dialog: {
+    minter: 'bridge',
+    label: 'Needs you',
+    glyph: '⌨',
+    icon: 'keyboard',
+    bodyEditable: false,
+    destinationOptional: true,
+    nativeApprovable: false, // a notification opens the app: the owner sees the options before pressing anything
+    highRiskUnderTrust: false,
+    bridgeHandled: true,
+  },
+} as const satisfies Record<string, CardKindFacts>
+
+export type CardKind = keyof typeof CARD_KIND_TABLE
+export type AgentCardKind = {
+  [K in CardKind]: (typeof CARD_KIND_TABLE)[K]['minter'] extends 'agent' ? K : never
+}[CardKind]
 export type BridgeOnlyCardKind = Exclude<CardKind, AgentCardKind>
 
 /** Every card kind, in wire order. */
-export const CARD_KINDS = Object.keys(CARD_KIND_MINTER) as [CardKind, ...CardKind[]]
+export const CARD_KINDS = Object.keys(CARD_KIND_TABLE) as [CardKind, ...CardKind[]]
 
 /** Card kinds the agent's `card` tool (and headless `POST /bridge/post`) may mint. An allowlist: a new kind is refused. */
-export const AGENT_CARD_KINDS = CARD_KINDS.filter((k) => CARD_KIND_MINTER[k] === 'agent') as readonly AgentCardKind[]
+export const AGENT_CARD_KINDS = CARD_KINDS.filter(
+  (k) => CARD_KIND_TABLE[k].minter === 'agent',
+) as readonly AgentCardKind[]
 /** Card kinds only the live bridge mints, from its own data (a scheduler record, a Claude Code permission request). */
 export const BRIDGE_ONLY_CARD_KINDS = CARD_KINDS.filter(
-  (k) => CARD_KIND_MINTER[k] === 'bridge',
+  (k) => CARD_KIND_TABLE[k].minter === 'bridge',
 ) as readonly BridgeOnlyCardKind[]
 export function isAgentCardKind(kind: unknown): kind is AgentCardKind {
   return typeof kind === 'string' && (AGENT_CARD_KINDS as readonly string[]).includes(kind)
+}
+
+/** The facts for a kind, or undefined for one this build does not know (a newer peer's kind, or a name like "constructor"). */
+export function cardKindFacts(kind: unknown): (typeof CARD_KIND_TABLE)[CardKind] | undefined {
+  return typeof kind === 'string' && Object.hasOwn(CARD_KIND_TABLE, kind)
+    ? CARD_KIND_TABLE[kind as CardKind]
+    : undefined
+}
+
+/** Card kinds whose decision the bridge acts on itself; the agent is never told about them. */
+export function isBridgeHandledCardKind(kind: unknown): boolean {
+  return cardKindFacts(kind)?.bridgeHandled === true
 }
 
 export const CardAction = z.enum(['primary', 'kill', 'revise', 'expired']) // 'expired' only ever set by bridge/relay
@@ -208,7 +387,7 @@ export const CardField = z.object({
 export const Card = z.object({
   id: CardId,
   thread_id: ThreadId,
-  // The kinds are CARD_KIND_MINTER; the agent's `card` tool takes AGENT_CARD_KINDS only.
+  // The kinds are CARD_KIND_TABLE; the agent's `card` tool takes AGENT_CARD_KINDS only.
   kind: z.enum(CARD_KINDS),
   title: z.string().max(120),
   summary: z.string().max(280).optional(),
@@ -240,6 +419,8 @@ export const Card = z.object({
        * an older Mac: readers fall back to `at`.
        */
       taken_at: IsoTs.optional().catch(undefined),
+      /** Which device took the decision ("Alex's iPhone", "this Mac"), when the card says so. Absent from an older Mac. */
+      by: z.string().max(60).optional().catch(undefined),
     })
     .optional(),
   /**
@@ -258,6 +439,11 @@ export const Card = z.object({
         .catch(undefined),
     })
     .optional(),
+  /**
+   * The plain explanation of a permission card (permission-explain.ts). Beside the card, not in its binding: absent from a card
+   * made without an explainer and from an older Mac; a value a reader does not know reads as unset.
+   */
+  explain: PermissionExplain.optional().catch(undefined),
   related_event_id: z.string().optional(),
   supersedes: CardId.optional(),
   created_at: IsoTs,
@@ -333,7 +519,7 @@ export function bindingFrom(card: CardT): CardBinding {
 
 /** The body is editable iff allow_edit && kind is email, message or publish. */
 export function isBodyEditable(card: Pick<CardT, 'allow_edit' | 'kind'>): boolean {
-  return card.allow_edit && (card.kind === 'email' || card.kind === 'message' || card.kind === 'publish')
+  return card.allow_edit && cardKindFacts(card.kind)?.bodyEditable === true
 }
 
 export const NormalizedEvent = z.object({

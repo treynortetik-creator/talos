@@ -1,33 +1,11 @@
 // The real McpStatusSource: an Agent SDK session in the agent folder, driving the INSTALLED `claude`, with hooks off and
 // no model turn (M5.1 steps 1-3, gates G1-G2). The prompt stream never yields, so nothing is ever billed and no tool can
 // run; only control requests are used: initializationResult, mcpServerStatus, reconnectMcpServer, readMcpResource.
-import { accessSync, constants, statSync } from 'node:fs'
-import { delimiter, join } from 'node:path'
 import { type Options, type SDKUserMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk'
 import type { McpStatusSource, RawServer } from './scan.ts'
 import { ScanStop } from './scan.ts'
 
-/** `claude` on PATH, the same lookup the live launch line uses. */
-export function resolveClaude(
-  pathVar: string | undefined,
-  isExec: (p: string) => boolean = defaultIsExec,
-): string | undefined {
-  for (const dir of (pathVar ?? '').split(delimiter).filter(Boolean)) {
-    const p = join(dir, 'claude')
-    if (isExec(p)) return p
-  }
-  return undefined
-}
-
-function defaultIsExec(p: string): boolean {
-  try {
-    if (!statSync(p).isFile()) return false
-    accessSync(p, constants.X_OK)
-    return true
-  } catch {
-    return false
-  }
-}
+export { resolveClaude } from '../claude-path.ts'
 
 export type ScanOptionInput = {
   agentDir: string

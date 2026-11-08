@@ -285,7 +285,55 @@ real `claude`. Skills and agents of the plugin load once you trust the folder (t
 A fresh `./install.sh` activates `current` only when there is none yet; a second agent installed from another kit version leaves it alone and
 prints how to move every agent (`plugin-release.py activate --version V`). That second agent runs the release `current` points at (its
 settings template and version), not the newer kit's, so it works with the code it loads; a `current` whose release folder is gone counts as
-absent and a fresh install repairs it. Reconciling each agent's hook list with the active release when it changes is a manual step today: [`UPGRADE.md`](UPGRADE.md), "Step 6 — Reconcile the hooks by hand", after `bash kit/scripts/upgrade.sh --into ~/talos-agent --dry-run`.
+absent and a fresh install repairs it. An agent already on the plugin layout is not upgraded by `upgrade.sh`; it uses `talos update`, below.
+
+### Updating, rolling back, restoring a file
+
+Run these in Terminal, in the agent folder (or with `--agent <folder>`). They refuse without a terminal and inside a Claude Code session, and
+the guard hook denies an agent these commands and any write to the kit's vendor folder. **That is a speed bump, not a lock.** The agent runs
+as you, so a determined one could fake a terminal, clear the variable, or write to the release folder or its own hooks directly; no text rule
+stops that. What stands behind the bump: every bundle must carry a signature the installed release trusts, and **every session start checks
+that the live release's files still match the content hash recorded when it was built** and, when they do not, puts a RELEASE INTEGRITY
+WARNING at the top of the session so the agent tells you in the thread.
+
+- `talos update --dry-run` shows the new version, its release notes, the pending migrations and the hook changes, and changes nothing.
+  `talos update` does it: it fetches `latest.json` and the signed bundle from the update source (`--source`, `TALOS_UPDATE_SOURCE`, or
+  `update_source` in the installed release's `release.json`), checks the signature, unpacks it next to the others, self-tests it, swaps
+  `current`, copies the Talos files that live inside your folder (`.claude/rules/talos-defaults.md`, `wiki/README.md`,
+  `wiki/_privacy-and-sharing.md`, `wiki/examples/`; one you had edited is kept as `<file>.bak-update-<version>`), makes the hook list in
+  `.claude/settings.json` match the new release (entries you added or edited are kept and reported), runs the pending migrations, checks
+  that the agent folder loads the new release, and asks the Mac app to restart the agent. If the check fails, or anything fails after the swap,
+  it rolls back to the release you had and `settings.json` is back byte for byte. Nothing in `memory/`, `wiki/` (other than the files named
+  above), `.learnings/`, `CLAUDE.md` or `custom/` is written, and a migration that deletes a file there (even while a session is running) fails
+  the update. A migration that fails half way has its own `down` run too, so `down` must tolerate an `up` that stopped anywhere. The newest
+  three releases are kept. If two agent folders share the release, `talos update --agent B` after A's update brings B up to date (its files,
+  hook list and migrations) instead of saying it is up to date. A pre-release (`1.5.0-rc1`) sorts before its final release (`1.5.0`).
+- **Signatures.** A bundle is `talos-kit-<version>.tar.gz` plus `.sig`, made with `ssh-keygen -Y sign -n talos-kit-release`, and is verified with
+  `ssh-keygen -Y verify -I talos-release` against `allowed_signers` of the release that is installed now, never the one inside the bundle. A
+  release that changes that file takes effect for the next update. A source checkout lists no key (the owner of the release key adds it before
+  cutting a release), so until then `talos update` refuses every bundle with "no signing key". `plugin-release.py pack` makes a bundle.
+  **Getting the first key into an install that has none: once, by you, in Terminal:** `talos-update trust-key <public-key-file>` (the script is
+  `bin/talos-update` in the plugin; the folder is `~/.local/share/talos/kit/current/talos-kit/bin`). It shows the key's fingerprint, asks
+  y/N, and on y appends the key to `~/.local/share/talos/kit/trusted_signers` (mode 600), which is read together with the release's own
+  `allowed_signers`. It is owner-terminal-only, takes exactly one public key (a private key or a file with two keys is refused), and changes
+  no release, so no reinstall is needed. Compare the fingerprint with the one the key's owner gave you, not with this screen alone.
+- Only one of update, rollback and restore runs at a time (a kernel lock; a migration it started keeps the lock even if the updater is killed).
+  A run that was killed leaves `update-journal.json`; the next `talos update` resumes it.
+- `talos rollback [version]` undoes the migrations above the target's newest, newest first (one marked `# down: none` makes it refuse before
+  anything runs), puts the hook list and the Talos files back, swaps `current` and asks for a restart.
+- `talos restore <file>`: a Talos file comes from the current release, `.mcp.json` and the settings from the Talos app's last-good store, anything
+  else from git (`git restore --source=HEAD`, or `--source <commit>`); what it replaces is kept as `<file>.bak-restore-<time>`.
+- The app checkout's own pull and rollback are `talos update app` and `talos rollback app`. `talos update --app-repo <checkout> --app-ref
+  <ref>` first merges `<ref>` into your app branch in a side worktree; a conflict names the files and stops before anything is swapped.
+- **Several agents on one Mac, one `current`:** `talos rollback --agent A` while another agent (one the Talos app has saved a setup for) is on a
+  newer release than the target does NOT swap `current` (that would strand the other): it undoes A's own migrations, hook list and Talos files,
+  prints "Agent B is on <v> ... roll back B too", and only the last agent's rollback swaps `current`. Run it for each agent in turn, any order.
+  `talos update --agent B` brings a lagging agent forward. An agent the app has never saved a setup for is not seen.
+- `trusted_signers` is used only when it is a plain file, mode 600, yours, and every line is exactly what `trust-key` writes; the first session
+  after it changes tells the agent to pass a one-line notice (with the fingerprints) to you.
+- Limits: there is no stop-only request for the Mac app, so the agent is stopped and started by one restart request after the new release
+  passed its check, and a session that was already running meanwhile has the new scripts under old registrations until it restarts. A relay
+  that does not match a release's `min_relay` only prints a line to press Update in Railway. `scripts/test-update.sh` proves all of the above.
 
 ## Optional extras
 
@@ -356,24 +404,31 @@ folders, not a list of files. The protected roots (the `protect` list in the lea
   still reads them, outside the sandbox; only the lead's tools and Bash are denied;
 - the Talos app home, the whole tree (`media/`, `shared-inbox/`, config, keys, databases);
 - `~/private-agent-vault/`, the default vault in the bootstrap;
+- `~/.ssh`, `~/.config/gh`, `~/.aws`, `~/.npmrc` and `~/.netrc`;
 - anything you add with `--protect <dir>` (it stays on a re-run).
 
-Claude Code's own OS sandbox (Seatbelt) enforces it. `settings.json` switches it on and locks it: Bash and every process it
-starts (scripts, python, node, sqlite3, symlinks, hard links, `~user`, variables) cannot open a root, and the Read tool is
-held by the same deny rules. `dangerouslyDisableSandbox` is ignored, and claude refuses to start if the sandbox cannot run.
-Package caches live in the lead's `.cache/` folder, not in your shared ones. Push over https: ssh remotes cannot resolve
-inside the sandbox. A path with `* ? [ ] { }` in it is refused at init (Claude Code reads it as a glob). Connectors are off:
-claude.ai account connectors, every plugin's MCP servers, the browser and computer-use tools, and every MCP server your main agent switched
-off or has at user scope (copied from `~/.claude.json`); `talos-app` stays. `Monitor`, `Tmux`, `PowerShell`, `SendMessage`, `ListAgents` and `RemoteTrigger` are denied, and a lead cannot run `talos-app digest`, `post`
-or `inbox*`. In the bridge, a lead's `read_thread` and `list_threads` see its own thread only, and `attach` refuses files
-from the Talos folder. A lead's search is not held to its own thread (no agent tool searches history).
+The Talos home is closed whole. The files you send a thread that has its own session are copied to `~/.talos-inbox/<thread>/`
+(outside the Talos home, 0700 and 0600), and the lead is given that path. That folder has no deny: **other thread sessions can
+read every thread's inbox**. Copies go after 7 days (or past 1 GiB), and a thread's folder goes when the thread is archived or
+deleted. A lead is **light** by default: the deny rules above hold the file tools and Bash's `cat`, `head`, `tail`, `sed`, `tee` and
+redirections. That stops accidents, not a determined program: `sqlite3`, `python` or `grep -r` can still open a blocked file,
+and the network is open. `git push`, `gh`, tmux and `SendMessage` to other sessions work. Add `--sandbox` for Claude Code's
+own OS sandbox (Seatbelt): Bash and every process it starts cannot open a root, `dangerouslyDisableSandbox` is ignored, claude
+refuses to start if the sandbox cannot run, package caches live in the lead's `.cache/` folder, `SendMessage` is denied, and
+`git` over SSH, `gh`, tmux suites, `xcodebuild` and `ci-local.sh` do not work inside it (push over https). A re-run keeps the
+folder's profile; `--sandbox` or `--light` changes it. A path with `* ? [ ] { }` in it is refused at init (Claude Code reads it
+as a glob). `Monitor`, `Tmux`, `PowerShell`, `ListAgents` and `RemoteTrigger` are denied in both, the browser and computer-use
+servers are never open, and a lead can run only `talos-app commands`, `lead check`, `codex check` and the hook entries (every other command is
+refused to it). In the bridge, a lead's `read_thread` and `list_threads` see its own thread only, and
+`attach` sends a file from its own inbox but refuses files from the Talos folder and from other threads' inboxes. A lead's search is not held to its own thread (no agent tool searches history).
 
-**Add your own disabled list.** Name the MCP servers you use for mail, banking, calendars or notes:
-`talos-app lead init trip --folder ... --disable-mcp my-mail,bank-sync`. Each becomes a `mcp__<name>__*` deny rule and a
-`disabledMcpjsonServers` entry, on top of the defaults and what is read from `~/.claude.json`. You can also edit the lead's
-`.claude/settings.json` by hand; a later `lead init` keeps your additions, but the lead itself cannot change that file.
+**Choose its MCP servers.** Name the servers a lead may use: `talos-app lead init trip --folder ... --mcp github,slack` (or edit
+the list in the thread's own-session sheet in the app; `--mcp ""` clears it). A lead gets `talos-app` plus those; with no `--mcp`
+it gets `talos-app` alone. The Mac app applies the list when it starts the session (only those servers, nothing else), so `lead init`
+writes no deny for your other servers. An older lead folder may still carry the denies an earlier version wrote for the list; `lead check` lists the probable ones, and `lead init <thread> --remove-stopgap` removes them (nothing is removed without that flag, because one of your own rules can look the same). A
+claude.ai connector cannot be on a lead's list (a lead's connectors are always off); `lead init` refuses one.
 
-**Where a lead can write.** In its own folder, and in tmp for Bash: the Bash sandbox confines writes there. The file tools run
+**Where a lead can write.** In the sandbox profile, in its own folder and tmp for Bash: the Bash sandbox confines writes there. The file tools run
 outside the sandbox, so the places a write would take effect later are also denied to them: shell start-up files, launch
 agents, `~/.ssh`, git and npm config, `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin` and every folder on your `PATH`
 when you ran `lead init`. The list is best effort. A lead's `attach` refuses any file inside a protected root.
@@ -382,8 +437,9 @@ when you ran `lead init`. The list is best effort. A lead's `attach` refuses any
 if you run leads with `--dangerously-skip-permissions`, Edit and Write can still write anywhere you can outside the roots
 (a shell rc file, say). A hard link that already exists outside the roots is readable (a lead cannot make one into a root).
 Other leads' folders are not roots. The `digest`/`post`/`inbox*` refusal in a lead's folder is a backstop (`cd /` gets past
-it); the sandbox denying the Talos home is the real block. MCP servers read their own data outside the sandbox (`talos-app`
-stays, under its thread lock; a server you add later that is in none of the disabled lists is on). Hooks run outside it;
+it, and so does `cd /tmp && env -u TALOS_SESSION_ROLE -u TALOS_APP_WORKER_THREAD talos-app logs`); the deny on the Talos home
+is the real block. MCP servers read their own data outside the sandbox (`talos-app` stays, under its thread lock; a server you
+add after `lead init` is not on the thread's list, so the Mac app does not start it). Hooks run outside it;
 they are written by the kit and the lead cannot edit them. Anything the lead legitimately has (its own folder, what you
 paste into the thread) can still be sent over the network. Your own `~/.claude/settings.json` or a `--settings` file can
 weaken the sandbox for every lead (`talos-app lead check` reports the known keys). A lead can read whatever this Mac user
@@ -707,6 +763,7 @@ bash scripts/test-watcher.sh           # quiet check-ins: ICS parsing, silence, 
 bash scripts/test-gopublic.sh          # the public-repo gate with fake gh and git
 bash scripts/test-localmodels.sh       # the suggested-model fallbacks and setup flags, with fake programs (nothing is downloaded)
 bash scripts/test-settings-merge.sh    # adding new hook registrations to an existing settings.json
+bash scripts/test-address.sh           # the update-source and calendar fetches refuse private addresses, same list as the app (needs the repo checkout)
 TALOS_TEST_CHRONOS=/path/to/chronos bash scripts/test-install.sh   # same, against a real Chronos checkout
 TALOS_TEST_CHRONOS=/path/to/chronos bash scripts/test-jobs.sh      # also asks the real Chronos for each job's flags (needs 0.2.2)
 TALOS_TEST_SEMANTIC=1 bash scripts/test-recall.sh   # the real semantic stack (downloads a venv and a small model)

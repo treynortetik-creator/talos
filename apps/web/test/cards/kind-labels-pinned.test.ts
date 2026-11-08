@@ -17,6 +17,7 @@ describe('card kind labels', () => {
       ['permission', { icon: '⚠', label: 'Permission' }],
       ['app_action', { icon: '◇', label: 'App request' }],
       ['config', { icon: '⚙', label: 'Setting' }],
+      ['dialog', { icon: '⌨', label: 'Needs you' }],
     ])
     expect(Object.keys(KIND_LABEL)).toEqual([...Card.shape.kind.options])
   })

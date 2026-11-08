@@ -1,14 +1,13 @@
 // Entry points to the thread settings sheet (manage/ThreadEditor.tsx): the "..." in a thread's header, and "New thread".
 import type { ThreadT } from '@talos-app/protocol'
 import { useEffect, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { useSearchParams } from 'react-router'
 import { cn } from '../../ui/cn.ts'
-import { IconMore, IconPlus, IconSearch } from '../../ui/icons.tsx'
+import { IconMore, IconPlus } from '../../ui/icons.tsx'
 import { ThreadEditor } from './manage/ThreadEditor.tsx'
 
 export function ThreadSettings({ thread }: { thread: ThreadT }) {
   const [open, setOpen] = useState(false)
-  const nav = useNavigate()
   // Settings -> Notifications links to /t/<id>?settings=1: open this thread's settings once, then drop the flag so a
   // refresh or Back does not reopen it.
   const [params, setParams] = useSearchParams()
@@ -22,16 +21,6 @@ export function ThreadSettings({ thread }: { thread: ThreadT }) {
   }, [wantsOpen, params, setParams])
   return (
     <>
-      <button
-        type="button"
-        aria-label="Search this thread"
-        title="Search this thread"
-        data-testid="thread-search"
-        onClick={() => nav(`/search?thread=${encodeURIComponent(thread.id)}`)}
-        className="grid size-11 place-items-center rounded-pill hover:bg-surface-2"
-      >
-        <IconSearch />
-      </button>
       <button
         type="button"
         aria-label="Thread settings"

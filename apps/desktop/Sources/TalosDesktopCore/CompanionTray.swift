@@ -107,7 +107,7 @@ public enum CompanionBannerPolicy {
   public struct Pet: Equatable, Sendable {
     /// Panels up: on, and not snoozed.
     public var onScreen: Bool
-    /// The quiet decision: nil until known. Quiet means a statue with no bubbles.
+    /// The quiet decision: nil until known. Quiet means no bubbles; it does not change how he looks or moves.
     public var quiet: Bool?
     public var micRunning: Bool
     public var feedLive: Bool
@@ -116,13 +116,25 @@ public enum CompanionBannerPolicy {
     public var state: CompanionState
     /// `companion.replyBanners`: the owner wants both.
     public var replyBanners: Bool
-    public init(onScreen: Bool, quiet: Bool?, micRunning: Bool, feedLive: Bool, state: CompanionState, replyBanners: Bool) {
+    /// The thread the page says is on screen. It counts only while the window is key (`windowIsKey`): a window that is merely
+    /// visible is not being read.
+    public var viewedThread: String?
+    public var windowIsKey: Bool
+    /// Threads whose turn is running now. A reply in one of them waits for the turn (his Done), so its banner stays.
+    public var workingThreads: Set<String>
+    public init(
+      onScreen: Bool, quiet: Bool?, micRunning: Bool, feedLive: Bool, state: CompanionState, replyBanners: Bool,
+      viewedThread: String? = nil, windowIsKey: Bool = false, workingThreads: Set<String> = []
+    ) {
       self.onScreen = onScreen
       self.quiet = quiet
       self.micRunning = micRunning
       self.feedLive = feedLive
       self.state = state
       self.replyBanners = replyBanners
+      self.viewedThread = viewedThread
+      self.windowIsKey = windowIsKey
+      self.workingThreads = workingThreads
     }
   }
 
@@ -130,13 +142,26 @@ public enum CompanionBannerPolicy {
     body.hasPrefix("New reply in ") || body.hasPrefix("Answer ready in ")
   }
 
-  public static func drops(body: String, pet: Pet) -> Bool {
-    guard isReplyBanner(body), NotificationPolicy.isPushPhrase(body), !pet.replyBanners else { return false }
+  /// He can say a reply he is not asked to wait on: on screen, awake, not quiet, no mic, a live feed, and not showing something
+  /// that outranks it. Working is fine here (his Done comes when the turn ends); `drops` is stricter because a banner dropped
+  /// for a Done that never comes would be lost.
+  public static func canDeliver(pet: Pet) -> Bool {
     guard pet.onScreen, pet.quiet == false, !pet.micRunning, pet.feedLive else { return false }
     switch pet.state {
     case .down, .needsYou, .trouble: return false
-    case .working: return false  // he can't announce it yet: the Done waits for the turn, and could be lost on the way
-    case .done, .idle, .asleep: return true
+    case .working, .done, .idle, .asleep: return true
+    }
+  }
+
+  /// `thread` is the reply's own thread (from the banner's path). If its turn is running, his Done waits for it and could be lost
+  /// on the way, so the banner stays; another thread's turn does not matter.
+  public static func drops(body: String, pet: Pet, thread: String? = nil) -> Bool {
+    guard isReplyBanner(body), NotificationPolicy.isPushPhrase(body), !pet.replyBanners else { return false }
+    guard pet.onScreen, pet.quiet == false, !pet.micRunning, pet.feedLive else { return false }
+    if let t = thread, pet.workingThreads.contains(t) { return false }
+    switch pet.state {
+    case .down, .needsYou, .trouble: return false
+    case .working, .done, .idle, .asleep: return true
     }
   }
 }

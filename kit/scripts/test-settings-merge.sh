@@ -26,7 +26,7 @@ json.dump(old, open(A + "/.claude/settings.json", "w"), indent=2)
 PY
 cp "$A/.claude/settings.json" "$SB/before.json"
 out="$(cd "$A" && python3 scripts/settings-merge.py 2>&1)"
-{ printf '%s' "$out" | grep -q 'would add memory-reflex.py on UserPromptSubmit' && printf '%s' "$out" | grep -q 'would add action-rules.py on PreToolUse' && printf '%s' "$out" | grep -q 'Dry run'; } && ok || no "dry run does not list the missing hooks" "$out"
+{ <<<"$out" grep -q 'would add memory-reflex.py on UserPromptSubmit' && <<<"$out" grep -q 'would add action-rules.py on PreToolUse' && <<<"$out" grep -q 'Dry run'; } && ok || no "dry run does not list the missing hooks" "$out"
 cmp -s "$A/.claude/settings.json" "$SB/before.json" && ok || no "dry run changed the file"
 out="$(cd "$A" && python3 scripts/settings-merge.py --apply 2>&1)"; rc=$?
 [ "$rc" = 0 ] && ls "$A/.claude"/settings.json.bak-* >/dev/null 2>&1 && ok || no "apply failed or took no backup" "$out"
@@ -46,12 +46,12 @@ assert scripts(t) <= scripts(new), scripts(t) - scripts(new)
 assert "PreCompact" in new["hooks"]
 PY
 out="$(cd "$A" && python3 scripts/settings-merge.py 2>&1)"
-printf '%s' "$out" | grep -q 'already registered' && ok || no "a second run is not a no-op" "$out"
+<<<"$out" grep -q 'already registered' && ok || no "a second run is not a no-op" "$out"
 n1=$(ls "$A/.claude"/settings.json.bak-* | wc -l | tr -d ' '); ( cd "$A" && python3 scripts/settings-merge.py --apply >/dev/null 2>&1 ); n2=$(ls "$A/.claude"/settings.json.bak-* | wc -l | tr -d ' ')
 [ "$n1" = "$n2" ] && ok || no "a no-op apply still took a backup"
 printf '{ not json' > "$A/.claude/settings.json"; out="$(cd "$A" && python3 scripts/settings-merge.py --apply 2>&1)"; rc=$?
-{ [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'not valid JSON' && [ "$(cat "$A/.claude/settings.json")" = '{ not json' ]; } && ok || no "invalid JSON was not left alone" "$out"
+{ [ "$rc" = 1 ] && <<<"$out" grep -q 'not valid JSON' && [ "$(cat "$A/.claude/settings.json")" = '{ not json' ]; } && ok || no "invalid JSON was not left alone" "$out"
 rm -f "$A/.claude/settings.json"; out="$(cd "$A" && python3 scripts/settings-merge.py 2>&1)"; rc=$?
-[ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'does not exist' && ok || no "missing settings.json not reported" "$out"
+[ "$rc" = 1 ] && <<<"$out" grep -q 'does not exist' && ok || no "missing settings.json not reported" "$out"
 echo "  settings-merge: PASS $PASS FAIL $FAIL"
 [ "$FAIL" -eq 0 ]

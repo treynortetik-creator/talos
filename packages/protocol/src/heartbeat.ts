@@ -130,8 +130,6 @@ function itemShape() {
  * add `source`, `first_seen`, `last_seen` and `count`, then `HeartbeatItem.parse`: the text is identical on every run.
  */
 export const HeartbeatItem = z.strictObject(itemShape())
-/** The same schema under the name that says what it is for. */
-export const HeartbeatItemStore = HeartbeatItem
 /** The same row as read back: keys it doesn't know are ignored; the text is checked, not changed. */
 export const HeartbeatItemRead = z.object(itemShape())
 /** What a source process prints for one item, with its text escaped here (strict: Talos's own check, e.g. in a test run). */

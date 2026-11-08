@@ -106,7 +106,9 @@ export function checkConfigPatch(patch: unknown): ConfigPatchCheck {
  * Thread-level patch semantics for a `config.patch` that carries `threads` (docs/THREADS.md). The array replaces the
  * list (order, membership), but inside a thread that already exists a key the client left out keeps its current value,
  * so an older app that doesn't know `color` or `topic` can't wipe them by editing something else. A key sent as `null`
- * is cleared. Never mutates its inputs; non-object entries are passed through for the schema to refuse.
+ * is cleared. `session_opts` is merged the same way one level down: a setting the client leaves out (`mcp_allow`, from a
+ * build that doesn't know it) keeps its value, and `null` clears it; a `session_opts` that is not an object is passed
+ * through for the schema to refuse. Never mutates its inputs; non-object entries are passed through the same way.
  */
 export function resolveThreadsPatch(current: readonly unknown[], patched: unknown): unknown {
   if (!Array.isArray(patched)) return patched
@@ -118,8 +120,18 @@ export function resolveThreadsPatch(current: readonly unknown[], patched: unknow
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(was ?? {})) if (!UNSAFE_KEYS.has(k) && !(k in t)) out[k] = v
     for (const [k, v] of Object.entries(t)) if (!UNSAFE_KEYS.has(k) && v !== null) out[k] = v
+    if (isObject(t.session_opts)) out.session_opts = mergeOpts(was?.session_opts, t.session_opts)
     return out
   })
+}
+
+/** `session_opts` from a patch over the current one: keys left out are kept, `null` clears a key. */
+function mergeOpts(current: unknown, patched: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (isObject(current))
+    for (const [k, v] of Object.entries(current)) if (!UNSAFE_KEYS.has(k) && !(k in patched)) out[k] = v
+  for (const [k, v] of Object.entries(patched)) if (!UNSAFE_KEYS.has(k) && v !== null) out[k] = v
+  return out
 }
 
 /** Patch-time rules the stored-config check can't take (a config that already breaks them must still load). */

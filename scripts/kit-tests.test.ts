@@ -14,6 +14,12 @@ import { ROOT } from './size-report.ts'
 const KIT_SCRIPTS = join(ROOT, 'kit/scripts')
 const TIMEOUT_MS = 300_000
 
+/**
+ * Script name -> its own time cap. test-default-agent.sh renders the kit and runs the whole self-test.sh inside it: about 2.5 min
+ * alone on a quiet Mac, about 4 min on a loaded one, so the 300 s default is no room when CI runs several jobs at once.
+ */
+const SLOW_MS: Record<string, number> = { 'test-default-agent.sh': 600_000 }
+
 /** Script name -> the platform it needs and why. Empty today: every kit test fakes `say`, `afplay` and `launchctl`, so all run anywhere. */
 const PLATFORM_ONLY: Record<string, { platform: NodeJS.Platform; reason: string }> = {}
 
@@ -41,6 +47,10 @@ describe('kit test scripts', () => {
     for (const name of Object.keys(PLATFORM_ONLY)) expect(scripts).toContain(name)
   })
 
+  it('SLOW_MS names only scripts that exist', () => {
+    for (const name of Object.keys(SLOW_MS)) expect(scripts).toContain(name)
+  })
+
   it('hands each script a temp HOME, a TMPDIR and no XDG_* variable', () => {
     const env = scriptEnv('/h', '/t')
     expect(env.HOME).toBe('/h')
@@ -55,11 +65,12 @@ describe('kit test scripts', () => {
       it.skip(`${name} (${reason})`, () => {})
       continue
     }
-    it.concurrent(name, { timeout: TIMEOUT_MS }, async () => {
+    const timeoutMs = SLOW_MS[name] ?? TIMEOUT_MS
+    it.concurrent(name, { timeout: timeoutMs }, async () => {
       // Kill the script a little before the test timeout, so a hang reports as a failure with its output.
       const { code, out } = await runScript(join(KIT_SCRIPTS, name), {
         cwd: join(ROOT, 'kit'),
-        timeoutMs: TIMEOUT_MS - 10_000,
+        timeoutMs: timeoutMs - 10_000,
         env: scriptEnv,
       })
       for (const { line, reason } of classifySkips(name, out))

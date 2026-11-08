@@ -76,7 +76,7 @@ final class WorkerRig: @unchecked Sendable {
     o.busyWindow = 0.5
     let e = env
     let m = WorkerManager(options: o, probe: LiveSystem(loginEnv: { e }), baseEnv: { e })
-    m.onEvent = { [weak self] ev in self?.lock.withLock { self?.events.append(ev) } }
+    record(m)
     mgr?.detach()
     mgr = m
     return m
@@ -84,11 +84,18 @@ final class WorkerRig: @unchecked Sendable {
 
   var allEvents: [WorkerManager.Event] { lock.withLock { events } }
 
-  func wake(_ id: String, action: String = "pointer", ids: [String] = ["m_01JBF3V7Q8K2M4N6P8R0S2T401"]) throws {
+  /// Keeps every event the manager emits, for `allEvents`. A test that needs its own `onEvent` calls `note` from it.
+  func record(_ m: WorkerManager) { m.onEvent = { [weak self] ev in self?.note(ev) } }
+  func note(_ ev: WorkerManager.Event) { lock.withLock { events.append(ev) } }
+
+  /// `at` is when the hub wrote the wake (now unless a test says a stale file): an owed pointer's deadline counts from it.
+  func wake(
+    _ id: String, action: String = "pointer", ids: [String] = ["m_01JBF3V7Q8K2M4N6P8R0S2T401"], at: Double = Date().timeIntervalSince1970
+  ) throws {
     let d = talosHome + "/workers/" + id
     try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true)
     let list = ids.map { "\"\($0)\"" }.joined(separator: ",")
-    try "{\"v\":1,\"thread_id\":\"\(id)\",\"message_ids\":[\(list)],\"at\":\"2026-10-30T00:00:00.000Z\",\"action\":\"\(action)\"}"
+    try "{\"v\":1,\"thread_id\":\"\(id)\",\"message_ids\":[\(list)],\"at\":\"\(ISOTime.string(at))\",\"action\":\"\(action)\"}"
       .write(toFile: d + "/wake", atomically: true, encoding: .utf8)
   }
 
@@ -103,9 +110,7 @@ final class WorkerRig: @unchecked Sendable {
   /// two polls of a busy machine is still seen; the state itself is only a snapshot of one moment.
   func liveCount(_ id: String) -> Int { allEvents.filter { $0 == .live(thread: id) }.count }
   var typedLines: [String] { lines(typed) }
-  func lines(_ p: String) -> [String] {
-    ((try? String(contentsOfFile: p, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
-  }
+  func lines(_ p: String) -> [String] { completeLines(p) }
 
   @discardableResult
   func wait(_ timeout: Double, _ cond: () -> Bool) -> Bool {

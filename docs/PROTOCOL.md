@@ -229,19 +229,21 @@ base62 chars (connection, a capability). Frame ids are bare ULIDs.
 
 ## Other helpers in the package
 
-| Module               | Contents                                                                                                                                                   |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `canonical.ts`       | `jcs`, `sha256Hex`, `payloadHash(binding)` = `sha256:<hex>`                                                                                                |
-| `hash.ts`            | Synchronous SHA-256, HMAC-SHA256, HKDF-SHA256 (verified against `node:crypto` in tests)                                                                    |
-| `enroll.ts`          | Enrollment code, `code_auth`, `code_bind`, `bindingMac`, `verifyBinding`                                                                                   |
-| `bridge-auth.ts`     | Ed25519 challenge and HTTP signature helpers, key id, rotation signature                                                                                   |
-| `untrusted.ts`       | `wrapExternal`, `sanitizeExternal`, `stripSpecialTokens`, `sanitizeMetaValue`                                                                              |
-| `quiet-window.ts`    | `isQuiet`, `nextQuietEnd` (Intl, any IANA zone, DST-safe)                                                                                                  |
-| `push.ts`            | `PushPayload`, `buildPushPayload` (fixed templates, no free text field), `badgeCount` (the one app-icon number)                                            |
-| `fingerprint.ts`     | `fingerprintWords(device_id)`: four PGP words for pin confirmation                                                                                         |
-| `http.ts`            | Request and response schemas and a route table for spec 3.8                                                                                                |
-| `native.ts`          | Native-shell JS bridge messages (page <-> Mac/iPhone web view), strict zod; fixtures in `fixtures/native/`                                                 |
-| `thread-sessions.ts` | Option C: the per-thread switch, `dedicated` settings, `workers.json`, wake file, hub lines; fixtures in `fixtures/option-c/` ([OPTION-C.md](OPTION-C.md)) |
+| Module                              | Contents                                                                                                                                                                    |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `canonical.ts`                      | `jcs`, `sha256Hex`, `payloadHash(binding)` = `sha256:<hex>`                                                                                                                 |
+| `hash.ts`                           | Synchronous SHA-256, HMAC-SHA256, HKDF-SHA256 (verified against `node:crypto` in tests)                                                                                     |
+| `enroll.ts`                         | Enrollment code, `code_auth`, `code_bind`, `bindingMac`, `verifyBinding`                                                                                                    |
+| `bridge-auth.ts`                    | Ed25519 challenge and HTTP signature helpers, key id, rotation signature                                                                                                    |
+| `untrusted.ts`                      | `wrapExternal`, `sanitizeExternal`, `stripSpecialTokens`, `sanitizeMetaValue`                                                                                               |
+| `quiet-window.ts`                   | `isQuiet`, `nextQuietEnd` (Intl, any IANA zone, DST-safe)                                                                                                                   |
+| `push.ts`                           | `PushPayload`, `buildPushPayload` (fixed templates, no free text field), `badgeCount` (the one app-icon number)                                                             |
+| `fingerprint.ts`                    | `fingerprintWords(device_id)`: four PGP words for pin confirmation                                                                                                          |
+| `http.ts`                           | Request and response schemas and a route table for spec 3.8                                                                                                                 |
+| `native.ts`                         | Native-shell JS bridge messages (page <-> Mac/iPhone web view), strict zod; fixtures in `fixtures/native/`                                                                  |
+| `thread-sessions.ts`                | Option C: the per-thread switch, `dedicated` settings, `workers.json`, wake file, hub lines; fixtures in `fixtures/option-c/` ([OPTION-C.md](OPTION-C.md))                  |
+| `dialog-card.ts`, `dialog-files.ts` | Needs-you prompts: the `dialog` card (composer, payload, texts) and the files the Mac and the bridge share; `needs-you/1` ([OPTION-C.md](OPTION-C.md), "Needs-you prompts") |
+| `frames-cards.ts`, `frame-base.ts`  | The three card frames (`card.resolve` carries `choice`) and the envelope builders, split out of `frames.ts`                                                                 |
 
 ## Config patches: when a save counts
 

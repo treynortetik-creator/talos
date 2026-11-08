@@ -49,7 +49,7 @@ bash "$T" --file "$SB/does-not-exist.md" "x" >/dev/null 2>&1 && no "--file with 
 
 long="$(python3 -c "print(' '.join(['word'] * 200))")"
 err="$(bash "$T" "$long" 2>&1 >/dev/null)"
-printf '%s' "$err" | grep -q '200 words is past the 150-word cap' && ok "a message past 150 words warns on stderr (and still sends)" || no "no word-cap warning" "$err"
+<<<"$err" grep -q '200 words is past the 150-word cap' && ok "a message past 150 words warns on stderr (and still sends)" || no "no word-cap warning" "$err"
 err="$(TALOS_NOTIFY_WORD_CAP=500 bash "$T" "$long" 2>&1 >/dev/null)"; [ -z "$err" ] && ok "TALOS_NOTIFY_WORD_CAP raises the cap" || no "cap env ignored" "$err"
 : > "$SB/calls"; bash "$T" "" >/dev/null 2>&1; [ ! -s "$SB/calls" ] && ok "an empty message sends nothing" || no "empty message sent"
 
@@ -73,7 +73,7 @@ env -i HOME="$HOME" PATH="$THIN" bash "$T" "recorded" >/dev/null 2>&1; rc=$?
 { [ "$rc" = 0 ] && grep -qx 'ARG: recorded' "$SB/calls"; } && ok "the path install.sh recorded is used first" || no "recorded path ignored (rc=$rc)"
 rm -f "$HOME/.config/talos/talos-app-bin" "$SB/elsewhere/talos-app"
 err="$(env -i HOME="$HOME" PATH="$THIN" bash "$T" "nowhere" 2>&1 >/dev/null)"; rc=$?
-{ [ "$rc" = 127 ] && printf '%s' "$err" | grep -q 'talos-app not found' && grep -q 'NOT delivered' "$HOME/.config/talos/notify-errors.log"; } \
+{ [ "$rc" = 127 ] && <<<"$err" grep -q 'talos-app not found' && grep -q 'NOT delivered' "$HOME/.config/talos/notify-errors.log"; } \
   && ok "with no talos-app anywhere: exit 127, a line on stderr and in notify-errors.log" || no "a missing binary vanished silently (rc=$rc)" "$err"
 
 # R2-5: a bare-name TALOS_APP_BIN that is not on PATH is a missing binary too: logged, exit 127, not a bare shell error

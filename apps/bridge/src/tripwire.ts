@@ -75,9 +75,6 @@ function label(name: unknown): string {
   return t || '(no name)'
 }
 
-/** Kept for callers that want the single hash. */
-export const securityHash = (home: string, which: WatchedFile): string => securityState(home, which).h
-
 const baselineFile = (home: string) => join(home, 'tripwire.json')
 const markerFile = (home: string) => join(home, 'tripwire.writing')
 

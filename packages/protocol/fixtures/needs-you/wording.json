@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "title": {
+    "trust": "Trust this folder?",
+    "mcp_consent": "Allow this MCP server?",
+    "login": "{thread} needs you to sign in"
+  },
+  "sentence": {
+    "trust": "{thread}'s session wants to work in this folder. Claude will be able to read, change and run files in it, and in folders inside it.",
+    "mcp_consent": "{thread}'s session wants to turn on this server's tools for its folder.",
+    "login": "{thread}'s session needs you to sign in to Claude on the Mac."
+  },
+  "footer": {
+    "card": "Your Mac presses the key for you. The session answers your message once it is in.",
+    "popup": "Also on your phone. Answer either one."
+  }
+}

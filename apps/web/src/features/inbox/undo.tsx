@@ -3,6 +3,7 @@
 import type { InboxItemT } from '@talos-app/protocol'
 import { useEffect } from 'react'
 import { create } from 'zustand'
+import { useApprovalOpen } from '../../lib/approvalOpen.ts'
 import { useTalosClient } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import { Button } from '../../ui/index.ts'
@@ -18,12 +19,13 @@ export const clearUndo = () => useUndoStore.setState({ offer: null })
 export function UndoStrip({ floating = false }: { floating?: boolean }) {
   const client = useTalosClient()
   const offer = useUndoStore((s) => s.offer)
+  const approving = useApprovalOpen() // the approval sheet owns the screen
   useEffect(() => {
     if (!offer) return
     const t = setTimeout(() => (useUndoStore.getState().offer === offer ? clearUndo() : undefined), UNDO_MS)
     return () => clearTimeout(t)
   }, [offer])
-  if (!offer) return null
+  if (!offer || approving) return null
   const { item, kind } = offer
   return (
     <div

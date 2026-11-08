@@ -23,8 +23,13 @@ public enum WebToNative: Equatable, Sendable {
   /// A `companion_state` that failed decoding. The receiver clears the feed: an old frame must not keep standing.
   case companionInvalid
   case companionReply(CompanionReply)
-  /// Where the page left room for the agent terminal, or nil when the terminal screen is not showing (`terminal_view`).
-  case terminalView(TerminalViewRect?)
+  /// Where the page left room for the terminal, or nil when the terminal screen is not showing, and which session it shows:
+  /// "main" or a thread id (`terminal_view`). The id is checked here; whether that thread exists is the receiver's to check.
+  case terminalView(TerminalViewRect?, session: String)
+  /// The owner pressed Resume (or Start) on a parked thread's panel (`terminal_resume`).
+  case terminalResume(threadId: String)
+  /// The Terminal screen was left (`terminal_leave`). A `terminal_view` with no rect is only "no terminal to show right now".
+  case terminalLeave
 
   /// Decodes what `WKScriptMessage.body` carries (a JSON object). nil = refuse.
   public static func decode(_ body: Any) -> WebToNative? {
@@ -88,14 +93,25 @@ public enum WebToNative: Equatable, Sendable {
       return .companionState(feed)
     case "companion_reply":
       return CompanionReply.decode(o).map(WebToNative.companionReply)
+    case "terminal_leave":
+      return only([]) ? .terminalLeave : nil
+    case "terminal_resume":
+      guard only(["thread_id"]), let t = o["thread_id"] as? String, ThreadIdRule.isValid(t) else { return nil }
+      return .terminalResume(threadId: t)
     case "terminal_view":
-      guard only(["rect"]) else { return nil }
-      if o["rect"] is NSNull { return .terminalView(nil) }
+      guard allowed(required: ["rect"], optional: ["session"]) else { return nil }
+      // Absent = Main (a page that predates the tabs). Present and not "main" or a thread id = refused, the whole message.
+      var session = TerminalSessions.mainId
+      if let raw = o["session"] {
+        guard let sid = raw as? String, TerminalSessions.isValidSession(sid) else { return nil }
+        session = sid
+      }
+      if o["rect"] is NSNull { return .terminalView(nil, session: session) }
       guard let r = o["rect"] as? [String: Any], Set(r.keys) == ["x", "y", "width", "height"],
         let x = JSONValue.int(r["x"]), let y = JSONValue.int(r["y"]), let w = JSONValue.int(r["width"]),
         let h = JSONValue.int(r["height"]), [x, y, w, h].allSatisfy({ (0...TerminalViewRect.max).contains($0) })
       else { return nil }
-      return .terminalView(TerminalViewRect(x: x, y: y, width: w, height: h))
+      return .terminalView(TerminalViewRect(x: x, y: y, width: w, height: h), session: session)
     default:
       return nil
     }
@@ -114,10 +130,20 @@ public enum NativeToWeb: Equatable, Sendable {
   case compose(threadId: String, text: String)
   case navigate(path: String)
   case enrollCode(String)
-  /// Asks the page for the newest agent reply in one thread, as plain text (after a click only).
+  /// Asks the page for the newest agent reply in one thread, as plain text: after a click on his reply card, and for the first
+  /// line of a reply bubble he is about to show.
   case companionReplyRequest(req: String, threadId: String)
+  /// Whether he delivers new replies himself (the page holds its jump banner back while true, and toasts what is left when it
+  /// goes false), and the held replies he has just shown or posted, which the page forgets.
+  case companionReplies(on: Bool, shown: [HeldReply], epoch: Int? = nil)
   /// What macOS says about this app's notification permission (Settings > Notifications shows it).
   case notifyPermission(NotifyPermission)
+  /// The Terminal screen's tabs (`terminal_sessions`), pushed when the list changes.
+  case terminalSessions([TerminalSessions.Item])
+  /// What the shell said to the last Resume/Start press (`terminal_resume_result`).
+  case terminalResumeResult(threadId: String, outcome: TerminalSessions.ResumeOutcome)
+  /// The shell switched the Terminal screen's tab itself (Ctrl+digit with its terminal holding the keyboard): "main" or a thread id.
+  case terminalSelect(session: String)
 
   public var object: [String: Any] {
     switch self {
@@ -125,7 +151,15 @@ public enum NativeToWeb: Equatable, Sendable {
     case .navigate(let p): return ["type": "navigate", "path": p]
     case .enrollCode(let c): return ["type": "enroll_code", "code": c]
     case .companionReplyRequest(let r, let t): return ["type": "companion_reply_request", "req": r, "thread_id": t]
+    case .companionReplies(let on, let shown, let epoch):
+      var o: [String: Any] = ["type": "companion_replies", "on": on]
+      if let epoch { o["epoch"] = epoch }
+      if !shown.isEmpty { o["shown"] = shown.map { ["thread_id": $0.thread, "seq": $0.seq] as [String: Any] } }
+      return o
     case .notifyPermission(let p): return ["type": "notify_permission", "state": p.rawValue]
+    case .terminalSessions(let items): return ["type": "terminal_sessions", "items": items.map(\.object)]
+    case .terminalResumeResult(let t, let o): return ["type": "terminal_resume_result", "thread_id": t, "outcome": o.rawValue]
+    case .terminalSelect(let s): return ["type": "terminal_select", "session": s]
     }
   }
 
@@ -137,7 +171,13 @@ public enum NativeToWeb: Equatable, Sendable {
     case .navigate(let p): return AppPath.isValid(p) ? m : nil
     case .enrollCode(let c): return EnrollCode.normalize(c) != nil ? m : nil
     case .companionReplyRequest(let r, let t): return CompanionReq.isValid(r) && ThreadIdRule.isValid(t) ? m : nil
+    case .companionReplies(_, let shown, let epoch):
+      return (epoch ?? 0) >= 0 && shown.count <= CompanionFeed.maxRows && shown.allSatisfy { ThreadIdRule.isValid($0.thread) && $0.seq >= 0 } ? m : nil
     case .notifyPermission: return m
+    case .terminalSessions(let items):
+      return items.count <= TerminalSessions.itemsMax && items.allSatisfy(\.isValid) ? m : nil
+    case .terminalResumeResult(let t, _): return ThreadIdRule.isValid(t) ? m : nil
+    case .terminalSelect(let s): return TerminalSessions.isValidSession(s) ? m : nil
     }
   }
 

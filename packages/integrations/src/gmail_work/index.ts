@@ -1,12 +1,9 @@
 // Gmail on a work account (work): the Gmail module with category `work`. Ships disabled; routes to the work thread.
 import { isRecord, type ModuleExtras, parseJson } from '../generic/common.ts'
-import { renderGmailScript } from '../gmail/apps-script.ts'
 import { gmailToggle, normalizeGmail } from '../gmail/normalize.ts'
 import { verifyGmail } from '../gmail/verify.ts'
 import type { IntegrationModule } from '../types.ts'
-import { gmailWorkSetup, WORK_ASK_NOTE } from './setup.ts'
-
-export { renderGmailScript as renderGmailWorkScript, WORK_ASK_NOTE }
+import { gmailWorkSetup } from './setup.ts'
 
 export const integration: IntegrationModule & ModuleExtras = {
   claim: true,

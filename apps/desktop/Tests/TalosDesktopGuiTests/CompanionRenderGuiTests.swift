@@ -32,7 +32,7 @@ struct CompanionRenderGuiTests {
 
   func output(_ p: Pose, quiet: Bool = false) -> CompanionOutput {
     CompanionOutput(
-      state: p.state, displayState: p.state, quiet: quiet, animation: nil, rest: p.rest, bubble: nil, word: p.name,
+      state: p.state, quiet: quiet, animation: nil, rest: p.rest, bubble: nil, word: p.name,
       accessibilityLabel: p.name, dot: false, dragging: false, roundsDue: false, anticStop: 0, nextDeadline: nil)
   }
 

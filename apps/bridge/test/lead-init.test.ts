@@ -87,7 +87,7 @@ describe('lead init', () => {
   test('creates the folder with brief, board, decisions, fence and hooks, and sets the thread folder', () => {
     const s = setup()
     const dir = join(s.base, 'leads', 'trip')
-    expect(s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir])).toBe(0)
+    expect(s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir, '--sandbox'])).toBe(0)
     for (const f of [
       'CLAUDE.md',
       'BOARD.md',
@@ -109,7 +109,7 @@ describe('lead init', () => {
     expect(settings.permissions.deny).toEqual(expect.arrayContaining(['Monitor', 'Tmux', 'PowerShell']))
     expect(settings.permissions.deny).toContain(`Read(/${s.claudeDir}/**)`)
     expect(settings.permissions.deny).toContain(`Edit(/${s.claudeDir}/**)`)
-    expect(settings.permissions.deny).toContain('mcp__plugin_*')
+    expect(settings.permissions.deny).toContain('mcp__computer-use__*')
     expect(settings.env.npm_config_cache).toBe(join(dir, '.cache', 'npm'))
     expect(existsSync(join(dir, '.claude/hooks/lead-guard.sh'))).toBe(false)
     const marker = JSON.parse(readFileSync(join(dir, '.talos-lead'), 'utf8'))
@@ -141,7 +141,7 @@ describe('lead init', () => {
   test('a re-run over an old folder removes the old guard script and its registration', () => {
     const s = setup()
     const dir = join(s.base, 'trip')
-    s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir])
+    s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir, '--sandbox'])
     const guard = join(dir, '.claude/hooks/lead-guard.sh')
     writeFileSync(guard, '#!/bin/sh\n')
     const sp = join(dir, '.claude/settings.json')
@@ -174,7 +174,9 @@ describe('lead init', () => {
     const s = setup()
     const dir = join(s.base, 'trip')
     const cfgDir = join(s.base, 'cfg')
-    expect(s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir], { claudeDir: cfgDir })).toBe(0)
+    expect(
+      s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir, '--sandbox'], { claudeDir: cfgDir }),
+    ).toBe(0)
     const d = JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8')).permissions.deny as string[]
     expect(d).toContain(`Read(/${cfgDir}/**)`)
     expect(d).toContain(`Edit(/${cfgDir}/**)`)
@@ -473,7 +475,7 @@ describe('lead init: safety', () => {
       2,
     )
   })
-  test("the owner's main project entry in ~/.claude.json feeds the connector deny list", () => {
+  test("the owner's servers in ~/.claude.json are not turned into deny rules: the Mac app applies the thread's list", () => {
     const s = setup()
     writeFileSync(
       join(s.base, '.claude.json'),
@@ -485,7 +487,7 @@ describe('lead init: safety', () => {
     const dir = join(s.base, 'trip')
     expect(s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir])).toBe(0)
     const d = JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8')).permissions.deny as string[]
-    expect(d).toEqual(expect.arrayContaining(['mcp__talos-browser__*', 'mcp__blender__*', 'mcp__old-mail__*']))
+    expect(d.filter((r) => r.startsWith('mcp__')).sort()).toEqual(['mcp__claude-in-chrome__*', 'mcp__computer-use__*'])
   })
 })
 
@@ -526,7 +528,7 @@ describe('lead check', () => {
     const fresh = () => {
       const s = setup()
       const dir = join(s.base, 'trip')
-      s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir])
+      s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir, '--sandbox'])
       const sp = join(dir, '.claude/settings.json')
       const edit = (f: (j: never) => void) => {
         const j = JSON.parse(readFileSync(sp, 'utf8'))
@@ -556,7 +558,7 @@ describe('lead check', () => {
       ['filesystem.allowRead is not empty', (j) => (j.sandbox.filesystem = { allowRead: ['/x'] }), /allowRead/],
       ['filesystem.allowWrite is not empty', (j) => (j.sandbox.filesystem = { allowWrite: ['/x'] }), /allowWrite/],
       ['filesystem.disabled is set', (j) => (j.sandbox.filesystem = { disabled: true }), /filesystem\.disabled/],
-      ['the plugin MCP deny is missing', drop('mcp__plugin_*'), /mcp__plugin_/],
+      ['the computer-use MCP deny is missing', drop('mcp__computer-use__*'), /computer-use/],
       [
         'an autostart file deny is missing',
         (j) => {
@@ -637,7 +639,7 @@ describe('lead check', () => {
       const s = setup()
       const dir = join(s.base, 'trip')
       const cfgDir = join(s.base, 'cfg')
-      s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir], { claudeDir: cfgDir })
+      s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir, '--sandbox'], { claudeDir: cfgDir })
       mkdirSync(cfgDir, { recursive: true })
       writeFileSync(join(cfgDir, 'settings.json'), JSON.stringify({ sandbox: { excludedCommands: ['docker'] } }))
       s.lines.length = 0

@@ -4,10 +4,8 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event'
 import { Profiler } from 'react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { AgentsChip } from '../../src/features/agents/AgentsChip.tsx'
+import { afterEach, describe, expect, it } from 'vitest'
 import { AgentsList, useAgentsView } from '../../src/features/agents/AgentsList.tsx'
-import { AgentsRail, setRailPref } from '../../src/features/agents/AgentsRail.tsx'
 import { SessionPanel } from '../../src/features/session/SessionPanel.tsx'
 import { ClientProvider } from '../../src/lib/client.ts'
 import type { FakeClientOptions } from '../../src/lib/fakeClient.ts'
@@ -27,9 +25,9 @@ function viewport(px: number) {
   }) as unknown as typeof window.matchMedia
 }
 
-function ListProbe({ mode }: { mode: 'inline' | 'push' }) {
+function ListProbe() {
   const view = useAgentsView()
-  return <AgentsList threadId="general" mode={mode} view={view} />
+  return <AgentsList threadId="general" view={view} />
 }
 
 function mount(opts: FakeClientOptions, ui: React.ReactElement) {
@@ -51,88 +49,40 @@ const visibleText = (el: Element) => {
   return (c.textContent ?? '').replace(/\s+/g, ' ').trim()
 }
 
-const SHELLS_ONLY = [
-  { id: 's1', kind: 'shell' as const, type: 'shell', title: 'dev server', status: 'running' as const },
-  { id: 's2', kind: 'shell' as const, type: 'shell', title: 'tsc --watch', status: 'running' as const },
-  { id: 'm1', kind: 'monitor' as const, type: 'monitor', title: 'CI', status: 'running' as const },
-]
-
 describe('F1: counts and labels', () => {
-  beforeEach(() => setRailPref(null))
-
-  it('F1a: the chip never calls a shell or a monitor an "agent" (CLI 2.1.312 says "2 shells, 1 monitor")', async () => {
-    viewport(800)
-    const client = mount({ agents: 'empty' }, <AgentsChip threadId="general" variant="header" />)
-    act(() => client.session.setAgents(SHELLS_ONLY))
-    const chip = await screen.findByTestId('agents-chip')
-    await waitFor(() => expect(screen.getByTestId('agents-chip-count').textContent).toBe('3'))
-    // Today: "3 agents" with zero agents running. The CLI pill (S_o in the 2.1.312 bundle) names the kind when every
-    // task is one kind ("2 shells, 1 monitor") and says "N background tasks" when they are mixed.
-    expect(visibleText(chip)).not.toMatch(/\b3\s*agents\b/)
-  })
-
-  it('F1b: the demo chip does not say "6 agents" when 3 agents and 3 shells/monitors are live', async () => {
-    viewport(800)
-    mount({ agents: 'demo' }, <AgentsChip threadId="general" variant="header" />)
-    const chip = await screen.findByTestId('agents-chip')
-    await waitFor(() => expect(screen.getByTestId('agents-chip-count').textContent).not.toBe('0'))
-    // Its own accessible name contradicts itself today: "6 agents (6 active: 3 agents, 2 shells, 1 monitor, running)".
-    expect(visibleText(chip)).not.toMatch(/\b6\s*agents\b/)
-  })
-
   it('F1c: the "N active" beside the Agents heading counts what the Agents list holds, not shells', async () => {
-    viewport(1440)
-    mount({ agents: 'demo' }, <AgentsRail threadId="general" />)
-    const rail = await screen.findByTestId('agents-rail')
-    await waitFor(() => expect(rail.getAttribute('data-state')).toBe('open'))
-    const header = rail.querySelector('h2')?.parentElement as HTMLElement
-    // demo: 3 live agents (Explore, reviewer, the folded Explore) + 2 shells + 1 monitor. Header says "6 active" above
-    // a list of 4 agent rows, 2 of them done/failed.
-    expect(visibleText(header)).toMatch(/\b3 active\b/)
-  })
-
-  it('F1d: the count live region says what it counts (a bare "6" is announced out of context)', async () => {
-    viewport(1440)
-    mount({ agents: 'demo' }, <AgentsRail threadId="general" />)
-    await screen.findByTestId('agents-count')
-    await waitFor(() => expect(screen.getByTestId('agents-rail').getAttribute('data-state')).toBe('open'))
-    const live = screen.getByTestId('agents-count')
-    expect(live.getAttribute('aria-live')).toBe('polite')
-    expect(live.textContent).toMatch(/\d+\s+\w+/)
+    mount({ agents: 'demo' }, <SessionPanel threadId="general" />)
+    const section = await screen.findByTestId('session-agents')
+    // demo: 3 live agents (Explore, reviewer, the folded Explore) + 2 shells + 1 monitor. The heading says "3 active"
+    // above the list, never "6 active".
+    expect(visibleText(section)).toMatch(/3 active/)
+    expect(visibleText(section)).not.toMatch(/6 active/)
   })
 })
 
-describe('F2: the panel hides when there is no agents snapshot (old relay/bridge, mod without `agents`)', () => {
-  beforeEach(() => setRailPref(null))
-
-  it('F2a: no rail strip on a 1440 px thread when the mod sends no snapshot', async () => {
-    viewport(1440)
-    mount({}, <AgentsRail threadId="general" />) // agents: 'none' = an old relay/bridge or a mod without `agents`
-    await wait(50)
-    // Today: a 44 px strip with "0" on every thread; opening it blames the mod.
-    expect(screen.queryByTestId('agents-rail')).toBeNull()
+describe('F2: with no agents snapshot (old relay/bridge, mod without `agents`) the section is empty, and does not blame the mod', () => {
+  it('F2a: the Agents section is there and says "No agents running."', async () => {
+    mount({}, <SessionPanel threadId="general" />) // agents: 'none' = an old relay/bridge or a mod without `agents`
+    const section = await screen.findByTestId('session-agents')
+    expect(visibleText(section)).toContain('No agents running.')
   })
 
   it('F2b: with the Mac offline and no snapshot the panel does not say "Needs the Talos mod"', async () => {
-    viewport(1440)
-    setRailPref('open')
-    const client = mount({}, <AgentsRail threadId="general" />)
+    const client = mount({}, <SessionPanel threadId="general" />)
     act(() => client.setMacOnline(false))
     await wait(50)
     expect(screen.queryByText('Needs the Talos mod (Settings → Session).')).toBeNull()
+    expect(screen.getByTestId('session-agents')).toBeTruthy()
   })
 })
 
 describe('F3: Stop failure handling', () => {
-  it('F3a: a Stop error that lands after the row was collapsed is still shown somewhere', async () => {
-    viewport(1440)
-    setRailPref('open')
-    const client = mount({ agents: 'demo' }, <AgentsRail threadId="general" />)
+  it('F3a: a Stop error that lands after the owner went back to the list is still shown there', async () => {
+    const client = mount({ agents: 'demo' }, <ListProbe />)
     client.session.mute(true)
-    const row = await screen.findByRole('button', { name: /research mods API/ })
-    await userEvent.click(row)
+    await userEvent.click(await screen.findByRole('button', { name: /research mods API/ }))
     await userEvent.click(screen.getByTestId('agent-stop'))
-    await userEvent.click(row) // collapse while "Stopping…"
+    await userEvent.click(screen.getByRole('button', { name: /All agents/ })) // back to the list while "Stopping…"
     await waitFor(() =>
       expect(client.sent.some((f) => f.type === 'session.control' && f.action === 'agent_stop')).toBe(true),
     )
@@ -148,8 +98,9 @@ describe('F3: Stop failure handling', () => {
         at: iso(Date.now()),
       }),
     )
-    await userEvent.click(row) // reopen
-    // Today the result lived in AgentDetail's useState and died with the collapse: the owner never learns it failed.
+    // The result lives in the store by agent id, not in the detail view's own state: going back never loses it.
+    expect(screen.queryByText('TaskStop failed: no such task')).not.toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /research mods API/ })) // and it is still there on reopening
     expect(screen.queryByText('TaskStop failed: no such task')).not.toBeNull()
   })
 
@@ -168,9 +119,7 @@ describe('F3: Stop failure handling', () => {
   })
 
   it('guard: a send that throws settles as an error and Stop comes back', async () => {
-    viewport(1440)
-    setRailPref('open')
-    const client = mount({ agents: 'demo' }, <AgentsRail threadId="general" />)
+    const client = mount({ agents: 'demo' }, <ListProbe />)
     client.sendOwnerFrame = async () => {
       throw new Error('socket closed')
     }
@@ -183,7 +132,7 @@ describe('F3: Stop failure handling', () => {
 
 describe('F4: elapsed timers', () => {
   it('F4a: an ended row without ended_at does not keep counting up', async () => {
-    const client = mount({ agents: 'empty' }, <ListProbe mode="inline" />)
+    const client = mount({ agents: 'empty' }, <ListProbe />)
     act(() =>
       client.session.setAgents([
         { id: 'done', title: 'finished', status: 'completed', started_at: iso(Date.now() - 10_000), tokens: 5 },
@@ -201,7 +150,7 @@ describe('F4: elapsed timers', () => {
     const client = mount(
       { agents: 'empty' },
       <Profiler id="list" onRender={() => void commits++}>
-        <ListProbe mode="inline" />
+        <ListProbe />
       </Profiler>,
     )
     act(() =>
@@ -222,9 +171,9 @@ describe('F4: elapsed timers', () => {
   })
 })
 
-describe('F5: keyboard focus in push mode (sheets)', () => {
+describe('F5: keyboard focus when a row opens its detail', () => {
   it('F5a: opening a row moves focus into the detail, not to <body>', async () => {
-    mount({ agents: 'demo' }, <ListProbe mode="push" />)
+    mount({ agents: 'demo' }, <ListProbe />)
     const row = await screen.findByRole('button', { name: /research mods API/ })
     row.focus()
     await userEvent.keyboard('{Enter}')
@@ -233,7 +182,7 @@ describe('F5: keyboard focus in push mode (sheets)', () => {
   })
 
   it('F5b: "All agents" returns focus to the row that was opened', async () => {
-    mount({ agents: 'demo' }, <ListProbe mode="push" />)
+    mount({ agents: 'demo' }, <ListProbe />)
     ;(await screen.findByRole('button', { name: /research mods API/ })).focus()
     await userEvent.keyboard('{Enter}')
     screen.getByRole('button', { name: /All agents/ }).focus()
@@ -246,7 +195,7 @@ describe('F5: keyboard focus in push mode (sheets)', () => {
 
 describe('F6: untrusted text', () => {
   it('guard: HTML in title/activity/recent renders as text, never markup', async () => {
-    const client = mount({ agents: 'empty' }, <ListProbe mode="inline" />)
+    const client = mount({ agents: 'empty' }, <ListProbe />)
     const evil = '<img src=x onerror="window.__pwned=1"><b>bold</b>'
     act(() =>
       client.session.setAgents([
@@ -260,9 +209,9 @@ describe('F6: untrusted text', () => {
       ]),
     )
     await userEvent.click(await screen.findByRole('button', { name: /bold/ }))
-    const row = screen.getByTestId('agent-row')
-    expect(row.querySelector('img,b')).toBeNull()
-    expect(row.textContent).toContain('<b>bold</b>')
+    const detail = screen.getByTestId('agent-detail')
+    expect(detail.querySelector('img,b')).toBeNull()
+    expect(detail.textContent).toContain('<b>bold</b>')
     expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined()
   })
 })

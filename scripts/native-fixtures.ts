@@ -22,7 +22,9 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   haptic: { type: 'haptic', kind: 'success' },
   threads: { type: 'threads', items: [{ id: 'general', name: 'General' }] },
   pair_status: { type: 'pair_status', state: 'waiting_pin' },
-  terminal_view: { type: 'terminal_view', rect: { x: 240, y: 0, width: 880, height: 780 } },
+  terminal_view: { type: 'terminal_view', rect: { x: 240, y: 0, width: 880, height: 780 }, session: 'general' },
+  terminal_resume: { type: 'terminal_resume', thread_id: 'general' },
+  terminal_leave: { type: 'terminal_leave' },
   navigate: { type: 'navigate', path: '/t/general' },
   compose: { type: 'compose', thread_id: 'general', text: 'Hello from the shell.' },
   voice_note: { type: 'voice_note', thread_id: 'general', mime: 'audio/mp4', duration_ms: 1200, bytes_b64: 'AAAA' },
@@ -43,6 +45,9 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
       { thread_id: 'daily', state: 'working' },
     ],
     last_reply: { thread_id: 'general', seq: 48123 },
+    viewing: 'general',
+    held: [{ thread_id: 'daily', seq: 7 }],
+    replies_epoch: 2,
   },
   companion_reply: {
     type: 'companion_reply',
@@ -52,7 +57,33 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
     truncated: true,
   },
   companion_reply_request: { type: 'companion_reply_request', req: 'r12', thread_id: 'general' },
+  companion_replies: { type: 'companion_replies', on: true, shown: [{ thread_id: 'general', seq: 7 }], epoch: 2 },
   notify_permission: { type: 'notify_permission', state: 'granted' },
+  terminal_sessions: {
+    type: 'terminal_sessions',
+    items: [
+      {
+        id: 'main',
+        name: 'Main',
+        state: 'live',
+        key: '1',
+        panel: 'terminal',
+        action: null,
+        detail: 'Main is running.',
+      },
+      {
+        id: 'general',
+        name: 'General',
+        state: 'parked',
+        key: '2',
+        panel: 'resume',
+        action: 'resume',
+        detail: 'Parked to save memory.',
+      },
+    ],
+  },
+  terminal_resume_result: { type: 'terminal_resume_result', thread_id: 'general', outcome: 'asked' },
+  terminal_select: { type: 'terminal_select', session: 'general' },
 }
 
 /** Messages that must NEVER validate, whichever direction they are tried in. */
@@ -70,6 +101,12 @@ const MUST_REJECT: Array<[string, unknown]> = [
   ['companion_state negative count', { ...SAMPLES.companion_state, needs: -1 }],
   ['terminal_view carries text', { ...SAMPLES.terminal_view, text: 'ls' }],
   ['terminal_view negative size', { type: 'terminal_view', rect: { x: 0, y: 0, width: -1, height: 1 } }],
+  ['terminal_view hostile session', { ...SAMPLES.terminal_view, session: '=agent' }],
+  ['terminal_view session is a tmux target', { ...SAMPLES.terminal_view, session: 't-general' }],
+  ['terminal_resume hostile thread', { type: 'terminal_resume', thread_id: '../x' }],
+  ['terminal_resume main', { type: 'terminal_resume', thread_id: 'all' }],
+  ['terminal_select hostile session', { type: 'terminal_select', session: '=agent' }],
+  ['terminal_leave carries a rect', { type: 'terminal_leave', rect: null }],
   ['notify_permission unknown state', { type: 'notify_permission', state: 'maybe' }],
 ]
 

@@ -2,6 +2,7 @@
 // topic the agent routes by), notifications, default thread, archive. One owner-signed config.patch per Save.
 import { THREAD_COLORS, THREAD_TOPIC_MAX, type ThreadT } from '@talos-app/protocol'
 import { useId, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { useTalos } from '../../../lib/client.ts'
 import { cn } from '../../../ui/cn.ts'
 import { IconCheck, IconSearch } from '../../../ui/icons.tsx'
@@ -189,6 +190,8 @@ function EditorBody({
         </div>
       </div>
 
+      {thread && <SearchThisThread id={thread.id} close={close} />}
+
       {!system && (
         <div>
           <label className="block text-sm font-medium" htmlFor="thread-name">
@@ -317,9 +320,18 @@ function EditorBody({
           )}
         </>
       ) : (
-        <p className="m-0 rounded-button border border-line p-2 text-xs text-text-2" data-testid="threads-update-mac">
-          Update Talos on your Mac to pick icons, colors and topics.
-        </p>
+        <>
+          <p className="m-0 rounded-button border border-line p-2 text-xs text-text-2" data-testid="threads-update-mac">
+            Update Talos on your Mac to pick icons, colors and topics.
+          </p>
+          {/* a note from before topics lived in config: still readable here, since nothing else shows it any more */}
+          {localNote && (
+            <p className="m-0 text-sm" data-testid="thread-device-note">
+              <span className="block text-xs text-text-2">Note kept on this device</span>
+              {localNote}
+            </p>
+          )}
+        </>
       )}
 
       <fieldset className="m-0 border-0 p-0">
@@ -400,6 +412,24 @@ function EditorBody({
         </Button>
       </div>
     </>
+  )
+}
+
+/** The thread's own search lives here now that its header has no search icon. */
+function SearchThisThread({ id, close }: { id: string; close: () => void }) {
+  const nav = useNavigate()
+  return (
+    <Button
+      variant="outline"
+      className="self-start"
+      onClick={() => {
+        close()
+        nav(`/search?thread=${encodeURIComponent(id)}`)
+      }}
+    >
+      <IconSearch width={18} height={18} aria-hidden="true" />
+      Search this thread
+    </Button>
   )
 }
 

@@ -171,6 +171,8 @@ export class HubClient {
     } else if (msg.t === 'controls') {
       // P1 (WP-OC5): controls for this worker's mod; nothing here runs them yet
       this.o.log.info('hub: controls line ignored (no mod in this worker)')
+    } else if (msg.t === 'perm_result') {
+      // answers a hook's request, never a worker's: nothing here asked for it
     } else if (msg.t === 'rpc_result') {
       const w = this.rpcWaiters.get(msg.id)
       if (w) {

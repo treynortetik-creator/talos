@@ -2,8 +2,8 @@
 """talos-migrate.py: move an agent folder from the layout it has to the layout a release expects, one migration at a time.
 
     talos-migrate.py status [--agent DIR] [--release DIR]
-    talos-migrate.py up     [--agent DIR] [--release DIR] [--kit-home DIR]
-    talos-migrate.py down   [--agent DIR] [--release DIR] [--kit-home DIR] [--steps N]
+    talos-migrate.py up     [--agent DIR] [--release DIR] [--kit-home DIR] [--limit N] [--live]
+    talos-migrate.py down   [--agent DIR] [--release DIR] [--kit-home DIR] [--steps N | --id ID] [--live]
     talos-migrate.py check  [--release DIR]                      # every migration keeps the contract below
     talos-migrate.py mark   --agent DIR --version V [--migration ID]   # a fresh install stamps the layout it was built in
 
@@ -19,7 +19,12 @@ THE CONTRACT for migrations/<UTC yyyymmddHHMM>-<slug>.sh in a release:
     a file it changes or deletes there must have its original kept next to it as <file>.bak-<id> (down: ...-down), and the
     migration prints a line for it. memory/, wiki/ and .learnings/ are never touched at all.
 This runner CHECKS the last two rules by hashing the agent folder before and after each migration, and it stops and reports
-(without advancing .talos-version) when one is broken. Python 3.9, standard library only.
+(without advancing .talos-version) when one is broken. With --live (what `talos update` passes: an agent session may be running
+and writing its own memory while the update runs) the contents of memory/, wiki/ and .learnings/ are not compared, because a change
+there cannot be told from the live session's own write; but a file that is GONE from them after a migration is still a broken rule
+(a migration may never delete there). Every shipped migration is also checked WITHOUT --live by test-plugin.sh.
+`down --id ID` runs one migration's down() whether or not the marker says it finished: `talos update` uses it for a migration whose
+up() failed half way, so down() must tolerate an up() that stopped anywhere. Python 3.9, standard library only.
 """
 import argparse
 import hashlib
@@ -34,6 +39,7 @@ ZONE = {"hooks", "scripts", ".talos-pre-plugin", ".talos-version", "hooks.tmp-re
 NEVER = ("memory", "wiki", ".learnings")
 SKIP_DIRS = {".git", ".index", "node_modules", "__pycache__"}
 TOP_LIVE = {".learnings", "logs", "state"}          # top-level folders a running session writes
+LIVE = False                                        # --live: also leave NEVER folders out of the zone check
 # Paths a running session writes at any moment (an open Claude Code session, Chronos, a hook) are left out of the zone check
 # (see _live): comparing them before and after a migration would call a normal live write a broken rule. .learnings/, logs/ and state/, *.log / *.lock / *.pid files and the dot-files hooks keep under memory/ and wiki/ (.last-lint ...) are skipped;
 # the curated files in memory/ and wiki/ are still checked, because a migration must never change them.
@@ -138,7 +144,7 @@ def snapshot(agent, skipped=None):
         rel_root = os.path.relpath(root, agent)
         rel_root = "" if rel_root == "." else rel_root
         if rel_root == "":
-            dirs[:] = [d for d in dirs if d not in ZONE and d not in TOP_LIVE and d not in SKIP_DIRS]
+            dirs[:] = [d for d in dirs if d not in ZONE and d not in TOP_LIVE and d not in SKIP_DIRS and not (LIVE and d in NEVER)]
             files = [f for f in files if f not in ZONE]
         else:
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
@@ -171,6 +177,17 @@ def snapshot(agent, skipped=None):
     return snap
 
 
+def never_names(agent):
+    """The relative path of every file under memory/, wiki/ and .learnings/ (dot files too): what --live still compares."""
+    out = set()
+    for top in NEVER:
+        for root, dirs, files in os.walk(os.path.join(agent, top)):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            for f in files:
+                out.add(os.path.relpath(os.path.join(root, f), agent))
+    return out
+
+
 def zone_violations(before, after, mig, suffix):
     bad, created = [], []
     for rel in sorted(set(before) | set(after)):
@@ -195,6 +212,7 @@ def zone_violations(before, after, mig, suffix):
 def run_one(agent, release, kit_home, mig_id, path, direction):
     skipped_before, skipped_after = [], []
     before = snapshot(agent, skipped_before)
+    names_before = never_names(agent) if LIVE else set()
     env = dict(os.environ, TALOS_AGENT=agent, TALOS_RELEASE=release, TALOS_KIT_HOME=kit_home,
                TALOS_MIGRATION_ID=mig_id, TALOS_DIRECTION=direction)
     fn = "up" if direction == "up" else "down"
@@ -210,6 +228,9 @@ def run_one(agent, release, kit_home, mig_id, path, direction):
     if skipped:
         print("migrate: %d file(s) not checked (not regular files, or not readable): %s" % (len(skipped), ", ".join(skipped[:8]) + (" ..." if len(skipped) > 8 else "")))
     bad, created = zone_violations(before, after, mig_id, "" if direction == "up" else "-down")
+    if LIVE:
+        bad += ["%s was deleted; memory/, wiki/ and .learnings/ are never touched by a migration, deletions included" % rel
+                for rel in sorted(names_before - never_names(agent))]
     for rel in created:
         print("migrate: %s created %s (outside the Talos zone)" % (mig_id, rel))
     if bad:
@@ -230,6 +251,8 @@ def cmd_up(a, agent, release, kit_home):
     if not pending:
         print("migrate: nothing to do (migration=%s)" % (marker or "none"))
         return 0
+    if a.limit:
+        pending = pending[:a.limit]
     for i, p in pending:
         bad = contract_problems(p)
         if bad:
@@ -244,6 +267,15 @@ def cmd_up(a, agent, release, kit_home):
 
 
 def cmd_down(a, agent, release, kit_home):
+    if a.id:
+        found = [(i, p) for i, p in migrations(release) if i == a.id]
+        if not found:
+            print("migrate: %s is not a migration of %s" % (a.id, release), file=sys.stderr)
+            return 1
+        if not re.search(r"^\s*(function\s+)?down\s*\(\s*\)", open(found[0][1], encoding="utf-8").read(), re.M):
+            print("migrate: %s has no down() to run" % a.id, file=sys.stderr)
+            return 1
+        return 0 if run_one(agent, release, kit_home, a.id, found[0][1], "down") else 1
     marker = read_marker(agent).get("migration", "")
     done = [(i, p) for i, p in migrations(release) if marker and i <= marker]
     if not done:
@@ -270,9 +302,14 @@ def main():
     ap.add_argument("--release")
     ap.add_argument("--kit-home")
     ap.add_argument("--steps", type=int, default=1)
+    ap.add_argument("--id", help="down: run this one migration's down(), whatever the marker says")
+    ap.add_argument("--limit", type=int, help="up: run at most this many pending migrations")
+    ap.add_argument("--live", action="store_true", help="a session may be writing memory/, wiki/ and .learnings/: leave them out of the zone check")
     ap.add_argument("--version")
     ap.add_argument("--migration")
     a = ap.parse_args()
+    global LIVE
+    LIVE = a.live
     release = os.path.abspath(a.release or code_root())
     if a.cmd == "check":
         bad = 0

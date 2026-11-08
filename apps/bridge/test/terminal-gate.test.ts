@@ -97,9 +97,12 @@ describe('one table drives the gate and agent_may_run', () => {
         'install-guards',
         'lead init',
         'memory init',
+        'restore', // the three below are the agent kit's updater, run as `talos ...` (talos-app's update and rollback are the app's, ask-gated)
+        'rollback',
         'rotate',
         'theme reset',
         'trust on',
+        'update',
       ].sort(),
     )
     for (const c of gated) expect(c.agent_may_run).toBe(false)

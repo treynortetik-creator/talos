@@ -1,6 +1,6 @@
 // Trust mode on the bridge (docs/SECURITY.md "Trust mode"). The setting lives in config.json. The owner writes it: `talos-app trust on|off` at the Mac, or a signed
 // config.patch from the app (the relay asks for the passkey on `on`); the agent never does; everything that relaxes a check asks `trustOn` here, so there is one place to look.
-import { type MessageT, riskForTrust, trustOn } from '@talos-app/protocol'
+import { riskForTrust, trustOn } from '@talos-app/protocol'
 import { type BridgeContext, postSystemNotice } from './context.ts'
 import { isShareOnly } from './share-only.ts'
 import { handoffSince } from './worker/handoff.ts'

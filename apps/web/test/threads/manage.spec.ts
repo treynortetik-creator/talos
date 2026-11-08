@@ -1,9 +1,10 @@
 import { expect, type Page, test } from '@playwright/test'
-import { expectPurpose, openPhoneMenu, openThreadSettings } from '../helpers/phone.ts'
+import { closePhoneMenu, expectPurpose, openPhoneMenu, openThreadSettings } from '../helpers/phone.ts'
 
 // Thread management (docs/THREADS.md) in fake mode (VITE_FAKE=1): create with icon and color, rename, reorder (drag,
 // keyboard, arrows), archive and restore, default thread. Screenshots for the PR land in docs/screenshots/threads/.
-const SHOTS = '../../docs/screenshots/threads'
+// Rewritten into the tracked docs folder only on request (TALOS_SHOTS=1), so a plain run leaves tracked files alone.
+const SHOTS = process.env.TALOS_SHOTS ? '../../docs/screenshots/threads' : 'test-results/shots/threads'
 const isDesktop = (name: string) => name === 'desktop'
 
 // The fake client lives in memory, so specs navigate inside the app (never page.goto after the first load).
@@ -90,9 +91,11 @@ test('create a thread with an icon, a color and a topic; it shows in the list wi
   if (desktop) {
     await expect(page.getByTestId('thread-screen').locator('[data-thread-color="orange"]').first()).toBeVisible()
   } else {
-    // the slim phone header has no icon; the thread's colour shows on its card in the menu
+    // the slim phone header has no icon; the thread's colour shows on its row in the menu
     await openPhoneMenu(page)
-    await expect(page.getByTestId('phone-menu-current').locator('[data-thread-color="orange"]').first()).toBeVisible()
+    await expect(
+      page.getByTestId('phone-menu').locator('[aria-current="page"] [data-thread-color="orange"]').first(),
+    ).toBeVisible()
     await page.keyboard.press('Escape')
   }
   if (desktop) await expect(scope.locator('[data-thread-color="orange"]')).toHaveCount(1)
@@ -108,6 +111,7 @@ test('rename keeps the id; archive and restore from edit mode; default thread', 
   await sheet.getByLabel('Name').fill('Work stuff')
   await sheet.getByRole('button', { name: 'Save' }).click()
   await expect(sheet).toBeHidden()
+  await closePhoneMenu(page)
   // the default thread is set under Settings -> Agent now (the sheet's checkbox is gone); same patch, same rules
   await page.evaluate(() =>
     (window as unknown as { __talos: { patchConfig(p: object): Promise<void> } }).__talos.patchConfig({
@@ -122,12 +126,15 @@ test('rename keeps the id; archive and restore from edit mode; default thread', 
   await expect(sheet.getByLabel(/Default thread/)).toHaveCount(0)
   await expect(sheet.getByRole('button', { name: 'Archive thread' })).toBeDisabled()
   await sheet.getByRole('button', { name: 'Cancel' }).click()
+  await closePhoneMenu(page)
 
   await openThread(page, desktop, 'general', 'General')
   await openThreadSettings(page)
   await sheet.getByRole('button', { name: 'Archive thread' }).click()
+  // the sheet outlives the row it was opened from (on a phone the row leaves the menu's list when archived): Restore is there
   await expect(sheet.getByRole('button', { name: 'Restore thread' })).toBeVisible()
   await sheet.getByRole('button', { name: 'Cancel' }).click()
+  await closePhoneMenu(page)
 
   await editMode(page, desktop)
   const archived = page.getByTestId('thread-archived').filter({ visible: true })

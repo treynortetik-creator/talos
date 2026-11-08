@@ -340,6 +340,13 @@ export class HistoryStore {
   kvDelete(key: string) {
     this.db.query('DELETE FROM kv WHERE key = ?').run(key)
   }
+  /** Every key that starts with `prefix` (compared as plain text: `%` and `_` in it mean themselves). */
+  kvKeys(prefix: string): string[] {
+    const rows = this.db
+      .query('SELECT key FROM kv WHERE substr(key, 1, ?) = ? ORDER BY key')
+      .all(prefix.length, prefix) as Array<{ key: string }>
+    return rows.map((r) => r.key)
+  }
   kvSet(key: string, value: string) {
     this.db
       .query('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')

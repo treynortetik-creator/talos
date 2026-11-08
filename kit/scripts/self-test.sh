@@ -55,6 +55,7 @@ for f in START-HERE.md BOOTSTRAP.md SETUP-INTERVIEW.md HOMEWORK.md SEED-WIKI.md 
          templates/dot-claude/settings.json wiki/README.md wiki/_index.md \
          .claude/agents/grunt.md .claude/agents/reviewer.md \
          hooks/action-rules.py hooks/action-rules.yaml hooks/compaction-guard.py hooks/memory-reflex.py hooks/bsd-sed-guard.py \
+         hooks/permission-relay.py scripts/test-permission-relay.sh \
          scripts/wiki-gazetteer.py scripts/settings-merge.py scripts/go-public.sh scripts/watcher.py \
          scripts/watcher-adapters/macos-calendar.sh scripts/memory/mem_rerank.py scripts/memory/fetch-reranker.sh \
          scripts/dream/common.py scripts/dream/collect.py scripts/dream/verify_quotes.py scripts/dream/apply.py \
@@ -583,7 +584,8 @@ for _t in "action-rules:the never/ask action table (starter rules, your own file
           "watcher:the quiet check-ins (ICS, silence, change detection, dry run)" \
           "gopublic:the go-public gate (account check, scan, never pushes in check mode)" \
           "localmodels:the suggested local models degrade gracefully and install only on request" \
-          "settings-merge:merging new hook registrations into an existing settings.json"; do
+          "settings-merge:merging new hook registrations into an existing settings.json" \
+          "permission-relay:the PermissionRequest hook (a decision only on the hub's exact answer; no output on every failure)"; do
   _n="${_t%%:*}"; _d="${_t#*:}"
   bash "$KIT/scripts/test-$_n.sh" >/dev/null 2>&1 && ok "$_d" || bad "scripts/test-$_n.sh fails -- run it to see which check"
 done
@@ -768,7 +770,9 @@ _uprc=$?
 _sums > "$U/after.sums"
 
 if [ "$_uprc" -ne 0 ]; then
-  bad "upgrade.sh exited $_uprc on a dirty install"; printf '%s\n' "$_upout" | tail -12 | sed 's/^/          /'
+  bad "upgrade.sh exited $_uprc on a dirty install"
+  # `|` lines at 8 spaces: test-default-agent.sh keeps exactly those from a failing self-test, so a CI log shows why it exited.
+  printf '%s\n' "$_upout" | sed 's/\x1b\[[0-9;]*m//g' | grep -v '^[[:space:]]*$' | tail -12 | sed 's/^/        | /'
 else
   ok "upgrade.sh completes against a dirty, UNSTAMPED install (the pre-1.0.0 case)"
 fi

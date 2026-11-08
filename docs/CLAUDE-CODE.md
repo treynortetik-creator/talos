@@ -256,7 +256,7 @@ MCP health is honest: a server with tools in `$.tool.list()` is `connected`; any
 
 ### C3.1 Making prompts exist in bypass mode
 
-- Default (2026-11-03): `talos-app init` writes `permission_relay: true` into a new install's `config.json`, so prompts never need the terminal. The schema default stays `false`: a saved `false` is never flipped and a config with no key stays off. A worker (`server.ts`) never declares the permission capability and relays nothing. Switch: Settings → Health, "Tool prompts as approval cards".
+- Default (2026-11-03): `talos-app init` writes `permission_relay: true` into a new install's `config.json`, so prompts never need the terminal. The schema default stays `false`: a saved `false` is never flipped and a config with no key stays off. A worker (`server.ts`) never declares the permission capability and relays nothing over MCP; its prompts, and Claude Code's own built-in ones, reach the phone through the PermissionRequest hook (C3.9). Switch: Settings → Health, "Tool prompts as approval cards".
 
 - `talos-app install-ask-rules --agent-dir <dir> [--dry-run]`: shows a diff of the agent folder's
   `.claude/settings.json`, asks y/N, adds a short `permissions.ask` list. Generic default (edit before saving):
@@ -331,7 +331,175 @@ field per question and return `{result}`. **SMOKE S6.**
 
 Workspace trust, MCP consent, the dev-channel warning, the bypass disclaimer, login: startup dialogs, not tool prompts.
 
+
+### C3.9 Prompts the relay cannot carry: the PermissionRequest hook
+
+Two kinds of prompt never reach the channel relay: Claude Code's own built-in ones (the "Dangerous rm operation on critical
+path" prompt shows even in bypass mode and is blocked by Claude Code itself after about 2 minutes), and every prompt of a thread's
+own session (a thread session is not a channel). Claude Code does run `PermissionRequest` hooks for both.
+
+- **The hook** is `kit/hooks/permission-relay.py`, registered on `PermissionRequest` (every tool, `timeout: 3600`) by the kit's
+  settings template, so `settings-merge.py` adds it to an older agent folder. A thread session gets the same hook in its own
+  `--settings` file (`WorkerSpec.withPermissionHook`, the agent folder's script by absolute path, marked
+  `TALOS_APP_PERM_HOOK_SOURCE=worker`); in a thread session the agent folder's copy stays silent, so one prompt raises one card.
+  Verified against Claude Code 2.1.318 (hooks reference, and real runs): stdin carries `session_id`, `cwd`, `permission_mode`,
+  `tool_name`, `tool_input` and `permission_suggestions`, with no `tool_use_id`; stdout is `{"hookSpecificOutput":
+  {"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}` (or `deny` with a `message`); an exit-2 or a failing hook
+  leaves the prompt as it is. Interactive sessions set `CLAUDE_CODE_SESSION_ATTENDED=1`, `claude -p` sets `0` and the hook stays
+  silent there, so an unattended ask is still refused (C3.1).
+- **The road** is the hub socket (`$TALOS_APP_HOME/hub.sock`, 0600 in the 0700 data folder): one `perm` line (`HubPerm`: tool name,
+  the exact tool input, the Claude Code pid and cwd, and for a thread session its id and nonce), one `perm_result` line back
+  (`allow`, `deny` or `none`). Before it sends anything the hook checks that the socket's peer is the live bridge (peer pid from
+  `LOCAL_PEERPID`/`SO_PEERCRED` equals the pid in `bridge.pid`), so a stand-in listener never sees the call and cannot hand back an
+  `allow`. Only the bridge mints the card, through the same `composePermissionCard` and ledger as the relay: title `Allow <tool>?`,
+  risk `high` for Bash and every tool but a short read-only list (so the app asks for Face ID before Allow), deny-only when any
+  part of it cannot be shown at all.
+- **What the card shows: the owner's rule is "if he can see what the approval is for, he can approve it from his phone".** A Bash
+  call with only `command` (and `description`) shows the command as text; anything else shows the whole input as JSON. A run of
+  ASCII spaces other than one plain space folds to one visible marker (`⟨15000 spaces⟩`, a line break `⏎`), so padding reads short and
+  its count is on show; every other blank (a no-break space, U+2000 to U+200A, U+3000, a tab, U+FEFF, a vertical tab) is shown as
+  its own marker, so the label "spaces" is only ever said of ASCII spaces. Hidden, direction-changing and invisible characters (the shared `INVISIBLE_OR_BIDI`: control, default-ignorable,
+  format, unassigned, private-use and surrogate code points, U+FFFC, runs of more than three combining marks) are shown as
+  `[U+XXXX]` markers, in the call, the summary and the title, and the card STAYS Allow-able; CJK, emoji and any other text show as they
+  are. A card has no Allow only when part of the call cannot be shown at all: Claude Code itself elided or cut it (`⋯`, a trailing
+  `…`), a part is redacted or unserializable, the call is past 20,000 shown characters, an old Claude Code, or the card is not exactly
+  what the bridge composed (the bridge re-checks the body, summary and title it composed, byte for byte). A card for a request with
+  no proof says who asked (`[asked by pid N in <cwd>]`).
+- **The approval sheet.** In the thread a permission card is compact: the start of the call, the "Ends with:" line, Deny, and a tap
+  target that opens a full-screen approval sheet (a push or `/card/:id` opens it by itself). The sheet is `position: fixed`, sized
+  from the visual viewport (a keyboard cannot pan it), above every layer, and while it is open one flag (`lib/approvalOpen.ts`)
+  makes the now-playing pill, the new-reply banner and its toast viewport, and the undo strip stand down (they come back when it
+  closes). It shows the whole call in its own scroll area and the pinned "Ends with:" line under it. Deny is always enabled. Allow
+  is enabled once the owner has seen every line: a sentinel after the end of the call is watched by an IntersectionObserver rooted in
+  the sheet's scroll area (a call that fits needs no scroll); once seen it stays enabled while the sheet is open and the call is
+  unchanged; with no IntersectionObserver, or while the page is pinch-zoomed (visual viewport scale over 1), Allow is off. The call, summary,
+  title and tail wrap anywhere (`overflow-wrap: anywhere; word-break: break-all`), and Allow also stays off while the scroll area, the
+  title or the tail is wider than the screen (scrollWidth over clientWidth, re-checked on resize), so nothing runs off the side. Allow
+  still goes through the step-up for risky tools, and the bridge sends `allow` only for an owner-signed answer to this exact card.
+  A notification Approve for a permission card needs the same rule and a call of at most 150 characters on one line
+  (`PERMISSION_NOTICE_MAX_CHARS`); anything longer shows Open, which goes to the sheet.
+- **Identity.** A thread session proves itself exactly as `hello` does (the supervisor's nonce, a pid inside the recorded pane's
+  process group, a dedicated thread, a fresh supervisor) and its card goes to that thread only. A request with no thread goes to the
+  default thread; one that carries a nonce without a thread is refused. Nothing in the request can name a thread it has not proven.
+  For the main session the only gate is the socket (0600 in the 0700 data folder, plus the peer check above): a process of yours can
+  raise a card in the default thread, which shows the call it names and releases an answer only to its own connection. At most 16
+  hook requests are open at once.
+- **No double card.** Only the session this bridge is the channel of can have a relay twin: its hook names its Claude Code pid, which must be one of the
+  bridge's ancestors (the bridge runs under `bun run start` and a shell, so Claude Code is an ancestor, not the parent). The
+  bridge keeps the relay cards it has made in the last 15 s; a hook request from that session waits up to 1.5 s for a card with the
+  same tool and exactly the same whole input (JSON re-serialised, whitespace runs folded to one space, never deleted). A twin means the relay card answers and the hook answers nothing.
+  Anything else, including a preview Claude Code cut or reshaped, is not a match: the hook raises its own card and says "Another card
+  for this call can also approve this." A duplicate is a nuisance; a missing card leaves a prompt at the Mac and nothing on the phone.
+  Every hook request gets its own card; one Allow releases exactly one hook.
+- **Time.** The hook waits until it is answered or the prompt is over. Claude Code ends the hook at once when the prompt is
+  answered at the Mac, but NOT when its own countdown blocks the call (observed on 2.1.318: the countdown reads 0:00 at 2 minutes,
+  the call is blocked, and the hook is left running). So the hook also watches the session transcript for the `tool_result` of
+  this very call (the `tool_use` block with this tool name and input that has no result yet); when two identical calls are open it cannot tell
+  whose result is whose and stays off; it ends when its result appears;
+  if the transcript never shows the call, only Claude Code ending the hook closes the card. It also ends within a second when the
+  process that started it is gone, and runs as `exec python3` so Claude Code's signal reaches it. The hook's socket closing closes
+  the card (`hook_gone`). The registered 3600 s timeout and the bridge's one-hour card ceiling are backstops. Switching
+  `permission_relay` off, a stopping bridge and a failed card send close the card too.
+- **Fail closed.** The hook prints a decision only for the exact words `allow` or `deny` with its own request id, which the bridge
+  sends only after an owner-signed `card.resolve` passed the ledger checks and `permissionVerdictFor` (the same function the relay
+  path uses). No bridge, no socket, a stand-in listener, a refusal, a garbled or newer answer, an input over 250 KB, an error: no
+  output, exit 0, and Claude Code's own prompt and default stay. Kill switch: `permission-relay.off` or `TALOS_PERMISSION_RELAY_OFF=1`.
+- **Tests.** `apps/bridge/test/permission-hook.test.ts` (real bridge, real hook script), `kit/scripts/test-permission-relay.sh`,
+  `apps/web/test/cards/permission-sheet.spec.ts` (the real app on an iPhone SE, an iPhone 15 and a Pixel: scroll-through gate, overlays,
+  zoom),
+  `WorkerCoreTests`, and the opt-in `apps/bridge/test/real-claude-permission-hook.test.ts` (`TALOS_REAL_CLAUDE=1`: a real Claude
+  Code and its dangerous-rm prompt, including the countdown running out). Run the opt-in test with a short `TMPDIR`: the hub socket
+  path must stay under about 104 bytes.
+
 ---
+
+### C3.10 Plain explanation of a permission card
+
+Every permission card (the channel relay and the PermissionRequest hook alike) gets one plain explanation from an independent model, so a
+non-technical owner can decide without reading the command. **It is advice beside the card, never part of it.**
+
+- **What it sees.** Only the command (or the tool's input as JSON) and Claude's own description of it. No tools, no conversation, no
+  repository, no files, no MCP servers, no connectors, no hooks, no plugins, no CLAUDE.md, no project settings.
+- **What it makes.** One or two plain sentences, one tag (`Reads files`, `Changes files`, `Deletes`, `Sends over the internet`,
+  `Installs`) and a mismatch flag for "Claude's description does not cover what the command does". A mismatch is said inside the
+  sentence and the chip reads `<Tag> · Doesn't match`; Deny becomes the main button and Allow reads "Allow anyway" (still behind the
+  full-screen sheet, which still shows the whole call).
+- **Never blocks.** The card goes out at once with `explain: {status:'pending'}`; the explanation follows as a `card.update` 1 to 3
+  seconds later. Allow and Deny work before it arrives; an explanation that arrives after the card was answered or closed is dropped.
+  If the explainer fails, times out (8 s) or answers anything but the exact format, the card says "Couldn't explain this one" and
+  opens the command, unless the floor (below) has something to say about the command: then the card shows the floor's tag, as a
+  mismatch, with a sentence made from the floor alone ("Talos could not get a plain explanation, but it sees that this deletes
+  files."). A pending explanation older than 15 s on the phone reads the same way (a lost update).
+- **Runs on your own Claude CLI** (your plan; no API key, no bill; an `ANTHROPIC_API_KEY` in the environment is removed for this run).
+  Found the way the live launch finds it: `claude` on the bridge's PATH. None found: no explainer, cards exactly as before.
+  **Switch it off** with `TALOS_EXPLAINER=off` (also `0`, `false`, `no`) in the bridge's environment or `bridge.env`; restart the bridge.
+- **The exact command** (`apps/bridge/src/permission/explainer.ts`, `explainArgv()`), headless, with the call piped on stdin. Flags are as
+  documented in the Claude Code CLI reference unless marked:
+
+  | Flag or variable                                                         | Why                                                                                                                                                  |
+  | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `-p "<fixed line>"`                                                      | print (headless) mode; stdin carries the data                                                                                                        |
+  | `--model haiku`                                                          | the fast, cheap class (alias per the CLI reference)                                                                                                  |
+  | `--output-format json`                                                   | one JSON envelope; the answer is its `result` string                                                                                                 |
+  | `--max-turns 1`                                                          | one model turn                                                                                                                                       |
+  | `--tools ""`                                                             | no built-in tools (an empty list disables all)                                                                                                       |
+  | `--strict-mcp-config --mcp-config '{"mcpServers":{}}'`                   | only the (empty) config: no user, project or plugin MCP servers                                                                                      |
+  | `--safe-mode`                                                            | all customizations off: CLAUDE.md, skills, plugins, hooks, MCP servers, output styles, auto memory. Login and model selection work (unlike `--bare`) |
+  | `--no-chrome`                                                            | no browser integration                                                                                                                               |
+  | `--disable-slash-commands`                                               | no skills or commands                                                                                                                                |
+  | `--no-session-persistence`                                               | nothing saved to disk                                                                                                                                |
+  | `--setting-sources project`                                              | reads only the empty temp folder's own `.claude/settings.json` (there is none): no user-scope `apiKeyHelper`, `env` or `enabledPlugins`              |
+  | `--settings '{"disableAllHooks":true,"disableClaudeAiConnectors":true}'` | hooks, status line and claude.ai connectors off; `--settings` outranks the files                                                                     |
+  | `--system-prompt <fixed text>`                                           | replaces the default prompt; it names the data block as untrusted                                                                                    |
+  | `ENABLE_CLAUDEAI_MCP_SERVERS=false`                                      | second switch for connectors                                                                                                                         |
+  | `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`  | none of your CLAUDE.md or memory files reach the model                                                                                               |
+  | `CLAUDE_CODE_SKIP_PROMPT_HISTORY=1`, `DISABLE_AUTOUPDATER=1`             | no history written, no background update                                                                                                             |
+  | the scrubbed environment                                                 | the session markers of the running Claude Code are removed (`claude-env.ts`), so it is not a child session                                           |
+
+  Not used on purpose: `--bare` (it ignores your subscription login and needs an API key) and `--json-schema` (it is documented to work
+  through a structured-output mechanism whose interplay with `--tools ""` is not documented; the answer is validated here instead).
+  Why `project` and not `user`: the settings reference lets `apiKeyHelper` (its output is sent as the API key, which would switch the run
+  to API billing), `env` (which can set `ANTHROPIC_API_KEY` and a proxy) and `enabledPlugins` sit in any settings file, and the user file
+  is where an owner keeps them; a `--settings` override would need the key names to be known and an empty `apiKeyHelper` is not
+  documented as "unset". Leaving the user file unread closes that without guessing. Cost: an owner whose login depends on a
+  user-scope `env` or helper has no explainer (the cards show the command and the floor). `--safe-mode` is documented in
+  `cli-reference.md` and `env-vars.md` without a minimum version; a Claude Code too old to know it fails every run, which the cards
+  show as above, and the live smoke (`apps/bridge/scripts/explainer-smoke.sh`) shows at once. A managed (organisation) setting can
+  still force hooks and plugins on (`--safe-mode`'s own text says managed policy still applies); the explainer's answer is validated,
+  so a surprise there fails the explanation, not the card.
+- **Injection.** The call is JSON on stdin between lines `BEGIN UNTRUSTED DATA <random id>` and `END UNTRUSTED DATA <random id>`; a JSON
+  string cannot contain a line break, so nothing in the call can imitate the end line. The system prompt says everything in the block is
+  data, to be described, never obeyed, and that an instruction inside it is a reason to flag a mismatch. The call never appears in argv.
+- **The floor.** The bridge also reads the command itself (`explain-floor.ts`: a small shell lexer that follows pipes, `&&`/`;`/`||`,
+  `$()`, backticks, `bash -c`, `sudo`/`env`/`xargs`/`find -exec`, quotes, env prefixes and absolute paths) and works out the least severe
+  tag the call can honestly wear: deletes (`rm`, `find -delete`, `git clean`, ...), sends (`curl`, `ssh`, `git push`, any `https://` word
+  outside a text tool, ...), installs (`npm install`, `pip install`, `brew install`, `curl ... | sh`, ...), changes files (`mv`, `sed -i`,
+  `tee`, `>` redirection, running a script, ...). It follows `$'..'` quoting, here-documents and here-strings fed to shells and
+  interpreters, `${}`/`$(( ))` and unquoted here-document bodies, `env -S`, `su -c`, `busybox`, `arch`, `time`, `git -c alias.x='!..'`,
+  `find -exec`, and the strings that scripts hand to `system`/`subprocess`/`os.system`/`exec`. Tags rank Reads < Changes < Sends <
+  Installs < Deletes. **The tag shown is the more severe of the model's and the floor's.** When the floor raises it, the card is a
+  mismatch and the sentence gets one more clause ("Talos also sees that it deletes files."). A model that says "Safe" about
+  `rm -rf ~/x` still shows "Deletes". **A command word the shell builds** (`$x`, `/bin/r?`, `{rm,-rf,x}`), a call nested deeper than the
+  floor follows, and `awk`/`osascript` programs that run shell commands are _unreadable_: the card is always a mismatch, at least
+  "Changes files", and says "Talos can't read all of this command." The floor is a minimum, not a verdict: it cannot see through a
+  program it does not know (`./deploy.sh`) or a string a script builds at run time, and a command that matches no rule has no floor.
+- **What the sentence is.** Plain text, at most 500 characters from the model (tags and markdown marks removed, hidden characters shown as
+  `[U+XXXX]`), then at most two clauses of ours. Not part of the binding: the explanation does not change `payload_hash`, and
+  `permissionCardAllowsPrimary` ignores it. **It is not signed**, so a hostile relay could put any sentence or tag on a card (the app
+  takes the first answer only, so it cannot replace one that already arrived). What still holds whatever it says: Allow exists only
+  on a call the full-screen sheet shows whole, behind the scroll to the end, and the bridge re-checks the card it composed before it
+  sends `allow`. The explanation is a reading aid, not a guard; a forged "Reads files" does not remove any of those steps.
+- **Wire.** `Card.explain` (`pending` | `ready{tag,mismatch,sentence}` | `failed`) on `card.create`, and an optional `explain` on
+  `card.update`. The update still carries `state: 'pending'` because older apps require the field and would drop a frame without it.
+  The relay keeps the explanation with its copy of the card (so a device that connects later gets it in `open_cards`) only while the
+  card is pending and still waiting for one, never moves the card's state for it, and sends the apps the card's real state in that
+  frame, so an older app that applies the state does not reopen a card the owner already answered. A current app takes the first
+  `ready` or `failed` only and ignores the state. An older relay or app ignores the field and shows today's card; an older relay can
+  briefly show a just-answered card as pending until the Mac's own `done` update, which follows on the same connection.
+- **Cache.** In memory: up to 200 answers for 24 h, keyed by a hash of (tool, input, description, prompt version). Failures are not cached.
+  At most two CLIs run at once; a CLI still running when the bridge stops being the live one is killed with its process group.
+- **Trying it for real.** `bash apps/bridge/scripts/explainer-smoke.sh` makes three Haiku calls with the `claude` on PATH and prints the
+  argv and, for each call, the model's raw answer and what the card would show.
 
 ## C4. Session control from Talos
 
@@ -427,10 +595,10 @@ Design:
 
 ### C4.5 Session sheet (WP-C3)
 
-- Opens from the header mascot or Settings → Session. Model pill + effort, context bar, "≈ $x.xx this session (list
+- Opens from the usage chip in the top-right corner (docked on a desktop, a sheet below 1024 px), the phone header's ring, or Settings → Session. Model pill + effort, context bar, "≈ $x.xx this session (list
   price)", the weekly and context bars (the 5-hour window is no longer shown; a peer that still sends it is read and ignored), busy word, version, "Also open in: …". Buttons by capability: Stop (busy only),
   Compact, Model ▾, Effort, New conversation.
-- Tabs: Commands (Built-in · Skills · Plugins · MCP prompts, with route badges), MCP servers, Plugins, **Sessions**
+- Tabs, in Settings → Session only (the docked panel and the sheets link there): Commands (Built-in · Skills · Plugins · MCP prompts, with route badges), MCP servers, Plugins, **Sessions**
   (C4.6).
 - Composer `/` palette (C4.3). Thread status uses the mod's `busy` when `source:'mod'`.
 

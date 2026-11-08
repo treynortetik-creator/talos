@@ -59,6 +59,24 @@ describe('check-no-personal.sh', () => {
     expect(r.out).toContain(file)
   })
 
+  // THIRD_PARTY_NOTICES.md keeps upstream licence texts verbatim; two upstream copyright lines carry their author's address.
+  // Only those exact addresses, only in that file, pass. Built at run time so this file holds nothing the scan would flag.
+  it("lets the two upstream authors' addresses through in THIRD_PARTY_NOTICES.md and nothing else", () => {
+    const clsx = j('luke.edwards05', '@', 'gmail.com')
+    const idb = j('jaffathecake', '@', 'gmail.com')
+    const ok = run({ 'THIRD_PARTY_NOTICES.md': `Copyright (c) Luke <${clsx}>\nCopyright (c) 2016, Jake <${idb}>\n` })
+    expect(ok.code).toBe(0)
+    const other = run({
+      'THIRD_PARTY_NOTICES.md': `Copyright (c) Luke <${clsx}>\nmail ${j('jo.smith', '@', 'gmail.com')}\n`,
+    })
+    expect(other.code).toBe(1)
+    expect(other.out).toContain('THIRD_PARTY_NOTICES.md:2')
+    expect(other.out).not.toContain('THIRD_PARTY_NOTICES.md:1\n')
+    const elsewhere = run({ 'docs/a.md': `by ${clsx}\n` })
+    expect(elsewhere.code).toBe(1)
+    expect(elsewhere.out).toContain('docs/a.md')
+  })
+
   it('names the file, line and rule of a hit and never prints the matched text', () => {
     const secret = 'Zorp' + 'Industries'
     const r = run({ 'src/a.ts': `// ok\nconst v = '${secret}'\n` }, `.*\t-\t${secret}\n`)

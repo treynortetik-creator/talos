@@ -228,7 +228,7 @@ final class CompanionSpriteView: NSView {
     let still = look.stillOnly || !look.animationsAllowed
     if still {
       removeAllMotion()
-      showRest(o.rest, atlas: atlas, animated: false, state: o.displayState)
+      showRest(o.rest, atlas: atlas, animated: false, state: o.state)
       return
     }
     if o.anticStop != lastAnticStop {
@@ -237,30 +237,30 @@ final class CompanionSpriteView: NSView {
       lastAnticStop = o.anticStop
       if let p = playingClip, CompanionModel.isAntic(p) {
         removeAllMotion()
-        showRest(o.rest, atlas: atlas, animated: true, state: o.displayState)
+        showRest(o.rest, atlas: atlas, animated: true, state: o.state)
       }
     }
     if let a = o.animation, a.seq != lastSeq {
       lastSeq = a.seq
-      play(a, rest: o.rest, state: o.displayState, atlas: atlas)
+      play(a, rest: o.rest, state: o.state, atlas: atlas)
     } else if playingClip == nil {
       // Nothing changes while the same rest is already drawn and moving: redrawing would restart the ember with a new period,
       // so a slow pulse would never get past its first steps (a 2 s recompute is enough to do it).
-      let wantEmber = Self.ember(for: o.rest, state: o.displayState)
+      let wantEmber = Self.ember(for: o.rest, state: o.state)
       let framesGone = spriteLayer.animation(forKey: "frames") == nil
       let idleLoopGone = restLooping ? framesGone : (o.rest == .idle && (framesGone || spriteLayer.animation(forKey: "breath") == nil))
       let emberGone = !restLooping && emberMode.period > 0 && emberLayer.animation(forKey: "ember") == nil
       if currentRest != o.rest || emberMode != wantEmber || !restAnimated || idleLoopGone || emberGone {
-        showRest(o.rest, atlas: atlas, animated: true, state: o.displayState)
+        showRest(o.rest, atlas: atlas, animated: true, state: o.state)
       }
     } else {
       // A clip keeps playing while the rest it will settle on is unchanged; a different rest (quiet, Asleep, a new state) cuts it.
       // A clip that loops until cleared (Carried, a Rounds walk) also needs the model to keep asserting it: when it stops
       // (a mic started mid-drag), the loop must not outlive it.
       let held = !playingUntilCleared || o.animation?.untilCleared == true
-      if held, let p = pendingRest, p.0 == o.rest, p.1 == o.displayState { return }
+      if held, let p = pendingRest, p.0 == o.rest, p.1 == o.state { return }
       removeAllMotion()
-      showRest(o.rest, atlas: atlas, animated: true, state: o.displayState)
+      showRest(o.rest, atlas: atlas, animated: true, state: o.state)
     }
   }
 
@@ -275,13 +275,13 @@ final class CompanionSpriteView: NSView {
     playingClip = nil
     playingUntilCleared = false
     spriteLayer.contents = img
-    let pose = CompanionAtlas.miniPose(look.output.displayState, quiet: look.output.quiet)
+    let pose = CompanionAtlas.miniPose(look.output.state)
     spriteLayer.contentsRect = atlas.manifest.contentsRect(sheet: .mini, col: pose.rawValue, row: 0)
     emberLayer.contents = sheet(.miniEmber, in: atlas)
     emberLayer.contentsRect = atlas.manifest.miniEmberRect(pose: pose)
     emberLayer.isHidden = emberLayer.contents == nil
     // Working is the only state that steps the ember in Mini; without it Working and Idle look the same.
-    let mode: EmberMode = pose == .statue ? .dim : (look.output.displayState == .working && !look.stillOnly && look.animationsAllowed ? .glow : .resting)
+    let mode: EmberMode = pose == .statue ? .dim : (look.output.state == .working && !look.stillOnly && look.animationsAllowed ? .glow : .resting)
     let animated = !look.stillOnly && look.animationsAllowed
     // The same Mini look again (the 2 s recompute) leaves a running glow alone instead of restarting it.
     if emberMode == mode, restAnimated == animated, !emberLayer.isHidden, (mode.period == 0 || emberLayer.animationKeys() != nil || !animated) {

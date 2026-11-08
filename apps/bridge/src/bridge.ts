@@ -25,6 +25,7 @@ import {
   threadRef,
 } from './context.ts'
 import { DeviceStore } from './devices.ts'
+import { DialogCards } from './dialog-card.ts'
 import { Enrollment } from './enrollment.ts'
 import { configSyncFrame, sessionAgentsFrame, sessionInventoryFrame, sessionStateFrame } from './frames-out.ts'
 import { ensureDir, mtimeMs } from './fsutil.ts'
@@ -61,6 +62,7 @@ import { Tripwire } from './tripwire.ts'
 import { noteTrustFlip } from './trust.ts'
 import { pruneTtsFiles } from './tts.ts'
 import { BRIDGE_CLIENT_NAME, BRIDGE_COMMIT, BRIDGE_VERSION } from './version.ts'
+import { liveThreadIds, pruneInboxes, removeGoneInboxes } from './worker/inbox.ts'
 import { WorkerStore } from './worker/store.ts'
 import { WorkerTransport } from './worker/transport.ts'
 
@@ -134,7 +136,7 @@ export class Bridge {
       )
     this.clock = opts.clock ?? realClock
     this.pollMs = opts.pollMs ?? POLL_MS
-    this.paths = pathsOf(env.home)
+    this.paths = pathsOf(env.home, env.inboxRoot)
     const p = this.paths
     for (const d of [p.home, p.media, p.approved, p.enrollPending]) ensureDir(d)
     this.log = opts.logger ?? createLogger(p.home, env.logLevel)
@@ -262,6 +264,7 @@ export class Bridge {
     this.ctx.permission = new PermissionRelay(this.ctx)
     // O1: only a live main-session bridge can mint a settings card (a worker or a headless process has no relay socket to ask)
     if (live && !worker) this.ctx.configProposals = new ConfigProposals(this.ctx)
+    if (live && !worker) this.ctx.dialogs = new DialogCards(this.ctx)
     this.ctx.session = new SessionControls(this.ctx)
     // MCP apps: only a live bridge answers app requests; the service does nothing until TALOS_APP_APPS=1
     if (live)
@@ -510,6 +513,7 @@ export class Bridge {
     this.health?.onReady()
     ctx.schedules?.onReady(ready?.features ?? [])
     ctx.configProposals?.setRelayFeatures(ready?.features ?? [])
+    ctx.dialogs?.setRelayFeatures(ready?.features ?? [])
     if (!this.configRecovered && ctx.configProposals) {
       this.configRecovered = true // once per process, like the unanswered report
       void ctx.configProposals
@@ -555,6 +559,8 @@ export class Bridge {
       this.ctx.store.pruneSeen(this.lastPrune)
       pruneAttachmentRetries(this.ctx, this.lastPrune)
       this.router?.store.prune(this.lastPrune)
+      pruneInboxes(this.paths.inbox, this.lastPrune)
+      removeGoneInboxes(this.paths.inbox, liveThreadIds(this.ctx.config.config))
       const n = this.ctx.store.pruneOld(this.lastPrune, { historyDays: this.ctx.env.historyDays })
       const files = pruneTtsFiles(
         this.paths.media,
@@ -613,6 +619,7 @@ export class Bridge {
   optionCTick() {
     const r = this.router
     if (!r || this.ctx.mode !== 'live') return
+    this.ctx.dialogs?.tick()
     const now = this.clock.now()
     r.tick((status) => {
       this.ctx.transport.sendEphemeral({
@@ -679,6 +686,7 @@ export class Bridge {
     if (this.debounce) this.clock.clearTimeout(this.debounce)
     this.pollTimer = this.debounce = null
     this.ctx.schedules?.stop(final)
+    this.ctx.dialogs?.stop()
     void this.ctx.apps?.stop().catch(() => {})
     this.stopMemory()
     for (const w of this.watchers) w.close()

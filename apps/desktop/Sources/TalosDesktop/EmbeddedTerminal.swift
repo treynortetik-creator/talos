@@ -20,12 +20,24 @@ final class EmbeddedTerminal: NSObject, LocalProcessTerminalViewDelegate {
     case tmux(attach: [String])
   }
 
+  typealias ThreadTarget = TerminalSessions.ThreadTarget
+  static let goneNote = TerminalSessions.goneNote
+
+  /// The thread target for a session id the page named (see `TerminalSessions.threadTarget`).
+  static func threadTarget(
+    _ id: String, snapshot: (entries: [SwitcherEntry], workers: WorkersFile?)?, attach: (SwitcherEntry) -> [String]?
+  ) -> ThreadTarget {
+    TerminalSessions.threadTarget(id, entries: snapshot?.entries, workers: snapshot?.workers, attach: attach)
+  }
+
   /// Where the view gets its facts. `live` reads the supervisor; tests hand in their own.
   struct Source {
     var host: () -> Host
     var configured: () -> Bool
     var hasLiveChild: () -> Bool
     var sessionExists: () -> Bool
+    /// What a thread's tab shows (not used for Main, which keeps `host` above).
+    var thread: (String) -> ThreadTarget = { _ in .gone }
 
     @MainActor static func live() -> Source {
       func model() -> SupervisorController? { TerminalWindowController.shared.supervisorModel }
@@ -37,7 +49,11 @@ final class EmbeddedTerminal: NSObject, LocalProcessTerminalViewDelegate {
         },
         configured: { model()?.configured ?? false },
         hasLiveChild: { model()?.status.childPid != nil },
-        sessionExists: { model()?.agentSessionExists() ?? false })
+        sessionExists: { TerminalWindowController.shared.cachedAgentSessionExists() },
+        thread: { id in
+          let c = TerminalWindowController.shared
+          return EmbeddedTerminal.threadTarget(id, snapshot: c.switcherSnapshot(), attach: { c.attachArgv(for: $0) })
+        })
     }
   }
 
@@ -57,6 +73,9 @@ final class EmbeddedTerminal: NSObject, LocalProcessTerminalViewDelegate {
   let container = NSView()
   private let note = NSTextField(wrappingLabelWithString: "")
   private var viewer: LocalProcessTerminalView?
+  /// The session the view shows: "main" or a thread id the page named. Switching ends only our own viewer.
+  private(set) var session = TerminalSessions.mainId
+  private var keyboardClaimUntil = Date.distantPast
   private var timer: Timer?
   private var lastViewerStart = Date.distantPast
   private(set) var isOpen = false
@@ -75,11 +94,47 @@ final class EmbeddedTerminal: NSObject, LocalProcessTerminalViewDelegate {
     ])
   }
 
+  /// Key codes of the digits 1 … 9 on the digit row and on the keypad. The chord is decided by the physical key, so a layout that
+  /// prints something else on the row (French "é" for 2) is the same tab. The page uses the same rule (`Digit1-9`, `Numpad1-9`).
+  static let digitKeyCodes: [UInt16: Int] = [
+    18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9,
+    83: 1, 84: 2, 85: 3, 86: 4, 87: 5, 88: 6, 89: 7, 91: 8, 92: 9,
+  ]
+
+  /// The digit of a Ctrl+digit key event, nil for anything else. Caps Lock and the keypad flag are not modifiers anyone pressed
+  /// for this chord and are ignored; Shift, Option, Command or Function make it another chord, which is left to the terminal.
+  static func controlDigit(_ event: NSEvent) -> Int? {
+    guard event.type == .keyDown else { return nil }
+    let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad])
+    guard mods == .control else { return nil }
+    return digitKeyCodes[event.keyCode]
+  }
+
+  /// Whether `responder` is this view's own terminal (the one the owner clicked into).
+  func holdsKeyboard(_ responder: NSResponder?) -> Bool {
+    guard let v = responder as? NSView, let viewer else { return false }
+    return v === viewer || v.isDescendant(of: viewer)
+  }
+
   /// Tests: what the owner sees and what is running.
   var noteTextForTest: String? { note.isHidden ? nil : note.stringValue }
   var hasViewerForTest: Bool { viewer != nil }
   var viewerForTest: NSView? { viewer }
   var viewerIsRunningForTest: Bool { viewer?.process.running == true }
+
+  /// Re-points the view at another session. Ends our own `tmux attach` child and nothing else: no key is sent, and no session is
+  /// detached or killed (the others keep running). The next look attaches to the new one.
+  func select(_ id: String, keepKeyboard: Bool = false) {
+    guard id != session, TerminalSessions.isValidSession(id) else { return }
+    session = id
+    // The owner's own key switched it: the viewer that attaches next takes the keyboard (for a few seconds only). A switch the
+    // page asked for never does: the page must not be able to move the owner's typing into a terminal.
+    keyboardClaimUntil = keepKeyboard ? Date().addingTimeInterval(4) : .distantPast
+    removeViewer()
+    note.isHidden = true
+    lastViewerStart = .distantPast
+    if isOpen { tick() }
+  }
 
   /// Shows the view over `frame` of `host`, or moves it there when it is already showing.
   func show(in host: NSView, frame: CGRect) {
@@ -105,6 +160,7 @@ final class EmbeddedTerminal: NSObject, LocalProcessTerminalViewDelegate {
 
   func tick() {
     guard isOpen else { return }
+    if session != TerminalSessions.mainId { return tickThread() }
     switch source.host() {
     case .none:
       say(TerminalPane.choose(configured: false, hasLiveChild: false, sessionExists: false))
@@ -116,6 +172,20 @@ final class EmbeddedTerminal: NSObject, LocalProcessTerminalViewDelegate {
       let choice = TerminalPane.choose(
         configured: source.configured(), hasLiveChild: live, sessionExists: live || source.sessionExists())
       guard case .attach = choice else { return say(choice) }
+      guard Date().timeIntervalSince(lastViewerStart) > 1.0 else { return }
+      lastViewerStart = Date()
+      start(argv)
+    }
+  }
+
+  /// A thread's tab: attach its session when it has a pane, say why when it doesn't.
+  private func tickThread() {
+    guard case .tmux = source.host() else { return say(.note(Self.noTmuxNote)) }
+    switch source.thread(session) {
+    case .gone: say(.note(Self.goneNote))
+    case .note(let text): say(.note(text))
+    case .attach(let argv):
+      if viewer?.process.running == true { note.isHidden = true; return }
       guard Date().timeIntervalSince(lastViewerStart) > 1.0 else { return }
       lastViewerStart = Date()
       start(argv)
@@ -136,6 +206,10 @@ final class EmbeddedTerminal: NSObject, LocalProcessTerminalViewDelegate {
     v.processDelegate = self
     container.addSubview(v)
     viewer = v
+    if Date() < keyboardClaimUntil {
+      keyboardClaimUntil = .distantPast
+      container.window?.makeFirstResponder(v)
+    }
     note.isHidden = true
     let env = ThreadSessionsPane.tmuxViewerEnvironment()
     v.startProcess(
@@ -146,9 +220,14 @@ final class EmbeddedTerminal: NSObject, LocalProcessTerminalViewDelegate {
 
   private func removeViewer() {
     guard let v = viewer else { return }
+    // A viewer that held the keyboard leaves it with the page's view, not with the bare window: a window that is first
+    // responder beeps at every key and no shortcut reaches it.
+    let host = container.superview
+    let held = v.window?.firstResponder === v
     if v.process.running { v.terminate() }
     v.removeFromSuperview()
     viewer = nil
+    if held, let host { host.window?.makeFirstResponder(host) }
   }
 
   // MARK: LocalProcessTerminalViewDelegate

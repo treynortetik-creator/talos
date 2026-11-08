@@ -17,10 +17,10 @@ no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '  
 
 SB="$(mktemp -d)" || exit 2
 case "$SB" in /*/*) ;; *) echo "suspicious temp dir '$SB'" >&2; exit 2 ;; esac
-trap 'rm -rf "$SB"' EXIT
+trap 'chmod -R u+w "$SB" 2>/dev/null; rm -rf "$SB"' EXIT   # kit releases are read-only by design
 REALHOME="$HOME"
 fresh_home(){ # $1 = name; sets up an empty fake HOME and a launchctl tripwire
-  export HOME="$SB/$1"; rm -rf "$HOME"; mkdir -p "$HOME/bin" "$HOME/Library/LaunchAgents"
+  export HOME="$SB/$1"; chmod -R u+w "$HOME" 2>/dev/null; rm -rf "$HOME"; mkdir -p "$HOME/bin" "$HOME/Library/LaunchAgents"
   export XDG_CONFIG_HOME="$HOME/.config"; export CHRONOS_CONFIG="$HOME/.config/chronos/config.json"
   export CHRONOS_LAUNCHAGENTS_DIR="$HOME/Library/LaunchAgents"; export TALOS_VENDOR_DIR="$HOME/.local/share/talos"
   printf '#!/bin/bash\necho "launchctl $*" >> "%s/launchctl.calls"\nexit 1\n' "$SB" > "$HOME/bin/launchctl"; chmod +x "$HOME/bin/launchctl"
@@ -34,7 +34,7 @@ fresh_home h1
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --notify macos --dry-run 2>&1)"; rc=$?
 [ "$rc" = 0 ] && ok "--dry-run exits 0" || no "--dry-run exited $rc" "$(printf '%s' "$out" | tail -3)"
 { [ ! -e "$HOME/agent" ] && [ ! -e "$HOME/.config" ] && [ ! -e "$HOME/.chronos" ]; } && ok "--dry-run created nothing" || no "--dry-run wrote files"
-printf '%s' "$out" | grep -q 'would:' && ok "--dry-run prints a plan" || no "--dry-run printed no plan"
+<<<"$out" grep -q 'would:' && ok "--dry-run prints a plan" || no "--dry-run printed no plan"
 
 # ---- 1b. --notify talos records the absolute path of talos-app, or warns when it is missing (R1-4)
 fresh_home h1b; A="$HOME/agent"
@@ -44,7 +44,7 @@ out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load 
   && ok "--notify talos records the absolute path of talos-app" || no "talos-app path not recorded (rc=$rc)" "$(cat "$XDG_CONFIG_HOME/talos/talos-app-bin" 2>&1)"
 fresh_home h1c; A="$HOME/agent"
 out="$(PATH="/usr/bin:/bin:$HOME/bin" bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --notify talos 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'warning: --notify talos: the talos-app command was not found' && [ ! -e "$XDG_CONFIG_HOME/talos/talos-app-bin" ]; } \
+{ [ "$rc" = 0 ] && <<<"$out" grep -q 'warning: --notify talos: the talos-app command was not found' && [ ! -e "$XDG_CONFIG_HOME/talos/talos-app-bin" ]; } \
   && ok "--notify talos warns, and records nothing, when talos-app is missing" || no "no warning for a missing talos-app (rc=$rc)" "$(printf '%s' "$out" | grep -i talos-app)"
 
 # ---- 2. a real install with the stub Chronos
@@ -75,21 +75,21 @@ PY
 python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["notify"].endswith("notify/macos.sh") else 1)' "$CHRONOS_CONFIG" && [ -x "$XDG_CONFIG_HOME/talos/notify/macos.sh" ] \
   && ok "--notify macos installs the wrapper and sets Chronos's notify" || no "notify not wired"
 grep -q 'chronos-session-start.py' "$A/.claude/settings.json" && ok "the Chronos session hook is registered in the agent's settings" || no "session hook not registered"
-{ printf '%s' "$out" | grep -q '   chronos: chronos 0.2.2 installed' && ! printf '%s' "$out" | grep -q 'empty jobs.json'; } \
+{ <<<"$out" grep -q '   chronos: chronos 0.2.2 installed' && ! <<<"$out" grep -q 'empty jobs.json'; } \
   && ok "Chronos's installer runs --quiet: one labelled summary line, and no stray \"created an empty jobs.json\" before the jobs are registered" || no "Chronos output not quiet/labelled" "$(printf '%s' "$out" | grep -i chronos | head -4)"
 grep -q 'quiet=1' "$HOME/.chronos/fake-install.log" && ok "install.sh passed --quiet to a Chronos that supports it" || no "--quiet not passed"
-{ printf '%s' "$out" | grep -q 'NOT running (--no-load)' && printf '%s' "$out" | grep -q 'io.github.chronos.tick.plist' && printf '%s' "$out" | grep -q 'ui/server.py'; } \
+{ <<<"$out" grep -q 'NOT running (--no-load)' && <<<"$out" grep -q 'io.github.chronos.tick.plist' && <<<"$out" grep -q 'ui/server.py'; } \
   && ok "--no-load ends with how to start the scheduler and the UI by hand (and claims no UI address is serving)" || no "--no-load instructions missing" "$(printf '%s' "$out" | tail -8)"
 [ -f "$XDG_CONFIG_HOME/talos/chronos-dir" ] && ok "install remembers where Chronos came from (for uninstall)" || no "chronos-dir not recorded"
-vi="$(cd "$A" && bash scripts/verify-install.sh 2>&1)"; printf '%s' "$vi" | grep -q 'hook parsed' && ok "verify-install.sh parses the installed hook registration" || no "verify-install does not see the hook"
-printf '%s' "$vi" | grep -q 'enforcement hooks registered' && ! printf '%s' "$vi" | grep -q 'registered but the file is missing' \
+vi="$(cd "$A" && bash scripts/verify-install.sh 2>&1)"; <<<"$vi" grep -q 'hook parsed' && ok "verify-install.sh parses the installed hook registration" || no "verify-install does not see the hook"
+<<<"$vi" grep -q 'enforcement hooks registered' && ! <<<"$vi" grep -q 'registered but the file is missing' \
   && ok "verify-install reports the enforcement hooks as registered, and does not mistake Chronos's own hook for a missing one" || no "verify-install hook note wrong" "$(printf '%s' "$vi" | grep -i hooks)"
 # K5b: a fresh install is a working agent. The default is rendered, the floor rules are in it, and the closing message does not make the interview a prerequisite.
 if ! grep -q 'talos:placeholder' "$A/CLAUDE.md"; then ok "a fresh install renders CLAUDE.md (no placeholder marker left)"; else no "fresh install left the placeholder CLAUDE.md"; fi
 _fl=""; for ph in 'do not retry or route around' 'never send, post, delete, spend or share' 'carries the substance' 'only one process may hold a channel' 'never infer authority' 'Never do these' '## 8. Guardrails'; do
   grep -qF "$ph" "$A/CLAUDE.md" || _fl="$_fl [$ph]"; done
 [ -z "$_fl" ] && ok "the installed CLAUDE.md carries every floor rule (ACTION RULE, scheduled runs, channel reply, one poller, who approves, NEVER_DO, GUARDRAILS)" || no "installed CLAUDE.md lacks:$_fl"
-{ printf '%s' "$out" | grep -qi 'ready' && printf '%s' "$out" | grep -qi 'optional' && ! printf '%s' "$out" | grep -q 'then say:  Read BOOTSTRAP'; } \
+{ <<<"$out" grep -qi 'ready' && <<<"$out" grep -qi 'optional' && ! <<<"$out" grep -q 'then say:  Read BOOTSTRAP'; } \
   && ok "install's closing message says the agent is ready and the interview is optional" || no "closing message wrong" "$(printf '%s' "$out" | tail -8)"
 [ ! -e "$SB/launchctl.calls" ] && ok "launchctl was never called" || no "launchctl WAS called" "$(cat "$SB/launchctl.calls")"
 
@@ -97,7 +97,7 @@ _fl=""; for ph in 'do not retry or route around' 'never send, post, delete, spen
 fresh_home h2b
 OLD="$SB/old-chronos"; rm -rf "$OLD"; cp -R "$STUB" "$OLD"; sed -i.bak 's/--quiet/--q-u-i-e-t/g' "$OLD/install.sh"; rm -f "$OLD/install.sh.bak"
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$OLD" --no-load 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && grep -q 'quiet=0' "$HOME/.chronos/fake-install.log" && printf '%s' "$out" | grep -q '   chronos: no jobs yet'; } \
+{ [ "$rc" = 0 ] && grep -q 'quiet=0' "$HOME/.chronos/fake-install.log" && <<<"$out" grep -q '   chronos: no jobs yet'; } \
   && ok "a Chronos without --quiet is not passed it, and its output is still labelled" || no "old-Chronos fallback wrong (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
 
 # ---- 2d. THE REVIEW'S CASE: a Chronos config already exists, so Chronos's installer is not re-run; the pinned clone is 0.2.2
@@ -114,14 +114,14 @@ out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" -
 n=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j["id"].startswith("talos-")))' "$HOME/.config/chronos/jobs.json")
 r=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j.get("restricted") is True))' "$HOME/.config/chronos/jobs.json")
 { [ "$rc" = 0 ] && [ "$r" = 0 ] && [ "$n" = 5 ] && ! grep -q 'install.sh --workspace' "$HOME/.chronos/fake-install.log" 2>/dev/null \
-  && printf '%s' "$out" | grep -q 'not running its installer again' && printf '%s' "$out" | grep -q 'SKIPPED talos-morning-brief' && printf '%s' "$out" | grep -q "$OLDRT"; } \
+  && <<<"$out" grep -q 'not running its installer again' && <<<"$out" grep -q 'SKIPPED talos-morning-brief' && <<<"$out" grep -q "$OLDRT"; } \
   && ok "an existing Chronos config + an OLDER runtime under launchd: Chronos's installer is not re-run, and the restricted jobs are skipped (read from the runtime launchd runs, not the 0.2.2 clone), with the runtime named" \
   || no "install trusted the clone's version or registered restricted jobs on an old runtime (rc=$rc jobs=$n restricted=$r)" "$(printf '%s' "$out" | tail -8)"
 
 # ---- 2c. the documented opt-out: --full-access-jobs registers the Claude jobs unrestricted, and says so
 fresh_home h2c
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --no-load --full-access-jobs 2>&1)"; rc=$?
-python3 - "$HOME/.config/chronos/jobs.json" <<'PY' && [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'permission prompts SKIPPED' && ok "--full-access-jobs records restricted:false with no tool list, and the installer says prompts are skipped" || no "--full-access-jobs wrong (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+python3 - "$HOME/.config/chronos/jobs.json" <<'PY' && [ "$rc" = 0 ] && <<<"$out" grep -q 'permission prompts SKIPPED' && ok "--full-access-jobs records restricted:false with no tool list, and the installer says prompts are skipped" || no "--full-access-jobs wrong (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
 import json,sys
 d={j["id"]:j for j in json.load(open(sys.argv[1]))}
 assert all(d[i]["restricted"] is False and "allowed_tools" not in d[i] for i in ("talos-morning-brief","talos-weekly-wiki-lint","talos-weekly-snapshot","talos-state-sweep"))
@@ -129,7 +129,7 @@ PY
 
 # ---- 3. second install is refused, with the upgrade hint
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load 2>&1)"; rc=$?
-{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'upgrade.sh'; } && ok "re-running install on an installed folder is refused and points at upgrade.sh" || no "second install was not refused (rc=$rc)"
+{ [ "$rc" != 0 ] && <<<"$out" grep -q 'upgrade.sh'; } && ok "re-running install on an installed folder is refused and points at upgrade.sh" || no "second install was not refused (rc=$rc)"
 
 # ---- 3b. --add-to-existing: Chronos and the jobs are added to an agent that exists, and nothing in the folder is overwritten
 fresh_home h3b2; A="$HOME/agent"
@@ -141,14 +141,14 @@ out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load 
 { [ "$rc" = 0 ] && [ ! -e "$CHRONOS_CONFIG" ]; } && ok "--add-to-existing --dry-run prints a plan and changes nothing" || no "--add-to-existing --dry-run wrong (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --add-to-existing --notify macos 2>&1)"; rc=$?
 n=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j["id"].startswith("talos-")))' "$HOME/.config/chronos/jobs.json" 2>/dev/null || echo 0)
-{ [ "$rc" = 0 ] && [ -f "$CHRONOS_CONFIG" ] && [ "$n" -ge 1 ] && printf '%s' "$out" | grep -q 'nothing is copied'; } \
+{ [ "$rc" = 0 ] && [ -f "$CHRONOS_CONFIG" ] && [ "$n" -ge 1 ] && <<<"$out" grep -q 'nothing is copied'; } \
   && ok "--add-to-existing on an installed agent installs Chronos, registers the Talos jobs (disabled) and copies nothing" || no "--add-to-existing did not add Chronos (rc=$rc jobs=$n)" "$(printf '%s' "$out" | tail -5)"
 grep -q "workspace $A noload=1" "$HOME/.chronos/fake-install.log" 2>/dev/null && ok "Chronos's installer got the existing agent folder as its workspace" || no "workspace not passed" "$(cat "$HOME/.chronos/fake-install.log" 2>/dev/null)"
 grep -q 'chronos-session-start' "$A/.claude/settings.json" && ok "the Chronos session hook was registered in the existing agent's settings" || no "session hook missing"
 sum_after="$(cat "$A/CLAUDE.md" "$A/memory/mine.md" "$A/.talos-version" | shasum | cut -d' ' -f1)"
 [ "$sum_before" = "$sum_after" ] && ok "CLAUDE.md, memory/ and .talos-version are byte-identical after --add-to-existing" || no "--add-to-existing changed the owner's files"
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --add-to-existing 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'kept existing talos-morning-brief'; } && ok "running --add-to-existing twice keeps the jobs it registered (no duplicate, no overwrite)" || no "second --add-to-existing misbehaved (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+{ [ "$rc" = 0 ] && <<<"$out" grep -q 'kept existing talos-morning-brief'; } && ok "running --add-to-existing twice keeps the jobs it registered (no duplicate, no overwrite)" || no "second --add-to-existing misbehaved (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
 fresh_home h3b3; mkdir -p "$HOME/plain"; echo x > "$HOME/plain/a.txt"
 bash "$KIT/install.sh" --agent-dir "$HOME/plain" --chronos-path "$STUB" --no-load --add-to-existing >/dev/null 2>&1; rc=$?
 { [ "$rc" != 0 ] && [ ! -e "$CHRONOS_CONFIG" ] && [ ! -e "$HOME/plain/.talos-version" ]; } && ok "--add-to-existing refuses a folder that is not a Talos agent, and writes nothing" || no "--add-to-existing touched a plain folder (rc=$rc)"
@@ -157,7 +157,7 @@ bash "$KIT/install.sh" --agent-dir "$HOME/plain" --chronos-path "$STUB" --no-loa
 fresh_home h3c; A="$HOME/agent"
 mkdir -p "$HOME/work"; ( cd "$HOME/work" && git init -q clone && git -C clone remote add origin https://github.com/someone/talos.git )
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$HOME/work/clone/vault" --dry-run 2>&1)"; rc=$?
-{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'git work tree'; } && ok "a vault inside a git work tree with a GitHub remote is refused" || no "vault inside a GitHub clone was not refused (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
+{ [ "$rc" != 0 ] && <<<"$out" grep -q 'git work tree'; } && ok "a vault inside a git work tree with a GitHub remote is refused" || no "vault inside a GitHub clone was not refused (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$HOME/work/clone/sub/deeper/vault" --dry-run 2>&1)"; rc=$?
 [ "$rc" != 0 ] && ok "so is one in a folder that does not exist yet under it" || no "nested path under a GitHub clone accepted"
 ( cd "$HOME/work" && git init -q local-only )
@@ -167,17 +167,17 @@ fresh_home h3d; A="$HOME/agent"; V="$HOME/private-vault"
 bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$V" >/dev/null 2>&1 || no "(setup) first install with a vault failed"
 echo "keep me" > "$V/note.md"
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$V" --add-to-existing 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && [ "$(cat "$V/note.md")" = "keep me" ] && printf '%s' "$out" | grep -q 'already made by this installer'; } && ok "a vault this installer made is recognised on a re-run: skipped, nothing overwritten" || no "re-run with the same vault failed (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+{ [ "$rc" = 0 ] && [ "$(cat "$V/note.md")" = "keep me" ] && <<<"$out" grep -q 'already made by this installer'; } && ok "a vault this installer made is recognised on a re-run: skipped, nothing overwritten" || no "re-run with the same vault failed (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --with-vault "$V" --add-to-existing 2>&1)"; rc=$?
 { [ "$rc" = 0 ] && [ -f "$CHRONOS_CONFIG" ]; } && ok "the same vault flag plus Chronos reaches Chronos (the step 3 then step 9.1 sequence)" || no "vault flag blocked the Chronos step (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
 mkdir -p "$HOME/foreign"; echo x > "$HOME/foreign/a.txt"
 bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$HOME/foreign" --add-to-existing --dry-run >/dev/null 2>&1 && no "a foreign non-empty folder was accepted as the vault" || ok "a foreign non-empty folder is still refused as the vault"
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault --dry-run 2>&1)"; rc=$?
-{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'needs a'; } && ok "--with-vault followed by another flag is refused, not read as the folder" || no "flag taken as a value (rc=$rc)"
+{ [ "$rc" != 0 ] && <<<"$out" grep -q 'needs a'; } && ok "--with-vault followed by another flag is refused, not read as the folder" || no "flag taken as a value (rc=$rc)"
 fresh_home h3e
 mkdir -p "$HOME/my-agent"; echo "version=1.0.0" > "$HOME/my-agent/.talos-version"
 out="$(bash "$KIT/install.sh" --no-chronos 2>&1)"; rc=$?
-{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'my-agent' && printf '%s' "$out" | grep -q -- '--agent-dir' && [ ! -e "$HOME/talos-agent" ]; } && ok "an old ~/my-agent with no --agent-dir stops and asks; no second agent is created" || no "silently created a second agent (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+{ [ "$rc" != 0 ] && <<<"$out" grep -q 'my-agent' && <<<"$out" grep -q -- '--agent-dir' && [ ! -e "$HOME/talos-agent" ]; } && ok "an old ~/my-agent with no --agent-dir stops and asks; no second agent is created" || no "silently created a second agent (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
 bash "$KIT/install.sh" --no-chronos --agent-dir "$HOME/my-agent" --add-to-existing --dry-run >/dev/null 2>&1 && ok "naming the old folder on purpose is fine" || no "explicit old folder refused"
 
 # ---- 3d. round-2 review fixes
@@ -193,7 +193,7 @@ bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$V" --add-to-
 fresh_home h3g; A="$HOME/agent"
 mkdir -p "$HOME/work/gl"; ( cd "$HOME/work" && git init -q gl && git -C gl remote add origin https://gitlab.com/someone/x.git )
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos --with-vault "$HOME/work/gl/vault" --dry-run 2>&1)"; rc=$?
-{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'git work tree'; } && ok "a vault inside a git work tree with ANY remote is refused (not only GitHub)" || no "gitlab-remote work tree accepted (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
+{ [ "$rc" != 0 ] && <<<"$out" grep -q 'git work tree'; } && ok "a vault inside a git work tree with ANY remote is refused (not only GitHub)" || no "gitlab-remote work tree accepted (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
 
 fresh_home h3h
 CL="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)"; SW="$(dirname "$CL")/$(basename "$CL" | tr 'A-Za-z' 'a-zA-Z')"
@@ -209,7 +209,7 @@ bash "$KIT/install.sh" --agent-dir "$HOME/no/such/parent/agent" --no-chronos --p
 
 fresh_home h3j
 out="$(bash "$KIT/uninstall.sh" --agent-dir --yes 2>&1)"; rc=$?
-{ [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'needs a value'; } && ok "uninstall.sh refuses a flag as the value of --agent-dir" || no "uninstall took --yes as a folder (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
+{ [ "$rc" = 2 ] && <<<"$out" grep -q 'needs a value'; } && ok "uninstall.sh refuses a flag as the value of --agent-dir" || no "uninstall took --yes as a folder (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
 
 # ---- 4. other refusals
 fresh_home h3
@@ -221,17 +221,17 @@ mkdir -p "$HOME/Documents"
 bash "$KIT/install.sh" --agent-dir "$HOME/Documents/agent" --chronos-path "$STUB" --no-load >/dev/null 2>&1 && no "installed into ~/Documents with Chronos on" || ok "refuses ~/Documents when Chronos is on (macOS privacy rules)"
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/Documents/agent" --no-chronos 2>&1)"; rc=$?
 { [ "$rc" = 0 ] && [ -e "$HOME/Documents/agent/BOOTSTRAP.md" ]; } && ok "allows ~/Documents with --no-chronos" || no "--no-chronos in ~/Documents failed"
-{ printf '%s' "$out" | grep -q 'WARNING: this folder is inside a macOS-protected folder' && printf '%s' "$out" | grep -q 'would like to access files in your Desktop folder' && printf '%s' "$out" | grep -q '~/agent'; } \
+{ <<<"$out" grep -q 'WARNING: this folder is inside a macOS-protected folder' && <<<"$out" grep -q 'would like to access files in your Desktop folder' && <<<"$out" grep -q '~/agent'; } \
   && ok "an agent folder inside ~/Documents WARNS about the macOS access prompt and recommends ~/agent" || no "no protected-folder warning" "$(printf '%s' "$out" | grep -i -A2 warning)"
 for pf in Desktop Downloads; do
   mkdir -p "$HOME/$pf"; fresh_h="$HOME/$pf/agent-$pf"
   out="$(bash "$KIT/install.sh" --agent-dir "$fresh_h" --chronos-path "$STUB" --no-load --allow-protected-folder 2>&1)"; rc=$?
-  { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'WARNING: this folder is inside a macOS-protected folder'; } && ok "--allow-protected-folder under ~/$pf installs and WARNS" || no "no warning under ~/$pf (rc=$rc)"
+  { [ "$rc" = 0 ] && <<<"$out" grep -q 'WARNING: this folder is inside a macOS-protected folder'; } && ok "--allow-protected-folder under ~/$pf installs and WARNS" || no "no warning under ~/$pf (rc=$rc)"
 done
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/Documents/dry-agent" --no-chronos --dry-run 2>&1)"
-printf '%s' "$out" | grep -q 'WARNING: this folder is inside a macOS-protected folder' && ok "--dry-run shows the protected-folder warning too" || no "dry-run hides the protected-folder warning"
+<<<"$out" grep -q 'WARNING: this folder is inside a macOS-protected folder' && ok "--dry-run shows the protected-folder warning too" || no "dry-run hides the protected-folder warning"
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent-ok" --no-chronos 2>&1)"
-printf '%s' "$out" | grep -qi 'macOS-protected' && no "a normal folder got the protected-folder warning" || ok "no protected-folder warning for a folder outside Desktop, Documents and Downloads"
+<<<"$out" grep -qi 'macOS-protected' && no "a normal folder got the protected-folder warning" || ok "no protected-folder warning for a folder outside Desktop, Documents and Downloads"
 bash "$KIT/install.sh" --agent-dir "$HOME/x" --notify carrier-pigeon >/dev/null 2>&1 && no "accepted --notify carrier-pigeon" || ok "rejects an unknown --notify"
 
 # ---- 5. --no-chronos installs the agent and nothing else
@@ -252,12 +252,12 @@ head="$(git -C "$TALOS_VENDOR_DIR/chronos" rev-parse HEAD 2>/dev/null)"
 fresh_home h6
 bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$R" --chronos-ref 0000000000000000000000000000000000000000 --no-load >/dev/null 2>&1 && no "installed with a commit that does not exist" || ok "a pinned commit that does not exist aborts the install"
 fresh_home h7
-cl="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$SB/does-not-exist" --no-load 2>&1)"; printf '%s' "$cl" | grep -q 'Could not clone' && ok "a failed clone says what to do (check the network, --chronos-path, --no-chronos)" || no "failed clone gave no guidance"
+cl="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$SB/does-not-exist" --no-load 2>&1)"; <<<"$cl" grep -q 'Could not clone' && ok "a failed clone says what to do (check the network, --chronos-path, --no-chronos)" || no "failed clone gave no guidance"
 
 # ---- 4b. a nonexistent parent folder is a hard error, never the filesystem root (A3)
 fresh_home h3b
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/no/such/parent/agent" --no-chronos 2>&1)"; rc=$?
-{ [ "$rc" != 0 ] && [ ! -e "$HOME/no" ] && [ ! -e /agent ] && printf '%s' "$out" | grep -q 'parent folder'; } \
+{ [ "$rc" != 0 ] && [ ! -e "$HOME/no" ] && [ ! -e /agent ] && <<<"$out" grep -q 'parent folder'; } \
   && ok "a missing parent folder is refused with a clear message and creates nothing" || no "missing parent not handled (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
 
 # ---- 5b. the kit's test fixtures are not copied into the agent folder (A9)
@@ -271,7 +271,7 @@ fresh_home h4c; mkdir -p "$HOME/.config/chronos" "$HOME/other-ws"
 printf '{\n "workspace": "%s",\n "jobs_file": "~/.config/chronos/jobs.json",\n "jobs_dir": "~/.config/chronos/jobs",\n "notify": ""\n}\n' "$HOME/other-ws" > "$CHRONOS_CONFIG"
 echo "[]" > "$HOME/.config/chronos/jobs.json"; chmod 600 "$CHRONOS_CONFIG"
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --no-load 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'WARNING: Chronos.s workspace' && grep -q "other-ws" "$CHRONOS_CONFIG"; } \
+{ [ "$rc" = 0 ] && <<<"$out" grep -q 'WARNING: Chronos.s workspace' && grep -q "other-ws" "$CHRONOS_CONFIG"; } \
   && ok "a different Chronos workspace is warned about and left alone by default" || no "workspace mismatch not warned (rc=$rc)" "$(printf '%s' "$out" | grep -i workspace | head -2)"
 fresh_home h4d; mkdir -p "$HOME/.config/chronos" "$HOME/other-ws"
 printf '{\n "workspace": "%s",\n "jobs_file": "~/.config/chronos/jobs.json",\n "jobs_dir": "~/.config/chronos/jobs",\n "notify": ""\n}\n' "$HOME/other-ws" > "$CHRONOS_CONFIG"
@@ -284,14 +284,14 @@ python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["workspa
 # ---- 6b. --with-memory-search: the dry-run prints the plan and creates nothing; with no Python 3.10+ the install still succeeds (C3)
 fresh_home h6b
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --with-memory-search --embed-model small --dry-run 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'bge-small-en-v1.5' && printf '%s' "$out" | grep -q 'fastembed==' && printf '%s' "$out" | grep -q 'talos-memory-index' \
+{ [ "$rc" = 0 ] && <<<"$out" grep -q 'bge-small-en-v1.5' && <<<"$out" grep -q 'fastembed==' && <<<"$out" grep -q 'talos-memory-index' \
   && [ ! -e "$HOME/agent" ] && [ ! -e "$HOME/.local" ] && [ ! -e "$HOME/.config" ]; } \
   && ok "--with-memory-search --dry-run prints the venv, pinned packages, model, index and job, and creates nothing" || no "memory-search dry-run wrong (rc=$rc)" "$(printf '%s' "$out" | tail -8)"
 bash "$KIT/install.sh" --agent-dir "$HOME/agent" --with-memory-search --embed-model huge --dry-run >/dev/null 2>&1 && no "accepted --embed-model huge" || ok "rejects an unknown --embed-model"
 fresh_home h6c
 out="$(PATH="$HOME/bin:/usr/bin:/bin" bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --no-load --with-memory-search 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'NONE FOUND' && printf '%s' "$out" | grep -q 'NOT enabled' && [ -e "$HOME/agent/BOOTSTRAP.md" ] && [ ! -e "$HOME/.local/share/talos/venv" ] \
-  && printf '%s' "$out" | grep -q 'brew install uv && bash .*scripts/memory/setup.sh' && printf '%s' "$out" | grep -q 'astral.sh/uv/install.sh'; } \
+{ [ "$rc" = 0 ] && <<<"$out" grep -q 'NONE FOUND' && <<<"$out" grep -q 'NOT enabled' && [ -e "$HOME/agent/BOOTSTRAP.md" ] && [ ! -e "$HOME/.local/share/talos/venv" ] \
+  && <<<"$out" grep -q 'brew install uv && bash .*scripts/memory/setup.sh' && <<<"$out" grep -q 'astral.sh/uv/install.sh'; } \
   && ok "with no Python 3.10+ (and no uv) the install still succeeds, says so, and builds no venv" || no "no-python fallback wrong (rc=$rc)" "$(printf '%s' "$out" | tail -6)"
 
 # ---- 6c2. Python discovery sees a newer python3.14 (Homebrew's current default) and a plain python3 that is 3.10+
@@ -304,7 +304,7 @@ done
 if [ -n "$_py10" ]; then
   printf '#!/bin/bash\nexec %s "$@"\n' "$_py10" > "$HOME/pybin/python3.14"; chmod +x "$HOME/pybin/python3.14"
   out="$(PATH="$HOME/pybin:/usr/bin:/bin" bash "$KIT/scripts/memory/setup.sh" --dry-run 2>&1)"
-  printf '%s' "$out" | grep -q "python:  *$HOME/pybin/python3.14" && ok "setup.sh finds a python3.14 when it is the only 3.10+ on PATH" || no "python3.14 not found" "$(printf '%s' "$out" | grep python:)"
+  <<<"$out" grep -q "python:  *$HOME/pybin/python3.14" && ok "setup.sh finds a python3.14 when it is the only 3.10+ on PATH" || no "python3.14 not found" "$(printf '%s' "$out" | grep python:)"
 else
   echo "  skip setup.sh python3.14 discovery (no Python 3.10+ on this machine to wrap)"
 fi
@@ -312,10 +312,10 @@ fi
 # ---- 6d. --with-vault: a private vault, validated first, never inside the agent or on synced storage (S2)
 fresh_home h6d
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos --with-vault "$HOME/private-vault" --dry-run 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'private-vault' && [ ! -e "$HOME/private-vault" ] && [ ! -e "$HOME/agent" ]; } && ok "--with-vault --dry-run prints the plan and creates nothing" || no "vault dry-run wrong (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+{ [ "$rc" = 0 ] && <<<"$out" grep -q 'private-vault' && [ ! -e "$HOME/private-vault" ] && [ ! -e "$HOME/agent" ]; } && ok "--with-vault --dry-run prints the plan and creates nothing" || no "vault dry-run wrong (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos --with-vault "$HOME/private-vault" 2>&1)"; rc=$?
 { [ "$rc" = 0 ] && [ -f "$HOME/private-vault/CLAUDE.md" ] && [ -f "$HOME/private-vault/_guard-terms.txt" ] && [ ! -e "$HOME/private-vault/_guard-terms.txt.example" ] \
-  && [ "$(cat "$XDG_CONFIG_HOME/talos/vault-dir")" = "$HOME/private-vault" ] && printf '%s' "$out" | grep -q '## Personal vault'; } \
+  && [ "$(cat "$XDG_CONFIG_HOME/talos/vault-dir")" = "$HOME/private-vault" ] && <<<"$out" grep -q '## Personal vault'; } \
   && ok "--with-vault copies the vault template, records its path, and prints the block to add to CLAUDE.md" || no "vault install wrong (rc=$rc)" "$(printf '%s' "$out" | tail -5)"
 mode="$(stat -f %Lp "$HOME/private-vault" 2>/dev/null || stat -c %a "$HOME/private-vault")"; [ "$mode" = 700 ] && ok "the vault folder is mode 700" || no "vault mode is $mode"
 grep -v '^#' "$HOME/private-vault/_guard-terms.txt" | grep -q '[a-z]' && no "the shipped guard-terms file contains terms" || ok "the vault's guard-terms file ships with comments only, no terms"
@@ -333,7 +333,7 @@ bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos >/dev/null 2>&1
 grep -q 'TALOS-POINTER' "$HOME/.claude/CLAUDE.md" && no "a plain install edited the global CLAUDE.md (it must be opt-in)" || ok "without --global-pointer the global ~/.claude/CLAUDE.md is untouched"
 fresh_home h6g; mkdir -p "$HOME/.claude"; printf '# My global rules\n\n- be brief\n' > "$HOME/.claude/CLAUDE.md"; cp "$HOME/.claude/CLAUDE.md" "$SB/global.orig"
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos --global-pointer --dry-run 2>&1)"
-{ [ "$(cat "$HOME/.claude/CLAUDE.md")" = "$(cat "$SB/global.orig")" ] && printf '%s' "$out" | grep -q 'TALOS-POINTER:BEGIN'; } && ok "--global-pointer --dry-run shows the block and changes nothing" || no "global-pointer dry-run wrong"
+{ [ "$(cat "$HOME/.claude/CLAUDE.md")" = "$(cat "$SB/global.orig")" ] && <<<"$out" grep -q 'TALOS-POINTER:BEGIN'; } && ok "--global-pointer --dry-run shows the block and changes nothing" || no "global-pointer dry-run wrong"
 bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos --global-pointer >/dev/null 2>&1
 { grep -q "recall.py" "$HOME/.claude/CLAUDE.md" && grep -q "$HOME/agent" "$HOME/.claude/CLAUDE.md" && grep -q 'be brief' "$HOME/.claude/CLAUDE.md" && [ -f "$HOME/.claude/CLAUDE.md.bak-before-talos" ]; } \
   && ok "--global-pointer appends one marked block (agent path, recall command), keeps the user's lines, backs the file up first" || no "global block wrong"
@@ -343,7 +343,7 @@ bash "$HOME/agent/uninstall.sh" --agent-dir "$HOME/agent" >/dev/null 2>&1
 { [ "$(cat "$HOME/.claude/CLAUDE.md")" = "$(cat "$SB/global.orig")" ]; } && ok "uninstall removes exactly the block: the global file is byte-identical to before" || no "uninstall left the file different" "$(diff "$SB/global.orig" "$HOME/.claude/CLAUDE.md")"
 printf '<!-- TALOS-POINTER:BEGIN -->\nhalf\n' > "$HOME/.claude/CLAUDE.md"; python3 "$KIT/scripts/global-pointer.py" add --agent-dir "$HOME/agent" >/dev/null 2>&1 && no "unbalanced markers were overwritten" || ok "unbalanced markers are refused and the file is left alone"
 out="$(python3 "$KIT/scripts/global-pointer.py" remove 2>&1)"; rc=$?
-{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'nothing was removed' && grep -q 'half' "$HOME/.claude/CLAUDE.md"; } && ok "remove with a BEGIN marker but no END says so (exit 1) instead of claiming it removed a block" || no "false removal message (rc=$rc)" "$out"
+{ [ "$rc" != 0 ] && <<<"$out" grep -q 'nothing was removed' && grep -q 'half' "$HOME/.claude/CLAUDE.md"; } && ok "remove with a BEGIN marker but no END says so (exit 1) instead of claiming it removed a block" || no "false removal message (rc=$rc)" "$out"
 # a symlinked global CLAUDE.md (a dotfiles repo) stays a symlink; the real file is what changes
 mkdir -p "$HOME/dotfiles"; printf '# dotfiles global\n' > "$HOME/dotfiles/CLAUDE.md"; rm -f "$HOME/.claude/CLAUDE.md"; ln -s "$HOME/dotfiles/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 python3 "$KIT/scripts/global-pointer.py" add --agent-dir "$HOME/agent" >/dev/null 2>&1
@@ -357,7 +357,7 @@ bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --notif
 [ "$(cat "$XDG_CONFIG_HOME/talos/agent-dir" 2>/dev/null)" = "$A" ] && ok "install records the agent folder for uninstall" || no "agent-dir not recorded"
 # no --agent-dir on purpose: uninstall must find the agent folder from what install recorded (A4)
 uout="$(bash "$A/uninstall.sh" 2>&1)"
-{ printf '%s' "$uout" | grep -q 'The one change inside it: the Chronos hook entry was removed from' && ! printf '%s' "$uout" | grep -q 'was not touched'; } \
+{ <<<"$uout" grep -q 'The one change inside it: the Chronos hook entry was removed from' && ! <<<"$uout" grep -q 'was not touched'; } \
   && ok "uninstall names the one edit it made inside the agent folder instead of claiming it was not touched" || no "uninstall message is false" "$(printf '%s' "$uout" | tail -3)"
 python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["notify"]=="" else 1)' "$CHRONOS_CONFIG" \
   && ok "uninstall clears Chronos's notify when it pointed into ~/.config/talos (no dangling wrapper)" || no "Chronos notify still points at the deleted wrapper"
@@ -369,7 +369,7 @@ ids="$(python3 -c 'import json,sys; print(",".join(j["id"] for j in json.load(op
 fresh_home h8b; A="$HOME/agent"
 bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --no-session-hook >/dev/null 2>&1
 uout="$(bash "$A/uninstall.sh" 2>&1)"
-printf '%s' "$uout" | grep -q 'Your agent folder .* was not touched' && ok "when uninstall edited nothing in the agent folder it says it was not touched" || no "wrong message when nothing was edited" "$(printf '%s' "$uout" | tail -2)"
+<<<"$uout" grep -q 'Your agent folder .* was not touched' && ok "when uninstall edited nothing in the agent folder it says it was not touched" || no "wrong message when nothing was edited" "$(printf '%s' "$uout" | tail -2)"
 
 # ---- 7b. uninstall deletes ONLY the names the kit writes in ~/.config/talos; everything else survives (K0, R1-2)
 # pty(): run a command on a real pseudo-terminal and type $1 after a second. macOS `script -q /dev/null CMD...`.
@@ -391,7 +391,7 @@ uout="$(bash "$A/uninstall.sh" 2>&1)"
   && ok "plain uninstall keeps secrets/, browser/, voice/, unknown entries, app/, action-rules.yaml and brand.json" || no "uninstall deleted something that is not the kit's: missing:$(survivors)" "$(ls -R "$XDG_CONFIG_HOME/talos" 2>&1 | head)"
 { [ ! -e "$XDG_CONFIG_HOME/talos/agent-dir" ] && [ ! -e "$XDG_CONFIG_HOME/talos/chronos-dir" ] && [ ! -e "$XDG_CONFIG_HOME/talos/notify" ] && [ ! -e "$XDG_CONFIG_HOME/talos/telegram.json" ] && [ ! -e "$XDG_CONFIG_HOME/talos/notify.env" ]; } \
   && ok "plain uninstall still removes the kit's own files (agent-dir, chronos-dir, notify/, telegram.json, notify.env)" || no "kit files left behind" "$(ls "$XDG_CONFIG_HOME/talos")"
-{ printf '%s' "$uout" | grep -q 'kept secrets (not the kit.s)' && printf '%s' "$uout" | grep -q 'kept browser (not the kit.s)' && printf '%s' "$uout" | grep -q 'kept voice (not the kit.s)' && printf '%s' "$uout" | grep -q 'kept app (the Talos app'; } \
+{ <<<"$uout" grep -q 'kept secrets (not the kit.s)' && <<<"$uout" grep -q 'kept browser (not the kit.s)' && <<<"$uout" grep -q 'kept voice (not the kit.s)' && <<<"$uout" grep -q 'kept app (the Talos app'; } \
   && ok "uninstall lists what it kept: 'kept <name> (not the kit's)' and the app's data" || no "kept entries not listed" "$(printf '%s' "$uout" | grep -i kept)"
 # --purge-app on a pty with the right word: the app's data goes, unknown entries still stay and are listed
 fresh_home h8d; A="$HOME/agent"
@@ -400,7 +400,7 @@ plant
 uout="$(pty purge-app bash "$A/uninstall.sh" --purge-app 2>&1)"
 { [ -z "$(survivors)" ] && [ ! -e "$XDG_CONFIG_HOME/talos/app" ] && [ ! -e "$XDG_CONFIG_HOME/talos/action-rules.yaml" ] && [ ! -e "$XDG_CONFIG_HOME/talos/brand.json" ]; } \
   && ok "--purge-app (typed on a pty) removes the app's data but never secrets/, browser/, voice/ or unknown entries" || no "--purge-app deleted unknown entries or kept the app data: missing:$(survivors)" "$(printf '%s' "$uout" | tail -8)"
-printf '%s' "$uout" | grep -q 'kept secrets (not the kit.s)' && ok "--purge-app lists the unknown entries it left, for the user to delete by hand" || no "--purge-app did not list kept entries" "$(printf '%s' "$uout" | tail -8)"
+<<<"$uout" grep -q 'kept secrets (not the kit.s)' && ok "--purge-app lists the unknown entries it left, for the user to delete by hand" || no "--purge-app did not list kept entries" "$(printf '%s' "$uout" | tail -8)"
 
 # a WRONG answer to the --purge-app question changes nothing at all: jobs, hook, pointer, notify, files (R1-1)
 fresh_home h8e; A="$HOME/agent"; mkdir -p "$HOME/.claude"; printf '# global\n' > "$HOME/.claude/CLAUDE.md"
@@ -416,7 +416,7 @@ jobs_after="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])
 { [ -n "$notify_before" ] && [ "$notify_before" = "$notify_after" ]; } && ok "a wrong --purge-app answer leaves Chronos's notify setting alone" || no "notify changed: '$notify_before' -> '$notify_after'"
 { [ "$jobs_before" -gt 0 ] && [ "$jobs_before" = "$jobs_after" ]; } && ok "a wrong --purge-app answer leaves the registered jobs alone ($jobs_after)" || no "jobs changed: $jobs_before -> $jobs_after"
 grep -q 'chronos-session-start.py' "$A/.claude/settings.json" && grep -q 'TALOS-POINTER' "$HOME/.claude/CLAUDE.md" && ok "a wrong answer leaves the session hook and the global pointer in place" || no "hook or pointer removed on a wrong answer"
-cmp -s "$SB/before.snap" "$SB/after.snap" && printf '%s' "$uout" | grep -q 'aborted; nothing removed' && ok "a wrong answer on a pty changes nothing on disk and says so" || no "files changed or no abort message" "$(diff "$SB/before.snap" "$SB/after.snap" | head -5)"
+cmp -s "$SB/before.snap" "$SB/after.snap" && <<<"$uout" grep -q 'aborted; nothing removed' && ok "a wrong answer on a pty changes nothing on disk and says so" || no "files changed or no abort message" "$(diff "$SB/before.snap" "$SB/after.snap" | head -5)"
 
 # the TTY guard itself: the RIGHT word piped in must still be refused (R1-3). Without the guard line, the same pipe purges.
 fresh_home h8f; A="$HOME/agent"
@@ -443,7 +443,7 @@ else printf '  skip [network] pin exists upstream (set TALOS_TEST_NETWORK=1)\n';
 fresh_home h8g
 for bad in 3cf20fc main HEAD 3cf20fc191d39f8247d4a740d6c663dc25136c2 3CF20FC191D39F8247D4A740D6C663DC25136C2A; do
   out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$KIT" --chronos-ref "$bad" --no-load --dry-run 2>&1)"; rc=$?
-  { [ "$rc" = 2 ] && printf '%s' "$out" | grep -q '40-character'; } && ok "--chronos-ref '${bad:0:12}' is refused (needs the full 40-char sha)" || no "--chronos-ref '$bad' was not refused (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
+  { [ "$rc" = 2 ] && <<<"$out" grep -q '40-character'; } && ok "--chronos-ref '${bad:0:12}' is refused (needs the full 40-char sha)" || no "--chronos-ref '$bad' was not refused (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
 done
 [ ! -e "$HOME/agent" ] && ok "a refused ref creates nothing" || no "a refused ref left an agent folder"
 # a full sha that is not in the clone: the checkout/verify fails and nothing is installed
@@ -455,15 +455,15 @@ if [ -n "${TALOS_TEST_CHRONOS:-}" ] && [ -f "$TALOS_TEST_CHRONOS/install.sh" ]; 
   fresh_home h9; A="$HOME/agent"
   out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$TALOS_TEST_CHRONOS" --no-load --notify macos 2>&1)"; rc=$?
   [ "$rc" = 0 ] && ok "[real Chronos] install.sh exits 0" || no "[real Chronos] install.sh exited $rc" "$(printf '%s' "$out" | tail -5)"
-  { printf '%s' "$out" | grep -q '   chronos: chronos [0-9.]* installed:' && ! printf '%s' "$out" | grep -q 'empty jobs.json'; } \
+  { <<<"$out" grep -q '   chronos: chronos [0-9.]* installed:' && ! <<<"$out" grep -q 'empty jobs.json'; } \
     && ok "[real Chronos] its installer output is one labelled line in the middle of the Talos install" || no "[real Chronos] output not quiet" "$(printf '%s' "$out" | grep -i chronos | head -5)"
-  c="$(python3 "$TALOS_TEST_CHRONOS/bin/chronos" list 2>&1)"; printf '%s' "$c" | grep -q 'talos-memory-index' && ok "[real Chronos] the index command job shows in chronos list" || no "[real Chronos] index job missing" "$c"
+  c="$(python3 "$TALOS_TEST_CHRONOS/bin/chronos" list 2>&1)"; <<<"$c" grep -q 'talos-memory-index' && ok "[real Chronos] the index command job shows in chronos list" || no "[real Chronos] index job missing" "$c"
   labels="$(grep -ho '<string>[a-z.]*chronos[a-z.]*</string>' "$HOME"/Library/LaunchAgents/*.plist 2>/dev/null | sort -u | tr '\n' ' ')"
   ls "$HOME"/Library/LaunchAgents/*.plist >/dev/null 2>&1 && ok "[real Chronos] plists were written into the FAKE LaunchAgents folder only" || no "[real Chronos] no plists rendered"
   ls "$HOME"/Library/LaunchAgents/ | grep -qi talos && no "[real Chronos] a Talos launchd agent exists; Talos must add none" || ok "[real Chronos] Talos added no launchd agent of its own"
   [ ! -e "$SB/launchctl.calls" ] && ok "[real Chronos] launchctl was never called" || no "[real Chronos] launchctl WAS called" "$(cat "$SB/launchctl.calls")"
   c="$(python3 "$TALOS_TEST_CHRONOS/bin/chronos" list 2>&1)"
-  printf '%s' "$c" | grep -q 'talos-morning-brief' && ok "[real Chronos] 'chronos list' shows the Talos jobs" || no "[real Chronos] list does not show Talos jobs" "$c"
+  <<<"$c" grep -q 'talos-morning-brief' && ok "[real Chronos] 'chronos list' shows the Talos jobs" || no "[real Chronos] list does not show Talos jobs" "$c"
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["workspace"]==sys.argv[2] else 1)' "$CHRONOS_CONFIG" "$A" && ok "[real Chronos] workspace in its config is the agent folder" || no "[real Chronos] workspace not set to the agent folder"
   # the shipped pin must be a real commit of that Chronos, and a clone at it must install (no network: file://)
   fresh_home h10

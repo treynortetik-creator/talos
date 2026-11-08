@@ -5,7 +5,7 @@
 //   - the owner frames (list, get, patch, run now, control) and the card apply (S3.4),
 //   - failures reaching the app (S3.6) and `schedule.status` (S2.2).
 // Chronos keeps the registry, the due logic, the claim and the approved record; nothing here does schedule maths.
-import { appendFileSync, existsSync, type FSWatcher, readFileSync, watch } from 'node:fs'
+import { existsSync, type FSWatcher, readFileSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import {
   type ApplyResult,
@@ -87,6 +87,9 @@ import type { ClosedAdapter } from './closed-adapter.ts'
 import { type Discovered, discover, hostLabel, localZone } from './discovery.ts'
 import { detailText, listText, shortWhen } from './format.ts'
 import { InstanceRegistry } from './instances.ts'
+import { JobMemory } from './job-memory.ts'
+import { applyTalosFields, memoryForRun, memoryProblem, rememberRun } from './job-memory-run.ts'
+import { proposerKey, pruneScheduleKv, startedKey } from './kv-prune.ts'
 import { type Offer, Sidecar } from './sidecar.ts'
 import { hasHeartbeatMeta, notYourJob, pendingFor, scopedSnapshot, type WorkerScope } from './worker-scope.ts'
 
@@ -146,9 +149,10 @@ export const STALE_MS = 2 * 60_000
 /** How long a card waits for Chronos to say which thread is a heartbeat's (HB4 R2-5). */
 const HB_THREAD_LOOKUP_MS = 2000
 const THREAD_MAP_SCHEMA = 'talos.heartbeat-threads/1'
+/** The proposer row of a card main (or the owner's form) made: recorded so that a missing row is never read as "main". */
+const MAIN_PROPOSER = 'main'
 const RUN_NOW_GAP_MS = 2 * 60_000
 const PROPOSALS_PER_HOUR = 10
-const proposerKey = (cardId: string) => `schedule_card_proposer/${cardId}`
 const MAX_PENDING_SCHEDULE_CARDS = 20
 /** A failure older than this (by its job date) is history, not news, when the bridge first sees it. */
 const NOTICE_MAX_AGE_MS = 48 * 3600_000
@@ -286,6 +290,7 @@ function heartbeatProblem(
 
 export class ScheduleService {
   readonly sidecar: Sidecar
+  private readonly jobMemory: JobMemory
   private readonly instances: InstanceRegistry
   private disc: Discovered | null = null
   private unansweredAt = 0
@@ -329,6 +334,11 @@ export class ScheduleService {
       ctx.paths.home,
       () => this.gate(),
       (e) => this.log('schedules-meta.json not written; trying again next tick', { error: e.message }),
+    )
+    this.jobMemory = new JobMemory(
+      ctx.paths.home,
+      () => this.gate(),
+      (id) => this.sidecar.bumpEpoch(id),
     )
     const seams = deps.heartbeat ?? {}
     const real = makeWake({
@@ -481,16 +491,19 @@ export class ScheduleService {
     if (this.started || !this.gate()) return
     this.started = true
     this.instances.register(this.deps.instance) // before any claim, so another bridge's sweep can see this one is alive
-    try {
-      reapOrphans(this.ctx.paths.home, (m, f) => this.log(m, f)) // before any slot: sources a crash left running
-    } catch (e) {
-      this.log('heartbeat orphan sweep failed', { error: (e as Error).message })
-    }
     await this.enqueue(async () => {
+      // before any slot, and in the queue so it never overlaps a store write of this process: sources a crash left running
+      try {
+        await reapOrphans(this.ctx.paths.home, (m, f) => this.log(m, f))
+      } catch (e) {
+        this.log('heartbeat orphan sweep failed', { error: (e as Error).message })
+      }
+      if (this.stopped) return
       await this.ensure()
       if (this.stopped) return
       await this.failStuckCards()
       this.sidecar.prune(this.now())
+      this.pruneKv()
       await this.sweepOrphans()
       if (this.stopped) return
       await this.refresh()
@@ -549,6 +562,7 @@ export class ScheduleService {
     const d = await discover(this.ctx.env, {
       meta: {
         threadOf: (id) => this.sidecar.threadOf(id),
+        memoryOf: (id) => this.sidecar.memoryOf(id),
         offerAgeS: (id, ds) => {
           const o = this.sidecar.offerFor(id, ds)
           return o ? Math.max(0, Math.round((this.now() - o.at) / 1000)) : null
@@ -918,6 +932,7 @@ export class ScheduleService {
     const snap = this.lastGood ?? (await this.safeSnapshot())
     const job = snap.schedules.find((s) => s.id === id)
     const runId = `r_${newUlid()}`
+    const memory = memoryForRun(this.jobMemory, this.sidecar, id, sp.prompt)
     const o: Offer = {
       id,
       ds: ds ?? '',
@@ -927,6 +942,7 @@ export class ScheduleService {
       trigger,
       again,
       content_hash: sp.contentHash,
+      ...(memory ? { memory_binding: memory.binding, memory_epoch: memory.epoch } : {}),
       instance: this.deps.instance,
       at: this.now(),
     }
@@ -943,6 +959,7 @@ export class ScheduleService {
         windowEnds: windowEnds ?? undefined,
         guard: sp.guard,
         prompt: sp.prompt,
+        memory: memory?.block ?? null,
         ts,
       }),
     )
@@ -1077,7 +1094,7 @@ export class ScheduleService {
       if (this.stopped) return
       const r = await this.adapter.finish(a.id, { runId, status, report })
       if (!r.ok) return
-      this.sidecar.closeInflight(runId, status)
+      this.closeInflight(runId, status)
       this.sidecar.setNote(
         runId,
         {
@@ -1164,7 +1181,7 @@ export class ScheduleService {
 
   private async closeRun(id: string, ds: string, runId: string, status: 'timed_out' | 'session_ended', report: string) {
     const r = await this.adapter.finish(id, { runId, status, report })
-    this.sidecar.closeInflight(runId, status)
+    this.closeInflight(runId, status)
     this.sidecar.setNote(runId, { id, ds, status }, this.now())
     // A heartbeat wake that never came back (timed out, or its session restarted): the items stay unshown, and any that have
     // now had two tries are posted as plain lines.
@@ -1246,7 +1263,13 @@ export class ScheduleService {
     })
   }
 
-  async toolRunDone(a: { runId: string; ok: boolean; summary: string; report?: string }): Promise<ToolOut> {
+  async toolRunDone(a: {
+    runId: string
+    ok: boolean
+    summary: string
+    report?: string
+    notepad?: string
+  }): Promise<ToolOut> {
     let wakeDone: { jobId: string } | null = null
     const out = await this.toolRunDoneQueued(a, (j) => {
       wakeDone = j
@@ -1261,7 +1284,7 @@ export class ScheduleService {
   }
 
   private toolRunDoneQueued(
-    a: { runId: string; ok: boolean; summary: string; report?: string },
+    a: { runId: string; ok: boolean; summary: string; report?: string; notepad?: string },
     onClosed: (j: { jobId: string }) => void,
   ): Promise<ToolOut> {
     return this.enqueue(async () => {
@@ -1287,7 +1310,7 @@ export class ScheduleService {
       }
       const note = this.sidecar.note(a.runId)
       const started = note ? Date.parse(note.started_at) : this.now()
-      this.sidecar.closeInflight(a.runId, status)
+      this.closeInflight(a.runId, status)
       // A heartbeat wake: ONLY a done that Chronos accepted for this run, with ok:true, marks its items shown.
       this.wakeRuns.delete(a.runId)
       onClosed({ jobId: job.id })
@@ -1312,8 +1335,16 @@ export class ScheduleService {
           this.pendingAlerts.push({ kind: 'job_failed', key: `${job.id}:${job.ds}`.slice(0, 80) })
         }
       }
+      const remembered = rememberRun(this.jobMemory, this.sidecar, {
+        jobId: job.id,
+        runId: a.runId,
+        ds: note?.ds ?? job.ds,
+        ok: a.ok,
+        summary: a.summary,
+        notepad: a.notepad,
+      })
       await this.refresh()
-      return yes('recorded')
+      return yes(`recorded${remembered}`)
     })
   }
 
@@ -1460,9 +1491,53 @@ export class ScheduleService {
     )
   }
 
+  /** At start: kv rows of cards and runs that are over, unknown or a week old (a crash or a headless process can skip the cleanup). */
+  private pruneKv() {
+    try {
+      const { ctx } = this
+      const n = pruneScheduleKv({
+        now: this.now(),
+        kv: ctx.store,
+        card: (id) => {
+          const row = ctx.ledger.get(id)
+          if (!row) return undefined
+          // a card the owner declined or sent back stays 'resolved' in the ledger but is over
+          const declined =
+            row.state === 'resolved' && row.resolution?.action !== undefined && row.resolution.action !== 'primary'
+          return { state: declined ? 'declined' : row.state, created_at: row.created_at }
+        },
+        run: (id) => this.sidecar.inflightOf(id),
+      })
+      if (n) this.log('old schedule rows removed', { count: n })
+    } catch (e) {
+      this.log('schedule row sweep failed', { error: (e as Error).message })
+    }
+  }
+
+  /** The card is over (resolved, declined, expired or replaced): its proposer row has no reader left. */
+  forgetCard(cardId: string) {
+    try {
+      this.ctx.store.kvDelete(proposerKey(cardId))
+    } catch (e) {
+      this.log('schedule card row not removed', { card: cardId, error: (e as Error).message })
+    }
+  }
+
+  /** The run is closed: the "this session started it" row has no reader left. */
+  private closeInflight(runId: string, status: string): boolean {
+    const ok = this.sidecar.closeInflight(runId, status)
+    try {
+      this.ctx.store.kvDelete(startedKey(runId))
+    } catch (e) {
+      this.log('schedule run row not removed', { run: runId, error: (e as Error).message })
+    }
+    return ok
+  }
+
   /** The thread session that proposed this card, or null when main (or the owner's form) did. */
   private cardProposer(cardId: string): string | null {
-    return this.ctx.store.kvGet(proposerKey(cardId)) ?? null
+    const v = this.ctx.store.kvGet(proposerKey(cardId))
+    return v === undefined || v === MAIN_PROPOSER ? null : v
   }
 
   /** Can the router hand this job's run to a thread session? Only a plain session job; an unknown job is main's. */
@@ -1526,7 +1601,7 @@ export class ScheduleService {
       if (!minted.ok) return fail(minted.error)
       recent.push(now)
       // who proposed it, kept beside the card: supersede, the pending count and the apply-time check read it
-      if (scope) this.ctx.store.kvSet(proposerKey(minted.card.id), scope.thread)
+      this.ctx.store.kvSet(proposerKey(minted.card.id), scope?.thread ?? MAIN_PROPOSER)
       await this.publishCard(minted.card)
       return yes(`card ${minted.card.id} pending, expires ${minted.card.expires_at}`)
     })
@@ -1618,6 +1693,7 @@ export class ScheduleService {
         thread_id: resultThread ?? null,
         prompt: str('prompt'),
         ...(a.meta !== undefined ? { meta: a.meta } : {}),
+        ...(a.memory !== undefined ? { memory: a.memory } : {}),
       }
       const parsed = ScheduleChange.safeParse({ op: 'create', draft })
       if (!parsed.success) return { ok: false, error: zodText(parsed.error) }
@@ -1646,6 +1722,7 @@ export class ScheduleService {
         'notify',
         'prompt',
         'meta',
+        'memory',
       ])
         if (a[k] !== undefined) set[k] = a[k]
       if (resultThread !== undefined) set.thread_id = resultThread
@@ -1743,6 +1820,14 @@ export class ScheduleService {
     const hbProblem = heartbeatProblemOf(change, base, defaultThreadRef(this.ctx).id)
     if (hbProblem)
       return { ok: false, error: hbProblem, code: 'schedule_invalid', fields: [{ path: 'meta', message: hbProblem }] }
+    const memProblem = memoryProblem(change, base)
+    if (memProblem)
+      return {
+        ok: false,
+        error: memProblem,
+        code: 'schedule_invalid',
+        fields: [{ path: 'memory', message: memProblem }],
+      }
     // test_required (docs/HEARTBEAT.md): a heartbeat that ends up ON needs a passing test of these exact settings, whichever door it came by.
     const needTest = testRequiredProblem(this.ctx.paths.home, this.now(), change, base)
     if (needTest)
@@ -1753,7 +1838,7 @@ export class ScheduleService {
         fields: [{ path: TEST_REQUIRED_FIELD, message: needTest }],
       }
     // Only the result thread changes (a Talos-only field): Chronos has nothing to validate or write, and refuses an empty change.
-    const threadOnly = isThreadOnly(split)
+    const threadOnly = isTalosOnly(split)
     if (change.op === 'update' && change.set.thread_id && !this.ctx.config.thread(change.set.thread_id))
       return {
         ok: false,
@@ -1778,7 +1863,7 @@ export class ScheduleService {
       const text = v.errors.map((e) => (e.path ? `${e.path}: ${e.message}` : e.message)).join('; ')
       return { ok: false, error: `${v.code}: ${text}`, code: v.code, fields: v.errors }
     }
-    const final = fromChronosChange(v.normalized, split.threadId)
+    const final = fromChronosChange(v.normalized, split.threadId, split.memory)
     const now = this.iso()
     let card: CardT
     try {
@@ -1823,11 +1908,13 @@ export class ScheduleService {
       if (e instanceof RelayRejectedError) {
         ctx.ledger.expire(card.id)
         ctx.expiry?.cancel(card.id)
+        this.forgetCard(card.id)
       }
       throw e
     }
     if (card.supersedes && ctx.ledger.supersede(card.supersedes)) {
       ctx.expiry?.cancel(card.supersedes)
+      this.forgetCard(card.supersedes)
       ctx.transport
         .sendDurable(
           cardUpdateFrame(this.now(), { card_id: card.supersedes, state: 'superseded', reason: 'superseded' }),
@@ -1848,6 +1935,7 @@ export class ScheduleService {
     const payload = ScheduleCardPayload.safeParse(approved.payload)
     const byAgent = payload.success && payload.data.proposed_by === 'agent'
     if (action !== 'primary') {
+      this.forgetCard(cardId) // declined or sent back: nothing will read who proposed it
       if (byAgent) {
         // KILL and REVISE reach the agent like any card, with the owner's note: REVISE is how they steer a proposal (S8.2)
         void this.ctx.emit(
@@ -1893,6 +1981,7 @@ export class ScheduleService {
   private async endCard(row: LedgerRow, cardId: string, ok: boolean, text: string) {
     const { ctx } = this
     ctx.ledger.finish(cardId, ok)
+    this.forgetCard(cardId)
     await ctx.transport
       .sendDurable(
         cardUpdateFrame(this.now(), {
@@ -1934,10 +2023,16 @@ export class ScheduleService {
     if (d.state !== 'ready') return finish(false, 'The scheduler is not available. Nothing was saved. Ask again.')
     // A thread session's change or delete is the owner's approval of THAT thread's job: if the job moved, was switched to a
     // background runner or became a heartbeat since the card was drawn, it is no longer what was shown.
+    const recorded = ctx.store.kvGet(proposerKey(cardId))
     const proposer = this.cardProposer(cardId)
-    if (proposer && (change.op === 'update' || change.op === 'delete')) {
+    if (change.op === 'update' || change.op === 'delete') {
       const cur = await d.adapter.detail(change.id, null).catch(() => null)
-      if (cur && !this.inScope({ thread: proposer }, cur.detail.schedule))
+      const j = cur?.detail.schedule
+      // No row at all (lost, or a card from before the rows were kept for main) cannot be told from a thread session's card
+      // whose scope check was skipped: for a job that runs in a session, fail closed.
+      if (recorded === undefined && j && runsInSession(j) && j.kind !== 'command' && !hasHeartbeatMeta(j.meta))
+        return finish(false, "Nothing was changed: this card's origin can't be checked. Ask again.")
+      if (proposer && j && !this.inScope({ thread: proposer }, j))
         return finish(false, 'This job moved to another thread; nothing changed.')
     }
     // The test that let this card be drawn may be a day old by the time it is approved: ask again, against the job as it is now.
@@ -1946,7 +2041,7 @@ export class ScheduleService {
     if (needTest)
       return finish(false, needTest.replace('Nothing was saved.', 'Nothing was saved. Test again, then ask again.'))
     let r: ApplyResult
-    if (isThreadOnly(split) && change.op === 'update') {
+    if (isTalosOnly(split) && change.op === 'update') {
       // nothing for Chronos to write: confirm the job is still the revision the card showed, then only the sidecar changes
       const x = await d.adapter.detail(change.id, null)
       r = !x
@@ -1974,11 +2069,11 @@ export class ScheduleService {
     }
     const id = change.op === 'create' ? change.draft.id : change.id
     let sideErr = ''
+    let memErr = ''
     try {
-      if (change.op === 'delete') this.sidecar.forgetJob(id)
-      else if (split.threadId.set) {
-        if (!this.sidecar.setThread(id, split.threadId.value)) sideErr = 'the bridge was not live'
-      }
+      const side = applyTalosFields(this.jobMemory, this.sidecar, id, change, split)
+      sideErr = side.thread
+      memErr = side.memory
     } catch (e) {
       sideErr = (e as Error).message
     }
@@ -1992,6 +2087,7 @@ export class ScheduleService {
       if (next) text += ` Next run ${shortWhen(next, tz)}.`
     }
     if (sideErr) text = `${text.replace(/\.$/, '')}. Result thread not set (${sideErr}).`
+    if (memErr) text = `${text.replace(/\.$/, '')}. Memory setting not saved (${memErr}).`
     return finish(true, text)
   }
 
@@ -2156,6 +2252,7 @@ export class ScheduleService {
     })
     if (!minted.ok) return this.err(minted.code ?? 'schedule_invalid', minted.error, f.id, minted.fields)
     this.ack(f.id)
+    this.ctx.store.kvSet(proposerKey(minted.card.id), MAIN_PROPOSER) // the owner's own form: recorded, so a missing row always means "unknown"
     await this.publishCard(minted.card)
   }
 
@@ -2305,10 +2402,10 @@ export class ScheduleService {
   }
 }
 
-/** An update whose only change is Talos-only (the result thread): the Chronos part is empty. */
-function isThreadOnly(split: ReturnType<typeof toChronosChange>): boolean {
+/** An update whose only changes are Talos-only (the result thread, the memory switch): the Chronos part is empty. */
+function isTalosOnly(split: ReturnType<typeof toChronosChange>): boolean {
   const c = split.chronos
-  return c.op === 'update' && Object.keys(c.set).length === 0 && split.threadId.set
+  return c.op === 'update' && Object.keys(c.set).length === 0 && (split.threadId.set || split.memory?.set === true)
 }
 
 function zodText(err: { issues: Array<{ path: PropertyKey[]; message: string }> }): string {

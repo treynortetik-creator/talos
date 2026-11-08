@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { join } from 'node:path'
 import { runInstallGuards, withGuardsSettings } from '../src/guards/install.ts'
 import { buildGuardConfig, denyRules, guardDecision } from '../src/guards/rules.ts'
+import { DEFAULT_ASK_RULES } from '../src/permission/ask-rules.ts'
 
 const root = mkdtempSync('/tmp/gd')
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -51,6 +52,26 @@ describe('guard decisions', () => {
     for (const n of ['agent-request.json', 'last-good', 'config-history'])
       expect(rules.some((r) => r.startsWith('Edit(/') && r.endsWith(`/${n})`))).toBe(true)
     expect(rules).toContain('Bash(*agent-request.json*)')
+  })
+  test('denies the needs-you files under workers/<thread>/ to a write and to any command that names them', () => {
+    const rules = denyRules(cfg)
+    for (const n of ['dialog-answer.json', 'dialog-result.json', 'dialog-card.json']) {
+      expect(write(join(home, 'workers', 'trip', n))?.deny, n).toContain(n)
+      expect(write(join(home, 'workers', 'trip', n), 'Edit'), n).toBeDefined()
+      expect(bash(`echo '{}' > ${home}/workers/trip/${n}`), n).toBeDefined()
+      expect(bash(`cd ${home}/workers/trip && printf x > ${n}`), n).toBeDefined()
+      expect(bash(`cat ${home}/workers/trip/${n}`), n).toBeDefined()
+      expect(rules, n).toContain(`Bash(*${n}*)`)
+      expect(
+        rules.some((r) => r.startsWith('Edit(/') && r.endsWith(`/workers/**/${n})`)),
+        n,
+      ).toBe(true)
+    }
+    expect(bash(`rm ${home}/workers/trip/dialog-*`)).toBeDefined()
+    expect(bash(`cd ${home}/workers/trip && rm dialog-a*`)).toBeDefined()
+    // the rest of a worker's folder is as it was
+    expect(write(join(home, 'workers', 'trip', 'WORKER.md'))).toBeUndefined()
+    expect(bash(`ls ${home}/workers/trip`)).toBeUndefined()
   })
   test('allows an ordinary file', () => {
     expect(write(join(root, 'agent', 'notes.md'))).toBeUndefined()
@@ -197,6 +218,59 @@ describe('guard decisions', () => {
   })
   test('an unreadable input is denied', () => {
     expect(guardDecision({ tool_name: 'Write', tool_input: {} }, cfg)).toBeDefined()
+  })
+})
+
+describe('the kit updater: an agent cannot update, roll back or restore, or write a release', () => {
+  const kit = cfg.protectedPaths[cfg.protectedPaths.length - 1] as string
+  test('the kit vendor folder is on the never-change list, for the write tools and for shell writes', () => {
+    expect(kit.endsWith(join('talos', 'kit'))).toBe(true)
+    expect(write(join(kit, 'releases', '9.9.9-planted', 'talos-kit', 'hooks', 'x.py'))?.deny).toContain(kit)
+    expect(write(join(kit, 'current'), 'Edit')).toBeDefined()
+    expect(write(join(kit, 'releases', '1.2.0', 'talos-kit', 'allowed_signers'), 'MultiEdit')).toBeDefined()
+    expect(bash(`ln -sfn releases/9.9.9 ${kit}/current`)?.deny).toContain(kit)
+    expect(bash(`echo evil > ${kit}/releases/1.2.0/talos-kit/allowed_signers`)).toBeDefined()
+    expect(bash(`rm -rf ${kit}/releases`)).toBeDefined()
+    expect(bash(`ls ${kit}/releases && cat ${kit}/current/talos-kit/VERSION`)).toBeUndefined() // reading is fine
+  })
+  test('talos update, rollback and restore are human-only, however they are spelled', () => {
+    for (const c of [
+      'talos update',
+      'talos update --dry-run',
+      'talos rollback 1.2.0',
+      'talos restore CLAUDE.md',
+      'talos-update update --source /x',
+      'bash -c "talos-update rollback"',
+      'python3 /somewhere/kit/scripts/talos-update.py update',
+      'bash ~/.local/share/talos/kit/current/talos-kit/bin/talos-update update',
+      'FOO=1 talos-update restore x',
+    ])
+      expect(bash(c)?.deny, c).toContain('human-only')
+    // a path or a message that merely contains the name is not the command
+    expect(bash('git commit -m "talos-update restore: docs"')).toBeUndefined()
+    expect(bash('grep -n update kit/scripts/talos-update.py')).toBeUndefined()
+  })
+  test("talos-app update and rollback (the app's own, behind the ask card) are not denied: the phone recovery path", () => {
+    for (const c of ['talos-app rollback --yes', 'talos-app rollback', 'talos-app update'])
+      expect(bash(c), c).toBeUndefined()
+    const rules = denyRules(cfg)
+    for (const r of ['Bash(talos-app update:*)', 'Bash(talos-app rollback:*)', 'Bash(talos-app restore:*)'])
+      expect(rules, r).not.toContain(r)
+    // the ask card is what stands in front of `talos-app rollback`
+    expect(DEFAULT_ASK_RULES).toContain('Bash(*talos-app rollback*)')
+  })
+  test('`talos rollback app` and `talos update app` are NOT a phone path: the permission rule `talos rollback:*` is a prefix match and also covers them', () => {
+    // Claude Code's permission patterns cannot say "talos rollback, except when the next word is app", so only `talos-app rollback` is the
+    // documented phone recovery (docs/SETUP.md). The hook itself lets the app forms through; the permission layer does not.
+    const rules = denyRules(cfg)
+    expect(rules).toContain('Bash(talos rollback:*)')
+    expect(rules).toContain('Bash(talos update:*)')
+    expect(bash('talos rollback app --yes')).toBeUndefined()
+  })
+  test('the permission deny rules name the updater too', () => {
+    const rules = denyRules(cfg)
+    for (const r of ['Bash(talos update:*)', 'Bash(talos rollback:*)', 'Bash(talos restore:*)', 'Bash(talos-update:*)'])
+      expect(rules, r).toContain(r)
   })
 })
 

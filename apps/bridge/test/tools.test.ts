@@ -1,16 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { closeSync, ftruncateSync, openSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { AGENT_CARD_KINDS, parseFrame, sha256Hex } from '@talos-app/protocol'
 import {
-  AGENT_CARD_KINDS,
   ATTACHMENT_BRIDGE_TOOLS,
   BRIDGE_TOOLS,
   CONFIG_BRIDGE_TOOLS,
   MOD_BRIDGE_TOOLS,
-  parseFrame,
   SCHEDULE_BRIDGE_TOOLS,
-  sha256Hex,
-} from '@talos-app/protocol'
+} from '../src/tools/table.ts'
 import { fixture, type Harness, startHarness, tempHome } from './helpers.ts'
 
 let h: Harness

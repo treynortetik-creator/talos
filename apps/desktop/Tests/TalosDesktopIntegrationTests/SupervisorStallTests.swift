@@ -28,22 +28,31 @@ struct SupervisorStallTests {
     r.wait(60) { r.clock.advance(60); r.sup.tickNow(); return r.sup.status.needsYou == .startStalled }
   }
 
+  /// Waits for `.stuck` (two polls that miss our pid). Each pass moves the clock past the agents-poll gate, so it may start a poll,
+  /// and the wait is only on the poll's own hop and subprocess, not on 0.5 s of real time between two polls. The session is already
+  /// running, so no start or notice deadline is left for the jump to trip.
+  private func becomesStuck(_ r: Rig) -> Bool {
+    r.wait(60) { r.clock.advance(30); r.sup.tickNow(); return r.sup.status.needsYou == .stuck }
+  }
+
+  /// The message of a red wait on `.stuck`: what the supervisor said, then every agents call it made, so the failure tells a poll
+  /// that never ran from a slow `claude agents` or an unreadable (nil) answer.
+  private func why(_ r: Rig) -> String {
+    "needsYou \(String(describing: r.sup.status.needsYou)), \(r.agentsSummary), audit: \(r.audit)"
+  }
+
   @Test(arguments: bothHosts)
   func aStuckWarningTheLoginDialogTookIsBackWhenTheDialogIsAnswered(kind: HostKind) throws {
     let r = try Rig(kind, scenario: "stuck-then-login.sh", timings: Self.timings())
     defer { r.teardown() }
     try coldStartConfirmed(r)
-    #expect(
-      r.wait(30) { r.sup.tickNow(); return r.sup.status.needsYou == .stuck },
-      "needsYou \(String(describing: r.sup.status.needsYou)), audit: \(r.audit)")
+    #expect(becomesStuck(r), "\(why(r))")
     r.humanEnter()  // a login dialog over the stuck session
     #expect(
       r.wait(30) { r.sup.tickNow(); return r.sup.status.needsYou == login },
       "needsYou \(String(describing: r.sup.status.needsYou)), audit: \(r.audit)")
     r.humanEnter()  // answered: the session screen again, and the agent is still missing from the list
-    #expect(
-      r.wait(10) { r.sup.tickNow(); return r.sup.status.needsYou == .stuck },
-      "the session is still stuck, so the owner is still told: \(String(describing: r.sup.status.needsYou))")
+    #expect(becomesStuck(r), "the session is still stuck, so the owner is still told: \(why(r))")
     #expect(count("needs_you why=stuck", in: r.audit) == 1, "told once, shown again, not told twice")
   }
 
@@ -85,14 +94,22 @@ struct SupervisorStallTests {
   }
 
   /// tmux, except that `capture-pane` fails while the returned flag file exists. Takes effect at once for this rig's supervisor.
-  private func captureFailsWhileFlagged(_ r: Rig) throws -> String {
+  /// With `flagAfterTheSupervisorSends`, the shim itself creates the flag the moment the supervisor's first `send-keys` has
+  /// returned, so no supervision pass can read the screen between that key and the outage, however loaded the Mac is.
+  private func captureFailsWhileFlagged(_ r: Rig, flagAfterTheSupervisorSends: Bool = false) throws -> String {
     let flag = r.root + "/capture-fails"
     let shim = r.root + "/tmux-capture-shim"
+    let flagAfterSend = flagAfterTheSupervisorSends ? "true" : "false"
     try """
     #!/bin/bash
     for a in "$@"; do
       if [ "$a" = capture-pane ] && [ -e '\(flag)' ]; then echo 'capture failed' >&2; exit 1; fi
     done
+    if \(flagAfterSend); then
+      for a in "$@"; do
+        if [ "$a" = send-keys ]; then '\(Rig.tmuxPath!)' "$@"; rc=$?; : > '\(flag)'; exit $rc; fi
+      done
+    fi
     exec '\(Rig.tmuxPath!)' "$@"
     """.write(toFile: shim, atomically: true, encoding: .utf8)
     chmod(shim, 0o755)
@@ -143,21 +160,23 @@ struct SupervisorStallTests {
     try coldStartConfirmed(r)  // running, screen read fine so far
     FileManager.default.createFile(atPath: flag, contents: Data())
     r.humanEnter()  // the fake leaves the agent list now
-    #expect(
-      r.wait(60) { r.clock.advance(30); r.sup.tickNow(); return r.sup.status.needsYou == .stuck },
-      "needsYou \(String(describing: r.sup.status.needsYou)), audit: \(r.audit)")
+    #expect(becomesStuck(r), "\(why(r))")
   }
 
   @Test(.enabled(if: Rig.hasTmux))
   func aScreenReadOutagePastTheNoticeDeadlineLeavesAHealthyRestartRunning() throws {
     var t = Self.timings()
     t.dialogStall = 60  // the dialog stays up until the test's second Enter; it is not what this test is about
-    let r = try Rig(.tmux, scenario: "restart-late-notice.sh", timings: t)
+    // Start 1 crashes 6 s after the notice (the fake's default is 1 s), so it is seen running first even on a loaded Mac.
+    let r = try Rig(.tmux, scenario: "restart-late-notice.sh", env: ["FAKE_CRASH_AFTER": "6"], timings: t)
     defer { r.teardown() }
-    let flag = try captureFailsWhileFlagged(r)
+    // The restart's dialog stays on screen after the supervisor's Enter (the fake waits for the test's second one). A pass that
+    // read it 0.4 s after the Enter would call it "pressed twice" and hold that question, which an unreadable screen never
+    // replaces. So the outage starts inside the shim, as the Enter returns, not from a file the test creates a moment later.
+    let flag = try captureFailsWhileFlagged(r, flagAfterTheSupervisorSends: true)
     try coldStartConfirmed(r)  // start 1 confirmed by the owner; it crashes; the restart shows the dialog
     #expect(r.wait(30) { r.sup.tickNow(); return r.audit.contains(" auto_confirm ") }, "audit: \(r.audit)")
-    FileManager.default.createFile(atPath: flag, contents: Data())  // the Enter is sent; now the screen cannot be read
+    #expect(FileManager.default.fileExists(atPath: flag), "the Enter is sent; now the screen cannot be read")
     let pid = try #require(r.sup.status.childPid)
     r.clock.advance(20)  // past the notice deadline (15 s), well short of the start deadline (120 s)
     for _ in 0..<5 { r.sup.tickNow() }
@@ -195,7 +214,8 @@ struct SupervisorStallTests {
 
   @Test(arguments: bothHosts)
   func aLaterClearReadingReplacesTheRefusalReasonWithoutAnotherAlarm(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "ambiguous-then-wrong-highlight.sh", timings: Self.timings())
+    // Start 1 crashes 6 s after its notice (the fake's default is 1 s), so a late poll still sees it running after the human Enter.
+    let r = try Rig(kind, scenario: "ambiguous-then-wrong-highlight.sh", env: ["FAKE_CRASH_AFTER": "6"], timings: Self.timings())
     defer { r.teardown() }
     try coldStartConfirmed(r)
     #expect(r.wait(30) { r.starts.count >= 2 }, "restarted")
@@ -237,7 +257,68 @@ struct SupervisorStallTests {
       "needsYou \(String(describing: r.sup.status.needsYou)), audit: \(r.audit)")
     for _ in 0..<5 { r.sup.tickNow() }
     #expect(r.sup.status.needsYou == .confirmColdStart, "later passes: \(String(describing: r.sup.status.needsYou))")
-    #expect(count("why=stall:", in: r.audit) == 1, "only the folder-trust stall was raised, never one for the dev-channel dialog: \(r.audit)")
+    #expect(count("why=stall:", in: r.audit) == 1, "only one stall was raised: \(r.audit)")
+    #expect(r.audit.contains("why=stall:folder trust"), "and it was the folder-trust stall: \(r.audit)")
+    #expect(!r.audit.contains("stall:dev-channel"), "never a stall for the dev-channel dialog: \(r.audit)")
+    #expect(r.phase() == .starting)
+  }
+
+  /// A screen caught blank between two dialogs empties the slot (the folder-trust stall is over); the dev-channel dialog that
+  /// comes next must find the cold-start question back, not leave the stall check to say the vaguer "a dialog needs you".
+  @Test(arguments: bothHosts)
+  func theColdStartQuestionComesBackWhenTheDevChannelDialogReturnsAfterABlankScreen(kind: HostKind) throws {
+    let r = try Rig(kind, scenario: "dev-dialog-trust-blank-dev-dialog.sh", timings: Self.timings())
+    defer { r.teardown() }
+    r.start()
+    #expect(r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart }, "cold-start question")
+    r.humanEnter()
+    #expect(r.wait(10) { r.screenContains("Yes, I trust this folder") }, "the second dialog is up")
+    #expect(
+      r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .dialog("folder trust") },
+      "needsYou \(String(describing: r.sup.status.needsYou)), audit: \(r.audit)")
+    r.humanEnter()
+    #expect(r.wait(10) { !r.screenContains("Yes, I trust this folder") }, "the screen is blank")
+    // The blank screen is read on these ticks: the stall is over and the slot is empty before the dev-channel dialog is up.
+    for _ in 0..<5 { r.sup.tickNow() }
+    #expect(r.sup.status.needsYou == nil, "the blank screen empties the slot: \(String(describing: r.sup.status.needsYou))")
+    r.humanEnter()
+    #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) }, "the dev-channel dialog is up again")
+    #expect(
+      r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart },
+      "needsYou \(String(describing: r.sup.status.needsYou)), audit: \(r.audit)")
+    for _ in 0..<5 { r.sup.tickNow() }
+    #expect(r.sup.status.needsYou == .confirmColdStart, "later passes: \(String(describing: r.sup.status.needsYou))")
+    #expect(count("why=stall:", in: r.audit) == 1, "only one stall was raised: \(r.audit)")
+    #expect(r.audit.contains("why=stall:folder trust"), "and it was the folder-trust stall: \(r.audit)")
+    #expect(!r.audit.contains("stall:dev-channel"), "never a stall for the dev-channel dialog: \(r.audit)")
+    #expect(r.phase() == .starting)
+  }
+
+  /// Only the dev-channel dialog gets the question back. The folder-trust dialog returning after a blank screen is still a
+  /// dialog nothing above names: it stalls with its own reason and is not relabelled as the cold-start question.
+  @Test(arguments: bothHosts)
+  func aDifferentDialogReturningAfterABlankScreenStillStallsWithItsOwnReason(kind: HostKind) throws {
+    let r = try Rig(kind, scenario: "dev-dialog-trust-blank-trust.sh", timings: Self.timings())
+    defer { r.teardown() }
+    r.start()
+    #expect(r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart }, "cold-start question")
+    r.humanEnter()
+    #expect(r.wait(10) { r.screenContains("Yes, I trust this folder") }, "the second dialog is up")
+    #expect(
+      r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .dialog("folder trust") },
+      "needsYou \(String(describing: r.sup.status.needsYou)), audit: \(r.audit)")
+    r.humanEnter()
+    #expect(r.wait(10) { !r.screenContains("Yes, I trust this folder") }, "the screen is blank")
+    for _ in 0..<5 { r.sup.tickNow() }
+    r.humanEnter()
+    #expect(r.wait(10) { r.screenContains("Yes, I trust this folder") }, "the folder-trust dialog is up again")
+    #expect(
+      r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .dialog("folder trust") },
+      "needsYou \(String(describing: r.sup.status.needsYou)), audit: \(r.audit)")
+    for _ in 0..<5 { r.sup.tickNow() }
+    #expect(r.sup.status.needsYou == .dialog("folder trust"), "later passes: \(String(describing: r.sup.status.needsYou))")
+    #expect(count("why=stall:folder trust", in: r.audit) == 2, "the folder-trust stall, raised again: \(r.audit)")
+    #expect(!r.audit.contains("stall:dev-channel"), "never a stall for the dev-channel dialog: \(r.audit)")
     #expect(r.phase() == .starting)
   }
 

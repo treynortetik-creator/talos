@@ -3,8 +3,13 @@
 // when `talos` runs from another directory). Not done here; `talos` reads the environment exactly as `talos-app` does.
 // `talos` entry: a thin front door over the `talos-app` CLI. Every command is handed to the same handler `talos-app` uses,
 // with the same arguments, so the two never disagree. Only `commands` (the list below) and `doctor --json` are new here.
+import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { CliDeps, CliIO } from './cli-main.ts'
+import { workerCliRefusal } from './worker/cli-refusal.ts'
 
 export type CommandInfo = {
   /** One word, or `word subword` where the subcommand has its own rule. */
@@ -24,10 +29,21 @@ const ownerTerminal = (name: string, summary: string): CommandInfo => ({
   needs_terminal: true,
 })
 
-/** The terminal-only command that `argv` runs (`devices revoke x` is `devices`), or undefined. */
-export function terminalOnly(argv: readonly string[]): string | undefined {
+/** `update`, `rollback` and `restore` mean the agent kit's updater under `talos`; under `talos-app`, `update` and `rollback` are the app's own (ask-gated, not terminal-only). */
+const KIT_NAMES = new Set(['update', 'rollback', 'restore'])
+
+/** The terminal-only command that `argv` runs (`devices revoke x` is `devices`), or undefined. `prog` is the program it was typed to. */
+export function terminalOnly(argv: readonly string[], prog: 'talos' | 'talos-app' = 'talos-app'): string | undefined {
   const [a, b] = argv
-  return COMMANDS.find((c) => c.needs_terminal && (c.name === a || c.name === `${a} ${b}`))?.name
+  if (prog === 'talos' && (a === 'update' || a === 'rollback') && b === 'app') return undefined // the app's own
+  return COMMANDS.find(
+    (c) => c.needs_terminal && (prog === 'talos' || !KIT_NAMES.has(c.name)) && (c.name === a || c.name === `${a} ${b}`),
+  )?.name
+}
+
+/** The names that are terminal-only under `prog`, for the permission deny rules. */
+export function terminalOnlyNames(prog: 'talos' | 'talos-app'): string[] {
+  return COMMANDS.filter((c) => c.needs_terminal && (prog === 'talos' || !KIT_NAMES.has(c.name))).map((c) => c.name)
 }
 
 /** The single list of `talos` commands. Add a command here and give it a case in cli-main.ts. */
@@ -85,8 +101,30 @@ export const COMMANDS: readonly CommandInfo[] = [
   ownerTerminal('devices', 'List approved devices or revoke one'),
   ownerTerminal('rotate', 'Replace the bridge key'),
   { name: 'start', summary: 'Start the agent (launches Claude Code)', agent_may_run: false },
-  { name: 'update', summary: 'Pull the latest code and install packages', agent_may_run: false },
-  { name: 'rollback', summary: 'Go back to the previous recorded version', agent_may_run: false },
+  // `update`, `rollback` and `restore` act on the agent kit (the Talos zone of the agent folder) and run kit/bin/talos-update,
+  // which holds the lock, checks the signature and does the work; they are owner terminal commands (a speed bump for an agent, not a lock). The app checkout's own pull and
+  // rollback are `talos-app update` / `talos-app rollback` (also spelled `talos update app` / `talos rollback app` at the hook): ask-gated, not
+  // terminal-only, so the documented phone recovery (`talos-app rollback --yes` behind a card) keeps working. The deny pattern
+  // `talos rollback:*` is a prefix match and also covers `talos rollback app`, so only the `talos-app` spelling is a phone path.
+  ownerTerminal(
+    'update',
+    'Update the agent kit to the newest signed release (--dry-run shows what would change first)',
+  ),
+  {
+    name: 'update app',
+    summary: 'Pull the latest app code and install packages (this checkout, not the agent kit)',
+    agent_may_run: false,
+  },
+  ownerTerminal('rollback', 'Put the previous agent kit release back (a version after it names one)'),
+  {
+    name: 'rollback app',
+    summary: 'Go back to the previous recorded app version (this checkout, not the agent kit)',
+    agent_may_run: false,
+  },
+  ownerTerminal(
+    'restore',
+    'Put one file back: a Talos file from the release, settings from last-good, your own from git',
+  ),
   { name: 'restore-last-good', summary: 'Put back the last-good .mcp.json and .claude settings', agent_may_run: false },
   {
     name: 'trust',
@@ -132,6 +170,46 @@ export type RunCli = (
 const defaultRun: RunCli = async (argv, io, env, deps) => (await import('./cli.ts')).runCli(argv, io, env, deps)
 
 export type TalosDeps = CliDeps & { run?: RunCli }
+
+/** The kit verbs: `talos update`, `talos rollback` and `talos restore` run the kit's own updater. `update app` and `rollback app` are the app's. */
+export function isKitVerb(argv: readonly string[]): boolean {
+  const [cmd, sub] = argv
+  if (cmd === 'restore') return true
+  return (cmd === 'update' || cmd === 'rollback') && sub !== 'app'
+}
+
+/** The kit's vendor folder (releases, `current`, the lock): the same place kit/scripts/plugin-release.py puts it. */
+export function kitVendorDir(env: Record<string, string | undefined>, home: string = env.HOME ?? homedir()): string {
+  const base = env.TALOS_VENDOR_DIR ?? join(env.XDG_DATA_HOME ?? join(home, '.local', 'share'), 'talos')
+  return env.TALOS_KIT_HOME ?? join(base, 'kit')
+}
+
+/** Where the installed kit's updater is: inside the release `current` names. */
+export function kitUpdateBin(env: Record<string, string | undefined>): string {
+  return join(kitVendorDir(env), 'current', PLUGIN_DIR, 'bin', 'talos-update')
+}
+const PLUGIN_DIR = 'talos-kit'
+
+/** Runs the kit updater with the owner's terminal as its own. Returns its exit code; never loads the rest of the CLI. */
+function runKit(argv: string[], io: CliIO, env: Record<string, string | undefined>): number {
+  const bin = kitUpdateBin(env)
+  if (!existsSync(bin)) {
+    io.err(`talos: no Talos kit release is installed here (looked for ${bin}). Run the kit's install.sh first.`)
+    return 1
+  }
+  const r = spawnSync(bin, argv, { stdio: 'inherit', env: env as NodeJS.ProcessEnv })
+  if (r.error) {
+    io.err(`talos: could not run ${bin}: ${r.error.message}`)
+    return 1
+  }
+  // A signal that ended it is 128 + the signal, like a shell reports; null status with no signal cannot happen after a spawn.
+  return (
+    r.status ??
+    (r.signal
+      ? 128 + (({ SIGTERM: 15, SIGINT: 2, SIGHUP: 1, SIGKILL: 9 } as Record<string, number>)[r.signal] ?? 1)
+      : 1)
+  )
+}
 
 const USAGE = [
   'talos: a front door over talos-app. Every command below runs the same handler as `talos-app <command>`.',
@@ -208,7 +286,21 @@ export async function runTalos(
       io.err(`talos: unknown command "${cmd}". Run \`talos commands\` for the list.`)
       return 2
     }
+    // `doctor --json` is answered here, not by the CLI handler, so a thread session is refused here too
+    const refusal = workerCliRefusal(argv, env, cliDeps.cwd)
+    if (refusal) {
+      io.err(refusal)
+      return 1
+    }
     if (cmd === 'doctor' && rest.includes('--json')) return await doctorJson(rest, io, env, cliDeps)
+    if ((cmd === 'update' || cmd === 'rollback') && rest[0] === 'app') {
+      return await run([cmd, ...rest.slice(1)], io, env, cliDeps)
+    }
+    if (isKitVerb(argv)) {
+      // No terminal, no update: an agent's Bash tool has none. The updater checks again for itself (and refuses inside a Claude Code session).
+      if (io.isTerminal === false) return notTerminal(cmd, io)
+      return runKit(argv, io, env)
+    }
     return await run(argv, io, env, cliDeps)
   } catch (e) {
     io.err(`talos: ${(e as Error).message}`)
@@ -216,9 +308,17 @@ export async function runTalos(
   }
 }
 
+function notTerminal(name: string, io: CliIO): number {
+  io.err(
+    `talos ${name} only runs in Terminal, typed by you. Open Terminal on your Mac and run it there; it will not run from an agent, a script or a pipe.`,
+  )
+  return 2
+}
+
 /** A terminal with no prompt: enough for the commands answered here, which never ask a question. */
 function plainIO(): CliIO {
   return {
+    isTerminal: Boolean(process.stdin.isTTY && process.stdout.isTTY),
     out: (l) => process.stdout.write(`${l}\n`),
     err: (l) => process.stderr.write(`${l}\n`),
     prompt: async () => '',
@@ -229,6 +329,12 @@ function plainIO(): CliIO {
 
 if (import.meta.main) {
   const argv = process.argv.slice(2)
+  // before the early exits below, which never reach runTalos
+  const refusal = workerCliRefusal(argv, process.env)
+  if (refusal) {
+    process.stderr.write(`${refusal}\n`)
+    process.exit(1)
+  }
   // The same early exits `talos-app` (cli.ts) keeps, for the same reasons: `subagent-tee` runs every few seconds and must
   // exit in under 100 ms (docs/SUBAGENTS.md 5.2), `hook` is Claude Code's per-call process, and `rollback` is the way back
   // when an update left the packages broken. None of them may load cli-main.ts (the relay, sqlite, the MCP SDK).
@@ -240,9 +346,9 @@ if (import.meta.main) {
     const h = await import('./apps/hook-cli.ts')
     process.exit(await h.mainHook(argv.slice(1), h.processHookIO()))
   }
-  if (argv[0] === 'rollback') {
+  if (argv[0] === 'rollback' && argv[1] === 'app') {
     const r = await import('./rollback.ts')
-    process.exit(await r.runRollback(argv.slice(1), r.rollbackIO()))
+    process.exit(await r.runRollback(argv.slice(2), r.rollbackIO()))
   }
   if (argv[0] === 'restore-last-good') {
     const l = await import('./last-good.ts')
@@ -250,7 +356,7 @@ if (import.meta.main) {
     process.exit(await l.restoreLastGood(argv.slice(1), r.rollbackIO()))
   }
   // Everything else that needs the full CLI loads it here, once; `commands`, help, --version and an unknown name do not.
-  const needsCli = argv[0] !== 'commands' && COMMANDS.some((c) => c.name.split(' ')[0] === argv[0])
+  const needsCli = argv[0] !== 'commands' && !isKitVerb(argv) && COMMANDS.some((c) => c.name.split(' ')[0] === argv[0])
   const io = needsCli ? (await import('./cli-main.ts')).terminalIO() : plainIO()
   process.exit(await runTalos(argv, io))
 }

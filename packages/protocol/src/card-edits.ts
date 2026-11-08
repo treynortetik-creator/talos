@@ -2,7 +2,7 @@
 // call these functions, because two hand-written versions disagree on field matching, order and body handling.
 import { z } from 'zod'
 import { jcs, payloadHash } from './canonical.ts'
-import { type CardBinding, type CardT, isBodyEditable } from './models.ts'
+import { type CardBinding, type CardT, cardKindFacts, isBodyEditable } from './models.ts'
 
 /** The `edited` object of `card.resolve`. */
 export const CardEdits = z.strictObject({
@@ -67,12 +67,7 @@ export function validateCard(
 ): string[] {
   const issues: string[] = []
   // permission cards name no destination: the bound tool call is the whole card (docs/CLAUDE-CODE.md C3.2)
-  if (
-    card.destination.length === 0 &&
-    card.kind !== 'decision' &&
-    card.kind !== 'generic' &&
-    card.kind !== 'permission'
-  )
+  if (card.destination.length === 0 && cardKindFacts(card.kind)?.destinationOptional !== true)
     issues.push('destination_required')
   if (card.payload !== undefined && new TextEncoder().encode(jcs(card.payload)).length > MAX_CARD_PAYLOAD_BYTES) {
     issues.push('payload_too_large')

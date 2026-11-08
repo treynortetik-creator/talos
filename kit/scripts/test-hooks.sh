@@ -75,7 +75,7 @@ printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin)["hookSp
   && ok "append-only guard: a Write that shrinks a daily log asks first" || no "append-only guard: no ask on shrink" "$out"
 out="$(W "$A/memory/2026-10-01.md" "$(python3 -c "print('y' * 1200)")")"
 [ "$out" = "{}" ] && ok "append-only guard: a Write that grows the file passes" || no "growth blocked" "$out"
-out="$(W "$A/wiki/_changelog.md" "short")"; printf '%s' "$out" | grep -q '"ask"' && ok "append-only guard: the changelog is protected" || no "changelog not protected" "$out"
+out="$(W "$A/wiki/_changelog.md" "short")"; <<<"$out" grep -q '"ask"' && ok "append-only guard: the changelog is protected" || no "changelog not protected" "$out"
 out="$(W "$A/memory/notes.md" "short")"; [ "$out" = "{}" ] && ok "append-only guard: an ordinary file may shrink" || no "ordinary file blocked" "$out"
 out="$(W "$A/memory/2026-10-02.md" "s")"; [ "$out" = "{}" ] && ok "append-only guard: a file under 500 bytes may shrink" || no "small file blocked" "$out"
 out="$(W "$SB/other/2026-10-01.md" "short")"; [ "$out" = "{}" ] && ok "append-only guard: a file outside the agent folder is ignored" || no "outside file touched" "$out"
@@ -105,13 +105,13 @@ head -1 "$A/memory/agent-log.md" | grep -q '^# Agent log' && ok "agent log: the 
 printf 'handoff\n' > "$A/memory/HANDOFF.md"
 SL='{"model":{"display_name":"Opus"},"context_window":{"used_percentage":23.4},"rate_limits":{"seven_day":{"used_percentage":12.2}}}'
 out="$(printf '%s' "$SL" | H statusline.py)"; rc=$?
-{ [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] && printf '%s' "$out" | grep -q 'Opus | ██░░░░░░░░ 23% | 7d: 12% | handoff: ' ; } \
+{ [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] && <<<"$out" grep -q 'Opus | ██░░░░░░░░ 23% | 7d: 12% | handoff: ' ; } \
   && ok "statusline: model | context bar | 7-day | handoff age on exactly one line" || no "statusline output wrong (rc=$rc)" "$out"
 out="$(printf 'not json' | H statusline.py)"; rc=$?
-{ [ "$rc" = 0 ] && ! printf '%s' "$out" | grep -qi traceback; } && ok "statusline: malformed JSON exits 0 and prints no traceback" || no "statusline broke on garbage (rc=$rc)" "$out"
-out="$(printf '{"model":{"display_name":"Sonnet"}}' | H statusline.py)"; printf '%s' "$out" | grep -q '^Sonnet' && ok "statusline: missing fields are skipped, the model still prints" || no "statusline partial input wrong" "$out"
-out="$(printf '{"model":{"display_name":"X"},"context_window":{"used_percentage":250}}' | H statusline.py)"; printf '%s' "$out" | grep -q '██████████ 100%' && ok "statusline: an out-of-range percentage is clamped" || no "percentage not clamped" "$out"
-out="$(printf '%s' "$SL" | LANG=C LC_ALL=C PYTHONIOENCODING=ascii H statusline.py)"; printf '%s' "$out" | grep -q 'Opus' && ok "statusline: survives an ASCII terminal locale" || no "statusline died under LANG=C" "$out"
+{ [ "$rc" = 0 ] && ! <<<"$out" grep -qi traceback; } && ok "statusline: malformed JSON exits 0 and prints no traceback" || no "statusline broke on garbage (rc=$rc)" "$out"
+out="$(printf '{"model":{"display_name":"Sonnet"}}' | H statusline.py)"; <<<"$out" grep -q '^Sonnet' && ok "statusline: missing fields are skipped, the model still prints" || no "statusline partial input wrong" "$out"
+out="$(printf '{"model":{"display_name":"X"},"context_window":{"used_percentage":250}}' | H statusline.py)"; <<<"$out" grep -q '██████████ 100%' && ok "statusline: an out-of-range percentage is clamped" || no "percentage not clamped" "$out"
+out="$(printf '%s' "$SL" | LANG=C LC_ALL=C PYTHONIOENCODING=ascii H statusline.py)"; <<<"$out" grep -q 'Opus' && ok "statusline: survives an ASCII terminal locale" || no "statusline died under LANG=C" "$out"
 
 # ================================================================ E2 channel-debt
 D() { H channel-debt.py "$@"; }
@@ -122,7 +122,7 @@ out="$(printf '{}' | D check)"
 printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["decision"]=="block" and "4242" in d["reason"] and "CANNOT SEE" in d["reason"]' 2>/dev/null \
   && ok "channel debt: Stop with a debt blocks the turn and says why (names the chat)" || no "check did not block" "$out"
 out="$(printf '{}' | D check)"
-printf '%s' "$out" | grep -q '"block"' && ok "channel debt: a second check still blocks (at most twice in a row)" || no "second check not blocking" "$out"
+<<<"$out" grep -q '"block"' && ok "channel debt: a second check still blocks (at most twice in a row)" || no "second check not blocking" "$out"
 out="$(printf '{}' | D check)"
 [ -z "$out" ] && [ ! -e "$SD/channel-debt.json" ] && ok "channel debt: the third check gives up, so a session can never be trapped" || no "third check blocked" "$out"
 printf '%s' "$TAGGED" | D arm; printf '{}' | D check >/dev/null
@@ -185,7 +185,7 @@ out="$(printf '{"session_id":"JOB1"}' | CHRONOS_RUN=1 D check)"; [ -z "$out" ] &
 printf '{"session_id":"JOB1"}' | CHRONOS_RUN=1 D reset; [ -s "$SD/channel-debt-LIVE.json" ] && ok "channel debt: a headless run's SessionStart reset does not wipe the live session's debt" || no "headless reset wiped the live debt"
 out="$(printf '{"session_id":"OTHER"}' | D check)"; [ -z "$out" ] && ok "channel debt: a different session in the same folder is not blocked by it" || no "other session blocked" "$out"
 printf '{"session_id":"OTHER"}' | D reset; [ -s "$SD/channel-debt-LIVE.json" ] && ok "channel debt: another session's fresh debt survives this session's reset" || no "reset wiped another session's fresh debt"
-out="$(printf '{"session_id":"LIVE"}' | D check)"; printf '%s' "$out" | grep -q '"block"' && ok "channel debt: the owning session is still blocked until it replies" || no "owner not blocked" "$out"
+out="$(printf '{"session_id":"LIVE"}' | D check)"; <<<"$out" grep -q '"block"' && ok "channel debt: the owning session is still blocked until it replies" || no "owner not blocked" "$out"
 printf '{"session_id":"OTHER","tool_name":"mcp__plugin_imessage_imessage__reply","tool_input":{}}' | D clear; [ -s "$SD/channel-debt-LIVE.json" ] && ok "channel debt: another session's reply does not pay this session's debt" || no "wrong session paid"
 printf '{"session_id":"LIVE","tool_name":"mcp__plugin_imessage_imessage__reply","tool_input":{}}' | D clear; [ ! -e "$SD/channel-debt-LIVE.json" ] && ok "channel debt: the owning session's reply pays it" || no "owner reply did not pay"
 python3 -c "import json,time; json.dump({'source':'imessage','ts':time.time()-4*3600,'blocks':0}, open('$SD/channel-debt-DEAD.json','w'))"; printf '{"session_id":"NEW"}' | D reset
@@ -206,15 +206,15 @@ ok "channel debt: actually running notify/talos.sh (bare, via bash/sh, by path, 
 cp "$KIT/hooks/session-start.py" "$A/hooks/"; mkdir -p "$A/wiki"
 printf '%s' "$TAGGED" | D arm
 ctx="$(printf '{"source":"compact"}' | ( cd "$A" && CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py 2>/dev/null ))"
-printf '%s' "$ctx" | grep -q 'REPLY OWED' && ok "session start (after a compaction) tells the agent a chat reply is still owed" || no "no REPLY OWED after compact"
+<<<"$ctx" grep -q 'REPLY OWED' && ok "session start (after a compaction) tells the agent a chat reply is still owed" || no "no REPLY OWED after compact"
 ctx="$(printf '{"source":"startup"}' | ( cd "$A" && CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py 2>/dev/null ))"
-printf '%s' "$ctx" | grep -q 'REPLY OWED' && no "REPLY OWED shown on a fresh startup" || ok "session start does not announce an owed reply on a fresh startup"
+<<<"$ctx" grep -q 'REPLY OWED' && no "REPLY OWED shown on a fresh startup" || ok "session start does not announce an owed reply on a fresh startup"
 printf '{}' | D reset
 chat LIVE | D arm
 ctx="$(printf '{"source":"compact","session_id":"LIVE"}' | ( cd "$A" && CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py 2>/dev/null ))"
-printf '%s' "$ctx" | grep -q 'REPLY OWED' && ok "session start after a compaction announces the debt of THIS session" || no "own session's debt not announced"
+<<<"$ctx" grep -q 'REPLY OWED' && ok "session start after a compaction announces the debt of THIS session" || no "own session's debt not announced"
 ctx="$(printf '{"source":"compact","session_id":"OTHER"}' | ( cd "$A" && CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py 2>/dev/null ))"
-printf '%s' "$ctx" | grep -q 'REPLY OWED' && no "announced another session's debt" || ok "session start does not announce another session's debt"
+<<<"$ctx" grep -q 'REPLY OWED' && no "announced another session's debt" || ok "session start does not announce another session's debt"
 rm -f "$SD"/channel-debt-*.json
 
 # ================================================================ S2 check-vault
@@ -226,7 +226,7 @@ out="$(CV "$(payload "$A/wiki/x.md" "She goes to Zebra-Clinic on Fridays.")")"
 [ "$out" = "{}" ] && ok "vault guard: with no vault configured it is inert" || no "vault guard acted with no vault" "$out"
 mkdir -p "$SB/hm/private-agent-vault"; echo marker > "$SB/hm/private-agent-vault/.talos-vault"
 warn="$(printf '%s' "$(payload "$A/wiki/x.md" "hello")" | ( cd "$A" && HOME="$SB/hm" XDG_CONFIG_HOME="$SB/hm/.config" python3 hooks/check-vault.py 2>&1 >/dev/null ))"
-printf '%s' "$warn" | grep -q 'vault-dir' && ok "vault guard: a vault marker with no vault-dir record prints a one-line warning" || no "no warning for an unrecorded vault" "$warn"
+<<<"$warn" grep -q 'vault-dir' && ok "vault guard: a vault marker with no vault-dir record prints a one-line warning" || no "no warning for an unrecorded vault" "$warn"
 printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"
 out="$(CV "$(payload "$A/wiki/x.md" "She goes to Zebra-Clinic on Fridays.")")"
 printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin)["hookSpecificOutput"]; assert d["permissionDecision"]=="ask" and "zebra-clinic" in d["permissionDecisionReason"].lower()' 2>/dev/null \
@@ -236,11 +236,11 @@ out="$(CV "$(payload "$V/journal/a.md" "She goes to Zebra-Clinic on Fridays.")")
 out="$(CV "$(payload "$V/../vault/journal/../b.md" "Zebra-Clinic")")"
 [ "$out" = "{}" ] && ok "vault guard: a path that wanders back into the vault is canonicalised, not fooled" || no "dotdot path misjudged" "$out"
 out="$(CV "$(payload "$V/../escape.md" "Zebra-Clinic")")"
-printf '%s' "$out" | grep -q '"ask"' && ok "vault guard: a path that climbs OUT of the vault is caught" || no "dotdot escape not caught" "$out"
+<<<"$out" grep -q '"ask"' && ok "vault guard: a path that climbs OUT of the vault is caught" || no "dotdot escape not caught" "$out"
 out="$(CV "$(payload "$A/wiki/x.md" "nothing private here, and zebra-clinicals is a different word")")"
 [ "$out" = "{}" ] && ok "vault guard: matching is whole-word (no hit inside a longer word) and clean text passes" || no "false positive" "$out"
 out="$(CV '{"tool_name":"MultiEdit","tool_input":{"file_path":"'"$A"'/wiki/y.md","edits":[{"old_string":"a","new_string":"visit Oakridge"}]}}')"
-printf '%s' "$out" | grep -q '"ask"' && ok "vault guard: MultiEdit payloads (edits[].new_string) are scanned too" || no "MultiEdit not scanned" "$out"
+<<<"$out" grep -q '"ask"' && ok "vault guard: MultiEdit payloads (edits[].new_string) are scanned too" || no "MultiEdit not scanned" "$out"
 out="$(CV '{"tool_name":"Edit","tool_input":{"file_path":"'"$A"'/wiki/y.md","old_string":"Oakridge","new_string":"a town"}}')"
 [ "$out" = "{}" ] && ok "vault guard: removing a term (it is only in old_string) is allowed" || no "old_string was scanned" "$out"
 printf '# no terms yet\n' > "$V/_guard-terms.txt"; out="$(CV "$(payload "$A/wiki/x.md" "Zebra-Clinic")")"
@@ -258,16 +258,16 @@ HF status >/dev/null; [ "$?" = 1 ] && ok "hands-free status exits 1 when off" ||
 HF on 30 | grep -q '30 minutes' && ok "hands-free on 30 opens a 30-minute window" || no "hands-free on wrong"
 HF status | grep -qE '(29|30) minutes left' && ok "hands-free status reports the minutes left" || no "status minutes wrong"
 rp "$LONG" '[]' | HF note; out="$(printf '{}' | HF check)"
-printf '%s' "$out" | grep -q 'HANDS-FREE MODE' && printf '%s' "$out" | grep -q 'tts.sh file' && ok "hands-free: a long text-only chat reply is blocked and told how to make audio" || no "long reply not blocked" "$out"
+<<<"$out" grep -q 'HANDS-FREE MODE' && <<<"$out" grep -q 'tts.sh file' && ok "hands-free: a long text-only chat reply is blocked and told how to make audio" || no "long reply not blocked" "$out"
 rp "$LONG" '["/tmp/x.m4a"]' | HF note; out="$(printf '{}' | HF check)"
 [ -z "$out" ] && ok "hands-free: the same reply WITH an audio file attached pays the debt" || no "audio did not pay" "$out"
 rp "on it" '[]' | HF note; out="$(printf '{}' | HF check)"; [ -z "$out" ] && ok "hands-free: a short acknowledgement may stay text" || no "short ack blocked" "$out"
 rp "$LONG" '[]' | HF note; printf '{}' | HF check >/dev/null; printf '{}' | HF check >/dev/null; out="$(printf '{}' | HF check)"
 [ -z "$out" ] && ok "hands-free: blocks at most twice, then gives up" || no "hands-free trapped the session" "$out"
 printf '{"tool_name":"mcp__talos-app__reply","tool_input":{"thread_id":"t","text":%s,"files":[]}}' "$(js "$LONG")" | HF note; out="$(printf '{}' | HF check)"
-printf '%s' "$out" | grep -q 'HANDS-FREE MODE' && ok "hands-free: a long text-only reply through mcp__talos-app__reply is counted and blocked like an iMessage reply" || no "talos-app reply not recognised as a reply tool" "$out"
+<<<"$out" grep -q 'HANDS-FREE MODE' && ok "hands-free: a long text-only reply through mcp__talos-app__reply is counted and blocked like an iMessage reply" || no "talos-app reply not recognised as a reply tool" "$out"
 rp "$LONG" '[]' | HF note; printf '{"tool_name":"Bash","tool_input":{"command":"x"}}' | HF note; out="$(printf '{}' | HF check)"
-printf '%s' "$out" | grep -q 'HANDS-FREE' && ok "hands-free: only the channel reply tools count; other tool calls do not clear or add debt" || no "other tool changed debt" "$out"
+<<<"$out" grep -q 'HANDS-FREE' && ok "hands-free: only the channel reply tools count; other tool calls do not clear or add debt" || no "other tool changed debt" "$out"
 HF off | grep -q off; out="$(printf '{}' | HF check)"; [ -z "$out" ] && ok "hands-free off ends the window and drops any debt" || no "off did not clear" "$out"
 mkdir -p "$SD"; python3 -c "import json,time; json.dump({'until': time.time()-5}, open('$SD/hands-free.json','w'))"
 rp "$LONG" '[]' | HF note; out="$(printf '{}' | HF check)"; [ -z "$out" ] && [ ! -e "$SD/hands-free.json" ] && ok "hands-free: an expired window is ignored and cleaned up" || no "expired window still active" "$out"
@@ -277,7 +277,7 @@ HF on 20 >/dev/null; touch "$SD/hands-free.off"; rp "$LONG" '[]' | HF note; out=
 # 1.2: audio ALWAYS goes out with the full text, never a caption
 HF on 30 >/dev/null
 rp "Here is the audio" '["/tmp/x.m4a"]' | HF note; out="$(printf '{}' | HF check)"
-printf '%s' "$out" | grep -q '"block"' && printf '%s' "$out" | grep -q 'full' && ok "hands-free: audio with only a caption is blocked once and told to send the full text" || no "caption-only audio not blocked" "$out"
+<<<"$out" grep -q '"block"' && <<<"$out" grep -q 'full' && ok "hands-free: audio with only a caption is blocked once and told to send the full text" || no "caption-only audio not blocked" "$out"
 rp "Here is the audio again" '["/tmp/x.m4a"]' | HF note; out="$(printf '{}' | HF check)"      # the agent resends a caption in the same turn
 [ -z "$out" ] && ok "hands-free: the caption-only block gives up after one block (never traps the session)" || no "caption-only block repeated" "$out"
 rp "$LONG" '["/tmp/x.m4a"]' | HF note; out="$(printf '{}' | HF check)"
@@ -312,9 +312,9 @@ printf '{"session_id":"S1"}' | CG save
 { [ -s "$SD/compaction-carry.md" ] && grep -q 'keep every row' "$SD/compaction-carry.md" && ! grep -q 'too old to carry' "$SD/compaction-carry.md"; } \
   && ok "compaction guard: carries the last days' logged corrections, not old ones" || no "compaction guard carry wrong" "$(cat "$SD/compaction-carry.md" 2>/dev/null)"
 ctx="$(printf '{"source":"compact","session_id":"S1"}' | ( cd "$A" && CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py 2>/dev/null ))"
-{ printf '%s' "$ctx" | grep -q 'CARRIED ACROSS THIS COMPACTION' && printf '%s' "$ctx" | grep -q 'keep every row'; } && ok "session start after a compaction hands the carried corrections back inside the continuity block" || no "carry not injected after compact" "$ctx"
+{ <<<"$ctx" grep -q 'CARRIED ACROSS THIS COMPACTION' && <<<"$ctx" grep -q 'keep every row'; } && ok "session start after a compaction hands the carried corrections back inside the continuity block" || no "carry not injected after compact" "$ctx"
 ctx="$(printf '{"source":"startup"}' | ( cd "$A" && CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py 2>/dev/null ))"
-printf '%s' "$ctx" | grep -q 'CARRIED ACROSS' && no "carry shown on a fresh startup" || ok "session start does not show a carry on a fresh startup"
+<<<"$ctx" grep -q 'CARRIED ACROSS' && no "carry shown on a fresh startup" || ok "session start does not show a carry on a fresh startup"
 HF on 30 >/dev/null; printf '{"session_id":"S1"}' | CG save
 grep -q 'HANDS-FREE is ON' "$SD/compaction-carry.md" && ok "compaction guard: an open hands-free window is carried" || no "hands-free not carried" "$(cat "$SD/compaction-carry.md")"
 HF off >/dev/null
@@ -322,7 +322,7 @@ rm -f "$A/.learnings/LEARNINGS.md"; printf '{"session_id":"S1"}' | CG save
 [ ! -e "$SD/compaction-carry.md" ] && ok "compaction guard: nothing to carry leaves no stale file behind" || no "stale carry file left"
 touch -t 202001010000 "$SD/compaction-carry.md" 2>/dev/null || { mkdir -p "$SD"; printf 'old\n' > "$SD/compaction-carry.md"; touch -t 202001010000 "$SD/compaction-carry.md"; }
 ctx="$(printf '{"source":"compact"}' | ( cd "$A" && CLAUDE_PROJECT_DIR="$A" python3 hooks/session-start.py 2>/dev/null ))"
-printf '%s' "$ctx" | grep -q 'CARRIED ACROSS' && no "a stale carry file was injected" || ok "session start ignores a carry file older than 12 hours"
+<<<"$ctx" grep -q 'CARRIED ACROSS' && no "a stale carry file was injected" || ok "session start ignores a carry file older than 12 hours"
 rm -f "$SD/compaction-carry.md"
 mkdir -p "$SD"; touch "$SD/compaction-guard.off"; printf '{"session_id":"S1"}' | CG save; rm -f "$SD/compaction-guard.off"
 [ ! -e "$SD/compaction-carry.md" ] && ok "compaction guard: its kill switch works" || no "kill switch ignored (compaction guard)"
@@ -346,18 +346,18 @@ SS() { printf '{"source":"startup"}' | ( cd "$1" && CLAUDE_PROJECT_DIR="$1" pyth
 
 # control: a REAL memory folder is injected (so the symlink cases below can fail)
 A2="$SB/agent2"; mkagent "$A2"; mkdir -p "$A2/memory"; printf 'REAL-STATE-MARK\n' > "$A2/memory/STATE.md"; printf 'REAL-HANDOFF-MARK\n' > "$A2/memory/HANDOFF.md"
-ctx="$(SS "$A2")"; { printf '%s' "$ctx" | grep -q 'REAL-STATE-MARK' && printf '%s' "$ctx" | grep -q 'REAL-HANDOFF-MARK'; } && ok "containment control: a normal memory/ folder is read and injected" || no "control failed: real memory not injected" "$ctx"
+ctx="$(SS "$A2")"; { <<<"$ctx" grep -q 'REAL-STATE-MARK' && <<<"$ctx" grep -q 'REAL-HANDOFF-MARK'; } && ok "containment control: a normal memory/ folder is read and injected" || no "control failed: real memory not injected" "$ctx"
 
 # 1. memory/ is a symlink to a folder OUTSIDE the project: nothing from it reaches the context
 rm -rf "$A2/memory"; ln -s "$OUT/memory" "$A2/memory"
 ctx="$(SS "$A2")"
-{ ! printf '%s' "$ctx" | grep -q 'SECRET-OUTSIDE'; } && ok "session start: a symlinked PARENT (memory/ -> elsewhere) is not read: no STATE, HANDOFF or daily log leaks into the context" || no "a symlinked memory/ was READ" "$(printf '%s' "$ctx" | grep -o 'SECRET-OUTSIDE[A-Z-]*' | sort -u)"
+{ ! <<<"$ctx" grep -q 'SECRET-OUTSIDE'; } && ok "session start: a symlinked PARENT (memory/ -> elsewhere) is not read: no STATE, HANDOFF or daily log leaks into the context" || no "a symlinked memory/ was READ" "$(printf '%s' "$ctx" | grep -o 'SECRET-OUTSIDE[A-Z-]*' | sort -u)"
 # 1b. a symlinked file inside a real folder (the old check) is still refused
 rm -f "$A2/memory"; mkdir -p "$A2/memory"; ln -s "$OUT/memory/STATE.md" "$A2/memory/STATE.md"; printf 'REAL-HANDOFF-MARK\n' > "$A2/memory/HANDOFF.md"
-ctx="$(SS "$A2")"; { ! printf '%s' "$ctx" | grep -q 'SECRET-OUTSIDE-STATE' && printf '%s' "$ctx" | grep -q 'REAL-HANDOFF-MARK'; } && ok "session start: a symlinked FILE is refused and its real neighbours still read" || no "symlinked file read, or the neighbour lost"
+ctx="$(SS "$A2")"; { ! <<<"$ctx" grep -q 'SECRET-OUTSIDE-STATE' && <<<"$ctx" grep -q 'REAL-HANDOFF-MARK'; } && ok "session start: a symlinked FILE is refused and its real neighbours still read" || no "symlinked file read, or the neighbour lost"
 # 1c. an in-project symlink that stays inside the project is refused too (reject ANY link below the root)
 rm -rf "$A2/memory"; mkdir -p "$A2/realmem"; printf 'INNER-LINK-MARK\n' > "$A2/realmem/STATE.md"; ln -s realmem "$A2/memory"
-ctx="$(SS "$A2")"; { ! printf '%s' "$ctx" | grep -q 'INNER-LINK-MARK'; } && ok "session start: even a symlink that points INSIDE the project is refused (no link anywhere below the root)" || no "an in-project symlinked folder was read"
+ctx="$(SS "$A2")"; { ! <<<"$ctx" grep -q 'INNER-LINK-MARK'; } && ok "session start: even a symlink that points INSIDE the project is refused (no link anywhere below the root)" || no "an in-project symlinked folder was read"
 rm -f "$A2/memory"; rm -rf "$A2/realmem"; mkdir -p "$A2/memory"
 
 # 2. stamps: a write through a symlinked parent must not create or truncate anything outside
@@ -396,7 +396,7 @@ printf '{"agent_type":"worker","description":"through a link","last_assistant_me
 rm -f "$A3/memory"; mkdir -p "$A3/memory"; printf '{"agent_type":"worker","description":"normal","last_assistant_message":"done"}' | ( cd "$A3" && python3 hooks/agent-log.py 2>/dev/null )
 grep -q 'normal' "$A3/memory/agent-log.md" 2>/dev/null && ok "agent log control: the same row is written when memory/ is a real folder" || no "agent-log control failed"
 rm -rf "$A3/memory"; ln -s "$OUT/memory" "$A3/memory"
-out="$(printf '{"model":{"display_name":"Opus"}}' | ( cd "$A3" && python3 hooks/statusline.py ))"; printf '%s' "$out" | grep -q 'handoff:' && no "status line stat()ed HANDOFF.md through a symlinked memory/" "$out" || ok "status line: no handoff age is read through a symlinked memory/"
+out="$(printf '{"model":{"display_name":"Opus"}}' | ( cd "$A3" && python3 hooks/statusline.py ))"; <<<"$out" grep -q 'handoff:' && no "status line stat()ed HANDOFF.md through a symlinked memory/" "$out" || ok "status line: no handoff age is read through a symlinked memory/"
 # the shared helper itself
 python3 - "$A3" "$OUT" <<'PY' && ok "contained(): in-root ok, '..' refused, outside refused, link refused, a missing file in a real folder is fine" || no "contained() misjudged a path"
 import os, sys
@@ -445,7 +445,7 @@ for g in append-only-guard.py check-vault.py; do
   if [ "$g" = check-vault.py ]; then mkdir -p "$V"; printf 'zebra-clinic\n' > "$V/_guard-terms.txt"; printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"; fi
   live="$(printf '%s' "$BADIN" | H "$g")"; un="$(printf '%s' "$BADIN" | HU "$g")"
   if [ "$g" = check-vault.py ]; then rm -f "$XDG_CONFIG_HOME/talos/vault-dir"; fi
-  { [ "$live" = "{}" ] && denied "$un" && printf '%s' "$un" | grep -q 'unattended'; } && ok "$g: an unexpected error is allowed in a live session and DENIED (with the reason) when unattended" || no "$g fail modes wrong" "live=[$live] unattended=[$un]"
+  { [ "$live" = "{}" ] && denied "$un" && <<<"$un" grep -q 'unattended'; } && ok "$g: an unexpected error is allowed in a live session and DENIED (with the reason) when unattended" || no "$g fail modes wrong" "live=[$live] unattended=[$un]"
 done
 # timeline-guard: a broken or missing wiki-lint.py is the realistic internal error
 mkdir -p "$A/wiki/people"; printf -- '---\ntitle: x\ntype: person\nupdated: 2026-10-01\ntags: [a]\n---\nbody\n\n<!-- TIMELINE:APPEND-ONLY -->\n' > "$A/wiki/people/tl.md"
@@ -457,7 +457,7 @@ mv "$SB/wiki-lint.hold" "$A/scripts/wiki-lint.py" 2>/dev/null || true
 
 # an `ask` has nobody to answer it when unattended: it becomes a deny
 out="$(W "$A/memory/2026-10-01.md" "short")"; un="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s","content":"short"}}' "$A/memory/2026-10-01.md" | HU append-only-guard.py)"
-{ printf '%s' "$out" | grep -q '"ask"' && denied "$un" && printf '%s' "$un" | grep -q 'nobody to ask'; } && ok "append-only guard: the shrink check asks in a live session and denies when unattended" || no "ask not converted" "live=[$out] un=[$un]"
+{ <<<"$out" grep -q '"ask"' && denied "$un" && <<<"$un" grep -q 'nobody to ask'; } && ok "append-only guard: the shrink check asks in a live session and denies when unattended" || no "ask not converted" "live=[$out] un=[$un]"
 printf 'zebra-clinic\n' > "$V/_guard-terms.txt"; printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"
 un="$(printf '%s' "$(payload "$A/wiki/x.md" "Zebra-Clinic")" | HU check-vault.py)"; rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
 denied "$un" && ok "vault guard: a term headed outside the vault is denied (not asked) when unattended" || no "vault guard ask not converted" "$un"
@@ -510,7 +510,7 @@ bad=""
 for spec in "claim-gate.py" "claim-gate.py inject" "agent-log.py" "statusline.py" "channel-debt.py arm" "channel-debt.py check" "channel-debt.py clear" "hands-free.py check" "hands-free.py note"; do
   # shellcheck disable=SC2086
   out="$(printf '\xff\xfe not json {' | ( cd "$A" && CHRONOS_RUN=1 python3 hooks/$spec 2>&1 ))"; rc=$?
-  { [ "$rc" = 0 ] && ! printf '%s' "$out" | grep -qi 'traceback\|"deny"\|"block"'; } || bad="$bad [$spec rc=$rc]"
+  { [ "$rc" = 0 ] && ! <<<"$out" grep -qi 'traceback\|"deny"\|"block"'; } || bad="$bad [$spec rc=$rc]"
 done
 [ -z "$bad" ] && ok "reminder hooks (claim gate, channel debt, agent log, status line, hands-free) stay fail-open when unattended" || no "a reminder hook blocked or crashed unattended:$bad"
 # a HUNG guard: Claude Code treats a hook that outlives its timeout as a non-blocking error, so the action would run unchecked.
@@ -520,12 +520,12 @@ hang() { # $1 = hook, $2 = extra env assignment; prints "<stdout, newlines remov
   sleep 4 | ( cd "$A" && t=$SECONDS; out="$(env TALOS_GUARD_TIMEOUT_S=1 $2 python3 "hooks/$1" 2>/dev/null)"; rc=$?; printf '%s|%s|%s' "$(printf '%s' "$out" | tr -d '\n')" "$rc" "$((SECONDS - t))" )
 }
 r="$(hang pre-tool-guard.py CHRONOS_RUN=1)"; rl="$(hang pre-tool-guard.py FOO=1)"
-{ printf '%s' "$r" | grep -q '^|2|' && printf '%s' "$rl" | grep -q '^|0|'; } && ok "pre-tool guard: a hang is refused (exit 2) when unattended and allowed (exit 0) in a live session, within the alarm, not after 4 seconds" || no "pre-tool guard hang handling wrong" "unattended=[$r] live=[$rl]"
+{ <<<"$r" grep -q '^|2|' && <<<"$rl" grep -q '^|0|'; } && ok "pre-tool guard: a hang is refused (exit 2) when unattended and allowed (exit 0) in a live session, within the alarm, not after 4 seconds" || no "pre-tool guard hang handling wrong" "unattended=[$r] live=[$rl]"
 { [ "${r##*|}" -le 2 ] && [ "${rl##*|}" -le 2 ]; } && ok "pre-tool guard: the alarm, not the end of the held-open pipe, ended it (${r##*|}s unattended, ${rl##*|}s live)" || no "pre-tool guard waited for stdin to close (${r##*|}s)"
 printf 'zebra-clinic\n' > "$V/_guard-terms.txt"; printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"
 for g in append-only-guard.py check-vault.py; do
   r="$(hang "$g" CHRONOS_RUN=1)"; rl="$(hang "$g" FOO=1)"
-  { denied "${r%%|*}" && printf '%s' "$r" | grep -q 'did not finish' && [ "${rl%%|*}" = "{}" ]; } && ok "$g: a hung run is DENIED when unattended and allowed in a live session (alarm, not the harness timeout)" || no "$g hang handling wrong" "unattended=[$r] live=[$rl]"
+  { denied "${r%%|*}" && <<<"$r" grep -q 'did not finish' && [ "${rl%%|*}" = "{}" ]; } && ok "$g: a hung run is DENIED when unattended and allowed in a live session (alarm, not the harness timeout)" || no "$g hang handling wrong" "unattended=[$r] live=[$rl]"
   secs="${r##*|}"; [ "$secs" -le 3 ] && ok "$g: the alarm fired inside the shortened window ($secs s), not at the end of the held-open pipe" || no "$g took $secs seconds"
 done
 rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
@@ -563,7 +563,7 @@ bad=""
 for spec in "hands-free.py check" "hands-free.py note" "check-vault.py" "claim-gate.py" "claim-gate.py inject" "append-only-guard.py" "timeline-guard.py" "agent-log.py" "statusline.py" "channel-debt.py arm" "channel-debt.py check" "channel-debt.py clear" "channel-debt.py reset"; do
   # shellcheck disable=SC2086
   out="$(printf '\xff\xfe not json {' | ( cd "$A" && python3 hooks/$spec 2>&1 ))"; rc=$?
-  { [ "$rc" = 0 ] && ! printf '%s' "$out" | grep -qi traceback; } || bad="$bad [$spec rc=$rc]"
+  { [ "$rc" = 0 ] && ! <<<"$out" grep -qi traceback; } || bad="$bad [$spec rc=$rc]"
 done
 [ -z "$bad" ] && ok "every hook exits 0 with no traceback on binary garbage" || no "a hook did not fail open:$bad"
 

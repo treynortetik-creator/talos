@@ -50,6 +50,16 @@ export function relayProblemFrom(err: unknown, now: number, fatal = false): Prob
 }
 
 /**
+ * A client that hung up mid-request. Node's http server fails the request body with `Error: aborted` and code ECONNRESET;
+ * nothing went wrong on the relay, so it is not a problem report. Both must match: ECONNRESET alone is also what an
+ * outbound call to an upstream gets (`read ECONNRESET`, `socket hang up`), and "aborted" alone could be anything, and
+ * those are real faults. An AbortError from our own timeout never matches either.
+ */
+export function isClientHangup(err: unknown): boolean {
+  return err instanceof Error && (err as { code?: unknown }).code === 'ECONNRESET' && err.message === 'aborted'
+}
+
+/**
  * Remembers what it already reported: the same fingerprint once per window, and a rolling hourly cap per process, so one bug that
  * fires on every request is one report. A report is never made while another is being made (the recorder's own failure
  * must not feed itself).

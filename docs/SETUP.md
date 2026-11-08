@@ -399,9 +399,17 @@ Six things are still yours to do. The command lists them when it finishes:
 2. **The relay** deploys from Railway, not from this Mac. Push to your GitHub copy; Railway builds it.
 3. **The Mac app** (if you use it): run `apps/desktop/scripts/build-app.sh`, then `apps/desktop/scripts/install.sh`, which
    copies the new app to `~/Applications` and opens it. The build alone leaves the old app in place.
-4. **The agent folder (the kit).** `talos-app update` does not touch it. Run `bash kit/scripts/upgrade.sh --into ~/talos-agent
+4. **The agent folder (the kit).** `talos-app update` does not touch it. An agent on the plugin layout (every new install) updates with
+   `talos update --dry-run`, then `talos update`, in Terminal: it checks the release's signature, swaps the release, runs the
+   migrations, checks that the agent folder loads it, rolls back by itself if not, and asks the Mac app to restart the agent.
+   `talos rollback` goes back one release and `talos restore <file>` puts one file back ([`kit/README.md`](../kit/README.md),
+   "Updating, rolling back, restoring a file"). The first time, an install that has no release signing key needs you to add one, once, in
+   Terminal: `talos-update trust-key <public-key-file>` shows the fingerprint and asks y/N; no reinstall. These commands are a speed bump for
+   an agent, not a lock (it runs as you); every session start also checks that the live release still matches its recorded hash. An older agent still uses `bash kit/scripts/upgrade.sh --into ~/talos-agent
    --dry-run`, read the plan, then run it again without `--dry-run`. It backs the folder up first and never writes your memory,
-   wiki or `CLAUDE.md`; [`kit/UPGRADE.md`](../kit/UPGRADE.md) has the checks and the rollback.
+   wiki or `CLAUDE.md`; [`kit/UPGRADE.md`](../kit/UPGRADE.md) has the checks and the rollback. (`talos update app` and
+   `talos rollback app` are the app checkout's own pull and rollback, the same as `talos-app update` and `talos-app rollback`; from the phone use
+   the `talos-app` spelling, because the agent's deny rule `talos rollback:*` also matches `talos rollback app`.)
 5. **The iPhone app.** The web app on the Home Screen updates itself. A native app you built yourself is rebuilt and installed again
    after a native change ([`ios.md`](ios.md)); if you use your own TestFlight, upload a new build.
 

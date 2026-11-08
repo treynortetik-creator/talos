@@ -16,7 +16,8 @@ import { CARD_EXPIRY_S, MAX_PENDING_CARDS } from '../heartbeat/cards.ts'
 import { WAKE_ENDED_TEXT } from '../heartbeat/prompt.ts'
 import { assertFrameFits, type DurableResult, RelayRejectedError } from '../transport.ts'
 import { mintRisk } from '../trust.ts'
-import { fail, needStr, ok, str, type Tool, ToolError, threadArg, threadProps } from './common.ts'
+import { fail, needStr, ok, str, ToolError, threadArg, threadProps } from './common.ts'
+import { OWN_THREAD, type ToolRecord, WORKER_NO_THREAD } from './define.ts'
 import { uploadAll } from './send.ts'
 
 // Owner call O2: a background card used to die unseen after 30 minutes. It now lives a day, like a chat card; the relay
@@ -27,8 +28,13 @@ const MAX_EXPIRY_S = 604_800
 /** Cards a call is replacing right now: a second call cannot replace the same card while the first is in flight. */
 const superseding = new Set<string>()
 
-export const card: Tool = {
+export const card: ToolRecord = {
   name: 'card',
+  group: 'core',
+  headless: true,
+  ...OWN_THREAD,
+  instructions: `Anything that sends, posts, deploys, pays or deletes on the owner's behalf goes through \`card\` first; act only on a \`card_action\` with action PRIMARY, exactly as approved, then call \`card_result\`.`,
+  told: ['main', 'worker'],
   description:
     "Ask the owner to approve something before you do it. Anything that sends, posts, deploys, pays or deletes on the owner's behalf goes through a card first; act only on a card_action with action PRIMARY, exactly as approved, then call card_result.",
   inputSchema: {
@@ -209,8 +215,13 @@ export const card: Tool = {
   },
 }
 
-export const cardResult: Tool = {
+export const cardResult: ToolRecord = {
   name: 'card_result',
+  group: 'core',
+  headless: false,
+  ...WORKER_NO_THREAD,
+  instructions: null,
+  told: [],
   liveOnly: true,
   description: 'Report the outcome after acting on an approved card (card_action PRIMARY).',
   inputSchema: {

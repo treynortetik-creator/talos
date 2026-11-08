@@ -3,6 +3,7 @@
 // and the constants every side has to agree on. Nothing here starts a process; the bridge and the desktop supervisor
 // read it. Everything defaults to off: a config without these fields behaves exactly as before.
 import { z } from 'zod'
+import { WorkerDialog } from './dialog-files.ts'
 import { IsoTs, ThreadId } from './ids.ts'
 
 // ---- the per-thread switch (OPTION-C 9.1) -----------------------------------------------------------------------
@@ -22,6 +23,31 @@ export const AbsolutePath = z.string().max(512).regex(NO_CONTROL_ABS)
 
 export const DEFAULT_IDLE_PARK_MIN = 30
 
+/** Most servers a thread's allow list may name, and the longest name (a `claude.ai <Name>` connector is the long kind). */
+export const MCP_ALLOW_MAX = 32
+export const MCP_NAME_MAX = 80
+/**
+ * A server name as Claude Code knows it (`github`, `plugin:x:y`, `claude.ai Gmail`): printable, no spaces at the ends, no
+ * commas, and none of the characters that change how text reads or where a line ends (C0 and C1 controls, line and
+ * paragraph separators, zero-width marks, bidi marks and overrides).
+ */
+const MCP_BAD = '\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff,'
+const MCP_NAME = new RegExp(`^[^\\s${MCP_BAD}](?:[^${MCP_BAD}]*[^\\s${MCP_BAD}])?$`)
+/**
+ * The MCP servers a thread's own session may use, besides `talos-app` (which it always has). No list at all means today's
+ * behaviour: the session gets whatever Claude Code gives it. A list, even an empty one, means ONLY those. Unique names.
+ */
+export const McpAllowList = z
+  .array(z.string().max(MCP_NAME_MAX).regex(MCP_NAME))
+  .max(MCP_ALLOW_MAX)
+  .refine((l) => new Set(l).size === l.length, { message: 'a server is named twice' })
+export type McpAllowListT = z.infer<typeof McpAllowList>
+/**
+ * As read: a list this build cannot read is the EMPTY list (talos-app only), never "no list". Reading junk as "allow
+ * everything" would open a fence a hand edit or a newer build meant to close.
+ */
+const McpAllowRead = McpAllowList.optional().catch([])
+
 /** What the Mac accepts in a write (`sessionFieldsIssue`). */
 export const ThreadSessionOptsStrict = z.object({
   /** Absolute; absent = the agent folder. */
@@ -29,6 +55,7 @@ export const ThreadSessionOptsStrict = z.object({
   model: WorkerModel.default('inherit'),
   effort: WorkerEffort.optional(),
   idle_park_min: z.number().int().min(5).max(720).default(DEFAULT_IDLE_PARK_MIN),
+  mcp_allow: McpAllowList.optional(),
 })
 
 /**
@@ -40,6 +67,7 @@ export const ThreadSessionOpts = z.object({
   model: WorkerModel.default('inherit').catch('inherit'),
   effort: WorkerEffort.optional().catch(undefined),
   idle_park_min: z.number().int().min(5).max(720).default(DEFAULT_IDLE_PARK_MIN).catch(DEFAULT_IDLE_PARK_MIN),
+  mcp_allow: McpAllowRead,
 })
 export type ThreadSessionOptsT = z.infer<typeof ThreadSessionOpts>
 
@@ -229,7 +257,7 @@ export const POINTER_CLIENT_QUIET_MS = 10_000
 export const WORKER_BACKOFF_S = [2, 5, 15, 30, 60] as const
 export const WORKER_CRASH_LOOP = { count: 5, window_s: 15 * 60 } as const
 
-// WORKER_BRIDGE_TOOLS and WORKER_THREAD_LOCKED_TOOLS follow the agent tool table in channel-meta.ts.
+// WORKER_BRIDGE_TOOLS and WORKER_THREAD_LOCKED_TOOLS follow the agent tool table in apps/bridge/src/tools/table.ts.
 
 /** Words a worker's command line must never contain (OPTION-C 4.3). The supervisor's WorkerSpec test checks the same. */
 export const WORKER_FORBIDDEN_ARGS = ['--channels', '--dangerously-load-development-channels', '-p', '--print', '--bg']
@@ -256,10 +284,22 @@ export const WorkerFailure = z.enum([
   'crash_loop',
   'start_failed',
   'folder_claimed', // another session works in that folder and no worktree was possible
+  'mode_escalation_denied', // the spec would be wider than the main session (see WorkerCeilingAxis); it was not launched
 ])
+/** Which axis of the privilege ceiling a `mode_escalation_denied` failure was over. */
+export const WorkerCeilingAxis = z.enum(['permission_mode', 'mcp', 'deny_rules'])
 export type WorkerFailureT = z.infer<typeof WorkerFailure>
 
 const SessionUuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+
+/** The folder, model, effort and MCP list a worker was actually started with (the Mac records it at launch). */
+export const WorkerLaunched = z.object({
+  cwd: AbsolutePath,
+  model: WorkerModel.default('inherit'),
+  effort: WorkerEffort.optional().catch(undefined),
+  mcp_allow: McpAllowRead,
+})
+export type WorkerLaunchedT = z.infer<typeof WorkerLaunched>
 
 export const WorkerEntry = z.object({
   state: WorkerState,
@@ -274,9 +314,23 @@ export const WorkerEntry = z.object({
   parked_at: IsoTs.nullable().default(null),
   restarts: z.array(IsoTs).max(10).default([]),
   error: z
-    .object({ code: WorkerFailure, detail: z.string().max(300).optional(), at: IsoTs })
+    .object({
+      // A code this build does not know (a newer Mac) is `unknown` for THIS entry: it must never make the whole file unreadable,
+      // which would take every thread's session down with it.
+      code: z.enum([...WorkerFailure.options, 'unknown']).catch('unknown'),
+      detail: z.string().max(300).optional(),
+      at: IsoTs,
+      /** With `mode_escalation_denied`. An axis this build does not know is dropped, never the file. */
+      axis: WorkerCeilingAxis.optional().catch(undefined),
+    })
     .nullable()
     .default(null),
+  /** The worker's last real activity, saved by the Mac so a relaunched app carries the idle clock on. The bridge only tolerates it. A value that is not a time reads as none. */
+  last_active_at: IsoTs.optional().catch(undefined),
+  /** A known dialog on the pane right now (dialog-files.ts); a value that does not fit reads as none. */
+  dialog: WorkerDialog.optional().catch(undefined),
+  /** What the running session was started with. The Mac writes it; the bridge only tolerates it. A value that does not fit reads as none. */
+  launched: WorkerLaunched.optional().catch(undefined),
 })
 export type WorkerEntryT = z.infer<typeof WorkerEntry>
 
@@ -347,7 +401,15 @@ export type WakeFileT = z.infer<typeof WakeFile>
  * TALOS_APP_WORKER_NONCE; the hub refuses a `hello` without it), `ready` (hub writes it on a good `hello`; the
  * supervisor's start is done when it appears), `mcp.json` and `WORKER.md` (supervisor / main).
  */
-export const WORKER_FILES = { wake: 'wake', nonce: 'nonce', ready: 'ready' } as const
+export const WORKER_FILES = {
+  wake: 'wake',
+  nonce: 'nonce',
+  ready: 'ready',
+  // Needs-you prompts (dialog-files.ts): the card's state for the Mac, the signed answer to press and the Mac's result
+  dialogCard: 'dialog-card.json',
+  dialogAnswer: 'dialog-answer.json',
+  dialogResult: 'dialog-result.json',
+} as const
 export const WORKER_NONCE_ENV = 'TALOS_APP_WORKER_NONCE'
 
 export const WorkerReady = z.object({
@@ -404,7 +466,27 @@ export const HubRpc = z.strictObject({
   tool: z.string().min(1).max(40),
   args: z.looseObject({}),
 })
-export const HubWorkerLine = z.discriminatedUnion('t', [HubHello, HubOut, HubMod, HubRpc])
+/**
+ * hook → hub: the kit's PermissionRequest hook (kit/hooks/permission-relay.py) asks for a permission card on the phone and
+ * waits for the owner's answer. One request per connection; the connection needs no `hello`. WHO is asking is proven here,
+ * never named: with `thread_id` the hub requires that thread's supervisor nonce and a `pid` inside the recorded pane's
+ * process group (the same proof as `hello`), and the card goes to that thread; without it the request is the main session's
+ * and the card goes to the default thread. Loose on purpose: a newer hook's extra fields never break an older hub.
+ */
+export const HubPerm = z.looseObject({
+  t: z.literal('perm'),
+  id: z.string().min(1).max(64),
+  thread_id: ThreadId.optional(),
+  pid: z.number().int().positive().optional(),
+  nonce: z.string().min(16).max(64).optional(),
+  tool_name: z.string().min(1).max(4096),
+  tool_input: z.unknown().optional(),
+  /** Claude Code's session id and working folder; only the folder is shown (on a main-session card, to say who asked). */
+  session_id: z.string().max(100).optional(),
+  cwd: z.string().max(1000).optional(),
+})
+export type HubPermT = z.infer<typeof HubPerm>
+export const HubWorkerLine = z.discriminatedUnion('t', [HubHello, HubOut, HubMod, HubRpc, HubPerm])
 export type HubWorkerLineT = z.infer<typeof HubWorkerLine>
 
 /** hub → worker. */
@@ -433,7 +515,25 @@ export const HubRpcResult = z.strictObject({
   ok: z.boolean(),
   text: z.string().max(HUB_RPC_MAX_TEXT),
 })
-export const HubHubLine = z.discriminatedUnion('t', [HubWelcome, HubAck, HubRefused, HubControls, HubRpcResult])
+/**
+ * hub → hook: the answer to one `perm`. `allow` and `deny` are the owner's own signed answer to the card; `none` is
+ * "no decision" (the relay is off, the request was refused, the owner never answered, the card was closed). A hook acts on
+ * the exact words `allow` and `deny` only, so any other value, or a newer hub's new one, reads as `none`.
+ */
+export const HubPermResult = z.looseObject({
+  t: z.literal('perm_result'),
+  id: z.string().min(1).max(64),
+  decision: z.string().max(20),
+  reason: z.string().max(300).optional(),
+})
+export const HubHubLine = z.discriminatedUnion('t', [
+  HubWelcome,
+  HubAck,
+  HubRefused,
+  HubControls,
+  HubRpcResult,
+  HubPermResult,
+])
 export type HubHubLineT = z.infer<typeof HubHubLine>
 
 // ---- what the app sees (bridge → relay → app) -------------------------------------------------------------------------

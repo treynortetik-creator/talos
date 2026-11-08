@@ -91,7 +91,16 @@ export type ComposeScheduleCardOpts = {
 
 type Effective = Pick<
   ScheduleT,
-  'name' | 'runner' | 'permissions' | 'allowed_tools' | 'model' | 'enabled' | 'thread_id' | 'catchup_min' | 'notify'
+  | 'name'
+  | 'runner'
+  | 'permissions'
+  | 'allowed_tools'
+  | 'model'
+  | 'enabled'
+  | 'thread_id'
+  | 'catchup_min'
+  | 'notify'
+  | 'memory'
 >
 
 function effective(change: ScheduleChangeT, base: ScheduleCardBase | null): Effective {
@@ -106,6 +115,7 @@ function effective(change: ScheduleChangeT, base: ScheduleCardBase | null): Effe
     thread_id: null,
     catchup_min: 180,
     notify: 'failure',
+    memory: false,
   }
   const now = { ...fallback, ...cur }
   if (change.op === 'create') return { ...now, ...pickEffective(change.draft) }
@@ -125,12 +135,22 @@ function pickEffective(o: Partial<Record<keyof Effective, unknown>>): Partial<Ef
     'thread_id',
     'catchup_min',
     'notify',
+    'memory',
   ] as const) {
     if (o[k] !== undefined) out[k] = o[k]
   }
   return out as Partial<Effective>
 }
 
+/**
+ * What a job with memory on keeps (docs/SCHEDULES.md S3.8). It is a line of the card's body, not a row of its destination: a
+ * schedule card already fills the six destination rows a card can have, and a job without memory has no such line, so its card
+ * is as it always was.
+ */
+const MEMORY_ON = 'on (keeps its last 3 results and a notepad of up to 2 KB between runs)'
+const MEMORY_BACKGROUND = 'but this job runs in the background, which does not get memory yet'
+/** What switching memory on does, in the card's own words: it widens every future prompt. */
+const MEMORY_WIDENS = "Future runs will see the last 3 results and this job's notepad."
 export function permissionWords(p: ScheduleT['permissions'], tools: readonly string[]): string {
   if (p === 'full') return 'Full permissions, nobody watching'
   if (p === 'restricted') return `Read-only: ${tools.length ? tools.join(', ') : 'no tools'}`
@@ -159,6 +179,8 @@ export function scheduleCardRisk(
   const s = change.set
   const cur = base.schedule
   if (s.enabled === true && !cur.enabled) return 'high'
+  // switching memory on widens everything every future prompt carries: always the owner's card, like turning a job on
+  if (s.memory === true && cur.memory !== true) return 'high'
   if (s.prompt !== undefined && s.prompt !== base.prompt) return 'high'
   if (s.model !== undefined && s.model !== cur.model) return 'high'
   if (s.runner !== undefined && s.runner !== cur.runner) return 'high'
@@ -414,7 +436,22 @@ function changeLines(
   if (s.notify !== undefined) row('Notify', cur?.notify, s.notify)
   if (s.thread_id !== undefined)
     row('Posts to', cur ? opts.threadName(cur.thread_id) : undefined, opts.threadName(s.thread_id))
+  if (s.memory !== undefined) {
+    const background = !runsInSession(effective(change, base))
+    const head = `Memory: ${cur ? yes(cur.memory === true) : '(unknown)'} → ${yes(s.memory)}`
+    lines.push(s.memory && background ? `${head}, ${MEMORY_BACKGROUND}` : head)
+    if (s.memory && !background && cur?.memory !== true) lines.push(MEMORY_WIDENS)
+  }
   return lines
+}
+
+/** The create card's lines about memory: what it keeps and what it widens, or that this job cannot use it. */
+function memoryLines(d: { runner?: string | undefined; permissions?: string | undefined }): string[] {
+  const background =
+    d.runner !== undefined &&
+    d.permissions !== undefined &&
+    !runsInSession({ runner: d.runner, permissions: d.permissions })
+  return background ? [`Memory: on, ${MEMORY_BACKGROUND}`] : [`Memory: ${MEMORY_ON}`, MEMORY_WIDENS]
 }
 
 function settingsLines(d: {
@@ -423,12 +460,16 @@ function settingsLines(d: {
   model: string | null
   notify: string
   catchup_min: number
+  memory?: boolean | undefined
+  runner?: string | undefined
+  permissions?: string | undefined
 }): string[] {
   return [
     `On: ${d.enabled ? 'on' : 'off (created switched off; turning it on needs another card)'}`,
     `Model: ${d.model ?? 'default'}`,
     `Notify: ${d.notify}`,
     `Catch-up: ${d.catchup_min} min`,
+    ...(d.memory ? memoryLines(d) : []),
     `Description: ${d.description || '(none)'}`,
   ]
 }

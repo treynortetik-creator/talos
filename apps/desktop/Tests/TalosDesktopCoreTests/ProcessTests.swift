@@ -154,6 +154,12 @@ struct TmuxCommandsTests {
     }
   }
 
+  @Test func respawnClearsHistoryInTheSameInvocation() {
+    // One tmux invocation (one `;` list): a later call could wipe the line a child that exits at once has printed.
+    let a = t.withPane("%7").respawnPane(argv: ["c", "--resume", "id"], env: [:], cwd: "/a")
+    #expect(a.suffix(8) == ["--", "c", "--resume", "id", ";", "clear-history", "-t", "%7"])
+  }
+
   @Test func argvNotAShellString() {
     let a = t.newSession(argv: ["/bin/claude", "--name", "a b"], env: ["B": "2", "A": "1"], cwd: "/x y")
     #expect(
@@ -180,6 +186,39 @@ struct TmuxCommandsTests {
     #expect(t.withPane("=agent:").paneId == nil, "only a real %N id is accepted")
     #expect(t.newSession(argv: ["c"], env: [:], cwd: "/").contains("#{pane_id}"))
     #expect(TmuxCommands.parsePaneState("12|0|||1|2|%3")?.paneId == "%3")
+  }
+
+  // tmux ends a command at an argv element ending in `;` and starts the next command after it (OBSERVED, tmux 3.8: `be brief;`
+  // then `plain` ran as a command named `plain`). One backslash before that last `;` is removed by tmux and the element arrives
+  // as typed, including one that already ended in `\;` (it is sent as `\\;`).
+  static let semicolons = ["be brief;", ";", "a\\;", "mid;dle", "two;;", "-p", ""]
+  static let semicolonsSent = ["be brief\\;", "\\;", "a\\\\;", "mid;dle", "two;\\;", "-p", ""]
+
+  @Test func everyUserElementOfAPaneCommandIsEscapedForTmux() {
+    let p = t.withPane("%7")
+    let env = ["A": "x;", "B": "y"]
+    let sentEnv = ["-e", "A=x\\;", "-e", "B=y"]
+    let s = t.newSession(argv: Self.semicolons, env: env, cwd: "/a;")
+    #expect(s.contains("/a\\;"))
+    #expect(s.suffix(Self.semicolons.count) == Self.semicolonsSent[...])
+    #expect(Array(s[s.firstIndex(of: "-e")!..<s.firstIndex(of: "--")!]) == sentEnv)
+    let w = t.newWindow(argv: Self.semicolons, env: env, cwd: "/a;")
+    #expect(w.suffix(Self.semicolons.count) == Self.semicolonsSent[...])
+    #expect(Array(w[w.firstIndex(of: "-e")!..<w.firstIndex(of: "--")!]) == sentEnv)
+    #expect(w.contains("/a\\;"))
+    let r = p.respawnPane(argv: Self.semicolons, env: env, cwd: "/a;")
+    // the agent's elements are escaped; the `;` that starts the clear-history command is a real separator and stays one
+    #expect(r.suffix(4) == [";", "clear-history", "-t", "%7"])
+    #expect(Array(r.dropLast(4).suffix(Self.semicolons.count)) == Self.semicolonsSent)
+    #expect(Array(r[r.firstIndex(of: "-e")!..<r.firstIndex(of: "--")!]) == sentEnv)
+    #expect(r.contains("/a\\;"))
+  }
+
+  @Test func otherTextInACommandListIsEscapedAndTheSeparatorsAreNot() {
+    #expect(t.sendLiteral("hello;").suffix(2) == ["--", "hello\\;"])
+    #expect(t.setOption("k", "v;").suffix(2) == ["@k", "v\\;"])
+    #expect(t.withPane("%7").sendBytesLeavingMode([0x0d]).contains(";"), "the if-shell separator stays a separator")
+    #expect(!t.newSession(argv: ["c"], env: [:], cwd: "/a").contains { $0.contains("\\") })
   }
 
   @Test func parsesPaneState() {

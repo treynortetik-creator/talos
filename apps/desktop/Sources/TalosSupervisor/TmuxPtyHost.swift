@@ -172,24 +172,31 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
       setPane(id)
       return try adoptPane()
     }
-    // A fresh screen and history: a notice or dialog from the previous run must never be read as this run's.
+    // A fresh screen and history: a notice or dialog from the previous run must never be read as this run's. The second
+    // clear is part of the respawn command itself (see `respawnPane`), never a later call.
     tmux(commands.clearHistory())
     let r = tmux(commands.respawnPane(argv: [executable] + args, env: Self.clean(env), cwd: cwd))
     guard r.ok else { throw PtyHostError.startFailed(r.err.trimmingCharacters(in: .whitespacesAndNewlines)) }
-    tmux(commands.clearHistory())
     try adoptPane()
   }
 
   private func adoptPane() throws {
     guard let s = paneState(), let pid = s.pid else {
-      // It died before we could read its pid (e.g. an unknown flag exits at once). Report the exit with no pid.
-      throw PtyHostError.startFailed("the agent exited immediately")
+      // It died before we could read its pid (e.g. an unknown flag, or a resume of a conversation that is gone, exits at
+      // once). Report the exit with no pid, and what it left on the screen: the caller decides what that line means.
+      let r = tmux(commands.captureRecent(lines: 200))
+      throw PtyHostError.exitedImmediately(rows: r.ok ? Self.deadPaneRows(r.out) : [])
     }
     lock.withLock {
       _childPid = pid
       reported = false
     }
     watch()
+  }
+
+  /// A dead pane's screen and history, without the "Pane is dead" line tmux adds.
+  private static func deadPaneRows(_ capture: String) -> [String] {
+    TmuxCommands.parseCapture(capture).filter { !$0.hasPrefix("Pane is dead") }
   }
 
   public func attachIfRunning() -> Bool {
@@ -250,7 +257,7 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
     if !s.dead, s.pid != pid { return }  // respawned meanwhile; the new pid is adopted by start/restart
     if s.dead {
       let r = tmux(commands.captureRecent(lines: 200))
-      let recent = r.ok ? TmuxCommands.parseCapture(r.out).filter { !$0.hasPrefix("Pane is dead") } : rows
+      let recent = r.ok ? Self.deadPaneRows(r.out) : rows
       report(ExitInfo(pid: pid, code: s.exitSignal == nil ? s.exitStatus : nil, signal: s.exitSignal, lastRows: recent))
     }
   }
@@ -290,6 +297,12 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
     guard lock.withLock({ paneId }) != nil else { return nil }
     let r = tmux(commands.capturePane())
     return r.ok ? TmuxCommands.parseCapture(r.out) : nil
+  }
+
+  public func clientActivity() -> Double? {
+    let r = tmux(commands.listClientsActivity())
+    guard r.ok, let times = TmuxCommands.parseClientActivity(r.out) else { return nil }
+    return times.max()
   }
 
   public func lastOutputAt() -> Date? {

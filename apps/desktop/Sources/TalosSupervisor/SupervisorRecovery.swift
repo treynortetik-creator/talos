@@ -17,6 +17,8 @@ struct RecoveryState {
   /// Set for the cold start a recovery begins: if it stops at the dev-channel warning, the phone is told once. Cleared when it
   /// has been, or when the start moves on without that warning.
   var postColdStart = false
+  /// The crash-loop post goes out once per supervisor.
+  var crashLoopPosted = false
 }
 
 /// The Mac half of "Restart agent" on the phone, and the one automatic restore. The decisions are
@@ -82,6 +84,28 @@ extension Supervisor {
     }
   }
 
+  /// A `--resume` whose agent was gone before the host could read its pid (the CLI prints its resume error and exits at once)
+  /// ends as `.resumeMissing`, exactly as the same exit seen by `handleExit` does: same audit, same event, same stop, never a
+  /// restart. The host only reports the dead pane's rows (`PtyHostError.exitedImmediately`); the matcher is the exit path's own.
+  /// False for any other launch or error, which the caller handles as before.
+  func resumeMissingAtStart(_ error: Error, _ mode: ResumeRewrite.Mode) -> Bool {
+    guard case .resume(let rid) = mode, case PtyHostError.exitedImmediately(let rows) = error,
+      DialogMatcher.resumeMissing(rows)
+    else { return false }
+    audit("resume_missing", ["session": rid])
+    finishStop(.resumeMissing(rid), closeHost: false, announcing: .resumeFailed(sessionId: rid))
+    return true
+  }
+
+  /// The exit path of the same stop: the group is cleared first, and `resumeFailed` goes out once the stop is published, so the
+  /// menu never says the conversation can't be resumed while the status still says starting.
+  func resumeMissingStop(_ rid: String, pgid: Int32, holders: [Holder], now: Double) {
+    audit("resume_missing", ["session": rid])
+    beginCleanup(
+      pgid: pgid, holders: holders, now: now,
+      then: .stop(.resumeMissing(rid), closeHost: false, announcing: .resumeFailed(sessionId: rid)))
+  }
+
   /// `talos-app restore-last-good --yes --newest-start --agent-dir <folder>`, then a cold restart. The command is not terminal-only
   /// (`--yes` skips its question), so it runs as a plain child; `--newest-start` makes it use only the newest saved start version or
   /// do nothing, and `--agent-dir` (one argv element) makes it refuse a version saved from another folder: exit 1, nothing written.
@@ -101,8 +125,8 @@ extension Supervisor {
     audit("restore_start", ["why": Self.name(of: why)])
     let queue = q
     let me = WeakRef(self)
-    // `options.background` (a thread of its own) and back to the queue with `sync`: both would otherwise wait for a free thread in the
-    // shared dispatch pool, which a loaded Mac (every core held by a blocked thread) does not give for as long as that lasts.
+    // `options.background` (a thread of its own, not one from the shared dispatch pool, which gives none while every thread in it is
+    // blocked) and back to the queue with `sync`, which needs no pool thread either.
     options.background {
       let r = ProcessRunner.run(cmd + ["restore-last-good", "--yes", "--newest-start", "--agent-dir", agentDir], env: childEnv, timeout: 60)
       queue.sync { me.value?.restoreFinished(why, r) }
@@ -151,6 +175,12 @@ extension Supervisor {
     guard recovery.postColdStart else { return }
     recovery.postColdStart = false
     postToPhone { CrashPost.coldStartText(agentName: $0) }
+  }
+
+  func postCrashLoopOnce() {
+    guard !recovery.crashLoopPosted else { return }
+    recovery.crashLoopPosted = true
+    postToPhone { CrashPost.text(agentName: $0, at: CrashPost.clockTime(Date())) }
   }
 
   /// `talos-app post <default thread> <text>` (headless). `text` is built from the agent's name. Used by the crash-loop post too.

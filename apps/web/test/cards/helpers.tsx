@@ -103,7 +103,15 @@ export function renderWith(ui: ReactElement, client: FakeClient, route = '/', pa
 }
 
 /** Renders the card currently in the store (as WP6's timeline does), so resolves show up in the view. */
-export function LiveCard({ id, threadName = 'General' }: { id: string; threadName?: string }) {
+export function LiveCard({
+  id,
+  threadName = 'General',
+  highlighted,
+}: {
+  id: string
+  threadName?: string
+  highlighted?: boolean
+}) {
   const card = useTalos((s) => s.cards.find((c) => c.id === id))
-  return card ? <CardView card={card} threadName={threadName} /> : null
+  return card ? <CardView card={card} threadName={threadName} {...(highlighted ? { highlighted } : {})} /> : null
 }

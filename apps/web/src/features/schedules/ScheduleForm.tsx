@@ -1,6 +1,6 @@
 // The create / edit form (docs/SCHEDULES.md S5.4). Edit sends only the fields the owner touched; "Review change" sends
 // `schedule.patch`, which writes nothing: the bridge answers with an approval card shown in place through CardView.
-import { EDIT_LIMITS, ScheduleChange, type ScheduleDetailT, type ScheduleT } from '@talos-app/protocol'
+import { EDIT_LIMITS, runsInSession, ScheduleChange, type ScheduleDetailT, type ScheduleT } from '@talos-app/protocol'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
@@ -21,6 +21,7 @@ import {
   WEEKDAYS,
   type WhenKind,
 } from './logic.ts'
+import { MemoryToggle } from './MemoryToggle.tsx'
 import { ProposalCard, proposeError } from './Proposal.tsx'
 import { CAPS, FIELD, Field } from './shared.tsx'
 
@@ -410,6 +411,12 @@ export function ScheduleForm(p: Props) {
                 </select>
               )}
             </Field>
+
+            <MemoryToggle
+              checked={f.memory}
+              background={!runsInSession({ runner: f.runner, permissions: f.permissions })}
+              onChange={(on) => up('memory', on)}
+            />
 
             <details>
               <summary className="min-h-11 cursor-pointer py-2 text-sm text-accent-text underline">Advanced</summary>

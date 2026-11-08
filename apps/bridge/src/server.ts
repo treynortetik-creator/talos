@@ -21,7 +21,8 @@ import { recordHealthyStart } from './good-starts.ts'
 import { agentDirFromEnv, saveLastGood } from './last-good.ts'
 import { installLifecycle, installRejectionLogger, removePidFileIfOurs, takeOver, writePidFile } from './lifecycle.ts'
 import { createLogger } from './log.ts'
-import { ancestorCommandLines, otherChannelsFromLines } from './permission/doctor.ts'
+import { ancestorCommandLines, ancestorPids, otherChannelsFromLines } from './permission/doctor.ts'
+import { createExplainerFromEnv } from './permission/explainer.ts'
 import { APP_INSTRUCTIONS } from './tools/apps.ts'
 import { toolTableProblems } from './tools/index.ts'
 import {
@@ -108,6 +109,22 @@ async function main() {
   if (declarePermission) experimental[PERMISSION_CAPABILITY] = {}
   // remembered, so a switch turned on later is reported as "after restart" instead of silently doing nothing
   if (!worker) bridge.declarePermissionRelay(declarePermission)
+  // the Claude Code this bridge is the channel of: only its hook can have a relay twin (permission/relay.ts)
+  if (env.live) {
+    const pids = ancestorPids()
+    bridge.ctx.permission.setSessionPids(pids)
+    log.info('permission session pids', { pids })
+  }
+  // The plain explanation of each permission card runs on the owner's own `claude`; with none on PATH, or TALOS_EXPLAINER=off,
+  // there is no explainer and the cards are as they always were. Worker bridges raise no cards.
+  if (!worker) {
+    const explainer = createExplainerFromEnv({
+      ...process.env,
+      ...(env.explainer !== undefined ? { TALOS_EXPLAINER: env.explainer } : {}),
+    })
+    bridge.ctx.permission.setExplainer(explainer)
+    log.info('permission explainer', { on: explainer !== undefined })
+  }
   const mcp = new Server(
     { name: MCP_SERVER_NAME, version: BRIDGE_VERSION },
     {

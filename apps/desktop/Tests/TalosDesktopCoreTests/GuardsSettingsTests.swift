@@ -47,8 +47,16 @@ struct GuardsSettingsTests {
     #expect(obj["enabledPlugins"] != nil)
     #expect(obj["hooks"] != nil)
     #expect((obj["permissions"] as? [String: Any])?["deny"] != nil)
-    let plain = try WorkerSpec.build(inputs(try home()))
-    #expect(!plain.settingsJSON.contains("hooks"))
+    let plainHome = try home()
+    let plain = try WorkerSpec.build(inputs(plainHome))
+    // A plain worker (no guards installed) has no guard hooks and no deny rules but the Talos-home fence; the only hook is the permission relay's, which is
+    // always registered because the hook and the bridge check `permission_relay` themselves, on every request.
+    let plainObj = try #require(try JSONSerialization.jsonObject(with: Data(plain.settingsJSON.utf8)) as? [String: Any])
+    let plainHooks = try #require(plainObj["hooks"] as? [String: Any])
+    #expect(Set(plainHooks.keys) == ["PermissionRequest"])
+    #expect(plainHooks["PreToolUse"] == nil)
+    #expect(((plainObj["permissions"] as? [String: Any])?["deny"] as? [String]) == WorkerFence.denyRules(talosHome: plainHome))
+    #expect(plain.settingsJSON.contains("TALOS_APP_PERM_HOOK_SOURCE=worker"))
   }
 
   @Test func aWorkerWillNotStartUnderGuardsItCannotRead() throws {
@@ -66,6 +74,7 @@ struct GuardsSettingsTests {
     let inv = try #require(ThreadSessions.claudeInvocation(for: row, claudePath: "claude", talosHome: on))
     let json = try #require(inv.args.last)
     #expect(json.contains("enabledPlugins") && json.contains("PreToolUse"))
-    #expect(ThreadSessions.claudeInvocation(for: row, claudePath: "claude", talosHome: on + "-missing")?.args.last == ThreadSessions.pluginsOffSettings)
+    let noGuards = try #require(ThreadSessions.claudeInvocation(for: row, claudePath: "claude", talosHome: on + "-missing")?.args.last)
+    #expect(noGuards.contains("enabledPlugins") && !noGuards.contains("PreToolUse"), "no guards file, no guard hook (the fence is there either way)")
   }
 }

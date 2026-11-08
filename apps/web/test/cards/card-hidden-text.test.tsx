@@ -12,6 +12,14 @@ import { LiveCard, makeCard, renderWith, setup } from './helpers.tsx'
 const RLO = '\u202E'
 const TRICKS = ['‮', '⁦', '​', '⁠', '؜', '﻿', '️']
 
+describe('a run of combining marks', () => {
+  it('revealHidden shows every code point of a run of four or more marks, like visibleText', () => {
+    const m = '\u0301'
+    expect(revealHidden(`e${m}${m}${m}${m}`)).toBe('e⟦U+0301⟧⟦U+0301⟧⟦U+0301⟧⟦U+0301⟧')
+    expect(revealHidden(`e${m}${m}${m}`)).toBe(`e${m}${m}${m}`) // up to three are ordinary text
+  })
+})
+
 describe('hidden characters in a card', () => {
   it.each(['summary', 'body', 'warning'] as const)(
     '%s shows every direction and invisible character as a token',

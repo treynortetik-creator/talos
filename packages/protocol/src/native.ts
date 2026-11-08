@@ -4,8 +4,8 @@
 // the shell validates what it receives from the page. Shells cannot do passkeys in a web view; they sign in with the
 // one-time setup code (`POST /api/auth/enroll/session`, docs/SPEC.md 5.3).
 //
-//   web -> native   ready · notify · badge · open_external · haptic · threads · pair_status · companion_state · companion_reply · terminal_view
-//   native -> web   navigate · compose · voice_note (reserved) · enroll_code · companion_reply_request · notify_permission
+//   web -> native   ready · notify · badge · open_external · haptic · threads · pair_status · companion_state · companion_reply · terminal_view · terminal_resume · terminal_leave
+//   native -> web   navigate · compose · voice_note (reserved) · enroll_code · companion_reply_request · notify_permission · terminal_sessions · terminal_resume_result · terminal_select
 import { z } from 'zod'
 import { normalizeEnrollCode } from './enroll.ts'
 import { ThreadId } from './ids.ts'
@@ -101,6 +101,7 @@ const CompanionReq = z.string().regex(/^[A-Za-z0-9_-]{1,32}$/)
  * The row `state` is a closed set on this side. The Mac app drops a row with a state it does not know instead of the
  * whole frame, because the page updates through the relay and the shell does not.
  */
+const CompanionHeld = z.strictObject({ thread_id: ThreadId, seq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) })
 export const NativeCompanionState = msg('companion_state', {
   link: z.enum(['connecting', 'online', 'offline', 'unreachable']),
   mac_online: z.boolean(),
@@ -122,6 +123,12 @@ export const NativeCompanionState = msg('companion_state', {
   last_reply: z
     .strictObject({ thread_id: ThreadId, seq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) })
     .nullable(),
+  /** The thread on screen, by the page's own routing (a card page counts as its thread), or null. Optional: an older page omits it. */
+  viewing: ThreadId.nullable().optional(),
+  /** Replies the page held back because the companion said he delivers them (`companion_replies`), at most one per thread. */
+  held: z.array(CompanionHeld).max(COMPANION_ROWS_MAX).optional(),
+  /** The epoch of the `companion_replies {on:true}` the page last applied, or null while off: the shell ignores `held` from a frame of an older epoch. */
+  replies_epoch: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable().optional(),
 })
 /** The answer to `companion_reply_request`: plain text, at most COMPANION_REPLY_MAX characters, or null. */
 export const NativeCompanionReply = msg('companion_reply', {
@@ -140,9 +147,25 @@ const TerminalCoord = z.number().int().min(0).max(TERMINAL_RECT_MAX)
  * when the terminal screen is not showing. The terminal itself is a native view on this Mac: nothing it shows or types
  * crosses this message, and nothing about it goes to the relay. The shell clamps the rectangle to its window.
  */
+/**
+ * Which session the terminal view shows: "main" (the agent) or a thread id (that thread's own session). The shell derives the
+ * tmux session name from the id itself; the page never names a session. A Mac app that predates the tabs refuses a message
+ * with this field, so the page leaves it out for Main.
+ */
+export const TerminalSessionId = z.union([z.literal('main'), ThreadId])
 export const NativeTerminalView = msg('terminal_view', {
   rect: z.strictObject({ x: TerminalCoord, y: TerminalCoord, width: TerminalCoord, height: TerminalCoord }).nullable(),
+  session: TerminalSessionId.optional(),
 })
+/** The owner pressed Resume (or Start) on a parked thread's panel in the Terminal screen. The shell asks the thread's worker to start. */
+export const NativeTerminalResume = msg('terminal_resume', { thread_id: ThreadId })
+
+/**
+ * The Terminal screen was left. `terminal_view` with a null rect only means "no terminal to lay over this space right now"
+ * (a parked tab shows its own panel, a dialog is open): the screen is still open and its tab list must keep following the
+ * sessions. This is the message that says the screen is gone.
+ */
+export const NativeTerminalLeave = msg('terminal_leave', {})
 
 export const WEB_TO_NATIVE = {
   ready: NativeReady,
@@ -155,6 +178,8 @@ export const WEB_TO_NATIVE = {
   companion_state: NativeCompanionState,
   companion_reply: NativeCompanionReply,
   terminal_view: NativeTerminalView,
+  terminal_resume: NativeTerminalResume,
+  terminal_leave: NativeTerminalLeave,
 } as const
 export const WebToNative = z.discriminatedUnion('type', [
   NativeReady,
@@ -167,6 +192,8 @@ export const WebToNative = z.discriminatedUnion('type', [
   NativeCompanionState,
   NativeCompanionReply,
   NativeTerminalView,
+  NativeTerminalResume,
+  NativeTerminalLeave,
 ])
 export type WebToNativeT = z.infer<typeof WebToNative>
 
@@ -202,8 +229,21 @@ export const NativeEnrollCode = msg('enroll_code', {
     .max(64)
     .refine((c) => normalizeEnrollCode(c) !== null, 'not a setup code'),
 })
-/** The owner clicked the companion: ask the page for the newest agent reply in one thread, as plain text. */
+/** The companion wants the newest agent reply in one thread as plain text: for a click on his reply card, or the first line of his reply bubble. */
 export const NativeCompanionReplyRequest = msg('companion_reply_request', { req: CompanionReq, thread_id: ThreadId })
+/**
+ * The Mac companion delivers new replies in other threads himself (his bubble), so the page holds back its own jump banner while
+ * `on` is true (it lists what it holds in `companion_state.held`) and toasts what is still held the moment `on` goes false or the
+ * shell is lost. Sent whenever it changes, with `shown` whenever he shows held replies, and again after every `ready`; a page that
+ * was reloaded, or has no shell, is off.
+ */
+export const NativeCompanionReplies = msg('companion_replies', {
+  on: z.boolean(),
+  /** Held replies he has put in front of the owner (bubble or banner): the page drops them from `held`. */
+  shown: z.array(CompanionHeld).max(COMPANION_ROWS_MAX).optional(),
+  /** Which "on" this is. The page echoes it in `companion_state.replies_epoch`, so a frame sent before the page heard an off cannot be mistaken for a new one. */
+  epoch: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+})
 
 /**
  * What macOS says about this app's notification permission, so Settings can tell the truth instead of "not supported".
@@ -212,13 +252,78 @@ export const NativeCompanionReplyRequest = msg('companion_reply_request', { req:
  */
 export const NativeNotifyPermission = msg('notify_permission', { state: z.enum(['granted', 'denied', 'not_asked']) })
 
+// ---- the Terminal screen's session tabs ----
+export const TERMINAL_SESSIONS_MAX = 101
+export const TERMINAL_SESSION_STATES = [
+  'live',
+  'working',
+  'idle',
+  'starting',
+  'parked',
+  'stopping',
+  'failed',
+  'needs_you',
+  'not_started',
+  'unknown',
+] as const
+/** What the area under the tabs shows: the raw terminal, a Resume/Start panel, the error, or a plain note. */
+export const TERMINAL_PANELS = ['terminal', 'resume', 'error', 'note'] as const
+export const TerminalSessionItem = z.object({
+  id: TerminalSessionId,
+  name: z.string().min(1).max(80),
+  /** A state this page does not know reads as "unknown": that tab degrades, the list stays. */
+  state: z.enum(TERMINAL_SESSION_STATES).catch('unknown'),
+  /** The digit of the Ctrl+digit shortcut that switches to this tab, or null past the ninth. */
+  key: z
+    .string()
+    .regex(/^[1-9]$/)
+    .nullable()
+    .catch(null),
+  panel: z.enum(TERMINAL_PANELS).catch('note'),
+  /** The button on a "resume" panel. */
+  action: z.enum(['resume', 'start']).nullable().catch(null),
+  /** One plain sentence: why it stopped, what it waits on, the error. */
+  detail: z.string().max(600).catch(''),
+})
+export type TerminalSessionItemT = z.infer<typeof TerminalSessionItem>
+/**
+ * Every session the Terminal screen can show a tab for, pushed when the list changes. One item that cannot be read (a bad id,
+ * a missing name) is dropped and the rest stay; an unknown state or panel degrades that one tab. Fields a newer shell adds are
+ * ignored, not refused: the list is for display and nothing it carries leaves the page.
+ */
+export const NativeTerminalSessions = z.object({
+  type: z.literal('terminal_sessions'),
+  items: z
+    .array(z.unknown())
+    .max(TERMINAL_SESSIONS_MAX)
+    .transform((raw) =>
+      raw.flatMap((r) => {
+        const p = TerminalSessionItem.safeParse(r)
+        return p.success ? [p.data] : []
+      }),
+    ),
+})
+/** What the shell said to the last Resume/Start press (its `requestResume` outcomes). */
+export const TERMINAL_RESUME_OUTCOMES = ['asked', 'already_pending', 'park_pending', 'failed'] as const
+export const NativeTerminalResumeResult = msg('terminal_resume_result', {
+  thread_id: ThreadId,
+  outcome: z.enum(TERMINAL_RESUME_OUTCOMES),
+})
+
+/** The owner pressed Ctrl+1 to Ctrl+9 with the Mac's terminal holding the keyboard: the shell switched the tab and says which. */
+export const NativeTerminalSelect = msg('terminal_select', { session: TerminalSessionId })
+
 export const NATIVE_TO_WEB = {
   navigate: NativeNavigate,
   compose: NativeCompose,
   voice_note: NativeVoiceNote,
   enroll_code: NativeEnrollCode,
   companion_reply_request: NativeCompanionReplyRequest,
+  companion_replies: NativeCompanionReplies,
   notify_permission: NativeNotifyPermission,
+  terminal_sessions: NativeTerminalSessions,
+  terminal_resume_result: NativeTerminalResumeResult,
+  terminal_select: NativeTerminalSelect,
 } as const
 export const NativeToWeb = z.discriminatedUnion('type', [
   NativeNavigate,
@@ -226,7 +331,11 @@ export const NativeToWeb = z.discriminatedUnion('type', [
   NativeVoiceNote,
   NativeEnrollCode,
   NativeCompanionReplyRequest,
+  NativeCompanionReplies,
   NativeNotifyPermission,
+  NativeTerminalSessions,
+  NativeTerminalResumeResult,
+  NativeTerminalSelect,
 ])
 export type NativeToWebT = z.infer<typeof NativeToWeb>
 

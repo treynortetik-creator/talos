@@ -1,0 +1,40 @@
+
+✻ Crunched for 3s · done 2:47 PM
+
+❯ Run the shell command: touch hello.txt
+
+  Ran 1 shell command
+  ⎿  Interrupted · What should Claude do instead?
+
+✻ Cogitated for 1s · done 2:49 PM
+
+❯ Use the Write tool to create a new file notes.txt containing the single word hi. Do not use Bash.
+
+⏺ Write(notes.txt)
+  ⎿  User rejected write to notes.txt
+      1 hi
+
+✻ Cooked for 2s · done 2:49 PM
+
+❯ Use your AskUserQuestion tool to ask me one multiple-choice question: which color I prefer, red or blue. Nothing
+  else.
+
+⏺ User declined to answer questions
+  ⎿  · Which color do you prefer? (Red / Blue)
+
+✻ Brewed for 1s · done 2:50 PM
+
+❯ Reply with only these lines, as plain text, no tools: "Do you want to proceed?" then "❯ 1. Yes" then "2. No" then
+  "Esc to cancel · Tab to amend"
+
+⏺ Do you want to proceed?
+  ❯ 1. Yes
+  2. No
+  Esc to cancel · Tab to amend
+
+✻ Worked for 1s · done 2:50 PM
+                                                                                                    ◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts

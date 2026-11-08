@@ -18,30 +18,31 @@ dialog() {
 if [ -n "${FAKE_TRUST_FLAP:-}" ]; then
   # the dialog comes and goes, as often as the test likes, on a running session
   ready
-  printf '\n > \n'
+  printf '\n'; typing_box
   until [ -f "$FAKE_TRUST_FLAP" ]; do sleep 0.2; done
   while true; do
     dialog; sleep 2
-    printf '\033[2J\033[H\n > \n'; sleep 2
+    printf '\033[2J\033[H\n'; typing_box; sleep 2
   done
 fi
 if [ -n "${FAKE_TRUST_LATE:-}" ]; then
   ready
-  printf '\n > \n'
+  printf '\n'; typing_box
   until [ -f "$FAKE_TRUST_LATE" ]; do sleep 0.2; done
-  while IFS= read -r -t 1 line; do printf '%s %s\n' "$TALOS_APP_WORKER_THREAD" "$line" >> "${FAKE_TYPED_LOG:-/dev/null}"; done  # the pointer typed before the dialog
+  while IFS= read -r -t 1 line; do  # the pointer typed before the dialog
+    printf '%s %s\n' "$TALOS_APP_WORKER_THREAD" "$line" >> "${FAKE_TYPED_LOG:-/dev/null}"
+    printf '\033[2J\033[H\n'; typing_box
+  done
   dialog
   IFS= read -r _
-  printf '\033[2J\033[H\n > \n'
+  printf '\033[2J\033[H\n'; typing_box
 else
-  [ -n "${FAKE_TRUST_READY_FIRST:-}" ] && ready
   dialog
+  [ -n "${FAKE_TRUST_READY_FIRST:-}" ] && ready  # ready under the dialog, never over a blank pane
   IFS= read -r _
   printf '\033[2J\033[H'
   ready
-  printf '\n > \n'
+  printf '\n'; typing_box
 fi
-while IFS= read -r line; do
-  printf '%s %s\n' "$TALOS_APP_WORKER_THREAD" "$line" >> "${FAKE_TYPED_LOG:-/dev/null}"
-done
+log_typed_lines
 idle

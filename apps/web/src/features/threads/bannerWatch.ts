@@ -21,12 +21,14 @@ export function watchForBanner(
   onScreenThread: (s: ClientState) => string | null,
   show: (b: Banner) => void,
   now: () => number = Date.now,
+  /** The Mac companion may take a reply (true): the page holds it for him and shows no banner; false shows it as always. */
+  hold: (b: Banner) => boolean = () => false,
 ): () => void {
   const fired = new Set<string>()
   let prevUnread: Record<string, number> = { ...store.getState().unread }
   return store.subscribe(() => {
     const s = store.getState()
-    let last: Banner | undefined
+    const found: Banner[] = []
     for (const [tid, n] of Object.entries(s.unread)) {
       if (n <= (ownValue(prevUnread, tid) ?? 0)) continue
       const t = s.threads.find((x) => x.id === tid)
@@ -37,14 +39,16 @@ export function watchForBanner(
       if (!m || fired.has(m.id)) continue
       if (now() - Date.parse(m.created_at) > FRESH_REPLY_MS) continue
       fired.add(m.id)
-      last = {
+      found.push({
         key: m.id,
         threadId: tid,
         name: t.name,
         snippet: (m.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 90) || 'New reply',
-      }
+      })
     }
     prevUnread = { ...s.unread }
+    // One banner for the burst, the newest, as always; a reply the companion takes is held for him instead.
+    const last = found.filter((b) => !hold(b)).at(-1)
     if (last) show(last)
   })
 }

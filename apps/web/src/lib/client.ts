@@ -102,6 +102,8 @@ export type CardResolveInput = {
   editedHash?: string
   /** Revise note. */
   note?: string
+  /** Which button of a dialog card, as its index in the card's options. */
+  choice?: number
   /** From `stepup()` for risk:'high' cards. */
   stepupToken?: string
 }

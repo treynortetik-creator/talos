@@ -65,6 +65,8 @@ const Running = z.object({
   command: z.string().min(1).max(2000),
   /** The start time `ps` showed for it: a reused pid has another one. */
   lstart: z.string().min(1).max(64).optional(),
+  /** The bridge process that started it. A record whose bridge is still alive is not a crash's leftover (orphans.ts). */
+  bridge_pid: z.number().int().min(2).max(4_194_304).optional(),
   at: IsoTs,
 })
 export type Running = z.infer<typeof Running>
@@ -81,8 +83,10 @@ export type HeartbeatStore = {
   wake: Wake | null
   /** Source processes running now, by source id. Cleared as each ends; a bridge start kills what a crash left (orphans.ts). */
   running: Record<string, Running>
-  /** When this heartbeat last completed a live run. A gap here (not a source's own silence) longer than the job's limit (cold.ts) skips the backlog. */
+  /** When this heartbeat last completed a live run (even one where every source failed). A gap here longer than the job's limit (cold.ts) skips the backlog. */
   last_run: string | null
+  /** A cold run in which no source answered skipped nothing: when that off period began (the old `last_run`), so the next run is still cold. Cleared by the first run a source answers. */
+  cold_since: string | null
   /** "Install talos-app-mod" has been said and the agent has not been available since, so it is not said again. */
   triage_said: boolean
   /** Slots in a row where the mod had not reported (unknown): a few are waited out, then the items become lines. */
@@ -101,6 +105,7 @@ export const emptyStore = (): HeartbeatStore => ({
   wake: null,
   running: {},
   last_run: null,
+  cold_since: null,
   triage_said: false,
   triage_unknown: 0,
   thread_said: false,
@@ -158,6 +163,8 @@ export function loadStore(path: string, setAside = true): LoadedStore {
     }
   const lr = IsoTs.safeParse(r.last_run)
   if (lr.success) store.last_run = lr.data
+  const cs = IsoTs.safeParse(r.cold_since)
+  if (cs.success) store.cold_since = cs.data
   if (r.triage_said === true) store.triage_said = true
   if (r.thread_said === true) store.thread_said = true
   if (typeof r.triage_unknown === 'number' && Number.isInteger(r.triage_unknown) && r.triage_unknown >= 0)

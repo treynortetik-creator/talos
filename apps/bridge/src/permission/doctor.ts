@@ -64,6 +64,28 @@ export function ancestorCommandLines(startPid = process.ppid): string[] {
   return out
 }
 
+/**
+ * Pids of this process's ancestors, nearest first (the bridge runs under `bun run start`, under a shell, under `claude`, so the
+ * launching Claude Code is among them but is not the parent). Its own PermissionRequest hook names that pid; a hook from any
+ * other Claude Code session is not among them. [] when `ps` fails.
+ */
+export function ancestorPids(startPid = process.ppid, maxHops = 8): number[] {
+  const out: number[] = []
+  let pid = startPid
+  for (let i = 0; i < maxHops && pid > 1; i++) {
+    out.push(pid)
+    try {
+      const r = spawnSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8', timeout: 3000 })
+      const next = Number((r.stdout ?? '').trim())
+      if (r.status !== 0 || !Number.isInteger(next)) break
+      pid = next
+    } catch {
+      break
+    }
+  }
+  return out
+}
+
 /** Other channels (not Talos) the launching `claude` loaded. They may answer a permission prompt too. */
 export function otherChannelsFromLines(lines: string[], self = 'talos-app'): string[] {
   const names = new Set<string>()

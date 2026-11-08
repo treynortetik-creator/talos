@@ -4,8 +4,6 @@ import { pollRss } from './poll.ts'
 import { rssSetup } from './setup.ts'
 import { verifyRss } from './verify.ts'
 
-export { assertPublicFeedUrl } from './poll.ts'
-
 export const integration: IntegrationModule = {
   id: 'rss',
   setup: rssSetup,

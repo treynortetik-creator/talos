@@ -1,4 +1,5 @@
 import Foundation
+import SwiftTerm
 import TalosDesktopCore
 import TalosSupervisor
 
@@ -61,6 +62,8 @@ final class Rig: @unchecked Sendable {
   let clock = JumpClock()
   /// How many times the restore child or a phone post was handed to `Options.background`.
   let backgroundRuns = RunCounter()
+  /// Every `claude agents --json` call the current supervisor's probe made (see `RecordingProbe`).
+  private(set) var agentsProbe: RecordingProbe!
   /// A wrapper to use instead of the real tmux binary (a fault or counting shim). Takes effect at the next `makeSupervisor()`.
   var tmuxBin: String?
   private(set) var host: PtyHost!
@@ -145,7 +148,8 @@ final class Rig: @unchecked Sendable {
   @discardableResult
   func makeSupervisor() -> Supervisor {
     let env = loginEnv
-    let probe = LiveSystem(loginEnv: { env })
+    let probe = RecordingProbe(LiveSystem(loginEnv: { env }))
+    agentsProbe = probe
     let h: PtyHost
     switch kind {
     case .tmux:
@@ -171,6 +175,9 @@ final class Rig: @unchecked Sendable {
     sup = s
     return s
   }
+
+  /// `agentsProbe.summary` for this supervisor's current child, worked out here on the test's thread.
+  var agentsSummary: String { agentsProbe.summary(ourPid: sup.status.childPid) }
 
   var allEvents: [Supervisor.Event] { lock.withLock { events } }
 
@@ -211,12 +218,8 @@ final class Rig: @unchecked Sendable {
   }
 
   var config: DesktopConfig { (try? ConfigFile.load(configPath)) ?? nil ?? .defaults }
-  var starts: [String] {
-    ((try? String(contentsOfFile: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
-  }
-  var posts: [String] {
-    ((try? String(contentsOfFile: postLog, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
-  }
+  var starts: [String] { completeLines(log) }
+  var posts: [String] { completeLines(postLog) }
   /// Every message to the owner's phone (`talos-app post`); the restore the loop brings is recorded in the same log.
   var phonePosts: [String] { posts.filter { $0.hasPrefix("post ") } }
   /// The crash-loop message to the owner's phone.
@@ -225,6 +228,29 @@ final class Rig: @unchecked Sendable {
     ((try? String(contentsOfFile: holderLog, encoding: .utf8)) ?? "").split(separator: "\n").compactMap { Int32($0) }
   }
   var audit: String { (try? String(contentsOfFile: auditPath, encoding: .utf8)) ?? "" }
+  /// Every start that ended on its own, as audited. Three shapes: a child that ran and exited audits `exit pid=…` (an exit during
+  /// a Stop logs `exit` too, and the cap does not see it); a restart whose child died before its pid could be read audits
+  /// `restart_failed` and no `exit`; and the restore's cold start dying before its pid is a `start_failed` after `restore_start`.
+  /// The cap itself counts restarts, one fewer than the crashes that led to a stop. Counting `exit` lines alone falls short on a
+  /// loaded runner while the loop still stops.
+  var crashes: Int {
+    let n = { (s: String, e: String) in s.components(separatedBy: e).count - 1 }
+    return n(audit, " exit ") + n(audit, " restart_failed") + n(auditAfterRestore, " start_failed")
+  }
+  /// The audit from the automatic restore on: a `start_failed` here is the restore's cold start, not an unrelated failed start.
+  private var auditAfterRestore: String {
+    audit.range(of: " restore_start").map { String(audit[$0.upperBound...]) } ?? ""
+  }
+  /// The loop has stopped the agent for good: `.crashLoop`, or `.startFailed` when the restore's cold start died before its pid
+  /// could be read (the start path has no crash count of its own; it stops the same way, with the same buttons, and nothing loops).
+  /// A `start_failed` with no `restore_start` before it is a first start that never ran, not a loop, and is not accepted.
+  var loopStopped: Bool {
+    switch stopReason(phase()) {
+    case .crashLoop?: return true
+    case .startFailed?: return auditAfterRestore.contains(" start_failed")
+    default: return false
+    }
+  }
 
   func phase() -> Supervisor.Phase { sup.status.phase }
 
@@ -300,9 +326,101 @@ final class Rig: @unchecked Sendable {
   }
 }
 
+/// LiveSystem that notes each `claude agents --json` call: when it began (seconds since this probe was made), how long the
+/// subprocess ran and what came back. A red wait on `.stuck` prints `summary`, so the failure says which it was: no call at all
+/// although the supervisor was ticked (the hop to a pool thread never ran), a call that took long (a slow subprocess), or `nil`
+/// answers (unreadable, which counts neither way). Only the raw answer is kept on the poll's thread; whether our pid is in it is
+/// worked out in `summary`, on the caller's.
+final class RecordingProbe: SystemProbe, @unchecked Sendable {
+  private let base: LiveSystem
+  private let t0 = ProcessInfo.processInfo.systemUptime
+  private let lock = NSLock()
+  private var calls: [(at: Double, took: Double?, entries: [AgentEntry]?)] = []
+  private var _answer: (@Sendable () -> [AgentEntry]?)?
+  /// Replaces the subprocess with this answer, for a test that is about the hop to the poll and not about `claude agents`.
+  var answer: (@Sendable () -> [AgentEntry]?)? {
+    get { lock.withLock { _answer } }
+    set { lock.withLock { _answer = newValue } }
+  }
+
+  init(_ base: LiveSystem) { self.base = base }
+
+  private var now: Double { ProcessInfo.processInfo.systemUptime - t0 }
+
+  func agents(claude: String, env: [String: String]) -> [AgentEntry]? {
+    let began = now
+    let i = lock.withLock { () -> Int in calls.append((began, nil, nil)); return calls.count - 1 }
+    let out = answer.map { $0() } ?? base.agents(claude: claude, env: env)
+    lock.withLock { calls[i].took = now - began; calls[i].entries = out }
+    return out
+  }
+
+  /// The last six calls, newest last, and the time now: `+start duration result` (`listed`: `ourPid` is in the answer, `absent`: it
+  /// is not, `nil`: unreadable), or `+start running` for one not back yet.
+  func summary(ourPid: Int32?) -> String {
+    let (all, at) = (lock.withLock { calls }, now)
+    let last = all.suffix(6).map { c -> String in
+      guard let took = c.took else { return String(format: "+%.1fs running", c.at) }
+      let result = c.entries.map { e in ourPid.flatMap { AgentsList.interactive(e, pid: $0) } == nil ? "absent" : "listed" } ?? "nil"
+      return String(format: "+%.1fs %.2fs %@", c.at, took, result)
+    }
+    return String(format: "agents calls %d (now +%.1fs): ", all.count, at) + (last.isEmpty ? "none" : last.joined(separator: ", "))
+  }
+
+  func snapshot(_ pid: Int32) -> ProcessSnapshot? { base.snapshot(pid) }
+  func psInfo(_ pid: Int32) -> PsInfo? { base.psInfo(pid) }
+  func readFile(_ path: String) -> Data? { base.readFile(path) }
+  func modifiedAt(_ path: String) -> Double? { base.modifiedAt(path) }
+  func isExecutable(_ path: String) -> Bool { base.isExecutable(path) }
+  func cliVersion(claude: String, env: [String: String]) -> String? { base.cliVersion(claude: claude, env: env) }
+  func loginShellEnv() -> [String: String]? { base.loginShellEnv() }
+  func post(command: [String], thread: String, text: String, env: [String: String]) -> Bool {
+    base.post(command: command, thread: thread, text: text, env: env)
+  }
+  func postOutcome(command: [String], thread: String, text: String, env: [String: String]) -> PostOutcome {
+    base.postOutcome(command: command, thread: thread, text: text, env: env)
+  }
+}
+
 final class RunCounter: @unchecked Sendable {
   private let lock = NSLock()
   private var n = 0
   var count: Int { lock.withLock { n } }
   func increment() { lock.withLock { n += 1 } }
+}
+
+/// The finished lines of a log a fake appends to. bash 3.2's printf writes a line over 1024 bytes in two writes, so a reader
+/// can catch the first 1024 bytes of a line with no newline yet; that half line is not a line. (A worker start line is about
+/// 1,330 bytes with `--resume <sid>` at its end: counting the half line once made a resume look like a fresh start.)
+func completeLines(_ path: String) -> [String] {
+  let s = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+  guard let end = s.lastIndex(of: "\n") else { return [] }
+  return s[...end].split(separator: "\n").map(String.init)
+}
+
+extension LocalProcess {
+  /// What the owner types into a viewer, written straight to the viewer's pty. `send(data:)` goes through a DispatchIO at default
+  /// QoS, and in a full run the @Tests that block in `usleep` hold every cooperative thread (OBSERVED, 2026-11-07: the viewer's
+  /// Enter reached the pty 22 to 24 s after the test sent it, two runs in a row; see
+  /// `anEnterGetsThroughWhileTheDispatchPoolIsStarved` for how the pool is held). The viewer tests are about what tmux does with
+  /// the bytes, not about how SwiftTerm queues them, so they must not wait on that queue. The descriptor is non-blocking, so a
+  /// full pty buffer (`EAGAIN`) is retried, bounded. False when the process is gone or the bytes did not all go in.
+  @discardableResult
+  func typeDirectly(_ data: ArraySlice<UInt8>) -> Bool {
+    let fd = childfd
+    guard fd >= 0 else { return false }
+    var rest = data[...]
+    let until = Date().addingTimeInterval(5)
+    while !rest.isEmpty {
+      let n = rest.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+      if n > 0 {
+        rest = rest.dropFirst(n)
+      } else if n < 0, errno == EAGAIN || errno == EINTR, Date() < until {
+        usleep(10_000)
+      } else {
+        return false
+      }
+    }
+    return true
+  }
 }

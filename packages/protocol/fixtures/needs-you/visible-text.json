@@ -1,0 +1,115 @@
+{
+  "v": 1,
+  "cases": [
+    {
+      "name": "plain text is left alone",
+      "input": "Yes, I trust this folder",
+      "expected": "Yes, I trust this folder"
+    },
+    {
+      "name": "letters, CJK and an emoji are left alone",
+      "input": "caf\u00e9 \u65e5\u672c\u8a9e \ud83d\ude00 ls -la",
+      "expected": "caf\u00e9 \u65e5\u672c\u8a9e \ud83d\ude00 ls -la"
+    },
+    {
+      "name": "zero-width space",
+      "input": "a\u200bb",
+      "expected": "a\u27e6U+200B\u27e7b"
+    },
+    {
+      "name": "right-to-left override",
+      "input": "a\u202eb",
+      "expected": "a\u27e6U+202E\u27e7b"
+    },
+    {
+      "name": "arabic letter mark",
+      "input": "a\u061cb",
+      "expected": "a\u27e6U+061C\u27e7b"
+    },
+    {
+      "name": "soft hyphen and byte order mark",
+      "input": "a\u00adb\ufeff",
+      "expected": "a\u27e6U+00AD\u27e7b\u27e6U+FEFF\u27e7"
+    },
+    {
+      "name": "escape",
+      "input": "a\u001b[2Kb",
+      "expected": "a\u27e6U+001B\u27e7[2Kb"
+    },
+    {
+      "name": "a line break and a tab",
+      "input": "l\none\t",
+      "expected": "l\u27e6U+000A\u27e7one\u27e6U+0009\u27e7"
+    },
+    {
+      "name": "a C1 control",
+      "input": "a\u0085b",
+      "expected": "a\u27e6U+0085\u27e7b"
+    },
+    {
+      "name": "line and paragraph separators",
+      "input": "a\u2028b\u2029",
+      "expected": "a\u27e6U+2028\u27e7b\u27e6U+2029\u27e7"
+    },
+    {
+      "name": "a tag character",
+      "input": "a\udb40\udc41b",
+      "expected": "a\u27e6U+E0041\u27e7b"
+    },
+    {
+      "name": "hangul filler and braille blank",
+      "input": "a\u3164b\u2800",
+      "expected": "a\u27e6U+3164\u27e7b\u27e6U+2800\u27e7"
+    },
+    {
+      "name": "a variation selector",
+      "input": "a\ufe0f",
+      "expected": "a\u27e6U+FE0F\u27e7"
+    },
+    {
+      "name": "a joiner inside an emoji is shown too",
+      "input": "\ud83d\udc69\u200d\ud83d\udcbb",
+      "expected": "\ud83d\udc69\u27e6U+200D\u27e7\ud83d\udcbb"
+    },
+    {
+      "name": "private use",
+      "input": "a\ue000b",
+      "expected": "a\u27e6U+E000\u27e7b"
+    },
+    {
+      "name": "unassigned",
+      "input": "a\u0378b",
+      "expected": "a\u27e6U+0378\u27e7b"
+    },
+    {
+      "name": "object replacement character",
+      "input": "a\ufffcb",
+      "expected": "a\u27e6U+FFFC\u27e7b"
+    },
+    {
+      "name": "a format character outside the listed ranges",
+      "input": "a\ud804\udcbdb",
+      "expected": "a\u27e6U+110BD\u27e7b"
+    },
+    {
+      "name": "the marker brackets are marked too",
+      "input": "\u27e6U+0041\u27e7",
+      "expected": "\u27e6U+27E6\u27e7U+0041\u27e6U+27E7\u27e7"
+    },
+    {
+      "name": "three combining marks are left alone",
+      "input": "e\u0301\u0301\u0301",
+      "expected": "e\u0301\u0301\u0301"
+    },
+    {
+      "name": "four combining marks in a row are all shown",
+      "input": "e\u0301\u0301\u0301\u0301",
+      "expected": "e\u27e6U+0301\u27e7\u27e6U+0301\u27e7\u27e6U+0301\u27e7\u27e6U+0301\u27e7"
+    },
+    {
+      "name": "a no-break space is an ordinary space on every card but a permission card",
+      "input": "a\u00a0b",
+      "expected": "a\u00a0b"
+    }
+  ]
+}

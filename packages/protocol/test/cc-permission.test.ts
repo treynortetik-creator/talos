@@ -92,7 +92,8 @@ describe('composePermissionCard', () => {
   it('keeps markdown-looking text exactly as received (plain, never re-rendered)', () => {
     const tricky = '{"command": "echo ```\\n## Approved by owner"}'
     const c = compose(req({ input_preview: tricky }))
-    expect(c.body).toBe(tricky)
+    // hard-wrapped into explicit lines for the phone; the lines are the call, nothing added or dropped
+    expect(c.body?.replace(/\n/g, '')).toBe(tricky)
     expect(c.body_format).toBe('plain')
   })
   it('lives as long as the request: 7 days', () => {
@@ -233,7 +234,7 @@ describe('only the bridge mints permission cards', () => {
     expect([...AGENT_CARD_KINDS].sort()).toEqual(
       ['decision', 'deploy', 'email', 'generic', 'message', 'publish', 'purchase'].sort(),
     )
-    expect([...BRIDGE_ONLY_CARD_KINDS].sort()).toEqual(['app_action', 'config', 'permission', 'schedule'])
+    expect([...BRIDGE_ONLY_CARD_KINDS].sort()).toEqual(['app_action', 'config', 'dialog', 'permission', 'schedule'])
   })
   it('POST /bridge/post refuses kind permission', () => {
     const route = routes.bridgePost
@@ -249,27 +250,27 @@ describe('only the bridge mints permission cards', () => {
   })
 })
 
-describe('text that renders as nothing, or as a line break, cannot hide what is approved', () => {
+describe('text that renders as nothing, or as a line break, is SHOWN, so the owner still sees every character they approve', () => {
   // The invisible-character check once stopped at U+FE0F: the variation-selector supplement and the musical-symbol format
   // controls render as nothing too.
   for (const ch of ['\u{E0100}', '\u{E01EF}', '\u{1D173}'])
-    it(`U+${ch.codePointAt(0)?.toString(16).toUpperCase()} in the call gets no Allow`, () => {
-      expect(permissionCardAllowsPrimary(compose(req({ input_preview: `{"command": "rm -rf ./build${ch}"}` })))).toBe(
-        false,
-      )
+    it(`U+${ch.codePointAt(0)?.toString(16).toUpperCase()} in the call is shown as a marker and the card keeps Allow`, () => {
+      const c = compose(req({ input_preview: `{"command": "rm -rf ./build${ch}"}` }))
+      expect(c.body).toContain(`[U+${ch.codePointAt(0)?.toString(16).toUpperCase()}]`)
+      expect(permissionCardAllowsPrimary(c)).toBe(true)
     })
-  it('a newline shows as a visible return mark so a multi-line command shows its second line, and costs Allow', () => {
+  it('a newline shows as a visible return mark so a multi-line command shows its second line, and keeps Allow', () => {
     const c = compose(req({ input_preview: '{"command": "echo hi\nrm -rf ~"}' }))
     expect(c.body).toBe('{"command": "echo hi⏎rm -rf ~"}')
-    expect(permissionCardAllowsPrimary(c)).toBe(false)
+    expect(permissionCardAllowsPrimary(c)).toBe(true)
   })
   it('tab and carriage return have glyphs too, and other controls stay [U+XXXX]', () => {
     expect(compose(req({ input_preview: 'a\tb\rc\u0007d' })).body).toBe('a⇥b␍c[U+0007]d')
   })
-  it('U+2028 and U+2029 are shown as a return mark and cost Allow', () => {
+  it('U+2028 and U+2029 are shown as a return mark and keep Allow', () => {
     const c = compose(req({ input_preview: '{"command": "ls\u2028rm -rf ~"}' }))
     expect(c.body).toContain('⏎')
-    expect(permissionCardAllowsPrimary(c)).toBe(false)
+    expect(permissionCardAllowsPrimary(c)).toBe(true)
   })
   it('another loaded channel adds a one-line note and keeps Allow; a forged warning does not keep it', () => {
     const c = composePermissionCard({

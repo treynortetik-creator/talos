@@ -54,7 +54,14 @@ public enum CompanionPhrase {
         lastSpace = false
       }
     }
-    let t = String(String(out).prefix(40)).trimmingCharacters(in: .whitespaces)
+    // At most 40 UTF-16 units, cut on a grapheme boundary: a flood of combining marks or a long emoji family counts by what it
+    // costs in `NotificationPolicy.isPushPhrase`, not as one character.
+    var cut = ""
+    for ch in String(out) {
+      if cut.utf16.count + String(ch).utf16.count > 40 { break }
+      cut.append(ch)
+    }
+    let t = cut.trimmingCharacters(in: .whitespaces)
     return t.isEmpty ? "Talos" : t
   }
 

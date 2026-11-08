@@ -12,10 +12,18 @@ const WORDS: Record<ThreadStatusT['state'], { word: string; shape: DotShape; ton
 
 /** The mark, word and tone for a status, for places that show only the dot. */
 export const statusMark = (s?: ThreadStatusT['state']) => WORDS[s ?? 'idle']
-export const statusWord = (s?: ThreadStatusT['state']) => WORDS[s ?? 'idle'].word
 
 /** Status word paired with a drawn mark and a color (never color alone, 8.1). */
-export function StatusWord({ state, className }: { state?: ThreadStatusT['state']; className?: string }) {
+export function StatusWord({
+  state,
+  className,
+  pill,
+}: {
+  state?: ThreadStatusT['state']
+  className?: string
+  /** Drawn as a small outlined pill: the chat header's status, beside the title. */
+  pill?: boolean
+}) {
   const w = WORDS[state ?? 'idle']
   return (
     <span
@@ -23,6 +31,7 @@ export function StatusWord({ state, className }: { state?: ThreadStatusT['state'
       className={cn(
         'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs font-semibold uppercase tracking-[var(--tracking-caps)]',
         w.tone,
+        pill && 'rounded-pill border border-line px-2.5 py-0.5',
         className,
       )}
     >

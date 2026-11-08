@@ -57,18 +57,18 @@ printf 'api = "%s"\nowner = %s\nroot = %s\n' "$KEY" "$MAIL" "$HP" > "$DIRTY/conf
 
 # ---- account gate
 out=$(FAKE_GH_LOGIN=dana-ruiz bash "$GP" account 2>&1); rc=$?
-{ [ $rc -ne 0 ] && echo "$out" | grep -qi "no GitHub account is configured"; } && ok "refuses when no account is configured (and says how to set one)" || no "no-config case" "rc=$rc $out"
+{ [ $rc -ne 0 ] && <<<"$out" grep -qi "no GitHub account is configured"; } && ok "refuses when no account is configured (and says how to set one)" || no "no-config case" "rc=$rc $out"
 grep -q 'api user' "$SB/gh.calls" && no "gh was queried although no account is configured" || ok "does not even ask gh when nothing is configured"
 
 out=$(FAKE_GH_LOGIN=dana-ruiz bash "$GP" --account acme-bot account 2>&1); rc=$?
-{ [ $rc -ne 0 ] && echo "$out" | grep -q "MISMATCH" && echo "$out" | grep -q "will not switch"; } && ok "refuses on mismatch (flag)" || no "mismatch via --account" "rc=$rc $out"
+{ [ $rc -ne 0 ] && <<<"$out" grep -q "MISMATCH" && <<<"$out" grep -q "will not switch"; } && ok "refuses on mismatch (flag)" || no "mismatch via --account" "rc=$rc $out"
 out=$(TALOS_GITHUB_ACCOUNT=acme-bot FAKE_GH_LOGIN=dana-ruiz bash "$GP" account 2>&1); rc=$?
-{ [ $rc -ne 0 ] && echo "$out" | grep -q "MISMATCH"; } && ok "refuses on mismatch (env var)" || no "mismatch via env" "rc=$rc $out"
+{ [ $rc -ne 0 ] && <<<"$out" grep -q "MISMATCH"; } && ok "refuses on mismatch (env var)" || no "mismatch via env" "rc=$rc $out"
 mkdir -p "$XDG_CONFIG_HOME/talos"; echo "acme-bot" > "$XDG_CONFIG_HOME/talos/github-account"
 out=$(FAKE_GH_LOGIN=dana-ruiz bash "$GP" account 2>&1); rc=$?
-{ [ $rc -ne 0 ] && echo "$out" | grep -q "MISMATCH"; } && ok "refuses on mismatch (config file)" || no "mismatch via file" "rc=$rc $out"
+{ [ $rc -ne 0 ] && <<<"$out" grep -q "MISMATCH"; } && ok "refuses on mismatch (config file)" || no "mismatch via file" "rc=$rc $out"
 out=$(FAKE_GH_LOGIN=Acme-Bot bash "$GP" account 2>&1); rc=$?
-{ [ $rc -eq 0 ] && echo "$out" | grep -q "^OK"; } && ok "matches (case-insensitive) when the config agrees" || no "match case" "rc=$rc $out"
+{ [ $rc -eq 0 ] && <<<"$out" grep -q "^OK"; } && ok "matches (case-insensitive) when the config agrees" || no "match case" "rc=$rc $out"
 out=$(bash "$GP" account 2>&1); rc=$?
 [ $rc -ne 0 ] && ok "refuses when gh cannot report a login" || no "gh failure should refuse" "$out"
 grep -Eq 'auth (switch|login)' "$SB/gh.calls" && no "script tried to change the gh account" || ok "never switches or logs in to a gh account"
@@ -76,22 +76,22 @@ grep -Eq 'auth (switch|login)' "$SB/gh.calls" && no "script tried to change the 
 # ---- scan
 out=$(bash "$GP" scan "$DIRTY" 2>&1); rc=$?
 [ $rc -ne 0 ] && ok "scan exits non-zero on a planted key/email/path" || no "scan should fail on the dirty repo" "$out"
-echo "$out" | grep -q "config.py:1  an sk- API key" && ok "scan finds the planted key at file:line" || no "key not found" "$out"
-echo "$out" | grep -q "config.py:2  an email address" && ok "scan finds the planted email" || no "email not found" "$out"
-echo "$out" | grep -q "config.py:3  an absolute home-folder path" && ok "scan finds the planted home path" || no "path not found" "$out"
-echo "$out" | grep -q "\[history\]" && ok "scan also covers history" || no "no history hit" "$out"
-echo "$out" | grep -Fq -e "$KEY" -e "$MAIL" -e "danaruiz" && no "scan printed a secret value" || ok "scan never prints the value"
+<<<"$out" grep -q "config.py:1  an sk- API key" && ok "scan finds the planted key at file:line" || no "key not found" "$out"
+<<<"$out" grep -q "config.py:2  an email address" && ok "scan finds the planted email" || no "email not found" "$out"
+<<<"$out" grep -q "config.py:3  an absolute home-folder path" && ok "scan finds the planted home path" || no "path not found" "$out"
+<<<"$out" grep -q "\[history\]" && ok "scan also covers history" || no "no history hit" "$out"
+<<<"$out" grep -Fq -e "$KEY" -e "$MAIL" -e "danaruiz" && no "scan printed a secret value" || ok "scan never prints the value"
 
 out=$(bash "$GP" scan "$CLEAN" 2>&1); rc=$?
-{ [ $rc -eq 0 ] && echo "$out" | grep -q "no automated findings"; } && ok "scan passes a clean repo" || no "clean repo failed" "$out"
+{ [ $rc -eq 0 ] && <<<"$out" grep -q "no automated findings"; } && ok "scan passes a clean repo" || no "clean repo failed" "$out"
 
 DL="$SB/denylist.txt"; echo "springfield-secret" > "$DL"; echo "see springfield-secret office" > "$CLEAN/notes.txt"
 ( cd "$CLEAN" && "$REALGIT" add -A && "$REALGIT" commit -q -m notes )
 out=$(TALOS_PRIVACY_DENYLIST="$DL" bash "$GP" scan "$CLEAN" 2>&1); rc=$?
-{ [ $rc -ne 0 ] && echo "$out" | grep -q "denylist term (entry #1)"; } && ok "the private denylist is applied" || no "denylist ignored" "$out"
-echo "$out" | grep -q "springfield-secret" && no "denylist term echoed" || ok "denylist terms are not echoed"
+{ [ $rc -ne 0 ] && <<<"$out" grep -q "denylist term (entry #1)"; } && ok "the private denylist is applied" || no "denylist ignored" "$out"
+<<<"$out" grep -q "springfield-secret" && no "denylist term echoed" || ok "denylist terms are not echoed"
 cp "$DL" "$CLEAN/dl.txt"; out=$(TALOS_PRIVACY_DENYLIST="$CLEAN/dl.txt" bash "$GP" scan "$CLEAN" 2>&1); rc=$?
-{ [ $rc -ne 0 ] && echo "$out" | grep -q "INSIDE the repo"; } && ok "refuses a denylist inside the repo" || no "inside-repo denylist accepted" "$out"
+{ [ $rc -ne 0 ] && <<<"$out" grep -q "INSIDE the repo"; } && ok "refuses a denylist inside the repo" || no "inside-repo denylist accepted" "$out"
 rm -f "$CLEAN/dl.txt" "$CLEAN/notes.txt"; ( cd "$CLEAN" && "$REALGIT" add -A && "$REALGIT" commit -q -m cleanup )
 
 # ---- check mode never mutates

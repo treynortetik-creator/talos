@@ -179,9 +179,9 @@ python3 "$TJ" unregister >/dev/null 2>&1
 cnt(){ python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j["id"].startswith("talos-")))' "$JF"; }
 mkplist "$SB/rt" 0.2.0
 out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; n=$(cnt)
-{ [ "$n" = 0 ] && printf '%s' "$out" | grep -q 'SKIPPED talos-memory-index' && printf '%s' "$out" | grep -q 'command jobs need 0.2.1' && printf '%s' "$out" | grep -q 'SKIPPED talos-morning-brief.*restricted jobs need 0.2.2'; } \
+{ [ "$n" = 0 ] && <<<"$out" grep -q 'SKIPPED talos-memory-index' && <<<"$out" grep -q 'command jobs need 0.2.1' && <<<"$out" grep -q 'SKIPPED talos-morning-brief.*restricted jobs need 0.2.2'; } \
   && ok "on Chronos 0.2.0 the command job and every restricted job are skipped with a message (nothing registers silently unrestricted)" || no "old-Chronos gate wrong (jobs=$n)" "$out"
-printf '%s' "$out" | grep -q 'git -C ~/.local/share/talos/chronos fetch' && printf '%s' "$out" | grep -q 'reinstall-chronos' && ok "the message says how to update the Chronos clone (detached: fetch + checkout the pin, or --reinstall-chronos), not 'git pull'" || no "update help missing or says git pull" "$out"
+<<<"$out" grep -q 'git -C ~/.local/share/talos/chronos fetch' && <<<"$out" grep -q 'reinstall-chronos' && ok "the message says how to update the Chronos clone (detached: fetch + checkout the pin, or --reinstall-chronos), not 'git pull'" || no "update help missing or says git pull" "$out"
 out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" --full-access 2>&1)"; n=$(cnt)
 { [ "$n" = 5 ] && python3 - "$JF" <<'PY'
 import json,sys
@@ -206,7 +206,7 @@ python3 "$TJ" unregister >/dev/null 2>&1
 mkdir -p "$HOME/.config/talos" "$SB/clone022/lib"; printf 'VERSION = "0.2.2"\n' > "$SB/clone022/lib/chronoslib.py"; printf '%s\n' "$SB/clone022" > "$HOME/.config/talos/chronos-dir"
 mkplist "$SB/rt" 0.2.1
 out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; n=$(cnt)
-{ [ "$n" = 5 ] && printf '%s' "$out" | grep -q 'SKIPPED talos-state-sweep' && printf '%s' "$out" | grep -q "$SB/rt"; } && ok "a pinned 0.2.2 CLONE does not fool Talos: the version comes from the runtime launchd runs (0.2.1), so restricted jobs are skipped and the message names that runtime" || no "Talos trusted the clone's version" "$out"
+{ [ "$n" = 5 ] && <<<"$out" grep -q 'SKIPPED talos-state-sweep' && <<<"$out" grep -q "$SB/rt"; } && ok "a pinned 0.2.2 CLONE does not fool Talos: the version comes from the runtime launchd runs (0.2.1), so restricted jobs are skipped and the message names that runtime" || no "Talos trusted the clone's version" "$out"
 python3 "$TJ" unregister >/dev/null 2>&1
 # unknown: no plist at all, an unreadable runtime, a plist that names no tick script, a runtime with no VERSION
 for case in noplist noruntime badplist noversion; do
@@ -222,7 +222,7 @@ PY
     noversion) mkplist "$SB/rt" ""; printf '# no version here\n' > "$SB/rt/lib/chronoslib.py" ;;
   esac
   out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; n=$(cnt)
-  { [ "$n" = 5 ] && printf '%s' "$out" | grep -q 'SKIPPED talos-morning-brief' && printf '%s' "$out" | grep -q 'cannot tell which Chronos'; } && ok "unknown Chronos version ($case): restricted jobs are refused, not assumed fine" || no "unknown version ($case) accepted (jobs=$n)" "$out"
+  { [ "$n" = 5 ] && <<<"$out" grep -q 'SKIPPED talos-morning-brief' && <<<"$out" grep -q 'cannot tell which Chronos'; } && ok "unknown Chronos version ($case): restricted jobs are refused, not assumed fine" || no "unknown version ($case) accepted (jobs=$n)" "$out"
   python3 "$TJ" unregister >/dev/null 2>&1
 done
 rm -f "$HOME/.config/talos/chronos-dir"
@@ -238,7 +238,7 @@ mkplist "$SB/rt" 0.2.2
 mkdir -p "$SB/agent/scripts/memory"; cp "$KIT/scripts/memory/refresh-index.sh" "$SB/agent/scripts/memory/"
 export XDG_DATA_HOME="$SB/data"
 out="$(bash "$SB/agent/scripts/memory/refresh-index.sh" 2>&1)"; rc=$?
-{ [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'memory search is not installed (bash .*scripts/memory/setup.sh)'; } && ok "refresh-index.sh without the venv exits 1 and says how to install it (the job then fails and notifies)" || no "refresh-index.sh without a venv wrong (rc=$rc)" "$out"
+{ [ "$rc" = 1 ] && <<<"$out" grep -q 'memory search is not installed (bash .*scripts/memory/setup.sh)'; } && ok "refresh-index.sh without the venv exits 1 and says how to install it (the job then fails and notifies)" || no "refresh-index.sh without a venv wrong (rc=$rc)" "$out"
 mkdir -p "$XDG_DATA_HOME/talos/venv/bin"; printf '#!/bin/bash\necho "FAKE-PY $*" >> "%s/index.calls"\necho "indexed 0 files"\n' "$SB" > "$XDG_DATA_HOME/talos/venv/bin/python"; chmod +x "$XDG_DATA_HOME/talos/venv/bin/python"
 out="$(bash "$SB/agent/scripts/memory/refresh-index.sh" 2>&1)"; rc=$?
 [ "$rc" = 1 ] && ok "a venv without the memory-search marker (a voice-only venv) is not mistaken for an install" || no "voice-only venv accepted (rc=$rc)"
@@ -362,7 +362,7 @@ assert all(d[i]["restricted"] is True and d[i]["allowed_tools"] for i in ("talos
 assert "restricted" not in d["talos-memory-index"]
 PY
   grep -q 'RESTRICTED' "$JD/talos-state-sweep/prompt.md" && ok "harden replaces a 1.1.1 prompt the user never edited" || no "harden did not update an untouched prompt"
-  { grep -q 'MY OWN EDIT' "$JD/talos-weekly-snapshot/prompt.md" && printf '%s' "$out" | grep -q 'prompt.md KEPT'; } && ok "harden keeps a prompt the user edited, and says so" || no "harden overwrote or hid an edited prompt" "$out"
+  { grep -q 'MY OWN EDIT' "$JD/talos-weekly-snapshot/prompt.md" && <<<"$out" grep -q 'prompt.md KEPT'; } && ok "harden keeps a prompt the user edited, and says so" || no "harden overwrote or hid an edited prompt" "$out"
   python3 - "$JF" "$TJ" <<'PY' && ok "harden switches in_session OFF on a job that had it (restricted + in_session is invalid: Chronos would skip it and the UI would refuse to save it) and every hardened job validates" || no "harden left restricted + in_session, or an invalid job" "$out"
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("tj", sys.argv[2]); tj = importlib.util.module_from_spec(spec); spec.loader.exec_module(tj)
@@ -371,51 +371,51 @@ assert by["talos-state-sweep"]["restricted"] is True and by["talos-state-sweep"]
 bad = [(x["id"], tj.check_job(x)) for x in d if x["id"].startswith("talos-") and tj.check_job(x)]
 assert not bad, bad
 PY
-  printf '%s' "$out" | grep -q 'in_session switched OFF' && ok "harden says it switched in_session off" || no "harden did not say it changed in_session" "$out"
-  out2="$(python3 "$TJ" harden --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; printf '%s' "$out2" | grep -q 'nothing to harden' && ok "harden is idempotent" || no "harden ran twice" "$out2"
+  <<<"$out" grep -q 'in_session switched OFF' && ok "harden says it switched in_session off" || no "harden did not say it changed in_session" "$out"
+  out2="$(python3 "$TJ" harden --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; <<<"$out2" grep -q 'nothing to harden' && ok "harden is idempotent" || no "harden ran twice" "$out2"
   python3 "$TJ" unregister >/dev/null 2>&1
 } || echo "  skip harden test (needs the kit's git history for the 1.1.1 files)"
 
 # 8i. weekly-snapshot.sh: the whole snapshot job is exactly this script (the restricted job may run nothing else)
 SN="$SB/snap"; rm -rf "$SN"; mkdir -p "$SN/scripts" "$SN/memory" "$SN/wiki" "$SN/.learnings"; cp "$KIT/scripts/weekly-snapshot.sh" "$SN/scripts/"
 sn() { ( cd "$SN" && bash scripts/weekly-snapshot.sh 2>&1 ); }
-out="$(sn)"; rc=$?; { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'not a git repository'; } && ok "snapshot script: outside a git repository it says so, exits 0 and never runs git init" || no "snapshot without a repo wrong (rc=$rc)" "$out"
+out="$(sn)"; rc=$?; { [ "$rc" = 0 ] && <<<"$out" grep -q 'not a git repository'; } && ok "snapshot script: outside a git repository it says so, exits 0 and never runs git init" || no "snapshot without a repo wrong (rc=$rc)" "$out"
 [ ! -d "$SN/.git" ] && ok "snapshot script: it did not create a repository" || no "snapshot ran git init"
 ( cd "$SN" && git init -q . && git config user.email t@t && git config user.name t && echo base > memory/a.md && echo other > other.txt && git add -A && git commit -q -m base )
-out="$(sn)"; { [ $? = 0 ] && printf '%s' "$out" | grep -q 'nothing to commit'; } && ok "snapshot script: a clean tree is reported as nothing to commit" || no "clean tree wrong" "$out"
+out="$(sn)"; { [ $? = 0 ] && <<<"$out" grep -q 'nothing to commit'; } && ok "snapshot script: a clean tree is reported as nothing to commit" || no "clean tree wrong" "$out"
 echo more >> "$SN/memory/a.md"; echo note > "$SN/wiki/n.md"; echo l > "$SN/.learnings/l.md"; echo "UNRELATED" > "$SN/other.txt"; ( cd "$SN" && git add other.txt )
 out="$(sn)"; rc=$?
 c="$(git -C "$SN" show --stat --format=%s HEAD | head -1)"
-{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'committed 3 file' && printf '%s' "$c" | grep -q '^weekly snapshot 20'; } && ok "snapshot script: one local commit of memory, wiki and .learnings, titled 'weekly snapshot <date>'" || no "snapshot commit wrong (rc=$rc)" "$out"
+{ [ "$rc" = 0 ] && <<<"$out" grep -q 'committed 3 file' && <<<"$c" grep -q '^weekly snapshot 20'; } && ok "snapshot script: one local commit of memory, wiki and .learnings, titled 'weekly snapshot <date>'" || no "snapshot commit wrong (rc=$rc)" "$out"
 git -C "$SN" show --name-only --format= HEAD | grep -q other.txt && no "snapshot swept in a file that was staged outside the three folders" || ok "snapshot script: something else already staged in the repo is NOT swept into the commit"
 echo "SECRET=1" > "$SN/memory/.env"; echo x >> "$SN/memory/a.md"; before="$(git -C "$SN" rev-parse HEAD)"
-out="$(sn)"; rc=$?; { [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'REFUSED' && [ "$(git -C "$SN" rev-parse HEAD)" = "$before" ] && ! git -C "$SN" diff --cached --name-only | grep -q '^memory/'; } && ok "snapshot script: a .env among the changes is refused BEFORE anything is staged or committed" || no ".env not refused (rc=$rc)" "$out"
+out="$(sn)"; rc=$?; { [ "$rc" = 1 ] && <<<"$out" grep -q 'REFUSED' && [ "$(git -C "$SN" rev-parse HEAD)" = "$before" ] && ! git -C "$SN" diff --cached --name-only | grep -q '^memory/'; } && ok "snapshot script: a .env among the changes is refused BEFORE anything is staged or committed" || no ".env not refused (rc=$rc)" "$out"
 rm -f "$SN/memory/.env"
 for odd in "my notes" "caf\xc3\xa9" "tab	dir"; do
   d="$(printf "$odd")"; mkdir -p "$SN/memory/$d"; echo "SECRET=1" > "$SN/memory/$d/.env"; echo x >> "$SN/memory/a.md"; before="$(git -C "$SN" rev-parse HEAD)"
   out="$(sn)"; rc=$?
-  { [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'REFUSED' && [ "$(git -C "$SN" rev-parse HEAD)" = "$before" ] && ! git -C "$SN" diff --cached --name-only | grep -q '^memory/'; } \
+  { [ "$rc" = 1 ] && <<<"$out" grep -q 'REFUSED' && [ "$(git -C "$SN" rev-parse HEAD)" = "$before" ] && ! git -C "$SN" diff --cached --name-only | grep -q '^memory/'; } \
     && ok "snapshot script: a .env in a folder whose name has a space, a non-ASCII letter or a tab ('$odd') is refused (git quotes those names; -z does not)" || no ".env in an oddly named folder slipped through ($odd, rc=$rc)" "$out"
   rm -rf "$SN/memory/$d"
 done
 mkdir -p "$SN/memory/personal"; echo p > "$SN/memory/personal/p.md"; out="$(sn)"; rc=$?
-{ [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'personal/p.md'; } && ok "snapshot script: anything under a personal/ folder is refused too" || no "personal/ not refused (rc=$rc)" "$out"
+{ [ "$rc" = 1 ] && <<<"$out" grep -q 'personal/p.md'; } && ok "snapshot script: anything under a personal/ folder is refused too" || no "personal/ not refused (rc=$rc)" "$out"
 rm -rf "$SN/memory/personal"
 # the .env.example exemption belongs to the .env pattern only: it must not let a personal/ path through
 mkdir -p "$SN/memory/personal"; echo x > "$SN/memory/personal/x.env.example"; before="$(git -C "$SN" rev-parse HEAD)"; out="$(sn)"; rc=$?
-{ [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'personal/x.env.example' && [ "$(git -C "$SN" rev-parse HEAD)" = "$before" ]; } && ok "snapshot script: memory/personal/x.env.example is still refused (the .env.example exemption does not apply to personal/)" || no "personal/x.env.example was not refused (rc=$rc)" "$out"
+{ [ "$rc" = 1 ] && <<<"$out" grep -q 'personal/x.env.example' && [ "$(git -C "$SN" rev-parse HEAD)" = "$before" ]; } && ok "snapshot script: memory/personal/x.env.example is still refused (the .env.example exemption does not apply to personal/)" || no "personal/x.env.example was not refused (rc=$rc)" "$out"
 rm -rf "$SN/memory/personal"; echo y > "$SN/memory/ok.env.example"
-out="$(sn)"; rc=$?; { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'committed'; } && ok "snapshot script: a plain .env.example outside personal/ is allowed" || no ".env.example wrongly refused (rc=$rc)" "$out"
+out="$(sn)"; rc=$?; { [ "$rc" = 0 ] && <<<"$out" grep -q 'committed'; } && ok "snapshot script: a plain .env.example outside personal/ is allowed" || no ".env.example wrongly refused (rc=$rc)" "$out"
 # an existing-but-EMPTY folder next to a changed one must not break the snapshot ("pathspec did not match")
 SE="$SB/snap-empty"; rm -rf "$SE"; mkdir -p "$SE/scripts" "$SE/memory" "$SE/wiki" "$SE/.learnings"; cp "$KIT/scripts/weekly-snapshot.sh" "$SE/scripts/"
 ( cd "$SE" && git init -q . && git config user.email t@t && git config user.name t && echo base > memory/a.md && git add -A && git commit -q -m base && echo z >> memory/a.md )
 sn() { ( cd "${SNX:-$SN}" && bash scripts/weekly-snapshot.sh 2>&1 ); }
 SNX="$SE"; out="$(sn)"; rc=$?
-{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'committed 1 file'; } && ok "snapshot script: empty wiki/ and .learnings/ next to a changed memory/ do not break it" || no "empty folders broke the snapshot (rc=$rc)" "$out"
-out="$(sn)"; { [ $? = 0 ] && printf '%s' "$out" | grep -q 'nothing to commit'; } && ok "snapshot script: with only empty folders left it reports nothing to commit" || no "empty-only case wrong" "$out"
+{ [ "$rc" = 0 ] && <<<"$out" grep -q 'committed 1 file'; } && ok "snapshot script: empty wiki/ and .learnings/ next to a changed memory/ do not break it" || no "empty folders broke the snapshot (rc=$rc)" "$out"
+out="$(sn)"; { [ $? = 0 ] && <<<"$out" grep -q 'nothing to commit'; } && ok "snapshot script: with only empty folders left it reports nothing to commit" || no "empty-only case wrong" "$out"
 # a parent repository must not be committed into: the repository has to BE the agent folder
 PAR="$SB/par"; rm -rf "$PAR"; mkdir -p "$PAR/agent/scripts" "$PAR/agent/memory"; cp "$KIT/scripts/weekly-snapshot.sh" "$PAR/agent/scripts/"; ( cd "$PAR" && git init -q . && git config user.email t@t && git config user.name t && echo a > agent/memory/a.md && git add -A && git commit -q -m b && echo b >> agent/memory/a.md )
-out="$( cd "$PAR/agent" && bash scripts/weekly-snapshot.sh 2>&1 )"; rc=$?; { [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'not this agent folder'; } && ok "snapshot script: refuses when the git repository is a PARENT folder, not the agent folder" || no "parent repo accepted (rc=$rc)" "$out"
+out="$( cd "$PAR/agent" && bash scripts/weekly-snapshot.sh 2>&1 )"; rc=$?; { [ "$rc" = 1 ] && <<<"$out" grep -q 'not this agent folder'; } && ok "snapshot script: refuses when the git repository is a PARENT folder, not the agent folder" || no "parent repo accepted (rc=$rc)" "$out"
 if grep -v '^[[:space:]]*#' "$KIT/scripts/weekly-snapshot.sh" | grep -v 'echo ' | grep -qE 'git (push|pull|fetch|reset|clean|checkout|remote|init)|git add (-A|--all|\.)'; then no "the snapshot script contains a command that touches a remote or history"; else ok "snapshot script: contains no push, pull, fetch, reset, clean, checkout, remote, init or sweeping add"; fi
 
 # 8j. a malformed `restricted` is INVALID (never "unrestricted"); harden refuses to write anything invalid
@@ -439,7 +439,7 @@ json.dump(d,open(p,"w"))
 PY
 cp "$JF" "$SB/jobs.before"
 out="$(python3 "$TJ" harden --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; rc=$?
-{ [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'nothing changed' && cmp -s "$JF" "$SB/jobs.before"; } && ok "harden validates every job first and writes nothing when one would end up invalid" || no "harden wrote or accepted an invalid job (rc=$rc)" "$out"
+{ [ "$rc" != 0 ] && <<<"$out" grep -q 'nothing changed' && cmp -s "$JF" "$SB/jobs.before"; } && ok "harden validates every job first and writes nothing when one would end up invalid" || no "harden wrote or accepted an invalid job (rc=$rc)" "$out"
 python3 "$TJ" unregister >/dev/null 2>&1
 
 # 9. against the REAL Chronos, if you point at one: the exact prompt a run would receive, and what is due when
@@ -448,9 +448,9 @@ if [ -n "${TALOS_TEST_CHRONOS:-}" ] && [ -x "$TALOS_TEST_CHRONOS/bin/chronos" ];
   CH="$TALOS_TEST_CHRONOS/bin/chronos"
   for id in talos-morning-brief talos-weekly-wiki-lint talos-weekly-snapshot talos-state-sweep; do
     p="$(python3 "$CH" prompt "$id" 2026-10-05 2>&1)"
-    if printf '%s' "$p" | grep -q 'Never start background tasks' && printf '%s' "$p" | grep -q 'FOREGROUND ONLY' && printf '%s' "$p" | grep -q "$SB/agent"; then
+    if <<<"$p" grep -q 'Never start background tasks' && <<<"$p" grep -q 'FOREGROUND ONLY' && <<<"$p" grep -q "$SB/agent"; then
       ok "real Chronos builds the $id prompt: preamble + locked guard + task, agent path present"
-    else no "real Chronos prompt for $id is wrong" "$(printf '%s' "$p" | head -3)"; fi
+    else no "real Chronos prompt for $id is wrong" "$(<<<"$p" head -3)"; fi
   done
   # the command job, end to end through the real run script: no claude, the indexer is a fake python in a fake venv
   CHVER="$(python3 "$CH" --version 2>&1)"
@@ -473,14 +473,14 @@ PY
   else echo "  skip real-Chronos command-job checks (this Chronos predates 0.2.1)"; fi
   # Chronos 0.2 honours the per-job `model` key (0.1 has no jobenv command and ignores it)
   env_out="$(python3 "$CH" jobenv talos-weekly-snapshot 2>&1)"
-  if printf '%s' "$env_out" | grep -q 'CH_JOB_MODEL'; then
-    printf '%s' "$env_out" | grep -q "CH_JOB_MODEL=.\?sonnet" && ok "real Chronos reads the shipped per-job model (the snapshot job runs with --model sonnet)" || no "real Chronos did not pick up model: sonnet" "$env_out"
-    printf '%s' "$(python3 "$CH" jobenv talos-morning-brief 2>&1)" | grep -q "CH_JOB_MODEL=''\|CH_JOB_MODEL=$" && ok "real Chronos: the morning brief pins no model (inherits your default)" || no "brief model not empty" "$(python3 "$CH" jobenv talos-morning-brief 2>&1 | head -3)"
+  if <<<"$env_out" grep -q 'CH_JOB_MODEL'; then
+    <<<"$env_out" grep -q "CH_JOB_MODEL=.\?sonnet" && ok "real Chronos reads the shipped per-job model (the snapshot job runs with --model sonnet)" || no "real Chronos did not pick up model: sonnet" "$env_out"
+    <<<"$(python3 "$CH" jobenv talos-morning-brief 2>&1)" grep -q "CH_JOB_MODEL=''\|CH_JOB_MODEL=$" && ok "real Chronos: the morning brief pins no model (inherits your default)" || no "brief model not empty" "$(python3 "$CH" jobenv talos-morning-brief 2>&1 | head -3)"
   else echo "  skip per-job model check (this Chronos predates 0.2)"; fi
   # Chronos 0.2.2: the restriction is real. Chronos validates allowed_tools and silently falls back to a SAFE default list if
   # one entry is malformed, so assert that OUR rules came through verbatim (they validated) and that the built-ins stay narrow.
   jenv="$(python3 "$CH" jobenv talos-morning-brief 2>&1)"
-  if printf '%s' "$jenv" | grep -q 'CH_RESTRICTED'; then
+  if <<<"$jenv" grep -q 'CH_RESTRICTED'; then
     for id in talos-morning-brief talos-weekly-wiki-lint talos-weekly-snapshot talos-state-sweep; do
       jenv="$(python3 "$CH" jobenv "$id" 2>&1)"
       want="$(python3 - "$JF" "$id" <<'PY'
@@ -488,7 +488,7 @@ import json,sys
 print(",".join({x["id"]:x for x in json.load(open(sys.argv[1]))}[sys.argv[2]]["allowed_tools"]))
 PY
 )"
-      { printf '%s' "$jenv" | grep -q '^CH_RESTRICTED=1$' && printf '%s' "$jenv" | grep -qF "CH_EV_ALLOWED='$want'" && printf '%s' "$jenv" | grep -q '^CH_EV_MCP=strict$' \
+      { <<<"$jenv" grep -q '^CH_RESTRICTED=1$' && <<<"$jenv" grep -qF "CH_EV_ALLOWED='$want'" && <<<"$jenv" grep -q '^CH_EV_MCP=strict$' \
         && ! printf '%s' "$jenv" | grep '^CH_EV_TOOLS=' | grep -Eq 'WebFetch|WebSearch|Task|Agent'; } \
         && ok "real Chronos 0.2.2 runs $id restricted: our tool list validates as written, no web tools, no MCP server loads" || no "real Chronos did not adopt the restriction for $id" "$jenv"
       python3 "$CH" prompt "$id" 2026-10-05 2>&1 | grep -q 'This job is RESTRICTED. Your tools are limited to:' && ok "real Chronos tells $id its tool list in the prompt" || no "prompt for $id does not state the restriction"
@@ -496,9 +496,9 @@ PY
   else echo "  skip restricted-job checks (this Chronos predates 0.2.2)"; fi
   python3 "$TJ" enable talos-morning-brief >/dev/null 2>&1
   due="$(CHRONOS_NOW=2026-10-05T07:20 python3 "$CH" due --dry 2>&1)"
-  printf '%s' "$due" | grep -q '^talos-morning-brief|2026-10-05' && ok "real Chronos says the brief is due Monday 07:20" || no "brief not due when it should be" "$due"
+  <<<"$due" grep -q '^talos-morning-brief|2026-10-05' && ok "real Chronos says the brief is due Monday 07:20" || no "brief not due when it should be" "$due"
   due="$(CHRONOS_NOW=2026-10-03T07:20 python3 "$CH" due --dry 2>&1)"
-  printf '%s' "$due" | grep -q 'talos-morning-brief' && no "brief is due on a Saturday" "$due" || ok "real Chronos does not schedule the brief on a Saturday"
+  <<<"$due" grep -q 'talos-morning-brief' && no "brief is due on a Saturday" "$due" || ok "real Chronos does not schedule the brief on a Saturday"
 else
   echo "  skip real-Chronos checks (set TALOS_TEST_CHRONOS=/path/to/chronos to run them)"
 fi

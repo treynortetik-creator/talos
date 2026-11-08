@@ -133,14 +133,21 @@ cannot be removed does not stop the rest.
 
 **A big or cold wake.** One wake carries at most 10 items (nearest deadline first, then oldest). The rest stay `new` for the
 next wake and the thread says "N more items are waiting for the next check-in". The store keeps `last_run`, when this
-heartbeat last completed a live run (a store written before `last_run` was kept, with sources but no `last_run`, starts over
-once the same way, with the line "Heartbeat started over."). If it was longer ago than twice the job's largest gap
-between two of its weekly times (counting the wrap from the last time of the week to the first), and never under 48 hours,
-every source starts over with no cursor, what they report on that first look is recorded as shown and not woken, and the
-thread gets one line, "Heartbeat was off for N days. Skipped the backlog (M items)." A Monday and Thursday job may be off
-8 days, a daily one 48 hours, a job with one weekly time 14 days; a job whose days or times cannot be read, 14 days. A
-source's own silence does not trigger this: one that failed for three days while the heartbeat
-kept running keeps its cursor and delivers normally. The bridge can see its own state file only; it cannot see Chronos's
+heartbeat last completed a live run (even one where every source failed; a store written before `last_run` was kept, with sources
+but no `last_run`, starts over once the same way, with the line "Heartbeat started over."). If it was longer ago than twice the
+job's largest gap between two of its weekly times (counting the wrap from the last time of the week to the first), and never
+under 48 hours, every source starts over with no cursor, what they report on that first look is recorded as shown and not
+woken, and the thread gets one line, "Heartbeat was off for N days. Skipped the backlog (M items)." A Monday and Thursday job
+may be off 8 days, a daily one 48 hours, a job with one weekly time 14 days; a job whose days or times cannot be read, 14 days.
+A source's own silence does not trigger this: one that failed for three days while the heartbeat kept running keeps its cursor
+and delivers normally.
+
+A cold run in which every source fails has looked at nothing, so it has skipped nothing. The store then keeps `cold_since`, when
+the off period began (the old `last_run`; the time of that run for a store that never had one), and the next run is still cold,
+however recent `last_run` is. The first run in which any source answers skips the backlog as above and clears `cold_since`.
+While it is set, each failed run says, after the failure line, "Heartbeat was off for N days. The backlog will be skipped once a
+source answers." with N counted from `cold_since` (a store with no known start just says "Heartbeat started over."). A store
+without the field behaves as it always did. The bridge can see its own state file only; it cannot see Chronos's
 history or the agent's last turn.
 
 ### Cards

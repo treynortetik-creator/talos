@@ -165,7 +165,7 @@ runner builds on it as written.
   enter. `url` is https only, and must read the same after escaping (no hidden, bidi or control characters).
 - **Escape once, at the source parse.** Untrusted text (an item's `title`, `detail` and `why`, and a source's `error`) is
   capped and escaped in exactly one place: `parseHeartbeatSourceResponse`. Everything after it only CHECKS. `HeartbeatItem`
-  (also exported as `HeartbeatItemStore`) is the schema the runner stores through: it refuses a raw hidden or control character
+  is the schema the runner stores through: it refuses a raw hidden or control character
   and an escape token the escaper would not make, and never rewrites text. The path is: parse the source's answer, add
   `source`, `first_seen`, `last_seen` and `count`, `HeartbeatItem.parse`, store; the text is identical on every run.
   `HeartbeatItemRead` reads a stored row the same way (loose on unknown keys). `HeartbeatSourceItem` is the escaping
@@ -518,6 +518,8 @@ There's no new step-up purpose, so the relay auth module is untouched. Limit: S8
 | `schedule.run_now`                                                    | 20/hour total, 1 per job per 2 min                                                                                       | relay / bridge            |
 | `schedule.control`                                                    | 60/hour, of which `retry_headless` 6/hour                                                                                | relay                     |
 | `schedule_propose` (agent)                                            | 10/hour, ≤ 20 pending schedule cards                                                                                     | bridge                    |
+| job memory notepad                                                    | 2,048 bytes; a longer one is cut and the next prompt says so                                                             | bridge                    |
+| job memory results                                                    | the last 3 per job, 280 characters each                                                                                  | bridge                    |
 | adapter call                                                          | `TALOS_APP_SCHEDULER_TIMEOUT_S` (15 s), then killed                                                                      | bridge                    |
 | pending request map (relay)                                           | 30 s TTL, 100 entries per socket                                                                                         | relay                     |
 
@@ -765,6 +767,80 @@ Chronos 0.2 can already put jobs into a session. Its SessionStart hook arms Cron
 
   Running it again is safe. Jobs already approved and converted aren't asked about again.
 - **The agent rule.** The agent instructions (S6.2) forbid arming in-session timers for jobs in the scheduler.
+
+
+### S3.8 Job memory
+
+A job can remember between runs. It is **off unless the owner switches it on**, per job. Only a job that runs in the
+session can have it; a heartbeat (a check the bridge runs itself) and a command job are refused with a reason.
+
+- **The switch.** `memory: true` on the job. It is a Talos-only field, handled exactly like `thread_id`: it travels in the
+  draft and in an update's `set`, the bridge splits it off before the change goes to Chronos (`toChronosChange`), and it
+  lives in the sidecar (`jobs[id].memory`). Chronos's files never see it. It is optional and tolerant: a job with no field
+  reads as off, and the bridge sends `memory` in a snapshot only when it is on.
+  - **It travels on `schedules/2`.** The strict snapshot, detail and card schemas of an older relay or app do not know the
+    field, so a memory-on row, or a patch or proposal that mentions `memory` in any way, is held back like a times job
+    (`needsSchedulesV2`, `changeNeedsSchedulesV2`): an older relay or app gets an `unreadable` entry that says what to update,
+    and a plain `scheduler_unavailable` for a detail or a change.
+  - **Where the owner sets it.** The form's "Remember between runs" box (create and edit), or `memory` on the agent's
+    `schedule_propose`. Both make an ordinary schedule card, so the agent can propose it but never switch it on alone. A new
+    job's card has a `Memory:` line in its body when it is on (not a destination row: a schedule card already has the six a
+    card may have); an edit shows `Memory: off → on` (or `on → off`).
+  - **Switching it on is high risk** (S8.2), like turning a job on: it widens everything every future prompt carries, and the
+    card says so plainly: "Future runs will see the last 3 results and this job's notepad." Switching it off narrows, and is
+    low.
+  - **Jobs that run in the background.** Memory is put into the prompt the bridge hands to the session, so only a job that
+    runs in the session (`runsInSession`) gets it. A background job, or a restricted one (always background), can have the
+    switch on, and the card and the form say it has no effect yet. A heartbeat or a command job cannot: the bridge refuses
+    the change ("Nothing was saved") rather than store a switch that does nothing.
+- **What a run gets.** With memory on, the `schedule_run` notification has a third section after the job text, `--- memory
+  (this job only) ---`:
+  1. **The last 3 results** of this job (newest first: date, ok or failed, summary). A summary is cut to **280
+     characters** of the text as stored (after hidden characters are shown, and never in the middle of a `⟦U+XXXX⟧`), so the
+     wrapper's own size cap can never reach the notepad. 280 is the limit `schedule_run_done` already puts on a summary, so
+     nothing plain the agent sent is cut; the cap is there again on read for a hand-edited file. Three is enough to show a
+     trend or "what I did last time" without growing every prompt by much.
+  2. **A notepad** of up to **2 KB** (2,048 bytes, UTF-8) that the run may rewrite.
+     The bridge's own lines say what this is and how to update it. The results and the notepad sit inside one external-content
+     wrapper (`wrapExternal`, the one email and web text get), so they are data: they carry no authority and never read as the
+     owner's words.
+- **How a run updates the notepad.** By passing `notepad` to `schedule_run_done`: the whole new text. It leaves the existing
+  call and its run-id ownership check in place, adds no tool, and cannot name another job (the run id decides the job). A
+  marked block in the run's output was the other choice; it would mean parsing free text that an inbox message could imitate.
+  Leaving `notepad` out keeps the old one. The answer says whether the text was kept or cut: `recorded. Notepad saved` or
+  `recorded. Notepad saved, but cut to 2 KB: the end was dropped`. Over 2 KB is truncated at a character boundary, and the next
+  prompt says "The notepad was cut to 2 KB when it was saved; the end was dropped."
+  - The run's own result is recorded in the same write. Only a run that was given the memory section can write it, and only
+    while the memory is still the one it was given: its offer carries a hash of the job text and the memory's **epoch**, a
+    random value in the sidecar that is new each time memory is switched on and moves on every wipe. A save with another
+    epoch or hash is refused and touches nothing (`recorded (this job's memory changed while the run was going, so nothing was
+    kept)`); only the read at a run's offer wipes. So an edit, a thread change, memory switched off and on, or a job deleted
+    and made again with the same text cannot be undone by a run that finishes late.
+- **Where it lives.** `$TALOS_APP_HOME/job-memory/<job-id>.json`: a 0700 folder, mode 0600, written atomically (tmp +
+  rename), and **no link anywhere**: a link in the folder or file position is refused for reading, writing and removal, and
+  a job id that is not `[a-z0-9-]{2,40}` never becomes a path. Only the live bridge writes (the same gate as the sidecar).
+  Results are kept in this file, not in the sidecar's run list, because that list is pruned at 8 days and would hold no
+  history for a weekly job.
+- **What wipes it.**
+  - Changing the job's text (a card with `prompt`, or an Adopt of a file edited on disk), and deleting the job: the file is
+    removed. A file is also bound to a hash of the job text it was written for, so it is wiped on its next read if the text
+    changed by any other route.
+  - Switching memory off, or on again: it starts empty.
+  - Moving the job's result thread: a notepad written for one thread's session must not reach another's. (Saying the thread
+    it already has is not a move.)
+  - Changing only the name, the time or the notify setting does not wipe it.
+  - Results from before an edit go with it (they are in the same file).
+  - The hash covers the job text only, not the standing rules (the guard): editing the guard does not wipe the memory.
+  - A new job's sidecar entry replaces whatever the sidecar held for that id, so a leftover memory switch from a job removed
+    outside the app never carries over.
+- **The fence.**
+  - One file per job. A prompt is built only from its own job's file, and `schedule_run_done` writes only the file of the job
+    the run id belongs to. Nothing of one job reaches another.
+  - Everything in the file was written by an agent, which may have quoted an email or a page. It is stored with every hidden,
+    control and direction character shown as `⟦U+XXXX⟧` (the escape the cards use for job `meta`; a literal `⟦` is escaped
+    too), a summary is one line (its new lines are shown, not obeyed), and the whole thing is wrapped as above.
+    A forged wrapper end marker inside it is neutralised by the wrapper.
+  - The notification's own meta (`trust=owner`) is unchanged and carries nothing from memory.
 
 ---
 
@@ -1272,10 +1348,11 @@ card shows the **normalized** record exactly as it will be written.
 
 - **creates** a job, **deletes** one, **turns one on** or **adopts** outside changes;
 - changes the **prompt**, **model** or **runner**;
+- switches **memory** on (S3.8: it widens every future prompt);
 - sets permissions to `full`;
 - adds an allowed tool.
 
-Everything else is `risk:'low'`: rename, description, time, days, catch-up, notify, result thread. Those can only narrow
+Everything else is `risk:'low'`: rename, description, time, days, catch-up, notify, result thread, switching memory off. Those can only narrow
 or move behaviour the owner already approved. `notify:'never'` stays low-risk, because failures always reach the app
 (S3.6).
 

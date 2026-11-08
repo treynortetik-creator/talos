@@ -143,6 +143,27 @@ describe('a heartbeat slot, claimed and closed by the bridge', () => {
     expect(h.notes).toEqual([])
   })
 
+  test('a cold store whose every source fails closes the slot exactly like any failed slot: same marker and summary, last_run still written', async () => {
+    const home = tempHome()
+    const old = new Date(Date.parse(T0950) - 140 * 3600_000).toISOString() // over this job's 129 hours
+    const st = emptyStore()
+    st.last_run = old
+    st.sources.down = { cursor: { n: 1 }, last_ok: old, fail_streak: 0 }
+    writeFileSync(storeFile(home, false, 'beat'), JSON.stringify(st))
+    await begin(config([cmd('down', printing(tmpDir(), 'd', errAnswer('jira: 401')))]), { home })
+    await waitFor(() => state().some((f) => f.startsWith('failed-beat')) && closed(), 30_000, 'the slot to fail')
+    expect(state().filter((f) => /^(ran|failed)-beat/.test(f))).toEqual([`failed-beat-${SLOT}`]) // the slot is closed by Chronos as before, and nothing else was marked
+    expect(noteOf()?.summary).toBe('Check failed')
+    await waitFor(() => rows().length >= 1, 5000, 'the failure line')
+    const text = rows()[0]?.message.text ?? ''
+    expect(text).toContain('jira: 401')
+    expect(text).toContain('Heartbeat was off for 5 days.')
+    const after = JSON.parse(readFileSync(storeFile(home, false, 'beat'), 'utf8'))
+    expect(after.last_run).not.toBe(old) // what last_run means and when it is written has not changed
+    expect(after.sources.down.last_ok).toBe(old) // and the failed look is not a success
+    expect(after.cold_since).toBe(old) // the off period began when the heartbeat last ran
+  })
+
   test('shadow mode through the bridge never posts or notifies, and writes the digest to the shadow log', async () => {
     await begin(config([cmd('news', printing(tmpDir(), 'n', ok([item('a')])))], { mode: 'shadow' }))
     await waitFor(() => ran().length === 1 && closed(), 30_000, 'the slot to close')

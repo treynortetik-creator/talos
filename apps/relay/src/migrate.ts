@@ -9,7 +9,6 @@ import { fileURLToPath } from 'node:url'
 import type Database from 'better-sqlite3'
 
 export const MODULE_ORDER = ['core', 'auth', 'hooks', 'voice'] as const
-export type MigrationModule = (typeof MODULE_ORDER)[number]
 
 const FILE = /^\d{4}_[a-z0-9_]+\.sql$/
 

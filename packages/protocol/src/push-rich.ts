@@ -28,9 +28,14 @@ import { z } from 'zod'
 import { b64urlDecode, b64urlEncode, utf8 } from './encoding.ts'
 import { sha256Hex } from './hash.ts'
 import { CardId, DeviceId, IsoTs, Sha256Ref, ThreadId, Ulid } from './ids.ts'
-import type { JwkP256T } from './models.ts'
+import { CARD_KIND_TABLE, CARD_KINDS, type JwkP256T } from './models.ts'
 import { signOwnerFrame, verifyOwnerFrame } from './owner-sig.ts'
-import { type PermissionAllowView, permissionCardAllowsPrimary, visibleText } from './permission.ts'
+import {
+  PERMISSION_NOTICE_MAX_CHARS,
+  type PermissionAllowView,
+  permissionCardAllowsPrimary,
+  visibleText,
+} from './permission.ts'
 
 const subtle = () => globalThis.crypto.subtle
 
@@ -443,7 +448,7 @@ export function normalizeNoticeText(text: string): string {
 
 /** Card kinds a notification may approve. Everything that leaves the app (email, message, deploy, publish, purchase) or
  *  changes the Mac's own settings (schedule, app_action) is open-in-the-app only, whatever risk the agent put on it. */
-export const NATIVE_APPROVABLE_KINDS: readonly string[] = ['decision', 'generic', 'permission']
+export const NATIVE_APPROVABLE_KINDS: readonly string[] = CARD_KINDS.filter((k) => CARD_KIND_TABLE[k].nativeApprovable)
 
 const seeLines = (t: string) => t.split('\n').map(visibleText).join('\n')
 
@@ -476,7 +481,11 @@ export function cardNotice(card: Omit<PermissionAllowView, 'state'>): { text: st
     // A permission card is offered Approve only where the app would show Allow: the same rule, so the notification, the app
     // and the bridge agree. The Mac's binding has no state field, and a card in the ledger is pending, so it is judged as such.
     (card.kind === 'permission'
-      ? permissionCardAllowsPrimary({ ...card, state: 'pending' })
+      ? // ...and only a call the notification can show whole: one short visible line. A longer one shows Open, which goes to the
+        // full-screen approval sheet where the owner scrolls through every character.
+        permissionCardAllowsPrimary({ ...card, state: 'pending' }) &&
+        (card.body ?? '').length <= PERMISSION_NOTICE_MAX_CHARS &&
+        !/[\n\u23CE]/.test(card.body ?? '')
       : card.payload === undefined)
   return { text: whole ? full : clipUtf8(full, budget), complete: whole }
 }

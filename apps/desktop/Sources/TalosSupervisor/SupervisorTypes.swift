@@ -14,6 +14,10 @@ extension Supervisor {
     /// screen) before the owner is told. Far longer than a slow start needs; it only ends a wait that would never end.
     public var startWait: Double = 120
     public var dialogStall: Double = 60
+    /// A prompt of the CLI's that Talos has no name for counts after its region of the screen has held still this long.
+    public var promptSettle: Double = 5
+    /// ... and while an attached client has not typed for this long (an owner-opened picker is not waiting on anybody).
+    public var promptClientQuiet: Double = 30
     public var agentsPoll: Double = 10
     public var hangPolls: Int = 2
     public var restartWindow: Double = 900
@@ -160,6 +164,9 @@ extension Supervisor {
     var question: NeedsYou?
     /// The folder this session was started in (the configured one at that moment). The config can name another folder later.
     var agentDir: String = ""
+    /// A prompt of the CLI's nobody named on Main's screen: its stillness, and whether this run has looked at the screen yet.
+    var promptWatch = PromptWatch()
+    var promptChecked = false
   }
 
   struct Cleanup {
@@ -172,7 +179,7 @@ extension Supervisor {
 
   enum AfterCleanup {
     case restart
-    case stop(StopReason, closeHost: Bool)
+    case stop(StopReason, closeHost: Bool, announcing: Event? = nil)
   }
 }
 

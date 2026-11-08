@@ -15,10 +15,16 @@ final class SupervisorController: ObservableObject {
   @Published var status: Supervisor.Status
   @Published var configured: Bool
   @Published var notice: String = ""
+  /// The text the last supervisor `.needsYou` event put in `notice`. While `notice` still equals it, the menu follows `status.needsYou`.
+  private(set) var needsYouEventNotice: String?
   @Published var adopt: AdoptPlan?
   @Published var adoptNote: String = ""
   /// Bumps when Create, Adopt, Choose, Import or Adopt-a-session rewrites the config, so an open Settings window reloads its text boxes.
   @Published var configRevision = 0
+
+  /// The running app's controller, for the main window's Terminal screen: it must not depend on the Terminals window having
+  /// been opened (nothing attached the model to it on a normal launch, and the page showed no tabs).
+  static weak var current: SupervisorController?
 
   let supervisor: Supervisor
   /// Option C (docs/OPTION-C.md): thread sessions. Runs only with the tmux host; starts nothing until the owner
@@ -37,6 +43,8 @@ final class SupervisorController: ObservableObject {
   /// Whether a usable tmux (3.2+) exists. Found once at launch: it runs a process, so no view asks for it.
   var tmuxUsable: Bool
   private var refresh: Timer?
+  /// The popup for a thread session's start-up questions (NeedsYouPopup.swift); it never takes the keyboard.
+  private var needsYouPopups: NeedsYouPopupController?
   /// Settings changed before setup wait here (U8); see `PreSetup`.
   let store: SettingsStore
 
@@ -86,18 +94,25 @@ final class SupervisorController: ObservableObject {
     workers?.postNotice = { [weak sup] thread, text in sup?.postToThread(thread, text: text) ?? .failed }
     status = supervisor.status
     // Before setup the file doesn't exist and the supervisor would start from the defaults: hand it the held values.
-    if !start.hasFile { sup.updateConfig(cfg) }
+    if !start.hasFile {
+      sup.updateConfig(cfg)
+      sup.drain()  // ticking has not started, so this is instant; `currentConfig()` below must see the held values
+    }
     supervisor.onEvent = { [weak self] e in Task { @MainActor in self?.handle(e) } }
     workers?.onEvent = { [weak self] e in Task { @MainActor in self?.handleWorker(e) } }
+    // asked from the worker queue: nothing here waits for the main thread. False when there is no controller to ask.
+    workers?.openTerminals = { [weak self] thread in
+      guard self != nil else { return false }
+      Task { @MainActor in self?.showThreadTerminal(thread) }
+      return true
+    }
+    if let w = workers { needsYouPopups = NeedsYouPopupController(source: w, quiet: { MainActor.assumeIsolated { NeedsYouPopupController.statusQuiet() } }) }
     refresh = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in
         guard let self else { return }
         self.status = self.supervisor.status
         if let w = self.workers {
-          Task.detached {
-            let running = w.snapshot().anyMayBeRunning
-            await MainActor.run { if self.workersRunning != running { self.workersRunning = running } }
-          }
+          WorkersRunningPoll.poll(w) { running in if self.workersRunning != running { self.workersRunning = running } }
         }
       }
     }
@@ -108,6 +123,7 @@ final class SupervisorController: ObservableObject {
       workers?.startTicking()
     }
     // A tap on a banner opens the pane before any menu button has attached a model to it.
+    Self.current = self
     TerminalWindowController.shared.attach(model: self)
   }
 
@@ -125,10 +141,12 @@ final class SupervisorController: ObservableObject {
       cfg.claudePath == "auto"
       ? (LoginShellEnv.which("claude", path: loginEnv["PATH"], isExecutable: FileManager.default.isExecutableFile) ?? "claude")
       : cfg.claudePath
-    let o = WorkerManager.Options(
+    var o = WorkerManager.Options(
       talosHome: talosHome, agentDir: cfg.agentDir, claudePath: claude,
       permissionFlag: cfg.args.contains("--dangerously-skip-permissions") ? "--dangerously-skip-permissions" : nil,
       tmux: tmux, tmuxConf: conf)
+    o.mainArgs = cfg.args
+    o.auditLogPath = Self.auditPath
     let m = WorkerManager(options: o, probe: probe, baseEnv: { loginEnv }, mainPanePid: mainPid)
     if let current { m.launchSource = { Self.launchSource(current(), loginEnv: loginEnv) } }
     return m
@@ -143,7 +161,7 @@ final class SupervisorController: ObservableObject {
       : cfg.claudePath
     return .init(
       agentDir: cfg.expandedAgentDir(home: NSHomeDirectory()), claudePath: claude,
-      permissionFlag: cfg.args.contains("--dangerously-skip-permissions") ? "--dangerously-skip-permissions" : nil)
+      permissionFlag: cfg.args.contains("--dangerously-skip-permissions") ? "--dangerously-skip-permissions" : nil, mainArgs: cfg.args)
   }
 
   /// How many times tmux was looked for (it runs `tmux -V`). A test asserts a window being open adds none.
@@ -170,7 +188,9 @@ final class SupervisorController: ObservableObject {
   func handle(_ e: Supervisor.Event) {
     status = supervisor.status
     switch e {
-    case .needsYou(let n): notice = "\(SupervisorNotice.needsYou): \(Self.describe(n))"
+    case .needsYou(let n):
+      notice = "\(SupervisorNotice.needsYou): \(Self.describe(n))"
+      needsYouEventNotice = notice
     case .openTerminal:
       // Emitted when `open_terminal_on_dialog` is on. Nothing handled it, so the setting did nothing (audit D8).
       TerminalWindowController.shared.attach(model: self)
@@ -203,6 +223,14 @@ final class SupervisorController: ObservableObject {
       notice = "Couldn't tell the \(thread) thread its session is waiting on a prompt. Open Terminals… to answer it."
     default: break
     }
+  }
+
+  /// What the menu says for `notice`. The supervisor's own needs-you line describes `status.needsYou` as it is now: it puts the
+  /// question back quietly (no event) after a blank screen or when another dialog's warning ends, so the text of the last event
+  /// can be about a dialog that is gone. Every other notice, and a thread session's needs-you line, is shown as it was set.
+  static func following(_ notice: String, eventNotice: String?, current: Supervisor.NeedsYou?) -> String {
+    guard let current, notice == eventNotice else { return notice }
+    return "\(SupervisorNotice.needsYou): \(describe(current))"
   }
 
   static func describe(_ n: Supervisor.NeedsYou) -> String {

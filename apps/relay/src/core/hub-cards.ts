@@ -1,6 +1,7 @@
 // Card decisions: a tap in the app, a tap on a notification, and putting a card back when the Mac refuses it.
-// Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks are in hub.ts; some
-// handlers here run their own device, seen-id, step-up or card-state checks, so read both when auditing trust.
+// Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks (session, pairing,
+// schema) are in hub-app-conn.ts and hub-app-frames.ts; some handlers here run their own device, seen-id, step-up
+// or card-state checks, so read both when auditing trust.
 import {
   type ActBodyT,
   type CardT,
@@ -21,7 +22,7 @@ import { DEFAULT_AGENT_CONFIG } from './default-config.ts'
 import type { BridgeFeatures } from './features.ts'
 import type { AppConn, Hub, HubDeps } from './hub.ts'
 import type { StoredFrame } from './store.ts'
-import { DAY_MS, mkFrame } from './util.ts'
+import { DAY_MS, longTimeout, mkFrame } from './util.ts'
 
 /** What the cards handlers use of Hub, and nothing else. Hub builds it in its constructor. */
 export type CardsCtx = {
@@ -42,6 +43,7 @@ export type CardsCtx = {
   stampForApps(frame: Record<string, unknown>): StoredFrame
   enqueueRow(stamped: StoredFrame, ttlMs: number): void
   afterEnqueue(stamped: StoredFrame): void
+  cardTimers: Map<string, unknown>
   expireCard(card: CardT): void
   agentConfig(): ReturnType<Hub['agentConfig']>
   nativeApproveCard(body: unknown): string | undefined
@@ -49,6 +51,31 @@ export type CardsCtx = {
 }
 
 export const cardsFrames = {
+  /** Arms the timer that expires a pending card when its time comes. */
+  scheduleCardExpiry(this: CardsCtx, cardId: string, expiresAt: number): void {
+    const prev = this.cardTimers.get(cardId)
+    if (prev) this.d.clock.clearTimeout(prev)
+    longTimeout(
+      this.d.clock,
+      () => {
+        this.cardTimers.delete(cardId)
+        const card = this.d.store.getCard(cardId)
+        if (card?.state === 'pending') this.expireCard(card)
+      },
+      expiresAt - this.d.clock.now(),
+      (h) => this.cardTimers.set(cardId, h),
+    )
+  },
+
+  expireCard(this: CardsCtx, card: CardT): void {
+    if (this.d.store.getCard(card.id)?.state !== 'pending') return
+    this.d.store.setCardState(card.id, { state: 'expired' })
+    const stamped = this.stampForApps(
+      mkFrame(this.d.clock, 'card.update', { card_id: card.id, state: 'expired', reason: 'expired' }),
+    )
+    this.fanOut(stamped)
+  },
+
   /** The `card.resolve` frame: device check, duplicate check, step-up, then the card-state check. The `case` of that name in Hub.onAppFrameBuiltin. */
   async onCardResolve(
     this: CardsCtx,

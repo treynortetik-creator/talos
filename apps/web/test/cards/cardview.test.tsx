@@ -3,13 +3,7 @@ import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CardDeepLink } from '../../src/features/cards/CardDeepLink.tsx'
-import {
-  collapseLine,
-  editsFromDraft,
-  isAltered,
-  RESULT_OVERDUE_MS,
-  renderedHash,
-} from '../../src/features/cards/logic.ts'
+import { collapseLine, editsFromDraft, isAltered, RESULT_OVERDUE_MS } from '../../src/features/cards/logic.ts'
 import { LiveCard, makeCard, renderWith, setup } from './helpers.tsx'
 
 const view = (card: ReturnType<typeof makeCard>) => <LiveCard id={card.id} />

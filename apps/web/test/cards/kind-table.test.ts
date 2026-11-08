@@ -1,4 +1,4 @@
-// The card kinds are one table (CARD_KIND_MINTER); the app's label and icon tables must have an entry for each kind.
+// The card kinds are one table (CARD_KIND_TABLE); the app's label and icon tables must have an entry for each kind.
 import { CARD_KINDS, type CardKind } from '@talos-app/protocol'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -11,6 +11,7 @@ import {
   IconChat,
   IconClock,
   IconDiamond,
+  IconKeyboard,
   IconMail,
   IconMegaphone,
   IconRocket,
@@ -51,6 +52,7 @@ describe('card kind table', () => {
       permission: IconAlert,
       app_action: IconDiamond,
       config: IconSettings,
+      dialog: IconKeyboard,
     }
     for (const kind of CARD_KINDS) expect(draw(KIND_ICON[kind]), kind).toBe(draw(expected[kind]))
     // The pin only means something if the icons differ from each other (the two diamonds aside).

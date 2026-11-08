@@ -74,16 +74,29 @@ export async function importDevicePrivateKey(privateJwk: JsonWebKey): Promise<Cr
   return subtle().importKey('jwk', privateJwk, ALG, false, ['sign'])
 }
 
-/** The exact string that is signed. */
-export function ownerSigningInput(frame: Record<string, unknown>): string {
-  const deviceId = frame.device_id
-  if (typeof deviceId !== 'string') throw new Error('owner frame has no device_id')
+/**
+ * The canonical text the owner's signature commits to: the JCS form of the frame without `osig`, `relay` and `stepup_token`.
+ * Built from the RAW frame (what was received), never from a parsed copy.
+ */
+export function ownerSignedString(frame: Record<string, unknown>): string {
   // fromEntries defines own properties, so an own `__proto__` key is signed like any other (assigning rest[k] = v would
   // set the prototype instead and leave that field outside the signature).
   const rest = Object.fromEntries(
     Object.entries(frame).filter(([k]) => !(UNSIGNED_FIELDS as readonly string[]).includes(k)),
   )
-  return `${OWNER_SIG_DOMAIN}\n${deviceId}\n${sha256Hex(jcs(rest))}`
+  return jcs(rest)
+}
+
+/** The exact string that is signed, from a device id and the canonical text above (`ownerSignedString`). */
+export function ownerSigningInputFor(deviceId: string, signed: string): string {
+  return `${OWNER_SIG_DOMAIN}\n${deviceId}\n${sha256Hex(signed)}`
+}
+
+/** The exact string that is signed. */
+export function ownerSigningInput(frame: Record<string, unknown>): string {
+  const deviceId = frame.device_id
+  if (typeof deviceId !== 'string') throw new Error('owner frame has no device_id')
+  return ownerSigningInputFor(deviceId, ownerSignedString(frame))
 }
 
 /** Returns a copy of `frame` with `osig` set. `frame` must be the raw object that will be serialized. */
@@ -110,6 +123,29 @@ export async function verifyOwnerFrame(frame: Record<string, unknown>, pubkey: J
     const spki = new Uint8Array(await subtle().exportKey('spki', key))
     if (deviceIdFromSpki(spki) !== frame.device_id) return false
     return await subtle().verify(SIGN_ALG, key, sig, utf8(ownerSigningInput(frame)))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Verifies `osig` over a canonical text that was kept as a string (`ownerSignedString` of the frame the owner signed), for a
+ * reader that is handed the text and not the frame. `deviceId` must be the id of `pubkey`. Returns false (never throws).
+ */
+export async function verifyOwnerSignedString(
+  signed: string,
+  osig: string,
+  deviceId: string,
+  pubkey: JwkP256T | CryptoKey,
+): Promise<boolean> {
+  try {
+    if (osig.length !== 86) return false
+    const sig = b64urlDecode(osig)
+    if (sig.length !== 64) return false
+    const key = 'kty' in pubkey ? await importDevicePublicKey(pubkey) : pubkey
+    const spki = new Uint8Array(await subtle().exportKey('spki', key))
+    if (deviceIdFromSpki(spki) !== deviceId) return false
+    return await subtle().verify(SIGN_ALG, key, sig, utf8(ownerSigningInputFor(deviceId, signed)))
   } catch {
     return false
   }

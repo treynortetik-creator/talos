@@ -1,0 +1,64 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "ignoreExportsUsedInFile": true,
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.{ts,mjs}", "!scripts/*.test.ts"],
+      "project": ["scripts/**/*.{ts,mjs}"],
+      // `claude-code` is provided by the Claude Code runtime, not npm: `claude-code/testing` is the test harness that
+      // `claude plugin test` supplies (the CLI pinned in plugins/talos-app-mod/CLAUDE_CODE_VERSION), and
+      // plugins/talos-app-mod/hooks/register.ts imports `type { Register } from 'claude-code'`. It cannot be a devDependency.
+      "ignoreDependencies": ["claude-code"],
+      // System tools that the root tests call; not npm packages.
+      "ignoreBinaries": [
+        "realpath", // scripts/ci-local-runner.test.ts
+        "jq", // scripts/ci-runner.test.ts
+        "mkfifo" // scripts/kit-identity.test.ts, scripts/kit-onboarding.test.ts
+      ],
+      // vitest.config.ts: `setupFiles: ['test/setup-clock.ts']` sits in the `web` project, whose root is apps/web, so it is
+      // apps/web/test/setup-clock.ts. Knip resolves it from the repo root, where it is not found.
+      "ignoreUnresolved": ["^test/setup-clock\\.ts$"]
+    },
+    "apps/bridge": {
+      "entry": ["src/server.ts", "src/worker/*.ts", "scripts/*.ts", "test/**/*.ts", "test-contract/**/*.ts"],
+      "project": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts", "test-contract/**/*.ts"],
+      // System tools: `shortcuts` (macOS Shortcuts CLI) in src/share/shortcut.ts; `openssl` in test/apps/guarded-fetch-tls.test.ts;
+      // `mkfifo` in test/review-memory-recheck.test.ts.
+      "ignoreBinaries": ["shortcuts", "openssl", "mkfifo"]
+    },
+    "apps/relay": {
+      "entry": ["src/index.ts", "scripts/*.{ts,mjs}", "test/**/*.ts"],
+      "project": ["src/**/*.ts", "scripts/**/*", "test/**/*.ts"],
+      "ignoreDependencies": ["canonicalize", "ulid", "rss-parser", "fast-xml-parser"]
+    },
+    "apps/web": {
+      "entry": ["test/**/*.{ts,tsx}"],
+      "project": ["src/**/*.{ts,tsx,css}", "test/**/*.{ts,tsx}"],
+      "ignoreDependencies": ["@types/markdown-it"]
+    },
+    "apps/mobile": {
+      "entry": ["scripts/*", "test/**/*.ts"],
+      "project": ["scripts/**/*", "test/**/*.ts", "*.ts"],
+      "ignoreDependencies": ["@capacitor/haptics", "@capacitor/keyboard"],
+      // System tools: `xcodegen` and `swift` in package.json scripts, `xcodegen` in scripts/check-generated.ts (macOS only).
+      "ignoreBinaries": ["xcodegen", "swift"]
+    },
+    "packages/protocol": {
+      "entry": ["scripts/*", "test/**/*.ts", "test-browser/**/*.ts"],
+      "project": ["src/**/*.ts", "scripts/**/*", "test/**/*.ts", "test-browser/**/*.ts"]
+    },
+    "packages/testkit": {
+      "entry": ["test/**/*.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "packages/integrations": {
+      "entry": ["test/**/*.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "e2e": {
+      "entry": ["tests/**/*.ts", "harness/drive-reporter.ts"],
+      "project": ["**/*.ts"],
+      "ignoreDependencies": ["@modelcontextprotocol/server-.*"]
+    }
+  }
+}

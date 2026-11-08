@@ -88,6 +88,17 @@
         ]
       }
     ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 3600,
+            "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/permission-relay.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 \"$f\""
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

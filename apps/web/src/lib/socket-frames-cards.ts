@@ -13,16 +13,24 @@ export function onCardCreate(ctx: FrameContext, frame: FrameOf<'card.create'>): 
 export function onCardUpdate(ctx: FrameContext, frame: FrameOf<'card.update'>): void {
   const { set, bumpSeq } = ctx
   set((s) => ({
-    cards: s.cards.map((c) =>
-      c.id === frame.card_id
-        ? {
-            ...c,
-            state: frame.state,
-            ...(frame.resolution ? { resolution: frame.resolution } : {}),
-            ...(frame.result ? { result: frame.result } : {}),
-          }
-        : c,
-    ),
+    cards: s.cards.map((c) => {
+      if (c.id !== frame.card_id) return c
+      // The explanation of a permission card is unsigned, so it is taken once: only from "pending" to "ready" or "failed", the
+      // first answer wins, and nothing sets it on a card that never had one. Its update repeats the card's state; that must
+      // not move the card (one the owner already answered stays answered).
+      const explain =
+        frame.explain && frame.explain.status !== 'pending' && c.explain?.status === 'pending'
+          ? { explain: frame.explain }
+          : {}
+      if (frame.explain && !frame.resolution && !frame.result) return { ...c, ...explain }
+      return {
+        ...c,
+        state: frame.state,
+        ...(frame.resolution ? { resolution: frame.resolution } : {}),
+        ...(frame.result ? { result: frame.result } : {}),
+        ...explain,
+      }
+    }),
   }))
   bumpSeq(frame)
   return

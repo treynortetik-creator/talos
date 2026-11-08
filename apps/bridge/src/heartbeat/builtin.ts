@@ -179,23 +179,45 @@ function htmlUrlOf(subjectUrl: string | undefined, repoUrl: string | undefined):
   return httpsOnly(repoUrl)
 }
 
-/** `fn` over `xs`, `size` at a time, results in the order of `xs`. After a failure nothing new starts; the first error is thrown once everything running has ended. */
-async function inPool<T, R>(xs: readonly T[], size: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+/**
+ * `fn` over `xs`, `size` at a time, results in the order of `xs`. One AbortController is shared by the whole pool: after a failure,
+ * or when `deadline` passes, or when `outer` aborts, every lookup still running is stopped (its process killed) and nothing new
+ * starts. The first error is thrown once everything has ended.
+ */
+async function inPool<T, R>(
+  xs: readonly T[],
+  size: number,
+  deadline: number,
+  outer: AbortSignal,
+  fn: (x: T, signal: AbortSignal) => Promise<R>,
+): Promise<R[]> {
   const out: R[] = new Array(xs.length)
+  const pool = new AbortController()
+  const onOuter = () => pool.abort()
+  if (outer.aborted) pool.abort()
+  else outer.addEventListener('abort', onOuter, { once: true })
+  const timer = setTimeout(() => pool.abort(), Math.max(0, deadline - Date.now()))
   let next = 0
   let failed: { e: unknown } | null = null
   const worker = async () => {
-    while (!failed && next < xs.length) {
+    while (!failed && !pool.signal.aborted && next < xs.length) {
       const i = next++
       try {
-        out[i] = await fn(xs[i] as T)
+        out[i] = await fn(xs[i] as T, pool.signal)
       } catch (e) {
         failed ??= { e }
+        pool.abort() // the siblings do not finish work nobody will use
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(size, xs.length) }, worker))
+  try {
+    await Promise.all(Array.from({ length: Math.min(size, xs.length) }, worker))
+  } finally {
+    clearTimeout(timer)
+    outer.removeEventListener('abort', onOuter)
+  }
   if (failed) throw (failed as { e: unknown }).e
+  if (pool.signal.aborted) throw new Error(outer.aborted ? 'stopped' : 'ran out of time before every PR was checked')
   return out
 }
 
@@ -356,7 +378,9 @@ async function github(
       looks.push({ repo, n, sha, pr })
     }
   }
-  const cis = await inPool(looks, PR_LOOKUPS_AT_ONCE, (l) => prCi(l.repo, l.sha, d, deadline, signal))
+  const cis = await inPool(looks, PR_LOOKUPS_AT_ONCE, deadline, signal, (l, sig) =>
+    prCi(l.repo, l.sha, d, deadline, sig),
+  )
   for (const [i, { repo, n, sha, pr }] of looks.entries()) {
     const ci = cis[i] as Ci
     const url = httpsOnly(str(pr.html_url))

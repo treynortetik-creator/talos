@@ -88,6 +88,12 @@ export function runScript(script: string, opts: RunOptions): Promise<RunResult> 
 /** Why a "skip ..." line a kit test prints is expected. A line that matches nothing here is reported as unlisted. */
 export const KNOWN_SKIPS: { script: string; line: RegExp; reason: string }[] = [
   {
+    script: 'test-address.sh',
+    line: /^skip address parity\b/i,
+    reason:
+      'the shared corpus (packages/protocol/fixtures/address-corpus.json) is not next to this kit, so only a short built-in address list runs; the full parity against the TypeScript check needs the repo checkout',
+  },
+  {
     script: 'test-jobs.sh',
     line: /^skip harden test\b/i,
     reason:

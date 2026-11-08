@@ -56,6 +56,7 @@ import { cmdTheme } from './theme-cli.ts'
 import { cmdTrust } from './trust-cli.ts'
 import { cmdV2, V2_USAGE } from './v2-cli.ts'
 import { BRIDGE_COMMIT, BRIDGE_VERSION, commitReport, resolveVersion, versionSkew } from './version.ts'
+import { workerCliRefusal } from './worker/cli-refusal.ts'
 
 export type CliIO = {
   /** False when stdin or stdout is not a terminal. Absent (a test's io) counts as a terminal. */
@@ -998,7 +999,7 @@ const USAGE = `talos-app ${BRIDGE_VERSION}
   logs [-n <lines>] [-f]
   trust on|off|show
   theme reset|show
-  lead init <thread-id> --folder <dir> --agent-dir <dir> [--disable-mcp <names>] | lead check <folder> [--agent-dir <dir>]
+  lead init <thread-id> --folder <dir> --agent-dir <dir> [--mcp <names>] [--sandbox | --light] | lead check <folder> [--agent-dir <dir>]
   report [--agent-dir <dir>] [--lines <n>] [--out <file>]
   post <thread> <text>
   digest [--since <ISO>]
@@ -1014,17 +1015,6 @@ const USAGE = `talos-app ${BRIDGE_VERSION}
   apps scan [--check] [--agent-dir <dir>] [--exclude-plugin <name>] | list | revoke <server|key-prefix> | login <server> | logout <server> | strict on|off
 ${V2_USAGE}`
 
-/** The nearest folder at or above `cwd` that holds a `.talos-lead` marker (a lead's folder), or undefined. */
-function leadFolderAbove(cwd: string): string | undefined {
-  let dir = resolve(cwd)
-  for (;;) {
-    if (existsSync(join(dir, '.talos-lead'))) return dir
-    const up = dirname(dir)
-    if (up === dir) return undefined
-    dir = up
-  }
-}
-
 export async function runCli(
   argv: string[],
   io: CliIO,
@@ -1034,16 +1024,10 @@ export async function runCli(
   const [cmd, ...rest] = argv
   // A thread's own session (a lead) works through its own tools: the mailbox commands read and write across threads.
   const raw = envOverride ?? process.env
-  if (cmd === 'digest' || cmd === 'post' || cmd?.startsWith('inbox')) {
-    // the variables the supervisor sets, or a lead's marker in this folder or a parent (unsetting the variables does not help)
-    const byEnv = raw.TALOS_APP_WORKER_THREAD || raw.TALOS_SESSION_ROLE === 'worker' ? 'a thread session' : undefined
-    const folder = byEnv ? undefined : leadFolderAbove(deps.cwd ?? process.cwd())
-    if (byEnv || folder) {
-      io.err(
-        `talos-app ${cmd} is not available in ${byEnv ?? `a lead's folder (${folder}/.talos-lead exists)`}: a thread works through its own thread's tools. Ask the owner.`,
-      )
-      return 1
-    }
+  const refusal = workerCliRefusal(argv, raw, deps.cwd)
+  if (refusal) {
+    io.err(refusal)
+    return 1
   }
   const env = loadEnv(raw)
   const gated = io.isTerminal === false ? terminalOnly(argv) : undefined

@@ -37,7 +37,9 @@ const ok = {
     text: 'Plain text here.',
     truncated: false,
   },
-  terminal_view: { type: 'terminal_view', rect: { x: 240, y: 0, width: 880, height: 780 } },
+  terminal_view: { type: 'terminal_view', rect: { x: 240, y: 0, width: 880, height: 780 }, session: 'trip' },
+  terminal_resume: { type: 'terminal_resume', thread_id: 'trip' },
+  terminal_leave: { type: 'terminal_leave' },
 } as const
 
 describe('web -> native bridge messages', () => {
@@ -142,6 +144,114 @@ describe('terminal_view', () => {
   })
 })
 
+const HOSTILE_IDS = [
+  '../etc',
+  'Trip',
+  't-trip',
+  '=agent',
+  'a;b',
+  'a b',
+  'trip\n',
+  '',
+  'all',
+  '1trip',
+  'x'.repeat(33),
+  'trip:0',
+  '$(id)',
+]
+
+describe('terminal_view session and terminal_resume (page -> shell, untrusted)', () => {
+  const view = (session: unknown) => ({ type: 'terminal_view', rect: null, session })
+  it('session is optional, "main" or a thread id', () => {
+    expect(WebToNative.safeParse({ type: 'terminal_view', rect: null }).success).toBe(true)
+    expect(WebToNative.safeParse(view('main')).success).toBe(true)
+    expect(WebToNative.safeParse(view('trip')).success).toBe(true)
+  })
+  it('a hostile session or thread id is refused, not clamped', () => {
+    for (const id of HOSTILE_IDS) {
+      if (id === 'all' || id === '') expect(WebToNative.safeParse(view(id)).success, id).toBe(false)
+      else expect(WebToNative.safeParse(view(id)).success, id).toBe(false)
+      expect(WebToNative.safeParse({ type: 'terminal_resume', thread_id: id }).success, `resume ${id}`).toBe(false)
+    }
+    for (const bad of [null, 7, ['trip'], { id: 'trip' }]) expect(WebToNative.safeParse(view(bad)).success).toBe(false)
+  })
+  it('terminal_resume names a thread, never main, and takes nothing else', () => {
+    expect(WebToNative.safeParse({ type: 'terminal_resume', thread_id: 'trip' }).success).toBe(true)
+    expect(WebToNative.safeParse({ type: 'terminal_resume' }).success).toBe(false)
+    expect(WebToNative.safeParse({ type: 'terminal_resume', thread_id: 'trip', keys: 'ls' }).success).toBe(false)
+    expect(NativeToWeb.safeParse({ type: 'terminal_resume', thread_id: 'trip' }).success).toBe(false)
+  })
+})
+
+describe('terminal_leave and terminal_select', () => {
+  it('terminal_leave is page -> shell only and carries nothing', () => {
+    expect(WebToNative.safeParse({ type: 'terminal_leave' }).success).toBe(true)
+    expect(WebToNative.safeParse({ type: 'terminal_leave', rect: null }).success).toBe(false)
+    expect(NativeToWeb.safeParse({ type: 'terminal_leave' }).success).toBe(false)
+  })
+  it('terminal_select names main or a thread id, and refuses anything else', () => {
+    expect(NativeToWeb.safeParse({ type: 'terminal_select', session: 'main' }).success).toBe(true)
+    for (const id of HOSTILE_IDS)
+      expect(NativeToWeb.safeParse({ type: 'terminal_select', session: id }).success, id).toBe(false)
+    expect(WebToNative.safeParse({ type: 'terminal_select', session: 'main' }).success).toBe(false)
+  })
+})
+
+describe('terminal_sessions (shell -> page)', () => {
+  const item = (o: Record<string, unknown> = {}) => ({
+    id: 'trip',
+    name: 'OC Test',
+    state: 'working',
+    key: '2',
+    panel: 'terminal',
+    action: null,
+    detail: '',
+    ...o,
+  })
+  const parse = (items: unknown[]) => {
+    const r = NativeToWeb.safeParse({ type: 'terminal_sessions', items })
+    if (!r.success || r.data.type !== 'terminal_sessions') throw new Error('refused')
+    return r.data.items
+  }
+  it('an unknown state or panel degrades that one tab; the others stay', () => {
+    const got = parse([
+      item({ id: 'main', name: 'Main', state: 'live', key: '1' }),
+      item({ state: 'levitating', panel: 'hologram', action: 'dance' }),
+    ])
+    expect(got.map((g) => g.id)).toEqual(['main', 'trip'])
+    expect(got[1]).toMatchObject({ state: 'unknown', panel: 'note', action: null })
+    expect(got[0]?.state).toBe('live')
+  })
+  it('an item with a hostile id or no name is dropped, not the frame', () => {
+    const got = parse([
+      item({ id: 'main', name: 'Main' }),
+      ...HOSTILE_IDS.map((id) => item({ id })),
+      item({ name: '' }),
+      'junk',
+      null,
+      item({ id: 'ok2' }),
+    ])
+    expect(got.map((g) => g.id)).toEqual(['main', 'ok2'])
+  })
+  it('a field a newer shell adds is ignored; an older frame without key or detail still reads', () => {
+    expect(parse([{ ...item(), badge_color: 'red' }])).toHaveLength(1)
+    const old = parse([{ id: 'main', name: 'Main', state: 'live' }])
+    expect(old[0]).toMatchObject({ id: 'main', key: null, panel: 'note', detail: '' })
+  })
+  it('more than 101 items is refused (a bug, not a list)', () => {
+    expect(
+      NativeToWeb.safeParse({ type: 'terminal_sessions', items: Array.from({ length: 102 }, () => item()) }).success,
+    ).toBe(false)
+    expect(WebToNative.safeParse({ type: 'terminal_sessions', items: [] }).success).toBe(false)
+  })
+  it('terminal_resume_result refuses an outcome it does not know and a hostile id', () => {
+    const r = { type: 'terminal_resume_result', thread_id: 'trip', outcome: 'asked' }
+    expect(NativeToWeb.safeParse(r).success).toBe(true)
+    expect(NativeToWeb.safeParse({ ...r, outcome: 'maybe' }).success).toBe(false)
+    expect(NativeToWeb.safeParse({ ...r, thread_id: '../x' }).success).toBe(false)
+  })
+})
+
 describe('native -> web bridge messages', () => {
   const good = {
     navigate: { type: 'navigate', path: '/t/general' },
@@ -149,8 +259,62 @@ describe('native -> web bridge messages', () => {
     voice_note: { type: 'voice_note', thread_id: 'general', mime: 'audio/mp4', duration_ms: 1200, bytes_b64: 'AAAA' },
     enroll_code: { type: 'enroll_code', code: '0123456789ABCDEFGHJKMNPQRS' },
     companion_reply_request: { type: 'companion_reply_request', req: 'r12', thread_id: 'general' },
+    companion_replies: { type: 'companion_replies', on: true },
     notify_permission: { type: 'notify_permission', state: 'denied' },
+    terminal_sessions: {
+      type: 'terminal_sessions',
+      items: [
+        {
+          id: 'main',
+          name: 'Main',
+          state: 'live',
+          key: '1',
+          panel: 'terminal',
+          action: null,
+          detail: 'Main is running.',
+        },
+      ],
+    },
+    terminal_resume_result: { type: 'terminal_resume_result', thread_id: 'trip', outcome: 'asked' },
+    terminal_select: { type: 'terminal_select', session: 'trip' },
   } as const
+  it('companion_replies is native -> web only, a boolean and an optional list of what he showed', () => {
+    expect(WebToNative.safeParse(good.companion_replies).success).toBe(false)
+    for (const bad of [{ on: 1 }, { on: 'true' }, {}, { on: true, extra: 1 }])
+      expect(NativeToWeb.safeParse({ type: 'companion_replies', ...bad }).success).toBe(false)
+    expect(NativeToWeb.safeParse({ type: 'companion_replies', on: false }).success).toBe(true)
+    const shown = [{ thread_id: 'ops', seq: 7 }]
+    expect(NativeToWeb.safeParse({ type: 'companion_replies', on: true, shown, epoch: 3 }).success).toBe(true)
+    for (const epoch of [-1, 1.5, '3'])
+      expect(NativeToWeb.safeParse({ type: 'companion_replies', on: true, epoch }).success).toBe(false)
+    for (const bad of [
+      [{ thread_id: 'ops' }],
+      [{ thread_id: 'ops', seq: -1 }],
+      [{ thread_id: 'all', seq: 1 }],
+      [{ thread_id: 'ops', seq: 1, extra: 1 }],
+      Array.from({ length: 13 }, (_, i) => ({ thread_id: `t${i}`, seq: i })),
+    ])
+      expect(NativeToWeb.safeParse({ type: 'companion_replies', on: true, shown: bad }).success).toBe(false)
+  })
+  it('companion_state carries the thread on screen and the replies it holds, both optional', () => {
+    const frame = ok.companion_state as Record<string, unknown>
+    expect(WebToNative.safeParse({ ...frame, viewing: 'general', held: [{ thread_id: 'ops', seq: 4 }] }).success).toBe(
+      true,
+    )
+    expect(WebToNative.safeParse({ ...frame, viewing: null, held: [] }).success).toBe(true)
+    expect(WebToNative.safeParse(frame).success).toBe(true)
+    expect(WebToNative.safeParse({ ...frame, replies_epoch: 3 }).success).toBe(true)
+    expect(WebToNative.safeParse({ ...frame, replies_epoch: null }).success).toBe(true)
+    for (const bad of [
+      { viewing: 'All' },
+      { viewing: 5 },
+      { held: [{ thread_id: 'ops' }] },
+      { held: 'ops' },
+      { replies_epoch: -1 },
+      { replies_epoch: '3' },
+    ])
+      expect(WebToNative.safeParse({ ...frame, ...bad }).success, JSON.stringify(bad)).toBe(false)
+  })
   it('notify_permission refuses a state it does not know', () => {
     expect(NativeToWeb.safeParse({ type: 'notify_permission', state: 'maybe' }).success).toBe(false)
     expect(NativeToWeb.safeParse({ ...good.notify_permission, extra: 1 }).success).toBe(false)

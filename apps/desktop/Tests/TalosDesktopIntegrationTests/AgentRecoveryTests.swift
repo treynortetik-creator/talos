@@ -656,25 +656,80 @@ struct AgentAutoRestoreIntegrationTests {
   // 2. a crash loop restores once, then restarts once
   @Test(arguments: bothHosts)
   func aCrashLoopRestoresOnceThenRestartsOnceAndNeverLoops(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "crash-loop.sh")
+    // Start 1 crashes 6 s after its notice (the fake's default is 1 s), so a late poll still sees it running after the human Enter.
+    let r = try Rig(kind, scenario: "crash-loop.sh", env: ["FAKE_CRASH_AFTER": "6"])
     defer { r.teardown() }
+    try crashLoopRestoresOnce(r)
+  }
+
+  /// The same, when agents die before the host reads their pids (what a loaded runner does): the first two restarts (respawns 0
+  /// and 1) audit `restart_failed`, not `exit`; the restore's cold start (respawn 5) is a `start_failed`, and stops the agent as
+  /// `.startFailed`, not `.crashLoop`. Counting `exit` lines alone, or waiting for `.crashLoop`, fails on each of these.
+  @Test(.enabled(if: Rig.hasTmux), arguments: [[0, 1], [5]])
+  func aCrashLoopStillRestoresOnceWhenSomeAgentsDieBeforeTheirPidIsRead(slowRespawns: [Int]) throws {
+    let r = try Rig(.tmux, scenario: "crash-loop.sh", env: ["FAKE_CRASH_AFTER": "6"])
+    defer { r.teardown() }
+    // After the real respawn, the shim waits (at most 8 s, under tmux's 10 s timeout) until the pane is dead, so the host's next
+    // read finds a dead pane with no pid however slow the machine is. Only the numbered respawns (counted from 0) wait.
+    let shim = r.root + "/tmux-slow-respawn"
+    let count = r.root + "/respawn-count"
+    try """
+    #!/bin/bash
+    real='\(Rig.tmuxPath!)'
+    n=$(cat '\(count)' 2>/dev/null || echo 0)
+    "$real" "$@"; rc=$?
+    pre=(); seen=0; tgt=''; prev=''
+    for a in "$@"; do
+      [ "$a" = respawn-pane ] && seen=1
+      [ $seen = 0 ] && pre+=("$a")
+      [ $seen = 1 ] && [ "$prev" = -t ] && [ -z "$tgt" ] && tgt=$a
+      prev=$a
+    done
+    if [ $seen = 1 ]; then
+      echo $((n + 1)) > '\(count)'
+      case " \(slowRespawns.map(String.init).joined(separator: " ")) " in
+        *" $n "*) for _ in $(seq 40); do [ "$("$real" "${pre[@]}" display-message -p -t "$tgt" '#{pane_dead}')" = 1 ] && break; sleep 0.2; done ;;
+      esac
+    fi
+    exit $rc
+    """.write(toFile: shim, atomically: true, encoding: .utf8)
+    chmod(shim, 0o755)
+    r.tmuxBin = shim
+    r.makeSupervisor()
+    try crashLoopRestoresOnce(r)
+    if slowRespawns.contains(5) {
+      var startFailed = false
+      if case .startFailed? = stopReason(r.phase()) { startFailed = true }
+      #expect(startFailed, "\(r.phase())")
+      #expect(r.audit.components(separatedBy: " restore_start").last?.contains(" start_failed") == true, "\(r.audit)")
+    } else {
+      #expect(r.audited("restart_failed") >= 2, "the slowed restarts died before their pid: \(r.audit)")
+    }
+  }
+
+  private func crashLoopRestoresOnce(_ r: Rig) throws {
     try coldStartConfirmed(r)
     #expect(r.wait(60) { r.audited("restore_start") == 1 }, "phase \(r.phase()), audit: \(r.audit)")
     #expect(r.wait(30) { r.starts.count == 7 }, "the one restart: \(r.starts.count)")
     #expect(r.audit.contains("restore_start why=crash_loop"))
     // The restarted session crashes at once and the loop stops it again. That is not a reason for a second restore.
-    #expect(r.wait(30) { stopReason(r.phase()) == .crashLoop && r.audited("exit ") >= 7 }, "\(r.phase())")
+    // Seven starts, seven crashes, however each was audited (`exit`, `restart_failed`, or the restore start's `start_failed`).
+    #expect(r.wait(30) { r.loopStopped && r.crashes >= 7 }, "\(r.phase()), \(r.audit)")
     for _ in 0..<3 { r.sup.tickNow() }
     r.sup.drain()
     #expect(r.audited("restore_start") == 1, "the latch holds: \(r.audit)")
     #expect(r.restoreCalls == [r.restoreArgv], "the newest start version only, for this agent folder")
     #expect(r.starts.count == 7, "no loop")
+    #expect(r.crashes == 7, "seven starts, seven crashes, however each was audited: \(r.audit)")
   }
 
   // 3. and when it fails, nothing more happens
   @Test(arguments: bothHosts)
   func aFailedAutomaticRestoreStopsWithNoRestartAndNoSecondTry(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "crash-loop.sh") { c in c.talosAppCommand = [Rig.fixtures + "/talos-app-fails"] }
+    // Start 1 crashes 6 s after its notice (the fake's default is 1 s), so a late poll still sees it running after the human Enter.
+    let r = try Rig(kind, scenario: "crash-loop.sh", env: ["FAKE_CRASH_AFTER": "6"]) { c in
+      c.talosAppCommand = [Rig.fixtures + "/talos-app-fails"]
+    }
     defer { r.teardown() }
     try coldStartConfirmed(r)
     #expect(r.wait(60) { r.recovered == [.restoreFailed] }, "phase \(r.phase()), audit: \(r.audit)")

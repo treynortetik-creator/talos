@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { expectPurpose, openThreadSettings } from '../helpers/phone.ts'
+import { closePhoneMenu, expectPurpose, openThreadSettings } from '../helpers/phone.ts'
 
 // Fake mode (VITE_FAKE=1). Screenshots land in test/threads/shots/<project>-*.png for the PR.
 const shot = (name: string, project: string) => `test/threads/shots/${project}-${name}.png`
@@ -30,6 +30,7 @@ test('an empty thread explains itself; settings set notify and the note', async 
   await page.getByLabel('What goes here').fill('Notes for the trip')
   await page.screenshot({ path: shot('settings', info.project.name) })
   await page.getByRole('button', { name: 'Save' }).click()
+  await closePhoneMenu(page)
   await expectPurpose(page, 'Notes for the trip')
 })
 

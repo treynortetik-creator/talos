@@ -4,7 +4,6 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  MOD_BRIDGE_TOOLS,
   MOD_LIVE_WINDOW_MS,
   MOD_TOOL_DESCRIPTION,
   ModSyncResponse,
@@ -16,6 +15,7 @@ import { type FakeClock, FakeMod, fakeClock } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
 import { nullLogger } from '../src/log.ts'
 import { type ModEventSink, ModLink } from '../src/mod/link.ts'
+import { MOD_BRIDGE_TOOLS } from '../src/tools/table.ts'
 import { type Harness, startHarness } from './helpers.ts'
 import { helloArgs, signedSync, signingLink } from './mod-sign.ts'
 

@@ -431,11 +431,20 @@ def fetch_calendar(cfg, lo, hi, cfg_tz):
             if not url.lower().startswith(("https://", "http://")):
                 raise SourceError("calendar url must be http(s) or webcal")
             try:
+                import _addr        # the address check; a lone copy of this file without it refuses rather than fetch unchecked
+            except ImportError:
+                raise SourceError("the address check (_addr.py) is missing, so the ICS url is not fetched")
+            try:
                 req = urllib.request.Request(url, headers={"User-Agent": "talos-watcher"})
-                with urllib.request.urlopen(req, timeout=20) as r:
+                # every connection, the first and each redirect, goes through the address check; only a calendar the owner
+                # put on this machine may reach loopback
+                opener = _addr.build_opener(local_server=_addr.local_server_of(url))
+                with opener.open(req, timeout=20) as r:
                     text = r.read(5_000_000).decode("utf-8", "replace")
             except Exception as e:
-                raise SourceError("could not fetch the ICS url (%s)" % type(e).__name__)
+                if isinstance(getattr(e, "reason", None), _addr.BlockedAddressError):
+                    raise SourceError("the ICS url is refused: %s" % e.reason)
+                raise SourceError("could not fetch the ICS url (%s; %s)" % (type(e).__name__, _addr.NO_PROXY))
         elif cal.get("path"):
             try:
                 with open(os.path.expanduser(str(cal["path"])), encoding="utf-8", errors="replace") as fh:

@@ -16,7 +16,7 @@ enum Entry {
 /// The menu bar item, and the windows: Mac settings (Session, Connection, Permissions, Hotkeys, Companion, General) and the setup
 /// checklist. Help is not a window: it is a page in the Talos window (`HelpRouter`).
 struct TalosApp: App {
-  @StateObject private var model = SupervisorController()
+  @StateObject private var model: SupervisorController
   @StateObject private var web = WebController.shared
   @StateObject private var status = StatusCoordinator.shared
   @StateObject private var companion = CompanionController.shared
@@ -32,6 +32,8 @@ struct TalosApp: App {
     KeepAwake.shared.start(enabled: cfg.keepAwakeOnAC)
     WebController.shared.prepare()
     HotkeyController.shared.bootstrap(configured: cfg.hotkeys.compose)
+    // Made now, not when the menu is first opened: the Terminal screen in the Talos window reads it from the first launch.
+    _model = StateObject(wrappedValue: SupervisorController())
   }
 
   /// The standard About panel with the app's version (audit D62: the menu used to show none).
@@ -111,7 +113,6 @@ struct TalosApp: App {
         TerminalWindowController.shared.attach(model: model)
         TerminalWindowController.shared.show()
       }
-        .keyboardShortcut("k")
       Divider()
       if model.sessionIsUp {
         Button("Stop session") { model.stop() }.disabled(!model.configured || !model.supervisor.holdsSessionLock)
@@ -206,7 +207,9 @@ struct TalosApp: App {
                 TerminalWindowController.shared.show()
               },
               requestReply: { WebController.shared.requestLastReply(thread: $0, completion: $1) },
-              cancelReply: { WebController.shared.cancelLastReply() }))
+              cancelReply: { WebController.shared.cancelLastReply() },
+              postReplyBanner: { StatusCoordinator.shared.postReplyBanner(thread: $0, name: $1) },
+              setRepliesFlag: { WebController.shared.setCompanionReplies($0, shown: $1, epoch: $2) }))
           status.onCompanionChange = { CompanionController.shared.inputsChanged() }
           // A menu-bar-only app has no top menu at all, so the policy follows the windows (Dock icon while one is open).
           ActivationPolicyController.shared.start()
@@ -324,7 +327,8 @@ extension SupervisorController {
     default: kind = .other
     }
     let logExists = notice.hasPrefix(SupervisorNotice.noLogYet) && FileManager.default.fileExists(atPath: bridgeLogPath)
-    return SupervisorNotice.isStale(notice, phase: kind, needsYou: status.needsYou != nil, logExists: logExists) ? "" : notice
+    let shown = Self.following(notice, eventNotice: needsYouEventNotice, current: status.needsYou)
+    return SupervisorNotice.isStale(shown, phase: kind, needsYou: status.needsYou != nil, logExists: logExists) ? "" : shown
   }
 
   /// The failed stop the owner can act on: Try again / Start a new conversation (audit D41, D43).

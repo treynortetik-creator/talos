@@ -127,7 +127,7 @@ export const ChronosDetail = z.strictObject({
 })
 
 /** The draft as Chronos sees it: Talos-only fields stripped (S3.4 step 1). */
-export const ChronosDraft = ScheduleDraft.omit({ thread_id: true })
+export const ChronosDraft = ScheduleDraft.omit({ thread_id: true, memory: true })
 export const ChronosChange = z.discriminatedUnion('op', [
   z.strictObject({ op: z.literal('create'), draft: ChronosDraft }),
   z.strictObject({
@@ -332,7 +332,13 @@ const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` 
  */
 export function scheduleFromChronos(
   job: ChronosJobT,
-  extra: { thread_id: z.infer<typeof ThreadId> | null; offerAgeS: number | null; sessionBeatAgeS?: number | null },
+  extra: {
+    thread_id: z.infer<typeof ThreadId> | null
+    offerAgeS: number | null
+    sessionBeatAgeS?: number | null
+    /** Job memory is on (the sidecar says so). Absent from the row when off. */
+    memory?: boolean
+  },
 ): ScheduleT {
   const { ds: _ds, date_key: _dateKey, meta, ...j } = job
   const over: string[] = []
@@ -365,6 +371,7 @@ export function scheduleFromChronos(
     editable,
     read_only_reason: editable ? null : reason === null ? null : cut(reason, DISPLAY_LIMITS.read_only_reason),
     thread_id: extra.thread_id,
+    ...(extra.memory ? { memory: true } : {}),
     wait_reason: deriveWaitReason(job.today, extra.sessionBeatAgeS ?? null, extra.offerAgeS),
   }
 }
@@ -415,20 +422,32 @@ export function parseChronosSnapshot(raw: unknown): ChronosSnapshotRows {
   return { ok: true, head, jobs, unreadable }
 }
 
-/** Talos change -> Chronos change: strips `thread_id` from the draft or the `set` (S3.4 step 1). */
+/** A Talos-only choice the change carries (the job's memory switch), or not. */
+export type MemorySplit = { set: true; value: boolean } | { set: false }
+
+/**
+ * Talos change -> Chronos change: strips the Talos-only `thread_id` and `memory` from the draft or the `set` (S3.4 step 1).
+ * `memory` is in the answer only when the change mentioned it.
+ */
 export function toChronosChange(change: ScheduleChangeT): {
   chronos: ChronosChangeT
   threadId: { set: true; value: string | null } | { set: false }
+  memory?: MemorySplit
 } {
   if (change.op === 'create') {
-    const { thread_id, ...draft } = change.draft
-    return { chronos: { op: 'create', draft }, threadId: { set: true, value: thread_id } }
+    const { thread_id, memory, ...draft } = change.draft
+    return {
+      chronos: { op: 'create', draft },
+      threadId: { set: true, value: thread_id },
+      ...(memory === undefined ? {} : { memory: { set: true as const, value: memory } }),
+    }
   }
   if (change.op === 'update') {
-    const { thread_id, ...set } = change.set
+    const { thread_id, memory, ...set } = change.set
     return {
       chronos: { op: 'update', id: change.id, base_etag: change.base_etag, set },
       threadId: thread_id === undefined ? { set: false } : { set: true, value: thread_id },
+      ...(memory === undefined ? {} : { memory: { set: true as const, value: memory } }),
     }
   }
   return { chronos: change, threadId: { set: false } }
@@ -438,11 +457,13 @@ export function toChronosChange(change: ScheduleChangeT): {
 export function fromChronosChange(
   normalized: ChronosChangeT,
   threadId: { set: true; value: string | null } | { set: false },
+  memory?: MemorySplit,
 ): ScheduleChangeT {
+  const mem = memory?.set ? { memory: memory.value } : {}
   if (normalized.op === 'create')
-    return { op: 'create', draft: { ...normalized.draft, thread_id: threadId.set ? threadId.value : null } }
+    return { op: 'create', draft: { ...normalized.draft, thread_id: threadId.set ? threadId.value : null, ...mem } }
   if (normalized.op === 'update')
-    return { ...normalized, set: { ...normalized.set, ...(threadId.set ? { thread_id: threadId.value } : {}) } }
+    return { ...normalized, set: { ...normalized.set, ...(threadId.set ? { thread_id: threadId.value } : {}), ...mem } }
   return normalized
 }
 

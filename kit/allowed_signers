@@ -1,0 +1,5 @@
+# allowed_signers: who may sign a Talos kit release. `talos update` checks every bundle against THIS file in the release that is
+# installed now (never the file inside the bundle it is checking), with `ssh-keygen -Y verify -n talos-kit-release -I talos-release`.
+# One line per key: talos-release namespaces="talos-kit-release" ssh-ed25519 AAAA...
+# A release that changes this list takes effect for the NEXT update. No key is listed in a source checkout: the owner of the
+# release key adds the public half here before cutting a release; until then `talos update` refuses every bundle ("no signing key").

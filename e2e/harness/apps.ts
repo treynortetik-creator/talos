@@ -30,8 +30,6 @@ export type AppServerSpec = {
   approve?: boolean
 }
 
-export type AppsRig = Awaited<ReturnType<typeof startApps>>
-
 /** One scripted `talos-app apps scan`: returns what it printed. Throws with the output if the scan fails. */
 async function runScanScript(args: Record<string, unknown>): Promise<{ out: string[]; asked: string[] }> {
   return await new Promise((resolve, reject) => {

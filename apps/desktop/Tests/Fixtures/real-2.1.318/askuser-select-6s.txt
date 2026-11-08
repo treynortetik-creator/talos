@@ -1,0 +1,40 @@
+
+❯ Run the shell command: echo hi
+
+  Ran 1 shell command
+
+⏺ I ran echo hi and it printed hi.
+
+✻ Crunched for 3s · done 2:47 PM
+
+❯ Run the shell command: touch hello.txt
+
+  Ran 1 shell command
+  ⎿  Interrupted · What should Claude do instead?
+
+✻ Cogitated for 1s · done 2:49 PM
+
+❯ Use the Write tool to create a new file notes.txt containing the single word hi. Do not use Bash.
+
+⏺ Write(notes.txt)
+  ⎿  User rejected write to notes.txt
+      1 hi
+
+✻ Cooked for 2s · done 2:49 PM
+
+❯ Use your AskUserQuestion tool to ask me one multiple-choice question: which color I prefer, red or blue. Nothing
+  else.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color do you prefer?
+
+❯ 1. Red
+     Choose red
+  2. Blue
+     Choose blue
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

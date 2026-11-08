@@ -13,7 +13,8 @@ import { replyFrame } from '../frames-out.ts'
 import { kindFor } from '../media.ts'
 import { assertFrameFits } from '../transport.ts'
 import { synthesize } from '../tts.ts'
-import { fail, needStr, ok, str, type Tool, ToolError, threadArg, threadProps } from './common.ts'
+import { fail, needStr, ok, str, ToolError, threadArg, threadProps } from './common.ts'
+import { OWN_THREAD, type ToolRecord } from './define.ts'
 
 const MAX_FILES = 10
 
@@ -21,7 +22,7 @@ const MAX_FILES = 10
 function workerOpts(ctx: BridgeContext) {
   if (!ctx.worker) return { worker: false }
   const cwd = ctx.config.thread(ctx.worker.thread)?.session_opts?.cwd
-  return { worker: true, ...(cwd ? { leadCwd: cwd } : {}) }
+  return { worker: true, thread: ctx.worker.thread, ...(cwd ? { leadCwd: cwd } : {}) }
 }
 
 export async function uploadAll(ctx: BridgeContext, paths: string[]): Promise<AttachmentRefT[]> {
@@ -63,8 +64,13 @@ const filesFrom = (v: unknown): string[] => {
   return v as string[]
 }
 
-export const reply: Tool = {
+export const reply: ToolRecord = {
   name: 'reply',
+  group: 'core',
+  headless: true,
+  ...OWN_THREAD,
+  instructions: `Messages from the Talos app arrive as <channel source="talos-app" thread_id=… message_id=… kind=… trust=…>. The owner reads the app, not this terminal. Answer with \`reply\`, passing \`thread_id\` back unchanged; never answer in a different thread. Threads are topics. Reply in the thread a message came from.`,
+  told: ['main'],
   description:
     'Send a message to the owner in a thread. Pass thread_id back unchanged from the notification. Optional: files (absolute paths), voice (read it aloud as a voice reply), speak (short spoken answer for a live call), silent (no push).',
   inputSchema: {
@@ -179,8 +185,13 @@ export async function sendVoiceFollowUp(ctx: BridgeContext, replyTo: MessageT, s
   }
 }
 
-export const attach: Tool = {
+export const attach: ToolRecord = {
   name: 'attach',
+  group: 'core',
+  headless: true,
+  ...OWN_THREAD,
+  instructions: null,
+  told: [],
   description: 'Send one file into a thread. An .html file becomes a page card the owner can open in the app.',
   inputSchema: {
     type: 'object',

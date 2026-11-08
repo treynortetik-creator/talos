@@ -115,9 +115,13 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
   private func switcherSource(_ model: SupervisorController) -> SwitcherSource { switcherSourceOverride ?? .live(model) }
 
   func attach(model: SupervisorController) { self.model = model }
+  /// Tests: a launch on which nothing has attached a model to the Terminals window (it was never opened).
+  func detachForTest() { model = nil }
   func isAttached(to m: SupervisorController) -> Bool { model === m }
   /// The supervisor the window was attached to; the main window's terminal view reads the same facts.
-  var supervisorModel: SupervisorController? { model }
+  var supervisorModel: SupervisorController? { activeModel }
+  /// The attached model, or the app's own controller when the Terminals window never attached one.
+  private var activeModel: SupervisorController? { model ?? SupervisorController.current }
   /// Tests: whether the last show() asked for the keyboard, and a way to put the window away again.
   var wantsKeyboardForTest: Bool { wantsKeyboard }
   func hideForTest() {
@@ -284,27 +288,46 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
 
   /// Main's facts as the switcher lists them.
   private func mainFacts(_ model: SupervisorController) -> SessionSwitcher.MainFacts {
-    let state: SessionSwitcher.MainState
-    if !model.configured {
-      state = .notSetUp
-    } else {
-      switch model.status.phase {
-      case .idle: state = .notStarted
-      case .starting, .cleaningUp, .waitingToRestart: state = .starting
-      case .running: state = .running
-      case .stopping: state = .stopping
-      case .blocked: state = .stopped(failure: SupervisorNotice.blocked)
-      case .stopped(let r): state = .stopped(failure: r.isFailure ? r.plainSentence : nil)
+    SessionList.mainFacts(model, hasScreen: model.status.childPid != nil || viewerSession == TmuxCommands.mainSession)
+  }
+
+  /// The list as the switcher builds it right now, for the Terminal screen in the main window (same states, same order, same
+  /// source, so the two never disagree). nil before the window has a supervisor.
+  func switcherSnapshot() -> (entries: [SwitcherEntry], workers: WorkersFile?)? {
+    guard let model = activeModel else { return nil }
+    let src = switcherSource(model)
+    let w = src.workers()
+    let screen = model.status.childPid != nil || viewerSession == TmuxCommands.mainSession || cachedAgentSessionExists()
+    let list = SessionSwitcher.entries(
+      main: SessionList.mainFacts(model, hasScreen: screen), workers: w, names: src.names(), needsYou: src.needsYou())
+    return (list, w)
+  }
+
+  /// Whether the agent's tmux session exists, without waiting for tmux: the answer is the last one a background probe found
+  /// (at most 3 s old), and a stale one starts a new probe. The 1.5 s looks on the main thread must never block on a subprocess.
+  private var sessionProbe: (exists: Bool, at: Date, running: Bool) = (false, .distantPast, false)
+  /// Tests: what the probe runs (it runs off the main thread), instead of `tmux has-session`.
+  var sessionProbeOverride: (@Sendable () -> Bool)?
+  func cachedAgentSessionExists() -> Bool {
+    if !sessionProbe.running, Date().timeIntervalSince(sessionProbe.at) > 3 {
+      sessionProbe.running = true
+      let argv = activeModel?.tmuxHasSession
+      let override = sessionProbeOverride
+      Task.detached {
+        let found = override?() ?? argv.map { ProcessRunner.run($0, timeout: 2).ok } ?? false
+        await MainActor.run { TerminalWindowController.shared.finishProbe(found) }
       }
     }
-    var waiting: String?
-    switch model.status.needsYou {
-    case .dialog(let what)?: waiting = what
-    case let n?: waiting = SupervisorController.describe(n)
-    case nil: break
-    }
-    return .init(state: state, hasScreen: model.status.childPid != nil || viewerSession == TmuxCommands.mainSession, needsYou: waiting)
+    return sessionProbe.exists
   }
+  private func finishProbe(_ found: Bool) { sessionProbe = (found, Date(), false) }
+  func resetProbeForTest() { sessionProbe = (false, .distantPast, false) }
+
+  /// The `tmux attach` for an entry of the list, nil when this Mac can't show it.
+  func attachArgv(for e: SwitcherEntry) -> [String]? { activeModel.flatMap { switcherSource($0).attach(e) } }
+
+  /// Asks a thread's worker to start, the one way Resume does it (a wake file).
+  func requestResume(_ id: String) -> WorkerManager.ResumeRequest { activeModel.map { switcherSource($0).resume(id) } ?? .failed }
 
   /// Reads the worker file and the flags and redraws the list. Cheap: the rows are rebuilt only when something they show changed.
   func refreshSwitcher(_ model: SupervisorController) {

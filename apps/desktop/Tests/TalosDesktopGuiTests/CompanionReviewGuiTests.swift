@@ -64,7 +64,6 @@ struct CompanionReviewGuiTests {
       ("reduce motion", { $0.controller.envAdjust = { $0.reduceMotion = true } }),
       ("low power", { $0.controller.envAdjust = { $0.lowPower = true } }),
       ("mic", { $0.controller.systemForTest.simulateMic(running: true) }),
-      ("quiet", { $0.inputs.quiet = true }),
     ]
     for (name, apply) in clamps {
       let fx = CompanionFixture(enabled: true)
@@ -84,6 +83,18 @@ struct CompanionReviewGuiTests {
       #expect(p.frame.origin == home, "\(name): and he does not move again")
       #expect(fx.controller.activeTimerCount <= 2, "\(name): no walk timer")
     }
+  }
+
+  @Test func quietHoursDoNotStopAWalkInProgress() throws {
+    _ = NSApplication.shared
+    let fx = CompanionFixture(enabled: true)
+    defer { fx.done() }
+    fx.controller.startRoundsForTest()
+    #expect(fx.controller.isWalking)
+    fx.spin(0.5)
+    fx.inputs.quiet = true
+    fx.advance(0.1)
+    #expect(fx.controller.isWalking, "he walks in quiet hours as he does by day")
   }
 
   @Test func theWayBackFacesBack() throws {

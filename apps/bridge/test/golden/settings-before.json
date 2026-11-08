@@ -1,0 +1,4985 @@
+{
+  "agent.name": {
+    "apply": [
+      {
+        "v": "Atlas",
+        "r": {
+          "ok": true,
+          "at": "Atlas",
+          "disk_rev": 1,
+          "disk_at": "Atlas"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": true,
+          "at": "x",
+          "disk_rev": 1,
+          "disk_at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "Talos",
+          "disk_rev": 1,
+          "disk_at": "Talos"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": true,
+          "at": "Not/AZone",
+          "disk_rev": 1,
+          "disk_at": "Not/AZone"
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "Talos"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.name"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": true,
+          "at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.name"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.name"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.name"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.name"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.name"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.name"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": true,
+          "at": "Not/AZone"
+        }
+      },
+      {
+        "v": "Atlas",
+        "r": {
+          "loads": true,
+          "at": "Atlas"
+        }
+      }
+    ]
+  },
+  "agent.voice": {
+    "apply": [
+      {
+        "v": "marin",
+        "r": {
+          "ok": true,
+          "at": "marin",
+          "disk_rev": 1,
+          "disk_at": "marin"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": true,
+          "at": "x",
+          "disk_rev": 1,
+          "disk_at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "meridian",
+          "disk_rev": 1,
+          "disk_at": "meridian"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": true,
+          "at": "Not/AZone",
+          "disk_rev": 1,
+          "disk_at": "Not/AZone"
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "meridian"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": true,
+          "at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": true,
+          "at": "Not/AZone"
+        }
+      },
+      {
+        "v": "marin",
+        "r": {
+          "loads": true,
+          "at": "marin"
+        }
+      }
+    ]
+  },
+  "agent.voice_persona": {
+    "apply": [
+      {
+        "v": "calm",
+        "r": {
+          "ok": true,
+          "at": "calm",
+          "disk_rev": 1,
+          "disk_at": "calm"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice_persona",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": true,
+          "at": "x",
+          "disk_rev": 1,
+          "disk_at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice_persona",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice_persona",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "",
+          "disk_rev": 1,
+          "disk_at": ""
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice_persona",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice_persona",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at agent.voice_persona",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": true,
+          "at": "Not/AZone",
+          "disk_rev": 1,
+          "disk_at": "Not/AZone"
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": ""
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice_persona"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": true,
+          "at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice_persona"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice_persona"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice_persona"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice_persona"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice_persona"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at agent.voice_persona"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": true,
+          "at": "Not/AZone"
+        }
+      },
+      {
+        "v": "calm",
+        "r": {
+          "loads": true,
+          "at": "calm"
+        }
+      }
+    ]
+  },
+  "owner.display_name": {
+    "apply": [
+      {
+        "v": "Alex Example",
+        "r": {
+          "ok": true,
+          "at": "Alex Example",
+          "disk_rev": 1,
+          "disk_at": "Alex Example"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at owner.display_name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": true,
+          "at": "x",
+          "disk_rev": 1,
+          "disk_at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at owner.display_name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at owner.display_name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "You",
+          "disk_rev": 1,
+          "disk_at": "You"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at owner.display_name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at owner.display_name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at owner.display_name",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": true,
+          "at": "Not/AZone",
+          "disk_rev": 1,
+          "disk_at": "Not/AZone"
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "You"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at owner.display_name"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": true,
+          "at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at owner.display_name"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at owner.display_name"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at owner.display_name"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at owner.display_name"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at owner.display_name"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at owner.display_name"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": true,
+          "at": "Not/AZone"
+        }
+      },
+      {
+        "v": "Alex Example",
+        "r": {
+          "loads": true,
+          "at": "Alex Example"
+        }
+      }
+    ]
+  },
+  "threads": {
+    "apply": [
+      {
+        "v": [
+          {
+            "id": "general",
+            "name": "General",
+            "icon": "💬",
+            "kind": "fixed",
+            "order": 0,
+            "notify": "all",
+            "voice_context": "recent",
+            "archived": false,
+            "created_at": "2026-10-28T00:00:00.000Z"
+          },
+          {
+            "id": "inbox",
+            "name": "Inbox",
+            "icon": "📥",
+            "kind": "system",
+            "order": 1,
+            "notify": "all",
+            "voice_context": "none",
+            "archived": false,
+            "created_at": "2026-10-28T00:00:00.000Z"
+          }
+        ],
+        "r": {
+          "ok": true,
+          "at": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ],
+          "disk_rev": 1,
+          "disk_at": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ]
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at threads",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at threads",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at threads",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at threads",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at threads",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at threads",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at threads",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at threads",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at threads",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": false,
+      "error": "config.json invalid at threads"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at threads"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at threads"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at threads"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at threads"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at threads"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at threads"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at threads"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at threads"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at threads"
+        }
+      },
+      {
+        "v": [
+          {
+            "id": "general",
+            "name": "General",
+            "icon": "💬",
+            "kind": "fixed",
+            "order": 0,
+            "notify": "all",
+            "voice_context": "recent",
+            "archived": false,
+            "created_at": "2026-10-28T00:00:00.000Z"
+          },
+          {
+            "id": "inbox",
+            "name": "Inbox",
+            "icon": "📥",
+            "kind": "system",
+            "order": 1,
+            "notify": "all",
+            "voice_context": "none",
+            "archived": false,
+            "created_at": "2026-10-28T00:00:00.000Z"
+          }
+        ],
+        "r": {
+          "loads": true,
+          "at": [
+            {
+              "id": "general",
+              "name": "General",
+              "icon": "💬",
+              "kind": "fixed",
+              "order": 0,
+              "notify": "all",
+              "voice_context": "recent",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            },
+            {
+              "id": "inbox",
+              "name": "Inbox",
+              "icon": "📥",
+              "kind": "system",
+              "order": 1,
+              "notify": "all",
+              "voice_context": "none",
+              "archived": false,
+              "created_at": "2026-10-28T00:00:00.000Z"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "default_thread": {
+    "apply": [
+      {
+        "v": "general",
+        "r": {
+          "ok": true,
+          "at": "general",
+          "disk_rev": 1,
+          "disk_at": "general"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at default_thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "default_thread is not a configured thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at default_thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at default_thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at default_thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at default_thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at default_thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at default_thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at default_thread",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": false,
+      "error": "config.json invalid at default_thread"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at default_thread"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "default_thread is not a configured thread"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at default_thread"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at default_thread"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at default_thread"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at default_thread"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at default_thread"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at default_thread"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at default_thread"
+        }
+      },
+      {
+        "v": "general",
+        "r": {
+          "loads": true,
+          "at": "general"
+        }
+      }
+    ]
+  },
+  "timezone": {
+    "apply": [
+      {
+        "v": "Europe/Paris",
+        "r": {
+          "ok": true,
+          "at": "Europe/Paris",
+          "disk_rev": 1,
+          "disk_at": "Europe/Paris"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at timezone",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at timezone",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at timezone",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at timezone",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at timezone",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at timezone",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at timezone",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at timezone",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at timezone",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": false,
+      "error": "config.json invalid at timezone"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at timezone"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at timezone"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at timezone"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at timezone"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at timezone"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at timezone"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at timezone"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at timezone"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at timezone"
+        }
+      },
+      {
+        "v": "Europe/Paris",
+        "r": {
+          "loads": true,
+          "at": "Europe/Paris"
+        }
+      }
+    ]
+  },
+  "quiet_window": {
+    "apply": [
+      {
+        "v": {
+          "start": "22:00",
+          "end": "07:00"
+        },
+        "r": {
+          "ok": true,
+          "at": {
+            "start": "22:00",
+            "end": "07:00"
+          },
+          "disk_rev": 1,
+          "disk_at": {
+            "start": "22:00",
+            "end": "07:00"
+          }
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at quiet_window",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at quiet_window",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at quiet_window",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at quiet_window",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at quiet_window",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at quiet_window.start",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at quiet_window",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at quiet_window",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "__absent__"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at quiet_window"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at quiet_window"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at quiet_window"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at quiet_window"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at quiet_window"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at quiet_window.start"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at quiet_window"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at quiet_window"
+        }
+      },
+      {
+        "v": {
+          "start": "22:00",
+          "end": "07:00"
+        },
+        "r": {
+          "loads": true,
+          "at": {
+            "start": "22:00",
+            "end": "07:00"
+          }
+        }
+      }
+    ]
+  },
+  "notifications.master": {
+    "apply": [
+      {
+        "v": false,
+        "r": {
+          "ok": true,
+          "at": false,
+          "disk_rev": 1,
+          "disk_at": false
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.master",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.master",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": true,
+          "at": true,
+          "disk_rev": 1,
+          "disk_at": true
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": true,
+          "at": false,
+          "disk_rev": 1,
+          "disk_at": false
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": true,
+          "disk_rev": 1,
+          "disk_at": true
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.master",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.master",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.master",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.master",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": true
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.master"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.master"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": true,
+          "at": true
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": true,
+          "at": false
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.master"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.master"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.master"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.master"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.master"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": true,
+          "at": false
+        }
+      }
+    ]
+  },
+  "notifications.show_thread_names": {
+    "apply": [
+      {
+        "v": "all",
+        "r": {
+          "ok": true,
+          "at": "all",
+          "disk_rev": 1,
+          "disk_at": "all"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.show_thread_names",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.show_thread_names",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.show_thread_names",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.show_thread_names",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "fixed_only",
+          "disk_rev": 1,
+          "disk_at": "fixed_only"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.show_thread_names",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.show_thread_names",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.show_thread_names",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at notifications.show_thread_names",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "fixed_only"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.show_thread_names"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.show_thread_names"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.show_thread_names"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.show_thread_names"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.show_thread_names"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.show_thread_names"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.show_thread_names"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.show_thread_names"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at notifications.show_thread_names"
+        }
+      },
+      {
+        "v": "all",
+        "r": {
+          "loads": true,
+          "at": "all"
+        }
+      }
+    ]
+  },
+  "voice_notes.reply_with_voice": {
+    "apply": [
+      {
+        "v": "always",
+        "r": {
+          "ok": true,
+          "at": "always",
+          "disk_rev": 1,
+          "disk_at": "always"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.reply_with_voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.reply_with_voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.reply_with_voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.reply_with_voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "when_voice",
+          "disk_rev": 1,
+          "disk_at": "when_voice"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.reply_with_voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.reply_with_voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.reply_with_voice",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.reply_with_voice",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "when_voice"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.reply_with_voice"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.reply_with_voice"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.reply_with_voice"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.reply_with_voice"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.reply_with_voice"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.reply_with_voice"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.reply_with_voice"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.reply_with_voice"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.reply_with_voice"
+        }
+      },
+      {
+        "v": "always",
+        "r": {
+          "loads": true,
+          "at": "always"
+        }
+      }
+    ]
+  },
+  "voice_notes.driving_until": {
+    "apply": [
+      {
+        "v": "2999-01-01T00:00:00.000Z",
+        "r": {
+          "ok": true,
+          "at": "2026-11-06T12:00:00.000Z",
+          "disk_rev": 1,
+          "disk_at": "2026-11-06T12:00:00.000Z"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.driving_until",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.driving_until",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.driving_until",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.driving_until",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.driving_until",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.driving_until",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.driving_until",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at voice_notes.driving_until",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "__absent__"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.driving_until"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.driving_until"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.driving_until"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.driving_until"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.driving_until"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.driving_until"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.driving_until"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at voice_notes.driving_until"
+        }
+      },
+      {
+        "v": "2999-01-01T00:00:00.000Z",
+        "r": {
+          "loads": true,
+          "at": "2999-01-01T00:00:00.000Z"
+        }
+      }
+    ]
+  },
+  "work.enabled": {
+    "apply": [
+      {
+        "v": ["gmail"],
+        "r": {
+          "ok": true,
+          "at": ["gmail"],
+          "disk_rev": 1,
+          "disk_at": ["gmail"]
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: work.enabled",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: work.enabled",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: work.enabled",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: work.enabled",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": [],
+          "disk_rev": 1,
+          "disk_at": []
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": true,
+          "at": [],
+          "disk_rev": 1,
+          "disk_at": []
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: work.enabled",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: work.enabled",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: work.enabled",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": []
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.enabled"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.enabled"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.enabled"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.enabled"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.enabled"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": true,
+          "at": []
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.enabled"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.enabled"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.enabled"
+        }
+      },
+      {
+        "v": ["gmail"],
+        "r": {
+          "loads": true,
+          "at": ["gmail"]
+        }
+      }
+    ]
+  },
+  "work.thread": {
+    "apply": [
+      {
+        "v": "general",
+        "r": {
+          "ok": true,
+          "at": "general",
+          "disk_rev": 1,
+          "disk_at": "general"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "work.thread is not a configured thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.thread",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.thread",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "__absent__"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.thread"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "work.thread is not a configured thread"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.thread"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.thread"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.thread"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.thread"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.thread"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.thread"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.thread"
+        }
+      },
+      {
+        "v": "general",
+        "r": {
+          "loads": true,
+          "at": "general"
+        }
+      }
+    ]
+  },
+  "work.label": {
+    "apply": [
+      {
+        "v": "Work",
+        "r": {
+          "ok": true,
+          "at": "Work",
+          "disk_rev": 1,
+          "disk_at": "Work"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.label",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": true,
+          "at": "x",
+          "disk_rev": 1,
+          "disk_at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.label",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.label",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "Work systems",
+          "disk_rev": 1,
+          "disk_at": "Work systems"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.label",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.label",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.label",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": true,
+          "at": "Not/AZone",
+          "disk_rev": 1,
+          "disk_at": "Not/AZone"
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "Work systems"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.label"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": true,
+          "at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.label"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.label"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.label"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.label"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.label"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.label"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": true,
+          "at": "Not/AZone"
+        }
+      },
+      {
+        "v": "Work",
+        "r": {
+          "loads": true,
+          "at": "Work"
+        }
+      }
+    ]
+  },
+  "work.ask_note": {
+    "apply": [
+      {
+        "v": "Ask first.",
+        "r": {
+          "ok": true,
+          "at": "Ask first.",
+          "disk_rev": 1,
+          "disk_at": "Ask first."
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.ask_note",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": true,
+          "at": "x",
+          "disk_rev": 1,
+          "disk_at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.ask_note",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.ask_note",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "Ask your IT team before connecting these.",
+          "disk_rev": 1,
+          "disk_at": "Ask your IT team before connecting these."
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.ask_note",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.ask_note",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.ask_note",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": true,
+          "at": "Not/AZone",
+          "disk_rev": 1,
+          "disk_at": "Not/AZone"
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "Ask your IT team before connecting these."
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.ask_note"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": true,
+          "at": "x"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.ask_note"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.ask_note"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.ask_note"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.ask_note"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.ask_note"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.ask_note"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": true,
+          "at": "Not/AZone"
+        }
+      },
+      {
+        "v": "Ask first.",
+        "r": {
+          "loads": true,
+          "at": "Ask first."
+        }
+      }
+    ]
+  },
+  "work.retention": {
+    "apply": [
+      {
+        "v": "buffer",
+        "r": {
+          "ok": true,
+          "at": "buffer",
+          "disk_rev": 1,
+          "disk_at": "buffer"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.retention",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.retention",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.retention",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.retention",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "passthrough",
+          "disk_rev": 1,
+          "disk_at": "passthrough"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.retention",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.retention",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.retention",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at work.retention",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "passthrough"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.retention"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.retention"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.retention"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.retention"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.retention"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.retention"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.retention"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.retention"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at work.retention"
+        }
+      },
+      {
+        "v": "buffer",
+        "r": {
+          "loads": true,
+          "at": "buffer"
+        }
+      }
+    ]
+  },
+  "permission_relay": {
+    "apply": [
+      {
+        "v": true,
+        "r": {
+          "ok": true,
+          "at": true,
+          "disk_rev": 1,
+          "disk_at": true
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at permission_relay",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at permission_relay",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": true,
+          "at": true,
+          "disk_rev": 1,
+          "disk_at": true
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": true,
+          "at": false,
+          "disk_rev": 1,
+          "disk_at": false
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": false,
+          "disk_rev": 1,
+          "disk_at": false
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at permission_relay",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at permission_relay",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at permission_relay",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at permission_relay",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": false
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at permission_relay"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at permission_relay"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": true,
+          "at": true
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": true,
+          "at": false
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at permission_relay"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at permission_relay"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at permission_relay"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at permission_relay"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at permission_relay"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": true,
+          "at": true
+        }
+      }
+    ]
+  },
+  "session_models": {
+    "apply": [
+      {
+        "v": ["default", "opus"],
+        "r": {
+          "ok": true,
+          "at": ["default", "opus"],
+          "disk_rev": 1,
+          "disk_at": ["default", "opus"]
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at session_models",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at session_models",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at session_models",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at session_models",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": ["default", "opus", "sonnet", "haiku"],
+          "disk_rev": 1,
+          "disk_at": ["default", "opus", "sonnet", "haiku"]
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at session_models",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at session_models",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at session_models",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "bad_frame",
+          "message": "config.json invalid at session_models",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": ["default", "opus", "sonnet", "haiku"]
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at session_models"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at session_models"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at session_models"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at session_models"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at session_models"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at session_models"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at session_models"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at session_models"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at session_models"
+        }
+      },
+      {
+        "v": ["default", "opus"],
+        "r": {
+          "loads": true,
+          "at": ["default", "opus"]
+        }
+      }
+    ]
+  },
+  "memory_browser": {
+    "apply": [
+      {
+        "v": false,
+        "r": {
+          "ok": true,
+          "at": false,
+          "disk_rev": 1,
+          "disk_at": false
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "the memory browser can only be turned on at your Mac (talos-app memory on)",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "the memory browser can only be turned on at your Mac (talos-app memory on)",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "the memory browser can only be turned on at your Mac (talos-app memory on)",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": true,
+          "at": false,
+          "disk_rev": 1,
+          "disk_at": false
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "the memory browser can only be turned on at your Mac (talos-app memory on)",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "the memory browser can only be turned on at your Mac (talos-app memory on)",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "the memory browser can only be turned on at your Mac (talos-app memory on)",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "the memory browser can only be turned on at your Mac (talos-app memory on)",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "the memory browser can only be turned on at your Mac (talos-app memory on)",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": true
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at memory_browser"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at memory_browser"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": true,
+          "at": true
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": true,
+          "at": false
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at memory_browser"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at memory_browser"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at memory_browser"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at memory_browser"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at memory_browser"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": true,
+          "at": false
+        }
+      }
+    ]
+  },
+  "dedicated": {
+    "apply": [
+      {
+        "v": {
+          "enabled": true
+        },
+        "r": {
+          "ok": true,
+          "at": {
+            "enabled": true,
+            "max_live": 3,
+            "governor": {
+              "five_hour": 80,
+              "weekly": 85,
+              "park_all": 95,
+              "off": false
+            }
+          },
+          "disk_rev": 1,
+          "disk_at": {
+            "enabled": true,
+            "max_live": 3,
+            "governor": {
+              "five_hour": 80,
+              "weekly": 85,
+              "park_all": 95,
+              "off": false
+            }
+          }
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "thread_session_refused",
+          "message": "those thread session settings are not valid",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "thread_session_refused",
+          "message": "those thread session settings are not valid",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "thread_session_refused",
+          "message": "those thread session settings are not valid",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "thread_session_refused",
+          "message": "those thread session settings are not valid",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "thread_session_refused",
+          "message": "those thread session settings are not valid",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": true,
+          "at": {
+            "enabled": false,
+            "max_live": 3,
+            "governor": {
+              "five_hour": 80,
+              "weekly": 85,
+              "park_all": 95,
+              "off": false
+            }
+          },
+          "disk_rev": 1,
+          "disk_at": {
+            "enabled": false,
+            "max_live": 3,
+            "governor": {
+              "five_hour": 80,
+              "weekly": 85,
+              "park_all": 95,
+              "off": false
+            }
+          }
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "thread_session_refused",
+          "message": "those thread session settings are not valid",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "thread_session_refused",
+          "message": "those thread session settings are not valid",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "__absent__"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": true,
+          "at": {
+            "enabled": false,
+            "max_live": 3,
+            "governor": {
+              "five_hour": 80,
+              "weekly": 85,
+              "park_all": 95,
+              "off": false
+            }
+          }
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": {
+          "enabled": true
+        },
+        "r": {
+          "loads": true,
+          "at": {
+            "enabled": true,
+            "max_live": 3,
+            "governor": {
+              "five_hour": 80,
+              "weekly": 85,
+              "park_all": 95,
+              "off": false
+            }
+          }
+        }
+      }
+    ]
+  },
+  "theme": {
+    "apply": [
+      {
+        "v": "paper",
+        "r": {
+          "ok": true,
+          "at": "paper",
+          "disk_rev": 1,
+          "disk_at": "paper"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "__absent__"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "paper",
+        "r": {
+          "loads": true,
+          "at": "paper"
+        }
+      }
+    ]
+  },
+  "trust_mode": {
+    "apply": [
+      {
+        "v": true,
+        "r": {
+          "ok": true,
+          "at": true,
+          "disk_rev": 1,
+          "disk_at": true
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: trust_mode",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: trust_mode",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": true,
+          "at": true,
+          "disk_rev": 1,
+          "disk_at": true
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": true,
+          "at": "__absent__",
+          "disk_rev": 1,
+          "disk_at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: trust_mode",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: trust_mode",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: trust_mode",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: trust_mode",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "__absent__"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": true,
+          "at": true
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": true,
+          "at": false
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": true,
+          "at": true
+        }
+      }
+    ]
+  },
+  "version": {
+    "apply": [
+      {
+        "v": 1,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: version",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: version",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: version",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: version",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: version",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: version",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: version",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: version",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: version",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: version",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": false,
+      "error": "config.json invalid at version"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at version"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at version"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at version"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at version"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at version"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at version"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at version"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at version"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at version"
+        }
+      },
+      {
+        "v": 1,
+        "r": {
+          "loads": true,
+          "at": 1
+        }
+      }
+    ]
+  },
+  "rev": {
+    "apply": [
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: rev",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: rev",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: rev",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: rev",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: rev",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: rev",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: rev",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: rev",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: rev",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: rev",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": false,
+      "error": "config.json invalid at rev"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": true,
+          "at": 5
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at rev"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at rev"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at rev"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at rev"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at rev"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at rev"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at rev"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": false,
+          "error": "config.json invalid at rev"
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "loads": true,
+          "at": 5
+        }
+      }
+    ]
+  },
+  "mirror": {
+    "apply": [
+      {
+        "v": {
+          "telegram": "on"
+        },
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: mirror",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: mirror",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: mirror",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: mirror",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: mirror",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: mirror",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: mirror",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: mirror",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: mirror",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: mirror",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "__absent__"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": {
+          "telegram": "on"
+        },
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      }
+    ]
+  },
+  "surprise": {
+    "apply": [
+      {
+        "v": 1,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: surprise",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": 5,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: surprise",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: surprise",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: surprise",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: surprise",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: surprise",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: surprise",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: surprise",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: surprise",
+          "disk_rev": 0
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "ok": false,
+          "code": "config_field_forbidden",
+          "message": "field not allowed: surprise",
+          "disk_rev": 0
+        }
+      }
+    ],
+    "load_missing": {
+      "loads": true,
+      "at": "__absent__"
+    },
+    "load_garbled": [
+      {
+        "v": 5,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "x",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": true,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": false,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": null,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": [],
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": {},
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "<5000 chars>",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": "Not/AZone",
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      },
+      {
+        "v": 1,
+        "r": {
+          "loads": true,
+          "at": "__absent__"
+        }
+      }
+    ]
+  },
+  "section:agent": [
+    {
+      "v": {},
+      "r": {
+        "ok": true,
+        "at": {
+          "name": "Talos",
+          "voice": "meridian",
+          "voice_persona": ""
+        },
+        "disk_rev": 1,
+        "disk_at": {
+          "name": "Talos",
+          "voice": "meridian",
+          "voice_persona": ""
+        }
+      }
+    },
+    {
+      "v": null,
+      "r": {
+        "ok": false,
+        "code": "bad_frame",
+        "message": "config.json invalid at agent",
+        "disk_rev": 0
+      }
+    },
+    {
+      "v": 5,
+      "r": {
+        "ok": false,
+        "code": "bad_frame",
+        "message": "config.json invalid at agent",
+        "disk_rev": 0
+      }
+    }
+  ],
+  "section:owner": [
+    {
+      "v": {},
+      "r": {
+        "ok": true,
+        "at": {
+          "display_name": "You"
+        },
+        "disk_rev": 1,
+        "disk_at": {
+          "display_name": "You"
+        }
+      }
+    },
+    {
+      "v": null,
+      "r": {
+        "ok": false,
+        "code": "bad_frame",
+        "message": "config.json invalid at owner",
+        "disk_rev": 0
+      }
+    },
+    {
+      "v": 5,
+      "r": {
+        "ok": false,
+        "code": "bad_frame",
+        "message": "config.json invalid at owner",
+        "disk_rev": 0
+      }
+    }
+  ],
+  "section:notifications": [
+    {
+      "v": {},
+      "r": {
+        "ok": true,
+        "at": {
+          "master": true,
+          "show_thread_names": "fixed_only"
+        },
+        "disk_rev": 1,
+        "disk_at": {
+          "master": true,
+          "show_thread_names": "fixed_only"
+        }
+      }
+    },
+    {
+      "v": null,
+      "r": {
+        "ok": false,
+        "code": "bad_frame",
+        "message": "config.json invalid at notifications",
+        "disk_rev": 0
+      }
+    },
+    {
+      "v": 5,
+      "r": {
+        "ok": false,
+        "code": "bad_frame",
+        "message": "config.json invalid at notifications",
+        "disk_rev": 0
+      }
+    }
+  ],
+  "section:work": [
+    {
+      "v": {},
+      "r": {
+        "ok": true,
+        "at": {
+          "label": "Work systems",
+          "ask_note": "Ask your IT team before connecting these.",
+          "enabled": [],
+          "retention": "passthrough"
+        },
+        "disk_rev": 1,
+        "disk_at": {
+          "label": "Work systems",
+          "ask_note": "Ask your IT team before connecting these.",
+          "enabled": [],
+          "retention": "passthrough"
+        }
+      }
+    },
+    {
+      "v": null,
+      "r": {
+        "ok": false,
+        "code": "config_field_forbidden",
+        "message": "field not allowed: work",
+        "disk_rev": 0
+      }
+    },
+    {
+      "v": 5,
+      "r": {
+        "ok": false,
+        "code": "config_field_forbidden",
+        "message": "field not allowed: work",
+        "disk_rev": 0
+      }
+    }
+  ],
+  "section:voice_notes": [
+    {
+      "v": {},
+      "r": {
+        "ok": true,
+        "at": {
+          "reply_with_voice": "when_voice",
+          "driving_until": null
+        },
+        "disk_rev": 1,
+        "disk_at": {
+          "reply_with_voice": "when_voice",
+          "driving_until": null
+        }
+      }
+    },
+    {
+      "v": null,
+      "r": {
+        "ok": false,
+        "code": "bad_frame",
+        "message": "config.json invalid at voice_notes",
+        "disk_rev": 0
+      }
+    },
+    {
+      "v": 5,
+      "r": {
+        "ok": false,
+        "code": "bad_frame",
+        "message": "config.json invalid at voice_notes",
+        "disk_rev": 0
+      }
+    }
+  ],
+  "unknown_in_file": {
+    "loaded_top_keys": [
+      "agent",
+      "default_thread",
+      "memory_browser",
+      "notifications",
+      "owner",
+      "permission_relay",
+      "quiet_window",
+      "rev",
+      "session_models",
+      "threads",
+      "timezone",
+      "version",
+      "voice_notes",
+      "work"
+    ],
+    "loaded_agent_key": false,
+    "patch_ok": true,
+    "disk_top_key": false,
+    "disk_agent_key": false
+  }
+}

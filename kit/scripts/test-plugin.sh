@@ -121,7 +121,7 @@ PY
 [ "$(marker "$A" version)" = "$(tr -d ' \t\r\n' < "$KIT/VERSION")" ] && [ -n "$(marker "$A" migration)" ] \
   && [ "$(marker "$A" migration)" = "$(python3 "$KIT/scripts/talos-migrate.py" status --agent "$A" --release "$KIT" | sed -n 's/^applied //p' | tail -1)" ] \
   && ok ".talos-version holds version= and migration=<last id>; talos-migrate sees nothing pending on a fresh agent" || no ".talos-version wrong" "$(cat "$A/.talos-version")"
-out="$(python3 "$A/scripts/talos-migrate.py" up --agent "$A" 2>&1)"; printf '%s' "$out" | grep -q 'nothing to do' && ok "talos-migrate up on a fresh agent has nothing to do" || no "up on a fresh agent did something" "$out"
+out="$(python3 "$A/scripts/talos-migrate.py" up --agent "$A" 2>&1)"; <<<"$out" grep -q 'nothing to do' && ok "talos-migrate up on a fresh agent has nothing to do" || no "up on a fresh agent did something" "$out"
 { [ -x "$A/hooks/session-start.py" ] && [ -d "$REL/skills/talos-agora" ] && [ -f "$REL/agents/grunt.md" ] && [ -x "$REL/bin/talos-migrate" ] && [ ! -e "$A/.claude/skills" ] && [ ! -e "$A/.claude/agents" ] \
   && [ -f "$A/.claude/rules/talos-defaults.md" ] && [ -f "$A/CLAUDE.md" ] && [ ! -e "$REL/CLAUDE.md" ] && [ ! -d "$REL/memory" ] && [ ! -d "$REL/wiki" ]; } \
   && ok "the release holds hooks, skills, agents, bin; the agent keeps CLAUDE.md and the floor rules; no data folders in the release" || no "release or agent layout wrong"
@@ -183,18 +183,18 @@ for d in ("hooks", "scripts"):
     assert os.readlink(os.path.join(a, d)) == v + "/current/talos-kit/" + d and os.path.isdir(os.path.join(a, ".talos-pre-plugin", d))
 assert open(os.path.join(a, ".talos-version")).read().count("migration=" + i) == 1
 PY
-{ cmp -s "$LA/.claude/settings.json.bak-$ID" "$SB/settings.orig" && printf '%s' "$out" | grep -q "touches .claude/settings.json (outside the Talos zone)"; } \
+{ cmp -s "$LA/.claude/settings.json.bak-$ID" "$SB/settings.orig" && <<<"$out" grep -q "touches .claude/settings.json (outside the Talos zone)"; } \
   && ok "the one touch outside the zone (settings.json) keeps a .bak with the original bytes and prints a line" || no "no .bak or no line for settings.json" "$out"
 LG="$(ls "$TALOS_APP_HOME/last-good" | head -1)"
 { [ -n "$LG" ] && cmp -s "$TALOS_APP_HOME/last-good/$LG/.claude/settings.json" "$SB/settings.orig" && grep -q "\"agent_dir\": \"$LA\"" "$TALOS_APP_HOME/last-good/$LG/meta.json"; } \
   && ok "the settings were saved in the restore-last-good store first (original bytes, agent folder recorded)" || no "last-good store not written" "$(ls -R "$TALOS_APP_HOME" | head)"
 if [ -f "$KIT/../apps/bridge/src/cli.ts" ] && command -v bun >/dev/null 2>&1 && [ -d "$KIT/../node_modules" ]; then
   lst="$(cd "$KIT/.." && TALOS_APP_HOME="$TALOS_APP_HOME" bun run apps/bridge/src/cli.ts restore-last-good --list --agent-dir "$LA" 2>&1)"
-  printf '%s' "$lst" | grep -q "from $LA" && printf '%s' "$lst" | grep -q '\.claude/settings\.json' && ok "talos-app restore-last-good --list reads the version plugin-move saved (same format as the bridge's own saves)" || no "the bridge does not list the saved version" "$lst"
+  <<<"$lst" grep -q "from $LA" && <<<"$lst" grep -q '\.claude/settings\.json' && ok "talos-app restore-last-good --list reads the version plugin-move saved (same format as the bridge's own saves)" || no "the bridge does not list the saved version" "$lst"
 else echo "  skip restore-last-good compatibility (needs the repo's bridge, bun and node_modules)"; fi
 H_AFTER_UP="$(hash_tree "$LA" 2>/dev/null)"
 out="$(cd "$LA" && python3 "$LA/scripts/talos-migrate.py" up --agent "$LA" 2>&1)"
-{ printf '%s' "$out" | grep -q 'nothing to do' && [ "$(hash_tree "$LA")" = "$H_AFTER_UP" ]; } && ok "up twice: the second run is a no-op (the whole agent folder is byte for byte the same)" || no "second up changed something" "$out"
+{ <<<"$out" grep -q 'nothing to do' && [ "$(hash_tree "$LA")" = "$H_AFTER_UP" ]; } && ok "up twice: the second run is a no-op (the whole agent folder is byte for byte the same)" || no "second up changed something" "$out"
 out="$(TALOS_AGENT="$LA" TALOS_RELEASE="$REL3" TALOS_KIT_HOME="$V3" TALOS_MIGRATION_ID="$ID" TALOS_DIRECTION=up bash -c 'set -euo pipefail; source "$TALOS_RELEASE/migrations/'"$ID"'.sh"; up' 2>&1)"
 { [ "$(hash_tree "$LA")" = "$H_AFTER_UP" ]; } && ok "up() itself is idempotent: run again directly it changes nothing" || no "a direct second up() changed the agent folder" "$out"
 out="$(cd "$LA" && python3 "$LA/scripts/talos-migrate.py" down --agent "$LA" 2>&1)"; rc=$?
@@ -202,7 +202,7 @@ out="$(cd "$LA" && python3 "$LA/scripts/talos-migrate.py" down --agent "$LA" 2>&
   && [ ! -L "$LA/hooks" ] && [ ! -L "$LA/scripts" ] && [ ! -e "$LA/.talos-pre-plugin" ]; } \
   && ok "up then down: settings.json, hooks/ and scripts/ are byte for byte what they were (modes too); no link or .talos-pre-plugin left" || no "down did not restore exactly (rc=$rc)" "$out"
 { [ -z "$(marker "$LA" migration)" ] && [ "$(cd "$LA" && hash_data memory wiki .learnings)" = "$H_DATA" ]; } && ok "down puts migration= back to empty and leaves memory/, wiki/, .learnings/ untouched (content and modification times)" || no "marker or data changed by up/down"
-{ [ -f "$LA/custom/hooks/my-own.py" ] && printf '%s' "$out" | grep -q 'custom/ was left'; } && ok "down keeps the owner's custom/ copies (nothing outside the zone is deleted) and says so" || no "custom/ handling wrong" "$out"
+{ [ -f "$LA/custom/hooks/my-own.py" ] && <<<"$out" grep -q 'custom/ was left'; } && ok "down keeps the owner's custom/ copies (nothing outside the zone is deleted) and says so" || no "custom/ handling wrong" "$out"
 # again, then the owner edits settings.json after the move: down undoes only Talos's own changes
 python3 "$LA/scripts/talos-migrate.py" up --agent "$LA" >/dev/null 2>&1
 python3 - "$LA/.claude/settings.json" <<'PY'
@@ -221,11 +221,11 @@ ls "$LA/.claude" | grep -q 'bak-.*-down' && ok "down keeps a .bak of the setting
 # no last-good store: the .bak is the saved copy, and the output says so
 fresh_home h3b; LB="$HOME/legacy"; legacy_agent "$LB"; python3 "$KIT/scripts/plugin-release.py" build --vendor "$TALOS_VENDOR_DIR/kit" --activate >/dev/null 2>&1
 out="$(cd "$LB" && python3 "$(vendor_release "$TALOS_VENDOR_DIR/kit")/scripts/talos-migrate.py" up --agent "$LB" 2>&1)"
-{ printf '%s' "$out" | grep -q 'restore-last-good store is not reachable' && ls "$LB/.claude" | grep -q "settings.json.bak-$ID"; } && ok "without a restore-last-good store the .bak next to settings.json is the saved copy, and plugin-move says so" || no "no-store path wrong" "$out"
+{ <<<"$out" grep -q 'restore-last-good store is not reachable' && ls "$LB/.claude" | grep -q "settings.json.bak-$ID"; } && ok "without a restore-last-good store the .bak next to settings.json is the saved copy, and plugin-move says so" || no "no-store path wrong" "$out"
 
 # the old upgrade path must not write through the links into the shared release
 out="$(bash "$KIT/scripts/upgrade.sh" --into "$A" --dry-run 2>&1)"; rc=$?
-{ [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'link into a Talos plugin release'; } && ok "upgrade.sh refuses an agent whose hooks/ and scripts/ are links into a release (it would write into the shared release)" || no "upgrade.sh did not refuse (rc=$rc)" "$out"
+{ [ "$rc" = 2 ] && <<<"$out" grep -q 'link into a Talos plugin release'; } && ok "upgrade.sh refuses an agent whose hooks/ and scripts/ are links into a release (it would write into the shared release)" || no "upgrade.sh did not refuse (rc=$rc)" "$out"
 python3 "$KIT/scripts/settings-merge.py" --agent-dir "$A" 2>&1 | grep -q 'is already registered' && ok "settings-merge.py works on a plugin agent as on any other: its settings.json registers the hooks, so it finds nothing to add" || no "settings-merge.py output for a plugin agent" "$(python3 "$KIT/scripts/settings-merge.py" --agent-dir "$A" 2>&1 | head -4)"
 
 # the runner checks the zone rule and the contract (and these checks fail when the runner is broken: see the mutations below)
@@ -236,15 +236,15 @@ newmig(){ printf '#!/usr/bin/env bash\n%s\n' "$2" > "$R2/migrations/$1.sh"; }
 runmig(){ out="$(python3 "$R2/scripts/talos-migrate.py" up --agent "$HOME/mini" --release "$R2" 2>&1)"; rc=$?; }
 mini; newmig 202612010000-touch-data 'up() { echo more >> "$TALOS_AGENT/memory/STATE.md"; }
 down() { :; }'
-runmig; { [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'BROKEN RULE.*memory/STATE.md' && [ "$(marker "$HOME/mini" migration)" = "$ID" ]; } && ok "a migration that writes into memory/ is stopped and .talos-version is not advanced" || no "memory/ write not caught (rc=$rc)" "$out"
+runmig; { [ "$rc" = 1 ] && <<<"$out" grep -q 'BROKEN RULE.*memory/STATE.md' && [ "$(marker "$HOME/mini" migration)" = "$ID" ]; } && ok "a migration that writes into memory/ is stopped and .talos-version is not advanced" || no "memory/ write not caught (rc=$rc)" "$out"
 rm -f "$R2"/migrations/2026120*; mini; newmig 202612010001-no-bak 'up() { echo more >> "$TALOS_AGENT/CLAUDE.md"; }
 down() { :; }'
-runmig; { [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'BROKEN RULE.*CLAUDE.md.*without a matching' && [ "$(marker "$HOME/mini" migration)" = "$ID" ]; } && ok "a change outside the zone with no .bak is stopped" || no "missing .bak not caught (rc=$rc)" "$out"
+runmig; { [ "$rc" = 1 ] && <<<"$out" grep -q 'BROKEN RULE.*CLAUDE.md.*without a matching' && [ "$(marker "$HOME/mini" migration)" = "$ID" ]; } && ok "a change outside the zone with no .bak is stopped" || no "missing .bak not caught (rc=$rc)" "$out"
 rm -f "$R2"/migrations/2026120*; mini; newmig 202612010002-with-bak 'up() { cp -p "$TALOS_AGENT/CLAUDE.md" "$TALOS_AGENT/CLAUDE.md.bak-$TALOS_MIGRATION_ID"; echo "migrate: $TALOS_MIGRATION_ID touches CLAUDE.md"; echo more >> "$TALOS_AGENT/CLAUDE.md"; }
 down() { :; }'
 runmig; { [ "$rc" = 0 ] && [ "$(marker "$HOME/mini" migration)" = "202612010002-with-bak" ]; } && ok "the same change with its .bak is accepted and the marker moves to the new id" || no "a proper migration was refused (rc=$rc)" "$out"
 rm -f "$R2"/migrations/2026120*; mini; newmig 202612010003-no-down 'up() { :; }'
-runmig; { [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'neither down() nor'; } && ok "a migration with neither down() nor '# down: none (reason)' breaks the contract and is not run" || no "contract not enforced (rc=$rc)" "$out"
+runmig; { [ "$rc" = 2 ] && <<<"$out" grep -q 'neither down() nor'; } && ok "a migration with neither down() nor '# down: none (reason)' breaks the contract and is not run" || no "contract not enforced (rc=$rc)" "$out"
 rm -f "$R2"/migrations/2026120*; mini; newmig 202612010004-no-down-ok '# down: none (it only prints)
 up() { echo hello; }'
 runmig; [ "$rc" = 0 ] && ok "'# down: none (reason)' satisfies the contract" || no "down: none refused" "$out"
@@ -265,7 +265,7 @@ mkdir -p "$HOME/work/sub"; echo keep > "$HOME/work/note.txt"; H7="$(hash_tree "$
 for c in up down status; do
   for w in "$HOME" "$HOME/work/sub"; do
     out="$(cd "$w" && python3 "$REL7/scripts/talos-migrate.py" $c 2>&1)"; rc=$?
-    { [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'not an agent folder; pass --agent'; } || bad7="$bad7 $c@$w(rc=$rc)"
+    { [ "$rc" != 0 ] && <<<"$out" grep -q 'not an agent folder; pass --agent'; } || bad7="$bad7 $c@$w(rc=$rc)"
   done
 done
 { [ -z "$bad7" ] && [ "$(hash_tree "$HOME")" = "$H7" ] && [ ! -e "$HOME/.talos-version" ] && [ ! -e "$HOME/.claude" ]; } && ok "talos-migrate up/down/status with no --agent and no .talos-version around (cwd = HOME or below it) refuses with 'not an agent folder; pass --agent' and changes nothing" || no "talos-migrate fell back to the working directory ($bad7)" "$out"
@@ -274,7 +274,7 @@ done
 H7k="$(hash_tree "$KIT")"; bad7=""
 for c in up down status; do
   out="$(cd "$KIT" && env -u CLAUDE_PROJECT_DIR python3 "$KIT/scripts/talos-migrate.py" $c 2>&1)"; rc=$?
-  { [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'not an agent folder; pass --agent'; } || bad7="$bad7 $c(rc=$rc)"
+  { [ "$rc" != 0 ] && <<<"$out" grep -q 'not an agent folder; pass --agent'; } || bad7="$bad7 $c(rc=$rc)"
 done
 { [ -z "$bad7" ] && [ "$(hash_tree "$KIT")" = "$H7k" ]; } && ok "talos-migrate up/down/status run from a kit source checkout with no --agent refuses 'not an agent folder; pass --agent' and changes nothing in the checkout" || no "talos-migrate treated a kit source checkout as an agent ($bad7)" "$out"
 
@@ -393,14 +393,14 @@ out="$(down7)"; rc=$?
   && ok "down re-run after a crash (hooks/ link removed before the saved folder came back; scripts/ half swapped) finishes: both folders byte for byte, settings restored, marker cleared" || no "down is not re-runnable after a crash (rc=$rc)" "$out"
 python3 "$REL7f/scripts/talos-migrate.py" up --agent "$LF" >/dev/null 2>&1; rm -rf "$LF/.talos-pre-plugin/hooks"; rm "$LF/hooks"
 out="$(down7)"; rc=$?
-{ [ "$rc" != 0 ] && [ -n "$(marker "$LF" migration)" ] && printf '%s' "$out" | grep -q 'hooks/'; } && ok "down refuses to clear the marker when hooks/ cannot be put back (saved folder gone), and says which" || no "down cleared the marker with hooks/ missing (rc=$rc)" "$out"
+{ [ "$rc" != 0 ] && [ -n "$(marker "$LF" migration)" ] && <<<"$out" grep -q 'hooks/'; } && ok "down refuses to clear the marker when hooks/ cannot be put back (saved folder gone), and says which" || no "down cleared the marker with hooks/ missing (rc=$rc)" "$out"
 
 # R1-7. down on a fresh plugin install (nothing was moved) refuses plainly and keeps the marker
 fresh_home h7g; LG="$HOME/agent"; bash "$KIT/install.sh" --agent-dir "$LG" --no-chronos >/dev/null 2>&1
 HG="$(hash_tree "$LG/.claude" "$LG/hooks" "$LG/scripts")"; MG="$(marker "$LG" migration)"
 out="$(python3 "$LG/scripts/talos-migrate.py" down --agent "$LG" 2>&1)"; rc=$?
 { [ "$rc" != 0 ] && [ "$(marker "$LG" migration)" = "$MG" ] && [ -n "$MG" ] && [ -L "$LG/hooks" ] && [ "$(hash_tree "$LG/.claude" "$LG/hooks" "$LG/scripts")" = "$HG" ] \
-  && printf '%s' "$out" | grep -q 'installed on the plugin layout' && ! printf '%s' "$out" | grep -q 'back to the layout with hooks/'; } \
+  && <<<"$out" grep -q 'installed on the plugin layout' && ! <<<"$out" grep -q 'back to the layout with hooks/'; } \
   && ok "down on a fresh plugin install refuses with a plain line, keeps the marker, claims no success, changes nothing" || no "down on a fresh install did something or claimed success (rc=$rc)" "$out"
 
 # R1-8. live writes (a running session's .learnings, logs, stamps) are not a broken rule; a real one says the marker was not advanced and how to recover
@@ -412,7 +412,7 @@ out="$(python3 "$R7h/scripts/talos-migrate.py" up --agent "$HOME/mini" --release
 { [ "$rc" = 0 ] && [ "$(marker "$HOME/mini" migration)" = 202612010000-live ]; } && ok "a session writing .learnings/, a log and a memory stamp while a migration runs is not a broken rule" || no "live-write paths tripped the zone check (rc=$rc)" "$out"
 rm -f "$R7h"/migrations/202612010000-live.sh; mini7; printf '#!/usr/bin/env bash\nup() { echo more >> "$TALOS_AGENT/CLAUDE.md"; }\ndown() { :; }\n' > "$R7h/migrations/202612010001-bad.sh"
 out="$(python3 "$R7h/scripts/talos-migrate.py" up --agent "$HOME/mini" --release "$R7h" 2>&1)"; rc=$?
-{ [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'BROKEN RULE' && printf '%s' "$out" | grep -qi 'marker was not advanced' && printf '%s' "$out" | grep -q 'talos-migrate up' && ! printf '%s' "$out" | grep -q 'Undo with: talos-migrate down'; } \
+{ [ "$rc" = 1 ] && <<<"$out" grep -q 'BROKEN RULE' && <<<"$out" grep -qi 'marker was not advanced' && <<<"$out" grep -q 'talos-migrate up' && ! <<<"$out" grep -q 'Undo with: talos-migrate down'; } \
   && ok "a broken rule after a migration ran says the marker was not advanced and gives the recovery (not 'talos-migrate down')" || no "the broken-rule message is wrong (rc=$rc)" "$out"
 
 # R1-14. snapshot() skips sockets/FIFOs and unreadable files, counts and prints them, never raises
@@ -433,10 +433,10 @@ assert sorted(skipped) == ["pipe", "secret.txt"], skipped
 print("snapshot-ok")
 PY
 )"; rc=$?
-{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q snapshot-ok; } && ok "snapshot() skips a FIFO and an unreadable file (reported to the caller), neither hangs nor raises" || no "snapshot() raised or hung on a special/unreadable file (rc=$rc)" "$out"
+{ [ "$rc" = 0 ] && <<<"$out" grep -q snapshot-ok; } && ok "snapshot() skips a FIFO and an unreadable file (reported to the caller), neither hangs nor raises" || no "snapshot() raised or hung on a special/unreadable file (rc=$rc)" "$out"
 mini7; mkfifo "$HOME/mini/pipe"; printf '#!/usr/bin/env bash\nup() { echo hi; }\ndown() { :; }\n' > "$R7h/migrations/202612010002-fine.sh"; rm -f "$R7h"/migrations/202612010001-bad.sh
 out="$(timeout 60 python3 "$R7h/scripts/talos-migrate.py" up --agent "$HOME/mini" --release "$R7h" 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '1 file(s) not checked' && printf '%s' "$out" | grep -q 'pipe'; } && ok "a migration run over an agent with a FIFO finishes and prints the skipped file" || no "the runner hung or did not name the skipped file (rc=$rc)" "$out"
+{ [ "$rc" = 0 ] && <<<"$out" grep -q '1 file(s) not checked' && <<<"$out" grep -q 'pipe'; } && ok "a migration run over an agent with a FIFO finishes and prints the skipped file" || no "the runner hung or did not name the skipped file (rc=$rc)" "$out"
 rm -f "$R7h"/migrations/202612010002-fine.sh
 
 # R1-10. a fresh install never moves a current link other agents use
@@ -445,7 +445,7 @@ mkkit(){ rm -rf "$1"; mkdir -p "$1"; ( cd "$KIT" && tar --exclude='./.git' --exc
 mkkit "$SB/kit7a" 1.0.0-cur-a; mkkit "$SB/kit7b" 1.0.0-cur-b
 bash "$SB/kit7a/install.sh" --agent-dir "$HOME/agentA" --no-chronos >/dev/null 2>&1
 out="$(bash "$SB/kit7b/install.sh" --agent-dir "$HOME/agentB" --no-chronos 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && [ "$(readlink "$V7i/current")" = releases/1.0.0-cur-a ] && [ -d "$V7i/releases/1.0.0-cur-b" ] && printf '%s' "$out" | grep -q 'another agent on this Mac uses release 1.0.0-cur-a' && [ -L "$HOME/agentB/hooks" ]; } \
+{ [ "$rc" = 0 ] && [ "$(readlink "$V7i/current")" = releases/1.0.0-cur-a ] && [ -d "$V7i/releases/1.0.0-cur-b" ] && <<<"$out" grep -q 'another agent on this Mac uses release 1.0.0-cur-a' && [ -L "$HOME/agentB/hooks" ]; } \
   && ok "installing a second agent from another kit version leaves current on the first, says so, and still builds the new release" || no "a fresh install moved or ignored current (rc=$rc, current=$(readlink "$V7i/current"))" "$(printf '%s' "$out" | tail -4)"
 
 # R2-1. the agent installed beside a current it did not move runs against THAT release: its settings.json comes from current's template
@@ -462,7 +462,7 @@ out="$(bash "$SB/kit7c/install.sh" --agent-dir "$HOME/agentC" --no-chronos 2>&1)
   && cmp -s "$HOME/agentA/.claude/settings.json" "$HOME/agentC/.claude/settings.json" && grep -q '^version=1.0.0-cur-a$' "$HOME/agentC/.talos-version" \
   && ! grep -q 'cur-c' "$HOME/agentC/.talos-version"; } \
   && ok "an agent installed beside a current it did not move gets current's own settings.json template and version (not the newer kit's); it runs the release it follows" || no "the new kit's template or version was stamped onto an agent that follows an older release (rc=$rc)" "$(grep -c new-guard-from-c "$HOME/agentC/.claude/settings.json" 2>&1) / $(cat "$HOME/agentC/.talos-version" 2>&1 | tr '\n' ' ')"
-printf '%s' "$out" | grep -q 'uses release 1.0.0-cur-a' && ok "and the install says which release the agent runs, and how to move all agents together" || no "the install did not say which release the agent runs" "$(printf '%s' "$out" | grep -i note)"
+<<<"$out" grep -q 'uses release 1.0.0-cur-a' && ok "and the install says which release the agent runs, and how to move all agents together" || no "the install did not say which release the agent runs" "$(printf '%s' "$out" | grep -i note)"
 
 # R2-4. a dangling current (its release folder is gone) counts as absent: a fresh install repairs it
 fresh_home h7k; V7k="$TALOS_VENDOR_DIR/kit"; mkdir -p "$V7k"; ln -s releases/gone "$V7k/current"
@@ -477,9 +477,9 @@ for bad in "$HOME/does-not-exist" "$R7j"; do
   out="$(cd "$HOME/cwdagent" && CLAUDE_PROJECT_DIR="$bad" TALOS_UNATTENDED=1 sh -c 'printf "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls\"}}" | python3 "$0/hooks/append-only-guard.py"' "$R7j" 2>&1)"; rc=$?
   [ "$rc" = 2 ] || bad7="$bad7 guard-unattended($bad):rc=$rc"
   out="$(cd "$HOME/cwdagent" && CLAUDE_PROJECT_DIR="$bad" sh -c 'printf "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls\"}}" | python3 "$0/hooks/append-only-guard.py"' "$R7j" 2>&1)"; rc=$?
-  { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'not an agent folder'; } || bad7="$bad7 guard-attended($bad):rc=$rc"
+  { [ "$rc" = 0 ] && <<<"$out" grep -q 'not an agent folder'; } || bad7="$bad7 guard-attended($bad):rc=$rc"
   out="$(cd "$HOME/cwdagent" && CLAUDE_PROJECT_DIR="$bad" python3 -c 'import sys; sys.path.insert(0, sys.argv[1] + "/scripts"); import _agent_root; _agent_root.agent_root(sys.argv[1] + "/scripts/x.py")' "$R7j" 2>&1)"; rc=$?
-  [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'not an agent folder' || bad7="$bad7 scripts($bad)"
+  [ "$rc" != 0 ] && <<<"$out" grep -q 'not an agent folder' || bad7="$bad7 scripts($bad)"
 done
 [ -z "$bad7" ] && [ ! -d "$HOME/state" ] && ok "CLAUDE_PROJECT_DIR = a missing folder or a release: a guard blocks (exit 2) when unattended, refuses without acting otherwise, scripts/_agent_root.py refuses; nothing is written" || no "a bad CLAUDE_PROJECT_DIR was followed or allowed:$bad7" "$out"
 
@@ -586,7 +586,7 @@ PY
   guard_run CHRONOS_RUN=1; U5="$(cat "$SB/fake.last")"
   guard_run X=1; A5R="$(cat "$SB/fake.last")"
   kill $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
-  { printf '%s' "$U5" | grep -q 'unattended, so the action is blocked' && printf '%s' "$U5" | grep -q '"is_error": *true' && printf '%s' "$A5R" | grep -q 'guard-probe' && ! printf '%s' "$A5R" | grep -q 'the action is blocked'; } \
+  { <<<"$U5" grep -q 'unattended, so the action is blocked' && <<<"$U5" grep -q '"is_error": *true' && <<<"$A5R" grep -q 'guard-probe' && ! <<<"$A5R" grep -q 'the action is blocked'; } \
     && ok "[claude] with its release gone, the Bash guard fails closed in a claude -p tool call when unattended (the tool result is the guard's error) and lets the same call through in an interactive-style run" || no "[claude] the guard did not fail closed through a real tool call (fake API port '$FP')" "unattended: $(printf '%s' "$U5" | cut -c1-300) | attended: $(printf '%s' "$A5R" | cut -c1-300)"
   python3 "$KIT/scripts/plugin-release.py" activate --vendor "$V5" --version "$(tr -d ' \t\r\n' < "$KIT/VERSION")" >/dev/null 2>&1
 
@@ -608,9 +608,9 @@ PY
 
   # 5. claude plugin validate
   v="$(HOME="$SB/claude4" claude plugin validate "$RR" 2>&1)"; rc=$?
-  { [ "$rc" = 0 ] && printf '%s' "$v" | grep -q 'Validation passed'; } && ok "[claude] claude plugin validate passes on the built plugin ($(claude --version 2>/dev/null | head -1))" || no "[claude] plugin validate failed (rc=$rc)" "$(printf '%s' "$v" | tail -5)"
+  { [ "$rc" = 0 ] && <<<"$v" grep -q 'Validation passed'; } && ok "[claude] claude plugin validate passes on the built plugin ($(claude --version 2>/dev/null | head -1))" || no "[claude] plugin validate failed (rc=$rc)" "$(printf '%s' "$v" | tail -5)"
   v="$(HOME="$SB/claude4" claude plugin validate "$TALOS_VENDOR_DIR/kit" 2>&1)"; rc=$?
-  { [ "$rc" = 0 ] && printf '%s' "$v" | grep -q 'Validation passed'; } && ok "[claude] claude plugin validate passes on the marketplace folder (its one warning: the source goes through the current symlink, which validation never follows)" || no "[claude] marketplace validate failed (rc=$rc)" "$(printf '%s' "$v" | tail -5)"
+  { [ "$rc" = 0 ] && <<<"$v" grep -q 'Validation passed'; } && ok "[claude] claude plugin validate passes on the marketplace folder (its one warning: the source goes through the current symlink, which validation never follows)" || no "[claude] marketplace validate failed (rc=$rc)" "$(printf '%s' "$v" | tail -5)"
 else
   echo "  skip claude plugin validate and the real-session checks (the claude CLI is not installed here)"
 fi

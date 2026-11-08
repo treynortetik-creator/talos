@@ -47,13 +47,14 @@ struct ThreadSessionsListTests {
   @Test func theHandOpenedClaudeHasBothChannelPluginsOffAndTheWorkersPermissionFlag() throws {
     let r = ThreadSessions.rows(from: file(["q": ("failed", "needs_mac", "trust")])).first!
     let inv = try #require(
-      ThreadSessions.claudeInvocation(for: r, claudePath: "/usr/local/bin/claude", permissionFlag: "--dangerously-skip-permissions"))
+      ThreadSessions.claudeInvocation(
+        for: r, claudePath: "/usr/local/bin/claude", permissionFlag: "--dangerously-skip-permissions", talosHome: "/home/alex/.talos"))
     #expect(inv.args.first == "--dangerously-skip-permissions")
     let i = try #require(inv.args.firstIndex(of: "--settings"))
     let json = inv.args[i + 1]
     #expect(json.contains("\"\(WorkerSpec.telegramPlugin)\":false"))
     #expect(json.contains("\"\(WorkerSpec.imessagePlugin)\":false"))
-    let none = ThreadSessions.claudeInvocation(for: r, claudePath: "claude")!
+    let none = ThreadSessions.claudeInvocation(for: r, claudePath: "claude", talosHome: "/home/alex/.talos")!
     #expect(!none.args.contains("--dangerously-skip-permissions"))
   }
 
@@ -90,10 +91,11 @@ struct ThreadSessionsListTests {
 
   @Test func claudeOpensInTheThreadsFolderOnlyForNeedsMacAndTypesNothing() {
     let r = ThreadSessions.rows(from: file(["q": ("failed", "needs_mac", "trust")])).first!
-    let inv = ThreadSessions.claudeInvocation(for: r, claudePath: "/usr/local/bin/claude")
-    #expect(inv == .init(executable: "/usr/local/bin/claude", args: ["--settings", ThreadSessions.pluginsOffSettings], cwd: "/home/alex/proj-q"))
+    let inv = ThreadSessions.claudeInvocation(for: r, claudePath: "/usr/local/bin/claude", talosHome: "/home/alex/.talos")
+    #expect(inv?.executable == "/usr/local/bin/claude" && inv?.cwd == "/home/alex/proj-q")
+    #expect(inv?.args.first == "--settings" && inv?.args.count == 2, "the settings are the only argument: nothing is typed or passed for the owner")
     let live = ThreadSessions.rows(from: file(["l": ("live", nil, nil)])).first!
-    #expect(ThreadSessions.claudeInvocation(for: live, claudePath: "claude") == nil)
+    #expect(ThreadSessions.claudeInvocation(for: live, claudePath: "claude", talosHome: "/home/alex/.talos") == nil)
   }
 
   @Test func theHandOpenedClaudeNeverJoinsTalosAsAChannel() {

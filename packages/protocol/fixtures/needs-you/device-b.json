@@ -1,0 +1,9 @@
+{
+  "deviceId": "d_wohov3wmxapevwsxeger",
+  "publicJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "XJMigy9ojs3_Q7vj8opEYgjqllY7fcM6oD6C4oLGfEk",
+    "y": "imKr8nxumZkdb3CIzUm3Vz8UwQlCUN0jaXvOafsy0_0"
+  }
+}

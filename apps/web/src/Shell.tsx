@@ -1,14 +1,18 @@
 // The app shell: sidebar + center + optional detail panel on tablet/desktop, content + bottom bar on phones.
 import { type CSSProperties, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation, useMatch, useNavigate } from 'react-router'
-import { AgentsRail } from './features/agents/AgentsRail.tsx'
-import { PhoneChrome } from './features/phone/PhoneChrome.tsx'
+import { PHONE_QUERY, PhoneChrome } from './features/phone/PhoneChrome.tsx'
+import { usePhonePanel } from './features/phone/phoneStore.ts'
+import { useSessionDockOpen } from './features/session/dockPref.ts'
+import { SessionDock } from './features/session/SessionDock.tsx'
+import { SessionTrigger, useSessionSupported } from './features/session/SessionTrigger.tsx'
 import { useMediaQuery } from './features/settings/useMedia.ts'
 import { DetailPanelContext } from './features/threads/DetailPanel.tsx'
 import { BottomBar, Sidebar, useNeedsYouCount } from './features/threads/Nav.tsx'
 import { toggleSidebar, useSidebarCollapsed } from './features/threads/sidebarPref.ts'
 import { ThreadBanner } from './features/threads/ThreadBanner.tsx'
 import { useAgentName, useVisibleThreads } from './features/threads/useThreads.ts'
+import { useApprovalOpen } from './lib/approvalOpen.ts'
 import { useKeyboardLayout } from './lib/keyboardViewport.ts'
 import { setNativeViewing } from './lib/nativePush.ts'
 import { useGlobalKeys } from './lib/useKeyboard.ts'
@@ -24,6 +28,12 @@ export function Shell() {
   const needs = useNeedsYouCount()
   const agent = useAgentName()
   const desktop = useMediaQuery('(min-width: 1024px)')
+  const phone = useMediaQuery(PHONE_QUERY)
+  // the thread on screen (ThreadView publishes it): the Session chip and panel follow it, on /t/:id and /card/:id alike
+  const sessionThread = usePhonePanel((s) => s.thread)
+  const sessionSupported = useSessionSupported()
+  const dockOpen = useSessionDockOpen()
+  const approving = useApprovalOpen() // the approval sheet owns the screen: no toast viewport over it
   const folded = useSidebarCollapsed()
   const onThread = useMatch('/t/:thread')
   const onCard = useMatch('/card/:id')
@@ -101,7 +111,10 @@ export function Shell() {
         >
           <Sidebar />
           <PhoneChrome />
-          <div className="flex min-w-0 flex-1 flex-col">
+          <div className="@container relative flex min-w-0 flex-1 flex-col">
+            {/* the usage chip sits in this column's top-right corner: the window's corner while the panel is closed. It steps aside
+                while a details panel is open (the dock is not drawn then, so the chip would toggle something nobody can see). */}
+            {sessionThread && !phone && !detail && <SessionTrigger threadId={sessionThread} />}
             <main
               className={cn(
                 'mx-auto min-h-0 w-full flex-1 overflow-y-auto overscroll-contain',
@@ -116,8 +129,10 @@ export function Shell() {
             </main>
             {!inThread && <BottomBar />}
           </div>
-          {/* docs/SUBAGENTS.md 6.1: the agents rail docks on the right of a thread at >= 1280 px */}
-          {onThread?.params.thread && !(detail && desktop) && <AgentsRail threadId={onThread.params.thread} />}
+          {/* the Session panel docks on the right of a thread on a desktop; it is not a modal, the chat stays usable */}
+          {sessionThread && desktop && dockOpen && sessionSupported && !detail && (
+            <SessionDock threadId={sessionThread} />
+          )}
           {detail && desktop && (
             <aside
               aria-label={detail.title ?? 'Details'}
@@ -146,7 +161,7 @@ export function Shell() {
           </Sheet>
         </div>
         <ThreadBanner />
-        <ToastViewport />
+        {approving ? null : <ToastViewport />}
       </DetailPanelContext.Provider>
     </ToastProvider>
   )

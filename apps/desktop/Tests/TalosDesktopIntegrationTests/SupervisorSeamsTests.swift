@@ -29,9 +29,11 @@ struct SupervisorSeamsTests {
 
   @Test(arguments: bothHosts)
   func aRestartThatShowsNeitherDialogNorNoticeStopsWaitingAndTellsTheOwner(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "restart-silent.sh", timings: Self.timings())
+    // Start 1 crashes 6 s after the notice, not the fake's 1 s: the restart shows nothing, so a start 1 that dies before the
+    // test or the supervisor has seen it running (a starved poll, a slow `tmux send-keys`) leaves the phase `.starting` for good.
+    let r = try Rig(kind, scenario: "restart-silent.sh", env: ["FAKE_CRASH_AFTER": "6"], timings: Self.timings())
     defer { r.teardown() }
-    try coldStartConfirmed(r)  // start 1 crashes a second after the Enter; the restart then shows nothing recognisable
+    try coldStartConfirmed(r)  // start 1 crashes some seconds after the Enter; the restart then shows nothing recognisable
     #expect(r.wait(60) { r.starts.count >= 2 }, "restarted")
     #expect(startStalls(r), "needsYou \(String(describing: r.sup.status.needsYou)), phase \(r.phase()), audit: \(r.audit)")
     #expect(r.phase() == .starting, "it is not called running: nothing confirmed it")

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BRIDGE_TOOLS, CHANNEL_KINDS, CHANNEL_TRUSTS, ChannelMeta } from '../src/index.ts'
+import { CHANNEL_KINDS, CHANNEL_TRUSTS, ChannelMeta } from '../src/index.ts'
 
 const ok = {
   chat_id: 'general',
@@ -36,9 +36,5 @@ describe('ChannelMeta', () => {
     expect(ChannelMeta.safeParse({ ...ok, 'thread-id': 'x' }).success).toBe(false)
     expect(ChannelMeta.safeParse({ ...ok, duration_s: 4 }).success).toBe(false)
     expect(ChannelMeta.safeParse({ ...ok, chat_id: 'other' }).success).toBe(false)
-  })
-  it('lists the 12 bridge tools of spec 4.4', () => {
-    expect(BRIDGE_TOOLS).toHaveLength(12)
-    expect(new Set(BRIDGE_TOOLS).size).toBe(12)
   })
 })

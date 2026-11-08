@@ -100,7 +100,10 @@ test.describe('stock themes under the production CSP', () => {
       expect(await accent(page), theme.name).toBe(theme.dark['--accent'])
     }
     expect(await accent(page)).not.toBe(before)
-    expect(await violations(page)).toEqual(baseline)
+    // zod probes `new Function` once per first parse of a schema; the CSP blocks it (zod falls back) and reports it. How many
+    // such probes land in this window depends on which schemas parse first, so count only the reports that are not that.
+    const notEval = (list: string[]) => list.filter((v) => !v.startsWith('script-src eval'))
+    expect(notEval(await violations(page))).toEqual(notEval(baseline))
   })
 })
 

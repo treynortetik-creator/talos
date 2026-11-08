@@ -52,7 +52,7 @@ rm -f "$CFG"; reset
 out=$(run 2>&1); rc=$?
 { [ $rc -eq 0 ] && [ -z "$out" ] && [ "$(nlines)" = 0 ] && [ -z "$(seenfile)" ]; } && ok "unconfigured: silent, exit 0, nothing sent, no state written" || no "unconfigured run" "rc=$rc out=$out"
 out=$(run --explain 2>&1)
-echo "$out" | grep -q "no sources configured" && ok "--explain says 'no sources configured' with no config" || no "--explain unconfigured" "$out"
+<<<"$out" grep -q "no sources configured" && ok "--explain says 'no sources configured' with no config" || no "--explain unconfigured" "$out"
 mkdir -p "$AGENT/memory"; printf '## FUSES\n| 2026-10-29 | Renew example domain |\n' > "$AGENT/memory/STATE.md"
 out=$(run 2>&1); rc=$?
 { [ $rc -eq 0 ] && [ -z "$out" ] && [ "$(nlines)" = 0 ]; } && ok "a STATE.md alone (no config file) does not switch the check on" || no "STATE.md without config" "$out"
@@ -112,10 +112,10 @@ out=$(run --dry-run --job mid 2>/dev/null)
 words=$(printf '%s' "$out" | wc -w | tr -d ' ')
 { [ -n "$out" ] && [ "$(nlines)" = 0 ] && [ -z "$(seenfile)" ]; } && ok "--dry-run prints the message, sends nothing, writes no state" || no "dry-run" "out=$out"
 [ "$words" -le 60 ] && ok "message is $words words (<= 60)" || no "message too long: $words words"
-echo "$out" | grep -q "Talos mid check-in" && ok "--job labels the message" || no "job label" "$out"
-echo "$out" | grep -q "17:00 Standup" && echo "$out" | grep -q "Acme sync review" && ok "soon events listed (TZID event converted, markdown stripped)" || no "soon content" "$out"
-echo "$out" | grep -Eq '[*_`]' && no "message contains chat-hostile characters" "$out" || ok "message is plain text (no * _ \`)"
-echo "$out" | grep -q "Planning later" && no "an event 8 days out was reported" || ok "an event outside every window is not reported"
+<<<"$out" grep -q "Talos mid check-in" && ok "--job labels the message" || no "job label" "$out"
+<<<"$out" grep -q "17:00 Standup" && <<<"$out" grep -q "Acme sync review" && ok "soon events listed (TZID event converted, markdown stripped)" || no "soon content" "$out"
+<<<"$out" grep -Eq '[*_`]' && no "message contains chat-hostile characters" "$out" || ok "message is plain text (no * _ \`)"
+<<<"$out" grep -q "Planning later" && no "an event 8 days out was reported" || ok "an event outside every window is not reported"
 reset
 out=$(run --job am 2>&1); rc=$?
 { [ $rc -eq 0 ] && [ -z "$out" ] && [ "$(nlines)" = 1 ]; } && ok "a real run sends exactly ONE message and prints nothing" || no "real run" "rc=$rc out=$out lines=$(nlines)"
@@ -156,7 +156,7 @@ E
 cp "$(seenfile)" "$SB/seen.before"
 out=$(run --dry-run 2>/dev/null)
 cmp -s "$SB/seen.before" "$(seenfile)" && ok "--dry-run leaves the seen-state byte-identical" || no "dry-run touched the seen-state"
-echo "$out" | grep -q "Moved: Budget review" && echo "$out" | grep -q "Cancelled: Vendor call" && echo "$out" | grep -q "New: Brand new thing" \
+<<<"$out" grep -q "Moved: Budget review" && <<<"$out" grep -q "Cancelled: Vendor call" && <<<"$out" grep -q "New: Brand new thing" \
   && ok "dry-run shows the moved, cancelled and new event" || no "change detection (dry-run)" "$out"
 run >/dev/null 2>&1
 { [ "$(nlines)" = 1 ] && grep -q "Moved" "$LOG" && grep -q "Cancelled" "$LOG" && grep -q "New" "$LOG"; } && ok "the real run sends ONE message with moved + cancelled + new" || no "change detection (real)" "$(cat "$LOG")"
@@ -177,8 +177,8 @@ cat > "$AGENT/memory/STATE.md" <<'S'
 | Closed thing | 2026-10-29 |
 S
 out=$(run --dry-run --job eve 2>/dev/null)
-echo "$out" | grep -q "Renew example domain" && echo "$out" | grep -q "Dentist" && ok "STATE.md rows dated inside 48 h are reported" || no "deadline hits" "$out"
-echo "$out" | grep -Eq "shipped|Far away|Closed thing" && no "a done row, a far row or a RECENTLY CLOSED row was reported" "$out" || ok "done rows, far dates and RECENTLY CLOSED are ignored"
+<<<"$out" grep -q "Renew example domain" && <<<"$out" grep -q "Dentist" && ok "STATE.md rows dated inside 48 h are reported" || no "deadline hits" "$out"
+<<<"$out" grep -Eq "shipped|Far away|Closed thing" && no "a done row, a far row or a RECENTLY CLOSED row was reported" "$out" || ok "done rows, far dates and RECENTLY CLOSED are ignored"
 run >/dev/null 2>&1; run >/dev/null 2>&1
 [ "$(nlines)" = 1 ] && ok "a deadline is announced once" || no "deadline repeated" "lines=$(nlines)"
 rm -f "$AGENT/memory/STATE.md"
@@ -191,7 +191,7 @@ echo '[{"title":"Adapter event","start":"2026-10-28T17:30:00+00:00"},{"title":"D
 A
 printf '{"timezone":"UTC","deadlines":false,"calendar":{"type":"command","command":"bash %s"}}\n' "$SB/good.sh" > "$CFG"
 out=$(run --dry-run 2>/dev/null)
-echo "$out" | grep -q "17:30 Adapter event" && ok "command adapter: JSON events are read" || no "json adapter" "$out"
+<<<"$out" grep -q "17:30 Adapter event" && ok "command adapter: JSON events are read" || no "json adapter" "$out"
 cat > "$SB/bad.sh" <<'A'
 #!/bin/bash
 echo "calendar access was denied" >&2
@@ -205,12 +205,12 @@ grep -q "calendar command failed" "$SB/err.txt" && ok "...and as one stderr line
 run --job mid >/dev/null 2>&1; [ "$(nlines)" = 1 ] && ok "the same failure is not repeated on the next run" || no "failure repeated" "lines=$(nlines)"
 printf '{"timezone":"UTC","deadlines":false,"calendar":{"type":"command","command":"/nonexistent/adapter --x"}}\n' > "$CFG"
 reset; out=$(run 2>&1); rc=$?
-echo "$out" | grep -q Traceback && no "traceback on a missing command" "$out" || ok "a missing command never produces a traceback"
+<<<"$out" grep -q Traceback && no "traceback on a missing command" "$out" || ok "a missing command never produces a traceback"
 printf '{"timezone":"UTC","deadlines":false,"calendar":{"type":"ics","path":"%s/missing.ics"}}\n' "$SB" > "$CFG"
 reset; out=$(run 2>&1)
-echo "$out" | grep -q Traceback && no "traceback on a missing ics" "$out" || ok "a missing ICS file never produces a traceback"
+<<<"$out" grep -q Traceback && no "traceback on a missing ics" "$out" || ok "a missing ICS file never produces a traceback"
 printf '{not json' > "$CFG"; out=$(run 2>&1); rc=$?
-{ [ $rc -ne 0 ] && ! echo "$out" | grep -q Traceback; } && ok "a broken config is one stderr line, not a traceback" || no "broken config" "rc=$rc $out"
+{ [ $rc -ne 0 ] && ! <<<"$out" grep -q Traceback; } && ok "a broken config is one stderr line, not a traceback" || no "broken config" "rc=$rc $out"
 
 # ---------------------------------------------------------------- 8. notify failure keeps state so the next run retries
 reset; cfg_ics
@@ -219,13 +219,13 @@ s1|Standup|DTSTART:20261028T170000Z
 E
 printf '#!/bin/bash\nexit 7\n' > "$SB/failnotify.sh"; chmod +x "$SB/failnotify.sh"
 out=$(TALOS_NOTIFY_CMD="$SB/failnotify.sh" run 2>&1); rc=$?
-{ [ $rc -eq 1 ] && echo "$out" | grep -q "notify command exited 7" && [ -z "$(seenfile)" ]; } && ok "notify failure: exit 1, one stderr line, nothing marked as sent" || no "notify failure" "rc=$rc $out"
+{ [ $rc -eq 1 ] && <<<"$out" grep -q "notify command exited 7" && [ -z "$(seenfile)" ]; } && ok "notify failure: exit 1, one stderr line, nothing marked as sent" || no "notify failure" "rc=$rc $out"
 run >/dev/null 2>&1; [ "$(nlines)" = 1 ] && ok "...and the next run delivers it" || no "no retry" "lines=$(nlines)"
 
 # ---------------------------------------------------------------- 9. --explain with a source
 out=$(run --explain)
-echo "$out" | grep -q "calendar source: ics" && echo "$out" | grep -q "active sources: calendar (ics)" && ok "--explain lists the active calendar source" || no "--explain with ics" "$out"
-echo "$out" | grep -q "no sources configured" && no "--explain claims no sources although one is set" || ok "--explain does not say 'no sources configured' when one is"
+<<<"$out" grep -q "calendar source: ics" && <<<"$out" grep -q "active sources: calendar (ics)" && ok "--explain lists the active calendar source" || no "--explain with ics" "$out"
+<<<"$out" grep -q "no sources configured" && no "--explain claims no sources although one is set" || ok "--explain does not say 'no sources configured' when one is"
 
 # ---------------------------------------------------------------- 10. the macOS adapter, with fake back ends
 AD="$KIT/scripts/watcher-adapters/macos-calendar.sh"
@@ -233,7 +233,7 @@ FB="$SB/fb"; mkdir -p "$FB"
 for t in bash date uname cut head printf; do p=$(command -v "$t") && [ -x "$p" ] && ln -sf "$p" "$FB/$t"; done
 ln -sf "$(python3 -c 'import sys,os;print(os.path.realpath(sys.executable))')" "$FB/python3"   # not a pyenv shim: a shim needs tr/sed on PATH
 out=$(PATH="$FB" "$FB/bash" "$AD" 2>&1); rc=$?
-{ [ $rc -ne 0 ] && echo "$out" | grep -q "found neither"; } && ok "adapter: clear message when neither osascript nor icalBuddy exists" || no "adapter without back ends" "rc=$rc $out"
+{ [ $rc -ne 0 ] && <<<"$out" grep -q "found neither"; } && ok "adapter: clear message when neither osascript nor icalBuddy exists" || no "adapter without back ends" "rc=$rc $out"
 cat > "$FB/icalBuddy" <<'FAKE'
 #!/bin/bash
 printf '@@Dentist visit\n    2026-10-28 at 17:30 - 18:15\n@@Company holiday\n    2026-10-30\n'
@@ -248,7 +248,7 @@ assert d[1] == {"title": "Company holiday", "start": "2026-10-30", "all_day": Tr
 PY
 printf '{"timezone":"UTC","deadlines":false,"calendar":{"type":"command","command":"%s/bash %s"}}\n' "$FB" "$AD" > "$CFG"
 out=$(PATH="$FB:$PATH" run --dry-run 2>/dev/null)
-echo "$out" | grep -q "Dentist" && ok "watcher + adapter end to end (fake icalBuddy)" || no "end to end adapter" "$out"
+<<<"$out" grep -q "Dentist" && ok "watcher + adapter end to end (fake icalBuddy)" || no "end to end adapter" "$out"
 grep -Eq 'osascript|icalBuddy' "$KIT/scripts/watcher-adapters/macos-calendar.sh" && ! grep -Eq 'make new|delete |set summary|tell application "Calendar" to (make|delete)' "$AD" \
   && ok "adapter source has no write verbs" || no "adapter may write"
 

@@ -21,6 +21,7 @@ describe('isBlockedAddress: the corpus', () => {
   })
   it.each(corpus.core)('refuses core %s', (a) => expect(isBlockedAddress(a)).toBe(true))
   it.each(corpus.alsoBlocked)('refuses %s', (a) => expect(isBlockedAddress(a)).toBe(true))
+  it.each(corpus.embedded)('refuses embedded %s', (a) => expect(isBlockedAddress(a)).toBe(true))
   it.each(corpus.public)('allows public %s', (a) => expect(isBlockedAddress(a)).toBe(false))
   // an unknown value degrades to "refuse", never to "allow" (class 2)
   it.each(corpus.notAnAddress)('refuses text that is not exactly an address: %j', (a) =>
@@ -29,6 +30,58 @@ describe('isBlockedAddress: the corpus', () => {
   it('brackets around a v6 literal do not change the verdict', () => {
     for (const a of corpus.core.filter((x) => x.includes(':'))) expect(isBlockedAddress(`[${a}]`)).toBe(true)
     expect(isBlockedAddress('[2606:4700:4700::1111]')).toBe(false)
+  })
+})
+
+describe('the corpus carries the blocked IPv4 ranges inside every IPv6 wrapper', () => {
+  const hex = (n: number) => n.toString(16)
+  const bases = [
+    '169.254.169.254',
+    '127.0.0.1',
+    '127.255.255.254',
+    '10.0.0.5',
+    '10.255.255.255',
+    '172.16.0.1',
+    '172.31.255.255',
+    '192.168.1.1',
+    '192.168.255.255',
+  ]
+  // built here from the dotted address, never copied from the fixture, so the fixture cannot drift from what it claims
+  const built = bases.flatMap((v4) => {
+    const [p, q, r, s] = v4.split('.').map(Number) as [number, number, number, number]
+    const [hi, lo] = [(p << 8) | q, (r << 8) | s]
+    return [
+      `::ffff:${v4}`,
+      `::ffff:${hex(hi)}:${hex(lo)}`,
+      `::${hex(hi)}:${hex(lo)}`,
+      `64:ff9b::${hex(hi)}:${hex(lo)}`,
+      `2002:${hex(hi)}:${hex(lo)}::1`,
+      `2001:0:4136:e378:8000:63bf:${hex(hi ^ 0xffff)}:${hex(lo ^ 0xffff)}`, // Teredo: the client address is XOR-obfuscated
+    ]
+  })
+  const listed = new Set([...corpus.core, ...corpus.alsoBlocked, ...corpus.embedded])
+  it.each(built)('%s is blocked and is in the corpus', (a) => {
+    expect(isBlockedAddress(a)).toBe(true)
+    expect(listed.has(a)).toBe(true)
+  })
+  it('a public IPv4 address in the same wrappers (all but Teredo, which is refused whole) is allowed', () => {
+    expect(isBlockedAddress('::ffff:8.8.8.8')).toBe(false)
+    expect(isBlockedAddress('64:ff9b::808:808')).toBe(false)
+    expect(isBlockedAddress('2002:808:808::1')).toBe(false)
+    expect(isBlockedAddress('2001:0:4136:e378:8000:63bf:f7f7:f7f7')).toBe(true)
+  })
+})
+
+describe('every blocked range: first and last address are blocked, the addresses just outside are not', () => {
+  // the table lives in the corpus, so the kit's Python copy runs the same one (kit/scripts/test-address.sh)
+  it.each(corpus.rangeEdges)('$range', ({ first, last, before, after }) => {
+    expect(isBlockedAddress(first), first).toBe(true)
+    expect(isBlockedAddress(last), last).toBe(true)
+    if (before) expect(isBlockedAddress(before), before).toBe(false)
+    if (after) expect(isBlockedAddress(after), after).toBe(false)
+  })
+  it('the link-local range is blocked whole, not only the metadata address (169.254.170.2 serves container credentials)', () => {
+    for (const a of ['169.254.0.1', '169.254.170.2', '169.254.169.253']) expect(isBlockedAddress(a), a).toBe(true)
   })
 })
 

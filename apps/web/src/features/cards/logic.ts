@@ -1,6 +1,8 @@
 // Pure card logic (spec 8.4). No React here, so the hash rules are unit-testable.
 import {
   bindingFrom,
+  CARD_KIND_TABLE,
+  CARD_KINDS,
   type CardEditsT,
   type CardKind,
   type CardT,
@@ -91,6 +93,7 @@ const DONE_VERB: Record<CardT['kind'], string> = {
   permission: 'Sent',
   app_action: 'Done',
   config: 'Changed',
+  dialog: 'Answered',
 }
 const FAIL_VERB: Record<CardT['kind'], string> = {
   email: 'send',
@@ -104,6 +107,7 @@ const FAIL_VERB: Record<CardT['kind'], string> = {
   permission: 'finish',
   app_action: 'finish',
   config: 'change it',
+  dialog: 'answer',
 }
 
 /** The verb for a kind, or the generic card's verb for a kind this build does not know (own keys only: "constructor" is unknown). */
@@ -116,10 +120,20 @@ export function isExpiredNow(card: CardT, nowMs: number): boolean {
   return card.state === 'pending' && Date.parse(card.expires_at) <= nowMs
 }
 
+/** A needs-you dialog card that is no longer waiting: the words its result already carries (the bridge wrote them). */
+function dialogLine(card: CardT, expired: boolean): string | null {
+  if (card.state === 'pending') return expired ? '⌛ Expired' : null
+  if (card.state === 'expired') return '⌛ Expired'
+  if (card.state === 'resolved') return '… Pressing the key on your Mac'
+  const text = card.result?.text
+  return text ? `${card.result?.ok ? '✓' : '⚠'} ${text}` : '✓ Answered'
+}
+
 /**
  * The one-line summary shown after a decision (8.4 / 8.7). Null for a live pending card.
  */
 export function collapseLine(card: CardT, o: { agent: string; timeZone?: string; nowMs: number }): string | null {
+  if (card.kind === 'dialog') return dialogLine(card, isExpiredNow(card, o.nowMs))
   const at = (iso: string | undefined) => (iso ? ` ${formatClock(iso, o.timeZone)}` : '')
   // Only that it expired: a card the relay left out of `ready`, or one past its time, may still have been decided here or
   // on another device, so the phone does not say what ran.
@@ -156,20 +170,10 @@ export function collapseLine(card: CardT, o: { agent: string; timeZone?: string;
   }
 }
 
-/** One entry per card kind: a kind missing here fails the type check. */
-export const KIND_LABEL: Record<CardKind, { icon: string; label: string }> = {
-  email: { icon: '✉', label: 'Email' },
-  message: { icon: '💬', label: 'Message' },
-  deploy: { icon: '🚀', label: 'Deploy' },
-  publish: { icon: '📣', label: 'Publish' },
-  purchase: { icon: '💳', label: 'Purchase' },
-  decision: { icon: '⚖', label: 'Decision' },
-  generic: { icon: '◇', label: 'Card' },
-  schedule: { icon: '⏱', label: 'Schedule' },
-  permission: { icon: '⚠', label: 'Permission' },
-  app_action: { icon: '◇', label: 'App request' },
-  config: { icon: '⚙', label: 'Setting' },
-}
+/** One entry per card kind, read from the kind table (CARD_KIND_TABLE), so a kind cannot lack one. */
+export const KIND_LABEL = Object.fromEntries(
+  CARD_KINDS.map((k) => [k, { icon: CARD_KIND_TABLE[k].glyph, label: CARD_KIND_TABLE[k].label }]),
+) as Record<CardKind, { icon: string; label: string }>
 
 /** "m:ss" for a countdown. */
 export function countdown(ms: number): string {

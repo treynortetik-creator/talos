@@ -56,6 +56,10 @@ describe('defaultLeadRoots', () => {
     const plain = defaultLeadRoots({ ...base, claudeDir: '/Users/alex/.claude' })
     expect(plain.filter((r) => r === '/Users/alex/.claude')).toHaveLength(1)
   })
+  test('the credential folders are roots: ~/.ssh, ~/.config/gh, ~/.aws, ~/.npmrc, ~/.netrc', () => {
+    const roots = defaultLeadRoots({ ...base, claudeDir: '/Users/alex/.claude' })
+    for (const p of ['.ssh', '.config/gh', '.aws', '.npmrc', '.netrc']) expect(roots).toContain(`/Users/alex/${p}`)
+  })
   test('no root twice', () => {
     const roots = defaultLeadRoots({ ...base, claudeDir: '/Users/alex/.claude', protect: [agent] })
     expect(new Set(roots).size).toBe(roots.length)

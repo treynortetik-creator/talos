@@ -137,6 +137,3 @@ export function renderGcalScript(vars: GcalScriptVars): string {
   const values: Record<string, string> = { HOOK_URL: vars.hookUrl, CLAIM_CODE: vars.claimCode }
   return TEMPLATE.replace(/'\{\{(HOOK_URL|CLAIM_CODE)\}\}'/g, (_m, k: string) => jsLiteral(values[k] as string))
 }
-
-/** The unrendered template (placeholders intact). */
-export const GCAL_SCRIPT_TEMPLATE = TEMPLATE

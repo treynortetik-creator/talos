@@ -19,6 +19,17 @@ describe('fakeClock', () => {
     c.advance(1000)
     expect(log).toEqual(['a', 'b', 'd'])
     expect(c.pending).toBe(0)
+    expect(c.fired).toBe(3)
     expect(c.iso()).toBe('2026-10-28T00:00:01.100Z')
+  })
+
+  it('set moves time without firing timers', () => {
+    const c = fakeClock('2026-10-28T00:00:00.000Z')
+    let ran = 0
+    c.setTimeout(() => ran++, 100)
+    c.set(c.now() + 1000)
+    expect(ran).toBe(0)
+    expect(c.fired).toBe(0)
+    expect(c.pending).toBe(1)
   })
 })

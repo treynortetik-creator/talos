@@ -11,7 +11,6 @@ import {
   HeartbeatConfig,
   HeartbeatItem,
   HeartbeatItemRead,
-  HeartbeatItemStore,
   HeartbeatResult,
   HeartbeatSourceConfig,
   HeartbeatSourceItem,
@@ -111,7 +110,6 @@ describe('HeartbeatItem', () => {
       expect(HeartbeatItem.safeParse(item({ [f]: 'a‮b' })).success, f).toBe(false)
     expect(HeartbeatItem.safeParse(item({ title: 'a\u0000b' })).success).toBe(false)
     expect(HeartbeatItem.parse(item({ title: 'a⟦U+202E⟧b' })).title).toBe('a⟦U+202E⟧b')
-    expect(HeartbeatItemStore).toBe(HeartbeatItem)
   })
 })
 

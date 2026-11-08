@@ -1,4 +1,4 @@
-// Whether the desktop sidebar is the full panel or the slim rail. Per device (localStorage), like the agents rail.
+// Whether the desktop sidebar is the full panel or the slim rail. Per device (localStorage), like the Session panel's open / closed choice.
 // Phones never read this: they have the bottom bar and the header menu.
 import { useSyncExternalStore } from 'react'
 

@@ -177,8 +177,16 @@ test('an existing version-2 database is left alone: old rows stay, it stays at 2
   // the app opens the database lazily; opening a report forces a read of the problems store
   await page.goto('/settings/health')
   await page.waitForFunction(() => Boolean((window as unknown as { __talos?: unknown }).__talos))
-  await page.getByTestId('report-problem-open').click()
-  await expect(page.getByTestId('report-problem')).toBeVisible()
+  // The page shifts once when /api/status (not routed here) finishes failing: "Checking…" is replaced by the error block above
+  // the button. A click that Playwright aimed before the shift can land on the old spot after it and open nothing, so wait for
+  // the layout to settle (the error block is the end state; "Checking…" may not have rendered yet when the app is ready), and if a
+  // click is still lost under load, click again until the form is there (bounded at 10 s).
+  await expect(page.getByTestId('health-error')).toBeVisible()
+  const form = page.getByTestId('report-problem')
+  await expect(async () => {
+    if (!(await form.isVisible())) await page.getByTestId('report-problem-open').click({ timeout: 2000 })
+    await expect(form).toBeVisible({ timeout: 1000 })
+  }).toPass({ timeout: 10_000 })
   const info = await page.evaluate(
     () =>
       new Promise<{ version: number; stores: string[]; old: unknown; side: string[] }>((resolve, reject) => {

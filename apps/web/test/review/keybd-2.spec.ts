@@ -155,8 +155,10 @@ test.describe('jump to latest', () => {
     await scrollUp(tl)
     const jump = page.getByTestId('jump-to-latest')
     await expect(jump).toBeVisible()
-    await page.getByTestId('session-trigger').click()
-    await expect(page.getByTestId('session-sheet')).toBeVisible()
+    // a modal sheet: the Session panel on a phone or tablet; on a desktop that panel is docked, so thread settings is the sheet
+    const docked = (page.viewportSize()?.width ?? 0) >= 1024
+    await page.getByTestId(docked ? 'thread-settings-trigger' : 'session-trigger').click()
+    await expect(page.getByTestId(docked ? 'thread-settings' : 'session-sheet')).toBeVisible()
     await frames(page)
     // A modal sheet sets pointer-events:none on body, so a plain hit test skips the button whatever is painted. With the
     // button hit-testable again, elementFromPoint returns the topmost painted element: the sheet or its overlay, if correct.

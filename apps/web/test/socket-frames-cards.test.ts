@@ -62,3 +62,53 @@ describe('cards frames', () => {
     expect(rig.client.store.getState().lastSeq).toBe(8)
   })
 })
+
+describe('the explanation on a permission card', () => {
+  const READY = { status: 'ready', tag: 'Deletes', mismatch: true, sentence: 'It deletes things.' } as const
+  const send = (cardId: string, seq: number, extra: Record<string, unknown>) =>
+    rig.relay.sendToApps(mkFrame('card.update', { card_id: cardId, ...extra, ...STAMP(seq) }))
+  const withCard = async (explain: unknown) => {
+    const card = buildCard({ thread_id: 'general', ...(explain ? { explain } : {}) } as never)
+    rig.relay.sendToApps(mkFrame('card.create', { card, ...STAMP(5) }))
+    await waitFor(() => rig.client.store.getState().cards.length === 1, 2000, 'card')
+    return card
+  }
+  const shown = () => rig.client.store.getState().cards[0]
+
+  it('pending to ready: sets the explanation and leaves the state alone, even a state that moved on', async () => {
+    const card = await withCard({ status: 'pending' })
+    send(card.id, 6, { state: 'resolved' })
+    await waitFor(() => shown()?.state === 'resolved', 2000, 'resolved')
+    send(card.id, 7, { state: 'pending', explain: READY })
+    await waitFor(() => shown()?.explain?.status === 'ready', 2000, 'explain')
+    expect(shown()?.explain).toEqual(READY)
+    expect(shown()?.state).toBe('resolved')
+  })
+
+  it('pending to failed is accepted', async () => {
+    const card = await withCard({ status: 'pending' })
+    send(card.id, 6, { state: 'pending', explain: { status: 'failed' } })
+    await waitFor(() => shown()?.explain?.status === 'failed', 2000, 'failed')
+  })
+
+  it('the first answer wins: a ready one is never overwritten, nothing goes back to pending', async () => {
+    const card = await withCard({ status: 'pending' })
+    send(card.id, 6, { state: 'pending', explain: READY })
+    await waitFor(() => shown()?.explain?.status === 'ready', 2000, 'ready')
+    send(card.id, 7, { state: 'pending', explain: { status: 'failed' } })
+    send(card.id, 8, { state: 'pending', explain: { status: 'pending' } })
+    send(card.id, 9, {
+      state: 'pending',
+      explain: { ...READY, tag: 'Reads files', mismatch: false, sentence: 'Lists files.' },
+    })
+    await waitFor(() => rig.client.store.getState().lastSeq === 9, 2000, 'all three frames')
+    expect(shown()?.explain).toEqual(READY)
+  })
+
+  it('a card that never had an explanation does not grow one from an update', async () => {
+    const card = await withCard(undefined)
+    send(card.id, 6, { state: 'pending', explain: READY })
+    await waitFor(() => rig.client.store.getState().lastSeq === 6, 2000, 'frame')
+    expect(shown()?.explain).toBeUndefined()
+  })
+})

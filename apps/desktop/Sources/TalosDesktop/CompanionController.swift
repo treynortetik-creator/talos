@@ -11,32 +11,6 @@ import TalosDesktopCore
 final class CompanionController: NSObject, ObservableObject {
   static let shared = CompanionController(defaults: .standard)
 
-  enum Key {
-    static let enabled = "companion.enabled"
-    static let size = "companion.size"
-    static let moments = "companion.moments"
-    static let snoozeUntil = "companion.snoozeUntil"
-    static let display = "companion.display"
-    static let posPrefix = "companion.pos."
-    /// C-LIVE: also post the page's reply banners while he is on (spec 4.3). Off by default.
-    static let replyBanners = "companion.replyBanners"
-  }
-
-  /// Everything the controller needs from the rest of the app, so tests can stand in for it.
-  @MainActor struct Host {
-    var openTalos: () -> Void = {}
-    var openSettings: () -> Void = {}
-    var showCompose: (_ anchor: NSRect?) -> Void = { _ in }
-    var composeIsVisible: () -> Bool = { false }
-    var screens: () -> [CompanionScreen] = { CompanionController.liveScreens() }
-    /// Opens Talos at an in-app path (`/t/<id>`, or `/` for Home): `web.show()` then `navigate`.
-    var openPath: (_ path: String) -> Void = { _ in }
-    var showTerminal: () -> Void = {}
-    /// The page's newest agent reply in a thread, as plain text; the outcome comes once.
-    var requestReply: (_ thread: String, _ done: @escaping @MainActor (LastReplyTracker.Outcome) -> Void) -> Void = { _, done in done(.unavailable) }
-    var cancelReply: () -> Void = {}
-  }
-
   // Settings reads these.
   nonisolated static let log = Logger(subsystem: "app.talos.desktop", category: "companion")
   @Published private(set) var artProblem: String?
@@ -58,11 +32,11 @@ final class CompanionController: NSObject, ObservableObject {
   /// Tests: pins the clock.
   var nowProvider: () -> (mono: TimeInterval, wall: Date) = { (ProcessInfo.processInfo.systemUptime, Date()) }
 
-  /// Tests: the model's dice (fidget gaps, the day's three Rounds slots). Left alone, a test that pins the clock still meets a
+  /// Tests: the model's dice (fidget gaps, the day's nine Rounds slots). Left alone, a test that pins the clock still meets a
   /// different day's slots on every run, and a Rounds walk that starts in the middle of it takes the ember away.
   var modelRandom: (ClosedRange<Double>) -> Double = { Double.random(in: $0) }
   private lazy var model = CompanionModel(random: modelRandom)
-  private let system = CompanionSystem()
+  let system = CompanionSystem()
   private var atlas: LoadedAtlas?
   /// The Settings line for a failed reload at the other display's scale, and the scale it failed at (not retried each recompute).
   private var reloadStatus = ArtReloadStatus()
@@ -70,9 +44,9 @@ final class CompanionController: NSObject, ObservableObject {
   private var builtMini = false
   private var observer: NSObjectProtocol?
 
-  private var spritePanel: CompanionPanel?
+  var spritePanel: CompanionPanel?
   private var bubblePanel: CompanionPanel?
-  private var controlsPanel: CompanionPanel?
+  var controlsPanel: CompanionPanel?
   private var spriteView: CompanionSpriteView?
   private var trayPanel: CompanionPanel?
   private var trayView: CompanionTrayView?
@@ -83,6 +57,8 @@ final class CompanionController: NSObject, ObservableObject {
   private var cardToken = 0
   /// The thread the open card shows, for its Open in Talos button.
   private var cardThread: String?
+  /// Mini Talos delivers thread replies (header, first line, Open and Later); see `CompanionReplyBubble`.
+  lazy var replies = CompanionReplyBubble(hooks: .make(for: self))
   /// The bubble on screen, so a click knows what it is a click on.
   private var currentBubble: CompanionBubble?
   private var bubbleView: CompanionBubbleView?
@@ -105,9 +81,9 @@ final class CompanionController: NSObject, ObservableObject {
   private var clickTimer: Timer?
   private var snoozeTimer: Timer?
 
-  private var output: CompanionOutput?
+  var output: CompanionOutput?
   private var lastBubbleSeq = 0
-  private var bubbleVisible = false
+  var bubbleVisible = false
   private var hovering = false
   private var dragging = false
   private var clickGate = ClickGate()
@@ -150,7 +126,7 @@ final class CompanionController: NSObject, ObservableObject {
   var isMini: Bool { defaults.string(forKey: Key.size) == "mini" }
   var momentsOn: Bool { defaults.object(forKey: Key.moments) == nil ? true : defaults.bool(forKey: Key.moments) }
   var isOnScreen: Bool { spritePanel?.isVisible == true }
-  var panels: [NSPanel] { [spritePanel, bubblePanel, controlsPanel, trayPanel, cardPanel].compactMap { $0 } }
+  var panels: [NSPanel] { [spritePanel, bubblePanel, controlsPanel, trayPanel, cardPanel, replies.panel].compactMap { $0 } }
   var trayPanelForTest: NSPanel? { trayPanel }
   var trayViewForTest: CompanionTrayView? { trayView }
   var cardPanelForTest: NSPanel? { cardPanel }
@@ -160,6 +136,7 @@ final class CompanionController: NSObject, ObservableObject {
   var outsideMonitorCount: Int { outsideMonitors.count }
   var currentBubbleForTest: CompanionBubble? { currentBubble }
   var replyBannersOn: Bool { defaults.bool(forKey: Key.replyBanners) }
+  var replyBubblesOn: Bool { defaults.object(forKey: Key.replyBubbles) as? Bool ?? true }
   var spritePanelForTest: NSPanel? { spritePanel }
   var spriteViewForTest: CompanionSpriteView? { spriteView }
   var bubblePanelForTest: NSPanel? { bubblePanel }
@@ -178,7 +155,7 @@ final class CompanionController: NSObject, ObservableObject {
   /// Live timers of this controller and its system watcher. Zero when he is off.
   var activeTimerCount: Int {
     [deadlineTimer, bubbleTimer, hoverShowTimer, hoverHideTimer, walkTimer, clickTimer, cardTimer].compactMap { $0 }.filter(\.isValid).count
-      + system.timerCount + (spriteView?.clipTimerCount ?? 0)
+      + system.timerCount + (spriteView?.clipTimerCount ?? 0) + replies.timerCount
   }
   /// Observers and CoreAudio listeners alive.
   var activeListenerCount: Int {
@@ -458,6 +435,7 @@ final class CompanionController: NSObject, ObservableObject {
     if spritePanel != nil { carry = model.carry }
     hideTray()
     hideCard()
+    replies.close()
     for p in [trayPanel, cardPanel] {
       p?.orderOut(nil)
       p?.contentView = nil
@@ -508,7 +486,7 @@ final class CompanionController: NSObject, ObservableObject {
 
   // MARK: the reducer loop
 
-  private func currentEnv() -> CompanionEnv {
+  func currentEnv() -> CompanionEnv {
     var e = CompanionEnv()
     e.micRunning = system.micHeld
     e.reduceMotion = system.reduceMotion
@@ -516,7 +494,7 @@ final class CompanionController: NSObject, ObservableObject {
     e.mini = builtMini
     e.moments = momentsOn
     e.secondsSinceInput = system.secondsSinceInput
-    e.bubbleOpen = bubbleVisible || cardIsShowing
+    e.bubbleOpen = bubbleVisible || cardIsShowing || replies.isBusy
     // No antic under the tray, the compose box, the controls, the right-click menu or a pointer resting on him: any of them means the owner is there.
     e.anticHold = trayIsShowing || host.composeIsVisible() || controlsPanel?.isVisible == true || hovering || contextMenuOpen
     // Only the antics the art on screen has; no art, no antics.
@@ -556,10 +534,10 @@ final class CompanionController: NSObject, ObservableObject {
     guard let sv = spriteView else { return }
     let env = currentEnv()
     let allowed = animationsAllowed
-    // A walk is a beat: any clamp (Reduce Motion, Low Power, a mic, quiet, a hidden panel) or a new state stops it, and he is
+    // A walk is a beat: any clamp (Reduce Motion, Low Power, a mic, a hidden panel) or a new state stops it, and he is
     // back at his saved spot, as Hover and a drag do.
     if let w = walk, !startingRounds,
-      o.state != w.stateAtStart || env.stillOnly || env.micRunning || o.quiet || !allowed
+      o.state != w.stateAtStart || env.stillOnly || env.micRunning || !allowed
     { stopWalk() }
     var look = o
     if let a = walk?.anim { look.animation = a }  // the model knows nothing of the walk: keep asserting its clip
@@ -567,8 +545,11 @@ final class CompanionController: NSObject, ObservableObject {
     controlsView?.wordLabel.stringValue = o.word
     if bubbleVisible, env.micRunning || o.quiet { hideBubble() }  // a bubble already up when a clamp starts goes too
     // The reply card holds message text: a mic starting (a call), the quiet window, or the page going away closes it.
-    let feedLive = inputsProvider().feed != nil
+    let i = inputsProvider()
+    let feedLive = i.feed != nil
     if cardIsShowing, env.micRunning || o.quiet || !feedLive { hideCard() }
+    replies.sync(i, canDeliver: replyBubblesOn && CompanionBannerPolicy.canDeliver(pet: petNow()), mono: nowProvider().mono)
+    if env.micRunning || o.quiet || !feedLive { replies.interrupt() }  // what was never shown becomes a banner, except in quiet hours
     if trayIsShowing { refreshTray() }
     let tray = trayContent()
     controlsView?.statusCount = tray.rows.count + tray.more
@@ -592,7 +573,7 @@ final class CompanionController: NSObject, ObservableObject {
   private func returnHomeIfOff(micRunning: Bool) {
     guard let p = spritePanel, let target = homeAfterCutWalk else { return }
     let panelOpen =
-      bubbleVisible || trayIsShowing || cardIsShowing || controlsPanel?.isVisible == true || host.composeIsVisible() || contextMenuOpen
+      bubbleVisible || trayIsShowing || cardIsShowing || replies.isBusy || controlsPanel?.isVisible == true || host.composeIsVisible() || contextMenuOpen
     guard CompanionPlacement.shouldReturnHome(
       home: target, current: p.frame.origin, size: p.frame.size, pointer: pointerProvider(),
       walking: walk != nil, dragging: dragging, onCall: micRunning, panelOpen: panelOpen)
@@ -690,7 +671,7 @@ final class CompanionController: NSObject, ObservableObject {
     reloadAtlasIfNeeded()
   }
 
-  private func screenContaining(_ point: CGPoint, _ screens: [CompanionScreen]) -> CompanionScreen? {
+  func screenContaining(_ point: CGPoint, _ screens: [CompanionScreen]) -> CompanionScreen? {
     screens.first { $0.frame.contains(point) } ?? screens.first { $0.isPrimary } ?? screens.first
   }
 
@@ -730,6 +711,7 @@ final class CompanionController: NSObject, ObservableObject {
 
   private func spriteHover(_ inside: Bool) {
     hovering = inside
+    replies.spriteHovered = inside
     if inside {
       noteActivity()
       hoverHideTimer?.invalidate()
@@ -800,6 +782,7 @@ final class CompanionController: NSObject, ObservableObject {
     cp.setFrame(CompanionPlacement.controlsFrame(sprite: sp.frame, in: s.visibleFrame), display: false)
     cp.orderFrontRegardless()
     if bubbleVisible { positionBubble() }  // it moves past the controls
+    replies.relayout()
   }
 
   private func hideControls() {
@@ -809,11 +792,15 @@ final class CompanionController: NSObject, ObservableObject {
     hoverHideTimer = nil
     controlsPanel?.orderOut(nil)
     if bubbleVisible { positionBubble() }
+    replies.relayout()
   }
 
   // MARK: bubble
 
   private func showBubble(_ bubble: CompanionBubble) {
+    if case .newReply(let name, let id) = bubble, replyBubblesOn, spritePanel != nil {
+      return replies.deliver(thread: id, name: name, askPage: !cardIsShowing)  // the card has the page's one open question
+    }
     guard let bp = bubblePanel, let bv = bubbleView, !dragging else { return }
     stopWalk()
     currentBubble = bubble
@@ -824,11 +811,11 @@ final class CompanionController: NSObject, ObservableObject {
     startBubbleTimer()
   }
 
-  private func positionBubble() {
+  func positionBubble() {
     guard let sp = spritePanel, let bp = bubblePanel, let bv = bubbleView else { return }
     let screens = host.screens()
     guard let s = screenContaining(CGPoint(x: sp.frame.midX, y: sp.frame.midY), screens) else { return }
-    let controls = controlsPanel?.isVisible == true ? controlsPanel?.frame : nil
+    let controls = replies.stack(past: controlsPanel?.isVisible == true ? controlsPanel?.frame : nil)
     let f = CompanionPlacement.bubbleFrame(
       sprite: sp.frame, textWidth: CompanionBubbleView.width(of: bv.text), controls: controls, in: s.visibleFrame)
     bp.setFrame(f.frame, display: false)
@@ -987,7 +974,7 @@ final class CompanionController: NSObject, ObservableObject {
   }
 
   /// The card is for a real reply only while he can show one: not in a call, not in the quiet window, with a live feed.
-  private var cardAllowed: Bool {
+  var cardAllowed: Bool {
     let i = inputsProvider()
     return i.quiet == false && !currentEnv().micRunning && i.feed != nil
   }
@@ -1060,14 +1047,9 @@ final class CompanionController: NSObject, ObservableObject {
   func openHome() { host.openPath("/") }
   func openTalosFromMenu() { host.openTalos() }
 
-  /// Spec 4.3: his bubble replaces the page's reply banner only while he can actually show it.
-  func dropsReplyBanner(body: String) -> Bool {
-    let i = inputsProvider()
-    return CompanionBannerPolicy.drops(
-      body: body,
-      pet: .init(
-        onScreen: spritePanel != nil && !system.animationsPaused, quiet: i.quiet, micRunning: currentEnv().micRunning, feedLive: i.feed != nil,
-        state: output?.state ?? .idle, replyBanners: replyBannersOn))
+  /// Spec 4.3: his bubble replaces the page's reply banner only while he can actually show it, and the thread on screen gets neither.
+  func dropsReplyBanner(body: String, navigate: String = "/") -> Bool {
+    ReplyDelivery.route(body: body, navigate: navigate, pet: petNow()) != .banner
   }
 
   // MARK: clicks
@@ -1099,6 +1081,7 @@ final class CompanionController: NSObject, ObservableObject {
     homeAfterCutWalk = nil
     dragging = true
     hideControls()
+    replies.suspend(true)
     if bubbleVisible { heldBubble = currentBubble }
     hideBubble()
     hideTray()
@@ -1122,6 +1105,7 @@ final class CompanionController: NSObject, ObservableObject {
 
   private func dragEnded() {
     dragging = false
+    replies.suspend(false)
     if let p = spritePanel {
       let scale = p.backingScaleFactor
       p.setFrameOrigin(CompanionPlacement.snap(p.frame.origin, scale: scale))
@@ -1153,7 +1137,7 @@ final class CompanionController: NSObject, ObservableObject {
     guard let p = spritePanel, walk == nil, !dragging else { return decline(kind) }
     // The window moving under a still pointer would eat his next click and fire no enter event: only start with nothing open
     // and the pointer well away from the whole path. A walk also waits until he can be seen: the next recompute would cut it.
-    guard !host.composeIsVisible(), controlsPanel?.isVisible != true, !bubbleVisible, !trayIsShowing, !cardIsShowing,
+    guard !host.composeIsVisible(), controlsPanel?.isVisible != true, !bubbleVisible, !trayIsShowing, !cardIsShowing, !replies.isBusy,
       kind.mayStart(visible: animationsAllowed), let home = savedOrigin()
     else { return decline(kind) }
     let screens = host.screens()
@@ -1237,7 +1221,7 @@ final class CompanionController: NSObject, ObservableObject {
   /// Hover, a drag, a click, a bubble, a priority rise, a clamp or a display change stops him and he jumps to his saved spot, unless
   /// the pointer is over where he stands or over that spot: then he stays where he stands until the pointer leaves both
   /// (`returnHomeIfOff`) or the next walk starts from his saved spot.
-  private func stopWalk() {
+  func stopWalk() {
     walkTimer?.invalidate()  // always: a timer must never outlive the walk it was made for
     walkTimer = nil
     guard let w = walk else { return }

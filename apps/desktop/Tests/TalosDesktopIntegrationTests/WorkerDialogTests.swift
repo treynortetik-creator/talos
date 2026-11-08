@@ -35,6 +35,7 @@ extension WorkerRig {
       $0.noticeRetry = retry
       $0.dialogLimit = dialogLimit
       $0.dialogSettle = 0.5  // a running worker's dialog counts after the screen holds still (5 s in the app)
+      $0.cardAckWait = 0  // these tests are about the line the Mac posts; no bridge mints a card here (NeedsYouTests wait for one)
     }
   }
 }
@@ -200,9 +201,9 @@ struct WorkerDialogTests {
     #expect(r.wait(15) { r.state("trip") == "parked" }, "\(r.why("trip"))")
   }
 
-  /// R1-3 in the running app's own loop: quoted dialog words and the worker's own menu never flag, whatever is on screen.
-  @Test func quotedDialogWordsAndAWorkersOwnMenuNeverFlag() throws {
-    let r = try WorkerRig(scenario: "worker-quote.sh")
+  /// R1-3 in the running app's own loop: quoted dialog words never flag, whatever is on screen.
+  @Test func quotedDialogWordsNeverFlag() throws {
+    let r = try WorkerRig(scenario: "worker-quote.sh", extraEnv: ["FAKE_QUOTE_NO_MENU": "1"])
     defer { r.teardown() }
     let log = NoticeLog()
     r.trackNotices(log)
@@ -213,6 +214,24 @@ struct WorkerDialogTests {
     #expect(r.mgr.needsYou().isEmpty, "\(r.mgr.needsYou())")
     #expect(log.all.isEmpty)
     #expect(!r.allEvents.contains { if case .needsYou = $0 { return true } else { return false } })
+  }
+
+  /// The same screen with a question menu of the agent's own at the bottom is a prompt waiting on the owner (PromptRelayTests), but
+  /// the quoted dialog words above it still name no known dialog: the one notice is the generic one, about the question.
+  @Test func aWorkersOwnMenuIsAPromptAndTheQuotedWordsAreNotDialogs() throws {
+    let r = try WorkerRig(scenario: "worker-quote.sh")
+    defer { r.teardown() }
+    let log = NoticeLog()
+    r.trackNotices(log)
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
+    #expect(r.wait(10) { r.mgr.needsYou()["trip"] == "prompt" }, "\(r.mgr.needsYou())")
+    #expect(r.wait(5) { log.all.count == 1 })
+    usleep(2_500_000)
+    #expect(log.all.count == 1, "\(log.all)")
+    #expect(log.all.first?.text == "trip's session is waiting on a prompt, \"Which way?\"; open Terminals \u{2192} trip on the Mac to answer.")
+    #expect(r.typedLines.isEmpty, "nothing is typed into the menu")
   }
 
   /// R1-3: a login dialog flags a running worker too (control for the false-positive cases).
@@ -342,7 +361,7 @@ struct WorkerDialogTests {
     #expect(r.typedLines.isEmpty, "typed onto a draft: \(r.typedLines)")
     #expect(r.tmuxCmd(["list-clients"]).out.isEmpty, "no client was attached")
     #expect(log.all.count == 1, "\(log.all)")
-    #expect(log.all.first?.text == "trip's session has unsent text in its input box; your message is waiting. Open Terminals to finish or clear it.")
+    #expect(log.all.first?.text == "trip's session has unsent text in its input box; your message has probably gone to the main session. Open Terminals to finish or clear it.")
     FileManager.default.createFile(atPath: clear, contents: nil)
     #expect(r.wait(10) { r.typedLines.count == 1 }, "the pointer goes once the box is clear")
     #expect(r.wait(5) { r.mgr.needsYou().isEmpty })

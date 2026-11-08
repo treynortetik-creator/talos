@@ -175,7 +175,10 @@ export function revealHidden(text: string): string {
   return text.replace(HIDDEN, (m: string, flag: string | undefined, hidden: string | undefined, at: number) => {
     if (flag) return m
     const c = hidden ?? m
+    const show = (ch: string) => `⟦U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}⟧`
+    // a run of combining marks matches as one: every code point of it is shown, the same as visibleText does
+    if ([...c].length > 1) return [...c].map(show).join('')
     if (isOrdinary(text, at, c)) return c
-    return `⟦U+${(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}⟧`
+    return show(c)
   })
 }

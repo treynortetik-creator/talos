@@ -3,11 +3,13 @@
 // content). Trust is decided here, by frame type and signature result.
 import {
   CONSUMABLE_FRAME_TYPES,
+  classifyUnparsed,
   DeviceId,
   ErrorCode,
   type ErrorCodeT,
   type Frame,
   HEARTBEAT_OWNER_FRAME_TYPES,
+  looksSigned,
   OWNER_FRAME_TYPES,
   SCHEDULE_OWNER_FRAME_TYPES,
   SESSION_CONSUMABLE_FRAME_TYPES,
@@ -16,7 +18,7 @@ import {
 } from '@talos-app/protocol'
 import { onAgentRecover, resendAgentRecover } from './agent-recover.ts'
 import type { CardExpiry } from './card-expiry.ts'
-import { type BridgeContext, defaultThreadRef } from './context.ts'
+import { type BridgeContext, defaultThreadRef, postSystemNotice, threadRef } from './context.ts'
 import type { Enrollment } from './enrollment.ts'
 import { ackFrame, errorFrame } from './frames-out.ts'
 import { MAX_FUTURE_MS } from './history-store.ts'
@@ -31,8 +33,6 @@ import { CLOCK_OFF_MESSAGE, type Item, type Of, type OwnerCheck } from './inboun
 import { systemNotification } from './notify.ts'
 import { onThreadSessionControl } from './router/controls.ts'
 import { LiveTransport } from './transport.ts'
-
-export { CLOCK_OFF_MESSAGE } from './inbound-shared.ts'
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/
 // session.control is consumable here ("consumed" = its result was recorded, C2.5); session.spawn is WP-C7's, not yet.
@@ -55,6 +55,10 @@ const OTHER_DURABLE = new Set(['config.patch', 'device.enrolled', 'device.revoke
 const MAX_AGE_MS = 8 * 24 * 3600_000
 
 export const BACKLOG_AFTER_MS = 15 * 60_000
+/** Most frame types from a newer peer that one process announces; a peer can invent names without limit. */
+const MAX_NEWER_NOTICES = 5
+const NEWER_NOTICE =
+  "The relay or your phone is newer than this Mac's Talos: it sent a newer kind of message that this Mac cannot read. Update Talos on this Mac to see everything."
 const SIG_NOTICE_LIMIT = 5
 const SIG_NOTICE_WINDOW_MS = 10 * 60_000
 
@@ -74,6 +78,8 @@ export class Inbound {
   private settleTimer: unknown = null
   private maxTimer: unknown = null
   private sigNotices: number[] = []
+  /** Frame types from a newer peer already announced to the owner in this process. */
+  private readonly newerTold = new Set<string>()
 
   constructor(
     readonly ctx: BridgeContext,
@@ -111,7 +117,9 @@ export class Inbound {
     const type = typeof raw?.type === 'string' ? raw.type : ''
     // history.request and media.fetch are signed owner reads too (they are not in OWNER_FRAME_TYPES: their handlers differ)
     const ownerFrame = (OWNER_FRAME_TYPES as readonly string[]).includes(type) || EPHEMERAL_READ.has(type)
+    // Every refused frame is logged, newer or not, whatever the notice below decides.
     ctx.log.warn('relay frame did not parse', { id, type, message })
+    this.noteNewer(raw)
     if (!id) {
       ctx.transport.sendEphemeral(errorFrame(ctx.clock.now(), 'bad_frame', message))
       return
@@ -144,6 +152,24 @@ export class Inbound {
         this.reject(item, 'bad_frame', message)
       })
       .catch((e) => ctx.log.error('bad frame handling failed', { error: (e as Error).message }))
+  }
+
+  /**
+   * A frame from a newer relay or phone (a type this build lacks, or a known type with a value it lacks): tell the owner once
+   * per type, in the Inbox thread like the problem reports (no agent wake-up, no new channel), at most `MAX_NEWER_NOTICES`
+   * types a process. This decides ONLY that notice; the frame is refused and logged by the caller whatever it returns.
+   * A signed or owner-originated frame never gets it: a refused one of those is a security matter with its own alarms. The
+   * notice does not repeat the frame's type: that is the peer's text, and it is in the log for anyone who needs it.
+   */
+  private noteNewer(raw: Record<string, unknown> | undefined) {
+    const { ctx } = this
+    if (looksSigned(raw) || (OWNER_FRAME_TYPES as readonly string[]).includes(String(raw?.type))) return
+    const why = classifyUnparsed(raw, 'relay_to_bridge')
+    if (why.kind === 'broken' || this.newerTold.has(why.type) || this.newerTold.size >= MAX_NEWER_NOTICES) return
+    this.newerTold.add(why.type)
+    void postSystemNotice(ctx, NEWER_NOTICE, {
+      thread: ctx.config.thread('inbox') ? threadRef(ctx, 'inbox') : defaultThreadRef(ctx),
+    }).catch((e) => ctx.log.warn('newer-peer notice not posted', { error: (e as Error).message }))
   }
 
   onFrame(raw: Record<string, unknown>, frame: Frame) {

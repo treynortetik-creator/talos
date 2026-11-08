@@ -392,6 +392,40 @@ describe('ci-local.sh queued runs', () => {
     expect(existsSync(tmp)).toBe(false)
   }, 30_000)
 
+  // 2026-11-05: a bridge test left a real kit release (read-only by design) in the slot's temp dir, and the next run's cleanup
+  // failed on it with exit 1. Every CI run on main failed from then on.
+  it('cleans up a slot temp dir that a job left read-only', async () => {
+    const r = repo()
+    const copy = join(r.clone, 'scripts', 'ci-local.sh')
+    const body = readFileSync(copy, 'utf8').replace(
+      '\ncd "$WT"\n',
+      '\njob_probe() { mkdir -p "$TMPDIR/rel/kit" && : > "$TMPDIR/rel/kit/f" && chmod -R a-w "$TMPDIR/rel"; echo "tmp=$TMPDIR" > "$HOME/probe"; }\ncd "$WT"\n',
+    )
+    writeFileSync(copy, body)
+    expect(await r.ciLocal('--ref', 'HEAD', '--jobs', 'probe', '--no-status').done).toBe(0)
+    const tmp = readFileSync(join(r.home, 'probe'), 'utf8').match(/tmp=(\S+)/)?.[1] ?? ''
+    expect(tmp).toContain('talos-ci-s1')
+    expect(existsSync(tmp)).toBe(false)
+    expect(await r.ciLocal('--ref', 'HEAD', '--jobs', 'probe', '--no-status').done).toBe(0)
+  }, 30_000)
+
+  it('starts cleanly when a read-only folder is already sitting in its slot temp dir', async () => {
+    const r = repo()
+    const copy = join(r.clone, 'scripts', 'ci-local.sh')
+    const body = readFileSync(copy, 'utf8').replace(
+      '\ncd "$WT"\n',
+      '\njob_probe() { echo "tmp=$TMPDIR" > "$HOME/probe"; }\ncd "$WT"\n',
+    )
+    writeFileSync(copy, body)
+    expect(await r.ciLocal('--ref', 'HEAD', '--jobs', 'probe', '--no-status').done).toBe(0)
+    const tmp = readFileSync(join(r.home, 'probe'), 'utf8').match(/tmp=(\S+)/)?.[1] ?? ''
+    mkdirSync(join(tmp, 'stale', 'kit'), { recursive: true })
+    writeFileSync(join(tmp, 'stale', 'kit', 'f'), '')
+    spawnSync('chmod', ['-R', 'a-w', join(tmp, 'stale')])
+    expect(await r.ciLocal('--ref', 'HEAD', '--jobs', 'probe', '--no-status').done).toBe(0)
+    expect(existsSync(join(tmp, 'stale'))).toBe(false)
+  }, 30_000)
+
   // 2026-10-30: every `pnpm test` in a builder's checkout ran this script with a fake HOME (other locks, so slot 1 was free)
   // and the owner's TMPDIR, and its `rm -rf` emptied real slot 1's temp dir under the real run. That one bug failed
   // chromium-media in bulk (browser launch ENOENT), two e2e schedules tests and the desktop job (swiftc couldNotFindTmpDir).

@@ -2,7 +2,9 @@
 import { isInheritedName, THREAD_TOPIC_MAX, ThreadId, type ThreadT, trustOn, wrapExternal } from '@talos-app/protocol'
 import { configSyncFrame, threadArchiveFrame, threadUpsertFrame } from '../frames-out.ts'
 import { wrapShared } from '../notify.ts'
-import { fail, needStr, ok, str, type Tool, ToolError, threadArg, threadProps } from './common.ts'
+import { removeInbox } from '../worker/inbox.ts'
+import { fail, needStr, ok, str, ToolError, threadArg, threadProps } from './common.ts'
+import { NOT_FOR_WORKERS, type ToolRecord, WORKER_NO_THREAD, WORKER_READS_OWN_THREAD } from './define.ts'
 
 const MAX_AGENT_THREADS = 20
 /** The config schema's own limit on `threads`, trust mode or not. */
@@ -19,8 +21,13 @@ export function slugify(name: string): string {
   return isInheritedName(id) ? `${id}_thread` : id
 }
 
-export const listThreads: Tool = {
+export const listThreads: ToolRecord = {
   name: 'list_threads',
+  group: 'core',
+  headless: true,
+  ...WORKER_NO_THREAD,
+  instructions: `Messages you start yourself (briefs, reminders, results of background work) go to the thread whose name or topic (\`list_threads\` shows each thread's "what goes here" line) matches; never dump everything in General or the default thread.`,
+  told: ['main'],
   description:
     'List the threads (id, name, topic, kind, notify, unread). `topic` is the owner\'s "what goes here" line: route by it. `unread` counts owner messages in that thread you have been told about and have not answered or touched yet. Also gives default_thread, where proactive messages go when no thread matches.',
   inputSchema: { type: 'object', properties: {} },
@@ -44,8 +51,13 @@ export const listThreads: Tool = {
   },
 }
 
-export const createThread: Tool = {
+export const createThread: ToolRecord = {
   name: 'create_thread',
+  group: 'core',
+  headless: false,
+  ...NOT_FOR_WORKERS,
+  instructions: `If a project or recurring topic has no thread and will produce more than one message this week, \`create_thread\` with a short noun name, then post there; don't create a thread for a one-off answer.`,
+  told: ['main'],
   description: 'Create a thread for a topic (agent threads, at most 20). The id is slugged from the name when absent.',
   liveOnly: true,
   inputSchema: {
@@ -110,8 +122,13 @@ export const createThread: Tool = {
   },
 }
 
-export const archiveThread: Tool = {
+export const archiveThread: ToolRecord = {
   name: 'archive_thread',
+  group: 'core',
+  headless: false,
+  ...NOT_FOR_WORKERS,
+  instructions: `When a topic is finished, post a one-line wrap-up and \`archive_thread\` (agent-made threads only).`,
+  told: ['main'],
   description: 'Archive an agent-created thread. Fixed and system threads, and the default thread, cannot be archived.',
   liveOnly: true,
   inputSchema: { type: 'object', properties: { thread_id: threadProps.thread_id }, required: ['thread_id'] },
@@ -126,6 +143,7 @@ export const archiveThread: Tool = {
         ...c,
         threads: c.threads.map((x) => (x.id === id ? { ...x, archived: true } : x)),
       }))
+      removeInbox(ctx.paths.inbox, id) // an archived thread keeps no copies of the owner's files
       const now = ctx.clock.now()
       await ctx.transport.sendDurable(threadArchiveFrame(now, id))
       await ctx.transport.sendDurable(configSyncFrame(now, next))
@@ -137,8 +155,13 @@ export const archiveThread: Tool = {
   },
 }
 
-export const readThread: Tool = {
+export const readThread: ToolRecord = {
   name: 'read_thread',
+  group: 'core',
+  headless: true,
+  ...WORKER_READS_OWN_THREAD,
+  instructions: null,
+  told: [],
   description:
     'Read recent messages of a thread from the Mac history, oldest first. Useful after compaction. Page back with `before`.',
   inputSchema: {

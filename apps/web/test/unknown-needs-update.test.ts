@@ -20,6 +20,23 @@ const card = (over: Record<string, unknown> = {}) =>
 /** What a newer peer sends: a well-formed card whose kind this build has never heard of. */
 const futureCard = (kind = 'hologram', over: Record<string, unknown> = {}) => ({ ...card(over), kind })
 
+/** A real agent reply except that its message kind is one a newer build added. */
+const futureReply = (kind: string) =>
+  srv('reply', {
+    message: {
+      id: uid('m_'),
+      thread_id: 'general',
+      seq: 2,
+      author: 'agent',
+      kind,
+      text: 'hi',
+      format: 'plain',
+      attachments: [],
+      via: 'app',
+      created_at: START_ISO,
+    },
+  })
+
 async function online(r: Run, extra: Record<string, unknown> = {}) {
   r.sock().receive(readyFrame(extra))
   await r.settle()
@@ -94,6 +111,26 @@ describe('an unknown frame type', () => {
     expect(notes(run)).toHaveLength(1)
   })
 
+  it('a known type with an enum value this build does not list (a newer peer) shows one note, once for the type', async () => {
+    run = await startRun()
+    await online(run)
+    run.sock().receive(futureReply('hologram'))
+    run.sock().receive(futureReply('telepathy'))
+    await run.settle()
+    expect(notes(run)).toHaveLength(1)
+    // and nothing from it reached the timeline as a message
+    expect((run.client.store.getState().messages.general ?? []).filter((m) => m.author === 'agent')).toHaveLength(0)
+  })
+
+  it('in catchup.batch too, and a frame that is only broken is still silent', async () => {
+    run = await startRun()
+    await online(run)
+    const stored = futureReply('hologram')
+    run.sock().receive(srv('catchup.batch', { from_seq: 1, to_seq: 2, frames: [stored], more: false }))
+    await run.settle()
+    expect(notes(run)).toHaveLength(1)
+  })
+
   it('does not turn text that is not a frame, or a malformed known frame, into a note', async () => {
     run = await startRun()
     await online(run)
@@ -131,6 +168,26 @@ describe('the note appears once', () => {
     await run.settle()
     expect(notes(run)).toHaveLength(3)
     expect(notes(run, 'work')).toHaveLength(1)
+  })
+
+  it('a frame type once per session: other ids, other threads and a reconnect add nothing', async () => {
+    run = await startRun()
+    await online(run, { threads: [thread('general'), thread('work')] })
+    for (let i = 0; i < 5; i++) run.sock().receive(srv('no.such.frame', { thread_id: i % 2 ? 'work' : 'general' }))
+    await run.settle()
+    expect(notes(run)).toHaveLength(1)
+    expect(notes(run, 'work')).toHaveLength(0)
+    run.sock().drop(1006)
+    await run.settle()
+    await run.advance(5000)
+    await online(run, { threads: [thread('general'), thread('work')] })
+    run.sock().receive(srv('no.such.frame', {}))
+    await run.settle()
+    expect(notes(run)).toHaveLength(1)
+    // a second, different type is a second note
+    run.sock().receive(srv('another.new.frame', {}))
+    await run.settle()
+    expect(notes(run)).toHaveLength(2)
   })
 
   it('not again on every reconnect, though the relay lists the card as open each time', async () => {
@@ -193,11 +250,26 @@ describe('a peer cannot make the notes pile up or land in a thread it invented',
     expect(notes(run)).toHaveLength(3)
   })
 
+  it('frame-type notes are capped too: 30 invented types over 10 threads give 20 notes in all, and none beyond 3 per thread', async () => {
+    run = await startRun()
+    const ids = Array.from({ length: 10 }, (_, i) => `t${i}`)
+    await online(run, { threads: ids.map(thread) })
+    for (const t of ids) for (let i = 0; i < 3; i++) run.sock().receive(srv(`future.type_${t}_${i}`, { thread_id: t }))
+    for (let i = 0; i < 40; i++) run.sock().receive(srv(`future.more_${i}`, {}))
+    await run.settle()
+    const per = ids.map((t) => notes(run as Run, t).length)
+    expect(Math.max(...per)).toBeLessThanOrEqual(3)
+    const all = [...ids, 'general'].reduce((n, t) => n + notes(run as Run, t).length, 0)
+    expect(all).toBe(20)
+  })
+
   it('stops after 20 notes in one session, however many threads and kinds arrive', async () => {
     run = await startRun()
     const ids = Array.from({ length: 10 }, (_, i) => `t${i}`)
     await online(run, { threads: ids.map(thread) })
-    for (const t of ids) for (let i = 0; i < 3; i++) run.sock().receive(srv(`no.such.frame_${i}`, { thread_id: t }))
+    for (const t of ids)
+      for (let i = 0; i < 3; i++)
+        run.sock().receive(srv('card.create', { card: futureCard(`hologram_${i}`, { thread_id: t }) }))
     await run.settle()
     const total = ids.reduce((n, t) => n + notes(run as Run, t).length, 0)
     expect(total).toBe(20)

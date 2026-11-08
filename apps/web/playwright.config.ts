@@ -33,6 +33,12 @@ export default defineConfig({
   ],
   projects: [
     { name: 'iphone', testIgnore: voice, use: { ...devices['iPhone 15'] } }, // WebKit
+    // The narrowest phone the app supports (an iPhone SE, 320 pt): the approval sheet's spec runs here (and in the others)
+    {
+      name: 'iphone-se',
+      testMatch: '**/cards/permission-sheet.spec.ts',
+      use: { ...devices['iPhone SE'], viewport: { width: 320, height: 568 } },
+    },
     { name: 'pixel', testIgnore: voice, use: { ...devices['Pixel 8'] } }, // Chromium
     {
       name: 'desktop',

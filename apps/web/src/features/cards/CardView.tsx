@@ -1,7 +1,15 @@
 // CardView (spec 8.4): the approval card. It recomputes the hash from exactly what it renders, refuses to show buttons
 // for an altered or expired card, supports inline edit (edited_hash), revise, step-up for high risk, and collapses to
 // one line after a decision.
-import { type CardKind, type CardT, isBodyEditable, ScheduleCardPayload } from '@talos-app/protocol'
+import {
+  CARD_KIND_TABLE,
+  CARD_KINDS,
+  type CardIconKey,
+  type CardKind,
+  type CardT,
+  isBodyEditable,
+  ScheduleCardPayload,
+} from '@talos-app/protocol'
 import { type ComponentType, type ReactNode, type SVGProps, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { NoAnswerError, NotSentError, TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
 import { HttpError } from '../../lib/http.ts'
@@ -15,6 +23,7 @@ import {
   IconClip,
   IconClock,
   IconDiamond,
+  IconKeyboard,
   IconMail,
   IconMegaphone,
   IconRocket,
@@ -26,6 +35,7 @@ import { StatusDot } from '../../ui/StatusDot.tsx'
 import type { CardViewProps } from '../contracts.ts'
 import { dateTimeLabel } from '../schedules/logic.ts'
 import { spendArm, useArmedCard } from './arm.tsx'
+import { DialogCard } from './DialogCard.tsx'
 import {
   COUNTDOWN_WINDOW_MS,
   collapseLine,
@@ -44,20 +54,28 @@ import { copyText, formatExpiry, prefersReducedMotion, revealHidden, useNow } fr
 
 const BODY_PREVIEW_LINES = 6
 
-/** One entry per card kind: a kind missing here fails the type check. */
-export const KIND_ICON: Record<CardKind, ComponentType<SVGProps<SVGSVGElement>>> = {
-  email: IconMail,
-  message: IconChat,
-  deploy: IconRocket,
-  publish: IconMegaphone,
-  purchase: IconCardPay,
-  decision: IconScale,
-  generic: IconDiamond,
-  schedule: IconClock,
-  permission: IconAlert,
-  app_action: IconDiamond,
-  config: IconSettings,
-}
+type CardIcon = ComponentType<SVGProps<SVGSVGElement>>
+
+/** One drawing per icon key the kind table names: a key missing here fails the type check. */
+const ICON_BY_KEY = {
+  mail: IconMail,
+  chat: IconChat,
+  rocket: IconRocket,
+  megaphone: IconMegaphone,
+  'card-pay': IconCardPay,
+  scale: IconScale,
+  diamond: IconDiamond,
+  clock: IconClock,
+  alert: IconAlert,
+  settings: IconSettings,
+  keyboard: IconKeyboard,
+} satisfies Record<CardIconKey, CardIcon>
+
+/** One icon per card kind, read from the kind table (CARD_KIND_TABLE), so a kind cannot lack one. */
+export const KIND_ICON = Object.fromEntries(CARD_KINDS.map((k) => [k, ICON_BY_KEY[CARD_KIND_TABLE[k].icon]])) as Record<
+  CardKind,
+  CardIcon
+>
 
 function KindIcon({ kind }: { kind: CardT['kind'] }) {
   // A kind this build does not know falls back rather than crashing. Strict parsing drops a newer peer's card; the
@@ -224,6 +242,16 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
       await client.resolveCard(card.id, { action: 'kill', payloadHash: hash })
       setDecided(true)
     })
+  // a button of a needs-you dialog card; the login card's one button carries no index
+  const choose = (choice: number | null) =>
+    run(async () => {
+      await client.resolveCard(card.id, {
+        action: 'primary',
+        payloadHash: hash,
+        ...(choice === null ? {} : { choice }),
+      })
+      setDecided(true)
+    })
   const revise = () =>
     run(async () => {
       await client.resolveCard(card.id, { action: 'revise', payloadHash: hash, note: note.trim() })
@@ -240,7 +268,7 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
         {kindInfo.label} · {threadName}
       </span>
       <span className="ml-auto flex items-center gap-1">
-        {live ? (
+        {live && card.kind !== 'dialog' ? (
           // A solid accent pill rather than a warn-coloured Badge, so the card that needs you stands out from a status badge.
           <span className="inline-flex items-center gap-1.5 rounded-pill bg-accent px-2 py-0.5 text-xs font-semibold uppercase tracking-[var(--tracking-caps)] text-on-accent">
             <StatusDot shape="solid" size={8} />
@@ -273,6 +301,10 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
       })
     }
   }
+
+  // ---- needs-you dialog card (docs/OPTION-C.md): draws every state itself, so it comes before the collapsed line --------
+  const shared = { card, header, titleId, rootRef, pulse, hash, now, busy, error, timeZone }
+  if (card.kind === 'dialog') return <DialogCard {...shared} altered={altered} decided={decided} onChoose={choose} />
 
   // ---- collapsed (decided / failed / expired / superseded) ------------------------------------------------------
   if (line && !altered) {
@@ -376,22 +408,7 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
 
   // ---- live permission card (docs/CLAUDE-CODE.md C3.2): its own layout, never the generic one ----------------------
   if (card.kind === 'permission')
-    return (
-      <PermissionCardLive
-        card={card}
-        header={header}
-        titleId={titleId}
-        rootRef={rootRef}
-        pulse={pulse}
-        hash={hash}
-        now={now}
-        busy={busy}
-        error={error}
-        timeZone={timeZone}
-        onAllow={primary}
-        onDeny={kill}
-      />
-    )
+    return <PermissionCardLive {...shared} highlighted={highlighted} onAllow={primary} onDeny={kill} />
 
   // ---- live pending card ----------------------------------------------------------------------------------------
   const body = card.body ?? ''

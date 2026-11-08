@@ -360,7 +360,7 @@ describe('Own session: model, effort, folder and idle time', () => {
     dedicated(client)
     const box = await mount(client)
     expect(screen.queryByText(/Model and effort changes apply when this thread's session restarts/)).toBeNull()
-    expect(box.textContent).toMatch(/next time this thread's session starts/)
+    expect(box.textContent).toMatch(/Saving restarts the session when its current turn ends\./)
   })
 
   it('model and effort save at once', async () => {

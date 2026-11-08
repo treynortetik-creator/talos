@@ -1,27 +1,46 @@
-// The table of agent tools (AGENT_TOOLS in packages/protocol/src/channel-meta.ts) and the tools that run for its rows.
+// The table of agent tools (tools/table.ts): one record per tool, and every list and instruction text read from it.
 
 import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
-import {
-  AGENT_TOOL_GROUPS,
-  AGENT_TOOL_NAMES,
-  AGENT_TOOLS,
-  READ_THREAD_TOOLS,
-  WORKER_THREAD_LOCKED_TOOLS,
-} from '@talos-app/protocol'
 import type { BridgeContext } from '../src/context.ts'
+import { AGENT_TOOL_GROUPS, READ_THREAD_TOOLS, type ToolMembership, type ToolRecord } from '../src/tools/define.ts'
 import { ALL_TOOLS, callTool, mainGroups, toolsFor, toolTableProblems, WORKER_TOOLS } from '../src/tools/index.ts'
 import { toolInstructions } from '../src/tools/instructions.ts'
 import { workerStoreOf } from '../src/tools/read-inbound.ts'
+import {
+  AGENT_TOOL_NAMES,
+  AGENT_TOOLS,
+  HEADLESS_BRIDGE_TOOLS,
+  TOOL_RECORDS,
+  tableProblems,
+  WORKER_THREAD_LOCKED_TOOLS,
+} from '../src/tools/table.ts'
 import { WorkerStore } from '../src/worker/store.ts'
 
 const all = toolsFor({ scheduler: 'auto', apps: true })
 const byName = new Map([...all, ...WORKER_TOOLS].map((t) => [t.name, t]))
 
 describe('AGENT_TOOLS', () => {
-  test('every row has a tool of that name, and every listed tool has a row', () => {
+  test('every record is listed by some session, and every listed tool is a record', () => {
     for (const n of AGENT_TOOL_NAMES) expect(byName.has(n), n).toBe(true)
     for (const t of byName.values()) expect(t.name in AGENT_TOOLS, t.name).toBe(true)
+  })
+
+  test('does not allow a tool that posts into a thread to go to workers unlocked', () => {
+    // @ts-expect-error a worker tool that posts into a thread must be locked to the worker's own
+    const unlocked: ToolMembership = { group: 'core', headless: false, worker: true, locked: false, thread: 'post' }
+    expect(unlocked.worker).toBe(true)
+  })
+
+  test('derives the headless list from the records', () => {
+    expect(HEADLESS_BRIDGE_TOOLS.every((n) => AGENT_TOOLS[n]?.headless)).toBe(true)
+  })
+
+  test('puts the instruction text on the record, a string or an explicit null', () => {
+    for (const t of TOOL_RECORDS)
+      expect(typeof t.instructions === 'string' || t.instructions === null, t.name).toBe(true)
+    expect(() => toolInstructions('attach')).toThrow('has no instruction text')
+    expect(() => toolInstructions('no_such_tool')).toThrow('has no instruction text')
   })
 
   test('a tool a worker gets that takes a thread id is locked to the worker thread, or is declared as only reading', () => {
@@ -71,11 +90,13 @@ describe('AGENT_TOOLS', () => {
     }
   })
 
-  test('a row without a tool, or a tool without a row, is reported by name', () => {
-    const real = new Map([...all, ...WORKER_TOOLS].map((t) => [t.name, t]))
-    expect(toolTableProblems()).toEqual([])
-    const missing = Object.fromEntries([...real].filter(([n]) => n !== 'reply'))
-    expect(toolTableProblems(missing as never).join('\n')).toContain('"reply"')
+  test('a duplicate name, or a thread-read label outside READ_THREAD_TOOLS, is reported by name', () => {
+    expect(tableProblems()).toEqual([])
+    const reply = AGENT_TOOLS.reply as ToolRecord
+    expect(tableProblems([...TOOL_RECORDS, reply]).join('\n')).toContain('"reply" is in the table twice')
+    const stray = { ...reply, name: 'stray', worker: true, locked: true, thread: 'read' } as ToolRecord
+    expect(tableProblems([...TOOL_RECORDS, stray]).join('\n')).toContain('"stray" is labelled as reading a thread')
+    expect(tableProblems(TOOL_RECORDS.filter((t) => t.name !== 'read_thread')).join('\n')).toContain('"read_thread"')
   })
 
   test('no group list holds a tool twice', () => {
@@ -186,7 +207,7 @@ describe('a worker is held to its own thread, tool by tool (callTool -> workerRe
 
   test("read_thread is locked to the worker's own thread: another thread, or none, is refused before the history is touched", async () => {
     const { ctx } = setup()
-    expect(AGENT_TOOLS.read_thread.thread).toBe('read')
+    expect((AGENT_TOOLS.read_thread as { thread?: string }).thread).toBe('read')
     expect(AGENT_TOOLS.read_thread.locked).toBe(true)
     expect(await text(ctx, 'read_thread', { thread_id: 'garden' })).toContain('can only post there')
     expect(await text(ctx, 'read_thread', {})).toContain('thread_id is required')

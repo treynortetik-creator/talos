@@ -79,7 +79,8 @@ test.describe('H2: /card/:id is a thread screen', () => {
   test('the menu keeps Thread settings for the thread on screen', async ({ page }) => {
     await openCard(page)
     await openPhoneMenu(page)
-    await expect(page.getByTestId('phone-menu').getByTestId('thread-settings-trigger')).toBeVisible()
+    // every thread in the menu has its own settings button, the one on screen too
+    await expect(page.getByTestId('phone-menu').getByTestId('thread-more-general')).toBeVisible()
   })
 })
 
@@ -128,12 +129,12 @@ test.describe('M: the owner can still tell something is waiting', () => {
 })
 
 test.describe('M: the owner nit from the screenshots', () => {
-  // Fix: keep one. Thread settings has to survive whichever row goes.
+  // Fix: keep one. Thread settings has to survive whichever row goes: it is the row's own ⋯ now.
   test('the menu lists the current thread once', async ({ page }) => {
     await openThread(page)
     await openPhoneMenu(page)
     const menu = page.getByTestId('phone-menu')
     await expect(menu.getByText('General', { exact: true })).toHaveCount(1)
-    await expect(menu.getByTestId('thread-settings-trigger')).toBeVisible()
+    await expect(menu.getByTestId('thread-more-general')).toBeVisible()
   })
 })

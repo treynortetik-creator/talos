@@ -827,6 +827,92 @@ def onboarding_block(source="startup"):
         return ""
 
 
+def release_integrity_block():
+    """If hooks/ leads into an installed plugin release (the layout `talos update` keeps), check that the release's files still hash to
+    the content_sha256 recorded in its .talos-release when it was built (inside the bundle that was signed). A mismatch means a file in
+    the live release was changed after install: say so first thing in the session. Nothing here stops anything; it makes a change that
+    nobody announced impossible to miss. '' when hooks/ is an ordinary folder, or the release is intact."""
+    try:
+        import hashlib
+        root = os.path.dirname(os.path.realpath(os.path.join(PROJECT_DIR, "hooks")))
+        if not (os.path.isfile(os.path.join(root, ".claude-plugin", "plugin.json")) and os.path.isfile(os.path.join(root, ".talos-release"))):
+            return ""
+        want = ""
+        for line in open(os.path.join(root, ".talos-release"), encoding="utf-8"):
+            if line.startswith("content_sha256="):
+                want = line.strip().split("=", 1)[1]
+        h = hashlib.sha256()
+        for dp, dn, fn in os.walk(root):
+            dn[:] = sorted(d for d in dn if d != "__pycache__")
+            for n in sorted(fn):
+                if n.endswith(".pyc"):
+                    continue
+                p = os.path.join(dp, n)
+                rel = os.path.relpath(p, root).replace(os.sep, "/")
+                if rel == ".talos-release":
+                    continue
+                h.update(rel.encode() + b"\0" + (b"x" if os.access(p, os.X_OK) else b"-") + b"\0")
+                with open(p, "rb") as fh:
+                    h.update(fh.read())
+                h.update(b"\0")
+        if want and h.hexdigest() == want:
+            return ""
+        why = "its files do not match the content hash recorded when it was built" if want else "it has no recorded content hash"
+        return ("=== RELEASE INTEGRITY WARNING ===\n"
+                "The Talos release this agent runs (%s) does not match what was installed: %s. A file in it was changed or removed after "
+                "`talos update` or the installer put it there, and the hooks and guards run from it. Tell the owner now, in this thread, before "
+                "anything else, and do not run anything from hooks/ or scripts/ until they have looked. `talos rollback` or reinstalling the "
+                "release puts it right." % (root, why))
+    except Exception as e:
+        return ("=== RELEASE INTEGRITY WARNING ===\nThe Talos release this agent runs could not be checked against its recorded hash (%s). Tell "
+                "the owner in this thread." % e)
+
+
+def trusted_keys_notice():
+    """One line, once per change: VENDOR/trusted_signers (the keys the owner allowed to sign Talos releases with `talos-update trust-key`) is
+    not empty and differs from the last time a session saw it. The hash of what was last seen is kept next to the file (trusted_signers.seen).
+    '' when there is nothing to say."""
+    try:
+        import hashlib
+        import subprocess
+        import tempfile
+        root = os.path.dirname(os.path.realpath(os.path.join(PROJECT_DIR, "hooks")))
+        if not os.path.isfile(os.path.join(root, ".claude-plugin", "plugin.json")):
+            return ""
+        tp = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(root))), "trusted_signers")
+        data = open(tp, "rb").read()
+        if not data.strip():
+            return ""
+        digest = hashlib.sha256(data).hexdigest()
+        seen = tp + ".seen"
+        try:
+            if open(seen, encoding="utf-8").read().strip() == digest:
+                return ""
+        except OSError:
+            pass
+        fps = []
+        for line in data.decode("utf-8", "replace").splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            with tempfile.TemporaryDirectory() as d:
+                kp = os.path.join(d, "k.pub")
+                open(kp, "w").write("%s %s\n" % (parts[-2], parts[-1]))
+                r = subprocess.run(["ssh-keygen", "-l", "-f", kp], capture_output=True, text=True, timeout=10)
+                fps.append(r.stdout.split()[1] if r.returncode == 0 and len(r.stdout.split()) > 1 else "(unreadable key)")
+        try:
+            with open(seen, "w", encoding="utf-8") as fh:
+                fh.write(digest + "\n")
+        except OSError:
+            pass
+        return ("TRUSTED SIGNING KEYS CHANGED: this Mac now trusts %d key(s) to sign Talos kit releases (%s). Tell the owner in this thread, once, "
+                "so they can confirm they added it." % (len(fps), ", ".join(fps)))
+    except OSError:
+        return ""
+    except Exception as e:
+        return "TRUSTED SIGNING KEYS could not be checked (%s). Tell the owner in this thread." % e
+
+
 def main():
     try:
         # Project guard: no-op if we somehow fire outside our own folder.
@@ -846,6 +932,12 @@ def main():
         ident = identity_block()
         if ident:
             context = ident + "\n\n" + context
+        notice = trusted_keys_notice()
+        if notice:
+            context = notice + "\n\n" + context
+        integrity = release_integrity_block()
+        if integrity:
+            context = integrity + "\n\n" + context
         setup = onboarding_block(str(_p.get("source") or ""))
         if setup:
             context = context + "\n\n" + setup

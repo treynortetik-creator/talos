@@ -3,7 +3,7 @@
 // `McpStatusSource`, so tests inject answers. Server configs (http headers in plaintext, G8) are moved out of every status
 // object the moment they arrive; nothing downstream ever sees them (M4.8).
 import { appendFileSync, existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs'
-import { delimiter, join } from 'node:path'
+import { join } from 'node:path'
 import {
   AppCsp,
   type AppCspT,
@@ -14,16 +14,7 @@ import {
   sha256Hex,
 } from '@talos-app/protocol'
 import { writeFileAtomic } from '../fsutil.ts'
-import {
-  type DirectLine,
-  defaultShow,
-  diffManifests,
-  directLines,
-  keyOf,
-  labelProblem,
-  manifestOf,
-  renderApproval,
-} from './approval.ts'
+import { defaultShow, diffManifests, directLines, keyOf, labelProblem, manifestOf, renderApproval } from './approval.ts'
 import {
   type AppCatalogT,
   type CatalogResourceT,
@@ -750,6 +741,3 @@ export function readPinnedHtml(p: AppPaths, sha: string): Uint8Array | undefined
     return undefined
   }
 }
-
-export type { DirectLine }
-export { delimiter }

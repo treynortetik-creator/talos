@@ -71,6 +71,8 @@ public enum ThreadSessions {
       case "crash_loop": return "It kept crashing, so it was stopped."
       case "start_failed": return "It didn't start."
       case "folder_claimed": return "Another thread session works in that folder."
+      case "mode_escalation_denied":
+        return "It was not started: it would have more access than the main session (a wider permission mode, more MCP servers or fewer deny rules). Narrow its settings in the app, then press Restart."
       default: return "It stopped and needs attention."
       }
     case "parked": return "Parked to save memory. It starts again with the next message."
@@ -85,7 +87,7 @@ public enum ThreadSessions {
   }
 
   /// What "open claude here" runs for a needs_mac row: interactive `claude` in the thread's folder. It gets the same plugin-off
-  /// settings a worker gets, so it can never start the Telegram or iMessage plugin (which would take the main agent's bot);
+  /// settings and Talos-home deny a worker gets, so it can never start the Telegram or iMessage plugin (which would take the main agent's bot);
   /// and the worker's permission flag, so the dialog that stopped the worker can come up again. No keystrokes typed for the
   /// owner (OPTION-C: a dialog is only ever answered by a person).
   public struct Invocation: Equatable, Sendable {
@@ -100,16 +102,16 @@ public enum ThreadSessions {
     guard row.needsMac, row.cwd.hasPrefix("/"), !row.cwd.contains("\0") else { return nil }
     var args: [String] = []
     if let p = permissionFlag, !p.isEmpty { args.append(p) }
-    var settings = pluginsOffSettings
-    if let home = talosHome {
-      // the optional guards ride in the same inline settings, since Claude Code takes one --settings
-      guard let base = (try? JSONSerialization.jsonObject(with: Data(pluginsOffSettings.utf8))) as? [String: Any],
-        let merged = GuardsSettings.merged(base, talosHome: home),
-        let data = try? JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys])
-      else { return nil }
-      settings = String(decoding: data, as: UTF8.self)
-    }
-    args += ["--settings", settings]
+    // Without the Talos home there is nothing to fence, and a hand-opened claude with no fence is not offered.
+    guard let home = talosHome, WorkerFence.isSafe(talosHome: home) else { return nil }
+    // the optional guards ride in the same inline settings, since Claude Code takes one --settings; the Talos-home deny goes in after
+    // them, as a union, exactly as a worker's does
+    guard let base = (try? JSONSerialization.jsonObject(with: Data(pluginsOffSettings.utf8))) as? [String: Any],
+      let merged = GuardsSettings.merged(base, talosHome: home),
+      let fenced = WorkerFence.applying(merged, talosHome: home),
+      let data = try? JSONSerialization.data(withJSONObject: fenced, options: [.sortedKeys])
+    else { return nil }
+    args += ["--settings", String(decoding: data, as: UTF8.self)]
     return Invocation(executable: claudePath, args: args, cwd: row.cwd)
   }
 

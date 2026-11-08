@@ -66,8 +66,12 @@ public struct CompanionInputs: Equatable, Sendable {
   public var pageStatus: CompanionPageStatus = .down
   /// `web.threads`, for names in bubbles and the tray.
   public var threads: [CompanionThreadRef] = []
-  /// The Talos window is the key window: a reply the owner is looking at is not "done" news.
+  /// The Talos window is the key window: the owner is in it, and the page's own list of held replies (see `ReplyLedger`) tells
+  /// him about them. The reducer announces no reply then, or he would be told twice.
   public var windowIsKey = false
+  /// The thread the page says is on screen (`companion_state.viewing`, a card page counting as its thread), else nil. It only
+  /// matters while the window is key.
+  public var viewedThread: String?
 
   public init() {}
 
@@ -137,8 +141,8 @@ public struct CompanionBubbleEvent: Equatable, Sendable {
 
 public struct CompanionOutput: Equatable, Sendable {
   public var state: CompanionState
-  /// What is drawn: the quiet window forces a statue whatever the state (spec 2.3).
-  public var displayState: CompanionState
+  /// The quiet window is on. It silences bubbles, banners and sounds and adds the overnight dot; it never changes how he looks
+  /// or moves.
   public var quiet: Bool
   public var animation: CompanionAnimation?
   public var rest: CompanionRest
@@ -302,7 +306,7 @@ public struct CompanionModel {
   private var collectedExtra = 0
 
   /// What survives a rebuild of the model (a size change, the end of a snooze, off and on): the count Morning already
-  /// reported and the day's Rounds plan. Without it a rebuild would re-report items and plan more than three Rounds a day.
+  /// reported and the day's Rounds plan. Without it a rebuild would re-report items and plan more than nine Rounds a day.
   public struct Carry: Equatable, Sendable {
     public var collectedBase = 0
     public var roundsDay: String?
@@ -578,8 +582,10 @@ public struct CompanionModel {
   private var decisionsKnown: Bool { inputs.quiet != nil }
   private var bubbleGate: Bool { decisionsKnown && !quietNow && !env.micRunning }
 
+  /// Beats and moves are not held back by the quiet window, only by an unknown decision (nothing before the first bridge read), a
+  /// running mic and the motion clamps.
   private func beatGate(asleep: Bool) -> Bool {
-    bubbleGate && !asleep && !env.reduceMotion && !env.lowPower && !env.mini
+    decisionsKnown && !env.micRunning && !asleep && !env.reduceMotion && !env.lowPower && !env.mini
   }
 
   private mutating func nextSeq() -> Int {
@@ -797,7 +803,7 @@ public struct CompanionModel {
     roundsSlots.removeAll { wall.timeIntervalSince($0) > Self.roundsGrace }  // missed: dropped
     let wakeOK = !asleepNow || env.secondsSinceInput <= 60
     let roundsDue =
-      (shown == .idle || shown == .working) && !dragging && env.moments && bubbleGate && !env.reduceMotion && !env.lowPower
+      (shown == .idle || shown == .working) && !dragging && env.moments && decisionsKnown && !env.micRunning && !env.reduceMotion && !env.lowPower
       && !env.mini && wakeOK && (roundsSlots.first.map { $0 <= wall } ?? false)
 
     // 10. Bubbles. A held bubble shows once the clamps allow it, and only while it is still true.
@@ -819,11 +825,11 @@ public struct CompanionModel {
     }
     // Dozing off and waking up are walked, not popped: he lies down into the nap pose and gets up out of it. A wake from a Mac
     // that slept (the lid) just shows the nap. A state's own entry animation, a click or a drop win.
-    let napNow = asleepNow && !quietNow
+    let napNow = asleepNow
     if napNow, !wasNap, event != .woke, anim == nil, !dragging, beatGate(asleep: false) {
       anim = CompanionAnimation(clip: "sleep", seq: nextSeq())
       sleepStart = mono
-    } else if wasNap, !napNow, !quietNow, anim == nil, !dragging, beatGate(asleep: false) {
+    } else if wasNap, !napNow, anim == nil, !dragging, beatGate(asleep: false) {
       // Woken while still lying down (the first part of the sleep clip): get up from the seat, not from the floor.
       anim = CompanionAnimation(clip: mono - sleepStart < Self.napEdge ? "wake-low" : "wake", seq: nextSeq())
     }
@@ -846,11 +852,8 @@ public struct CompanionModel {
 
     // 11. The picture.
     let sleeping = asleepNow
-    let displayState: CompanionState = quietNow ? .asleep : (sleeping ? .asleep : shown)
     let rest: CompanionRest
-    if quietNow {
-      rest = .statue
-    } else if sleeping {
+    if sleeping {
       rest = .nap
     } else {
       switch shown {
@@ -861,7 +864,6 @@ public struct CompanionModel {
       case .working: rest = .holdLast("running")
       }
     }
-    if quietNow { anim = nil }
 
     let outState: CompanionState = sleeping ? .asleep : shown
     let word = CompanionPhrase.word(
@@ -870,7 +872,7 @@ public struct CompanionModel {
     if !quietNow, shown == .idle, let f = inputs.feed, (failedDot && f.failed > 0) || (unreadDot && f.unread > 0) { dot = true }
 
     return CompanionOutput(
-      state: outState, displayState: displayState, quiet: quietNow, animation: anim, rest: rest,
+      state: outState, quiet: quietNow, animation: anim, rest: rest,
       bubble: event2, word: word, accessibilityLabel: CompanionPhrase.accessibility(agent: inputs.agentName, word: word),
       dot: dot, dragging: dragging, roundsDue: roundsDue, wanderDue: wanderDue, anticStop: anticStopSeq,
       nextDeadline: deadline(mono: mono, wall: wall))
@@ -910,35 +912,25 @@ public struct CompanionModel {
   }
 }
 
-/// Three Rounds slots a day, one in each third of the awake hours (the 24 hours outside the quiet window; all 24 when there
-/// is none). Spec 2.4.
+/// Nine Rounds slots a day (the owner's 2026-11-06 ask: three was too few), spread over the whole 24 hours with no quiet-window
+/// exclusion. The day is cut into nine equal parts of 160 minutes and each slot lands inside the middle of its part (20 to 139
+/// minutes in), so two slots are never closer than 41 minutes. The quiet window only supplies the time zone the day is cut in.
+/// Times are set by local clock reading, so a 23- or 25-hour DST day still holds all nine on that day. Spec 2.4.
 public enum RoundsPlan {
+  public static let perDay = 9
+  public static let minimumGapMinutes = 40
+
   public static func slots(on day: Date, quiet: QuietWindow?, random: (ClosedRange<Double>) -> Double) -> [Date] {
     var cal = Calendar(identifier: .gregorian)
     cal.timeZone = quiet?.timeZone ?? .current
     let start = cal.startOfDay(for: day)
-    // Awake minutes of this local day, as ranges.
-    var awake: [Range<Int>] = [0..<1440]
-    if let q = quiet, q.start != q.end {
-      awake = q.start < q.end ? [0..<q.start, q.end..<1440] : [q.end..<q.start]
-      awake = awake.filter { !$0.isEmpty }
-    }
-    let total = awake.reduce(0) { $0 + $1.count }
-    guard total >= 3 else { return [] }
-    func minute(atAwakeOffset k: Int) -> Int {
-      var left = k
-      for r in awake {
-        if left < r.count { return r.lowerBound + left }
-        left -= r.count
-      }
-      return awake.last?.upperBound ?? 0
-    }
+    let part = 1440 / perDay
     var out: [Date] = []
-    for third in 0..<3 {
-      let lo = total * third / 3
-      let hi = max(lo + 1, total * (third + 1) / 3)
-      let k = min(total - 1, Int(random(Double(lo)...Double(hi - 1))))
-      if let d = cal.date(byAdding: .minute, value: minute(atAwakeOffset: k), to: start) { out.append(d) }
+    for k in 0..<perDay {
+      let lo = Double(part * k + 20)
+      let hi = Double(part * (k + 1) - 21)
+      let m = min(1439, Int(random(lo...hi)))
+      if let d = cal.date(bySettingHour: m / 60, minute: m % 60, second: 0, of: start) { out.append(d) }
     }
     return out
   }

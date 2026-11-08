@@ -10,6 +10,8 @@ export type FakeClock = Clock & {
   advance(ms: number): void
   set(ms: number): void
   readonly pending: number
+  /** How many timers have fired so far (a test can bound it to prove a long jump did not replay days of timers). */
+  readonly fired: number
   iso(): string
 }
 
@@ -18,6 +20,7 @@ export function fakeClock(startIso = '2026-10-28T15:00:00.000Z'): FakeClock {
   let nextId = 1
   const timers = new Map<number, { at: number; fn: () => void; seq: number }>()
   let seq = 0
+  let fired = 0
   const clock: FakeClock = {
     now: () => t,
     setTimeout(fn, ms) {
@@ -42,6 +45,7 @@ export function fakeClock(startIso = '2026-10-28T15:00:00.000Z'): FakeClock {
         if (!best) break
         timers.delete(best[0])
         t = Math.max(t, best[1].at)
+        fired++
         best[1].fn()
       }
       t = target
@@ -51,6 +55,9 @@ export function fakeClock(startIso = '2026-10-28T15:00:00.000Z'): FakeClock {
     },
     get pending() {
       return timers.size
+    },
+    get fired() {
+      return fired
     },
     iso: () => new Date(t).toISOString(),
   }

@@ -22,6 +22,7 @@
     "test:e2e": "pnpm -r --workspace-concurrency=1 --if-present test:e2e",
     "drive": "node e2e/drive.ts",
     "check:personal": "bash scripts/check-no-personal.sh",
+    "notices:check": "node scripts/third-party-web.ts --check",
     "capture:schedules": "bun run apps/bridge/scripts/capture-schedules.ts",
     "capture:memory": "bun run apps/bridge/scripts/capture-memory.ts",
     "capture:search": "bun run apps/bridge/scripts/capture-search.ts",

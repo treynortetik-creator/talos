@@ -85,11 +85,11 @@ export function eventOf(
 
 export const DAY_MS = 86_400_000
 export const HOUR_MS = 3_600_000
+/** How long a replaced signing secret keeps verifying: after a rotation, and after a re-pasted vendor secret. */
+export const OLD_SECRET_GRACE_MS = 24 * HOUR_MS
 export const MAX_BODY_BYTES = 1_000_000
 export const DEDUP_TTL_MS = 7 * DAY_MS
 export const GITHUB_DEDUP_TTL_MS = 90 * DAY_MS
-export const PASSTHROUGH_MAX_MS = HOUR_MS
-export const OLD_SECRET_GRACE_MS = DAY_MS
 /** Creds keys that hold the previous vendor signing secret after a re-paste, and when it stops being accepted. */
 export const PREV_SECRET = '_prev_verify_secret'
 export const PREV_SECRET_UNTIL = '_prev_verify_secret_until'

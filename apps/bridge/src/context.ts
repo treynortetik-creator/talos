@@ -8,6 +8,7 @@ import type { BridgeEnv, BridgePaths } from './config.ts'
 import type { ConfigFile } from './config-file.ts'
 import type { ConfigProposals } from './config-propose/service.ts'
 import type { DeviceStore } from './devices.ts'
+import type { DialogCards } from './dialog-card.ts'
 import { receiptFrame, replyFrame } from './frames-out.ts'
 import type { HistoryStore } from './history-store.ts'
 import type { Logger } from './log.ts'
@@ -187,6 +188,8 @@ export type BridgeContext = {
   schedules?: ScheduleService
   /** O1: settings the agent may PROPOSE (a card the owner approves, applied by the bridge). Live main session only. */
   configProposals?: ConfigProposals
+  /** Needs-you prompts: a card for a known dialog in a thread session (docs/OPTION-C.md). Live main session only. */
+  dialogs?: DialogCards
   /** v2 features (docs/V2-FEATURES.md V8): set by WP-V2, WP-V5 and WP-V1; absent = the read answers a fixed error. */
   search?: SearchService
   memory?: MemoryService

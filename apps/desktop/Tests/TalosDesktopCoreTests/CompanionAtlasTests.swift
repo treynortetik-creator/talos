@@ -107,12 +107,11 @@ struct CompanionAtlasTests {
   }
 
   @Test func theMiniMapFollowsTheSpec() {
-    #expect(CompanionAtlas.miniPose(.down, quiet: false) == .worried)
-    #expect(CompanionAtlas.miniPose(.needsYou, quiet: false) == .waiting)
-    #expect(CompanionAtlas.miniPose(.asleep, quiet: false) == .statue)
-    #expect(CompanionAtlas.miniPose(.working, quiet: false) == .pleased)
-    #expect(CompanionAtlas.miniPose(.idle, quiet: false) == .pleased)
-    #expect(CompanionAtlas.miniPose(.down, quiet: true) == .statue, "quiet is a statue whatever the state")
+    #expect(CompanionAtlas.miniPose(.down) == .worried)
+    #expect(CompanionAtlas.miniPose(.needsYou) == .waiting)
+    #expect(CompanionAtlas.miniPose(.asleep) == .statue)
+    #expect(CompanionAtlas.miniPose(.working) == .pleased)
+    #expect(CompanionAtlas.miniPose(.idle) == .pleased)
   }
 
   @Test func idleLoopPlansItsBlinksWithoutATimer() throws {

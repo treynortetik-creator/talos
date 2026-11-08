@@ -5,10 +5,10 @@ import type { ModuleExtras } from '../generic/common.ts'
 import { normalizeGmail } from '../gmail/normalize.ts'
 import { verifyStandard } from '../standard-webhooks.ts'
 import type { IntegrationModule } from '../types.ts'
-import { forwardScriptTemplate, renderForwardScript } from './apps-script.ts'
+import { renderForwardScript } from './apps-script.ts'
 import { forwardSetup } from './setup.ts'
 
-export { forwardScriptTemplate, renderForwardScript }
+export { renderForwardScript }
 
 export const integration: IntegrationModule & ModuleExtras = {
   id: 'forward',

@@ -630,5 +630,3 @@ export function register(services: RelayServices): void {
     services.clock.clearTimeout(sweepTimer)
   })
 }
-
-export { FrameBudget } from './limits.ts'

@@ -1,7 +1,8 @@
 // The desktop companion's feed (DESKTOP-COMPANION-SPEC 7, feature `companion/1`). The page is the only side that holds the
 // live state (cards, thread statuses, unread, the session), so it tells the Mac app in one small message, `companion_state`:
 // counts and thread ids, never a name and never a word of a message. The words of a reply cross only on request
-// (`companion_reply_request` -> `companion_reply`), after a click, as plain text capped at 500 characters.
+// (`companion_reply_request` -> `companion_reply`), as plain text capped at 500 characters: when the owner clicks the reply
+// card, and when the companion wants the first line of a reply bubble he is about to show.
 //
 // The pet is off by default and this file does nothing visible by itself: it only keeps `web.companionFeed` honest in the
 // Mac app. An old Mac app drops the unknown message (`NativeBridge.dropped` goes up); an old page never sends it.
@@ -17,6 +18,12 @@ import {
 import type { ClientState, TalosClient } from '../../lib/client.ts'
 import type { ConnectionMeta } from '../../lib/connectionMeta.ts'
 import type { ShellBridge } from '../../lib/native/bridge.ts'
+import {
+  heldReplies,
+  repliesEpoch,
+  subscribeCompanionReplies,
+  viewingThread,
+} from '../../lib/native/companionReplies.ts'
 import { freshStatus, freshStatuses } from '../../lib/threadStatus.ts'
 import { useSession } from '../auth/session.ts'
 import { awaitsOwner } from '../cards/logic.ts'
@@ -24,7 +31,6 @@ import { buildHome } from '../home/groups.ts'
 import { getSessionController } from '../session/store.ts'
 
 export type CompanionFrame = Extract<WebToNativeT, { type: 'companion_state' }>
-export type CompanionReplyFrame = Extract<WebToNativeT, { type: 'companion_reply' }>
 type Row = CompanionFrame['rows'][number]
 type LastReply = NonNullable<CompanionFrame['last_reply']>
 
@@ -46,6 +52,12 @@ export type CompanionInputs = {
   failed: number
   lastReply: LastReply | null
   nowMs: number
+  /** The thread on screen by the page's own routing (a card page counts as its thread), or null. */
+  viewing?: string | null
+  /** Replies held back for the companion (`lib/native/companionReplies.ts`). */
+  held?: Array<{ thread_id: string; seq: number }>
+  /** The epoch of the companion's "on" the page last applied, or null. */
+  repliesEpoch?: number | null
 }
 
 /** The frame signed out: zeros, no rows. A cached store must not leak counts or ids to the shell. */
@@ -63,6 +75,9 @@ function signedOutFrame(connection: CompanionFrame['link']): CompanionFrame {
     failed: 0,
     rows: [],
     last_reply: null,
+    viewing: null,
+    held: [],
+    replies_epoch: null,
   }
 }
 
@@ -132,6 +147,9 @@ export function buildCompanionFrame(i: CompanionInputs): CompanionFrame {
     failed: count(i.failed),
     rows,
     last_reply: i.lastReply,
+    viewing: i.viewing && ThreadId.safeParse(i.viewing).success ? i.viewing : null,
+    held: (i.held ?? []).filter((h) => ThreadId.safeParse(h.thread_id).success).slice(-COMPANION_ROWS_MAX),
+    replies_epoch: i.repliesEpoch ?? null,
   }
 }
 
@@ -234,6 +252,9 @@ export function startCompanionFeed(
       failed: meta ? Object.keys(meta.getState().failed).length : 0,
       lastReply,
       nowMs: now(),
+      viewing: viewingThread(),
+      held: heldReplies(),
+      repliesEpoch: repliesEpoch(),
     })
   }
   const flush = (force = false) => {
@@ -294,6 +315,7 @@ export function startCompanionFeed(
       }
     }),
     ...(meta ? [meta.subscribe(schedule)] : []),
+    subscribeCompanionReplies(schedule), // what the page holds or shows changes the frame
     client.onFrame('reply', (f) => {
       // The same filter as the native banner (notify.ts).
       if (f.silent || f.voice_delegation_id) return

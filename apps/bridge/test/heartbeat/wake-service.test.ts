@@ -9,7 +9,6 @@ import { HEARTBEAT_META_KEY, heartbeatConfigHashOf } from '@talos-app/protocol'
 import { packDir, packPath } from '../../src/heartbeat/pack.ts'
 import { storeFile } from '../../src/heartbeat/store.ts'
 import { recordPass } from '../../src/heartbeat/tested.ts'
-import type { Notification } from '../../src/notify.ts'
 import {
   draft,
   longTimeouts,

@@ -11,7 +11,6 @@ import type {
   DriveScreenProps,
   EventRowProps,
   HealthScreenProps,
-  HitRowProps,
   HomeScreenProps,
   InboxScreenProps,
   IntegrationsScreenProps,
@@ -74,10 +73,6 @@ export const SearchScreen = lazyNamed<SearchScreenProps, typeof import('./search
 export const ContextView = lazyNamed<ContextViewProps, typeof import('./search/index.tsx')>(
   () => import('./search/index.tsx'),
   'ContextView',
-)
-export const HitRow = lazyNamed<HitRowProps, typeof import('./search/index.tsx')>(
-  () => import('./search/index.tsx'),
-  'HitRow',
 )
 export const MemoryScreen = lazyNamed<MemoryScreenProps, typeof import('./memory/index.tsx')>(
   () => import('./memory/index.tsx'),

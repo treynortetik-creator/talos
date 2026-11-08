@@ -25,7 +25,9 @@ func blockers(_ p: Supervisor.Phase) -> [TakeoverCheck.Blocker]? {
 /// Brings a fresh rig to "running, confirmed by the human".
 func coldStartConfirmed(_ r: Rig) throws {
   r.start()
-  #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) }, "dialog shown")
+  // A real tmux costs a subprocess per read, so on a loaded Mac its caps are longer. Every one only caps a hang.
+  let cap: Double = r.kind == .tmux ? 30 : 10
+  #expect(r.wait(cap) { r.screenContains(DialogMatcher.Strings.devTitle) }, "dialog shown")
   // Bounds are generous on purpose: they only cap a hang. Under CI load (parallel swift builds) the supervisor's tick
   // can be starved for seconds after the dialog is on screen (aSecondSupervisor... failed here once, 2026-10-30).
   // `tickNow()` asks for a supervision pass now instead of waiting for the 0.2 s timer to be scheduled: on a loaded Mac the
@@ -34,8 +36,8 @@ func coldStartConfirmed(_ r: Rig) throws {
     r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart },
     "needsYou \(String(describing: r.sup.status.needsYou)), phase \(r.phase()), audit: \(r.audit)")
   r.humanEnter()
-  #expect(r.wait(10) { r.sup.tickNow(); return isRunning(r.phase()) }, "running after the human Enter: \(r.phase())")
-  #expect(r.wait(10) { r.config.session.confirmedAt != nil })
+  #expect(r.wait(cap) { r.sup.tickNow(); return isRunning(r.phase()) }, "running after the human Enter: \(r.phase())")
+  #expect(r.wait(cap) { r.config.session.confirmedAt != nil })
 }
 
 @Suite("Supervisor (real pty, real tmux)", .serialized)
@@ -158,10 +160,12 @@ struct SupervisorIntegrationTests {
     t.backoff = Backoff(steps: [0.3, 0.5, 0.5, 0.5, 0.5], jitter: 0)
     t.dialogStall = 0
     t.stopGrace = 3
-    let r = try Rig(kind, scenario: "extra-channel.sh", env: ["FAKE_CRASH_SECONDS": "1"], timings: t)
+    // FAKE_CRASH_SECONDS is read only by crash-after.sh; this scenario's crash delay is FAKE_CRASH_AFTER. Start 1 crashes 6 s
+    // after its notice (the fake's default is 1 s), so a late poll still sees it running after the human Enter.
+    let r = try Rig(kind, scenario: "extra-channel.sh", env: ["FAKE_CRASH_AFTER": "6"], timings: t)
     defer { r.teardown() }
     try coldStartConfirmed(r)
-    #expect(r.wait(15) { r.starts.count >= 2 })
+    #expect(r.wait(30) { r.starts.count >= 2 })
     #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) })
     let want = Supervisor.NeedsYou.restartNotConfirmed(.channelsMismatch)
     #expect(r.wait(10) { r.sup.tickNow(); return r.sup.status.needsYou == want }, "\(String(describing: r.sup.status.needsYou))")
@@ -175,7 +179,9 @@ struct SupervisorIntegrationTests {
   @Test(arguments: bothHosts, Refuse.allCases)
   func restartRefusesAnythingButTheExactDialog(kind: HostKind, why: Refuse) throws {
     let scenario: String
-    var env: [String: String] = [:]
+    // The two crash_first_then scenarios crash start 1 6 s after its notice (the fake's default is 1 s), so a late poll still
+    // sees it running after the human Enter. `.versionChanged` runs crash-after.sh, which has its own FAKE_CRASH_SECONDS.
+    var env: [String: String] = ["FAKE_CRASH_AFTER": "6"]
     let versionFile = NSTemporaryDirectory() + "talos-d1-ver-\(UUID().uuidString.prefix(6))"
     switch why {
     case .extraChannel: scenario = "extra-channel.sh"
@@ -190,7 +196,7 @@ struct SupervisorIntegrationTests {
     try coldStartConfirmed(r)
     // The native installer moved claude between restarts.
     if why == .versionChanged { try "2.1.313".write(toFile: versionFile, atomically: true, encoding: .utf8) }
-    #expect(r.wait(15) { r.starts.count >= 2 })
+    #expect(r.wait(30) { r.starts.count >= 2 })
     #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) })
     let expected: AutoConfirmGuard.Refusal =
       switch why {
@@ -198,7 +204,9 @@ struct SupervisorIntegrationTests {
       case .wrongHighlight: .wrongHighlight
       case .versionChanged: .versionChanged
       }
-    #expect(r.wait(5) { r.sup.status.needsYou == .restartNotConfirmed(expected) }, "\(String(describing: r.sup.status.needsYou))")
+    #expect(
+      r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .restartNotConfirmed(expected) },
+      "\(String(describing: r.sup.status.needsYou))")
     usleep(1_500_000)
     #expect(r.screenContains(DialogMatcher.Strings.devTitle), "no keypress: the dialog is still up")
     #expect(r.phase() == .starting)
@@ -207,11 +215,12 @@ struct SupervisorIntegrationTests {
 
   @Test(arguments: bothHosts)
   func noNoticeAfterTheEnterStopsAfterFifteenSeconds(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "no-notice.sh")
+    // Start 1 crashes 6 s after its notice (the fake's default is 1 s), so a late poll still sees it running after the human Enter.
+    let r = try Rig(kind, scenario: "no-notice.sh", env: ["FAKE_CRASH_AFTER": "6"])
     defer { r.teardown() }
     try coldStartConfirmed(r)
-    #expect(r.wait(15) { r.starts.count >= 2 })
-    #expect(r.wait(10) { r.audit.contains(" auto_confirm ") })
+    #expect(r.wait(30) { r.starts.count >= 2 })
+    #expect(r.wait(30) { r.sup.tickNow(); return r.audit.contains(" auto_confirm ") })
     let sent = Date()
     #expect(r.wait(25) { stopReason(r.phase()) == .noNotice }, "\(r.phase())")
     #expect(Date().timeIntervalSince(sent) >= 13.5)
@@ -229,7 +238,7 @@ struct SupervisorIntegrationTests {
     #expect(
       r.wait(40) {
         r.sup.tickNow()
-        return r.starts.count == 7 && stopReason(r.phase()) == .crashLoop && r.audit.components(separatedBy: " exit ").count > 7
+        return r.starts.count == 7 && r.loopStopped && r.crashes >= 7
       },
       "\(r.phase()), starts \(r.starts.count)")
     r.sup.tickNow()
@@ -261,10 +270,12 @@ struct SupervisorIntegrationTests {
 
   @Test(arguments: bothHosts)
   func sixCrashesInFifteenMinutesStopAfterTheFifthRestartAndPostOnce(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "crash-loop.sh")
+    // Start 1 crashes 6 s after its notice (the fake's default is 1 s), so a late poll still sees it running after the human
+    // Enter; the 5 s it adds is no part of what is counted, and the caps below only bound a hang.
+    let r = try Rig(kind, scenario: "crash-loop.sh", env: ["FAKE_CRASH_AFTER": "6"])
     defer { r.teardown() }
     try coldStartConfirmed(r)
-    #expect(r.wait(40) { stopReason(r.phase()) == .crashLoop }, "\(r.phase())")
+    #expect(r.wait(60) { r.loopStopped }, "\(r.phase())")
     #expect(r.starts.count >= 6)
     #expect(r.wait(5) { r.allEvents.contains(.stoppedRestarting) })
     #expect(r.wait(5) { r.crashPosts.count == 1 })
@@ -272,9 +283,11 @@ struct SupervisorIntegrationTests {
     #expect(post.hasPrefix("post general Testagent's session stopped restarting at "))
     // The loop's stop also brings the one automatic restore and one restart; that start crashes and the loop stops it again. The
     // owner's phone is told about the loop once, not twice.
-    #expect(r.wait(30) { r.starts.count == 7 && stopReason(r.phase()) == .crashLoop && r.audit.components(separatedBy: " exit ").count > 7 })
+    #expect(r.wait(30) { r.starts.count == 7 && r.loopStopped && r.crashes >= 7 })
     #expect(r.crashPosts.count == 1)
-    #expect(r.allEvents.filter { $0 == .stoppedRestarting }.count == 2, "the Mac says so each time it stops")
+    // The loop's own stop says so each time; a restore start that dies before its pid is a failed start, which does not.
+    let loopStops = stopReason(r.phase()) == .crashLoop ? 2 : 1
+    #expect(r.allEvents.filter { $0 == .stoppedRestarting }.count == loopStops, "the Mac says so each time the loop stops it")
   }
 
   @Test(arguments: bothHosts)
@@ -292,11 +305,14 @@ struct SupervisorIntegrationTests {
 
   @Test(arguments: bothHosts)
   func theDialogPrintedTwiceIsAnsweredOnce(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dialog-twice.sh")
+    // Start 1 crashes 6 s after its notice (the fake's default is 1 s), so a late poll still sees it running after the human Enter.
+    let r = try Rig(kind, scenario: "dialog-twice.sh", env: ["FAKE_CRASH_AFTER": "6"])
     defer { r.teardown() }
     try coldStartConfirmed(r)
-    #expect(r.wait(15) { r.starts.count >= 2 })
-    #expect(r.wait(10) { r.sup.status.needsYou == .restartNotConfirmed(.alreadyConfirmedThisStart) }, "\(String(describing: r.sup.status.needsYou))")
+    #expect(r.wait(30) { r.starts.count >= 2 })
+    #expect(
+      r.wait(30) { r.sup.tickNow(); return r.sup.status.needsYou == .restartNotConfirmed(.alreadyConfirmedThisStart) },
+      "\(String(describing: r.sup.status.needsYou))")
     usleep(1_000_000)
     #expect(r.screenContains(DialogMatcher.Strings.devTitle))
     #expect(r.audit.components(separatedBy: " auto_confirm ").count - 1 == 1)
@@ -304,10 +320,11 @@ struct SupervisorIntegrationTests {
 
   @Test(arguments: bothHosts)
   func anExitDuringTheNoticeWaitIsACrash(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "exit-in-notice-wait.sh")
+    // Start 1 crashes 6 s after its notice (the fake's default is 1 s), so a late poll still sees it running after the human Enter.
+    let r = try Rig(kind, scenario: "exit-in-notice-wait.sh", env: ["FAKE_CRASH_AFTER": "6"])
     defer { r.teardown() }
     try coldStartConfirmed(r)
-    #expect(r.wait(20) { r.starts.count >= 3 }, "the exit after the Enter was counted and restarted: \(r.starts.count)")
+    #expect(r.wait(40) { r.starts.count >= 3 }, "the exit after the Enter was counted and restarted: \(r.starts.count)")
     // `starts` is the fake agent's own log; the supervisor publishes its status a beat later. Same bound, polled, so a
     // loaded machine cannot read the snapshot between the two (seen red on 2026-10-30, restartsInWindow was 1).
     #expect(r.wait(10) { r.sup.status.restartsInWindow >= 2 }, "restartsInWindow: \(r.sup.status.restartsInWindow)")

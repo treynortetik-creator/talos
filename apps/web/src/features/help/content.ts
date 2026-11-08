@@ -119,7 +119,7 @@ export const HELP_SECTIONS: Section[] = [
           {
             q: 'Rename, reorder or archive threads',
             where: [w('settings', 'Agent', 'Manage threads')],
-            note: 'On a phone, one thread’s own settings are under Open menu, then the pencil beside its name. On a computer they are the ⋯ button at the top of the thread.',
+            note: 'On a phone, one thread’s own settings are under Open menu, then the ⋯ beside its name. On a computer they are the ⋯ button at the top of the thread.',
           },
           {
             q: 'Stop the agent’s turn, compact, or start a new conversation',
@@ -311,17 +311,22 @@ export const HELP_SECTIONS: Section[] = [
                 when: 'While Talos is the front app. The top menu appears when a Talos window is open or the Dock icon is on.',
               },
               { keys: '⌘T', what: 'Show Talos', when: 'Same as above.' },
-              {
-                keys: '⌘K',
-                what: 'Terminals…',
-                when: 'The key shown beside the item in the Window menu. To be sure of it, choose Window, then Terminals….',
-              },
               { keys: '⌘N', what: 'Quick compose…', when: 'Same as above.' },
               { keys: '⌘W', what: 'Close', when: 'Same as above.' },
               { keys: '⌘M', what: 'Minimize', when: 'Same as above.' },
               { keys: '⌘H', what: 'Hide Talos', when: 'Same as above.' },
               { keys: '⌥⌘H', what: 'Hide Others', when: 'Same as above.' },
               { keys: '⌘Q', what: 'Quit Talos', when: 'Same as above.' },
+            ],
+          },
+          {
+            title: 'Mac app, Terminal screen',
+            rows: [
+              {
+                keys: 'Ctrl+1 to Ctrl+9',
+                what: 'Switch to tab 1 to 9 (Main first)',
+                when: 'On the Terminal screen, while its tabs show. Terminals… in the menu has no key: ⌘K is Search in the Talos window.',
+              },
             ],
           },
           {
@@ -339,7 +344,6 @@ export const HELP_SECTIONS: Section[] = [
             rows: [
               { keys: '⌘T', what: 'Show Talos', when: 'Shown beside the item in the Talos icon’s menu.' },
               { keys: '⌘N', what: 'Quick compose…', when: 'Shown beside the item in the Talos icon’s menu.' },
-              { keys: '⌘K', what: 'Terminals…', when: 'Shown beside the item in the Talos icon’s menu.' },
               { keys: '⌘,', what: 'Settings…', when: 'Shown beside the item in the Talos icon’s menu.' },
               { keys: '⌘Q', what: 'Quit Talos', when: 'The item’s name goes on to say what happens to the agent.' },
             ],

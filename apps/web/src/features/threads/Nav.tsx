@@ -12,7 +12,6 @@ import {
   IconBell,
   IconBook,
   IconClock,
-  IconPencil,
   IconSearch,
   IconSettings,
   IconSidebar,
@@ -24,9 +23,9 @@ import { ThreadIcon } from '../../ui/ThreadIcon.tsx'
 import { useAwaitingOwner } from '../cards/useAwaitingOwner.ts'
 import { useSchedulesDot, useSchedulesSync } from '../schedules/sync.ts'
 import { ThreadManageList } from './manage/ThreadManageList.tsx'
-import { onBeforeSidebarChange, toggleSidebar, useSidebarCollapsed } from './sidebarPref.ts'
+import { onBeforeSidebarChange, setSidebarCollapsed, toggleSidebar, useSidebarCollapsed } from './sidebarPref.ts'
 import { ThreadRowWithSettings } from './ThreadMoreButton.tsx'
-import { NewThread } from './ThreadSettings.tsx'
+import { ThreadSearchResults, ThreadTools, useThreadSearch } from './ThreadSearch.tsx'
 import { useAgentName, useVisibleThreads } from './useThreads.ts'
 
 /** Same rule as Home's "Needs you" tab: an expired or unverifiable card never shows in the badge. */
@@ -127,6 +126,7 @@ export function Sidebar() {
   const macOnline = useTalos((s) => s.presence.bridge_online)
   const memoryFeature = useFeature('memory/1')
   const collapsed = useSidebarCollapsed()
+  const search = useThreadSearch()
   const [editingRaw, setEditing] = useState(false)
   // Managing threads needs the full panel; folding it away ends the mode.
   const editing = editingRaw && !collapsed
@@ -156,9 +156,13 @@ export function Sidebar() {
   const text = (label: string) => (collapsed ? <span className="sr-only">{label}</span> : label)
   const tip = (label: string) => (collapsed ? { title: label } : {})
   // Folding by any route (button, chord, another tab) ends manage mode, so unfolding does not bring it back.
+  const stopSearch = search.stop
   useEffect(() => {
-    if (collapsed) setEditing(false)
-  }, [collapsed])
+    if (collapsed) {
+      setEditing(false)
+      stopSearch()
+    }
+  }, [collapsed, stopSearch])
   // Folding removes rows. If focus was on one of them it would drop to the page body: put it on the toggle instead.
   const asideRef = useRef<HTMLElement>(null)
   const toggleRef = useRef<HTMLButtonElement>(null)
@@ -222,36 +226,30 @@ export function Sidebar() {
           {text('Needs you')}
           {needs > 0 && count(needs, `${needs} need you`)}
         </NavLink>
-        <div className="mx-2 mt-2 flex items-center border-t border-chrome-line pt-2">
+        <div className="mx-2 mt-2 border-t border-chrome-line pt-2">
           {collapsed ? (
-            <span className="sr-only">Threads</span>
+            // the folded rail has room for one thing: the magnifier unfolds the sidebar and opens the search box in it
+            <button
+              type="button"
+              aria-label="Search threads"
+              title="Search threads"
+              data-testid="search-threads"
+              onClick={() => {
+                setSidebarCollapsed(false)
+                search.start()
+              }}
+              className="grid min-h-11 w-full place-items-center rounded-button text-on-chrome-2 hover:bg-chrome-hover hover:text-on-chrome"
+            >
+              <IconSearch width={20} height={20} />
+            </button>
           ) : (
-            <>
-              <span className="flex-1 px-0.5 text-xs font-semibold tracking-[var(--tracking-caps)] text-on-chrome-2 uppercase">
-                Threads
-              </span>
-              <NewThread compact tone="chrome" onCreated={(id) => nav(`/t/${id}`)} />
-              <button
-                type="button"
-                aria-pressed={editing}
-                aria-label={editing ? 'Done managing threads' : 'Manage threads'}
-                title={editing ? 'Done' : 'Reorder, rename, icons and colors'}
-                data-testid="edit-threads"
-                onClick={() => setEditing((v) => !v)}
-                className={cn(
-                  'grid min-h-11 min-w-11 place-items-center rounded-button px-2 text-sm',
-                  editing
-                    ? 'font-semibold text-chrome-accent-text hover:bg-chrome-hover'
-                    : 'text-on-chrome-2 hover:bg-chrome-hover hover:text-on-chrome',
-                )}
-              >
-                {editing ? 'Done' : <IconPencil width={18} height={18} />}
-              </button>
-            </>
+            <ThreadTools search={search} editing={editing} onEditing={setEditing} onCreated={(id) => nav(`/t/${id}`)} />
           )}
         </div>
-        {editing && <ThreadManageList tone="chrome" />}
+        {search.searching && !collapsed && <ThreadSearchResults query={search.query} onPick={search.stop} />}
+        {editing && !search.searching && <ThreadManageList tone="chrome" />}
         {!editing &&
+          !search.searching &&
           threads
             .filter((t) => t.id !== 'inbox')
             .map((t, i) => {
@@ -281,38 +279,35 @@ export function Sidebar() {
                 </ThreadRowWithSettings>
               )
             })}
-        {(() => {
-          const row = (
-            <NavLink to="/t/inbox" className={(st) => cn(link(st), !collapsed && inbox && 'pr-14')} {...tip('Inbox')}>
-              <ThreadIcon id="inbox" icon={inbox?.icon} color={inbox?.color} size={28} framed />
-              {text('Inbox')}
-              {(unread.inbox ?? 0) > 0 && count(unread.inbox ?? 0, `${unread.inbox} unread`)}
-            </NavLink>
-          )
-          // no thread in the synced config yet (or the rail is folded): nothing to open settings for
-          return collapsed || !inbox ? (
-            row
-          ) : (
-            <ThreadRowWithSettings thread={inbox} tone="chrome">
-              {row}
-            </ThreadRowWithSettings>
-          )
-        })()}
-        <NavLink to="/schedules" className={link} {...tip('Schedules')}>
-          <span className="relative grid size-7 place-items-center">
-            <IconClock width={20} height={20} />
-            <SchedulesDot />
-          </span>
-          {text('Schedules')}
-        </NavLink>
+        {!search.searching &&
+          (() => {
+            const row = (
+              <NavLink to="/t/inbox" className={(st) => cn(link(st), !collapsed && inbox && 'pr-14')} {...tip('Inbox')}>
+                <ThreadIcon id="inbox" icon={inbox?.icon} color={inbox?.color} size={28} framed />
+                {text('Inbox')}
+                {(unread.inbox ?? 0) > 0 && count(unread.inbox ?? 0, `${unread.inbox} unread`)}
+              </NavLink>
+            )
+            // no thread in the synced config yet (or the rail is folded): nothing to open settings for
+            return collapsed || !inbox ? (
+              row
+            ) : (
+              <ThreadRowWithSettings thread={inbox} tone="chrome">
+                {row}
+              </ThreadRowWithSettings>
+            )
+          })()}
+        {!search.searching && (
+          <NavLink to="/schedules" className={link} {...tip('Schedules')}>
+            <span className="relative grid size-7 place-items-center">
+              <IconClock width={20} height={20} />
+              <SchedulesDot />
+            </span>
+            {text('Schedules')}
+          </NavLink>
+        )}
       </nav>
       <div className={cn('border-t border-chrome-line p-2', collapsed ? 'pr-2.5 pl-1' : 'pr-3')}>
-        <NavLink to="/search" className={link} {...tip('Search')}>
-          <span className="grid size-7 place-items-center">
-            <IconSearch width={20} height={20} />
-          </span>
-          {text('Search')}
-        </NavLink>
         {memoryFeature !== 'off' && (
           <NavLink to="/memory" className={link} {...tip('Memory')}>
             <span className="grid size-7 place-items-center">

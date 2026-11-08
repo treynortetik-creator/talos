@@ -30,6 +30,12 @@ final class LiveFixture {
   var replyRequests: [String] = []
   var replyDone: [@MainActor (LastReplyTracker.Outcome) -> Void] = []
   var cancels = 0
+  /// The banners he fell back to posting himself: (thread id, thread name).
+  var fallbackBanners: [String] = []
+  /// Every value of the flag he told the page (the page's jump banner stands down while it is true).
+  var flags: [Bool] = []
+  /// What he said he showed with each flag message (the page drops those from its held list).
+  var acks: [[HeldReply]] = []
   var c: CompanionController { fx.controller }
 
   init(enabled: Bool = true) {
@@ -42,6 +48,11 @@ final class LiveFixture {
       self.replyDone.append(done)
     }
     c.host.cancelReply = { [unowned self] in self.cancels += 1 }
+    c.host.postReplyBanner = { [unowned self] id, name in self.fallbackBanners.append("\(id):\(name)") }
+    c.host.setRepliesFlag = { [unowned self] on, shown, _ in
+      self.flags.append(on)
+      self.acks.append(shown)
+    }
     fx.inputs.threads = [
       CompanionThreadRef(id: "general", name: "Daily plan"), CompanionThreadRef(id: "a1", name: "A thread"),
       CompanionThreadRef(id: "a2", name: "A thread"),
@@ -136,6 +147,7 @@ struct CompanionLiveGuiTests {
   @Test func aNewReplyBubbleOpensTheReplyCardAndTheTextStaysInTheViewOnly() throws {
     let t = LiveFixture()
     defer { t.done() }
+    t.fx.defaults.set(false, forKey: CompanionController.Key.replyBubbles)  // the plain bubble: today's behaviour
     t.feed(feedFrame(reply: ("general", 1)))
     t.feed(feedFrame(unread: 1, reply: ("general", 2)))
     #expect(t.c.bubbleIsShowing)

@@ -6,7 +6,6 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import {
-  BRIDGE_TOOLS,
   bindingFrom,
   type CardT,
   type Frame,
@@ -20,6 +19,7 @@ import {
   verifyOwnerFrame,
   wrapExternal,
 } from '@talos-app/protocol'
+import { SPEC_CORE_TOOLS } from '../../src/contract/spec-tools.ts'
 
 const env = process.env as Record<string, string>
 const pinned = JSON.parse(env.PINNED ?? '{}') as Record<string, never>
@@ -245,7 +245,7 @@ ws.onmessage = async (ev) => {
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: BRIDGE_TOOLS.map((name) => ({
+  tools: SPEC_CORE_TOOLS.map((name) => ({
     name,
     description: `${name} (stub)`,
     inputSchema: { type: 'object' as const, properties: {}, additionalProperties: true },

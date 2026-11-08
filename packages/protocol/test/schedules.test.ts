@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  BRIDGE_TOOLS,
   buildPushPayload,
   CHANNEL_KINDS,
   ChannelMeta,
@@ -11,7 +10,6 @@ import {
   OWNER_FRAME_TYPES,
   parseFrame,
   RunId,
-  SCHEDULE_BRIDGE_TOOLS,
   SCHEDULES_FEATURE,
   SCHEDULES_PROTOCOL,
   ScheduleCardPayload,
@@ -254,15 +252,6 @@ describe('error codes, channel kinds and tools', () => {
       window_ends: '2026-10-05T10:30:00-04:00',
     }
     expect(ChannelMeta.safeParse(meta).success).toBe(true)
-  })
-  it('names the four schedule tools apart from the 12 core tools (S1 merges them when it registers them)', () => {
-    expect([...SCHEDULE_BRIDGE_TOOLS]).toEqual([
-      'schedules_list',
-      'schedule_propose',
-      'schedule_run_start',
-      'schedule_run_done',
-    ])
-    for (const t of SCHEDULE_BRIDGE_TOOLS) expect(BRIDGE_TOOLS as readonly string[]).not.toContain(t)
   })
 })
 

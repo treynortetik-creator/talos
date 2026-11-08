@@ -7,12 +7,13 @@ relay can't forge or alter an edit. There are no extra approval steps.
 
 ## Where
 
-| Surface           | How                                                                                                                                                                             |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Desktop sidebar   | **Threads** header: **+** opens a new thread; the pencil ("Manage threads") switches to edit mode (drag handles, a gear per thread, Archived with Restore). **Done** leaves it. |
-| Phone Threads tab | **+** and **Edit** in the header. Edit mode has the same list plus Move up / Move down arrows.                                                                                  |
-| Inside a thread   | **···** in the header opens that thread's settings sheet.                                                                                                                       |
-| Settings > Agent  | The older full editor (name, live-call context, archive, arrows) stays.                                                                                                         |
+| Surface           | How                                                                                                                                                                                                                        |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop sidebar   | One row of three buttons: the magnifier (search all threads, in place), **+** (a new thread) and the pencil ("Manage threads": edit mode with drag handles, a gear per thread, Archived with Restore; **Done** leaves it). |
+| Phone Threads tab | **+** and **Edit** in the header. Edit mode has the same list plus Move up / Move down arrows.                                                                                                                             |
+| Phone menu        | The same row of three buttons; each thread in the list has its own **···**.                                                                                                                                                |
+| Inside a thread   | **···** in the header opens that thread's settings sheet (it also has "Search this thread").                                                                                                                               |
+| Settings > Agent  | The older full editor (name, live-call context, archive, arrows) stays.                                                                                                                                                    |
 
 The settings sheet holds: name, color, icon (searchable), "What goes here" (the topic), notifications, Default thread,
 Archive / Restore. Notifications apply at once; everything else applies on Save. The default thread can't be archived

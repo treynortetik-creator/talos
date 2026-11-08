@@ -15,6 +15,7 @@ import { AppEchoRow, AppViewCard, CardView, EventRow } from '../registry.ts'
 import { SharedContentBox } from '../share/SharedContentBox.tsx'
 import { AttachmentView } from './Attachments.tsx'
 import { Markdown } from './Markdown.tsx'
+import { REVEAL } from './messageRow.ts'
 import { runContextOf } from './runBlock.ts'
 import { SpeakButton } from './SpeakButton.tsx'
 import { useAgentName } from './useThreads.ts'
@@ -197,8 +198,8 @@ async function copyText(t: string): Promise<boolean> {
 const COPY_NOTE_MS = 2000
 
 /**
- * The always-visible Copy in a message's meta line. Same text and same helper as the menu's Copy. On touch the button is
- * 44 by 44: it makes the line 44 tall and reaches 12 px sideways, so it never covers what sits above or below.
+ * Copy in the row under a message. Same text and same helper as the menu's Copy. On touch the button is 44 tall: it makes the
+ * row 44 tall, so it never covers what sits above or below.
  */
 function CopyButton({ text }: { text: string }) {
   const [state, setState] = useState<'ok' | 'fail' | null>(null)
@@ -223,14 +224,16 @@ function CopyButton({ text }: { text: string }) {
         aria-label="Copy message"
         onClick={copy}
         className={cn(
-          '-my-1 grid size-6 shrink-0 place-items-center rounded-pill text-text-2 hover:text-text',
-          // On touch the 44 by 44 box is the height of the meta line (Listen is 44 tall in the same line on agent rows, and an
-          // owner row lets the line use the bubble's bottom padding), so it never reaches up over text, a link or Run, nor down
-          // into the next row, and it sits beside Time and Listen without overlapping them.
-          '[@media(pointer:coarse)]:my-0 [@media(pointer:coarse)]:size-11',
+          '-my-1 inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-pill px-1.5 font-sans text-text-2 hover:text-text',
+          // On touch the box is the height of the row (Listen is 44 tall in the same row on agent rows, and an owner row lets
+          // the row use the bubble's bottom padding), so it never reaches up over text, a link or Run, nor down into the next
+          // row, and it sits beside Time and Listen without overlapping them.
+          'pointer-coarse:my-0 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:justify-center',
+          REVEAL,
         )}
       >
         {state === 'ok' ? <IconCheck width={14} height={14} /> : <IconCopy width={14} height={14} />}
+        <span>Copy</span>
       </button>
       <span role="status" data-testid="msg-copy-note" className={cn(state === null && 'sr-only')}>
         {state === 'ok' ? 'Copied' : state === 'fail' ? "Couldn't copy" : ''}
@@ -247,9 +250,8 @@ const PRESS_MS = 500
 const LIFT_GRACE_MS = 600
 
 /**
- * Copy and Reply for one message. A button that shows on hover or keyboard focus (desktop), and the same menu on a long
- * press or right-click (phone). Only for rows with text. The menu is anchored to the row itself, so it opens at the
- * message even where the hover button is not shown (touch).
+ * Copy, Share and Reply for one message. The "..." button sits in the row under the message (`MessageMenuButton`), and the
+ * same menu opens on a long press or right-click. Only for rows with text. The menu is anchored to the row itself.
  */
 function MessageActions({ m, owner, children }: { m: MessageT; owner: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(false)
@@ -301,12 +303,7 @@ function MessageActions({ m, owner, children }: { m: MessageT; owner: boolean; c
       <PopoverAnchor asChild>
         {/* biome-ignore lint/a11y/noStaticElementInteractions: long-press and right-click are the touch and mouse routes to the menu; the keyboard route is the Message actions button inside */}
         <div
-          className={cn(
-            'group relative',
-            // The button sits in the margin beside the message. This strip keeps the hover going while the mouse crosses the
-            // gap, so a slow mouse can reach it.
-            owner && 'before:absolute before:inset-y-0 before:-left-10 before:w-10 before:content-[""]',
-          )}
+          className="group relative"
           onContextMenu={(e) => {
             if ((e.target as HTMLElement).closest('a, button, input, textarea')) return
             // Text was already selected in this message: the browser's own menu (with its Copy of just the selection) is what
@@ -348,24 +345,6 @@ function MessageActions({ m, owner, children }: { m: MessageT; owner: boolean; c
           }}
         >
           {children}
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              data-testid="msg-actions"
-              aria-label="Message actions"
-              className={cn(
-                'pointer-events-none absolute top-0 grid size-8 place-items-center rounded-pill bg-surface text-text-2 opacity-0 shadow-sm',
-                // Touch has the long-press; an invisible button at the screen edge would also swallow the edge swipes.
-                '[@media(pointer:coarse)]:hidden',
-                'focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100',
-                // Inside the row for an agent message (the row is the full width, so the margin is the scroller's edge);
-                // in the margin to the left of an owner message.
-                owner ? '-left-9' : 'right-0',
-              )}
-            >
-              <span aria-hidden="true">⋯</span>
-            </button>
-          </PopoverTrigger>
         </div>
       </PopoverAnchor>
       <PopoverContent
@@ -422,6 +401,26 @@ function MessageActions({ m, owner, children }: { m: MessageT; owner: boolean; c
         </button>
       </PopoverContent>
     </Popover>
+  )
+}
+
+/** The "..." that opens the message menu: last in the row under the message, never over its text. Only inside MessageActions. */
+function MessageMenuButton() {
+  return (
+    <PopoverTrigger asChild>
+      <button
+        type="button"
+        data-testid="msg-actions"
+        aria-label="Message actions"
+        className={cn(
+          '-my-1 grid size-6 shrink-0 place-items-center rounded-pill font-sans text-sm text-text-2 hover:text-text',
+          'pointer-coarse:my-0 pointer-coarse:size-11',
+          REVEAL,
+        )}
+      >
+        <span aria-hidden="true">⋯</span>
+      </button>
+    </PopoverTrigger>
   )
 }
 
@@ -586,6 +585,8 @@ export function MessageView({
     )
   }
   const owner = m.author === 'owner'
+  // text a person can copy or reply to; a shared page or an app view has none of these
+  const actionable = Boolean(m.text) && !m.share_content
   const hasVoice = (m.attachments ?? []).some((a) => a.kind === 'voice_note')
   const bubble = (
     <div
@@ -613,11 +614,12 @@ export function MessageView({
           <span className="sr-only">{formatDuration(m.attachments?.[0]?.duration_ms ?? 0)}</span>
         ) : null}
         <time dateTime={m.created_at}>{clockTime(m.created_at)}</time>
-        {m.text && !m.share_content ? <CopyButton text={m.text} /> : null}
         {owner && <Receipt m={m} />}
+        {actionable ? <CopyButton text={m.text ?? ''} /> : null}
         {/* The play button: an agent's own words only (never a shared page, an app view or a message the owner wrote). It
-            shares the meta line so time, Copy and Listen are one 44 px row; its status text is full width and wraps below. */}
-        {!owner && m.text && !m.share_content ? <SpeakButton m={m} /> : null}
+            shares the row so time, Copy, Listen and the menu are one 44 px row; its status text is full width and wraps below. */}
+        {!owner && actionable ? <SpeakButton m={m} /> : null}
+        {actionable ? <MessageMenuButton /> : null}
       </div>
       {owner && <SendState m={m} />}
     </div>
@@ -630,7 +632,7 @@ export function MessageView({
       aria-label={owner ? 'You' : agent}
     >
       <div className={cn('min-w-0', owner ? 'max-w-[85%] md:max-w-[75%]' : 'w-full')}>
-        {m.text && !m.share_content ? (
+        {actionable ? (
           <MessageActions m={m} owner={owner}>
             {bubble}
           </MessageActions>
@@ -674,11 +676,20 @@ function AppRow({ m }: { m: MessageT }) {
   )
 }
 
-export function TimelineCard({ card, threadName }: { card: CardT; threadName: string }) {
+export function TimelineCard({
+  card,
+  threadName,
+  highlighted,
+}: {
+  card: CardT
+  threadName: string
+  /** Opened from a push or /card/:id: a permission card opens its approval sheet by itself. */
+  highlighted?: boolean
+}) {
   return (
     <div id={`card-${card.id}`} className="enter-up px-4 py-2" data-testid="timeline-card">
       <Suspense fallback={<div className="h-24 animate-pulse rounded-card bg-surface-2" />}>
-        <CardView card={card} threadName={threadName} inline />
+        <CardView card={card} threadName={threadName} inline {...(highlighted ? { highlighted } : {})} />
       </Suspense>
     </div>
   )

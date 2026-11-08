@@ -1,15 +1,12 @@
 import { type InboxItemT, MsgId } from '@talos-app/protocol'
 import { Suspense, useEffect, useRef, useState } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
-import { useTalos, useTalosClient } from '../../lib/client.ts'
+import { useTalos } from '../../lib/client.ts'
 import { useThreadStatus } from '../../lib/threadStatus.ts'
 import { IconBack } from '../../ui/icons.tsx'
-import { Mascot } from '../../ui/Mascot.tsx'
-import { Meander } from '../../ui/Meander.tsx'
 import { ScrollRegion } from '../../ui/ScrollRegion.tsx'
 import { StatusDot } from '../../ui/StatusDot.tsx'
 import { ThreadIcon } from '../../ui/ThreadIcon.tsx'
-import { AgentsChip } from '../agents/AgentsChip.tsx'
 import { useAwaitingOwner } from '../cards/useAwaitingOwner.ts'
 import { Composer } from '../composer/Composer.tsx'
 import { DropZone } from '../composer/DropZone.tsx'
@@ -18,7 +15,6 @@ import { PHONE_QUERY } from '../phone/PhoneChrome.tsx'
 import { PhoneHeader } from '../phone/PhoneHeader.tsx'
 import { usePhonePanel } from '../phone/phoneStore.ts'
 import { CallBar, ContextView, InboxScreen } from '../registry.ts'
-import { SessionTrigger } from '../session/SessionTrigger.tsx'
 import { useMediaQuery } from '../settings/useMedia.ts'
 import { useIsOnCall } from '../voice/controller.ts'
 import { ArchivedBanner } from './ArchivedBanner.tsx'
@@ -27,20 +23,8 @@ import { ItemSheet } from './ItemSheet.tsx'
 import { StatusWord } from './StatusPill.tsx'
 import { ThreadSettings } from './ThreadSettings.tsx'
 import { Timeline } from './Timeline.tsx'
-import { useDescription } from './threadMeta.ts'
 import { useAgentName } from './useThreads.ts'
 import { useThreadState, WorkingRow } from './WorkingRow.tsx'
-
-function ThreadPurpose({ threadId, topic }: { threadId: string; topic?: string | undefined }) {
-  const local = useDescription(threadId)
-  const desc = topic || local
-  if (!desc) return null
-  return (
-    <p data-testid="thread-purpose" className="m-0 border-b border-line/60 px-4 py-2 text-sm text-text-2">
-      {desc}
-    </p>
-  )
-}
 
 export function ThreadScreen({ highlightCard }: { highlightCard?: string }) {
   const { thread: threadId = '' } = useParams()
@@ -98,7 +82,9 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
         <PhoneHeader thread={thread} state={state} statusLabel={status?.label} />
       ) : (
         <>
-          <header className="kb-hide-short flex items-center gap-1 px-2 pt-[env(safe-area-inset-top)]">
+          {/* The right padding keeps the title and menu clear of the usage chip in the corner while this column is too narrow
+              to have room for it beside the 760 px reading column. */}
+          <header className="kb-hide-short flex items-center gap-1 pt-[env(safe-area-inset-top)] pr-32 pl-2 @min-[64rem]:pr-2">
             <button
               type="button"
               aria-label="Back to threads"
@@ -109,37 +95,14 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
             </button>
             <div className="flex min-w-0 flex-1 items-center gap-3 py-2.5 md:pl-2">
               <ThreadIcon id={thread.id} icon={thread.icon} color={thread.color} size={40} />
-              <div className="min-w-0">
-                <h1 className="m-0 truncate font-display text-xl font-semibold leading-tight">{thread.name}</h1>
-                {/* Wraps instead of colliding: on a narrow phone the word and the "5 tasks" chip do not fit on one line. */}
-                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5">
-                  <div aria-live="polite" className="flex max-w-full items-center">
-                    <StatusWord state={state} />
-                    {status?.label ? (
-                      <span className="ml-2 min-w-0 truncate text-xs text-text-2">{status.label}</span>
-                    ) : null}
-                  </div>
-                  <AgentsChip threadId={thread.id} variant="inline" />
-                </div>
+              <h1 className="m-0 min-w-0 truncate font-display text-xl font-semibold leading-tight">{thread.name}</h1>
+              <div aria-live="polite" className="flex min-w-0 items-center gap-2">
+                <StatusWord state={state} pill />
+                {status?.label ? <span className="min-w-0 truncate text-xs text-text-2">{status.label}</span> : null}
               </div>
             </div>
-            <AgentsChip threadId={thread.id} variant="header" />
-            <SessionTrigger threadId={thread.id}>
-              <Mascot
-                state={state === 'working' ? 'working' : state === 'on_call' ? 'listening' : 'pleased'}
-                size={36}
-                name={agent}
-                decorative
-                animate={false}
-              />
-            </SessionTrigger>
             <ThreadSettings thread={thread} />
           </header>
-          <Meander />
-          {/* Compact while the keyboard is up (keyboardViewport.ts, app.css): the box and the latest messages need the room. */}
-          <div className="kb-hide">
-            <ThreadPurpose threadId={thread.id} topic={thread.topic} />
-          </div>
         </>
       )}
       <div className="kb-hide-banner kb-hide-short-landscape">

@@ -8,7 +8,7 @@ describe('card kinds', () => {
   })
 
   it('lists the bridge-only kinds in order', () => {
-    expect([...BRIDGE_ONLY_CARD_KINDS]).toEqual(['schedule', 'permission', 'app_action', 'config'])
+    expect([...BRIDGE_ONLY_CARD_KINDS]).toEqual(['schedule', 'permission', 'app_action', 'config', 'dialog'])
   })
 
   it('accepts exactly these kinds on a Card, in this order', () => {
@@ -24,6 +24,7 @@ describe('card kinds', () => {
       'permission',
       'app_action',
       'config',
+      'dialog',
     ])
   })
 

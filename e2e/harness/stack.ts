@@ -211,6 +211,7 @@ export async function startStack(
     TALOS_APP_HOME: home,
     TALOS_APP_RELAY_URL: origin,
     TALOS_APP_BRIDGE: '1',
+    TALOS_EXPLAINER: 'off', // a journey never starts the owner's real claude to explain a permission card
     ...clockEnv(worldOffset),
     ...(opts.stt === false ? {} : { TALOS_APP_STT_CMD: JSON.stringify(['bash', join(STUBS_DIR, 'stt.sh'), '{in}']) }),
     ...(opts.tts === false

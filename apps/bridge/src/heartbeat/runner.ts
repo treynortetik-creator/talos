@@ -7,13 +7,13 @@
 // Nothing here talks to Chronos. The caller (ScheduleService) claims the slot before and closes it after.
 import { existsSync } from 'node:fs'
 import {
+  HEARTBEAT_SOURCE_TIMEOUT_MIN_S,
   type HeartbeatConfigT,
   HeartbeatItem,
   type HeartbeatItemT,
   HeartbeatResult,
   type HeartbeatResultT,
   type HeartbeatSourceConfigT,
-  type HeartbeatSourceItemT,
   heartbeatMuteMatches,
   isQuiet,
   newId,
@@ -24,7 +24,7 @@ import type { BridgeContext } from '../context.ts'
 import type { ThreadRef } from '../notify.ts'
 import { type BuiltinDeps, runBuiltin } from './builtin.ts'
 import { COLD_UNKNOWN_MS, coldNote, coldness } from './cold.ts'
-import { composeDigest, type DigestInput } from './digest.ts'
+import { composeDigest } from './digest.ts'
 import { pickForPack, prunePacks, removePack } from './pack.ts'
 import {
   appendShadow,
@@ -56,7 +56,14 @@ import {
   wakesOn,
 } from './store.ts'
 
-export { FAIL_STREAK_SAY, SHADOW_LOG } from './run-parts.ts'
+export { SHADOW_LOG } from './run-parts.ts'
+
+/** The least a source's own limit is, in real milliseconds, while `secondMs` is set (see `RunnerDeps.secondMs`). */
+export const SOURCE_FLOOR_MS = HEARTBEAT_SOURCE_TIMEOUT_MIN_S * 1000
+
+/** A spawned source's limit in real milliseconds: `timeoutS` configured seconds, never under the floor when `secondMs` is set. */
+export const sourceLimitMs = (timeoutS: number, secondMs?: number): number =>
+  secondMs === undefined ? timeoutS * 1000 : Math.max(timeoutS * secondMs, SOURCE_FLOOR_MS)
 
 /**
  * What the agent wake gets (HB4: the real one builds the run pack from `items`). The answer says what happened to the hand-over:
@@ -97,7 +104,11 @@ export type RunnerDeps = {
   threadFor: (jobId: string) => ThreadRef
   /** False once the bridge has been stopped or superseded: no more writes, no more posts. */
   alive?: () => boolean
-  /** Milliseconds in one configured "second". Tests shorten it so a 5 s time limit does not cost 5 s. */
+  /**
+   * Milliseconds in one configured "second". Tests shorten it so a 30 s run limit does not cost 30 s. A spawned source's own limit
+   * is never shortened below `SOURCE_FLOOR_MS` (its configured minimum, 5 s): a shell script that is slow to start on a loaded
+   * machine is not what such a test is about.
+   */
   secondMs?: number
   /** Test seams: throw to model a crash at that point. */
   hooks?: { afterStoreWrite?: () => void; afterPost?: () => void }
@@ -303,8 +314,9 @@ export class HeartbeatRunner {
     }
 
     // How long THIS HEARTBEAT has gone without a completed run (its own last_run, not a source's silence: a source that was down
-    // while the heartbeat kept running holds its cursor and delivers normally when it recovers). Past the job's own limit
-    // (cold.ts) every source starts over with no cursor, and whatever it reports on that first look is the backlog, recorded and not shown.
+    // while the heartbeat kept running holds its cursor and delivers normally when it recovers), or a cold period no source has answered
+    // in yet (`cold_since`). Past the job's own limit (cold.ts) every source starts over with no cursor, and whatever it reports on that
+    // first look is the backlog, recorded and not shown.
     const { ms: coldMs, cold } = coldness(store, nowMs, input.coldAfterMs ?? COLD_UNKNOWN_MS)
 
     // ---- the sources
@@ -392,7 +404,11 @@ export class HeartbeatRunner {
         attempts: 0,
       }
     }
-    if (cold && outs.some((o) => o.ok)) notes.push(coldNote(coldMs, backlog))
+    const answered = outs.some((o) => o.ok)
+    if (cold && outs.length) notes.push(coldNote(coldMs, backlog, answered))
+    // A cold run no source answered skipped nothing: stay cold, counting from where the off period began, until one answers.
+    if (answered) store.cold_since = null
+    else if (cold && outs.length) store.cold_since ??= store.last_run ?? nowIso
 
     // ---- sources' own state
     const failures = updateSources(store, outs, nowIso)
@@ -710,7 +726,7 @@ export class HeartbeatRunner {
     const { ctx } = this.d
     const req = sourceRequest(cfg, store.sources[cfg.id], nowMs, dry, cold, windowH)
     const t0 = performance.now()
-    const limitMs = cfg.timeout_s * this.secondMs
+    const limitMs = sourceLimitMs(cfg.timeout_s, this.d.secondMs)
     const own = new AbortController()
     let timedOut = false
     const timer = setTimeout(() => {
@@ -742,7 +758,11 @@ export class HeartbeatRunner {
           ...(file
             ? {
                 onStart: (p) =>
-                  this.markRunning(store, file, cfg.id, { ...p, at: new Date(ctx.clock.now()).toISOString() }),
+                  this.markRunning(store, file, cfg.id, {
+                    ...p,
+                    bridge_pid: process.pid,
+                    at: new Date(ctx.clock.now()).toISOString(),
+                  }),
                 onEnd: () => this.markRunning(store, file, cfg.id, null),
               }
             : {}),

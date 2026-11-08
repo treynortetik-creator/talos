@@ -2,6 +2,7 @@
 // caches (offers, in-flight runs, finished-run summaries). Mode 0600, tmp + rename, ONE writer: the live, gated bridge.
 // It holds NO approval state (N1): deleting or editing it can lose a result thread or an offer timestamp, never an
 // approval, and every loss falls back safely (default_thread; the job is offered again; the orphan sweep reads Chronos).
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { HeartbeatResultT } from '@talos-app/protocol'
 import { readJsonFile, writeJsonAtomic } from '../fsutil.ts'
@@ -21,6 +22,9 @@ export type Offer = {
   content_hash?: string
   /** The bridge instance that sent it; a restart offers it again (the old session is gone). */
   instance: string
+  /** Job memory: what this run was given (a hash of the job text and the memory's epoch). Only a run holding both may save. */
+  memory_binding?: string
+  memory_epoch?: string
   at: number
 }
 export type Inflight = {
@@ -54,7 +58,7 @@ export type RunNote = {
 
 export type SidecarData = {
   adapter: string
-  jobs: Record<string, { thread_id: string | null }>
+  jobs: Record<string, { thread_id: string | null; memory?: true; epoch?: string }>
   offers: Record<string, Offer>
   inflight: Record<string, Inflight>
   runs: Record<string, RunNote>
@@ -135,7 +139,7 @@ export class Sidecar {
   }
 
   /** Every job the sidecar holds a thread for. */
-  jobThreads(): Record<string, { thread_id: string | null }> {
+  jobThreads(): Record<string, { thread_id: string | null; memory?: true; epoch?: string }> {
     return this.data.jobs
   }
   threadOf(id: string): string | null {
@@ -145,7 +149,48 @@ export class Sidecar {
     // Gate first: memory must not change when the save is refused.
     if (!this.canWrite()) return false
     const before = this.data.jobs[id]
-    this.data.jobs[id] = { thread_id: thread }
+    this.data.jobs[id] = { ...before, thread_id: thread }
+    return this.commit(() => {
+      if (before) this.data.jobs[id] = before
+      else delete this.data.jobs[id]
+    })
+  }
+  /** Job memory is on for this job (docs/SCHEDULES.md S3.8). Off when there is no entry, so a lost sidecar never turns it on. */
+  memoryOf(id: string): boolean {
+    return this.data.jobs[id]?.memory === true
+  }
+  /** The epoch of this job's memory: random, new each time memory is switched on and after every wipe. Undefined when it is off. */
+  memoryEpoch(id: string): string | undefined {
+    const j = this.data.jobs[id]
+    return j?.memory === true ? j.epoch : undefined
+  }
+  setMemory(id: string, on: boolean): boolean {
+    // Gate first: memory must not change when the save is refused.
+    if (!this.canWrite()) return false
+    const before = this.data.jobs[id]
+    const { memory: _m, epoch: _e, ...rest } = before ?? { thread_id: null }
+    this.data.jobs[id] = on ? { ...rest, memory: true, epoch: randomUUID() } : rest
+    return this.commit(() => {
+      if (before) this.data.jobs[id] = before
+      else delete this.data.jobs[id]
+    })
+  }
+  /** Moves the epoch of a job that has memory on (a wipe happened). Nothing to move for a job with it off. */
+  bumpEpoch(id: string): boolean {
+    const before = this.data.jobs[id]
+    if (before?.memory !== true) return true
+    if (!this.canWrite()) return false
+    this.data.jobs[id] = { ...before, epoch: randomUUID() }
+    return this.commit(() => {
+      this.data.jobs[id] = before
+    })
+  }
+  /** A new job's entry: it REPLACES whatever the sidecar held for that id, so nothing of an earlier job carries over. */
+  createJob(id: string, thread: string | null, memory: boolean): boolean {
+    // Gate first: memory must not change when the save is refused.
+    if (!this.canWrite()) return false
+    const before = this.data.jobs[id]
+    this.data.jobs[id] = memory ? { thread_id: thread, memory: true, epoch: randomUUID() } : { thread_id: thread }
     return this.commit(() => {
       if (before) this.data.jobs[id] = before
       else delete this.data.jobs[id]

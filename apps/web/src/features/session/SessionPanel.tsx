@@ -13,13 +13,15 @@ import {
   THINKING_NOTE,
 } from '@talos-app/protocol'
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router'
 import { useStore } from 'zustand'
 import { useTalos } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import { Badge, Button, Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/index.ts'
 import { StatusDot } from '../../ui/StatusDot.tsx'
 import { AgentsList, OfflineBadge, useAgentsView } from '../agents/AgentsList.tsx'
-import { chipLabel } from '../agents/logic.ts'
+import { chipLabel, EMPTY_TEXT } from '../agents/logic.ts'
+import { useWorkersStatus, WORKER_STATE_TEXT } from '../thread-sessions/store.ts'
 import {
   compactTokens,
   contextUsed,
@@ -80,23 +82,23 @@ function Meter({
   )
 }
 
-function Usage({ state, now }: { state: SessionStateT | undefined; now: number }) {
-  // Option C: the plan limits are one pool for main and every thread session, so say so when those can exist
-  const pooled = useTalos((s) => (s.config ? dedicatedSettings(s.config).enabled : false))
-  const all = pooled ? ' · all sessions' : ''
-  const week = usedPct(state, 'seven_day')
-  const ctx = contextUsed(state)
-  const high = (n: number | undefined) => n !== undefined && n >= WARN_USED_PCT
+/** A section title in the panel: small capitals, like the mark above a list. */
+function SectionTitle({ id, children }: { id: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-4" data-testid="session-usage">
-      <Meter
-        testId="meter-week"
-        label={`Weekly usage${all}`}
-        value={week}
-        text={week === undefined ? 'No reading yet' : `${week}% used`}
-        tone={high(week) ? 'warn' : 'accent'}
-        detail={week === undefined ? undefined : resetWords(resetsAt(state, 'seven_day'), now)}
-      />
+    <h3 id={id} className="m-0 text-xs font-semibold uppercase tracking-[var(--tracking-caps)] text-text-2">
+      {children}
+    </h3>
+  )
+}
+
+function Context({ state, threadId, live }: { state: SessionStateT | undefined; threadId: string; live: boolean }) {
+  const ctl = useSessionController()
+  const busyCtl = useStore(ctl.store, (s) => Object.keys(s.pending).length > 0)
+  const ctx = contextUsed(state)
+  const canCompact = live && state?.capabilities.includes('compact') === true
+  return (
+    <section aria-labelledby="session-context-h" className="flex flex-col gap-3" data-testid="session-context">
+      <SectionTitle id="session-context-h">Context</SectionTitle>
       <Meter
         testId="meter-context"
         label="Context window"
@@ -107,7 +109,41 @@ function Usage({ state, now }: { state: SessionStateT | undefined; now: number }
           ? { detail: `${compactTokens(ctx.tokens)} of ${compactTokens(ctx.window)} tokens` }
           : {})}
       />
-    </div>
+      {canCompact && (
+        <div className="flex flex-col gap-1">
+          <Button
+            variant="outline"
+            className="self-start"
+            disabled={busyCtl}
+            onClick={() => void ctl.compact(threadId)}
+          >
+            Compact
+          </Button>
+          {state?.busy && <p className="m-0 text-xs text-text-2">Compacts after this turn</p>}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function Usage({ state, now }: { state: SessionStateT | undefined; now: number }) {
+  // Option C: the plan limits are one pool for main and every thread session, so say so when those can exist
+  const pooled = useTalos((s) => (s.config ? dedicatedSettings(s.config).enabled : false))
+  const all = pooled ? ' · all sessions' : ''
+  const week = usedPct(state, 'seven_day')
+  const high = (n: number | undefined) => n !== undefined && n >= WARN_USED_PCT
+  return (
+    <section aria-labelledby="session-usage-h" className="flex flex-col gap-3" data-testid="session-usage">
+      <SectionTitle id="session-usage-h">Usage</SectionTitle>
+      <Meter
+        testId="meter-week"
+        label={`Weekly usage${all}`}
+        value={week}
+        text={week === undefined ? 'No reading yet' : `${week}% used`}
+        tone={high(week) ? 'warn' : 'accent'}
+        detail={week === undefined ? undefined : resetWords(resetsAt(state, 'seven_day'), now)}
+      />
+    </section>
   )
 }
 
@@ -196,19 +232,12 @@ function Controls({
             Stop
           </Button>
         )}
-        {can('compact') && (
-          <Button variant="outline" disabled={busyCtl} onClick={() => void ctl.compact(threadId)}>
-            Compact
-          </Button>
-        )}
         {can('clear') && !confirmClear && (
           <Button variant="ghost" disabled={busyCtl} onClick={() => setConfirmClear(true)}>
             New conversation
           </Button>
         )}
       </div>
-      {state.busy && can('compact') && <p className="m-0 -mt-2 text-xs text-text-2">Compacts after this turn</p>}
-
       {confirmClear && (
         <div
           role="group"
@@ -306,7 +335,7 @@ function Controls({
                 disabled={busyCtl}
                 onClick={() => void ctl.command(threadId, 'effort', e)}
                 className={cn(
-                  'min-h-11 min-w-12 flex-1 border-r border-line px-2 text-sm last:border-r-0 hover:bg-surface-2 disabled:opacity-50',
+                  'min-h-11 min-w-12 flex-1 border-r border-line px-1 text-[0.8125rem] last:border-r-0 hover:bg-surface-2 disabled:opacity-50',
                   state.effort === e && 'bg-accent font-semibold text-on-accent hover:bg-accent',
                 )}
               >
@@ -330,25 +359,62 @@ function Controls({
   )
 }
 
-// ---- agents (docs/SUBAGENTS.md 6.1: right after the meters, before the tabs) --------------------------------------
+// ---- agents: this session's helpers, then the thread sessions ------------------------------------------------------
+
+function GroupTitle({ children }: { children: React.ReactNode }) {
+  return <h4 className="m-0 text-sm font-medium">{children}</h4>
+}
+
+/** Each thread that has its own session, with the state the Mac last reported (`workers.status`). */
+function ThreadSessionRows() {
+  const status = useWorkersStatus()
+  const threads = useTalos((s) => s.threads)
+  if (!status || status.threads.length === 0) return null
+  return (
+    <div className="flex flex-col gap-1" data-testid="session-thread-sessions">
+      <GroupTitle>Thread sessions</GroupTitle>
+      <ul className="m-0 flex list-none flex-col p-0">
+        {status.threads.map((w) => (
+          <li key={w.thread_id} className="flex min-h-11 items-center justify-between gap-3 text-sm">
+            <Link to={`/t/${w.thread_id}`} className="min-w-0 truncate font-medium">
+              {threads.find((t) => t.id === w.thread_id)?.name ?? w.thread_id}
+            </Link>
+            <span className="shrink-0 text-text-2">{WORKER_STATE_TEXT[w.state]}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
 
 function AgentsSection({ threadId }: { threadId: string }) {
   const view = useAgentsView()
-  // A snapshot at all = the mod has `agents` and the relay and bridge pass it on. Without one there is nothing true to
-  // say here (an old relay or bridge looks the same as an old mod); the install hint above covers a missing mod.
-  if (!view.snap) return null
+  // Always shown: "No agents running." is the answer when nothing is. Without a snapshot at all (an old relay or bridge, a mod
+  // without `agents`) the app cannot say more, so it says only that, and never blames the mod (the hint above covers that).
   return (
-    <section aria-labelledby="session-agents-h" data-testid="session-agents" className="flex flex-col gap-2">
+    <section aria-labelledby="session-agents-h" data-testid="session-agents" className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <h3 id="session-agents-h" className="m-0 text-sm font-medium">
-          Agents
-        </h3>
-        {view.snap ? <span className="font-mono text-xs text-text-2">{chipLabel(view.snap).agents} active</span> : null}
+        <SectionTitle id="session-agents-h">Agents</SectionTitle>
+        {view.snap ? (
+          <span aria-live="polite" data-testid="agents-count" className="font-mono text-xs text-text-2">
+            {chipLabel(view.snap).agents} active
+          </span>
+        ) : null}
         <span className="ml-auto">
           <OfflineBadge offline={view.offline} />
         </span>
       </div>
-      <AgentsList threadId={threadId} mode="push" view={view} />
+      <div className="flex flex-col gap-1">
+        <GroupTitle>This session</GroupTitle>
+        {view.snap ? (
+          <AgentsList threadId={threadId} view={view} />
+        ) : (
+          <p data-testid="agents-empty" className="m-0 text-sm text-text-2">
+            {EMPTY_TEXT}
+          </p>
+        )}
+      </div>
+      <ThreadSessionRows />
     </section>
   )
 }
@@ -428,7 +494,11 @@ function PluginsTab({ inventory }: { inventory: SessionInventoryT | undefined })
 
 // ---- the panel ----------------------------------------------------------------------------------------------------
 
-export function SessionPanel({ threadId }: { threadId: string }) {
+/**
+ * `inline` is Settings > Session: it also lists the commands, MCP servers and plugins. The docked panel and the sheets
+ * leave those out and link there instead.
+ */
+export function SessionPanel({ threadId, inline }: { threadId: string; inline?: boolean }) {
   const ctl = useSessionController()
   const state = useStore(ctl.store, (s) => s.state)
   const inventory = useStore(ctl.store, (s) => s.inventory)
@@ -488,6 +558,8 @@ export function SessionPanel({ threadId }: { threadId: string }) {
         </p>
       )}
 
+      <Context state={state} threadId={threadId} live={phase === 'live'} />
+
       <Usage state={state} now={now} />
 
       <AgentsSection threadId={threadId} />
@@ -503,22 +575,32 @@ export function SessionPanel({ threadId }: { threadId: string }) {
       {phase === 'live' && state && <Controls state={state} inventory={inventory} threadId={threadId} />}
       <OutcomeLine outcome={last} waiting={waiting} />
 
-      <Tabs defaultValue="commands">
-        <TabsList className="flex w-full">
-          <TabsTrigger value="commands">Commands</TabsTrigger>
-          <TabsTrigger value="mcp">MCP servers</TabsTrigger>
-          <TabsTrigger value="plugins">Plugins</TabsTrigger>
-        </TabsList>
-        <TabsContent value="commands">
-          <CommandsTab inventory={inventory} />
-        </TabsContent>
-        <TabsContent value="mcp">
-          <McpTab inventory={inventory} />
-        </TabsContent>
-        <TabsContent value="plugins">
-          <PluginsTab inventory={inventory} />
-        </TabsContent>
-      </Tabs>
+      {inline ? (
+        <Tabs defaultValue="commands">
+          <TabsList className="flex w-full">
+            <TabsTrigger value="commands">Commands</TabsTrigger>
+            <TabsTrigger value="mcp">MCP servers</TabsTrigger>
+            <TabsTrigger value="plugins">Plugins</TabsTrigger>
+          </TabsList>
+          <TabsContent value="commands">
+            <CommandsTab inventory={inventory} />
+          </TabsContent>
+          <TabsContent value="mcp">
+            <McpTab inventory={inventory} />
+          </TabsContent>
+          <TabsContent value="plugins">
+            <PluginsTab inventory={inventory} />
+          </TabsContent>
+        </Tabs>
+      ) : (
+        <Link
+          to="/settings/session"
+          className="min-h-11 text-sm text-accent-text underline"
+          data-testid="session-settings-link"
+        >
+          Commands, MCP servers and plugins: Settings › Session
+        </Link>
+      )}
     </div>
   )
 }

@@ -131,7 +131,7 @@ describe('C3.1-C3.3 the relay through the real stdio server', () => {
     const card = await cardFor(r, fx.params.request_id)
     expect(card.kind).toBe('permission')
     expect(card.title).toBe('Allow Bash?')
-    expect(card.body).toBe(fx.params.input_preview)
+    expect(card.body?.replace(/\n/g, '')).toBe(fx.params.input_preview)
     expect(card.body_format).toBe('plain')
     expect(card.fields[0]?.value).toBe(fx.params.description)
     expect(card.risk).toBe('high')
@@ -212,26 +212,21 @@ describe('C3.1-C3.3 the relay through the real stdio server', () => {
     })
   }
 
-  test('a right-to-left override in the command: no Allow, the character shows as [U+202E]', async () => {
+  test('a right-to-left override in the command: shown as [U+202E], the card keeps Allow, and an owner-signed Allow sends allow', async () => {
     const r = await rig()
     const params: PermissionRequestT = {
       request_id: 'bcdfg',
       tool_name: 'Bash',
       description: 'Run the check',
-      input_preview: '{"command": "echo ok ‮~ fr- mr"}',
+      input_preview: '{"command": "echo ok \u202e~ fr- mr"}',
     }
     await r.claude.openPermission(params)
     const card = await cardFor(r, 'bcdfg')
     expect(card.body).toContain('[U+202E]')
-    expect(card.body).not.toContain('‮')
-    expect(permissionCardAllowsPrimary(card)).toBe(false)
-    const f = await r.app.resolveCard(card, 'primary', card.payload_hash, {
-      stepup_token: r.relay.mintStepup(`card:${card.id}`),
-    })
-    expect((await r.relay.expectFrame('error', (e) => e.ref === f.id, { direction: 'from_bridge' })).code).toBe(
-      'permission_hidden',
-    )
-    expect(r.claude.permissionVerdicts).toHaveLength(0)
+    expect(card.body).not.toContain('\u202e')
+    expect(permissionCardAllowsPrimary(card)).toBe(true) // the owner sees every character, so he may approve it
+    await r.app.resolveCard(card, 'primary', card.payload_hash, { stepup_token: r.relay.mintStepup(`card:${card.id}`) })
+    expect(await r.claude.waitForVerdict('bcdfg')).toMatchObject({ behavior: 'allow', outcome: 'applied' })
   })
 
   for (const version of ['2.1.210', '2.0.0', '0.0.0']) {

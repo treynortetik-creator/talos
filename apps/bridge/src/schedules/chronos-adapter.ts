@@ -45,6 +45,8 @@ export class AdapterError extends Error {
 /** What the adapter needs from Talos's own sidecar to fill the Talos-only fields of a row (S3.5, N6). */
 export type AdapterMeta = {
   threadOf(id: string): string | null
+  /** Job memory is on for this job (the sidecar's word). */
+  memoryOf?(id: string): boolean
   /** Age in seconds of the sidecar's offer for (id, ds), or null. */
   offerAgeS(id: string, ds: string): number | null
 }
@@ -354,6 +356,7 @@ export class ChronosAdapter implements SchedulerAdapter {
       this.ds.set(j.id, j.ds)
       return scheduleFromChronos(j, {
         thread_id: (meta?.threadOf(j.id) ?? null) as ScheduleT['thread_id'],
+        memory: meta?.memoryOf?.(j.id) === true,
         offerAgeS: meta?.offerAgeS(j.id, j.ds) ?? null,
         sessionBeatAgeS: p.head.session_beat_age_s,
       })
@@ -380,6 +383,7 @@ export class ChronosAdapter implements SchedulerAdapter {
       detail: {
         schedule: scheduleFromChronos(x.schedule, {
           thread_id: (this.o.meta?.threadOf(id) ?? null) as ScheduleT['thread_id'],
+          memory: this.o.meta?.memoryOf?.(id) === true,
           offerAgeS: this.o.meta?.offerAgeS(id, x.schedule.ds) ?? null,
         }),
         prompt,

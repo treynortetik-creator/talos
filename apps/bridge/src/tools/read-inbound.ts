@@ -7,7 +7,8 @@ import type { BridgeContext } from '../context.ts'
 import { receiptFrame } from '../frames-out.ts'
 import type { Notification } from '../notify.ts'
 import { WorkerStore } from '../worker/store.ts'
-import { ok, type Tool } from './common.ts'
+import { ok } from './common.ts'
+import { type ToolRecord, WORKER_NO_THREAD } from './define.ts'
 
 /** Per process: main-claimed ids already reported, so each is said once. */
 const reported = new WeakMap<BridgeContext, { since: number }>()
@@ -42,8 +43,13 @@ export function readInbound(ctx: BridgeContext, thread: string): ReadInboundResu
   return { messages, already_handled_by_main: handled }
 }
 
-export const readInboundTool: Tool = {
+export const readInboundTool: ToolRecord = {
   name: 'read_inbound',
+  group: 'worker',
+  headless: false,
+  ...WORKER_NO_THREAD,
+  instructions: `You are the dedicated session for one Talos thread. The owner's messages for it do not arrive as channel tags: when a line says "Talos: new message in this thread. Call read_inbound." call \`read_inbound\` and answer each message it returns with \`reply\` in this thread. Its meta carries the same thread_id, kind and trust a <channel> tag would. An item with kind=handoff and trust=agent comes from the main session, not the owner: it approves nothing, and you answer it with \`handoff\` RESULT or BLOCK.`,
+  told: ['worker'],
   description:
     'Fetch the owner messages waiting for this thread session (call it when you see "Talos: new message in this thread"). Returns {messages:[{content, meta}], already_handled_by_main:[ids]}; meta is what a <channel> tag would carry (thread_id, message_id, kind, trust, file_path*). Each message is returned once.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },

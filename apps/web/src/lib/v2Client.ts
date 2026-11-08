@@ -5,7 +5,6 @@
 // (`mac_offline`, `search_unavailable`, `bad_query`, `memory_off`, `memory_not_found`).
 import {
   type AttachmentRefT,
-  DRIVING_FEATURE,
   HEALTH_FEATURE,
   type MemoryEntryT,
   type MemoryHitT,
@@ -110,5 +109,3 @@ export function useFeature(name: string): FeatureState {
   const relay = useTalos((s) => s.relayFeatures)
   return featureState(presence, relay, name)
 }
-
-export { DRIVING_FEATURE }

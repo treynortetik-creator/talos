@@ -3,7 +3,8 @@
 # They live in the private, gitignored scripts/personal-denylist.txt.
 # email addresses other than example.com / example.org / example.net / GitHub noreply / the commit trailer
 # kit/ is the public kit, copied unchanged (kit/SOURCE). Its docs and test fixtures use made-up people at acme.com, e.g. dana@acme.com, and example.com. Only those two domains are let through, and only inside kit/ (the ALLOW_RE below is anchored on a kit/ path); any other address in kit/ is still a hit. kit/ cannot be edited here without breaking scripts/kit-source.test.ts.
-!^third_party/	-	[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}	@(example\.(com|org|net)|users\.noreply\.github\.com|anthropic\.com)$|^kit/[^:]+:[0-9]+:[^:]*@acme\.com$
+# THIRD_PARTY_NOTICES.md keeps upstream licence texts verbatim; two upstream copyright lines carry their author's address (clsx, idb). Only those two exact addresses, only in that file, are let through.
+!^third_party/	-	[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}	@(example\.(com|org|net)|users\.noreply\.github\.com|anthropic\.com)$|^kit/[^:]+:[0-9]+:[^:]*@acme\.com$|^THIRD_PARTY_NOTICES\.md:[0-9]+:(luke\.edwards05|jaffathecake)@gmail\.com$
 # phone numbers
 !^third_party/	-	(\+?[0-9]{1,2}[ .-])?\(?[0-9]{3}\)?[ .-][0-9]{3}[ .-][0-9]{4}
 # home-directory paths

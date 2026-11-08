@@ -4,8 +4,6 @@ import type { IntegrationModule } from '../types.ts'
 import { gcalToggle, normalizeGcal } from './normalize.ts'
 import { gcalSetup } from './setup.ts'
 
-export { GCAL_SCRIPT_TEMPLATE, renderGcalScript } from './apps-script.ts'
-
 export const integration: IntegrationModule & ModuleExtras = {
   claim: true,
   id: 'gcal',

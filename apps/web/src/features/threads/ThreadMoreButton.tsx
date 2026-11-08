@@ -49,11 +49,14 @@ export function ThreadRowWithSettings({
   tone,
   className,
   wrap,
+  onOpenSettings,
   children,
 }: {
   thread: ThreadT
   tone?: 'chrome' | 'surface'
   className?: string
+  /** The caller owns the settings sheet (it must outlive this row: archiving takes the row out of the list). */
+  onOpenSettings?: (thread: ThreadT) => void
   /** Wraps the link and the button (the Threads list puts its press and swipe menu around both). */
   wrap?: (inner: ReactNode) => ReactNode
   children: ReactNode
@@ -63,21 +66,28 @@ export function ThreadRowWithSettings({
   const inner = (
     <div className={cn('group relative', className)}>
       {children}
-      <ThreadMoreButton ref={btn} thread={thread} tone={tone} onOpen={() => setOpen(true)} />
+      <ThreadMoreButton
+        ref={btn}
+        thread={thread}
+        tone={tone}
+        onOpen={() => (onOpenSettings ? onOpenSettings(thread) : setOpen(true))}
+      />
     </div>
   )
   return (
     <>
       {wrap ? wrap(inner) : inner}
-      <ThreadEditor
-        open={open}
-        onOpenChange={setOpen}
-        thread={thread}
-        onCloseAutoFocus={(e) => {
-          e.preventDefault()
-          btn.current?.focus()
-        }}
-      />
+      {!onOpenSettings && (
+        <ThreadEditor
+          open={open}
+          onOpenChange={setOpen}
+          thread={thread}
+          onCloseAutoFocus={(e) => {
+            e.preventDefault()
+            btn.current?.focus()
+          }}
+        />
+      )}
     </>
   )
 }

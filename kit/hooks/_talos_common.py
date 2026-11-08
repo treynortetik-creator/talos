@@ -73,13 +73,22 @@ def find_agent_root(env=None, here=None, cwd=None):
     return _agent_above(os.getcwd() if cwd is None else cwd)
 
 
+# The hooks Claude Code reads an exit code of 2 from as "block this": the PreToolUse guards, and the PreCompact guard. Only these
+# fail closed (exit 2) when the agent folder cannot be found. For every other hook exit 2 means something else: a Stop hook that
+# exits 2 tells Claude Code "do not stop, keep going", so an unattended job with a bad CLAUDE_PROJECT_DIR would loop on it.
+# Keep this in step with the PreToolUse and PreCompact entries of templates/dot-claude/settings.json (test-update.sh checks it).
+GUARD_HOOKS = frozenset(("pre-tool-guard.py", "action-rules.py", "append-only-guard.py", "timeline-guard.py", "check-vault.py",
+                         "bsd-sed-guard.py", "compaction-guard.py"))
+
+
 def _refuse(env):
-    """Fail closed, the way hooks/session-start.py does: act on nothing. Unattended the exit code is 2, which Claude Code reads
-    as BLOCK for a guard (a guard that exits 0 would allow); in a live session it is valid empty output and exit 0."""
+    """Fail closed, the way hooks/session-start.py does: act on nothing. Unattended, a GUARD exits 2, which Claude Code reads as
+    BLOCK (a guard that exits 0 would allow); every other hook exits 0 with valid empty output (a Stop hook's exit 2 means "keep
+    going", which would loop an unattended run). In a live session every hook gives valid empty output and exit 0."""
     sys.stderr.write("talos hook: refusing to run. CLAUDE_PROJECT_DIR=%r is not an agent folder (it does not exist, or it is a "
                      "plugin release), so nothing was read or written. Start claude inside the agent folder; if you did, something "
                      "else set that variable.\n" % env)
-    if os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1":
+    if (os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1") and os.path.basename(sys.argv[0]) in GUARD_HOOKS:
         sys.exit(2)
     sys.stdout.write("{}")
     sys.exit(0)

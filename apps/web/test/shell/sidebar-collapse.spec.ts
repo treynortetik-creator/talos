@@ -79,9 +79,12 @@ test.describe('desktop sidebar', () => {
     await page.goto('/settings')
     await toggle(page).click()
     const rail = sidebar(page)
-    for (const name of ['Needs you', 'Inbox', 'Schedules', 'Search', 'Settings']) {
+    for (const name of ['Needs you', 'Inbox', 'Schedules', 'Settings']) {
       await expect(rail.getByRole('link', { name: new RegExp(name) }).first()).toBeVisible()
     }
+    // search is one magnifier on the rail (it unfolds the sidebar into the search box), not a row
+    await expect(rail.getByRole('button', { name: 'Search threads' })).toBeVisible()
+    await expect(rail.getByRole('link', { name: 'Search', exact: true })).toHaveCount(0)
     // the seeded unread reply and pending card
     const unread = rail.getByRole('img', { name: '1 unread' })
     const needs = rail.getByRole('img', { name: '1 need you' })
@@ -101,7 +104,7 @@ test.describe('desktop sidebar', () => {
       await page.keyboard.press('Tab')
       seen.push(await page.evaluate(() => document.activeElement?.getAttribute('href') ?? ''))
     }
-    expect(seen).toEqual(expect.arrayContaining(['/', '/t/inbox', '/schedules', '/search', '/settings']))
+    expect(seen).toEqual(expect.arrayContaining(['/', '/t/inbox', '/schedules', '/settings']))
     // folded rows do not carry the manage-threads controls
     await expect(page.getByTestId('edit-threads')).toHaveCount(0)
     const axe = await new AxeBuilder({ page }).include('[aria-label="Sidebar"]').analyze()

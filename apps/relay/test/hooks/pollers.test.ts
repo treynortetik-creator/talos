@@ -5,6 +5,9 @@ import { framesOf, setup } from './harness.ts'
 
 afterEach(() => resetAuthImplementation())
 
+// every address any caller must refuse, as a host in a URL (a zone id cannot sit in a URL host)
+const everyBlocked = [...corpus.core, ...corpus.embedded, ...corpus.alsoBlocked.filter((a) => !a.includes('%'))]
+
 const TOKEN = 'ghp_exampletoken0000000000000000000000'
 const notif = (id: string, reason: string, title: string, updated = '2026-10-28T14:55:00Z') => ({
   id,
@@ -185,7 +188,7 @@ describe('rss poller in the relay', () => {
   it('refuses every address in the shared corpus, however it is spelled, through the same save route', async () => {
     const s = setup()
     const spellings = [
-      ...corpus.core.map((a) => `http://${a.includes(':') ? `[${a}]` : a}/f`),
+      ...everyBlocked.map((a) => `http://${a.includes(':') ? `[${a}]` : a}/f`),
       'http://2130706433/f',
       'http://0x7f.1/f',
       'http://127.0.0.1./f',

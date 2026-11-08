@@ -1,6 +1,7 @@
 // Settings patches from an app.
-// Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks are in hub.ts; some
-// handlers here run their own device, seen-id, step-up or card-state checks, so read both when auditing trust.
+// Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks (session, pairing,
+// schema) are in hub-app-conn.ts and hub-app-frames.ts; some handlers here run their own device, seen-id, step-up
+// or card-state checks, so read both when auditing trust.
 import { checkConfigPatch, type FrameOf, RECOVER_NEEDS_MAC_TEXT, trustOn } from '@talos-app/protocol'
 import { consumeStepupToken } from '../auth/contract.ts'
 import type { AppConn, Hub, HubDeps } from './hub.ts'

@@ -23,7 +23,7 @@ struct TerminalViewWiringGuiTests {
   func opened(visible: Bool = true) -> (WebController, WKWebView) {
     let (c, wv) = make(visible: visible)
     c.nativeMessage(.ready(signedIn: true, features: []))
-    c.nativeMessage(.terminalView(room))
+    c.nativeMessage(.terminalView(room, session: "main"))
     return (c, wv)
   }
 
@@ -35,7 +35,7 @@ struct TerminalViewWiringGuiTests {
 
   @Test func aPageThatAsksBeforeItIsReadyOrSignedInOpensNothingUntilItIs() {
     let (c, _) = make()
-    c.nativeMessage(.terminalView(room))
+    c.nativeMessage(.terminalView(room, session: "main"))
     #expect(!c.terminal.isOpen, "not ready yet")
     c.nativeMessage(.ready(signedIn: false, features: []))
     #expect(!c.terminal.isOpen, "ready but not signed in")
@@ -51,7 +51,7 @@ struct TerminalViewWiringGuiTests {
 
   @Test func leavingTheTerminalScreenClosesIt() {
     let (c, _) = opened()
-    c.nativeMessage(.terminalView(nil))
+    c.nativeMessage(.terminalView(nil, session: "main"))
     #expect(!c.terminal.isOpen)
   }
 
@@ -70,7 +70,7 @@ struct TerminalViewWiringGuiTests {
     _ = c.windowShouldClose(NSWindow())
     #expect(!c.terminal.isOpen)
     #expect(c.terminalRect == room, "the room is kept for when the window is shown again")
-    c.nativeMessage(.terminalView(room))  // the page's next report, or the window shown again
+    c.nativeMessage(.terminalView(room, session: "main"))  // the page's next report, or the window shown again
     #expect(c.terminal.isOpen)
   }
 
@@ -103,11 +103,11 @@ struct TerminalViewWiringGuiTests {
     window.contentView = wv
     c.useWebViewForTest(wv, windowVisible: true, window: window)
     c.nativeMessage(.ready(signedIn: true, features: []))
-    c.nativeMessage(.terminalView(room))
+    c.nativeMessage(.terminalView(room, session: "main"))
     #expect(c.terminal.isOpen)
     wv.setFrameSize(NSSize(width: 1000, height: 800))
     c.windowDidResize(Notification(name: NSWindow.didResizeNotification))
-    c.nativeMessage(.terminalView(nil))
+    c.nativeMessage(.terminalView(nil, session: "main"))
     #expect(window.asked.isEmpty, "the page can place the view but never move the owner's typing into it")
   }
 
@@ -123,7 +123,7 @@ struct TerminalViewWiringGuiTests {
     #expect(!done, "still waiting on the logout")
     #expect(!c.terminal.isOpen)
     #expect(c.terminalRect == nil)
-    c.nativeMessage(.terminalView(room))
+    c.nativeMessage(.terminalView(room, session: "main"))
     #expect(!c.terminal.isOpen, "the page is still alive during the logout and may ask again")
     let end = Date().addingTimeInterval(10)
     while !done, Date() < end { try? await Task.sleep(nanoseconds: 50_000_000) }

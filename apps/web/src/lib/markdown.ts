@@ -8,6 +8,7 @@
 import DOMPurify, { type Config } from 'dompurify'
 import MarkdownIt from 'markdown-it'
 import type * as TemmlModule from 'temml'
+import shortcodes from './emoji-shortcodes.json' with { type: 'json' }
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true, typographer: false })
 
@@ -29,6 +30,35 @@ md.core.ruler.after('inline', 'task_lists', (state) => {
     if (!m) continue
     first.content = `${m[1] === ' ' ? TASK_OPEN : TASK_DONE} ${first.content.slice(m[0].length)}`
     open.attrJoin('class', m[1] === ' ' ? 'md-task md-task-open' : 'md-task md-task-done')
+  }
+  return true
+})
+
+// ---- emoji shortcodes ----------------------------------------------------------------------------------------------
+// `:rocket:` becomes the emoji, in running text only. Names come from gemoji's list (MIT, see THIRD_PARTY_NOTICES.md), kept as a
+// Map so a name such as "constructor" is never a hit. The result stays a text token, so the renderer escapes it like any other
+// text: a shortcode can only ever add emoji characters, never markup. Code spans and blocks are other token types and are never
+// visited; text inside a link (including bare URLs that linkify turned into links) is skipped; images and math carry their
+// content outside text tokens.
+const EMOJI = new Map<string, string>(Object.entries(shortcodes as Record<string, string>))
+// not after a letter or digit and not before one, so IPv6 (fe80::ab:1) and 'a:on:off' stay as typed
+const SHORTCODE = /(?<![A-Za-z0-9])(:)([a-z0-9_+-]{1,64}):(?![A-Za-z0-9])/g
+
+/** `text` with each known `:name:` replaced by its emoji; unknown names, and everything else, exactly as typed. */
+export function expandShortcodes(text: string): string {
+  if (!text.includes(':')) return text
+  return text.replace(SHORTCODE, (whole: string, _c: string, name: string) => EMOJI.get(name) ?? whole)
+}
+
+md.core.ruler.after('linkify', 'emoji_shortcodes', (state) => {
+  for (const block of state.tokens) {
+    if (block.type !== 'inline' || !block.children) continue
+    let inLink = 0
+    for (const t of block.children) {
+      if (t.type === 'link_open') inLink++
+      else if (t.type === 'link_close') inLink--
+      else if (t.type === 'text' && inLink === 0) t.content = expandShortcodes(t.content)
+    }
   }
   return true
 })

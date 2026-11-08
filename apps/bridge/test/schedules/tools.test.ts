@@ -1,17 +1,14 @@
 // WP-S1 acceptance: the four agent tools and the instructions (S6.1, S6.2).
 import { afterEach, describe, expect, test } from 'bun:test'
+import { type CardT, composeScheduleCard, newId, ScheduleCardPayload } from '@talos-app/protocol'
+import { INSTRUCTIONS } from '../../src/bridge.ts'
 import {
   ATTACHMENT_BRIDGE_TOOLS,
   BRIDGE_TOOLS,
-  type CardT,
   CONFIG_BRIDGE_TOOLS,
-  composeScheduleCard,
   MOD_BRIDGE_TOOLS,
-  newId,
   SCHEDULE_BRIDGE_TOOLS,
-  ScheduleCardPayload,
-} from '@talos-app/protocol'
-import { INSTRUCTIONS } from '../../src/bridge.ts'
+} from '../../src/tools/table.ts'
 import { draft, longTimeouts, type SchedHarness, sleep, startSched } from './harness.ts'
 
 longTimeouts()

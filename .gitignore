@@ -36,5 +36,7 @@ __pycache__/
 
 # Desktop app (SwiftPM build output, packed apps)
 apps/desktop/.build/
+apps/.build/
+**/.build/
 *.app
 .desktop-out/

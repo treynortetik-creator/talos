@@ -60,6 +60,8 @@ export const IconImage = (p: P) => <Icon d={'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M
 export const IconFile = (p: P) => <Icon d={'M7 3h7l5 5v13H7zM14 3v5h5'} {...p} />
 export const IconCamera = (p: P) => <Icon d={'M4 8h3l2-3h6l2 3h3v11H4zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z'} {...p} />
 export const IconTrash = (p: P) => <Icon d={'M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13'} {...p} />
+/** A keyboard: a key is pressed for you at the Mac (the needs-you dialog card). */
+export const IconKeyboard = (p: P) => <Icon d={'M3 7h18v10H3zM7 11h.01M11 11h.01M15 11h.01M18 11h.01M8 14h8'} {...p} />
 export const IconAlert = (p: P) => <Icon d={'M12 4l9 16H3zM12 10v4M12 17h.01'} {...p} />
 export const IconMail = (p: P) => <Icon d={'M4 6h16v12H4zM4 7l8 6 8-6'} {...p} />
 export const IconChat = (p: P) => <Icon d={'M5 5h14v10H10l-4 4v-4H5z'} {...p} />

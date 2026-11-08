@@ -6,22 +6,25 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createConnection } from 'node:net'
 import { join } from 'node:path'
-import {
-  type CardT,
-  CLAIM_DEADLINE_MS,
-  HEARTBEAT_META_KEY,
-  ScheduleCardPayload,
-  WakeFile,
-  WORKER_BRIDGE_TOOLS,
-} from '@talos-app/protocol'
+import { type CardT, CLAIM_DEADLINE_MS, HEARTBEAT_META_KEY, ScheduleCardPayload, WakeFile } from '@talos-app/protocol'
 import { Bridge } from '../../src/bridge.ts'
 import { loadEnv } from '../../src/config.ts'
 import { HubClient } from '../../src/hub/client.ts'
 import { pgidOf } from '../../src/hub/server.ts'
 import { nullLogger } from '../../src/log.ts'
 import { heartbeatWakeNotification, scheduleRunNotification } from '../../src/notify.ts'
+import { WORKER_BRIDGE_TOOLS } from '../../src/tools/table.ts'
 import { eventually } from '../helpers.ts'
-import { draft, longTimeouts, readSidecar, type SchedHarness, sleep, startSched, waitFor } from './harness.ts'
+import {
+  draft,
+  longTimeouts,
+  readSidecar,
+  restartBridge,
+  type SchedHarness,
+  sleep,
+  startSched,
+  waitFor,
+} from './harness.ts'
 
 longTimeouts()
 
@@ -800,6 +803,47 @@ describe("review round 1: a thread session's job runs in the session", () => {
       'trip-digest',
     )
   })
+
+  test('R1-1: a card whose proposer row is missing cannot change a session job: nothing changes, and the owner is told', async () => {
+    await start()
+    const { trip } = await connected()
+    const del = await cardOf(
+      await trip.callTool('schedule_propose', {
+        op: 'delete',
+        id: 'trip-digest',
+        thread_id: 'trip',
+        reason: 'Not needed',
+      }),
+    )
+    expect(h.bridge.ctx.store.kvGet(`schedule_card_proposer/${del.id}`)).toBe('trip')
+    h.bridge.ctx.store.kvDelete(`schedule_card_proposer/${del.id}`)
+    const done = await approveCard(del)
+    expect(done.state).toBe('failed')
+    expect(JSON.stringify(done)).toContain("origin can't be checked")
+    expect(h.box.api<{ schedules: Array<{ id: string }> }>(['snapshot']).schedules.map((x) => x.id)).toContain(
+      'trip-digest',
+    )
+  })
+
+  test("R1-1: main's own card records 'main' and still applies to a session job", async () => {
+    await start()
+    const res = await h.bridge.callTool('schedule_propose', {
+      op: 'update',
+      id: 'trip-digest',
+      thread_id: 'trip',
+      reason: 'Rename',
+      name: 'Trip Digest Two',
+    })
+    expect(res.isError, text(res)).toBeFalsy()
+    const card = await cardOf(res)
+    expect(h.bridge.ctx.store.kvGet(`schedule_card_proposer/${card.id}`)).toBe('main')
+    expect((await approveCard(card)).state).toBe('done')
+    expect(
+      h.box
+        .api<{ schedules: Array<{ id: string; name: string }> }>(['snapshot'])
+        .schedules.find((x) => x.id === 'trip-digest')?.name,
+    ).toBe('Trip Digest Two')
+  })
 })
 
 describe('review round 1: delivery', () => {
@@ -972,5 +1016,95 @@ describe('review round 2', () => {
     const [a, b, c] = await Promise.all([1, 2, 3].map(() => trip.callTool('schedule_run_start', { run_id: runId })))
     expect([text(a as never), text(b as never), text(c as never)]).toEqual(['GO', 'GO', 'GO'])
     expect(text(await trip.callTool('schedule_run_done', { run_id: runId, ok: true, summary: 'ok' }))).toBe('recorded')
+  })
+})
+
+describe('R2-4: the kv rows of a card and a run go when the card or run is over', () => {
+  const create = (extra: Record<string, unknown> = {}) => ({
+    op: 'create',
+    thread_id: 'trip',
+    reason: 'The owner asked for a weekly packing check.',
+    name: 'Packing Check',
+    when: { type: 'weekdays', time: '07:45' },
+    prompt: 'Check the packing list and post what is missing.\n',
+    ...extra,
+  })
+  const proposerRow = (id: string) => h.bridge.ctx.store.kvGet(`schedule_card_proposer/${id}`)
+  const startedRow = (id: string) => h.bridge.ctx.store.kvGet(`schedule_run_started/${id}`)
+  async function propose(w: Bridge, extra: Record<string, unknown> = {}) {
+    const res = await w.callTool('schedule_propose', create(extra))
+    expect(res.isError, text(res)).toBeFalsy()
+    const id = /card (c_\S+) pending/.exec(text(res))?.[1] as string
+    const cc = await h.app.expectFrame('card.create', (c) => c.card.id === id, { direction: 'in' })
+    return cc.card as CardT
+  }
+
+  test('declined: the proposer row is removed', async () => {
+    await start()
+    const { trip } = await connected()
+    const card = await propose(trip)
+    expect(proposerRow(card.id)).toBe('trip')
+    await h.app.resolveCard(card, 'kill', card.payload_hash)
+    await eventually(() => expect(proposerRow(card.id)).toBeUndefined())
+  })
+
+  test('approved and applied: the proposer row is removed', async () => {
+    await start()
+    const { trip } = await connected()
+    const card = await propose(trip, { when: { type: 'daily', time: '07:40' } })
+    await h.app.resolveCard(card, 'primary', card.payload_hash, { stepup_token: h.relay.mintStepup(`card:${card.id}`) })
+    await h.app.expectFrame('card.update', (u) => u.card_id === card.id && u.state === 'done', { direction: 'in' })
+    await eventually(() => expect(proposerRow(card.id)).toBeUndefined())
+  })
+
+  test('expired: the proposer row is removed', async () => {
+    await start()
+    const { trip } = await connected()
+    const card = await propose(trip)
+    expect(proposerRow(card.id)).toBe('trip')
+    await h.advance(Date.parse(card.expires_at) - h.clock.now() + 2000)
+    await h.app.expectFrame('card.update', (u) => u.card_id === card.id && u.state === 'expired', { direction: 'in' })
+    await eventually(() => expect(proposerRow(card.id)).toBeUndefined())
+  })
+
+  test('replaced: the old card loses its row, the new one has its own', async () => {
+    await start()
+    const { trip } = await connected()
+    const old = await propose(trip)
+    const next = await propose(trip, { supersedes: old.id })
+    await eventually(() => expect(proposerRow(old.id)).toBeUndefined())
+    expect(proposerRow(next.id)).toBe('trip')
+  })
+
+  test('a run: the started row is there while it is open and gone when it is done', async () => {
+    await start()
+    const { trip } = await connected()
+    await h.advance(90_000)
+    await offered(3)
+    const [m] = (await inbound(trip)).messages
+    const runId = m?.meta.run_id as string
+    expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toBe('GO')
+    expect(startedRow(runId)).toBe('trip')
+    expect(text(await trip.callTool('schedule_run_done', { run_id: runId, ok: true, summary: 'ok' }))).toBe('recorded')
+    expect(startedRow(runId)).toBeUndefined()
+    // a late start for the closed run is still answered in words
+    expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toContain('already done')
+  })
+
+  test('a restart sweeps rows of unknown, finished and week-old things and keeps a card that still waits', async () => {
+    await start()
+    const { trip } = await connected()
+    const waiting = await propose(trip)
+    const store = h.bridge.ctx.store
+    store.kvSet('schedule_card_proposer/c_never_existed', 'trip')
+    store.kvSet('schedule_run_started/r_never_existed', 'trip')
+    store.kvSet('unrelated/key', 'stays')
+    for (const w of workers.splice(0)) await w.stop()
+    h = await restartBridge(h)
+    const after = h.bridge.ctx.store
+    expect(after.kvGet('schedule_card_proposer/c_never_existed')).toBeUndefined()
+    expect(after.kvGet('schedule_run_started/r_never_existed')).toBeUndefined()
+    expect(after.kvGet(`schedule_card_proposer/${waiting.id}`)).toBe('trip')
+    expect(after.kvGet('unrelated/key')).toBe('stays')
   })
 })

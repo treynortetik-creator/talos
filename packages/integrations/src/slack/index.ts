@@ -7,8 +7,6 @@ import { slackPrefilter } from './prefilter.ts'
 import { slackSetup } from './setup.ts'
 import { verifySlack } from './verify.ts'
 
-export { SLACK_USER_EVENTS, SLACK_USER_SCOPES, slackManifest, slackManifestUrl } from './manifest.ts'
-
 export const integration: IntegrationModule & ModuleExtras = {
   id: 'slack',
   setup: slackSetup,

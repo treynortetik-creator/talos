@@ -37,15 +37,25 @@ public struct CompanionFeed: Equatable, Sendable {
   public var failed: Int
   public var rows: [Row]
   public var lastReply: LastReply?
+  /// The thread on screen by the page's own routing (a card page counts as its thread), else nil.
+  public var viewing: String?
+  /// Replies the page holds back for him while he delivers (`companion_replies`), one per thread, oldest first.
+  public var held: [HeldReply]
+  /// The epoch of his last "on" the page has applied (`companion_replies.epoch`), nil while it is off or for an older page. A frame
+  /// of an older epoch may list replies the page has since toasted: ignore its `held`.
+  public var repliesEpoch: Int?
 
   public static let maxRows = 12
   static let keys: Set<String> = [
     "link", "mac_online", "busy", "needs", "working", "queued", "on_call", "unread", "failed", "rows", "last_reply",
   ]
+  /// Newer pages add these; an older page omits them.
+  static let optionalKeys: Set<String> = ["viewing", "held", "replies_epoch"]
 
   public init(
     link: Link, macOnline: Bool, busy: Bool, needs: Int = 0, working: Int = 0, queued: Int = 0, onCall: Int = 0,
-    unread: Int = 0, failed: Int = 0, rows: [Row] = [], lastReply: LastReply? = nil
+    unread: Int = 0, failed: Int = 0, rows: [Row] = [], lastReply: LastReply? = nil, viewing: String? = nil, held: [HeldReply] = [],
+    repliesEpoch: Int? = nil
   ) {
     self.link = link
     self.macOnline = macOnline
@@ -58,12 +68,16 @@ public struct CompanionFeed: Equatable, Sendable {
     self.failed = failed
     self.rows = rows
     self.lastReply = lastReply
+    self.viewing = viewing
+    self.held = held
+    self.repliesEpoch = repliesEpoch
   }
 
   /// Decodes the fields of a `companion_state` object (the `type` key already checked). nil = the frame is invalid, and
   /// the caller clears the feed rather than keep an old one standing.
   static func decode(_ o: [String: Any]) -> CompanionFeed? {
-    guard Set(o.keys) == keys.union(["type"]),
+    let present = Set(o.keys)
+    guard keys.union(["type"]).isSubset(of: present), present.isSubset(of: keys.union(["type"]).union(optionalKeys)),
       let linkRaw = o["link"] as? String, let link = Link(rawValue: linkRaw),
       let macOnline = JSONValue.bool(o["mac_online"]), let busy = JSONValue.bool(o["busy"]),
       let needs = count(o["needs"]), let working = count(o["working"]), let queued = count(o["queued"]),
@@ -93,9 +107,40 @@ public struct CompanionFeed: Equatable, Sendable {
     default:
       return nil
     }
+    var viewing: String?
+    switch o["viewing"] {
+    case nil, is NSNull: viewing = nil
+    case let id as String where ThreadIdRule.isValid(id): viewing = id
+    default: return nil
+    }
+    var held: [HeldReply] = []
+    switch o["held"] {
+    case nil: break
+    case let list as [Any]:
+      // A bad entry drops that entry, never the frame (like a row). A thread is listed once with its newest seq.
+      for e in list {
+        guard let d = e as? [String: Any], Set(d.keys) == ["thread_id", "seq"], let id = d["thread_id"] as? String,
+          ThreadIdRule.isValid(id), let seq = JSONValue.int(d["seq"]), seq >= 0
+        else { continue }
+        if let i = held.firstIndex(where: { $0.thread == id }) {
+          held[i].seq = max(held[i].seq, seq)
+        } else if held.count < maxRows {
+          held.append(HeldReply(thread: id, seq: seq))
+        }
+      }
+    default:
+      return nil
+    }
+    var epoch: Int?
+    switch o["replies_epoch"] {
+    case nil, is NSNull: epoch = nil
+    case let v?:
+      guard let n = JSONValue.int(v), n >= 0 else { return nil }
+      epoch = n
+    }
     return CompanionFeed(
       link: link, macOnline: macOnline, busy: busy, needs: needs, working: working, queued: queued, onCall: onCall,
-      unread: unread, failed: failed, rows: rows, lastReply: last)
+      unread: unread, failed: failed, rows: rows, lastReply: last, viewing: viewing, held: held, repliesEpoch: epoch)
   }
 
   private static func count(_ v: Any?) -> Int? {

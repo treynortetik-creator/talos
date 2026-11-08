@@ -1,22 +1,19 @@
 // The lead's settings.json: the OS sandbox switched on and locked, whole-root deny rules (the sandbox turns them into
 // kernel-enforced read and write limits), connectors off including the owner's own MCP servers, and the two hooks.
 // Fictional paths only.
-import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { readOwnerMcp } from '../src/lead/fence.ts'
+import { describe, expect, test } from 'bun:test'
 import {
   LEAD_AUTOSTART_FILES,
   LEAD_AUTOSTART_FOLDERS,
   LEAD_BOARD_MAX,
   LEAD_DENIED_TOOLS,
   leadSettings,
-  mcpDenyRules,
   mergeLeadSettings,
+  stopgapMcpDenies,
 } from '../src/lead/settings.ts'
 
 const opts = {
+  profile: 'sandbox' as const,
   agentDir: '/home/alex/My-Agent',
   talosHome: '/home/alex/.talos-app',
   home: '/home/alex',
@@ -61,88 +58,107 @@ describe('leadSettings: deny rules for whole roots', () => {
   })
 })
 
-describe('leadSettings: connectors', () => {
-  test('account connectors are off by setting and by deny rule; only talos-app is kept', () => {
-    const s = leadSettings({ ...opts, ownerMcp: { disabled: [], userScope: ['talos-app'] } })
-    expect(s.disableClaudeAiConnectors).toBe(true)
-    expect(s.permissions.deny).toContain('mcp__claude_ai_*')
-    expect(s.enableAllProjectMcpServers).toBe(false)
-    expect(s.permissions.deny.join('\n')).not.toContain('mcp__talos-app')
+describe('leadSettings: MCP servers (the Mac app applies the thread allow list)', () => {
+  const owner = {
+    disabled: ['old-mail', 'plugin:zoom-plugin:zoom-mcp'],
+    userScope: ['talos-browser', 'blender', 'talos-app'],
+  }
+  /** A lead's settings as the first version of the allow list wrote them: a deny per server the owner has, and the blanket ones. */
+  const stopgapFile = (deny: string[] = []) => ({
+    permissions: {
+      deny: [
+        'mcp__claude_ai_*',
+        'mcp__plugin_*',
+        'mcp__claude-in-chrome__*',
+        'mcp__computer-use__*',
+        'mcp__Claude_Browser__*',
+        'mcp__playwright__*',
+        'mcp__puppeteer__*',
+        'mcp__talos-browser__*',
+        'mcp__blender__*',
+        'mcp__old-mail__*',
+        'mcp__plugin_zoom-plugin_zoom-mcp__*',
+        ...deny,
+      ],
+    },
+    disabledMcpjsonServers: ['old-mail', 'talos-browser', 'blender', 'playwright', 'mine-json'],
   })
-  test('every plugin MCP server is denied by one rule, and talos-app still is not', () => {
-    const d = leadSettings(opts).permissions.deny
-    expect(d).toContain('mcp__plugin_*')
-    expect(d.some((r) => r.startsWith('mcp__talos-app'))).toBe(false)
-    expect('mcp__plugin_zoom-plugin_zoom-mcp__x'.startsWith('mcp__plugin_')).toBe(true)
-    expect('mcp__talos-app__reply'.startsWith('mcp__plugin_')).toBe(false)
+
+  test('only the browser and screen servers are denied by name; connectors are switched off by the setting; talos-app never is', () => {
+    for (const profile of ['light', 'sandbox'] as const) {
+      const s = leadSettings({ ...opts, profile })
+      for (const r of ['mcp__claude-in-chrome__*', 'mcp__computer-use__*']) expect(s.permissions.deny, r).toContain(r)
+      expect(s.permissions.deny.filter((r) => r.startsWith('mcp__')).sort()).toEqual([
+        'mcp__claude-in-chrome__*',
+        'mcp__computer-use__*',
+      ])
+      expect(s.disableClaudeAiConnectors).toBe(true)
+      expect(s.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false')
+      expect(s.enableAllProjectMcpServers).toBe(false)
+      expect('disabledMcpjsonServers' in s).toBe(false)
+    }
   })
-  test("the owner's user-scope servers and main's disabled servers become mcp__<name>__* deny rules", () => {
-    const d = leadSettings({
-      ...opts,
-      ownerMcp: {
-        disabled: ['old-mail', 'plugin:zoom-plugin:zoom-mcp'],
-        userScope: ['talos-browser', 'blender', 'talos-app'],
-      },
-    }).permissions.deny
-    for (const r of [
-      'mcp__talos-browser__*',
-      'mcp__blender__*',
-      'mcp__old-mail__*',
-      'mcp__plugin_zoom-plugin_zoom-mcp__*',
-      'mcp__claude-in-chrome__*',
-      'mcp__computer-use__*',
-    ])
-      expect(d, r).toContain(r)
-    expect(d.some((r) => r.startsWith('mcp__talos-app'))).toBe(false)
+  test("a plain re-run removes nothing: the stopgap is told apart from the owner's own denies only when he says so", () => {
+    const fresh = leadSettings(opts)
+    // `mcp__playwright__*` is what the stopgap wrote, and also what an owner may have written himself
+    const old = stopgapFile(['Bash(rm -rf*)', 'mcp__mine__*'])
+    const m = mergeLeadSettings(old, fresh) as {
+      permissions: { deny: string[] }
+      disabledMcpjsonServers?: string[]
+    }
+    expect(m.permissions.deny).toEqual(expect.arrayContaining(old.permissions.deny))
+    expect(m.disabledMcpjsonServers).toEqual(old.disabledMcpjsonServers)
+  })
+  test('with removeStopgap, exactly the entries named go; every other deny stays, an identical owner deny not named stays too', () => {
+    const fresh = leadSettings(opts)
+    const old = stopgapFile(['Bash(rm -rf*)', 'mcp__mine__*'])
+    const named = {
+      rules: ['mcp__blender__*', 'mcp__old-mail__*', 'mcp__claude_ai_*'],
+      disabled: ['old-mail', 'blender'],
+    }
+    const m = mergeLeadSettings(old, fresh, { removeStopgap: named }) as {
+      permissions: { deny: string[] }
+      disabledMcpjsonServers?: string[]
+    }
+    for (const r of named.rules) expect(m.permissions.deny, r).not.toContain(r)
+    expect(m.permissions.deny).toEqual(
+      expect.arrayContaining([
+        'mcp__playwright__*',
+        'mcp__plugin_*',
+        'mcp__talos-browser__*',
+        'mcp__mine__*',
+        'Bash(rm -rf*)',
+        'mcp__claude-in-chrome__*',
+        'mcp__computer-use__*',
+      ]),
+    )
+    expect(m.disabledMcpjsonServers).toEqual(['talos-browser', 'playwright', 'mine-json'])
+  })
+  test('a re-run of a file with nothing of the stopgap in it changes no deny and adds no disabledMcpjsonServers', () => {
+    const fresh = leadSettings(opts)
+    const once = mergeLeadSettings({}, fresh) as Record<string, unknown>
+    const twice = mergeLeadSettings(once, fresh)
+    expect(twice).toEqual(once)
+    expect('disabledMcpjsonServers' in twice).toBe(false)
+  })
+  test('what the stopgap would have written is a function of the owner servers, and talos-app is never in it', () => {
+    const g = stopgapMcpDenies(owner)
+    expect(g.rules).toEqual(
+      expect.arrayContaining([
+        'mcp__claude_ai_*',
+        'mcp__plugin_*',
+        'mcp__blender__*',
+        'mcp__plugin_zoom-plugin_zoom-mcp__*',
+      ]),
+    )
+    expect(g.rules.some((r) => r.startsWith('mcp__talos-app'))).toBe(false)
+    expect(g.rules).not.toContain('mcp__claude-in-chrome__*')
+    expect(g.disabled).not.toContain('talos-app')
   })
   test('server names with odd characters get the prefix Claude Code gives their tools', () => {
-    expect(mcpDenyRules(['My Server.v2', 'plugin:a b:c.d'])).toEqual(['mcp__My_Server_v2__*', 'mcp__plugin_a_b_c_d__*'])
-  })
-  test("readOwnerMcp reads the owner's main project entry and user scope from ~/.claude.json", () => {
-    const home = mkdtempSync(join(realpathSync(tmpdir()), 'lm-'))
-    // Inside the test's own home and never created: readOwnerMcp resolves it on disk, and a path under /home can stall on macOS (autofs).
-    const agent = join(home, 'My-Agent')
-    try {
-      writeFileSync(
-        join(home, '.claude.json'),
-        JSON.stringify({
-          mcpServers: { 'talos-browser': {}, blender: {}, 'talos-app': {} },
-          projects: {
-            [agent]: {
-              disabledMcpServers: ['old-mail', 'plugin:zoom-plugin:zoom-mcp'],
-              mcpServers: { x: {} },
-            },
-            [join(home, 'other')]: { disabledMcpServers: ['nope'] },
-          },
-        }),
-      )
-      const r = readOwnerMcp(home, agent, join(home, '.claude'))
-      expect(r.disabled.sort()).toEqual(['old-mail', 'plugin:zoom-plugin:zoom-mcp'])
-      expect(r.userScope.sort()).toEqual(['blender', 'talos-app', 'talos-browser'])
-      expect(readOwnerMcp(join(home, 'none'), '/x', join(home, 'none', '.claude'))).toEqual({
-        disabled: [],
-        userScope: [],
-      })
-      writeFileSync(join(home, '.claude.json'), '{ not json')
-      expect(readOwnerMcp(home, '/x', join(home, '.claude'))).toEqual({ disabled: [], userScope: [] })
-    } finally {
-      rmSync(home, { recursive: true, force: true })
-    }
-  })
-})
-
-describe('readOwnerMcp: the Claude config dir', () => {
-  test('with CLAUDE_CONFIG_DIR it reads <claudeDir>/.claude.json and not ~/.claude.json', () => {
-    const home = mkdtempSync(join(realpathSync(tmpdir()), 'lm-'))
-    try {
-      mkdirSync(join(home, 'cfg'))
-      writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: { homeOne: {} } }))
-      writeFileSync(join(home, 'cfg', '.claude.json'), JSON.stringify({ mcpServers: { cfgOne: {} } }))
-      expect(readOwnerMcp(home, '/x', join(home, 'cfg')).userScope).toEqual(['cfgOne'])
-      expect(readOwnerMcp(home, '/x', join(home, '.claude')).userScope).toEqual(['homeOne'])
-    } finally {
-      rmSync(home, { recursive: true, force: true })
-    }
+    expect(stopgapMcpDenies({ disabled: ['My Server.v2', 'plugin:a b:c.d'], userScope: [] }).rules).toEqual(
+      expect.arrayContaining(['mcp__My_Server_v2__*', 'mcp__plugin_a_b_c_d__*']),
+    )
   })
 })
 
@@ -209,7 +225,7 @@ describe('leadSettings: autostart and exec paths are closed to the file tools', 
         expect(d, `${tool} ${f} bare`).toContain(`${tool}(/${f})`)
       }
     }
-    expect(d.some((r) => r.startsWith('Read(') && /\.zshrc|\.ssh|LaunchAgents|\/usr\/local\/bin/.test(r))).toBe(false)
+    expect(d.some((r) => r.startsWith('Read(') && /\.zshrc|LaunchAgents|\/usr\/local\/bin/.test(r))).toBe(false)
   })
   test('lower-case forms too, like the roots', () => {
     const d = deny()
@@ -329,6 +345,11 @@ describe('leadSettings: the OS sandbox', () => {
       npm_config_cache: '/home/alex/work/trip/.cache/npm',
       npm_config_store_dir: '/home/alex/work/trip/.cache/pnpm-store',
       BUN_INSTALL_CACHE_DIR: '/home/alex/work/trip/.cache/bun',
+      XDG_CACHE_HOME: '/home/alex/work/trip/.cache/xdg',
+      XDG_STATE_HOME: '/home/alex/work/trip/.cache/state',
+      PNPM_HOME: '/home/alex/work/trip/.cache/pnpm',
+      npm_config_devdir: '/home/alex/work/trip/.cache/node-gyp',
+      PLAYWRIGHT_BROWSERS_PATH: '/home/alex/work/trip/.cache/playwright',
       ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
     })
     expect(JSON.stringify(s)).not.toContain('allowWrite')
@@ -420,9 +441,3 @@ describe("mergeLeadSettings: a re-run keeps the owner's edits and never drops a 
     expect(m.env.npm_config_cache).toBe('/home/alex/work/trip/.cache/npm')
   })
 })
-
-const made: string[] = []
-afterEach(() => {
-  for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true })
-})
-void mkdirSync

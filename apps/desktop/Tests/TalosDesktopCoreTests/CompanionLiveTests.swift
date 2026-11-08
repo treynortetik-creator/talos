@@ -320,15 +320,16 @@ struct CompanionLivePriorityTests {
     #expect(r.tick(0.1).state == .trouble)
   }
 
-  @Test func theQuietWindowMakesHimAStatueAndMorningCountsTheRepliesAndFailures() {
+  @Test func theQuietWindowKeepsHimAnimatedButSilentAndMorningCountsTheRepliesAndFailures() {
     var r = Rig()
     r.inputs.quiet = true
     r.feed(frame())
     r.tick()
     r.feed(frame(unread: 1, reply: ("ops", 1)))
     let o = r.tick(1)
-    #expect(o.displayState == .asleep && o.rest == .statue)
-    #expect(o.animation == nil && o.bubble == nil)
+    #expect(o.state == .done && o.rest == .holdLast("jumping"), "the Done look, not a statue")
+    #expect(o.animation?.clip == "jumping", "Done plays its clip in quiet hours as it does by day")
+    #expect(o.bubble == nil, "but no bubble")
     #expect(o.dot, "a still dot: something was collected")
     r.feed(frame(unread: 1, failed: 1, reply: ("ops", 1)))
     r.tick(1)
@@ -339,6 +340,18 @@ struct CompanionLivePriorityTests {
     r.advance(1)
     #expect(r.bubbles.contains("Overnight: 2 items"))
     #expect(r.anims.contains("waving"))
+  }
+
+  @Test func reduceMotionInTheQuietWindowIsStillAStillNotAnAnimation() {
+    var r = Rig()
+    r.inputs.quiet = true
+    r.env.reduceMotion = true
+    r.feed(frame())
+    r.tick()
+    r.feed(frame(unread: 1, reply: ("ops", 1)))
+    let o = r.tick(1)
+    #expect(o.animation == nil && o.bubble == nil)
+    #expect(o.rest == .holdLast("jumping"))
   }
 
   @Test func thirtyFakeDaysWithAQuietFeedGiveNoBubbleAndNoAlarm() {
@@ -363,8 +376,8 @@ struct CompanionLivePriorityTests {
   }
 
   @Test func theMiniPoseCoversTheNewStates() {
-    #expect(CompanionAtlas.miniPose(.trouble, quiet: false) == .worried)
-    #expect(CompanionAtlas.miniPose(.done, quiet: false) == .pleased)
+    #expect(CompanionAtlas.miniPose(.trouble) == .worried)
+    #expect(CompanionAtlas.miniPose(.done) == .pleased)
   }
 }
 
@@ -482,7 +495,6 @@ struct CompanionBannerTests {
       ("down", { $0.state = .down }),
       ("needs you", { $0.state = .needsYou }),
       ("trouble", { $0.state = .trouble }),
-      ("working: his Done waits for the turn and can be lost on the way", { $0.state = .working }),
       ("owner wants both", { $0.replyBanners = true }),
     ]
     for (name, change) in cases {

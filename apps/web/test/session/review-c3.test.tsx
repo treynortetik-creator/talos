@@ -24,9 +24,7 @@ describe('R1: the session sheet survives a relay that echoes the bridge features
       <StorageProvider storage={createMemoryStorage()}>
         <ClientProvider client={client}>
           <MemoryRouter>
-            <SessionTrigger threadId="general">
-              <span>mascot</span>
-            </SessionTrigger>
+            <SessionTrigger threadId="general" />
           </MemoryRouter>
         </ClientProvider>
       </StorageProvider>,
@@ -50,9 +48,7 @@ describe('R1: the session sheet survives a relay that echoes the bridge features
       <StorageProvider storage={createMemoryStorage()}>
         <ClientProvider client={client}>
           <MemoryRouter>
-            <SessionTrigger threadId="general">
-              <span aria-hidden="true">mascot</span>
-            </SessionTrigger>
+            <SessionTrigger threadId="general" />
           </MemoryRouter>
         </ClientProvider>
       </StorageProvider>,

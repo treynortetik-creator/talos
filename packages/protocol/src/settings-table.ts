@@ -1,11 +1,77 @@
-// One row per setting in config.json: who may change it, whether a change needs step-up, and its default. The lists that
-// used to be kept by hand (CONFIG_PATCH_ALLOWLIST, CONFIG_SESSION_STEPUP_FIELDS, AGENT_CONFIG_ALLOWLIST,
-// AGENT_CONFIG_REFUSED, the work and memory-browser rules in checkConfigPatch and the bridge) are read from this table.
+// One row per setting in config.json: who may change it, whether a change needs step-up, its default, and for the few
+// settings the agent may propose, what to call it, what values it takes and how to read it. The lists that used to be kept
+// by hand (CONFIG_PATCH_ALLOWLIST, CONFIG_SESSION_STEPUP_FIELDS, AGENT_CONFIG_ALLOWLIST, AGENT_CONFIG_REFUSED, the value
+// rules, labels and readers of config_propose, the words the agent is told, the work and memory-browser rules in
+// checkConfigPatch and the bridge) are read from this table.
 //
 // A setting added to `AgentConfig` with no row here fails `pnpm typecheck`: the table is checked against every config
 // path. A setting with no way to change it from a phone or by the agent is Mac only: say so with `phone: false` and
-// `agent: false`.
-import type { AgentConfigT } from './config.ts'
+// `agent: false`. A row with `agent: true` and no `agentRule` fails it too.
+//
+// What stays outside: the shape and the load-time leniency of each field (`AgentConfig` in config.ts). `SettingPath` and each
+// row's `default` type are taken from it, so a field added there needs a row here, and `settings-table.test.ts` checks every
+// `default` against what the schema really gives.
+import { z } from 'zod'
+import { type AgentConfigT, HHMM, isIanaZone } from './config.ts'
+import { themeProblems, validateTheme } from './theme.ts'
+
+/**
+ * Stock voices GPT-Live documents. The default, `meridian`, is documented as North American. One list for the Settings
+ * select and for `agent.voice` proposals: a guessed id the provider would refuse never reaches a card.
+ */
+export const VOICE_CHOICES = [
+  'meridian',
+  'marin',
+  'alloy',
+  'ash',
+  'ballad',
+  'beacon',
+  'bossa',
+  'cedar',
+  'cinder',
+  'coral',
+  'delta',
+  'echo',
+  'gleam',
+  'quartz',
+  'ripple',
+  'sage',
+  'shida',
+  'shimmer',
+  'stone',
+  'tempo',
+  'verse',
+  'vesper',
+  'willow',
+] as const
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/
+const Plain = (min: number, max: number) =>
+  z
+    .string()
+    .min(min)
+    .max(max)
+    .refine(
+      (s) => !UNSAFE_TEXT.test(s) && s.trim() === s && s.trim().length >= min,
+      'plain text, no control characters',
+    )
+
+const QuietWindow = z
+  .object({ start: HHMM, end: HHMM })
+  .strict()
+  .refine((w) => w.start !== w.end, 'start and end must differ')
+  .nullable()
+
+/** A whole custom theme, checked by the one validator the app and the config file use. Every problem is named in the refusal. */
+const ThemeValue = z.unknown().transform((v, ctx) => {
+  const problems = themeProblems(v)
+  if (problems.length > 0) {
+    ctx.addIssue({ code: 'custom', message: `refused, nothing was proposed. ${problems.join('; ')}` })
+    return z.NEVER
+  }
+  return validateTheme(v).ok ? (validateTheme(v) as { theme: unknown }).theme : z.NEVER
+})
 
 /** Config sections whose children are settings of their own. Every other top-level field is one setting. */
 type Section = 'agent' | 'owner' | 'notifications' | 'work' | 'voice_notes'
@@ -51,23 +117,42 @@ type PathRules<P extends string> = string extends P
         readonly stepupOnTrue?: 'config:session'
       }
 
-export type SettingRow<P extends string = string> = PathRules<P> & {
-  /**
-   * The phone, over `config.patch`. `'leaf'`: this setting only (a top-level field is its own leaf). `'section'`: the whole
-   * top-level section it sits in is open to the phone, whatever key a patch names inside it. `false`: not from a phone.
-   * Every row of a section that has a `'section'` row must be `'section'` too (`settingsTableProblems`).
-   */
-  readonly phone: 'leaf' | 'section' | false
-  /** The agent, by proposing it with `config_propose` and a card the owner approves. */
-  readonly agent: boolean
-  /** An agent refusal for this setting says "you can't change this, the owner does it in Settings" instead of "not a setting". */
-  readonly refusedByName?: boolean
-  /**
-   * The value when the file does not say. `undefined` means absent: an optional setting that is off, or one with no
-   * schema default because `talos-app init` writes it (threads, default_thread, timezone).
-   */
-  readonly default: Readonly<ValueAt<P>> | undefined
+/** What the agent needs to propose a setting: its name on a card, the words it is told, and the values it may send. */
+export type AgentRule = {
+  /** The setting's name on a card: "Agent name: Talos -> Atlas". */
+  readonly label: string
+  /** The setting in the sentence that tells the agent which settings it may change ("agent name, live-call voice and ..."). */
+  readonly phrase: string
+  /** The value it takes, in the tool's argument text ("agent.name (1-32 chars)"). */
+  readonly hint: string
+  /** The value rules: what a proposal, and the card at apply time, may carry. */
+  readonly value: z.ZodType<unknown>
+  /** What a file without the setting reads as when the owner is shown the old value (`theme` absent is `talos`). */
+  readonly whenAbsent?: unknown
+  /** One value as a card line reads it; without this, `String(value)`. */
+  readonly show?: (v: unknown) => string
 }
+
+type AgentSide =
+  | { readonly agent: true; readonly agentRule: AgentRule }
+  | { readonly agent: false; readonly agentRule?: undefined }
+
+export type SettingRow<P extends string = string> = PathRules<P> &
+  AgentSide & {
+    /**
+     * The phone, over `config.patch`. `'leaf'`: this setting only (a top-level field is its own leaf). `'section'`: the whole
+     * top-level section it sits in is open to the phone, whatever key a patch names inside it. `false`: not from a phone.
+     * Every row of a section that has a `'section'` row must be `'section'` too (`settingsTableProblems`).
+     */
+    readonly phone: 'leaf' | 'section' | false
+    /** An agent refusal for this setting says "you can't change this, the owner does it in Settings" instead of "not a setting". */
+    readonly refusedByName?: boolean
+    /**
+     * The value when the file does not say. `undefined` means absent: an optional setting that is off, or one with no
+     * schema default because `talos-app init` writes it (threads, default_thread, timezone).
+     */
+    readonly default: Readonly<ValueAt<P>> | undefined
+  }
 
 /** The shape `defineSettingsTable` demands: exactly one row per setting path, no more and no fewer. */
 export type SettingsTableShape = { readonly [P in SettingPath]: SettingRow<P> }
@@ -86,17 +171,74 @@ const MEMORY_BROWSER_OFF_ONLY = 'the memory browser can only be turned on at you
  * description, so move a row only on purpose.
  */
 export const SETTINGS_TABLE = defineSettingsTable({
-  'agent.name': { phone: 'section', agent: true, default: 'Talos' },
-  'agent.voice': { phone: 'section', agent: true, default: 'meridian' },
+  'agent.name': {
+    phone: 'section',
+    agent: true,
+    agentRule: { label: 'Agent name', phrase: 'agent name', hint: '1-32 chars', value: Plain(1, 32) },
+    default: 'Talos',
+  },
+  'agent.voice': {
+    phone: 'section',
+    agent: true,
+    agentRule: {
+      label: 'Live-call voice',
+      phrase: 'live-call voice',
+      hint: `one of ${VOICE_CHOICES.join(', ')}`,
+      value: z.enum(VOICE_CHOICES),
+    },
+    default: 'meridian',
+  },
   'agent.voice_persona': { phone: 'section', agent: false, refusedByName: true, default: '' },
-  'owner.display_name': { phone: 'section', agent: true, default: 'You' },
+  'owner.display_name': {
+    phone: 'section',
+    agent: true,
+    agentRule: { label: 'Your name', phrase: "the owner's name", hint: '1-40 chars', value: Plain(1, 40) },
+    default: 'You',
+  },
   threads: { phone: 'leaf', agent: false, refusedByName: true, default: undefined },
   default_thread: { phone: 'leaf', agent: false, refusedByName: true, default: undefined },
-  timezone: { phone: 'leaf', agent: true, default: undefined },
-  quiet_window: { phone: 'leaf', agent: true, default: null },
+  timezone: {
+    phone: 'leaf',
+    agent: true,
+    agentRule: {
+      label: 'Timezone',
+      phrase: 'timezone',
+      hint: 'an IANA zone like Europe/Paris',
+      value: z.string().max(64).refine(isIanaZone, 'a timezone from the list, like Europe/Paris'),
+    },
+    default: undefined,
+  },
+  quiet_window: {
+    phone: 'leaf',
+    agent: true,
+    agentRule: {
+      label: 'Quiet hours',
+      phrase: 'quiet hours',
+      hint: '{"start":"22:00","end":"07:00"} or null to turn it off',
+      value: QuietWindow,
+      whenAbsent: null,
+      show: (v) => {
+        const w = v as { start: string; end: string } | null
+        return w ? `${w.start} to ${w.end}` : 'off'
+      },
+    },
+    default: null,
+  },
   'notifications.master': { phone: 'section', agent: false, refusedByName: true, default: true },
   'notifications.show_thread_names': { phone: 'section', agent: false, refusedByName: true, default: 'fixed_only' },
-  'voice_notes.reply_with_voice': { phone: 'section', agent: true, default: 'when_voice' },
+  'voice_notes.reply_with_voice': {
+    phone: 'section',
+    agent: true,
+    agentRule: {
+      label: 'Voice-note replies',
+      phrase: 'voice-note replies',
+      hint: '"when_voice", "always" or "never"',
+      value: z.enum(['when_voice', 'always', 'never']),
+      show: (v) =>
+        ({ when_voice: 'when I send a voice note', always: 'always', never: 'never' })[String(v)] ?? String(v),
+    },
+    default: 'when_voice',
+  },
   'voice_notes.driving_until': { phone: 'section', agent: false, default: null },
   'work.enabled': { phone: 'leaf', agent: false, refusedByName: true, stepup: 'config:work', default: [] },
   'work.thread': { phone: 'leaf', agent: false, refusedByName: true, default: undefined },
@@ -137,7 +279,19 @@ export const SETTINGS_TABLE = defineSettingsTable({
   dedicated: { phone: 'leaf', agent: false, refusedByName: true, default: undefined },
   // The applied theme: a stock id picked in Settings, or a custom theme the agent proposed and the owner approved on a card
   // (null over the patch = back to talos).
-  theme: { phone: 'leaf', agent: true, default: undefined },
+  theme: {
+    phone: 'leaf',
+    agent: true,
+    agentRule: {
+      label: 'Colour theme',
+      phrase: 'the app theme',
+      hint: 'a whole custom theme object, see the talos-theme skill: only the allowed tokens, typed values and readable contrast; the card shows the owner a preview and they tap Apply, even in trust mode',
+      value: ThemeValue,
+      whenAbsent: 'talos',
+      show: (v) => (typeof v === 'string' ? v : `custom "${(v as { name?: string } | null)?.name ?? '?'}"`),
+    },
+    default: undefined,
+  },
   // The owner, not the agent: off from the app is free, on needs the passkey (the session step-up, never skipped), and
   // `talos-app trust on|off` still works on the Mac. A proposal from the agent is refused by name.
   trust_mode: { phone: 'leaf', agent: false, refusedByName: true, stepupOnTrue: 'config:session', default: undefined },
@@ -219,3 +373,25 @@ export function settingsTableProblems(table: Readonly<Record<string, SettingRow>
   }
   return out
 }
+
+/** The agent's rule for each setting it may propose. A record over `AgentSettingPath`, so a missing rule cannot be written. */
+export const AGENT_RULES = Object.fromEntries(
+  rows.filter(([, r]) => r.agent).map(([p, r]) => [p, r.agentRule]),
+) as unknown as Readonly<Record<AgentSettingPath, AgentRule>>
+
+/** The value now in `config` at a setting path (`a.b` reads `config.a.b`), or the row's `whenAbsent` when the file has none. */
+export function readSettingValue(config: AgentConfigT, path: AgentSettingPath): unknown {
+  const [top, sub] = path.split('.') as [keyof AgentConfigT, string | undefined]
+  const section = config[top] as unknown
+  const v = sub === undefined ? section : (section as Record<string, unknown> | undefined)?.[sub]
+  return v ?? AGENT_RULES[path].whenAbsent
+}
+
+/** The settings the agent may change, as a sentence part: "agent name, live-call voice and the app theme". */
+export const AGENT_SETTINGS_PHRASE: string = (() => {
+  const p = AGENT_SETTING_PATHS.map((x) => AGENT_RULES[x].phrase)
+  return p.length < 2 ? p.join('') : `${p.slice(0, -1).join(', ')} and ${p[p.length - 1]}`
+})()
+
+/** The value rules in the tool's argument text: "agent.name (1-32 chars), agent.voice (one of ...), ...". */
+export const AGENT_VALUE_HINTS: string = AGENT_SETTING_PATHS.map((p) => `${p} (${AGENT_RULES[p].hint})`).join(', ')

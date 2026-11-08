@@ -7,6 +7,7 @@ struct CompanionSettingsView: View {
   @AppStorage(CompanionController.Key.enabled) private var enabled = false
   @AppStorage(CompanionController.Key.size) private var size = "standard"
   @AppStorage(CompanionController.Key.moments) private var moments = true
+  @AppStorage(CompanionController.Key.replyBubbles) private var replyBubbles = true
   @AppStorage(CompanionController.Key.replyBanners) private var replyBanners = false
   @ObservedObject private var hotkeys = HotkeyController.shared
 
@@ -27,8 +28,11 @@ struct CompanionSettingsView: View {
       Toggle("Rounds and little moments", isOn: $moments)
       Text("Now and then he walks a short patrol or thinks for a moment. Off keeps him still except when you poke him.")
         .font(.caption).foregroundStyle(.secondary)
+      Toggle("Mini Talos delivers thread replies", isOn: $replyBubbles)
+      Text("A new reply comes in his bubble with the thread and its first line, and Open and Later. Off gives the short \u{201C}New reply in\u{201D} bubble.")
+        .font(.caption).foregroundStyle(.secondary)
       Toggle("Also show reply banners", isOn: $replyBanners)
-      Text("While he is on and can show a reply himself, his bubble replaces the \u{201C}New reply\u{201D} banner. Turn this on to get both.")
+      Text("When Talos is in the background and he can show a reply himself, his bubble replaces the \u{201C}New reply\u{201D} banner. Turn this on to get both. It does nothing while you work in the Talos window.")
         .font(.caption).foregroundStyle(.secondary)
       if let until = companion.snoozedUntil {
         HStack {

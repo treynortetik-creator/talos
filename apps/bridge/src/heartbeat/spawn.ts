@@ -1,7 +1,7 @@
 // Runs one heartbeat source as a process (docs/HEARTBEAT.md, docs/SCHEDULES.md S1.7): argv exactly as configured, never a
 // shell, an own process group so a hung source and everything it started can be killed by PID, a minimal base environment
 // (no inherited secrets), and a hard cap on what it may print. Never throws: every way it can go wrong is a plain result.
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { HEARTBEAT_SOURCE_MAX_BYTES } from '@talos-app/protocol'
 import { type PsInfo, parsePsLine } from '../lifecycle.ts'
 
@@ -34,18 +34,48 @@ export type SpawnOptions = {
 /**
  * What `ps` shows for `pid` (start time and command line, parsed like the instance registry does): `gone` when there is no such
  * process, `unknown` when ps itself could not answer (it timed out or could not run), which is not proof of anything.
+ * Asynchronous with a timeout: a slow `ps` must not stop the bridge's event loop on every source start.
  */
-export function processInfo(pid: number): PsInfo | 'gone' | 'unknown' {
-  const r = spawnSync('ps', ['-p', String(pid), '-o', 'lstart=,command='], {
-    encoding: 'utf8',
-    timeout: 2000,
-    env: { ...process.env, LC_ALL: 'C' }, // lstart text must not depend on the shell's locale
+export async function processInfo(pid: number, o: { timeoutMs?: number } = {}): Promise<PsInfo | 'gone' | 'unknown'> {
+  let proc: ReturnType<typeof Bun.spawn>
+  try {
+    proc = Bun.spawn(['ps', '-p', String(pid), '-o', 'lstart=,command='], {
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'ignore',
+      env: { ...process.env, LC_ALL: 'C' }, // lstart text must not depend on the shell's locale
+    })
+  } catch {
+    return 'unknown'
+  }
+  // Our own timer, not the runtime's spawn timeout: it ends the wait however the child ends.
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<'late'>((resolve) => {
+    timer = setTimeout(() => resolve('late'), o.timeoutMs ?? 2000)
   })
-  if (r.error || r.signal) return 'unknown'
-  const line = r.status === 0 ? r.stdout.replace(/\n$/, '') : ''
-  if (line.trim() === '') return 'gone'
-  const info = parsePsLine(line)
-  return { lstart: info.lstart, command: info.command.slice(0, 2000) }
+  try {
+    const answer = (async () => {
+      const text = await new Response(proc.stdout as ReadableStream).text()
+      const code = await proc.exited
+      return { text, code }
+    })()
+    answer.catch(() => {})
+    const r = await Promise.race([answer, late])
+    if (r === 'late') {
+      proc.kill('SIGKILL')
+      return 'unknown'
+    }
+    // ps exits 1 with nothing printed when there is no such process; anything else wrong is not an answer
+    if (r.code !== 0 && r.code !== 1) return 'unknown'
+    const line = r.code === 0 ? r.text.replace(/\n$/, '').slice(0, 8192) : ''
+    if (line.trim() === '') return 'gone'
+    const info = parsePsLine(line)
+    return { lstart: info.lstart, command: info.command.slice(0, 2000) }
+  } catch {
+    return 'unknown'
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /**
@@ -114,17 +144,7 @@ export function runSource(o: SpawnOptions): Promise<SpawnResult> {
       done(r) // the caller never waits for a pipe a grandchild may hold open
     }
     const onAbort = () => stop({ ok: false, reason: 'aborted', message: 'stopped' })
-    // Recorded before the source can read its input, so a crash at any later point leaves a way to find the group.
-    const info = o.onStart && child.pid ? processInfo(child.pid) : null
-    if (child.pid && info && typeof info !== 'string') {
-      started = true
-      tell(() => o.onStart?.({ pgid: child.pid as number, ...info }))
-    }
     o.signal?.addEventListener('abort', onAbort, { once: true })
-    timer = setTimeout(
-      () => stop({ ok: false, reason: 'timeout', message: `no answer within ${Math.round(o.timeoutMs / 1000)} s` }),
-      o.timeoutMs,
-    )
     child.on('error', (e) => done({ ok: false, reason: 'spawn', message: `could not start it: ${e.message}` }))
     child.stdout?.on('data', (d: Buffer) => {
       bytes += d.length
@@ -142,6 +162,24 @@ export function runSource(o: SpawnOptions): Promise<SpawnResult> {
     })
     // a source that never reads its stdin must not crash the bridge with EPIPE
     child.stdin?.on('error', () => {})
-    child.stdin?.end(o.stdin)
+    // Recorded before the source can read its input, so a crash at any later point leaves a way to find the group. The lookup is
+    // asynchronous (the abort and the pipes above are already live); a source that is over by then is not recorded.
+    const begin = async () => {
+      if (o.onStart && child.pid) {
+        const info = await processInfo(child.pid)
+        if (settled) return
+        if (typeof info !== 'string') {
+          started = true
+          tell(() => o.onStart?.({ pgid: child.pid as number, ...info }))
+        }
+      }
+      // The source's own time starts here, once it has its input: the bookkeeping above is ours and is not charged to it.
+      timer = setTimeout(
+        () => stop({ ok: false, reason: 'timeout', message: `no answer within ${Math.round(o.timeoutMs / 1000)} s` }),
+        o.timeoutMs,
+      )
+      child.stdin?.end(o.stdin)
+    }
+    void begin()
   })
 }

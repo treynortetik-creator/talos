@@ -175,17 +175,22 @@ test('settings-switches: permission_relay off in config.json closes the open app
       c.permission_relay = false
     })
     await openThread(page, 'General')
+    // The card is compact now (Allow lives in the approval sheet), so "no Allow button" proves nothing: wait for the card itself
+    // to say it expired, which is the bridge having noticed the switch.
     const open = page.locator('[data-card-id]').filter({ hasText: 'Allow Bash?' })
-    await expect(open.getByRole('button', { name: /^Allow/ })).toHaveCount(0, { timeout: 30_000 })
+    await expect(open).toHaveAttribute('data-card-state', 'expired', { timeout: 30_000 })
+    await expect(page.locator('[data-card-state="pending"]')).toHaveCount(0)
   })
 
   await test.step('off: a new prompt makes no card', async () => {
-    // The thread has just been reopened: count only once the closed card is on screen, or the count is taken too early.
-    await expect(page.locator('[data-card-id]').filter({ hasText: 'Allow Bash?' }).first()).toBeVisible()
-    const before = await page.locator('[data-card-id]').count()
+    const ids = () =>
+      page.locator('[data-card-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-card-id')))
+    const before = await ids()
+    expect(before).toHaveLength(1)
     await claude.openPermission({ ...first, request_id: 'abcde' })
     await page.waitForTimeout(1500)
-    await expect(page.locator('[data-card-id]')).toHaveCount(before)
+    // The same card ids, not just the same count: a second card, closed or not, is a card made while the switch was off.
+    expect(await ids()).toEqual(before)
   })
 
   await test.step('the Health screen follows', async () => {

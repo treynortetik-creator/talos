@@ -22,14 +22,17 @@ import {
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { checkWorkerCwd } from '@talos-app/protocol'
 import { real } from '../guards/rules.ts'
-import { defaultLeadRoots, readOwnerMcp } from './fence.ts'
+import { defaultLeadRoots, LEAD_SECRET_PATHS, readOwnerMcp } from './fence.ts'
 import {
+  deniedToolsFor,
+  isClaudeAiConnector,
   LEAD_BOARD_MAX,
   LEAD_BRIEF_MAX,
-  LEAD_DENIED_TOOLS,
+  type LeadProfile,
   type LeadSettings,
   leadSettings,
   mergeLeadSettings,
+  stopgapMcpDenies,
 } from './settings.ts'
 
 export const LEAD_MARKER = '.talos-lead'
@@ -50,7 +53,10 @@ export type LeadInitOpts = {
   pathDirs?: readonly string[]
   tmpDirs?: readonly string[]
   protect?: readonly string[]
-  disableMcp?: readonly string[]
+  /** The profile the owner asked for. Without it: a new folder is `light`, an existing one keeps the profile it has (a folder made before profiles is `sandbox`). */
+  profile?: LeadProfile
+  /** Take out the MCP denies the first version of the allow list wrote (the ones that are there), and record them in the marker. */
+  removeStopgap?: boolean
   templates?: string
 }
 
@@ -82,7 +88,16 @@ export function checkAgentDir(agentDir: string): string {
   return agent
 }
 
-type Marker = { thread?: string; protect?: string[]; agent_dir?: string; claude_dir?: string }
+type StopgapRecord = { rules: string[]; disabled: string[] }
+type Marker = {
+  thread?: string
+  protect?: string[]
+  agent_dir?: string
+  claude_dir?: string
+  profile?: LeadProfile
+  /** What `--remove-stopgap` took out of the settings, as a record. Never used to remove anything again. */
+  stopgap_removed?: StopgapRecord
+}
 function markerOf(folder: string): Marker | null {
   try {
     return JSON.parse(readFileSync(join(folder, LEAD_MARKER), 'utf8')) as Marker
@@ -186,7 +201,20 @@ function replaceFile(path: string, data: string | Uint8Array, mode: number) {
   }
 }
 
-export type LeadInitResult = { folder: string; created: string[]; kept: string[]; settings: LeadSettings }
+/** The profile a marker stands for: the one it names, `sandbox` for a folder made before profiles existed. */
+const profileOfMarker = (m: Marker | null): LeadProfile => (m?.profile === 'light' ? 'light' : 'sandbox')
+
+export type LeadInitResult = {
+  folder: string
+  created: string[]
+  kept: string[]
+  settings: LeadSettings
+  profile: LeadProfile
+  /** The profile changed because the owner asked. */
+  switched: boolean
+  /** The MCP deny rules the first version of the allow list wrote (the stopgap) that this run took out of the settings. */
+  stopgapRemoved: string[]
+}
 
 export function initLeadFolder(o: LeadInitOpts): LeadInitResult {
   const { folder, agent, roots } = checkLeadTarget(o)
@@ -204,7 +232,13 @@ export function initLeadFolder(o: LeadInitOpts): LeadInitResult {
     ['turn-start.sh', readFileSync(join(tpl, 'turn-start.sh'))],
   ] as const
 
+  // the profile: asked for, else the one the folder has (a folder made before profiles is sandboxed), else light
+  const priorMarker = existsSync(join(folder, LEAD_MARKER)) ? (markerOf(folder) ?? {}) : null
+  const profile: LeadProfile = o.profile ?? (priorMarker ? profileOfMarker(priorMarker) : 'light')
+  const switched = priorMarker !== null && profileOfMarker(priorMarker) !== profile
+  const ownerMcp = readOwnerMcp(o.home, agent, o.claudeDir)
   const fresh = leadSettings({
+    profile,
     agentDir: agent,
     talosHome: o.talosHome,
     home: o.home,
@@ -218,8 +252,6 @@ export function initLeadFolder(o: LeadInitOpts): LeadInitResult {
           r,
         ),
     ),
-    ...(o.disableMcp ? { disableMcp: o.disableMcp } : {}),
-    ownerMcp: readOwnerMcp(o.home, agent, o.claudeDir),
   })
 
   // 1. look at everything first: no link anywhere on the way, nothing of the wrong kind
@@ -261,9 +293,29 @@ export function initLeadFolder(o: LeadInitOpts): LeadInitResult {
       created.push(rel)
     }
   }
+  // the probable stopgap entries that are in the file now, to be removed only when the owner asked
+  const strOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+  const probable = stopgapMcpDenies(ownerMcp)
+  const removal: StopgapRecord | undefined = o.removeStopgap
+    ? {
+        rules: probable.rules.filter((r) => strOf(objOf(objOf(old).permissions).deny).includes(r)),
+        disabled: probable.disabled.filter((n) => strOf(objOf(old).disabledMcpjsonServers).includes(n)),
+      }
+    : undefined
   // hooks are the kit's, not the owner's: always refreshed
   for (const [n, body] of kitHooks) replaceFile(join(hooks, n), body, 0o755)
-  replaceFile(sp, `${JSON.stringify(mergeLeadSettings(old, fresh), null, 2)}\n`, 0o644)
+  replaceFile(
+    sp,
+    `${JSON.stringify(
+      mergeLeadSettings(old, fresh, {
+        ...(switched && profile === 'light' ? { toLightFrom: 'sandbox' as const, folder } : {}),
+        ...(removal ? { removeStopgap: removal } : {}),
+      }),
+      null,
+      2,
+    )}\n`,
+    0o644,
+  )
   // the old text-parsing guard is gone (the OS sandbox does that job now); only after the new settings are in place
   if (lstat(oldGuard)) {
     assertPlain(oldGuard, 'file')
@@ -277,11 +329,25 @@ export function initLeadFolder(o: LeadInitOpts): LeadInitResult {
       home: o.home,
       talos_home: o.talosHome,
       claude_dir: o.claudeDir,
+      profile,
       protect: roots,
+      ...(removal?.rules.length || removal?.disabled.length
+        ? { stopgap_removed: removal }
+        : priorMarker?.stopgap_removed
+          ? { stopgap_removed: priorMarker.stopgap_removed }
+          : {}),
     })}\n`,
     0o644,
   )
-  return { folder, created, kept, settings: fresh }
+  return {
+    folder,
+    created,
+    kept,
+    settings: fresh,
+    profile,
+    switched,
+    stopgapRemoved: removal?.rules ?? [],
+  }
 }
 
 const objOf = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {})
@@ -306,6 +372,8 @@ export function checkLeadFolder(
   talosHome: string,
   home: string,
   claudeDir: string,
+  /** The thread's allow list, read from the config by the caller; none known is the empty list. */
+  mcpAllow: readonly string[] = [],
 ): string[] {
   const out: string[] = []
   const size = (f: string, max: number) => {
@@ -330,47 +398,64 @@ export function checkLeadFolder(
     out.push('.claude/settings.json is missing or not JSON: the privacy fence and sandbox are not in place')
     return out
   }
-  const sandbox = objOf(settings.sandbox)
-  if (sandbox.enabled !== true) out.push('sandbox.enabled is not true: the OS sandbox is off; re-run lead init')
-  if (sandbox.failIfUnavailable !== true)
-    out.push('sandbox.failIfUnavailable is not true: claude would start without the sandbox; re-run lead init')
-  if (sandbox.allowUnsandboxedCommands !== false)
-    out.push('sandbox.allowUnsandboxedCommands is not false: a command could leave the sandbox; re-run lead init')
-  if (nonEmpty(sandbox.excludedCommands))
-    out.push('sandbox.excludedCommands is not empty: those commands run unsandboxed')
-  const fs = objOf(sandbox.filesystem)
-  if (nonEmpty(fs.allowRead)) out.push('sandbox.filesystem.allowRead is not empty: it can re-open a protected root')
-  if (nonEmpty(fs.allowWrite)) out.push('sandbox.filesystem.allowWrite is not empty: it can re-open a protected root')
-  if (fs.disabled) out.push('sandbox.filesystem.disabled is set: the sandbox does not hold file access')
+  const profile = profileOfMarker(marker)
+  if (profile === 'sandbox') {
+    const sandbox = objOf(settings.sandbox)
+    if (sandbox.enabled !== true) out.push('sandbox.enabled is not true: the OS sandbox is off; re-run lead init')
+    if (sandbox.failIfUnavailable !== true)
+      out.push('sandbox.failIfUnavailable is not true: claude would start without the sandbox; re-run lead init')
+    if (sandbox.allowUnsandboxedCommands !== false)
+      out.push('sandbox.allowUnsandboxedCommands is not false: a command could leave the sandbox; re-run lead init')
+    if (nonEmpty(sandbox.excludedCommands))
+      out.push('sandbox.excludedCommands is not empty: those commands run unsandboxed')
+    const fs = objOf(sandbox.filesystem)
+    if (nonEmpty(fs.allowRead)) out.push('sandbox.filesystem.allowRead is not empty: it can re-open a protected root')
+    if (nonEmpty(fs.allowWrite)) out.push('sandbox.filesystem.allowWrite is not empty: it can re-open a protected root')
+    if (fs.disabled) out.push('sandbox.filesystem.disabled is set: the sandbox does not hold file access')
+  }
   if (settings.disableClaudeAiConnectors !== true)
     out.push('claude.ai connectors are not switched off: re-run lead init')
   const have = new Set(
     Array.isArray(objOf(settings.permissions).deny) ? (objOf(settings.permissions).deny as unknown[]) : [],
   )
-  for (const t of LEAD_DENIED_TOOLS) if (!have.has(t)) out.push(`the ${t} tool is not denied: re-run lead init`)
+  const tools = deniedToolsFor(profile)
+  for (const t of tools) if (!have.has(t)) out.push(`the ${t} tool is not denied: re-run lead init`)
   const agent = agentDir ?? marker?.agent_dir
   if (agent && home) {
     const want = leadSettings({
+      profile,
       agentDir: agent,
       talosHome,
       home,
       claudeDir: cdir,
       folder: real(folder),
       protect: marker?.protect ?? [],
-    }).permissions.deny.filter((d) => !(LEAD_DENIED_TOOLS as readonly string[]).includes(d))
+    }).permissions.deny.filter((d) => !tools.includes(d))
     const lost = want.filter((d) => !have.has(d))
-    if (lost.length)
-      out.push(`the privacy fence is missing ${lost.length} deny rule(s), e.g. ${lost[0]}; re-run lead init`)
+    // the credential folders first, by name: a folder made before they were added misses all of them
+    const secrets = LEAD_SECRET_PATHS.map((p) => join(home, p)).filter((p) => lost.includes(`Read(/${p}/**)`))
+    for (const p of secrets) out.push(`the privacy fence does not deny reading ${p}; re-run lead init`)
+    const rest = lost.filter((d) => !secrets.some((p) => d.includes(p)))
+    if (rest.length)
+      out.push(`the privacy fence is missing ${rest.length} deny rule(s), e.g. ${rest[0]}; re-run lead init`)
   } else if (have.size === 0) out.push('the privacy fence is empty: no deny rules')
+  // the allow list is applied by the Mac app, not by deny rules here; a connector on it cannot work for a lead
+  for (const name of mcpAllow) {
+    if (isClaudeAiConnector(name))
+      out.push(
+        `${name} is on the thread's allow list, but a lead's claude.ai connectors are off (disableClaudeAiConnectors holds from every settings scope): take it off the list`,
+      )
+  }
 
   // settings the lead folder or the owner's user file add on top can open the sandbox again
   const local = readJson(join(folder, '.claude', 'settings.local.json'))
   if (local) {
-    if ('sandbox' in local) out.push('.claude/settings.local.json sets sandbox keys: remove them')
+    if (profile === 'sandbox' && 'sandbox' in local)
+      out.push('.claude/settings.local.json sets sandbox keys: remove them')
     if (nonEmpty(objOf(local.permissions).allow))
       out.push('.claude/settings.local.json sets permissions.allow: remove it')
   }
-  const user = readJson(join(cdir, 'settings.json'))
+  const user = profile === 'sandbox' ? readJson(join(cdir, 'settings.json')) : null
   if (user) {
     // sandbox.enabled: false there is not reported: the lead's own `true` wins
     const us = objOf(user.sandbox)
@@ -382,4 +467,40 @@ export function checkLeadFolder(
     if (ufs.disabled) out.push(`sandbox.filesystem.disabled ${weak}`)
   }
   return out
+}
+
+/** What each profile does not do, in plain words. `lead check` prints these every time, so a passing check is not read as more than it is. */
+const LEAD_PROFILE_NOTES: Record<LeadProfile, string[]> = {
+  light: [
+    'profile: light. It stops accidents, not a determined process.',
+    'It does not stop: a Bash command such as sqlite3, python or grep -r reading a path that is denied (the deny rules hold the file tools and Bash cat, head, tail, sed, tee and redirections only); the network is open.',
+  ],
+  sandbox: [
+    'profile: sandbox. The OS sandbox holds file access for every command the lead runs.',
+    "What a sandboxed lead can't do: git over SSH, gh, tmux integration suites, xcodebuild and the iOS Simulator, installs to ~/Applications, ci-local.sh, git clone / remote set-url / push -u when a nested .git/config is write-protected, and SendMessage to other sessions (denied). Network goes through the sandbox's proxy with an empty allowlist.",
+  ],
+}
+
+/** The probable stopgap denies still in a lead folder's settings: what the first version of the allow list would have written for this owner. */
+function probableStopgap(folder: string, marker: (Marker & { home?: string }) | null): string[] {
+  const settings = readJson(join(folder, '.claude', 'settings.json'))
+  const agent = marker?.agent_dir
+  const home = marker?.home
+  const cdir = marker?.claude_dir
+  if (!settings || !agent || !home || !cdir) return []
+  const have = Array.isArray(objOf(settings.permissions).deny) ? (objOf(settings.permissions).deny as unknown[]) : []
+  return stopgapMcpDenies(readOwnerMcp(home, agent, cdir)).rules.filter((r) => have.includes(r))
+}
+
+/** The profile of an existing lead folder and the lines `lead check` adds after its verdict. */
+export function leadCheckNotes(folder: string): { profile: LeadProfile; notes: string[] } {
+  const marker = existsSync(join(folder, LEAD_MARKER)) ? markerOf(folder) : null
+  const profile = profileOfMarker(marker)
+  const notes = [...LEAD_PROFILE_NOTES[profile]]
+  const probable = probableStopgap(folder, marker)
+  if (probable.length)
+    notes.push(
+      `.claude/settings.json denies MCP servers the way the first version of the allow list wrote them (${probable.slice(0, 5).join(', ')}${probable.length > 5 ? `, and ${probable.length - 5} more` : ''}). A deny blocks a server the thread's list allows, and the Mac app applies the list itself now. If you did not write these yourself, remove them with: talos-app lead init ${marker?.thread ?? '<thread>'} --remove-stopgap`,
+    )
+  return { profile, notes }
 }

@@ -11,8 +11,6 @@ import {
   isLiveAgentStatus,
 } from '@talos-app/protocol'
 
-/** The rail is docked at this width and up; below it, a header chip opens a sheet. */
-export const RAIL_QUERY = '(min-width: 1280px)'
 export const SHELL_KINDS: readonly AgentKindT[] = ['shell', 'monitor']
 export const MOD_MISSING_TEXT = 'Needs the Talos mod (Settings → Session).'
 export const EMPTY_TEXT = 'No agents running.'

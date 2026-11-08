@@ -81,7 +81,8 @@ trigger are what keep it from doing that. Tests: `scripts/ci-affected.test.ts`.
 2. **Jobs:** `check`, `mod` and `image` start together. `desktop` then `mobile` (they share a SwiftPM cache and a build wants
    every core) wait for `check`'s quiet group. `browser` waits for `check`. Results post as they finish. One red job does not
    stop the others. A job that dies without a result is red.
-3. **Inside `check`:** the personal-data scan, which only warns, then the quick gates (types, lint), then the quiet group: the contract suite, then the bridge's
+3. **Inside `check`:** the personal-data scan, which only warns, then the quick gates (types, lint, and `pnpm notices:check`: THIRD_PARTY_NOTICES.md must match what setup's web build
+   bundles), then the quiet group: the contract suite, then the bridge's
    `test/schedules/` files one at a time. Then the loud group side by side: the other bridge files 4 at once, Vitest and the
    capture check. Output of the loud group goes to `<log>.<step>` while it runs and into the job log, whole, with failed steps
    last so the reason is in the tail a failed job prints. Last comes the known-vulnerability audit (`pnpm audit --prod

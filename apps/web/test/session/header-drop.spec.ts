@@ -1,12 +1,14 @@
-// Header usage chip (all percent USED), the mascot only on phones and static, and drag-and-drop attach on desktop.
+// The usage chip (all percent USED), no mascot in the header, and drag-and-drop attach on desktop.
 import { expect, type Page, test } from '@playwright/test'
+import { sessionPanel } from '../helpers/phone.ts'
 
 // The page-motion helpers inject a <style> (test-only CSS). The service worker stamps the real CSP (style-src 'self') on
 // precached HTML, so once it controls the page that injection is refused. bypassCSP lets the test harness inject; the app's
 // CSP itself is asserted in test/relay/sw-csp.spec.ts.
 test.use({ bypassCSP: true })
 
-const DIR = '../../docs/screenshots/header-drop'
+// Rewritten into the tracked docs folder only on request (TALOS_SHOTS=1), so a plain run leaves tracked files alone.
+const DIR = process.env.TALOS_SHOTS ? '../../docs/screenshots/header-drop' : 'test-results/shots/header-drop'
 const isPhone = (page: Page) => (page.viewportSize()?.width ?? 0) < 768
 
 async function settle(page: Page) {
@@ -38,7 +40,7 @@ test('chip reads percent used for week and context; the chip is the tap target',
     .locator(phone ? 'xpath=.' : 'header')
     .screenshot({ path: `${DIR}/header-${info.project.name}.png` })
   await chip.click()
-  await expect(page.getByTestId('session-sheet')).toBeVisible()
+  await expect(sessionPanel(page)).toBeVisible()
 })
 
 test('mascot: gone from the header on phones (the slim row has none) and on desktop (the sidebar has the logo)', async ({

@@ -3,7 +3,8 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
-import { COMMANDS, terminalOnly } from '../talos.ts'
+import { WORKER_FILES } from '@talos-app/protocol'
+import { COMMANDS, kitVendorDir, terminalOnly, terminalOnlyNames } from '../talos.ts'
 
 export type GuardConfig = {
   home: string
@@ -38,6 +39,9 @@ export function buildGuardConfig(a: {
     .map((l) => l.trim())
     .filter(Boolean)
     .map((l) => join(checkout, l))
+  // The kit's releases and `current`: a release the agent could write is a release that would run as the agent's own guards.
+  // `talos update` is the only way in, and it checks a signature first.
+  protectedPaths.push(real(kitVendorDir(process.env, a.userHome ?? homedir())))
   return {
     home: real(a.home),
     checkout,
@@ -82,15 +86,20 @@ const under = (p: string, target: string) => p === target || p.startsWith(target
 /** `Edit(//abs/path)` is Claude Code's spelling of an absolute path in a permission rule. */
 export function denyRules(cfg: GuardConfig): string[] {
   const edit = cfg.writeDenied.flatMap((p) => [`Edit(/${p})`, `Edit(/${p}/**)`])
-  const gated = COMMANDS.filter((c) => c.needs_terminal).flatMap((c) => [
-    `Bash(talos-app ${c.name}:*)`,
-    `Bash(talos ${c.name}:*)`,
-  ])
+  const gated = [
+    ...terminalOnlyNames('talos-app').map((n) => `Bash(talos-app ${n}:*)`),
+    ...terminalOnlyNames('talos').map((n) => `Bash(talos ${n}:*)`),
+  ]
+  // needs-you prompts: the files the Mac and the bridge pass an answer through, in every thread's folder
+  const dialog = DIALOG_FILE_NAMES.flatMap((n) => [`Edit(/${cfg.home}/workers/**/${n})`, `Bash(*${n}*)`])
   return [
     ...edit,
+    ...dialog,
     ...gated,
     'Bash(claude plugin:*)',
     'Bash(claude plugins:*)',
+    'Bash(talos-update:*)',
+    'Bash(*talos-update.py*)',
     'Bash(*action-rules.py approve*)',
     'Bash(*enroll-pending*)',
     'Bash(*agent-request.json*)',
@@ -108,10 +117,25 @@ const HOME_NEVER = [
   'tripwire.writing',
   'agent-request.json',
 ]
+/** The needs-you files under `workers/<thread>/` (dialog-files.ts). A forged one would press a key in a session, so no tool touches them. */
+const DIALOG_FILE_NAMES: string[] = [WORKER_FILES.dialogCard, WORKER_FILES.dialogAnswer, WORKER_FILES.dialogResult]
+/** The needs-you file `abs` (lower-cased, resolved) names inside a worker's folder, or undefined. */
+function dialogFileAt(abs: string, home: string): string | undefined {
+  const name = DIALOG_FILE_NAMES.find((n) => basename(abs) === n)
+  const inWorkers = spellings(join(home, 'workers')).some((w) => abs.startsWith(`${w}${sep}`))
+  return name && inWorkers ? name : undefined
+}
 /** Files inside the Talos home that a command may read but not write. */
 const HOME_READ_ONLY = ['devices.json', 'config.json', 'last-good', 'config-history']
 /** Spellings of those names that mean the file wherever the shell is standing (`cd <home> && rm guards.json`). */
-const BARE_STEMS = ['guards.json', 'tripwire.json', 'tripwire.writing', 'enroll-pend', 'agent-request.json']
+const BARE_STEMS = [
+  'guards.json',
+  'tripwire.json',
+  'tripwire.writing',
+  'enroll-pend',
+  'agent-request.json',
+  ...DIALOG_FILE_NAMES,
+]
 
 /** Words that run the next command rather than being it. */
 const WRAPPERS = new Set([
@@ -225,13 +249,23 @@ function gatedIn(cmd: string, depth = 0): string | undefined {
       while (rest[k]?.startsWith('-')) k++
       return rest.slice(k)
     }
+    // the kit updater itself, run by name or through an interpreter: the same command as `talos update`, whatever it is called
+    if (
+      base === 'talos-update' ||
+      (/^(?:python[\d.]*|bash|sh|zsh)$/.test(base) &&
+        words.slice(i + 1).some((x) => /^talos-update(?:\.py)?$/.test(basename(x))))
+    )
+      return 'update'
     if (base === 'talos-app' || base === 'talos') {
-      const hit = terminalOnly(firstWord(words.slice(i + 1)))
+      const hit = terminalOnly(firstWord(words.slice(i + 1)), base)
       if (hit) return hit
     } else if (RUNNERS.has(base)) {
-      const at = words.findIndex((w, k) => k > i && /^cli(?:-main)?(?:\.[tj]s)?$/.test(basename(w)))
+      const at = words.findIndex((w, k) => k > i && /^(?:cli(?:-main)?|talos)(?:\.[tj]s)?$/.test(basename(w)))
       if (at > 0) {
-        const hit = terminalOnly(firstWord(words.slice(at + 1)))
+        const hit = terminalOnly(
+          firstWord(words.slice(at + 1)),
+          /^talos/.test(basename(words[at] as string)) ? 'talos' : 'talos-app',
+        )
         if (hit) return hit
       }
     } else if (SHELLS.has(base)) {
@@ -294,7 +328,7 @@ function bashDecision(cmd: string, cfg: GuardConfig): GuardDeny | undefined {
 
   if (BARE_STEMS.some((s) => hay.includes(s)) || mentions(names(cfg.home, HOME_NEVER)))
     return {
-      deny: 'Talos guard: the guard rules, the tripwire record, enroll-pending and agent-request.json belong to the app and the owner; no command may touch them.',
+      deny: 'Talos guard: the guard rules, the tripwire record, enroll-pending and agent-request.json belong to the app and the owner; no command may touch them. The same goes for the needs-you files (dialog-answer.json and its siblings).',
     }
   // a wildcard that could expand to one of them: match on the stem
   const words = expandHome(cmd, cfg.userHome).split(/[\s'"`;|&<>()=,]+/)
@@ -322,6 +356,13 @@ function bashDecision(cmd: string, cfg: GuardConfig): GuardDeny | undefined {
       }
     }
   }
+  // a wildcard that could expand to a needs-you file inside a worker's folder
+  for (const w of words) {
+    const stem = globStem(w)?.toLowerCase()
+    const last = stem?.slice(stem.lastIndexOf('/') + 1) ?? ''
+    if (last.length >= 6 && DIALOG_FILE_NAMES.some((n) => n.startsWith(last)))
+      return { deny: 'Talos guard: that wildcard can reach a needs-you file (dialog-answer.json and its siblings).' }
+  }
   const writes = WRITES.test(quiet(cmd))
   if (writes && mentions(names(cfg.home, HOME_READ_ONLY)))
     return {
@@ -347,6 +388,8 @@ export function guardDecision(call: GuardCall, cfg: GuardConfig): GuardDeny | un
     if (typeof file !== 'string' || !file)
       return { deny: 'Talos guard: cannot tell which file this writes, so it is blocked.' }
     const abs = real(file.startsWith('~') ? join(cfg.userHome, file.slice(1)) : file).toLowerCase()
+    const dialog = dialogFileAt(abs, cfg.home)
+    if (dialog) return { deny: `Talos guard: ${dialog} is passed between the Mac and the bridge; only they write it.` }
     const hit = cfg.writeDenied.find((t) => spellings(t).some((s) => under(abs, s)))
     return hit
       ? {

@@ -3,10 +3,16 @@
 // key file and never returns a secret, and sync needs one too. Both are marked deferred by the mod.
 import { MOD_TOOL_DESCRIPTION } from '@talos-app/protocol'
 import { MOD_LINK_FEATURES } from '../mod/link.ts'
-import { fail, ok, type Tool } from './common.ts'
+import { fail, ok } from './common.ts'
+import { NOT_FOR_WORKERS, type ToolRecord } from './define.ts'
 
-export const talosModHello: Tool = {
+export const talosModHello: ToolRecord = {
   name: 'talos_mod_hello',
+  group: 'mod',
+  headless: false,
+  ...NOT_FOR_WORKERS,
+  instructions: null,
+  told: [],
   description: MOD_TOOL_DESCRIPTION,
   liveOnly: true,
   inputSchema: {
@@ -25,8 +31,13 @@ export const talosModHello: Tool = {
   },
 }
 
-export const talosModSync: Tool = {
+export const talosModSync: ToolRecord = {
   name: 'talos_mod_sync',
+  group: 'mod',
+  headless: false,
+  ...NOT_FOR_WORKERS,
+  instructions: null,
+  told: [],
   description: MOD_TOOL_DESCRIPTION,
   liveOnly: true,
   inputSchema: {

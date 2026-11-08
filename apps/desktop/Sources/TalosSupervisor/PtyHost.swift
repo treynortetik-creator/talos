@@ -36,10 +36,14 @@ public enum HostKind: String, Sendable {
 
 public enum PtyHostError: Error, Equatable, CustomStringConvertible {
   case startFailed(String)
+  /// The agent was gone before its pid could be read. `rows` is its dead pane's last screen: a `--resume` of a conversation
+  /// that no longer exists prints its error line and exits at once, and that line is the only thing that says why.
+  case exitedImmediately(rows: [String])
   case alreadyRunning
   public var description: String {
     switch self {
     case .startFailed(let s): return "start failed: \(s)"
+    case .exitedImmediately: return "start failed: the agent exited immediately"
     case .alreadyRunning: return "a session is already running"
     }
   }
@@ -66,10 +70,16 @@ public protocol PtyHost: AnyObject, Sendable {
   func close()
   /// Stop watching. tmux: the agent keeps running. Owned pty: the agent dies with the app.
   func detach()
+  /// When an attached client last typed (seconds since 1970); nil when none is attached or it can't be read. Only tmux has clients.
+  func clientActivity() -> Double?
   /// The pane pid / owned child pid = its process group id.
   var childPid: Int32? { get }
   var onExit: (@Sendable (ExitInfo) -> Void)? { get set }
   /// Small values that must survive an app restart (tmux session user options; memory for the owned pty).
   func setMarker(_ key: String, _ value: String)
   func marker(_ key: String) -> String?
+}
+
+extension PtyHost {
+  public func clientActivity() -> Double? { nil }
 }

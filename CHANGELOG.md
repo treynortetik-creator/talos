@@ -1,5 +1,154 @@
 # Changelog
 
+## A scheduled job can remember between runs
+
+- Each scheduled job now has a "Remember between runs" box, off by default. Tick it when you make the job or edit it later (or ask Claude to propose it), and each run is shown that job's last 3 results and a small notepad (up to 2 KB) it can rewrite when it finishes. The card says when a job has it on. Only that job sees its own memory; it is marked as notes from earlier runs, not as something you said, and anything in it that came from an email or a web page stays labelled that way. Turning it on always asks for your approval on a card, because it changes what every later run sees. Changing the job's text, moving it to another thread, switching the box off, or deleting the job clears it. It works for jobs that run in your session; a background-only job can have the box ticked but does not get it yet.
+
+## A small popup on the Mac for a thread session's trust, MCP and login questions
+
+- When a thread's own session stops on its folder-trust, "new MCP server" or login question, the Mac app now also shows a small popup with the same question in plain words and the session's own buttons, in the same order. You can answer there or on your phone; the first answer wins and the other says "Already answered". The popup never takes the keyboard, and keys never reach it, so Return or a stray key cannot answer it; only a real click on a button does (not an Accessibility or AppleScript press), and a click in the first moment after it appears or moves is ignored. The close button just hides it. It stays away in quiet hours (and shows if the question is still waiting when they end), and it goes when the question goes. A click is checked against the screen first, like a tap from the phone: if the session's screen changed, or you were typing in it, nothing is pressed and the popup says so. The phone and web card and the popup now use the same words for each question ("sign in", never "log in").
+
+## A tidier app: search in the thread list, one Session panel, and a message row that stays out of the way
+
+- Search is now in the thread list. A magnifier sits beside + and the pencil; tap it and that row becomes a search box, and the results (the same search as before) take the place of the threads until you press Esc or the cross. The "Threads" label and the bottom "Search" row are gone. On a phone the menu has the same row, and the card at its top (the thread's name, its description and "Search this thread") is gone: the thread you are in is an ordinary row of the list.
+- The thread header is lighter: the status ("Idle", "Working") is a small pill beside the thread's name, and the search icon, the Greek-key line and the description line under it are gone. The description (the "what goes here" text) is still in the thread's ⋯ menu, and so is "Search this thread".
+- The usage readings (week and context) are one small, quiet chip in the top-right corner of the screen (a small dot on it means the Claude Code mod has lapsed). Tap it to open the Session panel. On a computer the panel sits beside the chat, never over it: you can keep typing and clicking in the chat while it is open, and it closes only on its cross or on the chip. It remembers on each device whether it was open. On a phone it is still a sheet.
+- The Agents panel on the right, its narrow strip and its "3 agents" chip are gone. What they showed is a section of the Session panel: Context (with Compact), Usage, and Agents in two groups (this session's helpers, shells and monitors, or "No agents running."; then each thread's own session and its state). Commands, MCP servers and plugins moved to Settings → Session; the panel links there.
+- Under each message there is now one row: the time, Copy, Listen and the ⋯ menu. On a computer Copy, Listen and the ⋯ show when you point at the message; on a touch screen they are always there. The ⋯ no longer sits on top of the first line of the message.
+
+## Every thread session is fenced from the Talos folder, and the MCP list and the restart rules are applied
+
+- The Mac app now blocks every thread's own session from reading or writing the whole Talos folder (messages, keys, databases) with the same file-tool rules the leads have, in the settings it writes for the session and for "Open claude here". It is added after the optional guards' settings so it is never lost to them. It stops the file tools and Bash `cat`, `head`, `sed`, `tee` and redirections; a Bash `sqlite3`, `python` or `grep -r` can still open the folder, because a non-lead session has no sandbox. A session whose settings lack the block does not start.
+- The "Limit MCP servers" list is now applied when a session starts: only `talos-app` and the servers you name, copied from where you defined them (your user config, the thread folder's `.mcp.json`, an enabled plugin), with the claude.ai connectors and Chrome off. A listed server that exists nowhere is skipped and the thread is told once. No value from a server's setup is ever printed or logged. No list still means no change. `lead init` no longer writes the list as block rules, and a re-run removes the ones an earlier version wrote (and only those).
+- Changing a running thread session's folder, model, effort or MCP list restarts it once the change has stood for 30 seconds, after its current turn ends (never in the middle of one). A new folder starts a fresh conversation there and the thread is told; the other changes resume the same conversation. The sheet now says "Saving restarts the session when its current turn ends."
+- One thread's failure code this version does not know no longer makes the whole thread-sessions file unreadable; that thread shows "stopped for a reason this version doesn't know" and the others carry on.
+- The MCP list now handles servers defined in the thread's own folder safely. A `.mcp.json` the folder ships can no longer replace a server you defined yourself. A server you defined for that folder (local scope) is used. A server from the folder's `.mcp.json` is used only if you approved it for that folder; otherwise the session does not start and the thread is told how to approve it. Messaging plugins can never be on a list, and every plugin not on the list is switched off for that session. Servers from your config no longer carry a Telegram or iMessage token into a thread session.
+- A thread session now starts in the same permission mode as the main session, and the folder's own `.claude/settings*.json` cannot widen it. When main's mode cannot be found, the thread session explicitly uses the default permission mode. The kit's relative rules such as `Read(./.env)` keep protecting the agent folder in a session started elsewhere.
+- Saving a setting that restarts a running session never cuts a turn short, however long it runs.
+- `talos-app lead check` lists the old MCP block rules an earlier version wrote, and `lead init <thread> --remove-stopgap` removes them on request. A plain `lead init` re-run no longer removes any block rule, so your own rules are safe.
+- A thread session can no longer start with more access than the main session: a wider permission mode, MCP servers the main session cannot use, or fewer block rules. It does not start, its status says it was not started for that reason and which one, and the thread is told once. Messages go to the main session until the settings are narrower.
+
+## Permission cards explain themselves in plain words
+
+- Every permission card now fills in, a second or two after it appears, one or two plain sentences saying what the command does and a tag (reads files, changes files, deletes, sends over the internet, installs); the command itself sits behind "Show the command". If Claude's own description leaves something out, the card says so, the tag reads "... · Doesn't match", Deny becomes the main button and Allow reads "Allow anyway". It never makes you wait: Allow and Deny work at once, and if the explanation can't be made the card says "Couldn't explain this one". The explanation is written by your own Claude on your own plan (no key, no bill), sees only the command and Claude's description, and can't lower the tag below what Talos itself reads in the command. Turn it off with `TALOS_EXPLAINER=off`. It needs the Mac to be updated; older apps show today's card.
+
+## A thread session parks after its idle time even when its status line keeps repainting
+
+- A thread's own Claude Code session was never parked for being idle if your Claude Code status line (the line under the input box, such as "Sonnet 5.5 | 20% | 7d: 38%") redrew now and then, because any redraw of the pane counted as activity, and the status line redraws when usage changes, including usage from your other sessions. The idle time now counts from the last message, the last change on the screen above the input box (a turn, or text typed in it), or the last key from a Terminals window attached to the session, so the status line and the footer no longer matter. A session that is busy, waiting on you, or still owed its message is never parked, as before. A status line set to refresh more often than every 15 seconds still keeps a session from parking. The last activity is saved with the session's status, so after the Mac app relaunches the idle time carries on from it.
+
+## Thread leads get a lighter fence by default, and a choice of MCP servers
+
+- `talos-app lead init` now makes a "light" lead by default: it keeps the read and write blocks on the main agent folder, `~/.claude`, the whole Talos folder, your vault, anything you `--protect`, and now also `~/.ssh`, `~/.config/gh`, `~/.aws`, `~/.npmrc` and `~/.netrc`, but runs without the macOS sandbox, so `git push`, `gh`, tmux and `SendMessage` to the builders work. Light stops accidents, not a determined program: a command like `sqlite3` or `python` can still open a blocked file, and the network is open. Add `--sandbox` for the old behaviour (the sandbox, no `SendMessage`); a re-run keeps a folder's profile and changes it only when you pass `--sandbox` or `--light`. `lead check` accepts both, prints what each does not stop, and flags a lead made before the new folders were added.
+- Files you send to a thread that has its own session are now copied to `~/.talos-inbox/<thread>/` and the session is given that path, so it never reads the shared media folder. That folder is not blocked: other thread sessions can read it. Copies are removed after 7 days (or past 1 GiB), and a thread's folder is removed when the thread is archived or deleted.
+- A thread's own session may run only `talos-app commands`, `lead check`, `codex check` and the hook entries; every other `talos-app` command is refused to it (it already was for `digest`, `post` and `inbox`).
+- Each thread's own-session sheet has a "Limit MCP servers" list. Off keeps today's behaviour; on means only the servers you name, plus `talos-app`. `lead init --mcp a,b` sets it (it replaces `--disable-mcp`); a claude.ai connector cannot be on a lead's list. An older app that does not know the list no longer wipes it when you edit a thread.
+
+## The Mac app presses the answer to a thread session's trust and MCP questions
+
+- The Mac app now shows a thread session's folder-trust, "new MCP server" and login questions to the bridge, and presses Up or Down and Enter for a tap on the card, but only when the tap carries the signature of a phone paired in `devices.json`, the screen still shows the same question, and nobody is typing in it. Login's "Open on the Mac" brings Terminals forward and presses nothing. When the bridge makes no card, the thread gets the same "open Terminals" line as before, now after a 15 second wait.
+
+## The "can't be resumed" notice appears together with the stopped status
+
+- When the last conversation could not be resumed, the menu's notice and its session status changed at slightly different moments: the notice could show next to "Session: restarting" while the old session was being cleared, or stay hidden for up to a second after the session had stopped. They now change together.
+
+## Answer a session's start-up question with a tap
+
+- When a thread's own session stops on its folder-trust question, the "new MCP server" question or a login prompt, the app can now show it as a card with the same buttons the session shows, in the same order, and you answer with one tap on your iPhone, the web app or the Mac app. The Mac presses the key for you only after it checks your signed tap came from one of your paired devices, that the card is exactly the question on its screen, and that the screen still shows it, and says so ("Answered on <device>") on every device. The first answer wins. If the screen has changed, nothing is pressed and the card says so. If nobody answers in 15 minutes the card expires and the thread gets the same one-line note as before. Login only offers "Open on the Mac"; the bypass-permissions question and anything Talos does not recognise are unchanged. This part is the phone and web side and the bridge: it stays off until the Mac app side lands, and until your relay is updated nothing changes.
+
+## Typing in the Terminals window no longer stalls while a thread session is slow to answer tmux
+
+- When tmux was slow to answer, the Mac app's regular checks (on the thread sessions, and on the agent's settings every few seconds) piled up behind it, and typing in the Terminals window, or the window itself, could lag or stall. The app now reads the last known state and settings without waiting. A few setup actions (choosing a folder, Adopt, Check again) can still wait for a slow tmux.
+
+## An unsent line for a thread's session is never "finished" onto an empty box
+
+- When the app had typed a thread's pointer line but not yet pressed Enter (after a relaunch, or within one session while the Enter was held up), clearing the input box at the wrong moment (a redraw caught with no box showing) could make the app press Enter on nothing, so the message silently went to the main session. The Enter is now sent only when the box holds exactly the app's own line, looked at just before it is sent; if the box is empty, the line is typed again.
+
+## The Terminals note for unsent text no longer promises the message waits
+
+- When a thread's session had unsent text in its input box, the Terminals window and the thread's notice said "your message is waiting". When a session's input box wasn't showing yet, the Terminals window said so too. Those lines only appear after 90 to 120 seconds, and by then Talos has given the message to the main session. They now say the message has probably gone to the main session.
+
+## A message for a thread's own session survives the Mac app quitting
+
+- If the Mac app quit, crashed or relaunched for an update just after a message arrived for a thread with its own session, the line telling that session to read it was lost, and the thread sat idle until the message went to the main session. It is now saved, and the app types it when it comes back if the message is probably still waiting for the session (the app estimates this from when the message arrived). If the app went after the line was typed but before it was sent, it finishes with Enter alone, and no longer mistakes its own line for your unsent text, which used to hold every later message from that thread. If the message has probably already gone to main, nothing is typed, and the app's own line is taken out of the box, but only when it is the only thing there and nobody has Terminals open on that session. Otherwise the app leaves the box alone and the thread gets one line asking you to clear it.
+
+## A heartbeat that was off and then could not check anything still skips the backlog
+
+- If the heartbeat had been off for days and every source then failed, you only saw "Heartbeat check failed", and the next run, no longer counted as off, could post the whole backlog of a source that came back. Now that run also says "Heartbeat was off for N days", the heartbeat stays in its start-over state (a new `cold_since` mark in its state file), and the first run where a source answers skips the backlog as usual. A source that is down while the heartbeat keeps running is unaffected.
+
+## The menu's "needs you" line matches what is on screen
+
+- When one start-up dialog gave way to the dev-channel dialog (straight away, or after the screen went blank for a moment), the menu could keep saying "folder trust on screen" while the dev-channel dialog was the one waiting. The menu line now describes what is waiting now, as the Terminals row does, and still disappears when nothing waits.
+
+## The cold-start question comes back
+
+- If the agent's screen went blank for a moment between two start-up dialogs, the question about confirming the dev-channel dialog could be lost, and later you were only told "a dialog needs you". The question now comes back when that dialog is up again.
+
+## A thread session's message line waits for Claude's input box
+
+- A thread session that connected to Talos before Claude had drawn its input box (a blank pane, a banner, or a dialog still being drawn) could get the "new message" line typed into it. The line is now typed only once the input box is on the screen. If the box still isn't there 90 seconds after the message is due, the thread gets one line, "<thread>'s session isn't showing its input box yet. Open Terminals → <thread> to see what it's waiting on.", and the thread shows as **Needs you** in Terminals. The session is left running, and the line is typed when the box appears.
+- Tests cover a session that stays blank and then draws its box, one that never draws it (including a later hold telling the thread again), and an Enter still owed when the box leaves. They also check the saved screens of Claude's trust, MCP, bypass and permission dialogs and its question prompts, none of which counts as an input box.
+
+## A phone that drops an upload no longer files a problem report
+
+- When a phone closed a connection partway through a request (such as an upload), the relay filed it as a problem, "Error: aborted", and it reached the Mac. Nothing was wrong on the relay, so it is now only a debug line. Every other relay error is still reported.
+
+## The "session is stuck" check no longer waits for a free thread
+
+- The Mac asks `claude agents` every few seconds whether the agent is still listed, and two misses in a row raise "stuck". That check now has its own queue, so it is answered even when all the app's own shared threads are busy; before, the warning could come late.
+
+## An agent argument that ends in a semicolon now reaches Claude as typed
+
+- An agent argument in the Mac app's config (or an environment value, or a session's folder) that ended in `;`, such as `be brief;`, was read by tmux as the end of its own command, so the agent did not start. The Mac now escapes these for tmux, on a first start and a restart (a thread session's own arguments were never affected; only a folder name ending in `;` was, and that is escaped too). A `;` in the middle of a value was never a problem.
+- Tests start the agent through a real tmux with such arguments (`be brief;`, `;` alone, `a\;`, `two;;`) and check that the agent receives each one exactly, on the first start and on a restart.
+
+## A conversation that can't be resumed is told as that, even when the agent exits at once
+
+- When the agent's last conversation is gone, Claude Code prints its error and quits immediately. If that happened before the Mac could read the agent's process (a slow or busy Mac, or just a fast exit), the menu said "The agent couldn't start: the agent exited immediately." and did not offer **Start fresh**. It now reads the dead screen and says "The last conversation can't be resumed." with **Start fresh**, the same as when the exit is seen a moment later.
+- The Mac also no longer clears a restarted agent's screen history in a separate step after the restart, which could wipe the line a quick exit had just printed; it is now one step with the restart.
+
+## One web-address check, now in the kit too
+
+- The kit's two URL fetches, the update source (`talos update`) and a calendar's ICS address (the quiet check-ins), now refuse any address Talos will not contact: the same list as the app (private, loopback, link-local, cloud metadata, and every IPv6 form that carries one). It is checked on the address the connection really uses, for the first request and for every redirect, so a name that points inside your network or a redirect to one is refused. Only http and https are fetched: a redirect to `ftp:`, `file:` or `data:` is refused. An update source or calendar on your own machine (`localhost`, `127.0.0.1`, `::1`) still works, on its own port only.
+- Environment and system proxy settings are ignored for these two fetches, because a proxy hides where the request really goes; a failed fetch says so.
+- The kit's copy cannot quietly drift from the app's: `kit/scripts/test-address.sh` runs the shared address list (now including every blocked range's first and last address and its neighbours, and the IPv4 addresses carried inside IPv6: mapped, compatible, NAT64, 6to4, Teredo) against it, and `scripts/address-parity.test.ts` runs both checks over about 100,000 generated addresses and spellings and fails on any difference.
+
+## Terminal prompts reach you
+
+- When the main session or a thread's own session stops on a question that waits for a keypress (a tool permission such as a Bash command or a new file, the agent's own multiple-choice question, any other choice list), you now get one line: the main session's goes to the default thread, a thread session's to its own thread. It names the kind and the question ("Do you want to proceed?") and says to answer it in Terminal on the Mac. The Mac waits until the prompt has held still for 5 seconds, sends one line per prompt (a relaunch of the app does not send it again), and never types into it. The folder-trust, MCP-consent, bypass and login screens keep their own lines.
+- Found from the shape of the screen, checked against captures of the real Claude Code 2.1.318 (the idle input box, a finished turn and a reply that quotes a prompt are not prompts). A thread session that opens on such a prompt now stays up for you instead of being given up as "never connected".
+- Review fixes: a resize, a cursor move or text typed into "Type something." no longer makes a prompt look new (the notice is keyed to the prompt itself, not to its layout); the dev-channel warning is never also announced as a generic prompt; a picker you opened yourself (/model, /config, a slash menu) does not send a notice while you are typing in it; the agent's own "Chat about this" row, the Edit permission and the tab header of several questions are recognised; and Claude Code's own "Dangerous rm operation" prompt, whose countdown ticks every second, is announced once and says that Claude Code blocks it automatically in about two minutes.
+- A fresh thread session whose input box shows Claude's grey suggestion ("Try …") is no longer taken for one with unsent text: the colours of the row decide (the suggestion is dim, your own text is not), so its first message is typed instead of waiting for ever.
+- Both wordings of the "that conversation can't be resumed" error are covered by tests in the main session and in thread sessions, and the process-group kill (what a killed session leaves behind) is pinned by tests.
+
+## Mini Talos delivers thread replies
+
+- With the Mac companion on, a new reply in a thread now comes from him: a bubble with the thread name ("WORK · new reply"), the first line of the reply, and Open and Later. Open, or a click on the bubble, jumps to that thread; Later puts it away. It stays until you answer it or 30 seconds pass, and a pointer on it holds it. Several replies at once are one bubble ("3 new replies: Work, OC Test…"), and Open then goes Home.
+- While you work in the Talos window, the page now decides what is a new reply: one it would have shown as its jump banner is held for him, he shows it in his bubble and tells the page, and the page forgets it. When he stops (snooze, hidden, a call, quiet hours, the setting off, the app quitting) the page shows its own jump banner for whatever he did not show. Every reply ends as exactly one of his bubble, a macOS banner he posts, or the page's banner; a reply that waits more than 15 minutes mid-turn is posted as a macOS banner. The page reports the thread on screen (a card page counts as its thread) and what it holds in `companion_state` (`viewing`, `held`), and he answers in `companion_replies` (`on`, `shown`).
+- With Talos in the background it works as before: the macOS banner, taken by him only when he can say it. A reply in the thread you are reading gets nothing only while Talos is the window in front. Quiet hours add no banner.
+- The bubble's text is shown on your screen; the app does not promise to keep it out of screenshots, shares or a mirrored display.
+- A new setting, **Mini Talos delivers thread replies**, is on by default; off gives the old one-line bubble. **Also show reply banners** adds the macOS banner when Talos is in the background.
+
+## Terminal tabs show on a normal launch
+
+- The Terminal screen's tabs did not appear unless you had opened the Terminals window first: the main window's terminal read its sessions through that window, and nothing attached them on a normal launch. The app now creates its controller at launch and the Terminal screen reads it directly, so the tabs (and Main's terminal) come up the first time you open Terminal.
+
+## Session switcher: the MCP, bypass and login prompts checked against real Claude Code
+
+- The Terminals window's "Needs you" detection for Claude Code's MCP-server consent, bypass-permissions disclaimer and "not logged in" screens is now tested against screens captured from the real Claude Code 2.1.318, not invented ones. The MCP and bypass prompts were already recognised. A session that is not logged in was not: Claude Code shows no question there, only "Not logged in · Run /login" in the footer under the input box, and the Mac read that as a normal idle screen. It now shows Needs you with the login line. The same words in ordinary output do not trigger it. The "login expired" error of a running session could not be captured safely and is still tested with a written-out screen.
+
+## Terminal screen: a tab for every session
+
+- **Terminal** in the Talos window's sidebar now has a strip of tabs across the top: Main, then every thread that has its own session, each with a state dot and a word (working, live, parked, needs you, failed). Pick a tab and the raw Claude CLI terminal below switches to that session. Switching only ends the app's own viewer: no key is sent and no session is stopped. Ctrl+1 to Ctrl+9 switch tabs while the screen is up (on this screen they no longer open thread 1 to 9), and the arrow keys, Home and End move along the strip. The tab you picked last is remembered for that window. Ctrl+1 to Ctrl+9 also work after you click into the terminal: the Mac takes them before the terminal does, so Ctrl+3 (ESC) never interrupts a session. The tab states keep updating while a Resume panel is showing, so a resumed session turns live in its tab.
+- A parked or never-started thread shows a **Resume** (or **Start**) button where the terminal would be, and what the Mac answered ("Asked to resume the session…", or why it could not). Press it and the Mac asks the thread's worker to start, the same way the Terminals window does; it only does so for a thread that is parked or off right now. A failed thread shows its error. The list follows the sessions live. A Mac app from before the tabs keeps showing the one terminal for Main, with no strip; a page from before the tabs gets no list.
+- **Terminals…** (the separate window) stays, but it no longer takes ⌘K: in the Talos window ⌘K is Search, and the two collided. Choose it from the menu bar item or Window, Terminals…. Help's shortcut list and docs/desktop.md say so.
+
+## Bridge hardening: restart overlap, slow ps, PR checks, schedule rows
+
+- A bridge that starts while an older one is still shutting down no longer kills the older one's running heartbeat sources or overwrites its saved state: the startup sweep now runs inside the schedule queue, skips any source whose recording bridge is still alive, and reads the store again right before it writes so a record added meanwhile is kept. A group that is already gone is cleared even if its bridge is alive. Sources recorded by an older build carry no bridge marker and are judged as before.
+- Starting a heartbeat command source no longer freezes the bridge for up to 2 seconds while `ps` answers: the lookup is asynchronous with a timeout, and a source that ends before it answers is simply not recorded, and the time `ps` takes is not charged to the source's own limit.
+- The GitHub heartbeat's PR checks now stop together: after one lookup fails, when the run's deadline passes or when the run is stopped, every `gh` call still running is killed instead of left to finish.
+- The small records the bridge keeps for a thread session's schedule work (which session proposed a waiting card, which session started a run) are now removed when the card is approved, declined, replaced or expires and when the run closes, and a start-up sweep removes any left over from a crash or older than 7 days. A card for a job that runs in a thread session is now refused at approval, with nothing changed, if the record of who proposed it is missing.
+
 ## Thread row menu and trust mode toggle
 
 - Each thread in the sidebar (and each row of the Threads list on a phone) now has a "..." at its right end that opens that thread's settings: name, icon, color, notifications and, where it applies, Own session with Park now, Restart and Start fresh. It shows on hover or keyboard focus with a mouse and always on touch; it never opens the thread, and Schedules (not a thread) has none. General and Inbox get settings without an Own session section. The pencil at the top of the list stays for reordering and renaming.

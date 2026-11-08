@@ -29,9 +29,12 @@ public final class Supervisor: @unchecked Sendable {
   let signaller: GroupSignaller
   let random: @Sendable () -> Double
   let q: DispatchQueue
+  /// The agents poll's own serial queue, not `DispatchQueue.global`: that hop waits for a pool thread, and the process's own pool gives
+  /// none while every cooperative thread in it is blocked (the note in SwiftTermPtyHost.swift), so no poll ran although `q` did.
+  private let pollQ: DispatchQueue
   private var timer: DispatchSourceTimer?
 
-  private(set) var config: DesktopConfig
+  private(set) var config: DesktopConfig { didSet { statusLock.withLock { _config = config } } }
   private(set) var phase: Phase = .idle
   private(set) var launch: Launch?
   /// The just-exited child's group and leader start time. Cleared once a stop completes.
@@ -51,7 +54,6 @@ public final class Supervisor: @unchecked Sendable {
   private var nextRestartIsCold = false
   /// Set by `startAnyway()` for the one cold launch that follows it; spent by that launch (or cleared right after it).
   private var skipTakeoverOnce = false
-  private var crashLoopPosted = false
   /// Restart and restore requests, and the automatic restore (SupervisorRecovery.swift).
   var recovery = RecoveryState()
   private var lastAgentsPollAt: Double = -.infinity
@@ -61,6 +63,7 @@ public final class Supervisor: @unchecked Sendable {
 
   private let statusLock = NSLock()
   private var _status: Status
+  private var _config: DesktopConfig  // `config` as of its last change, for `currentConfig()`
   private let eventLock = NSLock()
   private var _onEvent: (@Sendable (Event) -> Void)?
 
@@ -84,7 +87,10 @@ public final class Supervisor: @unchecked Sendable {
     self.signaller = signaller ?? GroupSignaller(probe: probe)
     self.random = random
     self.q = DispatchQueue(label: "talos.supervisor.\(options.name)")
-    self.config = ((try? ConfigFile.load(options.configPath)) ?? nil) ?? .defaults
+    self.pollQ = DispatchQueue(label: "talos.supervisor.agents.\(options.name)", qos: .utility)
+    let loaded = ((try? ConfigFile.load(options.configPath)) ?? nil) ?? .defaults
+    self.config = loaded
+    self._config = loaded
     self.loop = CrashLoop(
       restartWindow: timings.restartWindow, restartCap: timings.restartCap, confirmWindow: timings.confirmWindow,
       confirmCap: timings.confirmCap)
@@ -261,7 +267,9 @@ public final class Supervisor: @unchecked Sendable {
     publish()
   }
 
-  public func currentConfig() -> DesktopConfig { q.sync { config } }
+  /// The config as of its last change. A lock read, never the queue: the tick holds the queue through its tmux calls (10 s each),
+  /// and this is read on the main thread (every 5 s by the status poll) and by the workers' tick.
+  public func currentConfig() -> DesktopConfig { statusLock.withLock { _config } }
 
   /// The rollback command (4.7): `cd <dir> && <env> claude <args> --resume <current id>`.
   public func terminalCommand() -> String {
@@ -412,6 +420,7 @@ public final class Supervisor: @unchecked Sendable {
         try host.restart(executable: claude, args: args, env: env, cwd: cwd)
       }
     } catch {
+      if resumeMissingAtStart(error, mode) { return }
       // A restart whose child dies before its pid can be read is a crash like any other: it counts toward the cap.
       if kind == .supervisorRestart { return crashedWithoutChild(String(describing: error)) }
       return fail(.startFailed("\(error)"))
@@ -553,6 +562,7 @@ public final class Supervisor: @unchecked Sendable {
     let unread = read == nil
     let screen = DialogMatcher.classify(rows)
     if case .devChannels(let d) = screen { l.devDialogSeen = d }
+    if !unread { watchPrompt(rows, launch: &l, now: now) }
 
     // The registration notice: channels are live, so the dialog was answered. It only counts after this start showed
     // the dialog (a stale notice in old scrollback must never look like a confirmation).
@@ -647,6 +657,9 @@ public final class Supervisor: @unchecked Sendable {
       if case .dialog(let named) = needsYou, !screen.isDialog || named != screen.label { over = true }
       // A held question is about the dialog on screen. Once that is gone and the stall was told before, the stall is what is left.
       if needsYouNamesTheDialog, !dialogOnScreen, l.notifiedScreens.contains("start") { over = true }
+      // A screen read blank between two dialogs empties the slot while the cold-start question is still held. The dev-channel
+      // dialog itself (never another dialog) coming up on an empty slot gets the question back, quietly, before the stall check.
+      if needsYou == nil, phase == .starting, l.question != nil, dialogOnScreen { over = true }
       if over { needsYou = Self.alarmUnderneath(l, phase: phase, devDialogOnScreen: dialogOnScreen) }
     }
 
@@ -730,7 +743,7 @@ public final class Supervisor: @unchecked Sendable {
     let probe = self.probe
     let queue = q
     let me = WeakRef(self)
-    DispatchQueue.global(qos: .utility).async {
+    pollQ.async {
       let entries = probe.agents(claude: claude, env: env)
       queue.async { me.value?.handleAgents(entries, pid: pid) }
     }
@@ -817,9 +830,7 @@ public final class Supervisor: @unchecked Sendable {
 
     let rows = info.lastRows.isEmpty ? (host.visibleRows() ?? []) : info.lastRows
     if let rid = l.resumeId, DialogMatcher.resumeMissing(rows) {
-      audit("resume_missing", ["session": rid])
-      emit(.resumeFailed(sessionId: rid))
-      return beginCleanup(pgid: l.childPid, holders: holders, now: now, then: .stop(.resumeMissing(rid), closeHost: false))
+      return resumeMissingStop(rid, pgid: l.childPid, holders: holders, now: now)
     }
     guard config.autoRestart else {
       return beginCleanup(pgid: l.childPid, holders: holders, now: now, then: .stop(.crashedNoAutoRestart, closeHost: false))
@@ -855,7 +866,7 @@ public final class Supervisor: @unchecked Sendable {
     publish()
   }
 
-  private func beginCleanup(pgid: Int32, holders: [Holder], now: Double, then: AfterCleanup) {
+  func beginCleanup(pgid: Int32, holders: [Holder], now: Double, then: AfterCleanup) {
     signaller.signal(pgid, SIGTERM)
     cleanup = Cleanup(pgid: pgid, deadline: now + timings.cleanupWait, holders: holders, then: then)
     phase = .cleaningUp
@@ -887,8 +898,8 @@ public final class Supervisor: @unchecked Sendable {
         restartAt = nil
         doRestart(now)
       }
-    case .stop(let reason, let close):
-      finishStop(reason, closeHost: close)
+    case .stop(let reason, let close, let announcing):
+      finishStop(reason, closeHost: close, announcing: announcing)
     }
   }
 
@@ -942,7 +953,7 @@ public final class Supervisor: @unchecked Sendable {
     finishStop(stopThen, closeHost: stopCloseHost)
   }
 
-  private func finishStop(_ reason: StopReason, closeHost: Bool) {
+  func finishStop(_ reason: StopReason, closeHost: Bool, announcing: Event? = nil) {
     // The group is gone: forget it, so its pid number can never whitelist someone else's session later.
     if let l = launch { signaller.release(l.childPid) }
     if let p = previousChild { signaller.release(p.pgid) }
@@ -950,19 +961,12 @@ public final class Supervisor: @unchecked Sendable {
     launch = nil
     if closeHost { host.close() }
     phase = .stopped(reason)
-    emit(.stopped(reason))
     publish()
+    if let e = announcing { emit(e) }  // after the status: a listener that reads it sees the stop
+    emit(.stopped(reason))
     let a = afterStop
     afterStop = nil
     a?()
-  }
-
-  // MARK: crash-loop post
-
-  private func postCrashLoopOnce() {
-    guard !crashLoopPosted else { return }
-    crashLoopPosted = true
-    postToPhone { CrashPost.text(agentName: $0, at: CrashPost.clockTime(Date())) }
   }
 
   // MARK: plumbing

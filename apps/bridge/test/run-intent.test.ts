@@ -509,17 +509,30 @@ describe('once only', () => {
 })
 
 describe('a backlog', () => {
+  const settleReplay = async (clock: FakeClock, ids: string[]) => {
+    for (const id of ids)
+      await hh().relay.expectFrame('ack', (a) => a.ref === id && a.stage === 'delivered', { direction: 'from_bridge' })
+    clock.advance(1000)
+    await hh().bridge.inbound?.idle()
+  }
+
   test('a Run in a replayed batch of old messages is never folded into the backlog note; it is judged on its own', async () => {
-    await start({ startBridge: false })
-    const old = ago(20 * 60_000)
+    const clock = fakeClock(new Date().toISOString())
+    await start({ startBridge: false, clock })
+    const old = new Date(clock.now() - 20 * 60_000).toISOString()
     const q = async (frame: Record<string, unknown>, seq: number) =>
       hh().relay.sendToBridge({ ...frame, relay: { seq, received_at: old } } as never)
-    await q(await hh().app.buildMessage('general', 'first owner message'), 1)
-    await q(await runFrame(hh()), 2)
-    await q(await hh().app.buildMessage('general', 'second owner message'), 3)
+    const frames = [
+      await q(await hh().app.buildMessage('general', 'first owner message'), 1),
+      await q(await runFrame(hh()), 2),
+      await q(await hh().app.buildMessage('general', 'second owner message'), 3),
+    ]
     hh().bridge.start()
+    await settleReplay(
+      clock,
+      frames.map((f) => f.id as string),
+    )
     await hh().waitNotes(2)
-    await sleep(200)
     const backlog = hh().notes.find((n) => n.meta.kind === 'backlog')
     expect(backlog?.meta.batch_count).toBe('2')
     expect(backlog?.content).not.toContain('echo hello')
@@ -530,16 +543,22 @@ describe('a backlog', () => {
   })
 
   test('an old Run in that batch is refused by age, not delivered with a fresh time', async () => {
-    await start({ startBridge: false })
-    const old = ago(20 * 60_000)
+    const clock = fakeClock(new Date().toISOString())
+    await start({ startBridge: false, clock })
+    const old = new Date(clock.now() - 20 * 60_000).toISOString()
     const q = async (frame: Record<string, unknown>, seq: number) =>
       hh().relay.sendToBridge({ ...frame, relay: { seq, received_at: old } } as never)
-    await q(await hh().app.buildMessage('general', 'first owner message'), 1)
-    await q(await runFrame(hh(), SCRIPT, { ts: ago(2 * 24 * HOUR) }), 2)
-    await q(await hh().app.buildMessage('general', 'second owner message'), 3)
+    const frames = [
+      await q(await hh().app.buildMessage('general', 'first owner message'), 1),
+      await q(await runFrame(hh(), SCRIPT, { ts: new Date(clock.now() - 2 * 24 * HOUR).toISOString() }), 2),
+      await q(await hh().app.buildMessage('general', 'second owner message'), 3),
+    ]
     hh().bridge.start()
+    await settleReplay(
+      clock,
+      frames.map((f) => f.id as string),
+    )
     await hh().waitNotes(1)
-    await settle(hh(), () => notices(hh()).length > 0)
     expect(hh().notes.every((n) => n.meta.run === undefined)).toBe(true)
     expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
   })
@@ -601,8 +620,15 @@ describe('a Run replayed after the history was kept aside', () => {
     expect(b.ctx.store.kvGet('history_reset_at')).toBeDefined()
     const before = notices(hh()).length
     hh().relay.sendToBridge(f as never)
-    await ticking(clock, () => notices(hh()).length > before, 'the refusal')
-    expect(notices(hh()).at(-1)).toMatch(/history was reset/)
+    // wait for the refusal itself: the restarted bridge's own startup notice can land in this window and is not it
+    await ticking(
+      clock,
+      () =>
+        notices(hh())
+          .slice(before)
+          .some((n) => /history was reset/.test(n)),
+      'the refusal',
+    )
     expect(notes.filter((n) => n.meta.run !== undefined || n.content.includes('echo hello'))).toHaveLength(0)
   })
 
@@ -616,8 +642,15 @@ describe('a Run replayed after the history was kept aside', () => {
     await advanceSteps(clock, 180_000, 20_000, b.client) // the signing time is now past the reset and its margin
     const before = notices(hh()).length
     hh().app.send(await runFrame(hh(), SCRIPT, { original_ts: ago(10 * 60_000) })) // but the words were written before it
-    await ticking(clock, () => notices(hh()).length > before, 'the refusal')
-    expect(notices(hh()).at(-1)).toMatch(/history was reset/)
+    // wait for the refusal itself: the restarted bridge's own startup notice can land in this window and is not it
+    await ticking(
+      clock,
+      () =>
+        notices(hh())
+          .slice(before)
+          .some((n) => /history was reset/.test(n)),
+      'the refusal',
+    )
     expect(notes.filter((n) => n.meta.run !== undefined)).toHaveLength(0)
   })
 

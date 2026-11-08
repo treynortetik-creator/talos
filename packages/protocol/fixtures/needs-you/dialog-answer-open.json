@@ -1,0 +1,15 @@
+{
+  "v": 2,
+  "dialog_id": "Hc4Pq9ZtLm2Xw7RvNa5KdB",
+  "action": "open",
+  "label": "Open on the Mac",
+  "by": "Alex's iPhone",
+  "at": "2026-11-07T10:00:09.000Z",
+  "control_id": "dc_01M6V2TGWJCH4P49F79Q2317CD",
+  "proof": {
+    "signed": "{\"action\":\"primary\",\"card_id\":\"c_01JBF3V7Q8K2M4N6P8R0S2T404\",\"device_id\":\"d_rjxnk4xufxem5xago5zd\",\"id\":\"01JBF3V7Q8K2M4N6P8R0S2T4AA\",\"payload_hash\":\"sha256:8f123ec63d02c53517b95e0e44cf87ac90ac09a10893b446895c023a5fc0eca1\",\"ts\":\"2026-11-07T10:00:09.000Z\",\"type\":\"card.resolve\",\"v\":1}",
+    "osig": "BKC5KA7Fop86SWR2YU68Y-0i--9FEB6W0VH-FPqDVkGzO9aUtx9ac6Z5nK0VdOW49dxwV-0MmiLHDBuJlCeyfg",
+    "device_id": "d_rjxnk4xufxem5xago5zd",
+    "binding": "{\"allow_edit\":false,\"allow_revise\":false,\"attachments\":[],\"body\":\"Inbox's session needs you to sign in to Claude on the Mac.\",\"body_format\":\"plain\",\"destination\":[],\"expires_at\":\"2026-11-07T10:15:00.000Z\",\"fields\":[],\"id\":\"c_01JBF3V7Q8K2M4N6P8R0S2T404\",\"kill_label\":\"\",\"kind\":\"dialog\",\"origin\":\"background\",\"payload\":{\"dialog_id\":\"Hc4Pq9ZtLm2Xw7RvNa5KdB\",\"dialog_kind\":\"login\",\"expires_at\":\"2026-11-07T10:15:00.000Z\",\"options\":[],\"subject\":null,\"thread\":\"inbox2\"},\"primary_label\":\"Open on the Mac\",\"risk\":\"low\",\"summary\":\"Inbox's session is waiting for you.\",\"thread_id\":\"inbox2\",\"title\":\"Inbox needs you to sign in\"}"
+  }
+}

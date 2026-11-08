@@ -9,7 +9,7 @@ A small menu-bar app for your Mac. It is optional: everything in [`SETUP.md`](SE
 - **Windows**: the Talos web app in its own window, the agent's terminal, and a quick-compose panel you can open from any
   app with a hotkey (default Control-Option-Space).
 - **Notifications** with fixed text only ("New reply in General"), never message content.
-- **A desktop companion** (off until you turn it on): a small figure that shows when the agent is working or needs you. When idle it breathes, blinks, fidgets and takes short walks along its line; "Rounds and little moments" in settings turns the fidgets, walks and Rounds off; the breathing, blinks, ember, direct reactions, dozing off and waking stay.
+- **A desktop companion** (off until you turn it on): a small figure that shows when the agent is working or needs you. When idle it breathes, blinks, fidgets and takes short walks along its line, and nine times a day, spread across the whole 24 hours (quiet hours included, at least 40 minutes apart), it goes on a longer round; "Rounds and little moments" in settings turns the fidgets, walks and Rounds off; the breathing, blinks, ember, direct reactions, dozing off and waking stay.
 
 It is built from source on your Mac. There is no download.
 
@@ -107,7 +107,7 @@ and the Bridge line leaves "unknown". `talos-app status` and `talos-app status -
 | Open the app in a window                                       | Menu, **Show Talos**. Closing the window only hides it.                                                          |
 | Read Help                                                      | Menu, **Talos Help** (or Help, Talos Help at the top of the screen). It opens the Help page in the Talos window. |
 | See or type into the agent                                     | Menu, **Terminals…**. It is the real session; closing the window does not stop the agent.                        |
-| See the agent in the Talos window                              | Sidebar, **Terminal** (Mac app only). Leaving it ends only the view; the agent keeps running.                    |
+| See the agent or a thread's session in the Talos window        | Sidebar, **Terminal** (Mac app only), then the tabs across the top (below). Leaving it ends only the view.       |
 | Send a quick message from any app                              | The compose hotkey, type or dictate, Command-Return. Esc closes without sending. Change it in Hotkeys.           |
 | See a thread's own session, or answer a question it stopped on | Menu, **Terminals…**, then pick the thread in the sidebar (below).                                               |
 | Stop or restart the agent                                      | Menu, **Stop session** / **Restart session**. **Quit and stop the agent** also ends the session.                 |
@@ -116,9 +116,23 @@ and the Bridge line leaves "unknown". `talos-app status` and `talos-app status -
 | Update Talos                                                   | Build again and run `install.sh`; a tmux agent keeps running through it.                                         |
 | Go back to running it in Terminal                              | Menu, **Copy Terminal command**, then **Quit and stop the agent**, then paste the command in Terminal.           |
 
+## How a new reply reaches you
+
+With the companion on, a new reply in a thread comes from him, not from a macOS banner:
+
+- His bubble shows the thread name in capitals with "new reply" ("WORK · new reply"), the first line of the reply (cut with "…"), and two buttons. **Open**, or a click on the bubble, takes you to that thread. **Later** puts it away; the reply stays in Talos.
+- It stays until you press Open or Later, or for 30 seconds. A pointer on him or on the bubble holds it, and a new reply restarts the clock.
+- Several replies at once make one bubble, such as "3 new replies: Work, OC Test…". Open then goes to Home, which shows them all.
+- **What is on screen.** The first line is asked of the Talos page when the reply lands, shown in his bubble, cleared when the bubble goes, never put in a notification and never stored. The bubble is a window on your screen like any other: a screenshot, a screen share or a mirrored display can show it. The app asks macOS to leave it out of captures, but does not rely on that and does not promise it. If the text of a reply must never be seen, turn him off or snooze him.
+- **While you work in the Talos window**, the page decides. A reply it would have shown as its own jump banner (another thread than the one on screen, a thread that notifies, a fresh reply; a card page counts as its thread) is held for him instead. He is told what is held, takes each one into his bubble, and tells the page which ones he showed, so you get one delivery, not two. A reply that lands while its thread is mid-turn waits for the turn to end, so the first line is the real one. He ignores the 60 second pause the plain bubble has. A drag does not lose it: it shows when you drop him.
+- **A reply is never lost.** Every reply the page holds ends as exactly one of: his bubble, a macOS banner he posted, or the page's own jump banner. When he stops (snoozed, hidden, off, a call, quiet hours, the setting off, something that needs you, no feed, or the app quits), the page shows one jump banner, the newest, for what it still holds. If Talos is not in front when he stops, he posts the macOS banner for what he had taken instead. In quiet hours he posts no banner, and the page keeps the reply for its own banner. A reply held longer than 15 minutes (a very long turn) is posted as a macOS banner. A reload of the page forgets what it held (the unread count stays). A browser, the phone and an app with no companion see no change.
+- **When Talos is in the background**, the page's banner comes as a macOS banner, as before, and he takes it only when he can say it: on screen, awake, not in quiet hours, no call, a live feed, and not showing something that needs you. A reply in a thread whose turn is running keeps its banner (his Done waits for that turn). A reply in the thread on screen gets nothing only while Talos is the window in front; a window that is merely visible does not count as read.
+- Quiet hours (Settings, quiet window) hold his bubble back and add no banner. They never change how he looks or moves: he idles, reacts to clicks and drags and walks as he does by day. Only Reduce Motion, Low Power, a running mic, Mini mode and a hidden panel hold his animation still. The app does not read macOS Focus, so Focus silences the macOS banner but not his bubble, as with every other bubble of his; turn him off or snooze him to silence it.
+- Settings, Companion: **Mini Talos delivers thread replies** (on by default). Off gives the short one-line "New reply in <thread>" bubble and the page's own banners. **Also show reply banners** (off by default) also posts the macOS banner when Talos is in the background; it does nothing while you are working in the Talos window.
+
 ## The Terminals window: Main and every thread session
 
-**Terminals…** (menu bar item, or Window → Terminals…, ⌘K) is one window. The **Sessions** tab has a sidebar listing Main and
+**Terminals…** (menu bar item, or Window → Terminals…; it has no key, because ⌘K is Search in the Talos window) is one window. The **Sessions** tab has a sidebar listing Main and
 every thread session, each with a state badge: Working, Idle, Parked, Stopping, Failed or Needs you (Main shows Live, Starting,
 Stopping or Not started). Click an entry, or press ⌘1 to ⌘9 while the window is in front, and the terminal beside the list
 switches to that tmux session. The list follows the sessions live. Switching ends only our own viewer: every session keeps
@@ -126,10 +140,37 @@ running. The tab appears with the tmux host; with the owned-pty fallback the win
 
 - **Live, idle, working or starting:** the terminal is that session's real pane.
 - **Needs you:** the pane is waiting on a Claude Code prompt (such as "trust this folder"). Answer it in the terminal; Talos
-  never types into a dialog. The thread also got one plain line saying so.
+  types into a dialog only for a tap on a card (folder trust, MCP consent: Up or Down and Enter, see OPTION-C "Needs-you prompts"),
+  never otherwise. The thread also got one plain line saying so, unless the bridge made a card for it.
 - **Parked or not started:** nothing is running, so a **Resume** (or **Start**) button stands in for the terminal. It asks the
   session to start, resuming the same conversation.
 - **Failed:** the error in words, no terminal.
+
+## The Terminal screen: a tab for every session
+
+Sidebar, **Terminal** (Mac app only; a browser or the phone app has no shell and `/terminal` goes Home). Across the top is a strip
+of tabs: **Main**, then every thread that has its own session, each with a state dot and a word: working, live, parked, needs you,
+failed (also starting, stopping, not started). The picked tab is underlined; the raw Claude CLI terminal is below it. The list is
+the same one the Terminals window shows, so the two always agree.
+
+- **Switch:** click a tab, use the arrow keys, Home and End on the strip, or press **Ctrl+1 to Ctrl+9** (Main is 1). On this screen
+  those chords pick tabs instead of opening thread 1 to 9. A number with no tab does nothing. This holds after you click into the
+  terminal too: the Mac takes Ctrl+1 to Ctrl+9 before the terminal does and tells the page, so no control byte (Ctrl+3 is ESC, Ctrl+8 is
+  DEL) reaches the session. The chord is the physical key (digit row or keypad, Caps Lock on or off, any keyboard layout); Ctrl+Shift+digit is another chord and goes to the terminal. After the switch the new terminal has the keyboard, so typing and the next Ctrl+digit work. Every other key goes to the terminal untouched. The tab you picked last is
+  remembered for that window.
+- **Switching is safe:** the Mac re-points only its own `tmux attach` at `=agent` or `=t-<thread>` on Talos's tmux server. No key is
+  sent, and no session is detached or killed. The page names only "main" or a thread id; the session name is worked out on the Mac
+  from the id (`WorkerSpec.tmuxName`) and an id that is not in the list attaches nothing.
+- **Parked or not started:** a Resume (or Start) button stands in for the terminal. It asks the thread's worker to start through the
+  same request as the Terminals window, only for a thread that is parked or off right now, and shows the Mac's answer.
+- **Failed:** the error in words, no terminal. **Needs you:** the terminal shows the prompt; answer it there.
+- The terminal needs room for 80 columns by 24 rows. Click inside it before typing: the page never moves your typing into it.
+- **Older Mac app or older page:** no list is sent, and the screen is the single Main terminal it was before.
+
+The messages behind it are in `packages/protocol/src/native.ts`: `terminal_view` carries `session`, the page sends `terminal_resume`,
+the page sends `terminal_leave` when the screen is closed (a null room only means "no terminal to show right now", so the list keeps
+following the sessions), and the Mac sends `terminal_sessions`, `terminal_resume_result` and `terminal_select` (a tab it switched itself). The page lists `terminal-tabs/1` in `ready`; the Mac sends the
+list only to a signed-in page that says so.
 
 The **Thread sessions** tab is still there for the one case below.
 

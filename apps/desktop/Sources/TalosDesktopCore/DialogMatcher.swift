@@ -179,6 +179,13 @@ public enum DialogMatcher {
     guard let rule = bottom.lastIndex(where: { isFrameRule($0) }) else { return .none }
     let block = Array(bottom[(rule + 1)...])
     let cleaned = block.map(clean)
+    // Not logged in is not a Select at all (real 2.1.318): the input box stays and the footer row below its last rule ends
+    // with `Not logged in · Run /login`. Only that row counts; the same words in output are above the box.
+    if !cleaned.contains(where: { $0.first == Strings.pointer }),
+      cleaned.contains(where: { row in Strings.login.contains { row.hasSuffix("\u{00B7} \($0)") } })
+    {
+      return .loginExpired
+    }
     guard cleaned.filter({ $0.first == Strings.pointer }).count == 1 else { return .none }
     let footer = cleaned.contains { $0.hasPrefix("Enter to confirm") || $0.contains("Esc to cancel") }
     guard footer || cleaned.contains(where: isIndexedCursor) else { return .none }

@@ -1,16 +1,7 @@
 // The services every relay module receives. Seam: frozen after WP0 (WP8 may edit). Code against these interfaces;
 // WP1 provides the implementations, tests provide fakes.
-import type {
-  AgentConfigT,
-  AttachmentRefT,
-  Frame,
-  FrameOf,
-  FrameType,
-  PushIntent,
-  PushPayloadT,
-} from '@talos-app/protocol'
+import type { AgentConfigT, AttachmentRefT, FrameOf, FrameType, PushIntent, PushPayloadT } from '@talos-app/protocol'
 import type Database from 'better-sqlite3'
-import type { Hono } from 'hono'
 import type { RelayEnv } from './env.ts'
 
 export interface Clock {
@@ -141,14 +132,3 @@ export interface RelayServices {
 
 /** Hono app type shared by every sub-app. `routes.ts` puts the services on the context. */
 export type AppEnv = { Variables: { services: RelayServices } }
-export type RelayApp = Hono<AppEnv>
-
-/** What each module exposes from its `index.ts`. */
-export interface RelayModule {
-  /** Mounted at the root by routes.ts. */
-  routes: RelayApp
-  /** Registers bus handlers, timers and workers. Must be safe to call once per process. */
-  register(services: RelayServices): void | Promise<void>
-}
-
-export type { Frame }

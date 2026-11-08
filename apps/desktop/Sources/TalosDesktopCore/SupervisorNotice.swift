@@ -78,4 +78,27 @@ public enum SupervisorNotice {
 
   /// Menu line when there is no `desktop.json`. Names only controls that exist.
   public static let notSetUp = "Not set up: Settings… → Session → Find a running session, or import your command"
+
+  /// What a prompt nobody named is, in the owner's words: `a 'Bash command' prompt, "Do you want to proceed?"`. The question is screen
+  /// text, cleaned to one short line by the detector; the kind is ours.
+  static func promptWhat(_ p: PromptDetector.Prompt) -> String {
+    var what = p.title.map { "a '\($0)' prompt" } ?? "a prompt"
+    if let q = p.question, !q.isEmpty { what += ", \"\(q)\"" }
+    // Claude Code's own countdown (its dangerous-rm prompt, even in bypass mode): it blocks the call itself when it runs out
+    if let s = p.autoBlockSeconds {
+      what += " (Claude Code blocks it automatically in \(s < 60 ? "under a minute" : "about \((s + 30) / 60) min"))"
+    }
+    return what
+  }
+
+  /// Main's session waits on a prompt of the CLI's: the line for the default thread.
+  public static func mainPromptLine(agentName: String?, prompt: PromptDetector.Prompt) -> String {
+    "\(agentName ?? "The agent") is waiting on \(promptWhat(prompt)); open Terminal on the Mac to answer."
+  }
+
+  /// A thread session waits on a prompt of the CLI's: the line for its own thread (the wording of `WorkerNotice.line`).
+  public static func workerPromptLine(threadName: String, prompt: PromptDetector.Prompt) -> String {
+    let name = SessionSwitcher.cleanTitle(threadName) ?? "A thread"
+    return "\(name)'s session is waiting on \(promptWhat(prompt)); open Terminals \u{2192} \(name) on the Mac to answer."
+  }
 }

@@ -82,20 +82,23 @@ describe('thread screen', () => {
     await waitFor(() => expect(client.store.getState().threads.find((t) => t.id === 'general')?.name).toBe('Main'))
   })
 
-  it('saves "what goes here" as the thread topic (the agent reads it) and shows it under the header', async () => {
+  it('saves "what goes here" as the thread topic (the agent reads it); it is read again in the settings, not under the header', async () => {
     const client = open()
     await userEvent.click(await screen.findByTestId('thread-settings-trigger'))
     const box = await screen.findByLabelText('What goes here')
     await userEvent.type(box, 'Weekly planning')
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
-    expect((await screen.findByTestId('thread-purpose')).textContent).toBe('Weekly planning')
-    expect(client.store.getState().threads.find((t) => t.id === 'general')?.topic).toBe('Weekly planning')
+    await waitFor(() =>
+      expect(client.store.getState().threads.find((t) => t.id === 'general')?.topic).toBe('Weekly planning'),
+    )
+    expect(screen.queryByTestId('thread-purpose')).toBeNull() // no description line under the header any more
+    await userEvent.click(await screen.findByTestId('thread-settings-trigger'))
+    expect((await screen.findByLabelText('What goes here')).textContent).toBe('Weekly planning')
   })
 
   it('a device-only note from before topics is offered as the topic and moved into config on save', async () => {
     localStorage.setItem('talos.thread-descriptions', JSON.stringify({ general: 'Old note' }))
     const client = open()
-    expect((await screen.findByTestId('thread-purpose')).textContent).toBe('Old note')
     await userEvent.click(await screen.findByTestId('thread-settings-trigger'))
     expect((await screen.findByLabelText('What goes here')).textContent).toBe('Old note')
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -113,6 +116,15 @@ describe('thread screen', () => {
     expect(screen.queryByTestId('color-swatches')).toBeNull()
   })
 
+  it('with a Mac that predates threads/2, the note kept on this device is still readable in the settings', async () => {
+    localStorage.setItem('talos.thread-descriptions', JSON.stringify({ general: 'Old note' }))
+    const client = setup()
+    client.store.setState((s) => ({ ...s, presence: { ...s.presence, features: ['schedules/1'] } }))
+    renderWith(<ThreadScreen />, client, '/t/general', '/t/:thread')
+    await userEvent.click(await screen.findByTestId('thread-settings-trigger'))
+    expect((await screen.findByTestId('thread-device-note')).textContent).toContain('Old note')
+  })
+
   it('the default thread cannot be archived until another is the default', async () => {
     open()
     await userEvent.click(await screen.findByTestId('thread-settings-trigger'))
@@ -121,13 +133,13 @@ describe('thread screen', () => {
 })
 
 describe('an empty thread tells a phone owner where thread settings are', () => {
-  it('names both the ⋯ button on a computer and Open menu then the pencil on a phone', async () => {
+  it('names both the ⋯ button on a computer and Open menu then the ⋯ on a phone', async () => {
     const client = setup()
     client.store.setState((s) => ({ ...s, messages: { ...s.messages, general: [] } }))
     renderWith(<ThreadScreen />, client, '/t/general', '/t/:thread')
     const text = (await screen.findByTestId('thread-empty-explainer')).textContent ?? ''
     expect(text).toMatch(/⋯ button at the top on a computer/)
-    expect(text).toMatch(/Open menu and then the pencil beside its name on a phone/)
+    expect(text).toMatch(/Open menu and then the ⋯ beside its name on a phone/)
     expect(text).not.toMatch(/Use the ⋯ menu above/)
   })
 })

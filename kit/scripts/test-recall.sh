@@ -49,14 +49,14 @@ R() { ( cd "$F" && python3 scripts/recall.py "$@" 2>&1 ); }
 F="$SB/agent-a"; mkfixture "$F"
 
 out="$(R "vendor contract")"
-printf '%s' "$out" | grep -q 'wiki/people/dana-ruiz.md' && ok "lexical arm finds a note by its terms" || no "lexical arm did not find dana-ruiz.md" "$out"
-printf '%s' "$out" | grep -q 'semantic: NOT INSTALLED' && ok "with no venv the first line says NOT INSTALLED and names the fix" || no "no NOT INSTALLED banner" "$(printf '%s' "$out" | head -2)"
+<<<"$out" grep -q 'wiki/people/dana-ruiz.md' && ok "lexical arm finds a note by its terms" || no "lexical arm did not find dana-ruiz.md" "$out"
+<<<"$out" grep -q 'semantic: NOT INSTALLED' && ok "with no venv the first line says NOT INSTALLED and names the fix" || no "no NOT INSTALLED banner" "$(<<<"$out" head -2)"
 out="$(cd "$F" && python3 scripts/recall.py "vendor contracts" --rerank 2>&1)"
-{ printf '%s' "$out" | grep -q 'rerank: requested but NOT applied' && printf '%s' "$out" | grep -q 'dana-ruiz'; } && ok "--rerank without the semantic stack says so on the banner line and still answers in the normal order" || no "--rerank without semantic misbehaved" "$(printf '%s' "$out" | head -3)"
+{ <<<"$out" grep -q 'rerank: requested but NOT applied' && <<<"$out" grep -q 'dana-ruiz'; } && ok "--rerank without the semantic stack says so on the banner line and still answers in the normal order" || no "--rerank without semantic misbehaved" "$(<<<"$out" head -3)"
 out="$(cd "$F" && RECALL_RERANK=1 python3 scripts/recall.py "vendor contracts" --json 2>&1)"
 printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["rerank"]["vendor contracts"]["applied"] is False' 2>/dev/null && ok "RECALL_RERANK=1 reports rerank status in --json (applied: false here)" || no "RECALL_RERANK=1 not honoured in --json" "$out"
 out="$(cd "$F" && python3 scripts/recall.py "vendor contracts" --json 2>&1)"
-printf '%s' "$out" | grep -q '"rerank"' && no "rerank status present although it was not requested" || ok "without --rerank nothing about reranking appears (default OFF)"
+<<<"$out" grep -q '"rerank"' && no "rerank status present although it was not requested" || ok "without --rerank nothing about reranking appears (default OFF)"
 
 out="$(R "vendor contract" --json)"
 printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["semantic"]=="not-installed" and d["results"][0]["file"].endswith("dana-ruiz.md")' 2>/dev/null \
@@ -65,17 +65,17 @@ out="$(R --batch "vendor contract" "brake pads" "budget review")"
 printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); b=d["batch"]; assert set(b)=={"vendor contract","brake pads","budget review"} and b["brake pads"][0]["file"].endswith("fleet-vehicles.md")' 2>/dev/null \
   && ok "--batch answers several queries in one call as valid JSON" || no "--batch output wrong" "$out"
 
-out="$(R "vendor" -k abc)"; [ "$?" != 0 ] || printf '%s' "$out" | grep -q 'needs a positive number' && ok "recall: -k with a non-number is a usage error, not a traceback" || no "-k abc mishandled" "$out"
-printf '%s' "$out" | grep -qi traceback && no "recall printed a traceback on a bad -k" || ok "recall: no traceback for a bad -k"
-out="$(R "vendor" -k)"; printf '%s' "$out" | grep -q 'needs a positive number' && ok "recall: a trailing -k with no value is a usage error" || no "trailing -k mishandled" "$out"
+out="$(R "vendor" -k abc)"; [ "$?" != 0 ] || <<<"$out" grep -q 'needs a positive number' && ok "recall: -k with a non-number is a usage error, not a traceback" || no "-k abc mishandled" "$out"
+<<<"$out" grep -qi traceback && no "recall printed a traceback on a bad -k" || ok "recall: no traceback for a bad -k"
+out="$(R "vendor" -k)"; <<<"$out" grep -q 'needs a positive number' && ok "recall: a trailing -k with no value is a usage error" || no "trailing -k mishandled" "$out"
 out="$(R "-5 vendor" --json)"; printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["query"]=="-5 vendor"' 2>/dev/null && ok "recall: a query word that starts with - is kept in the query" || no "dash query word dropped" "$out"
 out="$(R "xylophone concerto")"
-printf '%s' "$out" | grep -q 'NO RESULTS -- search verified working' && printf '%s' "$out" | grep -q 'positive control "alex"' \
+<<<"$out" grep -q 'NO RESULTS -- search verified working' && <<<"$out" grep -q 'positive control "alex"' \
   && ok "a miss on a healthy corpus is EMPTY: the control term (the title of wiki/me.md) was found" || no "empty diagnosis wrong" "$out"
 
 E="$SB/agent-empty"; mkfixture "$E"; rm -rf "$E/wiki" "$E/memory"; mkdir -p "$E/wiki"
 out="$( cd "$E" && python3 scripts/recall.py "anything at all" 2>&1 )"
-printf '%s' "$out" | grep -q 'SEARCH DEGRADED' && printf '%s' "$out" | grep -qi 'corpus is EMPTY' \
+<<<"$out" grep -q 'SEARCH DEGRADED' && <<<"$out" grep -qi 'corpus is EMPTY' \
   && ok "an empty wiki is BROKEN (nothing to search), never reported as 'nothing recorded'" || no "empty-corpus diagnosis wrong" "$out"
 
 bad=""
@@ -86,7 +86,7 @@ done
 
 if [ -x /usr/bin/python3 ] && /usr/bin/python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 9) else 1)' 2>/dev/null; then
   o="$( cd "$F" && /usr/bin/python3 scripts/recall.py "vendor contract" 2>&1 )"
-  printf '%s' "$o" | grep -q 'dana-ruiz.md' && ok "recall.py runs on Apple's python 3.9 (stdlib only)" || no "recall.py failed on python 3.9" "$o"
+  <<<"$o" grep -q 'dana-ruiz.md' && ok "recall.py runs on Apple's python 3.9 (stdlib only)" || no "recall.py failed on python 3.9" "$o"
 else echo "  skip python 3.9 check (the system python is not 3.9 here)"; fi
 
 # ---- fallback banners, with a FAKE semantic backend (a shell script that stands in for the venv's python)
@@ -103,15 +103,15 @@ PY
 }
 printf '#!/bin/bash\nexit 1\n' > "$V/python"; chmod +x "$V/python"
 out="$(R "vendor contract")"
-printf '%s' "$out" | grep -q 'semantic: NOT INSTALLED' && ok "a venv without the memory-search marker (a voice-only venv) is NOT INSTALLED, not a broken index" || no "voice-only venv misreported" "$(printf '%s' "$out" | head -2)"
+<<<"$out" grep -q 'semantic: NOT INSTALLED' && ok "a venv without the memory-search marker (a voice-only venv) is NOT INSTALLED, not a broken index" || no "voice-only venv misreported" "$(<<<"$out" head -2)"
 touch "$V/../.talos-memory-ok"
 out="$(R "vendor contract")"
-printf '%s' "$out" | grep -q 'semantic: NO INDEX' && ok "a venv with no index says NO INDEX and prints the command to build it" || no "no NO INDEX banner" "$(printf '%s' "$out" | head -2)"
+<<<"$out" grep -q 'semantic: NO INDEX' && ok "a venv with no index says NO INDEX and prints the command to build it" || no "no NO INDEX banner" "$(<<<"$out" head -2)"
 
 mkdb
 printf '#!/bin/bash\ncat >/dev/null\nexit 1\n' > "$V/python"
 out="$(R "vendor contract")"; touch "$F/.index/.last-index-ok"
-printf '%s' "$out" | grep -q 'semantic: UNAVAILABLE' && printf '%s' "$out" | grep -q 'dana-ruiz.md' \
+<<<"$out" grep -q 'semantic: UNAVAILABLE' && <<<"$out" grep -q 'dana-ruiz.md' \
   && ok "a crashing semantic backend says UNAVAILABLE and the lexical answer still arrives" || no "UNAVAILABLE fallback wrong" "$out"
 
 cat > "$V/python" <<'FAKE'
@@ -125,15 +125,15 @@ print(json.dumps({"model": "fake", "batch": {q: [hit] for q in qs}}))'
 FAKE
 chmod +x "$V/python"
 out="$(R "automobile servicing garage")"
-printf '%s' "$out" | grep -q 'semantic: live' && printf '%s' "$out" | grep -qE '1\. \[semantic +\] wiki/concepts/fleet-vehicles.md' \
+<<<"$out" grep -q 'semantic: live' && <<<"$out" grep -qE '1\. \[semantic +\] wiki/concepts/fleet-vehicles.md' \
   && ok "a semantic-only hit is found, tagged semantic, and the header says live" || no "semantic fusion wrong" "$out"
 out="$(R "brake pads")"
-printf '%s' "$out" | grep -qE '1\. \[lexical\+semantic\] wiki/concepts/fleet-vehicles.md' \
+<<<"$out" grep -qE '1\. \[lexical\+semantic\] wiki/concepts/fleet-vehicles.md' \
   && ok "a note found by BOTH arms is tagged lexical+semantic" || no "dual-arm tag wrong" "$out"
 
 touch -t 202601010000 "$F/.index/.last-index-ok"
 out="$(R "brake pads")"
-printf '%s' "$out" | grep -q 'semantic: INDEX STALE' && ok "an index older than 48h says INDEX STALE (and still searches)" || no "stale banner wrong" "$(printf '%s' "$out" | head -2)"
+<<<"$out" grep -q 'semantic: INDEX STALE' && ok "an index older than 48h says INDEX STALE (and still searches)" || no "stale banner wrong" "$(<<<"$out" head -2)"
 touch "$F/.index/.last-index-ok"
 
 # ---- session-start launches a DETACHED refresh when the index is stale, and never when headless
@@ -171,42 +171,42 @@ if [ "${TALOS_TEST_SEMANTIC:-0}" = 1 ]; then
   find "$F/wiki" "$F/memory" -type f | sort | xargs shasum -a 256 > "$SB/src.sums"
 
   out="$("$PYV" "$F/scripts/memory/mem_index.py" --full --embed-model small 2>&1)"; rc=$?
-  { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'new/changed' && [ -s "$F/.index/memory.db" ]; } && ok "[real] mem_index.py builds the index" || no "[real] indexing failed (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  { [ "$rc" = 0 ] && <<<"$out" grep -q 'new/changed' && [ -s "$F/.index/memory.db" ]; } && ok "[real] mem_index.py builds the index" || no "[real] indexing failed (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
   [ -e "$F/.index/.last-index-ok" ] && ok "[real] a clean index run writes the freshness stamp" || no "[real] no .last-index-ok stamp"
   chunks="$(python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(",".join(sorted(set(r[0] for r in c.execute("select path from chunks")))))' "$F/.index/memory.db")"
   case "$chunks" in *personal*|*examples*|*_changelog*) no "[real] excluded files were indexed: $chunks" ;; *) ok "[real] personal/, examples/ and the changelog are not in the index" ;; esac
 
   out="$(R "automobile servicing garage")"
-  printf '%s' "$out" | grep -q 'semantic: live' && printf '%s' "$out" | grep -qE '1\. \[semantic +\] wiki/concepts/fleet-vehicles.md' \
+  <<<"$out" grep -q 'semantic: live' && <<<"$out" grep -qE '1\. \[semantic +\] wiki/concepts/fleet-vehicles.md' \
     && ok "[real] a query sharing no word with the note still finds it, via semantic search, ranked first" \
-    || no "[real] semantic-only query did not return fleet-vehicles.md first" "$(printf '%s' "$out" | head -8)"
+    || no "[real] semantic-only query did not return fleet-vehicles.md first" "$(<<<"$out" head -8)"
 
   out="$("$PYV" "$F/scripts/memory/mem_index.py" 2>&1)"
-  printf '%s' "$out" | grep -q ' 0 new/changed' && ok "[real] a second index run reports 0 new/changed" || no "[real] second run was not a no-op" "$out"
+  <<<"$out" grep -q ' 0 new/changed' && ok "[real] a second index run reports 0 new/changed" || no "[real] second run was not a no-op" "$out"
 
   sleep 30 & HOLD=$!
   mkdir -p "$F/.index/.mem_index.lock.d"; echo "$HOLD" > "$F/.index/.mem_index.lock.d/pid"
   out="$("$PYV" "$F/scripts/memory/mem_index.py" 2>&1)"; rc=$?
-  { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'already running'; } && ok "[real] a concurrent run prints 'already running' and exits 0" || no "[real] concurrent run not refused" "$out"
+  { [ "$rc" = 0 ] && <<<"$out" grep -q 'already running'; } && ok "[real] a concurrent run prints 'already running' and exits 0" || no "[real] concurrent run not refused" "$out"
   kill "$HOLD" 2>/dev/null; wait "$HOLD" 2>/dev/null
   echo 999999 > "$F/.index/.mem_index.lock.d/pid"      # a dead pid: the lock must be stolen
   out="$("$PYV" "$F/scripts/memory/mem_index.py" 2>&1)"; rc=$?
-  { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'new/changed'; } && ok "[real] a lock held by a dead pid is stolen" || no "[real] stale lock not stolen (rc=$rc)" "$out"
+  { [ "$rc" = 0 ] && <<<"$out" grep -q 'new/changed'; } && ok "[real] a lock held by a dead pid is stolen" || no "[real] stale lock not stolen (rc=$rc)" "$out"
   [ ! -e "$F/.index/.mem_index.lock.d" ] && ok "[real] the lock is released when the run ends" || no "[real] lock folder left behind"
 
   mkdir -p "$F/.index/.mem_index.lock.d"          # a lock folder with NO pid yet: a run that is just starting
   out="$("$PYV" "$F/scripts/memory/mem_index.py" 2>&1)"; rc=$?
-  { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'starting; skipping' && [ -d "$F/.index/.mem_index.lock.d" ]; } && ok "[real] a brand-new pid-less lock folder is a run that is starting, not an abandoned lock: it is not stolen" || no "young pid-less lock stolen (rc=$rc)" "$out"
+  { [ "$rc" = 0 ] && <<<"$out" grep -q 'starting; skipping' && [ -d "$F/.index/.mem_index.lock.d" ]; } && ok "[real] a brand-new pid-less lock folder is a run that is starting, not an abandoned lock: it is not stolen" || no "young pid-less lock stolen (rc=$rc)" "$out"
   touch -t 202601010000 "$F/.index/.mem_index.lock.d"
   out="$("$PYV" "$F/scripts/memory/mem_index.py" 2>&1)"; rc=$?
-  { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'new/changed'; } && ok "[real] an OLD pid-less lock folder is treated as abandoned and stolen" || no "old pid-less lock not stolen (rc=$rc)" "$out"
+  { [ "$rc" = 0 ] && <<<"$out" grep -q 'new/changed'; } && ok "[real] an OLD pid-less lock folder is treated as abandoned and stolen" || no "old pid-less lock not stolen (rc=$rc)" "$out"
   out="$("$PYV" "$F/scripts/memory/mem_index.py" --embed-model base 2>&1)"; rc=$?
-  { [ "$rc" = 2 ] && printf '%s' "$out" | grep -q -- '--full'; } && ok "[real] switching embedding models without --full is refused" || no "[real] model mix not refused (rc=$rc)" "$out"
+  { [ "$rc" = 2 ] && <<<"$out" grep -q -- '--full'; } && ok "[real] switching embedding models without --full is refused" || no "[real] model mix not refused (rc=$rc)" "$out"
 
   echo "% a new note appears" > /dev/null
   printf -- '---\ntitle: Recycling\ntype: concept\ncreated: 2026-01-01\nupdated: 2026-01-01\nstatus: living\n---\n# Recycling\nGlass and cardboard go in the blue bins on Thursday. See [[team-offsite]].\n' > "$F/wiki/concepts/recycling.md"
   out="$("$PYV" "$F/scripts/memory/mem_index.py" 2>&1)"
-  printf '%s' "$out" | grep -q ' 1 new/changed' && ok "[real] a new note is picked up incrementally (1 new/changed)" || no "[real] incremental pickup wrong" "$out"
+  <<<"$out" grep -q ' 1 new/changed' && ok "[real] a new note is picked up incrementally (1 new/changed)" || no "[real] incremental pickup wrong" "$out"
   find "$F/wiki" "$F/memory" -type f ! -name recycling.md | sort | xargs shasum -a 256 > "$SB/src2.sums"
   grep -v recycling "$SB/src.sums" | diff -q - "$SB/src2.sums" >/dev/null && ok "[real] indexing never modified a source note" || no "[real] a source file changed during indexing"
 else

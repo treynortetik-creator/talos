@@ -218,6 +218,31 @@ the backstop: it cannot stop a change, it tells the owner about one.
 - An agent running without the guards installed can write `agent-request.json` in the Talos home (it runs as the same user, so
   this cannot be closed completely). The guards deny that file, `last-good/` and `config-history/` to the agent; without them,
   the safety is that the Mac app posts a visible notice for every recovery it performs, so the owner always sees one.
+- **Needs-you prompts (answering a start-up question with a tap).** Every agent session runs as the same user and can write the
+  Talos home, and the guards are optional and only match text (a script that opens the file by another route gets past them).
+  So nothing about WHO answered is taken from a file name or a field in a file. The defence is the proof check: the answer file
+  (`dialog-answer.json`) carries the owner's own signed `card.resolve` frame and the card's binding, and the Mac presses a key only
+  after it checks, against a device paired and not revoked in `devices.json`, the owner's signature, the signed action and choice, a tap time within
+  15 minutes, that the card is exactly the dialog on this worker's pane (thread, id, kind, folder or server and every option
+  equal to what the Mac itself read), and that the option's label is on the screen now; and it presses at most once per dialog.
+  A process that forges an answer for another thread, or for a card with a harmless folder name on the real dialog's id, or
+  replays an old tap, fails that check and nothing is pressed (the card then says "Answer on the Mac"). Fixtures for each of
+  those cases are in `packages/protocol/fixtures/needs-you/`, and the reference check is `verifyDialogAnswer`.
+  The other files (`dialog-card.json`, `dialog-result.json`, `workers.json`) are **display only**. A forged result, or a forged
+  `workers.json`, can change what a card SAYS ("Answered on this Mac", "Nothing pressed", a different folder name on a card that
+  can never be pressed from), and a forged `dialog-card.json` can hide the Mac's fallback thread line. None of them can press a
+  key. This is the real boundary even where the guards are installed; the guards (`talos-app install-guards` denies Write, Edit
+  and any command naming the three files) are an extra, not the defence. The readers also refuse a link (the bridge looks at
+  `workers/` and `workers/<thread>/` with lstat as well as the files), cap sizes and require strict fields.
+  For context: a program running as the same user can already pre-accept folder trust or an MCP server by editing Claude Code's
+  own settings, so this does not add a new power; it keeps a tap on the phone from being forged into a different press.
+  **Where the signer's key comes from, honestly:** the Mac verifies against the paired, not-revoked devices in `devices.json`,
+  behind one lookup function. That file is writable by any program running as the same user, so the signer source is guarded only by
+  the tripwire (which watches `devices.json` and tells the owner when it changes), not by the operating system. An agent that adds
+  its own device to `devices.json` could then sign a forged answer with that device's key and have the Mac press it; the tripwire
+  notice is what is meant to catch that, and the proof check does not. The proof closes forging by anything that does NOT hold a
+  paired device's key; it does not close a process that can both write `devices.json` and get past the tripwire. See
+  `docs/OPTION-C.md`, "Needs-you prompts".
 - Anything that edits `guards.json` and `settings.json` together, if it can get past the checks on those two files. The hash
   only catches a file edited alone.
 - A faked terminal, as above: the terminal check is not a boundary, and the guards' pattern for it is a pattern.

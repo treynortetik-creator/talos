@@ -203,7 +203,8 @@ struct CompanionTotalTests {
 struct CompanionBannerReviewTests {
   @Test func aReplyMidTurnKeepsItsBannerBecauseHisBubbleIsDeferred() {
     let p = CompanionBannerPolicy.Pet(
-      onScreen: true, quiet: false, micRunning: false, feedLive: true, state: .working, replyBanners: false)
-    #expect(!CompanionBannerPolicy.drops(body: "New reply in Alpha", pet: p))
+      onScreen: true, quiet: false, micRunning: false, feedLive: true, state: .working, replyBanners: false, workingThreads: ["alpha"])
+    #expect(!CompanionBannerPolicy.drops(body: "New reply in Alpha", pet: p, thread: "alpha"))
+    #expect(CompanionBannerPolicy.drops(body: "New reply in Beta", pet: p, thread: "beta"), "another thread's turn does not hold it")
   }
 }

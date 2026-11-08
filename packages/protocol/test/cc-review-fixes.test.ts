@@ -46,7 +46,7 @@ const compose = (over: Record<string, string> = {}, client_version: string | nul
     ...(client_version === null ? {} : { client_version }),
   })
 
-describe('R1: invisible and bidi characters, even from a current client', () => {
+describe('R1: invisible and bidi characters are shown as visible markers; the card stays Allow-able (owner call: seen in full means approvable)', () => {
   const cases: Array<[string, Record<string, string>]> = [
     ['RLO in input_preview', { input_preview: '{"command": "echo ok ‮~ fr- mr"}' }],
     ['LRI/PDI in description', { description: 'Run the tests ⁦⁩' }],
@@ -57,11 +57,12 @@ describe('R1: invisible and bidi characters, even from a current client', () => 
     ['zero-width joiner in tool_name (never sanitized)', { tool_name: 'Ba‍sh' }],
   ]
   for (const [name, over] of cases) {
-    it(`${name}: deny-only, with the hidden warning`, () => {
-      expect(permissionHiddenReasons(req(over))).toContain('bidi_or_invisible')
+    it(`${name}: shown as a marker, no hidden reason, Allow stays`, () => {
+      expect(permissionHiddenReasons(req(over))).toEqual([])
       const c = compose(over)
-      expect(permissionCardAllowsPrimary(c)).toBe(false)
-      expect(c.warning).toBe(PERMISSION_HIDDEN_WARNING)
+      expect(permissionCardAllowsPrimary(c)).toBe(true)
+      expect(c.warning).toBeUndefined()
+      expect(`${c.title}${c.body}${c.fields[0]?.value}`).toMatch(/\[U\+[0-9A-F]{4,5}\]|⏎/)
     })
   }
   it('shows each such character visibly as [U+XXXX] in the body, summary and title', () => {

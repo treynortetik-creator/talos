@@ -31,6 +31,11 @@ export type BridgeEnv = {
   pathDirs: string[]
   /** The owner's home directory (`~/.local/share/chronos/bin/chronos`); from HOME. */
   userHome: string
+  /**
+   * Where the owner's files for threads that have their own session are copied, one folder per thread: `~/.talos-inbox`
+   * (TALOS_INBOX_ROOT changes it; the tests always do, so none touches the real one).
+   */
+  inboxRoot: string
   /** False only in tests: never probe PATH or ~/.local/share for a real Chronos. */
   chronosAutoDiscover: boolean
   /** Passed through to Chronos so it computes in the owner's zone. */
@@ -53,6 +58,8 @@ export type BridgeEnv = {
   workerNonce: string | undefined
   /** O6: an ntfy topic the bridge posts to when it has had no relay connection for 10 minutes while the Mac is awake. Unset = off. */
   alertNtfyUrl: string | undefined
+  /** `TALOS_EXPLAINER` (process or bridge.env): off, 0, false or no turns the plain explanation of permission cards off. */
+  explainer: string | undefined
   /** MCP apps (MCP-APPS-SPEC): off unless TALOS_APP_APPS=1. Off, the bridge registers no app tool and answers app requests with a fixed refusal. */
   apps: boolean
 }
@@ -142,6 +149,9 @@ export function loadEnv(processEnv: Record<string, string | undefined> = process
     chronosNow: merged.TALOS_APP_CHRONOS_NOW || undefined,
     pathDirs: (merged.PATH ?? '').split(':').filter(Boolean),
     userHome: merged.HOME || homedir(),
+    // read from the process too, like the Chronos switch above: a test's hand-built env still gets the test root (test/preload.ts)
+    inboxRoot:
+      merged.TALOS_INBOX_ROOT || process.env.TALOS_INBOX_ROOT || join(merged.HOME || homedir(), '.talos-inbox'),
     tz: merged.TZ || undefined,
     nodeEnv: merged.NODE_ENV || undefined,
     historyDays: historyDays(merged.TALOS_APP_HISTORY_DAYS),
@@ -150,14 +160,17 @@ export function loadEnv(processEnv: Record<string, string | undefined> = process
     workerThread: processEnv.TALOS_APP_WORKER_THREAD || undefined,
     workerNonce: processEnv.TALOS_APP_WORKER_NONCE || undefined,
     alertNtfyUrl: merged.TALOS_APP_ALERT_NTFY_URL?.trim() || undefined,
+    explainer: merged.TALOS_EXPLAINER?.trim() || undefined,
     apps: merged.TALOS_APP_APPS === '1',
   }
 }
 
 /** Paths under $TALOS_APP_HOME. */
-export function paths(home: string) {
+export function paths(home: string, inboxRoot: string = join(homedir(), '.talos-inbox')) {
   return {
     home,
+    /** The threads' inbox folders (see BridgeEnv.inboxRoot): outside the Talos home on purpose. */
+    inbox: inboxRoot,
     configJson: join(home, 'config.json'),
     bridgeKey: join(home, 'bridge.key'),
     bridgeKeyNext: join(home, 'bridge.key.next'),

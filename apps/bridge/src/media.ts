@@ -152,14 +152,28 @@ export class MediaStore {
     return b === '.env' || b.startsWith('.env.') || b === 'bridge.env'
   }
 
-  /** Validates a path the agent gave us. */
-  checkUploadable(path: string, opts: { worker?: boolean; leadCwd?: string } = {}): { realPath: string; size: number } {
+  /**
+   * Validates a path the agent gave us. A thread session (`worker`) may send a file from its OWN thread's inbox (`thread` is
+   * its id), never another thread's, and nothing from the Talos home or a lead's protected roots.
+   */
+  checkUploadable(
+    path: string,
+    opts: { worker?: boolean; leadCwd?: string; thread?: string } = {},
+  ): { realPath: string; size: number } {
     if (!isAbsolute(path)) throw new MediaError(`not an absolute path: ${path}`)
     if (!existsSync(path)) throw new MediaError(`no such file: ${path}`)
     const realPath = realpathSync(path)
     const st = statSync(realPath)
     if (!st.isFile()) throw new MediaError(`not a regular file: ${path}`)
     if (st.size > MAX_FILE_BYTES) throw new MediaError(`file is over 50 MB: ${path}`)
+    // the threads' inboxes (outside the Talos home): a thread session sends its own and no other
+    if (opts.worker && this.p.inbox) {
+      const root = existsSync(this.p.inbox) ? realpathSync(this.p.inbox) : this.p.inbox
+      if (realPath.startsWith(root + sep)) {
+        if (opts.thread && realPath.startsWith(join(root, opts.thread) + sep)) return { realPath, size: st.size }
+        throw new MediaError(`a thread session can only send files from its own inbox: ${basename(path)}`)
+      }
+    }
     if (this.isSensitive(realPath)) throw new MediaError(`refusing to upload a protected file: ${basename(path)}`)
     // media/ holds every thread's files in one flat folder: a thread's own session sends its own files, never one from here
     if (opts.worker) {

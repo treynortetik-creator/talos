@@ -2,6 +2,7 @@
 // offline / absent states, against the scripted fake session (`VITE_FAKE=1`; `?fake_mod=offline|absent`).
 import { expect, type Page, test } from '@playwright/test'
 import { expectAxeClean } from '../cards/e2e.ts'
+import { sessionPanel } from '../helpers/phone.ts'
 
 // The page-motion helpers inject a <style> (test-only CSS). The service worker stamps the real CSP (style-src 'self') on
 // precached HTML, so once it controls the page that injection is refused. bypassCSP lets the test harness inject; the app's
@@ -36,14 +37,14 @@ async function expectUsageGlance(page: Page) {
 }
 async function openSheet(page: Page) {
   await page.getByTestId('session-trigger').click()
-  await expect(page.getByTestId('session-sheet')).toBeVisible()
+  await expect(sessionPanel(page)).toBeVisible()
 }
 
 test('the header chip is visible without opening the sheet and the sheet shows the two rows', async ({ page }) => {
   await openThread(page)
   await expectUsageGlance(page)
   await openSheet(page)
-  const sheet = page.getByTestId('session-sheet')
+  const sheet = sessionPanel(page)
   await expect(sheet.getByTestId('meter-five')).toHaveCount(0)
   await expect(sheet).not.toContainText('5-hour')
   await expect(sheet.getByTestId('meter-week')).toContainText('60% used')
@@ -147,8 +148,9 @@ test('mod offline: read-only, one hint, "Mod offline"', async ({ page }) => {
       /weekly usage 60% used.*mod offline/,
     )
   } else {
-    // The words on screen are the button's name: no separate label that could drift from them.
-    await expect(page.getByTestId('session-chip')).toContainText('mod offline')
+    // The chip stays narrow: a small dot says the mod lapsed, and the words are in the button's name and tooltip.
+    await expect(page.getByTestId('session-offline-dot')).toBeVisible()
+    await expect(page.getByTestId('session-chip')).not.toContainText('mod offline')
     await expect(page.getByTestId('session-trigger')).toHaveAccessibleName(/^Session: wk 60% used.*mod offline/)
   }
   await openSheet(page)
@@ -167,7 +169,7 @@ test('mod absent: nothing breaks, one hint, two "No reading yet"', async ({ page
   await expect(page.getByTestId('session-trigger')).toHaveAttribute('aria-label', 'Session')
   await openSheet(page)
   await expect(page.getByTestId('mod-hint')).toHaveCount(1)
-  await expect(page.getByTestId('session-sheet').getByText('No reading yet')).toHaveCount(2)
+  await expect(sessionPanel(page).getByText('No reading yet')).toHaveCount(2)
   await expect(page.getByTestId('session-controls')).toHaveCount(0)
   await page.keyboard.press('Escape')
   await page.getByLabel('Message', { exact: true }).fill('/')
@@ -189,7 +191,7 @@ test('an older peer that still sends the 5-hour window: read without error, show
     }),
   )
   await openSheet(page)
-  const sheet = page.getByTestId('session-sheet')
+  const sheet = sessionPanel(page)
   await expect(sheet.getByTestId('meter-week')).toContainText('No reading yet')
   await expect(sheet).not.toContainText('97%')
   await expect(sheet).not.toContainText('5-hour')

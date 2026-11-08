@@ -22,22 +22,45 @@ function groupState(pgid: number): 'alive' | 'gone' | 'foreign' {
   }
 }
 
-function judge(r: Running, info: (pid: number) => PsInfo | 'gone' | 'unknown'): Verdict {
+/** Is this process running? EPERM means it is (another user's). */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+async function judge(
+  r: Running,
+  info: (pid: number) => Promise<PsInfo | 'gone' | 'unknown'>,
+  bridgeAlive: (pid: number) => boolean,
+): Promise<Verdict> {
   if (r.pgid <= 1 || r.pgid === process.pid || r.pgid === process.ppid) return 'clear'
-  if (groupState(r.pgid) !== 'alive') return 'clear'
+  if (groupState(r.pgid) !== 'alive') return 'clear' // gone is gone, whoever started it
+  // Alive, and started by a bridge that is still running (the old one, while this one starts over it): its source is live, not left behind.
+  if (r.bridge_pid !== undefined && r.bridge_pid !== process.pid && bridgeAlive(r.bridge_pid)) return 'keep'
   // A group id cannot be handed out again while its group still has a member. So if the leader is gone and the group is alive, it
   // is the recorded one; if the leader is there, it must be the process that was recorded (same command, same start time).
-  const leader = info(r.pgid)
+  const leader = await info(r.pgid)
   if (leader === 'unknown') return 'keep' // ps did not answer: no proof either way, the next start looks again
   if (leader === 'gone') return 'kill'
   return leader.command === r.command && (r.lstart === undefined || leader.lstart === r.lstart) ? 'kill' : 'clear'
 }
 
-export function reapOrphans(
+/**
+ * Call it inside the schedule queue. The verdicts take a while (ps), so the store is read again right before the write and only the
+ * records that were judged are removed from that fresh copy: a record another writer added in between is never dropped.
+ */
+export async function reapOrphans(
   home: string,
   log: (msg: string, f?: Record<string, unknown>) => void,
-  deps: { info?: (pid: number) => PsInfo | 'gone' | 'unknown' } = {},
-): { killed: number[] } {
+  deps: {
+    info?: (pid: number) => Promise<PsInfo | 'gone' | 'unknown'>
+    bridgeAlive?: (pid: number) => boolean
+  } = {},
+): Promise<{ killed: number[] }> {
   const killed: number[] = []
   let files: string[]
   try {
@@ -49,18 +72,23 @@ export function reapOrphans(
     const path = join(home, f)
     const { store, corrupt } = loadStore(path, false) // a store that cannot be read is left exactly where it is
     if (corrupt || !Object.keys(store.running).length) continue
+    const judged: Array<[string, Running]> = []
     for (const [id, r] of Object.entries(store.running)) {
-      const v = judge(r, deps.info ?? processInfo)
+      const v = await judge(r, deps.info ?? processInfo, deps.bridgeAlive ?? pidAlive)
       if (v === 'keep') continue
       if (v === 'kill') {
         killGroup(r.pgid, true) // the group only: a lone-pid signal could hit a process that reused the number
         killed.push(r.pgid)
         log('heartbeat source left running by an earlier bridge was stopped', { source: id })
       }
-      delete store.running[id]
+      judged.push([id, r])
     }
+    if (!judged.length) continue
     try {
-      saveStore(path, store)
+      const fresh = loadStore(path, false)
+      if (fresh.corrupt) continue
+      for (const [id, r] of judged) if (fresh.store.running[id]?.pgid === r.pgid) delete fresh.store.running[id]
+      saveStore(path, fresh.store)
     } catch (e) {
       log('heartbeat store not saved after the sweep', { error: (e as Error).message })
     }

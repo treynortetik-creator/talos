@@ -70,6 +70,7 @@ struct MacHomesConfigTests {
     let w = try world()
     defer { try? FileManager.default.removeItem(atPath: w.root) }
     w.sup.mutateConfig { $0.host = .tmux; $0.notifyThread = "daily" }
+    w.sup.drain()  // `currentConfig()` is the config as of the last applied edit, not a wait for the queue
     // a hotkey rebind goes in through `updateConfig` instead, which used to write the defaults to disk
     var rebound = w.sup.currentConfig()
     rebound.hotkeys.compose = "ctrl+opt+shift+k"

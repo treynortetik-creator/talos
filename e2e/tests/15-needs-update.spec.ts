@@ -5,7 +5,7 @@ import { card, cardIdFrom, expect, LOW_RISK_CARD, sendText, signedIn, test } fro
 // thread, once, and everything else keeps working. The relay in this stack is the current build, so the newer peer is played
 // by handing the relay's socket hub a frame the app's parser does not know, as a newer relay would send it.
 
-const NOTE = "Something arrived that this version of Talos can't show. Update the app to see it."
+const NOTE = 'Talos on your phone or Mac is newer than this app; update to see everything.'
 
 test('15. a newer peer’s card kind shows one "needs an update" note in its thread and nothing else breaks', async ({
   stack,

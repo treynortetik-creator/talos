@@ -133,7 +133,8 @@ describe('in the Mac app', () => {
     notify() // nothing moved: no repeat
     expect(posted).toHaveLength(2)
     view.unmount()
-    expect(posted.at(-1)).toEqual({ type: 'terminal_view', rect: null })
+    expect(posted.at(-2)).toEqual({ type: 'terminal_view', rect: null })
+    expect(posted.at(-1)).toEqual({ type: 'terminal_leave' }) // and the shell is told the screen is gone
     expect(watched).toEqual([]) // and the watch ends with the screen
   })
 

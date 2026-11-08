@@ -10,6 +10,7 @@ import {
   type Frame,
   HUB_MAX_LINE_BYTES,
   HUB_RPC_MAX_TEXT,
+  type HubPermT,
   HubWorkerLine,
   MAX_FRAME_BYTES,
   parseFrame,
@@ -49,7 +50,14 @@ export type HubServerOptions = {
   pgidOf?: (pid: number) => number | undefined
 }
 
-type Conn = { sock: Socket; buf: string; thread?: string; features?: readonly string[] }
+type Conn = {
+  sock: Socket
+  buf: string
+  thread?: string
+  features?: readonly string[]
+  /** A PermissionRequest hook's connection: one `perm` request, no hello, closed after the answer. */
+  perm?: AbortController
+}
 
 /** Constant-time compare (the nonce is the real gate on `hello`; the pid is self-reported). */
 function sameText(a: string, b: string): boolean {
@@ -129,7 +137,7 @@ export class HubServer {
     this.conns.add(c)
     sock.setEncoding('utf8')
     const t = setTimeout(() => {
-      if (!c.thread) sock.destroy()
+      if (!c.thread && !c.perm) sock.destroy()
     }, HELLO_WAIT_MS)
     sock.on('data', (chunk: string) => {
       c.buf += chunk
@@ -150,6 +158,7 @@ export class HubServer {
     sock.on('close', () => {
       clearTimeout(t)
       this.conns.delete(c)
+      c.perm?.abort() // the hook died or was stopped (the owner answered at the Mac): its card closes
     })
   }
 
@@ -173,6 +182,7 @@ export class HubServer {
     const m = HubWorkerLine.safeParse(raw)
     if (!m.success) return c.thread ? undefined : this.refuse(c, 'bad_frame', 'not a hub line')
     const msg = m.data
+    if (msg.t === 'perm') return this.onPerm(c, msg)
     if (msg.t === 'hello') {
       if (c.thread) return // one hello per connection
       const why = this.checkHello(msg)
@@ -243,8 +253,61 @@ export class HubServer {
     }
   }
 
+  /**
+   * A PermissionRequest hook asks for a card (docs/CLAUDE-CODE.md C3.9). With `thread_id` it must prove it is that thread's
+   * session exactly as `hello` does (nonce, and a pid inside the recorded pane's process group); the card then goes to that
+   * thread and nowhere else. Without one it is the main session's, and the card goes to the default thread. Every refusal is
+   * answered `none`, which leaves the prompt at the Mac. One request per connection; the connection closing closes the card.
+   */
+  private async onPerm(c: Conn, msg: HubPermT) {
+    const answer = (decision: 'allow' | 'deny' | 'none', reason: string) => {
+      this.write(c, { t: 'perm_result', id: msg.id, decision, reason: reason.slice(0, 120) })
+      c.sock.end()
+    }
+    if (c.perm || c.thread) return // one request per connection, and a worker's own connection never carries one
+    const ac = new AbortController()
+    c.perm = ac
+    if (this.ctx.mode !== 'live') return answer('none', 'not_live')
+    if (msg.thread_id !== undefined) {
+      const why =
+        msg.pid === undefined || msg.nonce === undefined
+          ? { code: 'not_owner', message: 'a thread session names its pid and nonce' }
+          : this.checkWorkerProof({ thread_id: msg.thread_id, pid: msg.pid, nonce: msg.nonce }, true)
+      if (why) {
+        this.ctx.log.security('hub: permission request refused', { code: why.code, thread: msg.thread_id })
+        return answer('none', why.code)
+      }
+    } else if (msg.nonce !== undefined) {
+      // a main-session hook has no nonce to show; one that sends one is not the shape of anything we ship
+      return answer('none', 'bad_frame')
+    }
+    const r = await this.ctx.permission.onHookRequest(
+      {
+        ...(msg.thread_id !== undefined ? { thread: msg.thread_id } : {}),
+        tool_name: msg.tool_name,
+        tool_input: msg.tool_input,
+        ...(msg.pid !== undefined ? { pid: msg.pid } : {}),
+        ...(msg.cwd !== undefined ? { cwd: msg.cwd } : {}),
+      },
+      ac.signal,
+    )
+    if (!ac.signal.aborted) answer(r.decision, r.reason)
+  }
+
   /** null when the hello is good, else why not. */
   checkHello(h: { thread_id: string; pid: number; nonce: string }): { code: string; message: string } | null {
+    return this.checkWorkerProof(h, false)
+  }
+
+  /**
+   * The proof a thread session gives: live bridge, a dedicated thread, a fresh supervisor, a recorded pane, the supervisor's
+   * nonce, and a pid in that pane's process group. A `hello` also refuses a second connection for the thread; a hook's request
+   * is made while the worker's own connection is up, so it does not.
+   */
+  private checkWorkerProof(
+    h: { thread_id: string; pid: number; nonce: string },
+    allowConnected: boolean,
+  ): { code: string; message: string } | null {
     const { ctx } = this
     if (ctx.mode !== 'live') return { code: 'worker_unavailable', message: 'this bridge is not live' }
     if (threadSessionMode(ctx.config.config, h.thread_id) !== 'dedicated')
@@ -261,7 +324,7 @@ export class HubServer {
     if (g === undefined || g !== entry.pane_pid)
       return { code: 'not_owner', message: `pid ${h.pid} is not in thread ${h.thread_id}'s pane group` }
     // one worker per thread: a second start connects only after the first one's socket closed
-    if (this.connectedThreads().includes(h.thread_id))
+    if (!allowConnected && this.connectedThreads().includes(h.thread_id))
       return { code: 'worker_unavailable', message: `thread ${h.thread_id} already has a connected session` }
     return null
   }

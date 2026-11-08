@@ -11,7 +11,8 @@ test.use({ bypassCSP: true })
 
 const isPhone = (page: Page) => (page.viewportSize()?.width ?? 0) < 768
 const size = (page: Page) => page.viewportSize() ?? { width: 0, height: 0 }
-const SHOTS = '../../docs/screenshots/phone-header'
+// Rewritten into the tracked docs folder only on request (TALOS_SHOTS=1), so a plain run leaves tracked files alone.
+const SHOTS = process.env.TALOS_SHOTS ? '../../docs/screenshots/phone-header' : 'test-results/shots/phone-header'
 
 test.use({ reducedMotion: 'reduce' })
 
@@ -92,9 +93,11 @@ test.describe('phone', () => {
       await expect(nav.getByRole('link', { name })).toBeVisible()
     }
     await expect(menu.getByRole('link', { name: 'Settings' })).toBeVisible()
-    await expect(menu.getByRole('link', { name: 'Search', exact: true })).toBeVisible()
-    await expect(menu.getByRole('link', { name: 'Search this thread' })).toBeVisible()
-    await expect(menu.getByTestId('thread-settings-trigger')).toBeVisible()
+    // search is the magnifier in the list's own row (no bottom link, no thread card); each thread has its own settings button
+    await expect(menu.getByRole('button', { name: 'Search threads' })).toBeVisible()
+    await expect(menu.getByRole('link', { name: 'Search', exact: true })).toHaveCount(0)
+    await expect(menu.getByRole('link', { name: 'Search this thread' })).toHaveCount(0)
+    await expect(menu.getByTestId('thread-more-general')).toBeVisible()
     // focus is trapped inside while it is open
     for (let i = 0; i < 25; i++) await page.keyboard.press('Tab')
     expect(await page.evaluate(() => document.activeElement?.closest('[data-testid="phone-menu"]') !== null)).toBe(true)

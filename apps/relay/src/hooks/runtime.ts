@@ -9,7 +9,7 @@ import { wakeSnoozed } from './inbox.ts'
 import { idle, kick } from './ingest.ts'
 import { pollDue } from './poller.ts'
 import { deliverPending, dropAppCopies, notifyNewItems, wipeRawIfDone } from './route.ts'
-import { DAY_MS, type HooksRuntime, PASSTHROUGH_MAX_MS, type RuntimeOptions } from './types.ts'
+import { DAY_MS, HOUR_MS, type HooksRuntime, type RuntimeOptions } from './types.ts'
 
 const runtimes = new WeakMap<RelayServices, HooksRuntime & { timer?: unknown; stopped?: boolean }>()
 
@@ -37,7 +37,7 @@ export function runtimeFor(services: RelayServices): HooksRuntime {
  */
 export function sweepPassthrough(rt: HooksRuntime): number {
   const { db } = rt.services
-  const cutoff = rt.now() - PASSTHROUGH_MAX_MS
+  const cutoff = rt.now() - HOUR_MS
   const rows = db
     .prepare(
       `select event_id, raw_id, created_at from hooks_events where passthrough = 1

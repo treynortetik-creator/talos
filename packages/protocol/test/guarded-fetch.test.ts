@@ -3,7 +3,11 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import corpus from '../fixtures/address-corpus.json' with { type: 'json' }
+import { isLoopbackHost } from '../src/address.ts'
 import { BlockedAddressError, checkedLookup, createGuardedFetch } from '../src/guarded-fetch.ts'
+
+// every address any caller must refuse, as a host in a URL (a zone id cannot sit in a URL host)
+const everyBlocked = [...corpus.core, ...corpus.embedded, ...corpus.alsoBlocked.filter((a) => !a.includes('%'))]
 
 // the at-sign that starts userinfo, kept out of literals so the personal-data scan does not read these URLs as e-mail
 const AT = String.fromCharCode(64)
@@ -96,7 +100,7 @@ describe('a name is checked at the moment of connecting (DNS rebinding)', () => 
 
   it('all 19 core addresses, plus the extra blocked ones, are refused when a name resolves to them', async () => {
     hits = []
-    for (const a of [...corpus.core, ...corpus.alsoBlocked.filter((x) => !x.includes('%'))]) {
+    for (const a of everyBlocked) {
       const f = createGuardedFetch({ resolve: answer(a) })
       const e = await refused(f(`http://name.example.test:${port}/`))
       expect(e.host, a).toBe('name.example.test')
@@ -106,7 +110,7 @@ describe('a name is checked at the moment of connecting (DNS rebinding)', () => 
 
   it('allowLoopback lets loopback through and nothing else: a private or metadata answer is still refused', async () => {
     hits = []
-    for (const a of ['10.0.0.5', '169.254.169.254', '192.168.1.1', '::ffff:a9fe:a9fe', 'fd00::1']) {
+    for (const a of everyBlocked.filter((x) => !isLoopbackHost(x))) {
       const f = createGuardedFetch({ resolve: answer(a), allowLoopback: true })
       await refused(f(`http://name.example.test:${port}/`))
     }
@@ -147,7 +151,7 @@ describe('literal hosts never reach the lookup, so they are judged first', () =>
 
   it('every core address as a literal host is refused', async () => {
     const f = createGuardedFetch()
-    for (const a of corpus.core) await refused(f(a.includes(':') ? `http://[${a}]/` : `http://${a}/`))
+    for (const a of everyBlocked) await refused(f(a.includes(':') ? `http://[${a}]/` : `http://${a}/`))
   })
 
   it('userinfo that LOOKS like an address does not change the host: the real host is the one resolved', async () => {

@@ -50,7 +50,18 @@ public struct TmuxCommands: Equatable, Sendable {
   public var paneTarget: String { paneId ?? "=\(session):" }
 
   static func envFlags(_ env: [String: String]) -> [String] {
-    env.keys.sorted().flatMap { ["-e", "\($0)=\(env[$0] ?? "")"] }
+    env.keys.sorted().flatMap { ["-e", literalArg("\($0)=\(env[$0] ?? "")")] }
+  }
+
+  /// tmux ends a command at an argv element that ends in `;` (or is just `;`) and starts the next command after it, so an
+  /// agent argument like `be brief;` ran nothing ("unknown command") and the rest of the list was read as commands. One
+  /// backslash before that last `;` is removed by tmux and the element arrives as typed (OBSERVED, tmux 3.8, private socket:
+  /// `be brief;`, `;`, `a;;`, `$HOME;` and one ending in a backslash and `;` all arrive exactly; `;` inside an element is
+  /// left alone). Every element a user can influence goes through this: the agent's argv, env values, the folder, typed text.
+  /// The `;` that separates two commands of one list (respawn then clear-history, if-shell then send-keys) is NOT passed here.
+  public static func literalArg(_ element: String) -> String {
+    guard element.hasSuffix(";") else { return element }
+    return String(element.dropLast()) + "\\;"
   }
 
   public static func version() -> [String] { ["-V"] }
@@ -81,14 +92,14 @@ public struct TmuxCommands: Equatable, Sendable {
   {
     base + [
       "new-session", "-d", "-P", "-F", "#{pane_id}", "-s", session, "-x", String(cols), "-y", String(rows), "-c",
-      Self.literalPath(cwd),
-    ] + Self.envFlags(env) + ["--"] + argv
+      Self.literalArg(Self.literalPath(cwd)),
+    ] + Self.envFlags(env) + ["--"] + argv.map(Self.literalArg)
   }
 
   /// A fresh window for the agent when our pane is gone but the session still holds someone else's pane.
   public func newWindow(argv: [String], env: [String: String], cwd: String) -> [String] {
-    base + ["new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "\(sessionTarget):", "-c", Self.literalPath(cwd)]
-      + Self.envFlags(env) + ["--"] + argv
+    base + ["new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "\(sessionTarget):", "-c", Self.literalArg(Self.literalPath(cwd))]
+      + Self.envFlags(env) + ["--"] + argv.map(Self.literalArg)
   }
 
   /// The tmux server's own environment (`global`) or the session's. A server started by a polluted process carries
@@ -102,8 +113,12 @@ public struct TmuxCommands: Equatable, Sendable {
     base + ["set-environment"] + (global ? ["-g"] : ["-t", sessionTarget]) + ["-r", name]
   }
 
+  /// Respawns the pane and clears its history in the same tmux invocation. The two run back to back inside the server, before
+  /// the new child can print: a separate `clear-history` after this one could run after a child that exits at once had printed
+  /// its last line, and wipe it (OBSERVED, tmux 3.8: the line was in history once "Pane is dead" scrolled it there).
   public func respawnPane(argv: [String], env: [String: String], cwd: String) -> [String] {
-    base + ["respawn-pane", "-k", "-t", paneTarget, "-c", Self.literalPath(cwd)] + Self.envFlags(env) + ["--"] + argv
+    base + ["respawn-pane", "-k", "-t", paneTarget, "-c", Self.literalArg(Self.literalPath(cwd))] + Self.envFlags(env)
+      + ["--"] + argv.map(Self.literalArg) + [";", "clear-history", "-t", paneTarget]
   }
 
   public static let paneStateFormat =
@@ -112,6 +127,9 @@ public struct TmuxCommands: Equatable, Sendable {
   public func paneState() -> [String] { base + ["display-message", "-p", "-t", paneTarget, Self.paneStateFormat] }
 
   public func capturePane() -> [String] { base + ["capture-pane", "-p", "-J", "-t", paneTarget] }
+
+  /// The screen with its colours (`-e`): the placeholder in Claude's input box is dim, a draft is not (`InputBoxAttributes`).
+  public func capturePaneEscaped() -> [String] { base + ["capture-pane", "-e", "-p", "-J", "-t", paneTarget] }
 
   /// The screen plus `lines` of history. A dead pane needs it: tmux 3.8 scrolls the last output into history to print
   /// "Pane is dead (…)" (OBSERVED).
@@ -144,8 +162,21 @@ public struct TmuxCommands: Equatable, Sendable {
   }
 
   /// Literal text with no key-name parsing (`-l`). The Enter goes separately: a program reads one chunk as a paste.
-  public func sendLiteral(_ text: String) -> [String] { base + ["send-keys", "-t", paneTarget, "-l", "--", text] }
+  public func sendLiteral(_ text: String) -> [String] {
+    base + ["send-keys", "-t", paneTarget, "-l", "--", Self.literalArg(text)]
+  }
+  /// `n` Backspace keys in one invocation: each deletes the character before the cursor, and none does anything at the start of the box.
+  public func sendBackspaces(_ n: Int) -> [String] { base + ["send-keys", "-t", paneTarget] + Array(repeating: "BSpace", count: n) }
   public func sendEnter() -> [String] { base + ["send-keys", "-t", paneTarget, "Enter"] }
+
+  /// One of the three keys a tap on a dialog may send, by tmux key NAME (tmux turns it into the bytes the pane's own cursor-key mode wants:
+  /// Claude's Select runs with application cursor keys, so raw bytes would be the wrong ones). The type admits Up, Down and Enter and nothing
+  /// else: no text, no digit, no raw byte. It leaves copy mode first, in the same invocation (see `sendBytesLeavingMode`).
+  public func sendDialogKey(_ key: DialogKey) -> [String] {
+    base + [
+      "if-shell", "-F", "-t", paneTarget, "#{pane_in_mode}", "send-keys -t \(paneTarget) -X cancel", ";", "send-keys", "-t", paneTarget, key.rawValue,
+    ]
+  }
 
   public func clearHistory() -> [String] { base + ["clear-history", "-t", paneTarget] }
 
@@ -199,7 +230,7 @@ public struct TmuxCommands: Equatable, Sendable {
 
   /// Session user options (`@talos_*`) remember what the running pane was launched with, across app restarts.
   public func setOption(_ key: String, _ value: String) -> [String] {
-    base + ["set-option", "-t", "\(sessionTarget):", "@\(key)", value]
+    base + ["set-option", "-t", "\(sessionTarget):", "@\(key)", Self.literalArg(value)]
   }
 
   public func showOption(_ key: String) -> [String] {

@@ -90,6 +90,7 @@ export const cardUpdateFrame = (
     resolution?: CardT['resolution']
     result?: CardT['result']
     reason?: string
+    explain?: CardT['explain']
   },
 ): Of<'card.update'> => ({
   ...env(now),
@@ -99,6 +100,7 @@ export const cardUpdateFrame = (
   ...(a.resolution ? { resolution: a.resolution } : {}),
   ...(a.result ? { result: a.result } : {}),
   ...(a.reason ? { reason: a.reason } : {}),
+  ...(a.explain ? { explain: a.explain } : {}),
 })
 
 export const transcriptFrame = (

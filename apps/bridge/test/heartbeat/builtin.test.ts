@@ -60,6 +60,8 @@ function fakeGh(
     signedOut?: boolean
     hang?: boolean
     commitDelaySec?: number
+    /** A commit lookup whose path holds this text answers at once (the rest take `commitDelaySec`). */
+    quickFor?: string
     shift?: { after: number; notes: unknown[] }
   } = {},
 ): string {
@@ -99,13 +101,14 @@ if (path.startsWith('notifications?')) {
   process.stdout.write(JSON.stringify(list.slice((page - 1) * per, page * per)))
   process.exit(0)
 }
-if (path.startsWith('repos/') && path.includes('/commits/') && ${JSON.stringify(opts.commitDelaySec ?? 0)} > 0) {
+if (path.startsWith('repos/') && path.includes('/commits/') && ${JSON.stringify(opts.commitDelaySec ?? 0)} > 0 && !(${JSON.stringify(opts.quickFor ?? null)} && path.includes(${JSON.stringify(opts.quickFor ?? '')}))) {
   // a commit lookup takes a while, and the log says how many were in flight at the same moment
   mkdirSync(dir + '/inflight', { recursive: true })
   writeFileSync(dir + '/inflight/' + process.pid, '')
   appendFileSync(dir + '/inflight.log', readdirSync(dir + '/inflight').length + '\\n')
   await Bun.sleep(${JSON.stringify((opts.commitDelaySec ?? 0) * 1000)})
   rmSync(dir + '/inflight/' + process.pid, { force: true })
+  appendFileSync(dir + '/finished.log', path + '\\n') // only a lookup that was left to run to the end gets here
 }
 const f = dir + '/answers/' + path.replace(/[/?&=#]/g, '_') + '.json'
 if (existsSync(f)) process.stdout.write(readFileSync(f, 'utf8'))
@@ -425,6 +428,30 @@ describe('github', () => {
     })
   })
 
+  test('one failed PR lookup stops the lookups still running: they end at once instead of running to the end', async () => {
+    const prs = Array.from({ length: 6 }, (_, i) => pr(i + 1))
+    // sha1 has no answer (a 404, at once); the other five take 3 s each
+    const per = Object.fromEntries(
+      prs.slice(1).map((p) => [`sha${p.number}`, [status(`sha${p.number}`, []), checks([])]]),
+    )
+    const bin = fakeGh(answersFor([], prs, per as never), { commitDelaySec: 3, quickFor: 'sha1/' })
+    await start({ ghBin: bin })
+    await k.run(config([ghSource({ timeout_s: 60 })]))
+    const t0 = Date.now()
+    const out = await k.run(config([ghSource({ timeout_s: 60 })]))
+    expect(sourceOf(out.result, 'gh')?.ok).toBe(false)
+    expect(sourceOf(out.result, 'gh')?.error).toContain('gh failed')
+    expect(Date.now() - t0).toBeLessThan(2500) // waiting out the siblings would take 3 s or more
+    await Bun.sleep(3500)
+    let finished = ''
+    try {
+      finished = readFileSync(join(dir, 'finished.log'), 'utf8')
+    } catch {
+      // none finished: what the test wants
+    }
+    expect(finished).toBe('') // the siblings were killed, not left to finish
+  }, 15_000)
+
   test('signed out is a source error that names the problem, never a silent slot', async () => {
     await start({ ghBin: fakeGh({}, { signedOut: true }) })
     const out = await k.run(config([ghSource()]))
@@ -453,7 +480,7 @@ describe('github', () => {
     await start({ ghBin: fakeGh({}, { hang: true }) })
     const out = await k.run(config([ghSource()]))
     expect(sourceOf(out.result, 'gh')?.error).toContain('no answer within 5 s')
-  })
+  }, 15_000) // the 5 s source limit has to run out first: over bun's 5 s default
 
   test('hostile PR and notification text is escaped; a malformed row does not take the others down', async () => {
     const bin = fakeGh(

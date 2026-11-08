@@ -1,6 +1,7 @@
 // Owner messages and voice notes from an app.
-// Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks are in hub.ts; some
-// handlers here run their own device, seen-id, step-up or card-state checks, so read both when auditing trust.
+// Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks (session, pairing,
+// schema) are in hub-app-conn.ts and hub-app-frames.ts; some handlers here run their own device, seen-id, step-up
+// or card-state checks, so read both when auditing trust.
 import type { FrameOf, MessageT } from '@talos-app/protocol'
 import type { AppConn, HubDeps } from './hub.ts'
 import type { StoredFrame } from './store.ts'

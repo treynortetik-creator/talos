@@ -5,6 +5,7 @@ import { createStore } from 'zustand/vanilla'
 import { useSession } from '../../src/features/auth/session.ts'
 import { attachShell } from '../../src/features/native/attach.ts'
 import { startNativeNotify } from '../../src/features/native/notify.ts'
+import { useTerminalSessions } from '../../src/features/terminal/sessions.ts'
 import { initialClientState, type TalosClient } from '../../src/lib/client.ts'
 import { createShellBridge } from '../../src/lib/native/bridge.ts'
 import { installShell, type Shell } from '../../src/lib/native/shell.ts'
@@ -187,5 +188,56 @@ describe('startNativeNotify', () => {
     t.emit('reply', reply({ voice_delegation_id: 'v1' }))
     t.emit('reply', reply({ message: { author: 'owner', thread_id: threadId } }))
     expect(t.posted.filter((m) => m.type === 'notify')).toHaveLength(0)
+  })
+})
+
+describe("the Terminal screen's messages from the Mac", () => {
+  const sessions = {
+    type: 'terminal_sessions',
+    items: [{ id: 'main', name: 'Main', state: 'live', key: '1', panel: 'terminal', action: null, detail: '' }],
+  }
+  beforeEach(() => useTerminalSessions.getState().reset())
+
+  it('the page says it can read the tab list, in ready', () => {
+    const t = setup(false)
+    attachShell(t.shell, t.client)
+    expect(t.posted[0]).toMatchObject({ features: expect.arrayContaining(['terminal-tabs/1']) })
+  })
+  it('a list or a Resume answer before sign-in is refused and stored nowhere', () => {
+    const t = setup(true) // device pinned, but no session
+    attachShell(t.shell, t.client)
+    expect(t.bridge.receive(sessions)).toBe(false)
+    expect(t.bridge.receive({ type: 'terminal_resume_result', thread_id: 'p', outcome: 'asked' })).toBe(false)
+    expect(useTerminalSessions.getState().items).toBeNull()
+    expect(useTerminalSessions.getState().resume).toEqual({})
+  })
+  it('signed in, both are stored; signing out drops the thread names the list held', () => {
+    const t = setup(true)
+    attachShell(t.shell, t.client)
+    useSession.setState({ status: 'authed' })
+    expect(t.bridge.receive(sessions)).toBe(true)
+    expect(t.bridge.receive({ type: 'terminal_resume_result', thread_id: 'p', outcome: 'park_pending' })).toBe(true)
+    expect(useTerminalSessions.getState().items).toHaveLength(1)
+    expect(useTerminalSessions.getState().resume.p).toMatchObject({ outcome: 'park_pending' })
+    useSession.setState({ status: 'anon' })
+    expect(useTerminalSessions.getState().items).toBeNull()
+    expect(useTerminalSessions.getState().resume).toEqual({})
+  })
+  it('terminal_select is refused before sign-in and, signed in, asks the screen to switch tab', () => {
+    const t = setup(true)
+    attachShell(t.shell, t.client)
+    expect(t.bridge.receive({ type: 'terminal_select', session: 'trip' })).toBe(false)
+    expect(useTerminalSessions.getState().selectRequest).toBeNull()
+    useSession.setState({ status: 'authed' })
+    expect(t.bridge.receive({ type: 'terminal_select', session: 'trip' })).toBe(true)
+    expect(useTerminalSessions.getState().selectRequest).toMatchObject({ id: 'trip' })
+    expect(t.bridge.receive({ type: 'terminal_select', session: '=agent' })).toBe(false)
+  })
+  it('a list with one bad item still lands, minus that item', () => {
+    const t = setup(true)
+    attachShell(t.shell, t.client)
+    useSession.setState({ status: 'authed' })
+    expect(t.bridge.receive({ ...sessions, items: [...sessions.items, { id: '=agent', name: 'x' }] })).toBe(true)
+    expect(useTerminalSessions.getState().items?.map((i) => i.id)).toEqual(['main'])
   })
 })

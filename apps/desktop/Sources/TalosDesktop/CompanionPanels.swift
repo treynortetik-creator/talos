@@ -4,9 +4,10 @@ import TalosDesktopCore
 /// Every companion window is this: a borderless, non-activating panel that is never key and never main, on every Space, over
 /// full-screen apps (spec 3.1). Showing one never activates the app, so it can't take focus from what the owner is typing in.
 ///
-/// `sharing` is `.none` unless a caller says otherwise: a panel stays out of screenshots and screen shares by default, because the
-/// bubble, controls, tray and reply card can carry thread names and reply text. Only the character's own panel is `.readOnly`
-/// (owner's yes 2026-11-01, spec 3.1): he is meant to show in a screenshot or a share.
+/// `sharing` is `.none` unless a caller says otherwise: a panel asks macOS to stay out of screenshots and screen shares, because the
+/// bubble, controls, tray and reply card can carry thread names and reply text. That is a request, not a guarantee, and nothing
+/// relies on it (a mirrored display shows the panel). Only the character's own panel is `.readOnly` (owner's yes 2026-11-01,
+/// spec 3.1): he is meant to show in a screenshot or a share.
 final class CompanionPanel: NSPanel {
   init(size: CGSize, sharing: NSWindow.SharingType = .none) {
     // styleMask goes in the initializer: assigning .nonactivatingPanel later doesn't take (spec 3.1).

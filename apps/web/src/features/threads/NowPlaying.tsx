@@ -2,6 +2,7 @@
 // loaded. Play/pause, the title, and a tap on the title goes back to the thread it came from. It floats instead of docking so
 // the shell's layout does not change; a docked bar can move into Shell later.
 import { useNavigate } from 'react-router'
+import { useApprovalOpen } from '../../lib/approvalOpen.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconClose, IconPause, IconPlay } from '../../ui/icons.tsx'
 import { audioDock, useDock } from './audioDock.ts'
@@ -11,7 +12,8 @@ export function NowPlaying() {
   const item = useDock((s) => s.item)
   const playing = useDock((s) => s.playing)
   const failed = useDock((s) => s.failed)
-  if (!item) return null
+  const approving = useApprovalOpen() // the approval sheet owns the screen
+  if (!item || approving) return null
   const threadId = item.threadId
   return (
     <section

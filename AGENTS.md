@@ -23,7 +23,7 @@ them share. The one-screen picture is [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE
 | You want to change                      | Look in                                                                                                                   |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | A message, frame or HTTP route shape    | `packages/protocol/src`: the frames, models and http files. Both sides import it.                                         |
-| Card kinds, and who may create each     | `CARD_KIND_MINTER` in `packages/protocol/src/models.ts`; the other lists follow it                                        |
+| Card kinds, and who may create each     | `CARD_KIND_TABLE` in `packages/protocol/src/models.ts`; every other list and rule follows it                              |
 | What the agent is told and can call     | `INSTRUCTIONS` in `apps/bridge/src/instructions.ts`; tools in `apps/bridge/src/tools`                                     |
 | Relay routes, hub, storage              | `apps/relay/src/routes.ts`, `apps/relay/src/route-table.ts`, `apps/relay/src/core/hub.ts`, `apps/relay/src/core/store.ts` |
 | Relay database changes                  | `apps/relay/migrations`                                                                                                   |

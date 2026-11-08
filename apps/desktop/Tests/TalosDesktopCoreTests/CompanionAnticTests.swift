@@ -170,7 +170,6 @@ struct CompanionAnticTests {
     check("Down") { $0.inputs.session = .stopped(byOwner: false) }
     check("Down (relay)") { $0.inputs.relayDown = true }
     check("Blocked session") { $0.inputs.session = .blocked }
-    check("quiet window") { $0.inputs.quiet = true }
     check("a mic") { $0.env.micRunning = true }
     check("Reduce Motion") { $0.env.reduceMotion = true }
     check("Low Power") { $0.env.lowPower = true }
@@ -312,13 +311,15 @@ struct CompanionAnticTests {
     #expect(!r.anims.contains("wake"), "work wins: he goes straight to work")
   }
 
-  @Test func theQuietWindowKeepsTheStatueAndNeverNaps() {
-    var r = rig { $0.upperBound }
-    r.inputs.quiet = true
-    r.advance(3600, step: 30)
-    #expect(r.last?.rest == .statue)
-    #expect(!r.anims.contains("sleep"))
-    #expect(r.last?.animation == nil)
+  @Test func theQuietWindowNapsAndAnticsExactlyLikeTheDay() {
+    var day = rig { $0.upperBound }
+    var night = rig { $0.upperBound }
+    night.inputs.quiet = true
+    day.advance(3600, step: 30)
+    night.advance(3600, step: 30)
+    #expect(night.last?.rest == .nap && night.last?.rest != .statue)
+    #expect(night.anims.contains("sleep"))
+    #expect(night.anims == day.anims, "the same clips, in the same order, as outside quiet hours")
   }
 
   @Test func reduceMotionAndLowPowerGiveTheNapAsAStillWithNoAnimation() {
@@ -420,7 +421,6 @@ struct CompanionAnticTests {
     check("Low Power") { $0.env.lowPower = true }
     check("Mini") { $0.env.mini = true }
     check("moments off") { $0.env.moments = false }
-    check("the quiet window") { $0.inputs.quiet = true }
     check("an open bubble") { $0.env.bubbleOpen = true }
     check("the tray or a resting pointer") { $0.env.anticHold = true }
     check("no needs clips in the art") { $0.env.needsClips = [:] }

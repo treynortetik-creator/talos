@@ -68,7 +68,7 @@ rm -rf "$MART" "$OUT"
 if grep -rIn --exclude-dir=.build --exclude-dir=.git --exclude=guards-test.sh -E '/Users/[A-Za-z]' . ; then warn "absolute /Users/ path in apps/desktop"; else ok "no absolute /Users/ paths"; fi
 HOSTS="$(grep -rIhoE --exclude-dir=.build --exclude-dir=.git --exclude=guards-test.sh 'https?://[A-Za-z0-9._-]+' . | sed -E 's#https?://##' | sort -u \
   | grep -E '^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+\.?[A-Za-z]{2,}$|^[A-Za-z0-9-]+\.[A-Za-z]{2,}$' \
-  | grep -Ev '^(localhost|127\.0\.0\.1|github\.com|www\.apple\.com|swift\.org|www\.w3\.org)$' \
+  | grep -Ev '^(localhost|127\.0\.0\.1|github\.com|www\.apple\.com|swift\.org|www\.w3\.org|code\.claude\.com)$' \
   | grep -Eiv '(^|\.)example\.(com|net|org)$|\.(example|invalid|test|localhost)$' || true)"
 if [ -n "$HOSTS" ]; then echo "$HOSTS"; bad "unexpected host in apps/desktop"; else ok "no real hosts"; fi
 

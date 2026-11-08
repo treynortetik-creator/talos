@@ -1,9 +1,15 @@
 // `retry_attachment`: brings back an owner attachment whose download failed (see ../attachment-retry.ts).
 import { retryAttachment } from '../attachment-retry.ts'
-import { fail, needStr, ok, type Tool, ToolError } from './common.ts'
+import { fail, needStr, ok, ToolError } from './common.ts'
+import { NOT_FOR_WORKERS, type ToolRecord } from './define.ts'
 
-export const retryAttachmentTool: Tool = {
+export const retryAttachmentTool: ToolRecord = {
   name: 'retry_attachment',
+  group: 'attachment',
+  headless: false,
+  ...NOT_FOR_WORKERS,
+  instructions: `If a note says an attachment could not be downloaded, call \`retry_attachment\` with the media_id it names; if that still fails, tell the owner.`,
+  told: ['main'],
   liveOnly: true,
   description:
     'Try again to download an attachment the owner sent that could not be downloaded (the note in the message names its media_id). Answers with the file path on success, or why it still failed.',

@@ -494,6 +494,8 @@ export function scheduleRunNotification(a: {
   windowEnds: string | undefined
   guard: string | null
   prompt: string
+  /** Job memory's section (job-memory.ts), when the job has memory on: its own data-marked block, after the job text. */
+  memory?: string | null
   ts: string
 }): Notification {
   const due = a.fireAt ?? 'now'
@@ -507,6 +509,7 @@ export function scheduleRunNotification(a: {
   ]
   if (a.guard) lines.push('--- standing rules (guard) ---', a.guard)
   lines.push('--- job ---', a.prompt)
+  if (a.memory) lines.push(a.memory)
   return {
     content: lines.join('\n'),
     meta: base(a.thread, a.runId, a.ts, 'schedule_run', 'owner', {

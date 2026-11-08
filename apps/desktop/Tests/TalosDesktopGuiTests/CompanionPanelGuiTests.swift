@@ -37,7 +37,7 @@ final class CompanionFixture {
     if enabled { defaults.set(true, forKey: CompanionController.Key.enabled) }
     if mini { defaults.set("mini", forKey: CompanionController.Key.size) }
     controller = CompanionController(defaults: defaults)
-    // The middle of every range: the day's Rounds slots land at 03:59, 11:59 and 19:59, never in the seconds a test lets pass
+    // The middle of every range: the day's Rounds slots land in the middle of their ranges, never in the seconds a test lets pass
     // after the pinned 09:00 clock, and an idle antic never comes sooner than it could (23.5 s, and a wander 120 s, and later while the Mac is left alone). A test that wants Rounds starts them.
     controller.modelRandom = { ($0.lowerBound + $0.upperBound) / 2 }
     let v = Self.realVisible
@@ -317,11 +317,10 @@ struct CompanionPanelGuiTests {
     fx.advance(4)
     let w = cell(3, 7)
     #expect(near(fx.spritePixel(), w.0, w.1, w.2), "working: \(String(describing: fx.spritePixel()))")
-    fx.inputs.quiet = true  // quiet: statue, extension sheet row 1
+    fx.inputs.quiet = true  // quiet hours change nothing about how he is drawn
     fx.advance(1)
-    let s = cell(0, 1)
-    #expect(near(fx.spritePixel(), s.0, s.1, s.2), "quiet: \(String(describing: fx.spritePixel()))")
-    #expect(fx.controller.lastOutput?.state == .working, "a clamp changes how a state is shown, never the state")
+    #expect(near(fx.spritePixel(), w.0, w.1, w.2), "quiet is still Working: \(String(describing: fx.spritePixel()))")
+    #expect(fx.controller.lastOutput?.state == .working && fx.controller.lastOutput?.rest != .statue)
   }
 
   @Test func statesComeFromRealStatusCoordinatorInputsNotJustADebugMenu() {
@@ -541,7 +540,7 @@ struct CompanionPanelGuiTests {
     #expect(near(fx.spritePixel(), 76, 20, 200), "waiting = col 2")
     fx.inputs.quiet = true
     fx.advance(1)
-    #expect(near(fx.spritePixel(), 104, 20, 200), "statue = col 3")
+    #expect(near(fx.spritePixel(), 76, 20, 200), "quiet hours do not turn him into the statue: still waiting = col 2")
     // No beats in Mini.
     fx.inputs.quiet = false
     fx.advance(1)

@@ -4,7 +4,6 @@ import { cn } from './cn.ts'
 
 // A sheet is a dialog that slides in from an edge. Bottom on phones, right on desktop.
 export const Sheet = DialogPrimitive.Root
-export const SheetTrigger = DialogPrimitive.Trigger
 export const SheetClose = DialogPrimitive.Close
 export const SheetTitle = DialogPrimitive.Title
 export const SheetDescription = DialogPrimitive.Description

@@ -1,86 +1,18 @@
-import {
-  AGENT_TOOL_GROUPS,
-  AGENT_TOOL_NAMES,
-  AGENT_TOOLS,
-  type AgentToolGroup,
-  type AgentToolName,
-  HEADLESS_BRIDGE_TOOLS,
-  threadSessionMode,
-  WORKER_THREAD_LOCKED_TOOLS,
-} from '@talos-app/protocol'
+import { threadSessionMode } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
-import { APP_TOOLS, appResult, appShow, listApps } from './apps.ts'
-import { retryAttachmentTool } from './attachments.ts'
-import { card, cardResult } from './card.ts'
 import { fail, type Tool, type ToolResult } from './common.ts'
-import { configPropose } from './config.ts'
-import { handoffTool } from './handoff.ts'
-import { inboxRaw, inboxTriage, setStatus, voiceProgress } from './misc.ts'
-import { talosModHello, talosModSync } from './mod.ts'
-import { readInboundTool, workerStoreOf } from './read-inbound.ts'
-import { schedulePropose, scheduleRunDone, scheduleRunStart, schedulesList } from './schedules.ts'
-import { attach, reply } from './send.ts'
-import { archiveThread, createThread, listThreads, readThread } from './threads.ts'
+import { AGENT_TOOL_GROUPS, type AgentToolGroup } from './define.ts'
+import { workerStoreOf } from './read-inbound.ts'
+import { AGENT_TOOLS, HEADLESS_BRIDGE_TOOLS, TOOL_RECORDS, tableProblems, WORKER_THREAD_LOCKED_TOOLS } from './table.ts'
 
-/**
- * What each row of AGENT_TOOLS (packages/protocol/src/channel-meta.ts) runs. The type needs exactly one tool per row, so
- * a row without a tool, or a tool without a row, fails typecheck; the loop below says the same at start for anything the
- * type cannot see.
- */
-const IMPLEMENTATIONS: Record<AgentToolName, Tool> = {
-  reply,
-  attach,
-  card,
-  card_result: cardResult,
-  set_status: setStatus,
-  voice_progress: voiceProgress,
-  list_threads: listThreads,
-  create_thread: createThread,
-  archive_thread: archiveThread,
-  read_thread: readThread,
-  inbox_triage: inboxTriage,
-  inbox_raw: inboxRaw,
-  talos_mod_hello: talosModHello,
-  talos_mod_sync: talosModSync,
-  schedules_list: schedulesList,
-  schedule_propose: schedulePropose,
-  schedule_run_start: scheduleRunStart,
-  schedule_run_done: scheduleRunDone,
-  config_propose: configPropose,
-  retry_attachment: retryAttachmentTool,
-  app_show: appShow,
-  app_result: appResult,
-  list_apps: listApps,
-  read_inbound: readInboundTool,
-  handoff: handoffTool,
-}
+/** What does not fit in the table of agent tools (table.ts), for anything the types cannot see. Empty when all is well. server.ts calls it once its logger exists and refuses to start on any line, so the owner finds it in bridge.log (an error thrown at import came before the logger and never reached it). */
+export const toolTableProblems = tableProblems
 
-/**
- * What does not match between AGENT_TOOLS and the tools that run for it, for anything the types cannot see. Empty when
- * all is well. server.ts calls it once its logger exists and refuses to start on any line, so the owner finds it in
- * bridge.log (an error thrown at import came before the logger and never reached it).
- */
-export function toolTableProblems(
-  impls: Record<string, Tool> = IMPLEMENTATIONS,
-  appTools: Tool[] = APP_TOOLS,
-): string[] {
-  const out: string[] = []
-  for (const n of AGENT_TOOL_NAMES)
-    if (impls[n]?.name !== n)
-      out.push(
-        `agent tool "${n}" has a row in AGENT_TOOLS (packages/protocol/src/channel-meta.ts) but tools/index.ts has no tool of that name for it`,
-      )
-  if (appTools.map((t) => t.name).join() !== AGENT_TOOL_NAMES.filter((n) => AGENT_TOOLS[n].group === 'apps').join())
-    out.push('the tools in apps.ts are not the `apps` rows of AGENT_TOOLS (packages/protocol/src/channel-meta.ts)')
-  return out
-}
-
-const toolsOf = (keep: (name: AgentToolName) => boolean): Tool[] =>
-  AGENT_TOOL_NAMES.filter(keep).map((n) => IMPLEMENTATIONS[n])
+const toolsOf = (keep: (name: string) => boolean): Tool[] => TOOL_RECORDS.filter((t) => keep(t.name))
 const inGroups =
   (...groups: AgentToolGroup[]) =>
-  (n: AgentToolName) =>
-    groups.includes(AGENT_TOOLS[n].group)
+  (n: string) =>
+    groups.includes(AGENT_TOOLS[n]?.group as AgentToolGroup)
 
 /** The Schedules tools are registered unless TALOS_APP_SCHEDULER=off; config_propose and retry_attachment stay either way. */
 const NEEDS_SCHEDULER: AgentToolGroup[] = ['schedule']
@@ -97,10 +29,10 @@ export const TOOLS: Tool[] = toolsOf(inGroups('core', 'mod'))
 export const ALL_TOOLS: Tool[] = toolsOf(inGroups(...MAIN_GROUPS))
 
 /** Option C worker mode (docs/OPTION-C.md): its own thread's tools only, plus `read_inbound`. */
-export const WORKER_TOOLS: Tool[] = toolsOf((n) => AGENT_TOOLS[n].worker)
+export const WORKER_TOOLS: Tool[] = toolsOf((n) => AGENT_TOOLS[n]?.worker === true)
 
 const WORKER_WITHOUT_SCHEDULER: Tool[] = toolsOf(
-  (n) => AGENT_TOOLS[n].worker && !NEEDS_SCHEDULER.includes(AGENT_TOOLS[n].group),
+  (n) => AGENT_TOOLS[n]?.worker === true && !NEEDS_SCHEDULER.includes(AGENT_TOOLS[n].group),
 )
 const WITHOUT_SCHEDULER = toolsOf(inGroups(...MAIN_GROUPS.filter((g) => !NEEDS_SCHEDULER.includes(g))))
 const APPS = toolsOf(inGroups('apps'))

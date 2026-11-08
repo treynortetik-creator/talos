@@ -291,7 +291,7 @@ export function CallScreen({ threadId, onEnd }: CallScreenProps) {
 
 // ---- Settings -> Voice ---------------------------------------------------------------------------------------------
 
-// The voice list lives in the protocol (config-propose.ts) so the bridge checks the same ids the Settings select offers.
+// The voice list lives in the protocol (settings-table.ts) so the bridge checks the same ids the Settings select offers.
 export { VOICE_CHOICES }
 
 const MODES: Array<{ id: TalkMode; label: string; hint: string }> = [

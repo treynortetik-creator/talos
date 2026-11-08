@@ -299,6 +299,7 @@ describe('ci-local.sh gates', () => {
     ['check', '--skip test/schedules/'],
     ['check', 'test:contract'],
     ['check', 'capture-schedules.ts --check'],
+    ['check', 'notices:check'],
     ['browser', 'playwright install'],
     ['browser', 'test:browser'],
     ['browser', 'test:e2e'],

@@ -25,7 +25,6 @@ export function releaseSlot(id: string) {
   emit()
 }
 
-export const liveCount = () => live.length
 export const resetSlots = () => {
   live = []
   emit()

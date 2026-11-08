@@ -5,8 +5,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentInstructions } from '../src/bridge.ts'
 import type { BridgeContext } from '../src/context.ts'
-import { APP_INSTRUCTIONS, APP_TOOLS } from '../src/tools/apps.ts'
+import { APP_INSTRUCTIONS } from '../src/tools/apps.ts'
 import { ALL_TOOLS, callTool, TOOLS, toolsFor, WORKER_TOOLS } from '../src/tools/index.ts'
+import { APP_BRIDGE_TOOLS } from '../src/tools/table.ts'
 
 const names = (l: Array<{ name: string }>) => l.map((t) => t.name)
 
@@ -45,7 +46,7 @@ describe('which tools each kind of session lists, in order', () => {
       'read_inbound',
       'handoff',
     ])
-    expect(names(APP_TOOLS)).toEqual(APPS)
+    expect([...APP_BRIDGE_TOOLS]).toEqual(APPS)
   })
 
   test('toolsFor: scheduler on, scheduler off, apps on, worker', () => {

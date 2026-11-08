@@ -1076,7 +1076,7 @@
             "thread_id": "general",
             "author": "system",
             "kind": "text",
-            "text": "Something arrived that this version of Talos can't show. Update the app to see it.",
+            "text": "Talos on your phone or Mac is newer than this app; update to see everything.",
             "format": "plain",
             "attachments": [],
             "via": "app",

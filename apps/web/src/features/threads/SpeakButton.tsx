@@ -3,6 +3,7 @@ import { useTalosClient } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconPause, IconPlay } from '../../ui/icons.tsx'
 import { audioDock, useDock } from './audioDock.ts'
+import { REVEAL } from './messageRow.ts'
 import { cancelSpeak, speakKey, startSpeak, useSpeak } from './speak.ts'
 
 /**
@@ -48,6 +49,7 @@ export function SpeakButton({ m }: { m: MessageT }) {
         className={cn(
           'inline-flex min-h-11 items-center gap-1.5 rounded-pill px-2.5 font-sans text-xs text-text-2',
           'hover:bg-surface-2 hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px]',
+          REVEAL,
         )}
       >
         {loading ? (

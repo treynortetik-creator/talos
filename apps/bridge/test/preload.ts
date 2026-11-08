@@ -7,3 +7,15 @@ process.env.TALOS_APP_CHRONOS_AUTODISCOVER = 'off'
 import { installFakeClaude } from './fake-claude.ts'
 
 installFakeClaude()
+
+// A thread's inbox lives in ~/.talos-inbox. No test may touch the real one: every bridge test gets its own throw-away root
+// (loadEnv reads TALOS_INBOX_ROOT from the process too), and a test that checks the inbox sets its own.
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+process.env.TALOS_INBOX_ROOT = join(mkdtempSync(join(tmpdir(), 'talos-test-inbox-')), '.talos-inbox')
+
+// And no bridge test starts the plain explanation of permission cards on whatever `claude` it finds; the explainer's own
+// tests give it a fake CLI by path.
+process.env.TALOS_EXPLAINER = 'off'

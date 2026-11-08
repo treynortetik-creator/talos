@@ -79,9 +79,11 @@ public final class SwiftTermPtyHost: PtyHost, LocalProcessDelegate, TerminalDele
   public func send(keys: [UInt8]) -> SendOutcome {
     // Straight to the pty, not `LocalProcess.send`, whose DispatchIO write runs at default QoS. The kernel stops serving
     // that once every cooperative thread is blocked, which parallel tests in `usleep` do (OBSERVED: an Enter queued for 12 s,
-    // then cancelled unsent). The app never blocks that pool, but a dialog's Enter has no reason to depend on it. The pty is
-    // O_NONBLOCK (SwiftTerm's reader sets it on the shared file description), so this can't hold `lock`: past about 1 KB
-    // unread the rest is dropped.
+    // then cancelled unsent). The app's periodic reads of the worker manager and of the supervisor's config take no queue
+    // (WorkerPublished.swift), so a slow tmux cannot pile blocked callers onto that pool. What the app does start on it is a
+    // few bounded `Task.detached` probes, one at a time (the Terminals window's `tmux has-session`, 2 s at most). A dialog's
+    // Enter has no reason to depend on the pool anyway. The pty is O_NONBLOCK (SwiftTerm's reader sets it on the shared file
+    // description), so this can't hold `lock`: past about 1 KB unread the rest is dropped.
     lock.withLock {
       guard keysFd >= 0 else { return .failed }
       return keys.withUnsafeBytes { raw -> SendOutcome in

@@ -137,7 +137,13 @@ public enum SessionSwitcher {
   static func threadDetail(_ e: WorkersFile.Entry, waiting: String?) -> String {
     if !WorkersFile.restingStates.contains(e.state), let waiting {
       if waiting == WorkerNotice.draftKind {
-        return "Unsent text is in its input box, so your message is waiting. Finish or clear it here."
+        return "Unsent text is in its input box. Your message has probably gone to the main session. Finish or clear it here."
+      }
+      if waiting == WorkerNotice.leftoverKind {
+        return "Its input box holds text that may include an old line from Talos. Clear it here."
+      }
+      if waiting == WorkerNotice.noBoxKind {
+        return "Its input box isn't showing yet. Your message has probably gone to the main session. Check what the session is waiting on here."
       }
       return "Waiting on a \"\(waiting)\" prompt. Answer it here."
     }
@@ -217,9 +223,25 @@ public enum WorkerNotice {
   /// The `needs you` reason for a pointer held back by text in Claude's input box (not a dialog).
   public static let draftKind = "unsent text"
 
+  /// The `needs you` reason for a pointer held back because Claude's input box is not on the pane.
+  public static let noBoxKind = "no input box"
+
+  /// The `needs you` reason for a box that holds more than Talos's own line, after the message was due and the app came back.
+  public static let leftoverKind = "left-over line"
+
+  public static func leftoverLine(threadName: String) -> String {
+    let name = SessionSwitcher.cleanTitle(threadName) ?? "A thread"
+    return "\(name)'s session has text in its input box that may include an old line from Talos, so Talos left it alone. Open Terminals to clear it."
+  }
+
+  public static func noBoxLine(threadName: String) -> String {
+    let name = SessionSwitcher.cleanTitle(threadName) ?? "A thread"
+    return "\(name)'s session isn't showing its input box yet. Open Terminals \u{2192} \(name) to see what it's waiting on."
+  }
+
   public static func draftLine(threadName: String) -> String {
     let name = SessionSwitcher.cleanTitle(threadName) ?? "A thread"
-    return "\(name)'s session has unsent text in its input box; your message is waiting. Open Terminals to finish or clear it."
+    return "\(name)'s session has unsent text in its input box; your message has probably gone to the main session. Open Terminals to finish or clear it."
   }
 
   public static func line(threadName: String, screen: DialogMatcher.Screen) -> String {

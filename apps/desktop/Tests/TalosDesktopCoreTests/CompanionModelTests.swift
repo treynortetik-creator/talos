@@ -220,7 +220,7 @@ struct CompanionClampTests {
     #expect(r.last?.state == .idle)
     r.advance(2)
     #expect(r.last?.state == .asleep)
-    #expect(r.last?.rest == .nap, "Asleep is a nap now: lying down, eyes dim; the statue stays for the quiet window")
+    #expect(r.last?.rest == .nap, "Asleep is a nap now: lying down, eyes dim;  quiet hours do not change it")
     #expect(r.last?.word == "Dozing")
     let o = r.model.activity(mono: r.mono, wall: r.wall)
     #expect(o.state == .idle)
@@ -244,18 +244,18 @@ struct CompanionClampTests {
     #expect(r.bubbles.isEmpty)
   }
 
-  @Test func quietShowsAStatueWhateverTheStateWithNoBubbleNoBeatAndADotIfAnythingCollected() {
+  @Test func quietKeepsTheLookOfTheStateWithNoBubbleAndADotIfAnythingCollected() {
     var r = Rig()
     r.inputs.quiet = true
     r.inputs.collected = 3
     r.tick()
     r.inputs.needs = 1
     let o = r.tick(1)
-    #expect(o.state == .needsYou, "a clamp changes how a state is shown, never the state")
-    #expect(o.displayState == .asleep)
-    #expect(o.rest == .statue)
-    #expect(o.animation == nil)
-    #expect(o.bubble == nil)
+    #expect(o.state == .needsYou)
+    #expect(o.rest != .statue, "quiet hours never make him a statue")
+    #expect(o.rest == .holdStill("waiting"), "he looks as he does by day")
+    #expect(o.animation != nil, "and moves as he does by day")
+    #expect(o.bubble == nil, "banners and bubbles stay off")
     #expect(o.dot)
     #expect(o.word == "Needs you · 1", "hover tells the truth")
   }
@@ -336,9 +336,16 @@ struct CompanionBeatTests {
 
   @Test func helloIsGatedLikeEveryBeat() {
     var r = Rig()
-    r.inputs.quiet = true
+    r.env.micRunning = true
     r.tick()
     do { let o_ = r.model.turnedOn(mono: r.mono, wall: r.wall); #expect(o_.animation == nil) }
+  }
+
+  @Test func helloWavesInQuietHoursToo() {
+    var r = Rig()
+    r.inputs.quiet = true
+    r.tick()
+    do { let o_ = r.model.turnedOn(mono: r.mono, wall: r.wall); #expect(o_.animation?.clip == "waving" && o_.bubble == nil) }
   }
 
   @Test func pokeIsAFourFrameHopLimitedToOnePerSecond() {
@@ -507,43 +514,59 @@ struct CompanionDayTests {
     do { let o_ = r.tick(1); #expect(o_.dot == false) }
   }
 
-  @Test func roundsSlotsAreThreeOneInEachThirdOfTheAwakeHours() {
-    let slots = RoundsPlan.slots(on: Rig.start, quiet: quiet, random: { $0.lowerBound })
-    #expect(slots.count == 3)
+  private func minutesOfDay(_ slots: [Date], _ zone: TimeZone) -> [Int] {
     var cal = Calendar(identifier: .gregorian)
-    cal.timeZone = Rig.fixedUtcMinus7
-    let minutes = slots.map { cal.component(.hour, from: $0) * 60 + cal.component(.minute, from: $0) }
-    // Awake: 04:00 to 20:30 = 990 minutes, thirds of 330.
-    #expect(minutes == [240, 240 + 330, 240 + 660])
-    let top = RoundsPlan.slots(on: Rig.start, quiet: quiet, random: { $0.upperBound })
-    let topMin = top.map { cal.component(.hour, from: $0) * 60 + cal.component(.minute, from: $0) }
-    #expect(topMin.allSatisfy { $0 >= 240 && $0 < 20 * 60 + 30 }, "never inside the quiet window: \(topMin)")
+    cal.timeZone = zone
+    return slots.map { cal.component(.hour, from: $0) * 60 + cal.component(.minute, from: $0) }
   }
 
-  @Test func roundsSlotsWithAQuietWindowThatDoesNotWrapAndWithNone() {
-    let day = QuietWindow(start: 13 * 60, end: 15 * 60, timeZone: Rig.fixedUtcMinus7)
-    for seed in [0.0, 0.5, 1.0] {
-      let s = RoundsPlan.slots(on: Rig.start, quiet: day, random: { $0.lowerBound + ($0.upperBound - $0.lowerBound) * seed })
-      var cal = Calendar(identifier: .gregorian)
-      cal.timeZone = Rig.fixedUtcMinus7
-      let m = s.map { cal.component(.hour, from: $0) * 60 + cal.component(.minute, from: $0) }
-      #expect(m.count == 3)
-      #expect(m.allSatisfy { !(13 * 60..<15 * 60).contains($0) }, "\(m)")
+  @Test func roundsSlotsAreNineOneInEachNinthOfTheWholeDayQuietHoursIncluded() {
+    let slots = RoundsPlan.slots(on: Rig.start, quiet: quiet, random: { $0.lowerBound })
+    #expect(slots.count == 9)
+    let minutes = minutesOfDay(slots, Rig.fixedUtcMinus7)
+    // Nine ninths of 1440 minutes (160 each), each jittered inside its middle: 20 minutes in at the lowest.
+    #expect(minutes == (0..<9).map { 160 * $0 + 20 })
+    let top = minutesOfDay(RoundsPlan.slots(on: Rig.start, quiet: quiet, random: { $0.upperBound }), Rig.fixedUtcMinus7)
+    #expect(top == (0..<9).map { 160 * $0 + 139 })
+    // The quiet window is 20:30 to 04:00: Rounds no longer keep out of it.
+    let inQuiet = minutes.filter { $0 >= 20 * 60 + 30 || $0 < 4 * 60 }
+    #expect(inQuiet == [20, 180, 1300], "slots inside the quiet window: \(inQuiet)")
+  }
+
+  @Test func roundsSlotsKeepAtLeastFortyMinutesApartWhateverTheDice() {
+    for seed in [0.0, 0.25, 0.5, 0.75, 1.0] {
+      for window in [quiet, nil, QuietWindow(start: 13 * 60, end: 15 * 60, timeZone: Rig.fixedUtcMinus7)] {
+        let s = RoundsPlan.slots(on: Rig.start, quiet: window, random: { $0.lowerBound + ($0.upperBound - $0.lowerBound) * seed })
+        let m = minutesOfDay(s, Rig.fixedUtcMinus7)
+        #expect(m.count == 9)
+        #expect(m == m.sorted())
+        for (x, y) in zip(m, m.dropFirst()) { #expect(y - x >= 40, "\(m)") }
+        #expect(m.allSatisfy { $0 >= 0 && $0 < 1440 })
+      }
     }
-    #expect(RoundsPlan.slots(on: Rig.start, quiet: nil, random: { $0.lowerBound }).count == 3)
   }
 
-  @Test func roundsSlotsInADSTZoneStayInsideTheAwakeHoursOnAChangeDay() {
+  @Test func theQuietWindowDoesNotChangeTheSlotsOnlyTheZoneTheDayIsCutIn() {
+    let a = RoundsPlan.slots(on: Rig.start, quiet: quiet, random: { $0.lowerBound })
+    let b = RoundsPlan.slots(on: Rig.start, quiet: QuietWindow(start: 13 * 60, end: 15 * 60, timeZone: Rig.fixedUtcMinus7), random: { $0.lowerBound })
+    let c = RoundsPlan.slots(on: Rig.start, quiet: nil, random: { $0.lowerBound })
+    #expect(a == b)
+    #expect(a.count == 9 && c.count == 9)
+  }
+
+  @Test func roundsSlotsInADSTZoneStayInTheirDayOnAChangeDay() {
     let ny = TimeZone(identifier: "America/New_York")!
     let q = QuietWindow(start: 20 * 60 + 30, end: 4 * 60, timeZone: ny)
-    // 2026-11-01 is the fall-back day in New York.
     var cal = Calendar(identifier: .gregorian)
     cal.timeZone = ny
-    let day = cal.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 12))!
-    for seed in [0.0, 0.5, 1.0] {
-      let s = RoundsPlan.slots(on: day, quiet: q, random: { $0.lowerBound + ($0.upperBound - $0.lowerBound) * seed })
-      #expect(s.count == 3)
-      #expect(s.allSatisfy { cal.startOfDay(for: $0) == cal.startOfDay(for: day) })
+    // Fall-back (2026-11-01, 25 hours) and spring-forward (2026-03-08, 23 hours): nine slots, all on that local day.
+    for (month, d) in [(11, 1), (3, 8)] {
+      let day = cal.date(from: DateComponents(year: 2026, month: month, day: d, hour: 12))!
+      for seed in [0.0, 0.5, 1.0] {
+        let s = RoundsPlan.slots(on: day, quiet: q, random: { $0.lowerBound + ($0.upperBound - $0.lowerBound) * seed })
+        #expect(s.count == 9, "\(month)/\(d) seed \(seed)")
+        #expect(s.allSatisfy { cal.startOfDay(for: $0) == cal.startOfDay(for: day) }, "\(month)/\(d) seed \(seed)")
+      }
     }
   }
 
@@ -563,10 +586,48 @@ struct CompanionDayTests {
         _ = t.model.roundsStarted(mono: t.mono, wall: t.wall)
       }
     }
-    #expect(due == 2, "two slots remain between 09:00 and the end of the awake hours")
+    #expect(due == 5, "five slots remain between 09:00 and midnight: 11:00, 13:40, 16:20, 19:00 and 21:40, the last inside quiet hours")
     var m = r
     m.env.micRunning = true
     for _ in 0..<(15 * 60) { let o_ = m.tick(60); #expect(o_.roundsDue == false) }
+  }
+
+  @Test func everyClampStillBlocksARoundEvenInQuietHours() {
+    let clamps: [(String, (inout Rig) -> Void)] = [
+      ("reduce motion", { $0.env.reduceMotion = true }),
+      ("low power", { $0.env.lowPower = true }),
+      ("mic", { $0.env.micRunning = true }),
+      ("mini", { $0.env.mini = true }),
+      ("moments off", { $0.env.moments = false }),
+      ("asleep and away", { $0.env.secondsSinceInput = .infinity }),
+    ]
+    for (name, apply) in clamps {
+      var r = Rig()
+      r.inputs.quietWindow = quiet
+      r.env.secondsSinceInput = 5
+      apply(&r)
+      r.tick()
+      var due = 0
+      for _ in 0..<(24 * 60) {
+        r.inputs.quiet = quiet.isQuiet(r.wall)
+        if r.tick(60).roundsDue { due += 1 }
+      }
+      #expect(due == 0, "\(name) must block Rounds, got \(due)")
+    }
+    // Control: with no clamp, the same day does give Rounds inside the quiet window.
+    var c = Rig()
+    c.inputs.quietWindow = quiet
+    c.env.secondsSinceInput = 5
+    c.tick()
+    var inQuiet = 0
+    for _ in 0..<(24 * 60) {
+      c.inputs.quiet = quiet.isQuiet(c.wall)
+      if c.tick(60).roundsDue {
+        if c.inputs.quiet == true { inQuiet += 1 }
+        _ = c.model.roundsStarted(mono: c.mono, wall: c.wall)
+      }
+    }
+    #expect(inQuiet >= 1, "a Round comes due while the quiet window is on")
   }
 
   @Test func aMissedSlotIsDroppedWithNoCatchUp() {
@@ -648,11 +709,10 @@ struct ClickGateTests {
 
 @Suite("Companion clamps gate every path alike")
 struct CompanionGateTests {
-  enum Cause: CaseIterable { case quiet, mic, notYetKnown }
+  enum Cause: CaseIterable { case mic, notYetKnown }
 
   func close(_ r: inout Rig, _ c: Cause) {
     switch c {
-    case .quiet: r.inputs.quiet = true
     case .mic: r.env.micRunning = true
     case .notYetKnown: r.inputs.quiet = nil
     }
@@ -677,7 +737,6 @@ struct CompanionGateTests {
       r.env.secondsSinceInput = 1
       r.advance(1700, step: 10)  // past the longest antic gap
       #expect(r.anims.filter { CompanionModel.shippedAntics[$0] != nil }.isEmpty, "an antic under \(cause)")
-      #expect(cause != .quiet || !r.anims.contains("waving"), "nothing waves inside the quiet window")
       var due = false
       for _ in 0..<(24 * 60) {
         if r.tick(60).roundsDue { due = true }
@@ -698,26 +757,29 @@ struct CompanionGateTests {
     #expect(r.click().animation?.clip == "jumping")
   }
 
-  @Test func threeRoundsADayAcrossDateChangesEachInItsOwnDay() {
+  @Test func nineRoundsADayAcrossDateChangesEachInItsOwnDayQuietHoursIncluded() {
     var r = Rig(random: { $0.lowerBound })
     let q = QuietWindow(start: 20 * 60 + 30, end: 4 * 60, timeZone: Rig.fixedUtcMinus7)
     r.inputs.quietWindow = q
     r.env.secondsSinceInput = 3
     var perDay: [String: Int] = [:]
+    var inQuiet = 0
     var cal = Calendar(identifier: .gregorian)
     cal.timeZone = Rig.fixedUtcMinus7
     for _ in 0..<(48 * 60) {
       r.inputs.quiet = q.isQuiet(r.wall)
       let o = r.tick(60)
       if o.roundsDue {
+        if r.inputs.quiet == true { inQuiet += 1 }
         _ = r.model.roundsStarted(mono: r.mono, wall: r.wall)
         let c = cal.dateComponents([.month, .day], from: r.wall)
         perDay["\(c.month!)-\(c.day!)", default: 0] += 1
       }
     }
-    #expect(perDay.values.reduce(0, +) == 5 || perDay.values.reduce(0, +) == 6, "\(perDay)")
-    #expect(perDay.count == 3 || perDay.count == 2, "\(perDay)")
-    for (day, n) in perDay { #expect(n <= 3, "\(day) has \(n)") }
+    // From 09:00 on the 31st: five that day (11:00 on), all nine on the 1st, four before 09:00 on the 2nd.
+    #expect(perDay == ["10-31": 5, "11-1": 9, "11-2": 4], "\(perDay)")
+    #expect(inQuiet > 0, "some of them fall inside the quiet window")
+    for (day, n) in perDay { #expect(n <= 9, "\(day) has \(n)") }
   }
 
   @Test func downToNeedsYouIsStillHeldToOneChangeEveryThreeSeconds() {
@@ -763,15 +825,15 @@ struct CompanionReviewFixTests {
   }
 
   @Test func aRoundsSlotHeldBackByAnAwayOwnerDoesNotMakeItAskEvery50ms() {
-    var r = Rig(random: { $0.upperBound })  // slots at 09:30, 14:59 and 20:29
+    var r = Rig(random: { $0.upperBound })  // the last slot is at 23:39 (1280 + 139 minutes)
     r.inputs.quietWindow = quiet
-    r.wall = Rig.start.addingTimeInterval(10.5 * 3600 + 900)  // 19:45
+    r.wall = Rig.start.addingTimeInterval(13 * 3600 + 55 * 60)  // 22:55
     r.tick()
-    r.advance(2500, step: 10)  // 20:26:40, idle for more than 30 minutes: asleep
+    r.advance(2500, step: 10)  // 23:36:40, idle for more than 30 minutes: asleep
     #expect(r.last?.state == .asleep)
     r.env.secondsSinceInput = .infinity  // the owner is away
-    // 20:29:00 is the slot; the quiet window opens at 20:30. Step through the 90 s grace.
-    r.wall = Rig.start.addingTimeInterval(10.5 * 3600 + 3540 + 10)  // 20:29:10
+    // 23:39:00 is the slot. Step through the 90 s grace.
+    r.wall = Rig.start.addingTimeInterval(14 * 3600 + 39 * 60 + 10)  // 23:39:10
     var due = false
     let closest = closestAsk(&r, seconds: 60)
     for o in r.log.suffix(60) where o.roundsDue { due = true }
@@ -788,7 +850,7 @@ struct CompanionReviewFixTests {
     ] {
       for clamp: (inout Rig) -> Void in [
         { $0.env.micRunning = true }, { $0.env.reduceMotion = true }, { $0.env.lowPower = true }, { $0.env.mini = true },
-        { $0.env.moments = false }, { $0.inputs.quiet = true }, { _ in },
+        { $0.env.moments = false }, { _ in },
       ] {
         var r = Rig(random: { $0.lowerBound })
         r.inputs.quietWindow = quiet
@@ -806,7 +868,7 @@ struct CompanionReviewFixTests {
     r.inputs.quietWindow = quiet
     r.env.secondsSinceInput = 5
     r.tick()
-    r.wall = Rig.start.addingTimeInterval(-5 * 3600 + 25 * 60)  // 04:25, slot is 04:00 (grace passed)
+    r.wall = Rig.start.addingTimeInterval(-5 * 3600 + 25 * 60)  // 04:25; the first tick at 09:00 already dropped the morning slots
     var seen = 0
     var asked: [TimeInterval] = []
     for _ in 0..<(12 * 3600 / 30) {
@@ -814,7 +876,7 @@ struct CompanionReviewFixTests {
       if o.roundsDue { seen += 1; _ = r.model.roundsStarted(mono: r.mono, wall: r.wall) }
       if let d = o.nextDeadline { asked.append(d - r.mono) }
     }
-    #expect(seen == 2, "09:25ish and 14:50ish: \(seen)")
+    #expect(seen == 3, "11:00, 13:40 and 16:20 inside the 12 hours: \(seen)")
     #expect(asked.contains { $0 > 600 }, "a real slot ahead is still a deadline")
   }
 

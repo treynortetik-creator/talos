@@ -1,10 +1,8 @@
 // Pure Schedules logic (docs/SCHEDULES.md S5). No React and no schedule maths: Chronos computes every time and plain-words
 // text, this file only groups, labels and compares what the snapshot already says.
 import type {
-  DayStateT,
   HealthIssueT,
   ScheduleChangeT,
-  ScheduleDetailT,
   ScheduleDraftT,
   SchedulerHealthT,
   ScheduleSnapshotT,
@@ -502,6 +500,8 @@ export type FormState = {
   catchup: string
   model: string
   description: string
+  /** Job memory: the last results and a notepad are shown to each run. Off by default. */
+  memory: boolean
 }
 
 export function whenFromForm(f: FormState): ScheduleDraftT['when'] | null {
@@ -544,6 +544,7 @@ export function formFromSchedule(s: ScheduleT, prompt: string): FormState {
     catchup: String(s.catchup_min),
     model: s.model ?? '',
     description: s.description,
+    memory: s.memory === true,
   }
 }
 
@@ -563,6 +564,7 @@ export const blankForm = (threadId: string | null): FormState => ({
   catchup: '180',
   model: '',
   description: '',
+  memory: false,
 })
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
@@ -595,6 +597,7 @@ export function touchedSet(before: FormState, after: FormState): Extract<Schedul
   if (after.notify !== before.notify) set.notify = after.notify
   if (after.catchup !== before.catchup) set.catchup_min = Number(after.catchup)
   if (after.model !== before.model) set.model = after.model.trim() === '' ? null : after.model.trim()
+  if (after.memory !== before.memory) set.memory = after.memory
   return set as never
 }
 
@@ -627,6 +630,7 @@ export function draftFromForm(f: FormState, id: string): ScheduleDraftT | null {
     notify: f.notify,
     thread_id: f.threadId,
     prompt: f.prompt,
+    ...(f.memory ? { memory: true } : {}),
   }
 }
 
@@ -637,5 +641,3 @@ export function fieldOfPath(path: string): string {
   const parts = path.split('.').filter((p) => p !== 'draft' && p !== 'set' && p !== 'change')
   return parts[0] ?? path
 }
-
-export type { DayStateT, ScheduleDetailT }

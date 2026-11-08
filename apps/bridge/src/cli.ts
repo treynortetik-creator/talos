@@ -4,11 +4,19 @@
 // is dispatched here, before the rest of the CLI (relay, sqlite, MCP SDK) is loaded, and so are `rollback` and `restore-last-good` (they have to work
 // when the packages are broken); every other command loads
 // cli-main.ts on demand. Type exports are erased at build time, so importing them loads nothing.
+import { workerCliRefusal } from './worker/cli-refusal.ts'
+
 export type { CliDeps, CliIO } from './cli-main.ts'
 
 type Main = typeof import('./cli-main.ts')
 
 export async function runCli(...args: Parameters<Main['runCli']>): ReturnType<Main['runCli']> {
+  // a thread's own session runs only the commands on its allow list: checked before any of the early dispatches below
+  const refusal = workerCliRefusal(args[0], args[2] ?? process.env, args[3]?.cwd)
+  if (refusal) {
+    args[1].err(refusal)
+    return 1
+  }
   if (args[0][0] === 'subagent-tee') return (await import('./subagent-tee.ts')).mainTee(args[0].slice(1))
   if (args[0][0] === 'hook') {
     const h = await import('./apps/hook-cli.ts')
@@ -27,6 +35,11 @@ export async function runCli(...args: Parameters<Main['runCli']>): ReturnType<Ma
 
 if (import.meta.main) {
   const argv = process.argv.slice(2)
+  const refusal = workerCliRefusal(argv, process.env)
+  if (refusal) {
+    process.stderr.write(`${refusal}\n`)
+    process.exit(1)
+  }
   if (argv[0] === 'subagent-tee') {
     const { mainTee } = await import('./subagent-tee.ts')
     process.exit(mainTee(argv.slice(1)))

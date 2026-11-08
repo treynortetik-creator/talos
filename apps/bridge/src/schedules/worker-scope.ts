@@ -3,6 +3,8 @@
 // scope is that thread and nothing the request says. The rules live here and in ScheduleService; the hub only dispatches.
 import { HEARTBEAT_META_KEY, type ScheduleSnapshotT, type ScheduleT } from '@talos-app/protocol'
 import type { WorkerStore } from '../worker/store.ts'
+import { NOTEPAD_INPUT_MAX_CHARS } from './job-memory-run.ts'
+import { startedKey } from './kv-prune.ts'
 import type { ScheduleService } from './service.ts'
 
 /** The thread whose session is asking. */
@@ -99,7 +101,6 @@ export type WorkerRpcDeps = {
   now: () => number
   kv: { get(key: string): string | undefined; set(key: string, value: string): void }
 }
-const startedKey = (runId: string) => `schedule_run_started/${runId}`
 
 const runIdOf = (args: Record<string, unknown>): string | undefined =>
   typeof args.run_id === 'string' && args.run_id.length > 0 && args.run_id.length <= 64 ? args.run_id : undefined
@@ -158,15 +159,17 @@ export async function workerScheduleTool(d: WorkerRpcDeps, tool: string, args: R
       if (typeof args.summary !== 'string' || !args.summary) return fail('summary is required')
       const why = runProblem(d, runId)
       if (why) return { ok: true, text: `not yours: ${why}` }
+      if (args.notepad !== undefined && typeof args.notepad !== 'string') return fail('notepad must be text')
       const r = await d.schedules.toolRunDone({
         runId,
         ok: args.ok,
         summary: args.summary.slice(0, 280),
         ...(typeof args.report === 'string' ? { report: args.report.slice(0, 64 * 1024) } : {}),
+        ...(typeof args.notepad === 'string' ? { notepad: args.notepad.slice(0, NOTEPAD_INPUT_MAX_CHARS) } : {}),
       })
       // A finished run is an answer: without this the session parking afterwards would read as "stopped before it finished",
       // because a job's work need not post a reply.
-      if (r.ok && r.text === 'recorded') d.store.settleClaims([runId], d.now())
+      if (r.ok && r.text.startsWith('recorded')) d.store.settleClaims([runId], d.now())
       return r
     }
     default:

@@ -3,6 +3,8 @@ import { AppErrorCode } from './app-host.ts'
 import { APP_MESSAGE_TEXT_MAX, APP_TOOL_INPUT_MAX, APP_TOOL_RESULT_MAX, jcsAtMost, McpCallToolResult } from './apps.ts'
 import { AgentConfig } from './config.ts'
 import { ErrorCode, MAX_FRAME_BYTES, MAX_FRAME_BYTES_UNAUTH } from './errors.ts'
+import { frame, Osig, ownerFrame } from './frame-base.ts'
+import { CardCreateFrame, CardResolveFrame, CardUpdateFrame } from './frames-cards.ts'
 import { MAX_QUERY_CHARS, MAX_QUERY_TERMS } from './fts-query.ts'
 import { HealthBeat } from './health.ts'
 import {
@@ -16,7 +18,6 @@ import {
   MemoryRootId,
   MsgId,
   PageCursor,
-  Sha256Ref,
   ShareTokenId,
   ThreadId,
   Ulid,
@@ -67,31 +68,10 @@ import { ShareContent } from './share.ts'
 import { StepupAssertion } from './stepup.ts'
 import { ThreadSessionStateItem, WorkersStatus } from './thread-sessions.ts'
 
-// ---- envelope -------------------------------------------------------------------------------------------------
-
-/** Added by the relay on the way through (sequence number and receive time). Never covered by a signature. */
-export const RelayMeta = z.object({ seq: z.number().int(), received_at: IsoTs })
-
-const envelope = {
-  v: z.literal(1),
-  id: Ulid,
-  ts: IsoTs,
-  relay: RelayMeta.optional(),
-}
-
-/** 86 base64url chars = 64 raw IEEE P1363 bytes. DER signatures are longer and rejected. */
-export const Osig = z.string().regex(/^[A-Za-z0-9_-]{86}$/)
-
-function frame<T extends string, S extends z.ZodRawShape>(type: T, shape: S) {
-  return z.object({ ...envelope, type: z.literal(type), ...shape })
-}
-
-/** Owner (signed) frames: strict, and no `.default()` anywhere inside (3.5 raw-JSON rule). */
-function ownerFrame<T extends string, S extends z.ZodRawShape>(type: T, shape: S) {
-  return z.strictObject({ ...envelope, type: z.literal(type), ...shape, device_id: DeviceId, osig: Osig })
-}
-
 // Sha256Ref lives in ids.ts (exported; SCHEDULES S2.1) so schedules.ts can use it without an import cycle.
+// The envelope builders are in frame-base.ts and the card frames in frames-cards.ts; both are part of this module's exports.
+export { Osig, RelayMeta } from './frame-base.ts'
+export { CardCreateFrame, CardResolveFrame, CardUpdateFrame }
 
 // ---- connection ------------------------------------------------------------------------------------------------
 
@@ -261,35 +241,6 @@ export const ReceiptFrame = frame('receipt', {
 export const StatusFrame = frame('status', ThreadStatus.shape)
 /** `Presence` fields sit directly on the frame. */
 export const PresenceFrame = frame('presence', Presence.shape)
-
-// ---- cards ------------------------------------------------------------------------------------------------------
-
-export const CardCreateFrame = frame('card.create', { card: Card })
-
-export const CardResolveFrame = ownerFrame('card.resolve', {
-  card_id: CardId,
-  action: z.enum(['primary', 'kill', 'revise']),
-  payload_hash: Sha256Ref, // recomputed by the app from what it rendered (8.4)
-  edited: z
-    .strictObject({
-      fields: z.array(z.strictObject({ key: z.string().max(40), value: z.string().max(20_000) })),
-      body: z.string().max(20_000).optional(),
-    })
-    .optional(),
-  edited_hash: Sha256Ref.optional(),
-  note: z.string().max(2000).optional(), // revise text
-  stepup_token: z.string().max(200).optional(), // relay-checked, stripped before forwarding, not signed
-  /** Raw WebAuthn assertion, verified by the BRIDGE (docs/CLAUDE-CODE.md C3.6). Signed; the relay never strips it. */
-  stepup: StepupAssertion.optional(),
-})
-
-export const CardUpdateFrame = frame('card.update', {
-  card_id: CardId,
-  state: Card.shape.state,
-  resolution: Card.shape.resolution,
-  result: Card.shape.result,
-  reason: z.string().max(80).optional(), // expired, mac_offline_too_long, hash_mismatch, ...
-})
 
 // ---- hooks and inbox --------------------------------------------------------------------------------------------
 

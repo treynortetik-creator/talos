@@ -1,9 +1,11 @@
 // Connects a detected shell to the running app: tells it the page is ready, mirrors the Needs-you count and the thread
 // list, and handles what the shell sends (compose, navigate, enroll_code). Every handler validates again where it matters.
 import type { TalosClient } from '../../lib/client.ts'
+import { setCompanionReplies } from '../../lib/native/companionReplies.ts'
 import { setMacNotifyPermission } from '../../lib/native/notifyPermission.ts'
 import type { Shell } from '../../lib/native/shell.ts'
 import { useSession } from '../auth/session.ts'
+import { useTerminalSessions } from '../terminal/sessions.ts'
 import { lastReplyText, startCompanionFeed } from './companion.ts'
 import { startNativeNotify } from './notify.ts'
 
@@ -15,6 +17,7 @@ export const NATIVE_FEATURES = [
   'navigate',
   'enroll_code',
   'companion/1',
+  'terminal-tabs/1',
 ] as const
 
 /** The longest name the `threads` message carries (NativeThreads): a longer one would make the shell drop the whole list. */
@@ -68,8 +71,24 @@ export function attachShell(shell: Shell, client: TalosClient, opts: { nav?: Nav
       const r = lastReplyText(client.store.getState().messages, m.thread_id)
       bridge.send({ type: 'companion_reply', req: m.req, thread_id: m.thread_id, text: r.text, truncated: r.truncated })
     },
+    companion_replies(m) {
+      setCompanionReplies(m.on, m.shown, m.epoch)
+    },
     notify_permission(m) {
       setMacNotifyPermission(m.state)
+    },
+    terminal_sessions(m) {
+      // Names of threads: only a signed-in page keeps them (like compose, a shell cannot fill the store before sign-in).
+      if (!signedIn()) throw new Error('not signed in')
+      useTerminalSessions.getState().setItems(m.items)
+    },
+    terminal_resume_result(m) {
+      if (!signedIn()) throw new Error('not signed in')
+      useTerminalSessions.getState().setResume(m.thread_id, m.outcome)
+    },
+    terminal_select(m) {
+      if (!signedIn()) throw new Error('not signed in')
+      useTerminalSessions.getState().requestSelect(m.session)
     },
     enroll_code(m) {
       // The code goes into the fragment like a pasted setup link; EnrollPage reads it from there.
@@ -109,6 +128,10 @@ export function attachShell(shell: Shell, client: TalosClient, opts: { nav?: Nav
           .map((t) => ({ id: t.id, name: shellThreadName(t.name) }))
           .slice(0, 100)
       : []
+    if (!live) {
+      const t = useTerminalSessions.getState()
+      if (t.items !== null || Object.keys(t.resume).length > 0 || t.selectRequest !== null) t.reset()
+    }
     const key = JSON.stringify(items)
     if (key !== lastThreads) {
       lastThreads = key
@@ -121,6 +144,7 @@ export function attachShell(shell: Shell, client: TalosClient, opts: { nav?: Nav
   const offNotify = startNativeNotify(client, bridge)
   const feed = startCompanionFeed(client, bridge)
   return () => {
+    setCompanionReplies(false) // a detached shell is a lost shell
     feed.stop()
     offSession()
     offStore()

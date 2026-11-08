@@ -63,7 +63,7 @@ test.describe('in the Mac app', () => {
       .toBeGreaterThan(before)
     const wider = await space.boundingBox()
     expect(wider?.width ?? 0).toBeGreaterThan(box.width)
-    await page.getByRole('link', { name: 'Search' }).click()
+    await page.getByRole('link', { name: 'Schedules' }).click()
     await expect
       .poll(async () => (await posted(page)).filter((m) => m.type === 'terminal_view').at(-1)?.rect)
       .toBeNull()

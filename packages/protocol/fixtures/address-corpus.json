@@ -1,5 +1,5 @@
 {
-  "_note": "Addresses the web-address check must refuse, shared by every entry point's tests. `core` is the 19-address set every caller must agree on; `gapsInOldOauthCheck` marks the members the bridge sign-in check used to let through.",
+  "_note": "Addresses the web-address check must refuse, shared by every entry point's tests and by the kit's Python copy (kit/scripts/test-address.sh). `core` is the 19-address set every caller must agree on; `gapsInOldOauthCheck` marks the members the bridge sign-in check used to let through. `embedded` is the IPv4 addresses of the metadata service, loopback, 10/8, 172.16/12 and 192.168/16 (low and high ends) carried inside IPv6: mapped, compatible, NAT64, 6to4 and Teredo (any already in core or alsoBlocked is not repeated). `rangeEdges` is every blocked range with its first and last address (blocked) and the addresses just outside it (allowed, null where the neighbour is another blocked range); both the TypeScript and the kit tests run it. `alsoBlocked` holds the rest of what any caller's old tests listed.",
   "core": [
     "169.254.169.254",
     "127.0.0.1",
@@ -63,7 +63,19 @@
     "64:ff9b::c612:1",
     "2002:c612:1::",
     "2001:2::1",
-    "2001:2:0:ffff::1"
+    "2001:2:0:ffff::1",
+    "127.255.255.254",
+    "0.1.2.3",
+    "10.255.255.255",
+    "172.31.255.255",
+    "100.127.255.255",
+    "239.255.255.255",
+    "fc00::",
+    "fd00::1",
+    "::10.0.0.5",
+    "0:0:0:0:0:0:0:1",
+    "169.254.0.1",
+    "169.254.170.2"
   ],
   "public": [
     "8.8.8.8",
@@ -101,5 +113,218 @@
     "1:2:3:4:5:6:7:8:9",
     "[::1",
     "example.com"
+  ],
+  "embedded": [
+    "::ffff:169.254.169.254",
+    "2001:0:4136:e378:8000:63bf:5601:5601",
+    "::7f00:1",
+    "64:ff9b::7f00:1",
+    "2002:7f00:1::1",
+    "2001:0:4136:e378:8000:63bf:80ff:fffe",
+    "::ffff:127.255.255.254",
+    "::ffff:7fff:fffe",
+    "::7fff:fffe",
+    "64:ff9b::7fff:fffe",
+    "2002:7fff:fffe::1",
+    "2001:0:4136:e378:8000:63bf:8000:1",
+    "::ffff:10.0.0.5",
+    "::ffff:a00:5",
+    "::a00:5",
+    "64:ff9b::a00:5",
+    "2002:a00:5::1",
+    "2001:0:4136:e378:8000:63bf:f5ff:fffa",
+    "::ffff:10.255.255.255",
+    "::ffff:aff:ffff",
+    "::aff:ffff",
+    "64:ff9b::aff:ffff",
+    "2002:aff:ffff::1",
+    "2001:0:4136:e378:8000:63bf:f500:0",
+    "::ffff:172.16.0.1",
+    "::ffff:ac10:1",
+    "::ac10:1",
+    "64:ff9b::ac10:1",
+    "2002:ac10:1::1",
+    "2001:0:4136:e378:8000:63bf:53ef:fffe",
+    "::ffff:172.31.255.255",
+    "::ffff:ac1f:ffff",
+    "::ac1f:ffff",
+    "64:ff9b::ac1f:ffff",
+    "2002:ac1f:ffff::1",
+    "2001:0:4136:e378:8000:63bf:53e0:0",
+    "::ffff:192.168.1.1",
+    "::ffff:c0a8:101",
+    "::c0a8:101",
+    "64:ff9b::c0a8:101",
+    "2002:c0a8:101::1",
+    "2001:0:4136:e378:8000:63bf:3f57:fefe",
+    "::ffff:192.168.255.255",
+    "::ffff:c0a8:ffff",
+    "::c0a8:ffff",
+    "64:ff9b::c0a8:ffff",
+    "2002:c0a8:ffff::1",
+    "2001:0:4136:e378:8000:63bf:3f57:0"
+  ],
+  "rangeEdges": [
+    {
+      "range": "0.0.0.0/8",
+      "first": "0.0.0.0",
+      "last": "0.255.255.255",
+      "before": null,
+      "after": "1.0.0.0"
+    },
+    {
+      "range": "10.0.0.0/8",
+      "first": "10.0.0.0",
+      "last": "10.255.255.255",
+      "before": "9.255.255.255",
+      "after": "11.0.0.0"
+    },
+    {
+      "range": "100.64.0.0/10",
+      "first": "100.64.0.0",
+      "last": "100.127.255.255",
+      "before": "100.63.255.255",
+      "after": "100.128.0.0"
+    },
+    {
+      "range": "127.0.0.0/8",
+      "first": "127.0.0.0",
+      "last": "127.255.255.255",
+      "before": "126.255.255.255",
+      "after": "128.0.0.0"
+    },
+    {
+      "range": "169.254.0.0/16",
+      "first": "169.254.0.0",
+      "last": "169.254.255.255",
+      "before": "169.253.255.255",
+      "after": "169.255.0.0"
+    },
+    {
+      "range": "172.16.0.0/12",
+      "first": "172.16.0.0",
+      "last": "172.31.255.255",
+      "before": "172.15.255.255",
+      "after": "172.32.0.0"
+    },
+    {
+      "range": "192.0.0.0/24",
+      "first": "192.0.0.0",
+      "last": "192.0.0.255",
+      "before": "191.255.255.255",
+      "after": "192.0.1.0"
+    },
+    {
+      "range": "192.0.2.0/24 TEST-NET-1",
+      "first": "192.0.2.0",
+      "last": "192.0.2.255",
+      "before": "192.0.1.255",
+      "after": "192.0.3.0"
+    },
+    {
+      "range": "192.168.0.0/16",
+      "first": "192.168.0.0",
+      "last": "192.168.255.255",
+      "before": "192.167.255.255",
+      "after": "192.169.0.0"
+    },
+    {
+      "range": "198.18.0.0/15",
+      "first": "198.18.0.0",
+      "last": "198.19.255.255",
+      "before": "198.17.255.255",
+      "after": "198.20.0.0"
+    },
+    {
+      "range": "198.51.100.0/24 TEST-NET-2",
+      "first": "198.51.100.0",
+      "last": "198.51.100.255",
+      "before": "198.51.99.255",
+      "after": "198.51.101.0"
+    },
+    {
+      "range": "203.0.113.0/24 TEST-NET-3",
+      "first": "203.0.113.0",
+      "last": "203.0.113.255",
+      "before": "203.0.112.255",
+      "after": "203.0.114.0"
+    },
+    {
+      "range": "224.0.0.0/3",
+      "first": "224.0.0.0",
+      "last": "255.255.255.255",
+      "before": "223.255.255.255",
+      "after": null
+    },
+    {
+      "range": "fc00::/7",
+      "first": "fc00::",
+      "last": "fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "before": "fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "after": "fe00::"
+    },
+    {
+      "range": "fe80::/10",
+      "first": "fe80::",
+      "last": "febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "before": "fe7f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "after": null
+    },
+    {
+      "range": "fec0::/10",
+      "first": "fec0::",
+      "last": "feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "before": null,
+      "after": null
+    },
+    {
+      "range": "ff00::/8",
+      "first": "ff00::",
+      "last": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "before": null,
+      "after": null
+    },
+    {
+      "range": "3fff::/20",
+      "first": "3fff::",
+      "last": "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "before": "3ffe:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "after": "3fff:1000::"
+    },
+    {
+      "range": "2001:db8::/32",
+      "first": "2001:db8::",
+      "last": "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff",
+      "before": "2001:db7:ffff:ffff:ffff:ffff:ffff:ffff",
+      "after": "2001:db9::"
+    },
+    {
+      "range": "2001::/32 Teredo",
+      "first": "2001::",
+      "last": "2001:0:ffff:ffff:ffff:ffff:ffff:ffff",
+      "before": "2000:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "after": "2001:1::"
+    },
+    {
+      "range": "2001:2::/48 benchmarking",
+      "first": "2001:2::",
+      "last": "2001:2:0:ffff:ffff:ffff:ffff:ffff",
+      "before": "2001:1:ffff:ffff:ffff:ffff:ffff:ffff",
+      "after": "2001:2:1::"
+    },
+    {
+      "range": "100::/64 discard-only",
+      "first": "100::",
+      "last": "100::ffff:ffff:ffff:ffff",
+      "before": "ff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "after": "100:0:0:1::"
+    },
+    {
+      "range": "64:ff9b:1::/48 local-use NAT64",
+      "first": "64:ff9b:1::",
+      "last": "64:ff9b:1:ffff:ffff:ffff:ffff:ffff",
+      "before": "64:ff9b:0:1::",
+      "after": "64:ff9b:2::"
+    }
   ]
 }

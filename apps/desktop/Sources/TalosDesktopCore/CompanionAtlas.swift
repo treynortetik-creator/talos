@@ -274,9 +274,8 @@ public struct CompanionAtlas: Equatable, Sendable {
 
   public enum MiniPose: Int, Equatable, Sendable { case pleased = 0, worried, waiting, statue }
 
-  /// Down worried; Needs you waiting; Asleep and quiet statue; everything else pleased (spec 9.1).
-  public static func miniPose(_ s: CompanionState, quiet: Bool) -> MiniPose {
-    if quiet { return .statue }
+  /// Down worried; Needs you waiting; Asleep statue; everything else pleased (spec 9.1). Quiet hours do not change it.
+  public static func miniPose(_ s: CompanionState) -> MiniPose {
     switch s {
     case .down, .trouble: return .worried
     case .needsYou: return .waiting

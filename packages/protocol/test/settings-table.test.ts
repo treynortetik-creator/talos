@@ -1,7 +1,12 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import defaultConfig from '../../../examples/config.default.json' with { type: 'json' }
 import fiveThreadsConfig from '../../../examples/config.five-threads.json' with { type: 'json' }
 import {
+  AGENT_RULES,
+  AGENT_SETTING_PATHS,
+  AGENT_SETTINGS_PHRASE,
+  AGENT_VALUE_HINTS,
   AgentConfig,
   defineSettingsTable,
   SETTINGS_TABLE,
@@ -67,7 +72,14 @@ describe('the settings table', () => {
 })
 
 type Rows = Record<string, Record<string, unknown>>
-const copy = (): Rows => structuredClone(SETTINGS_TABLE) as unknown as Rows
+// the agent rules hold zod schemas (functions), which cannot be cloned; the rules under test do not read them
+const copy = (): Rows =>
+  Object.fromEntries(
+    Object.entries(SETTINGS_TABLE).map(([p, r]) => {
+      const { agentRule: _rule, ...rest } = r as Record<string, unknown>
+      return [p, structuredClone(rest)]
+    }),
+  ) as Rows
 const problems = (t: Rows) => settingsTableProblems(t as never)
 
 describe('rules the table keeps so no row is silently ignored', () => {
@@ -120,5 +132,50 @@ describe('rules the table keeps so no row is silently ignored', () => {
     // @ts-expect-error 'gone' is not a setting, so this is not exactly one row per setting
     defineSettingsTable({ ...SETTINGS_TABLE, gone: { phone: false, agent: false, default: undefined } })
     expect(Object.keys(SETTINGS_TABLE)).toEqual(paths)
+  })
+})
+
+describe('the agent column: a setting the agent may propose carries everything the agent path needs', () => {
+  it('a row with agent: true and no rule does not typecheck', () => {
+    // @ts-expect-error agent: true needs an agentRule (label, words, value rules)
+    const bare: SettingRow<'timezone'> = { phone: 'leaf', agent: true, default: undefined }
+    // @ts-expect-error a row the agent may not change has no rule to carry
+    const stray: SettingRow<'timezone'> = { ...SETTINGS_TABLE.timezone, agent: false }
+    expect([bare, stray]).toHaveLength(2)
+  })
+
+  it('a new setting added to the table without its facts does not typecheck', () => {
+    const { timezone: _tz, ...rest } = SETTINGS_TABLE
+    // @ts-expect-error the fake path is not a setting, and `timezone` now has no row
+    defineSettingsTable({ ...rest, fake_field: { phone: 'leaf', agent: true, default: undefined } })
+    expect(paths).toContain('timezone')
+  })
+
+  it('exactly the agent rows have a rule, and each has a label, words, a hint and a value rule that works', () => {
+    for (const path of paths) {
+      const row = SETTINGS_TABLE[path] as SettingRow
+      expect(row.agentRule !== undefined, path).toBe(row.agent)
+    }
+    expect(Object.keys(AGENT_RULES)).toEqual([...AGENT_SETTING_PATHS])
+    for (const p of AGENT_SETTING_PATHS) {
+      const r = AGENT_RULES[p]
+      expect(r.label.length, p).toBeGreaterThan(0)
+      expect(r.phrase.length, p).toBeGreaterThan(0)
+      expect(r.hint.length, p).toBeGreaterThan(0)
+      expect(r.value.safeParse(Symbol('no')).success, p).toBe(false) // refuses a value of no valid type
+    }
+  })
+
+  it('the words the agent is told are built from the rows, in row order', () => {
+    expect(AGENT_SETTINGS_PHRASE).toBe(
+      "agent name, live-call voice, the owner's name, timezone, quiet hours, voice-note replies and the app theme",
+    )
+    expect(AGENT_VALUE_HINTS.startsWith('agent.name (1-32 chars), agent.voice (one of meridian, marin')).toBe(true)
+    expect(AGENT_VALUE_HINTS.endsWith('even in trust mode)')).toBe(true)
+  })
+
+  it('the spec quotes the same list of settings the agent is told', () => {
+    const spec = readFileSync(new URL('../../../docs/SPEC.md', import.meta.url), 'utf8').replace(/\s*\n>\s*/g, ' ')
+    expect(spec).toContain(AGENT_SETTINGS_PHRASE)
   })
 })

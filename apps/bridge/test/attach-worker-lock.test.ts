@@ -148,3 +148,82 @@ describe('attach from a lead: the protected roots in its marker', () => {
     expect(() => l.media.checkUploadable(l.secret)).not.toThrow()
   })
 })
+
+// A thread's inbox (~/.talos-inbox/<thread>/, outside the Talos home) holds the files the owner sent that thread. Its own
+// session may send them back; it may not send another thread's.
+describe('attach from a lead: the thread inbox', () => {
+  function inboxes() {
+    const base = mkdtempSync(join(realpathSync(tmpdir()), 'aw-inbox-'))
+    made.push(base)
+    const home = join(base, 'home')
+    const root = join(base, '.talos-inbox')
+    const p = paths(home, root)
+    mkdirSync(p.media, { recursive: true })
+    for (const t of ['trip', 'garden']) {
+      mkdirSync(join(root, t), { recursive: true, mode: 0o700 })
+      writeFileSync(join(root, t, 'md_a.png'), `${t} file`)
+    }
+    const puts: string[] = []
+    const media = new MediaStore(p, { putMedia: async (id: string) => void puts.push(id) } as never)
+    const callIn = (path: string, thread = 'trip') =>
+      attach.handler(
+        {
+          media,
+          worker: { thread },
+          mode: 'live',
+          config: { thread: () => ({ id: thread }), threadIds: () => [thread] },
+          seen: { take: () => [] },
+        } as never,
+        { path, thread_id: thread },
+      )
+    return {
+      base,
+      home,
+      root,
+      media,
+      puts,
+      callIn,
+      own: join(root, 'trip', 'md_a.png'),
+      other: join(root, 'garden', 'md_a.png'),
+    }
+  }
+  test("a session may attach a file from its own thread's inbox", () => {
+    const s = inboxes()
+    expect(() => s.media.checkUploadable(s.own, { worker: true, thread: 'trip' })).not.toThrow()
+  })
+  test("it may not attach another thread's inbox file, and nothing is uploaded", async () => {
+    const s = inboxes()
+    expect(() => s.media.checkUploadable(s.other, { worker: true, thread: 'trip' })).toThrow(/another thread|inbox/i)
+    const r = await s.callIn(s.other)
+    expect(r.isError).toBe(true)
+    expect(s.puts).toEqual([])
+  })
+  test('a link in its own inbox that points at another thread is refused (the real path decides)', () => {
+    const s = inboxes()
+    symlinkSync(s.other, join(s.root, 'trip', 'innocent.png'))
+    expect(() =>
+      s.media.checkUploadable(join(s.root, 'trip', 'innocent.png'), { worker: true, thread: 'trip' }),
+    ).toThrow()
+  })
+  test("a thread folder that is itself a link to another thread's folder gives the other thread's files no way out", () => {
+    const s = inboxes()
+    rmSync(join(s.root, 'trip'), { recursive: true })
+    symlinkSync(join(s.root, 'garden'), join(s.root, 'trip'))
+    expect(() => s.media.checkUploadable(join(s.root, 'trip', 'md_a.png'), { worker: true, thread: 'trip' })).toThrow()
+  })
+  test('the lead marker does not stop its own inbox, and still stops the protected roots', () => {
+    const s = inboxes()
+    const folder = join(s.base, 'lead')
+    mkdirSync(folder)
+    writeFileSync(join(folder, '.talos-lead'), JSON.stringify({ thread: 'trip', protect: [s.home, s.root] }))
+    expect(() => s.media.checkUploadable(s.own, { worker: true, thread: 'trip', leadCwd: folder })).not.toThrow()
+    expect(() => s.media.checkUploadable(s.other, { worker: true, thread: 'trip', leadCwd: folder })).toThrow()
+  })
+  test("a worker still cannot send from the Talos home, and main's own attach is untouched", () => {
+    const s = inboxes()
+    const secret = join(s.home, 'config.json')
+    writeFileSync(secret, '{}')
+    expect(() => s.media.checkUploadable(secret, { worker: true, thread: 'trip' })).toThrow()
+    expect(() => s.media.checkUploadable(s.other)).not.toThrow()
+  })
+})

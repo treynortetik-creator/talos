@@ -4,6 +4,7 @@
     plugin-settings.py fresh      --agent DIR --template FILE --kit-home DIR
     plugin-settings.py to-plugin  --agent DIR --release DIR --kit-home DIR --migration ID
     plugin-settings.py from-plugin --agent DIR --migration ID
+    plugin-settings.py reconcile  --agent DIR --old-release DIR --new-release DIR [--migration ID] [--dry-run]
     plugin-settings.py is-plugin  --agent DIR                 # exit 0 when settings.json already names the marketplace
     plugin-settings.py save-last-good --agent DIR             # exit 0 saved, 3 store not reachable
 
@@ -311,6 +312,11 @@ def cmd_from_plugin(a):
     mig = a.migration
     if os.path.exists(path):
         cur = open(path, "rb").read()
+        if st.get("settings_existed") and sha(cur) == st["original_sha256"]:
+            # A re-run after a crash between writing the original bytes back and removing the record (the migration removes it
+            # next). The file is already right: do not parse and re-render it (that changes its bytes), and say what is true.
+            print("plugin-move: settings.json is already back to its original bytes; nothing to do")
+            return
         if sha(cur) == st["after_sha256"] and st.get("settings_existed"):
             bak = "%s.bak-%s" % (path, st["migration"])
             if os.path.exists(bak) and sha(open(bak, "rb").read()) == st["original_sha256"]:
@@ -332,6 +338,163 @@ def cmd_from_plugin(a):
         print("plugin-move: settings.json is gone; nothing to restore")
 
 
+# --------------------------------------------------------------------------- reconcile: each release's hook list (R2-6)
+KIT_HOOK = re.compile(r"\$\{?CLAUDE_PROJECT_DIR\}?\"?/hooks/([A-Za-z0-9_.-]+\.(?:py|sh))")
+
+
+def _kit_script(hook):
+    cmd = hook.get("command") if isinstance(hook, dict) else None
+    m = KIT_HOOK.search(cmd) if isinstance(cmd, str) else None
+    return m.group(1) if m else None
+
+
+def flat_hooks(hooks):
+    """[(key, entry, index, hook)] for every hook command that runs a kit script; key = (event, matcher, script, nth)."""
+    out, seen = [], {}
+    for event, entries in (hooks.items() if isinstance(hooks, dict) else []):
+        for entry in entries if isinstance(entries, list) else []:
+            hl = entry.get("hooks") if isinstance(entry, dict) else None
+            for i, h in enumerate(hl if isinstance(hl, list) else []):
+                script = _kit_script(h)
+                if script is None:
+                    continue
+                base = (event, entry.get("matcher"), script)
+                n = seen.get(base, 0)
+                seen[base] = n + 1
+                out.append((base + (n,), entry, i, h))
+    return out
+
+
+def reconcile_hooks(cfg, old_hooks, new_hooks):
+    """Make the kit's hook entries in cfg match `new_hooks` (the release's template), three-way against `old_hooks` (the release
+    the agent ran until now). Only hook commands that run a kit script ($CLAUDE_PROJECT_DIR/hooks/<name>) are ever touched.
+      * in the new list, not in the file:    added, unless the old list had it (the owner removed it: stays removed)
+      * in both, same command:               nothing
+      * in both, file still equals the old:  command replaced by the new one (renamed, new flags)
+      * in both, file differs from the old:  the owner edited it: kept, reported
+      * in the old list, not in the new:     removed, unless the file differs from the old one (the owner edited it: kept)
+    Returns the report lines; cfg is changed in place."""
+    lines, touched = [], set()
+    old = {k: h for k, _, _, h in flat_hooks(old_hooks)}
+    new_flat = flat_hooks(new_hooks)
+    new = {k: h for k, _, _, h in new_flat}
+    have = {k: (e, i, h) for k, e, i, h in flat_hooks(cfg.get("hooks"))}
+    hooks = cfg.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = cfg["hooks"] = {}
+    for key, tentry, _, th in new_flat:
+        event, matcher, script, _ = key
+        if key in have:
+            entry, i, cur = have[key]
+            if cur == th:
+                continue
+            if key in old and cur == old[key]:
+                entry["hooks"][i] = copy.deepcopy(th)
+                lines.append("reconcile: %s %s: updated to this release's command" % (event, script))
+            else:
+                lines.append("reconcile: %s %s: kept your edit (this release's command differs)" % (event, script))
+        elif key in old:
+            lines.append("reconcile: %s %s: kept your removal (not put back)" % (event, script))
+        else:
+            ne = {k: copy.deepcopy(v) for k, v in tentry.items() if k != "hooks"}
+            ne["hooks"] = [copy.deepcopy(th)]
+            lst = hooks.setdefault(event, [])
+            if not isinstance(lst, list):
+                lines.append("reconcile: %s is not a list in settings.json; %s was not added" % (event, script))
+                continue
+            at = len(lst)                       # keep the template's order: before the next kit entry that follows it there
+            for k2, _, _, _ in new_flat:
+                if k2[0] == event and new_flat.index(next(x for x in new_flat if x[0] == k2)) > new_flat.index(next(x for x in new_flat if x[0] == key)) \
+                        and k2 in have and any(e is have[k2][0] for e in lst):
+                    at = next(n for n, e in enumerate(lst) if e is have[k2][0])
+                    break
+            lst.insert(at, ne)
+            lines.append("reconcile: %s %s: added" % (event, script))
+    for key, oh in old.items():
+        if key in new or key not in have:
+            continue
+        entry, i, cur = have[key]
+        if cur == oh:
+            entry["hooks"][i] = None
+            touched.add(key[0])
+            lines.append("reconcile: %s %s: removed (this release no longer ships it)" % (key[0], key[2]))
+        else:
+            lines.append("reconcile: %s %s: kept your edit (this release no longer ships it)" % (key[0], key[2]))
+    for event in touched:        # only events this call removed something from: drop the entries and events that are now empty
+        lst = hooks.get(event)
+        if not isinstance(lst, list):
+            continue
+        for e in lst:
+            if isinstance(e, dict) and isinstance(e.get("hooks"), list):
+                e["hooks"] = [h for h in e["hooks"] if h is not None]
+        hooks[event] = [e for e in lst if not (isinstance(e, dict) and e.get("hooks") == [])]
+        if not hooks[event]:
+            del hooks[event]
+    return lines
+
+
+def _indent_of(text):
+    m = re.search(r"^( +)\S", text, re.M)
+    return len(m.group(1)) if m else 2
+
+
+def release_version_of(release):
+    try:
+        return open(os.path.join(release, "VERSION"), encoding="utf-8").read().strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
+def template_hooks_of(release):
+    p = os.path.join(release, "templates", "dot-claude", "settings.json")
+    try:
+        with open(p, encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d.get("hooks") or {}, None
+    except FileNotFoundError:
+        return {}, "no settings template"
+    except ValueError as e:
+        return {}, "its settings template is not valid JSON (%s)" % e
+
+
+def cmd_reconcile(a):
+    agent = os.path.abspath(a.agent)
+    path = os.path.join(agent, SETTINGS)
+    new_hooks, bad = template_hooks_of(a.new_release)
+    if bad:
+        raise SystemExit("plugin-settings: the new release has %s; nothing was changed" % bad)
+    old_hooks, _ = template_hooks_of(a.old_release)
+    if not os.path.exists(path):
+        print("reconcile: there is no settings.json in %s; nothing to reconcile" % agent)
+        return
+    try:
+        raw = open(path, "rb").read()
+        cfg = json.loads(raw.decode("utf-8"))
+    except ValueError as e:
+        raise SystemExit("plugin-settings: %s is not valid JSON (%s); it was left alone" % (path, e))
+    if not isinstance(cfg, dict):
+        raise SystemExit("plugin-settings: %s is not a JSON object; it was left alone" % path)
+    new = copy.deepcopy(cfg)
+    lines = reconcile_hooks(new, old_hooks, new_hooks)
+    if new == cfg:
+        for l in lines:
+            print(l)
+        print("reconcile: settings.json already matches this release's hook list")
+        return
+    for l in lines:
+        print(l)
+    if a.dry_run:
+        print("reconcile: dry run; settings.json was not written")
+        return
+    mig = a.migration if a.migration != "manual" else "update-%s-to-%s" % (release_version_of(a.old_release), release_version_of(a.new_release))
+    name = save_last_good(agent)
+    if name:
+        print("reconcile: saved the current setup in the restore-last-good store (version %s)" % name)
+    backup(path, mig)
+    write_atomic(path, (json.dumps(new, indent=_indent_of(raw.decode("utf-8")), ensure_ascii=False) + "\n").encode("utf-8"), os.stat(path).st_mode & 0o777)
+    print("reconcile: settings.json hook list now matches release %s" % release_version_of(a.new_release))
+
+
 def cmd_is_plugin(a):
     p = os.path.join(a.agent, SETTINGS)
     try:
@@ -350,15 +513,18 @@ def cmd_save_last_good(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("cmd", choices=["fresh", "to-plugin", "from-plugin", "is-plugin", "save-last-good"])
+    ap.add_argument("cmd", choices=["fresh", "to-plugin", "from-plugin", "is-plugin", "save-last-good", "reconcile"])
     ap.add_argument("--agent", required=True)
     ap.add_argument("--template")
+    ap.add_argument("--old-release")
+    ap.add_argument("--new-release")
+    ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--release")
     ap.add_argument("--kit-home")
     ap.add_argument("--migration", default="manual")
     a = ap.parse_args()
     {"fresh": cmd_fresh, "to-plugin": cmd_to_plugin, "from-plugin": cmd_from_plugin, "is-plugin": cmd_is_plugin,
-     "save-last-good": cmd_save_last_good}[a.cmd](a)
+     "save-last-good": cmd_save_last_good, "reconcile": cmd_reconcile}[a.cmd](a)
     return 0
 
 

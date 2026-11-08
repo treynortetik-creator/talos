@@ -1,9 +1,12 @@
-// Signed history reads and media re-uploads, routed to the Mac and the answer routed back to the asking socket.
-// Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks are in hub.ts; some
-// handlers here run their own device, seen-id, step-up or card-state checks, so read both when auditing trust.
-import type { FrameOf, MessageT } from '@talos-app/protocol'
+// Signed history reads and media re-uploads, routed to the Mac and the answer routed back to the asking socket; also the
+// catch-up an app gets after `hello` and the stored-frame-to-message conversion both use.
+// Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks (session, pairing,
+// schema) are in hub-app-conn.ts and hub-app-frames.ts; some handlers here run their own device, seen-id, step-up
+// or card-state checks, so read both when auditing trust.
+import { type FrameOf, type MessageT, ownValue } from '@talos-app/protocol'
 import type { RateLimiter } from '../auth/limits.ts'
 import type { AppConn, HubDeps, Ref } from './hub.ts'
+import { CATCHUP_PAGE } from './hub-types.ts'
 import type { StoredFrame } from './store.ts'
 import { mkFrame } from './util.ts'
 
@@ -135,5 +138,101 @@ export const historyFrames = {
     if (!this.bridgeOnline()) return this.appError(a, 'mac_offline', 'your Mac is offline', frame.id)
     this.rememberRef(frame.id, a, null, true) // the Mac's refusal goes back to this socket, never into a thread
     return this.sendBridge(raw)
+  },
+  /** `catchup.request` and the catch-up after `hello`: what the app missed since `since`, as a reset, a summary and one batch. */
+  sendCatchup(this: HistoryCtx, a: AppConn, since: number): void {
+    const store = this.d.store
+    const floor = store.floor()
+    if (floor !== null && since + 1 < floor) {
+      this.sendApp(a, mkFrame(this.d.clock, 'catchup.reset', { min_seq: floor }))
+      since = floor - 1
+    } else if (since > store.maxSeq()) {
+      // The app is ahead of us (volume lost or restored): resync it from what we have.
+      const min = floor ?? 1
+      this.sendApp(a, mkFrame(this.d.clock, 'catchup.reset', { min_seq: min }))
+      since = min - 1
+    }
+    if (store.countAppEventsAfter(since) > CATCHUP_PAGE) historyFrames.sendCatchupSummary.call(this, a, since)
+    const frames = store.appEventsAfter(since, CATCHUP_PAGE)
+    if (frames.length === 0) return
+    const last = (frames[frames.length - 1] as StoredFrame).relay.seq
+    this.sendApp(
+      a,
+      mkFrame(this.d.clock, 'catchup.batch', {
+        from_seq: since + 1,
+        to_seq: last,
+        frames,
+        more: store.countAppEventsAfter(last) > 0,
+      }),
+    )
+  },
+
+  sendCatchupSummary(this: HistoryCtx, a: AppConn, since: number): void {
+    const store = this.d.store
+    const unread = store.unreadByThread()
+    const lastAt = store.lastEventAtByThread()
+    const open = store.openCards(this.d.clock.now())
+    const needs = new Set(open.map((c) => c.thread_id))
+    const ids = new Set([...Object.keys(unread), ...Object.keys(lastAt)])
+    this.sendApp(
+      a,
+      mkFrame(this.d.clock, 'catchup.summary', {
+        since_seq: since,
+        threads: [...ids].map((t) => ({
+          thread_id: t,
+          unread: ownValue(unread, t) ?? 0,
+          last_ts: ownValue(lastAt, t) ? new Date(ownValue(lastAt, t) as number).toISOString() : null,
+          needs_you: needs.has(t),
+        })),
+        open_cards: open.length,
+      }),
+    )
+  },
+
+  /** One stored frame as the message the app would show, or null for a frame that is not a message. */
+  eventMessage(this: HistoryCtx, f: StoredFrame): MessageT | null {
+    const seq = f.relay.seq
+    let m: MessageT | null = null
+    if (f.type === 'message') {
+      const x = f as unknown as FrameOf<'message'>
+      m = {
+        id: x.client_msg_id,
+        thread_id: x.thread_id,
+        author: 'owner',
+        kind: 'text',
+        text: x.text,
+        format: 'plain',
+        attachments: x.attachments,
+        via: 'app',
+        created_at: f.relay.received_at,
+        ...(x.reply_to ? { reply_to: x.reply_to } : {}),
+        ...(x.share_content ? { share_content: x.share_content } : {}),
+      }
+    } else if (f.type === 'voice_note') {
+      const x = f as unknown as FrameOf<'voice_note'>
+      m = {
+        id: x.client_msg_id,
+        thread_id: x.thread_id,
+        author: 'owner',
+        kind: 'voice_note',
+        format: 'plain',
+        attachments: [x.attachment],
+        via: 'app',
+        created_at: f.relay.received_at,
+      }
+    } else if (f.type === 'reply' || f.type === 'message.stored') {
+      const msg = (f as unknown as { message: MessageT }).message
+      // Owner rows come from a `message` frame, except a share: it has no such frame, so it is kept (docs/V2-FEATURES.md V4.4).
+      if (f.type === 'message.stored' && msg.author === 'owner' && msg.via !== 'share') return null
+      m = { ...msg }
+    }
+    if (!m) return null
+    const meta = this.d.store.getMeta(m.id)
+    return {
+      ...m,
+      seq,
+      ...(meta.receipt ? { receipt: meta.receipt } : {}),
+      ...(meta.transcript ? { transcript: meta.transcript } : {}),
+    }
   },
 }

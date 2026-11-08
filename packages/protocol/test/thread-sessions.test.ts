@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest'
 import {
   AgentConfig,
   applyMergePatch,
-  BRIDGE_TOOLS,
   CAP_HOLD_MS,
   CHANNEL_KINDS,
   ChannelMeta,
@@ -30,7 +29,6 @@ import {
   OWNER_FRAME_TYPES,
   parseFrame,
   parseWorkersFile,
-  SCHEDULE_BRIDGE_TOOLS,
   SessionKind,
   SessionState,
   SUPERVISOR_STALE_MS,
@@ -40,10 +38,9 @@ import {
   threadSessionMode,
   validateAgentConfig,
   WakeFile,
-  WORKER_BRIDGE_TOOLS,
   WORKER_FORBIDDEN_ARGS,
   WORKER_POINTER_TEXT,
-  WORKER_THREAD_LOCKED_TOOLS,
+  WorkerStatusFailure,
   WorkersFile,
   workerSessionName,
   workerTmuxName,
@@ -264,6 +261,39 @@ describe('workers.json, the wake file, hub lines', () => {
     expect(workerSessionName('trip')).toBe('talos-trip')
   })
 
+  it('a thread session the Mac refused for being wider than main keeps its file readable, with the axis', () => {
+    const f = JSON.parse(fx('workers.json'))
+    f.threads.trip.state = 'failed'
+    f.threads.trip.error = {
+      code: 'mode_escalation_denied',
+      axis: 'mcp',
+      detail: 'the main session cannot use these MCP servers: local-db',
+      at: '2026-11-01T00:00:00.000Z',
+    }
+    const parsed = parseWorkersFile(JSON.stringify(f))
+    expect(parsed?.threads.trip?.error?.code).toBe('mode_escalation_denied')
+    expect(parsed?.threads.trip?.error?.axis).toBe('mcp')
+    // an axis this build does not know is dropped, never the file
+    f.threads.trip.error.axis = 'something_new'
+    expect(parseWorkersFile(JSON.stringify(f))?.threads.trip?.error?.axis).toBeUndefined()
+    expect(WorkerStatusFailure.parse('mode_escalation_denied')).toBe('mode_escalation_denied')
+  })
+
+  it('one entry with a failure code this build does not know is an `unknown` failure for that entry, and the rest stays', () => {
+    const f = JSON.parse(fx('workers.json'))
+    f.threads.trip.state = 'failed'
+    f.threads.trip.error = { code: 'something_from_a_newer_mac', detail: 'x', at: '2026-11-01T00:00:00.000Z' }
+    const parsed = parseWorkersFile(JSON.stringify(f))
+    expect(parsed).not.toBeNull()
+    expect(parsed?.threads.trip?.state).toBe('failed')
+    expect(parsed?.threads.trip?.error?.code).toBe('unknown')
+    expect(parsed?.threads.trip?.error?.detail).toBe('x')
+    expect(Object.keys(parsed?.threads ?? {})).toEqual(['trip', 'garden', 'taxes'])
+    expect(parsed?.threads.taxes?.error?.code).toBe('resume_missing')
+    expect(parsed?.threads.garden?.previous_ids.length).toBe(1)
+    expect(WorkerStatusFailure.parse('unknown')).toBe('unknown')
+  })
+
   it('a torn, wrong-version or junk file is null, never a partial read', () => {
     const text = fx('workers.json')
     expect(parseWorkersFile(text.slice(0, text.length / 2))).toBeNull()
@@ -315,19 +345,6 @@ describe('worker constants', () => {
     expect(WORKER_POINTER_TEXT).not.toMatch(/[\r\n]/)
     expect(WORKER_POINTER_TEXT.startsWith('/')).toBe(false)
     expect(WORKER_POINTER_TEXT).toContain('read_inbound')
-  })
-
-  it('worker tools: no thread lifecycle, inbox or voice; the schedule tools are there (they ask main); the locked set is a subset', () => {
-    for (const n of ['create_thread', 'archive_thread', 'inbox_triage', 'inbox_raw', 'voice_progress'])
-      expect(WORKER_BRIDGE_TOOLS as readonly string[]).not.toContain(n)
-    // all four ask main's Schedules service over the hub; `schedule_propose` names a thread, so it is locked to the worker's own
-    for (const n of SCHEDULE_BRIDGE_TOOLS) expect(WORKER_BRIDGE_TOOLS as readonly string[]).toContain(n)
-    expect(WORKER_THREAD_LOCKED_TOOLS as readonly string[]).toContain('schedule_propose')
-    for (const n of WORKER_THREAD_LOCKED_TOOLS) expect(WORKER_BRIDGE_TOOLS as readonly string[]).toContain(n)
-    for (const n of WORKER_BRIDGE_TOOLS.filter(
-      (x) => x !== 'read_inbound' && x !== 'handoff' && !(SCHEDULE_BRIDGE_TOOLS as readonly string[]).includes(x),
-    ))
-      expect(BRIDGE_TOOLS as readonly string[]).toContain(n)
   })
 
   it('the forbidden launch words include every channel and headless flag', () => {

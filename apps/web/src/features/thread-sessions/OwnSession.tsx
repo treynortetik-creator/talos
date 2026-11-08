@@ -13,6 +13,7 @@ import { useId, useState } from 'react'
 import { useTalos } from '../../lib/client.ts'
 import { Button, Input, Switch } from '../../ui/index.ts'
 import { useThreadPatch } from '../threads/manage/useThreadPatch.ts'
+import { McpAllow } from './McpAllow.tsx'
 import { type ControlOutcome, useThreadSessionsController, useThreadSessionView, workerLine } from './store.ts'
 
 export function costNote(idleMin: number): string {
@@ -116,13 +117,14 @@ function SessionOptions({ thread, locked, apply }: { thread: ThreadT; locked: bo
   const [idleText, setIdleText] = useState<string | null>(null)
   const [local, setLocal] = useState<string | null>(null)
 
-  const save = async (change: Partial<NonNullable<ThreadT['session_opts']>>, drop?: 'cwd' | 'effort') => {
+  const save = async (change: Partial<NonNullable<ThreadT['session_opts']>>, drop?: 'cwd' | 'effort' | 'mcp_allow') => {
     setLocal(null)
     return apply((latest) =>
       latest.map((t) => {
         if (t.id !== thread.id) return t
         const next: Record<string, unknown> = { ...(t.session_opts ?? {}), ...change }
-        if (drop) delete next[drop]
+        // a key left out keeps its value on the Mac (an older app must not wipe what it does not know): clearing sends null
+        if (drop) next[drop] = null
         return { ...t, session_opts: next as ThreadT['session_opts'] }
       }),
     )
@@ -232,7 +234,12 @@ function SessionOptions({ thread, locked, apply }: { thread: ThreadT; locked: bo
           }}
         />
       </div>
-      <p className="m-0 text-xs text-text-2">These apply the next time this thread's session starts.</p>
+      <McpAllow
+        value={opts?.mcp_allow}
+        locked={locked}
+        onChange={(next) => (next === undefined ? save({}, 'mcp_allow') : save({ mcp_allow: next }))}
+      />
+      <p className="m-0 text-xs text-text-2">Saving restarts the session when its current turn ends.</p>
       {local && (
         <p role="alert" className="m-0 text-xs text-danger">
           {local}

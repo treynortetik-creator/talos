@@ -19,6 +19,13 @@ private final class Clocks: @unchecked Sendable {
   func jumpAwake(_ s: Double) { l.withLock { up += s } }
 }
 
+private final class Latch: @unchecked Sendable {
+  private let l = NSLock()
+  private var on = false
+  var isSet: Bool { l.withLock { on } }
+  func set() { l.withLock { on = true } }
+}
+
 private final class EventLog: @unchecked Sendable {
   private let l = NSLock()
   private var events: [WorkerManager.Event] = []
@@ -54,6 +61,7 @@ struct WorkerUnknownPointer {
     defer { r.teardown() }
     let flag = r.root + "/dialog"
     r.env["FAKE_RV_DIALOG"] = flag
+    r.env["FAKE_RV_DIALOG_GONE"] = r.root + "/gone"
     let shim = try r.faultShim()
     r.manager(tmux: shim)
     try r.fault("Enter", "hold")
@@ -70,11 +78,42 @@ struct WorkerUnknownPointer {
     r.clearFault("Enter")
     for _ in 0..<3 { r.mgr.tickOnce() }  // whole ticks with the Enter working and the dialog up
     #expect(r.typedLines.isEmpty, "Enter went into a dialog")
-    // control: the owed Enter does go in once the dialog is gone (a reset blanks the screen; the typed text stays in the tty)
-    #expect(r.tmuxCmd(["send-keys", "-R", "-t", "=t-trip:"]).ok)
+    // control: the owed Enter does go in once the dialog is gone and the input box is back (the typed text stays in the tty; a pane
+    // with no box would hold it, as it holds the pointer)
+    FileManager.default.createFile(atPath: r.root + "/gone", contents: nil)
     #expect(r.wait(8) { !paneText(r).contains("Yes, I trust this folder") }, "the dialog stayed on screen")
     #expect(r.wait(8) { r.mgr.tickOnce(); return r.typedLines.count == 1 }, "control: it goes in once the dialog is gone: \(r.typedLines)")
     #expect(r.typedLines.first == "trip \(PointerTyper.text)", "\(r.typedLines)")
+  }
+
+  /// The text is in, the Enter failed, and the input box leaves the pane: the owed Enter is held like the pointer, and the thread is told.
+  @Test func anOwedEnterWithNoBoxOnThePaneIsHeldAndTellsTheThread() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    let blank = r.root + "/blank", back = r.root + "/back"
+    r.env["FAKE_RV_BLANK"] = blank
+    r.env["FAKE_RV_BLANK_BACK"] = back
+    let shim = try r.faultShim()
+    r.manager(tmux: shim)
+    let log = NoticeLog()
+    r.trackNotices(log)
+    try r.fault("Enter", "hold")
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(8) { r.up("trip") })
+    #expect(r.wait(8) { paneText(r).contains(PointerTyper.text) }, "the pointer text was never typed")
+    FileManager.default.createFile(atPath: blank, contents: nil)
+    #expect(r.wait(8) { !paneText(r).contains(PointerTyper.text) }, "the pane never went blank")
+    r.mgr.tune { $0.readyTimeout = 1.5 }
+    #expect(r.wait(10) { r.mgr.needsYou()["trip"] == WorkerNotice.noBoxKind }, "\(r.mgr.needsYou())")
+    #expect(r.wait(5) { log.all.count == 1 }, "\(log.all)")
+    r.clearFault("Enter")
+    usleep(1_500_000)
+    #expect(r.typedLines.isEmpty, "Enter went in with no input box on the pane: \(r.typedLines)")
+    FileManager.default.createFile(atPath: back, contents: nil)
+    #expect(r.wait(10) { r.mgr.tickOnce(); return r.typedLines.count == 1 }, "the owed Enter goes in once the box is back: \(r.typedLines)")
+    #expect(r.wait(5) { r.mgr.needsYou().isEmpty }, "\(r.mgr.needsYou())")
+    #expect(log.all.count == 1)
   }
 
   /// The pointer goes in once, not twice, however long the Enter takes.
@@ -289,10 +328,13 @@ struct WorkerUnknownOff {
 struct WorkerUnknownAdopt {
   /// A wake for a worker adopt can't read waits in its file: taken now, it would start a second run or get lost.
   @Test func aWakeWaitsForAdoptToFinish() throws {
-    let r = try WorkerRig(scenario: scenario)
+    // The box is drawn 0.6 s after the worker is live, as it can be on a loaded machine. The first pointer is typed before the app
+    // goes: an owed pointer would survive the app (PointerOwedTests), but this test is about the wake that waits for adopt, and counts
+    // exactly two lines.
+    let r = try WorkerRig(scenario: scenario, extraEnv: ["FAKE_RV_BOX_DELAY": "0.6"])
     defer { r.teardown() }
     let shim = try r.faultShim()
-    let pid = try r.liveWorkerThenAppGone(tmux: shim)
+    let pid = try r.liveWorkerThenAppGone(tmux: shim, pointerTyped: true)
     r.manager(tmux: shim)
     try r.fault("has-session", "hold")
     try r.wake("trip")
@@ -541,20 +583,51 @@ struct WorkerUnknownClock {
     #expect(r.wait(3) { r.fileOnDisk?.supervisor.heartbeat_at != first }, "no heartbeat after the clock went back")
   }
 
-  /// And a worker through the same jump keeps running: an activity time in the future reads as busy, not as a crash.
+  /// And a worker through the same jump keeps running: an activity time in the future reads as busy, not as a crash. The clock goes
+  /// back the moment the pointer's Enter is sent (the event is emitted on the manager's own queue, so no tick can come between), and
+  /// the worker is then watched for several times the idle limit.
   @Test func aBackwardJumpLeavesAWorkerAlone() throws {
     let r = try WorkerRig(scenario: scenario)
     defer { r.teardown() }
     let c = Clocks()
+    let seen = EventLog()
     r.manager(idle: 1, now: { c.now }, awake: { c.awake })
+    r.mgr.onEvent = { e in
+      seen.add(e)
+      if e == .pointer(thread: "trip") { c.jumpWall(-3600) }
+    }
     r.mgr.startTicking()
     try r.wake("trip")
-    #expect(r.wait(8) { r.state("trip") == "busy" || r.state("trip") == "live" })
+    #expect(r.wait(8) { seen.all.contains(.pointer(thread: "trip")) }, "the pointer never went in: \(seen.all) \(r.why("trip"))")
     let pid = try #require(r.entry("trip")?.pane_pid)
-    c.jumpWall(-3600)
-    usleep(1_500_000)
-    #expect(ProcessInspect.groupAlive(pid))
-    #expect(r.up("trip"), "\(String(describing: r.state("trip")))")
+    usleep(4_500_000)
+    #expect(ProcessInspect.groupAlive(pid), "\(seen.all) \(r.why("trip"))")
+    #expect(r.up("trip"), "\(String(describing: r.state("trip"))) \(seen.all) \(r.why("trip"))")
+  }
+
+  /// docs/OPTION-C.md: a worker is not idle-parked while its pointer is owed. The input box is not on the pane yet, so the pointer
+  /// stays owed for longer than the idle limit and nothing else keeps the worker from parking; once the box is drawn the line goes
+  /// in, and then the idle park applies.
+  @Test func aWorkerWithAPointerStillOwedIsNeverIdleParked() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    let gate = r.root + "/gate"
+    r.env["FAKE_RV_ECHO_BOX"] = "1"
+    r.env["FAKE_RV_BOX_FILE"] = gate
+    r.manager(idle: 1)
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(8) { r.up("trip") })
+    let until = Date().addingTimeInterval(3)  // three times the idle limit
+    while Date() < until {
+      #expect(r.up("trip"), "\(String(describing: r.state("trip"))) \(r.why("trip"))")
+      usleep(100_000)
+    }
+    FileManager.default.createFile(atPath: gate, contents: nil)
+    #expect(r.wait(10) { r.typedLines.count == 1 }, "the line never went in: \(r.typedLines) \(r.why("trip"))")
+    usleep(500_000)
+    #expect(r.typedLines.count == 1, "\(r.typedLines)")
+    #expect(r.wait(8) { r.state("trip") == "parked" }, "control: idle parking applies once nothing is owed")
   }
 }
 
@@ -562,9 +635,12 @@ struct WorkerUnknownClock {
 /// the awake clock, SIGTERM then SIGKILL, then the queued action. The governor never does.
 @Suite("Option C stop limit", .serialized, .enabled(if: Rig.hasTmux))
 struct WorkerStopLimit {
-  private func hungTurn(_ r: WorkerRig, _ c: Clocks, parkGrace: Double = 2, tmux: String? = nil) throws -> String {
+  private func hungTurn(
+    _ r: WorkerRig, _ c: Clocks, parkGrace: Double = 2, tmux: String? = nil, before: ((WorkerManager) -> Void)? = nil
+  ) throws -> String {
     r.env["FAKE_RV_QUIET"] = r.root + "/quiet"
-    r.manager(tmux: tmux, parkGrace: parkGrace, busyWindow: 2.5, now: { c.now }, awake: { c.awake })
+    let m = r.manager(tmux: tmux, parkGrace: parkGrace, busyWindow: 2.5, now: { c.now }, awake: { c.awake })
+    before?(m)  // before the first tick: `onEvent` is read on the manager's queue
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(8) { r.state("trip") == "busy" })
@@ -603,8 +679,43 @@ struct WorkerStopLimit {
       #expect(r.starts.last?.contains("--resume \(sid)") == true)
     default:
       #expect(r.wait(8) { r.starts.count == 2 })
-      #expect(r.entry("trip")?.previous_ids == [sid])
+      r.mgr.tickOnce()  // barrier: queue.sync, returns after the tick that started it has published
+      let e = r.entry("trip")
+      #expect(e?.previous_ids == [sid], "\(String(describing: e)) argv \(r.starts.last ?? "-") events \(r.allEvents)")
+      #expect(r.starts.last?.contains("--session-id") == true && r.starts.last?.contains("--resume") == false, "\(r.starts.last ?? "-")")
+      #expect(e?.session_id != sid)
     }
+  }
+
+  /// `entry()` is the snapshot from the end of the last tick, and the fake logs its start the moment tmux runs it, which is before
+  /// that tick publishes. Here the tick that starts the fresh worker is held for half a second inside `onEvent`, after the pane
+  /// exists and before it publishes: the log says 2 starts and the snapshot still says the old worker. The barrier is `tickOnce`.
+  @Test func aFreshStartIsSeenInTheSnapshotOnlyAfterTheTickThatMadeItPublishes() throws {
+    let r = try noisy()
+    defer { r.teardown() }
+    let c = Clocks()
+    let hold = Latch()
+    let held = Latch()
+    let sid = try hungTurn(r, c) { m in
+      m.onEvent = { [weak r] ev in
+        r?.note(ev)
+        if hold.isSet, ev == .started(thread: "trip", resume: false) {
+          held.set()
+          _ = r?.wait(5) { r?.starts.count == 2 }
+          usleep(500_000)
+        }
+      }
+    }
+    try r.wakeFile("trip", action: "fresh", reason: "control")
+    #expect(tapTaken(r, "trip"), "the tap was never taken")
+    hold.set()  // before the jump: the first start's event is long past, so the only `started` that can follow is the fresh one
+    c.jumpAwake(910)
+    #expect(r.wait(10) { r.mgr.tickOnce(); return !signals(r).isEmpty }, "no SIGTERM at the limit")
+    #expect(r.wait(8) { r.starts.count == 2 })
+    #expect(held.isSet, "the fresh start did not run inside the held tick, so this proved nothing")
+    r.mgr.tickOnce()  // barrier: queue.sync, returns after the tick that started it has published
+    let e = r.entry("trip")
+    #expect(e?.previous_ids == [sid], "\(String(describing: e)) argv \(r.starts.last ?? "-") events \(r.allEvents)")
   }
 
   @Test func aTurnThatIgnoresSIGTERMGetsSIGKILLThenTheQueuedAction() throws {
@@ -798,6 +909,8 @@ struct WorkerStopLimit {
     let r = try noisy()
     defer { r.teardown() }
     let c = Clocks()
+    // The first run to see `quiet` consumes it, so the second run starts noisy without the test racing to unlink it.
+    r.env["FAKE_RV_QUIET_ONCE"] = "1"
     _ = try hungTurn(r, c)
     let quiet = r.root + "/quiet"
     try r.wakeFile("trip", action: "restart", reason: "control")
@@ -805,14 +918,17 @@ struct WorkerStopLimit {
     FileManager.default.createFile(atPath: quiet, contents: nil)
     unlink(r.root + "/signals")
     #expect(r.wait(10) { r.starts.count == 2 }, "it parked on its own and restarted")
-    unlink(quiet)  // the second run prints too
     #expect(r.wait(8) { r.state("trip") == "busy" })
     unlink(r.root + "/signals")
+    let seen = EventLog()
+    r.mgr.onEvent = { seen.add($0) }
     try r.wakeFile("trip", action: "park", reason: "governor")
     #expect(r.wait(3) { r.state("trip") == "stopping" })
     c.jumpAwake(100_000)
     usleep(800_000)
-    #expect(signals(r).isEmpty, "the governor's stop inherited an old limit")
+    #expect(r.state("trip") == "stopping", "the second run went quiet: \(seen.all)")
+    #expect(!seen.all.contains(.parked(thread: "trip", reason: "stop_limit")), "the governor's stop inherited an old limit")
+    #expect(signals(r).isEmpty, "signalled while busy")
   }
 
   /// The turn ended by itself: nothing to rescue, and the reason on the park is still the owner's.

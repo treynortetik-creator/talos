@@ -80,25 +80,27 @@ shows the same start time and a command containing `apps/bridge/src/server.ts`. 
 
 `$TALOS_APP_HOME/bridge.env` is read first, then the process environment wins.
 
-| Variable                        | Default               | Meaning                                                                                                                                         |
-| ------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TALOS_APP_HOME`                | `~/.config/talos/app` | config, key, devices, history, media, approved, enroll-pending                                                                                  |
-| `TALOS_APP_RELAY_URL`           | (required)            | `https://<host>`                                                                                                                                |
-| `TALOS_APP_BRIDGE`              | unset                 | `1` = live mode                                                                                                                                 |
-| `TALOS_APP_STT_CMD`             | unset                 | JSON argv, `{in}` = audio file; transcript on stdout, exit 0                                                                                    |
-| `TALOS_APP_STT_LONG_CMD`        | = STT_CMD             | used when the note is longer than `TALOS_APP_STT_LONG_AFTER_S` (30)                                                                             |
-| `TALOS_APP_STT_TIMEOUT_S`       | 180                   |                                                                                                                                                 |
-| `TALOS_APP_TTS_CMD`             | unset                 | JSON argv, `{out}` = output file, `{text}` = text (a leading `-` is prefixed with a space, so it never reads as a flag)                         |
-| `TALOS_APP_TTS_EXT`             | `mp3`                 | extension and mime of the TTS output                                                                                                            |
-| `TALOS_APP_TTS_TIMEOUT_S`       | 120                   |                                                                                                                                                 |
-| `TALOS_APP_FFMPEG`              | unset                 | if set, TTS output is transcoded to AAC `.m4a` (`-c:a aac -b:a 48k -ac 1`)                                                                      |
-| `TALOS_APP_LOG`                 | `info`                | `debug`, `info`, `warn`, `error`; JSON lines in `$TALOS_APP_HOME/bridge.log`                                                                    |
-| `TALOS_APP_SCHEDULER`           | `auto`                | `auto`, `chronos` or `off` (no Schedules tab, no schedule tools). See "Schedules" below                                                         |
-| `TALOS_APP_CHRONOS_BIN`         | unset                 | absolute path to the `chronos` CLI; otherwise `chronos` on PATH, then `~/.local/share/chronos/bin/chronos`                                      |
-| `TALOS_APP_CHRONOS_CONFIG`      | unset                 | passed to Chronos as `CHRONOS_CONFIG`                                                                                                           |
-| `TALOS_APP_SCHEDULER_TIMEOUT_S` | 15                    | every call to the scheduler is killed after this long                                                                                           |
-| `TALOS_APP_CHRONOS_NOW`         | unset                 | test builds only (`NODE_ENV=test`), passed to Chronos as `CHRONOS_NOW`; any other environment refuses to start                                  |
-| `TALOS_APP_APPS`                | unset                 | `1` = MCP apps on (the three app tools, the app instructions, `app.request` handling). Re-read every 2 s, so `0` takes effect without a restart |
+| Variable                        | Default                     | Meaning                                                                                                                                         |
+| ------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TALOS_APP_HOME`                | `~/.config/talos/app`       | config, key, devices, history, media, approved, enroll-pending                                                                                  |
+| `TALOS_INBOX_ROOT`              | `~/.talos-inbox`            | where files for threads with their own session are copied, one folder per thread (0700); outside the Talos home on purpose (docs/OPTION-C.md)   |
+| `TALOS_APP_RELAY_URL`           | (required)                  | `https://<host>`                                                                                                                                |
+| `TALOS_APP_BRIDGE`              | unset                       | `1` = live mode                                                                                                                                 |
+| `TALOS_APP_STT_CMD`             | unset                       | JSON argv, `{in}` = audio file; transcript on stdout, exit 0                                                                                    |
+| `TALOS_APP_STT_LONG_CMD`        | = STT_CMD                   | used when the note is longer than `TALOS_APP_STT_LONG_AFTER_S` (30)                                                                             |
+| `TALOS_APP_STT_TIMEOUT_S`       | 180                         |                                                                                                                                                 |
+| `TALOS_APP_TTS_CMD`             | unset                       | JSON argv, `{out}` = output file, `{text}` = text (a leading `-` is prefixed with a space, so it never reads as a flag)                         |
+| `TALOS_APP_TTS_EXT`             | `mp3`                       | extension and mime of the TTS output                                                                                                            |
+| `TALOS_APP_TTS_TIMEOUT_S`       | 120                         |                                                                                                                                                 |
+| `TALOS_APP_FFMPEG`              | unset                       | if set, TTS output is transcoded to AAC `.m4a` (`-c:a aac -b:a 48k -ac 1`)                                                                      |
+| `TALOS_APP_LOG`                 | `info`                      | `debug`, `info`, `warn`, `error`; JSON lines in `$TALOS_APP_HOME/bridge.log`                                                                    |
+| `TALOS_APP_SCHEDULER`           | `auto`                      | `auto`, `chronos` or `off` (no Schedules tab, no schedule tools). See "Schedules" below                                                         |
+| `TALOS_APP_CHRONOS_BIN`         | unset                       | absolute path to the `chronos` CLI; otherwise `chronos` on PATH, then `~/.local/share/chronos/bin/chronos`                                      |
+| `TALOS_APP_CHRONOS_CONFIG`      | unset                       | passed to Chronos as `CHRONOS_CONFIG`                                                                                                           |
+| `TALOS_EXPLAINER`               | on when `claude` is on PATH | `off`, `0`, `false` or `no` turns off the plain explanation on permission cards (docs/CLAUDE-CODE.md C3.10); restart the bridge                 |
+| `TALOS_APP_SCHEDULER_TIMEOUT_S` | 15                          | every call to the scheduler is killed after this long                                                                                           |
+| `TALOS_APP_CHRONOS_NOW`         | unset                       | test builds only (`NODE_ENV=test`), passed to Chronos as `CHRONOS_NOW`; any other environment refuses to start                                  |
+| `TALOS_APP_APPS`                | unset                       | `1` = MCP apps on (the three app tools, the app instructions, `app.request` handling). Re-read every 2 s, so `0` takes effect without a restart |
 
 Commands run from an argv array, never through a shell. Example: `TALOS_APP_STT_CMD='["/path/stt.sh","{in}"]'`.
 More examples (use your own programs; these paths are placeholders):

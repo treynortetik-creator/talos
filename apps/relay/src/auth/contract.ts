@@ -135,6 +135,7 @@ export function isTestAuthInstalled(): boolean {
 
 export const requireSession: MiddlewareHandler<AppEnv> = (c, next) => impl.requireSession(c, next)
 export const requireCsrf: MiddlewareHandler<AppEnv> = (c, next) => impl.requireCsrf(c, next)
+/** @public The step-up guard modules import; part of the frozen auth seam. */
 export const requireStepup: AuthContract['requireStepup'] = (purpose) => (c, next) =>
   impl.requireStepup(purpose)(c, next)
 export const verifyBridgeHello: AuthContract['verifyBridgeHello'] = (a) => impl.verifyBridgeHello(a)

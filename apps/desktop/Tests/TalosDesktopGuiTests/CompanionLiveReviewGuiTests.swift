@@ -144,6 +144,7 @@ struct CompanionLiveReviewGuiTests {
   @Test func aReplyBubbleClickAfterTheFeedWentAwayStillOpensTheThread() {
     let t = LiveFixture()
     defer { t.done() }
+    t.fx.defaults.set(false, forKey: CompanionController.Key.replyBubbles)  // the plain bubble: today's behaviour
     t.feed(feedFrame(reply: ("general", 1)))
     t.feed(feedFrame(unread: 1, reply: ("general", 2)))
     #expect(t.c.currentBubbleForTest == .newReply(thread: "Daily plan", id: "general"))

@@ -371,7 +371,7 @@ describe('Help keyboard shortcuts are wired to real handlers', () => {
   it('every shortcut in the Mac top menu is listed with the same glyphs, nothing else is, and each one does something', () => {
     const items = topMenuItems()
     const keyed = items.filter((i) => i.glyph)
-    expect(keyed.length).toBeGreaterThanOrEqual(10)
+    expect(keyed.length).toBeGreaterThanOrEqual(9) // ten before Terminals… gave up ⌘K
     const listed = keyGroups().find((g) => g.title === 'Mac app, top menu')?.rows ?? []
     for (const i of keyed) {
       if (UNCLAIMED[i.title]) {
@@ -401,9 +401,9 @@ describe('Help keyboard shortcuts are wired to real handlers', () => {
 
   it('the Menu bar menu lists exactly the keys it really sets, each on the item that has it', () => {
     const real = menuBarKeys()
-    expect(real.map((r) => r.glyph).sort()).toEqual(['⌘,', '⌘K', '⌘N', '⌘Q', '⌘Q', '⌘T'].sort())
+    expect(real.map((r) => r.glyph).sort()).toEqual(['⌘,', '⌘N', '⌘Q', '⌘Q', '⌘T'].sort())
     const listed = keyGroups().find((g) => g.title === 'Mac app, Menu bar menu')?.rows ?? []
-    expect(listed.map((r) => r.keys).sort()).toEqual(['⌘,', '⌘K', '⌘N', '⌘Q', '⌘T'])
+    expect(listed.map((r) => r.keys).sort()).toEqual(['⌘,', '⌘N', '⌘Q', '⌘T'])
     for (const r of listed)
       expect(
         real.some((k) => k.glyph === r.keys && k.title.startsWith(r.what)),
@@ -540,12 +540,10 @@ const CLAIMS: Record<string, Proof[]> = {
   'In a browser, a test ignores the switch and the thread rules, so it can arrive while real notifications are off.': [
     has(S, 'A test ignores the switch and thread rules above, so it can arrive while real notifications are off.'),
   ],
-  'On a phone, one thread’s own settings are under Open menu, then the pencil beside its name.': [
+  'On a phone, one thread’s own settings are under Open menu, then the ⋯ beside its name.': [
     has('apps/web/src/features/phone/PhoneHeader.tsx', "'Open menu'"),
-    () =>
-      expect(rd('apps/web/src/features/phone/PhoneChrome.tsx')).toMatch(
-        /aria-label="Thread settings"[\s\S]{0,200}IconPencil/,
-      ),
+    has('apps/web/src/features/phone/PhoneChrome.tsx', '<ThreadRowWithSettings'),
+    has('apps/web/src/features/threads/ThreadMoreButton.tsx', 'IconMore'),
   ],
   'On a computer they are the ⋯ button at the top of the thread.': [
     has('apps/web/src/features/threads/ThreadSettings.tsx', 'IconMore'),
@@ -578,8 +576,21 @@ const CLAIMS: Record<string, Proof[]> = {
   'The top menu appears when a Talos window is open or the Dock icon is on.': [
     has(SPEC_F, '(showDockIcon || hasOpenWindow) ? .regular : .accessory'),
   ],
-  'The key shown beside the item in the Window menu.': [has(SPEC_F, 'Item(.showTerminal, "Terminals…", key: "k")')],
-  'To be sure of it, choose Window, then Terminals….': [has(SPEC_F, 'title: "Window"'), has(SPEC_F, '"Terminals…"')],
+  'On the Terminal screen, while its tabs show.': [
+    has('apps/web/src/features/terminal/TerminalScreen.tsx', "addEventListener('keydown', onKey, true)"),
+    has('apps/web/src/features/terminal/TerminalScreen.tsx', '!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey'),
+    has('apps/web/src/features/terminal/TerminalScreen.tsx', 'if (!hasStrip) return'),
+  ],
+  'Terminals… in the menu has no key: ⌘K is Search in the Talos window.': [
+    // the Window menu item and the Talos icon's menu item both carry no key, and ⌘K is the page's search chord
+    () => expect(rd(SPEC_F)).toContain(norm('Item(.showTerminal, "Terminals…"),')),
+    () => expect(rd(SPEC_F)).not.toMatch(/Item\(\.showTerminal, "Terminals…"[^)]*key:/),
+    () =>
+      expect(rd('apps/desktop/Sources/TalosDesktop/App.swift')).not.toMatch(
+        /Button\("Terminals…"\)[\s\S]{0,200}keyboardShortcut/,
+      ),
+    has('apps/web/src/lib/useKeyboard.ts', "e.code === 'KeyK'"),
+  ],
   'From any app.': [has('apps/desktop/Sources/TalosDesktop/HotKeys.swift', 'RegisterEventHotKey(spec.keyCode')],
   'This is the default; change it in Mac settings → Hotkeys.': [
     has('apps/desktop/Sources/TalosDesktopCore/DesktopConfig.swift', 'compose: "ctrl+opt+space"'),

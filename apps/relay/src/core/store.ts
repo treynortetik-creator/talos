@@ -422,7 +422,7 @@ export class Store {
     const r = this.db.prepare('select card from core_cards where card_id = ?').get(id) as { card: Buffer } | undefined
     return r ? openJson<CardT>(this.crypto, r.card, `core_cards:${id}`) : null
   }
-  setCardState(id: string, patch: Partial<Pick<CardT, 'state' | 'resolution' | 'result'>>): CardT | null {
+  setCardState(id: string, patch: Partial<Pick<CardT, 'state' | 'resolution' | 'result' | 'explain'>>): CardT | null {
     const card = this.getCard(id)
     if (!card) return null
     const next = { ...card, ...patch } as CardT

@@ -180,7 +180,9 @@ ci_end_run() { # ci_end_run <record dir> [locks dir]: stop everything a run left
   fi
   # The slot's temp dir goes whether or not the worktree is kept, and before the slot is released (below): holding the slot is
   # what makes the directory ours to empty.
-  [ ! -s "$rec/tmp" ] || case "$(cat "$rec/tmp")" in */talos-ci-s[0-9]*) rm -rf "$(cat "$rec/tmp")" ;; esac
+  # chmod first: a test that leaves a read-only folder behind (a real kit release is read-only by design) must not jam every
+  # later run on this slot.
+  [ ! -s "$rec/tmp" ] || case "$(cat "$rec/tmp")" in */talos-ci-s[0-9]*) chmod -R u+w "$(cat "$rec/tmp")" 2>/dev/null; rm -rf "$(cat "$rec/tmp")" ;; esac
   [ -z "${2:-}" ] || [ ! -s "$rec/owner" ] || ci_release_owned "$2" "$(cat "$rec/owner")"
   rm -rf "$rec"
 }
@@ -589,7 +591,7 @@ cleanup() {
   if [ -n "$WT" ] && [ "$KEEP" = 0 ]; then git -C "$ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || rm -rf "${WT:?}"; fi
   # With a record, ci_end_run removed the slot's temp dir before it let go of the slot. Doing it again here, after the slot is free,
   # could wipe the live temp dir of the next run that took the slot. Only a run that never made a record has it left.
-  [ -z "$SLOT_TMP" ] || [ -n "$RUN_DIR" ] || rm -rf "${SLOT_TMP:?}"
+  [ -z "$SLOT_TMP" ] || [ -n "$RUN_DIR" ] || { chmod -R u+w "${SLOT_TMP:?}" 2>/dev/null; rm -rf "${SLOT_TMP:?}"; }
   # Locks a job took inside its subshell (a mutex) are not in CI_HELD; they are ours all the same, and a cancelled run must not
   # leave one held. Nothing may still be running by now, so this is after the jobs are stopped.
   ci_release_owned "$LOCKS" "$(ci_me)"
@@ -689,7 +691,7 @@ plan_skips
 
 T_SLOT=$(date +%s)
 ci_slot_env "$CI_SLOT"
-rm -rf "${SLOT_TMP:?}" && mkdir -p "$SLOT_TMP" || exit 1 # anything here was left by a run that died in this slot
+{ chmod -R u+w "${SLOT_TMP:?}" 2>/dev/null; rm -rf "${SLOT_TMP:?}"; } && mkdir -p "$SLOT_TMP" || exit 1 # anything here was left by a run that died in this slot
 export PW_PORT="$SLOT_PW_PORT" TMPDIR="$SLOT_TMP"
 export TALOS_CI_SLOT_RUN=1 # beside PW_PORT: apps/web/playwright.config.ts accepts a slot port only with this
 unset TALOS_CI_PW_PORT TALOS_CI_IMAGE_PORT # same reason as TALOS_CI_CACHE: used, and gone before any test sees them
@@ -827,6 +829,7 @@ job_check() {
   run "$log" pnpm typecheck &&
   run "$log" pnpm typecheck:mod &&
   run "$log" pnpm lint &&
+  run "$log" pnpm notices:check &&
   suites_then_audit "$log"
 }
 

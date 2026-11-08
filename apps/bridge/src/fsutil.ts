@@ -1,20 +1,12 @@
 // Shared local state lives in files under $TALOS_APP_HOME, written atomically (tmp + rename) with 0600 (dirs 0700).
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 export function ensureDir(path: string, mode = 0o700): void {
   mkdirSync(path, { recursive: true, mode })
   try {
-    chmodSync(path, mode)
+    // never through a link: chmod follows it and would change the folder it points at
+    if (!lstatSync(path).isSymbolicLink()) chmodSync(path, mode)
   } catch {
     // not ours to chmod (e.g. a shared parent); the create above already used the mode
   }
@@ -71,5 +63,3 @@ export function fileMode(path: string): number | undefined {
     return undefined
   }
 }
-
-export { existsSync }

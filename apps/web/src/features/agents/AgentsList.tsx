@@ -1,6 +1,6 @@
 // The agents list (docs/SUBAGENTS.md 6.2): rows like the CLI's agent panel, grouped Agents, then Shells & monitors.
-// Tap a row for its detail (inline on the rail, a push view in a sheet) with the last activity lines and, only when
-// canStopAgent says so, Stop. Shared by the desktop rail, the phone sheet and the session sheet's Agents section.
+// Tap a row for its detail (it replaces the list, with a way back) with the last activity lines and, only when
+// canStopAgent says so, Stop. Drawn by the Session panel's Agents section.
 import type { AgentRowT, AgentRunStatusT, AgentsSnapshotT } from '@talos-app/protocol'
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from 'zustand'
@@ -265,27 +265,20 @@ function AgentDetail({
 function Rows({
   nodes,
   now,
-  mode,
-  open,
   onOpen,
-  threadId,
   label,
   snapAt,
 }: {
   nodes: AgentNode[]
   snapAt: string | undefined
   now: number
-  mode: 'inline' | 'push'
-  open: string | null
-  onOpen: (id: string | null) => void
-  threadId: string
+  onOpen: (id: string) => void
   label: string
 }) {
   return (
     // biome-ignore lint/a11y/noRedundantRoles: Safari drops list semantics from `list-style: none`; the spec asks for it
     <ul role="list" aria-label={label} className="m-0 flex list-none flex-col gap-0.5 p-0">
       {nodes.map((n) => {
-        const expanded = mode === 'inline' && open === n.row.id
         return (
           <li
             key={n.row.id}
@@ -300,16 +293,9 @@ function Rows({
                 '[&_.agent-who]:font-medium [&_.agent-who]:text-text-2 [&_.agent-title]:text-text-2',
             )}
           >
-            <button
-              type="button"
-              className={rowButton}
-              title={n.row.title}
-              {...(mode === 'inline' ? { 'aria-expanded': expanded } : {})}
-              onClick={() => onOpen(mode === 'inline' && expanded ? null : n.row.id)}
-            >
+            <button type="button" className={rowButton} title={n.row.title} onClick={() => onOpen(n.row.id)}>
               <RowLines node={n} now={now} snapAt={snapAt} />
             </button>
-            {expanded && <AgentDetail row={n.row} threadId={threadId} now={now} />}
             <AgentOutcome agentId={n.row.id} />
           </li>
         )
@@ -330,18 +316,8 @@ export function OfflineBadge({ offline }: { offline: AgentsView['offline'] }) {
 /** Offline: no colour and secondary ink throughout, so it reads greyed while every line keeps its contrast. */
 const GREYED = 'grayscale [&_*]:!text-text-2'
 
-/** The panel body. `mode` inline = tap expands in place (the rail); push = tap opens a detail view (sheets). */
-export function AgentsList({
-  threadId,
-  mode,
-  view,
-  className,
-}: {
-  threadId: string
-  mode: 'inline' | 'push'
-  view: AgentsView
-  className?: string
-}) {
+/** The list in the Session panel: a tap opens a detail view in its place, with a way back. */
+export function AgentsList({ threadId, view, className }: { threadId: string; view: AgentsView; className?: string }) {
   const { snap, offline } = view
   const now = useNowTick(hasTicking(snap))
   const [open, setOpen] = useState<string | null>(null)
@@ -349,10 +325,10 @@ export function AgentsList({
   const g = groupAgents(snap, now)
   const all = [...g.agents, ...g.shells]
   const greyed = offline !== null
-  const picked = mode === 'push' && open ? all.find((n) => n.row.id === open) : undefined
+  const picked = open ? all.find((n) => n.row.id === open) : undefined
   const pickedId = picked?.row.id
 
-  // Push mode swaps the list for the detail, which unmounts the button that had focus: put focus on the detail on the
+  // Opening a row swaps the list for the detail, which unmounts the button that had focus: put focus on the detail on the
   // way in and back on the row it came from on the way out (keyboard and screen reader users keep their place).
   const rootRef = useRef<HTMLDivElement>(null)
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -367,8 +343,8 @@ export function AgentsList({
       for (const li of rootRef.current?.querySelectorAll<HTMLElement>('li[data-id]') ?? [])
         if (li.dataset.id === m.id) li.querySelector('button')?.focus()
   }, [pickedId])
-  const onOpen = (id: string | null) => {
-    if (mode === 'push' && id) focusMove.current = { to: 'detail' }
+  const onOpen = (id: string) => {
+    focusMove.current = { to: 'detail' }
     setOpen(id)
   }
 
@@ -421,16 +397,7 @@ export function AgentsList({
       ) : null}
       {g.agents.length > 0 && (
         <section aria-label="Agents" className="flex flex-col gap-1">
-          <Rows
-            nodes={g.agents}
-            now={now}
-            mode={mode}
-            open={open}
-            onOpen={onOpen}
-            threadId={threadId}
-            snapAt={snap.at}
-            label="Agents"
-          />
+          <Rows nodes={g.agents} now={now} onOpen={onOpen} snapAt={snap.at} label="Agents" />
         </section>
       )}
       {g.shells.length > 0 && (
@@ -451,16 +418,7 @@ export function AgentsList({
             <span className="ml-auto min-w-0 truncate text-xs text-text-2">{g.shellSummary}</span>
           </button>
           {shellsOpen && (
-            <Rows
-              nodes={g.shells}
-              now={now}
-              mode={mode}
-              open={open}
-              onOpen={onOpen}
-              threadId={threadId}
-              snapAt={snap.at}
-              label="Shells and monitors"
-            />
+            <Rows nodes={g.shells} now={now} onOpen={onOpen} snapAt={snap.at} label="Shells and monitors" />
           )}
         </section>
       )}

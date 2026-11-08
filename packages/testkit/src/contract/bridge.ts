@@ -1,10 +1,11 @@
-import { BRIDGE_TOOLS, bindingFrom, ChannelMeta, type JwkP256T, parseFrame, payloadHash } from '@talos-app/protocol'
+import { bindingFrom, ChannelMeta, type JwkP256T, parseFrame, payloadHash } from '@talos-app/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { FakeApp } from '../fake-app.ts'
 import { FakeRelay } from '../fake-relay.ts'
 import { sleep, waitFor } from '../frame-utils.ts'
 import { resolvePastRelay } from '../past-relay.ts'
 import type { BridgeHandle, BridgeHarness } from './harness.ts'
+import { SPEC_CORE_TOOLS } from './spec-tools.ts'
 
 const MARKER = /<<<EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]{16}">>>/
 
@@ -58,7 +59,7 @@ export function defineBridgeContract(name: string, harness: BridgeHarness) {
     it('declares the channel capability and exposes all 12 tools of spec 4.4', async () => {
       expect(bridge.claude.serverCapabilities?.experimental).toHaveProperty('claude/channel')
       const tools = (await bridge.claude.listTools()).map((t) => t.name)
-      for (const t of BRIDGE_TOOLS) expect(tools, `tool ${t}`).toContain(t)
+      for (const t of SPEC_CORE_TOOLS) expect(tools, `tool ${t}`).toContain(t)
     })
 
     it('a signed message becomes a channel notification whose meta passes ChannelMeta', async () => {

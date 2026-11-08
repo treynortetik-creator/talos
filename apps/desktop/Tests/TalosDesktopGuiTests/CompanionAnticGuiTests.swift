@@ -19,7 +19,7 @@ struct CompanionAnticGuiTests {
 
   func output(rest: CompanionRest = .idle, state: CompanionState = .idle, animation: CompanionAnimation? = nil, stop: Int = 0) -> CompanionOutput {
     CompanionOutput(
-      state: state, displayState: state, quiet: false, animation: animation, rest: rest, bubble: nil, word: "w", accessibilityLabel: "w",
+      state: state, quiet: false, animation: animation, rest: rest, bubble: nil, word: "w", accessibilityLabel: "w",
       dot: false, dragging: false, roundsDue: false, anticStop: stop, nextDeadline: nil)
   }
 

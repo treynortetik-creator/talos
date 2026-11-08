@@ -6,8 +6,6 @@ import { pollJira } from './poll.ts'
 import { jiraSetup } from './setup.ts'
 import { verifyJira } from './verify.ts'
 
-export { jqlFor, validSite } from './poll.ts'
-
 export const integration: IntegrationModule & ModuleExtras = {
   id: 'jira',
   setup: jiraSetup,

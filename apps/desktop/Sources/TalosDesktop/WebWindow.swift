@@ -3,6 +3,18 @@ import Foundation
 import TalosDesktopCore
 import WebKit
 
+/// The Talos window. Every key event passes `intercept` first, so a key the page's own screen owns (Ctrl+1 … Ctrl+9 on the Terminal
+/// screen, typed into the embedded terminal) never reaches the terminal, which would send it to the session as a control byte.
+/// The hook decides narrowly and returns false for everything else, which then goes the usual way.
+final class WebNSWindow: NSWindow {
+  var intercept: ((NSEvent) -> Bool)?
+
+  override func sendEvent(_ event: NSEvent) {
+    if event.type == .keyDown, intercept?(event) == true { return }
+    super.sendEvent(event)
+  }
+}
+
 /// The Talos web app in a normal window (DESKTOP-SPEC 5.1). The view is never torn down: closing the window orders it out,
 /// so the page keeps its socket and its notifications. Thin by design: every screen is the web app; this file is glue.
 @MainActor
@@ -28,6 +40,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
         // The room the page asked for belonged to the document that is gone; a new document asks again.
         terminalRect = nil
         terminal.close()
+        stopTerminalSessions()
       }
     }
   }
@@ -42,6 +55,12 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   var onCompanionFeed: ((CompanionFeed?) -> Void)?
   /// The Talos window is the key window (Done must not fire while the owner is looking at the page).
   var windowIsKey: Bool { window?.isKeyWindow == true }
+  /// The thread the window shows right now, by the page's own routing (`companion_state.viewing`; a card page counts as its
+  /// thread), while the window is on screen. nil otherwise. Whether anyone is reading it is `windowIsKey`.
+  var viewedThread: String? {
+    guard let w = window, w.isVisible, w.isKeyWindow || w.occlusionState.contains(.visible) else { return nil }
+    return companionFeed?.viewing
+  }
   /// What the status list needs to know about the page (spec 4.2): down (not loaded or not signed in), an older page without
   /// `companion/1`, or ready for the feed.
   var companionPageStatus: CompanionPageStatus {
@@ -60,9 +79,25 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   /// The agent terminal laid over the page's Terminal screen (`terminal_view`), and the room the page last asked for. The
   /// terminal shows only while the window is on screen and the page is signed in; the room is kept across a hidden window.
   let terminal = EmbeddedTerminal()
-  private(set) var terminalRect: TerminalViewRect?
 
-  private var window: NSWindow?
+  private(set) var terminalRect: TerminalViewRect?
+  /// What the Terminal screen's tabs read: the Terminals window's list, and what Resume does. Tests hand in their own.
+  struct TerminalSessionSource {
+    var snapshot: () -> (entries: [SwitcherEntry], workers: WorkersFile?)?
+    var resume: (String) -> TerminalSessions.ResumeOutcome
+    @MainActor static let live = TerminalSessionSource(
+      snapshot: { TerminalWindowController.shared.switcherSnapshot() },
+      resume: { SessionList.resumeOutcome(TerminalWindowController.shared.requestResume($0)) })
+  }
+  var terminalSessionSource = TerminalSessionSource.live
+  /// The page tells us about its tabs only when it said it can read them (`terminal-tabs/1` in `ready`).
+  static let tabsFeature = "terminal-tabs/1"
+  var sessionsTimer: Timer?
+  var lastSessionsSent: [TerminalSessions.Item]?
+  /// Tests: whether the list is being kept current right now.
+  var terminalSessionsTimerRunningForTest: Bool { sessionsTimer != nil }
+
+  var window: NSWindow?
   private(set) var webView: WKWebView?
   private var bridge: NativeBridge?
   private var activity: NSObjectProtocol?
@@ -224,13 +259,14 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     let wv = makeWebView()
     webView = wv
 
-    let w = NSWindow(
+    let w = WebNSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1120, height: 780),
       styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
     w.title = "Talos"
     w.contentView = wv
     w.isReleasedWhenClosed = false
     w.delegate = self
+    w.intercept = { [weak self] e in self?.interceptKey(e) ?? false }
     w.center()
     w.setFrameAutosaveName("TalosWebWindow")
     window = w
@@ -343,11 +379,13 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     webView = wv
     windowVisibleForTest = windowVisible
     if let w { window = w }
+    (window as? WebNSWindow)?.intercept = { [weak self] e in self?.interceptKey(e) ?? false }
   }
 
   /// Lays the terminal over the room the page asked for, or takes it away: nothing asked, the window is hidden, the page is
   /// not signed in, or what is left of the room inside the window is too small.
   private func applyTerminal() {
+    if !signedIn { stopTerminalSessions() }
     guard let wv = webView,
       let frame = TerminalViewRect.placement(
         asked: terminalRect, pageReady: pageReady, signedIn: signedIn,
@@ -366,6 +404,16 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   func sendWhenReady(_ m: NativeToWeb, reveal: Bool = true) {
     if pageReady { deliver(m) } else { queued.append(m) }
     if reveal { show() }
+  }
+
+  /// Whether he delivers replies himself (`companion_replies`): kept here so every new document hears it after its `ready`.
+  private(set) var companionReplies = false
+  private var companionRepliesEpoch = 0
+  func setCompanionReplies(_ on: Bool, shown: [HeldReply] = [], epoch: Int = 0) {
+    guard on != companionReplies || !shown.isEmpty || (on && epoch != companionRepliesEpoch) else { return }
+    companionReplies = on
+    companionRepliesEpoch = epoch
+    if pageReady { deliver(.companionReplies(on: on, shown: shown, epoch: on ? epoch : nil)) }
   }
 
   /// Tests: also records what the page sent after the gate.
@@ -427,9 +475,16 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     for done in all.values { done(.lost) }
   }
 
-  private func deliver(_ m: NativeToWeb) {
-    guard let js = m.javascript() else { return }
-    webView?.evaluateJavaScript(js, completionHandler: nil)  // main frame only: a frame never sees talosNative
+  /// Tests: every message handed to the page, as the page would receive it.
+  var deliveredForTest: ((NativeToWeb) -> Void)?
+
+  /// False when nothing was handed over: the message fails the page's own rules, or there is no page.
+  @discardableResult
+  func deliver(_ m: NativeToWeb) -> Bool {
+    guard let js = m.javascript(), let wv = webView else { return false }
+    deliveredForTest?(m)
+    wv.evaluateJavaScript(js, completionHandler: nil)  // main frame only: a frame never sees talosNative
+    return true
   }
 
   // MARK: page -> native
@@ -441,10 +496,12 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
       pageFeatures = features
       pageReady = true
       setSignedIn(signedIn)  // also lays the terminal out: `signedIn` is set on every ready
+      if terminalRect != nil { startTerminalSessions() }
       let pending = queued
       queued = []
       for q in pending { deliver(q) }
       pushNotifyPermission()
+      if companionReplies { deliver(.companionReplies(on: true, shown: [], epoch: companionRepliesEpoch)) }  // a reloaded page starts at off: tell it again
     case .badge(let n): needsYou = n
     case .threads(let t): threads = t
     case .openExternal(let u): routeExternal(u)
@@ -461,9 +518,15 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     case .companionInvalid: companionGone()
     case .companionReply(let r):
       if let outcome = replyTracker.accept(r) { completeReply(outcome) }  // not the current request: dropped
-    case .terminalView(let r):
+    case .terminalView(let r, let session):
       terminalRect = r
+      terminal.select(session)
+      // A null room is "no terminal to show now" (a panel stands there, or a dialog is open): the screen is still open and its
+      // list must keep following the sessions. Only `terminal_leave` stops the timer.
+      startTerminalSessions()
       applyTerminal()
+    case .terminalLeave: pauseTerminalSessions()
+    case .terminalResume(let id): terminalResume(id)
     }
   }
 

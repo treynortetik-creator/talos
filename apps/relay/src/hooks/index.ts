@@ -9,13 +9,12 @@ import { apiRoutes } from './api.ts'
 import { bridgeRoutes } from './bridge.ts'
 import { handleClaim } from './claim.ts'
 import { applyInboxUpdate } from './inbox.ts'
-import { type HookResponse, handleHookRequest, idle, kick } from './ingest.ts'
+import { type HookResponse, handleHookRequest, idle } from './ingest.ts'
 import { markDelivered } from './route.ts'
 import { createRuntime, runtimeFor, startTicking, tick } from './runtime.ts'
 import { type BodyRead, MAX_BODY_BYTES } from './types.ts'
 
-export type { RuntimeOptions } from './types.ts'
-export { createRuntime, idle, kick, runtimeFor, tick }
+export { createRuntime, idle, runtimeFor, tick }
 
 /** The claim body is `{"claim_code": "..."}`: a few dozen bytes. */
 const CLAIM_MAX_BYTES = 1024

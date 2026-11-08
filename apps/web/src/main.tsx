@@ -8,6 +8,7 @@ import { attachShell } from './features/native/attach.ts'
 import { startNativeBadge } from './features/native/badge.ts'
 import { installProblems } from './features/problems/controller.ts'
 import { startReadSync } from './features/pwa/readSync.ts'
+import { audioDock } from './features/threads/audioDock.ts'
 import { installNativePlatform } from './lib/capacitorPlatform.ts'
 import { createFakeClient } from './lib/fakeClient.ts'
 import { installShell } from './lib/native/shell.ts'
@@ -57,6 +58,7 @@ const client =
 if (import.meta.env.VITE_FAKE === '1') {
   ;(window as unknown as { __talos: unknown }).__talos = client
   ;(window as unknown as { __talosSession: unknown }).__talosSession = useSession // so a spec can say what /api/me said
+  ;(window as unknown as { __talosDock: unknown }).__talosDock = audioDock // so a spec can raise the now-playing pill
 }
 
 if (shell) attachShell(shell, client)

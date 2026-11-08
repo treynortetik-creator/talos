@@ -335,17 +335,20 @@ export const CappedAgentsSnapshot = AgentsSnapshot.refine((s) => agentsSnapshotB
 
 ### 6.1 Placement
 
-| Width           | Where                                                                                                             | Opens                                                                                                     |
-| --------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| ≥1280 px        | **Docked right rail**, 320 px, beside the timeline in `ThreadScreen`; collapsible to a 44 px strip with the count | Auto-expands when a row starts running, unless the owner collapsed it (kept in `localStorage`, try/catch) |
-| 1024 to 1279 px | Header chip `◐ 3 agents` next to the session mascot                                                               | The existing right `Sheet`, with an **Agents** section under the meters                                   |
-| <1024 px        | The same chip                                                                                                     | Bottom sheet (`SessionSheet` pattern), full list                                                          |
-- "Beyond the context and metering": on the rail, the Session chip (weekly / context) stays in the header and the
-  rail sits to its right below it. In the sheet, Agents comes right after the meters, before the Commands / MCP /
-  Plugins tabs.
-- The panel draws `agentsForSession(snapshot, state)`, never a leftover of another session. The chip shows only when
-  there's at least one row or a snapshot at all (the mod has `agents`; `session.state` never lists it). The count is
-  `agentCounts().active`, with a pulse while `busy`.
+| Width          | Where                                                                                                                               | Opens                                                                                                |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| ≥1024 px       | The **Session panel**, docked on the right of the thread (360 px, not a modal); its **Agents** section sits under Context and Usage | The usage chip in the screen's top-right corner, or the panel's cross; the choice is kept per device |
+| 768 to 1023 px | The same chip                                                                                                                       | A bottom sheet with the same panel                                                                   |
+| <768 px        | The context ring in the phone header                                                                                                | A drawer from the right with the same panel                                                          |
+
+The agents rail and the "3 agents" header chip are gone: there is one Session panel, and Agents is a section of it.
+
+- In the panel, Agents comes right after Context and Usage. It has two groups: "This session" (the helpers, then the
+  shells and monitors behind a count) and "Thread sessions" (each thread's own session with the state the Mac last
+  reported). Nothing in the app feeds a group of remote builders, so there is none. The Commands, MCP servers and
+  Plugins lists are in Settings → Session; the panel links there.
+- The panel draws `agentsForSession(snapshot, state)`, never a leftover of another session. The rows come from the snapshot the mod
+  sends (the mod has `agents`; `session.state` never lists it).
 
 ### 6.2 Rows
 
@@ -374,16 +377,17 @@ export const CappedAgentsSnapshot = AgentsSnapshot.refine((s) => agentsSnapshotB
 
 ### 6.2a As built (WP-A2)
 
-- Code: `apps/web/src/features/agents/` (`logic.ts`, `AgentsList.tsx`, `AgentsRail.tsx`, `AgentsChip.tsx`,
-  `useNowTick.ts`); the store half is in `features/session/store.ts` (`agents`, `visibleAgents`, `showsAgentStop`,
-  `stopAgent`). The rail is mounted by `Shell.tsx` on `/t/:thread`, so the timeline keeps its 760 px column.
-- No snapshot at all (an old relay or bridge without `agents/1`, a mod without `agents`, no mod) = no rail, no chip and
-  no Agents section: the app cannot tell those apart, so it claims nothing. With a snapshot the rail opens by itself
-  while it has rows; an empty one rests as the 44 px strip. The owner's open / closed choice (`localStorage`
-  `talos-agents-rail`) wins either way.
-- Counts (review F1): the chip shows `agentCounts().active` named like the CLI's pill (2.1.312): the kind when every
-  live task is one kind ("3 agents", "2 shells"), "tasks" when mixed. A shell or monitor is never called an agent. The
-  "N active" beside every Agents heading counts the Agents group only; shells and monitors have their own count.
+- Code: `apps/web/src/features/agents/` (`logic.ts`, `AgentsList.tsx`, `useNowTick.ts`); the
+  store half is in `features/session/store.ts` (`agents`, `visibleAgents`, `showsAgentStop`, `stopAgent`). The panel is
+  `features/session/SessionPanel.tsx`; `Shell.tsx` docks it (`SessionDock.tsx`) on `/t/:thread`, so the timeline keeps its
+  760 px column.
+- The Agents section is always shown. With nothing running, or no snapshot at all (an old relay or bridge without
+  `agents/1`, a mod without `agents`, no mod), "This session" reads "No agents running." The app cannot tell those cases
+  apart, so it says no more and never blames the mod (the panel's hint covers that). The owner's open / closed choice for
+  the docked panel is kept per device (`localStorage` `talos-session-dock`).
+- Counts (review F1): `chipLabel()` names the kind like the CLI's pill (2.1.312): the kind when every live task is one
+  kind ("3 agents", "2 shells"), "tasks" when mixed. A shell or monitor is never called an agent. The "N active" beside
+  the Agents heading (a polite live region) counts the Agents group only; shells and monitors have their own count.
 - Stop outcomes live in the store by agent id (`agentOutcomes`), not in the detail: collapsing or going back never
   loses a failed Stop, and each row's live region is the only one that announces it (the session panel's outcome line
   ignores agent stops). Calm results fade after 10 s; errors stay until the next Stop of that row.

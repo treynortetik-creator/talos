@@ -4,19 +4,18 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import {
-  ATTACHMENT_BRIDGE_TOOLS,
-  BRIDGE_TOOLS,
-  ChannelMeta,
-  CONFIG_BRIDGE_TOOLS,
-  type JwkP256T,
-  MOD_BRIDGE_TOOLS,
-  SCHEDULE_BRIDGE_TOOLS,
-} from '@talos-app/protocol'
+import { ChannelMeta, type JwkP256T } from '@talos-app/protocol'
 import { FakeApp, FakeClaude, FakeRelay, loadExampleConfig, sleep, waitFor } from '@talos-app/testkit'
 import { RELAY_RESTART_NOTICE } from '../src/bridge.ts'
 import { readGoodStarts } from '../src/good-starts.ts'
 import { listVersions } from '../src/last-good.ts'
+import {
+  ATTACHMENT_BRIDGE_TOOLS,
+  BRIDGE_TOOLS,
+  CONFIG_BRIDGE_TOOLS,
+  MOD_BRIDGE_TOOLS,
+  SCHEDULE_BRIDGE_TOOLS,
+} from '../src/tools/table.ts'
 import { stopRelay, tempHome } from './helpers.ts'
 
 const BRIDGE_DIR = resolve(import.meta.dir, '..')

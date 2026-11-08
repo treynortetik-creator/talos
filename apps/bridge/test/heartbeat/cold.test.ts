@@ -64,3 +64,29 @@ describe('cold, judged against that limit', () => {
     expect(coldness(emptyStore(), NOW, 8 * DAY).cold).toBe(false)
   })
 })
+
+describe('cold_since: an off period that no source has answered in yet', () => {
+  const NOW = Date.parse('2026-10-12T10:00:00.000Z')
+  const ago = (ms: number) => new Date(NOW - ms).toISOString()
+  const marked = (lastRunMs: number | null, coldSinceMs: number | null) => {
+    const s = emptyStore()
+    s.sources.ss = { cursor: null, last_ok: null, fail_streak: 0 }
+    s.last_run = lastRunMs === null ? null : ago(lastRunMs)
+    s.cold_since = coldSinceMs === null ? null : ago(coldSinceMs)
+    return s
+  }
+
+  test('cold_since makes it cold whatever last_run says, and the length runs from cold_since', () => {
+    expect(coldness(marked(HOUR, 4 * DAY), NOW, 3 * DAY)).toEqual({ ms: 4 * DAY, cold: true })
+    expect(coldness(marked(HOUR, 4 * DAY), NOW, 8 * DAY)).toEqual({ ms: 0, cold: true }) // under the limit: no days claimed
+  })
+
+  test('without cold_since it is last_run and nothing else: a failing source does not make it cold', () => {
+    expect(coldness(marked(HOUR, null), NOW, 3 * DAY)).toEqual({ ms: 0, cold: false })
+    expect(coldness(marked(4 * DAY, null), NOW, 3 * DAY)).toEqual({ ms: 4 * DAY, cold: true })
+  })
+
+  test('the old-store rule is unchanged: sources and no last_run is cold once', () => {
+    expect(coldness(marked(null, null), NOW, 3 * DAY)).toEqual({ ms: 0, cold: true })
+  })
+})

@@ -4270,6 +4270,61 @@
           "v": 1,
           "id": "<id11>",
           "ts": "2026-10-28T15:00:00.000Z",
+          "type": "reply",
+          "message": {
+            "id": "m_<id12>",
+            "thread_id": "inbox",
+            "author": "system",
+            "kind": "text",
+            "text": "The relay or your phone is newer than this Mac's Talos: it sent a newer kind of message that this Mac cannot read. Update Talos on this Mac to see everything.",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          }
+        }
+      },
+      {
+        "dir": "to_bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id13>",
+          "ts": "<wall-time>",
+          "ref": "<id11>",
+          "seq": 2
+        }
+      },
+      {
+        "dir": "to_app",
+        "frame": {
+          "v": 1,
+          "id": "<id11>",
+          "ts": "2026-10-28T15:00:00.000Z",
+          "type": "reply",
+          "message": {
+            "id": "m_<id12>",
+            "thread_id": "inbox",
+            "author": "system",
+            "kind": "text",
+            "text": "The relay or your phone is newer than this Mac's Talos: it sent a newer kind of message that this Mac cannot read. Update Talos on this Mac to see everything.",
+            "format": "plain",
+            "attachments": [],
+            "via": "app",
+            "created_at": "2026-10-28T15:00:00.000Z"
+          },
+          "relay": {
+            "seq": 2,
+            "received_at": "<wall-time>"
+          }
+        }
+      },
+      {
+        "dir": "from_bridge",
+        "frame": {
+          "v": 1,
+          "id": "<id14>",
+          "ts": "2026-10-28T15:00:00.000Z",
           "type": "error",
           "code": "bad_frame",
           "message": "unknown frame type",
@@ -4289,7 +4344,7 @@
         "dir": "from_bridge",
         "frame": {
           "v": 1,
-          "id": "<id12>",
+          "id": "<id15>",
           "ts": "2026-10-28T15:00:00.300Z",
           "type": "error",
           "code": "bad_frame",

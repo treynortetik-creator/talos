@@ -13,7 +13,7 @@ import * as nativePushMod from '../../src/features/pwa/nativePush.ts'
 import { useNativePush } from '../../src/features/pwa/nativePush.ts'
 import { usePushState } from '../../src/features/pwa/push.ts'
 import { SearchScreen } from '../../src/features/search/SearchScreen.tsx'
-import { ThreadSettings } from '../../src/features/threads/ThreadSettings.tsx'
+import { ThreadEditor } from '../../src/features/threads/manage/ThreadEditor.tsx'
 import { ClientProvider } from '../../src/lib/client.ts'
 import { createFakeClient } from '../../src/lib/fakeClient.ts'
 import { renderMarkdown } from '../../src/lib/markdown.ts'
@@ -180,7 +180,7 @@ describe('D29: Search is easy to reach', () => {
     expect(threadIds(replay.asked.at(-1))).toEqual([])
   })
 
-  it('the phone menu offers Search this thread for the thread on screen', async () => {
+  it('the phone menu has no thread card: search is the magnifier in the list row, and there is no "Search this thread" link', async () => {
     window.matchMedia = ((q: string) => ({
       matches: q.includes('max-width: 767px'),
       media: q,
@@ -190,24 +190,27 @@ describe('D29: Search is easy to reach', () => {
     usePhonePanel.setState({ open: 'menu', path: '/t/general', thread: 'general' })
     renderWith(<PhoneChrome />, setup(), '/t/general', '/t/:thread')
     const menu = await screen.findByTestId('phone-menu')
-    expect(within(menu).getAllByRole('link', { name: /^Search/ })).toHaveLength(2) // #94's global one + this thread's
-    await userEvent.click(within(menu).getByRole('link', { name: 'Search this thread' }))
-    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/search'))
+    expect(within(menu).queryByTestId('phone-menu-current')).toBeNull()
+    expect(within(menu).queryByText('Search this thread')).toBeNull()
+    expect(within(menu).queryByRole('link', { name: /^Search/ })).toBeNull()
+    expect(within(menu).getByRole('button', { name: 'Search threads' })).toBeTruthy()
+    // the thread on screen is an ordinary row now, with its own settings button
+    expect(within(menu).getByRole('link', { name: /^General/ })).toBeTruthy()
   })
 
-  it('desktop ThreadSettings has Search this thread that opens /search?thread=', async () => {
+  it('the thread settings menu has Search this thread, which opens /search?thread=', async () => {
     const client = setup()
     const thread = client.store.getState().threads.find((t) => t.id === 'general')
     if (!thread) throw new Error('no general thread')
     const view = render(
       <ClientProvider client={client}>
         <MemoryRouter initialEntries={['/t/general']}>
-          <ThreadSettings thread={thread} />
+          <ThreadEditor open onOpenChange={() => {}} thread={thread} />
           <Where />
         </MemoryRouter>
       </ClientProvider>,
     )
-    await userEvent.click(view.getByRole('button', { name: 'Search this thread' }))
+    await userEvent.click(await view.findByRole('button', { name: 'Search this thread' }))
     expect(screen.getByTestId('where').textContent).toBe('/search?thread=general')
   })
 })

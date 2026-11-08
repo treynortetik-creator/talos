@@ -50,6 +50,7 @@ final class StatusCoordinator: ObservableObject {
     i.quiet = quietNow
     i.quietWindow = quiet
     i.collected = collected
+    i.viewedThread = WebController.shared.viewedThread
     return i
   }
   /// Tests: stands in for what `readBridge` learns from config.json.
@@ -87,13 +88,8 @@ final class StatusCoordinator: ObservableObject {
     started = true
     self.model = model
     Notifier.shared.start()
-    WebController.shared.onNotify = { title, body, navigate, tag in
-      // While the pet can show the reply himself (on, awake, mic off, fed, not busy with something that outranks it), his
-      // bubble replaces the page's reply banner (spec 4.3). Any other banner, and every other condition, is untouched.
-      if CompanionController.shared.dropsReplyBanner(body: body) { return }
-      if let n = NotificationPolicy.web(title: title, body: body, navigate: navigate, tag: tag, windowIsKey: false) {
-        Notifier.shared.show(n)
-      }
+    WebController.shared.onNotify = { [weak self] title, body, navigate, tag in
+      self?.webNotify(title: title, body: body, navigate: navigate, tag: tag)
     }
     // No removeDuplicates: `notice` is never cleared, so the same text again is a new event; the 60 s tag limit handles bursts.
     model.$notice.sink { [weak self] text in self?.noticeChanged(text) }.store(in: &bag)
@@ -113,6 +109,21 @@ final class StatusCoordinator: ObservableObject {
     timers.append(Timer.scheduledTimer(withTimeInterval: every, repeats: true) { [weak self] _ in
       Task { @MainActor in if let self { f(self) } }
     })
+  }
+
+  /// A banner the page asked for. While the pet can show a reply himself (on, awake, mic off, fed, not busy with something that
+  /// outranks it), his bubble replaces the page's reply banner (spec 4.3), and the thread on screen gets neither. Any other banner,
+  /// and every other condition, is untouched.
+  func webNotify(title: String, body: String, navigate: String, tag: String?, companion: CompanionController = .shared) {
+    if companion.dropsReplyBanner(body: body, navigate: navigate) { return }
+    if let n = NotificationPolicy.web(title: title, body: body, navigate: navigate, tag: tag, windowIsKey: false) {
+      Notifier.shared.show(n)
+    }
+  }
+
+  /// The fixed-phrase reply banner he posts himself when he took a reply and then could not show it.
+  func postReplyBanner(thread id: String, name: String) {
+    Notifier.shared.show(NotificationPolicy.replyBanner(agent: agentName, thread: name, id: id))
   }
 
   // MARK: inputs

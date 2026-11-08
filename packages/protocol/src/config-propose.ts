@@ -6,10 +6,15 @@
 // enrollment and security settings are never on it. The check runs when the agent proposes AND again when the owner's
 // approval is applied, on the payload that was bound to the card (what was shown), never on what the agent said later.
 import { z } from 'zod'
-import { type AgentConfigT, HHMM, isIanaZone } from './config.ts'
+import type { AgentConfigT } from './config.ts'
 import type { CardT } from './models.ts'
-import { AGENT_REFUSED_NAMES, AGENT_SETTING_PATHS, type AgentSettingPath } from './settings-table.ts'
-import { themeProblems, validateTheme } from './theme.ts'
+import {
+  AGENT_REFUSED_NAMES,
+  AGENT_RULES,
+  AGENT_SETTING_PATHS,
+  type AgentSettingPath,
+  readSettingValue,
+} from './settings-table.ts'
 
 /** Advertised by a relay whose Card enum knows `kind:'config'`. The bridge mints these cards only against such a relay. */
 export const CONFIG_PROPOSE_FEATURE = 'config-propose/1'
@@ -29,107 +34,23 @@ export type AgentConfigPath = AgentSettingPath
  */
 export const AGENT_CONFIG_REFUSED = AGENT_REFUSED_NAMES
 
-/**
- * Stock voices GPT-Live documents. The default, `meridian`, is documented as North American. One list for the Settings
- * select and for `agent.voice` proposals: a guessed id the provider would refuse never reaches a card.
- */
-export const VOICE_CHOICES = [
-  'meridian',
-  'marin',
-  'alloy',
-  'ash',
-  'ballad',
-  'beacon',
-  'bossa',
-  'cedar',
-  'cinder',
-  'coral',
-  'delta',
-  'echo',
-  'gleam',
-  'quartz',
-  'ripple',
-  'sage',
-  'shida',
-  'shimmer',
-  'stone',
-  'tempo',
-  'verse',
-  'vesper',
-  'willow',
-] as const
-
 export const MAX_CONFIG_CHANGES = 6
 
-// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
-const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/
-const Plain = (min: number, max: number) =>
-  z
-    .string()
-    .min(min)
-    .max(max)
-    .refine(
-      (s) => !UNSAFE_TEXT.test(s) && s.trim() === s && s.trim().length >= min,
-      'plain text, no control characters',
-    )
+/** The value each allowlisted leaf accepts: the same rules the config file applies, one place (the settings table). */
+export const AGENT_CONFIG_VALUE: Record<AgentConfigPath, z.ZodType<unknown>> = Object.fromEntries(
+  AGENT_SETTING_PATHS.map((p) => [p, AGENT_RULES[p].value]),
+) as Record<AgentConfigPath, z.ZodType<unknown>>
 
-const QuietWindow = z
-  .object({ start: HHMM, end: HHMM })
-  .strict()
-  .refine((w) => w.start !== w.end, 'start and end must differ')
-  .nullable()
-
-/** A whole custom theme, checked by the one validator the app and the config file use. Every problem is named in the refusal. */
-const ThemeValue = z.unknown().transform((v, ctx) => {
-  const problems = themeProblems(v)
-  if (problems.length > 0) {
-    ctx.addIssue({ code: 'custom', message: `refused, nothing was proposed. ${problems.join('; ')}` })
-    return z.NEVER
-  }
-  return validateTheme(v).ok ? (validateTheme(v) as { theme: unknown }).theme : z.NEVER
-})
-
-/** The value each allowlisted leaf accepts: the same rules the config file applies, one place. */
-export const AGENT_CONFIG_VALUE: Record<AgentConfigPath, z.ZodType<unknown>> = {
-  'agent.name': Plain(1, 32),
-  'agent.voice': z.enum(VOICE_CHOICES),
-  'owner.display_name': Plain(1, 40),
-  timezone: z.string().max(64).refine(isIanaZone, 'a timezone from the list, like Europe/Paris'),
-  quiet_window: QuietWindow,
-  'voice_notes.reply_with_voice': z.enum(['when_voice', 'always', 'never']),
-  theme: ThemeValue,
-}
-
-export const AGENT_CONFIG_LABEL: Record<AgentConfigPath, string> = {
-  'agent.name': 'Agent name',
-  'agent.voice': 'Live-call voice',
-  'owner.display_name': 'Your name',
-  timezone: 'Timezone',
-  quiet_window: 'Quiet hours',
-  'voice_notes.reply_with_voice': 'Voice-note replies',
-  theme: 'Colour theme',
-}
+export const AGENT_CONFIG_LABEL: Record<AgentConfigPath, string> = Object.fromEntries(
+  AGENT_SETTING_PATHS.map((p) => [p, AGENT_RULES[p].label]),
+) as Record<AgentConfigPath, string>
 
 export function isAgentConfigPath(p: unknown): p is AgentConfigPath {
   return typeof p === 'string' && (AGENT_CONFIG_ALLOWLIST as readonly string[]).includes(p)
 }
 
-/**
- * How to read each allowlisted path out of a config (absent quiet window is `null`). A record keyed by the allowlist, so an
- * `agent: true` row with no reader here fails `pnpm typecheck`.
- */
-const CONFIG_READER: Record<AgentConfigPath, (config: AgentConfigT) => unknown> = {
-  'agent.name': (c) => c.agent.name,
-  'agent.voice': (c) => c.agent.voice,
-  'owner.display_name': (c) => c.owner.display_name,
-  timezone: (c) => c.timezone,
-  quiet_window: (c) => c.quiet_window ?? null,
-  'voice_notes.reply_with_voice': (c) => c.voice_notes.reply_with_voice,
-  theme: (c) => c.theme ?? 'talos',
-}
-
 /** The value now in `config` at an allowlisted path. */
-export const readConfigPath = (config: AgentConfigT, path: AgentConfigPath): unknown => CONFIG_READER[path](config)
+export const readConfigPath = (config: AgentConfigT, path: AgentConfigPath): unknown => readSettingValue(config, path)
 
 /** The RFC 7386 merge patch for allowlisted changes. It can only ever name allowlisted leaves. */
 export function agentConfigPatch(
@@ -241,14 +162,7 @@ export function verifyConfigPayload(
 
 /** One line of a card body: "Agent name: Talos → Atlas". */
 export function describeValue(path: AgentConfigPath, v: unknown): string {
-  if (path === 'quiet_window') {
-    const w = v as { start: string; end: string } | null
-    return w ? `${w.start} to ${w.end}` : 'off'
-  }
-  if (path === 'voice_notes.reply_with_voice')
-    return { when_voice: 'when I send a voice note', always: 'always', never: 'never' }[String(v)] ?? String(v)
-  if (path === 'theme') return typeof v === 'string' ? v : `custom "${(v as { name?: string } | null)?.name ?? '?'}"`
-  return String(v)
+  return AGENT_RULES[path].show?.(v) ?? String(v)
 }
 export const describeChange = (c: ConfigChange): string =>
   `${AGENT_CONFIG_LABEL[c.path]}: ${describeValue(c.path, c.old)} → ${describeValue(c.path, c.new)}`

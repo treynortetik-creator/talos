@@ -50,5 +50,9 @@ fi
 if [ -n "${FAKE_ENV_DUMP:-}" ]; then
   /usr/bin/env > "$FAKE_ENV_DUMP.$n.tmp" && mv "$FAKE_ENV_DUMP.$n.tmp" "$FAKE_ENV_DUMP.$n"
 fi
+# FAKE_ARGV_DUMP=<path>: the argv this start received, one "[element]" per line, to <path>.<start number> (same rename trick).
+if [ -n "${FAKE_ARGV_DUMP:-}" ]; then
+  { for a in "$@"; do printf '[%s]\n' "$a"; done; } > "$FAKE_ARGV_DUMP.$n.tmp" && mv "$FAKE_ARGV_DUMP.$n.tmp" "$FAKE_ARGV_DUMP.$n"
+fi
 [ -n "${FAKE_LOG:-}" ] && printf 'start %s %s\n' "$$" "$*" >> "$FAKE_LOG"
 exec /bin/bash "$here/${FAKE_SCENARIO:-dev-dialog.sh}" "$@"

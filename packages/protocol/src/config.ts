@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { IntegrationId, IsoTs, ThreadId } from './ids.ts'
-import { Thread } from './models.ts'
+import { cardKindFacts, Thread } from './models.ts'
 import { STOCK_THEME_IDS, type Theme, validateTheme } from './theme.ts'
 import { DedicatedConfig } from './thread-sessions.ts'
 
@@ -125,5 +125,5 @@ export function validateAgentConfig(config: AgentConfigT): string[] {
  */
 export function riskForTrust(trust: boolean, kind: string, requested: 'low' | 'high'): 'low' | 'high' {
   if (!trust) return requested
-  return kind === 'purchase' ? 'high' : 'low'
+  return cardKindFacts(kind)?.highRiskUnderTrust ? 'high' : 'low'
 }

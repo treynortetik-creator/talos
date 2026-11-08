@@ -2,10 +2,16 @@
 // fake sources (small scripts) and real processes. The agent side is a spy: a heartbeat run must not reach it unless a wake is
 // called for, so "zero notifications" is the bridge's own emit, which `h.notes` records.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fakeClock } from '@talos-app/testkit'
-import { type HeartbeatWake, type RunnerDeps, SHADOW_LOG } from '../../src/heartbeat/runner.ts'
+import {
+  type HeartbeatWake,
+  type RunnerDeps,
+  SHADOW_LOG,
+  SOURCE_FLOOR_MS,
+  sourceLimitMs,
+} from '../../src/heartbeat/runner.ts'
 import { storeFile } from '../../src/heartbeat/store.ts'
 import { type Harness, startHarness, waitFor } from '../helpers.ts'
 import {
@@ -252,16 +258,41 @@ describe('failing and hanging sources', () => {
     // the hung source kept its cursor and counts a miss
     expect(k.store().sources.hang.fail_streak).toBe(1)
     expect(k.store().sources.hang.last_ok).toBeNull()
-  })
+  }, 15_000) // the source's 5 s limit (the floor, whatever secondMs is) + up to 3 s for the group to go: over bun's 5 s default
 
   test('the run limit stops every source still running, and says so', async () => {
-    await start()
+    await start((c) => c, { secondMs: 60 }) // the smallest run limit is 30 s: 1.8 s here
     const hang = script(dir, 'hang', 'sleep 300')
+    // the source's own limit (60 s = 3.6 s here) is longer than the run's (30 s = 1.8 s), so only the run limit can stop it
     const out = await k.run(config([cmd('hang', hang, { timeout_s: 60 })], { run_timeout_s: 30 }), {})
     expect(sourceOf(out.result, 'hang')?.ok).toBe(false)
     expect(sourceOf(out.result, 'hang')?.error).toContain("run's time limit")
     expect(out.result.outcome).toBe('failed')
+  }, 15_000)
+
+  test('a spawned source never gets under 5 real seconds, whatever secondMs is; unset, a second is a second', () => {
+    expect(SOURCE_FLOOR_MS).toBe(5000)
+    for (const secondMs of [60, 100, 200]) {
+      expect(sourceLimitMs(5, secondMs)).toBeGreaterThanOrEqual(5000)
+      expect(sourceLimitMs(60, secondMs)).toBe(Math.max(60 * secondMs, 5000)) // a longer limit is still scaled, down to the floor
+    }
+    expect(sourceLimitMs(30, 1000)).toBe(30_000)
+    expect(sourceLimitMs(5)).toBe(5000)
+    expect(sourceLimitMs(60)).toBe(60_000)
   })
+
+  test('a source that takes longer than its scaled limit (but under the floor) still answers; the run limit is still scaled', async () => {
+    await start((c) => c, { secondMs: 60 }) // timeout_s 5 would be 0.3 s here
+    const slowish = script(dir, 'slowish', `sleep 1.5\necho '${ok([item('late')])}'`)
+    const out = await k.run(config([cmd('slowish', slowish)]))
+    expect(sourceOf(out.result, 'slowish')?.ok).toBe(true)
+    // the same scaling makes the 30 s run limit 1.8 s: a source still running then is stopped by the run, not by its own (5 s) limit
+    const hang = script(dir, 'hang2', 'sleep 300')
+    const t0 = Date.now()
+    const out2 = await k.run(config([cmd('hang', hang)], { run_timeout_s: 30 }))
+    expect(sourceOf(out2.result, 'hang')?.error).toContain("run's time limit")
+    expect(Date.now() - t0).toBeLessThan(5000)
+  }, 15_000)
 
   test('a failed source never reads as silent: error answer, bad JSON, a crash, no such program, all land as failed', async () => {
     await start()
@@ -1087,7 +1118,8 @@ describe('the group of a running source is recorded in the store', () => {
     const src = script(
       dir,
       'rec',
-      `echo $$ > '${pidFile}'\ncp '${storeFile(h.home, false, 'beat')}' '${seen}'\ncat <<'JSON_END'\n${ok([])}\nJSON_END`,
+      // The record is promised before the source can READ its input, not before it starts: wait for the request on stdin first.
+      `cat > /dev/null\necho $$ > '${pidFile}'\ncp '${storeFile(h.home, false, 'beat')}' '${seen}'\ncat <<'JSON_END'\n${ok([])}\nJSON_END`,
     )
     await k.run(config([cmd('rec', src)]))
     const during = JSON.parse(readFileSync(seen, 'utf8'))
@@ -1098,13 +1130,36 @@ describe('the group of a running source is recorded in the store', () => {
     expect(k.store().running).toEqual({})
   })
 
+  test('the record is there before the source reads its input even when ps is slow', async () => {
+    await start()
+    const fake = join(dir, 'fakebin')
+    mkdirSync(fake)
+    writeFileSync(join(fake, 'ps'), '#!/bin/sh\nsleep 0.5\nexec /bin/ps "$@"\n', { mode: 0o755 })
+    const realPath = process.env.PATH
+    process.env.PATH = `${fake}:${realPath}`
+    try {
+      const seen = join(dir, 'slow.json')
+      const src = script(
+        dir,
+        'slowrec',
+        `cat > /dev/null\ncp '${storeFile(h.home, false, 'beat')}' '${seen}'\ncat <<'JSON_END'\n${ok([])}\nJSON_END`,
+      )
+      await k.run(config([cmd('slowrec', src, { timeout_s: 30 })])) // 6 s here: a loaded machine is not the thing under test
+      const rec = JSON.parse(readFileSync(seen, 'utf8')).running.slowrec
+      expect(rec.command).toContain(src)
+      expect(rec.bridge_pid).toBe(process.pid)
+    } finally {
+      process.env.PATH = realPath
+    }
+  })
+
   test('a source that is killed at its time limit leaves no record behind', async () => {
     await start()
     const hang = script(dir, 'hang', 'sleep 300')
     const out = await k.run(config([cmd('hang', hang)]))
     expect(sourceOf(out.result, 'hang')?.ok).toBe(false)
     expect(k.store().running).toEqual({})
-  })
+  }, 15_000) // the source's 5 s limit (the floor) has to run out first: over bun's 5 s default
 
   test('a dry run records nothing and writes no file', async () => {
     await start()

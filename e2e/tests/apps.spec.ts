@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync } from 'node:fs'
+import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 // MCP Apps end to end (MCP-APPS-SPEC M6.2): the built relay and web app, the real bridge with the apps switch on, a catalog the
@@ -6,7 +6,6 @@ import type { Page } from '@playwright/test'
 // lines, and a real browser. Only the model is scripted.
 import { appFrame, expectedAppCsp, frameByTitle, startApps, talosCode, tapView, viewRequest } from '../harness/apps.ts'
 import { enrollDevice, expect, openThread, test } from '../harness/fixtures.ts'
-import { ROOT } from '../harness/paths.ts'
 import { pinBrowserClock } from '../harness/schedules.ts'
 
 const CLOCK = { name: 'clock', kind: 'clock', label: 'Server clock' } as const

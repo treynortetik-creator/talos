@@ -1,15 +1,33 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { runCli } from '../src/cli.ts'
-import { COMMANDS, runTalos } from '../src/talos.ts'
+import { COMMANDS, runTalos, terminalOnly } from '../src/talos.ts'
 import { type Harness, startHarness } from './helpers.ts'
 
 let h: Harness | undefined
+/** Temp folders a test made. A real release folder is read-only by design, so each is made writable before it is removed. */
+const madeDirs: string[] = []
 afterEach(async () => {
   await h?.stop()
   h = undefined
+  for (const d of madeDirs.splice(0)) {
+    spawnSync('chmod', ['-R', 'u+w', d])
+    rmSync(d, { recursive: true, force: true })
+  }
 })
 
 function cliIO() {
@@ -167,8 +185,12 @@ describe('talos commands', () => {
     devices: { argv: ['devices'], says: /no devices pinned/, code: 0 },
     rotate: { argv: ['rotate'], says: /no bridge key/, code: 1 },
     start: { argv: ['start', '--no-such-flag'], says: unknown, code: 1 },
-    update: { argv: ['update', '--no-such-flag'], says: unknown, code: 1 },
-    rollback: { argv: ['rollback', '--no-such-flag'], says: unknown, code: 1 },
+    // `update`, `rollback` and `restore` are the agent kit's (no kit is installed in a probe's empty home); `... app` are the app's
+    update: { argv: ['update', '--no-such-flag'], says: /no Talos kit release is installed/, code: 1 },
+    'update app': { argv: ['update', 'app', '--no-such-flag'], says: unknown, code: 1 },
+    rollback: { argv: ['rollback', '--no-such-flag'], says: /no Talos kit release is installed/, code: 1 },
+    'rollback app': { argv: ['rollback', 'app', '--no-such-flag'], says: unknown, code: 1 },
+    restore: { argv: ['restore', 'CLAUDE.md'], says: /no Talos kit release is installed/, code: 1 },
     'restore-last-good': { argv: ['restore-last-good', '--no-such-flag'], says: unknown, code: 1 },
     theme: { argv: ['theme', '--no-such-flag'], says: /usage: talos-app theme/, code: 2 },
     'theme reset': { argv: ['theme', 'reset'], says: /cannot read .*config\.json/, code: 1 },
@@ -218,6 +240,7 @@ describe('talos commands', () => {
     const top = new Set(COMMANDS.map((c) => c.name.split(' ')[0] as string))
     for (const name of top) {
       if (name === 'commands' || name === 'hook') continue // talos' own command, and cli.ts' per-call hook entry
+      if (name === 'restore') continue // the kit updater's, run by talos.ts itself (talos-app has no such command)
       expect(source, name).toContain(`case '${name}':`)
     }
   })
@@ -232,6 +255,270 @@ describe('talos commands', () => {
     expect(await runTalos(['bogus'], io, {}, { run })).toBe(2)
     expect(ran).toBe(false)
   })
+})
+
+// `talos update`, `talos rollback` and `talos restore` run the agent kit's updater (kit/bin/talos-update). The one real thing here:
+// a real kit installed into a temp home, a real signed release, the real front door as a program with a terminal (a pty) for its
+// stdin and stdout; nothing stands in for the updater.
+const REPO = resolve(import.meta.dir, '..', '..', '..')
+const FIXTURE = join(REPO, 'kit', 'scripts', 'fixtures', 'update-fixture.py')
+const TTY_RUN = join(REPO, 'kit', 'scripts', 'fixtures', 'tty-run.py')
+
+function cleanEnv(extra: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (
+      v === undefined ||
+      k === 'CLAUDECODE' ||
+      k === 'CLAUDE_PROJECT_DIR' ||
+      k.startsWith('TALOS_') ||
+      k.startsWith('XDG_')
+    )
+      continue
+    out[k] = v
+  }
+  return { ...out, ...extra }
+}
+
+function sh(cmd: string, args: string[], env: Record<string, string>, cwd?: string) {
+  const r = spawnSync(cmd, args, { env, cwd, encoding: 'utf8' })
+  return { code: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
+}
+
+describe('talos update, rollback and restore', () => {
+  const fakeKit = (marker: string) => {
+    const vendor = mkdtempSync(join(tmpdir(), 'talos-fakekit-'))
+    const bin = join(vendor, 'current', 'talos-kit', 'bin')
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(join(bin, 'talos-update'), `#!/bin/sh\necho "$@" > "${marker}"\n`)
+    chmodSync(join(bin, 'talos-update'), 0o755)
+    return vendor
+  }
+
+  test('the five commands are owner terminal commands, listed with that', async () => {
+    const { out, io } = cliIO()
+    expect(await runTalos(['commands', '--json'], io, {})).toBe(0)
+    const byName = new Map(
+      (JSON.parse(out.join('\n')) as { commands: (Row & { needs_terminal?: boolean })[] }).commands.map((c) => [
+        c.name,
+        c,
+      ]),
+    )
+    for (const n of ['update', 'rollback', 'restore']) {
+      expect(byName.get(n)?.agent_may_run, n).toBe(false)
+      expect(byName.get(n)?.needs_terminal, n).toBe(true)
+    }
+    // the app's own pull and rollback stay what they were: not for the agent to choose, but ask-gated rather than terminal-only
+    for (const n of ['update app', 'rollback app']) {
+      expect(byName.get(n)?.agent_may_run, n).toBe(false)
+      expect(byName.get(n)?.needs_terminal, n).toBeUndefined()
+    }
+    // talos-app's own update (the app checkout) is not terminal-gated; talos's is the kit's
+    expect(terminalOnly(['update'], 'talos-app')).toBeUndefined()
+    expect(terminalOnly(['rollback'], 'talos-app')).toBeUndefined()
+    expect(terminalOnly(['update'], 'talos')).toBe('update')
+    expect(terminalOnly(['update', 'app'], 'talos')).toBeUndefined()
+    const app = cliIO()
+    expect(await runCli(['update', '--no-such-flag'], { ...app.io, isTerminal: false }, {})).toBe(1)
+    expect(app.err.join('\n')).toMatch(/Unknown option/)
+  })
+
+  test('without a terminal each one is refused and the updater is never started', async () => {
+    const marker = join(mkdtempSync(join(tmpdir(), 'talos-marker-')), 'ran')
+    const vendor = fakeKit(marker)
+    for (const argv of [
+      ['update'],
+      ['update', '--dry-run'],
+      ['rollback'],
+      ['rollback', '1.2.0'],
+      ['restore', 'CLAUDE.md'],
+    ]) {
+      const { err, io } = cliIO()
+      const code = await runTalos(argv, { ...io, isTerminal: false }, { TALOS_KIT_HOME: vendor })
+      expect(code, argv.join(' ')).toBe(2)
+      expect(err.join('\n')).toContain('only runs in Terminal')
+    }
+    // the app's own update and rollback are not the kit's: they reach the app handler (behind the ask card), never the updater
+    for (const argv of [
+      ['update', 'app'],
+      ['rollback', 'app'],
+    ]) {
+      const { io } = cliIO()
+      let ran = false
+      const run = async () => {
+        ran = true
+        return 0
+      }
+      expect(await runTalos(argv, { ...io, isTerminal: false }, { TALOS_KIT_HOME: vendor }, { run })).toBe(0)
+      expect(ran, argv.join(' ')).toBe(true)
+    }
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  test('with a terminal the kit verbs go to the kit updater, with every argument; update app and rollback app go to the app', async () => {
+    const marker = join(mkdtempSync(join(tmpdir(), 'talos-marker-')), 'ran')
+    const vendor = fakeKit(marker)
+    const env = { TALOS_KIT_HOME: vendor }
+    for (const argv of [
+      ['update', '--dry-run'],
+      ['rollback', '1.2.0'],
+      ['restore', 'memory/a b.md'],
+    ]) {
+      const { io } = cliIO()
+      let handed = false
+      const run = async () => {
+        handed = true
+        return 0
+      }
+      expect(await runTalos(argv, io, env, { run }), argv.join(' ')).toBe(0)
+      expect(readFileSync(marker, 'utf8').trim()).toBe(argv.join(' '))
+      expect(handed, 'the app handler was not used').toBe(false)
+      writeFileSync(marker, '')
+    }
+    const seen: string[][] = []
+    const run = async (a: string[]) => {
+      seen.push(a)
+      return 0
+    }
+    for (const argv of [
+      ['update', 'app', '--x'],
+      ['rollback', 'app', '--dry-run'],
+    ]) {
+      expect(await runTalos(argv, cliIO().io, env, { run })).toBe(0)
+    }
+    expect(seen).toEqual([
+      ['update', '--x'],
+      ['rollback', '--dry-run'],
+    ])
+    expect(readFileSync(marker, 'utf8')).toBe('') // the kit updater was not started for either
+  })
+
+  test('with no kit installed it says so, with the folder it looked in, and exits 1', async () => {
+    const empty = mkdtempSync(join(tmpdir(), 'talos-nokit-'))
+    const { err, io } = cliIO()
+    expect(await runTalos(['update'], io, { TALOS_KIT_HOME: empty })).toBe(1)
+    expect(err.join('\n')).toMatch(/no Talos kit release is installed here \(looked for .*talos-update\)/)
+  })
+
+  test('the real front door as a program, in a terminal: dry run, update, restore, rollback against a real signed release', () => {
+    const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'talos-k8b-')))
+    madeDirs.push(tmp)
+    const home = join(tmp, 'h')
+    mkdirSync(home)
+    const env = cleanEnv({
+      HOME: home,
+      XDG_CONFIG_HOME: join(home, '.config'),
+      TALOS_VENDOR_DIR: join(home, '.local', 'share', 'talos'),
+      TALOS_APP_HOME: join(home, 'app'),
+      TALOS_TEST_LOG: join(tmp, 'migrations.log'),
+      GIT_CONFIG_GLOBAL: '/dev/null',
+    })
+    const vendor = join(env.TALOS_VENDOR_DIR as string, 'kit')
+    const agent = join(home, 'agent')
+    const keys = join(tmp, 'keys')
+    const src = join(tmp, 'src')
+    const v1 = readFileSync(join(REPO, 'kit', 'VERSION'), 'utf8').trim()
+    const v2 = '1.3.0-front'
+    expect(sh('python3', [FIXTURE, 'keys', keys], env).code).toBe(0)
+    expect(
+      sh(
+        'python3',
+        [
+          FIXTURE,
+          'make-kit',
+          join(REPO, 'kit'),
+          join(tmp, 'kit1'),
+          '--version',
+          v1,
+          '--allowed',
+          join(keys, 'allowed1'),
+        ],
+        env,
+      ).code,
+    ).toBe(0)
+    const inst = sh('bash', [join(tmp, 'kit1', 'install.sh'), '--agent-dir', agent, '--no-chronos'], env)
+    expect(inst.code, inst.out).toBe(0)
+    mkdirSync(join(home, 'app', 'last-good'), { recursive: true })
+    expect(
+      sh(
+        'python3',
+        [
+          FIXTURE,
+          'make-kit',
+          join(REPO, 'kit'),
+          join(tmp, 'kit2'),
+          '--version',
+          v2,
+          '--allowed',
+          join(keys, 'allowed1'),
+          '--migration',
+          '202611050001:front:plain',
+          '--hook',
+          'UserPromptSubmit||front-guard.py',
+          '--notes',
+          'Front door test notes.',
+        ],
+        env,
+      ).code,
+    ).toBe(0)
+    const rel = join(tmp, 'kit2', 'scripts', 'plugin-release.py')
+    expect(sh('python3', [rel, 'build', '--source', join(tmp, 'kit2'), '--vendor', join(tmp, 'pub')], env).code).toBe(0)
+    expect(
+      sh(
+        'python3',
+        [rel, 'pack', '--vendor', join(tmp, 'pub'), '--version', v2, '--key', join(keys, 'key1'), '--out', src],
+        env,
+      ).code,
+    ).toBe(0)
+
+    // the front door, as the program the owner runs, with a terminal as stdin and stdout
+    const talos = (...args: string[]) =>
+      sh('python3', [TTY_RUN, '--', 'bun', join(REPO, 'apps', 'bridge', 'src', 'talos.ts'), ...args], env)
+    const cur = () => readlinkSync(join(vendor, 'current'))
+
+    const dry = talos('update', '--dry-run', '--agent-dir', agent, '--source', src)
+    expect(dry.code, dry.out).toBe(0)
+    expect(dry.out).toContain(v2)
+    expect(dry.out).toContain('Front door test notes.')
+    expect(dry.out).toContain('202611050001-front')
+    expect(cur()).toBe(`releases/${v1}`)
+
+    const up = talos('update', '--agent-dir', agent, '--source', src)
+    expect(up.code, up.out).toBe(0)
+    expect(up.out).toContain(`updated ${v1} -> ${v2}`)
+    expect(cur()).toBe(`releases/${v2}`)
+    expect(readFileSync(join(agent, '.talos-version'), 'utf8')).toContain('migration=202611050001-front')
+    const req = JSON.parse(readFileSync(join(home, 'app', 'agent-request.json'), 'utf8')) as Record<string, unknown>
+    expect(req.action).toBe('restart')
+
+    writeFileSync(join(agent, '.claude', 'settings.json'), '{"broken": true}')
+    const rest = talos('restore', '--agent-dir', agent, '.claude/settings.json')
+    expect(rest.code, rest.out).toBe(0)
+    expect(JSON.parse(readFileSync(join(agent, '.claude', 'settings.json'), 'utf8')).enabledPlugins).toEqual({
+      'talos@talos-local': true,
+    })
+
+    const back = talos('rollback', '--agent-dir', agent)
+    expect(back.code, back.out).toBe(0)
+    expect(back.out).toContain(`rolled back to ${v1}`)
+    expect(cur()).toBe(`releases/${v1}`)
+    // the migration the update ran was undone by the rollback
+    expect(readFileSync(join(tmp, 'migrations.log'), 'utf8')).toBe('up 202611050001\ndown 202611050001\n')
+
+    // refused from a script: no terminal
+    const piped = spawnSync(
+      'bun',
+      [join(REPO, 'apps', 'bridge', 'src', 'talos.ts'), 'update', '--agent-dir', agent, '--source', src],
+      {
+        env,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
+    expect(piped.status).toBe(2)
+    expect(piped.stderr).toContain('only runs in Terminal')
+    expect(cur()).toBe(`releases/${v1}`)
+  }, 240_000)
 })
 
 describe('talos help and version', () => {
@@ -341,23 +628,34 @@ describe('talos as a program: the early exits never load the full CLI', () => {
 
   test('rollback, subagent-tee and commands run with cli-main.ts unloadable', () => {
     const { run } = copyWithTrap()
-    for (const args of [['rollback', '--dry-run'], ['subagent-tee'], ['commands'], ['--version']]) {
+    for (const args of [
+      ['rollback', 'app', '--dry-run'],
+      ['update'],
+      ['rollback'],
+      ['restore', 'x'],
+      ['subagent-tee'],
+      ['commands'],
+      ['--version'],
+    ]) {
       const r = run(...args)
       expect(r.err, args.join(' ')).not.toContain('TRAP')
       expect(r.err, args.join(' ')).not.toContain('Cannot find module')
     }
+    // the kit verbs from a script (no terminal) are refused before anything else loads
+    expect(run('update').err).toContain('only runs in Terminal')
+    expect(run('update').code).toBe(2)
     expect(run('subagent-tee').code).toBe(0)
     expect(run('commands').out).toContain('rollback')
   })
 
-  test('rollback gets its own arguments, without the word rollback in front of them', () => {
+  test('rollback app gets its own arguments, without the words rollback app in front of them', () => {
     const { run } = copyWithTrap()
     // A flag only rollback knows is accepted; handed `rollback --dry-run` instead, it would call the word an unexpected argument.
-    const r = run('rollback', '--dry-run')
+    const r = run('rollback', 'app', '--dry-run')
     expect(r.err).not.toContain('Unexpected argument')
     expect(r.err).not.toContain('Unknown option')
     // And a bad flag is reported as the flag, which is the first thing rollback itself looks at.
-    const bad = run('rollback', '--no-such-flag')
+    const bad = run('rollback', 'app', '--no-such-flag')
     expect(bad.err).toContain("Unknown option '--no-such-flag'")
     expect(bad.code).toBe(1)
   })

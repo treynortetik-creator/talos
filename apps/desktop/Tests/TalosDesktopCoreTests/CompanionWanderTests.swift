@@ -172,7 +172,6 @@ struct CompanionWanderTests {
     check("Down") { $0.inputs.session = .stopped(byOwner: false) }
     check("Down (relay)") { $0.inputs.relayDown = true }
     check("Blocked session") { $0.inputs.session = .blocked }
-    check("the quiet window") { $0.inputs.quiet = true }
     check("a call (a mic)") { $0.env.micRunning = true }
     check("Reduce Motion") { $0.env.reduceMotion = true }
     check("Low Power") { $0.env.lowPower = true }
@@ -256,5 +255,22 @@ struct CompanionWanderTests {
     #expect(r.last?.state == .idle)
     r.advance(10, step: 1)
     #expect(r.last?.state == .asleep, "30 minutes with no touch: he still dozes off")
+  }
+}
+
+@Suite("Companion wander: quiet hours are not a clamp")
+struct CompanionWanderQuietTests {
+  @Test func aWanderIsDueInTheQuietWindowAsItIsByDay() {
+    func firstDue(quiet: Bool) -> Bool {
+      var r = Rig(random: { $0.lowerBound })
+      r.inputs.quiet = quiet
+      r.env.secondsSinceInput = 1
+      r.tick()
+      var due = false
+      for _ in 0..<(900 / 5) where r.tick(5).wanderDue { due = true }
+      return due
+    }
+    #expect(firstDue(quiet: false), "setup: by day a wander comes")
+    #expect(firstDue(quiet: true), "and in quiet hours too")
   }
 }

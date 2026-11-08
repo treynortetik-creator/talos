@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Haiku 5.5 · Claude Enterprise
+ ▝▝   ▝▝   /private/tmp/tcap/proj
+
+
+❯ Run the shell command: echo hi
+
+  Ran 1 shell command
+
+⏺ I ran echo hi and it printed hi.
+
+✻ Crunched for 3s · done 2:47 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts

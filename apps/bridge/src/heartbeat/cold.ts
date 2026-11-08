@@ -44,16 +44,28 @@ export function coldAfterMs(when: ScheduleWhenT | undefined): number {
   return Math.max(2 * gap * 60_000, COLD_FLOOR_MS)
 }
 
-/** How long the heartbeat has been off, if over `limitMs` (`ms`; 0 otherwise), and whether that makes it cold. */
+/**
+ * How long the heartbeat has been off, if over `limitMs` (`ms`; 0 otherwise), and whether that makes it cold. Cold is the heartbeat's
+ * own gap (`last_run`, not a source's silence: a source that was down while the heartbeat kept running delivers normally), or an off
+ * period no source has answered in yet (`cold_since`, set by a cold run that every source failed, cleared by the first answer): that
+ * run skipped nothing, so the next one still has the backlog to skip. The length runs from where the off period began, `cold_since`
+ * when it is set (it holds the old `last_run`), so a second failed run still says the true length.
+ */
 export function coldness(store: HeartbeatStore, nowMs: number, limitMs: number): { ms: number; cold: boolean } {
-  const gap = store.last_run ? nowMs - Date.parse(store.last_run) : 0
+  const from = store.cold_since ?? store.last_run
+  const gap = from ? nowMs - Date.parse(from) : 0
   const ms = gap > limitMs ? gap : 0
   // A store an earlier version wrote knows its sources but has no `last_run`: how long it was off is unknown, so it starts over once.
-  return { ms, cold: ms > 0 || (store.last_run === null && Object.keys(store.sources).length > 0) }
+  return {
+    ms,
+    cold: ms > 0 || store.cold_since !== null || (store.last_run === null && Object.keys(store.sources).length > 0),
+  }
 }
 
-export function coldNote(ms: number, backlog: number): string {
+/** `answered`: some source gave an answer this run, so a backlog was actually looked at and skipped. */
+export function coldNote(ms: number, backlog: number, answered = true): string {
   const days = Math.floor(ms / DAY_MS)
   const gone = ms > 0 ? `Heartbeat was off for ${days} ${days === 1 ? 'day' : 'days'}.` : 'Heartbeat started over.'
+  if (!answered) return ms > 0 ? `${gone} The backlog will be skipped once a source answers.` : gone
   return `${gone} Skipped the backlog${backlog ? ` (${backlog} ${backlog === 1 ? 'item' : 'items'})` : ''}.`
 }

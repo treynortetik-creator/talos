@@ -51,6 +51,37 @@ struct WorkerSpecTests {
     }
   }
 
+  @Test func aWorkersSettingsRegisterThePermissionHookWithTheAgentFoldersScript() throws {
+    let s = try WorkerSpec.build(inputs())
+    let settings = jsonObject(s.settingsJSON)
+    let entries = (settings?["hooks"] as? [String: Any])?["PermissionRequest"] as? [[String: Any]]
+    #expect(entries?.count == 1)
+    #expect(entries?.first?["matcher"] == nil, "a matcher would leave some tools out")
+    let hook = (entries?.first?["hooks"] as? [[String: Any]])?.first
+    #expect(hook?["type"] as? String == "command")
+    #expect(hook?["timeout"] as? Int == 3600)  // a backstop: Claude Code ends the hook when the prompt is answered or auto-blocked
+    let cmd = hook?["command"] as? String ?? ""
+    #expect(cmd.contains("/home/example/agent/hooks/permission-relay.py"), "\(cmd)")  // the agent folder's script, not the thread folder
+    #expect(cmd.hasSuffix("exec python3 \"$f\""), "exec, so Claude Code's signal reaches the hook and not a shell around it")
+    #expect(cmd.contains("TALOS_APP_PERM_HOOK_SOURCE=worker exec python3"), "this copy marks itself, so the agent folder's copy stays silent")
+    // still a worker: the hook did not bring a channel, a flag or the live-bridge marker with it
+    #expect(!s.args.contains("--channels") && s.env["TALOS_APP_BRIDGE"] == nil)
+    #expect(s.env["TALOS_APP_WORKER_NONCE"] == "n0nce-0123456789abcdef")  // what the hook sends as proof
+  }
+
+  @Test func theHookJoinsTheGuardsHooksInsteadOfReplacingThem() throws {
+    let guards: [String: Any] = ["PreToolUse": [["matcher": "Bash", "hooks": [["type": "command", "command": "guard"]]]]]
+    let merged = WorkerSpec.withPermissionHook(["hooks": guards, "effortLevel": "high"], agentDir: "/home/example/my agent")
+    let hooks = merged["hooks"] as? [String: Any]
+    #expect(hooks?["PreToolUse"] != nil, "the guards' hook was lost")
+    #expect(hooks?["PermissionRequest"] != nil)
+    #expect(merged["effortLevel"] as? String == "high")
+    let cmd = ((hooks?["PermissionRequest"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])?.first?["command"] as? String ?? ""
+    #expect(cmd.hasPrefix("f='/home/example/my agent/hooks/permission-relay.py';"), "a path with a space is quoted: \(cmd)")
+    // hooks of an unexpected shape are left alone, never overwritten
+    #expect((WorkerSpec.withPermissionHook(["hooks": "nonsense"], agentDir: "/a")["hooks"] as? String) == "nonsense")
+  }
+
   @Test func aWorkerNeverInheritsAnotherSessionsMarkers() throws {
     var i = inputs()
     i.baseEnv = i.baseEnv.merging(pollutedClaudeEnv) { a, _ in a }.merging(claudeKeepList) { a, _ in a }
@@ -206,11 +237,11 @@ struct WorkerRulesTests {
   }
 
   @Test func pointerNeverDuringADialogOrRecentTyping() {
-    #expect(PointerTyper.mayType(screen: .none, lastClientActivity: nil, now: 100, draftPresent: false))
-    #expect(PointerTyper.mayType(screen: .none, lastClientActivity: 80, now: 100, draftPresent: false))
-    #expect(!PointerTyper.mayType(screen: .none, lastClientActivity: 95, now: 100, draftPresent: false))
+    #expect(PointerTyper.mayType(screen: .none, lastClientActivity: nil, now: 100, draftPresent: false, boxVisible: true))
+    #expect(PointerTyper.mayType(screen: .none, lastClientActivity: 80, now: 100, draftPresent: false, boxVisible: true))
+    #expect(!PointerTyper.mayType(screen: .none, lastClientActivity: 95, now: 100, draftPresent: false, boxVisible: true))
     for s: DialogMatcher.Screen in [.trust, .mcpConsent, .loginExpired, .bypassDisclaimer, .unknownSelection] {
-      #expect(!PointerTyper.mayType(screen: s, lastClientActivity: nil, now: 100, draftPresent: false))
+      #expect(!PointerTyper.mayType(screen: s, lastClientActivity: nil, now: 100, draftPresent: false, boxVisible: true))
     }
   }
 

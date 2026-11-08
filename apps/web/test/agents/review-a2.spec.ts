@@ -1,6 +1,7 @@
 // Regression tests for the agents panel in a real browser. Each test names the bug it pins;
 // `guard` tests pin behaviour that already held. Fake mode (`VITE_FAKE=1`, `?fake_agents=demo`).
 import { expect, type Page, test } from '@playwright/test'
+import { openSessionPanel } from '../helpers/phone.ts'
 
 const isDesktop = (name: string) => name === 'desktop'
 async function openThread(page: Page, q = 'fake_agents=demo') {
@@ -9,12 +10,20 @@ async function openThread(page: Page, q = 'fake_agents=demo') {
 }
 type Fake = { session: { setAgents(rows: unknown[] | null, over?: Record<string, unknown>): void } }
 
-/** Where the list lives for this project: the docked rail on desktop, the bottom sheet on phones. */
+/** Where the list lives for this project: the docked panel on desktop, the sheet on phones. */
 async function panel(page: Page, project: string) {
-  if (isDesktop(project)) return page.getByTestId('agents-rail')
+  if (isDesktop(project)) return openSessionPanel(page)
   await page.getByTestId('session-trigger').click()
   const sheet = page.getByTestId('session-sheet')
   await expect(sheet).toBeVisible()
+  // The phone drawer slides in over 200 ms (phone.css `.drawer-anim`). WebKit evaluates a running transform at the moment of each
+  // getBoundingClientRect call, not once per frame, so two reads a millisecond or two apart (a loaded runner) differ by the distance
+  // the drawer moved in between: the F7 measure read 364.65 against an edge of 362.20 mid-slide. Measure only once the drawer itself has stopped (its own animations; rows below carry endless spinners).
+  await expect
+    .poll(() => sheet.evaluate((el) => el.getAnimations().filter((a) => a.playState === 'running').length), {
+      timeout: 3000,
+    })
+    .toBe(0)
   return sheet
 }
 
@@ -85,7 +94,6 @@ test('guard: 160-char unbroken paths and HTML stay inside the panel, no horizont
       },
     ])
   }, path)
-  if (isDesktop(info.project.name)) await expect(page.getByTestId('agents-rail')).toHaveAttribute('data-state', 'open') // rows open it by themselves
   const where = await panel(page, info.project.name)
   await where.getByTestId('agent-row').getByRole('button').click()
   await expect(where.getByTestId('agent-detail')).toBeVisible()
@@ -104,27 +112,29 @@ test('guard: 160-char unbroken paths and HTML stay inside the panel, no horizont
   expect(over.page).toBeLessThanOrEqual(0)
 })
 
-test('guard: 1280 px docks the rail and hides the chip; 1279 px is the chip and no rail', async ({ page }, info) => {
+test('guard: 1024 px docks the panel and 1023 px is a sheet; neither scrolls sideways', async ({ page }, info) => {
   test.skip(!isDesktop(info.project.name), 'a desktop browser resized')
-  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.setViewportSize({ width: 1024, height: 800 })
   await openThread(page)
-  await expect(page.getByTestId('agents-rail')).toHaveAttribute('data-state', 'open')
-  await expect(page.getByTestId('agents-chip')).toBeHidden()
+  await page.getByTestId('session-trigger').click()
+  await expect(page.getByTestId('session-dock')).toBeVisible()
+  await expect(page.getByTestId('agents-chip')).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
-  await page.setViewportSize({ width: 1279, height: 800 })
-  await expect(page.getByTestId('agents-rail')).toHaveCount(0)
-  await expect(page.getByTestId('agents-chip')).toBeVisible()
+  await page.setViewportSize({ width: 1023, height: 800 })
+  await expect(page.getByTestId('session-dock')).toHaveCount(0)
+  await expect(page.getByTestId('session-trigger')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
 })
 
-test('F8: the running mark keeps 3:1 against the rail at the bottom of its pulse (WCAG 1.4.11)', async ({
+test('F8: the running mark keeps 3:1 against the panel at the bottom of its pulse (WCAG 1.4.11)', async ({
   page,
 }, info) => {
-  test.skip(!isDesktop(info.project.name), 'the rail')
+  test.skip(!isDesktop(info.project.name), 'the docked panel')
   for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme })
     await openThread(page)
-    const rail = page.getByTestId('agents-rail')
+    const rail = page.getByTestId('session-dock')
+    if (!(await rail.isVisible())) await page.getByTestId('session-trigger').click() // the choice is kept between visits
     const mark = rail.locator('[data-status="running"][role="img"]').first()
     await expect(mark).toBeVisible()
     const ratio = await mark.evaluate((el) => {

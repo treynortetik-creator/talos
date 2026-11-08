@@ -30,8 +30,6 @@ type Row = { key: string; at: string; message?: MessageT; card?: CardT }
 
 const EMPTY: MessageT[] = []
 
-export type { Row as TimelineRow }
-
 /**
  * Messages plus any card of this thread that has no card message of its own, in order. Pure, so a test can drive it.
  */
@@ -471,7 +469,7 @@ export function Timeline({
                   <p data-testid="thread-empty-explainer" className="m-0 max-w-[40ch] text-sm text-text-2">
                     A thread is one topic. Messages here stay here, so {agent} can answer and file updates by subject.
                     To rename it, give it an icon and color, set notifications or archive it, open its settings: the ⋯
-                    button at the top on a computer, or Open menu and then the pencil beside its name on a phone.
+                    button at the top on a computer, or Open menu and then the ⋯ beside its name on a phone.
                   </p>
                 </>
               )}
@@ -511,7 +509,7 @@ export function Timeline({
                       onOpenItem={onOpenItem}
                     />
                   ) : r.card ? (
-                    <TimelineCard card={r.card} threadName={threadId} />
+                    <TimelineCard card={r.card} threadName={threadId} highlighted={r.card.id === highlightCard} />
                   ) : null}
                 </RowErrorBoundary>
               </Fragment>

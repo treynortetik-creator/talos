@@ -43,7 +43,9 @@ check 0 "ls -la"
 # fail open on garbage, non-Bash tools and the kill switch
 got=$(printf 'not json' | python3 "$H" 2>/dev/null; echo $?); [ "$got" = 0 ] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "  FAIL garbage input did not fail open"; }
 got=$(printf '{"tool_name":"Read","tool_input":{"command":"sed -i s/a/b/ f"}}' | python3 "$H" 2>/dev/null; echo $?); [ "$got" = 0 ] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "  FAIL a non-Bash tool was blocked"; }
-got=$(python3 -c 'import json; print(json.dumps({"tool_name":"Bash","tool_input":{"command":"sed -i \"s/a/b/\" f"}}))' | TALOS_BSD_SED_GUARD_OFF=1 python3 "$H" 2>/dev/null; echo $?); [ "$got" = 0 ] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "  FAIL the kill switch did not turn it off"; }
+# The hook exits at import when killed, before it reads stdin: a pipe into it would give the writer EPIPE and fail pipefail. Hand it a here-string.
+payload=$(python3 -c 'import json; print(json.dumps({"tool_name":"Bash","tool_input":{"command":"sed -i \"s/a/b/\" f"}}))')
+got=$(TALOS_BSD_SED_GUARD_OFF=1 python3 "$H" <<<"$payload" 2>/dev/null; echo $?); [ "$got" = 0 ] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "  FAIL the kill switch did not turn it off"; }
 grep -q '"bsd-sed-guard.off"' "$H" && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "  FAIL kill-switch name is not a string literal"; }
 echo "  bsd-sed-guard: PASS $PASS FAIL $FAIL"
 [ "$FAIL" -eq 0 ]

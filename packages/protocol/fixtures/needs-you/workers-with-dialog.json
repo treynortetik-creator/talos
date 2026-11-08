@@ -1,0 +1,66 @@
+{
+  "v": 1,
+  "supervisor": {
+    "pid": 4242,
+    "heartbeat_at": "2026-11-07T10:00:03.000Z",
+    "workers_supported": true,
+    "main_pane_pid": 4100
+  },
+  "threads": {
+    "trip": {
+      "state": "starting",
+      "session_id": "6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c41",
+      "tmux": "t-trip",
+      "pane_pid": 4300,
+      "cwd": "/home/alex/trip",
+      "dialog": {
+        "id": "k3Xv9QpT2mLw8ZrNa5HdBe",
+        "kind": "trust",
+        "subject": "/home/alex/trip",
+        "options": [
+          "No, exit",
+          "Yes, I trust this folder"
+        ],
+        "cursor": 1,
+        "seen_at": "2026-11-07T10:00:00.000Z",
+        "expires_at": "2026-11-07T10:15:00.000Z"
+      }
+    },
+    "garden": {
+      "state": "starting",
+      "session_id": "6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c42",
+      "tmux": "t-garden",
+      "pane_pid": 4301,
+      "cwd": "/home/alex/garden",
+      "dialog": {
+        "id": "Zt7Rm2QxW9cKpL4vNaH8dB",
+        "kind": "mcp_consent",
+        "subject": "github",
+        "options": [
+          "Use this and all future MCP servers in this project",
+          "Use this MCP server",
+          "Continue without using this MCP server"
+        ],
+        "cursor": 0,
+        "seen_at": "2026-11-07T10:00:01.000Z",
+        "expires_at": "2026-11-07T10:15:01.000Z"
+      }
+    },
+    "inbox2": {
+      "state": "live",
+      "session_id": "6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c43",
+      "tmux": "t-inbox2",
+      "pane_pid": 4302,
+      "cwd": "/home/alex/inbox2",
+      "dialog": {
+        "id": "Hc4Pq9ZtLm2Xw7RvNa5KdB",
+        "kind": "login",
+        "subject": null,
+        "options": [],
+        "cursor": null,
+        "seen_at": "2026-11-07T10:00:02.000Z",
+        "expires_at": "2026-11-07T10:15:02.000Z"
+      }
+    }
+  }
+}

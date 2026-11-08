@@ -4,6 +4,7 @@
     python3 scripts/plugin-release.py build    [--source KIT] [--vendor DIR] [--activate]
     python3 scripts/plugin-release.py activate [--vendor DIR] --version V
     python3 scripts/plugin-release.py paths    [--vendor DIR]          # vendor, marketplace, plugin root, as KEY=value lines
+    python3 scripts/plugin-release.py pack     [--vendor DIR] --version V --key PRIVATE_KEY --out DIR   # signed bundle for `talos update`
 
 Where things go (VENDOR is $TALOS_KIT_HOME, else $TALOS_VENDOR_DIR/kit, else ${XDG_DATA_HOME:-~/.local/share}/talos/kit):
 
@@ -26,7 +27,9 @@ agents, bin/. A release is immutable: building a version that already exists wit
 Python 3.9, standard library only.
 """
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import os
 import re
@@ -34,6 +37,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 
 PLUGIN_NAME = "talos"
 MARKETPLACE_NAME = "talos-local"
@@ -46,6 +50,11 @@ DESCRIPTION = "The Talos zone: memory hooks, safety guards, skills, agents and h
 SKIP_TOP = {".git", "docs", "memory", "wiki", ".learnings", ".index"}
 SKIP_NAMES = {".DS_Store", "__pycache__", ".releaseignore"}
 SKIP_PATHS = {"scripts/fixtures", "CLAUDE.md"}      # CLAUDE.md at a plugin root is never loaded; the agent's is rendered from templates/
+# Talos files that live INSIDE the agent folder (a plugin cannot carry them): a release keeps them under agent-files/ and `talos update`
+# copies them into the folder, replacing the old copy atomically. Everything else in wiki/ and .claude/ is the owner's.
+AGENT_FILES = (".claude/rules/talos-defaults.md", "wiki/README.md", "wiki/_privacy-and-sharing.md", "wiki/examples/")
+SIGN_NAMESPACE = "talos-kit-release"
+SIGN_PRINCIPAL = "talos-release"
 
 
 def vendor_default():
@@ -88,8 +97,24 @@ def _copy_file(src, dst):
     shutil.copy2(src, dst)
 
 
+def is_agent_file(rel):
+    return any(rel == a or (a.endswith("/") and rel.startswith(a)) for a in AGENT_FILES)
+
+
 def copy_tree(src, dst):
-    """The kit tree into dst, minus SKIP_*; .claude/skills -> skills/, .claude/agents -> agents/ (plugin locations)."""
+    """The kit tree into dst, minus SKIP_*; .claude/skills -> skills/, .claude/agents -> agents/ (plugin locations); the files
+    in AGENT_FILES -> agent-files/<same path> (wiki/ is otherwise the owner's and is not in a release)."""
+    for a in AGENT_FILES:
+        base = os.path.join(src, a)
+        paths = []
+        if a.endswith("/") and os.path.isdir(base):
+            for dp, dn, fn in os.walk(base):
+                dn.sort()
+                paths += [os.path.join(dp, n) for n in sorted(fn) if n not in SKIP_NAMES]
+        elif os.path.isfile(base):
+            paths = [base]
+        for p in paths:
+            _copy_file(p, os.path.join(dst, "agent-files", os.path.relpath(p, src)))
     for root, dirs, files in os.walk(src):
         rel_root = os.path.relpath(root, src)
         rel_root = "" if rel_root == "." else rel_root.replace(os.sep, "/")
@@ -99,7 +124,7 @@ def copy_tree(src, dst):
             if name in SKIP_NAMES or name.endswith(".pyc"):
                 continue
             rel = (rel_root + "/" + name).lstrip("/")
-            if rel in SKIP_PATHS:
+            if rel in SKIP_PATHS or is_agent_file(rel):
                 continue
             target = rel
             if rel.startswith(".claude/skills/"):
@@ -112,10 +137,14 @@ def copy_tree(src, dst):
 
 
 def content_sha(root):
+    """One hash over every file's path, executable bit and bytes. Bytecode caches are not part of a release (a Python run from
+    a staged copy may write them), so __pycache__ folders and .pyc files are left out."""
     h = hashlib.sha256()
     for dp, dn, fn in os.walk(root):
-        dn.sort()
+        dn[:] = sorted(d for d in dn if d != "__pycache__")
         for n in sorted(fn):
+            if n.endswith(".pyc"):
+                continue
             p = os.path.join(dp, n)
             rel = os.path.relpath(p, root).replace(os.sep, "/")
             if rel == ".talos-release":
@@ -227,13 +256,97 @@ def activate(vendor, version):
     if os.path.lexists(tmpl):
         os.remove(tmpl)
     os.symlink(os.path.join("releases", version), tmpl)      # relative: the vendor folder can be moved as a whole
-    os.replace(tmpl, link)
+    swap_link(tmpl, link)
     print("plugin-release: current -> releases/%s" % version)
+
+
+def swap_link(tmp, link):
+    """Make `link` point where the new link `tmp` points, in one step a reader can never see half of.
+    rename(2) over a symlink is atomic everywhere but a macOS reader that looks up `current` at that instant can get EINVAL (measured
+    on APFS: about a quarter of tight-loop reads fail). renamex_np with RENAME_SWAP exchanges the two names with no such moment (0
+    failures in 22,000 swaps), so it is used on macOS when `current` exists and the volume supports it; otherwise rename(2)."""
+    if sys.platform == "darwin" and os.path.islink(link):
+        try:
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+            if libc.renamex_np(os.fsencode(tmp), os.fsencode(link), 2) == 0:      # RENAME_SWAP: tmp now holds the OLD link
+                os.unlink(tmp)
+                return
+        except (OSError, AttributeError):
+            pass
+    os.replace(tmp, link)
+
+
+def bundle_bytes(plugin_dir):
+    """The plugin folder as a gzip'd tar with fixed names, owners and times, so the same release always packs to the same bytes
+    (and so to the same signature input). The archive's only top folder is talos-kit/."""
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tar:
+        for dp, dn, fn in os.walk(plugin_dir):
+            dn.sort()
+            for n in sorted(dn) + sorted(fn):
+                p = os.path.join(dp, n)
+                rel = PLUGIN_DIR + "/" + os.path.relpath(p, plugin_dir).replace(os.sep, "/")
+                st = os.lstat(p)
+                ti = tarfile.TarInfo(rel)
+                ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = 0, 0, 0, "", ""
+                if stat.S_ISDIR(st.st_mode):
+                    ti.type, ti.mode = tarfile.DIRTYPE, 0o755
+                    tar.addfile(ti)
+                elif stat.S_ISREG(st.st_mode):
+                    ti.size, ti.mode = st.st_size, 0o755 if st.st_mode & stat.S_IXUSR else 0o644
+                    with open(p, "rb") as fh:
+                        tar.addfile(ti, fh)
+                else:
+                    raise SystemExit("plugin-release: %s is not a file or folder; a release holds nothing else" % p)
+    out = io.BytesIO()
+    with gzip.GzipFile(fileobj=out, mode="wb", mtime=0) as gz:
+        gz.write(raw.getvalue())
+    return out.getvalue()
+
+
+def pack(vendor, version, key, out_dir):
+    """Write talos-kit-<version>.tar.gz, its ssh signature (talos-kit-<version>.tar.gz.sig, made with `ssh-keygen -Y sign -n
+    talos-kit-release`) and latest.json into out_dir. latest.json names the highest version packed there."""
+    plugin = os.path.join(vendor, "releases", version, PLUGIN_DIR)
+    if not os.path.isfile(os.path.join(plugin, ".claude-plugin", "plugin.json")):
+        raise SystemExit("plugin-release: no release %s under %s" % (version, vendor))
+    os.makedirs(out_dir, exist_ok=True)
+    name = "talos-kit-%s.tar.gz" % version
+    path = os.path.join(out_dir, name)
+    for stale in (path, path + ".sig"):
+        if os.path.exists(stale):
+            os.remove(stale)
+    with open(path, "wb") as fh:
+        fh.write(bundle_bytes(plugin))
+    r = subprocess.run(["ssh-keygen", "-q", "-Y", "sign", "-f", key, "-n", SIGN_NAMESPACE, path], capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(path + ".sig"):
+        raise SystemExit("plugin-release: ssh-keygen could not sign %s: %s" % (name, (r.stderr or r.stdout).strip()))
+    lp = os.path.join(out_dir, "latest.json")
+    best = version
+    try:
+        have = json.load(open(lp)).get("version", "")
+        if have and version_key(have) > version_key(version):
+            best = have
+    except (OSError, ValueError):
+        pass
+    with open(lp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"version": best, "bundle": "talos-kit-%s.tar.gz" % best}) + "\n")
+    print("plugin-release: packed and signed %s" % path)
+
+
+def version_key(v):
+    """Sortable form of a release version, semver-like: the numbers first (1.10.0 > 1.9.0), and a pre-release (`-rc1`, `-cli`,
+    `-test`) sorts BEFORE the final release with the same numbers (1.5.0-rc1 < 1.5.0); two pre-releases compare by their text."""
+    main, _, pre = v.split("+", 1)[0].partition("-")
+    return ([int(x) for x in re.findall(r"\d+", main)], 0 if pre else 1, pre)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("cmd", choices=["build", "activate", "paths"])
+    ap.add_argument("cmd", choices=["build", "activate", "paths", "pack"])
+    ap.add_argument("--key", help="with pack: the private key file to sign with")
+    ap.add_argument("--out", help="with pack: the folder to write the signed bundle into")
     ap.add_argument("--source", default=kit_source_default())
     ap.add_argument("--vendor", default=None)
     ap.add_argument("--version")
@@ -244,6 +357,10 @@ def main():
         print("vendor=%s\nmarketplace=%s\nmarketplace_name=%s\nplugin_key=%s\nplugin_root=%s" % (
             vendor, os.path.join(vendor, ".claude-plugin", "marketplace.json"), MARKETPLACE_NAME, PLUGIN_KEY,
             os.path.join(vendor, "current", PLUGIN_DIR)))
+    elif a.cmd == "pack":
+        if not (a.version and a.key and a.out):
+            raise SystemExit("plugin-release: pack needs --version, --key and --out")
+        pack(vendor, a.version, a.key, a.out)
     elif a.cmd == "build":
         v = build(a.source, vendor)
         if a.activate:
