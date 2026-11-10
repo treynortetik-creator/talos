@@ -5,7 +5,7 @@ import type { InventoryCommandT } from '@talos-app/protocol'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useStore } from 'zustand'
 import { cn } from '../../ui/cn.ts'
-import { filterCommands, GROUPS, INSTALL_HINT, routeBadge } from './logic.ts'
+import { commandBlock, filterCommands, GROUPS, INSTALL_HINT, routeBadge } from './logic.ts'
 import { type Outcome, useSessionController } from './store.ts'
 
 export type PickerItem = { cmd: InventoryCommandT; disabled: boolean; reason: string; id: string }
@@ -30,20 +30,7 @@ export function useSlashPicker(text: string, threadId: string) {
     const order = new Map(GROUPS.map((g, i) => [g.source, i]))
     const sorted = [...found].sort((a, b) => (order.get(a.source) ?? 9) - (order.get(b.source) ?? 9))
     return sorted.map((cmd, i) => {
-      const macOnly = cmd.route === 'local_only' || cmd.at_mac_only === true
-      const needsMod = cmd.route === 'control' && !modOnline
-      return {
-        cmd,
-        id: `slash-opt-${i}`,
-        disabled: macOnly || needsMod,
-        reason: macOnly
-          ? cmd.at_mac_only
-            ? 'At the Mac only'
-            : 'Run this at the Mac'
-          : needsMod
-            ? 'Needs the Talos mod'
-            : '',
-      }
+      return { cmd, id: `slash-opt-${i}`, ...commandBlock(cmd, modOnline) }
     })
   }, [open, inventory, query, modOnline])
 

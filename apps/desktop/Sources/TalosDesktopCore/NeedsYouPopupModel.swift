@@ -67,6 +67,16 @@ public enum DialogVisibleText {
   private static func listed(_ s: Unicode.Scalar) -> Bool { ranges.contains { $0.contains(s.value) } }
 }
 
+/// Whether a button's action is the owner's own click: the event the app is handling is a left mouse button event, under a second old, in this
+/// button's window and on the button. An Accessibility press or an AppleScript click reaches the same action method with no such event. Pure,
+/// so CI checks it without a window (the view only reads the event and asks this).
+public enum PopupClickCheck {
+  public enum Kind: Sendable { case leftMouseDown, leftMouseUp, other }
+  public static func isRealClick(kind: Kind, age: Double, sameWindow: Bool, onButton: Bool) -> Bool {
+    kind != .other && abs(age) < 1 && sameWindow && onButton
+  }
+}
+
 /// What a click on a popup button asks for: the option at an index (with the label the owner saw on the button, so what is pressed is the
 /// label as read, not a row number), or the login popup's one button.
 public enum NeedsYouPopupAction: Equatable, Sendable {
@@ -107,10 +117,16 @@ public struct NeedsYouPopupItem: Equatable, Sendable {
   public var thread: String
   public var threadName: String
   public var dialog: DialogOffer
-  public init(thread: String, threadName: String, dialog: DialogOffer) {
+  /// Main's development-channels popup only: the Mac posted its notice to the phone for this start.
+  public var phoneTold: Bool
+  /// Shown before every other popup, whatever its age (Main's warning is not hidden behind older popups).
+  public var first: Bool
+  public init(thread: String, threadName: String, dialog: DialogOffer, phoneTold: Bool = false, first: Bool = false) {
     self.thread = thread
     self.threadName = threadName
     self.dialog = dialog
+    self.phoneTold = phoneTold
+    self.first = first
   }
 }
 
@@ -135,7 +151,14 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
   public var footer: String
 
   public static let footer = "Also on your phone. Answer either one."
+  /// `DIALOG_WORDING.footer.popupMain`: Main's own popup, where the phone only gets a notice.
+  public static let footerMain = "Your phone is told to come here."
   public static let openLabel = "Open in Terminals"
+  /// The phone notice while Main waits at the Mac (`DIALOG_WORDING.phone.devChannelsWaiting`, committed in fixtures/needs-you/wording.json; the
+  /// tests assert they are equal). Posted by the Mac itself, so it needs no bridge.
+  public static let devWaitingPhone = "Main is waiting at your Mac: answer the Talos popup there."
+  /// `DIALOG_WORDING.footer.popupMainHere`: Main's popup when the phone was not told (the owner started Main at the Mac).
+  public static let footerMainHere = "Answer it here."
   static let screenChangedWords = "screen changed, so Talos left it alone. A new popup comes if it still needs you."
 
   /// The plain English is above the buttons; only the buttons are the screen's own words. The heading, the sentence and the footer are the
@@ -155,6 +178,9 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
     case .login:
       title = "\(name) needs you to sign in"
       sentence = "\(name)'s session needs you to sign in to Claude on the Mac."
+    case .devChannels:
+      title = "Allow Talos's development channel?"
+      sentence = Self.devChannelsSentence(subject: d.subject, launchChanged: d.launch_changed)
     }
     let buttons =
       d.kind == .login
@@ -162,7 +188,21 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
       : d.options.enumerated().map { NeedsYouPopupButton(text: DialogVisibleText.show($1), action: .choose($0, label: $1)) }
     return NeedsYouPopupContent(
       header: "Talos · \(name) needs you", title: title, subject: d.subject.map(DialogVisibleText.show), sentence: sentence, buttons: buttons,
-      footer: footer)
+      footer: d.kind != .devChannels ? footer : item.phoneTold ? footerMain : footerMainHere)
+  }
+
+  /// The card's words for Main's development-channels warning (`DIALOG_WORDING.sentence.dev_channels` and `.devChannels` in the protocol, committed
+  /// as fixtures/needs-you/wording.json; the tests assert these equal it): the sentence, a channel Talos did not add, and a start command that
+  /// is not the confirmed one with what changed.
+  static func devChannelsSentence(subject: String?, launchChanged: [String]?) -> String {
+    var lines = ["Main session's start needs this to talk to the Talos app."]
+    let others = (subject ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "server:talos-app" }
+    if !others.isEmpty { lines.append("Also loads \(others.map(DialogVisibleText.show).joined(separator: ", ")), which Talos didn't add.") }
+    if let lc = launchChanged {
+      lines.append(lc.isEmpty ? "Main's start command isn't confirmed on this Mac yet." : "Main's start command changed since you last confirmed it.")
+      if !lc.isEmpty { lines.append("Changed: \(lc.joined(separator: ", ")).") }
+    }
+    return lines.joined(separator: " ")
   }
 
   /// What the popup says when a click pressed nothing.
@@ -263,7 +303,7 @@ public final class NeedsYouPopupCoordinator {
     for e in entries.values where !ids.contains(e.item.dialog.id) { items.append(e.item) }  // the words of a click that failed, dialog gone
     items.sort {
       let a = ISOTime.parse($0.dialog.seen_at) ?? 0, b = ISOTime.parse($1.dialog.seen_at) ?? 0
-      return (a, $0.thread, $0.dialog.id) < (b, $1.thread, $1.dialog.id)
+      return ($0.first ? 0 : 1, a, $0.thread, $0.dialog.id) < ($1.first ? 0 : 1, b, $1.thread, $1.dialog.id)
     }
     let shown = Array(items.prefix(Self.maxShown))
     let shownIds = Set(shown.map(\.dialog.id))

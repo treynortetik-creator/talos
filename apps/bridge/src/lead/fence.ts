@@ -5,7 +5,8 @@
 // rules, and Claude Code's OS sandbox (Seatbelt) turns those into kernel-enforced limits on every command the lead runs.
 // Nothing here reads a command line: the OS decides what a process can open.
 import { readFileSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { join } from 'node:path'
+import { claudeConfigDir } from '../claude-dir.ts'
 import { real } from '../guards/rules.ts'
 
 const trim = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p)
@@ -14,13 +15,7 @@ const uniq = (l: readonly string[]) => [...new Set(l)]
 /** Credential folders and files, under the owner's home, that every lead protects: a lead has no use for them, and open network could carry a key out. */
 export const LEAD_SECRET_PATHS = ['.ssh', '.config/gh', '.aws', '.npmrc', '.netrc'] as const
 
-/** Claude Code's config folder: `CLAUDE_CONFIG_DIR` when set, else `<home>/.claude`. A value that is not an absolute path (`~/x` included) is an error. The caller reads the variable once. */
-export function claudeConfigDir(home: string, configured?: string): string {
-  if (!configured) return join(trim(home), '.claude')
-  if (!isAbsolute(configured))
-    throw new Error(`CLAUDE_CONFIG_DIR must be an absolute path (it is "${configured}"); fix it or unset it`)
-  return trim(configured)
-}
+export { claudeConfigDir }
 
 /** Claude Code's global config file(s): `<claudeDir>/.claude.json`, and `~/.claude.json` too when the folder is the default one. */
 function claudeJsonFiles(home: string, claudeDir: string): string[] {

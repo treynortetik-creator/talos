@@ -30,7 +30,8 @@ export type SchedHarness = Harness & {
   box: ChronosBox
   agent: FakeAgent
   /** Advances the injected clock (bridge and Chronos) and lets sockets breathe. */
-  advance(ms: number): Promise<void>
+  /** Moves the fake clock by `ms`. By default it ends with one runner tick at the final time (`catchUp: false` skips it: the capture step pins every step). */
+  advance(ms: number, opts?: { catchUp?: boolean }): Promise<void>
   noteKinds(): string[]
   /** Notifications of one kind, in order. */
   notesOf(kind: string): Notification[]
@@ -121,9 +122,19 @@ export async function startSched(
     clock,
     box,
     agent,
-    async advance(ms: number) {
+    async advance(ms: number, o: { catchUp?: boolean } = {}) {
       box.now = new Date(clock.now() + ms).toISOString()
       await advanceSteps(clock, ms, 40_000, h.bridge.client) // the relay's pong watchdog trips at 62 s of silence
+      // The runner loop skips a timer that fires while its previous tick still runs, and a 40 s step fires ~150 timers in
+      // under 2 s of real time. A tick that began before a slot and ended after the last step leaves no tick at the final
+      // time, and the slot is never offered. So: let a running tick finish, then run one tick at exactly this time. The
+      // clock is not moved. (The schedule queue is the service's own public seam; the product code is unchanged.)
+      const svc = h.bridge.ctx.schedules
+      if (svc?.armed && o.catchUp !== false) {
+        await svc.idle()
+        await svc.enqueue(() => svc.runnerTick())
+        await svc.idle()
+      }
     },
     noteKinds: () => h.notes.map((n) => n.meta.kind ?? ''),
     notesOf: (kind: string) => h.notes.filter((n) => n.meta.kind === kind),

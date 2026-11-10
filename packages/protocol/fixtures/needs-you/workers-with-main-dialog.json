@@ -1,0 +1,26 @@
+{
+  "v": 1,
+  "supervisor": {
+    "pid": 4242,
+    "heartbeat_at": "2026-11-07T10:00:03.000Z",
+    "workers_supported": true,
+    "main_pane_pid": 4100,
+    "main_dialog": {
+      "id": "Dv5Qm8ZtRx3Cw9PkNa2HdB",
+      "kind": "dev_channels",
+      "subject": "server:talos-app, server:other-thing",
+      "options": [
+        "I am using this for local development",
+        "Exit"
+      ],
+      "cursor": 0,
+      "launch_changed": [
+        "program",
+        "env"
+      ],
+      "seen_at": "2026-11-07T10:00:00.000Z",
+      "expires_at": "2026-11-07T10:15:00.000Z"
+    }
+  },
+  "threads": {}
+}

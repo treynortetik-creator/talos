@@ -5,6 +5,7 @@ import { FakeBridge, FakeScheduler } from '@talos-app/testkit'
 import { expect, test } from '../helpers/fixtures.ts'
 import type { Harness } from '../helpers/harness.ts'
 import { frameOfType, sigOk, waitUntil } from '../helpers/util.ts'
+import { expandGroups } from './groups.ts'
 
 async function startMac(harness: Harness, opts: { scheduler?: boolean } = {}) {
   const scheduler = new FakeScheduler({ tz: 'America/New_York', now: Date.now() })
@@ -42,6 +43,7 @@ async function openTab(
   bridge?.pin(dev)
   await page.goto(path)
   await waitUntil(() => harness.relay.appCount > 0, 'app socket')
+  if (path === '/schedules' && bridge) await expandGroups(page) // groups start shut on the organized page
   return dev
 }
 
@@ -97,7 +99,7 @@ test('edit sends only the touched fields; the card arrives over the socket, is a
 }) => {
   const { bridge } = await startMac(harness)
   const dev = await openTab(harness, page, context, bridge, '/schedules/daily-digest')
-  await page.getByRole('button', { name: 'Edit' }).click()
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
   await page.getByLabel('Name').fill('Morning Digest')
   await page.getByRole('button', { name: 'Review change' }).click()
   await waitUntil(() => frameOfType(harness, 'schedule.patch').length === 1, 'schedule.patch')

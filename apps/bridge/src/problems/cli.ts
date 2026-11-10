@@ -4,6 +4,7 @@
 import { sanitizeExternal } from '@talos-app/protocol'
 import type { CliIO } from '../cli-main.ts'
 import type { BridgeEnv } from '../config.ts'
+import { redact } from '../redact.ts'
 import { closeProblem, findProblem, type ListedProblem, listProblems, screenshotPath } from './store.ts'
 
 const USAGE =
@@ -21,9 +22,20 @@ function pick(home: string, id: string | undefined): ListedProblem {
   return found
 }
 
-export function cmdErrors(env: BridgeEnv, args: string[], io: CliIO): number {
+/**
+ * `thread` is true when a thread's own session runs this (the caller decides it from who is calling, never from the flag, so it fails closed). It reads, and prints less: no file
+ * path under the Talos home, no screenshot path, and not the owner's typed note, which can quote messages from any thread.
+ * `close` is refused here as well as by the fence.
+ */
+export function cmdErrors(env: BridgeEnv, args: string[], io: CliIO, thread = false): number {
   const [sub, ...rest] = args
+  const paths = { userHome: env.userHome, appHome: env.home }
+  const rd = (t: string) => (thread ? redact(t, paths) : t)
   try {
+    if (thread && sub !== 'list' && sub !== 'show') {
+      io.err('talos-app: a thread session may only run errors list and errors show')
+      return 1
+    }
     if (sub === 'list') {
       const which = rest.includes('--all') ? 'all' : rest.includes('--closed') ? 'closed' : 'open'
       const rows = listProblems(env.home, which)
@@ -34,8 +46,8 @@ export function cmdErrors(env: BridgeEnv, args: string[], io: CliIO): number {
         // A file that does not parse is shown, not skipped: a hidden report is a lost one.
         io.out(
           p
-            ? `${r.fingerprint.slice(0, 12)}  ${r.closed ? 'closed' : 'open  '}  x${p.count}  ${p.source}/${p.kind}  last ${p.last_seen}  ${one(p.name, 40)}: ${one(p.message)}`
-            : `${r.fingerprint.slice(0, 12)}  ${r.closed ? 'closed' : 'open  '}  (unreadable file: ${r.path})`,
+            ? `${r.fingerprint.slice(0, 12)}  ${r.closed ? 'closed' : 'open  '}  x${p.count}  ${p.source}/${p.kind}  last ${p.last_seen}  ${rd(one(p.name, 40))}: ${rd(one(p.message))}`
+            : `${r.fingerprint.slice(0, 12)}  ${r.closed ? 'closed' : 'open  '}  (unreadable file${thread ? '' : `: ${r.path}`})`,
         )
       }
       return 0
@@ -44,17 +56,27 @@ export function cmdErrors(env: BridgeEnv, args: string[], io: CliIO): number {
       const l = pick(env.home, rest[0])
       io.out(NOTE)
       if (!l.problem) {
-        io.err(`talos-app: the file for ${l.fingerprint.slice(0, 12)} cannot be read: ${l.path}`)
+        io.err(`talos-app: the file for ${l.fingerprint.slice(0, 12)} cannot be read${thread ? '' : `: ${l.path}`}`)
         return 1
       }
       const p = l.problem
       const clean = {
         ...p,
-        name: one(p.name, 80),
-        message: one(p.message, 300),
-        steps: p.steps === undefined ? undefined : sanitizeExternal(p.steps, 2000),
-        frames: p.frames.map((f) => ({ ...f, fn: f.fn && one(f.fn, 120), file: f.file && one(f.file, 120) })),
-        screenshot_path: screenshotPath(env.home, l),
+        name: rd(one(p.name, 80)),
+        message: rd(one(p.message, 300)),
+        steps:
+          p.steps === undefined
+            ? undefined
+            : thread
+              ? '[withheld from a thread session]'
+              : sanitizeExternal(p.steps, 2000),
+        frames: p.frames.map((f) => ({
+          ...f,
+          fn: f.fn && rd(one(f.fn, 120)),
+          file: f.file && rd(one(f.file, 120)),
+        })),
+        routes: p.routes.map((x) => rd(one(x, 120))),
+        screenshot_path: thread ? undefined : screenshotPath(env.home, l),
       }
       io.out(JSON.stringify(clean, null, 2))
       return 0

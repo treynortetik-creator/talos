@@ -5,7 +5,7 @@ N="${FAKE_CRASH_SECONDS:-1}"
 show_dialog; wait_enter; print_notice
 if [ "${FAKE_START_N:-1}" -le "${FAKE_CRASHES:-1}" ]; then
   spawn_holder
-  sleep "$N"
+  crash_wait "$N"
   exit 1
 fi
 idle

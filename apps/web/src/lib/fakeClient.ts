@@ -55,9 +55,16 @@ import {
 } from './client.ts'
 import { createFakeSchedules, type FakeSchedulesClient } from './fakeSchedules.ts'
 import { createFakeSession, type FakeAgentsMode, type FakeModMode, type FakeSession } from './fakeSession.ts'
-import { createFakeMemory, createFakeSearch, createFakeSpeak } from './fakeV2.ts'
+import {
+  createFakeFolders,
+  createFakeMemory,
+  createFakeSearch,
+  createFakeSpeak,
+  type FakeFolders,
+  type FakeFolderTree,
+} from './fakeV2.ts'
 import { PasskeyUnavailableError, passkeyBlock } from './passkeyGate.ts'
-import type { MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
+import type { FolderClient, MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
 
 export type FakeClientOptions = {
   /** Milliseconds before the fake agent answers. 0 = next tick. */
@@ -69,6 +76,8 @@ export type FakeClientOptions = {
   mod?: FakeModMode
   /** docs/SUBAGENTS.md: the agents snapshot the fake mod sends ('none' by default: a mod without `agents`). */
   agents?: FakeAgentsMode
+  /** The folders the fake Mac lists for the folder picker. Default: a small made-up home (`/Users/alex`). */
+  folders?: FakeFolderTree
 }
 
 /** Seeds: a config, two threads, one pending high-risk card, one inbox item, one agent message. */
@@ -104,6 +113,7 @@ export function seedState(): ClientState {
         'memory/1',
         'threads/2',
         'speak/1',
+        'folders/1',
         'run/1',
       ],
       features_at: '2026-10-28T15:00:00.000Z',
@@ -117,6 +127,24 @@ export function seedState(): ClientState {
     inbox: [item],
     lastSeq: 1,
   }
+}
+
+/** The made-up Mac the fake client lists folders from (VITE_FAKE=1 and the web tests). */
+export const DEMO_FOLDERS: FakeFolderTree = {
+  home: '/Users/alex',
+  agentDir: '/Users/alex/talos-agent',
+  tree: {
+    '/Users/alex': ['Documents', 'Projects', 'talos-agent', '.config'],
+    '/Users/alex/Documents': ['Taxes', 'Travel'],
+    '/Users/alex/Projects': ['alpha', 'beta', '.git'],
+    '/Users/alex/Projects/alpha': ['src', 'docs'],
+    '/Users/alex/Projects/beta': [],
+    '/Users/alex/Projects/alpha/src': [],
+    '/Users/alex/Projects/alpha/docs': [],
+    '/Users/alex/Documents/Taxes': [],
+    '/Users/alex/Documents/Travel': [],
+    '/Users/alex/talos-agent': ['notes'],
+  },
 }
 
 export type FakeClient = TalosClient & {
@@ -137,6 +165,9 @@ export type FakeClient = TalosClient & {
   readonly search: SearchClient
   readonly memory: MemoryClient
   readonly speak: SpeakClient
+  readonly folders: FolderClient
+  /** The fake Mac's folders: fail the next listing, change a folder's contents. */
+  readonly fakeFolders: FakeFolders
   /** CC-C3: scripted Claude Code session (state, inventory, control answers). */
   readonly session: FakeSession
 }
@@ -155,6 +186,10 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
   }
   const sent: Array<Record<string, unknown>> = []
   const keyPromise = createDeviceKey()
+  const fakeFolders = createFakeFolders(
+    { macOnline: () => store.getState().presence.bridge_online },
+    opts.folders ?? DEMO_FOLDERS,
+  )
   const stepups = new Map<string, string>()
   const listeners = new Map<string, Set<(f: never) => void>>()
   let seq = state.lastSeq
@@ -333,6 +368,8 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
       macOnline: () => store.getState().presence.bridge_online,
     }),
     memory: createFakeMemory({ macOnline: () => store.getState().presence.bridge_online }),
+    folders: fakeFolders,
+    fakeFolders,
     speak: createFakeSpeak({
       messages: () => store.getState().messages,
       macOnline: () => store.getState().presence.bridge_online,

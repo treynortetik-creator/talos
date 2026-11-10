@@ -163,7 +163,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -201,7 +202,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -232,7 +234,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },
@@ -668,7 +671,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -706,7 +710,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -737,7 +742,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },
@@ -1455,7 +1461,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -1493,7 +1500,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -1524,7 +1532,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },
@@ -2253,7 +2262,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -2291,7 +2301,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -2322,7 +2333,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },
@@ -2887,7 +2899,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -2925,7 +2938,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -2956,7 +2970,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },
@@ -3464,7 +3479,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -3502,7 +3518,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -3533,7 +3550,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },
@@ -4002,7 +4020,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -4040,7 +4059,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -4071,7 +4091,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },
@@ -4527,7 +4548,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -4565,7 +4587,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -4596,7 +4619,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },
@@ -4917,7 +4941,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -4955,7 +4980,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -4986,7 +5012,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },
@@ -5287,7 +5314,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -5325,7 +5353,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -5356,7 +5385,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },
@@ -5837,7 +5867,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -5875,7 +5906,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -5906,7 +5938,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },
@@ -6459,7 +6492,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "agent_config_rev": 0
@@ -6497,7 +6531,8 @@
               "memory/1",
               "health/1",
               "speak/1",
-              "problems/1"
+              "problems/1",
+              "folders/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
@@ -6528,7 +6563,8 @@
             "memory/1",
             "health/1",
             "speak/1",
-            "problems/1"
+            "problems/1",
+            "folders/1"
           ]
         }
       },

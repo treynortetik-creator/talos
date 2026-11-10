@@ -169,14 +169,6 @@ extension Supervisor {
     }
   }
 
-  /// The cold start a recovery began stopped at the dev-channel warning: it waits for Enter at the Mac, and the owner who asked
-  /// from the phone is not there. Tell the phone, once. The owner's own start at the Mac is not told.
-  func postColdStartToPhone() {
-    guard recovery.postColdStart else { return }
-    recovery.postColdStart = false
-    postToPhone { CrashPost.coldStartText(agentName: $0) }
-  }
-
   func postCrashLoopOnce() {
     guard !recovery.crashLoopPosted else { return }
     recovery.crashLoopPosted = true
@@ -184,13 +176,19 @@ extension Supervisor {
   }
 
   /// `talos-app post <default thread> <text>` (headless). `text` is built from the agent's name. Used by the crash-loop post too.
-  func postToPhone(_ text: (String?) -> String) {
+  /// Whether the post was started (a `talos-app` and a thread were found); the answer arrives in the audit log (`post ok=`).
+  @discardableResult
+  func postToPhone(_ text: (String?) -> String) -> Bool {
     let env = launchEnv()
     let found = resolveTalosApp(env: env)
-    guard let cmd = found.command else { return audit("post_skipped", ["why": found.why]) }
+    guard let cmd = found.command else {
+      audit("post_skipped", ["why": found.why])
+      return false
+    }
     let app = CrashPost.readAppConfig(probe.readFile(talosAppHome + "/config.json"))
     guard let thread = config.notifyThread ?? app.defaultThread else {
-      return audit("post_skipped", ["why": "no default thread"])
+      audit("post_skipped", ["why": "no default thread"])
+      return false
     }
     let text = text(app.agentName)
     let probe = self.probe
@@ -200,6 +198,7 @@ extension Supervisor {
       let ok = probe.post(command: cmd, thread: thread, text: text, env: env)
       queue.sync { me.value?.audit("post", ["ok": ok ? "1" : "0"]) }
     }
+    return true
   }
 
   /// `talos-app post <thread> <text>` for a thread session's notice (a worker waiting on a prompt). Blocking, so callers run it

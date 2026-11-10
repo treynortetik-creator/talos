@@ -25,6 +25,7 @@ import type { SettingsSectionProps } from '../contracts.ts'
 import { HELP_PATH } from '../help/path.ts'
 import { settingsSections as external } from '../registry.ts'
 import { Banners } from '../threads/Banners.tsx'
+import { ShortcutsSection } from './ShortcutsSection.tsx'
 import { AccountSection, AppearanceSection, NotificationsSection } from './sections.tsx'
 import { useMediaQuery } from './useMedia.ts'
 
@@ -52,6 +53,7 @@ export function useSections(): Def[] {
         { id: 'notifications', title: 'Notifications', order: 2, Component: NotificationsSection },
         ...external,
         { id: 'appearance', title: 'Appearance', order: 7, Component: AppearanceSection },
+        { id: 'shortcuts', title: 'Keyboard shortcuts', order: 8, Component: ShortcutsSection },
         // The last row: Talos Help is its own page (one text, shared with the Mac app's Help menu).
         { id: 'help', title: 'Help', order: 99, href: HELP_PATH },
       ].sort((a, b) => a.order - b.order) as Def[],
@@ -62,8 +64,9 @@ export function useSections(): Def[] {
 export function SettingsScreen({ children }: { children?: React.ReactNode }) {
   const { section } = useParams()
   const nav = useNavigate()
-  const sections = useSections()
   const wide = useMediaQuery('(min-width: 768px)')
+  // Shortcuts are for a keyboard: the phone does not list them.
+  const sections = useSections().filter((s) => s.id !== 'shortcuts' || wide)
   const macOnline = useTalos((s) => s.presence.bridge_online)
   const agentUnsaved = useAgentUnsaved()
   const active = sections.find((s) => s.id === section)

@@ -147,6 +147,27 @@ struct NeedsYouPopupGuiTests {
     #expect(clicked.isEmpty, "NSApp.currentEvent is nil here, as it is for an Accessibility press")
   }
 
+  /// Main's development-channels popup: Accept (the one that seals the launch) is answered only by a real mouse click. A program that presses
+  /// the button (Accessibility, AppleScript) sends no mouse event, so nothing is asked, nothing is pressed, nothing is sealed.
+  @Test func mainsAcceptButtonIsPressedOnlyByARealClick() throws {
+    _ = NSApplication.shared
+    let main = NeedsYouPopupItem(
+      thread: Supervisor.mainPopupThread, threadName: "Main",
+      dialog: DialogOffer(
+        id: idA, kind: .devChannels, subject: "server:talos-app", options: ["I am using this for local development", "Exit"], cursor: 0, launch_changed: [],
+        seen_at: "2026-11-07T10:00:00.000Z", expires_at: "2026-11-07T10:15:00.000Z"))
+    var clicked: [Int] = []
+    var event: NSEvent?
+    let panel = NeedsYouPopupController.makePanel(for: popup(main), onClick: { clicked.append($0) }, onClose: {}, currentEvent: { event })
+    let accept = try #require(buttons(in: try content(panel)).first { $0.tag == 0 })
+    accept.performClick(nil)  // no mouse event: a scripted press
+    click(accept)
+    #expect(clicked.isEmpty, "a scripted press of Accept asked for nothing")
+    event = try mouse(.leftMouseUp, on: accept)
+    click(accept)
+    #expect(clicked == [0], "the owner's click asks")
+  }
+
   @Test func theLoginPopupHasOneButtonOpenInTerminals() throws {
     _ = NSApplication.shared
     let panel = NeedsYouPopupController.makePanel(for: popup(item(idA, kind: .login)), onClick: { _ in }, onClose: {})

@@ -797,13 +797,16 @@ job_tmp() { # job_tmp <name>: a temp dir of the job's own inside the slot's, rem
 # - 1, for a suite that has the machine to itself; these two now overlap. docs/CI-LOCAL.md has the measurements.
 CI_CPUS="$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 8)"
 CI_WORKERS="${CI_WORKERS:-$((CI_CPUS * 2 / 5 > 2 ? CI_CPUS * 2 / 5 : 2))}"
+# The quiet group's bridge schedules files: one process per file, each in its own temp home with its own Chronos and no fixed port,
+# and nothing else of the run is going, so a third of the cores (6 here) instead of the 40% above shared by three suites.
+CI_SCHED_JOBS="${CI_SCHED_JOBS:-$((CI_CPUS / 3 > 2 ? CI_CPUS / 3 : 2))}"
 CI_MEM_GB="$(ci_mem_gb)" # unreadable: 0, which ci_e2e_workers turns into 1 worker, never a guess upward
 
 step_vitest() { pnpm test --maxWorkers="$CI_WORKERS"; }
 # The two halves of the bridge suite (test-parallel.ts). A commit forked before that runner existed has only the plain one, so
 # the first half does nothing and the second runs all of it.
 BUN_RUNNER=apps/bridge/scripts/test-parallel.ts SLOW_PREFIX=test/schedules/
-step_bun_schedules() { [ ! -f "$BUN_RUNNER" ] || bun run "$BUN_RUNNER" --jobs 1 --only "$SLOW_PREFIX"; }
+step_bun_schedules() { [ ! -f "$BUN_RUNNER" ] || bun run "$BUN_RUNNER" --jobs "$CI_SCHED_JOBS" --only "$SLOW_PREFIX"; }
 step_bun_rest() {
   if [ -f "$BUN_RUNNER" ]; then bun run "$BUN_RUNNER" --jobs "$CI_WORKERS" --skip "$SLOW_PREFIX"; else pnpm test:bun; fi
 }

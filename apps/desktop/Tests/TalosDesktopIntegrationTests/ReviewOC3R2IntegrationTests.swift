@@ -132,7 +132,7 @@ struct ReviewOC3R2Quit {
     try r.wake("trip")
     #expect(r.wait(8) { r.up("trip") })
     r.mgr.stopAll()
-    #expect(r.state("trip") == "parked")
+    #expect(r.wait(5) { r.state("trip") == "parked" })  // the snapshot publishes at the end of the tick that emitted .parked
     try r.wake("trip")
     usleep(1_500_000)
     #expect(r.state("trip") == "parked", "\(String(describing: r.state("trip"))) after Quit and stop")
@@ -412,7 +412,13 @@ struct ReviewOC3R2Children {
     #expect(kill(tool, 0) == 0, "control: the tool is running")
     #expect(getpgid(tool) != pid, "control: it left the group")
     kill(pid, SIGKILL)
-    #expect(r.wait(6) { r.state("trip") == "parked" })
+    #expect(r.wait(15) {
+      r.allEvents.contains {
+        if case .parked(let thread, _) = $0 { return thread == "trip" }
+        return false
+      }
+    })
+    #expect(r.wait(5) { r.state("trip") == "parked" })  // the snapshot publishes at the end of the tick that emitted .parked
     usleep(500_000)
     // Known issue, not fixed: R15 is an owner call (a tool that left the group needs a new way to find it and a new kind of
     // kill), see the PR. The assertion stands: this goes red the day the behaviour changes, so it gets a real decision.

@@ -58,6 +58,13 @@ export interface SpeakServiceSeam {
   request(f: FrameOf<'speak.request'>): Promise<SpeakBody>
 }
 
+/** The folder picker (src/folders/**): folder names under the owner's home, for the signed device only. */
+export interface FolderServiceSeam {
+  readonly available: boolean
+  list(f: Pick<FrameOf<'fs.list'>, 'path' | 'hidden'>): Promise<FolderBody>
+}
+export type FolderBody = Omit<FrameOf<'fs.listing'>, 'v' | 'id' | 'ts' | 'type' | 'relay' | 'request_id'>
+
 /** WP-V1 (src/health/**): advertises `health/1` and sends `health.beat`. */
 export interface HealthService {
   readonly available: boolean

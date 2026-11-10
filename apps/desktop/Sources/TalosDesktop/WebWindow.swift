@@ -93,6 +93,9 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   /// The page tells us about its tabs only when it said it can read them (`terminal-tabs/1` in `ready`).
   static let tabsFeature = "terminal-tabs/1"
   var sessionsTimer: Timer?
+  /// Choose… for a thread's folder: the Mac's open panel (replaced in tests, which show none) and whether one is up (WebWindowFolder.swift).
+  var folderPanel: (FolderPanelSpec) -> String? = { WebController.runOpenPanel($0) }
+  var pickingFolder = false
   var lastSessionsSent: [TerminalSessions.Item]?
   /// Tests: whether the list is being kept current right now.
   var terminalSessionsTimerRunningForTest: Bool { sessionsTimer != nil }
@@ -249,7 +252,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     let cfg = WKWebViewConfiguration()
     cfg.websiteDataStore = .default()
     cfg.preferences.inactiveSchedulingPolicy = .none  // keep the socket and notifications alive while hidden
-    cfg.applicationNameForUserAgent = WebPolicy.userAgentSuffix(version: Self.version)
+    cfg.applicationNameForUserAgent = WebPolicy.userAgentApplicationName(version: Self.version)
     let bridge = NativeBridge(relay: relay)
     bridge.delegate = self
     self.bridge = bridge
@@ -527,6 +530,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
       applyTerminal()
     case .terminalLeave: pauseTerminalSessions()
     case .terminalResume(let id): terminalResume(id)
+    case .pickFolder(let req, let start): pickFolder(req: req, start: start)
     }
   }
 

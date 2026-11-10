@@ -1,3 +1,4 @@
+import { type CardT, composeDialogCard } from '@talos-app/protocol'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -51,6 +52,28 @@ function seeded() {
 }
 
 describe('buildHome', () => {
+  it('lists a development-channels dialog card under Needs you, and counts it', () => {
+    const d = composeDialogCard({
+      card_id: 'c_01JBF3V7Q8K2M4N6P8R0S2T4AA',
+      dialog: {
+        id: 'Dv5Qm8ZtRx3Cw9PkNa2HdB',
+        kind: 'dev_channels',
+        subject: 'server:talos-app',
+        options: ['I am using this for local development', 'Exit'],
+        cursor: 0,
+        seen_at: new Date(NOW).toISOString(),
+        expires_at: new Date(NOW + 900_000).toISOString(),
+      },
+      thread_id: 'general',
+      thread_name: 'General',
+      now: NOW,
+    }) as CardT
+    const client = setup({ cards: [d] })
+    const m = buildHome(client.store.getState(), { nowMs: NOW, timeZone: 'UTC', localSnoozed: new Map() })
+    expect(m.groups.find((g) => g.id === 'needs_you')?.rows.map((r) => r.id)).toEqual([d.id])
+    expect(m.needsYouCount).toBe(1)
+  })
+
   it('orders groups Needs you → Ready for review → Working → Done today, with counts', () => {
     const { client } = seeded()
     client.store.setState((s) => ({ ...s, unread: { general: 3 } }))

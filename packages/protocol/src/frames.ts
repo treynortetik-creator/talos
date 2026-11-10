@@ -3,6 +3,7 @@ import { AppErrorCode } from './app-host.ts'
 import { APP_MESSAGE_TEXT_MAX, APP_TOOL_INPUT_MAX, APP_TOOL_RESULT_MAX, jcsAtMost, McpCallToolResult } from './apps.ts'
 import { AgentConfig } from './config.ts'
 import { ErrorCode, MAX_FRAME_BYTES, MAX_FRAME_BYTES_UNAUTH } from './errors.ts'
+import { FOLDER_LIST_MAX, FOLDER_PATH_MAX, FsEntry, FsListPath } from './folders.ts'
 import { frame, Osig, ownerFrame } from './frame-base.ts'
 import { CardCreateFrame, CardResolveFrame, CardUpdateFrame } from './frames-cards.ts'
 import { MAX_QUERY_CHARS, MAX_QUERY_TERMS } from './fts-query.ts'
@@ -66,7 +67,7 @@ import { CappedAgentsSnapshot } from './session-agents.ts'
 import { PHONE_PATCH_ENTRIES, SESSION_STEPUP_TOP_FIELDS } from './settings-table.ts'
 import { ShareContent } from './share.ts'
 import { StepupAssertion } from './stepup.ts'
-import { ThreadSessionStateItem, WorkersStatus } from './thread-sessions.ts'
+import { MAX_THREAD_SESSION_STATES, ThreadSessionStateItem, WorkersStatus } from './thread-sessions.ts'
 
 // Sha256Ref lives in ids.ts (exported; SCHEDULES S2.1) so schedules.ts can use it without an import cycle.
 // The envelope builders are in frame-base.ts and the card frames in frames-cards.ts; both are part of this module's exports.
@@ -147,7 +148,7 @@ export const ReadyFrame = frame('ready', {
   // app only, docs/OPTION-C.md 9: the last workers.status the relay saw
   workers_status: WorkersStatus.optional().catch(undefined), // never the reason a whole `ready` is dropped
   /** app only, docs/OPTION-C.md 9.3: each thread session's last session.state (main's stays in session_state). */
-  thread_session_states: z.array(ThreadSessionStateItem).max(40).optional().catch(undefined),
+  thread_session_states: z.array(ThreadSessionStateItem).max(MAX_THREAD_SESSION_STATES).optional().catch(undefined),
   /** docs/SUBAGENTS.md: the last session.agents snapshot, kept in relay memory only. */
   session_agents: CappedAgentsSnapshot.optional(),
 })
@@ -746,6 +747,30 @@ export const SpeakResultFrame = frame('speak.result', {
   wait_s: z.number().int().min(0).max(3600).optional(),
 })
 
+/**
+ * The folder picker: the app asks which FOLDERS are inside `path` (an absolute path on the Mac, under the owner's home), or
+ * with `path: null` only where home and the agent folder are. Names only, never files or contents (src/folders.ts).
+ * Answered by `fs.listing` under the same `request_id`; a refusal is the one fixed `error{ref}`.
+ */
+export const FsListFrame = ownerFrame('fs.list', {
+  request_id: Ulid,
+  path: FsListPath,
+  hidden: z.boolean(), // true = dot-folders too
+})
+/**
+ * `entries`: folder names, sorted, at most FOLDER_LIST_MAX; `more` counts the rest. `path` and `parent` are echoed for the
+ * listed folder (absent when the ask had no path). `home` and `agent_dir` are absolute paths the app shows as ~/… .
+ */
+export const FsListingFrame = frame('fs.listing', {
+  request_id: Ulid,
+  home: z.string().max(FOLDER_PATH_MAX),
+  agent_dir: z.string().max(FOLDER_PATH_MAX).optional(),
+  path: z.string().max(FOLDER_PATH_MAX).optional(),
+  parent: z.string().max(FOLDER_PATH_MAX).nullable().optional(),
+  entries: z.array(FsEntry).max(FOLDER_LIST_MAX),
+  more: z.number().int().min(0),
+})
+
 export const MemoryResultsFrame = frame('memory.results', {
   request_id: Ulid,
   hits: z.array(MemoryHit).max(50),
@@ -832,21 +857,23 @@ export const AppUpdateFrame = frame('app.update', {
 export const APP_OWNER_FRAME_TYPES = ['app.request'] as const
 export const APP_BRIDGE_FRAME_TYPES = ['app.response', 'app.update'] as const
 
-/** The five signed read frames (app -> relay -> bridge), each answered on the bridge's readQueue. */
+/** The six signed read frames (app -> relay -> bridge), each answered on the bridge's readQueue. */
 export const V2_READ_OWNER_FRAME_TYPES = [
   'search.query',
   'memory.tree',
   'memory.read',
   'memory.search',
   'speak.request',
+  'fs.list',
 ] as const
-/** The five bridge -> relay -> app answers, routed to the asking socket only. */
+/** The six bridge -> relay -> app answers, routed to the asking socket only. */
 export const V2_READ_RESPONSE_FRAME_TYPES = [
   'search.results',
   'memory.listing',
   'memory.file',
   'memory.results',
   'speak.result',
+  'fs.listing',
 ] as const
 /** Which answer each signed read expects (core/ephemeral.ts drops any other type for that request_id). */
 export const V2_READ_RESPONSE_FOR = {
@@ -855,6 +882,7 @@ export const V2_READ_RESPONSE_FOR = {
   'memory.read': 'memory.file',
   'memory.search': 'memory.results',
   'speak.request': 'speak.result',
+  'fs.list': 'fs.listing',
 } as const satisfies Record<(typeof V2_READ_OWNER_FRAME_TYPES)[number], (typeof V2_READ_RESPONSE_FRAME_TYPES)[number]>
 
 // ---- registry ---------------------------------------------------------------------------------------------------
@@ -938,6 +966,8 @@ export const frameSchemas = {
   'memory.results': MemoryResultsFrame,
   'speak.request': SpeakRequestFrame,
   'speak.result': SpeakResultFrame,
+  'fs.list': FsListFrame,
+  'fs.listing': FsListingFrame,
   'share.item': ShareItemFrame,
   'problem.item': ProblemItemFrame,
   'native.act': NativeActWire,

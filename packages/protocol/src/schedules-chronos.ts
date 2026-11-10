@@ -162,6 +162,7 @@ export const ChronosConfigSetOk = z.strictObject({
     session_runner: z.enum(['talos', 'hook']).optional(),
     approval_required: z.boolean().optional(),
     session_wait_notify_min: z.number().int().nonnegative().optional(),
+    memory_dir: z.string().max(400).optional(),
   }),
 })
 export const ChronosPauseOk = z.strictObject({

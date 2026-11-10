@@ -150,6 +150,14 @@ public enum WebPolicy {
     return accepts(sender, relay: relay)
   }
 
+  /// What this Mac app can do for the page, listed in the user agent so the page never asks for something an older app drops.
+  public static let shellFeatures = ["pick-folder"]
+
+  /// The whole application name for the web view's user agent: the version mark, then `TalosFeatures/<list>`.
+  public static func userAgentApplicationName(version: String) -> String {
+    "\(userAgentSuffix(version: version)) TalosFeatures/\(shellFeatures.joined(separator: ","))"
+  }
+
   /// ` TalosDesktop/<version>`, appended to the web view's user agent. The page needs it to know it is in the Mac app.
   public static func userAgentSuffix(version: String) -> String {
     let v = version.filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" }

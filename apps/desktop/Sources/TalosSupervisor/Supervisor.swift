@@ -16,7 +16,7 @@ public struct SystemMonotonicClock: MonotonicClock {
 ///
 /// Everything runs on one serial queue. A 1 s tick reads the screen and drives the state machine; nothing on the queue
 /// sleeps (clean-up and stop waits are deadlines checked by the tick). The supervisor only ever signals the process
-/// group of a child it started (`GroupSignaller`), and it never answers any dialog except the restart-only dev-channel
+/// group of a child it started (`GroupSignaller`), and it never answers any dialog except the dev-channel
 /// confirm under every `AutoConfirmGuard` condition.
 public final class Supervisor: @unchecked Sendable {
   // MARK: state (queue-confined)
@@ -36,10 +36,12 @@ public final class Supervisor: @unchecked Sendable {
 
   private(set) var config: DesktopConfig { didSet { statusLock.withLock { _config = config } } }
   private(set) var phase: Phase = .idle
-  private(set) var launch: Launch?
+  var launch: Launch?  // written by the tick, and by the Mac popup's click (SupervisorDevPopup.swift), both on `q`
   /// The just-exited child's group and leader start time. Cleared once a stop completes.
   private var previousChild: (pgid: Int32, start: Double)?
   private var loop: CrashLoop
+  /// The auto-answers of cold starts (`Timings.coldConfirmCap`), apart from `loop`'s crash-loop count.
+  private var coldLoop: CrashLoop
   private var attempt = -1
   private var cleanup: Cleanup?
   private var restartAt: Double?
@@ -48,7 +50,7 @@ public final class Supervisor: @unchecked Sendable {
   private var stopCloseHost = true
   private var afterStop: (() -> Void)?
   /// Read by the recovery tick, in the same pass that may have just raised it; `status` is the copy of the pass before.
-  private(set) var needsYou: NeedsYou?
+  var needsYou: NeedsYou?
   private var agentActivity: String?
   private var lastExit: ExitInfo?
   private var nextRestartIsCold = false
@@ -88,17 +90,20 @@ public final class Supervisor: @unchecked Sendable {
     self.random = random
     self.q = DispatchQueue(label: "talos.supervisor.\(options.name)")
     self.pollQ = DispatchQueue(label: "talos.supervisor.agents.\(options.name)", qos: .utility)
-    let loaded = ((try? ConfigFile.load(options.configPath)) ?? nil) ?? .defaults
+    let (found, migrated) = LaunchTrustMigration.load(options.configPath)
+    let loaded = found ?? .defaults
     self.config = loaded
     self._config = loaded
     self.loop = CrashLoop(
       restartWindow: timings.restartWindow, restartCap: timings.restartCap, confirmWindow: timings.confirmWindow,
       confirmCap: timings.confirmCap)
+    self.coldLoop = CrashLoop(confirmWindow: timings.confirmWindow, confirmCap: timings.coldConfirmCap)
     self._status = Status(host: host.kind)
     self.recovery.launchedAtMs = options.wallClock().rounded(.down)
     let queue = q
     let me = WeakRef(self)
     host.onExit = { info in queue.async { me.value?.handleExit(info) } }
+    if migrated { audit("launch_trust_migrated", [:]) }
     publish()
   }
 
@@ -250,9 +255,9 @@ public final class Supervisor: @unchecked Sendable {
       c.session.confirmedAt = nil
       c.session.confirmedCliVersion = nil
     }
-    // Both configs are hashed with the one cached resolved path, so a changed `claude_path` alone looked identical and the
-    // next crash restart auto-pressed Enter on a different binary. A new program is a new launch: compare the setting itself
-    // and drop the cached resolution so the next start finds the new one.
+    // Both configs are hashed with the one cached resolved path, so a changed `claude_path` alone looked identical: compare the setting
+    // itself and drop the cached resolution. The next start is cold, and its warning waits for the owner (its launch fingerprint differs
+    // from `confirmedLaunch`: `AutoConfirmGuard` `launchChanged`). A cold start with the same launch is automatic.
     let claude = resolvedClaude ?? c.claudePath
     let programChanged = c.claudePath != config.claudePath
     if programChanged || c.launchFingerprint(resolvedClaude: claude) != config.launchFingerprint(resolvedClaude: claude)
@@ -438,8 +443,9 @@ public final class Supervisor: @unchecked Sendable {
     launch = Launch(
       kind: kind, resumeId: { if case .resume(let id) = mode { return id } else { return nil } }(),
       sessionId: sessionId, startedAt: clock.now(), childPid: pid, leaderStart: snap?.startTime ?? 0, fingerprint: fp,
-      cliVersion: version,
-      expectsDevDialog: expects, devDialogSeen: nil, agentDir: cwd)
+      parts: config.launchParts(resolvedClaude: claude), cliVersion: version,
+      expectsDevDialog: expects, launchedChannels: AutoConfirmGuard.channels(inArgv: args), awakeStartedAt: options.awake(),
+      devDialogSeen: nil, agentDir: cwd)
     lastAgentsPollAt = -.infinity
     needsYou = nil
     phase = expects ? .starting : .running
@@ -572,10 +578,11 @@ public final class Supervisor: @unchecked Sendable {
         l.noticeSeen = true
         phase = .running
         needsYou = nil
-        if l.confirmsSent == 0 {
+        if l.confirmsSent == 0, !l.devCard.confirmed {
           recordHumanConfirm(&l, now: now)
-        } else {
+        } else if !l.devCard.confirmed {  // (a tap on the card already recorded its own confirm)
           audit("auto_confirm_ok", ["session": l.sessionId])
+          if config.session.confirmedAt == nil { recordStartConfirmed(l) }  // the first-start row of the checklist
         }
         adoptReportedIdIfNeeded(&l)
       } else if now - l.startedAt >= timings.noticeWait {
@@ -588,63 +595,43 @@ public final class Supervisor: @unchecked Sendable {
       }
     }
 
+    // The development-channels warning, at every start (cold or restart): answered when `AutoConfirmGuard` allows it, else held for the owner.
+    syncDevCard(onScreen: dialogOnScreen, unread: unread, launch: &l)
     if phase == .starting, l.expectsDevDialog {
-      if l.kind == .supervisorRestart {
-        if l.confirmSentAt == nil {
-          if case .devChannels = screen {
-            let decision = AutoConfirmGuard.decide(
-              AutoConfirmGuard.Inputs(
-                enabled: config.autoConfirmRestart, startKind: .supervisorRestart, launchedResumeId: l.resumeId,
-                session: config.session, cliVersion: l.cliVersion, screen: screen, confirmsThisStart: l.confirmsSent,
-                loop: loop, now: now))
-            switch decision {
-            case .confirm:
-              // A definite failure (no pane, tmux exited non-zero) means the Enter never arrived: it does not count, and the
-              // next tick tries again. A timeout may have delivered it, and the rule is never press twice, so it counts.
-              if host.send(keys: [0x0d]) == .failed {
-                audit("auto_confirm_send_failed", ["session": l.sessionId, "pid": "\(l.childPid)"])
-                break
-              }
-              l.confirmsSent += 1
-              // After the send returns, not the tick's start: host.send and visibleRows can each block for seconds, and the
-              // agent's noticeWait begins when the Enter has been delivered.
-              l.confirmSentAt = clock.now()
+      if l.confirmSentAt == nil {
+        if case .devChannels(let dialog) = screen {
+          // A crash restart counts against the crash loop's cap; a cold start (the owner's reset, the phone's restart) only against its own.
+          switch confirmDevDialog(screen, launch: &l, loop: l.kind == .supervisorRestart ? loop : coldLoop, now: now) {
+          case .sent:
+            if l.kind == .supervisorRestart {
               loop.recordAutoConfirm(now: now)
-              audit("auto_confirm", ["session": l.sessionId, "pid": "\(l.childPid)"])
-              emit(.autoConfirmed(sessionId: l.sessionId))
-            case .refuse(let why):
-              if l.notifiedScreens.contains("refuse"), case .restartNotConfirmed(let told) = needsYou {
-                // Already told once. A later reading may name a different reason (the first came from a screen still being
-                // drawn): the reason shown is replaced, nobody is told again, and still nothing is pressed.
-                if told != why {
-                  needsYou = .restartNotConfirmed(why)
-                  l.question = needsYou
-                  audit("needs_you_reason", ["why": "refuse", "reason": why.rawValue])
-                }
-              } else {
-                raiseNeedsYou(.restartNotConfirmed(why), key: "refuse", launch: &l)
-              }
-            }
-          }
-        } else if !l.noticeSeen {
-          if case .devChannels = screen, l.confirmsSent > 0, now - (l.confirmSentAt ?? now) >= timings.tick * 2 {
-            // The dialog is back after our one Enter: never press twice.
-            raiseNeedsYou(.restartNotConfirmed(.alreadyConfirmedThisStart), key: "twice", launch: &l)
-          }
-          // Not on a screen that could not be read: the notice may be up where we cannot see it, and stopping a healthy agent for
-          // that would be an action taken on no information. The start deadline below warns instead.
-          if !unread, now - (l.confirmSentAt ?? now) >= timings.noticeWait {
-            audit("auto_confirm_no_notice", ["session": l.sessionId])
-            emit(.confirmFailed)
-            launch = l
-            beginStop(reason: .noNotice, closeHost: false)
-            return
+              emit(.autoConfirmed(sessionId: l.sessionId))  // quiet note; a cold start gets none
+            } else { coldLoop.recordAutoConfirm(now: now) }
+            recovery.postColdStart = false  // a start that got through its warning has nothing to tell the phone
+            l.devRefusal = nil
+          case .notSent: break
+          case .refused(let why): devDialogRefused(why, dialog: dialog, launch: &l)
           }
         }
-      } else if case .devChannels = screen {
-        raiseNeedsYou(.confirmColdStart, key: "cold", launch: &l)
+      } else if !l.noticeSeen {
+        if case .devChannels(let again) = screen, l.confirmsSent > 0, now - (l.confirmSentAt ?? now) >= timings.tick * 2 {
+          // The dialog is back after our one Enter: never press twice.
+          raiseNeedsYou(.restartNotConfirmed(.alreadyConfirmedThisStart), key: "twice", launch: &l)
+          offerDevDialog(again, launch: &l)
+        }
+        // Not on a screen that could not be read: the notice may be up where we cannot see it, and stopping a healthy agent for
+        // that would be an action taken on no information. The start deadline below warns instead.
+        if !unread, now - (l.confirmSentAt ?? now) >= timings.noticeWait {
+          audit("auto_confirm_no_notice", ["session": l.sessionId])
+          emit(.confirmFailed)
+          launch = l
+          beginStop(reason: .noNotice, closeHost: false)
+          return
+        }
       }
     }
+
+    takeDevAnswer(launch: &l)  // the owner's tap on the card, if one came
 
     // A dialog that has gone from the screen, or been replaced by another, is dealt with: its stall warning is over, and the
     // same kind of dialog appearing again later (a second login expiry) must raise a new one. Only the key of the dialog
@@ -666,8 +653,10 @@ public final class Supervisor: @unchecked Sendable {
     // Dialog stall (4.3 step 3): no output for 60 s and a dialog on screen. The generic "a dialog needs you" is the
     // fallback for dialogs nothing above has already named: while the dev-channel dialog is still on screen and the
     // cold-start or refused-restart question about it is held, the stall must not replace it with the vaguer one. A
-    // different dialog (trust, consent, login) is not covered by that question, so the stall still raises for it.
-    if screen.isDialog, !(dialogOnScreen && needsYouNamesTheDialog), let last = host.lastOutputAt(), Date().timeIntervalSince(last) >= timings.dialogStall {
+    // different dialog (trust, consent, login) is not covered by that question, so the stall still raises for it. Nor does the dev-channel
+    // dialog stall once our own Enter is on its way and the start is still starting: it is answered, and the screen only has to catch
+    // up. A dev-channel dialog that shows up again after the notice (a running session) still stalls.
+    if screen.isDialog, !(dialogOnScreen && (needsYouNamesTheDialog || (l.confirmSentAt != nil && phase == .starting))), let last = host.lastOutputAt(), Date().timeIntervalSince(last) >= timings.dialogStall {
       raiseNeedsYou(.dialog(screen.label), key: "stall:\(screen.label)", launch: &l)
     }
 
@@ -704,7 +693,7 @@ public final class Supervisor: @unchecked Sendable {
     }
   }
 
-  private func raiseNeedsYou(_ n: NeedsYou, key: String, launch l: inout Launch) {
+  func raiseNeedsYou(_ n: NeedsYou, key: String, launch l: inout Launch) {
     guard !l.notifiedScreens.contains(key) else { return }
     l.notifiedScreens.insert(key)
     needsYou = n
@@ -714,7 +703,6 @@ public final class Supervisor: @unchecked Sendable {
     }
     audit("needs_you", ["why": key])
     emit(.needsYou(n))
-    if n == .confirmColdStart { postColdStartToPhone() }
     if config.openTerminalOnDialog { emit(.openTerminal) }
   }
 
@@ -724,13 +712,23 @@ public final class Supervisor: @unchecked Sendable {
     PathUtil.canonical(l.agentDir) == PathUtil.canonical(config.expandedAgentDir(home: options.home))
   }
 
-  private func recordHumanConfirm(_ l: inout Launch, now: Double) {
-    guard let d = l.devDialogSeen, let channels = d.channels, isForConfiguredFolder(l) else { return }
+  /// This start's session is the confirmed one (the checklist's "first start confirmed"), unless it is for another folder. Only the
+  /// verified tap on the card (`ownerConfirmed`) stores and seals the launch fingerprint the auto-accept compares with; an auto-accept or a plain Enter in the pane never does.
+  @discardableResult
+  func recordStartConfirmed(_ l: Launch, ownerConfirmed: Bool = false) -> Bool {
+    guard isForConfiguredFolder(l) else { return false }
     config.session.id = l.sessionId
     config.session.confirmedAt = ISO8601DateFormatter().string(from: Date())
-    config.session.confirmedCliVersion = l.cliVersion
-    config.session.approvedDevChannels = channels
+    if ownerConfirmed, !LaunchSeal.confirm(&config, fingerprint: l.fingerprint, parts: l.parts, trust: options.launchTrust) {
+      audit("launch_seal_unavailable", ["session": l.sessionId])  // no key could be used: stored unsealed, so the next start asks again
+    }
     saveConfig()
+    return true
+  }
+
+  private func recordHumanConfirm(_ l: inout Launch, now: Double) {
+    // a plain Enter in the pane confirms this start only: it can be anyone with tmux, so it seals nothing (only a verified tap on the card does)
+    guard l.devDialogSeen != nil, recordStartConfirmed(l) else { return }
     audit("human_confirm", ["session": l.sessionId])
     emit(.humanConfirmed(sessionId: l.sessionId))
   }
@@ -820,6 +818,7 @@ public final class Supervisor: @unchecked Sendable {
       ])
 
     if phase == .stopping { return continueStop(now) }
+    if stopsForOwnerExit(l) { return }
     if case .cleaningUp = phase { return }
 
     var lm = l
@@ -982,7 +981,8 @@ public final class Supervisor: @unchecked Sendable {
       phase: phase, host: host.kind, childPid: launch?.childPid, sessionId: config.session.id,
       startKind: launch?.kind, needsYou: needsYou, lastExit: lastExit,
       restartsInWindow: loop.restartsInWindow(now: clock.now()), cliVersion: launch?.cliVersion,
-      ownedGroups: ownedGroupsLocked, agentActivity: phase == .running ? agentActivity : nil)
+      ownedGroups: ownedGroupsLocked, agentActivity: phase == .running ? agentActivity : nil, devDialog: launch?.devCard.offer,
+      devPhoneTold: launch?.devCard.phoneTold ?? false)
     statusLock.withLock { _status = s }
   }
 

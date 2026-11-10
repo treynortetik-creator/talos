@@ -213,7 +213,7 @@ public enum WorkerNotice {
     case .trust: return "trust this folder"
     case .mcpConsent: return "approve a project MCP server"
     case .bypassDisclaimer: return "bypass permissions"
-    case .loginExpired: return "log in"
+    case .loginExpired: return "sign in"
     case .devChannels: return "development channels"
     case .unknownSelection: return "an unknown question"
     case .resumeMissing, .none: return s.label

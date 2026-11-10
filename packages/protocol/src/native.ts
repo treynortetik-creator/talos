@@ -4,8 +4,8 @@
 // the shell validates what it receives from the page. Shells cannot do passkeys in a web view; they sign in with the
 // one-time setup code (`POST /api/auth/enroll/session`, docs/SPEC.md 5.3).
 //
-//   web -> native   ready · notify · badge · open_external · haptic · threads · pair_status · companion_state · companion_reply · terminal_view · terminal_resume · terminal_leave
-//   native -> web   navigate · compose · voice_note (reserved) · enroll_code · companion_reply_request · notify_permission · terminal_sessions · terminal_resume_result · terminal_select
+//   web -> native   ready · notify · badge · open_external · haptic · threads · pair_status · companion_state · companion_reply · terminal_view · terminal_resume · terminal_leave · pick_folder
+//   native -> web   navigate · compose · voice_note (reserved) · enroll_code · companion_reply_request · notify_permission · terminal_sessions · terminal_resume_result · terminal_select · folder_picked
 import { z } from 'zod'
 import { normalizeEnrollCode } from './enroll.ts'
 import { ThreadId } from './ids.ts'
@@ -167,6 +167,20 @@ export const NativeTerminalResume = msg('terminal_resume', { thread_id: ThreadId
  */
 export const NativeTerminalLeave = msg('terminal_leave', {})
 
+// ---- the folder picker (Mac app): the Mac's own open panel for a thread's folder ----
+/** The feature the Mac app lists in its user agent (`TalosFeatures/pick-folder`) when it can answer `pick_folder`. */
+export const SHELL_FEATURE_PICK_FOLDER = 'pick-folder'
+/** A request id the page makes up; the answer carries it back. Same shape as the companion's. */
+const PickReq = z.string().regex(/^[A-Za-z0-9_-]{1,32}$/)
+// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+const PICK_PATH = /^\/[^\u0000-\u001f\u007f]*$/
+const PickPath = z.string().max(512).regex(PICK_PATH)
+/**
+ * The owner pressed Choose… next to a thread's folder. The shell shows its open panel (folders only, nothing created) at
+ * `start` when it is given, and answers `folder_picked`. The page never names what the panel may choose; it only says where to begin.
+ */
+export const NativePickFolder = msg('pick_folder', { req: PickReq, start: PickPath.optional() })
+
 export const WEB_TO_NATIVE = {
   ready: NativeReady,
   notify: NativeNotify,
@@ -180,6 +194,7 @@ export const WEB_TO_NATIVE = {
   terminal_view: NativeTerminalView,
   terminal_resume: NativeTerminalResume,
   terminal_leave: NativeTerminalLeave,
+  pick_folder: NativePickFolder,
 } as const
 export const WebToNative = z.discriminatedUnion('type', [
   NativeReady,
@@ -194,6 +209,7 @@ export const WebToNative = z.discriminatedUnion('type', [
   NativeTerminalView,
   NativeTerminalResume,
   NativeTerminalLeave,
+  NativePickFolder,
 ])
 export type WebToNativeT = z.infer<typeof WebToNative>
 
@@ -313,6 +329,17 @@ export const NativeTerminalResumeResult = msg('terminal_resume_result', {
 /** The owner pressed Ctrl+1 to Ctrl+9 with the Mac's terminal holding the keyboard: the shell switched the tab and says which. */
 export const NativeTerminalSelect = msg('terminal_select', { session: TerminalSessionId })
 
+/**
+ * The answer to `pick_folder`: the absolute path the owner chose, or null when they cancelled. The page saves it through the
+ * same checked thread patch as a typed path, so the Mac (bridge) still decides whether it may be used.
+ */
+export const NativeFolderPicked = msg('folder_picked', {
+  req: PickReq,
+  path: PickPath.nullable(),
+  /** Why there is no path when the owner did not simply cancel: the Mac app cannot show the panel now, or the folder's name has a character Talos cannot use. */
+  why: z.enum(['not_now', 'bad_name']).optional(),
+})
+
 export const NATIVE_TO_WEB = {
   navigate: NativeNavigate,
   compose: NativeCompose,
@@ -324,6 +351,7 @@ export const NATIVE_TO_WEB = {
   terminal_sessions: NativeTerminalSessions,
   terminal_resume_result: NativeTerminalResumeResult,
   terminal_select: NativeTerminalSelect,
+  folder_picked: NativeFolderPicked,
 } as const
 export const NativeToWeb = z.discriminatedUnion('type', [
   NativeNavigate,
@@ -336,6 +364,7 @@ export const NativeToWeb = z.discriminatedUnion('type', [
   NativeTerminalSessions,
   NativeTerminalResumeResult,
   NativeTerminalSelect,
+  NativeFolderPicked,
 ])
 export type NativeToWebT = z.infer<typeof NativeToWeb>
 

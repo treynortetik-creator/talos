@@ -22,29 +22,35 @@ func blockers(_ p: Supervisor.Phase) -> [TakeoverCheck.Blocker]? {
   return nil
 }
 
-/// Brings a fresh rig to "running, confirmed by the human".
+/// Brings a fresh rig to "running, the dev-channel warning answered". Since 2026-11-07 the supervisor answers the exact warning on a cold
+/// start itself; a rig whose guard refuses (the setting off, a screen that is not the exact warning) waits for the human Enter, which
+/// this presses. Either way the start is confirmed and running.
 func coldStartConfirmed(_ r: Rig) throws {
   r.start()
   // A real tmux costs a subprocess per read, so on a loaded Mac its caps are longer. Every one only caps a hang.
   let cap: Double = r.kind == .tmux ? 30 : 10
-  #expect(r.wait(cap) { r.screenContains(DialogMatcher.Strings.devTitle) }, "dialog shown")
   // Bounds are generous on purpose: they only cap a hang. Under CI load (parallel swift builds) the supervisor's tick
   // can be starved for seconds after the dialog is on screen (aSecondSupervisor... failed here once, 2026-10-30).
   // `tickNow()` asks for a supervision pass now instead of waiting for the 0.2 s timer to be scheduled: on a loaded Mac the
   // timer and the tmux reads behind each pass are what run late, and the 20 s only caps a pass that never comes.
   #expect(
-    r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart },
+    r.wait(20) { r.sup.tickNow(); return isRunning(r.phase()) || r.sup.status.needsYou == .confirmColdStart },
     "needsYou \(String(describing: r.sup.status.needsYou)), phase \(r.phase()), audit: \(r.audit)")
-  r.humanEnter()
-  #expect(r.wait(cap) { r.sup.tickNow(); return isRunning(r.phase()) }, "running after the human Enter: \(r.phase())")
+  if r.sup.status.needsYou == .confirmColdStart {
+    #expect(r.wait(cap) { r.screenContains(DialogMatcher.Strings.devTitle) }, "dialog shown")
+    r.humanEnter()
+  }
+  #expect(r.wait(cap) { r.sup.tickNow(); return isRunning(r.phase()) }, "running after the Enter: \(r.phase())")
   #expect(r.wait(cap) { r.config.session.confirmedAt != nil })
 }
 
 @Suite("Supervisor (real pty, real tmux)", .serialized)
 struct SupervisorIntegrationTests {
+  /// With "Press Enter for me" off the guard refuses everything, so a cold start still waits for the human (what every cold start did
+  /// until 2026-11-07; the accepted case is DevChannelsAcceptTests).
   @Test(arguments: bothHosts)
-  func coldStartWaitsForTheHumanEnter(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dev-dialog.sh")
+  func withAutoEnterOffAColdStartWaitsForTheHumanEnter(kind: HostKind) throws {
+    let r = try Rig(kind, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) })
@@ -55,14 +61,13 @@ struct SupervisorIntegrationTests {
     #expect(r.phase() == .starting)
     #expect(r.config.session.confirmedAt == nil)
     #expect(r.wait(5) { r.allEvents.contains(.openTerminal) })
-    #expect(!r.audit.contains("auto_confirm"))
+    #expect(!r.audit.contains(" auto_confirm "))
 
     r.humanEnter()
     #expect(r.wait(10) { isRunning(r.phase()) })
     let s = r.config.session
     #expect(s.confirmedAt != nil)
-    #expect(s.confirmedCliVersion == "2.1.312")
-    #expect(s.approvedDevChannels == ["server:talos-app"])
+    #expect(s.confirmedCliVersion == nil && s.approvedDevChannels.isEmpty, "no longer written (nothing reads them)")
     #expect(s.id != nil && ResumeRewrite.isUUID(s.id ?? ""))
     // A first start with no session id passes --session-id <new uuid>.
     #expect(r.starts.count == 1)
@@ -101,7 +106,7 @@ struct SupervisorIntegrationTests {
 
     #expect(r.wait(10) { isRunning(r.phase()) }, "auto-confirmed: \(r.phase())")
     #expect(r.wait(5) { r.allEvents.filter { if case .autoConfirmed = $0 { return true } else { return false } }.count == 1 })
-    #expect(r.audit.components(separatedBy: " auto_confirm ").count - 1 == 1)
+    #expect(r.autoConfirms == 2, "the cold start's Enter and the restart's: \(r.audit)")
     #expect(r.wait(5) { r.audit.contains("auto_confirm_ok") })
     #expect(r.config.session.id == id)
   }
@@ -116,7 +121,7 @@ struct SupervisorIntegrationTests {
     t.tick = 0.2
     t.agentsPoll = 0.5
     t.dialogStall = 0
-    let r = try Rig(kind, scenario: "dev-dialog.sh", timings: t)
+    let r = try Rig(kind, scenario: "dev-dialog.sh", timings: t, configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) }, "dialog shown")
@@ -136,7 +141,7 @@ struct SupervisorIntegrationTests {
     t.tick = 0.2
     t.agentsPoll = 0.5
     t.dialogStall = 0
-    let r = try Rig(kind, scenario: "dev-dialog-then-trust.sh", timings: t)
+    let r = try Rig(kind, scenario: "dev-dialog-then-trust.sh", timings: t, configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) }, "dialog shown")
@@ -174,35 +179,27 @@ struct SupervisorIntegrationTests {
     #expect(!r.audit.contains("why=stall:"), "\(r.audit)")
   }
 
-  enum Refuse: String, CaseIterable, Sendable { case extraChannel, wrongHighlight, versionChanged }
+  enum Refuse: String, CaseIterable, Sendable { case extraChannel, wrongHighlight }
 
   @Test(arguments: bothHosts, Refuse.allCases)
   func restartRefusesAnythingButTheExactDialog(kind: HostKind, why: Refuse) throws {
     let scenario: String
     // The two crash_first_then scenarios crash start 1 6 s after its notice (the fake's default is 1 s), so a late poll still
-    // sees it running after the human Enter. `.versionChanged` runs crash-after.sh, which has its own FAKE_CRASH_SECONDS.
-    var env: [String: String] = ["FAKE_CRASH_AFTER": "6"]
-    let versionFile = NSTemporaryDirectory() + "talos-d1-ver-\(UUID().uuidString.prefix(6))"
+    // sees it running after the human Enter.
+    let env: [String: String] = ["FAKE_CRASH_AFTER": "6"]
     switch why {
     case .extraChannel: scenario = "extra-channel.sh"
     case .wrongHighlight: scenario = "wrong-highlight.sh"
-    case .versionChanged:
-      scenario = "crash-after.sh"
-      env = ["FAKE_CLI_VERSION_FILE": versionFile, "FAKE_CRASH_SECONDS": "1"]
     }
-    defer { try? FileManager.default.removeItem(atPath: versionFile) }
     let r = try Rig(kind, scenario: scenario, env: env)
     defer { r.teardown() }
     try coldStartConfirmed(r)
-    // The native installer moved claude between restarts.
-    if why == .versionChanged { try "2.1.313".write(toFile: versionFile, atomically: true, encoding: .utf8) }
     #expect(r.wait(30) { r.starts.count >= 2 })
     #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) })
     let expected: AutoConfirmGuard.Refusal =
       switch why {
       case .extraChannel: .channelsMismatch
       case .wrongHighlight: .wrongHighlight
-      case .versionChanged: .versionChanged
       }
     #expect(
       r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .restartNotConfirmed(expected) },
@@ -210,7 +207,7 @@ struct SupervisorIntegrationTests {
     usleep(1_500_000)
     #expect(r.screenContains(DialogMatcher.Strings.devTitle), "no keypress: the dialog is still up")
     #expect(r.phase() == .starting)
-    #expect(!r.audit.contains(" auto_confirm "))
+    #expect(r.audit.components(separatedBy: " auto_confirm ").count - 1 == 1, "only the cold start's Enter: \(r.audit)")
   }
 
   @Test(arguments: bothHosts)
@@ -220,7 +217,7 @@ struct SupervisorIntegrationTests {
     defer { r.teardown() }
     try coldStartConfirmed(r)
     #expect(r.wait(30) { r.starts.count >= 2 })
-    #expect(r.wait(30) { r.sup.tickNow(); return r.audit.contains(" auto_confirm ") })
+    #expect(r.wait(30) { r.sup.tickNow(); return r.autoConfirms >= 2 }, "the restart's Enter")
     let sent = Date()
     #expect(r.wait(25) { stopReason(r.phase()) == .noNotice }, "\(r.phase())")
     #expect(Date().timeIntervalSince(sent) >= 13.5)
@@ -315,7 +312,7 @@ struct SupervisorIntegrationTests {
       "\(String(describing: r.sup.status.needsYou))")
     usleep(1_000_000)
     #expect(r.screenContains(DialogMatcher.Strings.devTitle))
-    #expect(r.audit.components(separatedBy: " auto_confirm ").count - 1 == 1)
+    #expect(r.autoConfirms == 2, "the cold start's Enter and the restart's one: \(r.audit)")
   }
 
   @Test(arguments: bothHosts)
@@ -476,7 +473,7 @@ struct TmuxHostingTests {
   }
 
   @Test func aTmuxServerKilledExternallyMeansAColdStartNotASilentRestart() throws {
-    let r = try Rig(.tmux, scenario: "dev-dialog.sh")
+    let r = try Rig(.tmux, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     try coldStartConfirmed(r)
     _ = ProcessRunner.run([Rig.tmuxPath!, "-L", r.socket, "kill-server"], env: r.loginEnv)

@@ -22,7 +22,7 @@ import type {
 import { createContext, createElement, type ReactNode, useContext } from 'react'
 import { type StoreApi, useStore } from 'zustand'
 import { initialSchedulesSlice, type SchedulesClient, type SchedulesSlice } from './schedulesClient.ts'
-import type { MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
+import type { FolderClient, MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
 
 /** Rejections the relay or the Mac would send as `error{code}`; clients and the fake throw this. */
 /** `onProgress` gets 0..1 as bytes go out; `signal` cancels the upload. Both optional. */
@@ -198,6 +198,8 @@ export interface TalosClient {
   readonly memory?: MemoryClient
   /** Read aloud (the play button on an agent message). Absent on a client that cannot ask the Mac. */
   readonly speak?: SpeakClient
+  /** The folder picker: folder names on the Mac. Absent on a client that cannot ask the Mac. */
+  readonly folders?: FolderClient
   /**
    * CC-C3: signs and sends a raw owner frame (`session.control`) and resolves on the relay's ack; rejects with
    * `TalosClientError`. Optional so older clients keep compiling; the answer arrives as `session.control.result`.

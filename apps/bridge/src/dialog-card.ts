@@ -14,6 +14,8 @@ import {
   composeDialogCard,
   DIALOG_ALREADY_ANSWERED_TEXT,
   DIALOG_ANSWER_MAX_BYTES,
+  DIALOG_CARD_ANSWERED_EVENT,
+  DIALOG_CARD_POSTED_EVENT,
   DIALOG_CLOSED_TEXT,
   DIALOG_FILE_MAX_BYTES,
   DIALOG_MISMATCH_TEXT,
@@ -46,12 +48,14 @@ import {
 } from '@talos-app/protocol'
 import type { LedgerRow } from './cards-ledger.ts'
 import { type BridgeContext, postSystemNotice, threadRef } from './context.ts'
+import { emitEvent } from './events.ts'
 import { cardCreateFrame, cardUpdateFrame } from './frames-out.ts'
 import { removeFile, writeFileAtomic } from './fsutil.ts'
 import { readRegularFile } from './safe-open.ts'
 import { assertFrameFits } from './transport.ts'
 import { WorkersReader } from './worker/files.ts'
 
+type Dialog = NonNullable<WorkersFileT['threads'][string]['dialog']>
 type Of<T extends Frame['type']> = Extract<Frame, { type: T }>
 
 /** How often files the Mac writes are looked at while a dialog card is open. workers.json changes poke the bridge sooner. */
@@ -85,6 +89,10 @@ export type DialogPrecheck =
   | { handled: false }
   | { handled: true; ok: false; code: ErrorCodeT; reason: string }
   | { handled: true; ok: true; choice: number | null; by: string }
+
+/** Main's answer has a file of its own: a worker on the default thread uses `dialog-answer.json` in the same folder. */
+const answerFile = (kind: DialogKindT): string =>
+  kind === 'dev_channels' ? WORKER_FILES.mainDialogAnswer : WORKER_FILES.dialogAnswer
 
 export class DialogCards {
   private relayOk = false
@@ -244,24 +252,41 @@ export class DialogCards {
     this.takeMacResult(id, rec)
     // only a fresh file can say the dialog is gone: a torn or old one proves nothing
     if (!fresh || !file) return
-    if (file.threads[rec.thread]?.dialog?.id === id) return
+    if (this.liveDialog(file, rec.thread, id)) return
     const now = this.rec(id)
     if (now?.phase !== 'waiting') return
     if (now.mac) this.finishByMac(id, now)
     else this.close(id, now)
   }
 
+  /**
+   * A dialog on a thread's pane in this workers.json, by id: the worker's own, or, on the default thread, Main's (`supervisor.main_dialog`:
+   * Main has no entry of its own, and its card goes to the default thread). Looked up side by side, so a worker's dialog on the default
+   * thread never hides Main's. Only Main publishes `dev_channels`, and Main publishes nothing else.
+   */
+  private liveDialog(file: WorkersFileT | null, thread: string, id: string): Dialog | undefined {
+    const own = file?.threads[thread]?.dialog
+    if (own?.id === id && own.kind !== 'dev_channels') return own
+    const main = file?.supervisor.main_dialog
+    if (main?.id === id && main.kind === 'dev_channels' && thread === this.ctx.config.config.default_thread) return main
+    return undefined
+  }
+
   private mintNew(file: WorkersFileT): void {
-    for (const [thread, entry] of Object.entries(file.threads)) {
-      const d = entry.dialog
-      if (!d || this.rec(d.id) || !this.ctx.config.thread(thread)) continue
+    const found: Array<[string, Dialog]> = []
+    for (const [thread, entry] of Object.entries(file.threads))
+      if (entry.dialog && entry.dialog.kind !== 'dev_channels') found.push([thread, entry.dialog])
+    const main = file.supervisor.main_dialog
+    if (main?.kind === 'dev_channels') found.push([this.ctx.config.config.default_thread, main])
+    for (const [thread, d] of found) {
+      if (this.rec(d.id) || !this.ctx.config.thread(thread)) continue
       this.mint(thread, d).catch((e) =>
         this.ctx.log.warn('dialog card not made', { thread, error: (e as Error).message }),
       )
     }
   }
 
-  private async mint(thread: string, d: NonNullable<WorkersFileT['threads'][string]['dialog']>): Promise<void> {
+  private async mint(thread: string, d: Dialog): Promise<void> {
     const { ctx } = this
     const now = ctx.clock.now()
     const card = composeDialogCard({
@@ -285,6 +310,7 @@ export class DialogCards {
     }
     ctx.expiry?.sync()
     this.writeCardFile(thread, d.id, card.id)
+    emitEvent(ctx.log, DIALOG_CARD_POSTED_EVENT, { dialog_kind: d.kind, thread_id: thread, card_id: card.id })
     this.watch(true)
   }
 
@@ -339,7 +365,7 @@ export class DialogCards {
     const found = this.rec(d.dialog_id)
     const file = this.reader.read()
     const gone =
-      file !== null && supervisorFresh(file, this.ctx.clock.now()) && file.threads[d.thread]?.dialog?.id !== d.dialog_id
+      file !== null && supervisorFresh(file, this.ctx.clock.now()) && !this.liveDialog(file, d.thread, d.dialog_id)
     if (found?.phase !== 'waiting' || gone) {
       if (found?.phase === 'waiting') this.close(d.dialog_id, found)
       return {
@@ -393,18 +419,29 @@ export class DialogCards {
       if (Buffer.byteLength(JSON.stringify(checked)) > DIALOG_ANSWER_MAX_BYTES) throw new Error('answer too large')
       // the check the Mac will make, made here first: an answer that would not pass is not handed over
       const file = this.reader.read()
-      const live = file?.threads[d.thread]?.dialog
+      const live = this.liveDialog(file, d.thread, d.dialog_id)
       const verdict = await verifyDialogAnswer(checked, {
         pinnedKey: (id) => ctx.devices.pinnedKey(id),
         nowMs: ctx.clock.now(),
         thread: d.thread,
-        pane:
-          live?.id === d.dialog_id
-            ? { dialog_id: live.id, dialog_kind: live.kind, subject: live.subject, options: live.options }
-            : { dialog_id: d.dialog_id, dialog_kind: d.dialog_kind, subject: d.subject, options: d.options },
+        pane: live
+          ? {
+              dialog_id: live.id,
+              dialog_kind: live.kind,
+              subject: live.subject,
+              options: live.options,
+              launch_changed: live.launch_changed,
+            }
+          : {
+              dialog_id: d.dialog_id,
+              dialog_kind: d.dialog_kind,
+              subject: d.subject,
+              options: d.options,
+              launch_changed: d.launch_changed,
+            },
       })
       if (!verdict.ok) throw new Error(`proof check: ${verdict.why}`)
-      this.writeFile(d.thread, WORKER_FILES.dialogAnswer, checked)
+      this.writeFile(d.thread, answerFile(d.dialog_kind), checked)
     } catch (e) {
       ctx.log.warn('dialog answer not written', { thread: d.thread, error: (e as Error).message })
       this.save(d.dialog_id, { ...(this.rec(d.dialog_id) ?? found), phase: 'done' })
@@ -412,6 +449,12 @@ export class DialogCards {
       return
     }
     this.writeCardFile(d.thread, d.dialog_id, row.id, { status: 'answered', by: answer?.by, label })
+    emitEvent(ctx.log, DIALOG_CARD_ANSWERED_EVENT, {
+      dialog_kind: d.dialog_kind,
+      thread_id: d.thread,
+      card_id: row.id,
+      choice,
+    })
     this.watch(true)
   }
 
@@ -504,7 +547,7 @@ export class DialogCards {
     // The report never came. Say what is known (never that the key was pressed) and take the answer back, so a Mac that is
     // late finds nothing to press.
     if (now - (rec.answered_at ?? rec.at) >= DIALOG_RESULT_WAIT_MS) {
-      this.removeOwn(rec.thread, WORKER_FILES.dialogAnswer)
+      this.removeOwn(rec.thread, answerFile(rec.kind))
       this.finish(id, rec, null)
     }
   }
@@ -574,7 +617,7 @@ export class DialogCards {
     if (!found) return
     const [id, rec] = found
     if (rec.phase !== 'waiting') return
-    const still = this.reader.read()?.threads[rec.thread]?.dialog?.id === id
+    const still = this.liveDialog(this.reader.read(), rec.thread, id) !== undefined
     this.save(id, { ...rec, phase: 'expired', ...(still ? { line: true as const } : {}) })
     this.writeCardFile(rec.thread, id, rec.card_id, { status: 'expired' })
     if (!still) return

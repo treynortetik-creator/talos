@@ -902,6 +902,24 @@ unsigned['speak.result'] = {
   truncated: false,
 }
 
+signedSrc['fs.list'] = {
+  ...env('fs.list', 136),
+  request_id: ulid(137),
+  path: '/Users/alex/Projects',
+  hidden: false,
+  ...owner,
+}
+unsigned['fs.listing'] = {
+  ...env('fs.listing', 138),
+  request_id: ulid(137),
+  home: '/Users/alex',
+  agent_dir: '/Users/alex/talos-agent',
+  path: '/Users/alex/Projects',
+  parent: '/Users/alex',
+  entries: [{ name: 'alpha' }, { name: 'beta' }],
+  more: 0,
+}
+
 // A phone's Reply, signed by the phone's action key (not a device-key owner frame), as the relay hands it to the Mac. The bytes
 // come from fixtures/push-rich/vectors.json so they stay the ones the Swift tests check (gen-push-rich-vectors.ts makes that file).
 const richVectors = JSON.parse(readFileSync(join(root, 'fixtures', 'push-rich', 'vectors.json'), 'utf8'))

@@ -3,6 +3,10 @@ import { expect, test } from '@playwright/test'
 
 test('a switch answers a tap 20 px above or below its centre', async ({ page }) => {
   await page.goto('/schedules')
+  // groups start shut: open the first, then measure a row's switch
+  const header = page.locator('[data-testid^="group-toggle-"]').first()
+  await header.click()
+  await expect(header).toHaveAttribute('aria-expanded', 'true')
   const toggle = page.getByRole('switch').first()
   await expect(toggle).toBeVisible()
   const box = await toggle.boundingBox()

@@ -70,7 +70,11 @@ public enum DialogProofCheck {
     public var kind: DialogReader.Kind
     public var subject: String?
     public var options: [String]
-    public init(thread: String, dialogId: String, kind: DialogReader.Kind, subject: String?, options: [String]) {
+    /// Main's development-channels dialog: which pieces of the start command changed, as the Mac itself recorded them. The signed card must say the
+    /// same (a `main_dialog` rewritten in workers.json to hide a change does not match what the Mac knows). nil for every other dialog.
+    public var launchChanged: [String]?
+    public init(thread: String, dialogId: String, kind: DialogReader.Kind, subject: String?, options: [String], launchChanged: [String]? = nil) {
+      self.launchChanged = launchChanged
       self.thread = thread
       self.dialogId = dialogId
       self.kind = kind
@@ -133,7 +137,8 @@ public enum DialogProofCheck {
       binding["thread_id"] as? String == env.pane.thread, let payload = binding["payload"] as? [String: Any],
       payload["thread"] as? String == env.pane.thread, ExactText.equal(payload["dialog_id"] as? String, env.pane.dialogId),
       payload["dialog_kind"] as? String == env.pane.kind.rawValue, sameSubject(payload["subject"], env.pane.subject),
-      payload["options"] as? [String] != nil, ExactText.equal(payload["options"] as? [String] ?? [], env.pane.options)
+      payload["options"] as? [String] != nil, ExactText.equal(payload["options"] as? [String] ?? [], env.pane.options),
+      sameLaunchChanged(payload["launch_changed"], env.pane.launchChanged)
     else { return no(4) }
     // 5: the option, on the screen now, once
     var label: String?
@@ -146,6 +151,12 @@ public enum DialogProofCheck {
     if env.alreadyPressed { return no(5, .alreadyAnswered) }
     if let c = choice, let label, let screen = env.screenLabel, screen(c) != label { return no(5, .screenChanged) }
     return .ok(choice: choice, label: label, deviceId: proof.deviceId)
+  }
+
+  private static func sameLaunchChanged(_ v: Any?, _ mine: [String]?) -> Bool {
+    guard let mine else { return v == nil }
+    guard let list = v as? [String] else { return false }
+    return ExactText.equal(list, mine)
   }
 
   private static func sameSubject(_ v: Any?, _ mine: String?) -> Bool {

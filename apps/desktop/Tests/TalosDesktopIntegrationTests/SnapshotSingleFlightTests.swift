@@ -142,7 +142,7 @@ struct SnapshotSingleFlightTests {
   /// Main's supervisor shares the tmux server with the workers, and its tick holds its own queue through `capture-pane`. Its config
   /// is read on the main thread every 5 s (the status poll) and by the workers' tick (`launchSource`).
   @Test func currentConfigDoesNotWaitForTheSupervisorsTick() throws {
-    let r = try Rig(.tmux, scenario: "dev-dialog.sh")
+    let r = try Rig(.tmux, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     let h = TmuxHold(root: r.root)
     defer { h.release() }

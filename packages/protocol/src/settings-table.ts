@@ -327,6 +327,46 @@ export const STEPUP_ON_TRUE_TOP_FIELDS: readonly string[] = rows
 /** `section.child` paths whose change needs the work step-up. */
 export const WORK_STEPUP_PATHS: readonly string[] = rows.filter(([, r]) => r.stepup === 'config:work').map(([p]) => p)
 
+/**
+ * Options inside `threads[].session_opts`. The rows above are config paths; `threads` is one leaf there, so a per-thread
+ * option gets its row here, in the same file. `phone: false` and `agent: false` mean the owner sets it on the Mac only
+ * (by hand in config.json): `threadOptsIssue` refuses any `config.patch`, phone, app or agent card, that turns it on, while
+ * turning it off or sending the saved value back (Settings does, on any other edit) is fine. `risk: 'high'` marks an option
+ * that opens something a thread session is fenced from.
+ */
+export const THREAD_SESSION_OPT_ROWS = {
+  /** The thread's own session may run `talos-app errors list` and `errors show`, and nothing else (apps/bridge worker/cli-refusal.ts). */
+  ops_read: { phone: false, agent: false, risk: 'high', default: false },
+} as const satisfies Record<string, { phone: false; agent: false; risk: 'high'; default: boolean }>
+
+/**
+ * Registry view: the per-thread options that open something a session is fenced from, as setting paths (`threads.session_opts.<key>`). A risk table or app-control check reads these with the views derived from `SETTINGS_TABLE`.
+ */
+export const HIGH_RISK_SETTING_PATHS: readonly string[] = Object.entries(THREAD_SESSION_OPT_ROWS)
+  .filter(([, r]) => r.risk === 'high')
+  .map(([k]) => `threads.session_opts.${k}`)
+
+type ThreadsLike = { threads?: unknown }
+const listOf = (v: unknown): ReadonlyArray<unknown> => (Array.isArray(v) ? v : [])
+const optsOf = (t: unknown): Record<string, unknown> => {
+  const o = (t as { session_opts?: unknown } | null)?.session_opts
+  return typeof o === 'object' && o !== null ? (o as Record<string, unknown>) : {}
+}
+
+/** The reason a patch may not be written when `next` turns on a Mac-only thread option that `current` did not have on, else null. */
+export function threadOptsIssue(current: ThreadsLike, next: ThreadsLike): string | null {
+  const before = new Map<string, unknown>()
+  for (const t of listOf(current.threads)) before.set(String((t as { id?: unknown })?.id), t)
+  for (const t of listOf(next.threads)) {
+    const id = String((t as { id?: unknown })?.id)
+    for (const key of Object.keys(THREAD_SESSION_OPT_ROWS)) {
+      if (optsOf(t)[key] === true && optsOf(before.get(id))[key] !== true)
+        return `thread "${id}": ${key} can only be turned on by the owner at the Mac (config.json)`
+    }
+  }
+  return null
+}
+
 /** The agent's settings, in table order. */
 export const AGENT_SETTING_PATHS = rows.filter(([, r]) => r.agent).map(([p]) => p) as unknown as readonly [
   AgentSettingPath,

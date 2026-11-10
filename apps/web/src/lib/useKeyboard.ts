@@ -1,45 +1,40 @@
-// Desktop keys (8.8): Ctrl/Cmd+1..9 switch threads in config order (matched on event.code), Cmd+Shift+K starts a call,
-// Cmd/Ctrl+Backslash folds the sidebar, Esc closes the detail panel. Enter / Shift+Enter live in the composer.
+// Desktop keys (8.8): every chord comes from the keymap table (lib/keymap.ts), matched on event.code. Cmd/Ctrl chords keep working in the
+// message box and other fields (switching thread while typing is useful) unless the field uses that chord itself; plain keys never act
+// globally. Enter / Shift+Enter live in the composer. Never a paste chord (Cmd+V, Cmd+Shift+V, Shift+Insert): dictation and paste tools
+// send those into the composer, and none of them is in the table.
 import { useEffect } from 'react'
+import { chordMatches, DEFAULT_KEYMAP, isActive, isMacPlatform, type KeyEntry } from './keymap.ts'
+import { detectShell } from './native/detect.ts'
 
-export function useGlobalKeys(handlers: {
-  onThread: (index: number) => void
-  onCall?: () => void
-  /** Cmd/Ctrl+K (no Shift, no Alt): open search. */
-  onSearch?: () => void
-  /** Cmd/Ctrl+Backslash (no Shift, no Alt): fold or unfold the sidebar. */
-  onSidebar?: () => void
-  onEscape?: () => void
-}) {
+const isField = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
+
+export function useGlobalKeys(
+  handlers: {
+    /** Run the entry. Return false when it did nothing here, so the browser keeps the key. */
+    onAction: (entry: KeyEntry) => unknown
+  },
+  opts: { keymap?: readonly KeyEntry[]; macApp?: boolean; mac?: boolean } = {},
+) {
+  const keymap = opts.keymap ?? DEFAULT_KEYMAP
+  const macApp = opts.macApp ?? detectShell() === 'desktop'
+  // Cmd on a Mac (and in the Mac app), Ctrl elsewhere: on a Mac Ctrl+F, Ctrl+K and Ctrl+J are text-editing keys.
+  const mac = opts.mac ?? (macApp || isMacPlatform())
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey
-      const digit = /^Digit([1-9])$/.exec(e.code)
-      if (mod && !e.altKey && !e.shiftKey && digit) {
-        e.preventDefault()
-        handlers.onThread(Number(digit[1]) - 1)
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.isComposing) return
+      for (const entry of keymap) {
+        if (!entry.chord || !isActive(entry, macApp) || !chordMatches(ev, entry.chord, mac)) continue
+        if (!entry.inField && isField(ev.target)) return
+        if (ev.repeat && !entry.repeat) {
+          ev.preventDefault() // a held chord must not hand its repeats to the browser (Ctrl+J, Ctrl+F)
+          return
+        }
+        if (handlers.onAction(entry) !== false && entry.id !== 'close') ev.preventDefault()
         return
       }
-      if (mod && !e.altKey && !e.shiftKey && e.code === 'KeyK' && handlers.onSearch) {
-        e.preventDefault()
-        handlers.onSearch()
-        return
-      }
-      if (mod && !e.altKey && !e.shiftKey && e.code === 'Backslash' && handlers.onSidebar) {
-        e.preventDefault()
-        // A toggle: a held key must not strobe the layout (the other chords here navigate, so repeats are harmless).
-        if (!e.repeat) handlers.onSidebar()
-        return
-      }
-      // Never a paste chord (Cmd+V, Cmd+Shift+V, Shift+Insert): dictation and paste tools send those into the composer.
-      if (e.metaKey && e.shiftKey && !e.altKey && e.code === 'KeyK' && handlers.onCall) {
-        e.preventDefault()
-        handlers.onCall()
-        return
-      }
-      if (e.key === 'Escape') handlers.onEscape?.()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [handlers])
+  }, [handlers, keymap, macApp, mac])
 }

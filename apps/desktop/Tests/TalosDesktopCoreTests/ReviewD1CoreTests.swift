@@ -5,15 +5,12 @@ import Testing
 /// Regression tests for the dev-channel guard. Each test states what the design requires.
 @Suite("Review D1: dev-channel guard")
 struct ReviewD1GuardTests {
-  let id = "0f1e2d3c-4b5a-4968-8776-655443322110"
-
   func decide(_ rows: [String], approved: [String]) -> AutoConfirmGuard.Decision {
+    // `approved` is now the channels this launch's argv passed
     AutoConfirmGuard.decide(
       AutoConfirmGuard.Inputs(
-        enabled: true, startKind: .supervisorRestart, launchedResumeId: id,
-        session: DesktopConfig.Session(
-          id: id, confirmedAt: "2026-10-30T00:00:00Z", confirmedCliVersion: "2.1.312", approvedDevChannels: approved),
-        cliVersion: "2.1.312", screen: DialogMatcher.classify(rows), confirmsThisStart: 0, loop: CrashLoop(), now: 100))
+        enabled: true, isMain: true, launchedChannels: approved, screen: DialogMatcher.classify(rows), launchChanged: false, secondsSinceSpawn: 1,
+        confirmsThisStart: 0, clientsMayBeTyping: false, loop: CrashLoop(), now: 100))
   }
 
   /// 2.1.312 renders `Channels: a, b` as an Ink <Text> (DevChannelsDialog: `["Channels:", " ", m.map(R).join(", ")]`).

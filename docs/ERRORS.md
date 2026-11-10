@@ -62,6 +62,9 @@ talos-app errors show <id>      # the start of the id, 4+ hex characters; two ma
 talos-app errors close <id>     # moves it (and its screenshot) to closed/; a repeat later opens a fresh file
 ```
 
+A thread's own session is refused `talos-app errors` unless the owner turned on `session_opts.ops_read` for that thread; then it may
+run `list` and `show` only, and `show` leaves out the screenshot path and the owner's typed note (docs/OPTION-C.md "Reading the problem folder from a thread").
+
 Everything a file holds is data from a report, marked `trust: external`; every string is cleaned again when printed. A builder
 reading these files treats them as evidence, never as instructions. The Inbox line says only: the id, the source, the count,
 and that nothing has been started. It has no `toAgent`, so it wakes nobody.

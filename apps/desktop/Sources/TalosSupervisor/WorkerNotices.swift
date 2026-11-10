@@ -26,6 +26,7 @@ extension WorkerManager {
   func noteScreen(_ id: String, _ scr: DialogMatcher.Screen, settled: Bool) {
     guard var r = rt[id] else { return }
     guard scr.isDialog else {
+      if !settled, r.needsYouPrompt != nil { return }  // held: only a settled screen without it says it is gone
       let hadFlag = r.needsYouPrompt != nil
       if hadFlag {
         r.needsYouPrompt = nil
@@ -49,7 +50,7 @@ extension WorkerManager {
     if r.needsYouPrompt != prompt {
       // a new dialog (or the first): one notice for it
       r.needsYouPrompt = prompt
-      if r.dialogSinceAwake == nil { r.dialogSinceAwake = awake() }
+      r.dialogSinceAwake = awake()  // a replaced dialog starts its own wait (`dialogLimit`)
       r.dlg.reset()
       rt[id] = r
       emit(.needsYou(thread: id, prompt: prompt))
@@ -75,7 +76,14 @@ extension WorkerManager {
       closeNoticeRecord(id)
     }
     // A prompt the detector sees but that has not settled yet is not "no dialog": it must not close the record a relaunch found open.
-    guard !seen.isDialog, let shown = rt[id]?.promptWatch.current else { return noteScreen(id, seen, settled: settled && found == nil) }
+    // A dialog's flag is held through repaints: an unsettled screen (a status line that repaints faster than `dialogSettle`) never clears
+    // it. It clears when the settled screen has none, or when no dialog shape has been on the pane for `dialogSettle` running.
+    let absent = found == nil && DialogMatcher.liveDialog(rows) == .none
+    let gone = rt[id]?.dialogAbsence.gone(present: !absent, at: awake(), settle: options.dialogSettle) ?? false
+    // Back to back: the held dialog's place taken by another whole dialog, the screen never still. It is a new dialog (its own notice).
+    let live = DialogMatcher.liveDialog(rows)
+    if !seen.isDialog, live.isDialog, let held = rt[id]?.needsYouPrompt, held != WorkerNotice.promptName(live) { return noteScreen(id, live, settled: false) }
+    guard !seen.isDialog, let shown = rt[id]?.promptWatch.current else { return noteScreen(id, seen, settled: settled && found == nil || gone) }
     notePrompt(id, shown)
   }
 
@@ -233,6 +241,7 @@ extension WorkerManager {
     rt[id]?.draftSince = nil
     rt[id]?.noBox.since = nil
     rt[id]?.noBox.notice.reset()
+    rt[id]?.dialogAbsence.reset()
     endOffer(id)  // no pane, no dialog on it
   }
 

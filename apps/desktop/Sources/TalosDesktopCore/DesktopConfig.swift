@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// `desktop.json` (DESKTOP-SPEC 4.1). Whether Talos starts at login is the system's (the login item), not this file: the old
@@ -12,11 +13,14 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     public var id: String?
     /// Last five ids the owner moved away from ([Start a new conversation]).
     public var previousIds: [String]
-    /// When a human confirmed the dev-channel dialog for `id` (ISO 8601). Required for any restart auto-confirm (4.4).
+    /// When a start of `id` got through the dev-channel dialog, by a human Enter or by the auto-accept (ISO 8601). It only feeds the
+    /// first-run checklist's "First start confirmed" row and the id hand-over (`adoptReportedIdIfNeeded`); no auto-accept reads it.
     public var confirmedAt: String?
-    /// `claude --version` at that human confirm. A different version makes the next start cold.
+    /// No longer written and never read (the auto-accept retired the rule that used them, 2026-11-07, see `AutoConfirmGuard`); the
+    /// places that reset a session still set it to nil. Still decoded and encoded as it is, so an older desktop.json loads and a
+    /// rolled-back app finds the key.
     public var confirmedCliVersion: String?
-    /// The `Channels:` line the human confirmed, as a list. Auto-confirm needs exactly these, nothing extra.
+    /// See `confirmedCliVersion`: no longer written or read. The only channel that counts is `AutoConfirmGuard.talosChannel`.
     public var approvedDevChannels: [String]
 
     public init(
@@ -98,6 +102,22 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
   /// Open the main Talos window once each time the app starts (a start at login included) when a relay is set up. On by
   /// default: the owner launched Talos, saw nothing, and could not find it (2026-11-02).
   public var openWindowAtLaunch: Bool
+  /// The launch fingerprint (`launchFingerprint`: folder, resolved program, flags without the resume id, env) of the last start that got
+  /// through the dev-channel dialog. The auto-accept presses Enter only while this start's fingerprint equals it; a changed launch (or none
+  /// stored yet) waits for the owner, and his confirmation stores the new one. Here, not in `session`, because a new conversation
+  /// replaces the whole `session` and must not ask again. Only a verified tap on the card stores it, never an auto-accept and never a plain Enter in the pane. It is
+  /// SEALED: `confirmedLaunchMac` is an HMAC over it with a key in the Keychain (`LaunchTrust`), so a program that can write this file cannot make
+  /// an edited launch look confirmed; the guard trusts it only while the MAC verifies. The floor under that is the constant-channel check in
+  /// `AutoConfirmGuard` (only `server:talos-app` is ever answered).
+  public var confirmedLaunch: String?
+  /// Per-piece hashes (`folder`, `program`, `flags`, `env`; never a value) of the launch `confirmedLaunch` stands for, so a card can say what
+  /// changed. Only a description: nothing is decided from it.
+  public var confirmedLaunchParts: [String: String]?
+  /// The seal on `confirmedLaunch` and its parts: an HMAC with a key in the Keychain (`LaunchTrust`). The guard trusts the fingerprint only while
+  /// it verifies; a value anyone else writes into this file does not.
+  public var confirmedLaunchMac: String?
+  /// The version of the seal migration that has run (`LaunchTrustMigration`); absent or 0 = it has not.
+  public var launchTrust: Int?
 
   enum CodingKeys: String, CodingKey {
     case v, host, args, env, session, hotkeys
@@ -112,6 +132,10 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     case notifyThread = "notify_thread"
     case keepAwakeOnAC = "keep_awake_on_ac"
     case openWindowAtLaunch = "open_window_at_launch"
+    case confirmedLaunch = "confirmed_launch"
+    case confirmedLaunchParts = "confirmed_launch_parts"
+    case confirmedLaunchMac = "confirmed_launch_mac"
+    case launchTrust = "launch_trust"
   }
 
   public init(
@@ -162,6 +186,10 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     keepAwakeOnAC = try c.decodeIfPresent(Bool.self, forKey: .keepAwakeOnAC) ?? d.keepAwakeOnAC
     // A value of the wrong type costs this one setting, not the file.
     openWindowAtLaunch = ((try? c.decodeIfPresent(Bool.self, forKey: .openWindowAtLaunch)) ?? nil) ?? d.openWindowAtLaunch
+    confirmedLaunch = (try? c.decodeIfPresent(String.self, forKey: .confirmedLaunch)) ?? nil
+    confirmedLaunchParts = (try? c.decodeIfPresent([String: String].self, forKey: .confirmedLaunchParts)) ?? nil
+    confirmedLaunchMac = (try? c.decodeIfPresent(String.self, forKey: .confirmedLaunchMac)) ?? nil
+    launchTrust = (try? c.decodeIfPresent(Int.self, forKey: .launchTrust)) ?? nil
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -183,6 +211,10 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     try c.encode(notifyThread, forKey: .notifyThread)
     try c.encode(keepAwakeOnAC, forKey: .keepAwakeOnAC)
     try c.encode(openWindowAtLaunch, forKey: .openWindowAtLaunch)
+    try c.encode(confirmedLaunch, forKey: .confirmedLaunch)
+    try c.encodeIfPresent(confirmedLaunchParts, forKey: .confirmedLaunchParts)
+    try c.encodeIfPresent(confirmedLaunchMac, forKey: .confirmedLaunchMac)
+    try c.encodeIfPresent(launchTrust, forKey: .launchTrust)
   }
 
   public static let defaults = DesktopConfig(
@@ -213,12 +245,31 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
   /// `agent_dir` with a leading `~` expanded.
   public func expandedAgentDir(home: String) -> String { PathUtil.expandTilde(agentDir, home: home) }
 
-  /// What a start launches. A change to any of these makes the next start a cold start (4.3 step 6).
+  /// What a start launches: SHA-256 over a length-prefixed encoding of the folder, the program, the flags (without the resume id) and the
+  /// environment, so no value can pass for a separator and no two launches share a fingerprint by design. A change to any of these makes the
+  /// next start a cold start (4.3 step 6) and, for the dev-channels warning, a launch the owner has not confirmed.
   public func launchFingerprint(resolvedClaude: String) -> String {
-    var parts = ["dir=\(agentDir)", "claude=\(resolvedClaude)"]
-    parts += ResumeRewrite.strip(args).map { "arg=\($0)" }
-    parts += env.keys.sorted().map { "env=\($0)=\(env[$0] ?? "")" }
-    return Fingerprint.fnv1a64(parts.joined(separator: "\u{0}"))
+    let flags = ResumeRewrite.strip(args)
+    let envRows = env.keys.sorted().flatMap { [$0, env[$0] ?? ""] }
+    return Fingerprint.sha256(["dir", agentDir, "claude", resolvedClaude, "args"] + [String(flags.count)] + flags + ["env"] + [String(envRows.count)] + envRows)
+  }
+
+  /// The same inputs as `launchFingerprint`, one short hash per piece (`LaunchChange`-style names the owner knows: the folder, the program, the
+  /// flags, the environment). A card compares two of these to say WHICH piece changed, never to decide anything.
+  public func launchParts(resolvedClaude: String) -> [String: String] {
+    let flags = ResumeRewrite.strip(args)
+    let envRows = env.keys.sorted().flatMap { [$0, env[$0] ?? ""] }
+    return [
+      "folder": Fingerprint.sha256([agentDir], bytes: 8), "program": Fingerprint.sha256([resolvedClaude], bytes: 8),
+      "flags": Fingerprint.sha256(flags, bytes: 8), "env": Fingerprint.sha256(envRows, bytes: 8),
+    ]
+  }
+
+  /// Which pieces differ between the confirmed launch and this one, in the card's order. Empty when the confirmed pieces are not known (or
+  /// nothing differs): the card then says only that the start command is not confirmed.
+  public static func changedPieces(confirmed: [String: String]?, now: [String: String]) -> [String] {
+    guard let confirmed else { return [] }
+    return ["folder", "program", "flags", "env"].filter { confirmed[$0] != nil && confirmed[$0] != now[$0] }
   }
 }
 
@@ -239,14 +290,15 @@ public enum PathUtil {
 }
 
 public enum Fingerprint {
-  /// FNV-1a 64-bit, hex. Not a security hash: it only detects "the launch command changed".
-  public static func fnv1a64(_ s: String) -> String {
-    var h: UInt64 = 0xcbf2_9ce4_8422_2325
-    for b in s.utf8 {
-      h ^= UInt64(b)
-      h = h &* 0x0000_0100_0000_01b3
+  /// SHA-256 over the strings, each written as its UTF-8 byte count, a colon and its bytes, so a string that contains a separator or looks
+  /// like the next field is still one string. Lowercase hex, cut to `bytes` bytes when given.
+  public static func sha256(_ items: [String], bytes: Int = 32) -> String {
+    var h = SHA256()
+    for item in items {
+      h.update(data: Data("\(item.utf8.count):".utf8))
+      h.update(data: Data(item.utf8))
     }
-    return String(format: "%016llx", h)
+    return h.finalize().prefix(bytes).map { String(format: "%02x", $0) }.joined()
   }
 }
 

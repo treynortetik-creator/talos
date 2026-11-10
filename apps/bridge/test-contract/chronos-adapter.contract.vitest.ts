@@ -1,5 +1,5 @@
 // defineSchedulerAdapterContract against the PRODUCTION Chronos adapter (apps/bridge/src/schedules/chronos-adapter.ts)
-// driving the real vendored Chronos CLI (third_party/chronos, v0.4.0) in a temp HOME. The same assertions run against
+// driving the real vendored Chronos CLI (third_party/chronos, v0.5.0) in a temp HOME. The same assertions run against
 // FakeScheduler and the testkit's thin ChronosCliAdapter; this is the one the bridge ships (docs/SCHEDULES.md S9, WP-S1).
 import { defineSchedulerAdapterContract } from '@talos-app/testkit'
 import { describe, it } from 'vitest'
@@ -16,7 +16,7 @@ const hasPython = (() => {
 
 if (hasPython && process.env.TALOS_SKIP_REAL_CHRONOS !== '1') {
   defineSchedulerAdapterContract(
-    'production ChronosAdapter (vendored Chronos v0.4.0)',
+    'production ChronosAdapter (vendored Chronos v0.5.0)',
     {
       async start(o) {
         const box = new ChronosBox(o.now, o.tz)

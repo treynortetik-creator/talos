@@ -2,7 +2,6 @@
 // host thread sessions, and the thread may have one (never the default thread, General or Inbox). No card, no step-up:
 // it is a config.patch like any thread setting. Off by default.
 import {
-  AbsolutePath,
   DEFAULT_IDLE_PARK_MIN,
   DOCUMENTED_EFFORTS,
   type ThreadSessionActionT,
@@ -13,6 +12,7 @@ import { useId, useState } from 'react'
 import { useTalos } from '../../lib/client.ts'
 import { Button, Input, Switch } from '../../ui/index.ts'
 import { useThreadPatch } from '../threads/manage/useThreadPatch.ts'
+import { FolderField } from './FolderField.tsx'
 import { McpAllow } from './McpAllow.tsx'
 import { type ControlOutcome, useThreadSessionsController, useThreadSessionView, workerLine } from './store.ts'
 
@@ -113,7 +113,6 @@ function SessionOptions({ thread, locked, apply }: { thread: ThreadT; locked: bo
   const cwd = opts?.cwd ?? ''
   const idle = opts?.idle_park_min ?? DEFAULT_IDLE_PARK_MIN
   const ids = { model: useId(), effort: useId(), cwd: useId(), idle: useId() }
-  const [folder, setFolder] = useState<string | null>(null)
   const [idleText, setIdleText] = useState<string | null>(null)
   const [local, setLocal] = useState<string | null>(null)
 
@@ -134,19 +133,6 @@ function SessionOptions({ thread, locked, apply }: { thread: ThreadT; locked: bo
   const efforts: string[] = [...DOCUMENTED_EFFORTS]
   if (effort && !efforts.includes(effort)) efforts.push(effort)
 
-  const commitFolder = async () => {
-    const v = (folder ?? cwd).trim()
-    if (v === cwd) return setFolder(null)
-    // saved or refused, the box goes back to the saved value (the Mac's words for a refusal show under the controls)
-    if (v === '') {
-      await save({}, 'cwd')
-      return setFolder(null)
-    }
-    if (!AbsolutePath.safeParse(v).success)
-      return setLocal('Use a full folder path that starts with /, like /Users/you/project.')
-    await save({ cwd: v })
-    setFolder(null)
-  }
   const commitIdle = async () => {
     const n = Number(idleText ?? idle)
     if (idleText === null || n === idle) return setIdleText(null)
@@ -194,26 +180,13 @@ function SessionOptions({ thread, locked, apply }: { thread: ThreadT; locked: bo
           ))}
         </select>
       </div>
-      <div className={field}>
-        <label htmlFor={ids.cwd}>Folder</label>
-        <Input
-          id={ids.cwd}
-          value={folder ?? cwd}
-          disabled={locked}
-          placeholder="The agent folder"
-          autoCapitalize="off"
-          spellCheck={false}
-          onChange={(e) => {
-            setLocal(null)
-            setFolder(e.target.value)
-          }}
-          onBlur={() => void commitFolder()}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void commitFolder()
-          }}
-        />
-        <span>Leave empty to use the agent folder. Your Mac checks that it exists.</span>
-      </div>
+      <FolderField
+        id={ids.cwd}
+        cwd={cwd}
+        locked={locked}
+        save={(v) => (v === null ? save({}, 'cwd') : save({ cwd: v }))}
+        problem={setLocal}
+      />
       <div className={field}>
         <label htmlFor={ids.idle}>Park after idle (minutes)</label>
         <Input

@@ -58,6 +58,8 @@ export const LIMITS: Record<string, Limit[]> = {
   memory: [{ capacity: 60, windowMs: MIN }],
   // Read aloud: the first ask of a tap plus about one follow-up per 1.5 s while the Mac makes the audio.
   speak: [{ capacity: 90, windowMs: MIN }],
+  // The folder picker: one listing per folder opened, so a person browsing stays far under this.
+  folders: [{ capacity: 60, windowMs: MIN }],
   // Signed history pages and media re-uploads, per socket: a page or a file per tap is far under these.
   history: [{ capacity: 60, windowMs: MIN }],
   media_fetch: [{ capacity: 120, windowMs: MIN }],

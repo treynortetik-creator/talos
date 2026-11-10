@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Regenerates the chronos-0.4 fixtures: the exact stdout of the real `chronos api` CLI from a checkout of Chronos with
-`times` and `meta` (the vendored v0.4.0 in third_party/chronos), run against a throwaway HOME with a fixed clock and zone.
+`times` and `meta` (the vendored v0.5.0 in third_party/chronos), run against a throwaway HOME with a fixed clock and zone.
 
     python3 generate.py /path/to/chronos-checkout [out-dir]
 

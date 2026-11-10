@@ -147,3 +147,23 @@ export function classifySkips(script: string, out: string): { line: string; reas
   }
   return found
 }
+
+/**
+ * What a failing kit script shows: every FAIL line with the detail lines under it (indented), then the last 40 lines. The tail alone
+ * lost the FAIL lines of a long script, which scroll off long before the end.
+ */
+export function failureReport(out: string, tail = 40): string {
+  const lines = out.split('\n')
+  const from = Math.max(0, lines.length - tail)
+  const head: string[] = []
+  for (let i = 0; i < from; i++) {
+    if (!/^\s*FAIL\b/.test(lines[i] ?? '')) continue
+    head.push(lines[i] ?? '')
+    while (i + 1 < from && /^ {7}\S/.test(lines[i + 1] ?? '')) head.push(lines[++i] ?? '')
+  }
+  return [
+    ...head,
+    ...(head.length ? ['  ... (FAIL lines above, last 40 lines below)'] : []),
+    ...lines.slice(from),
+  ].join('\n')
+}

@@ -153,6 +153,7 @@ describe('talos commands', () => {
     doctor: { argv: ['doctor', '--no-such-flag'], says: unknown, code: 1 },
     logs: { argv: ['logs', '--no-such-flag'], says: unknown, code: 1 },
     report: { argv: ['report', '--no-such-flag'], says: unknown, code: 1 },
+    events: { argv: ['events', '--no-such-flag'], says: unknown, code: 1 },
     errors: { argv: ['errors', '--no-such-flag'], says: /usage: talos-app errors list/, code: 2 },
     'search reindex': { argv: ['search', 'reindex'], says: /no history on this Mac yet/, code: 1 },
     schedules: { argv: ['schedules', '--no-such-flag'], says: /usage: talos-app schedules/, code: 1 },

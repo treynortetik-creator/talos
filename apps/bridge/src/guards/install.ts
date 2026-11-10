@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'node:f
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
+import { claudeConfigDir } from '../claude-dir.ts'
 import type { BridgeEnv } from '../config.ts'
 import { ensureDir, writeJsonAtomic } from '../fsutil.ts'
 import { buildGuardConfig, denyRules, WRITE_TOOLS } from './rules.ts'
@@ -77,9 +78,12 @@ export function withGuardsSettings(flags: string[], home: string): { flags: stri
 }
 
 export function cmdInstallGuards(env: BridgeEnv, args: string[], io: Out): number {
-  return runInstallGuards(
-    { home: env.home, checkout: CHECKOUT, claudeHome: process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude') },
-    args,
-    io,
-  )
+  let claudeHome: string
+  try {
+    claudeHome = claudeConfigDir(homedir(), process.env.CLAUDE_CONFIG_DIR)
+  } catch (e) {
+    io.err((e as Error).message)
+    return 1
+  }
+  return runInstallGuards({ home: env.home, checkout: CHECKOUT, claudeHome }, args, io)
 }

@@ -5,11 +5,14 @@ import type { ThreadStatusT, ThreadT } from '@talos-app/protocol'
 import { useStore } from 'zustand'
 import { useTalos } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
-import { IconThreads } from '../../ui/icons.tsx'
+import { IconSearch, IconThreads } from '../../ui/icons.tsx'
 import { StatusDot } from '../../ui/StatusDot.tsx'
+import { usePalette } from '../palette/store.ts'
+import { PALETTE_TEXT } from '../palette/text.ts'
 import { chipParts, phaseOf, usageLabel } from '../session/logic.ts'
 import { useSessionSupported } from '../session/SessionTrigger.tsx'
 import { useSessionController } from '../session/store.ts'
+import { useThreadContext } from '../session/threadContext.ts'
 import { useNeedsYouCount } from '../threads/Nav.tsx'
 import { statusMark } from '../threads/StatusPill.tsx'
 import { usePhonePanel } from './phoneStore.ts'
@@ -70,7 +73,8 @@ export function PhoneHeader({
   const ctl = useSessionController()
   const sessionState = useStore(ctl.store, (s) => s.state)
   const modOnline = useStore(ctl.store, (s) => s.modOnline)
-  const parts = chipParts(sessionState)
+  const view = useThreadContext(thread.id)
+  const parts = chipParts(sessionState, view)
   const phase = phaseOf(sessionState, modOnline)
   const ctx = parts?.ctx
   const mark = statusMark(state)
@@ -118,6 +122,16 @@ export function PhoneHeader({
           </span>
         </span>
       </div>
+      <button
+        type="button"
+        aria-label={PALETTE_TEXT.searchButton}
+        aria-haspopup="dialog"
+        data-testid="palette-button"
+        onClick={(e) => usePalette.getState().open('palette', e.currentTarget)}
+        className="grid size-11 shrink-0 place-items-center rounded-pill text-on-chrome hover:bg-chrome-hover"
+      >
+        <IconSearch width={20} height={20} />
+      </button>
       {supported && (
         <button
           type="button"
@@ -129,6 +143,7 @@ export function PhoneHeader({
           className={cn(
             'flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-pill px-2 font-mono text-xs text-on-chrome hover:bg-chrome-hover',
             phase === 'offline' && 'italic opacity-80',
+            (view.kind === 'last' || view.kind === 'off') && 'opacity-60',
           )}
         >
           <ContextRing pct={ctx} warn={ctx !== undefined && ctx >= 85} />

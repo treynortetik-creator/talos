@@ -31,30 +31,27 @@ describe('featureState', () => {
   })
 })
 
-function Keys({ onSearch, onCall }: { onSearch?: () => void; onCall?: () => void }) {
-  useGlobalKeys({
-    onThread: () => {},
-    ...(onSearch ? { onSearch } : {}),
-    ...(onCall ? { onCall } : {}),
-  })
+function Keys({ onAction, mac }: { onAction: (id: string) => void; mac: boolean }) {
+  useGlobalKeys({ onAction: (e) => onAction(e.id) }, { mac })
   return null
 }
 describe('Cmd+K', () => {
   const press = (init: KeyboardEventInit) =>
     window.dispatchEvent(new KeyboardEvent('keydown', { cancelable: true, ...init }))
-  it('Cmd+K and Ctrl+K search; Cmd+Shift+K still calls and does not search', () => {
-    const onSearch = vi.fn()
-    const onCall = vi.fn()
-    render(<Keys onSearch={onSearch} onCall={onCall} />)
+  it('Cmd+K opens the palette on a Mac and Ctrl+K elsewhere; Cmd+Shift+K still calls and does not', () => {
+    const onAction = vi.fn()
+    const off = render(<Keys onAction={onAction} mac />)
     press({ code: 'KeyK', key: 'k', metaKey: true })
     press({ code: 'KeyK', key: 'k', ctrlKey: true })
-    expect(onSearch).toHaveBeenCalledTimes(2)
-    expect(onCall).not.toHaveBeenCalled()
-    press({ code: 'KeyK', key: 'k', metaKey: true, shiftKey: true })
-    expect(onSearch).toHaveBeenCalledTimes(2)
-    expect(onCall).toHaveBeenCalledTimes(1)
+    expect(onAction.mock.calls.map((c) => c[0])).toEqual(['palette'])
+    press({ code: 'KeyK', key: 'K', metaKey: true, shiftKey: true })
+    expect(onAction.mock.calls.map((c) => c[0])).toEqual(['palette', 'call'])
     press({ code: 'KeyK', key: 'k', metaKey: true, altKey: true })
-    expect(onSearch).toHaveBeenCalledTimes(2)
+    expect(onAction).toHaveBeenCalledTimes(2)
+    off.unmount()
+    render(<Keys onAction={onAction} mac={false} />)
+    press({ code: 'KeyK', key: 'k', ctrlKey: true })
+    expect(onAction.mock.calls.map((c) => c[0])).toEqual(['palette', 'call', 'palette'])
   })
 })
 

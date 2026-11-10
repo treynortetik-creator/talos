@@ -7,6 +7,7 @@ import { expect, type Page, test } from '@playwright/test'
 import { type CardT, composeScheduleCard, type ScheduleChangeT } from '@talos-app/protocol'
 import { expectAxeClean } from '../cards/e2e.ts'
 import { NOW_ISO } from './clock.ts'
+import { expandGroups } from './groups.ts'
 
 test.use({ bypassCSP: true })
 
@@ -22,6 +23,7 @@ async function open(
   await page.waitForFunction(() => Boolean((window as unknown as { __talos?: unknown }).__talos))
   const sessions = o.sessions === undefined ? { workers: { trip: 'live', garden: 'parked' } } : o.sessions
   if (sessions) await page.evaluate((s) => window.__sessions(s as never), sessions)
+  if (o.route === undefined || o.route === '/schedules') await expandGroups(page) // groups start shut
 }
 const MAIN = '__main__'
 const group = (page: Page, key: string) => page.getByTestId(`thread-group-${key}`)
@@ -34,30 +36,24 @@ for (const scheme of ['light', 'dark'] as const) {
 
     test('groups: Main, then each thread, each saying who runs it', async ({ page }) => {
       await open(page)
-      await expect(page.locator('section[data-group] h2')).toHaveText(['Main', 'Trip', 'Garden', 'Rota'])
+      await expect(page.getByTestId('group-name')).toHaveText(['Main', 'Trip', 'Garden', 'Rota'])
       await expect(runner(page, MAIN)).toHaveText('run by Main')
       await expect(runner(page, 'trip')).toHaveText('own session · live')
       await expect(runner(page, 'garden')).toHaveText('own session · parked')
       await expect(runner(page, 'shared_one')).toHaveText('run by Main')
-      // a job in an archived thread falls to Main, and a row says who runs it
+      // a job in an archived thread falls to Main; a row is one line with its name and when
       await expect(group(page, MAIN).getByTestId('schedule-row-gone-thread-job')).toBeVisible()
       await expect(group(page, 'trip').getByTestId('schedule-row-packing-check')).toContainText('Weekdays at 8:00 AM')
-      await expect(group(page, 'trip').getByTestId('schedule-row-packing-check').getByTestId('row-runner')).toHaveText(
-        "Runs in Trip's own session",
-      )
-      // a job that is not a session job never reads as "own session", even in a thread with one
-      const rr = (id: string) => group(page, 'trip').getByTestId(`schedule-row-${id}`).getByTestId('row-runner')
-      await expect(rr('trip-backup')).toHaveText('Runs in the background, no session')
-      await expect(rr('trip-both')).toHaveText('Run by Main, with a background backup')
-      await expect(group(page, 'garden').getByTestId('schedule-row-water-plants').getByTestId('row-runner')).toHaveText(
-        "Runs in Garden's own session",
-      )
-      await expect(
-        group(page, 'shared_one').getByTestId('schedule-row-rota-nudge').getByTestId('row-runner'),
-      ).toHaveText('Run by Main')
-      await expect(group(page, MAIN).getByTestId('schedule-row-daily-summary').getByTestId('row-runner')).toHaveText(
-        'Run by Main',
-      )
+      await expect(group(page, 'trip').getByTestId('group-count')).toHaveText('4 jobs')
+      // a row says who runs the job, in words; a job that is not a session job never reads as "own session"
+      const rr = (key: string, id: string) =>
+        group(page, key).getByTestId(`schedule-row-${id}`).getByTestId('row-runner')
+      await expect(rr('trip', 'packing-check')).toHaveText("Runs in Trip's own session")
+      await expect(rr('trip', 'trip-backup')).toHaveText('Runs in the background, no session')
+      await expect(rr('trip', 'trip-both')).toHaveText('Run by Main, with a background backup')
+      await expect(rr('garden', 'water-plants')).toHaveText("Runs in Garden's own session")
+      await expect(rr('shared_one', 'rota-nudge')).toHaveText('Run by Main')
+      await expect(rr(MAIN, 'daily-summary')).toHaveText('Run by Main')
     })
 
     test('no sideways scroll, and the group name and runner are one reading for a screen reader', async ({ page }) => {
@@ -71,23 +67,26 @@ for (const scheme of ['light', 'dark'] as const) {
       await expect(group(page, 'trip')).toHaveAccessibleDescription('own session · live')
     })
 
-    test("keyboard: Tab lands on the first job (Main's first), and Enter opens it", async ({ page, browserName }) => {
+    test('keyboard: Tab lands on the first group header, Enter opens it, and the job is next', async ({
+      page,
+      browserName,
+    }) => {
       await open(page)
+      const openOnes = page.locator('[data-testid^="group-toggle-"][aria-expanded="true"]')
+      for (let i = 0; i < 50 && (await openOnes.count()) > 0; i++) await openOnes.first().click()
       await expect(group(page, MAIN)).toBeVisible()
       for (let i = 0; i < 40; i++) {
         // WebKit's Tab skips links unless Option is held (Safari's own setting)
         await page.keyboard.press(browserName === 'webkit' ? 'Alt+Tab' : 'Tab')
-        const inList = await page.evaluate(
-          () => document.activeElement?.closest('[data-testid^="schedule-row-"]') !== null,
+        const onHeader = await page.evaluate(() =>
+          document.activeElement?.getAttribute('data-testid')?.startsWith('group-toggle-'),
         )
-        if (inList) break
+        if (onHeader) break
       }
-      const focused = page.locator(':focus')
-      await expect(focused.locator('xpath=ancestor::li[starts-with(@data-testid,"schedule-row-")]')).toHaveAttribute(
-        'data-testid',
-        /^schedule-row-(daily-summary|gone-thread-job)$/,
-      )
-      await expect(focused).toBeInViewport()
+      await expect(page.locator(':focus')).toHaveAttribute('data-testid', 'group-toggle-__main__')
+      await page.keyboard.press('Enter')
+      await expect(group(page, MAIN).locator('li').first()).toBeVisible()
+      await page.keyboard.press(browserName === 'webkit' ? 'Alt+Tab' : 'Tab')
       await page.keyboard.press('Enter')
       await expect(page.getByTestId('location')).toHaveText(/^\/schedules\/(daily-summary|gone-thread-job)$/)
     })

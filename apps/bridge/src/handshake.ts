@@ -1,6 +1,7 @@
 // Bridge side of the WebSocket handshake (spec 3.4, 5.4): challenge -> hello (Ed25519 over the challenge string).
 import {
   DRIVING_FEATURE,
+  FOLDERS_FEATURE,
   type Frame,
   HEALTH_FEATURE,
   HEARTBEAT_FEATURE,
@@ -31,6 +32,8 @@ export function bridgeFeatures(svc: {
   memory?: { available: boolean } | undefined
   health?: { available: boolean } | undefined
   speak?: { available: boolean } | undefined
+  /** The folder picker (src/folders): present on a live main bridge, which is the one that answers `fs.list`. */
+  folders?: { available: boolean } | undefined
   /** Problem reports (docs/ERRORS.md): present on a live bridge, which is the one that files them. */
   problems?: unknown
 }): string[] {
@@ -51,6 +54,7 @@ export function bridgeFeatures(svc: {
     // always on once installed: with no TTS command the button explains it, which needs the Mac to answer
     ...(svc.speak?.available ? [SPEAK_FEATURE] : []),
     ...(svc.problems ? [PROBLEMS_FEATURE] : []),
+    ...(svc.folders?.available ? [FOLDERS_FEATURE] : []),
   ]
 }
 

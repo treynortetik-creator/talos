@@ -74,11 +74,11 @@ describe('item 1: version.features', () => {
   it('the real version answer, with `features`, parses (it used to close the whole scheduler)', () => {
     const v = ChronosVersion.safeParse(load('version'))
     expect(v.success).toBe(true)
-    expect(load('version').features).toEqual(['times', 'meta'])
+    expect(load('version').features).toEqual(['times', 'meta', 'memory'])
   })
   it('keeps the features, and one more unknown key does not break detection', () => {
     const v = ChronosVersion.parse({ ...load('version'), future_key: { a: 1 } })
-    expect(v.features).toEqual(['times', 'meta'])
+    expect(v.features).toEqual(['times', 'meta', 'memory'])
     expect(
       ChronosVersion.parse({ api: 1, chronos: '0.3.0', session_runner: 'talos', approval_required: true }).features,
     ).toBeUndefined()
@@ -389,8 +389,8 @@ describe('R1-15: the fixtures print the version of the Chronos that is vendored'
   const vendored = /^VERSION = "([^"]+)"/m.exec(
     readFileSync(join(here, '..', '..', '..', 'third_party', 'chronos', 'lib', 'chronoslib.py'), 'utf8'),
   )?.[1]
-  it('the vendored copy is 0.4.0', () => {
-    expect(vendored).toBe('0.4.0')
+  it('the vendored copy is 0.5.0', () => {
+    expect(vendored).toBe('0.5.0')
   })
   it('version.json and every "chronos" key in a snapshot say so', () => {
     expect(load('version').chronos).toBe(vendored)

@@ -201,7 +201,13 @@ struct ReviewOC3Parking {
     defer { r.killLeftovers(r.root + "/child.trip") }
     let pid = try #require(r.entry("trip")?.pane_pid)
     try r.wakeFile("trip", action: "park", reason: "control")
-    #expect(r.wait(6) { r.state("trip") == "parked" })
+    #expect(r.wait(15) {
+      r.allEvents.contains {
+        if case .parked(let thread, _) = $0 { return thread == "trip" }
+        return false
+      }
+    })
+    #expect(r.wait(5) { r.state("trip") == "parked" })  // the snapshot publishes at the end of the tick that emitted .parked
     usleep(1_500_000)
     #expect(!ProcessInspect.groupAlive(pid), "a child of the parked worker is still running")
   }
@@ -217,7 +223,13 @@ struct ReviewOC3Parking {
     defer { r.killLeftovers(r.root + "/child.trip") }
     let pid = try #require(r.entry("trip")?.pane_pid)
     kill(pid, SIGKILL)
-    #expect(r.wait(6) { r.state("trip") == "parked" })
+    #expect(r.wait(15) {
+      r.allEvents.contains {
+        if case .parked(let thread, _) = $0 { return thread == "trip" }
+        return false
+      }
+    })
+    #expect(r.wait(5) { r.state("trip") == "parked" })  // the snapshot publishes at the end of the tick that emitted .parked
     usleep(1_000_000)
     #expect(!ProcessInspect.groupAlive(pid), "the crashed worker's children are orphaned")
   }
@@ -233,11 +245,14 @@ struct ReviewOC3Parking {
     #expect(r.wait(8) { r.up("trip") })
     #expect(r.wait(3) { (r.fileOnDisk?.threads["trip"]?.pane_pid ?? 0) > 1 })
     r.mgr.detach()
-    usleep(2_500_000)
-    r.manager(idle: 1)
+    usleep(5_500_000)
+    // A limit of 4 s: an adopt that restarted the clock would park only 4 s after it, so parking within the 3 s of ticks below means the
+    // idle time was kept. A loaded Mac may need more than the two ticks this used to allow to read the pane.
+    r.manager(idle: 4)
     r.firstTick()
-    r.mgr.tickOnce()
-    #expect(["parking", "parked"].contains(r.state("trip") ?? ""), "\(String(describing: r.state("trip")))")
+    #expect(
+      r.wait(3) { r.mgr.tickOnce(); return ["parking", "parked"].contains(r.state("trip") ?? "") },
+      "\(String(describing: r.state("trip")))")
   }
 
   /// A message arriving in the park window is dropped: `handle` starts only from off/parked, and `finishPark` never
@@ -357,7 +372,13 @@ struct ReviewOC3Parking {
     let b = try #require(r.entry("garden"))
     #expect(a.session_id != b.session_id)
     try r.wakeFile("trip", action: "park", reason: "control")
-    #expect(r.wait(6) { r.state("trip") == "parked" })
+    #expect(r.wait(15) {
+      r.allEvents.contains {
+        if case .parked(let thread, _) = $0 { return thread == "trip" }
+        return false
+      }
+    })
+    #expect(r.wait(5) { r.state("trip") == "parked" })  // the snapshot publishes at the end of the tick that emitted .parked
     #expect(r.up("garden"))
     #expect(r.entry("garden")?.pane_pid == b.pane_pid)
     #expect(ProcessInspect.groupAlive(b.pane_pid))
@@ -599,7 +620,13 @@ struct ReviewOC3Folders {
     try check("start")
     #expect(r.lines(r.log).last?.contains("--session-id") == true)
     try r.wakeFile("trip", action: "park", reason: "control")
-    #expect(r.wait(6) { r.state("trip") == "parked" })
+    #expect(r.wait(15) {
+      r.allEvents.contains {
+        if case .parked(let thread, _) = $0 { return thread == "trip" }
+        return false
+      }
+    })
+    #expect(r.wait(5) { r.state("trip") == "parked" })  // the snapshot publishes at the end of the tick that emitted .parked
     try r.wake("trip")
     try check("resume")
     #expect(r.lines(r.log).last?.contains("--resume") == true)
@@ -763,7 +790,13 @@ struct ReviewOC3Panes {
     let garden = try #require(r.entry("garden")?.pane_pid)
     let sid = r.entry("trip")?.session_id
     killpg(trip, SIGKILL)
-    #expect(r.wait(6) { r.state("trip") == "parked" })
+    #expect(r.wait(15) {
+      r.allEvents.contains {
+        if case .parked(let thread, _) = $0 { return thread == "trip" }
+        return false
+      }
+    })
+    #expect(r.wait(5) { r.state("trip") == "parked" })  // the snapshot publishes at the end of the tick that emitted .parked
     #expect(r.entry("trip")?.session_id == sid)
     #expect(ProcessInspect.groupAlive(mainPid), "main's group")
     #expect(r.tmuxCmd(["has-session", "-t", "=agent"]).ok)

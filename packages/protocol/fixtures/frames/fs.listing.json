@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "type": "fs.listing",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T44A",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T449",
+  "home": "/Users/alex",
+  "agent_dir": "/Users/alex/talos-agent",
+  "path": "/Users/alex/Projects",
+  "parent": "/Users/alex",
+  "entries": [
+    {
+      "name": "alpha"
+    },
+    {
+      "name": "beta"
+    }
+  ],
+  "more": 0
+}

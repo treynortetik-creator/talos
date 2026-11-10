@@ -8,8 +8,13 @@
 import { z } from 'zod'
 import { CardId, IsoTs, ThreadId } from './ids.ts'
 
-/** The dialogs a card is made for. The bypass-permissions disclaimer and any dialog Talos does not know stay as they are. */
-export const DIALOG_KINDS = ['trust', 'mcp_consent', 'login'] as const
+/**
+ * The dialogs a card is made for. The bypass-permissions disclaimer and any dialog Talos does not know stay as they are.
+ * `dev_channels` is Main's own warning about the development channel (its `subject` is the channels, comma separated);
+ * the supervisor publishes it as `supervisor.main_dialog` in workers.json, because Main has no entry of its own, and the card
+ * goes to the default thread.
+ */
+export const DIALOG_KINDS = ['trust', 'mcp_consent', 'login', 'dev_channels'] as const
 export const DialogKind = z.enum(DIALOG_KINDS)
 export type DialogKindT = z.infer<typeof DialogKind>
 
@@ -57,6 +62,14 @@ export const DialogControlId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
 
 const Label = z.string().min(1).max(DIALOG_LABEL_MAX)
 
+/**
+ * With a `dev_channels` dialog the guard refused because Main's start command is not the one the owner last confirmed: what differs at
+ * the level the launch fingerprint knows. Names only, never a value (an env value can be a secret). An empty list means the Mac cannot say
+ * what changed (nothing was confirmed before, or the stored confirmation could not be checked).
+ */
+export const LAUNCH_CHANGED_PIECES = ['folder', 'program', 'flags', 'env'] as const
+export const LaunchChanged = z.array(z.enum(LAUNCH_CHANGED_PIECES)).max(LAUNCH_CHANGED_PIECES.length)
+
 /** A login dialog has nothing to choose; the others have at least one option. */
 const optionsFitKind = (d: { dialog_kind?: string; kind?: string; options: string[] }) =>
   (d.dialog_kind ?? d.kind) === 'login' ? d.options.length === 0 : d.options.length >= 1
@@ -87,6 +100,7 @@ export const WorkerDialog = z
       .min(0)
       .max(DIALOG_MAX_OPTIONS - 1)
       .nullable(),
+    launch_changed: LaunchChanged.optional(),
     seen_at: IsoTs,
     expires_at: IsoTs,
   })

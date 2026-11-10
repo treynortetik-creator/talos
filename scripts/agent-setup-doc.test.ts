@@ -307,20 +307,28 @@ describe('the voice lines in SETUP.md, written to a real bridge.env and read by 
     expect(env.TALOS_APP_TTS_EXT).toBe('m4a')
   })
 
-  it('tts.sh really writes an m4a through exactly that argv (macOS `say`)', () => {
+  it('tts.sh really writes an m4a through exactly that argv (macOS `say`)', (ctx) => {
     if (process.platform !== 'darwin') return
     const tmp = mkdtempSync(join(tmpdir(), 'setup-tts-'))
     made.push(tmp)
+    const probe = spawnSync('say', ['-o', join(tmp, 'probe.aiff'), 'hi'], {
+      env: { PATH: process.env.PATH ?? '', HOME: tmp, TALOS_TTS: 'say' },
+      timeout: 10_000,
+      killSignal: 'SIGKILL',
+    })
+    if (probe.status !== 0) ctx.skip('macOS speech (say) did not answer within 10 s on this machine')
     // the agent folder's scripts/ is a link to the kit zone; do the same here so the path in the guide is the one that runs
     const agent = join(tmp, 'talos-agent')
     mkdirSync(agent)
     symlinkSync(join(root, 'kit', 'scripts'), join(agent, 'scripts'))
     const out = join(tmp, 'reply.m4a')
+    const started = performance.now()
     const r = spawnSync(join(agent, 'scripts', 'tts.sh'), ['file', out, 'Hello from the setup test.'], {
       encoding: 'utf8',
       env: { PATH: process.env.PATH ?? '', HOME: tmp, TALOS_TTS: 'say' },
       timeout: 60_000,
     })
+    console.info(`tts.sh real call took ${Math.round(performance.now() - started)} ms`)
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0)
     expect(existsSync(out)).toBe(true)
     accessSync(join(agent, 'scripts', 'tts.sh'), constants.X_OK)

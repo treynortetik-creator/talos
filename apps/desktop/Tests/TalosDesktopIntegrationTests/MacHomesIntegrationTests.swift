@@ -187,16 +187,29 @@ struct MacHomesProgramEditTests {
     return (r.audit, r.sup.status.needsYou)
   }
 
-  @Test func aProgramOnlyEditMakesTheNextStartColdAndNeverAutoPressesEnter() throws {
+  /// Was "NeverAutoPressesEnter" until 2026-11-07, when the owner retired the rule that cold starts are always human. A changed program
+  /// is a changed launch: the next start is cold and its warning waits for the owner (`launchChanged`), whose Enter then confirms it.
+  @Test func aProgramOnlyEditMakesTheNextStartColdAndItWaitsForTheOwner() throws {
     let out = try crashAfterEdit { c, other in c.claudePath = other }
     #expect(out.audit.contains(" restart attempt=0 kind=cold"), "\(out.audit)")
-    #expect(!out.audit.contains(" auto_confirm "), "no key was pressed for a binary the owner never confirmed")
+    #expect(out.audit.components(separatedBy: " auto_confirm ").count - 1 == 1, "only the first start's: \(out.audit)")
+    #expect(out.audit.contains("auto_confirm_refused kind=cold reason=launchChanged"), "\(out.audit)")
     #expect(out.needs == .confirmColdStart, "\(String(describing: out.needs))")
   }
 
-  @Test func theArgsEditControlAlreadyWasCold() throws {
+  @Test func anArgsEditControlWaitsForTheOwnerToo() throws {
     let out = try crashAfterEdit { c, _ in c.args.append("--extra") }
     #expect(out.audit.contains(" restart attempt=0 kind=cold"), "\(out.audit)")
-    #expect(!out.audit.contains(" auto_confirm "))
+    #expect(out.audit.contains("auto_confirm_refused kind=cold reason=launchChanged"), "\(out.audit)")
+    #expect(out.needs == .confirmColdStart)
+  }
+
+  /// An edit that makes the launch pass a channel the screen will not show: the channel check comes first, so that is the reason.
+  @Test func anArgsEditThatAddsAChannelTheScreenDoesNotShowIsNotAccepted() throws {
+    let out = try crashAfterEdit { c, _ in c.args += ["--dangerously-load-development-channels", "server:other"] }
+    #expect(out.audit.contains(" restart attempt=0 kind=cold"), "\(out.audit)")
+    #expect(out.audit.components(separatedBy: " auto_confirm ").count - 1 == 1, "only the first start's: \(out.audit)")
+    #expect(out.audit.contains("auto_confirm_refused kind=cold reason=channelsMismatch"), "\(out.audit)")
+    #expect(out.needs == .confirmColdStart, "\(String(describing: out.needs))")
   }
 }

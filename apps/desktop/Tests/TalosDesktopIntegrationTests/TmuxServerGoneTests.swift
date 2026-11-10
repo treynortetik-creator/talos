@@ -85,7 +85,7 @@ struct TmuxServerGoneTests {
   }
 
   @Test func theMainSessionStartThatMeetsAShuttingDownServerIsAskedAgain() throws {
-    let r = try Rig(.tmux, scenario: "dev-dialog.sh")
+    let r = try Rig(.tmux, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     let shim = try newSessionShim(in: r.root, failTimes: 1, message: "server exited unexpectedly")
     r.tmuxBin = shim.path

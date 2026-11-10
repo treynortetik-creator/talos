@@ -20,7 +20,7 @@ import type { RelayHttp } from './relay-http.ts'
 import type { ScheduleService } from './schedules/service.ts'
 import type { SessionControls } from './session/controls.ts'
 import type { Transport } from './transport.ts'
-import type { HealthService, MemoryService, SearchService, SpeakServiceSeam } from './v2-seams.ts'
+import type { FolderServiceSeam, HealthService, MemoryService, SearchService, SpeakServiceSeam } from './v2-seams.ts'
 
 /** kv key holding the ids the agent was told about and has not touched (D39). */
 const UNANSWERED_KEY = 'unanswered_v1'
@@ -196,6 +196,8 @@ export type BridgeContext = {
   health?: HealthService
   /** Read aloud on request (the play button): set by a live bridge; absent = the read answers a fixed error. */
   speak?: SpeakServiceSeam
+  /** The folder picker's lister (live main bridge only); absent = `fs.list` answers a fixed error. */
+  folders?: FolderServiceSeam
   /** MCP apps (docs/APPS.md): present on a live bridge; it answers app requests with a fixed refusal while the feature is off. */
   apps?: AppService
   /** Problem reports (docs/ERRORS.md): the live main bridge files them; absent elsewhere. */

@@ -1,10 +1,11 @@
 {
   "api": 1,
-  "chronos": "0.4.0",
+  "chronos": "0.5.0",
   "session_runner": "talos",
   "approval_required": true,
   "features": [
     "times",
-    "meta"
+    "meta",
+    "memory"
   ]
 }

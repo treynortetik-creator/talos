@@ -1,4 +1,4 @@
-// The adapter contract against the REAL Chronos CLI (third_party/chronos, tag v0.4.0), in a temp HOME with a fixed
+// The adapter contract against the REAL Chronos CLI (third_party/chronos, tag v0.5.0), in a temp HOME with a fixed
 // CHRONOS_NOW. FakeScheduler runs the same assertions in fake-scheduler.test.ts. Needs python3 >= 3.9; without it the
 // suite is skipped (CI has it). Set TALOS_SKIP_REAL_CHRONOS=1 to skip on purpose.
 import { describe, it } from 'vitest'

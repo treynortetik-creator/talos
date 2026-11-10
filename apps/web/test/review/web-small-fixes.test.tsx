@@ -12,7 +12,8 @@ import { useGlobalKeys } from '../../src/lib/useKeyboard.ts'
 afterEach(cleanup)
 
 function Keys({ onCall }: { onCall?: () => void }) {
-  useGlobalKeys({ onThread: () => {}, ...(onCall ? { onCall } : {}) })
+  // the table has the Call chord; a handler that does not run it answers false, so the browser keeps the key
+  useGlobalKeys({ onAction: (e) => (e.id === 'call' && onCall ? onCall() : false) })
   return null
 }
 

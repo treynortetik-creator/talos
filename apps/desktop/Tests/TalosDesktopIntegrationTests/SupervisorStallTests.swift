@@ -98,6 +98,7 @@ struct SupervisorStallTests {
   /// returned, so no supervision pass can read the screen between that key and the outage, however loaded the Mac is.
   private func captureFailsWhileFlagged(_ r: Rig, flagAfterTheSupervisorSends: Bool = false) throws -> String {
     let flag = r.root + "/capture-fails"
+    let armed = r.root + "/armed"
     let shim = r.root + "/tmux-capture-shim"
     let flagAfterSend = flagAfterTheSupervisorSends ? "true" : "false"
     try """
@@ -107,7 +108,7 @@ struct SupervisorStallTests {
     done
     if \(flagAfterSend); then
       for a in "$@"; do
-        if [ "$a" = send-keys ]; then '\(Rig.tmuxPath!)' "$@"; rc=$?; : > '\(flag)'; exit $rc; fi
+        if [ "$a" = send-keys ] && [ -e '\(armed)' ]; then '\(Rig.tmuxPath!)' "$@"; rc=$?; : > '\(flag)'; exit $rc; fi
       done
     fi
     exec '\(Rig.tmuxPath!)' "$@"
@@ -167,15 +168,19 @@ struct SupervisorStallTests {
   func aScreenReadOutagePastTheNoticeDeadlineLeavesAHealthyRestartRunning() throws {
     var t = Self.timings()
     t.dialogStall = 60  // the dialog stays up until the test's second Enter; it is not what this test is about
-    // Start 1 crashes 6 s after the notice (the fake's default is 1 s), so it is seen running first even on a loaded Mac.
-    let r = try Rig(.tmux, scenario: "restart-late-notice.sh", env: ["FAKE_CRASH_AFTER": "6"], timings: t)
+    // Start 1 crashes when the test says so (FAKE_CRASH_ON_FILE), so a Mac that pauses the test cannot let the restart's Enter go before
+    // the shim is armed.
+    let r = try Rig(.tmux, scenario: "restart-late-notice.sh", env: ["FAKE_CRASH_ON_FILE": "1"], timings: t)
     defer { r.teardown() }
     // The restart's dialog stays on screen after the supervisor's Enter (the fake waits for the test's second one). A pass that
     // read it 0.4 s after the Enter would call it "pressed twice" and hold that question, which an unreadable screen never
     // replaces. So the outage starts inside the shim, as the Enter returns, not from a file the test creates a moment later.
     let flag = try captureFailsWhileFlagged(r, flagAfterTheSupervisorSends: true)
-    try coldStartConfirmed(r)  // start 1 confirmed by the owner; it crashes; the restart shows the dialog
-    #expect(r.wait(30) { r.sup.tickNow(); return r.audit.contains(" auto_confirm ") }, "audit: \(r.audit)")
+    try coldStartConfirmed(r)  // start 1's warning answered (it crashes when the test says so); the restart shows the dialog
+    // The outage starts with the RESTART's Enter, not the cold start's (also the supervisor's since 2026-11-07): the shim is armed now.
+    FileManager.default.createFile(atPath: r.root + "/armed", contents: Data())
+    FileManager.default.createFile(atPath: r.stateDir + "/crash-now", contents: Data())
+    #expect(r.wait(30) { r.sup.tickNow(); return r.autoConfirms >= 2 }, "audit: \(r.audit)")
     #expect(FileManager.default.fileExists(atPath: flag), "the Enter is sent; now the screen cannot be read")
     let pid = try #require(r.sup.status.childPid)
     r.clock.advance(20)  // past the notice deadline (15 s), well short of the start deadline (120 s)
@@ -199,7 +204,7 @@ struct SupervisorStallTests {
 
   @Test(.enabled(if: Rig.hasTmux))
   func aHeldQuestionIsNotReplacedByStartStalledWhileTheScreenCannotBeRead() throws {
-    let r = try Rig(.tmux, scenario: "dev-dialog.sh", timings: Self.timings())
+    let r = try Rig(.tmux, scenario: "dev-dialog.sh", timings: Self.timings(), configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     let flag = try captureFailsWhileFlagged(r)
     r.start()
@@ -232,7 +237,7 @@ struct SupervisorStallTests {
     let told = r.allEvents.filter { if case .needsYou(.restartNotConfirmed) = $0 { return true } else { return false } }
     #expect(told.count == 1, "told once, the reason replaced quietly: \(told)")
     #expect(count("needs_you why=refuse", in: r.audit) == 1)
-    #expect(!r.audit.contains(" auto_confirm "), "nothing was pressed")
+    #expect(r.autoConfirms == 1, "nothing was pressed for the restart (the cold start's Enter is the one): \(r.audit)")
     #expect(r.phase() == .starting)
   }
 
@@ -241,7 +246,7 @@ struct SupervisorStallTests {
   /// the vaguer "a dialog needs you" for it (the stall limit is already due, so the order of the two checks decides it).
   @Test(arguments: bothHosts)
   func theColdStartQuestionComesBackWhenTheDevChannelDialogReturnsAfterAnotherDialog(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dev-dialog-trust-dev-dialog.sh", timings: Self.timings())
+    let r = try Rig(kind, scenario: "dev-dialog-trust-dev-dialog.sh", timings: Self.timings(), configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart }, "cold-start question")
@@ -267,7 +272,7 @@ struct SupervisorStallTests {
   /// comes next must find the cold-start question back, not leave the stall check to say the vaguer "a dialog needs you".
   @Test(arguments: bothHosts)
   func theColdStartQuestionComesBackWhenTheDevChannelDialogReturnsAfterABlankScreen(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dev-dialog-trust-blank-dev-dialog.sh", timings: Self.timings())
+    let r = try Rig(kind, scenario: "dev-dialog-trust-blank-dev-dialog.sh", timings: Self.timings(), configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart }, "cold-start question")
@@ -298,7 +303,7 @@ struct SupervisorStallTests {
   /// dialog nothing above names: it stalls with its own reason and is not relabelled as the cold-start question.
   @Test(arguments: bothHosts)
   func aDifferentDialogReturningAfterABlankScreenStillStallsWithItsOwnReason(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dev-dialog-trust-blank-trust.sh", timings: Self.timings())
+    let r = try Rig(kind, scenario: "dev-dialog-trust-blank-trust.sh", timings: Self.timings(), configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart }, "cold-start question")
@@ -327,7 +332,7 @@ struct SupervisorStallTests {
   /// "a dialog needs you" the stall check would say.
   @Test(arguments: bothHosts)
   func theColdStartQuestionComesBackWhenTheDevChannelDialogReturnsAfterAStartStall(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dev-dialog-plain-dev-dialog.sh", timings: Self.timings())
+    let r = try Rig(kind, scenario: "dev-dialog-plain-dev-dialog.sh", timings: Self.timings(), configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart }, "cold-start question")
@@ -349,7 +354,7 @@ struct SupervisorStallTests {
   /// notice, a start that already stalled once is still stalled: the alarm is back, told no second time.
   @Test(arguments: bothHosts)
   func theStartStalledAlarmReplacesAQuestionWhoseDialogIsGoneAfterAnEarlierStall(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dev-dialog-plain-dev-dialog-plain.sh", timings: Self.timings())
+    let r = try Rig(kind, scenario: "dev-dialog-plain-dev-dialog-plain.sh", timings: Self.timings(), configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart }, "cold-start question")
@@ -373,7 +378,7 @@ struct SupervisorStallTests {
   /// The same when another dialog's warning stood between the stall and the dev-channel dialog's return.
   @Test(arguments: bothHosts)
   func theStartStalledAlarmReplacesAQuestionWhoseDialogIsGoneAfterAStallAndAnotherDialog(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dev-dialog-plain-trust-dev-dialog-plain.sh", timings: Self.timings())
+    let r = try Rig(kind, scenario: "dev-dialog-plain-trust-dev-dialog-plain.sh", timings: Self.timings(), configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart }, "cold-start question")

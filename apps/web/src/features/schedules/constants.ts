@@ -13,7 +13,32 @@ export const RECENT_RUNS = 10
 /** A failure in the last 24 h puts the dot on the tab (S5.1). */
 export const FAILED_DOT_WINDOW_MS = 24 * 60 * 60 * 1000
 
+/** The search box shows once there are more jobs than this. */
+export const SEARCH_AFTER = 15
+
 export const COPY = {
+  nextUp: 'Next to run',
+  oneOffGroup: 'One-off',
+  chipFailed: 'Failed',
+  chipPaused: 'Paused or off',
+  chipOneOff: 'One-off',
+  filters: 'Show only',
+  search: 'Search jobs',
+  filterEmpty: 'No job matches.',
+  groupFailed: 'a job failed',
+  editJob: 'Edit {name}',
+  edit: 'Edit',
+  editOffline: 'Your Mac is offline. Edit when it is back.',
+  jobOne: '1 job',
+  jobMany: '{n} jobs',
+  nextRun: 'next {when}',
+  switchOn: 'Turn on {name}',
+  switchRuns: '{name} runs on schedule',
+  statusOff: 'Off',
+  statusCommand: 'Command · read-only',
+  statusEvents: 'On events · read-only',
+  statusPaused: 'Paused',
+  editWhy: 'Edit it at the Mac.',
   title: 'Schedules',
   empty: 'No scheduled jobs yet. Tell {agent} what to do and when.',
   noScheduler: 'No scheduler on your Mac yet. {agent} uses Chronos to run jobs on a schedule.',

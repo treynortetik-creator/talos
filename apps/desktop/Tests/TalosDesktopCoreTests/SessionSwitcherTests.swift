@@ -153,4 +153,12 @@ struct SessionSwitcherTests {
     #expect(WorkerNotice.line(threadName: "\u{7}", screen: .loginExpired).hasPrefix("A thread's session"))
     #expect(WorkerNotice.promptName(.unknownSelection) == "an unknown question")
   }
+
+  /// The thread line for a login prompt says "sign in", as the card and the popup do (not the Mac's own start-at-login wording).
+  @Test func theLoginPromptIsNamedSignIn() {
+    #expect(WorkerNotice.promptName(.loginExpired) == "sign in")
+    #expect(
+      WorkerNotice.line(threadName: "OC Test", screen: .loginExpired)
+        == "OC Test's session is waiting on a 'sign in' prompt; open Terminals \u{2192} OC Test on the Mac to answer.")
+  }
 }

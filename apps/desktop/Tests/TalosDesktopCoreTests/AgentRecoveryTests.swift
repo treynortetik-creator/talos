@@ -339,11 +339,6 @@ struct AgentRecoveryNoticeTests {
     }
   }
 
-  @Test func theColdStartPostNamesTheAgentAndTheKeyPress() {
-    #expect(CrashPost.coldStartText(agentName: "Ada").hasPrefix("Ada restarted"))
-    #expect(CrashPost.coldStartText(agentName: nil).hasPrefix("The agent restarted"))
-    #expect(CrashPost.coldStartText(agentName: "Ada").contains("press Enter on the dev-channel warning"))
-  }
 
   @Test func eachOutcomeHasItsOwnPlainSentence() {
     let texts = all.map(SupervisorNotice.recovery)

@@ -110,7 +110,7 @@ public enum FirstRun {
     // whether Claude trusts a folder, so this row says only what it knows.
     case .some(true): r.append(Row(id: "trust", title: "First start confirmed", state: .ok))
     case .some(false):
-      r.append(Row(id: "trust", title: "First start confirmed", state: .fix("Choose Start session in the menu bar item if it isn't running, then press Enter on the dev-channel dialog in Terminals….")))
+      r.append(Row(id: "trust", title: "First start confirmed", state: .fix("Choose Start session in the menu bar item if it isn't running, then accept the dev-channel warning in the Talos popup….")))
     case .none:
       r.append(
         Row(

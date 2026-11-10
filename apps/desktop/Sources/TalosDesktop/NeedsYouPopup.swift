@@ -191,10 +191,11 @@ final class NeedsYouPopupView: NSView {
   /// click reaches the same action method but sends no mouse event, so `NSApp.currentEvent` is nil or something that has nothing to do with
   /// this button. Only the owner's hand at the Mac may answer; a program that can press a button for him may not.
   static func isRealClick(_ event: NSEvent?, on button: NSButton, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
-    guard let e = event, e.type == .leftMouseUp || e.type == .leftMouseDown, abs(now - e.timestamp) < 1,
-      let window = button.window, e.windowNumber == window.windowNumber
-    else { return false }
-    return button.bounds.contains(button.convert(e.locationInWindow, from: nil))
+    guard let e = event else { return false }
+    let kind: PopupClickCheck.Kind = e.type == .leftMouseUp ? .leftMouseUp : e.type == .leftMouseDown ? .leftMouseDown : .other
+    return PopupClickCheck.isRealClick(
+      kind: kind, age: now - e.timestamp, sameWindow: button.window.map { $0.windowNumber == e.windowNumber } ?? false,
+      onButton: button.bounds.contains(button.convert(e.locationInWindow, from: nil)))
   }
 
   @objc private func answerClicked(_ sender: NSButton) {

@@ -629,6 +629,37 @@
         ],
         "additionalProperties": false
       }
+    },
+    "pick_folder": {
+      "sample": {
+        "type": "pick_folder",
+        "req": "r12",
+        "start": "/Users/alex/Projects"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "pick_folder"
+          },
+          "req": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,32}$"
+          },
+          "start": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^\\/[^\\u0000-\\u001f\\u007f]*$"
+          }
+        },
+        "required": [
+          "type",
+          "req"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "native_to_web": {
@@ -985,6 +1016,52 @@
         "required": [
           "type",
           "session"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "folder_picked": {
+      "sample": {
+        "type": "folder_picked",
+        "req": "r12",
+        "path": "/Users/alex/Projects"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "folder_picked"
+          },
+          "req": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,32}$"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "pattern": "^\\/[^\\u0000-\\u001f\\u007f]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "why": {
+            "type": "string",
+            "enum": [
+              "not_now",
+              "bad_name"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "req",
+          "path"
         ],
         "additionalProperties": false
       }

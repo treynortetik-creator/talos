@@ -12,7 +12,7 @@ private extension Rig {
   var recovered: [AgentRecovery.Outcome] {
     allEvents.compactMap { if case .recovered(let o) = $0 { return o } else { return nil } }
   }
-  var phoneColdStartPosts: [String] { phonePosts.filter { $0.contains("dev-channel") } }
+  var phoneColdStartPosts: [String] { phonePosts.filter { $0.contains(NeedsYouPopupContent.devWaitingPhone) } }
   /// What the phone was told about an automatic restore.
   var restorePosts: [String] { phonePosts.filter { $0.contains("last good setup") } }
   /// What the slow fake `talos-app` was started with and saw (see its header): for the failure message, and for telling a missing
@@ -369,7 +369,7 @@ struct AgentRequestRulesIntegrationTests {
   // thread gives none). They are handed to `Options.background`; a test that starved the pool would starve the suites running beside it,
   // so this one only sees that both go through the seam. Route either through DispatchQueue.global and the count stays short.
   @Test func theRestoreAndThePhonePostAreHandedToTheInjectedExecutor() throws {
-    let r = try Rig(.direct, scenario: "dev-dialog.sh")
+    let r = try Rig(.direct, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     try coldStartConfirmed(r)
     #expect(r.backgroundRuns.count == 0, "nothing ran yet")
@@ -567,7 +567,7 @@ struct AgentRequestRulesIntegrationTests {
 struct ColdStartToPhoneIntegrationTests {
   @Test(arguments: bothHosts)
   func aRestartFromThePhoneThatLandsOnTheDevChannelWarningPostsItToThePhoneOnce(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dev-dialog.sh")
+    let r = try Rig(kind, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     try coldStartConfirmed(r)
     #expect(r.phoneColdStartPosts.isEmpty, "the owner was at the Mac for the first start: \(r.posts)")
@@ -578,7 +578,7 @@ struct ColdStartToPhoneIntegrationTests {
     for _ in 0..<5 { r.sup.tickNow() }
     r.sup.drain()
     #expect(r.phoneColdStartPosts.count == 1, "once: \(r.posts)")
-    #expect(r.phoneColdStartPosts.first?.hasPrefix("post general Testagent") == true, "\(r.posts)")
+    #expect(r.phoneColdStartPosts.first == "post general \(NeedsYouPopupContent.devWaitingPhone)", "\(r.posts)")
     // The "press Enter" line is the last word on the menu: the recovery notice must not land after it.
     let events = r.allEvents
     let noticeAt = try #require(events.lastIndex { if case .recovered = $0 { return true } else { return false } })
@@ -599,7 +599,7 @@ struct ColdStartToPhoneIntegrationTests {
   // for being too soon is audited, but does not take that line away.
   @Test(arguments: bothHosts)
   func aRequestRefusedAsTooSoonDoesNotHideThePressEnterLine(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dev-dialog.sh")
+    let r = try Rig(kind, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     try coldStartConfirmed(r)
     try r.writeRequest("restart", id: "c1")
@@ -615,7 +615,7 @@ struct ColdStartToPhoneIntegrationTests {
   // The pass that first sees the warning is also the pass that reads the second request, so the refusal has to look at the
   // supervisor's own state, not at the copy published after the previous pass. No timer: the test decides which pass that is.
   @Test func aRequestReadInTheSamePassThatFirstSeesTheWarningDoesNotHideIt() throws {
-    let r = try Rig(.direct, scenario: "dev-dialog-late.sh")
+    let r = try Rig(.direct, scenario: "dev-dialog-late.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.sup.start()
     #expect(r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart }, "\(r.phase()), \(r.audit)")
@@ -638,7 +638,7 @@ struct ColdStartToPhoneIntegrationTests {
 
   @Test(arguments: bothHosts)
   func anAutomaticRestoreThatLandsOnTheDevChannelWarningPostsItToThePhone(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dev-dialog.sh")
+    let r = try Rig(kind, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     try coldStartConfirmed(r)
     try r.seeBridgeUp()

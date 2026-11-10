@@ -1,9 +1,14 @@
 // The app shell: sidebar + center + optional detail panel on tablet/desktop, content + bottom bar on phones.
 import { type CSSProperties, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation, useMatch, useNavigate } from 'react-router'
+import { useAwaitingOwner } from './features/cards/useAwaitingOwner.ts'
+import { type ActionCtx, DIALOG_GUARDED, dialogOpen, runAction } from './features/palette/actions.ts'
+import { Palette } from './features/palette/Palette.tsx'
+import { attachPullToSearch } from './features/palette/pull.ts'
+import { usePalette } from './features/palette/store.ts'
 import { PHONE_QUERY, PhoneChrome } from './features/phone/PhoneChrome.tsx'
 import { usePhonePanel } from './features/phone/phoneStore.ts'
-import { useSessionDockOpen } from './features/session/dockPref.ts'
+import { toggleSessionDock, useSessionDockOpen } from './features/session/dockPref.ts'
 import { SessionDock } from './features/session/SessionDock.tsx'
 import { SessionTrigger, useSessionSupported } from './features/session/SessionTrigger.tsx'
 import { useMediaQuery } from './features/settings/useMedia.ts'
@@ -14,6 +19,8 @@ import { ThreadBanner } from './features/threads/ThreadBanner.tsx'
 import { useAgentName, useVisibleThreads } from './features/threads/useThreads.ts'
 import { useApprovalOpen } from './lib/approvalOpen.ts'
 import { useKeyboardLayout } from './lib/keyboardViewport.ts'
+import type { KeyEntry } from './lib/keymap.ts'
+import { detectShell } from './lib/native/detect.ts'
 import { setNativeViewing } from './lib/nativePush.ts'
 import { useGlobalKeys } from './lib/useKeyboard.ts'
 import { cn } from './ui/cn.ts'
@@ -74,16 +81,29 @@ export function Shell() {
     return () => window.removeEventListener('keydown', seen, true)
   }, [])
 
-  const handlers = useMemo(
+  const awaiting = useAwaitingOwner()
+  const macApp = useMemo(() => detectShell() === 'desktop', [])
+  const hasSession = Boolean(sessionThread && sessionSupported)
+  const ctx: ActionCtx = useMemo(
     () => ({
-      onThread: (i: number) => {
-        const t = threads[i]
-        if (t) nav(`/t/${t.id}`)
+      nav,
+      threads,
+      currentThreadId: onThread?.params.thread ?? null,
+      topCardId: awaiting[0]?.id ?? null,
+      togglePalette: (mode) => usePalette.getState().toggle(mode),
+      // The docked panel on a desktop, the drawer on a phone; with no Session on screen the chord is left to the browser.
+      toggleSession: () => {
+        if (!hasSession) return false
+        if (desktop) toggleSessionDock()
+        else {
+          const { open, set } = usePhonePanel.getState()
+          set(open === 'session' ? null : 'session')
+        }
+        return true
       },
-      onSearch: () => nav('/search'),
       // The sidebar only exists from 768 px up; on a phone the chord does nothing.
       // A sheet or dialog that is open owns the keyboard: folding would unmount the editor inside it and lose the text.
-      onSidebar: () => {
+      toggleSidebar: () => {
         if (!window.matchMedia?.('(min-width: 768px)').matches) return
         if (document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]'))
           return
@@ -91,14 +111,29 @@ export function Shell() {
       },
       // Escape belongs to an open sheet or dialog first: it closes that, not the panel behind it (a Heartbeat test sheet over
       // a job's detail would otherwise take the detail away with it).
-      onEscape: () => {
+      closeDetail: () => {
         if (dialogWasOpenAtEscape.current) return
         setDetail(null)
       },
     }),
-    [threads, nav],
+    [nav, threads, onThread, awaiting, desktop, hasSession],
   )
-  useGlobalKeys(handlers)
+  // The boxes this opens stay out of an open dialog and the approval sheet (a New thread editor must not be wiped by Cmd+K).
+  const handlers = useMemo(
+    () => ({
+      onAction: (entry: KeyEntry) =>
+        DIALOG_GUARDED.has(entry.id) && dialogOpen(approving) ? true : runAction(entry.act, ctx),
+    }),
+    [ctx, approving],
+  )
+  // The phone's pull-down: only on the two list screens, and only a deliberate pull from the very top (see pull.ts).
+  const listScreen = loc.pathname === '/' || loc.pathname === '/threads'
+  useEffect(() => {
+    const main = document.getElementById('main')
+    if (!phone || !listScreen || !main) return
+    return attachPullToSearch(main, () => usePalette.getState().open('palette'))
+  }, [phone, listScreen])
+  useGlobalKeys(handlers, { macApp })
   useKeyboardLayout()
   const close = useCallback(() => setDetail(null), [])
 
@@ -161,6 +196,7 @@ export function Shell() {
           </Sheet>
         </div>
         <ThreadBanner />
+        <Palette phone={phone} macApp={macApp} hasSession={hasSession} hasSidebar={!phone} ctx={ctx} />
         {approving ? null : <ToastViewport />}
       </DetailPanelContext.Provider>
     </ToastProvider>

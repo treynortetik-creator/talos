@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
+import type { CommandEffect, CommandRisk } from '@talos-app/protocol'
 import type { CliDeps, CliIO } from './cli-main.ts'
 import { workerCliRefusal } from './worker/cli-refusal.ts'
 
@@ -19,12 +20,19 @@ export type CommandInfo = {
   agent_may_run: boolean
   /** Set by `ownerTerminal` only: the command refuses unless stdin and stdout are a terminal (`terminalOnly`). */
   needs_terminal?: true
+  /** The usage after the name, e.g. `[--json] | revoke <id>`. `talos-app`'s usage text is made from this and `summary`. */
+  args?: string
+  /** What running it touches. Set only where it is known; absent means not stated, not "nothing". */
+  effects?: readonly CommandEffect[]
+  /** `ask` means behind an approval card. Set only where it is known. */
+  risk?: CommandRisk
 }
 
 /** A command only the owner types in Terminal. The one place that sets `needs_terminal`, and it forces `agent_may_run` false. */
-const ownerTerminal = (name: string, summary: string): CommandInfo => ({
+const ownerTerminal = (name: string, summary: string, args?: string): CommandInfo => ({
   name,
   summary,
+  ...(args ? { args } : {}),
   agent_may_run: false,
   needs_terminal: true,
 })
@@ -48,59 +56,149 @@ export function terminalOnlyNames(prog: 'talos' | 'talos-app'): string[] {
 
 /** The single list of `talos` commands. Add a command here and give it a case in cli-main.ts. */
 export const COMMANDS: readonly CommandInfo[] = [
-  { name: 'commands', summary: 'List these commands and whether the agent may run each one', agent_may_run: true },
-  { name: 'status', summary: 'Show relay reachability, bridge liveness, key id and queue depth', agent_may_run: true },
-  { name: 'doctor', summary: 'Check this Mac setup; --json returns the checks as rows', agent_may_run: true },
-  { name: 'logs', summary: 'Show the bridge log (-n lines, -f to follow)', agent_may_run: true },
-  { name: 'report', summary: 'Write a redacted report for a bug report (--out writes any path)', agent_may_run: false },
-  { name: 'errors', summary: 'List, show and close error reports', agent_may_run: true },
+  {
+    name: 'commands',
+    args: '[--json]',
+    summary: 'List these commands and whether the agent may run each one',
+    agent_may_run: true,
+    effects: ['read'],
+    risk: 'low',
+  },
+  {
+    name: 'events',
+    args: '[--json]',
+    summary: 'List the named events a hook can react to, with who emits each and the fields it carries',
+    agent_may_run: true,
+    effects: ['read'],
+    risk: 'low',
+  },
+  {
+    name: 'status',
+    args: '[--json]',
+    summary: 'Show relay reachability, bridge liveness, key id and queue depth',
+    agent_may_run: true,
+  },
+  {
+    name: 'doctor',
+    args: '[--agent-dir <dir>] [--deep]',
+    summary: 'Check this Mac setup; --json returns the checks as rows',
+    agent_may_run: true,
+  },
+  {
+    name: 'logs',
+    args: '[-n <lines>] [-f]',
+    summary: 'Show the bridge log (-n lines, -f to follow)',
+    agent_may_run: true,
+    effects: ['read'],
+    risk: 'low',
+  },
+  {
+    name: 'report',
+    args: '[--agent-dir <dir>] [--lines <n>] [--out <file>]',
+    summary: 'Write a redacted report for a bug report (--out writes any path)',
+    agent_may_run: false,
+  },
+  {
+    name: 'errors',
+    args: 'list [--closed|--all] | show <id> | close <id>',
+    summary: 'List, show and close error reports',
+    agent_may_run: true,
+  },
   { name: 'search reindex', summary: 'Rebuild the search index', agent_may_run: true },
   {
     name: 'schedules',
+    args: '[adopt | notify <message>]',
     summary: 'Show schedules; adopting one is a separate, owner-only subcommand',
     agent_may_run: false,
   },
   { name: 'schedules adopt', summary: 'Approve the schedules found on this Mac', agent_may_run: false },
   {
     name: 'codex',
+    args: 'check | run --thread <id> [--dir <abs>] [--sandbox read-only|workspace-write] [--image <abs>]... -- <prompt>',
     summary: 'Check or run the Codex CLI; the agent may run both subcommands',
     agent_may_run: true,
   },
   { name: 'codex check', summary: 'Check whether the Codex CLI is installed and logged in', agent_may_run: true },
-  { name: 'codex run', summary: 'Run Codex on a task in a thread', agent_may_run: true },
-  { name: 'digest', summary: 'Print the relay digest since a time', agent_may_run: true },
-  { name: 'post', summary: 'Send a headless reply into a thread', agent_may_run: true },
+  {
+    name: 'codex run',
+    args: '--thread <id> [--dir <abs>] [--sandbox read-only|workspace-write] [--image <abs>]... -- <prompt>',
+    summary: 'Run Codex on a task in a thread',
+    agent_may_run: true,
+  },
+  { name: 'digest', args: '[--since <ISO>]', summary: 'Print the relay digest since a time', agent_may_run: true },
+  { name: 'post', args: '<thread> <text>', summary: 'Send a headless reply into a thread', agent_may_run: true },
   {
     name: 'hook',
     summary: 'Claude Code hook entry for MCP apps (called by Claude Code, not by hand)',
     agent_may_run: false,
   },
-  { name: 'subagent-tee', summary: 'Status-line helper Claude Code calls for subagent rows', agent_may_run: true },
+  {
+    name: 'subagent-tee',
+    args: '[-- <your own subagentStatusLine command...>]',
+    summary: 'Status-line helper Claude Code calls for subagent rows',
+    agent_may_run: true,
+  },
   {
     name: 'memory',
+    args: 'init [--agent-dir <dir>] | on | off | show | reindex',
     summary: 'Show the memory browser or rebuild its index; the subcommands below set it up',
     agent_may_run: false,
   },
-  ownerTerminal('memory init', 'Set up the memory folder for an agent'),
+  ownerTerminal('memory init', 'Set up the memory folder for an agent', '[--agent-dir <dir>]'),
   { name: 'memory on', summary: 'Turn the memory browser on', agent_may_run: false },
   { name: 'memory off', summary: 'Turn the memory browser off', agent_may_run: false },
-  { name: 'memory show', summary: 'Show whether the memory browser is on and what it covers', agent_may_run: true },
+  {
+    name: 'memory show',
+    summary: 'Show whether the memory browser is on and what it covers',
+    agent_may_run: true,
+    effects: ['read'],
+    risk: 'low',
+  },
   { name: 'memory reindex', summary: 'Rebuild the memory index', agent_may_run: true },
-  { name: 'apps', summary: 'Manage MCP apps; the subcommands below say which the agent may run', agent_may_run: false },
-  { name: 'apps list', summary: 'List the MCP apps found', agent_may_run: true },
-  ownerTerminal('apps scan', 'Scan installed plugins for MCP apps'),
-  { name: 'apps strict', summary: 'Turn strict mode for MCP apps on or off', agent_may_run: false },
-  { name: 'apps revoke', summary: 'Revoke an MCP app approval', agent_may_run: false },
-  { name: 'apps login', summary: 'Sign in to an MCP app', agent_may_run: false },
-  { name: 'apps logout', summary: 'Sign out of an MCP app', agent_may_run: false },
-  { name: 'share', summary: 'Share links; the subcommands below are owner only', agent_may_run: false },
-  { name: 'share revoke', summary: 'Revoke a share link', agent_may_run: false },
-  { name: 'share shortcut', summary: 'Build and sign the share shortcut', agent_may_run: false },
-  { name: 'init', summary: 'Create the home folder, bridge key and config', agent_may_run: false },
-  ownerTerminal('enroll', 'Approve a new phone or browser'),
-  ownerTerminal('devices', 'List approved devices or revoke one'),
+  {
+    name: 'apps',
+    args: 'scan [--check] [--agent-dir <dir>] [--exclude-plugin <name>] | list | revoke <server|key-prefix> | login <server> | logout <server> | strict on|off',
+    summary: 'Manage MCP apps; the subcommands below say which the agent may run',
+    agent_may_run: false,
+  },
+  { name: 'apps list', summary: 'List the MCP apps found', agent_may_run: true, effects: ['read'], risk: 'low' },
+  ownerTerminal(
+    'apps scan',
+    'Scan installed plugins for MCP apps',
+    '[--check] [--agent-dir <dir>] [--exclude-plugin <name>]',
+  ),
+  { name: 'apps strict', args: 'on|off', summary: 'Turn strict mode for MCP apps on or off', agent_may_run: false },
+  { name: 'apps revoke', args: '<server|key-prefix>', summary: 'Revoke an MCP app approval', agent_may_run: false },
+  { name: 'apps login', args: '<server>', summary: 'Sign in to an MCP app', agent_may_run: false },
+  { name: 'apps logout', args: '<server>', summary: 'Sign out of an MCP app', agent_may_run: false },
+  {
+    name: 'share',
+    args: 'revoke <id> | shortcut [--label <label>] [--files] [--device <id>]',
+    summary: 'Share links; the subcommands below are owner only',
+    agent_may_run: false,
+  },
+  { name: 'share revoke', args: '<id>', summary: 'Revoke a share link', agent_may_run: false },
+  {
+    name: 'share shortcut',
+    args: '[--label <label>] [--files] [--device <id>]',
+    summary: 'Build and sign the share shortcut',
+    agent_may_run: false,
+  },
+  {
+    name: 'init',
+    args: '--relay-url <url> [--config default|five-threads]',
+    summary: 'Create the home folder, bridge key and config',
+    agent_may_run: false,
+  },
+  ownerTerminal('enroll', 'Approve a new phone or browser', '[--label <name>] [--no-qr] [--confirm]'),
+  ownerTerminal('devices', 'List approved devices or revoke one', '[revoke <id>]'),
   ownerTerminal('rotate', 'Replace the bridge key'),
-  { name: 'start', summary: 'Start the agent (launches Claude Code)', agent_may_run: false },
+  {
+    name: 'start',
+    args: '[--agent-dir <dir>] [--dry-run] [-- <claude flags>]',
+    summary: 'Start the agent (launches Claude Code)',
+    agent_may_run: false,
+  },
   // `update`, `rollback` and `restore` act on the agent kit (the Talos zone of the agent folder) and run kit/bin/talos-update,
   // which holds the lock, checks the signature and does the work; they are owner terminal commands (a speed bump for an agent, not a lock). The app checkout's own pull and
   // rollback are `talos-app update` / `talos-app rollback` (also spelled `talos update app` / `talos rollback app` at the hook): ask-gated, not
@@ -118,6 +216,7 @@ export const COMMANDS: readonly CommandInfo[] = [
   ownerTerminal('rollback', 'Put the previous agent kit release back (a version after it names one)'),
   {
     name: 'rollback app',
+    args: '[--dry-run] [--yes] [--skip-data-check]',
     summary: 'Go back to the previous recorded app version (this checkout, not the agent kit)',
     agent_may_run: false,
   },
@@ -125,14 +224,21 @@ export const COMMANDS: readonly CommandInfo[] = [
     'restore',
     'Put one file back: a Talos file from the release, settings from last-good, your own from git',
   ),
-  { name: 'restore-last-good', summary: 'Put back the last-good .mcp.json and .claude settings', agent_may_run: false },
+  {
+    name: 'restore-last-good',
+    args: '[--list] [--version <n>] [--file <name>] [--newest-start] [--agent-dir <dir>] [--yes]',
+    summary: 'Put back the last-good .mcp.json and .claude settings',
+    agent_may_run: false,
+  },
   {
     name: 'trust',
+    args: 'on|off|show',
     summary: 'Turn trust mode off, or show it; turning it on is a separate, owner-only subcommand',
     agent_may_run: false,
   },
   {
     name: 'theme',
+    args: 'reset|show',
     summary: 'Show the app theme, or reset it to the default (reset is owner only)',
     agent_may_run: false,
   },
@@ -140,20 +246,49 @@ export const COMMANDS: readonly CommandInfo[] = [
   ownerTerminal('trust on', 'Turn trust mode on (fewer cards)'),
   {
     name: 'lead',
+    args: 'init <thread-id> --folder <dir> --agent-dir <dir> [--mcp <names>] [--sandbox | --light] | check <folder> [--agent-dir <dir>]',
     summary: 'Set up or check the folder of a thread lead; making one is a separate, owner-only subcommand',
     agent_may_run: false,
   },
-  ownerTerminal('lead init', "Make a thread lead's folder (brief, board, privacy fence) and point the thread at it"),
-  { name: 'lead check', summary: "Check a lead folder's brief, board sizes and privacy fence", agent_may_run: true },
-  { name: 'install-mcp', summary: 'Add the Talos server to an agent folder .mcp.json', agent_may_run: false },
-  ownerTerminal('adopt', 'Connect a Claude Code folder you already use (.mcp.json and app hooks only)'),
+  ownerTerminal(
+    'lead init',
+    "Make a thread lead's folder (brief, board, privacy fence) and point the thread at it",
+    '<thread-id> --folder <dir> --agent-dir <dir> [--mcp <names>] [--sandbox | --light]',
+  ),
+  {
+    name: 'lead check',
+    args: '<folder> [--agent-dir <dir>]',
+    summary: "Check a lead folder's brief, board sizes and privacy fence",
+    agent_may_run: true,
+  },
+  {
+    name: 'install-mcp',
+    args: '--agent-dir <dir> [--dry-run]',
+    summary: 'Add the Talos server to an agent folder .mcp.json',
+    agent_may_run: false,
+  },
+  ownerTerminal(
+    'adopt',
+    'Connect a Claude Code folder you already use (.mcp.json and app hooks only)',
+    '--agent-dir <dir> [--dry-run] [--yes] [--repoint]',
+  ),
   { name: 'install-app-hooks', summary: 'Install the MCP apps hooks', agent_may_run: false },
-  ownerTerminal('install-ask-rules', 'Add the standard permissions.ask rules'),
+  ownerTerminal(
+    'install-ask-rules',
+    'Add the standard permissions.ask rules',
+    '--agent-dir <dir> [--scope project|user] [--dry-run]',
+  ),
   ownerTerminal(
     'install-guards',
     'Install (or --remove) the guard hook and deny rules that protect the never-change list',
+    '[--remove]',
   ),
-  { name: 'install-subagent-tee', summary: 'Install the subagent status line', agent_may_run: false },
+  {
+    name: 'install-subagent-tee',
+    args: '--agent-dir <dir> [--scope project|user] [--dry-run]',
+    summary: 'Install the subagent status line',
+    agent_may_run: false,
+  },
 ]
 
 const NOTE =
@@ -216,10 +351,32 @@ const USAGE = [
   'Run `talos commands` for the list, or `talos commands --json` for the same list as data.',
 ]
 
-function cmdCommands(args: string[], io: CliIO): number {
+/** Rows that exist under `talos` only: the list itself, and the kit's verbs (under `talos-app`, `update` and `rollback` are the `... app` rows). */
+const TALOS_ONLY = new Set(['commands', ...KIT_NAMES])
+/** How `talos-app` spells the app's own rows. */
+const APP_SPELLING: Readonly<Record<string, string>> = { 'update app': 'update', 'rollback app': 'rollback' }
+
+/** The text `talos-app` prints for help: one entry per COMMANDS row (name, args, then the summary), so it cannot drift from the list. */
+export function usageText(version: string): string {
+  const lines = [`talos-app ${version}`]
+  for (const c of COMMANDS) {
+    if (TALOS_ONLY.has(c.name)) continue
+    lines.push(`  ${APP_SPELLING[c.name] ?? c.name}${c.args ? ` ${c.args}` : ''}  - ${c.summary}`)
+  }
+  return lines.join('\n')
+}
+
+async function cmdCommands(args: string[], io: CliIO): Promise<number> {
   const { values } = parseArgs({ args, options: { json: { type: 'boolean' } }, strict: true })
   if (values.json) {
-    io.out(JSON.stringify({ enforced: 'terminal', note: NOTE, commands: COMMANDS }, null, 2))
+    // loaded here, not at the top: `talos` answers rollback and restore even when the packages are broken
+    const { BRIDGE_VERSION } = await import('./version.ts')
+    // the rule of `commandWho` (packages/protocol), inlined so this works with the packages broken; a test keeps the two equal
+    const who = (c: CommandInfo) => (c.needs_terminal ? 'owner_terminal' : c.agent_may_run ? 'agent' : 'owner')
+    const commands = COMMANDS.map((c) => ({ ...c, who: who(c) }))
+    io.out(
+      JSON.stringify({ schema: 1, app_version: BRIDGE_VERSION, enforced: 'terminal', note: NOTE, commands }, null, 2),
+    )
     return 0
   }
   const width = Math.max(...COMMANDS.map((c) => c.name.length))
@@ -281,7 +438,7 @@ export async function runTalos(
     return 0
   }
   try {
-    if (cmd === 'commands') return cmdCommands(rest, io)
+    if (cmd === 'commands') return await cmdCommands(rest, io)
     if (!COMMANDS.some((c) => c.name.split(' ')[0] === cmd)) {
       io.err(`talos: unknown command "${cmd}". Run \`talos commands\` for the list.`)
       return 2

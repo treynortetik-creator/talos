@@ -25,6 +25,7 @@ import { createSocketRequests } from './socket-requests.ts'
 import { createSocketState } from './socket-state.ts'
 import type { SocketClient, SocketClientOptions } from './socket-types.ts'
 import { createSocketUpload } from './socket-upload.ts'
+import { createSocketFolders } from './socketFolders.ts'
 import { createSocketMemory } from './socketMemory.ts'
 import { createSocketSchedules, NO_ANSWER_MS } from './socketSchedules.ts'
 import { createSocketSearch } from './socketSearch.ts'
@@ -105,6 +106,7 @@ export function createSocketClient(opts: SocketClientOptions): SocketClient {
 
   const memory = createSocketMemory({ ask: (frame, answer) => c.askRead(frame, answer) as never })
   const speak = createSocketSpeak({ ask: (frame) => c.askRead(frame, 'speak.result') })
+  const folders = createSocketFolders({ ask: (frame) => c.askRead(frame, 'fs.listing') })
 
   const search = createSocketSearch({
     sendAndWait: (frame, ms) => c.sendAndWait(frame, ms),
@@ -121,6 +123,7 @@ export function createSocketClient(opts: SocketClientOptions): SocketClient {
     search,
     memory,
     speak,
+    folders,
     store,
     meta,
     api,

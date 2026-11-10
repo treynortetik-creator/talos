@@ -2,6 +2,7 @@
 // list, and handles what the shell sends (compose, navigate, enroll_code). Every handler validates again where it matters.
 import type { TalosClient } from '../../lib/client.ts'
 import { setCompanionReplies } from '../../lib/native/companionReplies.ts'
+import { folderPicked } from '../../lib/native/folderPick.ts'
 import { setMacNotifyPermission } from '../../lib/native/notifyPermission.ts'
 import type { Shell } from '../../lib/native/shell.ts'
 import { useSession } from '../auth/session.ts'
@@ -89,6 +90,10 @@ export function attachShell(shell: Shell, client: TalosClient, opts: { nav?: Nav
     terminal_select(m) {
       if (!signedIn()) throw new Error('not signed in')
       useTerminalSessions.getState().requestSelect(m.session)
+    },
+    folder_picked(m) {
+      // no sign-in needed: it only answers a request this page made, and the path still goes through the checked patch
+      folderPicked(m.req, m.path, m.why)
     },
     enroll_code(m) {
       // The code goes into the fragment like a pasted setup link; EnrollPage reads it from there.

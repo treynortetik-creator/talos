@@ -138,6 +138,7 @@ export const appFrames = {
       case 'memory.read':
       case 'memory.search':
       case 'speak.request':
+      case 'fs.list':
         if (!this.ownerDeviceOk(a, frame.device_id, frame.id)) return
         return this.ephemeral.onRequest(a.id, frame, raw)
       // MCP Apps (spec M3.4): signed, never stored or replayed, answered to this socket only

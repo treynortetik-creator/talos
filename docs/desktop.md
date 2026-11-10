@@ -3,7 +3,7 @@
 A small menu-bar app for your Mac. It is optional: everything in [`SETUP.md`](SETUP.md) works without it. What it adds:
 
 - **It runs your agent for you.** Talos starts `claude` inside a tmux session, presses Enter on the development-channel
-  dialog, and starts it again (resuming the conversation) if it crashes. Without tmux the agent still runs, but it stops
+  dialog (every start, when the screen is exactly the warning for the one channel Talos adds, `server:talos-app`), and starts it again (resuming the conversation) if it crashes. Without tmux the agent still runs, but it stops
   when you quit Talos.
 - **A menu-bar icon that tells you the truth**: the session, the bridge and the relay each report separately.
 - **Windows**: the Talos web app in its own window, the agent's terminal, and a quick-compose panel you can open from any
@@ -74,8 +74,35 @@ apps/desktop/scripts/install.sh                 # copies it to ~/Applications an
 4. **Sign in**: menu, **Sign in...** pairs the Talos window with your relay as another device. It runs
    `talos-app enroll --label "Mac app"`, shows four words, and you type `y` in the small terminal pane when they match
    (the same check as [`SETUP.md`](SETUP.md) step 5).
-5. Quit the Terminal session, then Start session in Talos. The first time, the pane shows the development-channel warning;
-   Talos presses Enter for you from then on (after you confirmed it once yourself).
+5. Quit the Terminal session, then Start session in Talos. The pane shows the development-channel warning;
+   Talos presses Enter for you, every time, when it is exactly the warning for the one channel Talos adds, `server:talos-app`. Anything
+   else stays on screen and the menu says Talos needs you, and the warning comes up as a **Needs-you popup on the Mac**: "Allow Talos's development channel?" with the screen's own two buttons,
+   "I am using this for local development" and "Exit". When the start came from your phone, from a recovery or from a crash restart (you are probably away), the phone gets one plain line per start ("Main is waiting at your Mac: answer the Talos popup there"); a start you make yourself at the Mac gets none. Main's own bridge cannot run while Main sits on this warning (it is Main's child), so no card can be posted
+   from it; the answer is at the Mac. Your real click on the first button is your confirmation (a press sent by a script or by
+   Accessibility does nothing); "Exit"
+   presses Exit and leaves Main stopped until you start it again. An Enter you press in the pane lets that one start through, but is not
+   remembered (anyone with tmux can press one), so the next changed start asks again. If the Mac cannot carry the channels whole (a very
+   long list) the card offers Exit only. The popup names any channel Talos did not add, and, when it is your start command that changed (another program,
+   flag, environment variable or folder), says which piece (never a value): the first start after a change waits for your click
+   once, and the next starts are automatic again. When a bridge does run (a warning that comes back after Enter), the same
+   warning is also a card on your default thread.
+
+   **The seal.** The launch you confirmed is stored in `desktop.json` (`confirmed_launch`) together with a MAC
+   (`confirmed_launch_mac`) made with a 32-byte key kept in your Keychain (service `com.talos.app.launch-seal`, this Mac
+   only, never read with a prompt), so a program that can write the file cannot make an edited launch look confirmed. A missing
+   key, a missing or wrong MAC or a Keychain that cannot be read all count as "not confirmed": the warning waits for your tap,
+   and the tap seals it again. The key survives an update of the app when the update is signed with the same certificate (check
+   it with `apps/desktop/scripts/keychain-survival-probe.sh`); a build that cannot read the existing item (signed another way, ad hoc) never
+   re-seals, so every start of that build shows the card, which is safe and costs a tap.
+
+   **What the seal does not stop.** It stops accidental and casual auto-accepts of a changed launch: an edited `desktop.json` is not
+   trusted. It does not stop an agent running as you with access to tmux, which can press Enter on Main's dialog itself; agent guards
+   do not block tmux. The one development channel the app ever answers is still `server:talos-app`.
+
+   **After an update that brings the seal** the first start asks once (the card): an unsealed `confirmed_launch` cannot be told
+   from one a program wrote, so it is cleared once (`launch_trust` in `desktop.json` records that the step ran, version 2 with the SHA-256
+   fingerprint; set it back to 0 to run it again). **To get the old behaviour back**, turn **Press Enter for me** off in the Mac settings (`auto_confirm_restart`
+   false): Talos then never presses the key by itself, and the card and the pane are both yours to answer.
 
 While the same agent is still running in Terminal, Talos refuses to start a second one ("another session holds the
 channels"), so a chat channel does not lose its connection by accident.
@@ -167,6 +194,12 @@ the same one the Terminals window shows, so the two always agree.
 - The terminal needs room for 80 columns by 24 rows. Click inside it before typing: the page never moves your typing into it.
 - **Older Mac app or older page:** no list is sent, and the screen is the single Main terminal it was before.
 
+**Choose… for a thread's folder.** The Folder box in a thread's own-session settings has a Choose… button. In the Talos window it sends `pick_folder`
+(a request id and, optionally, where to start); the Mac shows an `NSOpenPanel` (folders only, one folder, nothing created; the page cannot change
+that) and answers `folder_picked` with the absolute path or `null` for Cancel. Only one panel is up at a time, and a signed-out page gets none. The page
+then saves the path through the same owner-signed thread patch as a typed one; the bridge checks it. The Mac app lists `TalosFeatures/pick-folder` in its
+user agent, so a page never asks an older app that would drop the message; the page then uses its in-app folder browser instead.
+
 The messages behind it are in `packages/protocol/src/native.ts`: `terminal_view` carries `session`, the page sends `terminal_resume`,
 the page sends `terminal_leave` when the screen is closed (a null room only means "no terminal to show right now", so the list keeps
 following the sessions), and the Mac sends `terminal_sessions`, `terminal_resume_result` and `terminal_select` (a tab it switched itself). The page lists `terminal-tabs/1` in `ready`; the Mac sends the
@@ -208,7 +241,7 @@ The **Thread sessions** tab is still there for the one case below.
   reopen the app. The phone is not told what the Mac did with its Restart tap: it says "sent to your Mac" and that the app
   decides (nothing happens if the app is not running). A restore cut off by quitting the app tells nobody, because the quit ends
   the process. After a phone restart or an automatic restore, if Claude Code stops at the dev-channel warning
-  (cold start), the app posts "press Enter at the Mac" to your default thread.
+  and Talos did not press Enter (the screen was not exactly the expected warning), the app posts "Main is waiting at your Mac: answer the Talos popup there" to your default thread, once per start (not for a start you make yourself at the Mac).
 - **macOS asks for the Desktop folder again.** The app was signed differently from last time. Use the local signing
   certificate above, or grant it again.
 - **A bug report.** `talos-app report --out report.txt` bundles doctor, status and the log with keys, tokens and your home

@@ -23,8 +23,8 @@ import { AgentsList, OfflineBadge, useAgentsView } from '../agents/AgentsList.ts
 import { chipLabel, EMPTY_TEXT } from '../agents/logic.ts'
 import { useWorkersStatus, WORKER_STATE_TEXT } from '../thread-sessions/store.ts'
 import {
+  CTX_LAST_KNOWN_TEXT,
   compactTokens,
-  contextUsed,
   groupCommands,
   INSTALL_HINT,
   type Phase,
@@ -37,6 +37,7 @@ import {
   WARN_USED_PCT,
 } from './logic.ts'
 import { type Outcome, useSessionController } from './store.ts'
+import { useThreadContext } from './threadContext.ts'
 
 // ---- meters -------------------------------------------------------------------------------------------------------
 
@@ -46,6 +47,7 @@ function Meter({
   text,
   detail,
   tone = 'accent',
+  stale,
   testId,
 }: {
   label: string
@@ -54,10 +56,16 @@ function Meter({
   text: string
   detail?: string
   tone?: 'accent' | 'warn'
+  /** A last known reading from a session that is not running: dimmed. */
+  stale?: boolean
   testId: string
 }) {
   return (
-    <div data-testid={testId} className="flex flex-col gap-1.5">
+    <div
+      data-testid={testId}
+      {...(stale ? { 'data-stale': 'true' } : {})}
+      className={cn('flex flex-col gap-1.5', stale && 'opacity-60')}
+    >
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-sm font-medium">{label}</span>
         <span className={cn('font-mono text-sm', value === undefined ? 'text-text-2' : 'text-text')}>{text}</span>
@@ -94,8 +102,13 @@ function SectionTitle({ id, children }: { id: string; children: React.ReactNode 
 function Context({ state, threadId, live }: { state: SessionStateT | undefined; threadId: string; live: boolean }) {
   const ctl = useSessionController()
   const busyCtl = useStore(ctl.store, (s) => Object.keys(s.pending).length > 0)
-  const ctx = contextUsed(state)
-  const canCompact = live && state?.capabilities.includes('compact') === true
+  // The thread's own session's context when it has one, never main's (docs/OPTION-C.md 9.3)
+  const { kind, ctx } = useThreadContext(threadId)
+  // Compact runs on main, so it is offered only where main is what the numbers describe
+  const canCompact = kind === 'main' && live && state?.capabilities.includes('compact') === true
+  const tokens =
+    ctx?.tokens !== undefined && ctx.window ? `${compactTokens(ctx.tokens)} of ${compactTokens(ctx.window)} tokens` : ''
+  const detail = [tokens, kind === 'last' ? CTX_LAST_KNOWN_TEXT : ''].filter(Boolean).join(' · ')
   return (
     <section aria-labelledby="session-context-h" className="flex flex-col gap-3" data-testid="session-context">
       <SectionTitle id="session-context-h">Context</SectionTitle>
@@ -103,11 +116,16 @@ function Context({ state, threadId, live }: { state: SessionStateT | undefined; 
         testId="meter-context"
         label="Context window"
         value={ctx?.used}
-        text={ctx === undefined ? 'No reading yet' : `${ctx.used}% used · ${100 - ctx.used}% left`}
+        text={
+          kind === 'off'
+            ? 'Not running'
+            : ctx === undefined
+              ? 'No reading yet'
+              : `${ctx.used}% used · ${100 - ctx.used}% left`
+        }
         tone={ctx !== undefined && ctx.used >= WARN_USED_PCT ? 'warn' : 'accent'}
-        {...(ctx?.tokens !== undefined && ctx.window
-          ? { detail: `${compactTokens(ctx.tokens)} of ${compactTokens(ctx.window)} tokens` }
-          : {})}
+        {...(kind === 'last' ? { stale: true } : {})}
+        {...(detail ? { detail } : {})}
       />
       {canCompact && (
         <div className="flex flex-col gap-1">

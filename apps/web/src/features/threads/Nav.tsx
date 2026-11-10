@@ -4,6 +4,7 @@ import { ownValue } from '@talos-app/protocol'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router'
 import { useTalos } from '../../lib/client.ts'
+import { threadChordLabel } from '../../lib/keymap.ts'
 import { getShell } from '../../lib/native/shell.ts'
 import { freshStatus, freshStatuses } from '../../lib/threadStatus.ts'
 import { useFeature } from '../../lib/v2Client.ts'
@@ -267,7 +268,7 @@ export function Sidebar() {
                   )}
                   {(ownValue(unread, t.id) ?? 0) > 0 &&
                     count(ownValue(unread, t.id) ?? 0, `${ownValue(unread, t.id)} unread`)}
-                  <span className="sr-only">Ctrl+{i + 1}</span>
+                  {threadChordLabel(i + 1, false) && <span className="sr-only">{threadChordLabel(i + 1, false)}</span>}
                 </NavLink>
               )
               // the folded rail shows icons only: no room for a "...", and the pencil is not there either

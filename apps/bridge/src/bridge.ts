@@ -27,6 +27,7 @@ import {
 import { DeviceStore } from './devices.ts'
 import { DialogCards } from './dialog-card.ts'
 import { Enrollment } from './enrollment.ts'
+import { FolderService, folderDeps } from './folders/service.ts'
 import { configSyncFrame, sessionAgentsFrame, sessionInventoryFrame, sessionStateFrame } from './frames-out.ts'
 import { ensureDir, mtimeMs } from './fsutil.ts'
 import { bridgeFeatures } from './handshake.ts'
@@ -273,6 +274,8 @@ export class Bridge {
     if (live) this.stopMemory = installMemory(this.ctx)
     // the play button on agent messages: reads a stored message aloud with the owner's own TTS command
     if (live) this.ctx.speak = new SpeakService(this.ctx, opts.speak)
+    // the folder picker: folder names under home for the owner's signed device (never in a thread session's process)
+    if (live && !worker) this.ctx.folders = new FolderService(folderDeps(env.home, process.env, opts.folders))
     // Problem reports: the live main bridge files them, and sees its own `error` log lines (never a worker or a headless run)
     if (live && !worker) {
       this.ctx.problems = new ProblemService({
@@ -621,15 +624,18 @@ export class Bridge {
     if (!r || this.ctx.mode !== 'live') return
     this.ctx.dialogs?.tick()
     const now = this.clock.now()
-    r.tick((status) => {
-      this.ctx.transport.sendEphemeral({
-        v: 1,
-        type: 'workers.status',
-        id: newUlid(),
-        ts: new Date(now).toISOString(),
-        status,
-      } as never)
-    })
+    r.tick(
+      (status) => {
+        this.ctx.transport.sendEphemeral({
+          v: 1,
+          type: 'workers.status',
+          id: newUlid(),
+          ts: new Date(now).toISOString(),
+          status,
+        } as never)
+      },
+      (state) => this.ctx.transport.sendEphemeral(sessionStateFrame(now, state)),
+    )
   }
 
   /** Worker mode: connect to main's hub (server.ts calls this once MCP is initialized). */

@@ -18,12 +18,19 @@ extension Supervisor {
     public var promptSettle: Double = 5
     /// ... and while an attached client has not typed for this long (an owner-opened picker is not waiting on anybody).
     public var promptClientQuiet: Double = 30
+    /// The dev-channels warning is answered only while no attached tmux client has typed for this long (or when the clients cannot be read: never).
+    /// tmux reports a client's activity in whole seconds, so the quiet needed is up to a second longer than this.
+    public var devDialogClientQuiet: Double = 5
     public var agentsPoll: Double = 10
     public var hangPolls: Int = 2
     public var restartWindow: Double = 900
     public var restartCap: Int = 5
     public var confirmWindow: Double = 3600
     public var confirmCap: Int = 3
+    /// Auto-answers of the dev-channels warning on COLD starts (the owner's resets, the phone's restart, a launch change) allowed per
+    /// `confirmWindow`. They do not spend `confirmCap`, which is the crash loop's: three resets in an hour must not make the fourth wait
+    /// for a human, and must not turn one real crash into a "crash loop". Ten an hour still stops a runaway self-restart.
+    public var coldConfirmCap: Int = 10
     public init() {}
   }
 
@@ -35,6 +42,9 @@ extension Supervisor {
     /// `$TALOS_APP_HOME`; nil = from the launch env, else `~/.config/talos/app`.
     public var talosAppHome: String?
     public var auditLogPath: String?
+    /// The key store that seals `confirmed_launch`. The in-memory store unless the app hands over the Keychain one (the app's own start, `App.init`):
+    /// nothing under test ever touches the Keychain.
+    public var launchTrust: LaunchTrust = MemoryLaunchTrust()
     /// Run the takeover check (4.2) before every start. Option C workers keep it on too.
     public var takeoverCheck: Bool = true
     /// Process groups owned by sibling supervisors (Option C: main whitelists its workers' panes, OPTION-C-SPEC 4.4).
@@ -82,9 +92,9 @@ extension Supervisor {
   public enum NeedsYou: Equatable, Sendable {
     /// A dialog Talos never answers (trust, MCP consent, login, unknown), or the dev-channel warning outside 4.4.
     case dialog(String)
-    /// Cold start: the owner presses Enter on the dev-channel warning in the pane.
+    /// A cold start whose warning the guard refused to auto-confirm: the owner presses Enter in the pane.
     case confirmColdStart
-    /// A restart the guard refused to auto-confirm.
+    /// A restart whose warning the guard refused to auto-confirm.
     case restartNotConfirmed(AutoConfirmGuard.Refusal)
     /// Alive but missing from `claude agents --json` for two polls.
     case stuck
@@ -111,6 +121,10 @@ extension Supervisor {
     /// The Mac restarted the agent, or put back the last good setup, because the owner asked or because it kept failing; or
     /// the restore failed and it stopped there.
     case recovered(AgentRecovery.Outcome)
+    /// Main's development-channels warning was refused and is offered to the owner as a card (named moments for future hooks).
+    case devCardOffered(dialogId: String)
+    /// The owner's tap on that card was verified and the Mac pressed the key for it (`choice` is the card's button, 0 = the confirm).
+    case devCardAnswered(dialogId: String, choice: Int)
   }
 
   public enum StartKind: String, Equatable, Sendable {
@@ -133,6 +147,10 @@ extension Supervisor {
     /// `status` of our pane's entry in the last `claude agents --json` poll (`busy`, `idle`, `waiting`); nil when the
     /// poll failed or the entry is missing. The status bar reads this instead of polling again.
     public var agentActivity: String?
+    /// Main's dialog on its pane as an offer for the bridge's card (SupervisorDevCard.swift); `WorkerManager` writes it to `workers.json`.
+    public var devDialog: DialogOffer?
+    /// The Mac told the phone, for this start, that Main waits at the Mac (`postDevWaitingToPhone`): the popup's footer says so only then.
+    public var devPhoneTold = false
   }
 
   struct Holder: Equatable {
@@ -149,8 +167,18 @@ extension Supervisor {
     /// The child's start time (seconds since 1970; 0 if unread). A pid number alone is never "ours" (pid reuse).
     var leaderStart: Double = 0
     var fingerprint: String
+    /// Per-piece hashes of this launch (folder, program, flags, env), so the card can say what differs from the confirmed one.
+    var parts: [String: String] = [:]
     var cliVersion: String?
     var expectsDevDialog: Bool
+    /// The channels this start's argv passed with `--dangerously-load-development-channels`: the only ones the warning may show.
+    var launchedChannels: [String] = []
+    /// `Options.awake` at the spawn (stops while the Mac sleeps): the 60 s window of the auto-accept counts from here.
+    var awakeStartedAt: Double = 0
+    /// The last reason the guard gave for not answering the warning (the log says it once per reason).
+    var devRefusal: AutoConfirmGuard.Refusal?
+    /// How many passes in a row gave `devRefusal` (a refusal that may clear by itself is held back for a few).
+    var devRefusalPasses = 0
     var devDialogSeen: DialogMatcher.DevChannels?
     var confirmsSent = 0
     var confirmSentAt: Double?
@@ -167,6 +195,8 @@ extension Supervisor {
     /// A prompt of the CLI's nobody named on Main's screen: its stillness, and whether this run has looked at the screen yet.
     var promptWatch = PromptWatch()
     var promptChecked = false
+    /// The refused development-channels warning as a card for the owner, and what has been taken from it (SupervisorDevCard.swift).
+    var devCard = DevCard()
   }
 
   struct Cleanup {

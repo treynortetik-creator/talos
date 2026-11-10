@@ -75,9 +75,9 @@ struct ReviewD1TmuxTests {
     #expect(r.wait(5) { s2.status.startKind == .attached })
     #expect(r.wait(25) { r.starts.count >= 2 }, "restarted")
     usleep(8_000_000)
-    let enters = r.audit.components(separatedBy: " auto_confirm ").count - 1
+    let enters = r.autoConfirms
     #expect(r.starts.count == 2, "\(r.starts.count) starts: \(r.starts)")
-    #expect(enters <= 1, "\(enters) auto-confirm Enters for one restart")
+    #expect(enters <= 2, "\(enters) auto-confirm Enters: the cold start's and at most one for the restart")
   }
 
   /// Option C names sessions `t-<thread_id>`; nothing enforces `TmuxCommands.isValidSessionName`. With a name tmux
@@ -114,7 +114,7 @@ struct ReviewD1TakeoverTests {
   /// steals Telegram. The just-exited child must be matched by leader start time, not by number.
   @Test func aStoppedChildsRecycledPgidIsNotWhitelisted() throws {
     let kind: HostKind = Rig.hasTmux ? .tmux : .direct
-    let r = try Rig(kind, scenario: "dev-dialog.sh")
+    let r = try Rig(kind, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     let env = r.loginEnv
     let probe = RecyclingProbe(base: LiveSystem(loginEnv: { env }))

@@ -1,7 +1,7 @@
 // In-memory SearchClient + MemoryClient for fakeClient (VITE_FAKE=1 and the web tests). Generic content only.
 import { foldForSearch, type MemoryEntryT, type MessageT, ownValue, type SearchHitT } from '@talos-app/protocol'
 import { TalosClientError } from './client.ts'
-import type { MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
+import type { FolderClient, MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
 
 /** Marks (start, end) in `text` for each folded term, mapped back to original string offsets. */
 function marksFor(text: string, terms: string[]): Array<[number, number]> {
@@ -224,6 +224,67 @@ export function createFakeSpeak(deps: {
         reason: 'no_tts',
         message:
           'Your Mac has no voice set up yet. Set TALOS_APP_TTS_CMD in bridge.env to a text-to-speech command and restart Talos.',
+      }
+    },
+  }
+}
+
+/** What a fake Mac's folders look like: a home, an agent folder, and the folder names under each path (dot-folders included). */
+export type FakeFolderTree = { home: string; agentDir?: string; tree: Record<string, string[]> }
+
+export type FakeFolders = FolderClient & {
+  /** The next `list` rejects with the Mac's one refusal sentence (or this text), then behaves again. */
+  failNextWith(message: string): void
+  /** Replaces the folder names under `path`. */
+  setTree(path: string, names: string[]): void
+  /** Says `n` more folders under `path` were not sent. */
+  setMore(path: string, n: number): void
+  /** Every `list` call, in order, for tests. */
+  readonly calls: Array<{ path: string | null; hidden: boolean }>
+}
+
+/**
+ * The folder picker's Mac as a fake: lists what `tree` holds, hides dot-folders unless asked, refuses a path that is not in
+ * the tree with the Mac's sentence, and rejects like the socket client does with the Mac away. Generic made-up folders only.
+ */
+export function createFakeFolders(deps: { macOnline: () => boolean }, seed: FakeFolderTree): FakeFolders {
+  const tree: Record<string, string[]> = { ...seed.tree }
+  const more: Record<string, number> = {}
+  const calls: FakeFolders['calls'] = []
+  let failNext: string | null = null
+  const base = { home: seed.home, ...(seed.agentDir ? { agentDir: seed.agentDir } : {}) }
+  return {
+    calls,
+    failNextWith(message) {
+      failNext = message
+    },
+    setTree(path, names) {
+      tree[path] = names
+    },
+    setMore(path, n) {
+      more[path] = n
+    },
+    async list(path, hidden) {
+      calls.push({ path, hidden })
+      if (!deps.macOnline()) throw new TalosClientError('mac_offline')
+      if (failNext !== null) {
+        const message = failNext
+        failNext = null
+        throw new TalosClientError('bad_frame', message)
+      }
+      if (path === null) return { ...base, parent: null, entries: [], more: 0 }
+      const names = tree[path.replace(/\/+$/, '') || '/']
+      if (!names) throw new TalosClientError('bad_frame', "That folder can't be opened.")
+      const shown = names
+        .filter((n) => hidden || !n.startsWith('.'))
+        .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+      const cut = path.lastIndexOf('/')
+      return {
+        ...base,
+        path,
+        parent: path === seed.home ? null : cut <= 0 ? '/' : path.slice(0, cut),
+        entries: shown,
+        more: more[path] ?? 0,
       }
     },
   }

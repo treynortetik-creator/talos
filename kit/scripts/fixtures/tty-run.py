@@ -40,9 +40,29 @@ if pidfile:
     with open(pidfile + ".tmp", "w") as fh:
         fh.write(str(pid))
     os.replace(pidfile + ".tmp", pidfile)
+
+
+def drain():
+    # Output can still arrive as the child finishes closing its terminal.
+    idle = time.monotonic() + 1.0
+    while time.monotonic() < idle:
+        if not select.select([fd], [], [], 0.05)[0]:
+            continue
+        try:
+            data = os.read(fd, 65536)
+        except OSError:
+            break
+        if not data:
+            break
+        sys.stdout.buffer.write(data.replace(b"\r\n", b"\n"))
+        sys.stdout.buffer.flush()
+        idle = time.monotonic() + 1.0
+
+
 deadline = time.monotonic() + timeout
 sent = send is None
 t0 = time.monotonic()
+status = None
 while True:
     if not sent and time.monotonic() - t0 > 1.0:
         os.write(fd, send.encode() + b"\n")
@@ -75,10 +95,17 @@ while True:
     try:
         data = os.read(fd, 65536)
     except OSError:
-        break
+        data = b""
     if not data:
-        break
+        exited, child_status = os.waitpid(pid, os.WNOHANG)
+        if exited:
+            status = child_status
+            break
+        continue
     sys.stdout.buffer.write(data.replace(b"\r\n", b"\n"))
     sys.stdout.buffer.flush()
-_, status = os.waitpid(pid, 0)
+drain()
+if status is None:
+    _, status = os.waitpid(pid, 0)
+drain()
 sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status))

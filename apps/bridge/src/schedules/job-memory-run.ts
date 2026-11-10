@@ -104,8 +104,9 @@ export function applyTalosFields(
 }
 
 /**
- * Why this change may not switch memory on, or null. Memory is put into the prompt the bridge hands to a session, so a heartbeat
- * (a check the bridge runs itself) and a command job (no prompt) cannot have it. Judged on the job as it would be after the change.
+ * Why this change may not switch memory on, or null. A heartbeat is a check the bridge runs itself, with its own pack, so it cannot
+ * have this memory. Every other job can: a session job gets it in its prompt, a background job through Chronos, a command job as files.
+ * Judged on the job as it would be after the change.
  */
 export function memoryProblem(change: ScheduleChangeT, base: ScheduleCardBase | null): string | null {
   if (change.op === 'delete' || change.op === 'adopt') return null
@@ -115,7 +116,5 @@ export function memoryProblem(change: ScheduleChangeT, base: ScheduleCardBase | 
   const meta = change.op === 'create' ? change.draft.meta : change.set.meta === undefined ? cur?.meta : change.set.meta
   if (heartbeatConfigFromMeta(meta) !== null)
     return 'A heartbeat job cannot have memory: its runs are checks the bridge makes itself, not session runs that could be shown it. Switch memory off first. Nothing was saved.'
-  if (cur?.kind === 'command')
-    return 'A command job cannot have memory: it runs a command, not a prompt in your session. Nothing was saved.'
   return null
 }

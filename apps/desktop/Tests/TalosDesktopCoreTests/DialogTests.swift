@@ -93,38 +93,34 @@ struct DialogMatcherTests {
 
 @Suite("AutoConfirmGuard")
 struct AutoConfirmGuardTests {
-  let id = "0f1e2d3c-4b5a-4968-8776-655443322110"
-
+  /// What a Main start whose argv passed `--dangerously-load-development-channels server:talos-app` shows, one second after the spawn,
+  /// with nobody typing. Nothing here says whether the start is a cold start or a restart: the guard no longer asks.
   func inputs(
-    _ rows: [String] = devDialog(), kind: AutoConfirmGuard.StartKind = .supervisorRestart, resume: String? = nil,
-    session: DesktopConfig.Session? = nil, version: String? = "2.1.312", sent: Int = 0, loop: CrashLoop = CrashLoop(),
-    enabled: Bool = true
+    _ rows: [String] = devDialog(), enabled: Bool = true, isMain: Bool = true, launched: [String] = ["server:talos-app"],
+    since: Double = 1, sent: Int = 0, typing: Bool = false, loop: CrashLoop = CrashLoop(), launchChanged: Bool = false
   ) -> AutoConfirmGuard.Inputs {
     AutoConfirmGuard.Inputs(
-      enabled: enabled, startKind: kind, launchedResumeId: resume ?? id,
-      session: session
-        ?? DesktopConfig.Session(
-          id: id, confirmedAt: "2026-10-30T00:00:00Z", confirmedCliVersion: "2.1.312",
-          approvedDevChannels: ["server:talos-app"]),
-      cliVersion: version, screen: DialogMatcher.classify(rows), confirmsThisStart: sent, loop: loop, now: 100)
+      enabled: enabled, isMain: isMain, launchedChannels: launched, screen: DialogMatcher.classify(rows),
+      launchChanged: launchChanged, secondsSinceSpawn: since, confirmsThisStart: sent, clientsMayBeTyping: typing, loop: loop, now: 100)
   }
 
-  @Test func confirmsOnlyTheExactRestartCase() {
+  @Test func confirmsTheExactDialog() {
     #expect(AutoConfirmGuard.decide(inputs()) == .confirm)
   }
 
+  /// TG 24520 ("cold starts are always human") was retired by the owner on 2026-11-07. Nothing but the screen, the launch's own argv,
+  /// the clock, the typing guard and the rate limit decides now.
   @Test func refusals() {
     let r = { (i: AutoConfirmGuard.Inputs) in AutoConfirmGuard.decide(i) }
     #expect(r(inputs(enabled: false)) == .refuse(.disabled))
-    #expect(r(inputs(kind: .cold)) == .refuse(.coldStart))
-    #expect(r(inputs(resume: "aaaaaaaa-4b5a-4968-8776-655443322110")) == .refuse(.idMismatch))
-    #expect(r(inputs(session: DesktopConfig.Session(id: id, approvedDevChannels: ["server:talos-app"]))) == .refuse(.notHumanConfirmed))
-    #expect(r(inputs(version: "2.1.313")) == .refuse(.versionChanged))
-    #expect(r(inputs(version: nil)) == .refuse(.versionUnknown))
+    #expect(r(inputs(isMain: false)) == .refuse(.notMain), "a worker's screen is never answered")
     #expect(r(inputs(sent: 1)) == .refuse(.alreadyConfirmedThisStart))
     #expect(r(inputs(["> working"])) == .refuse(.noDialog))
     #expect(r(inputs(devDialog(title: 2))) == .refuse(.ambiguousDialog), "the dialog printed twice")
     #expect(r(inputs(devDialog(highlight: 2))) == .refuse(.wrongHighlight))
+    #expect(r(inputs(since: 60.5)) == .refuse(.outsideWindow))
+    #expect(r(inputs(typing: true)) == .refuse(.clientsMayBeTyping))
+    #expect(r(inputs(launchChanged: true)) == .refuse(.launchChanged), "a launch the owner has not confirmed waits for him")
     // the title gone with the Channels line and the confirm row still there: a different screen, never confirmed
     let noTitle = DialogMatcher.DevChannels(
       channels: ["server:talos-app"], highlighted: DialogMatcher.Strings.devConfirm, titleCount: 0, channelLineCount: 1)
@@ -136,6 +132,14 @@ struct AutoConfirmGuardTests {
     #expect(r(inputs(loop: l)) == .refuse(.rateLimited))
   }
 
+  @Test func theWindowIsSixtySecondsFromTheSpawn() {
+    #expect(AutoConfirmGuard.window == 60)
+    #expect(AutoConfirmGuard.decide(inputs(since: 60)) == .confirm, "inside, on the edge")
+    #expect(AutoConfirmGuard.decide(inputs(since: 60.001)) == .refuse(.outsideWindow))
+    #expect(AutoConfirmGuard.decide(inputs(since: 3600)) == .refuse(.outsideWindow))
+  }
+
+  /// The channels the screen shows must be exactly the Talos channel, nothing extra.
   @Test(arguments: [
     "server:talos-app, server:talos-app-evil", "server:talos-app-evil", "server:talos-app, server:talos-app",
     "server:talos-app,plugin:x@y", "Server:talos-app", "",
@@ -144,11 +148,35 @@ struct AutoConfirmGuardTests {
     #expect(AutoConfirmGuard.decide(inputs(devDialog(channels: line))) == .refuse(.channelsMismatch))
   }
 
-  @Test func channelOrderDoesNotMatter() {
-    var s = DesktopConfig.Session(
-      id: id, confirmedAt: "x", confirmedCliVersion: "2.1.312", approvedDevChannels: ["server:b", "server:a"])
-    #expect(AutoConfirmGuard.decide(inputs(devDialog(channels: "server:a, server:b"), session: s)) == .confirm)
-    s.approvedDevChannels = []
-    #expect(AutoConfirmGuard.decide(inputs(devDialog(channels: ""), session: s)) == .refuse(.channelsMismatch))
+  /// The launch command can be edited by whatever can write desktop.json: the argv agreeing with the screen is not enough.
+  @Test func onlyTheTalosChannelIsEverAnswered() {
+    let r = { (i: AutoConfirmGuard.Inputs) in AutoConfirmGuard.decide(i) }
+    #expect(AutoConfirmGuard.talosChannel == "server:talos-app")
+    #expect(r(inputs(devDialog(channels: "server:talos-app"), launched: ["server:talos-app"])) == .confirm)
+    // argv with an extra channel, and the screen showing both
+    #expect(r(inputs(devDialog(channels: "server:talos-app, server:evil"), launched: ["server:talos-app", "server:evil"])) == .refuse(.channelsMismatch))
+    // argv and screen both name another channel
+    #expect(r(inputs(devDialog(channels: "server:evil"), launched: ["server:evil"])) == .refuse(.channelsMismatch))
+    // the screen is the Talos channel but the argv is not just that (another channel, none, the flag twice)
+    #expect(r(inputs(devDialog(channels: "server:talos-app"), launched: ["server:talos-app", "server:evil"])) == .refuse(.channelsMismatch))
+    #expect(r(inputs(devDialog(channels: "server:talos-app"), launched: ["server:evil"])) == .refuse(.channelsMismatch))
+    #expect(r(inputs(devDialog(channels: "server:talos-app"), launched: [])) == .refuse(.channelsMismatch))
+    #expect(r(inputs(devDialog(channels: "server:talos-app"), launched: ["server:talos-app", "server:talos-app"])) == .refuse(.channelsMismatch))
+    // the argv is the Talos channel but the screen shows more or another
+    #expect(r(inputs(devDialog(channels: "server:evil"), launched: ["server:talos-app"])) == .refuse(.channelsMismatch))
+    #expect(r(inputs(devDialog(channels: "server:talos-app, server:evil"), launched: ["server:talos-app"])) == .refuse(.channelsMismatch))
+    // a canonically-equal lookalike is different bytes
+    #expect(r(inputs(devDialog(channels: "server:talos-app\u{0301}"), launched: ["server:talos-app"])) == .refuse(.channelsMismatch))
+  }
+
+  @Test func theChannelsAnArgvPassed() {
+    let flag = "--dangerously-load-development-channels"
+    #expect(AutoConfirmGuard.channels(inArgv: ["--dangerously-skip-permissions", flag, "server:talos-app"]) == ["server:talos-app"])
+    #expect(AutoConfirmGuard.channels(inArgv: [flag, "server:a", "server:b", "--resume", "x"]) == ["server:a", "server:b"])
+    #expect(AutoConfirmGuard.channels(inArgv: ["\(flag)=server:a"]) == ["server:a"])
+    #expect(AutoConfirmGuard.channels(inArgv: [flag, "server:a", "--x", flag, "server:b"]) == ["server:a", "server:b"])
+    #expect(AutoConfirmGuard.channels(inArgv: ["--channels", "plugin:x@y"]).isEmpty, "--channels is another flag")
+    #expect(AutoConfirmGuard.channels(inArgv: ["--resume", "id"]).isEmpty)
+    #expect(AutoConfirmGuard.channels(inArgv: [flag]).isEmpty)
   }
 }

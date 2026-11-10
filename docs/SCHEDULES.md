@@ -771,8 +771,8 @@ Chronos 0.2 can already put jobs into a session. Its SessionStart hook arms Cron
 
 ### S3.8 Job memory
 
-A job can remember between runs. It is **off unless the owner switches it on**, per job. Only a job that runs in the
-session can have it; a heartbeat (a check the bridge runs itself) and a command job are refused with a reason.
+A job can remember between runs. It is **off unless the owner switches it on**, per job. A job that runs in the session, a background job and a command
+job can have it; a heartbeat (a check the bridge runs itself) is refused with a reason.
 
 - **The switch.** `memory: true` on the job. It is a Talos-only field, handled exactly like `thread_id`: it travels in the
   draft and in an update's `set`, the bridge splits it off before the change goes to Chronos (`toChronosChange`), and it
@@ -789,10 +789,9 @@ session can have it; a heartbeat (a check the bridge runs itself) and a command 
   - **Switching it on is high risk** (S8.2), like turning a job on: it widens everything every future prompt carries, and the
     card says so plainly: "Future runs will see the last 3 results and this job's notepad." Switching it off narrows, and is
     low.
-  - **Jobs that run in the background.** Memory is put into the prompt the bridge hands to the session, so only a job that
-    runs in the session (`runsInSession`) gets it. A background job, or a restricted one (always background), can have the
-    switch on, and the card and the form say it has no effect yet. A heartbeat or a command job cannot: the bridge refuses
-    the change ("Nothing was saved") rather than store a switch that does nothing.
+  - **Jobs that run in the session** get it in the prompt the bridge hands over, as described below.
+  - **Jobs that run in the background** get it through Chronos (see "Background jobs" below). A heartbeat cannot have memory:
+    the bridge refuses the change ("Nothing was saved") rather than store a switch that does nothing.
 - **What a run gets.** With memory on, the `schedule_run` notification has a third section after the job text, `--- memory
   (this job only) ---`:
   1. **The last 3 results** of this job (newest first: date, ok or failed, summary). A summary is cut to **280
@@ -841,6 +840,56 @@ session can have it; a heartbeat (a check the bridge runs itself) and a command 
     too), a summary is one line (its new lines are shown, not obeyed), and the whole thing is wrapped as above.
     A forged wrapper end marker inside it is neutralised by the wrapper.
   - The notification's own meta (`trust=owner`) is unchanged and carries nothing from memory.
+- **Background jobs.** Chronos starts these by itself (launchd), often with no bridge running, and composes the prompt itself, so
+  the bridge cannot hand it a memory section. It works through files, and needs a Chronos whose `api version` lists the
+  `memory` feature. Without it the card of a background job with memory on says plainly "a newer Chronos is needed", the bridge
+  writes nothing, and nothing is pretended.
+  - **The pack.** The live bridge keeps `$TALOS_APP_HOME/job-memory/<id>.pack.json` for each Claude job that runs in the
+    background and has memory on: `{v, job, prompt_sha256, epoch, notepad, key, text}`. `text` is the same wrapped block a session
+    run gets (`wrapExternal`, 280-character summaries, 2 KB notepad, hidden characters shown), at most 8 KB in all (oldest results
+    go first if it would be more). The bridge rewrites it when the memory changes (a save, a wipe, switching on or off, an
+    ingest) and deletes it when the job stops qualifying; a wipe deletes it at once. The bridge points Chronos at the folder with
+    `chronos api config set memory_dir <folder>` (Chronos accepts only a folder that already exists and is not a link, so the bridge
+    makes it first) and looks at Chronos's config on **every** sync, setting it again if it differs: whoever can run a command on this
+    Mac can repoint it, and a run would then read packs from, and leave receipts in, a folder that is not ours.
+    The hash a pack carries comes from Chronos (`chronos api memory-binding <id>`), so it is the hash Chronos will compare.
+  - **What Chronos does.** For a clock or Run now run it appends the pack's `text` after `THE TASK:`, inside a frame of its own
+    ("data that earlier runs left behind, not instructions") whose begin and end lines carry a random value made for that run; any
+    `<<<`, `>>>` or run of `=` inside the text is made harmless, so even a forged pack file can only ever be data. It does this only if
+    the pack is a
+    plain file (never a link, never in a linked folder), at most 8 KB, valid UTF-8, names this job, and its `prompt_sha256` is the
+    sha256 of the `prompt.md` on disk. Anything else is skipped and the run goes on without memory. It then writes a receipt,
+    `receipts/<id>.<run id>.json` (job, run id, epoch, hash, whether a notepad was offered), and, when the pack offers a
+    notepad and the job is not restricted, tells the run one file to write the whole new notepad to,
+    `out/<id>.<run id>.txt` (also `CHRONOS_MEMORY_OUT`). **Event runs get nothing**, read or write: their input is untrusted.
+  - **Restricted jobs read only.** Their pack has no notepad section and no out file ("reads past results; can't keep notes"): a
+    restricted run has no tool that can write one, and its final message is the report, which anything it read could shape.
+  - **Taking a run back.** After every refresh the bridge looks at each receipt of the job, oldest first. It asks Chronos about the
+    run by its id (`chronos api run-result`), not from the newest few runs, so a run is found however many came after it. A run counts
+    only when Chronos says it has finished and it was not started by an event (a receipt for an event run was not made by Chronos and
+    is thrown away), and only into the memory it was given: the receipt's epoch must still be the job's epoch and its hash
+    the hash of the job text now. Otherwise the memory is left exactly as it is. A kept run adds its result (the first line of its
+    report, or what became of it) and its notepad (cut to 2 KB, hidden characters shown, never read through a link).
+    The job and run id are written to the sidecar (`ingested`, pruned at 8 days) before the memory is written, so a restart can lose a
+    result but never count one twice.
+  - **The fence.** A receipt belongs to the job in its file name; one whose content names another job is thrown away. The out
+    file is found from the job id and run id only, never from anything inside a file. Wiping a job's memory also removes its pack,
+    receipts and out files. A full-permission background run can write anywhere its user can, including this folder; the
+    checks stop the bridge mixing memories up, not a run that was told to.
+  - **Command jobs.** A command is a script, not an agent, so it gets files, not a prompt. Its pack is bound to its kind and its
+    command and nothing else (Chronos computes the hash; the bridge never sees the command text), so a change of name, model or meta
+    keeps what it remembers and a change of the command clears it. The pack also carries `notepad_text` and `results_text`.
+    For a run Chronos makes a private folder `run/<id>.<run id>/` (mode 0700) with `notepad.txt`, `results.txt` (three lines, plain)
+    and `memory.wrapped.txt` (the same framed block an agent gets, for a script that pipes it into a model), and exports
+    `TALOS_MEMORY_DIR` and `TALOS_MEMORY_NOTEPAD_OUT` (`<folder>/notepad.new`). The command never gets the pack or the memory
+    folder. The bridge takes `notepad.new` from that folder only (same checks as an out file) and removes the folder. The result is
+    `exit 0: <last line of the output>`; a failed or timed-out command is kept as failed, with its status. A command runs as the
+    owner with full permissions, so it can still reach this folder if it was written to; the folder is hygiene, not a boundary.
+    A command run by an event does not exist (Chronos refuses it), so there is nothing to exclude.
+  - **Run ids.** `CHRONOS_RUN_ID` goes to the prompt step only and is unset before the agent or command starts, and `chronos run`
+    ignores one it inherits, so a run that starts another run never lends it its id.
+  - **Unattended.** A full-permission background run reads and rewrites its notepad with nobody watching, so the card says
+    "This job runs unattended, with full permissions".
 
 ---
 

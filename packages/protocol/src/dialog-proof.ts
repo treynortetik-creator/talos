@@ -30,6 +30,8 @@ export type PaneDialog = {
   dialog_kind: DialogKindT
   subject: string | null
   options: readonly string[]
+  /** Main's development-channels dialog: which pieces of the start command changed (absent for every other dialog). The signed card must say the same. */
+  launch_changed?: readonly string[] | undefined
 }
 
 export type DialogVerifyEnv = {
@@ -67,7 +69,15 @@ function sameFacts(binding: Record<string, unknown>, pane: PaneDialog): boolean 
   const p = binding.payload
   if (!isObject(p)) return false
   const o = p.options
+  const lc = p.launch_changed
+  const sameLaunch =
+    pane.launch_changed === undefined
+      ? lc === undefined
+      : Array.isArray(lc) &&
+        lc.length === pane.launch_changed.length &&
+        lc.every((x, i) => x === pane.launch_changed?.[i])
   return (
+    sameLaunch &&
     p.dialog_id === pane.dialog_id &&
     p.dialog_kind === pane.dialog_kind &&
     p.subject === pane.subject &&

@@ -40,6 +40,7 @@ const ok = {
   terminal_view: { type: 'terminal_view', rect: { x: 240, y: 0, width: 880, height: 780 }, session: 'trip' },
   terminal_resume: { type: 'terminal_resume', thread_id: 'trip' },
   terminal_leave: { type: 'terminal_leave' },
+  pick_folder: { type: 'pick_folder', req: 'r12', start: '/Users/alex/Projects' },
 } as const
 
 describe('web -> native bridge messages', () => {
@@ -277,6 +278,7 @@ describe('native -> web bridge messages', () => {
     },
     terminal_resume_result: { type: 'terminal_resume_result', thread_id: 'trip', outcome: 'asked' },
     terminal_select: { type: 'terminal_select', session: 'trip' },
+    folder_picked: { type: 'folder_picked', req: 'r12', path: '/Users/alex/Projects' },
   } as const
   it('companion_replies is native -> web only, a boolean and an optional list of what he showed', () => {
     expect(WebToNative.safeParse(good.companion_replies).success).toBe(false)

@@ -281,7 +281,7 @@ describe('what a card changes', () => {
   })
 })
 
-describe('memory only for a job that runs in a session', () => {
+describe('memory for every kind of job but a heartbeat', () => {
   const plain = (snapshotFixture as { snapshot: { schedules: ScheduleT[] } }).snapshot.schedules[0] as ScheduleT
   const base = (over: Partial<ScheduleT> = {}) => ({
     schedule: { ...plain, ...over } as ScheduleT,
@@ -310,10 +310,8 @@ describe('memory only for a job that runs in a session', () => {
     expect(memoryProblem(update({ meta: hb, memory: false }), base({ memory: true }))).toBeNull()
   })
 
-  test('a command job is refused', () => {
-    const p = memoryProblem(update({ memory: true }), base({ kind: 'command' }))
-    expect(p).toMatch(/command/i)
-    expect(p).toMatch(/Nothing was saved/)
+  test('a command job may have memory now (it runs in the background and gets files)', () => {
+    expect(memoryProblem(update({ memory: true }), base({ kind: 'command' }))).toBeNull()
     expect(memoryProblem(update({ memory: false }), base({ kind: 'command' }))).toBeNull()
   })
 })

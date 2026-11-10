@@ -325,7 +325,7 @@ export const HELP_SECTIONS: Section[] = [
               {
                 keys: 'Ctrl+1 to Ctrl+9',
                 what: 'Switch to tab 1 to 9 (Main first)',
-                when: 'On the Terminal screen, while its tabs show. Terminals… in the menu has no key: ⌘K is Search in the Talos window.',
+                when: 'On the Terminal screen, while its tabs show. Terminals… in the menu has no key: ⌘K is the command palette in the Talos window.',
               },
             ],
           },
@@ -349,6 +349,21 @@ export const HELP_SECTIONS: Section[] = [
             ],
           },
           {
+            title: 'Mac app, the Talos window',
+            rows: [
+              {
+                keys: '⌘[',
+                what: 'Previous thread',
+                when: 'In the Mac app only, not while typing in a box. In a web browser these two keys stay Back and Forward.',
+              },
+              {
+                keys: '⌘]',
+                what: 'Next thread',
+                when: 'Same as above.',
+              },
+            ],
+          },
+          {
             title: 'In a web browser on a computer',
             rows: [
               {
@@ -358,8 +373,28 @@ export const HELP_SECTIONS: Section[] = [
               },
               {
                 keys: '⌘K or Ctrl+K',
-                what: 'Search',
-                when: 'On the app’s main screens. Not on this Help page or the sign-in screen.',
+                what: 'Open the command palette',
+                when: 'On the app’s main screens, also while you type. Not on this Help page or the sign-in screen. It jumps to a thread, searches all messages, opens Schedules, Settings or Memory, starts a new thread, runs a / command and opens the top Needs-you card. It never answers a card.',
+              },
+              {
+                keys: '⌘J or Ctrl+J',
+                what: 'Open the Needs-you list',
+                when: 'On the app’s main screens. Arrows move, Enter opens a card. The card’s own buttons are the only way to answer it.',
+              },
+              {
+                keys: '⌘F or Ctrl+F',
+                what: 'Search this thread',
+                when: 'In a thread. On other screens the browser keeps the key.',
+              },
+              {
+                keys: '⌘. or Ctrl+.',
+                what: 'Open or close the Session panel',
+                when: 'In a thread that has a Session panel.',
+              },
+              {
+                keys: '⌘/ or Ctrl+/',
+                what: 'Show the keyboard shortcuts',
+                when: 'On the app’s main screens. The list is also in Settings.',
               },
               {
                 keys: '⌘\\ or Ctrl+\\',

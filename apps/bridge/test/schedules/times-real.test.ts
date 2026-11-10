@@ -1,6 +1,6 @@
 // HB1 against the REAL Chronos CLI with `times` and `meta`. Chronos's own decisions (which slot is due, what Run now claims,
 // when a slot is superseded) are not something a replay can make, so this suite runs the bridge on a real checkout: the
-// vendored copy (third_party/chronos, tag v0.4.0) by default.
+// vendored copy (third_party/chronos, tag v0.5.0) by default.
 //
 //   TALOS_CHRONOS_TIMES_SRC=/path/to/other-checkout bun test test/schedules/times-real.test.ts   # optional: try another one
 //
@@ -39,6 +39,7 @@ const job = () =>
     meta: { sources: ['inbox'] },
   })
 
+// waitFor's budget is scaled x3 (testkit waitScale), so 10_000 is 30 s: a missing offer reports its own name before the 60 s test timeout.
 const runs = (x: SchedHarness) => x.notes.filter((n) => n.meta.kind === 'schedule_run')
 
 real('Chronos with times, through the real bridge', () => {
@@ -47,13 +48,13 @@ real('Chronos with times, through the real bridge', () => {
     box.configure({ sessionRunner: 'talos', approvalRequired: true })
     box.create(job())
     h = await startSched({ box, now: T0950 })
-    await waitFor(() => runs(h).length === 1, 30_000, 'the 09:45 slot')
+    await waitFor(() => runs(h).length === 1, 10_000, 'the 09:45 slot')
     const first = runs(h)[0]
     expect(first?.meta.ds).toBe(`${MON}T0945`)
     expect((await h.agent.run(first as never)).done).toBe('recorded')
     // 12:20 EDT: the 12:15 slot, a different key; the first slot's marker does not make it "already done"
     await h.advance(150 * 60_000 + 30_000)
-    await waitFor(() => runs(h).length === 2, 30_000, 'the 12:15 slot')
+    await waitFor(() => runs(h).length === 2, 10_000, 'the 12:15 slot')
     const second = runs(h)[1]
     expect(second?.meta.ds).toBe(`${MON}T1215`)
     expect((await h.agent.run(second as never)).done).toBe('recorded')
@@ -67,11 +68,11 @@ real('Chronos with times, through the real bridge', () => {
     box.configure({ sessionRunner: 'talos', approvalRequired: true })
     box.create(job())
     h = await startSched({ box, now: T0950 })
-    await waitFor(() => runs(h).length === 1, 30_000, 'the 09:45 slot')
+    await waitFor(() => runs(h).length === 1, 10_000, 'the 09:45 slot')
     const slot = runs(h)[0]
     await h.agent.run(slot as never)
     await h.app.runScheduleNow('check-in')
-    await waitFor(() => runs(h).length === 2, 30_000, 'the Run now offer')
+    await waitFor(() => runs(h).length === 2, 10_000, 'the Run now offer')
     const now = runs(h)[1]
     expect((await h.agent.run(now as never)).started).toStartWith('GO')
     const side = JSON.parse(await Bun.file(`${h.home}/schedules-meta.json`).text()) as {
@@ -81,7 +82,7 @@ real('Chronos with times, through the real bridge', () => {
     const adhoc = keys.find((k) => !SLOTS.some((s) => k === `${MON}T${s.replace(':', '')}`))
     expect(adhoc).toMatch(/^2026-10-05T\d{4}$/)
     await h.advance(150 * 60_000 + 30_000)
-    await waitFor(() => runs(h).length === 3, 30_000, 'the 12:15 slot after a Run now')
+    await waitFor(() => runs(h).length === 3, 10_000, 'the 12:15 slot after a Run now')
     expect(runs(h)[2]?.meta.ds).toBe(`${MON}T1215`)
   })
 })

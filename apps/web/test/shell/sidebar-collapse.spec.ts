@@ -35,15 +35,19 @@ test.describe('desktop sidebar', () => {
     const box = page.getByLabel('Message', { exact: true })
     await box.click()
     await box.pressSequentially('keep me')
-    await page.keyboard.press('Control+Backslash')
+    await page.keyboard.press('ControlOrMeta+Backslash')
     await expect(sidebar(page)).toHaveAttribute('data-collapsed', 'true')
     await expect(box).toBeFocused()
     await expect(box).toHaveValue('keep me')
-    await page.keyboard.press('Meta+Backslash')
+    // the other platform's key is not ours: Ctrl on a Mac (text editing), the Windows or Super key elsewhere
+    const mac = await page.evaluate(() => /Mac|iPhone|iPad/.test(navigator.platform))
+    await page.keyboard.press(mac ? 'Control+Backslash' : 'Meta+Backslash')
+    await expect(sidebar(page)).toHaveAttribute('data-collapsed', 'true')
+    await page.keyboard.press('ControlOrMeta+Backslash')
     await expect(sidebar(page)).toHaveAttribute('data-collapsed', 'false')
     // Shift / Alt variants are other people's chords
-    await page.keyboard.press('Control+Shift+Backslash')
-    await page.keyboard.press('Control+Alt+Backslash')
+    await page.keyboard.press('ControlOrMeta+Shift+Backslash')
+    await page.keyboard.press('ControlOrMeta+Alt+Backslash')
     await expect(sidebar(page)).toHaveAttribute('data-collapsed', 'false')
   })
 
@@ -123,9 +127,9 @@ test.describe('desktop sidebar', () => {
     await page.goto('/settings')
     await page.getByTestId('edit-threads').click()
     await expect(page.getByTestId('edit-threads')).toHaveAttribute('aria-pressed', 'true')
-    await page.keyboard.press('Control+Backslash')
+    await page.keyboard.press('ControlOrMeta+Backslash')
     await expect(sidebar(page)).toHaveAttribute('data-collapsed', 'true')
-    await page.keyboard.press('Control+Backslash')
+    await page.keyboard.press('ControlOrMeta+Backslash')
     await expect(sidebar(page)).toHaveAttribute('data-collapsed', 'false')
     await expect(page.getByTestId('edit-threads')).toHaveAttribute('aria-pressed', 'false')
   })
@@ -139,34 +143,42 @@ test.describe('desktop sidebar', () => {
     await expect(dialog).toBeVisible()
     const field = dialog.getByRole('textbox').first()
     await field.fill('Half typed thread name')
-    await page.keyboard.press('Control+Backslash')
+    await page.keyboard.press('ControlOrMeta+Backslash')
     await expect(rail).toHaveAttribute('data-collapsed', 'false')
     await expect(dialog).toBeVisible()
     await expect(field).toHaveValue('Half typed thread name')
     await page.keyboard.press('Escape')
     await expect(dialog).toBeHidden()
-    await page.keyboard.press('Control+Backslash')
+    await page.keyboard.press('ControlOrMeta+Backslash')
     await expect(rail).toHaveAttribute('data-collapsed', 'true')
   })
 
   test('the chord from a control the fold removes lands focus on the toggle, not the page body', async ({ page }) => {
     await page.goto('/settings')
     await page.getByTestId('edit-threads').focus()
-    await page.keyboard.press('Control+Backslash')
+    await page.keyboard.press('ControlOrMeta+Backslash')
     await expect(sidebar(page)).toHaveAttribute('data-collapsed', 'true')
     await expect(toggle(page)).toBeFocused()
-    await page.keyboard.press('Control+Backslash')
+    await page.keyboard.press('ControlOrMeta+Backslash')
     await page.getByTestId('new-thread').focus()
-    await page.keyboard.press('Control+Backslash')
+    await page.keyboard.press('ControlOrMeta+Backslash')
     await expect(toggle(page)).toBeFocused()
   })
 
   test('a held chord toggles once, not on every key repeat', async ({ page }) => {
     await page.goto('/settings')
     await page.evaluate(() => {
+      const mac = /Mac|iPhone|iPad/.test(navigator.platform) // Cmd on a Mac, Ctrl elsewhere
       for (const repeat of [false, true, true, true]) {
         window.dispatchEvent(
-          new KeyboardEvent('keydown', { code: 'Backslash', key: '\\', ctrlKey: true, repeat, bubbles: true }),
+          new KeyboardEvent('keydown', {
+            code: 'Backslash',
+            key: '\\',
+            ctrlKey: !mac,
+            metaKey: mac,
+            repeat,
+            bubbles: true,
+          }),
         )
       }
     })
@@ -216,7 +228,7 @@ test.describe('phone', () => {
     expect(wide(page)).toBe(false)
     await expect(sidebar(page)).toBeHidden()
     await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible()
-    await page.keyboard.press('Control+Backslash')
+    await page.keyboard.press('ControlOrMeta+Backslash')
     expect(await page.evaluate((k) => localStorage.getItem(k), KEY)).toBeNull()
     await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible()
   })

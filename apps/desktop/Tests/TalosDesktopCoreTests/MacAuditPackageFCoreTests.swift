@@ -81,7 +81,7 @@ struct MacAuditPackageFCoreTests {
   }
 
   @Test func aStaleInstructionGoesWhenTheSessionMovesOn() {
-    let press = SupervisorNotice.needsYou + ": press Enter on the dev-channel warning in the pane"
+    let press = SupervisorNotice.needsYou + ": accept the dev-channel warning in the Talos popup"
     #expect(!SupervisorNotice.isStale(press, phase: .running, needsYou: true))
     #expect(SupervisorNotice.isStale(press, phase: .stopped, needsYou: true), "the session is gone")
     #expect(SupervisorNotice.isStale(press, phase: .running, needsYou: false), "nothing waits any more")

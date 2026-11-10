@@ -65,7 +65,7 @@ describe('ScheduleForm', () => {
 })
 
 describe('SchedulesScreen rows', () => {
-  it('M13: the pause switch is named for what on means (it runs), not "Pause X"', () => {
+  it('M13: the pause switch is named for what on means (it runs), not "Pause X"', async () => {
     const client = createFakeClient()
     const snap = snapshots('02-list-three-jobs')[0]
     if (!snap) throw new Error('capture missing')
@@ -77,6 +77,8 @@ describe('SchedulesScreen rows', () => {
         </MemoryRouter>
       </ClientProvider>,
     )
+    // groups start shut (the organized page): open them all
+    for (const b of screen.getAllByTestId(/^group-toggle-/)) await userEvent.click(b)
     const first = snap.schedules.find((s) => s.enabled)
     expect(screen.getByRole('switch', { name: `${first?.name} runs on schedule` })).toBeTruthy()
     expect(screen.queryByRole('switch', { name: /^Pause / })).toBeNull()

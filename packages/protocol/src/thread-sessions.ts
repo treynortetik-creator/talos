@@ -56,6 +56,8 @@ export const ThreadSessionOptsStrict = z.object({
   effort: WorkerEffort.optional(),
   idle_park_min: z.number().int().min(5).max(720).default(DEFAULT_IDLE_PARK_MIN),
   mcp_allow: McpAllowList.optional(),
+  /** Mac-only (`THREAD_SESSION_OPT_ROWS`): the thread's session may run `errors list` and `errors show`. */
+  ops_read: z.boolean().optional(),
 })
 
 /**
@@ -68,6 +70,8 @@ export const ThreadSessionOpts = z.object({
   effort: WorkerEffort.optional().catch(undefined),
   idle_park_min: z.number().int().min(5).max(720).default(DEFAULT_IDLE_PARK_MIN).catch(DEFAULT_IDLE_PARK_MIN),
   mcp_allow: McpAllowRead,
+  /** A value this build cannot read is absent (off), never on. */
+  ops_read: z.boolean().optional().catch(undefined),
 })
 export type ThreadSessionOptsT = z.infer<typeof ThreadSessionOpts>
 
@@ -343,6 +347,8 @@ export const WorkersFile = z.object({
     workers_supported: z.boolean().default(false),
     /** The pane pid of main's session (diagnostics). */
     main_pane_pid: z.number().int().nonnegative().default(0),
+    /** Main's own dialog on its pane right now (the development-channels warning), published here because Main has no thread entry. A value that does not fit reads as none. */
+    main_dialog: WorkerDialog.optional().catch(undefined),
   }),
   threads: z.record(ThreadId, WorkerEntry).default({}),
 })
@@ -408,6 +414,8 @@ export const WORKER_FILES = {
   // Needs-you prompts (dialog-files.ts): the card's state for the Mac, the signed answer to press and the Mac's result
   dialogCard: 'dialog-card.json',
   dialogAnswer: 'dialog-answer.json',
+  // Main's own answer (the development-channels card): apart from a worker's, which can sit on the same default thread
+  mainDialogAnswer: 'main-dialog-answer.json',
   dialogResult: 'dialog-result.json',
 } as const
 export const WORKER_NONCE_ENV = 'TALOS_APP_WORKER_NONCE'
@@ -567,6 +575,9 @@ export const WorkersStatus = z.object({
   at: IsoTs,
 })
 export type WorkersStatusT = z.infer<typeof WorkersStatus>
+
+/** How many thread sessions' states the relay keeps for `ready` and the bridge sends (the config allows 40 threads). */
+export const MAX_THREAD_SESSION_STATES = 40
 
 /**
  * A thread session's own `session.state`, as `ready.thread_session_states` carries it (docs/OPTION-C.md 9.3). The state

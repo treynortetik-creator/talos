@@ -133,7 +133,7 @@ struct MainPromptReviewTests {
 
   /// S2: the dev-channel dialog (no rule above its title) is the cold-start question, never also a generic prompt, however long it waits.
   @Test func theDevChannelDialogIsNotAlsoAGenericPrompt() throws {
-    let r = try Rig(.tmux, scenario: "dev-dialog.sh", timings: Self.timings())
+    let r = try Rig(.tmux, scenario: "dev-dialog.sh", timings: Self.timings(), configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) })

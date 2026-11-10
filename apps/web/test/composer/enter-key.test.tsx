@@ -70,4 +70,11 @@ describe('Enter in the message box', () => {
     expect(send).not.toHaveBeenCalled()
     expect(box.value).toBe('some words')
   })
+
+  it('does not send on the Enter an input method reports as keyCode 229 (Safari ends a composition that way)', async () => {
+    const { box, send } = await setup(false)
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 229 })
+    expect(send).not.toHaveBeenCalled()
+    expect(box.value).toBe('some words')
+  })
 })

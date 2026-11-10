@@ -22,7 +22,7 @@ test('fake mode: thread list and Ctrl+2', async ({ page }) => {
   await expect(tabs.locator('a[href="/t/general"]')).toHaveAttribute('aria-current', 'page')
   await expect(tabs.locator('a[href="/t/inbox"]')).toBeVisible()
   if (phone) await page.keyboard.press('Escape')
-  await page.keyboard.press('Control+2')
+  await page.keyboard.press('ControlOrMeta+2')
   await expect(page).toHaveURL(/\/t\/inbox$/)
   tabs = await threadSwitcher(page)
   await expect(tabs.locator('a[href="/t/inbox"]')).toHaveAttribute('aria-current', 'page')

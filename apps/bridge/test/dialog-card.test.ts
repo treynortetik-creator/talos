@@ -7,12 +7,15 @@ import { join } from 'node:path'
 import {
   type CardT,
   DIALOG_ANSWER_MAX_BYTES,
+  DIALOG_CARD_ANSWERED_EVENT,
+  DIALOG_CARD_POSTED_EVENT,
   DIALOG_RESULT_WAIT_MS,
   DialogAnswer,
   DialogCardFile,
   dialogFallbackLine,
   dialogNothingPressedText,
   dialogOf,
+  eventInfo,
   NEEDS_YOU_FEATURE,
   ownerSignedString,
   sha256Hex,
@@ -161,6 +164,12 @@ async function show(x: Harness, d: WorkerDialogT) {
 const tap = (x: Harness, card: CardT, choice?: number) =>
   x.app.resolveCard(card, 'primary', card.payload_hash, choice === undefined ? {} : { choice })
 const answerOf = (x: Harness) => readJson(file(x, 'trip', 'dialog-answer.json'))
+
+const logLines: Array<{ fields?: Record<string, unknown> }> = []
+const recLogger = () => {
+  const rec = (_msg: string, fields?: Record<string, unknown>) => void logLines.push(fields ? { fields } : {})
+  return { debug: rec, info: rec, warn: rec, error: rec, security: rec }
+}
 
 describe('making the card', () => {
   test('a new dialog becomes one card, and the Mac is told with the card file', async () => {
@@ -397,6 +406,34 @@ describe('a stop between the tap and the answer file', () => {
     await waitFor(() => lastUpdate(x, card.id)?.state === 'failed', 4000, 'failed')
     expect((lastUpdate(x, card.id) as Upd).result).toMatchObject({ ok: false, ran: false })
     expect(existsSync(file(x, 'trip', 'dialog-answer.json'))).toBe(false)
+  })
+})
+
+describe('the restart sweep of the schedule service', () => {
+  test('a dialog card that was tapped and waits for the Mac is not failed by a sweep that runs late', async () => {
+    await start()
+    const x = h as Harness
+    const card = await show(x, trust(x))
+    await tap(x, card, 1)
+    await waitFor(() => existsSync(file(x, 'trip', 'dialog-answer.json')), 4000, 'the answer file')
+    await waitFor(() => lastUpdate(x, card.id)?.state === 'resolved', 4000, 'card.update resolved')
+    // start() runs this sweep after its first awaits, so on a slow machine it can land after a tap; here it is run by hand, after
+    await (x.bridge.ctx.schedules as unknown as { failStuckCards(): Promise<void> }).failStuckCards()
+    expect(x.bridge.ctx.ledger.get(card.id)?.state).toBe('resolved')
+    expect(lastUpdate(x, card.id)?.state).toBe('resolved')
+    // and the card still ends the way the Mac reports
+    writeMacFile(x, 'trip', 'dialog-result.json', {
+      v: 1,
+      dialog_id: TRIP_ID,
+      control_id: answerOf(x).control_id,
+      source: 'card',
+      outcome: 'pressed',
+      choice: 1,
+      label: 'Yes, I trust this folder',
+      at: iso(now(x)),
+    })
+    x.bridge.optionCTick()
+    await waitFor(() => lastUpdate(x, card.id)?.state === 'done', 4000, 'done')
   })
 })
 
@@ -894,5 +931,200 @@ describe('the owner answered on the Mac popup', () => {
     x.bridge.optionCTick()
     await waitFor(() => lastUpdate(x, card.id)?.state === 'failed', 4000, 'failed')
     expect((lastUpdate(x, card.id) as Upd).result.text).toBe('Already answered at the Mac first.')
+  })
+})
+
+// ---- Main's development-channels dialog: published as supervisor.main_dialog, carded on the default thread ----
+describe("Main's development-channels dialog", () => {
+  const DEV_ID = 'Dv5Qm8ZtRx3Cw9PkNa2HdB'
+  const dev = (x: Harness, over: Partial<WorkerDialogT> = {}): WorkerDialogT =>
+    trust(x, {
+      id: DEV_ID,
+      kind: 'dev_channels',
+      subject: 'server:talos-app',
+      options: ['I am using this for local development', 'Exit'],
+      cursor: 0,
+      ...over,
+    })
+  const mainThread = (x: Harness) => x.bridge.ctx.config.config.default_thread
+  function writeMain(x: Harness, d: WorkerDialogT | undefined, opts: { stale?: boolean } = {}) {
+    writeFileSync(
+      join(x.home, 'workers.json'),
+      JSON.stringify({
+        v: 1,
+        supervisor: {
+          pid: 1,
+          heartbeat_at: iso(opts.stale ? now(x) - 60_000 : now(x)),
+          workers_supported: true,
+          ...(d ? { main_dialog: d } : {}),
+        },
+        threads: {},
+      }),
+    )
+  }
+  async function showMain(x: Harness, d: WorkerDialogT) {
+    writeMain(x, d)
+    x.bridge.optionCTick()
+    await waitFor(() => dialogCards(x).some((c) => dialogOf(c)?.dialog_id === d.id), 4000, 'the dev-channels card')
+    return dialogCards(x).find((c) => dialogOf(c)?.dialog_id === d.id) as CardT
+  }
+
+  test('Main publishes its dialog: one card on the default thread, with the screen buttons', async () => {
+    await start()
+    const x = h as Harness
+    const card = await showMain(x, dev(x))
+    expect(card.thread_id).toBe(mainThread(x))
+    expect(card.title).toBe("Allow Talos's development channel?")
+    expect(card.body).toBe("Main session's start needs this to talk to the Talos app.")
+    expect(dialogOf(card)).toMatchObject({
+      dialog_kind: 'dev_channels',
+      subject: 'server:talos-app',
+      options: ['I am using this for local development', 'Exit'],
+    })
+    const ack = DialogCardFile.parse(readJson(file(x, mainThread(x), 'dialog-card.json')))
+    expect(ack).toMatchObject({ dialog_id: DEV_ID, card_id: card.id, status: 'waiting' })
+  })
+
+  test('an extra channel and a changed launch are said on the card', async () => {
+    await start()
+    const x = h as Harness
+    const card = await showMain(x, dev(x, { subject: 'server:talos-app, server:odd', launch_changed: ['flags'] }))
+    expect(card.body).toContain("Also loads server:odd, which Talos didn't add.")
+    expect(card.body).toContain("Main's start command changed since you last confirmed it. Changed: flags.")
+  })
+
+  test('the same dialog id is carded once, however often the file is read', async () => {
+    await start()
+    const x = h as Harness
+    await showMain(x, dev(x))
+    for (let i = 0; i < 3; i++) {
+      writeMain(x, dev(x))
+      x.bridge.optionCTick()
+    }
+    await sleep(200)
+    expect(dialogCards(x)).toHaveLength(1)
+  })
+
+  test('a tap hands the signed answer to the Mac under the default thread', async () => {
+    await start()
+    const x = h as Harness
+    const card = await showMain(x, dev(x))
+    await tap(x, card, 0)
+    await waitFor(() => existsSync(file(x, mainThread(x), 'main-dialog-answer.json')), 4000, 'the answer file')
+    const a = DialogAnswer.parse(readJson(file(x, mainThread(x), 'main-dialog-answer.json')))
+    expect(a).toMatchObject({ dialog_id: DEV_ID, choice: 0, label: 'I am using this for local development' })
+  })
+
+  test('the card posted and the tap answered are named events, with ids and no words from the screen', async () => {
+    logLines.length = 0
+    h = await startHarness({
+      relay: FLAGGED,
+      bridge: { logger: recLogger() },
+      config: ((c: Record<string, unknown> & { threads: unknown[] }) => ({
+        ...c,
+        threads: [...c.threads, thread('trip', 'Trip')],
+      })) as never,
+    })
+    const x = h as Harness
+    const card = await showMain(x, dev(x, { subject: 'server:talos-app, server:secret-looking' }))
+    await waitFor(() => logLines.some((l) => l.fields?.event === DIALOG_CARD_POSTED_EVENT), 4000, 'the posted event')
+    await tap(x, card, 0)
+    await waitFor(
+      () => logLines.some((l) => l.fields?.event === DIALOG_CARD_ANSWERED_EVENT),
+      4000,
+      'the answered event',
+    )
+    const posted = logLines.find((l) => l.fields?.event === DIALOG_CARD_POSTED_EVENT)
+    const answered = logLines.find((l) => l.fields?.event === DIALOG_CARD_ANSWERED_EVENT)
+    expect(posted?.fields).toMatchObject({ dialog_kind: 'dev_channels', card_id: card.id })
+    expect(answered?.fields).toMatchObject({ dialog_kind: 'dev_channels', card_id: card.id, choice: 0 })
+    for (const [l, name] of [
+      [posted, DIALOG_CARD_POSTED_EVENT],
+      [answered, DIALOG_CARD_ANSWERED_EVENT],
+    ] as const) {
+      const { event, ...fields } = (l?.fields ?? {}) as Record<string, unknown>
+      expect(event).toBe(name)
+      expect(eventInfo(name)?.payload.safeParse(fields).success, name).toBe(true)
+    }
+    expect(JSON.stringify([posted, answered])).not.toContain('secret-looking')
+  })
+
+  test('Exit is a choice of its own', async () => {
+    await start()
+    const x = h as Harness
+    const card = await showMain(x, dev(x))
+    await tap(x, card, 1)
+    await waitFor(() => existsSync(file(x, mainThread(x), 'main-dialog-answer.json')), 4000, 'the answer file')
+    expect(readJson(file(x, mainThread(x), 'main-dialog-answer.json'))).toMatchObject({ choice: 1, label: 'Exit' })
+  })
+
+  test('a tap after the Mac dropped the dialog is refused as not pending, and writes nothing', async () => {
+    await start()
+    const x = h as Harness
+    const card = await showMain(x, dev(x))
+    writeMain(x, undefined)
+    const r = await pushCardResolvePastRelay(x, card, card.payload_hash, 'primary', { choice: 0 })
+    await waitFor(() => errors(x).some((e) => e.ref === r.id), 4000, 'the refusal')
+    expect(errors(x).find((e) => e.ref === r.id)?.code).toBe('card_not_pending')
+    expect(existsSync(file(x, mainThread(x), 'main-dialog-answer.json'))).toBe(false)
+  })
+
+  test('the dialog gone: the card is closed', async () => {
+    await start()
+    const x = h as Harness
+    const card = await showMain(x, dev(x))
+    writeMain(x, undefined)
+    x.bridge.optionCTick()
+    await waitFor(() => lastUpdate(x, card.id)?.state === 'superseded', 4000, 'the card closed')
+  })
+
+  test('a stale supervisor, or a relay without needs-you/1, makes no card', async () => {
+    await start()
+    const x = h as Harness
+    writeMain(x, dev(x), { stale: true })
+    x.bridge.optionCTick()
+    await sleep(300)
+    expect(dialogCards(x)).toHaveLength(0)
+  })
+
+  test("a dev_channels dialog under a worker's entry, or another kind as main_dialog, is no card (only Main publishes its own)", async () => {
+    await start()
+    const x = h as Harness
+    writeWorkers(x, { trip: dev(x, { id: 'Ew5Qm8ZtRx3Cw9PkNa2HdB' }) })
+    x.bridge.optionCTick()
+    writeMain(x, trust(x, { id: 'Fw5Qm8ZtRx3Cw9PkNa2HdB' }))
+    x.bridge.optionCTick()
+    await sleep(300)
+    expect(dialogCards(x)).toHaveLength(0)
+  })
+
+  test("a worker's own dialog on the default thread never hides Main's: both are carded, and the answer goes to Main's own file", async () => {
+    await start()
+    const x = h as Harness
+    const main = mainThread(x)
+    writeFileSync(
+      join(x.home, 'workers.json'),
+      JSON.stringify({
+        v: 1,
+        supervisor: { pid: 1, heartbeat_at: iso(now(x)), workers_supported: true, main_dialog: dev(x) },
+        threads: {
+          [main]: {
+            state: 'live',
+            session_id: '6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c41',
+            tmux: 't-main',
+            pane_pid: 0,
+            cwd: x.home,
+            error: null,
+            dialog: trust(x),
+          },
+        },
+      }),
+    )
+    x.bridge.optionCTick()
+    await waitFor(() => dialogCards(x).length === 2, 4000, 'both cards')
+    const card = dialogCards(x).find((c) => dialogOf(c)?.dialog_kind === 'dev_channels') as CardT
+    await tap(x, card, 0)
+    await waitFor(() => existsSync(file(x, main, 'main-dialog-answer.json')), 4000, 'the answer file')
+    expect(existsSync(file(x, main, 'dialog-answer.json'))).toBe(false)
   })
 })

@@ -450,7 +450,8 @@ export class FakeRelay {
       case 'memory.listing':
       case 'memory.file':
       case 'memory.results':
-      case 'speak.result': {
+      case 'speak.result':
+      case 'fs.listing': {
         const p = this.readReqs.get(frame.request_id)
         if (!p || p.want !== frame.type) return // unknown, expired or the wrong answer type: dropped
         this.readReqs.delete(frame.request_id)

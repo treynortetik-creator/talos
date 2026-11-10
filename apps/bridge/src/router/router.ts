@@ -9,6 +9,7 @@ import {
   dedicatedSettings,
   type ErrorCodeT,
   HUB_FEATURE_SCHEDULES,
+  type SessionStateT,
   supervisorFresh,
   THREAD_SESSIONS_FEATURE,
   threadSessionMode,
@@ -19,6 +20,7 @@ import {
   type WorkersFileT,
   type WorkersStatusT,
 } from '@talos-app/protocol'
+import { claudeConfigDir } from '../claude-dir.ts'
 import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { statusFrame } from '../frames-out.ts'
 import type { Notification } from '../notify.ts'
@@ -35,6 +37,7 @@ import {
 import { placeFilesInInbox } from '../worker/inbox.ts'
 import { type RouteRow, WorkerStore } from '../worker/store.ts'
 import { allowsStart, type GovernorReading, governor } from './governor.ts'
+import { WorkerContextFeed } from './worker-context.ts'
 
 export type Emit = (n: Notification) => Promise<void>
 
@@ -80,6 +83,7 @@ export class ThreadRouter {
   private lastStatusKey = ''
   private parkAllSent = false
   private relayListsFeature = false
+  private readonly contextFeed: WorkerContextFeed
   private readonly workerFeatures: (thread: string) => readonly string[] | undefined
   private readonly onCardUndelivered: (cardId: string, told?: false | 'unknown') => void
 
@@ -100,6 +104,15 @@ export class ThreadRouter {
     this.store = opts.store ?? new WorkerStore(ctx.store.db)
     this.workers = opts.workers ?? new WorkersReader(ctx.paths.home)
     this.handoffs = new HandoffLedger(ctx.store.db)
+    this.contextFeed = new WorkerContextFeed({
+      claudeDir: () => {
+        try {
+          return claudeConfigDir(ctx.env.userHome, ctx.env.claudeConfigDir)
+        } catch {
+          return undefined // a CLAUDE_CONFIG_DIR that is not absolute: Claude Code itself is unusable, nothing to read
+        }
+      },
+    })
   }
 
   /** Why a lead cannot take a hand-off right now (plain words), or undefined when it can. */
@@ -471,8 +484,8 @@ export class ThreadRouter {
     for (const row of this.store.allUnclaimed()) if (!this.timers.has(row.message_id)) this.arm(row)
   }
 
-  /** Called from the bridge's poll: governor park-all and workers.status. */
-  tick(send: (status: WorkersStatusT) => void): void {
+  /** Called from the bridge's poll: governor park-all, workers.status and each worker's context (`sendState`). */
+  tick(send: (status: WorkersStatusT) => void, sendState?: (state: SessionStateT) => void): void {
     const { ctx } = this
     const now = ctx.clock.now()
     const g = this.governor()
@@ -508,11 +521,15 @@ export class ThreadRouter {
       this.lastStatusKey = key
       send(status)
     }
+    // A scoped session.state only goes to a relay that lists thread-sessions/1: an older app's strict SessionState refuses `scope`.
+    if (this.relayListsFeature && sendState)
+      this.contextFeed.tick(file, (t) => threadSessionMode(ctx.config.config, t) === 'dedicated', sendState)
   }
 
   /** Forget the last status so the next tick sends it again (after `ready`). */
   resendStatus(): void {
     this.lastStatusKey = ''
+    this.contextFeed.reset()
   }
 
   status(file: WorkersFileT | null, g: GovernorReading, now: number): WorkersStatusT {

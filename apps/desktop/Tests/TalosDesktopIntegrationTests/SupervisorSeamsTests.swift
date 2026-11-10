@@ -58,7 +58,7 @@ struct SupervisorSeamsTests {
 
   @Test(arguments: bothHosts)
   func aColdStartWhoseDialogIsGoneAndNoticeNeverComesStopsWaitingAndSaysSo(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dialog-then-silent.sh", timings: Self.timings())
+    let r = try Rig(kind, scenario: "dialog-then-silent.sh", timings: Self.timings(), configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(20) { r.screenContains(DialogMatcher.Strings.devTitle) }, "dialog shown")
@@ -118,7 +118,7 @@ struct SupervisorSeamsTests {
   @Test(arguments: bothHosts)
   func theSessionIdTheCliReportsIsFollowedAndTheConfirmationMovesWithIt(kind: HostKind) throws {
     let reported = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-    let r = try Rig(kind, scenario: "dev-dialog.sh", env: ["FAKE_REPORT_SESSION_ID": reported], timings: Self.timings())
+    let r = try Rig(kind, scenario: "dev-dialog.sh", env: ["FAKE_REPORT_SESSION_ID": reported], timings: Self.timings(), configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     try coldStartConfirmed(r)
     #expect(
@@ -128,7 +128,7 @@ struct SupervisorSeamsTests {
     let launchedWith = s.previousIds.first ?? "-"
     #expect(s.previousIds.count == 1 && launchedWith != reported, "the id we launched with is remembered")
     #expect(s.confirmedAt != nil, "this start was confirmed by the owner, so the confirmation moves to the new id")
-    #expect(s.confirmedCliVersion == "2.1.312")
+    #expect(s.confirmedCliVersion == nil, "no longer written")
     #expect(r.host.marker("talos_session") == reported, "a relaunch of the app sees the id we follow")
     #expect(r.audit.contains("session_id_changed from=\(launchedWith) to=\(reported)"))
     #expect(count("session_id_changed", in: r.audit) == 1, "followed once, not on every poll")
@@ -139,9 +139,13 @@ struct SupervisorSeamsTests {
   @Test(arguments: bothHosts)
   func anIdReportedByASessionInAnotherFolderThanTheConfiguredOneIsNotFollowed(kind: HostKind) throws {
     let reported = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-    let r = try Rig(kind, scenario: "dev-dialog.sh", env: ["FAKE_REPORT_SESSION_ID": reported], timings: Self.timings())
+    // The owner's Enter is the point here: the app's own is off, or it would answer the dialog before the folder moves.
+    let r = try Rig(
+      kind, scenario: "dev-dialog.sh", env: ["FAKE_REPORT_SESSION_ID": reported], timings: Self.timings(),
+      configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
+    usleep(1_000_000)  // a slow test thread (a loaded Mac): with the app's Enter on, the dialog is answered and gone by now
     #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) }, "dialog shown")
     let other = r.root + "/other-folder"
     r.sup.mutateConfig { $0.agentDir = other }  // Choose into B while A's session runs
@@ -188,7 +192,7 @@ struct SupervisorSeamsTests {
 
   @Test(arguments: bothHosts)
   func restartSessionStopsTheOldChildThenStartsAColdResumeThatWaitsForTheOwner(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "dev-dialog.sh", timings: Self.timings())
+    let r = try Rig(kind, scenario: "dev-dialog.sh", timings: Self.timings(), configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     try coldStartConfirmed(r)
     let id = try #require(r.config.session.id)

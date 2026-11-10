@@ -248,7 +248,7 @@ struct WorkerDialogTests {
     try r.wake("trip")
     #expect(r.wait(10) { r.up("trip") })
     FileManager.default.createFile(atPath: trigger, contents: nil)
-    #expect(r.wait(10) { r.mgr.needsYou()["trip"] == "log in" })
+    #expect(r.wait(10) { r.mgr.needsYou()["trip"] == "sign in" })
     #expect(r.wait(5) { log.all.count == 1 })
   }
 

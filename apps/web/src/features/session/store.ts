@@ -15,6 +15,7 @@ import {
   newUlid,
   planPaletteRun,
   type SessionInventoryT,
+  SessionState,
   type SessionStateT,
   STOPPED_AT_MAC_TEXT,
 } from '@talos-app/protocol'
@@ -35,6 +36,8 @@ export type Pending = { controlId: string; label: string /** agent_stop: the row
 
 export type SessionStoreState = {
   state: SessionStateT | undefined
+  /** Option C: each thread session's own state (`session.state` with a scope, `ready.thread_session_states`), by thread. Main's `state` is never one of these. */
+  threadStates: Record<string, SessionStateT>
   inventory: SessionInventoryT | undefined
   /** docs/SUBAGENTS.md 6.3: the last agents snapshot (`ready.session_agents` / `session.agents`), replaced wholesale. */
   agents: AgentsSnapshotT | undefined
@@ -74,6 +77,16 @@ export function visibleAgents(s: Pick<SessionStoreState, 'agents' | 'state'>): A
 /** Stop shows only for a stoppable live row of a can_stop snapshot, with a live (fresh) mod of that session. */
 export function showsAgentStop(s: Pick<SessionStoreState, 'agents' | 'state' | 'modOnline'>, rowId: string): boolean {
   return s.modOnline && canStopAgent(visibleAgents(s), rowId, s.state)
+}
+
+/** `ready.thread_session_states`, each parsed with the strict SessionState; an item that does not fit is dropped, never the rest. */
+function threadStatesOf(items: FrameOf<'ready'>['thread_session_states']): Record<string, SessionStateT> {
+  const out: Record<string, SessionStateT> = {}
+  for (const it of items ?? []) {
+    const r = SessionState.safeParse(it.state)
+    if (r.success) out[it.thread_id] = r.data
+  }
+  return out
 }
 
 export const AGENT_GONE_TEXT = 'That agent already ended. Nothing was stopped.'
@@ -123,6 +136,7 @@ export function createSessionController(client: TalosClient, opts: ControllerOpt
   const timedOut = new Set<string>()
   const store = createStore<SessionStoreState>(() => ({
     state: undefined,
+    threadStates: {},
     inventory: undefined,
     agents: undefined,
     now: now(),
@@ -269,8 +283,12 @@ export function createSessionController(client: TalosClient, opts: ControllerOpt
       if (refs++ === 0) {
         off = [
           client.onFrame('session.state', (f: FrameOf<'session.state'>) => {
-            // a thread's own session (docs/OPTION-C.md) has its own state; this store is main's
-            if (f.state.scope !== undefined && f.state.scope !== 'main') return
+            // a thread's own session (docs/OPTION-C.md) has its own state, kept apart: `state` is main's
+            const scope = f.state.scope
+            if (scope !== undefined && scope !== 'main') {
+              const threadStates = { ...store.getState().threadStates, [scope.thread_id]: f.state }
+              return patch({ threadStates, now: now() })
+            }
             patch({ state: f.state, now: now() })
           }),
           client.onFrame('session.inventory', (f: FrameOf<'session.inventory'>) => patch({ inventory: f.inventory })),
@@ -283,6 +301,8 @@ export function createSessionController(client: TalosClient, opts: ControllerOpt
               now: now(),
               // main's slot: a scoped state is a thread session's, wherever it arrives
               ...(f.session_state && (f.session_state.scope ?? 'main') === 'main' ? { state: f.session_state } : {}),
+              // replaced when present (an item that fails to parse is skipped); a ready without it keeps what we have
+              ...(f.thread_session_states ? { threadStates: threadStatesOf(f.thread_session_states) } : {}),
               ...(f.session_inventory ? { inventory: f.session_inventory } : {}),
               ...(f.session_agents ? { agents: f.session_agents } : {}),
             }),

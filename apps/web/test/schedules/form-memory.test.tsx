@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { blankForm, draftFromForm, formFromSchedule, touchedSet } from '../../src/features/schedules/logic.ts'
+import { MemoryToggle } from '../../src/features/schedules/MemoryToggle.tsx'
 import { ScheduleForm } from '../../src/features/schedules/ScheduleForm.tsx'
 import { ClientProvider } from '../../src/lib/client.ts'
 import { createFakeClient } from '../../src/lib/fakeClient.ts'
@@ -141,30 +142,44 @@ describe('the form', () => {
 })
 
 describe('the box is honest about who gets memory', () => {
-  const note = /does not get this yet/
   const hint = () => screen.getByRole('checkbox', { name: /Remember between runs/ }).closest('label')?.textContent ?? ''
 
-  it('a job that runs in the session says nothing of the kind', () => {
+  it('a job that runs in the session says nothing about the background', () => {
     mount(false)
-    expect(hint()).not.toMatch(note)
+    expect(hint()).not.toMatch(/background/)
   })
 
-  it('a background job says memory does not reach it yet', () => {
+  it('a background job says it needs a Chronos with memory and that it runs unattended', () => {
     mount(false, { runner: 'headless' })
-    expect(hint()).toMatch(note)
+    expect(hint()).toMatch(/needs a Chronos that supports memory/)
+    expect(hint()).toMatch(/unattended/)
+    expect(hint()).not.toMatch(/does not get this yet/)
   })
 
-  it('a restricted job, which always runs in the background whatever its runner says, says it too', () => {
+  it('a restricted job, which always runs in the background whatever its runner says, reads past results and cannot keep notes', () => {
     mount(false, { runner: 'session', permissions: 'restricted', allowed_tools: ['Read'] })
-    expect(hint()).toMatch(note)
+    expect(hint()).toMatch(/reads past results; can't keep notes/)
+    expect(hint()).not.toMatch(/unattended/)
   })
 
   it('on create, choosing the background runner or the tool list changes the note', async () => {
     mount()
-    expect(hint()).not.toMatch(note)
+    expect(hint()).not.toMatch(/background/)
     await userEvent.click(screen.getByRole('radio', { name: 'Only the tools I list' }))
-    expect(hint()).toMatch(note)
+    expect(hint()).toMatch(/can't keep notes/)
     await userEvent.click(screen.getByRole('radio', { name: 'Full permissions' }))
-    expect(hint()).not.toMatch(note)
+    expect(hint()).not.toMatch(/background/)
+  })
+})
+
+describe('the box for a command job', () => {
+  it('says the command gets its memory as files and can rewrite the notepad, and that it runs unattended', () => {
+    render(<MemoryToggle checked={false} background restricted={false} command onChange={() => {}} />)
+    const text = screen.getByRole('checkbox', { name: /Remember between runs/ }).closest('label')?.textContent ?? ''
+    expect(text).toMatch(/as files/)
+    expect(text).toMatch(/Changing the command clears them/)
+    expect(text).not.toMatch(/Changing the job's text/)
+    expect(text).toMatch(/TALOS_MEMORY_DIR/)
+    expect(text).toMatch(/unattended/)
   })
 })

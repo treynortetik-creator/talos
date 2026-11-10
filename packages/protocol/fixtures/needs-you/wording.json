@@ -3,15 +3,28 @@
   "title": {
     "trust": "Trust this folder?",
     "mcp_consent": "Allow this MCP server?",
-    "login": "{thread} needs you to sign in"
+    "login": "{thread} needs you to sign in",
+    "dev_channels": "Allow Talos's development channel?"
   },
   "sentence": {
     "trust": "{thread}'s session wants to work in this folder. Claude will be able to read, change and run files in it, and in folders inside it.",
     "mcp_consent": "{thread}'s session wants to turn on this server's tools for its folder.",
-    "login": "{thread}'s session needs you to sign in to Claude on the Mac."
+    "login": "{thread}'s session needs you to sign in to Claude on the Mac.",
+    "dev_channels": "Main session's start needs this to talk to the Talos app."
+  },
+  "devChannels": {
+    "alsoLoads": "Also loads {channels}, which Talos didn't add.",
+    "launchChanged": "Main's start command changed since you last confirmed it.",
+    "launchChangedWhat": "Changed: {what}.",
+    "launchUnconfirmed": "Main's start command isn't confirmed on this Mac yet."
   },
   "footer": {
     "card": "Your Mac presses the key for you. The session answers your message once it is in.",
-    "popup": "Also on your phone. Answer either one."
+    "popup": "Also on your phone. Answer either one.",
+    "popupMain": "Your phone is told to come here.",
+    "popupMainHere": "Answer it here."
+  },
+  "phone": {
+    "devChannelsWaiting": "Main is waiting at your Mac: answer the Talos popup there."
   }
 }

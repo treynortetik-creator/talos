@@ -185,7 +185,7 @@ export const historyPageFrame = (
 ): Of<'history.page'> => ({ ...env(now), type: 'history.page', ...a })
 
 /** The answers to the signed v2 reads (docs/V2-FEATURES.md V1.3): routed by request_id, never stored. */
-type ReadAnswer = 'search.results' | 'memory.listing' | 'memory.file' | 'memory.results' | 'speak.result'
+type ReadAnswer = 'search.results' | 'memory.listing' | 'memory.file' | 'memory.results' | 'speak.result' | 'fs.listing'
 export const readAnswerFrame = <T extends ReadAnswer>(
   now: number,
   type: T,

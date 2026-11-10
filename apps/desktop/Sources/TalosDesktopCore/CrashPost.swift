@@ -20,11 +20,6 @@ public enum CrashPost {
     "\(agentName ?? "The agent")'s session stopped restarting at \(time)"
   }
 
-  /// After a restart the phone asked for, or an automatic restore, Claude Code waits for a key press at the Mac.
-  public static func coldStartText(agentName: String?) -> String {
-    "\(agentName ?? "The agent") restarted but is waiting for you at the Mac: press Enter on the dev-channel warning"
-  }
-
   /// `HH:mm` in the Mac's time zone.
   public static func clockTime(_ date: Date, timeZone: TimeZone = .current) -> String {
     let f = DateFormatter()

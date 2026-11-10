@@ -8,7 +8,18 @@ import { createDesktopPlatform } from './adapters.ts'
 import { createShellBridge, type ShellBridge } from './bridge.ts'
 import { detectShell } from './detect.ts'
 
-export type Shell = { kind: 'desktop'; bridge: ShellBridge; platform: Platform }
+/** What this Mac app can do for the page, as it lists it in the user agent (` TalosFeatures/pick-folder,…`). Empty for an older app. */
+export function shellFeatures(scope: unknown = globalThis): string[] {
+  try {
+    const ua = (scope as { navigator?: { userAgent?: string } }).navigator?.userAgent ?? ''
+    const m = /\bTalosFeatures\/([A-Za-z0-9,_-]{1,200})/.exec(ua)
+    return m?.[1] ? m[1].split(',').filter(Boolean) : []
+  } catch {
+    return []
+  }
+}
+
+export type Shell = { kind: 'desktop'; bridge: ShellBridge; platform: Platform; features?: readonly string[] }
 
 type PostTarget = { postMessage(message: unknown): unknown }
 
@@ -49,6 +60,6 @@ export function installShell(scope: unknown = globalThis): Shell | null {
     enumerable: false,
     writable: false,
   })
-  installed = { kind: 'desktop', bridge, platform }
+  installed = { kind: 'desktop', bridge, platform, features: shellFeatures(scope) }
   return installed
 }

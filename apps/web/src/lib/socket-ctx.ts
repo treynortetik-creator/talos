@@ -196,7 +196,7 @@ export type SocketCtx = {
   sendAndWait: (frame: Record<string, unknown>, timeoutMs?: number) => Promise<number | undefined>
   askRead: (
     frame: Record<string, unknown>,
-    answer: 'memory.listing' | 'memory.file' | 'memory.results' | 'speak.result',
+    answer: 'memory.listing' | 'memory.file' | 'memory.results' | 'speak.result' | 'fs.listing',
     timeoutMs?: number,
   ) => Promise<Record<string, unknown>>
   // socket-upload.ts

@@ -31,6 +31,8 @@ export type BridgeEnv = {
   pathDirs: string[]
   /** The owner's home directory (`~/.local/share/chronos/bin/chronos`); from HOME. */
   userHome: string
+  /** Claude Code's config folder (CLAUDE_CONFIG_DIR, else `~/.claude`): where a worker's transcript is read for its context. */
+  claudeConfigDir?: string | undefined
   /**
    * Where the owner's files for threads that have their own session are copied, one folder per thread: `~/.talos-inbox`
    * (TALOS_INBOX_ROOT changes it; the tests always do, so none touches the real one).
@@ -149,6 +151,8 @@ export function loadEnv(processEnv: Record<string, string | undefined> = process
     chronosNow: merged.TALOS_APP_CHRONOS_NOW || undefined,
     pathDirs: (merged.PATH ?? '').split(':').filter(Boolean),
     userHome: merged.HOME || homedir(),
+    // read from the process too, like the inbox root: a test's hand-built env still gets the test folder (test/preload.ts)
+    claudeConfigDir: merged.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || undefined,
     // read from the process too, like the Chronos switch above: a test's hand-built env still gets the test root (test/preload.ts)
     inboxRoot:
       merged.TALOS_INBOX_ROOT || process.env.TALOS_INBOX_ROOT || join(merged.HOME || homedir(), '.talos-inbox'),

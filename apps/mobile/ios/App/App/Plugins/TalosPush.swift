@@ -18,6 +18,11 @@ final class TalosPushCenter: NSObject, UNUserNotificationCenterDelegate {
     /// The thread the page is showing right now (or nil), set by the page through `setViewing`.
     var viewingThread: String?
     private var waiting: [String: Any]?
+    /// The last tap that went through to a page, and when. The page never says it acted on it, so a page that is replaced
+    /// right after (`requeueRecentlyDelivered`) may have lost it.
+    private var delivered: (event: [String: Any], at: Date)?
+    /// The clock, so a test can say how long ago the tap went through.
+    var now: () -> Date = Date.init
 
     /// Capacitor would take the delegate when its bridge is built (after launch) unless `ios.handleApplicationNotifications`
     /// is false in capacitor.config.ts; with it off, this stays the delegate and taps reach `didReceive` (review R2). The
@@ -32,7 +37,20 @@ final class TalosPushCenter: NSObject, UNUserNotificationCenterDelegate {
     /// view is not on the relay yet (a tap that launched the app), and the page's own `addListener` flushes again.
     func flush() {
         guard let deliver, let event = waiting else { return }
-        if deliver(event) { waiting = nil }
+        if deliver(event) {
+            waiting = nil
+            delivered = (event, now())
+        }
+    }
+
+    /// The web view is being replaced. A tap that went through to the old page within `window` seconds may never have been acted
+    /// on, so the new page gets it again (a tap that landed on the right route twice only opens that route twice). Older taps were
+    /// long since seen, and no tap that is still waiting is overwritten.
+    func requeueRecentlyDelivered(within window: TimeInterval = 60) {
+        let last = delivered
+        delivered = nil
+        guard let last, waiting == nil, now().timeIntervalSince(last.at) <= window else { return }
+        waiting = last.event
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
@@ -46,6 +64,11 @@ final class TalosPushCenter: NSObject, UNUserNotificationCenterDelegate {
                                                defaultIdentifier: UNNotificationDefaultActionIdentifier,
                                                dismissIdentifier: UNNotificationDismissActionIdentifier),
               let path = PushCore.navigatePath(response.notification.request.content.userInfo) else { return }
+        tapped(action: action, path: path)
+    }
+
+    /// A tap on a notification (or one of its buttons): kept until a page takes it.
+    func tapped(action: String, path: String) {
         waiting = ["action": action, "navigate": path]
         flush()
     }

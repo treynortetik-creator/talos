@@ -1,6 +1,6 @@
 {
   "about": "Captured by `bun run capture:schedules` (apps/bridge/scripts/capture-schedules.ts): the REAL bridge against the REAL vendored Chronos CLI. Ids, timestamps, signatures and the machine name are normalized; card hashes are recomputed. Do not edit by hand: re-run the capture.",
-  "chronos": "chronos 0.4.0",
+  "chronos": "chronos 0.5.0",
   "scheduler_tz": "America/New_York",
   "scheduler_clock_start": "2026-10-05T11:00:00Z",
   "bridge_hello_features": [

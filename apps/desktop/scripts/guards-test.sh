@@ -62,6 +62,10 @@ OUT="$(mktemp -d)"
 if TALOS_MENUBAR_SRC="$MART/menubar" bash scripts/build-app.sh --out "$OUT" >/dev/null 2>&1; then bad "build-app.sh passed with talos-ok-2x.png missing"; else ok "build-app.sh fails when a menu-bar picture is missing"; fi
 rm -rf "$MART" "$OUT"
 
+# 2b. the Mac popup's answer button asks the controller only after the real-click check (a scripted press of the button must do nothing)
+if awk '/func answerClicked/ {f=1} f && /isRealClick\(/ {g=1} f && /onClick\(/ {if (g) ok=1; exit} END {exit !ok}' Sources/TalosDesktop/NeedsYouPopup.swift; then ok "answerClicked checks isRealClick before onClick"; else bad "answerClicked reaches onClick without isRealClick first"; fi
+if [ "$(grep -c 'onClick(' Sources/TalosDesktop/NeedsYouPopup.swift | tr -d ' ')" -le 3 ] && ! grep -n 'coordinator.click' Sources/TalosDesktop/NeedsYouPopup.swift | grep -v 'onClick' | grep -v 'self?.coordinator.click(dialogId: id, button: i)' | grep -q .; then ok "coordinator.click is reached only from the panel's onClick"; else bad "coordinator.click has another caller"; fi
+
 # 3. no absolute home paths and no real hosts in apps/desktop. A "real host" is a plausible hostname (dotted labels, an
 #    alphabetic TLD); only the IANA-reserved names (RFC 2606 / 6761: example.com/net/org and subdomains, .example, .invalid,
 #    .test, .localhost) and a few project hosts are allowed. Test fixtures that are not hostnames at all ("https://.") don't count.

@@ -86,10 +86,13 @@ final class SupervisorController: ObservableObject {
       name: TmuxCommands.mainSession, configPath: Self.configPath, home: NSHomeDirectory(), auditLogPath: Self.auditPath)
     // our own worker panes never block main's takeover check (OPTION-C 4.4)
     opts.siblingGroups = { box.groups }
+    opts.launchTrust = Self.launchTrust
     let sup = Supervisor(options: opts, host: host, probe: probe)
     supervisor = sup
     workers = Self.makeWorkers(cfg: cfg, env: env, probe: probe, mainPid: { sup.status.childPid ?? 0 }, current: { sup.currentConfig() })
     box.manager = workers
+    // Main's development-channels warning, when refused, goes to the owner as a card the bridge posts (SupervisorDevCard.swift)
+    workers?.setMainDialog { [weak sup] in sup?.status.devDialog }
     // a worker stuck on a prompt gets one line in its own thread, through the same signed `talos-app post` main's notices use
     workers?.postNotice = { [weak sup] thread, text in sup?.postToThread(thread, text: text) ?? .failed }
     status = supervisor.status
@@ -106,7 +109,10 @@ final class SupervisorController: ObservableObject {
       Task { @MainActor in self?.showThreadTerminal(thread) }
       return true
     }
-    if let w = workers { needsYouPopups = NeedsYouPopupController(source: w, quiet: { MainActor.assumeIsolated { NeedsYouPopupController.statusQuiet() } }) }
+    // the Mac popup: the workers' dialogs, and Main's own development-channels warning (no bridge runs while Main waits on it)
+    needsYouPopups = NeedsYouPopupController(
+      source: MainAndWorkersPopupSource(workers: workers ?? NoWorkerPopups(), main: sup),
+      quiet: { MainActor.assumeIsolated { NeedsYouPopupController.statusQuiet() } })
     refresh = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in
         guard let self else { return }
@@ -126,6 +132,10 @@ final class SupervisorController: ObservableObject {
     Self.current = self
     TerminalWindowController.shared.attach(model: self)
   }
+
+  /// The key store that seals `confirmed_launch`: in memory until the app's own start swaps in the Keychain one (`TalosApp.init`), so a test that
+  /// makes a controller never reads or writes the owner's Keychain.
+  nonisolated(unsafe) static var launchTrust: LaunchTrust = MemoryLaunchTrust()
 
   /// The worker manager for Option C, or nil without tmux (workers live only in `tmux -L talos`, OPTION-C decision 1).
   static func makeWorkers(
@@ -236,7 +246,7 @@ final class SupervisorController: ObservableObject {
   static func describe(_ n: Supervisor.NeedsYou) -> String {
     switch n {
     case .dialog(let what): return "\(what) on screen"
-    case .confirmColdStart: return "press Enter on the dev-channel warning in the pane"
+    case .confirmColdStart: return "accept the dev-channel warning in the Talos popup"
     case .restartNotConfirmed(let why): return "the restart's dialog wasn't confirmed (\(why.rawValue))"
     case .stuck: return "the session looks stuck"
     case .startStalled: return "Claude has not finished starting; look at the pane"

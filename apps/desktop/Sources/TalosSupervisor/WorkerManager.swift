@@ -145,6 +145,7 @@ public final class WorkerManager: @unchecked Sendable {
     var needsYouPrompt: String?
     /// When (awake clock) the current dialog was first seen.
     var dialogSinceAwake: Double?
+    var dialogAbsence = DialogAbsence()  // awake clock: since the pane showed no dialog shape at all; clears a held flag (noteScreens)
     /// The notice for the dialog on screen now (`dlg`), for a pointer held back by a draft (`held`) or by no input box (`noBox`).
     var dlg = NoticeState()
     var held = NoticeState()
@@ -206,6 +207,7 @@ public final class WorkerManager: @unchecked Sendable {
   let probe: SystemProbe
   let baseEnv: @Sendable () -> [String: String]
   let mainPanePid: @Sendable () -> Int32
+  let mainDialogFeed = MainDialogFeed()
   let now: @Sendable () -> Double
   /// Seconds that stop while the Mac sleeps and never jump. The wall clock can't time a turn, a grace or a start: after a
   /// sleep or a clock change every wait on it looks long over.
@@ -374,6 +376,7 @@ public final class WorkerManager: @unchecked Sendable {
       checkLaunchChanges(settings: settings, now: t)
     }
     clearFolderClaims()
+    if mainDialogFeed.changed() { dirty = true }  // Main's card appears (or goes) within the tick
     // abs: after the clock goes back, a heartbeat must not wait for it to catch up
     if abs(t - lastHeartbeat) >= options.heartbeat || dirty {
       writeFile()
@@ -395,7 +398,9 @@ public final class WorkerManager: @unchecked Sendable {
     var threads: [String: WorkersFile.Entry] = [:]
     for (id, r) in rt { threads[id] = r.persisted }
     return WorkersFile(
-      supervisor: .init(pid: getpid(), heartbeat_at: ISOTime.string(now()), workers_supported: true, main_pane_pid: mainPanePid()),
+      supervisor: .init(
+        pid: getpid(), heartbeat_at: ISOTime.string(now()), workers_supported: true, main_pane_pid: mainPanePid(),
+        main_dialog: mainDialogFeed.current()),
       threads: threads)
   }
 

@@ -1,6 +1,7 @@
 // Pure helpers for the session sheet, the header chip and the `/` picker (docs/CLAUDE-CODE.md C4.5). No policy lives here:
 // routes, grammars and model rules come from @talos-app/protocol.
 import type { InventoryCommandT, SessionStateT } from '@talos-app/protocol'
+import type { ContextKind, ThreadContext } from './threadContext.ts'
 
 /** Fresh = the bridge heartbeats every 10 s; three missed beats and the mod counts as gone. */
 export const MOD_FRESH_MS = 45_000
@@ -76,19 +77,63 @@ export function resetWords(iso: string | undefined, nowMs: number): string {
   return `resets ${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
 }
 
-/** The header chip: what you need without opening the sheet. */
-export function chipParts(state: SessionStateT | undefined): { week?: number; ctx?: number } | undefined {
-  if (!state) return undefined
+/** What the chip and the panel say for a thread session that is not running and has no reading. */
+export const CTX_NOT_RUNNING_TEXT = 'not running'
+/** Said beside a reading from a session that is parked or stopped. */
+export const CTX_LAST_KNOWN_TEXT = 'last known'
+
+/**
+ * The header chip: what you need without opening the sheet. Weekly comes from `state` (main's, account-wide); the context
+ * comes from `view` when the open thread has a session of its own, otherwise from `state` too.
+ */
+export function chipParts(
+  state: SessionStateT | undefined,
+  view?: ThreadContext,
+): { week?: number; ctx?: number; kind?: ContextKind } | undefined {
+  const kind = view?.kind
+  if (!state && !view?.ctx && kind !== 'off') return undefined
   const week = usedPct(state, 'seven_day')
-  const ctx = contextUsed(state)?.used
-  if (week === undefined && ctx === undefined) return undefined
+  const ctx = (view ? view.ctx : contextUsed(state))?.used
+  if (week === undefined && ctx === undefined && kind !== 'off') return undefined
   return {
     ...(week !== undefined ? { week } : {}),
     ...(ctx !== undefined ? { ctx } : {}),
+    ...(kind ? { kind } : {}),
   }
 }
 
+/** The spoken reading of the usage numbers, e.g. "weekly usage 60% used, context 31% used". Empty when nothing is known. */
+export function usageLabel(parts: ReturnType<typeof chipParts>, phase: Phase): string {
+  return [
+    parts?.week !== undefined ? `weekly usage ${parts.week}% used` : null,
+    parts?.ctx !== undefined
+      ? `context ${parts.ctx}% used${parts.kind === 'last' ? `, ${CTX_LAST_KNOWN_TEXT}` : ''}`
+      : parts?.kind === 'off'
+        ? `context ${CTX_NOT_RUNNING_TEXT}`
+        : null,
+    phase === 'offline' ? 'mod offline' : null,
+  ]
+    .filter(Boolean)
+    .join(', ')
+}
+
 // ---- commands -----------------------------------------------------------------------------------------------------
+
+/** Whether the composer's `/` picker (and the palette) may run a command, and why not. One rule for both. */
+export function commandBlock(cmd: InventoryCommandT, modOnline: boolean): { disabled: boolean; reason: string } {
+  const macOnly = cmd.route === 'local_only' || cmd.at_mac_only === true
+  const needsMod = cmd.route === 'control' && !modOnline
+  return {
+    disabled: macOnly || needsMod,
+    reason: macOnly
+      ? cmd.at_mac_only
+        ? 'At the Mac only'
+        : 'Run this at the Mac'
+      : needsMod
+        ? 'Needs the Talos mod'
+        : '',
+  }
+}
 
 export const GROUPS: ReadonlyArray<{ source: InventoryCommandT['source']; label: string }> = [
   { source: 'builtin', label: 'Built-in' },
@@ -124,14 +169,3 @@ export function routeBadge(c: InventoryCommandT): { text: string; tone: 'ok' | '
 
 export const MODEL_LABELS: Record<string, string> = { default: 'Default', best: 'Best', fable: 'Fable' }
 export const titleCase = (s: string) => MODEL_LABELS[s] ?? s.charAt(0).toUpperCase() + s.slice(1)
-
-/** The spoken reading of the usage numbers, e.g. "weekly usage 60% used, context 31% used". Empty when nothing is known. */
-export function usageLabel(parts: ReturnType<typeof chipParts>, phase: Phase): string {
-  return [
-    parts?.week !== undefined ? `weekly usage ${parts.week}% used` : null,
-    parts?.ctx !== undefined ? `context ${parts.ctx}% used` : null,
-    phase === 'offline' ? 'mod offline' : null,
-  ]
-    .filter(Boolean)
-    .join(', ')
-}

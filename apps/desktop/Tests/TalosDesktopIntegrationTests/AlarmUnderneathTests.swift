@@ -23,7 +23,7 @@ struct AlarmUnderneathTests {
   }
 
   @Test func aRefusedRestartComesBackWithItsOwnReason() {
-    for why in [AutoConfirmGuard.Refusal.channelsMismatch, .wrongHighlight, .versionChanged, .alreadyConfirmedThisStart] {
+    for why in [AutoConfirmGuard.Refusal.channelsMismatch, .wrongHighlight, .outsideWindow, .alreadyConfirmedThisStart] {
       #expect(back(launch(["refuse"], question: .restartNotConfirmed(why))) == .restartNotConfirmed(why), "\(why)")
     }
   }

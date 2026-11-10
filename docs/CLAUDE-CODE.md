@@ -513,7 +513,7 @@ non-technical owner can decide without reading the command. **It is advice besid
 | Model, effort                | ✕                 | see it | C4.4                                                                                                                       | yes                          |
 | Run a skill                  | model may load it | ✕      | not via the mod: C4.3                                                                                                      | yes                          |
 | Resume an older conversation | ✕                 | ✕      | **SMOKE S7**                                                                                                               | yes                          |
-| Restart after a crash        | ✕                 | ✕      | ✕                                                                                                                          | yes, restart-only guard (C5) |
+| Restart after a crash        | ✕                 | ✕      | ✕                                                                                                                          | yes, exact-screen guard (C5) |
 | Startup dialogs, `/login`    | ✕                 | ✕      | ✕                                                                                                                          | at the Mac                   |
 | Permission mode              | ✕                 | ✕      | refused by policy                                                                                                          | yes                          |
 
@@ -630,10 +630,31 @@ or start any of them today.
 
 - **Startup dialogs and login.** No API presses keys at launch. A pty host can, under the owner's eyes.
 - **Restart after a crash.** Bridge and mod die with the process; the relay's "Mac session stopped" push stays the
-  signal (SPEC 4.1). Restart-only rule for the desktop app: it may type the dev-channel confirmation only when the
-  session is a restart of one the user started and confirmed by hand, and only if the dialog's channel list is byte-for-
-  byte what the user approved; never on a first launch. Anthropic's own `claude --bg` supervisor restarts sessions, but
-  carrying `--dangerously-load-development-channels` across its restarts is unconfirmed (**SMOKE S14**).
+  signal (SPEC 4.1). The desktop app answers the dev-channel warning on Main at every start, cold or restart (owner decision,
+  2026-11-07: the earlier rule that cold starts are always human is retired). It types the one Enter only when all of these hold: the screen is the whole warning
+  (one title, one `Channels:` line, the cursor on "I am using this for local development"); the channels shown are exactly
+  `server:talos-app` (a constant in the code: the one channel Talos adds, byte for byte, nothing extra) AND the channels this
+  launch's own argv passed with `--dangerously-load-development-channels` are exactly that same constant (neither a list in
+  `desktop.json` nor "whatever the argv passed" ever counts: the launch command is in `desktop.json`, which an agent may be able
+  to write); Main's launch is the one the owner last confirmed (the fingerprint of folder, program, flags without the resume id and
+  env equals `confirmed_launch` in `desktop.json`, stored when a start last got through the warning; none stored counts as
+  changed, so the first start after set-up, a new program, a new flag or a new env var waits for the owner, whose Enter, or whose tap
+  on the Mac's Needs-you popup (kind `dev_channels`: "Allow Talos's development channel?", the screen's two buttons; the bridge is Main's own
+  child, so while Main sits on this warning no bridge runs and posts no card: the Mac posts one plain line to the default thread instead,
+  once per start, for a start the phone or a recovery began and for a crash restart (not when the owner starts Main at the Mac); a bridge that does run reads `supervisor.main_dialog` in `workers.json` and posts the card), stores the new one; `confirmed_launch` sits in
+  `desktop.json` with an HMAC (`confirmed_launch_mac`) under a 32-byte key in the Keychain (`LaunchTrust`), and a missing key, a missing or
+  wrong MAC or an unreadable Keychain count as changed, so an edit of the file alone cannot confirm a launch. Only a real click on the popup's button (or a verified card tap) seals;
+  an Enter in the pane lets that one start through and stores nothing. The fingerprint is SHA-256 over a length-prefixed encoding. This stops
+  accidental and casual auto-accepts, not an agent running as the owner with tmux access, which can press Enter on Main's dialog itself
+  (agent guards do not block tmux); the floor under that is still the constant-channel check above); an ordinary cold start or
+  restart with the same launch is automatic; it is within 60 s (awake clock) of this start's spawn; it is the first
+  Enter of this start; no attached tmux client has typed within the last 5 s (clients that cannot be read count as typing); the
+  screen read again just before the Enter is the same warning; the crash-loop cap (3 auto-confirmed crash restarts in 60 min) is not
+  reached, and cold starts have a cap of their own (10 in 60 min) that crash restarts do not spend; the
+  "Press Enter for me" setting is on. Workers never get the flag and are never answered. Anything else stays at Needs you.
+  Every accept is one line in the app log (`auto_confirm`: time, start kind, channels, CLI version). Anthropic's own `claude --bg`
+  supervisor restarts sessions, but carrying `--dangerously-load-development-channels` across its restarts is unconfirmed
+  (**SMOKE S14**).
 - **Mid-turn steering beyond Stop.** A channel message waits for the next turn.
 - **Seeing the terminal.** No API streams the TUI; the desktop app's terminal pane is the answer.
 

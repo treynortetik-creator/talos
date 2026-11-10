@@ -18,13 +18,14 @@
 // 2147483 s, the most setTimeout takes.
 //
 // --only and --skip split the files by path prefix, so CI can run the same prefix through both and miss nothing: test/schedules/
-// waits 3 seconds on the real Chronos CLI, which only holds on a quiet machine, so those files go one at a time.
+// waits 3 seconds on the real Chronos CLI, which only holds on a quiet machine, so CI runs those files alone on the machine
+// (the `suites` mutex), a third of the cores at a time. Each file has its own temp home and Chronos and binds no fixed port.
 //
 // A test's default timeout goes from 5 to 20 seconds here. That timeout only catches a hang: several real-process tests take
 // 2 to 4 seconds alone and more with files beside them, and it fired on tests that passed every assertion. A test that sets
 // its own timeout, every assertion and every wait inside a test stay exactly as written.
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 
@@ -165,7 +166,9 @@ async function main(argv: string[]): Promise<number> {
   }
   const start = performance.now()
   const tmp = mkdtempSync(join(tmpdir(), 'bun-tests-'))
-  const queue = [...files]
+  // Biggest file first: a big file is a long one, and a long file started last is the whole run's tail (docs/CI-LOCAL.md).
+  const size = (f: string) => statSync(join(root, f)).size
+  const queue = [...files].sort((a, b) => size(b) - size(a) || (a < b ? -1 : 1))
   const results: Result[] = []
   await Promise.all(
     Array.from({ length: Math.min(jobs, files.length) }, async () => {

@@ -293,6 +293,14 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
     return r.ok ? .sent : .failed
   }
 
+  @discardableResult
+  public func sendDialogKey(_ key: DialogKey) -> SendOutcome {
+    guard lock.withLock({ paneId }) != nil else { return .failed }
+    let r = tmux(commands.sendDialogKey(key))
+    if r.timedOut { return .unknown }
+    return r.ok ? .sent : .failed
+  }
+
   public func visibleRows() -> [String]? {
     guard lock.withLock({ paneId }) != nil else { return nil }
     let r = tmux(commands.capturePane())
@@ -303,6 +311,11 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
     let r = tmux(commands.listClientsActivity())
     guard r.ok, let times = TmuxCommands.parseClientActivity(r.out) else { return nil }
     return times.max()
+  }
+
+  public func clientActivities() -> [Double]? {
+    let r = tmux(commands.listClientsActivity())
+    return r.ok ? TmuxCommands.parseClientActivity(r.out) : nil
   }
 
   public func lastOutputAt() -> Date? {

@@ -14,6 +14,7 @@ import {
   phoneValueIssue,
   resolveThreadsPatch,
   sessionFieldsIssue,
+  threadOptsIssue,
   threadPatchIssue,
   validateAgentConfig,
 } from '@talos-app/protocol'
@@ -133,6 +134,9 @@ export class ConfigFile {
     if (!checked.ok) throw new Error(checked.message)
     const inherited = newInheritedThread(base, checked.config)
     if (inherited) throw new Error(inheritedMessage(inherited))
+    // the same Mac-only rule as a patch, so a tool that writes through update() cannot skip it
+    const macOnly = threadOptsIssue(base, checked.config)
+    if (macOnly) throw new Error(macOnly)
     // archiving a thread (the agent's archive_thread) also turns its own session off (docs/OPTION-C.md 9.2)
     this.write(clearArchivedSessions(checked.config), opts.setsTrustMode === true)
     return this.current
@@ -140,6 +144,9 @@ export class ConfigFile {
 
   /** `config.patch` from the app: allowlist, optimistic concurrency, schema + structure validation. */
   applyPatch(baseRev: number, patch: Record<string, unknown>, now: number = Date.now()): PatchResult {
+    // A hand edit not yet picked up must not be judged against the copy in memory: Settings echoes the values it last saw, and a
+    // stale `ops_read: true` would otherwise put back what the owner just took away.
+    this.reloadIfChanged()
     const check = checkConfigPatch(patch)
     if (!check.ok) return { ok: false, code: 'config_field_forbidden', message: `field not allowed: ${check.path}` }
     // Settings the phone may only turn off (the memory browser kill switch, docs/V2-FEATURES.md V5.1): `on` comes from the Mac.
@@ -156,6 +163,9 @@ export class ConfigFile {
     // the schema is tolerant when reading (docs/OPTION-C.md "Compatibility"); what the owner writes is checked strictly
     const fields = sessionFieldsIssue(merged)
     if (fields) return { ok: false, code: 'thread_session_refused', message: fields }
+    // Mac-only thread options (ops_read): never turned on from an app patch or an agent card; off and echoes are fine
+    const macOnly = threadOptsIssue(cur, merged)
+    if (macOnly) return { ok: false, code: 'config_field_forbidden', message: macOnly }
     const checked = parseConfig({ ...merged, rev: cur.rev + 1, version: 1 })
     if (!checked.ok) return { ok: false, code: 'bad_frame', message: checked.message }
     const inherited = newInheritedThread(cur, checked.config)

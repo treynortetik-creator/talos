@@ -10,6 +10,8 @@ public enum DialogMatcher {
     public static let devTitle = "WARNING: Loading development channels"
     public static let channelsPrefix = "Channels:"
     public static let devConfirm = "I am using this for local development"
+    /// The other row of the same select (real 2.1.312 screen: "2. Exit").
+    public static let devExit = "Exit"
     /// The selection cursor in front of the focused option (SMOKE S3 confirms the rendering).
     public static let pointer: Character = "❯"
     /// The registration notice once channels are live: "Channels (experimental) messages from <…> inject directly in

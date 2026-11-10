@@ -109,6 +109,9 @@ window.__sessions = (spec) => {
   })
 }
 
+// `?threads=1`: the Trip and Garden threads exist before the first render (a spec that needs them at the start, not after)
+if (params.has('threads')) window.__sessions({ workers: { trip: 'live', garden: 'parked' } })
+
 window.__hb = { mode: 'pass', release: null }
 client.schedules.setHeartbeatTest(async (config, opts) => {
   const at = new Date(Date.now()).toISOString()

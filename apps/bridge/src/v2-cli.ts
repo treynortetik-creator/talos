@@ -31,10 +31,6 @@ type IO = {
   now?: () => number
 }
 
-export const V2_USAGE = `  search reindex
-  memory init [--agent-dir <dir>] | on | off | show | reindex
-  share revoke <id> | share shortcut [--label <label>] [--files] [--device <id>]`
-
 const OWNER: Record<string, string> = { search: 'WP-V2', memory: 'WP-V5', share: 'WP-V4' }
 
 /** Returns the exit code. */

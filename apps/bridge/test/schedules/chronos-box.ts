@@ -1,4 +1,4 @@
-// A real Chronos install in a temp HOME (third_party/chronos at v0.4.0), reachable through a wrapper script the bridge
+// A real Chronos install in a temp HOME (third_party/chronos at v0.5.0), reachable through a wrapper script the bridge
 // can use as TALOS_APP_CHRONOS_BIN. No bridge imports here: the vitest contract suites (Node) use it too.
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -57,7 +57,11 @@ export class ChronosBox {
   }
 
   /** `src` is a Chronos checkout; the vendored tag unless a test brings a newer one (times-real.test.ts). */
-  constructor(now: string, tz = TZ, src = CHRONOS_SRC) {
+  constructor(
+    now: string,
+    readonly tz = TZ,
+    readonly src = CHRONOS_SRC,
+  ) {
     this.now = now
     mkdirSync(join(this.home, '.config', 'chronos'), { recursive: true })
     mkdirSync(join(this.home, 'chronos-workspace'), { recursive: true }) // where headless runs start
@@ -73,14 +77,45 @@ export class ChronosBox {
     chmodSync(this.bin, 0o755)
   }
 
-  /** Runs `chronos <args>` (not `api`). */
-  cli(args: string[], stdin?: unknown, now = this.now): { status: number; out: string } {
+  /** Runs `chronos <args>` (not `api`). `env` adds variables (CHRONOS_RUN_ID, say). */
+  cli(
+    args: string[],
+    stdin?: unknown,
+    now = this.now,
+    env: Record<string, string> = {},
+  ): { status: number; out: string; err: string } {
     const r = spawnSync(this.bin, args, {
       input: stdin === undefined ? '' : JSON.stringify(stdin),
       encoding: 'utf8',
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', CHRONOS_NOW: now },
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', CHRONOS_NOW: now, ...env },
     })
-    return { status: r.status ?? -1, out: r.stdout }
+    return { status: r.status ?? -1, out: r.stdout, err: r.stderr }
+  }
+  /** Adds keys to the box's config.json (a stand-in `claude_bin`, `memory_dir`). */
+  mergeConfig(extra: Record<string, unknown>) {
+    const cur = JSON.parse(readFileSync(this.configFile, 'utf8')) as Record<string, unknown>
+    writeFileSync(this.configFile, JSON.stringify({ ...cur, ...extra }))
+  }
+  /**
+   * Runs the real run script (bin/chronos-run.sh) for one job in the foreground, in the box's HOME with its fake `claude`.
+   * `extra` is the environment on top (FAKE_LOG, CHRONOS_POLL_S); an event run passes `event` = [file, hash, type].
+   */
+  runScript(id: string, ds: string, extra: Record<string, string> = {}, event?: [string, string, string]) {
+    const r = spawnSync('/bin/bash', [join(this.src, 'bin', 'chronos-run.sh'), id, ds, ...(event ?? [])], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH ?? '/usr/bin:/bin',
+        HOME: this.home,
+        TZ: this.tz,
+        CHRONOS_TEST_MODE: '1',
+        PYTHONDONTWRITEBYTECODE: '1',
+        CHRONOS_NOW: this.now,
+        CHRONOS_POLL_S: '1',
+        ...extra,
+      },
+      timeout: 60_000,
+    })
+    return { status: r.status ?? -1, out: r.stdout + r.stderr }
   }
   api<T = Record<string, unknown>>(verb: string[], stdin?: unknown, now = this.now): T {
     const r = this.cli(['api', ...verb], stdin, now)
@@ -118,10 +153,19 @@ export class ChronosBox {
    * A job the way Chronos 0.2 (or a hand edit) leaves it: straight into jobs.json and prompt.md, no apply, no approved record.
    * `in_session` true with `headless` true or absent is the 0.2 meaning of "session first, background after a grace".
    */
-  handWrite(job: { id: string; name: string; time: string; prompt: string; in_session?: boolean; headless?: boolean }) {
+  handWrite(job: {
+    id: string
+    name: string
+    time: string
+    prompt: string
+    in_session?: boolean
+    headless?: boolean
+    /** More jobs.json fields (`restricted`, `allowed_tools`, `kind`, `command`). */
+    extra?: Record<string, unknown>
+  }) {
     const file = join(this.home, '.config', 'chronos', 'jobs.json')
     const list = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>) : []
-    const { prompt, ...rec } = job
+    const { prompt, extra, ...rec } = job
     list.push({
       description: '',
       days: 'daily',
@@ -133,6 +177,7 @@ export class ChronosBox {
       created: '2026-09-01T09:00:00',
       updated: '2026-09-01T09:00:00',
       ...rec,
+      ...extra,
     })
     writeFileSync(file, JSON.stringify(list, null, 2))
     mkdirSync(this.jobDir(job.id), { recursive: true })

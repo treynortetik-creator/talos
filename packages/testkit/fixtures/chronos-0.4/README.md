@@ -1,7 +1,7 @@
 # Chronos "times and meta" fixtures
 
-The exact stdout of `chronos api <verb>` from the vendored Chronos v0.4.0 (`third_party/chronos`; it prints
-`"chronos": "0.4.0"`), run against a throwaway HOME with `TZ=America/New_York` and a fixed
+The exact stdout of `chronos api <verb>` from the vendored Chronos v0.5.0 (`third_party/chronos`; it prints
+`"chronos": "0.5.0"`), run against a throwaway HOME with `TZ=America/New_York` and a fixed
 `CHRONOS_NOW` (Monday 2026-10-05 unless the name says weekend). Everything is fictional. The temp HOME is `$HOME`.
 
 - **Regenerate:** from the repo root, `python3 packages/testkit/fixtures/chronos-0.4/generate.py third_party/chronos packages/testkit/fixtures/chronos-0.4`
@@ -13,4 +13,4 @@ The exact stdout of `chronos api <verb>` from the vendored Chronos v0.4.0 (`thir
   `daily`, `weekdays` or names (`["mon", "wed"]`) for a named list (the PR's first commits printed integers; Talos still reads both); the `{id, error}` row for an over-4-KiB
   `meta`; `today: "missed"` on a slot key; bare runs with null `run_id`/`started_at`/`runner`; Run now's ad-hoc minute
   key (`2026-10-05T1001`); a stalled slot in `probe` and `health`.
-- Chronos is tagged v0.4.0 and `third_party/chronos` is that tag (plus the one-line divergence in its DIVERGENCE.md). `start-times-headless.json` holds a run id Chronos mints, so it differs on every regeneration.
+- Chronos is tagged v0.5.0 and `third_party/chronos` is that tag (plus the one-line divergence in its DIVERGENCE.md). `start-times-headless.json` holds a run id Chronos mints, so it differs on every regeneration.

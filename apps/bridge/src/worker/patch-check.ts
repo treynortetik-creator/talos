@@ -5,14 +5,24 @@
 // directory under $HOME, and does not resolve (through a symlink) into ~/.claude or $TALOS_APP_HOME. The desktop
 // supervisor re-checks the folder before every start (a folder can be swapped for a symlink after this check).
 import { realpathSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { type AgentConfigT, checkWorkerCwd, dedicatedPatchIssue } from '@talos-app/protocol'
+import { type AgentConfigT, checkWorkerCwd, dedicatedPatchIssue, FOLDER_WORDING } from '@talos-app/protocol'
+import { folderDeps, folderRefusedRoots, underRefusedRoot } from '../folders/service.ts'
 
-export type WorkerRoots = { home: string; talosHome: string }
+/**
+ * `claudeDir` and `agentDir` are optional: the first defaults to `<home>/.claude`, the second to nothing (the agent folder is
+ * refused only when the process knows it, from TALOS_AGENT_DIR, the same source the picker uses).
+ */
+export type WorkerRoots = { home: string; talosHome: string; claudeDir?: string; agentDir?: string }
 
 export function defaultWorkerRoots(configPath: string): WorkerRoots {
-  return { home: homedir(), talosHome: dirname(configPath) }
+  const d = folderDeps(dirname(configPath))
+  return {
+    home: d.home,
+    talosHome: d.talosHome,
+    claudeDir: d.claudeDir,
+    ...(d.agentDir ? { agentDir: d.agentDir } : {}),
+  }
 }
 
 const real = (p: string): string | null => {
@@ -21,6 +31,17 @@ const real = (p: string): string | null => {
   } catch {
     return null
   }
+}
+
+/** The folders a thread may never work in: the picker's own list (`folderRefusedRoots`), never a second copy. */
+function refusedFolder(path: string, roots: WorkerRoots): boolean {
+  const list = folderRefusedRoots({
+    home: roots.home,
+    talosHome: roots.talosHome,
+    claudeDir: roots.claudeDir ?? join(roots.home, '.claude'),
+    ...(roots.agentDir ? { agentDir: roots.agentDir } : {}),
+  })
+  return underRefusedRoot(path, list, (r) => real(r) ?? r)
 }
 
 /** The on-disk folder check: null when fine, else a reason the app can show. */
@@ -40,7 +61,11 @@ export function checkWorkerFolder(cwd: string, roots: WorkerRoots): string | nul
     talosHome: real(roots.talosHome) ?? roots.talosHome,
     claudeDir: real(join(roots.home, '.claude')),
   }
-  return checkWorkerCwd(resolved, resolvedRoots)
+  const viaDisk = checkWorkerCwd(resolved, resolvedRoots)
+  if (viaDisk) return viaDisk
+  // the picker's own list: the folder as written, and as the disk spells it (a link that leads into a refused root is that root)
+  if (refusedFolder(cwd, roots) || refusedFolder(resolved, roots)) return FOLDER_WORDING.refused
+  return null
 }
 
 /**

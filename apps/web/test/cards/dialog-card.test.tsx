@@ -322,3 +322,55 @@ describe('expired', () => {
     })
   })
 })
+
+// Main's development-channels warning (kind dev_channels): the same card, with the screen's own two buttons.
+const devDialog = (over: Partial<WorkerDialogT> = {}): WorkerDialogT => ({
+  id: 'Dv5Qm8ZtRx3Cw9PkNa2HdB',
+  kind: 'dev_channels',
+  subject: 'server:talos-app',
+  options: ['I am using this for local development', 'Exit'],
+  cursor: 0,
+  seen_at: iso(NOW),
+  expires_at: iso(NOW + 900_000),
+  ...over,
+})
+
+describe('the development-channels card', () => {
+  it('says the table heading and sentence, shows the channel, and has the two screen buttons in order', () => {
+    show(dialogCard(devDialog()))
+    expect(screen.getByRole('heading', { name: "Allow Talos's development channel?" })).toBeTruthy()
+    expect(screen.getByTestId('dialog-body').textContent).toBe(
+      "Main session's start needs this to talk to the Talos app.",
+    )
+    expect(screen.getByTestId('dialog-subject').textContent).toBe('server:talos-app')
+    expect(buttons().map((x) => x.textContent)).toEqual(['I am using this for local development', 'Exit'])
+  })
+
+  it('names a channel Talos did not add, and a changed start command, in plain words', () => {
+    show(dialogCard(devDialog({ subject: 'server:talos-app, server:odd', launch_changed: ['program', 'flags'] })))
+    const body = screen.getByTestId('dialog-body').textContent
+    expect(body).toContain("Also loads server:odd, which Talos didn't add.")
+    expect(body).toContain("Main's start command changed since you last confirmed it. Changed: program, flags.")
+  })
+
+  it('tapping the first button sends choice 0, and Exit sends choice 1, with the rendered hash', async () => {
+    const card = dialogCard(devDialog())
+    const client = show(card)
+    fireEvent.click(buttons()[0] as HTMLElement)
+    await waitFor(() => expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true))
+    expect(client.sent.find((x) => x.type === 'card.resolve')).toMatchObject({
+      card_id: card.id,
+      action: 'primary',
+      choice: 0,
+      payload_hash: card.payload_hash,
+    })
+  })
+
+  it('Exit sends choice 1', async () => {
+    const card = dialogCard(devDialog())
+    const client = show(card)
+    fireEvent.click(buttons()[1] as HTMLElement)
+    await waitFor(() => expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true))
+    expect(client.sent.find((x) => x.type === 'card.resolve')).toMatchObject({ choice: 1 })
+  })
+})

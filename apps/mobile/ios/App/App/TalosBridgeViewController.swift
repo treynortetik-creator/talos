@@ -16,10 +16,12 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     private var navigationGate: NavigationGate?
     private var keyboardHideObserver: NSObjectProtocol?
     private var foregroundObserver: NSObjectProtocol?
+    private var leavingObservers: [NSObjectProtocol] = []
     private var guardian: BridgeGuard?
     private var relayURL: URL?
     private var pathMonitor: NWPathMonitor?
     private var launchWatchdog: Timer?
+    private var revival: WebViewRevival?
     private var launchStarted = Date()
     private var shareInFlight = false
     private var relayPageFinished = false
@@ -31,11 +33,20 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     /// blank view while the relay answers.
     private let launchSpinner = UIActivityIndicatorView(style: .large)
 
-    deinit {
+    deinit { stopWatching() }
+
+    /// Observers, the network monitor and the launch timer. Also run when this controller is replaced, so a stale one cannot act.
+    private func stopWatching() {
         if let keyboardHideObserver { NotificationCenter.default.removeObserver(keyboardHideObserver) }
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
+        keyboardHideObserver = nil
+        foregroundObserver = nil
+        leavingObservers.forEach(NotificationCenter.default.removeObserver)
+        leavingObservers = []
         pathMonitor?.cancel()
+        pathMonitor = nil
         launchWatchdog?.invalidate()
+        launchWatchdog = nil
     }
 
     override func viewDidLoad() {
@@ -130,6 +141,20 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         webView.uiDelegate = gate
         self.guardian = guardian
         relayURL = bridge.config.serverURL
+        revival = WebViewRevival(
+            hasPage: { [weak webView] in webView?.url != nil },
+            isBusy: { [weak self] in
+                guard let self, let web = self.webView else { return true }
+                return web.isLoading || self.showingFallback
+            },
+            isActive: { UIApplication.shared.applicationState == .active },
+            ping: { [weak webView] timeout, done in
+                guard let webView else { return done(.answered) }
+                WebViewRevival.ping(webView, timeout: timeout, done)
+            },
+            hop: { DispatchQueue.main.async(execute: $0) },
+            reload: { [weak self] in self?.loadRelay(keepingRoute: true) },
+            rebuild: { [weak self] in self?.rebuildWebView() })
         startRetryTriggers()
         startLaunchWatchdog()
     }
@@ -139,20 +164,66 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     /// Reload the relay when the web view is not showing a relay page: offline page, blank view, nothing loaded.
     /// Tap (talos-retry link), network return and app foreground all land here.
     private func retryIfNeeded(tapped: Bool = false) {
-        guard let guardian, let relayURL, let webView, tapped || showingFallback,
+        guard let guardian, let webView, tapped || showingFallback,
               guardian.needsRetry(currentURL: webView.url) else { return }
+        loadRelay()
+    }
+
+    /// Loads the start URL (the one Capacitor loaded at launch) and starts the launch watchdog again. `keepingRoute`: a page
+    /// that is on a relay page (not /media/) is loaded where it was, so a process that died does not take the owner back to the start.
+    private func loadRelay(keepingRoute: Bool = false) {
+        guard let relayURL, let webView else { return }
+        var target = relayURL
+        if keepingRoute, let current = webView.url, guardian?.isRelayURL(current) == true, !BridgeGuard.isMediaPath(current) {
+            target = current
+        }
         relayPageFinished = false
         relayPageCommitted = false
         showingFallback = false
         launchSpinner.startAnimating()
-        webView.load(URLRequest(url: relayURL))
+        webView.load(URLRequest(url: target))
         startLaunchWatchdog()
+    }
+
+    /// The web process does not answer, so a load would queue behind it: put a new controller (a new web view and web process)
+    /// in the window. Only the controller that is on screen may do it, so a stale one cannot replace its successor.
+    private func rebuildWebView() {
+        guard let scene = view.window?.windowScene?.delegate as? SceneDelegate, scene.window?.rootViewController === self else { return }
+        TalosAudioPlugin.resetSession()
+        // A notification tap handed to this page a moment ago may never have been acted on: the new page gets it again.
+        TalosPushCenter.shared.requeueRecentlyDelivered()
+        scene.replaceBridgeViewController()
+    }
+
+    /// This controller is being replaced: stop everything that could still act for it and let go of its web view, so the old web
+    /// view (and with it the stuck web process) is not kept alive by a message handler or a delegate.
+    func retire() {
+        stopWatching()
+        guard let webView else { return }
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        webView.configuration.userContentController.removeAllScriptMessageHandlers()
+        webView.removeFromSuperview()
     }
 
     private func startRetryTriggers() {
         foregroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.retryIfNeeded() }
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                // The offline page or a blank view is retried first. The page is checked either way: a stuck web process cannot
+                // hide behind a load that is running or the offline page.
+                self?.retryIfNeeded()
+                self?.revival?.appDidForeground()
+            }
+        }
+        // Leaving the front voids a check that is still waiting for an answer.
+        leavingObservers = [UIApplication.willResignActiveNotification, UIApplication.didEnterBackgroundNotification].map {
+            NotificationCenter.default.addObserver(forName: $0, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.revival?.cancel() }
+            }
+        }
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
             guard path.status == .satisfied else { return }

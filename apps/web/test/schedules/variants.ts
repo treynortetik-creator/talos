@@ -249,6 +249,43 @@ export const VARIANTS = {
         inThread('gone-thread-job', 'Orphan job', 'archived_one'),
       ],
     }),
+  /** Threads with a failed job (Garden), a one-off in Trip, and a job in Main that runs sooner than the rest. */
+  organized: () =>
+    snap({
+      health: health(),
+      schedules: [
+        ranToday,
+        inThread('soon-job', 'Soon job', null, {
+          next_run: '2026-10-05T08:30:00-04:00',
+          when_text: 'Mondays at 8:30 AM',
+        }),
+        inThread('packing-check', 'Packing check', 'trip', { editable: true }),
+        inThread('hotel-watch', 'Hotel watch', 'trip', { enabled: false }),
+        inThread('passport', 'Renew passport', 'trip', {
+          when: { type: 'once', at: '2026-10-05T09:15' },
+          when_text: 'Once on Mon Oct 5 at 9:15 AM',
+          next_run: '2026-10-05T09:15:00-04:00',
+        }),
+        inThread('water-plants', 'Water plants', 'garden', {
+          today: 'failed',
+          last_run: {
+            run_id: 'r_01JBF3V7Q8K2M4N6P8R0S2T4AA',
+            ds: '2026-10-05',
+            started_at: '2026-10-05T06:00:00-04:00',
+            runner: 'headless',
+            trigger: 'clock',
+            status: 'failed',
+            has_report: true,
+          },
+        }),
+      ],
+    }),
+  /** Eighteen jobs in Trip: enough for the search box. */
+  many: () =>
+    snap({
+      health: health(),
+      schedules: Array.from({ length: 18 }, (_, i) => inThread(`job-${i}`, `Job ${i}`, 'trip')),
+    }),
   /** The fixture as it is: three jobs, `session_runner_conflict` (stuck). */
   stuck: () => base,
   healthy: () =>

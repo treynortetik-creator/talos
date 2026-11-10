@@ -6,6 +6,7 @@ import type { JwkP256T } from '@talos-app/protocol'
 import { verifyOwnerFrame } from '@talos-app/protocol'
 import { expectAxeClean } from '../cards/e2e.ts'
 import { NOW_ISO } from './clock.ts'
+import { expandGroups } from './groups.ts'
 import type { VariantName } from './variants.ts'
 
 // The page-motion helpers inject a <style> (test-only CSS). The service worker stamps the real CSP (style-src 'self') on
@@ -21,6 +22,8 @@ async function open(page: Page, route = '/schedules', o: { variant?: VariantName
   if (o.offline) q.set('offline', '1')
   await page.goto(`/test/schedules/harness/index.html?${q}`)
   await page.waitForFunction(() => Boolean((window as unknown as { __talos?: unknown }).__talos))
+  // groups start shut on the organized page; these specs read the rows
+  if (route === '/schedules' && variant && !o.offline) await expandGroups(page)
 }
 const sent = (page: Page): Promise<Array<Record<string, unknown>>> =>
   page.evaluate(() => JSON.parse(JSON.stringify(window.__talos.sent)))
@@ -60,21 +63,20 @@ test.describe('list', () => {
   test('groups and status words follow the data', async ({ page }) => {
     await open(page)
     // jobs are grouped by the thread they run in (test/schedules/thread-groups.spec.ts): none here has a thread, so one Main group
-    await expect(page.locator('section[data-group] h2')).toHaveText(['Main'])
+    await expect(page.getByTestId('group-name')).toHaveText(['Main', 'One-off'])
     await expect(page.getByTestId('group-runner')).toHaveText('run by Main')
     const order = await page
       .locator('li[data-testid^="schedule-row-"]')
       .evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
-    // today's jobs first, then later ones, then the ones that are off
-    expect(order.indexOf('schedule-row-daily-summary')).toBeLessThan(order.indexOf('schedule-row-remind-me'))
-    expect(order.indexOf('schedule-row-remind-me')).toBeLessThan(order.indexOf('schedule-row-pdf-digest'))
+    // today's jobs first, then the ones that are off; the one-off job sits in its own group, last
+    expect(order.indexOf('schedule-row-daily-summary')).toBeLessThan(order.indexOf('schedule-row-pdf-digest'))
+    expect(order.indexOf('schedule-row-pdf-digest')).toBeLessThan(order.indexOf('schedule-row-remind-me'))
+    await expect(page.getByTestId('thread-group-oneoff').getByTestId('schedule-row-remind-me')).toBeVisible()
     const row = (id: string) => page.getByTestId(`schedule-row-${id}`)
     await expect(row('daily-summary')).toContainText('Ran')
     await expect(row('daily-summary')).toContainText('7:31 AM')
     await expect(row('daily-summary')).toContainText('Weekdays at 7:30 AM')
-    await expect(row('daily-summary')).toContainText('next tomorrow 7:30 AM')
     await expect(row('weekly-review')).toContainText('Waiting for the agent')
-    await expect(row('weekly-review')).toContainText('until 12:00 PM')
     await expect(row('nightly-sync')).toContainText('Background run stuck')
     await expect(row('remind-me')).toContainText('Pending')
     await expect(row('remind-me')).toContainText('Once on Thu Nov 12 at 3:00 PM')
@@ -123,7 +125,7 @@ test.describe('list', () => {
 test.describe('review fixes', () => {
   test('the approval card says Next in plain words in the agent zone, and As follows the runner', async ({ page }) => {
     await open(page, '/schedules/daily-summary')
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Morning summary')
     await page.getByRole('button', { name: 'Review change' }).click()
     const card = page.locator('[data-card-state="pending"]')
@@ -136,7 +138,7 @@ test.describe('review fixes', () => {
   test('a headless full-permission job still says nobody is watching', async ({ page }) => {
     await open(page, '/schedules/nightly-sync')
     await expect(page.getByTestId('schedule-detail')).toContainText('Full permissions, nobody watching')
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Nightly sync 2')
     await page.getByRole('button', { name: 'Review change' }).click()
     await expect(page.locator('[data-card-state="pending"]')).toContainText('Full permissions, nobody watching')
@@ -168,12 +170,10 @@ test.describe('review fixes', () => {
     await expect(page.getByTestId('proposal-sheet').locator('[data-card-state="pending"]')).toBeVisible()
   })
 
-  test('on a phone the meta line wraps to two lines and the last row clears the tab bar', async ({ page }) => {
+  test('on a phone a row is one line and the last row clears the tab bar', async ({ page }) => {
     test.skip(!phone(page), 'phone layout')
     await open(page)
-    const meta = page.getByTestId('schedule-row-weekly-review').locator('span.line-clamp-2')
-    await expect(meta).toContainText('until 12:00 PM')
-    expect(await meta.evaluate((el) => getComputedStyle(el).webkitLineClamp)).toBe('2')
+    expect((await page.getByTestId('schedule-row-weekly-review').boundingBox())?.height).toBeLessThan(64)
     const region = page.getByRole('region', { name: 'Scheduled jobs' })
     await region.evaluate((el) => el.scrollTo(0, el.scrollHeight))
     const last = await page.getByTestId('schedule-row-pdf-digest').boundingBox()
@@ -261,7 +261,7 @@ test.describe('detail', () => {
   test('a job the app cannot edit says why', async ({ page }) => {
     await open(page, '/schedules/pdf-digest')
     await expect(page.getByTestId('read-only-reason')).toContainText('Edit it at the Mac')
-    await expect(page.getByRole('button', { name: 'Edit' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0)
   })
 })
 
@@ -276,7 +276,7 @@ test.describe('create and edit', () => {
 
   test('Edit sends only the touched fields; Review change shows the card bound to the revision', async ({ page }) => {
     await open(page, '/schedules/daily-summary')
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Morning summary')
     await page.getByRole('button', { name: 'Review change' }).click()
     const patch = (await sent(page)).filter((f) => f.type === 'schedule.patch').at(-1) as {
@@ -304,7 +304,7 @@ test.describe('create and edit', () => {
 
   test('nothing changed is not sent', async ({ page }) => {
     await open(page, '/schedules/daily-summary')
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByRole('button', { name: 'Review change' }).click()
     await expect(page.getByRole('alert').filter({ hasText: 'Nothing changed.' })).toBeVisible()
     expect((await sent(page)).filter((f) => f.type === 'schedule.patch')).toHaveLength(0)
@@ -312,7 +312,7 @@ test.describe('create and edit', () => {
 
   test('a high-risk approval asks for step-up and then resolves the card', async ({ page }) => {
     await open(page, '/schedules/weekly-cleanup')
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByRole('button', { name: 'Edit', exact: true }).click()
     // widen it: read-only -> full is what makes a card high-risk
     await page.getByLabel('Full permissions').check()
     await page.getByRole('button', { name: 'Review change' }).click()
@@ -330,7 +330,7 @@ test.describe('create and edit', () => {
 
   test('a relay-altered card shows "altered" and offers no buttons', async ({ page }) => {
     await open(page, '/schedules/daily-summary')
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Morning summary')
     await page.getByRole('button', { name: 'Review change' }).click()
     await expect(page.locator('[data-card-state="pending"]')).toBeVisible()
@@ -348,7 +348,7 @@ test.describe('create and edit', () => {
 
   test('a conflict is a collapsed warning with Review again', async ({ page }) => {
     await open(page, '/schedules/daily-summary')
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Morning summary')
     await page.getByRole('button', { name: 'Review change' }).click()
     await expect(page.locator('[data-card-state="pending"]')).toBeVisible()
@@ -463,6 +463,7 @@ test.describe('offline', () => {
     )
     await page.clock.install({ time: new Date(NOW_ISO) })
     await page.goto(`/test/schedules/harness/index.html?route=/schedules&offline=1`)
+    await expandGroups(page)
     await expect(page.getByTestId('schedule-row-standup-prep')).toContainText("Waiting: agent session isn't running")
     await expect(page.getByTestId('offline-banner')).toBeVisible()
   })
@@ -588,6 +589,7 @@ test.describe('empty and error states', () => {
     })
     await expect(page.getByTestId('empty-no_answer')).toContainText("Your Mac didn't answer. Try again.")
     await page.getByRole('button', { name: 'Try again' }).click()
+    await expandGroups(page)
     await expect(page.getByTestId('schedule-row-daily-digest')).toBeVisible()
   })
 })
@@ -619,6 +621,7 @@ test.describe('with the real-bridge captures', () => {
   const load = async (page: Page, scenario: string, index: number, route = '/schedules') => {
     await open(page, route, { variant: null })
     await page.evaluate(([s, i]) => window.__captured(s as string, i as number), [scenario, index])
+    if (route === '/schedules') await expandGroups(page)
   }
   test('02: the three jobs the real bridge listed', async ({ page }) => {
     await load(page, '02-list-three-jobs', 0)
@@ -725,7 +728,7 @@ test.describe('screenshots', () => {
     await expect(page.getByTestId('empty-not_installed')).toBeVisible()
     await shot('empty')
     await open(page, '/schedules/daily-summary')
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Morning summary')
     await page.getByRole('button', { name: 'Review change' }).click()
     await expect(page.locator('[data-card-state="pending"]')).toBeVisible()

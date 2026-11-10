@@ -2,7 +2,7 @@
 // bar. Run now confirms; Pause writes nothing; Edit, Delete and Turn on go through a card.
 import type { ScheduleDetailT, ScheduleLastRunT, ScheduleT } from '@talos-app/protocol'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, Navigate, useParams } from 'react-router'
+import { Link, Navigate, useParams, useSearchParams } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconAlert, IconBack, IconMore } from '../../ui/icons.tsx'
@@ -134,6 +134,20 @@ function Detail({ s, embedded = false }: { s: ScheduleT; embedded?: boolean }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [promptAll, setPromptAll] = useState(false)
   const [editing, setEditing] = useState(false)
+  // the list's Edit button arrives here as ?edit=1: open the form once the full job (its whole prompt) is loaded
+  const [params, setParams] = useSearchParams()
+  const wantEdit = params.get('edit') === '1'
+  useEffect(() => {
+    if (!wantEdit || (!cached && t.macOnline)) return
+    if (cached && s.editable && t.macOnline) setEditing(true)
+    setParams(
+      (p) => {
+        p.delete('edit')
+        return p
+      },
+      { replace: true },
+    )
+  }, [wantEdit, cached, s.editable, t.macOnline, setParams])
   const [runAsk, setRunAsk] = useState(false)
   const [report, setReport] = useState<{ text: string | null; loading: boolean; error?: string } | null>(null)
   const [propose, setPropose] = useState<null | {

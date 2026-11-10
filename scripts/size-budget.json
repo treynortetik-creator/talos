@@ -6,7 +6,6 @@
     "apps/bridge/scripts/capture-schedules.ts": 1006,
     "apps/bridge/src/apps/service.ts": 1174,
     "apps/bridge/src/cli-main.ts": 1101,
-    "apps/bridge/src/schedules/service.ts": 1539,
     "apps/desktop/Sources/TalosDesktop/CompanionController.swift": 1254,
     "packages/protocol/src/frames.ts": 1145,
     "scripts/ci-local.sh": 1003
@@ -27,8 +26,8 @@
     "packages/protocol/src/memory-links.ts::maskNote": 335,
     "plugins/talos-app-mod/hooks/register.ts::register": 313
   },
-  "filesListedCount": 7,
-  "filesListedLines": 8222,
+  "filesListedCount": 6,
+  "filesListedLines": 6683,
   "functionsListedCount": 14,
   "functionsListedLines": 5199
 }

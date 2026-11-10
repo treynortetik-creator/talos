@@ -415,6 +415,8 @@ export function ScheduleForm(p: Props) {
             <MemoryToggle
               checked={f.memory}
               background={!runsInSession({ runner: f.runner, permissions: f.permissions })}
+              restricted={f.permissions === 'restricted'}
+              command={p.mode === 'edit' && p.schedule.kind === 'command'}
               onChange={(on) => up('memory', on)}
             />
 

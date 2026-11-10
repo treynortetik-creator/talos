@@ -31,7 +31,7 @@ private func startViewer(_ r: Rig, _ d: ViewerDelegate) -> LocalProcess {
 @Suite("Terminal viewer (real tmux, private socket)", .serialized, .enabled(if: Rig.hasTmux))
 struct ViewerTests {
   @Test func enterTypedThroughTheViewerIsTheHumanConfirmation() throws {
-    let r = try Rig(.tmux, scenario: "dev-dialog.sh")
+    let r = try Rig(.tmux, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     // Every bound here only caps a hang: a real tmux costs a subprocess per read, and each poll below asks for a pass now.

@@ -35,7 +35,7 @@ export function useComposerKeyboard(o: {
       e.preventDefault()
       return
     }
-    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return
     if (window.matchMedia?.('(pointer: coarse)').matches) return // soft keyboards: Enter is a newline
     e.preventDefault()
     void send()

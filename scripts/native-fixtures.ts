@@ -25,6 +25,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   terminal_view: { type: 'terminal_view', rect: { x: 240, y: 0, width: 880, height: 780 }, session: 'general' },
   terminal_resume: { type: 'terminal_resume', thread_id: 'general' },
   terminal_leave: { type: 'terminal_leave' },
+  pick_folder: { type: 'pick_folder', req: 'r12', start: '/Users/alex/Projects' },
   navigate: { type: 'navigate', path: '/t/general' },
   compose: { type: 'compose', thread_id: 'general', text: 'Hello from the shell.' },
   voice_note: { type: 'voice_note', thread_id: 'general', mime: 'audio/mp4', duration_ms: 1200, bytes_b64: 'AAAA' },
@@ -84,6 +85,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   },
   terminal_resume_result: { type: 'terminal_resume_result', thread_id: 'general', outcome: 'asked' },
   terminal_select: { type: 'terminal_select', session: 'general' },
+  folder_picked: { type: 'folder_picked', req: 'r12', path: '/Users/alex/Projects' },
 }
 
 /** Messages that must NEVER validate, whichever direction they are tried in. */
@@ -107,6 +109,10 @@ const MUST_REJECT: Array<[string, unknown]> = [
   ['terminal_resume main', { type: 'terminal_resume', thread_id: 'all' }],
   ['terminal_select hostile session', { type: 'terminal_select', session: '=agent' }],
   ['terminal_leave carries a rect', { type: 'terminal_leave', rect: null }],
+  ['pick_folder relative start', { type: 'pick_folder', req: 'r12', start: 'Projects' }],
+  ['pick_folder tells the panel what to allow', { type: 'pick_folder', req: 'r12', canChooseFiles: true }],
+  ['folder_picked relative path', { type: 'folder_picked', req: 'r12', path: 'Projects' }],
+  ['folder_picked control character', { type: 'folder_picked', req: 'r12', path: '/a\u0000b' }],
   ['notify_permission unknown state', { type: 'notify_permission', state: 'maybe' }],
 ]
 

@@ -615,6 +615,43 @@ The MCP Apps injection corpus (hostile app text, forged "app request" notificati
 through the same kind of real agent as smoke item S7 in the manual smoke list for apps. It has its own
 result table there, also "not yet run".
 
+## Folder listing (the folder picker)
+
+The Folder box of a thread's own session has a Choose… button (docs/OPTION-C.md 9.2). In the browser and on the iPhone it asks the Mac
+for folder names with a signed `fs.list` read (`packages/protocol/src/folders.ts`, `apps/bridge/src/folders/service.ts`).
+
+- **Who may ask.** Only a pinned, unrevoked owner device, with a signature over the raw frame, inside the same freshness window as the other
+  signed reads, once per frame id (`inbound-reads.ts`, `onReadFrame`). An unsigned or forged frame, an unpinned or revoked device and a replay
+  get no names. The relay routes the answer to the asking socket only and stores nothing. It is not an agent tool, is in no agent
+  instruction, and a thread session's process never installs the lister (`bridge.ts`: live main bridge only).
+- **What it returns.** Folder names, sorted, at most 500 (the count of the rest is sent), and the owner's home and the agent folder as paths.
+  Never a file, a size, a time or a content. A name with a control character, or that is not valid text, is left out; a name with a hidden or
+  direction-changing character is sent as it is and the app spells the character out (`dialogVisibleText`).
+- **What it refuses**, always with the same sentence, so a refused folder, a missing one and a file read alike: a path that is not absolute,
+  has `.` / `..` / empty segments, a control character or broken text; anything outside the owner's home; any root in `folderRefusedRoots`
+  and anything under it. That list is the lead fence's own (`defaultLeadRoots` in `apps/bridge/src/lead/fence.ts`: the agent folder, the
+  Claude config folder and its global files, the Talos home, the vault, `~/.ssh`, `~/.config/gh`, `~/.aws`, `~/.npmrc`, `~/.netrc`) plus
+  `~/.gnupg`, `~/.config/talos`, `~/.talos-inbox` and `~/Library`. Matching ignores letter case and treats `/private/tmp` and `/tmp` alike.
+  A refused root is also left out of its parent's listing.
+- **Symlinks.** Every step from home to the folder is checked with `lstat`; a path through a symlink is refused, and a symlink is left out of
+  every listing, so a link to a folder inside home, to somewhere outside it, or to a refused root can never be entered from the picker.
+- **Time and the event loop.** The listing is read in turns (`fs.promises`), never in one blocking call, with a real two-second timer: a
+  folder that is slow to open or never opens is answered "This folder is slow to open." and given up on. A folder the system will not let
+  Talos open (macOS privacy folders such as Documents, Desktop and Downloads when Talos has no grant, or a file mode) answers "macOS
+  hasn't given Talos access to this folder." That is a different sentence from the refusal, and is only ever said for a folder that is
+  not on the refused list. I could not try a real privacy prompt on this Mac; the tests use a folder with mode 000, which fails the same way
+  (EACCES, and EPERM from macOS is treated alike).
+- **Spellings.** Paths are compared in composed Unicode (NFC) and with case folded the long way (`.ſsh`, `.SSH` and `.ssh` are one name),
+  and the folder is also judged by the spelling the disk gives back (`realpath`), and again after it was read, so a folder swapped for
+  another place in between returns no names.
+- **The save path agrees.** A thread's folder is refused when it is a refused root or inside one, however it was chosen (typed, the app's
+  browser, or the Mac's open panel), with the same sentence and the same list (`apps/bridge/src/worker/patch-check.ts` reads `folderRefusedRoots`). The
+  Mac app's supervisor still re-checks the folder before every start, by its own rules (a refused root is not among them yet).
+- **What the app trusts.** The answer is carried by the relay, so the app saves the path it asked for, never the one the answer names,
+  drops an answer for another path, pins the Mac's home from the first answer, and leaves out any name that is not one folder name.
+- **What the picker does not do.** It writes nothing. The folder it hands back goes through the existing owner-signed thread patch, where the
+  Mac checks it again (`apps/bridge/src/worker/patch-check.ts`). In the Mac app the open panel is the Mac's own and only returns a path to the page.
+
 ## Reporting a problem
 
 Please report security problems privately through GitHub's "Report a vulnerability" button on the repository's Security tab, not in a public issue.

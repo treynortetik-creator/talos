@@ -4,6 +4,7 @@
 import {
   APP_REQUEST_MAX_AGE_MS,
   type ErrorCodeT,
+  FOLDER_WORDING,
   type Frame,
   HISTORY_UPDATE_APP_MESSAGE,
   MAX_FRAME_BYTES,
@@ -203,6 +204,13 @@ export const readsFrames = {
           const sp = ctx.speak
           if (!sp?.available) return fail('internal', 'Read aloud is not available on this Mac.')
           out = readAnswerFrame(now(), 'speak.result', f.request_id, await sp.request(f))
+          break
+        }
+        case 'fs.list': {
+          // folder NAMES under home for the picker (src/folders/service.ts); it refuses in the one fixed sentence
+          const fo = ctx.folders
+          if (!fo?.available) return fail('internal', FOLDER_WORDING.notReady)
+          out = readAnswerFrame(now(), 'fs.listing', f.request_id, await fo.list(f))
           break
         }
         default:

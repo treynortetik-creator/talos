@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "app_version": "0.0.0-fixture",
+  "enforced": "terminal",
+  "note": "owner only commands that need a terminal refuse when stdin or stdout is not one; for the rest, agent_may_run is advice.",
+  "commands": [
+    {
+      "name": "events",
+      "args": "[--json]",
+      "summary": "List the named events a hook can react to, with who emits each and the fields it carries",
+      "agent_may_run": true,
+      "effects": ["read"],
+      "risk": "low",
+      "who": "agent"
+    },
+    {
+      "name": "status",
+      "args": "[--json]",
+      "summary": "Show relay reachability, bridge liveness, key id and queue depth",
+      "agent_may_run": true,
+      "who": "agent"
+    },
+    {
+      "name": "report",
+      "args": "[--agent-dir <dir>] [--lines <n>] [--out <file>]",
+      "summary": "Write a redacted report for a bug report (--out writes any path)",
+      "agent_may_run": false,
+      "who": "owner"
+    },
+    {
+      "name": "devices",
+      "args": "[revoke <id>]",
+      "summary": "List approved devices or revoke one",
+      "agent_may_run": false,
+      "needs_terminal": true,
+      "who": "owner_terminal"
+    }
+  ]
+}

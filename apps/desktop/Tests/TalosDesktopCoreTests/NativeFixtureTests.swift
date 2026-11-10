@@ -24,7 +24,7 @@ struct NativeFixtureTests {
     #expect(
       Set(w.keys) == [
         "ready", "notify", "badge", "open_external", "haptic", "threads", "pair_status", "companion_state", "companion_reply",
-        "terminal_view", "terminal_resume", "terminal_leave",
+        "terminal_view", "terminal_resume", "terminal_leave", "pick_folder",
       ])
     for (type, entry) in w {
       let sample = try #require((entry as? [String: Any])?["sample"])
@@ -37,7 +37,7 @@ struct NativeFixtureTests {
     #expect(
       Set(n.keys) == [
         "navigate", "compose", "voice_note", "enroll_code", "companion_reply_request", "companion_replies", "notify_permission",
-        "terminal_sessions", "terminal_resume_result", "terminal_select",
+        "terminal_sessions", "terminal_resume_result", "terminal_select", "folder_picked",
       ])
     let cases: [(String, NativeToWeb)] = [
       ("compose", .compose(threadId: "general", text: "Hello from the shell.")),
@@ -48,6 +48,7 @@ struct NativeFixtureTests {
       ("notify_permission", .notifyPermission(.granted)),
       ("terminal_resume_result", .terminalResumeResult(threadId: "general", outcome: .asked)),
       ("terminal_select", .terminalSelect(session: "general")),
+      ("folder_picked", .folderPicked(req: "r12", path: "/Users/alex/Projects")),
     ]
     for (type, msg) in cases {
       let sample = try #require(((n[type] as? [String: Any])?["sample"]) as? [String: Any])
@@ -115,6 +116,8 @@ struct NativeFixtureTests {
     #expect(WebToNative.decode(sample) == .terminalView(TerminalViewRect(x: 240, y: 0, width: 880, height: 780), session: "general"))
     let r = try #require(((w["terminal_resume"] as? [String: Any])?["sample"]) as? [String: Any])
     #expect(WebToNative.decode(r) == .terminalResume(threadId: "general"))
+    let pk = try #require(((w["pick_folder"] as? [String: Any])?["sample"]) as? [String: Any])
+    #expect(WebToNative.decode(pk) == .pickFolder(req: "r12", start: "/Users/alex/Projects"))
     #expect(WebToNative.decode(["type": "terminal_leave"]) == .terminalLeave)
     #expect(WebToNative.decode(["type": "terminal_leave", "rect": NSNull()]) == nil)
     #expect(NativeToWeb.validated(.terminalSelect(session: "=agent")) == nil)

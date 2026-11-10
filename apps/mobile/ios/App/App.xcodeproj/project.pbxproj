@@ -11,6 +11,7 @@
 		087E6D105C620FF7B95608A9 /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D163170C704202077DDEE6E5 /* KeychainTokenStore.swift */; };
 		0E2FF62B81581BE8921E482B /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D163170C704202077DDEE6E5 /* KeychainTokenStore.swift */; };
 		0EEA270D01DA507221C27B0F /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F13EA46D65C6DD380E027527 /* ShareViewController.swift */; };
+		1409C9400F309E930AA1BD9F /* WebViewRevivalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5D293CEE6CDA55F3D5EB46 /* WebViewRevivalTests.swift */; };
 		1C2828AB6F056A7680FC41D9 /* TalosAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = B1529373780317034FB668BF /* TalosAudioCore */; };
 		1CA998C627766237F2232BEB /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = FD127B870EFB46EFAC91834E /* CapApp-SPM */; };
 		1F5F0D3BAE328BCA1F73A160 /* MediaViewerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E74F8C3FCBA3B4AE97C68C2 /* MediaViewerController.swift */; };
@@ -18,7 +19,9 @@
 		35BD895BE3DCF16E0C717AD5 /* CompiledRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F8675814FAF64984E33686 /* CompiledRelay.swift */; };
 		3ADAB4B2470A531DAC1D3760 /* TalosQuickAct.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E244550EE6C5966F3E211ED /* TalosQuickAct.swift */; };
 		3EF75B20CDF46D5CBCADEDF8 /* TalosCrashCore in Frameworks */ = {isa = PBXBuildFile; productRef = BDFEBBD3CD6557ACDCFA3CAE /* TalosCrashCore */; };
+		3F7B410C57B835DB46996D40 /* WebViewRevival.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AED4980BFD0B4C68EF89852 /* WebViewRevival.swift */; };
 		3FB3C8C0634A765EE81D042E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 76989E05CECAD7B8B3C424A7 /* Assets.xcassets */; };
+		4EA0C1D5E74EF8EE0C95C1A9 /* WebViewReplaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61283257BD694E29B791985C /* WebViewReplaceTests.swift */; };
 		4FB34C264C0E482A4F3BA9EA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 23F8D68E28D07D16EB72E4AA /* LaunchScreen.storyboard */; };
 		50C3494C2BD46DCBB9C6B781 /* TalosAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9679C30F6E5386C1D9583F58 /* TalosAudio.swift */; };
 		58D8EB777AABC0F494EE6FB0 /* TalosShare.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FDCDCD29A7C84F740D263FC /* TalosShare.swift */; };
@@ -87,8 +90,10 @@
 /* Begin PBXFileReference section */
 		00974E067C806B76249CC31E /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		076C04980F436BC6BD16B38C /* NativeKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeKeyStore.swift; sourceTree = "<group>"; };
+		2AED4980BFD0B4C68EF89852 /* WebViewRevival.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewRevival.swift; sourceTree = "<group>"; };
 		2E59561450E59E8689D6B17B /* TalosBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosBridgeViewController.swift; sourceTree = "<group>"; };
 		3B3288FBC9BE0BA38026B618 /* ShareModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareModel.swift; sourceTree = "<group>"; };
+		3C5D293CEE6CDA55F3D5EB46 /* WebViewRevivalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewRevivalTests.swift; sourceTree = "<group>"; };
 		3E74F8C3FCBA3B4AE97C68C2 /* MediaViewerController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaViewerController.swift; sourceTree = "<group>"; };
 		441A3BD7070BE74658DC1469 /* TalosPushExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = TalosPushExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		471A8C9169042696FD40141A /* TalosPluginGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosPluginGate.swift; sourceTree = "<group>"; };
@@ -99,6 +104,7 @@
 		4D6A28A8C686BE348A566D25 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		5FDCDCD29A7C84F740D263FC /* TalosShare.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosShare.swift; sourceTree = "<group>"; };
 		603E421DF5523BA58B8E3E32 /* TalosShareCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TalosShareCore; path = ../TalosShareCore; sourceTree = SOURCE_ROOT; };
+		61283257BD694E29B791985C /* WebViewReplaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewReplaceTests.swift; sourceTree = "<group>"; };
 		68ED4E8FE0185474B6E8E85B /* capacitor.config.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		6B04ADF7B81E144C4949AE51 /* CapApp-SPM */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "CapApp-SPM"; path = "CapApp-SPM"; sourceTree = SOURCE_ROOT; };
 		76989E05CECAD7B8B3C424A7 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -185,6 +191,7 @@
 				7E5BBB12596EE01767A6151A /* public */,
 				ED2016878D44EAA9692D059F /* SceneDelegate.swift */,
 				2E59561450E59E8689D6B17B /* TalosBridgeViewController.swift */,
+				2AED4980BFD0B4C68EF89852 /* WebViewRevival.swift */,
 				23F8D68E28D07D16EB72E4AA /* LaunchScreen.storyboard */,
 				77DC4614F7D5E4C3289AA3F8 /* Plugins */,
 			);
@@ -212,6 +219,8 @@
 			isa = PBXGroup;
 			children = (
 				912C05722891585DB67B1AB9 /* NativeKeyStoreTests.swift */,
+				61283257BD694E29B791985C /* WebViewReplaceTests.swift */,
+				3C5D293CEE6CDA55F3D5EB46 /* WebViewRevivalTests.swift */,
 			);
 			path = AppTests;
 			sourceTree = "<group>";
@@ -466,6 +475,7 @@
 				A9B0B4B2A529B7950FE5CDB3 /* TalosPush.swift in Sources */,
 				3ADAB4B2470A531DAC1D3760 /* TalosQuickAct.swift in Sources */,
 				58D8EB777AABC0F494EE6FB0 /* TalosShare.swift in Sources */,
+				3F7B410C57B835DB46996D40 /* WebViewRevival.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -474,6 +484,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				CF04BCB5897EE830F6D15FF6 /* NativeKeyStoreTests.swift in Sources */,
+				4EA0C1D5E74EF8EE0C95C1A9 /* WebViewReplaceTests.swift in Sources */,
+				1409C9400F309E930AA1BD9F /* WebViewRevivalTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

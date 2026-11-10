@@ -618,7 +618,7 @@ struct FirstRunHomesTests {
     #expect(FirstRun.trust(setupDone: true, confirmedAt: "2026-11-01T10:00:00Z") == true)
     let rows = FirstRun.rows(.init(agentDirTrusted: FirstRun.trust(setupDone: true, confirmedAt: nil), home: home, setupDone: true))
     guard case .fix(let fix)? = rows.first(where: { $0.id == "trust" })?.state else { Issue.record("fix row reachable"); return }
-    #expect(fix.contains("Terminals…") && fix.contains("Start session"), "it names the real controls: \(fix)")
+    #expect(fix.contains("Talos popup") && fix.contains("Start session"), "it names the real controls: \(fix)")
     let before = FirstRun.rows(.init(home: home, setupDone: false)).first { $0.id == "trust" }
     if case .unknown(let m)? = before?.state { #expect(m.contains("first step above")) } else { Issue.record("waits for setup") }
   }
@@ -682,8 +682,8 @@ struct WordingTests {
   }
 
   @Test func theReConfirmLabelNoLongerReadsBackwards() {
-    #expect(MacSettingsText.autoConfirmTitle == "Press Enter for me on crash restarts")
-    #expect(MacSettingsText.autoConfirmHelp.contains("Never on the first start"))
+    #expect(MacSettingsText.autoConfirmTitle == "Press Enter for me on the development-channel dialog")
+    #expect(MacSettingsText.autoConfirmHelp.contains("exactly the dialog for the channel Talos launched with"))
     for (p, t) in sources() { #expect(!t.contains("Re-confirm the development-channel dialog"), "\(p)") }
   }
 

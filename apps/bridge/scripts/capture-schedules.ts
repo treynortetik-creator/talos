@@ -2,7 +2,7 @@
 // The capture step (docs/SCHEDULES.md S9, WP-S1, N4): `bun run capture:schedules [--check]`.
 //
 // It runs the REAL bridge (live, in process, on an injected clock) against the REAL vendored Chronos CLI
-// (third_party/chronos, v0.4.0) in a temp HOME, with testkit's FakeRelay and FakeApp as the far ends and a scripted
+// (third_party/chronos, v0.5.0) in a temp HOME, with testkit's FakeRelay and FakeApp as the far ends and a scripted
 // stand-in for the Claude session, drives the flow of S9 and writes every frame that crosses the bridge socket, plus every
 // channel notification and agent tool call, as JSON in packages/testkit/fixtures/captured/ with ids, timestamps,
 // signatures and the machine name normalized (and every card hash recomputed, so a captured card still verifies).
@@ -122,7 +122,7 @@ class Recorder {
   /** Moves the bridge's timers by `ms` (in steps the relay's heartbeat tolerates) with Chronos pinned at `chronosNow`. */
   async advance(ms: number, chronosNow: string) {
     this.now = chronosNow
-    await this.h.advance(ms)
+    await this.h.advance(ms, { catchUp: false }) // the capture pins Chronos per step: no extra tick
   }
 
   async settle() {

@@ -6,7 +6,7 @@
 // nowhere else (no SQLite row, no push, no log line), so a relay restart forgets it and the bridge's next send (at least
 // every AGENTS_HEARTBEAT_MS) refills it. A session.state naming another session retires it, and only the validated
 // fields are forwarded, so the 64 KB cap covers the whole frame.
-import { AGENTS_FEATURE, newUlid, THREAD_SESSIONS_FEATURE } from '@talos-app/protocol'
+import { AGENTS_FEATURE, MAX_THREAD_SESSION_STATES, newUlid, THREAD_SESSIONS_FEATURE } from '@talos-app/protocol'
 import { registerRelayFeature } from '../core/features.ts'
 import type { RelayServices } from '../services.ts'
 
@@ -53,7 +53,7 @@ export function register(services: RelayServices): void {
       const was = (threadStates.get(scope.thread_id) as { busy?: boolean } | undefined)?.busy
       if (was === true && frame.state.busy !== true) bus.settleWorking?.({ thread_id: scope.thread_id })
       threadStates.set(scope.thread_id, ctx.raw.state as Record<string, unknown>)
-      if (threadStates.size > 40) threadStates.delete(threadStates.keys().next().value as string)
+      if (threadStates.size > MAX_THREAD_SESSION_STATES) threadStates.delete(threadStates.keys().next().value as string)
       return bus.toApps(ctx.raw)
     }
     const wasBusy = (lastState?.state as { busy?: boolean } | undefined)?.busy === true

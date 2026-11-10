@@ -12,12 +12,16 @@ public struct WorkersFile: Codable, Equatable, Sendable {
     public var heartbeat_at: String
     public var workers_supported: Bool
     public var main_pane_pid: Int32
-    enum CodingKeys: String, CodingKey { case pid, heartbeat_at, workers_supported, main_pane_pid }
-    public init(pid: Int32, heartbeat_at: String, workers_supported: Bool, main_pane_pid: Int32) {
+    /// Main's own dialog on its pane (the development-channels warning), published here because Main has no thread entry. The bridge makes
+    /// a card from it for the default thread. A value that does not fit reads as none.
+    public var main_dialog: DialogOffer?
+    enum CodingKeys: String, CodingKey { case pid, heartbeat_at, workers_supported, main_pane_pid, main_dialog }
+    public init(pid: Int32, heartbeat_at: String, workers_supported: Bool, main_pane_pid: Int32, main_dialog: DialogOffer? = nil) {
       self.pid = pid
       self.heartbeat_at = heartbeat_at
       self.workers_supported = workers_supported
       self.main_pane_pid = main_pane_pid
+      self.main_dialog = main_dialog
     }
     public init(from d: Decoder) throws {
       let c = try d.container(keyedBy: CodingKeys.self)
@@ -25,6 +29,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       heartbeat_at = try c.decode(String.self, forKey: .heartbeat_at)
       workers_supported = try c.decodeIfPresent(Bool.self, forKey: .workers_supported) ?? false
       main_pane_pid = try c.decodeIfPresent(Int32.self, forKey: .main_pane_pid) ?? 0
+      main_dialog = ((try? c.decodeIfPresent(DialogOffer.self, forKey: .main_dialog)) ?? nil).flatMap { $0.isValid ? $0 : nil }
     }
   }
 

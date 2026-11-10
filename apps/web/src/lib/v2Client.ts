@@ -82,6 +82,28 @@ export interface SpeakClient {
   request(args: { messageId: string; threadId: string; fresh: boolean }): Promise<SpeakAnswer>
 }
 
+/** What the Mac answered to one `fs.list`: folder names only (src/folders in the bridge). */
+export type FolderListing = {
+  /** The owner's home on the Mac, absolute. The app shows paths under it as ~/… . */
+  home: string
+  /** The main agent folder, when the Mac knows it. */
+  agentDir?: string
+  /** The folder listed, absolute (absent when the ask had no path). */
+  path?: string
+  parent: string | null
+  entries: string[]
+  /** Folders past the cap that were not sent. */
+  more: number
+}
+
+export interface FolderClient {
+  /**
+   * `fs.list` -> `fs.listing`. `path: null` only asks where home and the agent folder are. Rejects with `TalosClientError`
+   * (`bad_frame` with the Mac's one fixed sentence for a folder it will not open, `mac_offline`, `rate_limited`).
+   */
+  list(path: string | null, hidden: boolean): Promise<FolderListing>
+}
+
 export type FeatureState = 'on' | 'needs_mac' | 'off'
 
 /** Features the relay itself provides: usable with the Mac offline. */

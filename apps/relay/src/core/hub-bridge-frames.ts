@@ -95,6 +95,7 @@ export const bridgeFrames = {
       case 'memory.file':
       case 'memory.results':
       case 'speak.result':
+      case 'fs.listing':
         return this.ephemeral.onResponse(frame, raw)
       case 'health.beat':
         // WP-V1 (core/health.ts) reads it through a bridge handler; the relay keeps the last one (V2.3, rule 1)

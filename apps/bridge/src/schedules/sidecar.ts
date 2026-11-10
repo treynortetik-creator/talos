@@ -64,9 +64,19 @@ export type SidecarData = {
   runs: Record<string, RunNote>
   /** Failure/hold notices already sent, so a restart does not repeat them. key -> at */
   notified: Record<string, number>
+  /** Background runs whose result and notepad were already taken into a job's memory, so a restart never counts one twice. job.run id -> at */
+  ingested: Record<string, number>
 }
 
-const empty = (): SidecarData => ({ adapter: 'chronos', jobs: {}, offers: {}, inflight: {}, runs: {}, notified: {} })
+const empty = (): SidecarData => ({
+  adapter: 'chronos',
+  jobs: {},
+  offers: {},
+  inflight: {},
+  runs: {},
+  notified: {},
+  ingested: {},
+})
 
 export class Sidecar {
   private data: SidecarData
@@ -290,6 +300,22 @@ export class Sidecar {
     })
   }
 
+  /** Was this background run of this job already taken into its memory? (Keyed by job and run: two jobs never share a run.) */
+  ingested(job: string, runId: string): boolean {
+    return `${job}.${runId}` in this.data.ingested
+  }
+  markIngested(job: string, runId: string, now: number): boolean {
+    // Gate first: a run id set in memory by a refused save would drop that run's result for good.
+    if (!this.canWrite()) return false
+    const key = `${job}.${runId}`
+    const before = this.data.ingested[key]
+    this.data.ingested[key] = now
+    return this.commit(() => {
+      if (before === undefined) delete this.data.ingested[key]
+      else this.data.ingested[key] = before
+    })
+  }
+
   /** Offers, in-flight entries, notes and notices older than 8 days go (S3.5). */
   prune(now: number): boolean {
     const cut = now - SIDECAR_RETENTION_MS
@@ -306,6 +332,7 @@ export class Sidecar {
     drop(this.data.inflight, (f) => f.claimed_at < cut)
     drop(this.data.runs, (r) => r.at < cut)
     drop(this.data.notified, (at) => at < cut)
+    drop(this.data.ingested, (at) => at < cut)
     const runs = Object.entries(this.data.runs)
     if (runs.length > MAX_RUNS) {
       runs.sort((a, b) => a[1].at - b[1].at)

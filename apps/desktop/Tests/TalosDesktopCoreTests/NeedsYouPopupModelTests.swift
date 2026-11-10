@@ -92,22 +92,52 @@ struct NeedsYouPopupWordsTests {
     var title: [String: String]
     var sentence: [String: String]
     var footer: [String: String]
+    var devChannels: [String: String]
+    var phone: [String: String]
   }
   static func wording() throws -> Wording {
     let o = try A2Fixtures.object("wording")
     func dict(_ k: String) throws -> [String: String] { try #require(o[k] as? [String: String]) }
-    return Wording(title: try dict("title"), sentence: try dict("sentence"), footer: try dict("footer"))
+    return Wording(title: try dict("title"), sentence: try dict("sentence"), footer: try dict("footer"), devChannels: try dict("devChannels"), phone: (o["phone"] as? [String: String]) ?? [:])
   }
   func wording() throws -> Wording { try Self.wording() }
 
-  @Test(arguments: [DialogReader.Kind.trust, .mcpConsent, .login])
+  /// The phone notice for Main waiting at the Mac (posted without Main's bridge) is the table's words too.
+  @Test func thePhoneNoticeIsTheSharedWording() throws {
+    let w = try wording()
+    #expect(!NeedsYouPopupContent.devWaitingPhone.isEmpty)
+    #expect(NeedsYouPopupContent.devWaitingPhone == w.phone["devChannelsWaiting"])
+  }
+
+  @Test(arguments: [DialogReader.Kind.trust, .mcpConsent, .login, .devChannels])
   func thePopupSaysExactlyWhatTheSharedWordingTableSays(kind: DialogReader.Kind) throws {
     let w = try wording()
-    let c = NeedsYouPopupContent.make(item(idA, kind: kind, subject: kind == .login ? nil : "x"))
+    let c = NeedsYouPopupContent.make(item(idA, kind: kind, subject: kind == .login ? nil : kind == .devChannels ? "server:talos-app" : "x"))
     #expect(c.title == w.title[kind.rawValue]?.replacingOccurrences(of: "{thread}", with: "Garden"), "\(kind)")
     #expect(c.sentence == w.sentence[kind.rawValue]?.replacingOccurrences(of: "{thread}", with: "Garden"), "\(kind)")
-    #expect(c.footer == w.footer["popup"])
+    #expect(c.footer == (kind == .devChannels ? w.footer["popupMainHere"] : w.footer["popup"]), "\(kind)")
+    #expect(NeedsYouPopupContent.footerMain == w.footer["popupMain"] && NeedsYouPopupContent.footer == w.footer["popup"])
     #expect(!c.title.lowercased().contains("log in") && !c.sentence.lowercased().contains("log in"))
+  }
+
+  /// The dev-channels popup says what the card says: the table's sentence, the channel Talos did not add, the changed start command and what changed.
+  @Test func theDevChannelsPopupCarriesTheCardsExtraLines() throws {
+    let w = try wording()
+    func popup(_ subject: String?, _ changed: [String]?) -> NeedsYouPopupContent {
+      NeedsYouPopupContent.make(
+        NeedsYouPopupItem(
+          thread: "general", threadName: "General",
+          dialog: DialogOffer(
+            id: idA, kind: .devChannels, subject: subject, options: ["I am using this for local development", "Exit"], cursor: 0,
+            launch_changed: changed, seen_at: "2026-11-07T10:00:00.000Z", expires_at: "2026-11-07T10:15:00.000Z")))
+    }
+    let base = w.sentence["dev_channels"] ?? ""
+    #expect(popup("server:talos-app", nil).sentence == base)
+    #expect(popup(nil, nil).sentence == base)
+    #expect(popup("server:talos-app, server:odd", nil).sentence == base + " " + (w.devChannels["alsoLoads"] ?? "").replacingOccurrences(of: "{channels}", with: "server:odd"))
+    #expect(popup("server:talos-app", []).sentence == base + " " + (w.devChannels["launchUnconfirmed"] ?? ""))
+    let lc = popup("server:talos-app", ["program", "env"]).sentence
+    #expect(lc == base + " " + (w.devChannels["launchChanged"] ?? "") + " " + (w.devChannels["launchChangedWhat"] ?? "").replacingOccurrences(of: "{what}", with: "program, env"))
   }
 
   @Test func noSubjectNoBox() {
@@ -199,6 +229,14 @@ struct NeedsYouPopupScreenTests {
     #expect(h.ids() == [idA, idB, idC], "oldest first, three at most")
     h.offers.removeAll { $0.dialog.id == idB }  // one is answered elsewhere: the one that waited comes
     #expect(h.ids() == [idA, idC, idD])
+  }
+
+  /// Main's own warning is not hidden by three older popups: it is shown first and does not count against the three.
+  @Test func mainsPopupComesFirstWhateverItsAge() {
+    let h = Harness()
+    let main = NeedsYouPopupItem(thread: "supervisor:main", threadName: "Main", dialog: offer(idD, kind: .devChannels, subject: "server:talos-app", options: ["I am using this for local development", "Exit"], seen: "2026-11-07T10:00:09.000Z"), first: true)
+    h.offers = [item(idA, thread: "a", seen: "2026-11-07T10:00:01.000Z"), item(idB, thread: "b", seen: "2026-11-07T10:00:02.000Z"), item(idC, thread: "c", seen: "2026-11-07T10:00:03.000Z"), main]
+    #expect(h.ids() == [idD, idA, idB], "Main first, then the oldest")
   }
 
   @Test func theOwnerHidingOneBringsTheNextAndTheHiddenOneStaysHidden() {
@@ -467,5 +505,38 @@ struct NeedsYouPopupFilesTests {
     try A2Fixtures.data("dialog-card").write(to: URL(fileURLWithPath: path))
     #expect(DialogCardAck.answered(path: path, dialogId: "k3Xv9QpT2mLw8ZrNa5HdBe") == nil, "waiting: nobody yet")
     #expect(DialogCardAck.answered(path: dir + "/none.json", dialogId: "k3Xv9QpT2mLw8ZrNa5HdBe") == nil)
+  }
+}
+
+@Suite("Needs-you popup: what a real click is")
+struct PopupRealClickTests {
+  private func real(_ kind: PopupClickCheck.Kind = .leftMouseUp, age: Double = 0.05, window: Bool = true, bounds: Bool = true) -> Bool {
+    PopupClickCheck.isRealClick(kind: kind, age: age, sameWindow: window, onButton: bounds)
+  }
+
+  @Test func onlyAFreshLeftMouseEventInThisWindowOnTheButtonIsAClick() {
+    #expect(real(.leftMouseUp))
+    #expect(real(.leftMouseDown))
+    #expect(!real(.other), "a key, a right click, a move, or no event at all")
+    #expect(!real(age: 1.0) && !real(age: 5) && !real(age: -5), "a stale event, or one from the future")
+    #expect(!real(window: false), "another window")
+    #expect(!real(bounds: false), "somewhere else in the window")
+  }
+
+  @Test func theFooterOfMainsPopupFollowsWhetherThePhoneWasTold() throws {
+    let w = try NeedsYouPopupWordsTests.wording()
+    func main(told: Bool) -> NeedsYouPopupContent {
+      NeedsYouPopupContent.make(NeedsYouPopupItem(thread: "supervisor:main", threadName: "Main", dialog: offer(idA, kind: .devChannels, subject: "server:talos-app", options: ["I am using this for local development", "Exit"], seen: "2026-11-07T10:00:00.000Z"), phoneTold: told))
+    }
+    #expect(main(told: true).footer == w.footer["popupMain"])
+    #expect(main(told: false).footer == w.footer["popupMainHere"])
+    #expect(main(told: false).footer != "Your phone is told to come here.")
+    #expect(NeedsYouPopupContent.make(item(idA)).footer == w.footer["popup"], "a worker's popup keeps its footer")
+  }
+
+  @Test func theFirstRunRowPointsAtThePopup() {
+    let r = FirstRun.rows(.init(authSignedIn: nil, agentDirTrusted: false, home: "/h"))
+    let text = r.compactMap { row -> String? in if case .fix(let t) = row.state { return t } else { return nil } }.joined(separator: " ")
+    #expect(text.contains("Talos popup") && !text.contains("press Enter"), "\(text)")
   }
 }

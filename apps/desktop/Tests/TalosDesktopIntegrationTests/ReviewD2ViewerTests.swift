@@ -37,7 +37,7 @@ struct ReviewD2ViewerTests {
   /// D1-REVIEW finding 1 asked for a viewer, not a workspace. The conf clears the prefix table and the right-click menus but
   /// tmux 3.8's root table keeps structural mouse bindings and the middle-click paste.
   @Test func theRootKeyTableHasNothingThatEditsTheSessionOrTypes() throws {
-    let r = try Rig(.tmux, scenario: "dev-dialog.sh")
+    let r = try Rig(.tmux, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) })
@@ -77,7 +77,7 @@ struct ReviewD2ViewerTests {
   /// A middle click (SwiftTerm forwards otherMouseDown) pastes tmux's buffer into the agent as typed input. A double-click
   /// fills that buffer, so the text needs no setup; a Return in it answers whatever is on screen.
   @Test func aMiddleClickTypesNothingIntoTheAgent() throws {
-    let r = try Rig(.tmux, scenario: "dev-dialog.sh")
+    let r = try Rig(.tmux, scenario: "dev-dialog.sh", configure: { $0.autoConfirmRestart = false })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(10) { r.screenContains(DialogMatcher.Strings.devTitle) })
@@ -140,7 +140,7 @@ struct ReviewD2ViewerTests {
     usleep(1_500_000)
     #expect(r.starts.count == 2, "\(r.starts.count) starts")
     #expect(r.sup.status.needsYou == nil, "\(String(describing: r.sup.status.needsYou))")
-    #expect(r.audit.components(separatedBy: " auto_confirm ").count - 1 <= 1)
+    #expect(r.autoConfirms <= 2, "the cold start's Enter and at most one for the restart: \(r.audit)")
   }
 
   /// A wheel-up in the viewer puts the pane in copy mode. `send-keys -H` then goes to copy mode, not to the agent, so the
@@ -228,7 +228,7 @@ struct ReviewD2ViewerTests {
     var t = Supervisor.Timings()
     t.tick = 0.2
     t.agentsPoll = 0.5
-    let r = try Rig(.tmux, scenario: "crash-after.sh", env: ["FAKE_CRASH_SECONDS": "1"], timings: t)
+    let r = try Rig(.tmux, scenario: "crash-after.sh", env: ["FAKE_CRASH_ON_FILE": "1"], timings: t)
     defer { r.teardown() }
     let flag = r.root + "/fail-next-send"
     let shim = r.root + "/tmux-failsend"
@@ -242,13 +242,14 @@ struct ReviewD2ViewerTests {
     chmod(shim, 0o755)
     r.tmuxBin = shim
     r.makeSupervisor()  // not started yet: same socket and config, now talking to tmux through the shim
-    FileManager.default.createFile(atPath: flag, contents: nil)  // the restart's first Enter fails; armed before the start so a stalled test thread cannot let it through
-    try coldStartConfirmed(r)
-    #expect(r.wait(15) { r.starts.count >= 2 })
+    try coldStartConfirmed(r)  // its Enter is the supervisor's too; start 1 crashes only when the file below says so
+    FileManager.default.createFile(atPath: flag, contents: nil)  // the restart's first Enter fails
+    FileManager.default.createFile(atPath: r.stateDir + "/crash-now", contents: Data())  // now start 1 crashes
+    #expect(r.wait(30) { r.starts.count >= 2 })
     #expect(r.wait(20) { r.audit.contains("auto_confirm_send_failed") }, "the shim never fired: \(r.audit)")
     #expect(r.wait(20) { isRunning(r.phase()) && r.sup.status.needsYou == nil }, "\(r.phase()) \(String(describing: r.sup.status.needsYou))")
     #expect(r.starts.count == 2, "\(r.starts.count) starts")
-    #expect(r.audit.contains(" auto_confirm "), "the retried Enter was recorded")
+    #expect(r.autoConfirms == 2, "the cold start's Enter and the retried one were recorded: \(r.audit)")
   }
 
   /// One status query that tmux fails without saying the pane is gone (an overloaded server: exit 1 "Resource temporarily

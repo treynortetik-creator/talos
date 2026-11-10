@@ -14,6 +14,7 @@ import {
   DialogId,
   DialogKind,
   type DialogKindT,
+  LaunchChanged,
   type WorkerDialogT,
 } from './dialog-files.ts'
 import { IsoTs, ThreadId } from './ids.ts'
@@ -22,6 +23,9 @@ import { INVISIBLE_OR_BIDI } from './permission.ts'
 
 /** The relay feature that says it knows `kind:'dialog'` and the app it ships can draw one. The bridge makes none without it. */
 export const NEEDS_YOU_FEATURE = 'needs-you/1'
+
+/** The one development channel Talos adds to Main's launch (the Mac's `AutoConfirmGuard.talosChannel`). */
+export const TALOS_DEV_CHANNEL = 'server:talos-app'
 
 export const DIALOG_OPEN_LABEL = 'Open on the Mac'
 export const DIALOG_FOOTNOTE = 'Your Mac presses the key for you. The session answers your message once it is in.'
@@ -49,21 +53,43 @@ export const DIALOG_WORDING = {
     trust: 'Trust this folder?',
     mcp_consent: 'Allow this MCP server?',
     login: '{thread} needs you to sign in',
+    dev_channels: "Allow Talos's development channel?",
   },
   sentence: {
     trust:
       "{thread}'s session wants to work in this folder. Claude will be able to read, change and run files in it, and in folders inside it.",
     mcp_consent: "{thread}'s session wants to turn on this server's tools for its folder.",
     login: "{thread}'s session needs you to sign in to Claude on the Mac.",
+    dev_channels: "Main session's start needs this to talk to the Talos app.",
   },
-  footer: { card: DIALOG_FOOTNOTE, popup: 'Also on your phone. Answer either one.' },
+  /** The lines the development-channels card adds under its sentence: a channel Talos did not add, and a start command the owner has not confirmed. */
+  devChannels: {
+    alsoLoads: "Also loads {channels}, which Talos didn't add.",
+    launchChanged: "Main's start command changed since you last confirmed it.",
+    launchChangedWhat: 'Changed: {what}.',
+    launchUnconfirmed: "Main's start command isn't confirmed on this Mac yet.",
+  },
+  footer: {
+    card: DIALOG_FOOTNOTE,
+    popup: 'Also on your phone. Answer either one.',
+    /** Main's development-channels popup: the phone gets only a notice (no bridge runs while Main waits), so the answer is here. */
+    popupMain: 'Your phone is told to come here.',
+    /** The same popup when the phone was not told (the owner started Main at the Mac). */
+    popupMainHere: 'Answer it here.',
+  },
+  /**
+   * The one line the Mac posts to the default thread, by itself, when Main waits on its development-channels warning. Main's own bridge is
+   * Main's child, so none runs then and no card can be posted: this needs no bridge, and the answer is the Mac popup's button.
+   */
+  phone: { devChannelsWaiting: 'Main is waiting at your Mac: answer the Talos popup there.' },
 } as const
 
 /** The same words the Mac's own thread line uses for the prompt (SessionSwitcher.promptName). */
 const DIALOG_PROMPT: Record<DialogKindT, string> = {
   trust: 'trust this folder',
   mcp_consent: 'approve a project MCP server',
-  login: 'log in',
+  login: 'sign in',
+  dev_channels: 'allow the development channel',
 }
 
 /** What a dialog card binds: the dialog, nothing else. */
@@ -73,6 +99,7 @@ export const DialogCardPayload = z
     thread: ThreadId,
     dialog_kind: DialogKind,
     ...DialogFacts,
+    launch_changed: LaunchChanged.optional(),
     expires_at: IsoTs,
   })
   .refine((d) => (d.dialog_kind === 'login' ? d.options.length === 0 : d.options.length >= 1), {
@@ -105,9 +132,33 @@ export function dialogTitle(kind: DialogKindT, threadName: string): string {
   return fill(DIALOG_WORDING.title[kind], n.length > 60 ? `${n.slice(0, 60).join('')}\u2026` : n.join(''))
 }
 
-/** The body under the title. Plain text. */
-export function dialogBody(kind: DialogKindT, threadName: string): string {
-  return fill(DIALOG_WORDING.sentence[kind], name(threadName))
+/** The channels a `dev_channels` dialog's subject names, in the order the screen showed them. */
+const devChannelsOf = (subject: string | null): string[] =>
+  (subject ?? '')
+    .split(',')
+    .map((c) => c.trim())
+    .filter(Boolean)
+
+/**
+ * The body under the title. Plain text. A `dev_channels` card adds a line naming any channel other than Talos's own, and, when
+ * the guard refused because the start command is not the confirmed one, one line saying so (and which pieces differ).
+ */
+export function dialogBody(
+  kind: DialogKindT,
+  threadName: string,
+  more: { subject?: string | null; launch_changed?: readonly string[] | undefined } = {},
+): string {
+  const lines = [fill(DIALOG_WORDING.sentence[kind], name(threadName))]
+  if (kind === 'dev_channels') {
+    const w = DIALOG_WORDING.devChannels
+    const others = devChannelsOf(more.subject ?? null).filter((c) => c !== TALOS_DEV_CHANNEL)
+    if (others.length > 0)
+      lines.push(w.alsoLoads.replace('{channels}', () => others.map((c) => dialogVisibleText(c)).join(', ')))
+    const lc = more.launch_changed
+    if (lc !== undefined) lines.push(lc.length === 0 ? w.launchUnconfirmed : w.launchChanged)
+    if (lc !== undefined && lc.length > 0) lines.push(w.launchChangedWhat.replace('{what}', () => lc.join(', ')))
+  }
+  return lines.join(' ')
 }
 
 /** The card the screen did not match when the Mac went to answer it. */
@@ -160,6 +211,7 @@ export function composeDialogCard(input: ComposeDialogCardInput): CardT | null {
     dialog_kind: d.kind,
     subject: d.subject,
     options: d.options,
+    ...(d.launch_changed === undefined ? {} : { launch_changed: d.launch_changed }),
     expires_at: new Date(expiresMs).toISOString(),
   }
   if (!DialogCardPayload.safeParse(payload).success) return null
@@ -171,7 +223,7 @@ export function composeDialogCard(input: ComposeDialogCardInput): CardT | null {
     // one line for lists and notifications; nothing from the screen goes in it
     summary: `${name(input.thread_name)}'s session is waiting for you.`,
     destination: [],
-    body: dialogBody(d.kind, input.thread_name),
+    body: dialogBody(d.kind, input.thread_name, { subject: d.subject, launch_changed: d.launch_changed }),
     body_format: 'plain',
     fields: [],
     attachments: [],

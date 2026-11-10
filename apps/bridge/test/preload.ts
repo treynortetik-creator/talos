@@ -19,3 +19,7 @@ process.env.TALOS_INBOX_ROOT = join(mkdtempSync(join(tmpdir(), 'talos-test-inbox
 // And no bridge test starts the plain explanation of permission cards on whatever `claude` it finds; the explainer's own
 // tests give it a fake CLI by path.
 process.env.TALOS_EXPLAINER = 'off'
+
+// Nor the owner's Claude folder: the hub reads each thread session's transcript from `<CLAUDE_CONFIG_DIR>/projects`, and the
+// fake relay lists thread-sessions/1, so without this a test would look in the real ~/.claude/projects.
+process.env.CLAUDE_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'talos-test-claude-'))

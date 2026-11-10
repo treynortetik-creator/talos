@@ -9,8 +9,9 @@ import { useTalos } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import { useMediaQuery } from '../settings/useMedia.ts'
 import { toggleSessionDock, useSessionDockOpen } from './dockPref.ts'
-import { chipParts, phaseOf } from './logic.ts'
+import { CTX_LAST_KNOWN_TEXT, CTX_NOT_RUNNING_TEXT, chipParts, phaseOf } from './logic.ts'
 import { useSessionController } from './store.ts'
+import { useThreadContext } from './threadContext.ts'
 
 const SessionSheet = lazy(async () => ({ default: (await import('./SessionSheet.tsx')).SessionSheet }))
 
@@ -20,11 +21,13 @@ export function useSessionSupported(): boolean {
   return !features || features.includes(SESSION_FEATURE)
 }
 
-export function SessionChip() {
+/** `threadId`: the open thread. A thread with its own session shows that session's context; weekly is always main's. */
+export function SessionChip({ threadId }: { threadId?: string }) {
   const ctl = useSessionController()
   const state = useStore(ctl.store, (s) => s.state)
   const modOnline = useStore(ctl.store, (s) => s.modOnline)
-  const parts = chipParts(state)
+  const view = useThreadContext(threadId)
+  const parts = chipParts(state, view)
   const phase = phaseOf(state, modOnline)
   if (!parts) return null
   // No role or label of its own: the button's name is built from the text on screen, so it can never disagree with it. Text
@@ -32,6 +35,7 @@ export function SessionChip() {
   return (
     <span
       data-testid="session-chip"
+      data-ctx={view.kind}
       className={cn(
         'relative flex flex-col items-end whitespace-nowrap font-mono text-[11px] leading-tight text-text-2',
         phase === 'offline' && 'italic',
@@ -53,12 +57,16 @@ export function SessionChip() {
         </span>
       )}
       {/* a real space between the two rows, so the words read "wk 60% used ctx 31% used" to anything that joins the text */}
-      {parts.week !== undefined && parts.ctx !== undefined && ' '}
+      {parts.week !== undefined && (parts.ctx !== undefined || view.kind === 'off') && ' '}
       {parts.ctx !== undefined && (
-        <span>
+        <span
+          className={cn(view.kind === 'last' && 'opacity-60')}
+          {...(view.kind === 'last' ? { title: CTX_LAST_KNOWN_TEXT } : {})}
+        >
           ctx {parts.ctx}%<span className="hidden sm:inline"> used</span>
         </span>
       )}
+      {view.kind === 'off' && <span className="opacity-60">ctx {CTX_NOT_RUNNING_TEXT}</span>}
     </span>
   )
 }
@@ -74,13 +82,15 @@ export function SessionTrigger({ threadId }: { threadId: string }) {
   const ctl = useSessionController()
   const state = useStore(ctl.store, (s) => s.state)
   const modOnline = useStore(ctl.store, (s) => s.modOnline)
-  const parts = chipParts(state)
+  const view = useThreadContext(threadId)
+  const parts = chipParts(state, view)
   const hasChip = parts !== undefined
   const offline = phaseOf(state, modOnline) === 'offline'
   // What the chip shows, as words, for the name of the button when the mod has lapsed (a dot alone says nothing aloud).
   const reading = [
     parts?.week !== undefined ? `wk ${parts.week}% used` : null,
     parts?.ctx !== undefined ? `ctx ${parts.ctx}% used` : null,
+    view.kind === 'off' ? `ctx ${CTX_NOT_RUNNING_TEXT}` : null,
   ]
     .filter(Boolean)
     .join(' ')
@@ -121,7 +131,7 @@ export function SessionTrigger({ threadId }: { threadId: string }) {
         className="absolute top-2 right-3 z-10 flex items-center rounded-button px-1.5 py-1 hover:bg-surface-2 before:absolute before:-inset-2 before:content-['']"
       >
         {hasChip && <span className="sr-only">Session: </span>}
-        <SessionChip />
+        <SessionChip threadId={threadId} />
         {/* No reading yet: the trigger still needs something visible to tap. */}
         {!hasChip && <span className="text-[11px] text-text-2">Session</span>}
       </button>

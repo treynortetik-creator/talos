@@ -211,7 +211,7 @@ describe('the dialog card', () => {
       "Work's session is waiting on a 'trust this folder' prompt; open Terminals → Work on the Mac to answer.",
     )
     expect(dialogFallbackLine('mcp_consent', 'Work')).toContain("'approve a project MCP server'")
-    expect(dialogFallbackLine('login', 'Work')).toContain("'log in'")
+    expect(dialogFallbackLine('login', 'Work')).toContain("'sign in'")
   })
 })
 
@@ -538,6 +538,12 @@ describe('one wording on every surface', () => {
     expect(JSON.parse(fixture('wording.json'))).toEqual({ v: 1, ...table })
   })
 
+  it('has the phone notice for Main waiting at the Mac, which needs no bridge to show', () => {
+    expect((table as { phone?: { devChannelsWaiting?: string } }).phone?.devChannelsWaiting).toBe(
+      'Main is waiting at your Mac: answer the Talos popup there.',
+    )
+  })
+
   it('names the thread with {thread}, says "sign in" and never "log in"', () => {
     expect(table.title.login).toBe('{thread} needs you to sign in')
     expect(table.title.trust).toBe('Trust this folder?')
@@ -575,5 +581,102 @@ describe('the shared table of hidden-character cases', () => {
 
   it.each(VISIBLE_TEXT_CASES.map((c) => [c.name, c] as const))('%s', (_n, c) => {
     expect(dialogVisibleText(c.input)).toBe(c.expected)
+  })
+})
+
+// ---- Main's development-channels dialog (the `dev_channels` kind) ----
+const devDialog = (over: Partial<WorkerDialogT> = {}): WorkerDialogT =>
+  trust({
+    id: 'Dv5Qm8ZtRx3Cw9PkNa2HdB',
+    kind: 'dev_channels',
+    subject: 'server:talos-app',
+    options: ['I am using this for local development', 'Exit'],
+    cursor: 0,
+    ...over,
+  })
+
+describe('the dev_channels dialog card', () => {
+  it('is a whole, valid card with the exact screen buttons under the table heading', () => {
+    const card = compose(devDialog())
+    expect(Card.safeParse(card).success).toBe(true)
+    expect(validateCard(card)).toEqual([])
+    expect(card.title).toBe("Allow Talos's development channel?")
+    expect(card.body).toBe("Main session's start needs this to talk to the Talos app.")
+    expect(dialogOf(card)).toMatchObject({
+      dialog_kind: 'dev_channels',
+      subject: 'server:talos-app',
+      options: ['I am using this for local development', 'Exit'],
+    })
+    expect(card.title).toBe(DIALOG_WORDING.title.dev_channels)
+    expect(card.body).toBe(DIALOG_WORDING.sentence.dev_channels)
+  })
+
+  it('names any channel Talos did not add, plainly', () => {
+    const card = compose(devDialog({ subject: 'server:talos-app, server:other-thing' }))
+    expect(card.body).toContain("Also loads server:other-thing, which Talos didn't add.")
+    expect(card.body).not.toContain('Also loads server:talos-app')
+    expect(compose(devDialog({ subject: null })).body).toBe(DIALOG_WORDING.sentence.dev_channels)
+  })
+
+  it('launchChanged adds one plain line, with what changed at the level the fingerprint knows', () => {
+    const plain = compose(devDialog({ launch_changed: [] })).body
+    expect(plain).toContain("Main's start command isn't confirmed on this Mac yet.")
+    const card = compose(devDialog({ launch_changed: ['program', 'env'] }))
+    expect(card.body).toContain("Main's start command changed since you last confirmed it. Changed: program, env.")
+    expect(dialogOf(card)?.launch_changed).toEqual(['program', 'env'])
+    // bound: the line is covered by payload_hash
+    expect(card.payload_hash).not.toBe(compose(devDialog()).payload_hash)
+  })
+
+  it('a launch_changed list holds only the fingerprint pieces, never a value', () => {
+    expect(WorkerDialog.safeParse(devDialog({ launch_changed: ['flags'] })).success).toBe(true)
+    expect(WorkerDialog.safeParse({ ...devDialog(), launch_changed: ['--token=abc'] }).success).toBe(false)
+  })
+
+  it('has options (it is not a login)', () => {
+    expect(WorkerDialog.safeParse(devDialog({ options: [] })).success).toBe(false)
+  })
+
+  it('the Mac fallback line says "sign in", never "log in"', () => {
+    expect(dialogFallbackLine('login', 'Work')).toContain("'sign in'")
+    expect(dialogFallbackLine('dev_channels', 'Work')).toContain("'allow the development channel'")
+  })
+
+  it('answers with the label as the screen showed it', () => {
+    expect(dialogAnswerText('dev_channels', 'server:talos-app', 'Exit')).toBe('Exit')
+  })
+})
+
+describe('workers.json carries Main’s dialog', () => {
+  const base = {
+    v: 1,
+    supervisor: { pid: 1, heartbeat_at: iso(NOW), workers_supported: true, main_pane_pid: 2 },
+    threads: {},
+  }
+  it('the committed fixture parses, and its card names the extra channel and the changed pieces', () => {
+    const f = parseWorkersFile(fixture('workers-with-main-dialog.json'))
+    const d = f?.supervisor.main_dialog
+    expect(d?.launch_changed).toEqual(['program', 'env'])
+    const body = compose(d as WorkerDialogT).body
+    expect(body).toContain("Also loads server:other-thing, which Talos didn't add.")
+    expect(body).toContain('Changed: program, env.')
+  })
+  it('reads supervisor.main_dialog', () => {
+    const f = parseWorkersFile(
+      JSON.stringify({ ...base, supervisor: { ...base.supervisor, main_dialog: devDialog() } }),
+    )
+    expect(f?.supervisor.main_dialog?.kind).toBe('dev_channels')
+  })
+  it('a main_dialog that does not fit reads as none, not as a broken file', () => {
+    const f = parseWorkersFile(JSON.stringify({ ...base, supervisor: { ...base.supervisor, main_dialog: { id: 1 } } }))
+    expect(f).not.toBeNull()
+    expect(f?.supervisor.main_dialog).toBeUndefined()
+  })
+})
+
+describe("Main's own answer file", () => {
+  it('has a name of its own, apart from a worker on the default thread', () => {
+    expect(WORKER_FILES.mainDialogAnswer).toBe('main-dialog-answer.json')
+    expect(WORKER_FILES.mainDialogAnswer).not.toBe(WORKER_FILES.dialogAnswer)
   })
 })

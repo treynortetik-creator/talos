@@ -1,8 +1,47 @@
 # Changelog
 
+## A list of named events, and a richer commands list
+
+- `talos events` (and `--json`) lists the named events the app emits, who emits each and the fields it carries (ids only, never a path or text). Nothing runs on them yet. The app now refuses to log an event that is not on that list.
+- `talos commands --json` gains `schema`, `app_version` and per-row `args`, `who`, `effects` and `risk` (today's keys stay), and the `talos-app` help text is built from the same list, so the two cannot drift.
+
+## A keyboard palette: Cmd+K, and the same search on the phone
+
+- **Cmd+K (Ctrl+K)** opens a palette from any main screen, also while you type. It jumps to a thread, searches all messages, opens Schedules, Settings or Memory, starts a new thread, runs a `/` command in the thread you are in, and opens the top Needs-you card. Each item shows its shortcut.
+- New shortcuts: **Cmd+J** the Needs-you list (arrows and Enter open a card), **Cmd+F** search this thread, **Cmd+.** the Session panel, **Cmd+/** the list of shortcuts, and in the Mac app **Cmd+[** and **Cmd+]** for the previous and next thread. In a browser those two stay Back and Forward, and New thread has no key (Cmd+N is the browser's and the Mac app's Quick compose). The list is in Settings > Keyboard shortcuts.
+- Nothing here answers a card. The palette and Cmd+J only open it; the card's own buttons (and the approval sheet's scroll to the end) are still the only way to answer.
+- On a phone: a search button in the thread header, and a pull-down from the top of the thread list or Home, open the same palette with no shortcuts shown.
+- Every chord now comes from one table (`apps/web/src/lib/keymap.ts`) of shipped defaults, with a resolver for your own overrides later. Rebinding itself is not built yet; nothing changes your keys.
+
+## The Schedules page is short again, and you can edit a job yourself
+
+- Jobs are grouped by thread, each group shut until you open it. A group's line shows the thread, how many jobs it has, when its next one runs, and a red dot if a job failed. A group with a failed job, or a job waiting for you, opens by itself.
+- The next job to run sits at the top with a countdown. One-time jobs have a group of their own. Each job is one line: name, when, a status dot and its on/off switch.
+- Filter with Failed, Paused or One-off. Once you have more than 15 jobs, a search box appears.
+- Every job has an **Edit** button that opens the form with the job filled in. Saving shows the same approval card as before, with the same risk rating (turning memory on still asks for your approval). Nothing new is written without your approval.
+
+## The Mac app presses Enter on the development-channel warning at every start
+
+- Restarting or resetting your session no longer leaves the agent waiting at "WARNING: Loading development channels". The Mac app now presses Enter for you at every start, not only after a crash, when the screen is exactly that warning and lists only the one channel the app itself adds (`server:talos-app`), launched with only that channel. If the launch command changed since you last pressed Enter (another program, flag or environment variable, or a first start after set-up) the first start after the change waits for your Enter once. If the screen differs in any way (another or an extra channel, the cursor on Exit, a second warning, more than a minute after the start, or you are typing in the pane) it presses nothing and the menu says it needs you, as before. Each time it presses Enter it writes one line to the app log. The setting is still "Press Enter for me", and turning it off means you press Enter yourself.
+
+## Choose a thread's folder instead of typing it
+
+- The Folder box in a thread's own-session settings now shows the real folder in words ("Working in ~/Projects/alpha", or "Working in ~/talos-agent, the agent folder" when it is empty), with `~` for your home. A **Choose…** button next to it picks the folder: in the Mac app it is the Mac's own open panel (folders only, nothing can be created); in the browser and on the iPhone it is a small folder browser that starts at your home, with a path across the top, dot-folders hidden unless you tick "Show hidden", and "Use this folder" for the level you are on. The last five folders you used on this device show as buttons under the box. Whatever way you choose, the folder is saved the same way as a typed one, and your Mac still checks that it exists and may be used. Typing `~/…` works too.
+- The browser asks your Mac for the names of the folders inside one folder at a time, and nothing else: never a file, a size or a time. Only your signed-in device can ask, and the agent has no way to. Your Mac will not list `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gh`, `~/.config/talos`, `~/.claude`, `~/Library`, the Talos folder, the agent folder, the per-thread inbox folders, your private vault, or anything inside them, nor anything outside your home. A folder that is a link to somewhere else is not shown at all. A list is cut at 500 folders ("37 more not shown"). A folder name with a hidden or direction-changing character is shown with the character spelled out.
+- A thread's folder can no longer be one of those folders however it is set (typed, chosen in the browser, or returned by the Mac's open panel): the Mac says "That folder can't be opened." The list also covers `~/.docker`, `~/.kube`, `~/.config/gcloud`, `~/.azure`, `~/.codex`, `~/.gemini`, `~/.password-store` and `~/.local/share/keyrings`. A folder macOS won't let Talos open says "macOS hasn't given Talos access to this folder.", and one that is slow to open says so.
+- When a thread's folder is set, changed or cleared, the Mac records a `thread.folder_chosen` event (the thread's id, never the path) for future hooks.
+
+## Bundled scheduler updated
+
+- Talos now ships Chronos 0.5.0, including upstream support for job memory.
+
+## Background jobs can remember between runs too
+
+- A job that runs in the background now keeps its last 3 results and a small notepad (up to 2 KB) like a session job does, when "Remember between runs" is ticked. It needs a Chronos that supports memory (the copy shipped with Talos does); with an older one the approval card says plainly that a newer Chronos is needed, and nothing is kept. A job with full permissions runs unattended, so its card says "runs unattended, with full permissions". A read-only (restricted) job reads its past results but cannot keep notes, and a run started by an event gets no memory at all. Switching the box on still needs your approval on a card, and changing the job's text, switching it off or deleting the job clears it, as before. A command job can have it too: the command gets the last results and the notepad as files in a private folder for that run, and may write a new notepad to the file named in `TALOS_MEMORY_NOTEPAD_OUT`; its result is its last output line with the exit status.
+
 ## A scheduled job can remember between runs
 
-- Each scheduled job now has a "Remember between runs" box, off by default. Tick it when you make the job or edit it later (or ask Claude to propose it), and each run is shown that job's last 3 results and a small notepad (up to 2 KB) it can rewrite when it finishes. The card says when a job has it on. Only that job sees its own memory; it is marked as notes from earlier runs, not as something you said, and anything in it that came from an email or a web page stays labelled that way. Turning it on always asks for your approval on a card, because it changes what every later run sees. Changing the job's text, moving it to another thread, switching the box off, or deleting the job clears it. It works for jobs that run in your session; a background-only job can have the box ticked but does not get it yet.
+- Each scheduled job now has a "Remember between runs" box, off by default. Tick it when you make the job or edit it later (or ask Claude to propose it), and each run is shown that job's last 3 results and a small notepad (up to 2 KB) it can rewrite when it finishes. The card says when a job has it on. Only that job sees its own memory; it is marked as notes from earlier runs, not as something you said, and anything in it that came from an email or a web page stays labelled that way. Turning it on always asks for your approval on a card, because it changes what every later run sees. Changing the job's text, moving it to another thread, switching the box off, or deleting the job clears it. It works for jobs that run in your session (background jobs: see the entry above).
 
 ## A small popup on the Mac for a thread session's trust, MCP and login questions
 

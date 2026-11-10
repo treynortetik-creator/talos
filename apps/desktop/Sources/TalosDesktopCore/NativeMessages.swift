@@ -30,6 +30,8 @@ public enum WebToNative: Equatable, Sendable {
   case terminalResume(threadId: String)
   /// The Terminal screen was left (`terminal_leave`). A `terminal_view` with no rect is only "no terminal to show right now".
   case terminalLeave
+  /// Choose… next to a thread's folder (`pick_folder`): show the open panel, beginning at `start` when it is given.
+  case pickFolder(req: String, start: String?)
 
   /// Decodes what `WKScriptMessage.body` carries (a JSON object). nil = refuse.
   public static func decode(_ body: Any) -> WebToNative? {
@@ -95,6 +97,14 @@ public enum WebToNative: Equatable, Sendable {
       return CompanionReply.decode(o).map(WebToNative.companionReply)
     case "terminal_leave":
       return only([]) ? .terminalLeave : nil
+    case "pick_folder":
+      guard allowed(required: ["req"], optional: ["start"]), let req = o["req"] as? String, CompanionReq.isValid(req) else { return nil }
+      var start: String?
+      if let raw = o["start"] {
+        guard let s = raw as? String, FolderPath.isValid(s) else { return nil }
+        start = s
+      }
+      return .pickFolder(req: req, start: start)
     case "terminal_resume":
       guard only(["thread_id"]), let t = o["thread_id"] as? String, ThreadIdRule.isValid(t) else { return nil }
       return .terminalResume(threadId: t)
@@ -144,6 +154,9 @@ public enum NativeToWeb: Equatable, Sendable {
   case terminalResumeResult(threadId: String, outcome: TerminalSessions.ResumeOutcome)
   /// The shell switched the Terminal screen's tab itself (Ctrl+digit with its terminal holding the keyboard): "main" or a thread id.
   case terminalSelect(session: String)
+  /// What the owner chose in the open panel for `pick_folder`: an absolute path, or nil when they cancelled. `why` says it was not the
+  /// owner cancelling: the app cannot show the panel now, or the chosen folder's name has a character Talos cannot use.
+  case folderPicked(req: String, path: String?, why: FolderPickWhy? = nil)
 
   public var object: [String: Any] {
     switch self {
@@ -160,6 +173,10 @@ public enum NativeToWeb: Equatable, Sendable {
     case .terminalSessions(let items): return ["type": "terminal_sessions", "items": items.map(\.object)]
     case .terminalResumeResult(let t, let o): return ["type": "terminal_resume_result", "thread_id": t, "outcome": o.rawValue]
     case .terminalSelect(let s): return ["type": "terminal_select", "session": s]
+    case .folderPicked(let r, let p, let why):
+      var o: [String: Any] = ["type": "folder_picked", "req": r, "path": p.map { $0 as Any } ?? NSNull()]
+      if let why { o["why"] = why.rawValue }
+      return o
     }
   }
 
@@ -178,6 +195,8 @@ public enum NativeToWeb: Equatable, Sendable {
       return items.count <= TerminalSessions.itemsMax && items.allSatisfy(\.isValid) ? m : nil
     case .terminalResumeResult(let t, _): return ThreadIdRule.isValid(t) ? m : nil
     case .terminalSelect(let s): return TerminalSessions.isValidSession(s) ? m : nil
+    case .folderPicked(let r, let p, let why):
+      return CompanionReq.isValid(r) && (p.map(FolderPath.isValid) ?? true) && !(p != nil && why != nil) ? m : nil
     }
   }
 
@@ -287,6 +306,33 @@ public enum AppPath {
     let first = segments.first.map { String($0).lowercased() } ?? ""
     return !blocked.contains(first)
   }
+}
+
+/// Why `folder_picked` carries no path although the owner did not cancel (`packages/protocol/src/native.ts`).
+public enum FolderPickWhy: String, Equatable, Sendable {
+  case notNow = "not_now"
+  case badName = "bad_name"
+}
+
+/// An absolute folder path the page and the shell exchange for the folder picker: one leading "/", at most 512 characters, no
+/// control characters (`packages/protocol/src/native.ts` PickPath). Whether the folder may be used is the Mac bridge's to say.
+public enum FolderPath {
+  public static func isValid(_ s: String) -> Bool {
+    s.hasPrefix("/") && s.utf16.count <= 512 && !s.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f })
+  }
+}
+
+/// The open panel for a thread's folder: folders only, one of them, nothing created. The page cannot change any of this; it
+/// only says where to begin (`pick_folder.start`).
+public struct FolderPanelSpec: Equatable, Sendable {
+  public let canChooseFiles = false
+  public let canChooseDirectories = true
+  public let canCreateDirectories = false
+  public let allowsMultipleSelection = false
+  /// Where the panel opens: `start` when the page gave one, else home.
+  public let directory: String
+
+  public static func make(start: String?, home: String) -> FolderPanelSpec { FolderPanelSpec(directory: start ?? home) }
 }
 
 public enum ExternalURL {

@@ -213,8 +213,10 @@ describe('capacitor config', () => {
     )
     // and it does so when it loads, in case a build ever turns handleApplicationNotifications back on
     expect(swiftBody(plugin, 'override func load()')).toMatch(/^\s*TalosPushCenter\.shared\.install\(\)/)
-    // a tap is only dropped from the waiting slot once the page took it
-    expect(swiftBody(plugin, 'func flush()')).toMatch(/if deliver\(event\) \{ waiting = nil \}/)
+    // a tap is only dropped from the waiting slot once the page took it (and is remembered for a moment, in case that page is replaced)
+    expect(swiftBody(plugin, 'func flush()')).toMatch(
+      /if deliver\(event\) \{\s*waiting = nil\s*delivered = \(event, now\(\)\)\s*\}/,
+    )
     expect(swiftBody(plugin, 'override func addListener')).toMatch(/TalosPushCenter\.shared\.flush\(\)/)
     const core = withoutComments(read('ios/TalosPushCore/Sources/TalosPushCore/PushCore.swift'))
     expect(core).toMatch(/approveButton = PushButton\([^)]*requiresAuthentication: true\)/)

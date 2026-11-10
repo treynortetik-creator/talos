@@ -1,4 +1,5 @@
 import Foundation
+import TalosDesktopCore
 
 /// How the agent's process ended.
 public struct ExitInfo: Equatable, Sendable {
@@ -58,6 +59,9 @@ public protocol PtyHost: AnyObject, Sendable {
   func attachIfRunning() -> Bool
   @discardableResult
   func send(keys: [UInt8]) -> SendOutcome
+  /// One of the three keys a tap on a dialog may send (`DialogKey`), by name, so the pane gets the bytes its own cursor-key mode wants.
+  @discardableResult
+  func sendDialogKey(_ key: DialogKey) -> SendOutcome
   /// Bottom-anchored screen text. nil when the screen could not be read (a failed or timed-out capture): that says nothing
   /// about what is on it, and a caller must not take it for an empty screen.
   func visibleRows() -> [String]?
@@ -72,6 +76,10 @@ public protocol PtyHost: AnyObject, Sendable {
   func detach()
   /// When an attached client last typed (seconds since 1970); nil when none is attached or it can't be read. Only tmux has clients.
   func clientActivity() -> Double?
+  /// When each attached client last typed (seconds since 1970, whole seconds). Empty when none is attached; nil when the clients could
+  /// not be read, which is not "nobody is typing". Only tmux has clients: the app-owned pty has none, so the default says "none" and
+  /// the owner typing into the embedded terminal is never seen by the dev-channels typing guard.
+  func clientActivities() -> [Double]?
   /// The pane pid / owned child pid = its process group id.
   var childPid: Int32? { get }
   var onExit: (@Sendable (ExitInfo) -> Void)? { get set }
@@ -81,5 +89,14 @@ public protocol PtyHost: AnyObject, Sendable {
 }
 
 extension PtyHost {
+  /// An app-owned pty has no key names: Claude's Select runs with application cursor keys (`ESC O A`, `ESC O B`), Enter is a return.
+  public func sendDialogKey(_ key: DialogKey) -> SendOutcome {
+    switch key {
+    case .up: return send(keys: [0x1b, 0x4f, 0x41])
+    case .down: return send(keys: [0x1b, 0x4f, 0x42])
+    case .enter: return send(keys: [0x0d])
+    }
+  }
   public func clientActivity() -> Double? { nil }
+  public func clientActivities() -> [Double]? { [] }
 }

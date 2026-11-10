@@ -141,7 +141,7 @@ export function createSocketRequests(c: SocketCtx) {
    */
   async function askRead(
     frame: Record<string, unknown>,
-    answer: 'memory.listing' | 'memory.file' | 'memory.results' | 'speak.result',
+    answer: 'memory.listing' | 'memory.file' | 'memory.results' | 'speak.result' | 'fs.listing',
     timeoutMs = 20_000,
   ): Promise<Record<string, unknown>> {
     if (!c.canSend()) throw new TalosClientError('mac_offline', "You're offline.")

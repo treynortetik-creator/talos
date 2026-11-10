@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process'
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { classifySkips, runScript } from './kit-run.ts'
+import { classifySkips, failureReport, runScript } from './kit-run.ts'
 import { ROOT } from './size-report.ts'
 
 const KIT_SCRIPTS = join(ROOT, 'kit/scripts')
@@ -75,7 +75,7 @@ describe('kit test scripts', () => {
       })
       for (const { line, reason } of classifySkips(name, out))
         console.warn(`${name}: ${line} [${reason ?? 'UNLISTED skip: add it to KNOWN_SKIPS in kit-run.ts'}]`)
-      expect(code, out.split('\n').slice(-40).join('\n')).toBe(0)
+      expect(code, failureReport(out)).toBe(0)
     })
   }
 

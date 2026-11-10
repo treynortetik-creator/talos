@@ -254,4 +254,43 @@ struct DialogFilesTests {
     try FileManager.default.createSymbolicLink(atPath: path, withDestinationPath: dir + "/elsewhere")
     #expect(DialogCardAck.dialogId(path: path) == nil)
   }
+
+  // MARK: Main's own dialog (supervisor.main_dialog)
+
+  /// The bridge's golden file with Main's development-channels dialog in it reads, and writes back the same way.
+  @Test func mainsDialogReadsFromTheGoldenFileAndRoundTrips() throws {
+    let f = try #require(WorkersFile.decode(try A2Fixtures.data("workers-with-main-dialog")))
+    let d = try #require(f.supervisor.main_dialog)
+    #expect(d.kind == .devChannels && d.kind.rawValue == "dev_channels")
+    #expect(d.subject == "server:talos-app, server:other-thing")
+    #expect(d.options == ["I am using this for local development", "Exit"] && d.cursor == 0)
+    #expect(d.launch_changed == ["program", "env"])
+    let back = try #require(WorkersFile.decode(try f.encoded()))
+    #expect(back.supervisor.main_dialog == d)
+    #expect(f.threads.isEmpty)
+  }
+
+  @Test func aFileWithoutMainsDialogKeepsNoKeyForIt() throws {
+    let f = WorkersFile(supervisor: .init(pid: 1, heartbeat_at: "2026-11-07T10:00:00.000Z", workers_supported: true, main_pane_pid: 2))
+    #expect(f.supervisor.main_dialog == nil)
+    #expect(!(String(decoding: try f.encoded(), as: UTF8.self)).contains("main_dialog"))
+  }
+
+  @Test func aMainDialogOnDiskThatDoesNotFitIsNoDialogAndTheRestStillReads() throws {
+    var o = try A2Fixtures.object("workers-with-main-dialog")
+    var sup = try #require(o["supervisor"] as? [String: Any])
+    var d = try #require(sup["main_dialog"] as? [String: Any])
+    d["id"] = "short"
+    sup["main_dialog"] = d
+    o["supervisor"] = sup
+    let f = try #require(WorkersFile.decode(try JSONSerialization.data(withJSONObject: o)))
+    #expect(f.supervisor.main_dialog == nil)
+    #expect(f.supervisor.pid == 4242)
+    // a launch_changed piece that is not one of the four names is no dialog either (never a free-text value)
+    d["id"] = "Dv5Qm8ZtRx3Cw9PkNa2HdB"
+    d["launch_changed"] = ["--token=abc"]
+    sup["main_dialog"] = d
+    o["supervisor"] = sup
+    #expect(try #require(WorkersFile.decode(try JSONSerialization.data(withJSONObject: o))).supervisor.main_dialog == nil)
+  }
 }

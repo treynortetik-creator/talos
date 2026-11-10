@@ -711,3 +711,21 @@ describe('trust_mode stays out of the agent paths, now that the owner can patch 
     expect(JSON.stringify(cfg(h))).toBe(before)
   })
 })
+
+describe('threads[].session_opts.ops_read stays the owner’s (m5/lead-errors-read)', () => {
+  test.each([
+    'threads',
+    'threads.session_opts.ops_read',
+    'threads.0.session_opts.ops_read',
+    'session_opts.ops_read',
+    'ops_read',
+  ])('%s is refused at propose, with no card and no write', async (path) => {
+    h = await start()
+    await ownerAsks(h)
+    const before = JSON.stringify(cfg(h))
+    const r = await propose(h, [{ path, value: true }])
+    expect(r.isError).toBe(true)
+    noCardMinted(h)
+    expect(JSON.stringify(cfg(h))).toBe(before)
+  })
+})

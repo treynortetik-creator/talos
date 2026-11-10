@@ -118,6 +118,7 @@ const EMPTY_READ: Record<FakeReadType, (f: Record<string, unknown>) => Record<st
   }),
   'memory.search': () => ({ hits: [], next_cursor: null, index: 'ready' }),
   'speak.request': () => ({ state: 'failed', reason: 'no_tts', message: 'Your Mac has no voice set up yet.' }),
+  'fs.list': () => ({ home: '/Users/alex', entries: [], more: 0 }),
 }
 
 const OWNER_TYPES = new Set(['message', 'voice_note', 'card.resolve', 'voice.ask'])

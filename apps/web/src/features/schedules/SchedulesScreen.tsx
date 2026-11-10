@@ -1,33 +1,25 @@
 // `/schedules` (docs/SCHEDULES.md S5.2): grouped job rows with a pause switch, the health banner, the offline cache and
 // every empty state. Times and plain words are Chronos's own; this file only lays them out.
-import { SCHEDULES_FEATURE_V2, type ScheduleT, threadSessionMode } from '@talos-app/protocol'
-import { useMemo, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { SCHEDULES_FEATURE_V2, threadSessionMode } from '@talos-app/protocol'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconPlus } from '../../ui/icons.tsx'
-import { Button, Sheet, SheetClose, SheetContent, SheetTitle, Switch } from '../../ui/index.ts'
+import { Button, Sheet, SheetClose, SheetContent, SheetTitle } from '../../ui/index.ts'
 import { Meander } from '../../ui/Meander.tsx'
 import { ScrollRegion } from '../../ui/ScrollRegion.tsx'
 import { prefillComposer } from '../composer/composerStore.ts'
 import { useThreadSessionsSupported, useWorkersStatus } from '../thread-sessions/store.ts'
 import { useAgentName } from '../threads/useThreads.ts'
+import { COPY, SEARCH_AFTER } from './constants.ts'
 import { EmptyState } from './Empty.tsx'
+import { FilterBar, GroupSection, NextUp } from './GroupList.tsx'
 import { HealthBanner, OfflineBanner } from './Health.tsx'
 import { HeartbeatSection } from './heartbeat/HeartbeatRow.tsx'
 import { isHeartbeat } from './heartbeat/logic.ts'
-import {
-  emptyKind,
-  groupByThread,
-  jobRunnerText,
-  pickBanner,
-  type RowStatus,
-  RUNNER_WORDS,
-  type Runner,
-  runnerOf,
-} from './logic.ts'
-import { ProposalSheet } from './Proposal.tsx'
-import { CAPS, Notice, refusalWords, StatusText, useSchedTime } from './shared.tsx'
+import { emptyKind, groupByThread, type JobFilter, organize, pickBanner, runnerOf } from './logic.ts'
+import { CAPS, Notice, refusalWords, useSchedTime } from './shared.tsx'
 import { refreshSchedules } from './sync.ts'
 
 export function useTellAgent() {
@@ -39,109 +31,9 @@ export function useTellAgent() {
     nav(`/t/${t}`)
   }
 }
-
-function Row({
-  s,
-  runner,
-  threadName,
-  onNotice,
-}: {
-  s: ScheduleT
-  runner: Runner
-  threadName: string
-  onNotice: (t: string) => void
-}) {
-  const client = useTalosClient()
-  const snap = useTalos((st) => st.schedules.snapshot)
-  const t = useSchedTime(snap?.health ?? null)
-  const defaultThread = useTalos((st2) => st2.config?.default_thread ?? 'general')
-  const [busy, setBusy] = useState(false)
-  const paused = snap?.health.paused_all ?? false
-  const off = !s.enabled || paused || s.kind === 'command' || s.when.type === 'events'
-  const st: RowStatus = off
-    ? {
-        glyph: '',
-        word: !s.enabled
-          ? 'Off'
-          : s.kind === 'command'
-            ? 'Command · read-only'
-            : s.when.type === 'events'
-              ? 'On events · read-only'
-              : 'Paused',
-        time: null,
-        tone: 'muted',
-        running: false,
-      }
-    : t.status(s)
-  const canPause = !off && s.today !== 'held' && t.macOnline
-  const eventsOnly = s.when.type === 'events'
-  const sub = [
-    // an event-only row already says "On events" in its status word
-    eventsOnly ? null : s.when_text,
-    !off && s.next_run ? `next ${t.when(s.next_run)}` : null,
-    !off && (s.today === 'waiting' || s.today === 'running') && s.window_ends ? `until ${t.time(s.window_ends)}` : null,
-  ]
-    .filter(Boolean)
-    .join(' · ')
-  const [turnOn, setTurnOn] = useState(false)
-  const who = jobRunnerText(s, runner, threadName)
-
-  const toggle = async () => {
-    setBusy(true)
-    try {
-      await client.schedules.controlSchedule(s.paused ? 'resume' : 'pause', s.id)
-    } catch (e) {
-      onNotice(refusalWords(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <li className="flex min-h-16 items-center gap-3 px-4 py-2" data-testid={`schedule-row-${s.id}`}>
-      <Link
-        to={`/schedules/${s.id}`}
-        className="min-w-0 flex-1 rounded-button py-1 transition-colors duration-[var(--dur-1)] ease-talos hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus"
-      >
-        <span className="block truncate text-[1.0625rem] font-medium">{s.name}</span>
-        <span className="block" data-testid="row-status">
-          <StatusText st={st} />
-        </span>
-        <span className="line-clamp-2 text-sm text-text-2">{sub}</span>
-        <span
-          className="block truncate text-sm text-text-2"
-          data-testid="row-runner"
-          data-runner={who.own ? runner : 'main'}
-        >
-          {who.text}
-        </span>
-      </Link>
-      {off && s.kind !== 'command' && (!s.enabled || eventsOnly) ? (
-        <Switch
-          aria-label={`Turn on ${s.name}`}
-          checked={false}
-          disabled={!t.macOnline}
-          onCheckedChange={() => setTurnOn(true)}
-        />
-      ) : null}
-      {turnOn ? (
-        <ProposalSheet
-          title={`Turn on ${s.name}`}
-          threadId={s.thread_id ?? defaultThread}
-          change={{ op: 'update', id: s.id, base_etag: s.etag, set: { enabled: true } }}
-          onClose={() => setTurnOn(false)}
-        />
-      ) : null}
-      {canPause ? (
-        <Switch
-          aria-label={`${s.name} runs on schedule`}
-          checked={!s.paused}
-          disabled={busy}
-          onCheckedChange={() => void toggle()}
-        />
-      ) : null}
-    </li>
-  )
-}
+/** What the owner set on the list (groups opened or shut, chips, search), per app session: see SchedulesScreen. */
+type View = { openBy: Record<string, boolean>; filters: ReadonlySet<JobFilter>; query: string }
+const SESSION = new WeakMap<object, View>()
 
 export function SchedulesScreen() {
   const client = useTalosClient()
@@ -155,6 +47,22 @@ export function SchedulesScreen() {
   const [newOpen, setNewOpen] = useState(false)
   const [pauseAskOpen, setPauseAskOpen] = useState(false)
   const [pauseBusy, setPauseBusy] = useState(false)
+  // What the owner set on the list: which groups are open (a group not in openBy opens by itself only while something needs the
+  // owner), the chips and the search. Kept while the app is open, so a job's details (a page of their own on a phone, the
+  // screen remounting on desktop) and back find the list as it was; a new launch starts fresh. Not a setting, never saved.
+  const [view, setViewState] = useState<View>(
+    () => SESSION.get(client) ?? { openBy: {}, filters: new Set(), query: '' },
+  )
+  const setView = (f: (v: View) => View) =>
+    setViewState((v) => {
+      const next = f(v)
+      SESSION.set(client, next)
+      return next
+    })
+  const { openBy, filters, query } = view
+  const setOpen = (key: string, on: boolean) => setView((v) => ({ ...v, openBy: { ...v.openBy, [key]: on } }))
+  const setFilters = (f: ReadonlySet<JobFilter>) => setView((v) => ({ ...v, filters: f }))
+  const setQuery = (q: string) => setView((v) => ({ ...v, query: q }))
   const snap = slice.snapshot
   // Pause all: shown while some job is on and nothing is paused already (Resume all is the health banner's button)
   const canPauseAll = Boolean(snap && !snap.health.paused_all && snap.schedules.some((r) => r.enabled && !r.paused))
@@ -197,6 +105,21 @@ export function SchedulesScreen() {
         : null,
     [snap, t.now, threads, config, workers, sessionsSupported],
   )
+  const listed = useMemo(() => snap?.schedules.filter((x) => !isHeartbeat(x)) ?? [], [snap])
+  const filtering = filters.size > 0 || query.trim() !== ''
+  const shown = useMemo(
+    () => (groups && snap ? organize(groups, { nowMs: t.now, health: snap.health, filters, query }) : null),
+    [groups, snap, t.now, filters, query],
+  )
+  // A group that opened itself stays open: once it has (and the thread list is known, so no job sits in Main only for want of it), record it, so pausing the failed job (or its failure clearing) does not
+  // shut it under the owner's finger. A group the owner shut stays shut; its red dot is the signal of a new failure.
+  const toRecord =
+    !filtering && threads.length > 0 ? (shown ?? []).filter((g) => g.autoOpen && openBy[g.key] === undefined) : []
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when a group newly opens itself
+  useEffect(() => {
+    if (toRecord.length > 0)
+      setView((v) => ({ ...v, openBy: { ...v.openBy, ...Object.fromEntries(toRecord.map((g) => [g.key, true])) } }))
+  }, [toRecord.map((g) => g.key).join('|')])
   // "Heartbeat" in [+ New]: only when none exists and the Mac reports several-times-a-day jobs (schedules/2)
   const features = useTalos((s) => s.presence.features)
   const canNewHeartbeat = hbRows.length === 0 && (features ?? []).includes(SCHEDULES_FEATURE_V2)
@@ -253,35 +176,31 @@ export function SchedulesScreen() {
         ) : (
           groups && (
             <>
+              {snap && !filtering ? <NextUp rows={listed} health={snap.health} /> : null}
               <HeartbeatSection rows={hbRows} onNotice={setNotice} />
-              {groups.map((g) => (
-                <section
+              {listed.length > 0 ? (
+                <FilterBar
+                  filters={filters}
+                  onFilters={setFilters}
+                  query={query}
+                  onQuery={setQuery}
+                  search={listed.length > SEARCH_AFTER || query !== ''}
+                />
+              ) : null}
+              {filtering && shown?.length === 0 ? (
+                <p role="status" data-testid="filter-empty" className="px-4 pt-4 text-sm text-text-2">
+                  {COPY.filterEmpty}
+                </p>
+              ) : null}
+              {shown?.map((g) => (
+                <GroupSection
                   key={g.key}
-                  data-group={g.key}
-                  data-runner={g.runner}
-                  aria-labelledby={`sg-${g.key}`}
-                  aria-describedby={`sr-${g.key}`}
-                  data-testid={`thread-group-${g.key}`}
-                >
-                  <div className="flex flex-wrap items-baseline gap-x-2 px-4 pt-4 pb-1">
-                    <h2 id={`sg-${g.key}`} className={cn(CAPS, 'm-0 text-text-2')} data-testid="group-name">
-                      {g.name}
-                    </h2>
-                    <span
-                      id={`sr-${g.key}`}
-                      className={cn('text-sm', g.runner === 'main' ? 'text-text-2' : 'text-accent-text')}
-                      data-testid="group-runner"
-                      data-runner={g.runner}
-                    >
-                      {RUNNER_WORDS[g.runner]}
-                    </span>
-                  </div>
-                  <ul className="m-0 list-none divide-y divide-line p-0">
-                    {g.rows.map((s) => (
-                      <Row key={s.id} s={s} runner={g.runner} threadName={g.name} onNotice={setNotice} />
-                    ))}
-                  </ul>
-                </section>
+                  g={g}
+                  open={filtering || (openBy[g.key] ?? g.autoOpen)}
+                  onOpen={(on: boolean) => setOpen(g.key, on)}
+                  when={t.when}
+                  onNotice={setNotice}
+                />
               ))}
             </>
           )

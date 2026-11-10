@@ -13,15 +13,24 @@ public struct DialogOffer: Codable, Equatable, Sendable {
   public var subject: String?
   public var options: [String]
   public var cursor: Int?
+  /// With a `devChannels` offer: which pieces of Main's start command differ from the one the owner last confirmed (`folder`, `program`,
+  /// `flags`, `env`; names only, never a value). Empty = changed (or never confirmed) but the Mac cannot say what. nil = not a launch change.
+  public var launch_changed: [String]?
   public var seen_at: String
   public var expires_at: String
 
-  public init(id: String, kind: DialogReader.Kind, subject: String?, options: [String], cursor: Int?, seen_at: String, expires_at: String) {
+  public static let launchPieces: Set<String> = ["folder", "program", "flags", "env"]
+
+  public init(
+    id: String, kind: DialogReader.Kind, subject: String?, options: [String], cursor: Int?, launch_changed: [String]? = nil, seen_at: String,
+    expires_at: String
+  ) {
     self.id = id
     self.kind = kind
     self.subject = subject
     self.options = options
     self.cursor = cursor
+    self.launch_changed = launch_changed
     self.seen_at = seen_at
     self.expires_at = expires_at
   }
@@ -34,6 +43,7 @@ public struct DialogOffer: Codable, Equatable, Sendable {
     try c.encode(subject, forKey: .subject)
     try c.encode(options, forKey: .options)
     try c.encode(cursor, forKey: .cursor)
+    try c.encodeIfPresent(launch_changed, forKey: .launch_changed)
     try c.encode(seen_at, forKey: .seen_at)
     try c.encode(expires_at, forKey: .expires_at)
   }
@@ -47,7 +57,8 @@ public struct DialogOffer: Codable, Equatable, Sendable {
     guard (22...64).contains(u.count), u.allSatisfy({ ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x41 && $0 <= 0x5a) || ($0 >= 0x61 && $0 <= 0x7a) || $0 == 0x5f || $0 == 0x2d }),
       options.count <= 6, kind == .login ? options.isEmpty : !options.isEmpty,
       options.allSatisfy({ (1...120).contains($0.count) }), subject.map({ (1...500).contains($0.count) }) ?? true,
-      cursor.map({ options.indices.contains($0) }) ?? true, ISOTime.parse(seen_at) != nil, ISOTime.parse(expires_at) != nil
+      cursor.map({ options.indices.contains($0) }) ?? true, ISOTime.parse(seen_at) != nil, ISOTime.parse(expires_at) != nil,
+      launch_changed.map({ $0.count <= 4 && $0.allSatisfy(Self.launchPieces.contains) }) ?? true
     else { return false }
     return true
   }

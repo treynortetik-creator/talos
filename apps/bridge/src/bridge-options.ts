@@ -26,6 +26,8 @@ export type BridgeOptions = {
   apps?: Partial<AppServiceDeps>
   /** Tests: swap the read-aloud synthesis or its timing. */
   speak?: SpeakOptions
+  /** Tests: the folders the picker may list (a temp home). Production passes nothing: the owner's real home. */
+  folders?: Partial<import('./folders/service.ts').FolderDeps>
   /** Test seam (O6): the relay-silence watch's tick, threshold and fetch. Production passes nothing. */
   relaySilence?: { tickMs?: number; silenceMs?: number; fetchFn?: typeof fetch }
   /** Test seam: how long discovery waits for `chronos api version` (ms). */

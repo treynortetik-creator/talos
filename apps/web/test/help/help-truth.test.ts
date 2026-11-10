@@ -25,6 +25,7 @@ import {
 } from '../../src/features/help/content.ts'
 import { HELP_PATH } from '../../src/features/help/path.ts'
 import { WRITES_SYNCED_CONFIG } from '../../src/features/settings/SettingsScreen.tsx'
+import { chordLabel, DEFAULT_KEYMAP } from '../../src/lib/keymap.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
 const WEB = join(ROOT, 'apps/web/src')
@@ -332,36 +333,44 @@ function menuBarKeys() {
   })
 }
 
-/** Browser keys: what each Help row says it does, and the global-key handler that has to carry it. */
-const BROWSER_HANDLER: Record<string, string> = {
-  'Open thread 1 to 9, in the order of the thread list': 'onThread',
-  Search: 'onSearch',
-  'Fold or unfold the sidebar': 'onSidebar',
-  'Close the side panel': 'onEscape',
+/** Browser keys: what each Help row says it does, and the keymap entry that has to carry it. */
+const BROWSER_ENTRY: Record<string, string> = {
+  'Open the command palette': 'palette',
+  'Open the Needs-you list': 'needsYou',
+  'Open thread 1 to 9, in the order of the thread list': 'thread1',
+  'Search this thread': 'findInThread',
+  'Open or close the Session panel': 'sessionPanel',
+  'Show the keyboard shortcuts': 'shortcuts',
+  'Fold or unfold the sidebar': 'sidebar',
+  'Close the side panel': 'close',
 }
 /** The row is typed in the message box, not a global key. */
 const COMPOSER_ROWS = ['Send the message']
 
-/** Handlers the Shell really passes to the global keys, and those the key reader declares. */
-function shellHandlers() {
-  const shell = read(join(WEB, 'Shell.tsx'))
-  const from = shell.indexOf('const handlers = useMemo(')
-  const body = shell.slice(from, shell.indexOf('useGlobalKeys(handlers)'))
-  const passed = new Set([...body.matchAll(/\b(on[A-Z]\w*):/g)].map((m) => m[1] ?? ''))
-  const keys = read(join(WEB, 'lib/useKeyboard.ts'))
-  const sig = keys.slice(keys.indexOf('export function useGlobalKeys'), keys.indexOf('}) {'))
-  const declared = [...sig.matchAll(/\b(on[A-Z]\w*)\??:/g)].map((m) => m[1] ?? '')
-  return { passed, declared }
+/** Does the one dispatcher (palette/actions.ts) do something for this entry? A `return false` case does nothing. */
+function actionIsHandled(act: { kind: string; name?: string }): boolean {
+  const src = read(join(WEB, 'features/palette/actions.ts'))
+  const key = act.kind === 'ui' ? `case '${act.name}':` : `case '${act.kind}':`
+  const at = src.indexOf(key)
+  if (at < 0) return false
+  return !/^case '[a-zA-Z]+':\s*return false/.test(src.slice(at).replace(/\/\/[^\n]*/g, ''))
 }
 
-/** What is wrong with a list of browser-key rows: unknown rows, and rows whose handler the Shell does not pass. */
-function browserKeyProblems(rows: Array<{ what: string }>, handlerOf: Record<string, string>): string[] {
-  const { passed } = shellHandlers()
+/** What is wrong with a list of browser-key rows: unknown rows, rows with no chord, glyphs that are not the table's, and actions that do nothing. */
+function browserKeyProblems(rows: Array<{ what: string; keys?: string }>, entryOf: Record<string, string>): string[] {
   return rows.flatMap((r) => {
     if (COMPOSER_ROWS.includes(r.what)) return []
-    const h = handlerOf[r.what]
-    if (!h) return [`"${r.what}": no handler is known for it`]
-    return passed.has(h) ? [] : [`"${r.what}": ${h} is declared but the Shell never passes it, so the key does nothing`]
+    const id = entryOf[r.what]
+    const entry = DEFAULT_KEYMAP.find((e) => e.id === id)
+    if (!id || !entry) return [`"${r.what}": no keymap entry is known for it`]
+    if (!entry.chord) return [`"${r.what}": ${id} has no chord, so the key does nothing`]
+    if (!actionIsHandled(entry.act)) return [`"${r.what}": ${id} is in the table but its action does nothing`]
+    const want = [chordLabel(entry.chord, true), chordLabel(entry.chord, false)]
+    const glyphs = r.keys ?? ''
+    const first = id.startsWith('thread') ? [chordLabel(entry.chord, true).replace('1', ''), 'Ctrl+'] : want
+    return first.every((g) => glyphs.includes(g)) || id === 'close'
+      ? []
+      : [`"${r.what}": Help says ${glyphs}, the table says ${want.join(' / ')}`]
   })
 }
 
@@ -420,23 +429,30 @@ describe('Help keyboard shortcuts are wired to real handlers', () => {
     expect(row, 'the from-anywhere row').toBeTruthy()
   })
 
-  it('every browser key row names a handler the Shell passes, and the glyph is what that handler listens for', () => {
-    expect(browserKeyProblems(browserRows(), BROWSER_HANDLER)).toEqual([])
-    const keys = read(join(WEB, 'lib/useKeyboard.ts'))
-    expect(keys).toContain('Digit([1-9])')
-    expect(keys).toMatch(/e\.code === 'KeyK' && handlers\.onSearch/)
-    expect(keys).toMatch(/e\.code === 'Backslash' && handlers\.onSidebar/)
-    expect(keys).toMatch(/e\.key === 'Escape'\) handlers\.onEscape/)
+  it('every browser key row names a keymap entry with that chord, and the dispatcher does something for it', () => {
+    expect(browserKeyProblems(browserRows(), BROWSER_ENTRY)).toEqual([])
+    const keys = read(join(WEB, 'lib/keymap.ts'))
+    expect(keys).toContain('`Digit${n}`')
+    expect(keys).toContain("code: 'KeyK'")
+    expect(keys).toContain("code: 'Backslash'")
+    expect(keys).toContain("code: 'Escape', mod: false")
     // Enter and Shift+Enter in the message box are exercised in composer/enter-key.test.tsx, not matched as text here.
   })
 
-  it('a key whose handler the Shell never passes would be caught: the live-call chord is such a key today', () => {
-    const { declared, passed } = shellHandlers()
-    expect(declared.filter((d) => !passed.has(d))).toEqual(['onCall'])
-    // had Help still listed ⌘⇧K, this is the failure the old test could not produce
-    const withCall = [...browserRows(), { what: 'Start a live call' }]
-    expect(browserKeyProblems(withCall, { ...BROWSER_HANDLER, 'Start a live call': 'onCall' })).toEqual([
-      '"Start a live call": onCall is declared but the Shell never passes it, so the key does nothing',
+  it('the Mac-app-only keys are marked so in the table, and the Shell only turns them on inside the Mac app', () => {
+    const rows = keyGroups().find((g) => g.title === 'Mac app, the Talos window')?.rows ?? []
+    expect(rows.map((r) => r.what)).toEqual(['Previous thread', 'Next thread'])
+    expect(DEFAULT_KEYMAP.filter((e) => e.scope === 'mac-app').map((e) => e.id)).toEqual(['threadPrev', 'threadNext'])
+    expect(read(join(WEB, 'Shell.tsx'))).toContain("detectShell() === 'desktop'")
+  })
+
+  it('a key whose action does nothing would be caught: the live-call chord is such a key today', () => {
+    const call = DEFAULT_KEYMAP.find((e) => e.id === 'call')
+    expect(call && actionIsHandled(call.act)).toBe(false)
+    // had Help still listed ⌘⇧K, this is the failure the check exists to produce
+    const withCall = [...browserRows(), { what: 'Start a live call', keys: '⌘⇧K' }]
+    expect(browserKeyProblems(withCall, { ...BROWSER_ENTRY, 'Start a live call': 'call' })).toEqual([
+      '"Start a live call": call is in the table but its action does nothing',
     ])
     expect(allText()).not.toContain('⌘⇧K')
   })
@@ -581,7 +597,7 @@ const CLAIMS: Record<string, Proof[]> = {
     has('apps/web/src/features/terminal/TerminalScreen.tsx', '!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey'),
     has('apps/web/src/features/terminal/TerminalScreen.tsx', 'if (!hasStrip) return'),
   ],
-  'Terminals… in the menu has no key: ⌘K is Search in the Talos window.': [
+  'Terminals… in the menu has no key: ⌘K is the command palette in the Talos window.': [
     // the Window menu item and the Talos icon's menu item both carry no key, and ⌘K is the page's search chord
     () => expect(rd(SPEC_F)).toContain(norm('Item(.showTerminal, "Terminals…"),')),
     () => expect(rd(SPEC_F)).not.toMatch(/Item\(\.showTerminal, "Terminals…"[^)]*key:/),
@@ -589,7 +605,7 @@ const CLAIMS: Record<string, Proof[]> = {
       expect(rd('apps/desktop/Sources/TalosDesktop/App.swift')).not.toMatch(
         /Button\("Terminals…"\)[\s\S]{0,200}keyboardShortcut/,
       ),
-    has('apps/web/src/lib/useKeyboard.ts', "e.code === 'KeyK'"),
+    has('apps/web/src/lib/keymap.ts', "code: 'KeyK'"),
   ],
   'From any app.': [has('apps/desktop/Sources/TalosDesktop/HotKeys.swift', 'RegisterEventHotKey(spec.keyCode')],
   'This is the default; change it in Mac settings → Hotkeys.': [
@@ -604,7 +620,50 @@ const CLAIMS: Record<string, Proof[]> = {
     has('apps/desktop/Sources/TalosDesktop/App.swift', 'Button("Quit Talos (agent keeps running)")'),
     has('apps/desktop/Sources/TalosDesktop/App.swift', 'Button("Quit Talos (stops the agent)")'),
   ],
-  'On the app’s main screens.': [has('apps/web/src/Shell.tsx', 'useGlobalKeys(handlers)')],
+  'In the Mac app only, not while typing in a box.': [
+    has('apps/web/src/lib/keymap.ts', "scope: 'mac-app'"),
+    has('apps/web/src/lib/keymap.ts', 'inField: false'),
+    has('apps/web/src/lib/useKeyboard.ts', '!entry.inField && isField(ev.target)'),
+  ],
+  'In a web browser these two keys stay Back and Forward.': [
+    has('apps/web/src/lib/keymap.ts', "scope: 'mac-app'"),
+    has('apps/web/src/lib/keymap.ts', 'return entry.scope ==='),
+  ],
+  'On the app’s main screens, also while you type.': [
+    has('apps/web/src/lib/keymap.ts', 'inField: true'),
+    has('apps/web/src/lib/useKeyboard.ts', 'const isField'),
+  ],
+  'It jumps to a thread, searches all messages, opens Schedules, Settings or Memory, starts a new thread, runs a / command and opens the top Needs-you card.':
+    [
+      has('apps/web/src/features/palette/items.ts', "'searchMessages'"),
+      has('apps/web/src/features/palette/items.ts', "type: 'slash'"),
+      has('apps/web/src/features/palette/items.ts', "'topCard'"),
+      has('apps/web/src/features/palette/Palette.tsx', '<ThreadEditor'),
+      has('apps/web/src/lib/keymap.ts', "to: '/schedules'"),
+      has('apps/web/src/lib/keymap.ts', "to: '/memory'"),
+      has('apps/web/src/lib/keymap.ts', "to: '/settings'"),
+    ],
+  'It never answers a card.': [
+    lacks('apps/web/src/features/palette/Palette.tsx', 'resolveCard'),
+    lacks('apps/web/src/features/palette/actions.ts', 'resolveCard'),
+    has('apps/web/src/features/palette/Palette.tsx', "if (r.type === 'card') return void nav(`/card/${r.id}`)"),
+  ],
+  'Arrows move, Enter opens a card.': [
+    has('apps/web/src/features/palette/Palette.tsx', "e.key === 'ArrowDown'"),
+    has('apps/web/src/features/palette/Palette.tsx', "e.key === 'Enter'"),
+  ],
+  'The card’s own buttons are the only way to answer it.': [
+    lacks('apps/web/src/features/palette/Palette.tsx', 'resolveCard'),
+    lacks('apps/web/src/features/palette/items.ts', 'resolveCard'),
+  ],
+  'In a thread.': [has('apps/web/src/features/palette/actions.ts', 'if (!ctx.currentThreadId) return false')],
+  'On other screens the browser keeps the key.': [
+    has('apps/web/src/features/palette/actions.ts', 'if (!ctx.currentThreadId) return false'),
+    has('apps/web/src/lib/useKeyboard.ts', '!== false'),
+  ],
+  'In a thread that has a Session panel.': [has('apps/web/src/Shell.tsx', 'if (!hasSession) return false')],
+  'The list is also in Settings.': [has('apps/web/src/features/settings/SettingsScreen.tsx', "id: 'shortcuts'")],
+  'On the app’s main screens.': [has('apps/web/src/Shell.tsx', 'useGlobalKeys(handlers, { macApp })')],
   'Not on this Help page or the sign-in screen.': [
     () => {
       expect(rd('apps/web/src/features/help/HelpScreen.tsx')).not.toContain('useGlobalKeys')

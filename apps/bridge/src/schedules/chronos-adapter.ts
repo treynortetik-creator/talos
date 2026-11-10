@@ -467,14 +467,19 @@ export class ChronosAdapter implements SchedulerAdapter {
     return { contentHash: r.content_hash, prompt: r.prompt, guard: r.guard, approvedAt: r.approved_at }
   }
 
-  /** `chronos api config set ...` for `talos-app schedules adopt` (S3.7). Chronos refuses while a `both` job remains. */
+  /**
+   * `chronos api config set ...` for `talos-app schedules adopt` (S3.7) and for pointing Chronos at the job-memory folder.
+   * Chronos refuses while a `both` job remains.
+   */
   async configSet(c: {
     sessionRunner?: 'talos' | 'hook'
     approvalRequired?: boolean
+    memoryDir?: string
   }): Promise<{ ok: true } | { ok: false; code: string; message: string; blocking: string[] }> {
     const args: string[] = []
     if (c.sessionRunner) args.push('session_runner', c.sessionRunner)
     if (c.approvalRequired !== undefined) args.push('approval_required', String(c.approvalRequired))
+    if (c.memoryDir) args.push('memory_dir', c.memoryDir)
     this.invalidate()
     const r = await this.call('config_set', ['config', 'set', ...args])
     this.invalidate()
@@ -484,6 +489,37 @@ export class ChronosAdapter implements SchedulerAdapter {
       return { ok: false, code: e.code, message: e.message, blocking }
     }
     return { ok: true }
+  }
+
+  /**
+   * What Chronos says about one run of a job, looked up by its id (`chronos api run-result`, not the newest few runs): its day, status,
+   * trigger and report text (null when it left none). Null when the run is unknown or has not finished. For job memory, which takes
+   * a background run in once it is over.
+   */
+  async runResult(
+    id: string,
+    runId: string,
+  ): Promise<{ status: string; ds: string; report: string | null; trigger: string } | null> {
+    const r = (await this.raw(['run-result', id, runId], undefined, undefined, true).catch(() => null)) as {
+      run?: { status?: unknown; ds?: unknown; trigger?: unknown }
+      report?: unknown
+    } | null
+    const run = r?.run
+    if (!run || typeof run.status !== 'string' || typeof run.ds !== 'string' || run.status === 'running') return null
+    return {
+      status: run.status,
+      ds: run.ds,
+      trigger: typeof run.trigger === 'string' ? run.trigger : 'clock',
+      report: typeof r?.report === 'string' ? r.report : null,
+    }
+  }
+
+  /** What a pack for this job must be bound to, as Chronos hashes it (`chronos api memory-binding`): hex sha256, or null. */
+  async memoryBinding(id: string): Promise<string | null> {
+    const r = (await this.raw(['memory-binding', id], undefined, undefined, true).catch(() => null)) as {
+      sha256?: unknown
+    } | null
+    return typeof r?.sha256 === 'string' && /^[0-9a-f]{64}$/.test(r.sha256) ? r.sha256 : null
   }
 
   // ---- runs ------------------------------------------------------------------------------------------------------

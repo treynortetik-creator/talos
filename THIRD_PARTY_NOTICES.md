@@ -7,7 +7,7 @@ repository). Copied code keeps a header comment naming its source file and licen
 
 | Path                                                           | Upstream                                                          | Licence                            |
 | -------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------- |
-| `third_party/chronos/` (bin, lib, LICENSE, two test stand-ins) | github.com/treynortetik-creator/chronos tag `v0.4.0` @ `fe9bb516` | MIT, same owner as this repository |
+| `third_party/chronos/` (bin, lib, LICENSE, two test stand-ins) | github.com/treynortetik-creator/chronos tag `v0.5.0` @ `a85c0875` | MIT, same owner as this repository |
 
 ## Sources no longer vendored
 

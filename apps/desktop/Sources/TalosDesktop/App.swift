@@ -32,6 +32,7 @@ struct TalosApp: App {
     KeepAwake.shared.start(enabled: cfg.keepAwakeOnAC)
     WebController.shared.prepare()
     HotkeyController.shared.bootstrap(configured: cfg.hotkeys.compose)
+    SupervisorController.launchTrust = KeychainLaunchTrust()  // the app seals the confirmed launch with its Keychain key; tests keep the in-memory store
     // Made now, not when the menu is first opened: the Terminal screen in the Talos window reads it from the first launch.
     _model = StateObject(wrappedValue: SupervisorController())
   }

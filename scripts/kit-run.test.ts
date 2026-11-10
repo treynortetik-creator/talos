@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { classifySkips, KNOWN_SKIPS, runScript } from './kit-run.ts'
+import { classifySkips, failureReport, KNOWN_SKIPS, runScript } from './kit-run.ts'
 
 const dirs: string[] = []
 function scratch(): string {
@@ -103,5 +103,31 @@ describe('known skips', () => {
   it('every listed skip names a kit test script that exists', () => {
     const names = readdirSync(join(import.meta.dirname, '../kit/scripts'))
     for (const k of KNOWN_SKIPS) expect(names).toContain(k.script)
+  })
+})
+
+describe('failure report', () => {
+  const noise = Array.from({ length: 200 }, (_, i) => `  ok   check ${i}`)
+
+  it('keeps every FAIL line (with its detail) even when 200 lines follow it, plus the last 40 lines', () => {
+    const out = [
+      '  FAIL first',
+      '       why first',
+      ...noise,
+      '  FAIL second',
+      ...noise,
+      '  update: PASS 400 FAIL 2',
+    ].join('\n')
+    const r = failureReport(out)
+    expect(r).toContain('  FAIL first')
+    expect(r).toContain('       why first')
+    expect(r).toContain('  FAIL second')
+    expect(r).toContain('update: PASS 400 FAIL 2')
+    expect(r).not.toContain('check 5\n')
+  })
+
+  it('does not repeat a FAIL line that is already in the tail', () => {
+    const r = failureReport(['  ok   a', '  FAIL b', '       why b'].join('\n'))
+    expect(r.split('\n').filter((l) => l.includes('FAIL b'))).toHaveLength(1)
   })
 })

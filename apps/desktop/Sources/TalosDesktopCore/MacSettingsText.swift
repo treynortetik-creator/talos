@@ -30,7 +30,7 @@ public enum MacSettingsText {
     case .host: return HostChoice.appliesNote
     case .notifyThread: return "Applies to the next crash post."
     case .autoRestart: return "Applies from the next crash."
-    case .autoConfirmRestart: return "Applies from the next crash restart."
+    case .autoConfirmRestart: return "Applies from the next start."
     case .startSessionOnLaunch: return "Applies the next time Talos opens."
     case .openTerminalOnDialog: return "Applies from the next time the agent needs you."
     case .relayAddress: return "Applies when you press Return or close this window. The Talos window reloads then."
@@ -47,9 +47,9 @@ public enum MacSettingsText {
   // MARK: wording fixes (M22 to M30)
 
   /// M22. The old label read as if Talos asked you to confirm; on means Talos presses Enter for you.
-  public static let autoConfirmTitle = "Press Enter for me on crash restarts"
+  public static let autoConfirmTitle = "Press Enter for me on the development-channel dialog"
   public static let autoConfirmHelp =
-    "When the agent crashes and restarts, Talos presses Enter on the development-channel dialog for you. Never on the first start: you confirm that one yourself."
+    "Every time the agent starts, Talos presses Enter on the development-channel dialog for you, but only when it is exactly the dialog for the channel Talos launched with. Anything else waits for you."
 
   /// M26. Off still joins an agent that is already running; it only stops Talos starting a new one.
   public static let startOnOpenTitle = "Start the agent when Talos opens"

@@ -154,7 +154,7 @@ export class Hub implements Bus {
       this.ephemeral.register(
         t,
         V2_READ_RESPONSE_FOR[t],
-        t === 'search.query' ? 'search' : t === 'speak.request' ? 'speak' : 'memory',
+        t === 'search.query' ? 'search' : t === 'speak.request' ? 'speak' : t === 'fs.list' ? 'folders' : 'memory',
       )
     this.appRouter = new AppRouter({
       clock: d.clock,

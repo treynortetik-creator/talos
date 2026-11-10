@@ -83,7 +83,7 @@ trigger are what keep it from doing that. Tests: `scripts/ci-affected.test.ts`.
    stop the others. A job that dies without a result is red.
 3. **Inside `check`:** the personal-data scan, which only warns, then the quick gates (types, lint, and `pnpm notices:check`: THIRD_PARTY_NOTICES.md must match what setup's web build
    bundles), then the quiet group: the contract suite, then the bridge's
-   `test/schedules/` files one at a time. Then the loud group side by side: the other bridge files 4 at once, Vitest and the
+   `test/schedules/` files, `CI_SCHED_JOBS` at a time (a third of the cores, biggest file first). Then the loud group side by side: the other bridge files 4 at once, Vitest and the
    capture check. Output of the loud group goes to `<log>.<step>` while it runs and into the job log, whole, with failed steps
    last so the reason is in the tail a failed job prints. Last comes the known-vulnerability audit (`pnpm audit --prod
    --audit-level high`), which also only warns, because an advisory or a registry outage says nothing about this commit's code.
@@ -116,11 +116,12 @@ run, not per slot, so an orphan has nowhere to write that a later run reads. Fou
 
 Workers per suite (the web specs keep Playwright's default, 5):
 
-| Suite      | Workers                      | Set by                          | Measured alone                       |
-| ---------- | ---------------------------- | ------------------------------- | ------------------------------------ |
-| Vitest     | 4                            | `CI_WORKERS` (40% of the cores) | 9 workers 82 s · 5: 96 s · 3: 157 s  |
-| `bun test` | 4 processes                  | `CI_WORKERS`                    | 1 process 435 s · 4: 132 s           |
-| e2e suite  | 3 on 10 cores, 5 on 18 cores | `E2E_WORKERS`                   | 1 worker 500 s · 3: 248 s · 5: 187 s |
+| Suite      | Workers                      | Set by                          | Measured alone                                              |
+| ---------- | ---------------------------- | ------------------------------- | ----------------------------------------------------------- |
+| Vitest     | 4                            | `CI_WORKERS` (40% of the cores) | 9 workers 82 s · 5: 96 s · 3: 157 s                         |
+| `bun test` | 4 processes                  | `CI_WORKERS`                    | 1 process 435 s · 4: 132 s                                  |
+| schedules  | 6 processes (cores ÷ 3)      | `CI_SCHED_JOBS`                 | 1 process 579 s · 4: 154 s · 6: 118 s · 8: 113 s (18 cores) |
+| e2e suite  | 3 on 10 cores, 5 on 18 cores | `E2E_WORKERS`                   | 1 worker 500 s · 3: 248 s · 5: 187 s                        |
 
 Don't run these side by side to save a few minutes without many real runs behind it. `check` and `browser` used to look like
 the obvious thing to overlap, and a run did take 7 minutes, but tests with short real-time waits on real child processes

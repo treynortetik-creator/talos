@@ -63,6 +63,13 @@ if [ -n "${FAKE_RV_DIALOG:-}" ]; then
     [ -n "${FAKE_RV_DIALOG_GONE:-}" ] || exit 0
     until [ -f "$FAKE_RV_DIALOG_GONE" ]; do sleep 0.1; done; box_back ) &
 fi
+if [ -n "${FAKE_RV_QUESTION:-}" ]; then
+  # FAKE_RV_QUESTION=<file>: once it exists, draw a numbered question that is not one of the known dialogs (a prompt nobody named), below the status row (row 6);
+  # FAKE_RV_QUESTION_GONE=<file>: it goes away when that file exists, and the input box is back.
+  ( until [ -f "$FAKE_RV_QUESTION" ]; do sleep 0.1; done
+    printf '\033[2J\033[8;1H Allow this tool?\n\n \342\235\257 1. Allow\n   2. Deny\n'
+    until [ -f "${FAKE_RV_QUESTION_GONE:-/nonexistent}" ]; do sleep 0.1; done; box_back ) &
+fi
 if [ -n "${FAKE_RV_BLANK:-}" ]; then
   # FAKE_RV_BLANK=<file>: once this file exists the screen is cleared (no input box); FAKE_RV_BLANK_BACK=<file>: the box is drawn again
   ( until [ -f "$FAKE_RV_BLANK" ]; do sleep 0.1; done; printf '\033[2J\033[H'

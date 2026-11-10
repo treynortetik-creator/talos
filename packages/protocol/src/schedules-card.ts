@@ -87,6 +87,12 @@ export type ComposeScheduleCardOpts = {
    * that session, says where the job runs, and uses the Approve / Not now buttons. Absent = the card is byte-identical to before.
    */
   sessionName?: string
+  /**
+   * Whether the installed Chronos can give a background job its memory: `ok` (its version says "memory"), `too_old`, or `not_found`
+   * (no Chronos at all). The card of a background job with memory on says which, plainly. Absent = as if it can (a session job never
+   * needs it).
+   */
+  chronosMemory?: 'ok' | 'too_old' | 'not_found'
 }
 
 type Effective = Pick<
@@ -148,9 +154,49 @@ function pickEffective(o: Partial<Record<keyof Effective, unknown>>): Partial<Ef
  * is as it always was.
  */
 const MEMORY_ON = 'on (keeps its last 3 results and a notepad of up to 2 KB between runs)'
-const MEMORY_BACKGROUND = 'but this job runs in the background, which does not get memory yet'
+const MEMORY_RESULTS_ONLY = "on (reads its last 3 results; can't keep notes)"
 /** What switching memory on does, in the card's own words: it widens every future prompt. */
 const MEMORY_WIDENS = "Future runs will see the last 3 results and this job's notepad."
+const MEMORY_WIDENS_RESULTS = 'Future runs will see the last 3 results.'
+/** A background job with full permissions runs with nobody watching; a notepad it reads and rewrites is read and written unseen. */
+const MEMORY_UNATTENDED =
+  'This job runs unattended, with full permissions: nobody watches a run that reads or rewrites this memory.'
+/** A command job is a script: it gets the notepad and the results as files in a folder of its own, and may rewrite the notepad. */
+const MEMORY_COMMAND =
+  'The command gets them as files (TALOS_MEMORY_DIR) and may rewrite the notepad through TALOS_MEMORY_NOTEPAD_OUT.'
+const MEMORY_TOO_OLD =
+  'Your Chronos is too old to give background jobs memory: a newer Chronos is needed, and until you update it this job gets none.'
+const MEMORY_NO_CHRONOS = 'Chronos was not found on this Mac, so a background job gets no memory until it is installed.'
+const needsChronosLine = (c: ComposeScheduleCardOpts['chronosMemory']): string[] =>
+  c === 'too_old' ? [MEMORY_TOO_OLD] : c === 'not_found' ? [MEMORY_NO_CHRONOS] : []
+
+/** How a job's memory works: in the session's prompt, as results only, as files for a command, or unattended with full permissions. */
+function memoryKind(j: { runner: string; permissions: string }): 'session' | 'results' | 'command' | 'unattended' {
+  if (runsInSession(j)) return 'session'
+  return j.permissions === 'restricted' ? 'results' : j.permissions === 'command' ? 'command' : 'unattended'
+}
+
+/** The lines about memory for a job that ends up with it on: what it keeps, what it widens, who is watching, what it needs. */
+function memoryBody(
+  j: { runner?: string | undefined; permissions?: string | undefined },
+  chronosMemory: ComposeScheduleCardOpts['chronosMemory'],
+  head: string | null,
+): string[] {
+  const inSession =
+    j.runner === undefined ||
+    j.permissions === undefined ||
+    runsInSession({ runner: j.runner, permissions: j.permissions })
+  const restricted = j.permissions === 'restricted'
+  const keeps = restricted ? MEMORY_RESULTS_ONLY : MEMORY_ON
+  const lines = [
+    head === null ? `Memory: ${keeps}` : restricted ? `${head}, reads its last 3 results; can't keep notes` : head,
+  ]
+  lines.push(restricted ? MEMORY_WIDENS_RESULTS : MEMORY_WIDENS)
+  if (j.permissions === 'command') lines.push(MEMORY_COMMAND)
+  if (!inSession && !restricted) lines.push(MEMORY_UNATTENDED)
+  if (!inSession) lines.push(...needsChronosLine(chronosMemory))
+  return lines
+}
 export function permissionWords(p: ScheduleT['permissions'], tools: readonly string[]): string {
   if (p === 'full') return 'Full permissions, nobody watching'
   if (p === 'restricted') return `Read-only: ${tools.length ? tools.join(', ') : 'no tools'}`
@@ -437,39 +483,51 @@ function changeLines(
   if (s.thread_id !== undefined)
     row('Posts to', cur ? opts.threadName(cur.thread_id) : undefined, opts.threadName(s.thread_id))
   if (s.memory !== undefined) {
-    const background = !runsInSession(effective(change, base))
+    const eff = effective(change, base)
     const head = `Memory: ${cur ? yes(cur.memory === true) : '(unknown)'} → ${yes(s.memory)}`
-    lines.push(s.memory && background ? `${head}, ${MEMORY_BACKGROUND}` : head)
-    if (s.memory && !background && cur?.memory !== true) lines.push(MEMORY_WIDENS)
+    if (!s.memory) lines.push(head)
+    else if (cur?.memory === true) lines.push(head)
+    else lines.push(...memoryBody(eff, opts.chronosMemory, head))
+    if (s.memory && cur?.memory === true && !runsInSession(eff)) lines.push(...needsChronosLine(opts.chronosMemory))
+  } else if (
+    cur?.memory === true &&
+    (s.runner !== undefined || s.permissions !== undefined || s.allowed_tools !== undefined)
+  ) {
+    // memory stays on, but where the job runs or what it may do changes what the memory is: say so, as switching it on would
+    const eff = effective(change, base)
+    if (memoryKind(eff) !== memoryKind(cur) && memoryKind(eff) !== 'session')
+      lines.push(...memoryBody(eff, opts.chronosMemory, 'Memory: stays on'))
   }
   return lines
 }
 
-/** The create card's lines about memory: what it keeps and what it widens, or that this job cannot use it. */
-function memoryLines(d: { runner?: string | undefined; permissions?: string | undefined }): string[] {
-  const background =
-    d.runner !== undefined &&
-    d.permissions !== undefined &&
-    !runsInSession({ runner: d.runner, permissions: d.permissions })
-  return background ? [`Memory: on, ${MEMORY_BACKGROUND}`] : [`Memory: ${MEMORY_ON}`, MEMORY_WIDENS]
+/** The create card's lines about memory: what it keeps and what it widens. */
+function memoryLines(
+  d: { runner?: string | undefined; permissions?: string | undefined },
+  chronosMemory: ComposeScheduleCardOpts['chronosMemory'],
+): string[] {
+  return memoryBody(d, chronosMemory, null)
 }
 
-function settingsLines(d: {
-  description: string
-  enabled: boolean
-  model: string | null
-  notify: string
-  catchup_min: number
-  memory?: boolean | undefined
-  runner?: string | undefined
-  permissions?: string | undefined
-}): string[] {
+function settingsLines(
+  d: {
+    description: string
+    enabled: boolean
+    model: string | null
+    notify: string
+    catchup_min: number
+    memory?: boolean | undefined
+    runner?: string | undefined
+    permissions?: string | undefined
+  },
+  chronosMemory?: ComposeScheduleCardOpts['chronosMemory'],
+): string[] {
   return [
     `On: ${d.enabled ? 'on' : 'off (created switched off; turning it on needs another card)'}`,
     `Model: ${d.model ?? 'default'}`,
     `Notify: ${d.notify}`,
     `Catch-up: ${d.catchup_min} min`,
-    ...(d.memory ? memoryLines(d) : []),
+    ...(d.memory ? memoryLines(d, chronosMemory) : []),
     `Description: ${d.description || '(none)'}`,
   ]
 }
@@ -496,7 +554,9 @@ function body(
   switch (change.op) {
     case 'create': {
       // the normalized record exactly as it will be written (S8.2): settings first, then the meta, then the prompt
-      const head = [timesLine(change, base), ...settingsLines(change.draft)].filter((l) => l !== null).join('\n')
+      const head = [timesLine(change, base), ...settingsLines(change.draft, opts.chronosMemory)]
+        .filter((l) => l !== null)
+        .join('\n')
       const meta = metaSection(change, base)
       return `${head}\n\n${meta ? `${meta}\n\n` : ''}Prompt:\n${change.draft.prompt}`
     }

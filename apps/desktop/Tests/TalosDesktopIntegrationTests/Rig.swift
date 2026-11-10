@@ -59,13 +59,20 @@ final class Rig: @unchecked Sendable {
   let auditPath: String
   let socket: String
   var timings: Supervisor.Timings
+  /// The launch fingerprint stored as already confirmed at construction (nil for `launchConfirmed: false`).
+  private(set) var seededLaunch: String?
   let clock = JumpClock()
+  /// The key store that seals the confirmed launch: in memory, shared by every supervisor this rig makes (an app relaunch on the same Mac).
+  let trust = MemoryLaunchTrust()
   /// How many times the restore child or a phone post was handed to `Options.background`.
   let backgroundRuns = RunCounter()
   /// Every `claude agents --json` call the current supervisor's probe made (see `RecordingProbe`).
   private(set) var agentsProbe: RecordingProbe!
   /// A wrapper to use instead of the real tmux binary (a fault or counting shim). Takes effect at the next `makeSupervisor()`.
   var tmuxBin: String?
+  /// How often the tmux host's own poll reads the pane (it takes a capture each time, from its own thread). A test that logs tmux verbs
+  /// sets this before `makeSupervisor()` so the poll cannot land between two verbs it is ordering.
+  var hostPollInterval = 0.2
   private(set) var host: PtyHost!
   private(set) var sup: Supervisor!
   private var events: [Supervisor.Event] = []
@@ -84,7 +91,7 @@ final class Rig: @unchecked Sendable {
 
   init(
     _ kind: HostKind, scenario: String, env extra: [String: String] = [:], timings: Supervisor.Timings? = nil,
-    session: DesktopConfig.Session? = nil, loginExtra: [String: String] = [:],
+    session: DesktopConfig.Session? = nil, loginExtra: [String: String] = [:], launchConfirmed: Bool = true,
     configure: (inout DesktopConfig) -> Void = { _ in }
   ) throws {
     self.kind = kind
@@ -133,6 +140,14 @@ final class Rig: @unchecked Sendable {
     c.talosAppCommand = [Rig.fixtures + "/talos-app"]
     if let session { c.session = session }
     configure(&c)
+    // A launch the owner has already confirmed (the auto-accept presses Enter only on a launch it has seen answered). `launchConfirmed:
+    // false` is a first-ever start, or a launch he has just changed: the fingerprint of this very config is not stored.
+    if launchConfirmed {
+      LaunchSeal.confirm(
+        &c, fingerprint: c.launchFingerprint(resolvedClaude: c.claudePath), parts: c.launchParts(resolvedClaude: c.claudePath), trust: trust)
+      c.launchTrust = LaunchTrustMigration.version  // sealed in the current format: the migration leaves it
+    }
+    seededLaunch = c.confirmedLaunch
     try ConfigFile.save(c, to: configPath)
     makeSupervisor()
   }
@@ -155,12 +170,13 @@ final class Rig: @unchecked Sendable {
     case .tmux:
       h = TmuxPtyHost(
         commands: TmuxCommands(tmux: tmuxBin ?? Rig.tmuxPath!, socket: socket, configPath: Rig.tmuxConf), baseEnv: env,
-        pollInterval: 0.2)
+        pollInterval: hostPollInterval)
     case .direct:
       h = SwiftTermPtyHost()
     }
     var o = Supervisor.Options(name: "agent", configPath: configPath, home: home, talosAppHome: talosHome, auditLogPath: auditPath)
     o.takeoverCheck = true
+    o.launchTrust = trust
     let jump = clock
     o.wallClock = { jump.wallMs() }
     o.awake = { jump.awake() }
@@ -228,6 +244,9 @@ final class Rig: @unchecked Sendable {
     ((try? String(contentsOfFile: holderLog, encoding: .utf8)) ?? "").split(separator: "\n").compactMap { Int32($0) }
   }
   var audit: String { (try? String(contentsOfFile: auditPath, encoding: .utf8)) ?? "" }
+  /// How many Enters the supervisor has typed on the dev-channel warning (one `auto_confirm` line each). Since 2026-11-07 a cold start
+  /// is answered too, so a test that follows a start, a crash and a restart sees one for the first start and one for the restart.
+  var autoConfirms: Int { audit.components(separatedBy: " auto_confirm ").count - 1 }
   /// Every start that ended on its own, as audited. Three shapes: a child that ran and exited audits `exit pid=…` (an exit during
   /// a Stop logs `exit` too, and the cap does not see it); a restart whose child died before its pid could be read audits
   /// `restart_failed` and no `exit`; and the restore's cold start dying before its pid is a `start_failed` after `restore_start`.

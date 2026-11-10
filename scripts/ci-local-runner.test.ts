@@ -296,7 +296,7 @@ describe('ci_ios_test: the app tests on a simulator that may still be settling',
     writeFileSync(join(b, 'listing'), `${listing}\n`)
     writeFileSync(
       join(b, 'xcrun'),
-      `#!/bin/bash\necho "xcrun $*" >> "${calls}"\n[ "$HANG" = "$1 $2" ] && exec sleep 600\n[ "$CANCEL" = "$1 $2" ] && { kill -TERM $PPID; exit 143; }\n[ -n "$SIGREC" ] && [ "$1 $2" = "simctl shutdown" ] && { for s in INT TERM HUP; do trap "echo got $s >> \\"$SIGREC\\"; exit 0" $s; done; kill -$SIGSEND $$; sleep 1; echo ignored $SIGSEND >> "$SIGREC"; exit 0; }\n[ "$1 $2" = "simctl list" ] && cat "${join(b, 'listing')}"\nexit 0\n`,
+      `#!/bin/bash\necho "xcrun $*" >> "${calls}"\n[ "$HANG" = "$1 $2" ] && exec sleep 600\n[ "$CANCEL" = "$1 $2" ] && { kill -TERM $PPID; exit 143; }\n[ -n "$SIGREC" ] && [ "$1 $2" = "simctl shutdown" ] && { for s in INT TERM HUP; do trap "echo got $s >> \\"$SIGREC\\"; exit 0" $s; done; kill -$SIGSEND $$; sleep 1; echo ignored $SIGSEND >> "$SIGREC"; exit 0; }\n[ "$1 $2" = "simctl list" ] && { [ -n "$SLOW_LIST" ] && sleep "$SLOW_LIST"; cat "${join(b, 'listing')}"; }\nexit 0\n`,
     )
     writeFileSync(
       join(b, 'xcodebuild'),
@@ -412,12 +412,22 @@ describe('ci_ios_test: the app tests on a simulator that may still be settling',
     expect(stops(r.log)).toBe(1)
     expect(xcodeCalls(r.seen)).toBe(1)
   })
+  it('a listing that runs out of time leaves the device running: nothing is shut down, so nothing is stopped', () => {
+    // The mechanism behind the flake below, made certain: the device list that decides "was it already booted" is on the same limit
+    // as the shutdown. A list slower than the limit says yes (booted), so the end never shuts down and never hangs.
+    const r = rig('exit 0').run({ CI_SIMCTL_LIMIT: '1', HANG: 'simctl shutdown', SLOW_LIST: '2' })
+    expect(r.rc).toBe(0)
+    expect(shutdowns(r.seen)).toBe(0)
+    expect(stops(r.log)).toBe(0) // the symptom seen in CI: no "stopped after" line, because the shutdown never ran
+  })
   it('a hung shutdown is stopped, at the end and before the retry', () => {
-    const end = rig('exit 0').run({ CI_SIMCTL_LIMIT: '1', HANG: 'simctl shutdown' })
+    // The limit is 3 s, not 1: the listing before the run shares it (see the test above), and a loaded Mac (CI_SIMCTL_LIMIT=1 failed
+    // once in CI on 389143df: stops 0) can take over a second to start the stub and answer.
+    const end = rig('exit 0').run({ CI_SIMCTL_LIMIT: '3', HANG: 'simctl shutdown' })
     expect(end.rc).toBe(0)
     expect(stops(end.log)).toBe(1)
     const retry = rig(`if [ "$n" = 1 ]; then printf '${BUSY}\\n'; exit 65; fi\nexit 0`).run({
-      CI_SIMCTL_LIMIT: '1',
+      CI_SIMCTL_LIMIT: '3',
       HANG: 'simctl shutdown',
     })
     expect(retry.rc).toBe(0)

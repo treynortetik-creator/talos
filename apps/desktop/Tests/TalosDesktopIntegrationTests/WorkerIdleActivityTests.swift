@@ -186,6 +186,53 @@ struct WorkerIdleActivity {
     #expect(r.wait(12) { r.state("trip") == "parked" }, "control: answered, it parks: \(r.why("trip"))")
   }
 
+  /// The flag is held through repaints, whatever the busy window: the settle (2.5 s) is longer than the busy window and than the gap a
+  /// repaint (every 4 s) leaves, so for ~1.5 s after each repaint the worker is not busy, the screen is unsettled and idle is past the limit.
+  /// Dialog going away (a settled screen without it) ends the hold: it parks after the idle limit, no stuck flag.
+  @Test(arguments: [false, true])
+  func aDialogIsHeldThroughRepaintsEvenWhenRedetectionOutlastsTheBusyWindow(goesAway: Bool) throws {
+    let r = try WorkerRig(scenario: scenario, extraEnv: ["FAKE_RV_STATUS": "4"])
+    defer { r.teardown() }
+    let flag = r.root + "/dialog", gone = r.root + "/gone"
+    r.env["FAKE_RV_DIALOG"] = flag
+    r.env["FAKE_RV_DIALOG_GONE"] = gone
+    r.manager(idle: 3, busyWindow: 0.5)
+    r.mgr.tune { $0.dialogSettle = 2.5 }
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(8) { r.up("trip") }, "\(r.why("trip"))")
+    #expect(r.wait(8) { r.typedLines.count == 1 }, "the pointer never went in: \(r.why("trip"))")
+    FileManager.default.createFile(atPath: flag, contents: nil)
+    #expect(r.wait(15) { r.mgr.needsYou()["trip"] != nil }, "the dialog was never flagged: \(r.mgr.needsYou())")
+    #expect(r.staysUp(for: 10, "parked while the dialog was on screen"), "more than twice the idle limit and two repaints")
+    #expect(r.mgr.needsYou()["trip"] != nil, "the flag dropped with the dialog still on screen")
+    guard goesAway else { return }
+    FileManager.default.createFile(atPath: gone, contents: nil)
+    #expect(r.wait(15) { r.state("trip") == "parked" }, "the dialog went away but the worker never parked: \(r.why("trip"))")
+    #expect(r.mgr.needsYou()["trip"] == nil, "a stuck needs-you flag")
+  }
+
+  /// A prompt nobody named, on a pane whose status line repaints faster than the settle: the screen is never still, so only "no dialog
+  /// shape for `dialogSettle` running" can end the hold once the question is answered.
+  @Test func aPromptHoldEndsWhenItIsGoneEvenWithAStatusLineRepaintingFasterThanTheSettle() throws {
+    let r = try WorkerRig(scenario: scenario, extraEnv: ["FAKE_RV_STATUS": "1"])
+    defer { r.teardown() }
+    let ask = r.root + "/ask", gone = r.root + "/askgone"
+    r.env["FAKE_RV_QUESTION"] = ask
+    r.env["FAKE_RV_QUESTION_GONE"] = gone
+    r.manager(idle: 3, busyWindow: 0.5)
+    r.mgr.tune { $0.dialogSettle = 2.5 }
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(8) { r.up("trip") }, "\(r.why("trip"))")
+    #expect(r.wait(8) { r.typedLines.count == 1 }, "the pointer never went in: \(r.why("trip"))")
+    FileManager.default.createFile(atPath: ask, contents: nil)
+    #expect(r.wait(15) { r.mgr.needsYou()["trip"] != nil }, "the question was never flagged: \(r.mgr.needsYou())")
+    #expect(r.staysUp(for: 6, "parked while a question was on screen"), "more than the idle limit")
+    FileManager.default.createFile(atPath: gone, contents: nil)
+    #expect(r.wait(15) { r.state("trip") == "parked" }, "answered, but it never parked: \(r.why("trip"))")
+  }
+
   /// A relaunch: the new copy takes the worker over with what the file says (the saved last activity, the last pointer, the start) and
   /// nothing the pane says: its status row has repainted a moment ago whatever the file holds. The file's times are written here, a
   /// long time ago or a few seconds ago, so no wait and no clock decides it. The limit is ten minutes.

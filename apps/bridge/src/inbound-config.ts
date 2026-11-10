@@ -2,6 +2,7 @@
 // Handlers of the Inbound class (inbound.ts), which forwards to them. Dispatch and the first trust checks are in inbound.ts;
 // some handlers here run their own seen-id, age or card-state checks, so read both when auditing trust.
 import { defaultThreadRef } from './context.ts'
+import { emitFolderEvents } from './events.ts'
 import { configSyncFrame } from './frames-out.ts'
 import type { Inbound } from './inbound.ts'
 import type { Item, Of } from './inbound-shared.ts'
@@ -28,6 +29,7 @@ export const configFrames = {
     ctx.config.markSynced(r.config)
     ctx.permission.reconcile()
     ctx.log.info('config patched', { rev: r.config.rev })
+    emitFolderEvents(ctx.log, before.threads, r.config.threads)
     // a thread that was archived or deleted keeps no copies of the owner's files
     removeGoneInboxes(ctx.paths.inbox, liveThreadIds(r.config))
     // Thread edits change where the agent should post (docs/THREADS.md): tell it once, after the write.

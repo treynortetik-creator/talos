@@ -69,11 +69,21 @@ spawn_holder() {
 # The first start: the normal dialog, the (test-played) human Enter, the notice.
 first_start_ok() { show_dialog; wait_enter; print_notice; }
 
+# Waits $1 seconds, or, with FAKE_CRASH_ON_FILE set, until the test creates $FAKE_STATE_DIR/crash-now (a crash the test times itself,
+# however long a loaded Mac pauses the test: the supervisor's first Enter after that file is the restart's).
+crash_wait() {
+  if [ -n "${FAKE_CRASH_ON_FILE:-}" ]; then
+    for _ in $(seq 6000); do [ -e "$FAKE_STATE_DIR/crash-now" ] && return; sleep 0.05; done
+  else
+    sleep "$1"
+  fi
+}
+
 # Start 1 confirms normally, then crashes after FAKE_CRASH_AFTER seconds (default 1). Later starts run "$@".
 crash_first_then() {
   if [ "${FAKE_START_N:-1}" = 1 ]; then
     first_start_ok
-    sleep "${FAKE_CRASH_AFTER:-1}"
+    crash_wait "${FAKE_CRASH_AFTER:-1}"
     exit 1
   fi
   "$@"

@@ -13,7 +13,8 @@ import Foundation
 /// With the escaped capture (`capture-pane -e`) given, it must show the same screen as the plain rows, the cursor row must be the coloured
 /// one and every other option plain, and no option may be dim: the Select Claude draws, not text that looks like one.
 public enum DialogReader {
-  public enum Kind: String, Codable, Equatable, Sendable { case trust, mcpConsent = "mcp_consent", login }
+  /// `devChannels` is Main's own warning about the development channel: it is published as `supervisor.main_dialog` (never read off a worker's pane by `read`).
+  public enum Kind: String, Codable, Equatable, Sendable { case trust, mcpConsent = "mcp_consent", login, devChannels = "dev_channels" }
 
   public struct Dialog: Equatable, Sendable {
     public var kind: Kind
@@ -98,7 +99,7 @@ public enum DialogReader {
       } else {
         return nil
       }
-    case .login: return nil
+    case .login, .devChannels: return nil  // login has no select; Main's own warning is never read off a worker's pane
     }
     if let escaped, !intensityOK(escaped, top: top, options: first...last, cursor: c) { return nil }
     return Dialog(kind: kind, subject: subject, options: options, cursor: c - first)

@@ -28,13 +28,23 @@ describe('D3: offline page retry is native', () => {
     expect(vc).toMatch(/retry: \{ \[weak self\] in self\?\.retryIfNeeded\(tapped: true\) \}/)
     // network return (only a satisfied path) and coming to the front both go through the same retry
     const triggers = swiftBody(vc, 'private func startRetryTriggers')
+    // coming to the front: the offline page or a blank view is retried first; the page is then checked either way
+    // (WebViewRevival), and brought back only when it is dead or stuck
     expect(triggers).toMatch(
-      /UIApplication\.didBecomeActiveNotification[\s\S]*?\{ \[weak self\] _ in self\?\.retryIfNeeded\(\) \}/,
+      /UIApplication\.didBecomeActiveNotification[\s\S]*?self\?\.retryIfNeeded\(\)\s*self\?\.revival\?\.appDidForeground\(\)/,
+    )
+    // leaving the front voids a check that is waiting for an answer
+    expect(triggers).toMatch(
+      /willResignActiveNotification, UIApplication\.didEnterBackgroundNotification[\s\S]*?revival\?\.cancel\(\)/,
     )
     expect(triggers).toMatch(
       /guard path\.status == \.satisfied else \{ return \}\s*DispatchQueue\.main\.async \{ self\?\.retryIfNeeded\(\) \}/,
     )
     expect(triggers).toMatch(/monitor\.start\(queue:/)
+    // Capacitor's reload for a terminated web process still runs: the shell forwards the callback after resetting audio
+    expect(swiftBody(vc, 'func webViewWebContentProcessDidTerminate')).toMatch(
+      /pageDidReset\(\)\s*\(inner as\? WKNavigationDelegate\)\?\.webViewWebContentProcessDidTerminate\?\(webView\)/,
+    )
     // the retry reloads only when the web view is not on a relay page (needsRetry, ShellPolicyTests)
     expect(swiftBody(vc, 'private func retryIfNeeded')).toMatch(
       /tapped \|\| showingFallback,\s*guardian\.needsRetry\(currentURL: webView\.url\)/,

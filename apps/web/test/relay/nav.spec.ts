@@ -25,9 +25,9 @@ test('Ctrl+2 switches to the second thread, in config order', async ({ browser }
   const page = await context.newPage()
   try {
     await openSignedIn(harness, page, context, `/t/${config[0]?.id}`)
-    await page.keyboard.press('Control+2')
+    await page.keyboard.press('ControlOrMeta+2')
     await expect(page).toHaveURL(new RegExp(`/t/${config[1]?.id}$`))
-    await page.keyboard.press('Control+1')
+    await page.keyboard.press('ControlOrMeta+1')
     await expect(page).toHaveURL(new RegExp(`/t/${config[0]?.id}$`))
   } finally {
     await context.close()

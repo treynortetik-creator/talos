@@ -9,7 +9,7 @@ import type {
   ScheduleT,
 } from '@talos-app/protocol'
 import { dateOfRunKey, runsInSession, safeLine, type WorkerStatusItemT } from '@talos-app/protocol'
-import { FAILED_DOT_WINDOW_MS } from './constants.ts'
+import { COPY, FAILED_DOT_WINDOW_MS } from './constants.ts'
 
 export const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
 export type Weekday = (typeof WEEKDAYS)[number]
@@ -243,6 +243,125 @@ export function groupByThread(
       name: key === MAIN_GROUP ? 'Main' : (live.get(key)?.name ?? key),
       runner: o.runner(key === MAIN_GROUP ? null : key),
       rows: [...g.today, ...g.later, ...g.off],
+    })
+  }
+  return out
+}
+
+// ---- organized page (docs/SCHEDULES.md S5.2): groups with a header, the one next job, filter chips and search ----------------
+
+/** The group of one-off jobs. Like MAIN_GROUP, a key no thread id can take (a ThreadId starts with a letter). */
+export const ONEOFF_GROUP = '__oneoff__'
+
+export type JobFilter = 'failed' | 'paused' | 'oneoff'
+
+/** A one-off job runs once, whatever thread it belongs to. */
+export const isOneOff = (s: Pick<ScheduleT, 'when'>) => s.when.type === 'once'
+
+/** A job whose last word is a failure: failed, stuck, or a last run that failed. (The same words the row's red status uses.) */
+export function isFailedJob(s: ScheduleT, o: { nowMs: number; health: SchedulerHealthT }): boolean {
+  if (isOff(s, o.health)) return false // an off job, or every job paused, shows no failure on its row
+  return rowStatus(s, { nowMs: o.nowMs, tz: o.health.tz, macOnline: true }).tone === 'danger'
+}
+
+/** A job on hold waits for the owner to review it. */
+export const needsOwner = (s: Pick<ScheduleT, 'today'>) => s.today === 'held'
+
+/** The one job that runs next: the earliest run still to come among the jobs that are on. */
+export function nextJob(rows: readonly ScheduleT[], health: SchedulerHealthT, nowMs: number): ScheduleT | null {
+  let best: ScheduleT | null = null
+  let bestAt = Number.POSITIVE_INFINITY
+  for (const s of rows) {
+    if (isOff(s, health) || s.paused || s.today === 'held' || !s.next_run) continue
+    const at = Date.parse(s.next_run)
+    if (at > nowMs && at < bestAt) {
+      best = s
+      bestAt = at
+    }
+  }
+  return best
+}
+
+/** "in 12 min 05 s": seconds under an hour, then hours and minutes, then days and hours. */
+export function countdownText(iso: string, nowMs: number): string {
+  const s = Math.floor((Date.parse(iso) - nowMs) / 1000)
+  if (s <= 0) return 'now'
+  if (s < 60) return `in ${s} s`
+  const pad = (n: number) => String(n).padStart(2, '0')
+  if (s < 3600) return `in ${Math.floor(s / 60)} min ${pad(s % 60)} s`
+  if (s < 86_400) return `in ${Math.floor(s / 3600)} h ${pad(Math.floor((s % 3600) / 60))} min`
+  return `in ${Math.floor(s / 86_400)} d ${Math.floor((s % 86_400) / 3600)} h`
+}
+
+export type OrgGroup = {
+  /** MAIN_GROUP, ONEOFF_GROUP, or the thread id. */
+  key: string
+  name: string
+  /** Who runs the thread's jobs; null for the one-off group (its jobs come from every thread). */
+  runner: Runner | null
+  rows: ScheduleT[]
+  /** One-off group only: the thread group each job came from (who runs it, and its name), by job id. */
+  from?: Record<string, { runner: Runner; name: string }>
+  count: number
+  /** The earliest run still to come in the group (ISO), or null when nothing in it is on. */
+  next: string | null
+  /** A job in the group failed: the red dot. */
+  failed: boolean
+  /** The group opens itself: a job failed or waits for the owner. */
+  autoOpen: boolean
+}
+
+/**
+ * The thread groups as the page shows them: one-off jobs lifted out into a group of their own (last), then the filter chips
+ * (a job stays if it fits ANY chosen chip) and the search (by name) applied, groups left with nothing dropped, and each header's
+ * count, next run and flags worked out from the jobs that are left.
+ */
+export function organize(
+  groups: readonly ThreadGroup[],
+  o: { nowMs: number; health: SchedulerHealthT; filters: ReadonlySet<JobFilter>; query: string },
+): OrgGroup[] {
+  const q = o.query.trim().toLowerCase()
+  const fo = { nowMs: o.nowMs, health: o.health }
+  const keep = (s: ScheduleT, thread: string) =>
+    (o.filters.size === 0 ||
+      (o.filters.has('failed') && isFailedJob(s, fo)) ||
+      (o.filters.has('paused') && (s.paused || !s.enabled)) ||
+      (o.filters.has('oneoff') && isOneOff(s))) &&
+    (q === '' ||
+      s.name.toLowerCase().includes(q) ||
+      thread.toLowerCase().includes(q) ||
+      s.prompt_preview.toLowerCase().includes(q))
+  const from: Record<string, { runner: Runner; name: string }> = {}
+  const oneOffs = groups.flatMap((g) =>
+    g.rows.filter(isOneOff).map((s) => {
+      from[s.id] = { runner: g.runner, name: g.name }
+      return s
+    }),
+  )
+  const parts: Array<Pick<OrgGroup, 'key' | 'name' | 'runner' | 'from'> & { rows: ScheduleT[] }> = groups.map((g) => ({
+    key: g.key,
+    name: g.name,
+    runner: g.runner,
+    rows: g.rows.filter((s) => !isOneOff(s)),
+  }))
+  parts.push({ key: ONEOFF_GROUP, name: COPY.oneOffGroup, runner: null, rows: oneOffs, from })
+  const out: OrgGroup[] = []
+  for (const p of parts) {
+    const rows = p.rows.filter((s) => keep(s, p.from?.[s.id]?.name ?? p.name))
+    if (rows.length === 0) continue
+    const failed = rows.some((s) => isFailedJob(s, fo))
+    const upcoming = rows
+      .filter((s) => !isOff(s, o.health) && !s.paused && s.today !== 'held' && s.next_run)
+      .map((s) => s.next_run as string)
+      .filter((iso) => Date.parse(iso) > o.nowMs)
+      .sort((a, b) => Date.parse(a) - Date.parse(b))
+    out.push({
+      ...p,
+      rows,
+      count: rows.length,
+      next: upcoming[0] ?? null,
+      failed,
+      autoOpen: failed || rows.some(needsOwner),
     })
   }
   return out

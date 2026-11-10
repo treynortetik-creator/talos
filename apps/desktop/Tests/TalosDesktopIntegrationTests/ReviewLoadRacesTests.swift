@@ -47,7 +47,7 @@ struct ReviewLoadRacesTests {
     t.stopGrace = 3
     t.noticeWait = 3
     let r = try Rig(
-      .tmux, scenario: "slow-notice.sh", env: ["FAKE_CRASH_SECONDS": "1", "FAKE_NOTICE_DELAY": "1"], timings: t)
+      .tmux, scenario: "slow-notice.sh", env: ["FAKE_CRASH_ON_FILE": "1", "FAKE_NOTICE_DELAY": "1"], timings: t)
     defer { r.teardown() }
     let flag = r.root + "/slow-next-send"
     let shim = r.root + "/tmux-slowsend"
@@ -61,10 +61,11 @@ struct ReviewLoadRacesTests {
     chmod(shim, 0o755)
     r.tmuxBin = shim
     r.makeSupervisor()
+    try coldStartConfirmed(r)  // the cold start's Enter is the supervisor's too (host.send): the flag is armed after it, and start 1 crashes only when told
     FileManager.default.createFile(atPath: flag, contents: nil)  // only `host.send` uses if-shell; the human Enter is raw tmux
-    try coldStartConfirmed(r)
+    FileManager.default.createFile(atPath: r.stateDir + "/crash-now", contents: Data())  // now start 1 crashes
     #expect(r.wait(15) { r.starts.count >= 2 })
-    #expect(r.wait(20) { r.audit.contains(" auto_confirm ") }, "the restart's Enter: \(r.audit)")
+    #expect(r.wait(20) { r.autoConfirms >= 2 }, "the restart's Enter: \(r.audit)")
     #expect(r.wait(15) { (isRunning(r.phase()) && r.sup.status.needsYou == nil) || r.audit.contains("auto_confirm_no_notice") })
     #expect(!r.audit.contains("auto_confirm_no_notice"), "\(r.phase()) \(String(describing: r.sup.status.needsYou))")
     #expect(isRunning(r.phase()), "\(r.phase())")

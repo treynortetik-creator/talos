@@ -157,6 +157,7 @@ describe('hub entry points, app socket', () => {
         'app.request',
         'card.resolve',
         'config.patch',
+        'fs.list',
         'heartbeat.test',
         'history.request',
         'media.fetch',

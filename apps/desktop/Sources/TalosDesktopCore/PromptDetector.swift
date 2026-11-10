@@ -301,3 +301,22 @@ public struct PromptWatch: Sendable {
     return .appeared(p)
   }
 }
+
+/// How long a worker's pane has shown no dialog shape at all, repaints or not. Fed once per look. A held needs-you flag clears when this
+/// says gone: a pane whose status line repaints faster than `settle` never has a settled screen, so stillness cannot say it.
+public struct DialogAbsence: Sendable {
+  public init() {}
+  private var since: Double?
+
+  /// `present`: a dialog or prompt shape is on the screen now. True once none has been for `settle` running; a shape back starts over.
+  public mutating func gone(present: Bool, at t: Double, settle: Double) -> Bool {
+    guard !present else {
+      since = nil
+      return false
+    }
+    if since == nil { since = t }
+    return t - (since ?? t) >= settle
+  }
+
+  public mutating func reset() { since = nil }
+}

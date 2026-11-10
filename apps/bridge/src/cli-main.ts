@@ -23,6 +23,7 @@ import { parseConfig } from './config-file.ts'
 import { DeviceStore } from './devices.ts'
 import { EnrollFiles } from './enroll-files.ts'
 import { cleanDeviceName } from './enrollment.ts'
+import { cmdEvents } from './events.ts'
 import { ensureDir, readJsonFile, writeFileAtomic, writeJsonAtomic } from './fsutil.ts'
 import { withGuardsSettings } from './guards/install.ts'
 import { openHistory } from './history-store.ts'
@@ -51,12 +52,12 @@ import {
   teeCommand,
   writeTeePlan,
 } from './subagent-tee-install.ts'
-import { terminalOnly } from './talos.ts'
+import { terminalOnly, usageText } from './talos.ts'
 import { cmdTheme } from './theme-cli.ts'
 import { cmdTrust } from './trust-cli.ts'
-import { cmdV2, V2_USAGE } from './v2-cli.ts'
+import { cmdV2 } from './v2-cli.ts'
 import { BRIDGE_COMMIT, BRIDGE_VERSION, commitReport, resolveVersion, versionSkew } from './version.ts'
-import { workerCliRefusal } from './worker/cli-refusal.ts'
+import { isThreadCaller, workerCliRefusal } from './worker/cli-refusal.ts'
 
 export type CliIO = {
   /** False when stdin or stdout is not a terminal. Absent (a test's io) counts as a terminal. */
@@ -985,35 +986,7 @@ async function cmdUpdate(args: string[], io: CliIO, deps: CliDeps) {
 const CODEX_USAGE =
   'usage: talos-app codex check | codex run --thread <id> [--dir <abs>] [--sandbox read-only|workspace-write] [--image <abs>]... -- "<prompt>"'
 
-const USAGE = `talos-app ${BRIDGE_VERSION}
-  init --relay-url <url> [--config default|five-threads]
-  enroll [--label <name>] [--no-qr] [--confirm]
-  devices [revoke <id>]
-  rotate
-  start [--agent-dir <dir>] [--dry-run] [-- <claude flags>]
-  status [--json]
-  doctor [--agent-dir <dir>] [--deep]
-  update
-  rollback [--dry-run] [--yes] [--skip-data-check]
-  restore-last-good [--list] [--version <n>] [--file <name>] [--newest-start] [--agent-dir <dir>] [--yes]
-  logs [-n <lines>] [-f]
-  trust on|off|show
-  theme reset|show
-  lead init <thread-id> --folder <dir> --agent-dir <dir> [--mcp <names>] [--sandbox | --light] | lead check <folder> [--agent-dir <dir>]
-  report [--agent-dir <dir>] [--lines <n>] [--out <file>]
-  post <thread> <text>
-  digest [--since <ISO>]
-  install-mcp --agent-dir <dir> [--dry-run]
-  adopt --agent-dir <dir> [--dry-run] [--yes] [--repoint]
-  install-ask-rules --agent-dir <dir> [--scope project|user] [--dry-run]
-  install-guards [--remove]
-  install-subagent-tee --agent-dir <dir> [--scope project|user] [--dry-run]
-  subagent-tee [-- <your own subagentStatusLine command...>]
-  codex check | codex run --thread <id> [--dir <abs>] [--sandbox read-only|workspace-write] [--image <abs>]... -- <prompt>
-  schedules [adopt | notify <message>]
-  errors list [--closed|--all] | show <id> | close <id>
-  apps scan [--check] [--agent-dir <dir>] [--exclude-plugin <name>] | list | revoke <server|key-prefix> | login <server> | logout <server> | strict on|off
-${V2_USAGE}`
+const USAGE = usageText(BRIDGE_VERSION)
 
 export async function runCli(
   argv: string[],
@@ -1111,8 +1084,10 @@ export async function runCli(
         break
       case 'subagent-tee':
         return mainTee(rest) // normally dispatched by cli.ts before this module loads (docs/SUBAGENTS.md 5.2)
+      case 'events':
+        return cmdEvents(rest, io)
       case 'errors':
-        return (await import('./problems/cli.ts')).cmdErrors(env, rest, io)
+        return (await import('./problems/cli.ts')).cmdErrors(env, rest, io, isThreadCaller(raw, deps.cwd))
       case 'search':
       case 'memory':
       case 'share':

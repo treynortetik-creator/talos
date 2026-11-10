@@ -60,6 +60,14 @@ async function onSchedules(stack: Stack, mac: ChronosMac, page: Page, context: B
 async function openSchedules(page: Page) {
   await page.getByRole('link', { name: 'Schedules' }).first().click()
   await expect(page.getByRole('heading', { level: 1, name: 'Schedules' })).toBeVisible()
+  // groups start shut on the organized page; the rows below are read inside them
+  await page
+    .locator('[data-testid^="group-toggle-"]')
+    .first()
+    .waitFor({ timeout: 4000 })
+    .catch(() => {})
+  const shut = page.locator('[data-testid^="group-toggle-"][aria-expanded="false"]')
+  for (let i = 0; i < 50 && (await shut.count()) > 0; i++) await shut.first().click()
 }
 
 const row = (page: Page, id: string) => page.getByTestId(`schedule-row-${id}`)
@@ -200,7 +208,6 @@ test('list: Chronos jobs in groups with their words; pause and resume are signed
   await onSchedules(stack, mac, page, context)
 
   await expect(row(page, 'standup-prep')).toContainText('Pending')
-  await expect(row(page, 'standup-prep')).toContainText(`next`)
   await expect(inGroup(page, MAIN, 'standup-prep')).toContainText('Standup prep')
   // a paused job stays in its thread's group and says Off on its own row (there is no separate off section)
   await expect(inGroup(page, MAIN, 'old-report')).toContainText('Old report')
@@ -263,8 +270,13 @@ test('edit: the form sends only the touched field, the card is approved, the bri
 }) => {
   mac.add({ id: 'daily-digest', name: 'Daily digest', when: { type: 'daily', time: localHHMM(plusMin(mac.now, 30)) } })
   await onSchedules(stack, mac, page, context)
-  await row(page, 'daily-digest').getByRole('link').click()
-  await page.getByRole('button', { name: 'Edit' }).click()
+  // the owner's way in: the thread's group, shut and opened by hand, then Edit on the job's own row (no agent asked)
+  const mainToggle = page.getByTestId(`group-toggle-${MAIN}`)
+  await mainToggle.click()
+  await expect(mainToggle).toHaveAttribute('aria-expanded', 'false')
+  await mainToggle.click()
+  await expect(mainToggle).toHaveAttribute('aria-expanded', 'true')
+  await page.getByRole('button', { name: 'Edit Daily digest' }).click()
   await page.getByLabel('Name').fill('Morning digest')
   await page.getByRole('button', { name: 'Review change' }).click()
   const patch = sentFrames(page, 'schedule.patch').at(-1)?.json as { change: Record<string, unknown> }
@@ -282,7 +294,7 @@ test('edit: the form sends only the touched field, the card is approved, the bri
 
   // Conflict: the card is drawn, then the job changes on the Mac (another Chronos write), then the owner approves.
   await row(page, 'daily-digest').getByRole('link').click()
-  await page.getByRole('button', { name: 'Edit' }).click()
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
   await page.getByLabel('Name').fill('Evening digest')
   await page.getByRole('button', { name: 'Review change' }).click()
   const p2 = page.locator('[data-card-state="pending"]')
