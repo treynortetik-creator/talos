@@ -77,7 +77,7 @@ import { pruneTtsFiles } from './tts.ts'
 import { wireUndo } from './undo/wire.ts'
 import { BRIDGE_CLIENT_NAME, BRIDGE_COMMIT, BRIDGE_VERSION } from './version.ts'
 import { WorkersReader } from './worker/files.ts'
-import { adoptLegacyInboxes, liveThreadIds, pruneInboxes, removeGoneInboxes } from './worker/inbox.ts'
+import { adoptLegacyInboxes, keptInboxThreadIds, pruneInboxes, removeGoneInboxes } from './worker/inbox.ts'
 import { WorkerStore } from './worker/store.ts'
 import { WorkerTransport } from './worker/transport.ts'
 
@@ -724,7 +724,7 @@ export class Bridge {
       // folders an earlier build made carry no marker: mark them once, and only in the default root (never a shared one)
       adoptLegacyInboxes(this.paths.inbox, join(this.ctx.env.userHome, '.talos-inbox'))
       pruneInboxes(this.paths.inbox, this.lastPrune)
-      removeGoneInboxes(this.paths.inbox, liveThreadIds(this.ctx.config.config))
+      removeGoneInboxes(this.paths.inbox, keptInboxThreadIds(this.ctx.config.config))
       const n = this.ctx.store.pruneOld(this.lastPrune, { historyDays: this.ctx.env.historyDays })
       const files = pruneTtsFiles(
         this.paths.media,

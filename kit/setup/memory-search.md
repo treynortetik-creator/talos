@@ -23,8 +23,9 @@ bash scripts/memory/setup.sh --dry-run          # print the plan, create nothing
 ```
 
 It finds a Python 3.10+ (`uv` if you have it, else `python3.13` to `python3.10` from Homebrew or pyenv; Apple's
-own `python3` is 3.9 and cannot run the semantic packages). **A stock Mac has only the 3.9, so first run
-`brew install uv`** (no Homebrew: `curl -LsSf https://astral.sh/uv/install.sh | sh`, then a new terminal); `uv`
+own `python3` is 3.9 and cannot run the semantic packages). **A stock Mac has only the 3.9, so on a Mac `setup.sh` fetches a
+pinned `uv` into `~/.local/share/talos/uv/0.13.8` by itself** (no admin, checked against its published SHA-256). Only when that download fails
+(a blocked network) does it stop and print the by-hand fix: **`brew install uv`** (no Homebrew: `curl -LsSf https://astral.sh/uv/install.sh | sh`, then a new terminal); `uv`
 brings its own Python and changes nothing else on the system. Plain-Python alternative: `brew install python@3.12`.
 With none found, setup says so and prints that command, exits, and **nothing else breaks**: search stays lexical. Then it builds one shared venv at `~/.local/share/talos/venv`, installs three
 pinned packages (`fastembed`, `sqlite-vec`, `apsw`), downloads the model into

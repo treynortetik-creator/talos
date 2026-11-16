@@ -166,7 +166,15 @@ the setup checklist; TESTED: `TmuxLookupTests`). The `~/.zprofile` line is for T
      then the gate: the kit's self-test in the upgraded folder, a few minutes. The installer runs it itself (upgrade.sh gets
      `--no-gate` and prints a red "GATE NOT RUN" line that refers to that) and records a pass. A failed gate stops the carry
      before anything else is written, and every later run reruns it until it passes (TESTED, R2-1). Then settings-merge.py
-     (a backup of `settings.json` next to it first), then adopt, then semantic memory search, as a new install gets it (it can fail without failing the carry; `talos-app doctor` then gives the one command). The search takes about 40 s and up to 1.3 GB of memory on an M1 with the network (measured 2026-11-16, clean HOME), plus the reranker download where the computer has 3 GiB or more. For a fresh install there is nothing for her to type here: step 10 adds the `talos-app` server to `.mcp.json` itself (DRY RUN). She types `adopt` (with `--repoint`) only when the plan says her folder's `talos-app` server points at another clone.
+     (a backup of `settings.json` next to it first), then adopt, then semantic memory search, as a new install gets it (it can fail without failing the carry; `talos-app doctor` then gives the one command). The search takes about 40 s and up to 1.3 GB of memory on an M1 with the network (measured 2026-11-16, clean HOME), plus the reranker download where the computer has 3 GiB or more.
+     A stock Mac has only Apple's Python 3.9, so the carry fetches uv 0.13.8 itself first (a pinned download from GitHub, checked
+     against its published SHA-256, into `~/.local/share/talos/uv/0.13.8`, no admin, nothing put on PATH; about 2 s): nothing for her to type.
+     **Only if that download fails** (a blocked network) does it print "Semantic search needs Python 3.10 or newer", the uv line
+     (`curl -LsSf https://astral.sh/uv/install.sh | sh`) and the `bash <her folder>/scripts/memory/setup.sh` line. The carry itself
+     is done; [AGENT] runs those two by hand once the network allows it (about 40 seconds). `talos-app doctor` then says
+     `memory search: semantic search is set up` (DRY RUN, 2026-11-16, public snapshot mac-v0.1.1: uv 2 s, setup 39 s). Without
+     the network, setup.sh stops with "model download failed (network?)" and the same line runs again later.
+     For a fresh install there is nothing for her to type here: step 10 adds the `talos-app` server to `.mcp.json` itself (DRY RUN). She types `adopt` (with `--repoint`) only when the plan says her folder's `talos-app` server points at another clone.
    - While it runs, the folder holds a file `.talos-carry`, written before the first change and removed after the last. If
      the run stops after upgrade.sh, running the same command again finishes it (the merge and adopt, no second upgrade).
      A folder without that file is never treated as half carried, whatever its hooks look like (TESTED:

@@ -683,9 +683,9 @@ describe('SettingsScreen', () => {
 
   it('every section that writes synced config is read-only, and says so, with the Mac offline (U11)', async () => {
     expect(WRITES_SYNCED_CONFIG.sort()).toEqual(
-      ['agent', 'bug-reports', 'notifications', 'session', 'storage', 'thread-sessions', 'voice'].sort(),
+      ['agent', 'bug-reports', 'developer', 'notifications', 'session', 'storage', 'thread-sessions', 'voice'].sort(),
     )
-    for (const id of ['voice', 'notifications', 'agent', 'storage', 'bug-reports']) {
+    for (const id of ['voice', 'notifications', 'agent', 'storage', 'bug-reports', 'developer']) {
       const client = setup({ macOffline: true })
       stubStatus()
       const view = at(client, `/settings/${id}`)

@@ -7,6 +7,8 @@ TALOS_TEST_ORIG_APP_HOME="${TALOS_APP_HOME:-}"
 for _tv in $(compgen -e | grep '^TALOS_APP_'); do unset "$_tv"; done
 unset _tv TALOS_SESSION_ROLE TALOS_UNATTENDED CLAUDE_PID CLAUDE_CODE_SESSION_ATTENDED CHRONOS_RUN CHRONOS_CONFIG
 unset CLAUDE_PROJECT_DIR TALOS_KIT_HOME TALOS_VENDOR_DIR
+# no kit test may download a uv (memory/setup.sh fetches one on a Mac with no Python 3.10+); the test of the fetch unsets this per call
+export TALOS_MEMSEARCH_NO_UV_FETCH=1
 
 talos_test_sandbox() {
   local dir

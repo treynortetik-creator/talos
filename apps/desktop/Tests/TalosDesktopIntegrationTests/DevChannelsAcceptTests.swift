@@ -298,14 +298,22 @@ struct DevChannelsAcceptTests {
     defer { r.teardown() }
     let shim = r.root + "/tmux-changed-shim"
     let flag = r.root + "/changed"
+    let seen = r.root + "/dialog-seen"
     let sends = r.root + "/sends"
+    // Armed only once a capture has shown the dialog: a `list-clients` before that (the restart check's first write) is not the decision
+    // for it, and the fake claude may not have drawn it yet. The first `list-clients` after that is the decision; the pane then reads as another screen.
     try """
     #!/bin/bash
     for a in "$@"; do
       case "$a" in
-        list-clients) : > '\(flag)' ;;
+        list-clients) [ -e '\(seen)' ] && : > '\(flag)' ;;
         send-keys) echo x >> '\(sends)' ;;
-        capture-pane) if [ -e '\(flag)' ]; then printf ' > working\\n'; exit 0; fi ;;
+        capture-pane)
+          if [ -e '\(flag)' ]; then printf ' > working\\n'; exit 0; fi
+          out=$('\(Rig.tmuxPath!)' "$@"); rc=$?
+          printf '%s\\n' "$out"
+          case "$out" in *'WARNING: Loading development channels'*) : > '\(seen)' ;; esac
+          exit $rc ;;
       esac
     done
     exec '\(Rig.tmuxPath!)' "$@"

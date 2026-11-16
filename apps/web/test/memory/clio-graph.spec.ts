@@ -83,7 +83,7 @@ test('the graph fills the content area, with no page scroll and no Pause button'
 test('the wheel zooms the graph', async ({ page }, info) => {
   test.skip(info.project.name.startsWith('iphone') || info.project.name === 'pixel', 'a wheel is a desktop input')
   await openGraph(page)
-  await page.waitForTimeout(1500) // the first framing of the graph
+  await settledNode(page, 0) // the layout and its first framing are done: nothing else moves the camera
   const box = await page.getByTestId('clio-graph').locator('canvas').boundingBox()
   await page.mouse.move((box?.x ?? 0) + (box?.width ?? 0) / 2, (box?.y ?? 0) + (box?.height ?? 0) / 2)
   const before = await page.evaluate(() => (window as Hooks).__clioGraphCamera?.() ?? 0)
@@ -102,10 +102,9 @@ test('choosing a note slides its panel in beside a live graph, links browse insi
   const panel = page.getByRole('complementary', { name: 'Chosen note' })
   await expect(panel).not.toBeInViewport()
   const { i, at } = await clickableNode(page)
-  // a mouse comes to rest on the note before it clicks: the graph picks the note it is over on the next frame
-  await page.mouse.move(at.x, at.y, { steps: 4 })
-  await page.waitForTimeout(150)
-  await page.mouse.click(at.x, at.y)
+  // no hover first and no wait: a phone taps with no pointer moving before it, and a click must pick the note under itself
+  if (info.project.name.startsWith('iphone') || info.project.name === 'pixel') await page.touchscreen.tap(at.x, at.y)
+  else await page.mouse.click(at.x, at.y)
   await expect(panel).toBeInViewport()
   await expect(panel.getByRole('heading', { level: 2 })).not.toBeEmpty()
   const canvas = page.getByTestId('clio-graph').locator('canvas')
@@ -133,4 +132,31 @@ test('choosing a note slides its panel in beside a live graph, links browse insi
   }
   await page.keyboard.press('Escape')
   await expect(panel).not.toBeInViewport()
+})
+
+test('a mouse press released where the graph never heard it does not break the next one', async ({ page }) => {
+  // the owner's report (2026-11-16): OrbitControls threw on a release after a press whose release it missed
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(`${e.name}: ${e.message}`))
+  await openGraph(page)
+  await page.evaluate(() => {
+    const c = document.querySelector('canvas') as HTMLCanvasElement
+    const r = c.getBoundingClientRect()
+    const at = {
+      clientX: r.left + r.width / 2,
+      clientY: r.top + r.height / 2,
+      bubbles: true,
+      pointerType: 'mouse',
+      isPrimary: true,
+    }
+    c.dispatchEvent(new PointerEvent('pointerdown', { ...at, pointerId: 1, button: 0, buttons: 1 })) // its release never comes
+    c.dispatchEvent(new PointerEvent('pointerdown', { ...at, pointerId: 2, button: 0, buttons: 1 }))
+    c.ownerDocument.dispatchEvent(new PointerEvent('pointerup', { ...at, pointerId: 2, button: 0, buttons: 0 }))
+  })
+  await page.waitForTimeout(300)
+  // synthetic pointers are not real active pointers, so the browser refuses their pointer capture: that is the test's own
+  // doing, not the graph's; the crash it guards against was a TypeError reading a pointer's position
+  expect(errors.filter((m) => !/^NotFoundError|PointerCapture/.test(m))).toEqual([])
+  // (zooming afterwards is not checked here: synthetic pointers make setPointerCapture throw inside OrbitControls' own handler,
+  // which no real pointer does; the wheel test above covers zoom)
 })

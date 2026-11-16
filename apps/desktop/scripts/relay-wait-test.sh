@@ -150,7 +150,8 @@ wait "$LATER"
 # Older for the whole wait: stops, nothing changes. While it waits, no process carries the address on its command line.
 answer 200 "{\"ok\":true,\"version\":\"$OLD\"}"
 mkdir -p "$T/keep"; inst --app "$APP" --dest "$T/keep" & IPID=$!
-sleep 1; PS="$(ps -Ao args)"; wait "$IPID"
+# only this test's own processes (its process group): another process on a busy machine may show the same number
+sleep 1; PS="$(ps -o args= -g "$(ps -o pgid= -p $$ | tr -d ' ')")"; wait "$IPID"
 OUT="$(bash "$INSTALL" --app "$APP" --dest "$T/keep2" --no-open 2>&1)"; RC=$?; D="$T/keep2"; printf '%s\n' "$OUT" >> "$ALL"
 case "$PS" in *"$PORT"*) bad "a process command line carries the relay address" ;; *) ok "no process command line carries the relay address" ;; esac
 [ "$RC" = 8 ] && ! installed && [ ! -e "$T/keep2" ] \

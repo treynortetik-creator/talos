@@ -86,17 +86,24 @@ if [ "$DIARIZE" = 1 ]; then
   say "   licence: read the model pages yourself (not re-checked here). Only record people who know and agree."
 fi
 
+# the uv to use: one on PATH, else the one memory/setup.sh fetched into its Talos-owned folder (same lookup as there; keep in step).
+# Looked up when used, because memory/setup.sh may fetch it part-way through this script.
+uvbin() {
+  if command -v uv >/dev/null 2>&1; then echo uv; return; fi
+  case "$("$DATA/uv/0.13.8/uv" --version 2>/dev/null)" in "uv 0.13.8" | "uv 0.13.8 "*) echo "$DATA/uv/0.13.8/uv" ;; esac
+}
 mkvenv() { # path -- a dedicated venv under the Talos data folder, never system-wide
-  local v="$1" py=""
+  local v="$1" py="" UV
   [ -x "$v/bin/python" ] && return 0
-  if command -v uv >/dev/null 2>&1; then uv venv --quiet --python 3.13 "$v" && return 0; fi
+  UV="$(uvbin)"; if [ -n "$UV" ]; then "$UV" venv --quiet --python 3.13 "$v" && return 0; fi
   for c in python3.13 python3.12 python3.11 python3.10; do command -v "$c" >/dev/null 2>&1 && { py="$c"; break; }; done
   if [ -z "$py" ]; then echo "no Python 3.10+ found. One command fixes it: brew install uv   (then run this again)" >&2; return 3; fi
   "$py" -m venv "$v"
 }
 pipin() { # venv pkg...
   local v="$1"; shift
-  if command -v uv >/dev/null 2>&1; then uv pip install --quiet --python "$v/bin/python" "$@"
+  local UV; UV="$(uvbin)"
+  if [ -n "$UV" ]; then "$UV" pip install --quiet --python "$v/bin/python" "$@"
   else "$v/bin/python" -m pip install --quiet --disable-pip-version-check "$@"; fi
 }
 prefetch() { # venv repo-id -- download model weights into the Talos HF cache
@@ -158,7 +165,8 @@ if [ "$KOKORO" = 1 ]; then
       say "   no shared venv yet; creating one (needs Python 3.10+)"
       bash "$(cd "$(dirname "$0")" && pwd)/../memory/setup.sh" --venv-only || { echo "could not create the venv. Install Python 3.10+ with one command (brew install uv) and run this again." >&2; exit 3; }
     fi
-    if command -v uv >/dev/null 2>&1; then uv pip install --quiet --python "$PYV" kokoro-onnx soundfile || exit 1
+    UV="$(uvbin)"
+    if [ -n "$UV" ]; then "$UV" pip install --quiet --python "$PYV" kokoro-onnx soundfile || exit 1
     else "$PYV" -m pip install --quiet --disable-pip-version-check kokoro-onnx soundfile || exit 1; fi
     fetch "$KOKORO_BASE/kokoro-v1.0.onnx" "$DATA/models/kokoro/kokoro-v1.0.onnx" || exit 1
     fetch "$KOKORO_BASE/voices-v1.0.bin" "$DATA/models/kokoro/voices-v1.0.bin" || exit 1

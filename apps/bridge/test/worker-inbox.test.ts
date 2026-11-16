@@ -30,6 +30,7 @@ import {
   InboxError,
   inboxPath,
   inboxSeam,
+  keptInboxThreadIds,
   placeFilesInInbox,
   pruneInbox,
   pruneInboxes,
@@ -325,10 +326,20 @@ describe('removing the inbox of a thread that is gone', () => {
     expect(lstatSync(join(root, 'trip')).isSymbolicLink()).toBe(true)
     expect(readFileSync(join(target, 'keep.txt'), 'utf8')).toBe('keep')
   })
-  test('removeGoneInboxes keeps live threads and removes archived, removed and unknown ones', () => {
+  test('removeGoneInboxes keeps the threads it is given and removes removed and unknown ones', () => {
     const root = inboxes('trip', 'garden', 'old_one')
     removeGoneInboxes(root, ['trip'])
     expect(readdirSync(root)).toEqual(['trip'])
+  })
+  test('keptInboxThreadIds names every thread in the config, archived or not', () => {
+    expect(
+      keptInboxThreadIds({
+        threads: [
+          { id: 'trip', archived: false } as { id: string },
+          { id: 'garden', archived: true } as { id: string },
+        ],
+      }),
+    ).toEqual(['trip', 'garden'])
   })
   test('a missing root is fine', () => {
     expect(() => removeGoneInboxes(join(tmp('ib-none-'), '.talos-inbox'), [])).not.toThrow()
@@ -456,7 +467,7 @@ describe('a file sent to a dedicated thread', () => {
   })
 })
 
-describe('a thread that is archived or deleted loses its inbox', () => {
+describe('a thread that is deleted loses its inbox; an archived one keeps it', () => {
   function seed(thread: string) {
     const dir = join(inboxRoot, thread)
     mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -464,7 +475,11 @@ describe('a thread that is archived or deleted loses its inbox', () => {
     writeFileSync(join(dir, 'f.png'), 'x')
     return dir
   }
-  test("the agent's archive_thread removes it at once; another thread's stays", async () => {
+  const archivedOnDisk = (hh: { home: string }, id: string) =>
+    (
+      JSON.parse(readFileSync(join(hh.home, 'config.json'), 'utf8')).threads as Array<{ id: string; archived: boolean }>
+    ).some((t) => t.id === id && t.archived)
+  test("the agent's archive_thread keeps it, and so does another thread's", async () => {
     const hh = await hub([thread('scratch', 'Scratch', { kind: 'agent' })])
     const gone = seed('scratch')
     const kept = seed('trip')
@@ -472,10 +487,12 @@ describe('a thread that is archived or deleted loses its inbox', () => {
     expect(r.isError).toBeFalsy()
     expect(existsSync(gone)).toBe(true) // only a card so far
     await approveLatestConfigCard(hh)
-    await waitFor(() => !existsSync(gone))
+    await waitFor(() => archivedOnDisk(hh, 'scratch'))
+    await new Promise((res) => setTimeout(res, 300)) // the removal, were there one, follows the write
+    expect(existsSync(gone)).toBe(true)
     expect(existsSync(kept)).toBe(true)
   })
-  test('an owner config.patch that archives a thread removes it', async () => {
+  test('an owner config.patch that archives a thread keeps it', async () => {
     const hh = await hub([thread('scratch', 'Scratch', { kind: 'agent' })])
     const gone = seed('scratch')
     const kept = seed('trip')
@@ -483,7 +500,9 @@ describe('a thread that is archived or deleted loses its inbox', () => {
     await hh.app.sendConfigPatch(cfg.rev, {
       threads: cfg.threads.map((t: { id: string }) => (t.id === 'scratch' ? { ...t, archived: true } : t)),
     })
-    await waitFor(() => !existsSync(gone))
+    await waitFor(() => archivedOnDisk(hh, 'scratch'))
+    await new Promise((res) => setTimeout(res, 300))
+    expect(existsSync(gone)).toBe(true)
     expect(existsSync(kept)).toBe(true)
   })
   test('an owner config.patch that deletes a thread removes it', async () => {

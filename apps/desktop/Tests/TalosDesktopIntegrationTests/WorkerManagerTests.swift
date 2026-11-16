@@ -70,7 +70,7 @@ final class WorkerRig: @unchecked Sendable {
   }
 
   @discardableResult
-  func makeManager(idle: Double? = nil) -> WorkerManager {
+  func makeManager(idle: Double? = nil, awake: (@Sendable () -> Double)? = nil) -> WorkerManager {
     var o = WorkerManager.Options(
       talosHome: talosHome, agentDir: agentDir, claudePath: Rig.fixtures + "/claude",
       permissionFlag: "--dangerously-skip-permissions", tmux: tmuxBin ?? Rig.tmuxPath!, tmuxConf: Rig.tmuxConf)
@@ -84,7 +84,9 @@ final class WorkerRig: @unchecked Sendable {
     o.idleSecondsOverride = idle
     o.busyWindow = 0.5
     let e = env
-    let m = WorkerManager(options: o, probe: LiveSystem(loginEnv: { e }), baseEnv: { e })
+    let m =
+      awake.map { WorkerManager(options: o, probe: LiveSystem(loginEnv: { e }), baseEnv: { e }, awake: $0) }
+      ?? WorkerManager(options: o, probe: LiveSystem(loginEnv: { e }), baseEnv: { e })
     record(m)
     Self.noBackgroundLook(m)
     mgr?.detach()

@@ -6,7 +6,8 @@
 // Nothing here follows a link. The root and the thread folder are looked at with lstat before anything is read or written,
 // and looked at AGAIN (device and inode) right before each write, rename and unlink, so a folder swapped for a link or for
 // another folder after the first look is refused. The source is opened by a handle that refuses a link in any component.
-// Folders are 0700 and files 0600. A thread's folder is removed when the thread is archived or deleted, if Talos made it:
+// Folders are 0700 and files 0600. A thread's folder is removed when the thread leaves the config, if Talos made it (an
+// archived thread keeps its copies; the normal pruning ages them out: 7 days, 1 GiB a thread; un-archiving gets them back):
 // each folder it makes holds a marker file, and a folder without one is never removed (the root may be shared).
 import {
   chmodSync,
@@ -48,7 +49,7 @@ const MORE_FILES = /\((\d+) more files? beyond file_path_10: [^)]*\)/
  */
 export const INBOX_MARKER = '.talos-inbox-folder'
 const MARKER_TEXT =
-  'Talos made this folder for the files of one thread. It deletes the folder when the thread is archived or deleted.\n'
+  'Talos made this folder for the files of one thread. It deletes the folder when the thread leaves the config; the files of an archived thread age out as usual.\n'
 
 export class InboxError extends Error {}
 
@@ -377,7 +378,7 @@ export function removeInbox(root: string, thread: string): void {
   }
 }
 
-/** Removes the inbox Talos made for every thread that is not in `live` (archived, deleted, or never a thread of this config). */
+/** Removes the inbox Talos made for every thread that is not in `live` (removed from the config, or never a thread of this config). */
 export function removeGoneInboxes(root: string, live: Iterable<string>): void {
   const keep = new Set(live)
   let names: string[]
@@ -389,6 +390,6 @@ export function removeGoneInboxes(root: string, live: Iterable<string>): void {
   for (const t of names) if (!keep.has(t)) removeInbox(root, t)
 }
 
-/** The ids of the threads that are not archived: the only ones that keep an inbox. */
-export const liveThreadIds = (config: { threads: ReadonlyArray<{ id: string; archived: boolean }> }): string[] =>
-  config.threads.filter((t) => !t.archived).map((t) => t.id)
+/** The threads whose inbox is kept: every thread in the config. Archiving keeps it; the normal pruning ages the files out. */
+export const keptInboxThreadIds = (config: { threads: ReadonlyArray<{ id: string }> }): string[] =>
+  config.threads.map((t) => t.id)

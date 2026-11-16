@@ -117,7 +117,7 @@ describe('asked, the lock off (the default): made at once, and the owner is told
     expect(existsSync(old)).toBe(true) // nothing goes before the hour
   })
 
-  test('archiving says its inbox copies do not come back with it', async () => {
+  test('archiving says how to undo it', async () => {
     h = await start({
       threads: [
         ...(loadExampleConfig('default').threads as unknown[]),
@@ -136,7 +136,7 @@ describe('asked, the lock off (the default): made at once, and the owner is told
     await ownerSays(h, 'general', 'archive Trip')
     const r = await propose(h, [{ path: 'threads.trip.archived', value: true }])
     expect(text(r)).toContain('applied')
-    expect(text(r)).toContain('To undo: unarchive thread trip (its inbox copies are not restored).')
+    expect(text(r)).toContain('To undo: unarchive thread trip.')
   })
 
   test('words from an hour and a half ago still count (he should not have to repeat himself)', async () => {

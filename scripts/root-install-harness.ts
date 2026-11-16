@@ -170,6 +170,8 @@ export function run(
       TALOS_FORCE_ARCH: 'arm64',
       // a new agent's semantic memory search downloads a Python venv and a model: off here, on in the tests of that default
       TALOS_INSTALL_MEMSEARCH_DEFAULT: 'off',
+      // memory/setup.sh fetches a uv from GitHub on a Mac with no Python 3.10+: never from a test
+      TALOS_MEMSEARCH_NO_UV_FETCH: '1',
       ...env,
     },
   })

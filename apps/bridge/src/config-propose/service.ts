@@ -55,7 +55,7 @@ import { isScreenAllowCard } from '../screen-consent.ts'
 import { assertFrameFits } from '../transport.ts'
 import { OWNER_SPOKE_MS, outsideTextAt, ownerAskedAt, SETTINGS_LOCKED } from '../trust.ts'
 import { anyLeadSpokeSince } from '../worker/handoff.ts'
-import { liveThreadIds, removeGoneInboxes } from '../worker/inbox.ts'
+import { keptInboxThreadIds, removeGoneInboxes } from '../worker/inbox.ts'
 
 /** How recently the owner must have spoken in the thread for the agent to propose a setting there. */
 export { OWNER_SPOKE_MS, SETTINGS_LOCKED }
@@ -333,7 +333,7 @@ export class ConfigProposals {
     await ctx.transport.sendDurable(configSyncFrame(ctx.clock.now(), after)).catch(warn('config.sync'))
     ctx.config.markSynced(after)
     ctx.permission.reconcile()
-    removeGoneInboxes(ctx.paths.inbox, liveThreadIds(after))
+    removeGoneInboxes(ctx.paths.inbox, keptInboxThreadIds(after))
     emitConfigEvents(ctx.log, before, after, source)
   }
 

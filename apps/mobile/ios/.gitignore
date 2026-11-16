@@ -19,3 +19,4 @@ App/build
 .build/
 .swiftpm/
 Local.xcconfig
+.ui-test-backup/

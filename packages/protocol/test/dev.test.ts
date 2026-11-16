@@ -16,6 +16,10 @@ describe('the Developer rows', () => {
       expect(AgentConfig.parse(noDev).dev[r.key]).toBe(r.default)
     }
   })
+  it('every row says its value in Developer mode: the fence open (off), the notes lookup left on', () => {
+    for (const r of DEV_ROWS) expect(typeof r.open, r.key).toBe('boolean')
+    expect(Object.fromEntries(DEV_ROWS.map((r) => [r.key, r.open]))).toEqual({ thread_fence: false, note_lookup: true })
+  })
   it('a garbled dev section reads as the guard on, never off', () => {
     for (const dev of [null, 'off', { thread_fence: 'false' }, { thread_fence: 0 }, []])
       expect(AgentConfig.parse({ ...defaultConfig, dev }).dev.thread_fence).toBe(true)

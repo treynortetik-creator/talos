@@ -14,12 +14,21 @@ private final class FlagReads: @unchecked Sendable {
   var all: [String?] { lock.withLock { items } }
 }
 
+/// The manager's awake clock, plus a jump the test makes: a minute of the awake clock passes at once, whatever the load is.
+private final class SkewClock: @unchecked Sendable {
+  private let lock = NSLock()
+  private var skew = 0.0
+  func read() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 + lock.withLock { skew } }
+  func jump(_ seconds: Double) { lock.withLock { skew += seconds } }
+}
+
 @Suite("Worker prompts: the 2.1.322 sub-agent ask", .serialized, .enabled(if: Rig.hasTmux))
 struct WorkerPrompt322Tests {
   static let ask = "perm-subagent-rm-120x40"
 
-  private func rig(_ extra: [String: String]) throws -> (WorkerRig, NoticeLog) {
+  private func rig(_ extra: [String: String], clock: SkewClock? = nil) throws -> (WorkerRig, NoticeLog) {
     let r = try WorkerRig(scenario: "worker-real.sh", extraEnv: extra)
+    if let clock { r.makeManager(awake: clock.read) }
     let log = NoticeLog()
     r.trackNotices(log)
     r.mgr.tune { $0.auditLogPath = r.root + "/audit.log" }
@@ -141,33 +150,42 @@ struct WorkerPrompt322Tests {
   }
 
   /// The same ask blinks: another screen for about 3 s (a redraw, a moment of transcript, or the idle box), then the very same prompt
-  /// again, while its flag is still held (`dialogSettle` 4). That is one ask and it keeps its one line, however long ago the line went
-  /// (past `promptDebounce`, which would else hide a second post). The test above is the other half: a DIFFERENT prompt gets its own.
+  /// again, while its flag is still held. That is one ask and it keeps its one line, however long ago the line went (past `promptDebounce`,
+  /// which would else hide a second post). The test above is the other half: a DIFFERENT prompt gets its own. The awake clock is the
+  /// test's: the 3 s of the flicker and the wait past the settle are jumps of it, and the manager looks when the test says (`tickOnce`),
+  /// so a loaded machine cannot stretch the flicker past the flag's hold or shorten the wait.
   @Test(arguments: ["busy-transcript", "empty-input"])
   func theSameAskBackAfterAThreeSecondFlickerKeepsItsOneLine(between: String) throws {
     let a = TestTemp.base + "prm-\(UUID().uuidString.prefix(6))", b = TestTemp.base + "prm-\(UUID().uuidString.prefix(6))"
-    let (r, log) = try rig([
-      "FAKE_REAL_START": "screen:\(Self.ask)", "FAKE_REAL_SWITCH": a, "FAKE_REAL_THEN": between, "FAKE_REAL_SWITCH2": b, "FAKE_REAL_THEN2": Self.ask,
-    ])
+    let clock = SkewClock()
+    let (r, log) = try rig(
+      ["FAKE_REAL_START": "screen:\(Self.ask)", "FAKE_REAL_SWITCH": a, "FAKE_REAL_THEN": between, "FAKE_REAL_SWITCH2": b, "FAKE_REAL_THEN2": Self.ask],
+      clock: clock)
     defer {
       r.teardown()
       unlink(a)
       unlink(b)
     }
-    r.mgr.tune { $0.promptDebounce = 0.5 }
+    let askOnPane = { r.tmuxCmd(["capture-pane", "-p", "-t", "=t-trip:"]).out.contains("Do you want to proceed") }
+    r.mgr.tune { $0.promptDebounce = 0 }  // the wall clock never hides a second post here: only the flicker rule can keep it back
     r.mgr.startTicking()
     try r.wake("trip")
-    #expect(r.wait(15) { log.all.count == 1 }, "\(r.why("trip"))")
-    r.mgr.tune { $0.dialogSettle = 4 }
-    usleep(1_000_000)  // past the debounce: only the flicker rule can keep a second line back now
+    #expect(r.wait(30) { log.all.count == 1 }, "\(r.why("trip"))")
+    r.mgr.tune { $0.dialogSettle = 60 }  // the flag's hold: far longer than the flicker, however slow the machine
     FileManager.default.createFile(atPath: a, contents: nil)
-    #expect(r.wait(5) { !r.tmuxCmd(["capture-pane", "-p", "-t", "=t-trip:"]).out.contains("Do you want to proceed") }, "control: the ask is off the pane")
-    usleep(3_000_000)  // the flicker: longer than the 2 s after which the watch lets the prompt go, shorter than the flag's hold
+    #expect(r.wait(30) { !askOnPane() }, "control: the ask is off the pane")
+    r.mgr.tickOnce()  // the manager looks at the other screen
+    clock.jump(3)  // the flicker: longer than the 2 s after which the watch lets the prompt go, shorter than the flag's hold
+    r.mgr.tickOnce()
     #expect(r.mgr.needsYou()["trip"] == "Bash command", "control: the flag is still held")
     FileManager.default.createFile(atPath: b, contents: nil)
-    #expect(r.wait(5) { r.tmuxCmd(["capture-pane", "-p", "-t", "=t-trip:"]).out.contains("Do you want to proceed") }, "control: the ask is back")
-    usleep(7_000_000)  // past the settle (4 s) with room: a second line would have gone by now
-    #expect(log.all.count == 1, "one ask, one line: \(log.all.map(\.text)) \(audit(r))")
+    #expect(r.wait(30) { askOnPane() }, "control: the ask is back")
+    r.mgr.tickOnce()  // the manager sees it back
+    clock.jump(61)  // past the settle: a second line would be posted by the next look
+    r.mgr.tickOnce()
+    r.mgr.tickOnce()
+    #expect(!r.wait(3) { log.all.count != 1 }, "one ask, one line: \(log.all.map(\.text)) \(audit(r))")
+    #expect(log.all.count == 1)
     #expect(r.mgr.needsYou()["trip"] == "Bash command")
   }
 }

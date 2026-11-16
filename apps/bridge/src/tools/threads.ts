@@ -165,10 +165,10 @@ export const archiveThread: ToolRecord = {
   group: 'core',
   headless: false,
   ...NOT_FOR_WORKERS,
-  instructions: `When a topic is finished, post a one-line wrap-up and \`archive_thread\` (agent-made threads only); the owner approves the card.`,
+  instructions: `When a topic is finished, post a one-line wrap-up and \`archive_thread\` (agent-made threads only); when the owner spoke to you in the last two hours (in the thread he last spoke in, with nothing shared there since) and the settings lock is off, it is archived at once and he is told; otherwise he approves a card, shown in that thread. Its saved file copies are kept.`,
   told: ['main'],
   description:
-    'Archive an agent-created thread. Fixed and system threads, and the default thread, cannot be archived. A thin wrapper over `config_propose` (threads.<id>.archived): always a card for the owner to approve, even in trust mode. The card shows in the default thread.',
+    'Archive an agent-created thread. Fixed and system threads, and the default thread, cannot be archived. A thin wrapper over `config_propose` (threads.<id>.archived): when the owner spoke to you in the last two hours (in the thread he last spoke in, with nothing shared there since) and the settings lock is off, it is archived at once and he is told; otherwise he approves a card, shown in that thread. Either way the saved file copies are kept.',
   liveOnly: true,
   inputSchema: {
     type: 'object',
@@ -185,7 +185,7 @@ export const archiveThread: ToolRecord = {
       if (t?.kind !== 'agent') throw new ToolError(`thread ${id} is not an agent thread and cannot be archived`)
       if (ctx.config.config.default_thread === id)
         throw new ToolError(`thread ${id} is the owner's default thread and cannot be archived; ask the owner first`)
-      // a parent goes with its sub-threads, on one card (always a card: archiving is high risk, trust mode or not)
+      // a parent goes with its sub-threads, in one change (one card, or applied at once when the owner asked)
       const subs = subThreadsOf(ctx.config.config, id).filter((s) => !s.archived)
       const notAgent = subs.find((s) => s.kind !== 'agent')
       if (notAgent)
@@ -205,6 +205,9 @@ export const archiveThread: ToolRecord = {
       )
       if (!r.ok) return fail(r.text)
       const also = subs.length ? ` with its sub-threads ${subs.map((s) => s.id).join(', ')}` : ''
+      // the direct path (the owner asked, lock off) answers "Saved. ..."; a card answers "card c_... pending"
+      if (r.text.startsWith('Saved'))
+        return ok(`${r.text} Thread ${id}${also} is archived now; its saved file copies are kept.`)
       return ok(`${r.text}. Thread ${id}${also} is archived when the owner approves the card.`)
     } catch (e) {
       return fail((e as Error).message)

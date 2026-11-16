@@ -16,6 +16,8 @@ export type DevRow = {
   readonly off: string
   /** A fresh install's value. */
   readonly default: boolean
+  /** The row's value in Developer mode: the open setting. A row whose off opens nothing stays on. */
+  readonly open: boolean
   /** When a change takes effect. */
   readonly when: string
 }
@@ -27,6 +29,7 @@ export const DEV_ROWS: readonly DevRow[] = [
     on: "A thread's own session and its sub-agents can't read or write the Talos home (your messages, keys, settings).",
     off: 'They get the same access the main session has, the Talos home included, and no more.',
     default: true,
+    open: false,
     when: "at each thread session's next start",
   },
   {
@@ -35,6 +38,7 @@ export const DEV_ROWS: readonly DevRow[] = [
     on: "When your message names someone or something you have a note about, a thread's own session is pointed at that note and can read it.",
     off: 'A thread session gets no such pointers; it can still read a note it is asked to open.',
     default: true,
+    open: true, // turning it off opens nothing, so Developer mode leaves it on
     when: 'at the next message',
   },
 ]

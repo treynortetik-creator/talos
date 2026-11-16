@@ -10,7 +10,7 @@ import { Bridge } from '../src/bridge.ts'
 import { loadEnv } from '../src/config.ts'
 import { pgidOf } from '../src/hub/server.ts'
 import { createLogger, nullLogger } from '../src/log.ts'
-import { INBOX_MARKER } from '../src/worker/inbox.ts'
+import { INBOX_MARKER, keptInboxThreadIds, removeGoneInboxes } from '../src/worker/inbox.ts'
 import { eventually, type Harness, pushCardResolvePastRelay, sleep, startHarness, waitFor } from './helpers.ts'
 
 let h: Harness | undefined
@@ -415,7 +415,7 @@ describe('create_thread and archive_thread are thin wrappers over the same card'
     expect(text(r)).toMatch(/card c_\S+ pending/)
   })
 
-  test('archive_thread keeps its guards, shows a card even in trust mode, and approval archives and clears the inbox', async () => {
+  test('archive_thread keeps its guards, shows a card even in trust mode, and approval archives and keeps the inbox', async () => {
     await start({ trust: true })
     const x = h as Harness
     await ownerAsks(x)
@@ -432,11 +432,57 @@ describe('create_thread and archive_thread are thin wrappers over the same card'
     await approve(x, card)
     await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(true))
     await x.relay.expectFrame('thread.archive', (f) => f.thread_id === 'garden', { direction: 'from_bridge' })
-    await eventually(() => expect(existsSync(inbox)).toBe(false)) // commit() removes it after the frame and config.sync sends
-    expect(await doneText(x, card)).toContain('To undo: unarchive thread garden (its inbox copies are not restored)')
+    // commit() prunes the folders of threads gone from the config after the frame and config.sync sends; an archived one stays
+    await x.relay.expectFrame('config.sync', () => true, { direction: 'from_bridge' })
+    expect(existsSync(join(inbox, 'note.txt'))).toBe(true)
+    expect(await doneText(x, card)).toContain('To undo: unarchive thread garden')
     await eventually(() =>
       expect(events()).toContainEqual({ event: 'thread.archived', thread_id: 'garden', source: 'agent_card' }),
     )
+  })
+})
+
+describe('archive_thread says what really happened, and keeps the saved file copies', () => {
+  const withInbox = (x: Harness, id: string) => {
+    const inbox = join(x.bridge.ctx.paths.inbox, id)
+    mkdirSync(inbox, { recursive: true })
+    writeFileSync(join(inbox, INBOX_MARKER), '') // as a folder the bridge made carries it
+    writeFileSync(join(inbox, 'note.txt'), 'x')
+    return inbox
+  }
+
+  test('the owner asked, lock off: it is archived now, no card, and the saved copies stay', async () => {
+    await start({ lock: false })
+    const x = h as Harness
+    const inbox = withInbox(x, 'garden')
+    await ownerAsks(x)
+    const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
+    expect(r.isError, text(r)).toBeFalsy()
+    expect(text(r)).toContain('Thread garden is archived now; its saved file copies are kept.')
+    expect(text(r)).not.toContain('approves the card')
+    expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(true)
+    noCardMinted(x)
+    await x.relay.expectFrame('config.sync', () => true, { direction: 'from_bridge' })
+    expect(existsSync(join(inbox, 'note.txt'))).toBe(true)
+  })
+
+  test('not asked: still a card, and the reply says so', async () => {
+    await start({ lock: false })
+    const x = h as Harness
+    const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
+    expect(text(r)).toMatch(/card c_\S+ pending/)
+    expect(text(r)).toContain('is archived when the owner approves the card.')
+    expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(false)
+  })
+
+  test('a thread removed from the config altogether still has its inbox removed', async () => {
+    await start()
+    const x = h as Harness
+    const inbox = withInbox(x, 'gone_thread')
+    const kept = withInbox(x, 'garden')
+    removeGoneInboxes(x.bridge.ctx.paths.inbox, keptInboxThreadIds(cfg(x)))
+    expect(existsSync(inbox)).toBe(false)
+    expect(existsSync(kept)).toBe(true)
   })
 })
 
@@ -679,7 +725,7 @@ describe('follow-ups from the review of ffd0e721', () => {
     await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'trip')?.archived).toBe(true))
     expect(cfg(x).threads.find((t) => t.id === 'trip')?.session).not.toBe('dedicated')
     const result = await doneText(x, card)
-    expect(result).toContain('unarchive thread trip (its inbox copies are not restored)')
+    expect(result).toContain('unarchive thread trip')
     expect(result).toContain('Thread trip own session back to dedicated')
   })
 

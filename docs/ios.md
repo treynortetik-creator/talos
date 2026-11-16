@@ -90,6 +90,32 @@ On a real phone, work through the checks below (the maintainer keeps a longer pr
 - Open a zip, CSV or Word file from a thread. **Expect** a preview with a Share button, never a blank sheet. A file the Mac no longer has shows a plain message.
 - Use the app, leave it for a long while (an hour, or overnight), open it again. **Expect** the page, or "Reconnecting…" with a spinner and then the page or the "can't connect" page. Never a black or blank screen that takes no touch.
 
+## UI tests
+
+The shell has UI tests that drive the real app on a simulator: the + menu, the photo picker, the document picker. Run them before
+each TestFlight upload and after any change to `apps/mobile/ios/App/App/Plugins/TalosPicker.swift` or the composer's attach code:
+
+```sh
+bash apps/mobile/scripts/ui-test.sh        # about 3 minutes; prints "ui-test: N passed, M failed (S s)", exit 0 when all pass
+```
+
+Needs Xcode, `xcodegen`, `pnpm` and `node`. No Apple ID or signing: it is a simulator build. It is not in CI (over two minutes on
+a warm machine, and it needs a desktop session for the simulator); `scripts/testflight.sh` says to run it first.
+
+- **What it reaches.** The shell loads one origin, fixed at build time. The script builds it with `http://127.0.0.1:18791` (loopback;
+  `TALOS_UITEST_PORT` changes the port) and starts a throwaway Node server there (`apps/mobile/ui-test/fixture-server.ts`) that
+  serves a small composer page (`composer-fixture.html`). The page has the real composer's three menu labels and calls
+  `TalosPicker` the way `useComposerAttachments.ts` does, then lists what came back. It never touches a relay or a sign-in. The
+  tests cover the native half (the plugin and the system pickers); the web composer itself is covered by the web tests.
+  There is no test-only code in the app: nothing is compiled in or out, the origin is the existing build-time setting.
+- **What it seeds.** A dedicated simulator named "Talos UI Test" (created on first run, erased on every run, shut down after): two PNGs
+  go into Photos with `simctl addmedia`, and `talos-ui-note.txt` into Files > On My iPhone.
+- **What it checks.** + opens exactly one menu (Photo library, Camera, Files) and no iOS sheet; the photo picker returns two selected
+  images as two attachments; the document picker has no Photos source and returns the seeded file; cancelling either picker leaves
+  the plus button working and the box typing; the Camera button exists (a simulator has no camera, so it is not tapped through).
+- The script puts `apps/mobile/ios/App/App/capacitor.config.json` (gitignored) back as it found it, so a later real build is not
+  left pointing at the fixture.
+
 ## Coming back to the app
 
 iOS may end or freeze the page's web process while the app is in the background. On every return to the front the shell asks the page one question (`BridgeGuard.livenessScript`) and acts on the answer (`WebViewRevival`):

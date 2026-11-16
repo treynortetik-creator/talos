@@ -577,7 +577,7 @@ they do not stop a program that opens the file itself (`sqlite3`, `python`, `nod
 
 **The inbox.** A file the owner sends to a dedicated thread is copied by the bridge, as it routes the message, from `media/`
 (one flat folder for every thread, inside the Talos home) to `~/.talos-inbox/<thread>/` (`apps/bridge/src/worker/inbox.ts`; the
-root is `TALOS_INBOX_ROOT` when set, which every test sets), and the path `read_inbound` returns is the copy. A thread folder the bridge makes holds a `.talos-inbox-folder` marker; only a folder with that marker is pruned (7 days, 1 GiB), and when the thread is archived or deleted only such a folder is removed (its plain files, never a folder inside it), so anything else under the root is left alone. It lives outside the
+root is `TALOS_INBOX_ROOT` when set, which every test sets), and the path `read_inbound` returns is the copy. A thread folder the bridge makes holds a `.talos-inbox-folder` marker; only a folder with that marker is pruned (7 days, 1 GiB), and when the thread leaves the config only such a folder is removed (its plain files, never a folder inside it), so anything else under the root is left alone. An archived thread keeps its copies: they age out with that pruning (7 days, 1 GiB a thread), and un-archiving gets them back. It lives outside the
 Talos home on purpose, so the home deny can stay whole: there is no deny on the inbox and no carve-out (a `!` pattern in a deny
 list is read relative to the current folder and cannot reopen a folder that is blocked as a whole). **That means every other
 thread session can read every thread's inbox:** the light fence denies roots, and the inbox is not one; Bash and the file tools

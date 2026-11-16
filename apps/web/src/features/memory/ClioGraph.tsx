@@ -176,6 +176,25 @@ function makeScene(el: HTMLDivElement, r: SceneRefs): () => void {
     }
     if (chosenRef.current === null) ring.removeFromParent()
   }
+  // The note whose disc is under a click, by the click's own position: the nearest centre within its drawn radius.
+  const clickAt = (ev: MouseEvent) => {
+    const rect = el.getBoundingClientRect()
+    const x = ev.clientX - rect.left
+    const y = ev.clientY - rect.top
+    const cam = g.camera() as THREE.PerspectiveCamera
+    const perUnit = rect.height / 2 / Math.tan(((cam.fov ?? 50) * Math.PI) / 360)
+    let best: { id: number; d: number } | null = null
+    for (const n of g.graphData().nodes as GNode[]) {
+      if (n.x === undefined) continue
+      const p = g.graph2ScreenCoords(n.x, n.y ?? 0, n.z ?? 0)
+      const dist = cam.position.distanceTo(new THREE.Vector3(n.x, n.y ?? 0, n.z ?? 0))
+      const reach = Math.max(10, (radius(n.degree) * perUnit) / Math.max(dist, 1e-6))
+      const d = Math.hypot(p.x - x, p.y - y)
+      if (d <= reach && (!best || d < best.d)) best = { id: n.id, d }
+    }
+    if (best) openNode.current(best.id)
+    else backgroundClick.current()
+  }
   const g = (new ForceGraph3D(el, { controlType: 'orbit' }) as unknown as Graph)
     .width(el.clientWidth)
     .height(el.clientHeight)
@@ -214,8 +233,11 @@ function makeScene(el: HTMLDivElement, r: SceneRefs): () => void {
       sync()
       g.linkColor(g.linkColor()).linkWidth(g.linkWidth()).linkDirectionalParticles(g.linkDirectionalParticles())
     })
-    .onNodeClick((n: GNode) => openNode.current(n.id))
-    .onBackgroundClick(() => backgroundClick.current())
+    // the library hands a click the note it last hovered, found by a throttled raycast at the last pointer position: a quick
+    // tap (no hover on a phone, or a slow frame) can be released before that raycast ran, and the click then names no note or
+    // the wrong one. So every click picks the note under its own position.
+    .onNodeClick((_n: GNode, ev: MouseEvent) => clickAt(ev))
+    .onBackgroundClick((ev: MouseEvent) => clickAt(ev))
   g.d3Force('link')?.distance(60)
   g.d3Force('charge')?.strength(-140)
   // the first settle frames the whole graph; a later search must not yank the camera
@@ -246,6 +268,20 @@ function makeScene(el: HTMLDivElement, r: SceneRefs): () => void {
   // the wheel is the graph's: no page scroll or browser zoom may take it (OrbitControls does the zoom itself)
   const noScroll = (e: WheelEvent) => e.preventDefault()
   el.addEventListener('wheel', noScroll, { passive: false })
+  // A mouse has one pointer, but OrbitControls keeps every pointer it saw go down until it sees that one go up, and it records
+  // positions only for touch. A press released where the canvas never hears it (over the note panel, outside the window) left
+  // a stale mouse pointer, and the next release then read the position of a pointer it never recorded and threw (the owner,
+  // 2026-11-16). Each new mouse press first drops any other mouse pointer the controls still hold.
+  const pc = c as unknown as { _pointers: number[]; _pointerPositions: Record<number, unknown> }
+  const dropStale = (e: PointerEvent) => {
+    if (e.pointerType !== 'mouse' || !Array.isArray(pc._pointers)) return
+    for (const id of [...pc._pointers])
+      if (id !== e.pointerId) {
+        pc._pointers.splice(pc._pointers.indexOf(id), 1)
+        delete pc._pointerPositions[id]
+      }
+  }
+  el.addEventListener('pointerdown', dropStale, { capture: true })
 
   // test hooks for the fake client only (Playwright reads the camera and where a note is on screen)
   const hooks = window as unknown as {
@@ -269,6 +305,7 @@ function makeScene(el: HTMLDivElement, r: SceneRefs): () => void {
     ro.disconnect()
     c.removeEventListener('start', stop)
     el.removeEventListener('wheel', noScroll)
+    el.removeEventListener('pointerdown', dropStale, { capture: true })
     if (import.meta.env.VITE_FAKE === '1') {
       hooks.__clioGraphCamera = undefined
       hooks.__clioGraphNodeScreen = undefined

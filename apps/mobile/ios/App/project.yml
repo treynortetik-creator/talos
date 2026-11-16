@@ -151,6 +151,22 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(TALOS_BUNDLE_ID).tests
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "5.0"
+  # Drives the real shell on a simulator (docs/ios.md "UI tests"): the + menu, the photo and file pickers. Run through
+  # apps/mobile/scripts/ui-test.sh, which builds the shell against a local fixture page. Own scheme (AppUI) so the App scheme's
+  # `test` (AppTests) stays fast. No team, no signing: simulator only.
+  AppUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ../AppUITests
+    dependencies:
+      - target: App
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(TALOS_BUNDLE_ID).uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        TEST_TARGET_NAME: App
   TalosShareExtension:
     type: app-extension
     platform: iOS
@@ -242,3 +258,10 @@ schemes:
     test:
       targets:
         - AppTests
+  AppUI:
+    build:
+      targets:
+        App: all
+    test:
+      targets:
+        - AppUITests

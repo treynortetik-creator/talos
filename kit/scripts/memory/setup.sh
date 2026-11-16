@@ -1,14 +1,19 @@
 #!/bin/bash
 # setup.sh: turn on semantic memory search for this agent. OPT-IN; grep search works without it.
 #
-#   bash scripts/memory/setup.sh [--agent-dir DIR] [--embed-model auto|base|small] [--dry-run] [--no-index] [--no-job]
+#   bash scripts/memory/setup.sh [--agent-dir DIR] [--embed-model auto|base|small] [--dry-run] [--no-index] [--no-job] [--no-uv-fetch]
 #
 # What it does, in order (each step is skipped if it is already done):
 #   1. finds a Python 3.10+ (the semantic packages need it; Apple's python3 is 3.9):
 #        uv, if installed (uses uv's own managed CPython, about 30 MB, never touches the system), else the first
 #        python3.13 / 3.12 / 3.11 / 3.10 on PATH (Homebrew, pyenv), then a newer python3.14+ or plain python3 that is 3.10+. If there is none it says so and exits 3.
-#        A stock Mac has only Apple's Python 3.9. The one command to fix that:  brew install uv
-#        (no Homebrew: curl -LsSf https://astral.sh/uv/install.sh | sh). Alternative: brew install python@3.12.
+#        A stock Mac has only Apple's Python 3.9, so ON A MAC with none of the above this script fetches uv 0.13.8 itself:
+#        the pinned release asset for this Mac's arch from github.com/astral-sh/uv, checked against a SHA-256 pinned
+#        here, unpacked into its own folder ~/.local/share/talos/uv/0.13.8 (uv and uvx; no admin, no installer script run,
+#        nothing put on PATH, ~/.local/bin never touched). That uv is called by its full path. If the download fails
+#        (a blocked network) or the checksum differs, nothing is kept and it falls through to the message below.
+#        --no-uv-fetch (or TALOS_MEMSEARCH_NO_UV_FETCH=1) skips the fetch; off a Mac it is never tried.
+#        By hand:  brew install uv  (no Homebrew: curl -LsSf https://astral.sh/uv/install.sh | sh). Alternative: brew install python@3.12.
 #        Nothing else breaks: recall.py keeps working, lexical only.
 #   2. builds ONE shared venv at ~/.local/share/talos/venv (about 160 MB) and installs pinned packages
 #   3. downloads the embedding model into ~/.local/share/talos/models/fastembed (a pinned folder: the default
@@ -34,6 +39,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 AGENT_DIR="$(python3 "$HERE/../_agent_root.py" "$0" 2 2>/dev/null)" || AGENT_DIR="$(cd "$HERE/../.." && pwd)"   # the agent folder, not the plugin release
 MODEL=auto; RERANK=0; DRY=0; DO_INDEX=1; DO_JOB=1; PLAN_LABEL=""; VENV_ONLY=0
+NO_UV_FETCH=0; [ "${TALOS_MEMSEARCH_NO_UV_FETCH:-}" = 1 ] && NO_UV_FETCH=1
 PKGS="fastembed==0.8.0 sqlite-vec==0.1.9 apsw==3.53.1.0"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -44,6 +50,7 @@ while [ $# -gt 0 ]; do
     --no-job) DO_JOB=0; shift ;;
     --venv-only) VENV_ONLY=1; shift ;;
     --rerank) RERANK=1; shift ;;
+    --no-uv-fetch) NO_UV_FETCH=1; shift ;;
     --as-agent-dir) PLAN_LABEL="${2:?}"; shift 2 ;;     # install.sh --dry-run only: what to print as the agent folder
     -h|--help) awk 'NR>1 { if ($0 ~ /^#/) print; else exit }' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -77,6 +84,10 @@ say() { printf '%s\n' "$*"; }
 step() { printf '\n== %s\n' "$*"; }
 
 # ---- find a python
+UV_VER=0.13.8
+UVDIR="$DATA/uv/$UV_VER"        # the fetched uv lives in a Talos-owned folder and is called by its full path: never on PATH, never ~/.local/bin
+# uv prints its version as "uv 0.13.8 (<commit> <date> <target>)": the first two words are what is checked
+talos_uv_ok() { [ -x "$UVDIR/uv" ] && case "$("$UVDIR/uv" --version 2>/dev/null)" in "uv $UV_VER" | "uv $UV_VER "*) true ;; *) false ;; esac; }
 find_python() {
   if command -v uv >/dev/null 2>&1; then echo "uv"; return 0; fi
   local c p
@@ -86,16 +97,84 @@ find_python() {
     p="$(command -v "$c" 2>/dev/null || true)"
     [ -n "$p" ] && "$p" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null && { echo "$p"; return 0; }
   done
+  talos_uv_ok && { echo "$UVDIR/uv"; return 0; }
   return 1
 }
 PYSRC="$(find_python || true)"
 
+# ---- no usable Python on a Mac: fetch a pinned uv into $UVDIR (no admin, nothing run from the download but uv itself)
+FETCH_NOTE=""; FETCH_FAIL=""; FETCH_TMP=""
+fetch_clean() { [ -z "$FETCH_TMP" ] || rm -rf "$FETCH_TMP"; FETCH_TMP=""; }
+fetch_uv() {
+  local asset sum tmp pack arm oldtrap
+  # Rosetta: a shell run as x86_64 on an Apple-silicon Mac still wants the native uv
+  arm="$(sysctl -n hw.optional.arm64 2>/dev/null || true)"
+  case "$arm:$(uname -m)" in
+    1:*|*:arm64|*:aarch64) asset=uv-aarch64-apple-darwin.tar.gz; sum=6b71028a6b904f2ae3340ef52e595512de807d06c0a20eaef2f692581b246558 ;;
+    *:x86_64) asset=uv-x86_64-apple-darwin.tar.gz; sum=a04c2ffeac28b2003a2c13caf538ab425fcd7def3e4a41571f4a8fb370a66af3 ;;
+    *) FETCH_FAIL="no uv download for this Mac's processor ($(uname -m))"; return 1 ;;
+  esac
+  pack="${asset%.tar.gz}"
+  if [ "$DRY" = 1 ]; then FETCH_NOTE="would fetch uv $UV_VER into $UVDIR (no admin; checked against its published SHA-256)"; return 0; fi
+  oldtrap="$(trap -p EXIT INT TERM)"
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/talos-uv.XXXXXX")" || { FETCH_FAIL="could not download uv (no temp folder)"; return 1; }
+  FETCH_TMP="$tmp"; trap 'fetch_clean' EXIT; trap 'fetch_clean; exit 130' INT; trap 'fetch_clean; exit 143' TERM
+  fetch_uv_get "$asset" "$sum" "$tmp" "$pack"; local rc=$?
+  fetch_clean; trap - EXIT INT TERM; [ -z "$oldtrap" ] || eval "$oldtrap"
+  return $rc
+}
+fetch_uv_get() { # asset sum tmp pack: sets FETCH_FAIL / FETCH_NOTE
+  local asset="$1" sum="$2" tmp="$3" pack="$4" own="" url stage
+  # A test hands in its own tarball and its sum; only a path inside the test sandbox is taken, and the real download
+  # below never has an override.
+  # (the sandbox must exist and the tarball must be a plain file, not a link: a missing sandbox or a link must never widen it)
+  if [ -n "${TALOS_TEST_SANDBOX:-}" ] && [ -d "$TALOS_TEST_SANDBOX" ] && [ -n "${TALOS_UV_TEST_TARBALL:-}" ] \
+    && [ -n "${TALOS_UV_TEST_SHA256:-}" ] && [ -f "$TALOS_UV_TEST_TARBALL" ] && [ ! -L "$TALOS_UV_TEST_TARBALL" ]; then
+    local sbx; sbx="$(cd "$TALOS_TEST_SANDBOX" 2>/dev/null && pwd -P)"
+    own="$(cd "$(dirname "$TALOS_UV_TEST_TARBALL")" 2>/dev/null && pwd -P)/$(basename "$TALOS_UV_TEST_TARBALL")"
+    case "$own" in "$sbx"/*) [ -n "$sbx" ] || own="" ;; *) own="" ;; esac
+  fi
+  if [ -n "$own" ] && [ -f "$own" ]; then
+    cp "$own" "$tmp/$asset" || { FETCH_FAIL="could not download uv (test tarball)"; return 1; }
+    sum="$TALOS_UV_TEST_SHA256"
+  else
+    url="https://github.com/astral-sh/uv/releases/download/$UV_VER/$asset"
+    if ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 20 --max-time 180 -o "$tmp/$asset" "$url" 2>/dev/null; then
+      FETCH_FAIL="could not download uv (network?)"; return 1
+    fi
+  fi
+  if ! ( cd "$tmp" && printf '%s  %s\n' "$sum" "$asset" | shasum -a 256 -c - >/dev/null 2>&1 ); then
+    FETCH_FAIL="the downloaded uv did not match its published checksum: not used"; return 1
+  fi
+  if ! tar -xzf "$tmp/$asset" -C "$tmp" 2>/dev/null || [ ! -f "$tmp/$pack/uv" ] || [ ! -f "$tmp/$pack/uvx" ]; then
+    FETCH_FAIL="the downloaded uv could not be unpacked: not used"; return 1
+  fi
+  # a broken copy from an earlier run goes first; both files are staged, then the folder appears in one move
+  rm -rf "$UVDIR"
+  stage="$UVDIR.new.$$"
+  # (another run that put a good uv in place meanwhile wins: this one's copy is dropped, never moved inside it)
+  if ! mkdir -p "$stage" || ! cp "$tmp/$pack/uv" "$tmp/$pack/uvx" "$stage/" || ! chmod +x "$stage/uv" "$stage/uvx" \
+    || { [ -e "$UVDIR" ] && rm -rf "$stage" && talos_uv_ok; } || ! mv "$stage" "$UVDIR"; then
+    [ -d "$stage" ] || { talos_uv_ok && FETCH_NOTE="uv $UV_VER is in $UVDIR (another run put it there)" && return 0; }
+    rm -rf "$stage"; rmdir "$DATA/uv" 2>/dev/null
+    FETCH_FAIL="could not put uv into $UVDIR"; return 1
+  fi
+  FETCH_NOTE="uv $UV_VER fetched into $UVDIR (no admin; checked against its published SHA-256); it then downloads its own Python 3.12 (about 30 MB)"
+}
+if [ -z "$PYSRC" ] && [ "$NO_UV_FETCH" != 1 ] && [ "$(uname -s)" = Darwin ]; then
+  if fetch_uv; then
+    if [ "$DRY" = 1 ]; then PYSRC="$UVDIR/uv"; else PYSRC="$(find_python || true)"; fi
+  fi
+fi
+# UVBIN: the uv to call ("uv" from PATH, or the Talos-owned one by full path); empty when the python is a plain interpreter
+UVBIN=""; case "$PYSRC" in uv|"$UVDIR/uv") UVBIN="$PYSRC" ;; esac
+
 if [ "$VENV_ONLY" = 1 ]; then
-  [ -n "$PYSRC" ] || { echo "no Python 3.10+ found. Run:  brew install uv   (no Homebrew: curl -LsSf https://astral.sh/uv/install.sh | sh)" >&2; exit 3; }
+  [ -n "$PYSRC" ] || { [ -z "$FETCH_FAIL" ] || echo "$FETCH_FAIL" >&2; echo "no Python 3.10+ found. Run:  brew install uv   (no Homebrew: curl -LsSf https://astral.sh/uv/install.sh | sh)" >&2; exit 3; }
   [ "$DRY" = 1 ] && { echo "would create the shared venv at $VENV"; exit 0; }
   if [ ! -x "$PYV" ]; then
     mkdir -p "$DATA" || exit 1
-    if [ "$PYSRC" = uv ]; then uv venv --quiet --python 3.12 "$VENV" || exit 1; else "$PYSRC" -m venv "$VENV" || exit 1; fi
+    if [ -n "$UVBIN" ]; then "$UVBIN" venv --quiet --seed --python 3.12 "$VENV" || exit 1; else "$PYSRC" -m venv "$VENV" || exit 1; fi
   fi
   echo "shared venv ready at $VENV"; exit 0
 fi
@@ -108,7 +187,8 @@ say "   model:         $MODEL_NAME  ($MODEL, about ${MODEL_MB} MB, ${DIM} dimens
 say "   model cache:   $DATA/models/fastembed"
 say "   index:         ${PLAN_LABEL:-$AGENT_DIR}/.index/memory.db   (first index: about 1-3 minutes for ~500 notes)"
 if [ -n "$PYSRC" ]; then
-  if [ "$PYSRC" = uv ]; then say "   python:        uv (managed CPython 3.12, about 30 MB if not cached)"; else say "   python:        $PYSRC"; fi
+  if [ -n "$FETCH_NOTE" ]; then say "   python:        $FETCH_NOTE"
+  elif [ -n "$UVBIN" ]; then say "   python:        uv (managed CPython 3.12, about 30 MB if not cached)"; else say "   python:        $PYSRC"; fi
 else
   say "   python:        NONE FOUND (need 3.10+; Apple's python3 is 3.9)"
 fi
@@ -117,6 +197,7 @@ say "   job:           $([ "$DO_JOB" = 1 ] && echo 'enable talos-memory-index in
 
 if [ -z "$PYSRC" ]; then
   say ""
+  [ -z "$FETCH_FAIL" ] || say "$FETCH_FAIL"
   say "Semantic search needs Python 3.10 or newer, and a stock Mac only has Apple's 3.9. Run this one command:"
   say ""
   say "    brew install uv"
@@ -138,13 +219,13 @@ if [ -x "$PYV" ] && have_pkgs; then
 else
   mkdir -p "$DATA" || { echo "cannot create $DATA" >&2; exit 1; }
   if [ ! -x "$PYV" ]; then
-    if [ "$PYSRC" = uv ]; then uv venv --quiet --python 3.12 "$VENV" || { echo "uv could not create the venv" >&2; exit 1; }
+    if [ -n "$UVBIN" ]; then "$UVBIN" venv --quiet --seed --python 3.12 "$VENV" || { echo "uv could not create the venv" >&2; exit 1; }
     else "$PYSRC" -m venv "$VENV" || { echo "could not create the venv with $PYSRC" >&2; exit 1; }; fi
   fi
   "$PYV" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
     || { echo "the existing venv at $VENV uses a Python older than 3.10. Remove it (rm -rf \"$VENV\") and run this again." >&2; exit 1; }
   say "   installing the pinned packages (about 160 MB)"
-  if command -v uv >/dev/null 2>&1; then uv pip install --quiet --python "$PYV" $PKGS || { echo "package install failed" >&2; exit 1; }
+  if [ -n "$UVBIN" ]; then "$UVBIN" pip install --quiet --python "$PYV" $PKGS || { echo "package install failed" >&2; exit 1; }
   else "$PYV" -m pip install --quiet --disable-pip-version-check $PKGS || { echo "package install failed" >&2; exit 1; }; fi
   have_pkgs || { echo "installed, but the packages do not import; look above" >&2; exit 1; }
   # a marker that THIS venv has the memory-search packages: the venv is shared, and a voice-only venv has none of

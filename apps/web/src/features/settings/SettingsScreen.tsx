@@ -16,6 +16,7 @@ import {
   IconPlug,
   IconSettings,
   IconSun,
+  IconTerminal,
   IconUser,
 } from '../../ui/icons.tsx'
 import { Meander } from '../../ui/Meander.tsx'
@@ -28,6 +29,7 @@ import { HELP_PATH } from '../help/path.ts'
 import { settingsSections as external } from '../registry.ts'
 import { Banners } from '../threads/Banners.tsx'
 import { BugReportsSection } from './BugReportsSection.tsx'
+import { DeveloperSection } from './DeveloperSection.tsx'
 import { MediaRetentionSection } from './MediaRetentionSection.tsx'
 import { MemoryFoldersSection } from './MemoryFoldersSection.tsx'
 import { NOT_CONNECTED_LINE, useWriteBlock } from './offline.ts'
@@ -45,6 +47,7 @@ const SECTION_ICON: Record<string, typeof IconSettings> = {
   appearance: IconSun,
   help: IconBook,
   'bug-reports': IconBug,
+  developer: IconTerminal,
   about: IconBook,
 }
 
@@ -59,6 +62,7 @@ export const WRITES_SYNCED_CONFIG = [
   'session',
   'storage',
   'bug-reports',
+  'developer',
 ]
 
 function AboutSection() {
@@ -77,6 +81,8 @@ export function useSections(): Def[] {
         { id: 'memory-folders', title: 'Memory folders', order: 7.6, Component: MemoryFoldersSection },
         { id: 'shortcuts', title: 'Keyboard shortcuts', order: 8, Component: ShortcutsSection },
         { id: 'bug-reports', title: 'Bug reports', order: 9, Component: BugReportsSection },
+        // after Bug reports, before About: the guards are for working on Talos, not for everyday use
+        { id: 'developer', title: 'Developer', order: 9.5, Component: DeveloperSection },
         // which build is running here, on the server and on the computer: "which version am I on" at a glance
         { id: 'about', title: 'About', order: 98, Component: AboutSection },
         // The last row: Talos Help is its own page (one text, shared with the Mac app's Help menu).

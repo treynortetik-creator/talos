@@ -411,8 +411,8 @@ folders, not a list of files. The protected roots (the `protect` list in the lea
 
 The Talos home is closed whole. The files you send a thread that has its own session are copied to `~/.talos-inbox/<thread>/`
 (outside the Talos home, 0700 and 0600), and the lead is given that path. That folder has no deny: **other thread sessions can
-read every thread's inbox**. Copies go after 7 days (or past 1 GiB), and a thread's folder goes when the thread is archived or
-deleted. A lead is **light** by default: the deny rules above hold the file tools and Bash's `cat`, `head`, `tail`, `sed`, `tee` and
+read every thread's inbox**. Copies go after 7 days (or past 1 GiB a thread), and a thread's folder goes when the thread leaves the config; an archived
+thread's copies age out the same way, and un-archiving gets them back. A lead is **light** by default: the deny rules above hold the file tools and Bash's `cat`, `head`, `tail`, `sed`, `tee` and
 redirections. That stops accidents, not a determined program: `sqlite3`, `python` or `grep -r` can still open a blocked file,
 and the network is open. `git push`, `gh`, tmux and `SendMessage` to other sessions work. Add `--sandbox` for Claude Code's
 own OS sandbox (Seatbelt): Bash and every process it starts cannot open a root, `dangerouslyDisableSandbox` is ignored, claude

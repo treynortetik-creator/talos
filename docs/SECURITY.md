@@ -168,10 +168,11 @@ The owner asks his agent to change a Talos setting and it is done; he is told at
 - **What tells him.** Every change made this way posts "Changed X: A → B. To undo: …" in the thread he asked in. A change to
   which alerts reach him (notifications, quiet hours, a thread's alerts, the default thread) is also pushed as
   `settings_changed`, through the quiet window, the master switch and thread alerts.
-- **Two changes an undo cannot fully take back, said plainly.** Shorter attachment keeping goes through the hour's hold that
+- **One change an undo cannot fully take back, said plainly.** Shorter attachment keeping goes through the hour's hold that
   every change of it gets: the change line says how many files the hour will remove, when, and that undoing before then
-  removes nothing. Archiving a thread applies at once, and its line says that un-archiving does not restore the thread's inbox
-  copies.
+  removes nothing. Archiving a thread keeps its saved copies of the owner's files: they are removed only when the thread leaves
+  the config, otherwise they age out with the normal pruning (7 days, 1 GiB a thread), and un-archiving gets them back. Until
+  pruning removes them, archived copies stay readable by thread sessions, as any inbox is.
 - **The lock itself.** The agent may only propose `true` for it. Its shell could still edit config.json, so, like trust mode,
   every change of the lock is told to the owner in the default thread, whatever made it (`noteLockFlip`). The lock holds for
   `theme reset`, `memory init` and `lead init` with or without a terminal (a terminal can be faked). The app offers the switch

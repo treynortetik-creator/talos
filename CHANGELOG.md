@@ -1,5 +1,17 @@
 # Changelog
 
+## The Mac app says version 0.1.2
+
+- The app's version (About, the self-test, the update check) now matches the release tag: 0.1.2. Earlier releases still said 0.1.0.
+
+## The iPhone app has UI tests for the attach menu
+
+- `bash apps/mobile/scripts/ui-test.sh` runs the real iPhone shell on a simulator and checks the + menu, the photo picker, the file picker and dismissing them. It takes about three minutes and is run by hand before each TestFlight upload (docs/ios.md, "UI tests").
+
+## Archiving a thread keeps its saved file copies
+
+- Archiving a thread no longer deletes its saved copies of your files; they age out as usual. When you ask your agent to archive a thread, it now tells you it's done instead of pointing at a card.
+
 ## A public snapshot no longer needs a landing freeze
 
 - `scripts/publish-public.sh` now also accepts a checkout of the green branch, when that commit is on main and has all six CI passes, so a snapshot can be made while other machines keep landing.

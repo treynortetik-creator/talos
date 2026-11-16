@@ -678,7 +678,7 @@ export type ThreadFieldRow = {
 
 /**
  * Per-thread operations, with their risk. Name, topic, icon and alerts are low; a thread's own session, archiving it and putting
- * it under another thread are high (a session uses the owner's plan; archiving drops the thread's inbox copies; a sub-thread takes
+ * it under another thread are high (a session uses the owner's plan; archiving keeps the thread's inbox copies; a sub-thread takes
  * its parent's folder, model and MCP list).
  */
 export const THREAD_FIELD_RULES: Readonly<Record<ThreadField, ThreadFieldRow>> = {

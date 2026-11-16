@@ -47,6 +47,7 @@
 		CF04BCB5897EE830F6D15FF6 /* NativeKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 912C05722891585DB67B1AB9 /* NativeKeyStoreTests.swift */; };
 		D0D35A9CB4F2631A49D259C1 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6795445F49DC0C5A08BCBDA /* NotificationService.swift */; };
 		D3595F6B764F0A8C5C5B394C /* TalosPushCore in Frameworks */ = {isa = PBXBuildFile; productRef = DD0D399B039396E58E56C071 /* TalosPushCore */; };
+		D8C027F80211523FEC62C096 /* PickerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A022A1A0AA40866F5D24D878 /* PickerUITests.swift */; };
 		E393FD467E02DDB600817ABC /* WebViewLivenessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0287AD5FBA2FF6B3F8D3DB49 /* WebViewLivenessTests.swift */; };
 		E8E03F4FB1BE61A377693A7C /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9420949282AB92AA28A975D3 /* AppDelegate.swift */; };
 		FD0E375194DF369490D1A4BC /* TalosBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E59561450E59E8689D6B17B /* TalosBridgeViewController.swift */; };
@@ -59,6 +60,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 8E920D423D63FB7C9F8D5698;
 			remoteInfo = TalosPushExtension;
+		};
+		153CAF5D8AA6467EC9F5920C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6B590BF25178DC7D824D09CE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 93E9E330FC2CE7458D9C925F;
+			remoteInfo = App;
 		};
 		32EAB22E4CA94300DDDCDCCB /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -114,6 +122,7 @@
 		68ED4E8FE0185474B6E8E85B /* capacitor.config.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		6B04ADF7B81E144C4949AE51 /* CapApp-SPM */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "CapApp-SPM"; path = "CapApp-SPM"; sourceTree = SOURCE_ROOT; };
 		76989E05CECAD7B8B3C424A7 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		77F070B46A94D035DD2F7165 /* AppUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7E5BBB12596EE01767A6151A /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; name = public; path = App/public; sourceTree = SOURCE_ROOT; };
 		8776CD2CC1249496A6F18C86 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		912C05722891585DB67B1AB9 /* NativeKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeKeyStoreTests.swift; sourceTree = "<group>"; };
@@ -121,6 +130,7 @@
 		9679C30F6E5386C1D9583F58 /* TalosAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosAudio.swift; sourceTree = "<group>"; };
 		96ADD8C88522DD2549F74158 /* BridgeGuard */ = {isa = PBXFileReference; lastKnownFileType = folder; name = BridgeGuard; path = ../BridgeGuard; sourceTree = SOURCE_ROOT; };
 		9E244550EE6C5966F3E211ED /* TalosQuickAct.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosQuickAct.swift; sourceTree = "<group>"; };
+		A022A1A0AA40866F5D24D878 /* PickerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickerUITests.swift; sourceTree = "<group>"; };
 		A9CDDDC47163CCD1A6F601C4 /* TalosCrashCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TalosCrashCore; path = ../TalosCrashCore; sourceTree = SOURCE_ROOT; };
 		B1F8675814FAF64984E33686 /* CompiledRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompiledRelay.swift; sourceTree = "<group>"; };
 		C8A9A2F9E029400EE1562218 /* AppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -186,6 +196,14 @@
 				A09E2501204CB86B4B2B6562 /* Packages */,
 				E9C3DB3EC6D7655028A9C0D3 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		41D99C30F7BECA527A26D879 /* AppUITests */ = {
+			isa = PBXGroup;
+			children = (
+				A022A1A0AA40866F5D24D878 /* PickerUITests.swift */,
+			);
+			path = AppUITests;
 			sourceTree = "<group>";
 		};
 		443E9F32F0EC65EEBF466F3B /* App */ = {
@@ -263,6 +281,7 @@
 			children = (
 				4D6A28A8C686BE348A566D25 /* Signing.xcconfig */,
 				67E6ABD228D08FA903D459A3 /* AppTests */,
+				41D99C30F7BECA527A26D879 /* AppUITests */,
 				79BBF47105B280D35AF1A319 /* TalosPushExtension */,
 				579C795C3FC868CD411303DA /* TalosPushShared */,
 				2477C78C660157702946D1CD /* TalosShareExtension */,
@@ -290,6 +309,7 @@
 			children = (
 				49D88A349FD70A9153DD2C03 /* App.app */,
 				C8A9A2F9E029400EE1562218 /* AppTests.xctest */,
+				77F070B46A94D035DD2F7165 /* AppUITests.xctest */,
 				441A3BD7070BE74658DC1469 /* TalosPushExtension.appex */,
 				49FD8D75437A55C1CD73853B /* TalosShareExtension.appex */,
 			);
@@ -364,6 +384,24 @@
 			productReference = C8A9A2F9E029400EE1562218 /* AppTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		C460F2384F904D87838B32F7 /* AppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3F778A5D58B271B27B6A13EE /* Build configuration list for PBXNativeTarget "AppUITests" */;
+			buildPhases = (
+				049B66CF9C6C34AA66A24E6E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				31D421ABCD4F6B5F08290174 /* PBXTargetDependency */,
+			);
+			name = AppUITests;
+			packageProductDependencies = (
+			);
+			productName = AppUITests;
+			productReference = 77F070B46A94D035DD2F7165 /* AppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		FAB4F0F1F10FA3728D760DFF /* TalosShareExtension */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 63B58D005744F9A4433F3ABC /* Build configuration list for PBXNativeTarget "TalosShareExtension" */;
@@ -398,6 +436,9 @@
 					93E9E330FC2CE7458D9C925F = {
 						ProvisioningStyle = Automatic;
 					};
+					C460F2384F904D87838B32F7 = {
+						TestTargetID = 93E9E330FC2CE7458D9C925F;
+					};
 					FAB4F0F1F10FA3728D760DFF = {
 						ProvisioningStyle = Automatic;
 					};
@@ -427,6 +468,7 @@
 			targets = (
 				93E9E330FC2CE7458D9C925F /* App */,
 				99DCC7BD0ABB09C467644299 /* AppTests */,
+				C460F2384F904D87838B32F7 /* AppUITests */,
 				FAB4F0F1F10FA3728D760DFF /* TalosShareExtension */,
 				8E920D423D63FB7C9F8D5698 /* TalosPushExtension */,
 			);
@@ -449,6 +491,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		049B66CF9C6C34AA66A24E6E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D8C027F80211523FEC62C096 /* PickerUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		45BC72659DA5375495E3DAD4 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -508,6 +558,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		31D421ABCD4F6B5F08290174 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 93E9E330FC2CE7458D9C925F /* App */;
+			targetProxy = 153CAF5D8AA6467EC9F5920C /* PBXContainerItemProxy */;
+		};
 		96AA6D50C1AA746282D306B3 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 93E9E330FC2CE7458D9C925F /* App */;
@@ -554,6 +609,24 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
+		};
+		1932487F2E9FB8ADDC383B96 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TALOS_BUNDLE_ID).uitests";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = App;
+			};
+			name = Debug;
 		};
 		2EF40DF1E108E618D0D1371B /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -669,6 +742,24 @@
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		BD25F0BD6670BC892D41A30E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TALOS_BUNDLE_ID).uitests";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = App;
 			};
 			name = Release;
 		};
@@ -821,6 +912,15 @@
 			buildConfigurations = (
 				33A95629D3115DC03304CC13 /* Debug */,
 				F4973733537E4724F9DB2A32 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3F778A5D58B271B27B6A13EE /* Build configuration list for PBXNativeTarget "AppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1932487F2E9FB8ADDC383B96 /* Debug */,
+				BD25F0BD6670BC892D41A30E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

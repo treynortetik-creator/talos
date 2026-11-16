@@ -621,8 +621,9 @@ list `custom-themes/1`. Everything else is refused by name or by the closed list
   warning); 40 threads in all, archived ones included, is the config's own limit and still refuses. One proposal counts its own
   new threads and any thread it brings back from the archive against both. Archiving a
   dedicated thread adds a second line to the card, `own session: dedicated → shared`, because the write switches it off; the
-  undo lists both. The card also says archiving clears the thread's saved copies of the owner's files. Archiving is for agent-made threads
-  only, never the default thread, and drops that thread's inbox copies. A system thread (`inbox`) is never changed. The write
+  undo lists both. Archiving is for agent-made threads
+  only, never the default thread, and keeps that thread's inbox copies: the normal pruning ages them out, and they are removed
+  only when the thread leaves the config. A system thread (`inbox`) is never changed. The write
   is a `threads` patch through `ConfigFile.applyPatch`, so the Option C checks on `session` run too.
 - **`create_thread` and `archive_thread`** keep their names and arguments and are thin wrappers over the same path
   (`threads.<id>` and `threads.<id>.archived`): in trust mode, after the owner asked in the thread they asked in, a new thread

@@ -315,6 +315,142 @@ else
     && ok "with no Python 3.10+ (and no uv) the install still succeeds, says so, and builds no venv" || no "no-python fallback wrong (rc=$rc)" "$(printf '%s' "$out" | tail -6)"
 fi
 
+# ---- 6c1. memory/setup.sh on a Mac with no Python 3.10+ fetches a pinned uv into a Talos-owned folder (no network here: a fake curl,
+#      or a tarball the test hands in, which setup.sh takes only from inside the test sandbox)
+# The fake uv: `venv` makes a fake venv whose `python -m pip` works only if --seed was passed; `pip` and everything else
+# is logged and fails, so a run stops right after the step under test.
+if /usr/bin/python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+  echo "skip uv fetch: /usr/bin/python3 is 3.10 or newer"
+else
+  uvfetch_home(){ # $1 = name; $2 = uname -s answer; a fake curl, uname and sysctl first on PATH, and no uv anywhere
+    fresh_home "$1"; export FAKE_UNAME_S="$2" FAKE_UNAME_M=arm64 FAKE_SYSCTL=1 FAKE_CURL_RC=0 FAKE_TARBALL="$SB/uv-fake.tar.gz"; rm -rf "${SB:?}/tmp"; mkdir -p "$SB/tmp"
+    printf '#!/bin/bash\necho "curl $*" >> "%s/curl.calls"\n[ "$FAKE_CURL_RC" = 0 ] || exit "$FAKE_CURL_RC"\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && { cp "$FAKE_TARBALL" "$2"; exit 0; }; shift; done\nexit 2\n' "$HOME" > "$HOME/bin/curl"
+    printf '#!/bin/bash\ncase "$1" in -s) echo "$FAKE_UNAME_S" ;; -m) echo "$FAKE_UNAME_M" ;; *) exec /usr/bin/uname "$@" ;; esac\n' > "$HOME/bin/uname"
+    printf '#!/bin/bash\n[ "$2" = hw.optional.arm64 ] && { echo "$FAKE_SYSCTL"; exit 0; }\nexec /usr/sbin/sysctl "$@"\n' > "$HOME/bin/sysctl"
+    chmod +x "$HOME/bin/curl" "$HOME/bin/uname" "$HOME/bin/sysctl"
+  }
+  uvfetch_env(){ PATH="$HOME/bin:/usr/bin:/bin" TMPDIR="$SB/tmp" env -u TALOS_MEMSEARCH_NO_UV_FETCH "$@"; }
+  uvfetch_run(){ uvfetch_env "$@" bash "$KIT/scripts/memory/setup.sh" --agent-dir "$KIT" --no-index --no-job 2>&1; }
+  UVD=".local/share/talos/uv/0.13.8"
+  mkdir -p "$SB/uvpack/uv-aarch64-apple-darwin"
+  cat > "$SB/uvpack/uv-aarch64-apple-darwin/uv" <<'FAKEUV'
+#!/bin/bash
+echo "uv $*" >> "$HOME/uv.calls"
+case "$1" in
+  --version) echo "uv 0.13.8 (3d97a6aad 2026-11-12 aarch64-apple-darwin)"; exit 0 ;;  # the real uv's format
+  venv) seed=0; for a in "$@"; do [ "$a" = --seed ] && seed=1; last="$a"; done
+        mkdir -p "$last/bin"; [ "$seed" = 1 ] && : > "$last/.seeded"
+        printf '#!/bin/bash\ncase "$1 $2" in "-m pip") [ -f "$(dirname "$0")/../.seeded" ] && exit 0; echo "No module named pip" >&2; exit 1 ;; esac\nexit 0\n' > "$last/bin/python"
+        chmod +x "$last/bin/python"; exit 0 ;;
+esac
+exit 1
+FAKEUV
+  cp "$SB/uvpack/uv-aarch64-apple-darwin/uv" "$SB/uvpack/uv-aarch64-apple-darwin/uvx"
+  ( cd "$SB/uvpack" && tar -czf "$SB/uv-fake.tar.gz" uv-aarch64-apple-darwin )
+  GOODSUM="$(shasum -a 256 "$SB/uv-fake.tar.gz" | awk '{print $1}')"
+  OVR=(TALOS_UV_TEST_TARBALL="$SB/uv-fake.tar.gz" TALOS_UV_TEST_SHA256="$GOODSUM")
+  tmpclean(){ [ -z "$(ls -A "$SB/tmp")" ]; }
+  # the two pinned checksums are read out of setup.sh and compared with the published values (a typo fails here)
+  pin_a="$(grep -o 'aarch64-apple-darwin.tar.gz; sum=[0-9a-f]*' "$KIT/scripts/memory/setup.sh" | sed 's/.*sum=//')"
+  pin_x="$(grep -o 'x86_64-apple-darwin.tar.gz; sum=[0-9a-f]*' "$KIT/scripts/memory/setup.sh" | sed 's/.*sum=//')"
+  { [ "$pin_a" = 6b71028a6b904f2ae3340ef52e595512de807d06c0a20eaef2f692581b246558 ] && [ "$pin_x" = a04c2ffeac28b2003a2c13caf538ab425fcd7def3e4a41571f4a8fb370a66af3 ]; } \
+    && ok "the pinned uv 0.13.8 checksums in setup.sh equal the published ones" || no "pinned checksums differ" "aarch64=$pin_a x86_64=$pin_x"
+  # a) the fetch works: uv and uvx land in the Talos-owned folder (never ~/.local/bin, never PATH), venv made with --seed
+  uvfetch_home h6c3a Darwin
+  out="$(uvfetch_run "${OVR[@]}")"; rc=$?
+  { [ -x "$HOME/$UVD/uv" ] && [ -x "$HOME/$UVD/uvx" ] && [ ! -e "$HOME/.local/bin" ] && <<<"$out" grep -q "uv 0.13.8 fetched into $HOME/$UVD" && <<<"$out" grep -q 'about 30 MB' \
+    && grep -q '^uv venv --quiet --seed' "$HOME/uv.calls" && [ ! -e "$HOME/curl.calls" ] && tmpclean && [ "$rc" = 1 ]; } \
+    && ok "no Python 3.10+ on a Mac: setup.sh fetches uv into its own folder, calls it by full path, makes the venv with --seed" || no "uv fetch wrong (rc=$rc)" "$(printf '%s' "$out" | tail -5)"
+  # b) a checksum that differs: nothing kept, no temp folder, the Python 3.10 message, exit 3
+  uvfetch_home h6c3b Darwin
+  out="$(uvfetch_run TALOS_UV_TEST_TARBALL="$SB/uv-fake.tar.gz" TALOS_UV_TEST_SHA256=0000000000000000000000000000000000000000000000000000000000000000)"; rc=$?
+  { [ "$rc" = 3 ] && [ ! -e "$HOME/.local" ] && tmpclean && <<<"$out" grep -q 'did not match its published checksum: not used' && <<<"$out" grep -q 'Semantic search needs Python 3.10 or newer' && <<<"$out" grep -q 'brew install uv'; } \
+    && ok "a uv with the wrong checksum is not kept (no uv, no folder, no temp): the mismatch line, the Python 3.10 message, exit 3" || no "checksum mismatch handled wrong (rc=$rc)" "$(printf '%s' "$out" | tail -6)"
+  # c) the download fails (a blocked network): the real path, curl asked for the pinned https URL with the protocol limits
+  uvfetch_home h6c3c Darwin; export FAKE_CURL_RC=7
+  out="$(uvfetch_run)"; rc=$?
+  { [ "$rc" = 3 ] && [ ! -e "$HOME/.local" ] && tmpclean && <<<"$out" grep -q 'could not download uv (network?)' && <<<"$out" grep -q 'Semantic search needs Python 3.10 or newer' \
+    && grep -q "proto =https --proto-redir =https --connect-timeout 20 --max-time 180 .*https://github.com/astral-sh/uv/releases/download/0.13.8/uv-aarch64-apple-darwin.tar.gz" "$HOME/curl.calls"; } \
+    && ok "a failed uv download says so, then the Python 3.10 message, exit 3, no temp folder; curl is https-only with timeouts" || no "download failure handled wrong (rc=$rc)" "$(printf '%s' "$out" | tail -6)"
+  # d) off a Mac nothing is fetched
+  uvfetch_home h6c3d Linux
+  out="$(uvfetch_run "${OVR[@]}")"; rc=$?
+  { [ "$rc" = 3 ] && [ ! -e "$HOME/curl.calls" ] && [ ! -e "$HOME/.local" ] && <<<"$out" grep -q 'Semantic search needs Python 3.10 or newer'; } \
+    && ok "off a Mac (Linux) no uv is fetched: exit 3 as before" || no "Linux fetched or exit changed (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  # e) the switch and the flag turn the fetch off on a Mac
+  uvfetch_home h6c3e Darwin
+  out="$(uvfetch_run "${OVR[@]}" TALOS_MEMSEARCH_NO_UV_FETCH=1)"; rc=$?
+  { [ "$rc" = 3 ] && [ ! -e "$HOME/curl.calls" ] && [ ! -e "$HOME/.local" ]; } && ok "TALOS_MEMSEARCH_NO_UV_FETCH=1 on a Mac: no fetch, exit 3" || no "env switch ignored (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  out="$(uvfetch_env "${OVR[@]}" bash "$KIT/scripts/memory/setup.sh" --agent-dir "$KIT" --no-uv-fetch 2>&1)"; rc=$?
+  { [ "$rc" = 3 ] && [ ! -e "$HOME/.local" ]; } && ok "--no-uv-fetch on a Mac: no fetch, exit 3" || no "--no-uv-fetch ignored (rc=$rc)"
+  # f) a user's own ~/.local/bin/uv is neither used nor touched (it is not on PATH here); the Talos-owned one is fetched
+  uvfetch_home h6c3f Darwin; mkdir -p "$HOME/.local/bin"; printf '#!/bin/bash\necho "mine $*" >> "$HOME/uv.calls"\nexit 1\n' > "$HOME/.local/bin/uv"; chmod +x "$HOME/.local/bin/uv"
+  before="$(cksum < "$HOME/.local/bin/uv")"
+  out="$(uvfetch_run "${OVR[@]}")"; rc=$?
+  { [ "$(cksum < "$HOME/.local/bin/uv")" = "$before" ] && [ -x "$HOME/$UVD/uv" ] && ! grep -q '^mine' "$HOME/uv.calls"; } \
+    && ok "a uv in ~/.local/bin is left alone and not trusted: setup.sh fetches its own" || no "~/.local/bin/uv used or changed (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  # g) a Talos-owned uv that is broken (its version check fails) is replaced; a good one is used with no download
+  uvfetch_home h6c3g Darwin; mkdir -p "$HOME/$UVD"; printf '#!/bin/bash\nexit 1\n' > "$HOME/$UVD/uv"; chmod +x "$HOME/$UVD/uv"
+  out="$(uvfetch_run "${OVR[@]}")"; rc=$?
+  { case "$("$HOME/$UVD/uv" --version)" in "uv 0.13.8 "*) true ;; *) false ;; esac && <<<"$out" grep -q 'fetched into'; } && ok "a broken Talos-owned uv is removed and fetched again" || no "broken uv kept (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  rm -rf "${HOME:?}/.local/share/talos/venv"   # so this run builds the venv again, with the uv already there
+  out="$(uvfetch_run "${OVR[@]}")"; rc=$?
+  { ! <<<"$out" grep -q 'fetched into' && [ ! -e "$HOME/curl.calls" ] && [ "$(grep -c '^uv venv' "$HOME/uv.calls")" = 2 ]; } && ok "a good Talos-owned uv is used as is (no second fetch)" || no "good uv refetched (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  # h) --dry-run: no download, the plan says what it would do
+  uvfetch_home h6c3h Darwin
+  out="$(uvfetch_env bash "$KIT/scripts/memory/setup.sh" --agent-dir "$KIT" --dry-run 2>&1)"; rc=$?
+  { [ "$rc" = 0 ] && [ ! -e "$HOME/curl.calls" ] && [ ! -e "$HOME/.local" ] && <<<"$out" grep -q "would fetch uv 0.13.8 into $HOME/$UVD"; } \
+    && ok "--dry-run says it would fetch uv 0.13.8 and downloads nothing" || no "dry-run fetch plan wrong (rc=$rc)" "$(printf '%s' "$out" | grep python:)"
+  # i) the test override is honoured ONLY inside the sandbox: with no sandbox variable, or a tarball outside it, the real
+  #    download runs, and the pinned sum rejects the fake
+  uvfetch_home h6c3i Darwin
+  out="$(uvfetch_run "${OVR[@]}" TALOS_TEST_SANDBOX=)"; rc=$?
+  { [ "$rc" = 3 ] && [ ! -e "$HOME/.local" ] && tmpclean && [ -e "$HOME/curl.calls" ] && <<<"$out" grep -q 'did not match its published checksum'; } \
+    && ok "the test tarball is ignored without the sandbox variable: the real download runs and its pinned sum rejects the fake" || no "override honoured outside a sandbox (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  OUTSIDE="$(mktemp -d)"; cp "$SB/uv-fake.tar.gz" "$OUTSIDE/"
+  uvfetch_home h6c3j Darwin
+  out="$(uvfetch_run TALOS_UV_TEST_TARBALL="$OUTSIDE/uv-fake.tar.gz" TALOS_UV_TEST_SHA256="$GOODSUM")"; rc=$?
+  { [ "$rc" = 3 ] && [ ! -e "$HOME/.local" ] && [ -e "$HOME/curl.calls" ]; } && ok "a test tarball outside the sandbox is ignored" || no "outside tarball honoured (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  # a link inside the sandbox pointing at that outside tarball, and a sandbox folder that does not exist, are ignored too
+  ln -s "$OUTSIDE/uv-fake.tar.gz" "$SB/uv-link.tar.gz"
+  uvfetch_home h6c3j2 Darwin
+  out="$(uvfetch_run TALOS_UV_TEST_TARBALL="$SB/uv-link.tar.gz" TALOS_UV_TEST_SHA256="$GOODSUM")"; rc=$?
+  { [ "$rc" = 3 ] && [ -e "$HOME/curl.calls" ]; } && ok "a test tarball that is a link (to outside the sandbox) is ignored" || no "linked tarball honoured (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  rm -f "$SB/uv-link.tar.gz"
+  uvfetch_home h6c3j3 Darwin
+  out="$(uvfetch_run TALOS_UV_TEST_TARBALL="$OUTSIDE/uv-fake.tar.gz" TALOS_UV_TEST_SHA256="$GOODSUM" TALOS_TEST_SANDBOX=/nonexistent-talos-sandbox)"; rc=$?
+  { [ "$rc" = 3 ] && [ -e "$HOME/curl.calls" ]; } && ok "a sandbox folder that does not exist widens nothing: the tarball is ignored" || no "missing sandbox widened the override (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  rm -rf "${OUTSIDE:?}"
+  uvfetch_home h6c3k Darwin
+  out="$(uvfetch_run)"; rc=$?
+  { [ "$rc" = 3 ] && [ ! -e "$HOME/.local" ] && tmpclean && <<<"$out" grep -q 'did not match its published checksum'; } \
+    && ok "with no override the pinned sum rejects a fake tarball" || no "fake tarball accepted with no override (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  # j) the architecture: x86_64 asks for the x86_64 asset; Rosetta (x86_64 shell on Apple silicon) asks for the native one
+  uvfetch_home h6c3l Darwin; export FAKE_CURL_RC=7 FAKE_UNAME_M=x86_64 FAKE_SYSCTL=0
+  out="$(uvfetch_run)"; grep -q 'releases/download/0.13.8/uv-x86_64-apple-darwin.tar.gz' "$HOME/curl.calls" && ok "an Intel Mac asks for the x86_64 uv" || no "x86_64 URL not requested" "$(cat "$HOME/curl.calls" 2>/dev/null)"
+  uvfetch_home h6c3m Darwin; export FAKE_CURL_RC=7 FAKE_UNAME_M=x86_64 FAKE_SYSCTL=1
+  out="$(uvfetch_run)"; grep -q 'releases/download/0.13.8/uv-aarch64-apple-darwin.tar.gz' "$HOME/curl.calls" && ok "Rosetta (uname says x86_64, hw.optional.arm64 is 1) asks for the aarch64 uv" || no "Rosetta URL wrong" "$(cat "$HOME/curl.calls" 2>/dev/null)"
+  # k) a tarball without uv, and one that is not a tarball: both are refused, nothing kept, no temp folder
+  mkdir -p "$SB/uvpack2/uv-aarch64-apple-darwin"; cp "$SB/uvpack/uv-aarch64-apple-darwin/uvx" "$SB/uvpack2/uv-aarch64-apple-darwin/uvx"
+  ( cd "$SB/uvpack2" && tar -czf "$SB/uv-nouv.tar.gz" uv-aarch64-apple-darwin ); printf 'not a tarball' > "$SB/uv-junk.tar.gz"
+  for bad in uv-nouv uv-junk; do
+    uvfetch_home "h6c3-$bad" Darwin; sum="$(shasum -a 256 "$SB/$bad.tar.gz" | awk '{print $1}')"
+    out="$(uvfetch_run TALOS_UV_TEST_TARBALL="$SB/$bad.tar.gz" TALOS_UV_TEST_SHA256="$sum")"; rc=$?
+    { [ "$rc" = 3 ] && [ ! -e "$HOME/.local" ] && tmpclean && <<<"$out" grep -q 'could not be unpacked: not used'; } \
+      && ok "$bad: a tarball that does not unpack to uv and uvx is refused (no uv, no folder, no temp), exit 3" || no "$bad accepted or left files (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  done
+  # l) --venv-only through the fetch path: the venv has pip (--seed), and voice/setup.sh then installs with the Talos-owned uv
+  uvfetch_home h6c3n Darwin
+  out="$(uvfetch_env "${OVR[@]}" bash "$KIT/scripts/memory/setup.sh" --agent-dir "$KIT" --venv-only 2>&1)"; rc=$?
+  { [ "$rc" = 0 ] && "$HOME/.local/share/talos/venv/bin/python" -m pip install x; } \
+    && ok "setup.sh --venv-only through the uv fetch makes a venv that has pip" || no "venv-only venv has no pip (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+  uvfetch_home h6c3o Darwin
+  out="$(cd "$KIT" && uvfetch_env "${OVR[@]}" bash scripts/voice/setup.sh --kokoro 2>&1)"; rc=$?
+  { [ "$rc" = 1 ] && grep -q '^uv venv --quiet --seed' "$HOME/uv.calls" && grep -q "^uv pip install --quiet --python $HOME/.local/share/talos/venv/bin/python kokoro-onnx soundfile" "$HOME/uv.calls"; } \
+    && ok "voice/setup.sh --kokoro on a stock Mac: the shared venv is built through the fetched uv and the packages go in with it" || no "voice kokoro path wrong (rc=$rc)" "$(printf '%s' "$out" | tail -4; cat "$HOME/uv.calls" 2>/dev/null)"
+  unset FAKE_UNAME_S FAKE_UNAME_M FAKE_SYSCTL FAKE_CURL_RC FAKE_TARBALL
+fi
+
 # ---- 6c2. Python discovery sees a newer python3.14 (Homebrew's current default) and a plain python3 that is 3.10+
 fresh_home h6c2; mkdir -p "$HOME/pybin"
 # The wrapper must point at a REAL 3.10+ interpreter. Under the system python3 (3.9) `command -v python3` is not one, so look for any 3.10+ and skip when the machine has none.

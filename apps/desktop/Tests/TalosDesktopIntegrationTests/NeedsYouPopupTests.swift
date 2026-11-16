@@ -221,19 +221,49 @@ struct NeedsYouPopupTests {
     #expect(keys.keys.isEmpty)
   }
 
+  /// Like `offered`, but the manager only looks when the test says so (no timer): what the screen did since the last look is then not
+  /// something a slow machine can change. The offer stands as it was when the click comes.
+  private func offeredByHand(_ r: WorkerRig) throws -> DialogOffer {
+    try r.wake("trip")
+    #expect(r.firstTick())
+    #expect(
+      r.wait(60) {
+        r.mgr.tickOnce()
+        return r.offer != nil && !r.mgr.popupOffers().isEmpty
+      }, "no dialog offered: \(r.why("trip"))")
+    return try #require(r.offer)
+  }
+
   /// The owner's own Down in the pane: the cursor is somewhere else than the offer said. The row of the clicked label is found from the fresh
-  /// cursor and only that label is entered, so the owner gets what the button said.
+  /// cursor and only that label is entered, so the owner gets what the button said. No look of the manager falls between the Down and the
+  /// click here (a look would see the screen change and drop the offer, as the next test says), so the order does not depend on the load.
   @Test func aCursorMovedByTheOwnerStillGetsTheLabelClickedAndNothingElse() throws {
     let (r, keys, _) = try make("trust")
     defer { r.teardown(); keys.remove() }
-    let o = try offered(r)
+    let o = try offeredByHand(r)
     r.mgr.tune { $0.dialogSettle = 60 }
     let before = screen(r)
     #expect(r.tmuxCmd(["send-keys", "-t", "=t-trip:", "Down"]).ok)
-    #expect(r.wait(5) { keys.keys == ["DOWN"] })
-    #expect(r.wait(10) { screen(r) != before }, "the cursor row never moved on the screen")
+    #expect(r.wait(30) { keys.keys == ["DOWN"] })
+    #expect(r.wait(30) { screen(r) != before }, "the cursor row never moved on the screen")
     #expect(click(r, o, choice: 1) == .pressed(choice: 1, label: "Yes, I trust this folder"))
     #expect(keys.keys == ["DOWN", "ENTER"], "the cursor was already on the row: just the Enter")
+  }
+
+  /// The other half: once the manager has looked at the moved cursor, the screen counts as changed under the offer (it may be another
+  /// dialog that reads the same), so the old offer presses nothing; a new sighting follows. Fails closed, however long ago the Down was.
+  @Test func aCursorMovedByTheOwnerAndSeenByTheManagerMakesTheOldOfferPressNothing() throws {
+    let (r, keys, _) = try make("trust")
+    defer { r.teardown(); keys.remove() }
+    let o = try offeredByHand(r)
+    r.mgr.tune { $0.dialogSettle = 60 }
+    let before = screen(r)
+    #expect(r.tmuxCmd(["send-keys", "-t", "=t-trip:", "Down"]).ok)
+    #expect(r.wait(30) { keys.keys == ["DOWN"] })
+    #expect(r.wait(30) { screen(r) != before }, "the cursor row never moved on the screen")
+    r.mgr.tickOnce()
+    #expect(click(r, o, choice: 1) == .nothing(.screenChanged))
+    #expect(keys.keys == ["DOWN"], "no key beyond the owner's own: \(keys.keys)")
   }
 
   @Test func theDialogGoingAwayBeforeTheClickIsNothingToPress() throws {

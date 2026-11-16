@@ -414,9 +414,8 @@ export function undoText(changes: ReadonlyArray<ConfigChange>): string {
   const parts = changes.map((c) => {
     const t = targetOf(c.path)
     if (t?.kind === 'new_thread') return `archive thread ${t.id}`
-    // archiving drops the thread's inbox copies (the bridge removes them): un-archiving brings the thread back, not those
-    if (t?.kind === 'thread_field' && t.field === 'archived' && c.new === true)
-      return `unarchive thread ${t.id} (its inbox copies are not restored)`
+    // archiving keeps the thread's inbox copies, so un-archiving brings everything back
+    if (t?.kind === 'thread_field' && t.field === 'archived' && c.new === true) return `unarchive thread ${t.id}`
     // the agent never turns the lock off: the owner does
     if (c.path === 'settings_lock') return 'turn Lock Talos settings off in Settings'
     // a theme that turns out unreadable still has a way back that needs no reading of the screen
@@ -438,12 +437,6 @@ export type ConfigCardInput = {
   changes: ConfigChange[]
 }
 
-/** Archiving also clears the thread's saved copies of the owner's files; the card says so. */
-const archiveNote = (changes: ReadonlyArray<ConfigChange>): string =>
-  changes.some((c) => /^threads\.[^.]+\.archived$/.test(c.path) && c.new === true)
-    ? "\nArchiving also clears the thread's saved copies of your files."
-    : ''
-
 /** The card as it is drawn: pending, no editing, revise allowed, old and new of each setting in the body. Hash is set by the caller. */
 export function configCardCandidate(i: ConfigCardInput): Omit<CardT, 'payload_hash'> & { payload_hash: string } {
   const one = i.changes.length === 1 ? i.changes[0] : undefined
@@ -460,7 +453,7 @@ export function configCardCandidate(i: ConfigCardInput): Omit<CardT, 'payload_ha
         : `Change ${labelOfPath(one.path).toLowerCase()}`,
     summary: i.reason.slice(0, 280),
     destination: i.changes.slice(0, 6).map((c) => ({ label: 'Setting', value: labelOfPath(c.path) })),
-    body: `${i.changes.map(describeChange).join('\n')}${archiveNote(i.changes)}\n\nWhy: ${i.reason}`.slice(0, 20_000),
+    body: `${i.changes.map(describeChange).join('\n')}\n\nWhy: ${i.reason}`.slice(0, 20_000),
     body_format: 'plain',
     fields: [],
     attachments: [],

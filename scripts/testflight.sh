@@ -14,6 +14,7 @@
 #
 # The build is made from a throwaway worktree of $TESTFLIGHT_REF (default origin/main), so uncommitted work in your
 # checkout never ships. The build number is a UTC timestamp (YYYYMMDDHHMM), so every upload is higher than the last.
+# Before each upload run the shell's UI tests: bash apps/mobile/scripts/ui-test.sh (about 3 minutes; docs/ios.md "UI tests").
 set -euo pipefail
 set +x
 

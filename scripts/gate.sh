@@ -383,6 +383,8 @@ if [ "$IN_LOCK" = 0 ]; then
   if [ "$FAST" = 1 ]; then step "personal (this change only: its files and commit messages)" fast_personal "$EXTRA"
   else step personal env CHECK_EXTRA_RULES="$EXTRA" bash scripts/check-no-personal.sh; fi
   step size pnpm exec vitest run --project scripts scripts/size-budget.test.ts
+  # a file that loses its executable bit without a commit saying so (edits over \\wsl$ did, twice: scripts/gate/exec-bits.sh)
+  if [ -n "$BASE" ]; then step "exec bits" bash scripts/gate/exec-bits.sh "$BASE"; fi
 fi
 
 # ---- the suites: under the machine's heavy lock ---------------------------------------------------------------------------

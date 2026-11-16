@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Composer fixture</title>
+    <style>
+      body { font: 17px -apple-system, sans-serif; margin: 0; padding: 60px 16px 16px; background: #fff; color: #111; }
+      button, textarea { font: inherit; min-height: 44px; }
+      #row { display: flex; gap: 8px; align-items: flex-end; }
+      textarea { flex: 1; min-width: 0; }
+      #menu { margin: 8px 0; display: flex; flex-direction: column; gap: 4px; width: 14rem; border: 1px solid #888; padding: 4px; }
+      #menu[hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Stands in for the signed-in composer, for apps/mobile/ios/AppUITests. It copies the web app's contract with the shell and
+      nothing more: the same three menu labels, the same TalosPicker calls (apps/web/src/features/composer/useComposerAttachments.ts
+      chooseNative), the same result shape { files: [{ name, mime, base64 }] }, and the same "picker over: menu closed, box focused".
+      It never talks to a relay, so it needs no sign-in. The page's own markup is not what is under test: the native picker is.
+    -->
+    <h1 style="font-size: 1.1rem">Composer fixture</h1>
+    <div id="row">
+      <button id="plus" type="button" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">+</button>
+      <textarea id="box" rows="1" aria-label="Message" placeholder="Message"></textarea>
+    </div>
+    <div id="menu" role="menu" aria-label="Attach menu" hidden>
+      <button type="button" role="menuitem" data-which="photos">Photo library</button>
+      <button type="button" role="menuitem" data-which="camera">Camera</button>
+      <button type="button" role="menuitem" data-which="files">Files</button>
+    </div>
+    <p id="error" role="status"></p>
+    <p id="count">Attachments: 0</p>
+    <ul id="list" aria-label="Attachments"></ul>
+    <script>
+      const $ = (id) => document.getElementById(id)
+      const plus = $('plus')
+      const menu = $('menu')
+      const box = $('box')
+      const setMenu = (open) => {
+        menu.hidden = !open
+        plus.setAttribute('aria-expanded', String(open))
+      }
+      const attached = []
+      const show = () => {
+        $('count').textContent = 'Attachments: ' + attached.length
+        $('list').replaceChildren(
+          ...attached.map((f) => {
+            const li = document.createElement('li')
+            li.textContent = f.name + ' | ' + f.mime + ' | ' + atob(f.base64).length + ' bytes'
+            return li
+          }),
+        )
+      }
+      plus.addEventListener('click', () => setMenu(menu.hidden))
+      menu.addEventListener('click', async (e) => {
+        const which = e.target?.dataset?.which
+        if (!which) return
+        const plugin = window.Capacitor?.Plugins?.TalosPicker
+        $('error').textContent = ''
+        if (!plugin) {
+          $('error').textContent = "Couldn't attach: no TalosPicker"
+          return
+        }
+        try {
+          // The picker opens inside the tap, then the menu closes (as chooseNative does).
+          const run = which === 'photos' ? plugin.pickPhotos : which === 'camera' ? plugin.takePhoto : plugin.pickFiles
+          const pending = run.call(plugin)
+          setMenu(false)
+          const { files } = await pending
+          attached.push(...files)
+          show()
+        } catch (err) {
+          $('error').textContent = err?.message ? "Couldn't attach: " + err.message : "Couldn't attach that"
+        } finally {
+          setMenu(false)
+          box.focus({ preventScroll: true })
+        }
+      })
+    </script>
+  </body>
+</html>

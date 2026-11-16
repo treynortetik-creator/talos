@@ -8,7 +8,7 @@ import type { Inbound } from './inbound.ts'
 import type { Item, Of } from './inbound-shared.ts'
 import { systemNotification } from './notify.ts'
 import { describeDefaultChange, describeThreadChanges } from './thread-changes.ts'
-import { liveThreadIds, removeGoneInboxes } from './worker/inbox.ts'
+import { keptInboxThreadIds, removeGoneInboxes } from './worker/inbox.ts'
 
 export const configFrames = {
   async onConfigPatch(this: Inbound, it: Item, f: Of<'config.patch'>) {
@@ -31,8 +31,8 @@ export const configFrames = {
     ctx.log.info('config patched', { rev: r.config.rev })
     emitFolderEvents(ctx.log, before.threads, r.config.threads)
     emitConfigEvents(ctx.log, before, r.config, 'owner')
-    // a thread that was archived or deleted keeps no copies of the owner's files
-    removeGoneInboxes(ctx.paths.inbox, liveThreadIds(r.config))
+    // a thread removed from the config keeps no copies of the owner's files (an archived one keeps them)
+    removeGoneInboxes(ctx.paths.inbox, keptInboxThreadIds(r.config))
     // Thread edits change where the agent should post (docs/THREADS.md): tell it once, after the write.
     const told = [
       describeThreadChanges(before.threads, r.config.threads),
