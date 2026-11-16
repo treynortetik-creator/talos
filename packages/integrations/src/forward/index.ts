@@ -22,9 +22,9 @@ export const integration: IntegrationModule & ModuleExtras = {
             ...e,
             kind: 'email.forwarded',
             priority: 'high' as const,
-            dedup_key: e.dedup_key.replace(/^gmail:/, 'forward:'),
+            dedup_key: e.dedup_key.replace(/^gmail:(fwd:)?/, 'forward:'),
           }
-        : { ...e, dedup_key: e.dedup_key.replace(/^gmail:/, 'forward:') },
+        : { ...e, dedup_key: e.dedup_key.replace(/^gmail:(fwd:)?/, 'forward:') },
     ),
   toggle: (key, enabled, event) => (key === 'forwarded' && event.kind === 'email.forwarded' ? enabled : true),
   sample: () => ({

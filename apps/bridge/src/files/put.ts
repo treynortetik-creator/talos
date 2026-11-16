@@ -159,9 +159,11 @@ function createExclusive(dir: string, name: string, bytes: Uint8Array, allows: (
       if (!there && same()) removeIfEmpty(path)
       throw new ReadError('internal', FILES_PUT_WORDING.failed)
     }
+    let made: { ino: number; dev: number } | undefined // the file this call created, by inode
     try {
       // whatever the disk folds, the new file must not BE an instruction file or node_modules under another spelling
       const me = fstatSync(fd)
+      made = me
       for (const never of NEVER) {
         let st: ReturnType<typeof lstatSync> | undefined
         try {
@@ -176,13 +178,23 @@ function createExclusive(dir: string, name: string, bytes: Uint8Array, allows: (
       fsyncSync(fd)
     } catch (e) {
       closeSync(fd)
-      rmSync(path, { force: true }) // the file this call created
+      // the file this call created: only in the folder it was made in, and only if that name still is that very file
+      if (same() && sameFile(path, made)) rmSync(path, { force: true })
       throw e instanceof ReadError ? e : new ReadError('internal', FILES_PUT_WORDING.failed)
     }
     closeSync(fd)
     return candidate
   }
   throw new ReadError('bad_frame', FILES_PUT_WORDING.clash)
+}
+
+function sameFile(path: string, made: { ino: number; dev: number } | undefined): boolean {
+  try {
+    const st = lstatSync(path)
+    return made !== undefined && st.ino === made.ino && st.dev === made.dev
+  } catch {
+    return false
+  }
 }
 
 function exists(path: string): boolean {

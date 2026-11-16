@@ -198,5 +198,9 @@ RP_OUT="$(mktemp)"
 if bash scripts/release-publish-test.sh >"$RP_OUT" 2>&1; then ok "release-publish-test.sh: $(grep -c '^  ok' "$RP_OUT") cases green"
 else bad "release-publish-test.sh is red"; grep 'FAIL' "$RP_OUT" | head -20; fi
 rm -f "$RP_OUT"
+PL_OUT="$(mktemp)"
+if bash scripts/path-leak-test.sh >"$PL_OUT" 2>&1; then ok "path-leak-test.sh: $(grep -c '^  ok' "$PL_OUT") cases green"
+else bad "path-leak-test.sh is red"; grep 'FAIL' "$PL_OUT" | head -20; fi
+rm -f "$PL_OUT"
 
 exit $FAIL

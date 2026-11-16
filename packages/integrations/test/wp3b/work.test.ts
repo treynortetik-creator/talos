@@ -301,7 +301,8 @@ describe('forward and gmail_work', () => {
       script: s,
       main: [thread(1)],
       forwarded: [thread(2, { body: 'full body here' }, ['Talos/Inbound'])],
-      props: { TALOS_SECRET: 'whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' },
+      // past its first run (which only records what is labelled: gmail.test.ts)
+      props: { TALOS_SECRET: 'whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', TALOS_FWD_SENT: '[]' },
     })
     g.tick()
     expect(g.searches.every((q) => q.query.startsWith('label:"Talos/Inbound"'))).toBe(true)

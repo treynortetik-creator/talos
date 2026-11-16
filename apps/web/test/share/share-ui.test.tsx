@@ -61,6 +61,23 @@ describe('/share page', () => {
     expect(await screen.findByTestId('landed')).toBeTruthy()
   })
 
+  it('a Send retried after a lost answer is the same message (same client_msg_id)', async () => {
+    const { client } = page('/share?text=hello')
+    const real = client.sendOwnerFrame?.bind(client)
+    const ids: string[] = []
+    client.sendOwnerFrame = vi.fn(async (frame: Record<string, unknown>) => {
+      ids.push(String(frame.client_msg_id))
+      if (ids.length === 1) throw new Error('the answer was lost')
+      return real?.(frame)
+    }) as typeof client.sendOwnerFrame
+    await screen.findByTestId('shared-content')
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(ids).toHaveLength(1))
+    await userEvent.click(await screen.findByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(ids).toHaveLength(2))
+    expect(ids[1]).toBe(ids[0])
+  })
+
   it('the shared title and text never enter the note field', async () => {
     page('/share?title=Hello&text=World')
     const note = (await screen.findByLabelText(/What should .* do\?/)) as HTMLTextAreaElement

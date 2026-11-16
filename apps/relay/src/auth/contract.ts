@@ -23,6 +23,11 @@ export interface AuthContract {
     hello: { key_id: string; sig: string }
     challenge: { nonce: string; relay_host: string; server_time: number }
     ip: string
+    /**
+     * Accept only the ACTIVE key (or the env bootstrap key while no row is active). A previous key inside its grace window
+     * still signs HTTP calls but must not open a new socket. The hub's hello sets it; other callers keep every trusted key.
+     */
+    activeOnly?: boolean
   }): Promise<BridgeAuthResult>
   /**
    * When (epoch ms) the most recent bridge hello was refused, or null if the last hello was good (or none was refused).
@@ -30,6 +35,8 @@ export interface AuthContract {
    * Test implementations may omit it (never refused).
    */
   bridgeAuthRefusedAt?(): number | null
+  /** Whether this is the ACTIVE bridge key (not a previous one in its grace). Read from memory. Test implementations may omit it. */
+  bridgeKeyActive?(keyId: string): boolean
   /**
    * Guard for the `/ws` upgrade, run before upgrading: a valid session cookie AND `Origin === PUBLIC_ORIGIN`. Returns the
    * session, or a ready 401 / 403 Response. No CSRF header (browsers cannot set one on an upgrade).
@@ -118,6 +125,7 @@ export function isTestAuthInstalled(): boolean {
 export const requireSession: MiddlewareHandler<AppEnv> = (c, next) => impl.requireSession(c, next)
 export const requireCsrf: MiddlewareHandler<AppEnv> = (c, next) => impl.requireCsrf(c, next)
 export const verifyBridgeHello: AuthContract['verifyBridgeHello'] = (a) => impl.verifyBridgeHello(a)
+export const bridgeKeyActive = (keyId: string): boolean => impl.bridgeKeyActive?.(keyId) ?? true
 export const bridgeAuthRefusedAt = (): number | null => impl.bridgeAuthRefusedAt?.() ?? null
 export const guardWsUpgrade: AuthContract['guardWsUpgrade'] = (c) => impl.guardWsUpgrade(c)
 export const verifyBridgeHttp: AuthContract['verifyBridgeHttp'] = (c, body) => impl.verifyBridgeHttp(c, body)

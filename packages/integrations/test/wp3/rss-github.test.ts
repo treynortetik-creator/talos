@@ -133,16 +133,85 @@ describe('github notifications poller', () => {
     await expect(gh.poll?.(ctx({ secrets: {}, fetch: fakeFetch([]).f }))).rejects.toThrow(/no token/)
   })
 
-  it('reports a truncated page', async () => {
+  // RELAY-7: more than 50 unread since the last poll; the cursor used to move past the pages never read
+  const notes = (page: number, n = 50) =>
+    JSON.stringify(
+      Array.from({ length: n }, (_v, i) => ({
+        id: `${page}-${i}`,
+        updated_at: new Date(NOW - (page * 50 + i) * 1000).toISOString(),
+      })),
+    )
+  const nextTo = (page: number) => ({
+    link: `<https://api.github.com/notifications?page=${page}&per_page=50>; rel="next"`,
+  })
+
+  it('reads every page before moving the cursor, from the newest notification over all of them', async () => {
+    const { f, calls } = fakeFetch([
+      { body: notes(0), headers: { ...nextTo(2), 'last-modified': 'Wed, 28 Oct 2026 14:53:00 GMT' } },
+      { body: notes(1), headers: nextTo(3) },
+      { body: notes(2, 10) },
+    ])
     const res = await gh.poll?.(
-      ctx({
-        secrets,
-        fetch: fakeFetch([
-          { body: '[]', headers: { link: '<https://api.github.com/notifications?page=2>; rel="next"' } },
-        ]).f,
-      }),
+      ctx({ secrets, cursor: JSON.stringify({ since: '2026-10-28T10:00:00.000Z' }), fetch: f }),
+    )
+    expect(calls.map((c) => c.url.replace(/^.*\?/, ''))).toEqual([
+      'per_page=50&since=2026-10-28T10%3A00%3A00.000Z',
+      'page=2&per_page=50',
+      'page=3&per_page=50',
+    ])
+    expect(res?.deliveries).toHaveLength(110)
+    expect(res?.truncated).toBe(false)
+    const c = JSON.parse(res?.cursor ?? '{}')
+    expect(c).toEqual({
+      since: new Date(NOW - 5 * 60_000).toISOString(),
+      lastModified: 'Wed, 28 Oct 2026 14:53:00 GMT',
+    })
+  })
+
+  it('a backlog past 10 pages is read back over the next polls (before=), then the cursor moves past all of it', async () => {
+    const since = '2026-10-28T10:00:00.000Z'
+    const replies = Array.from({ length: 10 }, (_v, i) => ({ body: notes(i), headers: nextTo(i + 2) }))
+    const a = await gh.poll?.(
+      ctx({ secrets, cursor: JSON.stringify({ since, lastModified: 'x' }), fetch: fakeFetch(replies).f }),
+    )
+    expect(a?.deliveries).toHaveLength(500)
+    expect(a?.truncated).toBe(false) // nothing is skipped: the rest comes next poll
+    const oldest = NOW - 499 * 1000
+    expect(JSON.parse(a?.cursor ?? '{}')).toEqual({ since, before: new Date(oldest + 1000).toISOString(), top: NOW })
+    // the next poll reads on from there, with no If-Modified-Since, and the rest fits
+    const second = fakeFetch([{ body: notes(10), headers: nextTo(12) }, { body: notes(11, 20) }])
+    const b = await gh.poll?.(ctx({ secrets, cursor: a?.cursor ?? null, fetch: second.f }))
+    expect(second.calls[0]?.url).toContain(`&before=${encodeURIComponent(new Date(oldest + 1000).toISOString())}`)
+    expect(second.calls[0]?.headers['if-modified-since']).toBeUndefined()
+    expect(b?.deliveries).toHaveLength(70)
+    // done: since moves to the newest of the whole backlog (the first poll's), minus the overlap; no Last-Modified, no before
+    expect(JSON.parse(b?.cursor ?? '{}')).toEqual({ since: new Date(NOW - 5 * 60_000).toISOString() })
+  })
+
+  it('a backlog poll that gets no further back gives up the rest and says some were skipped', async () => {
+    const since = '2026-10-28T10:00:00.000Z'
+    const at = new Date(NOW - 10_000).toISOString()
+    // every page is the same second, which `before` already allows: no progress
+    const same = JSON.stringify(Array.from({ length: 50 }, (_v, i) => ({ id: `s${i}`, updated_at: at })))
+    const replies = Array.from({ length: 10 }, (_v, i) => ({ body: same, headers: nextTo(i + 2) }))
+    const res = await gh.poll?.(
+      ctx({ secrets, cursor: JSON.stringify({ since, before: at, top: NOW }), fetch: fakeFetch(replies).f }),
     )
     expect(res?.truncated).toBe(true)
+    expect(JSON.parse(res?.cursor ?? '{}')).toEqual({ since: new Date(NOW - 5 * 60_000).toISOString() })
+  })
+
+  it('a next link anywhere but GitHub’s notifications endpoint is not followed', async () => {
+    for (const link of [
+      '<https://evil.example.com/notifications?page=2>; rel="next"',
+      '<http://api.github.com/notifications?page=2>; rel="next"',
+      '<https://api.github.com/user/repos?page=2>; rel="next"',
+    ]) {
+      const { f, calls } = fakeFetch([{ body: notes(0, 3), headers: { link } }])
+      const res = await gh.poll?.(ctx({ secrets, fetch: f }))
+      expect(calls, link).toHaveLength(1)
+      expect(res?.deliveries).toHaveLength(3)
+    }
   })
 
   it('normalizes the fixture: kinds, priorities, html urls, and no javascript: urls', async () => {

@@ -38,7 +38,7 @@
 set -euo pipefail
 
 # The TALOS_WSL_* names are the test's stand-ins, for a run as an ordinary user against a scratch root:
-#   ROOT, MOUNT, UMOUNT, WSLINFO, UID, GID, STARTED, HOLD_CHECK_S, SYSTEMCTL, LOGINCTL, LAUNCH, KIT.
+#   ROOT, MOUNT, UMOUNT, WSLINFO, UID, GID, STARTED, HOLD_CHECK_S, STOP_WAIT, SYSTEMCTL, LOGINCTL, LAUNCH, KIT.
 # As root every one is ignored (Pantheon on bbdcdd36, as Fable R5-5 for pair.py): a WSLENV entry or anything else that
 # reaches root's environment cannot point root at another file, program or folder. EUID is bash's own, not from PATH.
 if [ "$EUID" -eq 0 ]; then
@@ -172,17 +172,20 @@ default_gateway() {
     "$R/proc/net/route" 2>/dev/null || true
 }
 # WSL's DNS tunnel (the 10.255.255.254 it writes) can stop answering while Windows stays online (found live on Titan,
-# 2026-11-14: every distro lost names; WSL's NAT gateway and Windows still answered). The gateway is added as a second
-# nameserver with short timeouts, so a dead tunnel costs a lookup about 2 s and nothing stops: the tunnel stays first,
-# nothing changes while it answers within 2 s, and the owner's own WSL settings are never touched.
+# 2026-11-14: every distro lost names; WSL's NAT gateway and Windows still answered). And the NAT gateway's resolver can
+# time out on every name it has not cached (Titan again, 2026-11-16, behind a VPN: 3 s and nothing for platform.claude.com
+# and claude.ai, while 1.1.1.1 and 8.8.8.8 answered from the distro in 12-64 ms; the owner's first sign-in failed on it).
+# So after WSL's own lines come the gateway (when WSL does not already name it), then two public resolvers that do not go
+# through Windows at all, with a 2 s timeout: WSL's choice stays first and nothing changes while it answers within 2 s (a
+# shorter wait would send a slow tunnel's names to the public resolvers routinely), and a dead one costs about 2 s. glibc reads at most three nameservers, so the list is cut at three.
+# The owner's own WSL settings are never touched.
+DNS_PUBLIC='1.1.1.1 8.8.8.8'
 dns_with_fallback() {
-  local gw
-  printf '%s\n' "$1"
+  local gw p
   gw="$(default_gateway)"
-  [ -n "$gw" ] || return 0
-  # already named (spacing aside): nothing added
-  printf '%s\n' "$1" | awk -v gw="$gw" '$1 == "nameserver" && $2 == gw { f = 1 } END { exit !f }' && return 0
-  printf 'nameserver %s\noptions timeout:2 attempts:2\n' "$gw"
+  { printf '%s\n' "$1"; [ -z "$gw" ] || printf 'nameserver %s\n' "$gw"; for p in $DNS_PUBLIC; do printf 'nameserver %s\n' "$p"; done; } |
+    awk '$1 == "nameserver" { if (NF < 2 || seen[$2]++ || n >= 3) next; n++; print "nameserver " $2; next } { print }
+      END { print "options timeout:2 attempts:2" }'
 }
 
 isolate_mounts() {
@@ -397,6 +400,46 @@ pair() {
 launch_approved() {
   [ "$(timeout -k 5 10 /usr/bin/python3 -I "${TALOS_WSL_LAUNCH:-/opt/talos-wsl/launch.py}" state 2>/dev/null | head -1)" = approved ]
 }
+# Main stops for real before the supervisor restarts (WINPROTO-2, 2026-11-16): the unit is KillMode=process and a quitting
+# supervisor detaches Main, so a bare `systemctl --user restart` left the same Claude session running and the next supervisor
+# adopted it, while the tray says "What Claude is doing in Talos right now stops". First the supervisor is asked
+# (`talos-app supervise stop`: SIGTERM, then SIGKILL after its grace, so a hung Main goes too) and its main-state is
+# watched for `stopped`; a supervisor that is not there, does not take the request, or never gets Main to stopped is passed
+# by: Main's tmux session (socket talos, session agent: TMUX_SOCKET and MAIN_TMUX_SESSION) is killed as talos. Then the
+# owner's own stop (supervisor-stopped) is cleared, because Start or Restart from the tray is the owner's start: the next
+# supervisor starts a fresh Main. Nothing of talos's is printed.
+STOP_WAIT_S="${TALOS_WSL_STOP_WAIT:-15}"
+case "$STOP_WAIT_S" in '' | *[!0-9]*) STOP_WAIT_S=15 ;; esac
+talos_app() {
+  local secs="$1" home uid
+  shift
+  home="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+  uid="$(id -u "$USER_NAME")"
+  timeout -k 5 "$secs" runuser -u "$USER_NAME" -- env -i HOME="$home" USER="$USER_NAME" LOGNAME="$USER_NAME" \
+    PATH="$home/.bun/bin:$home/.local/bin:/usr/local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="/run/user/$uid" \
+    "$home/.bun/bin/talos-app" "$@" </dev/null >/dev/null 2>&1
+}
+main_state_now() { timeout -k 1 2 runuser -u "$USER_NAME" -- head -c 64 "$(app_home)/run/main-state" 2>/dev/null | head -1 || true; }
+# Main is gone: its state says stopped, or its tmux session is gone (a Main at Claude's sign-in screen stays `signin` in the
+# state file after its stop; found live on Titan: a 20 s wait for a word that never came)
+main_session_up() { timeout -k 1 2 runuser -u "$USER_NAME" -- tmux -L talos has-session -t agent >/dev/null 2>&1; }
+main_gone() { [ "$(main_state_now)" = main=stopped ] || ! main_session_up; }
+# Bounded by the clock, not by passes (Opus review on eb96ae42: a stalled read made 40 passes minutes long): at most
+# STOP_WAIT_S from the stop request on, then about 6 s more for the kill and the flag, so restore (its own 95 s at worst) plus
+# this stays near the tray's limit only when talos stalls everything. The owner's stop flag, which `supervise stop` itself
+# writes, is cleared right after the request, so a verb the tray cuts off later never leaves Talos stopped for good. And the
+# session is killed after the wait whatever main-state says: talos could fake `stopped` to have the old session adopted.
+stop_main() {
+  local end=$((SECONDS + STOP_WAIT_S)) asked=0
+  talos_app 10 supervise stop && asked=1
+  timeout -k 1 3 runuser -u "$USER_NAME" -- rm -f "$(app_home)/supervisor-stopped" >/dev/null 2>&1 || true
+  if [ "$asked" = 1 ]; then
+    while [ "$SECONDS" -lt "$end" ] && ! main_gone; do sleep 0.5; done
+  fi
+  timeout -k 1 3 runuser -u "$USER_NAME" -- tmux -L talos kill-session -t agent >/dev/null 2>&1 || true
+  # again: the supervisor writes the flag in the same pass that takes the request, which can come after the first rm
+  timeout -k 1 3 runuser -u "$USER_NAME" -- rm -f "$(app_home)/supervisor-stopped" >/dev/null 2>&1 || true
+}
 restart_talos() {
   (isolation) >/dev/null 2>&1 || {
     echo not-isolated
@@ -414,6 +457,7 @@ restart_talos() {
     exit 1
   }
   timeout -k 5 20 "$SYSTEMCTL" start "user@$uid.service" >/dev/null 2>&1 || true
+  stop_main
   if timeout -k 5 30 runuser -u "$USER_NAME" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user restart talos-supervisor.service >/dev/null 2>&1; then
     echo restarted
   else
@@ -435,15 +479,19 @@ restore_last_good() {
     echo not-approved
     exit 1
   }
-  local home out
+  local home out dir
   home="$(getent passwd "$USER_NAME" | cut -d: -f6)"
   [ -n "$home" ] || {
     echo failed
     exit 1
   }
+  # the agent folder of the launch the owner approved, from root's own approval (WINPROTO-4); an approval from before it
+  # named one falls back to the install's own folder
+  dir="$(timeout -k 5 10 /usr/bin/python3 -I "${TALOS_WSL_LAUNCH:-/opt/talos-wsl/launch.py}" approved-folder 2>/dev/null | head -1 || true)"
+  case "$dir" in /*) ;; *) dir="$home/talos-agent" ;; esac
   # the whole pipeline under one group time limit (Fable R7-2): a child of talos-app holding stdout open cannot keep root
   # waiting; and a clean environment, a fixed list (R7-4), as pair.py gives enroll
-  out="$(timeout -k 5 95 sh -c 'runuser -u "$1" -- env -i HOME="$2" USER="$1" LOGNAME="$1" PATH="$2/.bun/bin:$2/.local/bin:/usr/local/bin:/usr/bin:/bin" "$2/.bun/bin/talos-app" restore-last-good --yes --newest-start --agent-dir "$2/talos-agent" 2>&1 </dev/null | head -c 65536' sh "$USER_NAME" "$home" || true)"
+  out="$(timeout -k 5 95 sh -c 'runuser -u "$1" -- env -i HOME="$2" USER="$1" LOGNAME="$1" PATH="$2/.bun/bin:$2/.local/bin:/usr/local/bin:/usr/bin:/bin" "$2/.bun/bin/talos-app" restore-last-good --yes --newest-start --agent-dir "$3" 2>&1 </dev/null | head -c 65536' sh "$USER_NAME" "$home" "$dir" || true)"
   if printf '%s\n' "$out" | grep -q '^restore-last-good: restored '; then
     echo restored
     restart_talos
@@ -457,9 +505,32 @@ restore_last_good() {
   fi
 }
 
-# Sign out: the token goes (as talos); the supervisor then shows main=signin and the tray says "not signed in"
+# Sign out (WINPROTO-7, 2026-11-16): sessions already running keep the token they started with, so removing the file alone
+# left them signed in while the tray said "signed out". The token goes FIRST (nothing woken after this point starts signed
+# in), then the supervisor stops (no thread is woken or adopted meanwhile: Opus review on 9c5aed05), then every session on
+# talos's tmux socket that is Main's (agent) or a thread's (t-<id>) is killed, under one 20 s deadline (talos could make
+# the list endless). For a launch the owner approved, the supervisor then starts again: its new Main shows Claude's sign-in
+# (main=signin; the tray offers Sign in). The owner's own stop (supervisor-stopped) is left as it is: a sign-out is not a start.
+stop_sessions() {
+  local s end=$((SECONDS + 20))
+  set -f
+  for s in $(timeout -k 1 5 runuser -u "$USER_NAME" -- tmux -L talos list-sessions -F '#{session_name}' 2>/dev/null | head -n 500 || true); do
+    [ "$SECONDS" -lt "$end" ] || break
+    case "$s" in
+    agent | t-*) timeout -k 1 3 runuser -u "$USER_NAME" -- tmux -L talos kill-session -t "=$s" >/dev/null 2>&1 || true ;;
+    esac
+  done
+  set +f
+}
 signout() {
+  local uid
+  uid="$(id -u "$USER_NAME" 2>/dev/null)" || uid=""
   runuser -u "$USER_NAME" -- rm -f "$(app_home)/claude-oauth-token"
+  [ -z "$uid" ] || timeout -k 5 30 runuser -u "$USER_NAME" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user stop talos-supervisor.service >/dev/null 2>&1 || true
+  stop_sessions
+  if [ -n "$uid" ] && (isolation) >/dev/null 2>&1 && launch_approved; then
+    timeout -k 5 30 runuser -u "$USER_NAME" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user start talos-supervisor.service >/dev/null 2>&1 || true
+  fi
   echo "signed out"
 }
 

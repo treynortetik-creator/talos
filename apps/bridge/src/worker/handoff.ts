@@ -138,6 +138,15 @@ export function leadSpokeSince(db: Database, thread: string, sinceMs: number, no
   }
 }
 
+/** `leadSpokeSince` for every lead: any thread's lead handed main anything after `sinceMs`. */
+export function anyLeadSpokeSince(db: Database, sinceMs: number, now: number): boolean {
+  try {
+    return !!db.query("SELECT 1 FROM handoffs WHERE dir = 'to_main' AND at > ? AND at <= ? LIMIT 1").get(sinceMs, now)
+  } catch {
+    return false
+  }
+}
+
 /** True when a lead sent main a RESULT or BLOCK for `thread` at or after `at`. That counts as the lead's answer. */
 export function leadAnsweredSince(db: Database, thread: string, at: number): boolean {
   try {

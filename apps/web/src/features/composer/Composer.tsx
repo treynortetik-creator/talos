@@ -6,12 +6,13 @@
 import { ownValue } from '@talos-app/protocol'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
+import type { SocketClient } from '../../lib/socketClient.ts'
 import { useStorage } from '../../lib/storageContext.tsx'
 import { SlashPicker, useSlashPicker } from '../session/SlashPicker.tsx'
 import { useSessionController } from '../session/store.ts'
 import { CallErrorLine } from '../voice/CallErrorLine.tsx'
 import { ChipList, useChipUpkeep } from './ComposerChips.tsx'
-import { ErrorLine, NoteLine, ReplyBar, TooLongBar } from './ComposerNotices.tsx'
+import { ErrorLine, NoteLine, ReplyBar, TooLongBar, UnsavedLine } from './ComposerNotices.tsx'
 import { ComposerToolbar } from './ComposerToolbar.tsx'
 import { type Chip, EMPTY_CHIPS, useComposerStore } from './composerStore.ts'
 import { RecorderLockedRow } from './RecorderLockedRow.tsx'
@@ -21,7 +22,7 @@ import { useComposerDraft } from './useComposerDraft.ts'
 import { useComposerKeyboard } from './useComposerKeyboard.ts'
 import { type Note, useComposerSend, useThreadAlive } from './useComposerSend.ts'
 import { useComposerTextBox } from './useComposerTextBox.ts'
-import { canQueue, useComposerVoice, useMicGesture, useRecorderState } from './useComposerVoice.ts'
+import { useComposerVoice, useMicGesture, useRecorderState } from './useComposerVoice.ts'
 
 export function Composer({
   threadId,
@@ -80,7 +81,7 @@ export function Composer({
     emptyBox,
   })
   const { choose, onKeyDown } = useComposerKeyboard({ picker, storage, threadId, taRef, setText, setNote, send })
-  const att = useComposerAttachments({ client, storage, threadId, text, taRef, setText })
+  const att = useComposerAttachments({ client, storage, threadId, text, taRef, setText, setError })
   const voice = useComposerVoice({ client, threadId, setError, rec })
 
   // Dictation (useComposerDictate): the words go in the box like typed ones; nothing here sends.
@@ -93,7 +94,9 @@ export function Composer({
     sendRecording: voice.sendRecording,
     // A 401 from dictation ends the session the same way a refused upload does.
     endSession: (reason) => {
-      if (canQueue(client)) client.meta.setState((m) => ({ ...m, authFailed: true, authReason: reason }))
+      // (the demo client has a `queueVoiceNote` but no session to end)
+      if ('meta' in client)
+        (client as SocketClient).meta.setState((m) => ({ ...m, authFailed: true, authReason: reason }))
     },
   })
   const mic = useMicGesture({
@@ -124,6 +127,13 @@ export function Composer({
       <SlashPicker picker={picker} onChoose={(it) => void choose(it)} />
       {note && <NoteLine note={note} />}
       {dictation.strip}
+      {voice.keptCount > 0 && (
+        <UnsavedLine
+          count={voice.keptCount}
+          onRetry={() => void voice.retryUnsaved()}
+          onDelete={voice.discardUnsaved}
+        />
+      )}
       {error && <ErrorLine error={error} />}
       {tooLong && <TooLongBar length={text.length} uploading={uploading} onSendAsFile={() => void att.sendAsFile()} />}
       {replyTarget && <ReplyBar target={replyTarget} onCancel={() => setReplyTo(threadId, undefined)} />}
@@ -169,6 +179,8 @@ export function Composer({
           pickerRef={att.pickerRef}
           onPick={att.onPick}
           choosePicker={att.choosePicker}
+          attachMode={att.attachMode()}
+          openIosSheet={att.openIosSheet}
           dictationButton={dictation.button}
           dictationBusy={dictation.busy}
           canSend={canSend}

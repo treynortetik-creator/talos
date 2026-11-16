@@ -1,7 +1,7 @@
 // `talos-app memory init|on|off|show|reindex` (docs/V2-FEATURES.md V5.1). Mac only: the app can switch the browser off,
 // never on. Nothing here writes under the agent dir; the files written are memory.json and config.json in the app home.
 import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { MemoryRootId } from '@talos-app/protocol'
 import { realClock } from '../clock.ts'
 import { type BridgeEnv, paths } from '../config.ts'
@@ -30,7 +30,8 @@ export type MemoryIO = {
   serviceOptions?: Partial<MemoryServiceOptions>
 }
 
-export const MEMORY_USAGE = 'usage: talos-app memory init [--defaults] [--agent-dir <dir>] | on | off | show | reindex'
+export const MEMORY_USAGE =
+  'usage: talos-app memory init [--defaults] [--agent-dir <dir>] | set-root <name> <path> [--agent-dir <dir>] | on | off | show | reindex'
 
 /** What `memory init --defaults` shares, in this order, when the agent folder has it: no questions asked. */
 export const DEFAULT_MEMORY_ROOTS = ['memory', 'wiki'] as const
@@ -298,11 +299,96 @@ async function show(env: BridgeEnv, io: MemoryIO): Promise<number> {
   return 0
 }
 
+/**
+ * `memory set-root <name> <path>`: share one folder. No memory.json yet: it is made with only this root. Otherwise this
+ * root is added (or its path changed, found by label or id) and the owner's other roots are kept as they are.
+ */
+function setRoot(env: BridgeEnv, args: string[], io: MemoryIO): number {
+  const i = args.indexOf('--agent-dir')
+  const agentArg = i >= 0 ? args[i + 1] : undefined
+  const pos = i < 0 ? args : args.filter((_, k) => k !== i && k !== i + 1)
+  const [name, pathArg] = pos
+  if ((i >= 0 && !agentArg) || !name || !pathArg || pos.length > 2) {
+    io.err(MEMORY_USAGE)
+    return 2
+  }
+  const existing = loadMemoryConfig(env.home)
+  if (!existing.ok && !('missing' in existing && existing.missing)) {
+    io.err(`${memoryJsonPath(env.home)} is there but not usable (${existing.message}); not changed`)
+    return 1
+  }
+  const real = (p: string) => {
+    try {
+      return realpathSync(p)
+    } catch {
+      return undefined
+    }
+  }
+  const given = agentArg ? real(resolve(agentArg)) : undefined
+  if (agentArg && !given) {
+    io.err(`${resolve(agentArg)} is not a folder`)
+    return 1
+  }
+  let agentDir: string
+  if (existing.ok) {
+    agentDir = existing.config.agent_dir
+    if (given && given !== agentDir) {
+      io.err(`memory.json is for the agent folder ${agentDir}, not ${given}; nothing changed`)
+      return 2
+    }
+  } else {
+    const dir = given ?? real(process.cwd())
+    if (!dir) {
+      io.err('the current folder is not readable; nothing written')
+      return 1
+    }
+    agentDir = dir
+  }
+  const abs = resolve(agentDir, pathArg)
+  const rel = relative(agentDir, real(abs) ?? abs)
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+    io.err(`${pathArg} must be inside the agent folder ${agentDir}; nothing written`)
+    return 1
+  }
+  const base: MemoryConfig = existing.ok
+    ? existing.config
+    : { version: 1, enabled: true, agent_dir: agentDir, roots: [], max_file_kb: DEFAULT_MAX_FILE_KB }
+  const wanted = slug(name, new Set())
+  const hit = base.roots.find((r) => r.label === name || r.id === wanted)
+  const roots: MemoryRootCfg[] = hit
+    ? base.roots.map((r) => (r === hit ? { ...r, path: rel } : r))
+    : [
+        ...base.roots,
+        {
+          id: slug(name, new Set(base.roots.map((r) => r.id))),
+          label: name,
+          path: rel,
+          include: DEFAULT_INCLUDE,
+          exclude: [],
+        },
+      ]
+  const parsed = parseMemoryConfig({ ...base, roots }, env.home)
+  if (!parsed.ok) {
+    io.err(parsed.message)
+    return 1
+  }
+  writeMemoryConfig(env.home, parsed.config)
+  if (existing.ok) {
+    io.out(`memory: ${hit?.label ?? name} → ${rel}`)
+  } else {
+    setSwitch(env.home, true, io)
+    io.out(`memory: ${name} → ${rel} (the only folder shared)`)
+  }
+  return 0
+}
+
 export async function cmdMemory(env: BridgeEnv, args: string[], io: MemoryIO): Promise<number> {
   const sub = args[0] ?? ''
   switch (sub) {
     case 'init':
       return await init(env, args.slice(1), io)
+    case 'set-root':
+      return setRoot(env, args.slice(1), io)
     case 'show':
       return await show(env, io)
     case 'on':

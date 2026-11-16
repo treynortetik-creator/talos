@@ -21,13 +21,14 @@ export function createClientSend(
   | 'queueVoiceNote'
   | 'sendVoiceAsk'
 > {
-  const { discarding, listeners, now, queueKeptAt, set, storage, store, uploadFailures } = c
+  const { discarding, listeners, now, deadlineHits, queueKeptAt, set, storage, store, uploadFailures } = c
   return {
     outboxSize: () => c.outbox.length + c.voiceQueue.length,
     retryMessage(clientMsgId) {
       // A voice note that failed to upload: it starts over with a full set of tries.
       if (c.voiceQueue.some((x) => x.clientMsgId === clientMsgId)) {
         uploadFailures.delete(clientMsgId)
+        deadlineHits.delete(clientMsgId)
         c.clearFailed(clientMsgId)
         c.refreshQueued()
         void c.flushOutbox()
@@ -56,6 +57,7 @@ export function createClientSend(
           if (v) {
             c.voiceQueue = c.voiceQueue.filter((x) => x.clientMsgId !== clientMsgId)
             uploadFailures.delete(clientMsgId)
+            deadlineHits.delete(clientMsgId)
             await storage.del('blobs', clientMsgId)
           }
         })

@@ -19,6 +19,7 @@ import {
   supervisorFresh,
   threadSessionMode,
 } from '@talos-app/protocol'
+import { settingsReadText } from '../config-propose/settings-read.ts'
 import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { workerScheduleTool } from '../schedules/worker-scope.ts'
 import { frameBytes } from '../transport.ts'
@@ -268,6 +269,14 @@ export class HubServer {
     }
     // The settings cards: the thread is the one this connection proved, never one the request names. The proposal is judged as the
     // thread's own (its fields only, the card in its thread), by the same service that judges main's.
+    if (msg.tool === 'settings_read') {
+      if (threadSessionMode(ctx.config.config, thread) !== 'dedicated')
+        return answer(
+          false,
+          `Thread "${thread}" no longer has its own session; the main session handles it now. Stop here.`,
+        )
+      return answer(true, settingsReadText(ctx, thread))
+    }
     if (msg.tool === 'config_propose') {
       if (threadSessionMode(ctx.config.config, thread) !== 'dedicated')
         return answer(

@@ -53,6 +53,7 @@ export function Shell() {
   const onThread = useMatch('/t/:thread')
   const onCard = useMatch('/card/:id')
   const onTerminal = useMatch('/terminal') !== null
+  const onGraph = useMatch('/memory/graph') !== null
   const inThread = onThread !== null || onCard !== null
   const [detail, setDetail] = useState<{ node: ReactNode; title?: string } | null>(null)
 
@@ -164,9 +165,11 @@ export function Shell() {
             {sessionThread && !phone && !detail && <SessionTrigger threadId={sessionThread} />}
             <main
               className={cn(
-                'mx-auto min-h-0 w-full flex-1 overflow-y-auto overscroll-contain',
+                'mx-auto min-h-0 w-full flex-1 overscroll-contain',
                 // the terminal wants the whole width; every other screen reads best in a column
-                onTerminal ? 'max-w-none' : 'max-w-[760px] lg:max-w-[760px]',
+                onTerminal || onGraph ? 'max-w-none' : 'max-w-[760px] lg:max-w-[760px]',
+                // the graph fills the area and takes the wheel for zoom, so the page itself never scrolls
+                onGraph ? 'overflow-hidden' : 'overflow-y-auto',
               )}
               id="main"
             >

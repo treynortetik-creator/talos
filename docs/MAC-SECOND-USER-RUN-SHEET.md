@@ -166,7 +166,7 @@ the setup checklist; TESTED: `TmuxLookupTests`). The `~/.zprofile` line is for T
      then the gate: the kit's self-test in the upgraded folder, a few minutes. The installer runs it itself (upgrade.sh gets
      `--no-gate` and prints a red "GATE NOT RUN" line that refers to that) and records a pass. A failed gate stops the carry
      before anything else is written, and every later run reruns it until it passes (TESTED, R2-1). Then settings-merge.py
-     (a backup of `settings.json` next to it first), then adopt. For a fresh install there is nothing for her to type here: step 10 adds the `talos-app` server to `.mcp.json` itself (DRY RUN). She types `adopt` (with `--repoint`) only when the plan says her folder's `talos-app` server points at another clone.
+     (a backup of `settings.json` next to it first), then adopt, then semantic memory search, as a new install gets it (it can fail without failing the carry; `talos-app doctor` then gives the one command). The search takes about 40 s and up to 1.3 GB of memory on an M1 with the network (measured 2026-11-16, clean HOME), plus the reranker download where the computer has 3 GiB or more. For a fresh install there is nothing for her to type here: step 10 adds the `talos-app` server to `.mcp.json` itself (DRY RUN). She types `adopt` (with `--repoint`) only when the plan says her folder's `talos-app` server points at another clone.
    - While it runs, the folder holds a file `.talos-carry`, written before the first change and removed after the last. If
      the run stops after upgrade.sh, running the same command again finishes it (the merge and adopt, no second upgrade).
      A folder without that file is never treated as half carried, whatever its hooks look like (TESTED:

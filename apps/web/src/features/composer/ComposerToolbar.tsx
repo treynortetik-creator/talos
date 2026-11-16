@@ -35,6 +35,10 @@ export function ComposerToolbar(p: {
   pickerRef: (which: Which) => (n: HTMLInputElement | null) => void
   onPick: (e: ChangeEvent<HTMLInputElement>) => void
   choosePicker: (which: Which) => void
+  /** 'menu' (desktop): our popover over three inputs. 'native' (iPhone app): our popover over TalosPicker. 'ios-web'
+   * (iPhone Safari): no popover, + opens iOS's own sheet on one plain input. */
+  attachMode: 'native' | 'ios-web' | 'menu'
+  openIosSheet: () => void
   dictationButton: React.ReactNode
   dictationBusy: boolean
   canSend: boolean
@@ -82,47 +86,59 @@ export function ComposerToolbar(p: {
         tabIndex={-1}
         onChange={p.onPick}
       />
-      <Popover open={p.menuOpen} onOpenChange={p.setMenuOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            aria-label="Attach"
-            className="order-2 grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill text-text-2 @min-[36rem]:order-none"
-            disabled={recording}
-          >
-            <IconPlus />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
+      {p.attachMode === 'ios-web' ? (
+        <button
+          type="button"
           aria-label="Attach"
-          className="flex w-56 flex-col gap-1 p-1"
-          // After a choice the OS picker takes over (no focus grab, it would raise the keyboard under it); a plain
-          // dismissal returns focus to the + button like any menu.
-          onCloseAutoFocus={(e) => {
-            if (!p.choseOnce.current) return
-            p.choseOnce.current = false
-            e.preventDefault()
-          }}
+          onClick={p.openIosSheet}
+          className="order-2 grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill text-text-2 @min-[36rem]:order-none"
+          disabled={recording}
         >
-          {(
-            [
-              ['photos', IconImage, 'Photo library'],
-              ['camera', IconCamera, 'Camera'],
-              ['files', IconFile, 'Files'],
-            ] as const
-          ).map(([which, Icon, label]) => (
+          <IconPlus />
+        </button>
+      ) : (
+        <Popover open={p.menuOpen} onOpenChange={p.setMenuOpen}>
+          <PopoverTrigger asChild>
             <button
-              key={which}
               type="button"
-              data-testid={`attach-${which}`}
-              onClick={() => p.choosePicker(which)}
-              className="flex min-h-11 items-center gap-3 rounded-button px-3 text-left hover:bg-surface-2"
+              aria-label="Attach"
+              className="order-2 grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill text-text-2 @min-[36rem]:order-none"
+              disabled={recording}
             >
-              <Icon /> {label}
+              <IconPlus />
             </button>
-          ))}
-        </PopoverContent>
-      </Popover>
+          </PopoverTrigger>
+          <PopoverContent
+            aria-label="Attach"
+            className="flex w-56 flex-col gap-1 p-1"
+            // After a choice the OS picker takes over (no focus grab, it would raise the keyboard under it); a plain
+            // dismissal returns focus to the + button like any menu.
+            onCloseAutoFocus={(e) => {
+              if (!p.choseOnce.current) return
+              p.choseOnce.current = false
+              e.preventDefault()
+            }}
+          >
+            {(
+              [
+                ['photos', IconImage, 'Photo library'],
+                ['camera', IconCamera, 'Camera'],
+                ['files', IconFile, 'Files'],
+              ] as const
+            ).map(([which, Icon, label]) => (
+              <button
+                key={which}
+                type="button"
+                data-testid={`attach-${which}`}
+                onClick={() => p.choosePicker(which)}
+                className="flex min-h-11 items-center gap-3 rounded-button px-3 text-left hover:bg-surface-2"
+              >
+                <Icon /> {label}
+              </button>
+            ))}
+          </PopoverContent>
+        </Popover>
+      )}
 
       {recording ? (
         <div

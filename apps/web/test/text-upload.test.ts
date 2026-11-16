@@ -20,7 +20,7 @@ function rig() {
         role: 'attachment',
         mime: h['X-Talos-File-Type'] ?? h['Content-Type'],
         name: decodeURIComponent(h['X-Talos-Name'] as string),
-        size: 3,
+        size: (init.body as Uint8Array).length,
         sha256: h['X-Talos-Sha256'],
       })
     }) as unknown as typeof fetch,

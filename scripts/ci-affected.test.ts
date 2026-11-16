@@ -310,6 +310,8 @@ const KIT_INPUTS = [
   'scripts/root-install.test.ts',
   'scripts/root-install-flags.test.ts',
   'scripts/root-install-harness.ts',
+  'scripts/root-install-v1-gate.test.ts',
+  'scripts/v1-agent-fixture.sh',
   'scripts/kit-tests.test.ts',
   'scripts/kit-run.ts',
   'scripts/size-report.ts',

@@ -26,6 +26,19 @@ export function pickClientIp(i: ClientIpInput): string {
   return canonicalAddress(pickRaw(i))
 }
 
+/**
+ * The address a LOCKOUT may key on, or null. Only a source the client cannot share with strangers counts: a single valid
+ * `X-Real-IP` (hops > 0, the header the Railway edge sets), or the socket peer when hops = 0. The `X-Forwarded-For` fallback
+ * of `pickClientIp` can be the shared edge hop, so one stranger would lock out everyone behind it: no key, no lockout.
+ */
+export function pickLockoutKey(i: ClientIpInput): string | null {
+  if (i.hops > 0) {
+    const real = i.realIp?.trim()
+    return real && isIP(real) !== 0 ? canonicalAddress(real) : null
+  }
+  return i.remote ? canonicalAddress(i.remote) : null
+}
+
 function pickRaw(i: ClientIpInput): string {
   if (i.hops > 0) {
     const real = i.realIp?.trim()

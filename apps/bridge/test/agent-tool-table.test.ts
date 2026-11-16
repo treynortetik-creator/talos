@@ -162,7 +162,7 @@ describe('a worker is held to its own thread, tool by tool (callTool -> workerRe
   const CARD_TOOLS = ['card_result']
   // main's Schedules service answers these over the hub, as the thread the connection proved (thread-schedules.test.ts)
   // wake_me takes no thread id either: the hub sets it for the proven thread (schedules/wake-me.test.ts, "scope")
-  const HUB_SCHEDULE_TOOLS = ['schedules_list', 'schedule_run_start', 'schedule_run_done', 'wake_me']
+  const HUB_SCHEDULE_TOOLS = ['schedules_list', 'schedule_run_start', 'schedule_run_done', 'wake_me', 'settings_read']
   // takes no thread id; lead-only, checked by its handler (worker-tool-lock.test.ts, restart-main.test.ts)
   const LEAD_ONLY_TOOLS = ['restart_main']
   // take no thread id; they talk to this Mac's Talos app over its screen socket (screen-tools.test.ts)

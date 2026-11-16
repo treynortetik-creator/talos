@@ -17,8 +17,8 @@ export const CLIO_TEXT = {
   canvas: 'Your notes as a 3D graph. Drag to turn it, scroll to zoom, choose a note to see what it links to.',
   panel: 'Chosen note',
   open: 'Open note',
-  pause: 'Pause',
-  turn: 'Turn',
+  close: 'Close',
+  backNote: 'Back',
   links: (n: number) => (n === 1 ? '1 link' : `${n} links`),
   meta: (shown: number, total: number, links: number) =>
     `${shown === total ? `${total}` : `${shown} of ${total}`} ${total === 1 ? 'note' : 'notes'} · ${links} ${links === 1 ? 'link' : 'links'}`,
@@ -114,4 +114,31 @@ export function shownGraph(g: MemoryGraph, hiddenFolders: ReadonlySet<number>, q
     degree.set(b, (degree.get(b) ?? 0) + 1)
   }
   return { nodes: [...keep], edges, degree }
+}
+
+/**
+ * Which notes get a text label: the most linked ones, the hovered one, the chosen one with its neighbours, and the search
+ * matches while there are few of them. Every other note is a disc only, which keeps 2,000 notes cheap to draw.
+ */
+export function labelled(
+  shown: Shown,
+  o: {
+    hovered: number | null
+    chosen: number | null
+    matches: ReadonlySet<number>
+    neighbours: ReadonlySet<number>
+    top: number
+  },
+): Set<number> {
+  const inShown = new Set(shown.nodes)
+  const out = new Set<number>()
+  const ranked = [...shown.nodes].sort((a, b) => (shown.degree.get(b) ?? 0) - (shown.degree.get(a) ?? 0) || a - b)
+  for (const i of ranked.slice(0, o.top)) out.add(i)
+  if (o.hovered !== null && inShown.has(o.hovered)) out.add(o.hovered)
+  if (o.chosen !== null && inShown.has(o.chosen)) {
+    out.add(o.chosen)
+    for (const i of o.neighbours) if (inShown.has(i)) out.add(i)
+  }
+  if (o.matches.size <= 50) for (const i of o.matches) if (inShown.has(i)) out.add(i)
+  return out
 }

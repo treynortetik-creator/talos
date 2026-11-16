@@ -96,6 +96,14 @@ describe('capacitor config', () => {
     expect(vc).toMatch(/registerPluginInstance\(TalosSnapshotPlugin\(\)\)/)
   })
 
+  it('the picker plugin (+ menu: photos, camera, files) is gated like every other and registered', () => {
+    const plugin = readFileSync(new URL('ios/App/App/Plugins/TalosPicker.swift', ROOT), 'utf8')
+    expect(plugin).toMatch(/guard TalosPluginGate\.allows\(bridge\) else \{ return call\.reject\(/)
+    expect(plugin).toMatch(/jsName = "TalosPicker"/)
+    const vc = readFileSync(new URL('ios/App/App/TalosBridgeViewController.swift', ROOT), 'utf8')
+    expect(vc).toMatch(/registerPluginInstance\(TalosPickerPlugin\(\)\)/)
+  })
+
   it('ships the haptics plugin', () => {
     const spm = readFileSync(new URL('ios/App/CapApp-SPM/Package.swift', ROOT), 'utf8')
     expect(spm).toMatch(/CapacitorHaptics/)

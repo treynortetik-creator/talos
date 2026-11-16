@@ -1,5 +1,22 @@
 # Changelog
 
+## A public snapshot no longer needs a landing freeze
+
+- `scripts/publish-public.sh` now also accepts a checkout of the green branch, when that commit is on main and has all six CI passes, so a snapshot can be made while other machines keep landing.
+## Approving a settings card leaves a line in the thread
+
+- When you approve a settings card, the thread now keeps a line saying what changed and how to undo it. Asking your agent to turn the thread fence off now does it directly.
+## Wrong pairing codes no longer cancel your pending links
+
+- A stranger can no longer cancel your pending pairing links by guessing codes; repeated wrong tries now only lock out that network for ten minutes.
+## Sign-out hangs up a live call, and uploads are checked against what you sent
+
+- Signing out, or having this device revoked, now ends a voice call in progress: the microphone and the call connection close.
+- A file you send is checked after it uploads: if the server reports a different hash or size than the file you chose, the send fails with a clear message instead of going out.
+## The downloadable app no longer carries the builder's user name
+
+- A release build used to hold about 1,400 build paths (`/Users/<name>/...`) in its binary. Release builds now map the checkout and home folder to neutral names and leave out the linker's debug map, and `release-app.sh` refuses to notarize any app whose Mach-O files still hold a home-folder or checkout path (`scripts/path-leak-check.sh`; test: `scripts/path-leak-test.sh`).
+
 ## Passwords in always-allowed commands are no longer kept
 
 - The record of always-allowed commands (and the line in your thread) now hides a password or key a command carries: `curl -u user:pass`, `?api_key=...` or `?token=...` in a link, `--password`, a `X-Api-Key` header. The same cleanup now covers bug reports and logs.

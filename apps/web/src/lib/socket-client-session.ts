@@ -8,7 +8,7 @@ import type { OutboxEntry, SocketClient } from './socket-types.ts'
 
 export function createClientSession(
   c: SocketCtx,
-): Pick<SocketClient, 'start' | 'ensureDevice' | 'deviceKey' | 'setPinned' | 'reconnect' | 'close'> {
+): Pick<SocketClient, 'start' | 'ensureDevice' | 'deviceKey' | 'onQueueWiped' | 'setPinned' | 'reconnect' | 'close'> {
   const { WS, configWaiters, isOnline, queueKeptAt, set, setMeta, settleConfig, storage, uploadFailures, writtenOn } = c
   return {
     async start(o) {
@@ -67,9 +67,14 @@ export function createClientSession(
         await storage.clear('outbox')
         await storage.clear('blobs')
         c.refreshQueued()
+        for (const f of c.wipeListeners) f()
         if (waiting > 0) c.noticeRemoved(waiting)
       }
       return c.ensureKey()
+    },
+    onQueueWiped(fn) {
+      c.wipeListeners.add(fn)
+      return () => void c.wipeListeners.delete(fn)
     },
     async deviceKey() {
       c.key ??= await loadDeviceKey(storage)
@@ -104,6 +109,7 @@ export function createClientSession(
     close(closeOpts) {
       c.closed = true
       queueKeptAt.set(c.epoch, closeOpts?.keepQueue === true)
+      if (closeOpts?.keepQueue !== true) for (const f of c.wipeListeners) f()
       c.epoch++
       c.started = false
       // The key is re-read from storage by the next start() or deviceKey(): a caller that deleted it (revoke) must not
@@ -119,6 +125,7 @@ export function createClientSession(
       if (c.voiceRetryTimer) clearTimeout(c.voiceRetryTimer)
       c.voiceRetryTimer = null
       uploadFailures.clear()
+      c.deadlineHits.clear()
       writtenOn.clear()
       // Ends with the session: a read mark or an undo note from before a sign-out is not carried into the next one.
       c.readQueue.clear()

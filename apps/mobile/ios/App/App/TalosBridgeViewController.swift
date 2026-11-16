@@ -137,6 +137,7 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(TalosPushPlugin())
         bridge?.registerPluginInstance(TalosCrashPlugin())
         bridge?.registerPluginInstance(TalosSnapshotPlugin())
+        bridge?.registerPluginInstance(TalosPickerPlugin())
         // The stock Keyboard plugin (resize: native) shrinks the web view to what the keyboard leaves. If a hide
         // notification ever arrives with the frame left short (upstream #12, #23), put it back to the window. Never
         // reproduced here; this only restores a frame that is already wrong. Done before the origin guard.

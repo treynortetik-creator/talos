@@ -277,7 +277,7 @@ describe('a failed transcription keeps the recording', () => {
     expect(recorder.stop).toHaveBeenCalledTimes(1) // recorded once, sent twice
   })
 
-  it('offers Send as voice note, which uploads the same audio as a voice note', async () => {
+  it('offers Send as voice note, which saves the same audio as a voice note', async () => {
     fetchMock.mockResolvedValue(refused(504, 'upstream_timeout'))
     const att = {
       media_id: 'md_01JZ0000000000000000000000',
@@ -286,17 +286,16 @@ describe('a failed transcription keeps the recording', () => {
       size: 3,
       sha256: 'a'.repeat(64),
     }
-    const uploadMedia = vi.fn().mockResolvedValue(att)
-    const sendVoiceNote = vi.fn().mockResolvedValue(undefined)
-    const { client } = mount({ uploadMedia, sendVoiceNote })
+    const queueVoiceNote = vi.fn().mockResolvedValue({ clientMsgId: 'm_1', state: 'sent' })
+    const { client } = mount({ queueVoiceNote })
     client.store.setState((s) => ({ ...s, connection: 'online' }))
     tapDictate()
     await screen.findByTestId('dictate-recording')
     tapStop()
     await screen.findByTestId('dictate-failed')
     fireEvent.click(screen.getByRole('button', { name: 'Send as voice note' }))
-    await waitFor(() => expect(sendVoiceNote).toHaveBeenCalledTimes(1))
-    expect(uploadMedia.mock.calls[0]?.[0]).toBe(recorder.audio)
+    await waitFor(() => expect(queueVoiceNote).toHaveBeenCalledTimes(1))
+    expect(queueVoiceNote.mock.calls[0]?.[0].blob).toBe(recorder.audio)
     expect(box().value).toBe('')
     expect(screen.queryByTestId('dictate-failed')).toBeNull()
   })

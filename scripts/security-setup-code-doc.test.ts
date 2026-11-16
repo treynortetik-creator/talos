@@ -48,16 +48,16 @@ const claims: Array<[string, RegExp, string, string]> = [
     'a second call with the same live code deletes the first session and mints a new one',
   ],
   [
-    'five wrong codes from anyone burn every unused code, shells included',
-    /five wrong codes from anyone burn every unused code, native apps included/i,
+    'five wrong codes from one address lock that address out, shells included, and burn no code',
+    /five wrong codes from one address lock that address out for ten minutes, native apps included; no code is burned/i,
     'enroll-session.test.ts',
-    'five bad codes in 10 minutes burn every outstanding code',
+    'five bad codes from one network lock out that network only; every code stays alive',
   ],
   [
     'a session from a burned code can never pin',
     /session made from a burned code can never pin/i,
-    'n0-review.test.ts',
-    'P5: a session minted from a code that is then burned',
+    'n0-recheck.test.ts',
+    'five wrong proofs from two IPs (3 + 2) burn the held code; the right proof from a clean IP is then 410',
   ],
   [
     'a device made this way has no passkey: its record holds no credential id',
@@ -66,10 +66,10 @@ const claims: Array<[string, RegExp, string, string]> = [
     'P6: the "setup-code" sentinel never lands in the device registry',
   ],
   [
-    'a wrong device proof burns the code it was sent with',
-    /wrong device proof burns the code it was sent with/i,
+    'a held code burns on its own fifth wrong device proof',
+    /code held by a session burns on its fifth wrong device proof/i,
     'n0-recheck.test.ts',
-    'five wrong proofs on a held code burn the owner other codes AND the leaked one',
+    'five wrong proofs on a held code burn that code only, not the owner other codes',
   ],
   [
     'media.fetch is signed like a history read, so the relay cannot ask the Mac for a file on its own',

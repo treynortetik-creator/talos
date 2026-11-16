@@ -58,6 +58,11 @@ export const TERMINAL_UPLOAD = new Set([400, 413, 415])
  * is a pattern. With the default 10 s between tries that is about 20 s of waiting before the text behind it is released.
  */
 export const VOICE_UPLOAD_TRIES = 3
+/** How long the flush waits for one queued voice upload before it lets go of it (it stays queued) and moves on. */
+export const VOICE_UPLOAD_DEADLINE_MS = 120_000
+/** The deadline grows with the recording: 30 s plus the time to send it at 50 KB/s, so a long note on a slow link is not cut at 120 s. */
+export const voiceUploadDeadlineMs = (bytes: number) =>
+  Math.max(VOICE_UPLOAD_DEADLINE_MS, 30_000 + Math.ceil(bytes / 50_000) * 1000)
 
 /** How long a config.patch waits for the Mac to apply it after the relay stored it. */
 export const CONFIG_APPLY_MS = 20_000

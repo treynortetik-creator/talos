@@ -864,6 +864,9 @@ Meta: `share_id`, `share_source`, files as `file_path*` (never `file_name`: a sh
      for none)".
   3. Shows the effective lists, the denylist hits and any `.talos-private` folders found.
   4. Writes the file. `memory show` prints exposure (counts per root, first 20 paths).
+- **`memory set-root <name> <path> [--agent-dir <dir>]`:** shares one folder. With no `memory.json` it creates one with only
+  that root; otherwise it adds that root (or changes its path, found by label or id) and keeps the others. The path is
+  relative to `agent_dir` or absolute, and must be inside it. A broken `memory.json` is never overwritten.
 - **Validation:** root paths realpath inside `agent_dir`. `agent_dir` may not be `/`, `$HOME` or `$TALOS_APP_HOME`.
   `Bun.Glob` matching.
 - **Never exposed** (`src/memory/deny.ts`; config can't override it; every path segment; case-insensitive):

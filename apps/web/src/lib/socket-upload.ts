@@ -76,6 +76,10 @@ export function createSocketUpload(c: SocketCtx) {
       throw new HttpError(res.status, undefined, body)
     }
     const ref = routes.mediaUpload.res.parse(await res.json())
+    // The signed attachment carries this ref's hash, and the bridge checks only that. A relay that answers with another
+    // file's hash or size could swap the bytes under a valid signature, so the answer must match what was sent.
+    if (ref.sha256 !== sha || ref.size !== bytes.length)
+      throw new TalosClientError('internal', 'The server stored a different file than the one you sent. Try again.')
     return { ...ref, ...(m.waveform ? { waveform: m.waveform } : {}) }
   }
 

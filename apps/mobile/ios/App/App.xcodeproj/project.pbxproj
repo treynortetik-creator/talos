@@ -25,6 +25,7 @@
 		4EA0C1D5E74EF8EE0C95C1A9 /* WebViewReplaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61283257BD694E29B791985C /* WebViewReplaceTests.swift */; };
 		4FB34C264C0E482A4F3BA9EA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 23F8D68E28D07D16EB72E4AA /* LaunchScreen.storyboard */; };
 		50C3494C2BD46DCBB9C6B781 /* TalosAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9679C30F6E5386C1D9583F58 /* TalosAudio.swift */; };
+		5459FC6B2733315F9577633A /* TalosPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66B703260204A67DC7C4E6CE /* TalosPicker.swift */; };
 		58D8EB777AABC0F494EE6FB0 /* TalosShare.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FDCDCD29A7C84F740D263FC /* TalosShare.swift */; };
 		5E04533C01261A377D816DB8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 8776CD2CC1249496A6F18C86 /* config.xml */; };
 		67740B5377F807ABF1532F55 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2016878D44EAA9692D059F /* SceneDelegate.swift */; };
@@ -109,6 +110,7 @@
 		5FDCDCD29A7C84F740D263FC /* TalosShare.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosShare.swift; sourceTree = "<group>"; };
 		603E421DF5523BA58B8E3E32 /* TalosShareCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TalosShareCore; path = ../TalosShareCore; sourceTree = SOURCE_ROOT; };
 		61283257BD694E29B791985C /* WebViewReplaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewReplaceTests.swift; sourceTree = "<group>"; };
+		66B703260204A67DC7C4E6CE /* TalosPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosPicker.swift; sourceTree = "<group>"; };
 		68ED4E8FE0185474B6E8E85B /* capacitor.config.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		6B04ADF7B81E144C4949AE51 /* CapApp-SPM */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "CapApp-SPM"; path = "CapApp-SPM"; sourceTree = SOURCE_ROOT; };
 		76989E05CECAD7B8B3C424A7 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -238,6 +240,7 @@
 			children = (
 				9679C30F6E5386C1D9583F58 /* TalosAudio.swift */,
 				48A879D7486EC440EB48D3F5 /* TalosCrash.swift */,
+				66B703260204A67DC7C4E6CE /* TalosPicker.swift */,
 				471A8C9169042696FD40141A /* TalosPluginGate.swift */,
 				FA566E4C10699729F30E7729 /* TalosPush.swift */,
 				9E244550EE6C5966F3E211ED /* TalosQuickAct.swift */,
@@ -480,6 +483,7 @@
 				50C3494C2BD46DCBB9C6B781 /* TalosAudio.swift in Sources */,
 				FD0E375194DF369490D1A4BC /* TalosBridgeViewController.swift in Sources */,
 				B222B4241F9CCC801BD09990 /* TalosCrash.swift in Sources */,
+				5459FC6B2733315F9577633A /* TalosPicker.swift in Sources */,
 				76D62AC129AAAD4B9F4DD90B /* TalosPluginGate.swift in Sources */,
 				A9B0B4B2A529B7950FE5CDB3 /* TalosPush.swift in Sources */,
 				3ADAB4B2470A531DAC1D3760 /* TalosQuickAct.swift in Sources */,

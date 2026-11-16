@@ -10,7 +10,7 @@ import {
   parseFrameText,
   WS_CLOSE,
 } from '@talos-app/protocol'
-import { verifyBridgeHello } from '../auth/contract.ts'
+import { bridgeKeyActive, verifyBridgeHello } from '../auth/contract.ts'
 import { type BridgeFeatures, noteBridgeMain } from './features.ts'
 import { errName } from './hub-helpers.ts'
 import type { BridgeConn, Conn, HubDeps } from './hub-types.ts'
@@ -59,12 +59,33 @@ function refuseBridge(b: BridgeConn, code: number): void {
   b.conn.close(code)
 }
 
+/** The ctx of each hub's bridge sockets, set by its first attachBridge, so a rotation reaches the connected bridge. */
+const ctxByDeps = new WeakMap<HubDeps, BridgeConnCtx>()
+/** How long after a rotation's 200 the old key's socket is closed: the answer reaches the CLI first. */
+export const KEY_ROTATED_CLOSE_DELAY_MS = 1500
+
+/**
+ * A rotation made `activeKeyId` the bridge key: a connected bridge that signed in with another key is closed with 1012, which
+ * the real bridge answers by dialling straight back with its new key (not with 4409, which would park it as a standby). The
+ * close comes after the rotation's answer is on its way, and looks at the socket again when it fires.
+ */
+export function closeBridgeNotOnKey(d: HubDeps, activeKeyId: string): void {
+  const ctx = ctxByDeps.get(d)
+  if (!ctx) return // no bridge socket has ever attached
+  const h = d.clock.setTimeout(() => {
+    const b = ctx.getBridge()
+    if (b?.authed && !b.closed && b.keyId !== activeKeyId) b.conn.close(WS_CLOSE.RESTARTING, 'key rotated')
+  }, KEY_ROTATED_CLOSE_DELAY_MS)
+  ctx.track(h)
+}
+
 export const bridgeConnFrames = {
   attachBridge(
     this: BridgeConnCtx,
     conn: Conn,
     args: { ip: string; relayHost: string },
   ): { onMessage(text: string): void; onClose(): void } {
+    ctxByDeps.set(this.d, this)
     const b: BridgeConn = {
       id: `b_${newUlid().slice(-10)}`,
       conn,
@@ -146,7 +167,12 @@ export const bridgeConnFrames = {
     const frame = parsed.frame
     if (!b.authed) {
       if (frame.type !== 'hello' || frame.role !== 'bridge') return refuseBridge(b, WS_CLOSE.UNAUTHORIZED)
-      const res = await verifyBridgeHello({ hello: { key_id: frame.key_id, sig: frame.sig }, challenge, ip: b.ip })
+      const res = await verifyBridgeHello({
+        hello: { key_id: frame.key_id, sig: frame.sig },
+        challenge,
+        ip: b.ip,
+        activeOnly: true,
+      })
       if (!res.ok) {
         this.d.log.warn({ ip: b.ip }, 'bridge hello refused')
         return refuseBridge(b, WS_CLOSE.UNAUTHORIZED)
@@ -154,6 +180,9 @@ export const bridgeConnFrames = {
       // The socket may have gone while the signature was being checked: closed by the 10 s handshake deadline, or by the peer.
       // Either way it stays gone; a socket that closed must never become the bridge (it would hold the slot as a ghost).
       if (b.refused || b.closed) return
+      // A rotation may have finished while the signature was being checked: the hello must still be the ACTIVE key's, or an
+      // old-key socket would replace the real bridge, which has already moved on to the new key.
+      if (!bridgeKeyActive(res.keyId)) return refuseBridge(b, WS_CLOSE.UNAUTHORIZED)
       // A bridge that was replaced asks to come back without replacing anyone: while another one is connected it is turned
       // away the way a replaced one is (4409), so two live bridges never trade the slot. With the slot empty it is an
       // ordinary hello.
@@ -180,6 +209,11 @@ export const bridgeConnFrames = {
       this.bridgeFeatures.onHello(frame.client.features ?? [], new Date(this.d.clock.now()).toISOString())
       return bridgeConnFrames.bridgeHello.call(this, b, res.keyId, frame.client.features ?? [])
     }
+    // The key was checked at hello; it is checked again on every frame (from memory), so a socket opened with a key that has
+    // since been rotated out ends at its next frame. The grace is for HTTP calls in flight, not for sockets. It ends with 1012
+    // ("come straight back"), not 4401: in the 1.5 s before the rotation's own close this is the REAL bridge, which then redials
+    // at once with its new key; a stolen old key gains nothing from it, since a hello needs the active key.
+    if (!bridgeKeyActive(b.keyId)) return refuseBridge(b, WS_CLOSE.RESTARTING)
     await this.onBridgeFrameBuiltin(b, frame, raw)
     await this.runBridgeHandlers(b.keyId, frame, raw)
   },

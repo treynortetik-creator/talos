@@ -66,6 +66,9 @@ export interface SocketClient extends TalosClient {
    */
   ensureDevice(opts?: { replace?: boolean }): Promise<DeviceKey>
   deviceKey(): Promise<DeviceKey | null>
+  /** Calls `fn` whenever the queue is wiped (a sign-out that keeps nothing, or a replaced key): what a screen keeps in
+   * memory for the same session must go too. Returns the way to stop listening. */
+  onQueueWiped(fn: () => void): () => void
   setPinned(pinned: boolean): void
   /** Stores an offline voice note (blob kept in IndexedDB); it is uploaded and signed when the connection is back. */
   queueVoiceNote(args: {

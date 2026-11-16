@@ -59,7 +59,7 @@ exports[`gmail normalizer > turns the batch fixture into the expected events 1`]
       "name": "Alex Example",
     },
     "connection": "cn_aaaaaaaaaaaaaaaaaaaaaa",
-    "dedup_key": "gmail:18c0aa11bb22cc04",
+    "dedup_key": "gmail:fwd:18c0aa11bb22cc04",
     "id": "<event id>",
     "kind": "email.forwarded",
     "priority": "high",

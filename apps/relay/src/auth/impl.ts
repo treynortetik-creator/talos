@@ -104,7 +104,7 @@ export function createAuthImplementation(
 
   // When the last hello was refused; a good hello clears it. In memory: a restart forgets it and the next refused hello sets it again.
   let helloRefusedAt: number | null = null
-  const verifyBridgeHello: AuthContract['verifyBridgeHello'] = async ({ hello, challenge, ip }) => {
+  const verifyBridgeHello: AuthContract['verifyBridgeHello'] = async ({ hello, challenge, ip, activeOnly }) => {
     // A blocked address is not a blocked KEY. Five bad hellos from one address block strangers there, but a hello that
     // proves it holds a trusted key still gets in: on a shared edge address (or behind one NAT) a stranger must not be able
     // to lock the owner's Mac out. A blocked address that fails is refused as `ip_blocked` and adds no further failure.
@@ -118,7 +118,11 @@ export function createAuthImplementation(
     const host = relayHost(origin)
     if (challenge.relay_host !== host && challenge.relay_host !== new URL(origin).hostname)
       return fail('wrong relay host')
-    const key = core.trustedKeys().find((k) => k.keyId === hello.key_id)
+    const key = (activeOnly ? core.helloKeys() : core.trustedKeys()).find((k) => k.keyId === hello.key_id)
+    // A previous key inside its grace is turned away from a socket without counting as a failed hello: the real bridge's own
+    // old-key redial around a rotation must not add up to the per-address block.
+    if (!key && activeOnly && core.trustedKeys().some((k) => k.keyId === hello.key_id))
+      return { ok: false, reason: 'previous key' }
     if (!key) return fail('unknown key_id')
     if (bridgeKeyId(b64urlDecode(key.publicKeyB64)) !== hello.key_id) return fail('unknown key_id')
     if (!(await verifyChallenge(key.publicKeyB64, challenge, hello.sig))) return fail('bad signature')
@@ -182,6 +186,7 @@ export function createAuthImplementation(
     requireCsrf,
     verifyBridgeHello,
     bridgeAuthRefusedAt: () => helloRefusedAt,
+    bridgeKeyActive: (keyId) => core.isActiveKeyId(keyId),
     guardWsUpgrade: async (c) => {
       if (c.req.header('origin') !== origin) return c.json({ error: 'bad_origin' }, 403)
       const session = sessionFor(state, c, { stamp: false })

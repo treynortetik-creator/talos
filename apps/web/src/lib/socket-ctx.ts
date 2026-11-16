@@ -81,6 +81,9 @@ export type SocketCtx = {
   discarding: Set<string>
   writtenOn: Map<string, number>
   uploadFailures: Map<string, { connection: number; count: number; round: number }>
+  /** Deadline overruns per queued voice note (a reconnect cut is not one); cleared whenever the note is shown as failed or discarded. */
+  deadlineHits: Map<string, number>
+  wipeListeners: Set<() => void>
   /**
    * Inbox changes sent and not yet answered (frame id -> change), with the socket each went out on. An entry stays
    * while its socket can still deliver the answer, so a reconnect does not send the change a second time.
@@ -141,6 +144,8 @@ export type SocketCtx = {
   unreadSeqs: Map<string, Set<number>>
   voiceQueue: PendingVoice[]
   flushing: boolean
+  /** The voice upload the flush is waiting on: a new connection cancels it. */
+  uploadAbort: AbortController | null
   flushAgain: boolean
   connection: number
   round: number
@@ -312,6 +317,8 @@ export function createSocketCtx(opts: SocketClientOptions): SocketCtx {
     discarding: new Set(),
     writtenOn: new Map(),
     uploadFailures: new Map(),
+    deadlineHits: new Map(),
+    wipeListeners: new Set(),
     inboxInFlight: new Map(),
     mediaFetchIds: new Map(),
     lostIds: new Set(),
@@ -340,6 +347,7 @@ export function createSocketCtx(opts: SocketClientOptions): SocketCtx {
     unreadSeqs: new Map(),
     voiceQueue: [],
     flushing: false,
+    uploadAbort: null,
     flushAgain: false,
     connection: 0,
     round: 0,

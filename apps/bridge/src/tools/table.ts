@@ -6,7 +6,7 @@
 import { APP_TOOL_RECORDS } from './apps.ts'
 import { retryAttachmentTool } from './attachments.ts'
 import { card, cardResult } from './card.ts'
-import { configPropose } from './config.ts'
+import { configPropose, settingsRead } from './config.ts'
 import { type AgentToolGroup, READ_THREAD_TOOLS, type ToolRecord } from './define.ts'
 import { handoffTool } from './handoff.ts'
 import { memoryNoteReadTool } from './memory-note-read.ts'
@@ -44,6 +44,7 @@ export const TOOL_RECORDS: readonly ToolRecord[] = [
   scheduleRunDone,
   wakeMe,
   configPropose,
+  settingsRead,
   retryAttachmentTool,
   publishPage,
   ...APP_TOOL_RECORDS,

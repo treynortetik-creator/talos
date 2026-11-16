@@ -37,6 +37,7 @@ describe('which tools each kind of session lists, in order', () => {
       ...CORE,
       ...SCHEDULES,
       'config_propose',
+      'settings_read',
       'retry_attachment',
       'publish_page',
       'handoff',
@@ -60,6 +61,7 @@ describe('which tools each kind of session lists, in order', () => {
       'read_thread',
       ...SCHEDULES,
       'config_propose',
+      'settings_read',
       'publish_page',
       'read_inbound',
       'memory_note_read',
@@ -81,6 +83,7 @@ describe('which tools each kind of session lists, in order', () => {
       ...CORE,
       ...SCHEDULES,
       'config_propose',
+      'settings_read',
       'retry_attachment',
       'publish_page',
       'handoff',
@@ -97,6 +100,7 @@ describe('which tools each kind of session lists, in order', () => {
     const off = [
       ...CORE,
       'config_propose',
+      'settings_read',
       'retry_attachment',
       'publish_page',
       'handoff',
@@ -148,6 +152,7 @@ describe('which tools a headless process may run', () => {
       'read_thread',
       'inbox_raw',
       'schedules_list',
+      'settings_read',
       'publish_page',
     ])
   })

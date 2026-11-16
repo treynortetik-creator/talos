@@ -35,6 +35,15 @@ USER = (os.environ.get("TALOS_SIGNIN_USER") if TESTING else None) or "talos"
 URL_WAIT_S = 60
 CODE_WAIT_S = 600
 RESULT_WAIT_S = 90
+_wait = (os.environ.get("TALOS_SIGNIN_RESULT_WAIT") if TESTING else None) or ""
+if _wait.isdigit():
+    RESULT_WAIT_S = int(_wait)
+# The names Claude Code looks up once the code is pasted. While she signs in in the browser they are looked up here every
+# 20 s, best effort: on the Windows test PC (2026-11-16) the distro's first lookup of a name failed after 10 s and the next
+# ones answered at once, and Claude Code's one lookup, made only after the paste, failed (EAI_AGAIN). When testing: only the
+# names TALOS_SIGNIN_WARM_HOSTS gives (comma-separated), none by default.
+WARM_HOSTS = (tuple(h for h in ((os.environ.get("TALOS_SIGNIN_WARM_HOSTS") if TESTING else None) or "").split(",") if h)
+              if TESTING else ("platform.claude.com", "api.anthropic.com", "claude.ai"))
 ANSI = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\r")
 # A link or a token counts only once something ends it (Fable R1-2 on f3575ba1): whitespace after it, or Claude Code's
 # output ending. A pty read can stop anywhere, and half a token taken as the whole would be "signed in" and broken.
@@ -47,14 +56,20 @@ CODE = re.compile(r"^[A-Za-z0-9#_.~+/=-]{8,512}$")
 # printable ASCII only (Fable R4-1 on f1699c11): the link is Claude Code's, which talos owns, and the tray opens it; no bidi or
 # other look-alike character, no quote, no angle bracket
 URL_DONE = re.compile(r"(https://(claude\.ai|claude\.com|[a-z0-9.-]*\.anthropic\.com)/[!#-&(-;=?-~]+)(?=\s)")
-# Claude Code's failures, in fixed plain words (Fable R1-8): none of its own text is passed on
+# Claude Code's failures, in fixed plain words (Fable R1-8): none of its own text is passed on. First match wins, so the
+# rejection comes before "expired": Claude Code's rejection sentence lists "expired" as one guess of several.
 KNOWN_FAILURES = [
-    (re.compile(r"invalid.*code|code.*invalid", re.I),
-     "Claude did not accept that code. Choose Sign in to Claude again and paste the newest code the page shows."),
+    (re.compile(r"getaddrinfo|EAI_AGAIN|EAI_FAIL|ENOTFOUND|ECONNREFUSED|ECONNRESET|ECONNABORTED|ETIMEDOUT|ENETUNREACH"
+                r"|EHOSTUNREACH|socket hang up|fetch failed|network|timeout|timed out", re.I),
+     "Talos could not reach Claude, so the code was not checked. Make sure this PC is online."),
+    (re.compile(r"invalid.*code|code.*invalid|n.?t accepted|not accepted", re.I),
+     "Claude did not accept that code. Next time, paste the whole code the page shows."),
     (re.compile(r"expired", re.I),
-     "That code had expired. Choose Sign in to Claude again, and paste the new code within a few minutes."),
+     "That code had expired. Next time, paste the code within a few minutes."),
 ]
 OTHER_FAILURE = "Claude Code could not sign you in. Try again in a minute."
+# Claude Code ends an error with this and then waits for Enter, with no newline after it: the line is whole once it is there
+ERROR_END = re.compile(r"press enter to retry", re.I)
 
 
 def say(event, **kw):
@@ -65,6 +80,53 @@ def say(event, **kw):
 def fail(message):
     say("error", message=message)
     sys.exit(1)
+
+
+def warm(hosts, keep):
+    """Look the names up every 20 s, best effort, in a child process (never a thread: write_token forks later, and a fork
+    while a thread is inside a glibc lookup can hang the child's initgroups, Opus review on ac66fb7f). The child holds none of
+    this process's files open but `keep`'s copies are closed too, so the tray still sees this process's output end; it ends
+    when this process does. Returns its pid, or None."""
+    if not hosts:
+        return None
+    import socket
+    parent = os.getpid()
+    pid = os.fork()
+    if pid:
+        return pid
+    try:
+        null = os.open(os.devnull, os.O_RDWR)
+        for f in (0, 1, 2):
+            os.dup2(null, f)
+        os.close(null)
+        os.close(keep)
+        while os.getppid() == parent:
+            for h in hosts:
+                try:
+                    socket.getaddrinfo(h, 443, proto=socket.IPPROTO_TCP)
+                except OSError:
+                    pass
+            time.sleep(20)
+    finally:
+        os._exit(0)
+
+
+def end_child(pid):
+    """SIGKILL and reap, with a bounded wait (the same 3 s as stop())."""
+    if not pid:
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    end = time.time() + 3.0
+    while time.time() < end:
+        try:
+            if os.waitpid(pid, os.WNOHANG)[0]:
+                return
+        except ChildProcessError:
+            return
+        time.sleep(0.05)
 
 
 def plain(raw):
@@ -109,8 +171,16 @@ def write_token(u, token):
             os._exit(0)
         except Exception:
             os._exit(1)
-    _, status = os.waitpid(pid, 0)
-    return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+    # bounded (Opus review on ac66fb7f): a child that hangs is killed, and the sign-in says it could not save, never "Signing
+    # in..." for good
+    end = time.time() + 15.0
+    while time.time() < end:
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+        time.sleep(0.05)
+    end_child(pid)
+    return False
 
 
 def main():
@@ -162,8 +232,12 @@ def main():
     out = bytearray()
 
     def read_until(secs, want):
-        """want(text) on everything read so far, after each read. When Claude Code's output ends, once more with a
-        newline added: its end ends the last word too."""
+        """want(text) on everything read so far: first on what is already read, then after each read. When Claude Code's
+        output ends, once more with a newline added: its end ends the last word too."""
+        if out:
+            hit = want(plain(bytes(out)))
+            if hit:
+                return hit
         end = time.time() + secs
         while time.time() < end:
             r, _, _ = select.select([fd], [], [], 0.5)
@@ -180,18 +254,22 @@ def main():
                     return hit
         return False
 
+    warmer = None
     try:
         url = read_until(URL_WAIT_S, lambda t: URL_DONE.search(t))
         if not url:
             fail("Claude Code did not give a sign-in link. Try again in a minute.")
         say("url", url=url.group(1))
         read_until(10, lambda t: "code" in t.lower() and ">" in t)
+        warmer = warm(WARM_HOSTS, fd)
         say("code")
         # at most CODE_WAIT_S for her to sign in and paste; the tray closing ends stdin, which ends this too
         signal.signal(signal.SIGALRM, lambda *a: fail("The sign-in waited too long for the code. Try again."))
         signal.alarm(CODE_WAIT_S)
         line = sys.stdin.readline().strip()
         signal.alarm(0)
+        end_child(warmer)
+        warmer = None
         if not CODE.fullmatch(line):
             fail("That is not a sign-in code. Copy the whole code the sign-in page shows, then try again.")
         del out[:]
@@ -202,15 +280,19 @@ def main():
             m = TOKEN_DONE.search(t)
             if m:
                 return ("token", m.group(1))
-            # whole lines only (the last one, still arriving, can wait); only which failure it is counts, never its text
-            for ln in t.split("\n")[:-1]:
-                if re.search(r"error|invalid|expired|failed", ln, re.I):
+            # whole lines only (the last one, still arriving, can wait, unless Claude Code's "Press Enter to retry" has
+            # ended it); only which failure it is counts, never its text
+            lines = t.split("\n")
+            whole = lines[:-1] + ([lines[-1]] if ERROR_END.search(lines[-1]) else [])
+            for ln in whole:
+                if re.search(r"error|invalid|expired|failed|accepted", ln, re.I):
                     return ("error", ln)
             return None
 
         got = read_until(RESULT_WAIT_S, result)
         if not got:
-            fail("Claude Code did not finish signing in. Try again.")
+            fail("The code was sent, but there was no answer from Claude in %d seconds. Make sure this PC is online."
+                 % RESULT_WAIT_S)
         kind, value = got
         if kind == "error":
             fail(next((words for pat, words in KNOWN_FAILURES if pat.search(value)), OTHER_FAILURE))
@@ -222,6 +304,7 @@ def main():
         value = None
         say("signed_in")
     finally:
+        end_child(warmer)
         stop()
         out[:] = b"\0" * len(out)
 

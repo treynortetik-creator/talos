@@ -5,6 +5,7 @@ import { newId } from '@talos-app/protocol'
 import { FakeBridge, FakeRelay, waitFor } from '@talos-app/testkit'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deleteDeviceKey } from '../src/lib/deviceKey.ts'
+import { voiceUploadDeadlineMs } from '../src/lib/socket-constants.ts'
 import { createSocketClient, type SocketClient } from '../src/lib/socketClient.ts'
 import { createMemoryStorage, type Storage } from '../src/lib/storage.ts'
 import { keepsUnsent } from '../src/lib/unsent.ts'
@@ -767,7 +768,7 @@ describe('a voice note written to a socket that was lost with it', () => {
     client.reconnect()
     await g.hitP // the flush on the new connection is uploading, and has not yet written the lost note again
     const typed = await client.sendMessage({ threadId: 'general', text: 'typed after the reconnect' })
-    expect(typed.state).toBe('queued')
+    expect(['sent', 'queued']).toContain(typed.state) // the lost note is already on the new connection (text goes out first, the upload is only another thread's)
     g.open()
     await waitFor(() => sentOrder().length === 2, 6000, 'both on the wire')
     expect(sentOrder()).toEqual(['voice_note', 'message'])
@@ -874,5 +875,151 @@ describe('the tries a voice note gets', () => {
     client.close({ keepQueue: true }) // with a timed retry waiting
     await client.start({ pinned: true })
     await waitFor(() => failedAs(note.clientMsgId) === 'retry', 6000, 'marked failed after the restart')
+  })
+})
+
+describe('a voice note is saved before anything is uploaded', () => {
+  it('survives a tab killed mid-upload: it is still queued after a reload, and the flush then sends it', async () => {
+    await goOnline(600_000)
+    const g = gate()
+    uploadFault = async () => {
+      g.hit()
+      await g.wait // the upload never finishes: the tab is killed here
+      return undefined
+    }
+    const note = await client.queueVoiceNote(webm())
+    await g.hitP
+    expect((await storage.all<{ clientMsgId: string }>('blobs')).map((b) => b.clientMsgId)).toEqual([note.clientMsgId])
+    client.close({ keepQueue: true }) // no flush finishes; a new client reads the same storage
+    uploadFault = undefined
+    await goOnline(600_000)
+    await waitFor(() => fromApp('voice_note').length === 1, 6000, 'the note was sent after the reload')
+    expect(await storage.all('blobs')).toHaveLength(0)
+    g.open()
+  })
+})
+
+describe('a voice upload that never answers', () => {
+  it('does not hold queued text in another thread, and the note stays queued after its deadline', async () => {
+    await goOnline(600_000)
+    uploadFault = () => new Promise<Response>(() => {}) // never resolves, ignores its signal
+    const note = await client.queueVoiceNote(webm())
+    await waitFor(() => uploads >= 1, 4000, 'the upload started')
+    await client.sendMessage({ threadId: 'other', text: 'another thread' })
+    await waitFor(() => fromApp('message').some((f) => f.raw.thread_id === 'other'), 4000, 'other thread sent')
+    expect(failedAs(note.clientMsgId)).toBeUndefined()
+    expect((await storage.all<{ clientMsgId: string }>('blobs')).map((b) => b.clientMsgId)).toEqual([note.clientMsgId])
+  })
+
+  it('lets go of it at its deadline, goes on to the next note, and leaves it queued', async () => {
+    const real = globalThis.setTimeout
+    // the 120 s deadline, shortened: only that timer is touched
+    const spy = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation(((fn: () => void, ms?: number, ...a: unknown[]) =>
+        real(fn, ms === 120_000 ? 150 : ms, ...a)) as unknown as typeof setTimeout)
+    try {
+      await goOnline(600_000)
+      uploadFault = (name) => (name === 'stuck.webm' ? new Promise<Response>(() => {}) : undefined)
+      const stuck = await client.queueVoiceNote(webm('stuck.webm'))
+      const next = await client.queueVoiceNote({ ...webm('next.webm'), threadId: 'other' })
+      await waitFor(() => fromApp('voice_note').some((f) => f.raw.thread_id === 'other'), 6000, 'the next note went')
+      expect(next.clientMsgId).toBeDefined()
+      expect(failedAs(stuck.clientMsgId)).toBeUndefined()
+      expect(client.meta.getState().queuedIds).toContain(stuck.clientMsgId)
+      expect((await storage.all<{ clientMsgId: string }>('blobs')).map((b) => b.clientMsgId)).toEqual([
+        stuck.clientMsgId,
+      ])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
+describe('a voice note that keeps timing out', () => {
+  const shortDeadline = () => {
+    const real = globalThis.setTimeout
+    return vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation(((fn: () => void, ms?: number, ...a: unknown[]) =>
+        real(fn, ms === 120_000 ? 100 : ms, ...a)) as unknown as typeof setTimeout)
+  }
+
+  it('is shown as failed with Retry after three deadlines, keeps its recording, and releases the text behind it', async () => {
+    const spy = shortDeadline()
+    try {
+      await goOnline(150)
+      uploadFault = () => new Promise<Response>(() => {})
+      const note = await client.queueVoiceNote(webm('slow.webm'))
+      await client.sendMessage({ threadId: 'general', text: 'behind the slow note' })
+      expect(fromApp('message')).toHaveLength(0)
+      await waitFor(() => failedAs(note.clientMsgId) === 'retry', 8000, 'shown as failed')
+      expect(uploads).toBe(3)
+      expect((await storage.all<{ clientMsgId: string }>('blobs')).map((b) => b.clientMsgId)).toEqual([
+        note.clientMsgId,
+      ])
+      await waitFor(() => fromApp('message').length === 1, 6000, 'the text behind it went')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('starts the timeout count at 0 after Retry on a note that was shown as failed by the network path', async () => {
+    const spy = shortDeadline()
+    try {
+      await goOnline(150)
+      // two deadline overruns, then three refusals: shown as failed by the network path
+      uploadFault = () => (uploads <= 2 ? new Promise<Response>(() => {}) : new Response('{}', { status: 503 }))
+      const note = await client.queueVoiceNote(webm('slow.webm'))
+      await waitFor(() => failedAs(note.clientMsgId) === 'retry', 8000, 'shown as failed')
+      expect(uploads).toBe(5)
+      uploadFault = () => new Promise<Response>(() => {})
+      client.retryMessage(note.clientMsgId)
+      await waitFor(() => uploads >= 7, 8000, 'the second try after Retry began') // the first one has timed out by now
+      expect(failedAs(note.clientMsgId)).toBeUndefined() // one overrun after Retry, not three
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('does not count an upload that a reconnect cut', async () => {
+    await goOnline(600_000)
+    uploadFault = () => new Promise<Response>(() => {})
+    const note = await client.queueVoiceNote(webm())
+    for (let n = 1; n <= 4; n++) {
+      await waitFor(() => uploads >= n, 4000, `upload ${n} started`)
+      client.reconnect()
+      await waitFor(() => client.store.getState().connection === 'online', 4000, 'online again')
+    }
+    expect(failedAs(note.clientMsgId)).toBeUndefined()
+  })
+
+  it('has a deadline that grows with the size of the recording', () => {
+    expect(voiceUploadDeadlineMs(10_000)).toBe(120_000)
+    expect(voiceUploadDeadlineMs(10 * 1024 * 1024)).toBeGreaterThan(200_000)
+    expect(voiceUploadDeadlineMs(10 * 1024 * 1024)).toBe(30_000 + Math.ceil((10 * 1024 * 1024) / 50_000) * 1000)
+  })
+})
+
+describe('a voice note the relay refuses for good', () => {
+  it.each([400, 413, 415])('%i: shown as failed, the recording kept until the row is deleted', async (status) => {
+    await goOnline()
+    uploadFault = () => new Response('{}', { status })
+    const note = await client.queueVoiceNote(webm())
+    await waitFor(() => failedAs(note.clientMsgId) === 'final', 6000, 'shown as failed')
+    expect((await storage.all<{ clientMsgId: string }>('blobs')).map((b) => b.clientMsgId)).toEqual([note.clientMsgId])
+    await client.discardMessage(note.clientMsgId)
+    expect(await storage.all('blobs')).toHaveLength(0)
+  })
+})
+
+describe('queue wipe listeners', () => {
+  it('are told when a close keeps nothing, and not when the queue is kept', async () => {
+    const wiped = vi.fn()
+    client.onQueueWiped(wiped)
+    client.close({ keepQueue: true })
+    expect(wiped).not.toHaveBeenCalled()
+    client.close()
+    expect(wiped).toHaveBeenCalledTimes(1)
   })
 })

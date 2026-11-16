@@ -87,7 +87,12 @@ describe('gmail Apps Script template', () => {
 describe('gmail tick (the rendered script, run in a vm)', () => {
   const script = renderGmailScript(VARS)
   const secret = newWebhookSecret()
-  const props = () => ({ TALOS_SECRET: secret, TALOS_CURSOR: String(Math.floor(Date.now() / 1000) - 3600) })
+  // an installed script past its first run (TALOS_FWD_SENT exists: the first run only records what is labelled)
+  const props = () => ({
+    TALOS_SECRET: secret,
+    TALOS_CURSOR: String(Math.floor(Date.now() / 1000) - 3600),
+    TALOS_FWD_SENT: '[]',
+  })
   const mainSearches = (g: ReturnType<typeof makeGas>) => g.searches.filter((s) => !s.query.startsWith('label:'))
   const post = (g: ReturnType<typeof makeGas>) => g.fetched.filter((f) => f.url === VARS.hookUrl)
 
@@ -161,6 +166,114 @@ describe('gmail tick (the rendered script, run in a vm)', () => {
     expect(normal).toMatchObject({ forwarded: false })
     expect(normal?.text.length).toBe(300)
     expect(g.searches.some((s) => s.query.startsWith('label:"Talos/Inbound"'))).toBe(true)
+  })
+
+  type Item = { message_id: string; forwarded: boolean; text: string }
+  const items = (g: ReturnType<typeof makeGas>) =>
+    post(g).flatMap((p) => (JSON.parse(p.body) as { items: Item[] }).items)
+
+  // RELAY-9: the relay keeps the first copy of a message, and the inbox's 300-character preview used to go first
+  it('a labelled message also in the inbox goes out once, in full: the label search runs first', () => {
+    const t = thread(1, { body: 'y'.repeat(5000) }, ['Talos/Inbound'])
+    const g = makeGas({ script, props: props(), main: [t], forwarded: [t] })
+    g.tick()
+    expect(g.searches[0]?.query.startsWith('label:"Talos/Inbound"')).toBe(true)
+    expect(items(g)).toEqual([expect.objectContaining({ message_id: 'm1', forwarded: true })])
+    expect(items(g)[0]?.text.length).toBe(4000)
+  })
+
+  // RELAY-8: labelling is the owner's act whenever the mail came; the label search had the inbox's cursor and date check
+  it('older mail labelled by hand goes out in full, once: the label search has no cursor, and sent ids are remembered', () => {
+    const old = thread(7, { date: new Date(Date.now() - 30 * 86_400_000), subject: 'Old receipt' }, ['Talos/Inbound'])
+    const g = makeGas({ script, props: props(), main: [], forwarded: [old] })
+    g.tick()
+    const label = g.searches.find((s) => s.query.startsWith('label:'))
+    expect(label?.query).toBe('label:"Talos/Inbound"')
+    expect(items(g)).toEqual([expect.objectContaining({ message_id: 'm7', forwarded: true })])
+    expect(JSON.parse(g.props.get('TALOS_FWD_SENT') ?? '[]')).toEqual(['m7'])
+    // the next run sends nothing more for it
+    g.fetched.length = 0
+    g.tick()
+    expect(post(g)).toHaveLength(0)
+    // the inbox search keeps its cursor: an old inbox message is still not sent
+    const h = makeGas({ script, props: props(), main: [thread(8, { date: new Date(Date.now() - 30 * 86_400_000) })] })
+    h.tick()
+    expect(post(h)).toHaveLength(0)
+    expect(mainSearches(h)[0]?.query).toMatch(/ after:\d+$/)
+  })
+
+  it('a failed post remembers no labelled message as sent, and a long label never reports mail as skipped', () => {
+    const g = makeGas({
+      script,
+      props: props(),
+      forwarded: Array.from({ length: 250 }, (_v, i) => thread(i, {}, ['Talos/Inbound'])),
+      status: () => 500,
+    })
+    g.tick()
+    expect(g.props.get('TALOS_FWD_SENT')).toBe('[]')
+    const ok = makeGas({ script, props: props(), forwarded: Array.from({ length: 250 }, (_v, i) => thread(i)) })
+    ok.tick()
+    const sent = post(ok).map((p) => JSON.parse(p.body) as { truncated: boolean })
+    expect(sent.every((s) => s.truncated === false)).toBe(true)
+    // the label reads 2 pages a run (no cursor): its 80 newest conversations
+    expect(ok.searches.filter((s) => s.query.startsWith('label:')).map((s) => s.start)).toEqual([0, 40])
+    expect(JSON.parse(ok.props.get('TALOS_FWD_SENT') ?? '[]')).toHaveLength(80)
+  })
+
+  // Opus review on 924d204f: a labelled message the label search had sent before came back next run as an inbox preview
+  it('a labelled message still in the inbox is never previewed on a later run', () => {
+    const t = thread(1, {}, ['Talos/Inbound'])
+    const g = makeGas({ script, props: props(), main: [t], forwarded: [t] })
+    g.tick()
+    expect(items(g)).toEqual([expect.objectContaining({ message_id: 'm1', forwarded: true })])
+    g.fetched.length = 0
+    g.tick()
+    expect(post(g)).toHaveLength(0)
+  })
+
+  it('the first run records what is labelled and sends none of it; then only newly labelled mail goes', () => {
+    const fwd = [thread(1, {}, ['Talos/Inbound']), thread(2, {}, ['Talos/Inbound'])]
+    const { TALOS_FWD_SENT: _drop, ...fresh } = props()
+    const g = makeGas({ script, props: fresh, main: [...fwd, thread(3)], forwarded: fwd })
+    g.tick()
+    // the inbox mail goes; the labelled mail is recorded, neither sent in full nor previewed
+    expect(items(g).map((i) => i.message_id)).toEqual(['m3'])
+    expect(JSON.parse(g.props.get('TALOS_FWD_SENT') ?? '')).toEqual(['m1', 'm2'])
+    // nothing labelled at all: the empty record is still kept, so the next run is not a first run again
+    const none = makeGas({ script, props: fresh, main: [] })
+    none.tick()
+    expect(none.props.get('TALOS_FWD_SENT')).toBe('[]')
+    // later a new message is labelled: it goes in full
+    fwd.unshift(thread(9, { subject: 'Fwd: new' }, ['Talos/Inbound']))
+    g.fetched.length = 0
+    g.tick()
+    // (the inbox's own 2-minute overlap sends m3 again, as before; the relay dedups it)
+    expect(
+      items(g)
+        .filter((i) => i.forwarded)
+        .map((i) => i.message_id),
+    ).toEqual(['m9'])
+    expect(items(g).some((i) => !i.forwarded && ['m1', 'm2', 'm9'].includes(i.message_id))).toBe(false)
+  })
+
+  it('a forwarded copy has its own dedup key, so mail labelled after its preview still comes in full', async () => {
+    const body = JSON.stringify({
+      v: 1,
+      account: 'a@example.com',
+      items: [
+        { message_id: 'abc', from: 'x@example.com', subject: 's', text: 't', date: new Date().toISOString() },
+        {
+          message_id: 'abc',
+          from: 'x@example.com',
+          subject: 's',
+          text: 't',
+          date: new Date().toISOString(),
+          forwarded: true,
+        },
+      ],
+    })
+    const evs = await gmail.normalize(raw(body), conn())
+    expect(evs.map((e) => e.dedup_key)).toEqual(['gmail:abc', 'gmail:fwd:abc'])
   })
 
   it('claims once on install and stores the secret it is given', () => {

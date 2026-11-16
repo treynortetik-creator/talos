@@ -54,7 +54,7 @@ kit_affected() { # kit_affected <base> <head>
   if ! git diff --name-only -z --no-renames "$1" "$2" -- > "$list" 2>/dev/null; then rm -f "$list"; return 2; fi
   while IFS= read -r -d '' f; do
     case "$f" in
-      scripts/root-install*.ts | scripts/kit-tests.test.ts | scripts/kit-run.ts | scripts/size-report.ts) rc=0 ;;
+      scripts/root-install*.ts | scripts/v1-agent-fixture.sh | scripts/kit-tests.test.ts | scripts/kit-run.ts | scripts/size-report.ts) rc=0 ;;
       apps/web/* | apps/relay/* | apps/mobile/* | apps/desktop/* | docs/* | CHANGELOG.md | scripts/*) ;;
       *) rc=0 ;;
     esac

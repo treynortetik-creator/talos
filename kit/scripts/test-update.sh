@@ -526,6 +526,9 @@ reset_world; SRC10="$SB/src10"; publish "1.9.1-slow" key1 "$SRC10" --migration "
 out="$(TALOS_UPDATE_STEP_TIMEOUT=3 runtty -- "$(BIN)" update --agent "$A" --source "$SRC10" 2>&1)"; rc=$?
 SPID="$(sed -n "s/^up ${D}0040 pid \([0-9]*\)/\1/p" "$TALOS_TEST_LOG" | head -1)"; sleep 0.5
 { [ "$rc" = 1 ] && <<<"$out" grep -qi 'timed out' && [ "$(cur)" = "releases/$V1" ] && [ -n "$SPID" ] && ! alive "$SPID"; } && ok "a migration past the step limit is killed (process gone), the update rolls back to $V1 (exit 1)" || no "slow migration (rc=$rc, pid '$SPID' alive=$(alive "$SPID" && echo yes || echo no))" "$out"
+# KIT-2: that migration may have stopped half way, so it is named and its own down runs before the rest is undone
+{ grep -q "^down ${D}0040" "$TALOS_TEST_LOG" && <<<"$out" grep -q "Migration ${D}0040-slow failed part way"; } \
+  && ok "the timed-out migration is named and its own down runs (it may have stopped half way)" || no "timed-out migration not cleaned up by its own down" "$(cat "$TALOS_TEST_LOG") | $out"
 # SIGTERM mid-migration: the child is stopped and the update rolls back
 reset_world; touch "$TALOS_TEST_HOLD"
 runtty --pidfile "$SB/pid10" -- "$(BIN)" update --agent "$A" --source "$SRC" > "$SB/out10" 2>&1 &
@@ -535,6 +538,7 @@ MPID="$(sed -n "s/^up ${D}0001 pid \([0-9]*\)/\1/p" "$TALOS_TEST_LOG" | head -1)
 kill -TERM "$(cat "$SB/pid10")"; wait "$BG10"; rc=$?; sleep 0.3
 { [ "$rc" != 0 ] && [ -n "$MPID" ] && ! alive "$MPID" && [ "$(cur)" = "releases/$V1" ] && [ ! -e "$V/update-journal.json" ] && [ ! -e "$TALOS_APP_HOME/agent-request.json" ]; } \
   && ok "SIGTERM mid-migration (rc=$rc): the migration process is stopped, the update rolled back to $V1, no journal, no restart request" || no "SIGTERM handling (rc=$rc, child alive=$(alive "$MPID" && echo yes || echo no))" "$(cat "$SB/out10")"
+{ [ "$rc" = 143 ] && grep -q "^down ${D}0001" "$TALOS_TEST_LOG"; } && ok "SIGTERM mid-migration: that migration's own down runs, and the exit is still 128+15" || no "SIGTERM mid-migration: rc=$rc, downs: $(grep '^down ' "$TALOS_TEST_LOG" | tr '\n' ' ')" "$(cat "$SB/out10")"
 rm -f "$TALOS_TEST_HOLD"
 
 lap "before section 11"

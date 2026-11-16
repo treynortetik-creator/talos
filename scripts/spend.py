@@ -4,7 +4,7 @@
     python3 scripts/spend.py [--days N] [--by agent|model|project] [--json] [--root DIR] [--until YYYY-MM-DD] [--machine NAME]
 
 The window is the N whole UTC days before --until (default: today, UTC), so `--days 1` is the previous UTC day.
-Reads ~/.claude/projects (or $CLAUDE_CONFIG_DIR/projects): each project's <session>.jsonl (the session itself, counted as
+Reads ~/.claude/projects (or $CLAUDE_CONFIG_DIR/projects), and on WSL the Windows user's too: each project's <session>.jsonl (the session itself, counted as
 `main`) and <session>/subagents/**/agent-*.jsonl, named by the sibling agent-*.meta.json (its name, else its agentType).
 Every assistant message counts once (Claude Code writes one line per content block, each with the same usage), by its
 message.id, and only when its timestamp is inside the window. Project folders of scratch and temp runs are skipped.
@@ -19,6 +19,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 
 SCHEMA = "talos-spend/1"
@@ -98,6 +99,35 @@ def agent_name(jsonl):
         return "subagent"
 
 
+def windows_projects():
+    """On WSL, the Windows user's ~/.claude/projects (as /mnt/<drive>/...): Claude Code run from the Windows app (Titan's
+    sessions) writes its transcripts there, not in the distro's home (found 2026-11-16: Titan's line read 0 runs). Asked of
+    Windows itself (cmd.exe), else the one /mnt/c/Users/* that has one; None off WSL or when it cannot be told.
+    TALOS_SPEND_WINDOWS_HOME (a test's) names the Windows home instead."""
+    try:
+        with open("/proc/sys/kernel/osrelease", encoding="utf-8") as f:
+            wsl = "microsoft" in f.read().lower()
+    except OSError:
+        wsl = False
+    if not (wsl or os.environ.get("WSL_DISTRO_NAME") or os.environ.get("TALOS_SPEND_WINDOWS_HOME")):
+        return None
+    home = os.environ.get("TALOS_SPEND_WINDOWS_HOME")
+    if not home:
+        try:
+            out = subprocess.run(["cmd.exe", "/c", "echo %USERPROFILE%"], cwd="/mnt/c", capture_output=True, text=True,
+                                 timeout=10).stdout.strip()
+            m = re.fullmatch(r"([A-Za-z]):\\(.*)", out)
+            if m:
+                home = "/mnt/%s/%s" % (m.group(1).lower(), m.group(2).replace("\\", "/"))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            home = None
+    if not home:
+        found = [d for d in glob.glob("/mnt/c/Users/*/.claude/projects") if os.path.isdir(d)]
+        return found[0] if len(found) == 1 else None
+    p = os.path.join(home, ".claude", "projects")
+    return p if os.path.isdir(p) else None
+
+
 def transcripts(root):
     """(project, agent, path) for every session and subagent transcript under the projects folder."""
     for proj in sorted(os.listdir(root)) if os.path.isdir(root) else []:
@@ -110,9 +140,9 @@ def transcripts(root):
             yield proj, agent_name(sub), sub
 
 
-def tally(root, start, end, by):
+def tally(roots, start, end, by):
     rows = {}
-    for proj, agent, path in transcripts(root):
+    for proj, agent, path in (t for root in roots for t in transcripts(root)):
         found = turns(path, start, end)
         if not found:
             continue
@@ -148,7 +178,8 @@ def main(argv):
     p.add_argument("--days", type=positive, default=1)
     p.add_argument("--by", choices=("agent", "model", "project"), default="agent")
     p.add_argument("--json", action="store_true")
-    p.add_argument("--root", default=os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "projects"))
+    # given: only that folder (repeatable). Not given: this home's, and on WSL the Windows user's too (windows_projects)
+    p.add_argument("--root", action="append")
     p.add_argument("--until", type=utc_day, help="end of the window, exclusive (default: today, UTC)")
     # the name Lemnos files the line under (lemnos, delphi, cyclops, titan, hestia): neither the hostname nor CI_STATUS_WHERE
     # (ci-runner on Lemnos) is it, so a --json line must say it
@@ -158,7 +189,13 @@ def main(argv):
         p.error("--json needs --machine (lemnos, delphi, cyclops, titan or hestia)")
     end = a.until or dt.datetime.now(dt.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     start = end - dt.timedelta(days=a.days)
-    rows, total = tally(a.root, start, end, a.by)
+    roots = a.root
+    if not roots:
+        roots = [os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "projects")]
+        win = windows_projects()
+        if win and os.path.realpath(win) != os.path.realpath(roots[0]):
+            roots.append(win)
+    rows, total = tally(roots, start, end, a.by)
     if a.json:
         window = {"start": iso(start), "end": iso(end), "days": a.days}
         print(json.dumps({"schema": SCHEMA, "machine": a.machine, "window": window, "by": a.by, "rows": rows, "total": total}))

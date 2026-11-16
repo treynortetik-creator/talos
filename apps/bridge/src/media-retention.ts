@@ -32,7 +32,9 @@ const SWEEP_EVERY_MS = 3_600_000
 const SURGE_FILES = 100
 const SURGE_SHARE = 0.2
 const MEDIA_ID = /md_[0-9A-HJKMNP-TV-Z]{26}/g
-const FILE = /^(md_[0-9A-HJKMNP-TV-Z]{26})(\.[A-Za-z0-9]{1,10})?$/
+/** A sidecar is `<id>.json`; a .json payload is `<id>.data.json` (media.ts), which is a download and is swept. */
+const isSidecar = (n: string) => /^md_[0-9A-HJKMNP-TV-Z]{26}\.json$/.test(n)
+const FILE = /^(md_[0-9A-HJKMNP-TV-Z]{26})(\.data\.json|\.[A-Za-z0-9]{1,10})?$/
 
 export type SweepResult = { files: number; bytes: number; oldest: number | null }
 type Seen = { days: number | null; changed_at: number; swept?: boolean }
@@ -102,7 +104,7 @@ const realOr = (p: string): string => {
 /** How many downloads the folder holds, in use or not (the base of the surge check). */
 function downloadCount(mediaDir: string): number {
   try {
-    return readdirSync(mediaDir).filter((n) => FILE.test(n) && !n.endsWith('.json')).length
+    return readdirSync(mediaDir).filter((n) => FILE.test(n) && !isSidecar(n)).length
   } catch {
     return 0
   }
@@ -124,7 +126,7 @@ function candidates(ctx: BridgeContext, mediaDir: string, cars: Sidecar[]): Cand
   const out: Candidate[] = []
   for (const n of names) {
     const m = FILE.exec(n)
-    if (!m || n.endsWith('.json')) continue
+    if (!m || isSidecar(n)) continue
     if (live.has(m[1] as string) || protectedFiles.has(n)) continue
     const full = join(mediaDir, n)
     try {

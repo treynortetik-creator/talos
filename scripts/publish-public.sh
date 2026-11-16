@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # The fresh public snapshot, up to the push and never past it. Run it on the machine that keeps the private personal-data
-# list (scripts/personal-denylist.txt), from a clean checkout of a green main:
+# list (scripts/personal-denylist.txt), from a clean checkout of origin/main, or of origin/green (the six-green commit CI keeps
+# at refs/heads/green): that commit must also be on origin/main and carry six local-ci successes (check mod browser image desktop
+# mobile, the newest of each "passed on ..." or, but for check, "skipped: no <job> inputs changed since <sha>"), read with gh from
+# the CI repo (origin's GitHub name, or PUBLISH_CI_REPO=OWNER/NAME). Any other HEAD is refused:
 #
 #   scripts/publish-public.sh PUBLIC_REPO_URL WORKDIR
 #
@@ -58,10 +61,43 @@ if [ ! -f "$HERE/private-docs.txt" ] && [ -n "$MAIN" ] && [ -f "$MAIN/scripts/pr
   done < "$MAIN/scripts/private-docs.txt"
 fi
 
-# only a clean checkout of main as origin has it: a branch or a stale commit is not what gets published
-git -C "$SRC" fetch --quiet origin main 2>/dev/null || die "could not fetch origin main. Nothing was done."
-[ "$(git -C "$SRC" rev-parse HEAD)" = "$(git -C "$SRC" rev-parse origin/main)" ] ||
-  die "HEAD is not origin/main: check out the current main first. Nothing was done."
+# only a clean checkout of main as origin has it, or of the six-green commit CI keeps at origin's green branch (below)
+git -C "$SRC" fetch --quiet origin +refs/heads/main:refs/remotes/origin/main 2>/dev/null || die "could not fetch origin main. Nothing was done."
+HEAD_SHA="$(git -C "$SRC" rev-parse HEAD)"
+# full ref names: a local tag or branch called "origin/main" must never stand in for the fetched one
+if [ "$HEAD_SHA" != "$(git -C "$SRC" rev-parse --verify -q refs/remotes/origin/main)" ]; then
+  # not main's head: allowed only at origin/green (refs/heads/green, which ci-runner.sh moves to a six-green commit of main), when
+  # HEAD is also on main and carries all six local-ci successes right now (the same rule as apps/desktop/scripts/release-publish.sh)
+  if git -C "$SRC" fetch --quiet origin '+refs/heads/green:refs/remotes/origin/green' 2>/dev/null; then
+    GREEN_SHA="$(git -C "$SRC" rev-parse -q --verify refs/remotes/origin/green 2>/dev/null || true)"
+  else
+    git -C "$SRC" update-ref -d refs/remotes/origin/green 2>/dev/null || true # no green, or origin unreadable: never a stale one
+    GREEN_SHA=""
+  fi
+  [ -n "$GREEN_SHA" ] && [ "$HEAD_SHA" = "$GREEN_SHA" ] ||
+    die "HEAD is not origin/main or origin/green: check out the current main (or the green branch) first. Nothing was done."
+  git -C "$SRC" merge-base --is-ancestor "$HEAD_SHA" refs/remotes/origin/main ||
+    die "HEAD is origin/green but is not on origin/main. Nothing was done."
+  CIREPO="${PUBLISH_CI_REPO:-$(git -C "$SRC" remote get-url origin 2>/dev/null | sed -nE 's#^(https://github\.com/|git@github\.com:)([^/]+/[^/]+)$#\2#p' | sed 's/\.git$//')}"
+  [[ "$CIREPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+    die "HEAD is not origin/main and the CI repository is unknown (PUBLISH_CI_REPO=OWNER/NAME). Nothing was done."
+  command -v gh >/dev/null || die "HEAD is not origin/main and gh is needed to read its CI statuses. Nothing was done."
+  echo "publish-public: reading the CI statuses of ${HEAD_SHA:0:7} on $CIREPO"
+  ROWS="$(GH_PROMPT_DISABLED=1 gh api --paginate "repos/$CIREPO/commits/$HEAD_SHA/statuses?per_page=100" --jq '.[] | [.context, .state, .description] | @tsv' </dev/null 2>/dev/null)" ||
+    die "could not read the CI statuses of ${HEAD_SHA:0:7} on $CIREPO. Nothing was done."
+  for job in check mod browser image desktop mobile; do
+    row="$(printf '%s\n' "$ROWS" | awk -F'\t' -v c="local-ci/$job" '$1 == c { print; exit }')"
+    [ -n "$row" ] || die "${HEAD_SHA:0:7} is not six-green: no local-ci/$job status. Nothing was done."
+    state="$(printf '%s' "$row" | cut -f2)" desc="$(printf '%s' "$row" | cut -f3)"
+    [ "$state" = success ] || die "${HEAD_SHA:0:7} is not six-green: local-ci/$job is $state. Nothing was done."
+    case "$desc" in
+      "passed on "*) ;;
+      "skipped: no $job inputs changed since "*)
+        [ "$job" != check ] && [[ "${desc##* since }" =~ ^[0-9a-f]{7,40}$ ]] || die "${HEAD_SHA:0:7} is not six-green: local-ci/$job was skipped, not passed. Nothing was done." ;;
+      *) die "${HEAD_SHA:0:7} is not six-green: local-ci/$job says \"$desc\", not a pass. Nothing was done." ;;
+    esac
+  done
+fi
 [ -z "$(git -C "$SRC" status --porcelain --untracked-files=no)" ] || die "the checkout has uncommitted changes. Nothing was done."
 # never the private repository itself
 [ "$URL" != "$(git -C "$SRC" remote get-url origin)" ] && [ "$URL" != "$SRC" ] && [ "$URL" != "$COMMON" ] ||
@@ -88,6 +124,9 @@ check "$SRC" || die "the privacy check found something in this checkout (above):
 echo "== 3/6 the export"
 mkdir -p "$WORK"
 bash "$HERE/export-public.sh" "$WORK/export" || die "export-public.sh failed (above)." 1
+# the export copied the checkout as it is now: it must still be the commit checked above, and clean
+[ "$(git -C "$SRC" rev-parse HEAD)" = "$HEAD_SHA" ] && [ -z "$(git -C "$SRC" status --porcelain --untracked-files=no)" ] ||
+  die "the checkout moved or changed while the export ran: run it again. Nothing was staged." 1
 
 echo "== 4/6 the privacy check on the exported folder, every file"
 check "$WORK/export" CHECK_ALL_FILES=1 CHECK_NO_GIT=1 ||
@@ -96,7 +135,7 @@ check "$WORK/export" CHECK_ALL_FILES=1 CHECK_NO_GIT=1 ||
 echo "== 5/6 the public repository, its tree replaced by the export"
 git clone --quiet -- "$URL" "$WORK/public" || die "could not clone $URL." 1
 # whatever the URL's spelling: a clone that holds this checkout's commit is the private repository, not the public one
-if git -C "$WORK/public" cat-file -e "$(git -C "$SRC" rev-parse HEAD)^{commit}" 2>/dev/null; then
+if git -C "$WORK/public" cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
   die "$URL holds this checkout's commit: it is the private repository, not the public one. Nothing was staged." 2
 fi
 find "$WORK/public" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
@@ -114,7 +153,7 @@ AE="${AE%>}"
 git -C "$WORK/public" config user.name "$AN"
 git -C "$WORK/public" config user.email "$AE"
 # the private commit this snapshot is made from, as a trailer on the snapshot commit, however the commit is written
-SOURCE_SHA="$(git -C "$SRC" rev-parse HEAD)"
+SOURCE_SHA="$HEAD_SHA"
 HOOKS="$(git -C "$WORK/public" rev-parse --absolute-git-dir)/hooks"
 mkdir -p "$HOOKS"
 printf '#!/bin/sh

@@ -73,3 +73,40 @@ function isTopFrame(scope: unknown): boolean {
 export function isNativeShell(scope: unknown = globalThis): boolean {
   return capacitorPlatform(scope) === 'ios' && isTopFrame(scope)
 }
+
+/** One file the shell's TalosPicker plugin hands back. */
+export type NativePickedFile = { name: string; mime: string; base64: string }
+/** The iPhone shell's own pickers (apps/mobile TalosPicker.swift). Each resolves `{ files }`; a dismissed picker gives []. */
+export type NativePicker = {
+  pickPhotos: () => Promise<{ files: NativePickedFile[] }>
+  takePhoto: () => Promise<{ files: NativePickedFile[] }>
+  pickFiles: () => Promise<{ files: NativePickedFile[] }>
+}
+
+/** The shell's TalosPicker plugin, or null outside the shell (or in a shell build without it). */
+export function nativePicker(scope: unknown = globalThis): NativePicker | null {
+  try {
+    if (!isNativeShell(scope)) return null
+    const p = (scope as { Capacitor?: { Plugins?: { TalosPicker?: NativePicker } } }).Capacitor?.Plugins?.TalosPicker
+    return p && typeof p.pickPhotos === 'function' ? p : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * True in iPhone/iPad Safari (or a Home Screen app) that is not the Talos shell. There iOS puts its own sheet (Photo Library /
+ * Take Photo / Choose File) on every file input, so the + button skips our menu and lets that sheet be the one menu.
+ * iPadOS reports a Mac user agent, hence the touch-points check.
+ */
+export function isIosWeb(scope: unknown = globalThis): boolean {
+  try {
+    if (isNativeShell(scope)) return false
+    const nav = (scope as { navigator?: { userAgent?: string; maxTouchPoints?: number } }).navigator
+    const ua = nav?.userAgent ?? ''
+    const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && (nav?.maxTouchPoints ?? 0) > 1)
+    return ios && coarsePointer(scope)
+  } catch {
+    return false
+  }
+}

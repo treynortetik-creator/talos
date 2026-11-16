@@ -34,7 +34,7 @@ import { isTestAuthInstalled, setAuthImplementation } from './contract.ts'
 import { enrollSessionRoutes } from './enroll-session.ts'
 import { implFor, sessionFor } from './impl.ts'
 import { authState } from './state.ts'
-import { clearedCookie, ENROLL_CODE_MAX_TTL_MS, newToken, sessionCookie, sessionTtlMs } from './util.ts'
+import { clearedCookie, ENROLL_CODE_MAX_TTL_MS, enrollIpKey, newToken, sessionCookie, sessionTtlMs } from './util.ts'
 
 export const routes = new Hono<AppEnv>()
 // Every sign-in route reads a small JSON body, often before it knows who is asking: cap it and put a clock on it. This
@@ -81,7 +81,8 @@ routes.post('/api/auth/enroll/options', rate('auth'), csrf, async (c) => {
   const { core, services } = state(c)
   const b = await body(c, R.enrollOptions.req)
   if (!b) return c.json({ error: 'bad_request' }, 400)
-  const code = core.checkCode(b.code_auth)
+  const code = core.checkCode(b.code_auth, enrollIpKey(c))
+  if (code === 'locked') return c.json({ error: 'too_many_attempts' }, 429)
   if (!code || code.registeredCredentialId) return c.json({ error: 'code_invalid' }, 410)
   core.purge()
   const options = await generateRegistrationOptions({
@@ -104,7 +105,8 @@ routes.post('/api/auth/enroll/verify', rate('auth'), csrf, async (c) => {
   const { core, services } = state(c)
   const b = await body(c, R.enrollVerify.req)
   if (!b) return c.json({ error: 'bad_request' }, 400)
-  const code = core.checkCode(b.code_auth)
+  const code = core.checkCode(b.code_auth, enrollIpKey(c))
+  if (code === 'locked') return c.json({ error: 'too_many_attempts' }, 429)
   if (!code || code.registeredCredentialId) return c.json({ error: 'code_invalid' }, 410)
   let verified: Awaited<ReturnType<typeof verifyRegistrationResponse>>
   try {
@@ -238,12 +240,13 @@ routes.post('/api/auth/device/verify', rate('auth'), csrf, sessionAny, async (c)
   const sess = sessionFor(state(c), c)
   const b = await body(c, R.deviceVerify.req)
   if (!sess || !b) return c.json({ error: 'bad_request' }, 400)
-  const code = core.checkCode(b.code_auth)
+  const code = core.checkCode(b.code_auth, enrollIpKey(c))
+  if (code === 'locked') return c.json({ error: 'too_many_attempts' }, 429)
   if (!code) return c.json({ error: 'code_invalid' }, 410)
   // WP-N0: a session minted from a setup code may only pin with that same code. Any other live code is a failed attempt.
   const mintedBy = core.sessionEnrollCodeId(sess.sessionId)
   if (mintedBy !== null && mintedBy !== code.codeId) {
-    core.recordEnrollFailure()
+    core.recordEnrollFailure(enrollIpKey(c))
     return c.json({ error: 'code_invalid' }, 410)
   }
   // Take the code NOW, before the first await: two parallel calls on one code cannot both enroll (review F2). Every early
@@ -285,7 +288,7 @@ routes.post('/api/auth/device/verify', rate('auth'), csrf, sessionAny, async (c)
           sig: proof.sig,
         }))
       if (!proven) {
-        if (proof !== undefined) core.recordEnrollFailure(code.codeId) // a wrong signature is a guess, not a first ask
+        if (proof !== undefined) core.recordEnrollFailure(enrollIpKey(c), code.codeId) // a wrong signature is a guess, not a first ask
         const challenge = newToken(32)
         core.putChallenge('device', challenge, sess.sessionId, existing.id, DEVICE_PROOF_TTL_MS)
         return c.json({ error: 'device_proof_required', challenge }, 409)
@@ -533,7 +536,9 @@ routes.post('/bridge/rotate', ...bridgeBodyGuard, async (c) => {
   if (current && current.publicKeyB64 === b.new_pubkey) return c.json({ ok: true, key_id: current.keyId })
   // Only the ACTIVE key may rotate; a previous key inside its grace window authenticates but cannot rotate.
   if (!current || current.keyId !== a.keyId) return c.json({ error: 'unauthorized' }, 401)
-  return c.json({ ok: true, key_id: core.rotateBridgeKey(current, b.new_pubkey) })
+  const keyId = core.rotateBridgeKey(current, b.new_pubkey)
+  services.onBridgeKeyRotated?.(keyId)
+  return c.json({ ok: true, key_id: keyId })
 })
 
 routes.post('/bridge/devices/:id/revoke', ...bridgeBodyGuard, async (c) => {

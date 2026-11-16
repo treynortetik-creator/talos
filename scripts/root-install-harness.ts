@@ -12,13 +12,14 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterAll } from 'vitest'
 
 export const REPO = resolve(__dirname, '..')
@@ -46,6 +47,30 @@ export function which(name: string): string | undefined {
   const r = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' })
   const p = r.stdout.trim()
   return r.status === 0 && p.startsWith('/') ? p : undefined
+}
+
+/**
+ * Replaces `bin/pnpm` with a wrapper that records `pnpm install ...` in `log` and does not run it; every other pnpm call is
+ * the real one. Any test that runs the root install.sh for real needs it: the clone is this checkout, already installed and
+ * used by other tests at the same time, and a sandbox HOME points pnpm at another store, so a real install would empty and
+ * relink the shared node_modules (install.sh lets pnpm purge without a terminal).
+ */
+export function recordPnpmInstall(bin: string, log: string) {
+  const pnpm = which('pnpm')
+  if (!pnpm) return
+  // install.sh never asks a corepack pnpm its version (asking makes corepack download pnpm into HOME, and a dry run must write
+  // nothing there): it knows one by where the pnpm link ends. So when this Mac's pnpm is corepack's, the wrapper lives in a
+  // folder named corepack and bin/pnpm links to it, as the real one does.
+  const viaCorepack = realpathSync(pnpm).includes('corepack')
+  const at = viaCorepack ? join(dirname(bin), 'corepack', 'pnpm') : join(bin, 'pnpm')
+  rmSync(join(bin, 'pnpm'), { force: true })
+  mkdirSync(dirname(at), { recursive: true })
+  writeFileSync(
+    at,
+    `#!/bin/sh\ncase " $* " in *" install "*) echo "pnpm $*" >> "${log}"; exit 0 ;; esac\nexec "${pnpm}" "$@"\n`,
+  )
+  chmodSync(at, 0o755)
+  if (viaCorepack) symlinkSync(at, join(bin, 'pnpm'))
 }
 
 export type Sandbox = { home: string; bin: string; log: string; desktop: string; agent: string; root: string }
@@ -105,13 +130,31 @@ export function sandbox(opts: { claude?: boolean } = {}): Sandbox {
   wrap('git', '*commit*', 'fail-commit', 'echo "fatal: could not write the commit" >&2; exit 1')
   wrap('tar', '*-xf*', 'fail-tar', `"${which('tar')}" "$@"; exit 137`)
   wrap('python3', '*render-default.py*', 'fail-render', 'exit 1')
+  recordPnpmInstall(bin, log)
   stub(desktop, 'build-app.sh', record('build-app.sh'))
   stub(desktop, 'install.sh', record('app-install.sh'))
   return { home, bin, log, desktop, agent: join(home, 'talos-agent'), root }
 }
 
-export function run(sb: Sandbox, args: string[], env: Record<string, string> = {}) {
-  const r = spawnSync('bash', [SCRIPT, ...args], {
+// A time limit that ends the install and everything it started (the kit's gate runs suites that start their own processes):
+// the install runs in its own process group, and when the time is up the whole group is killed and the exit code is 124.
+// spawnSync's own timeout would kill only bash and leave the rest running.
+const GROUP_LIMIT = `$SIG{ALRM} = sub { kill 'KILL', -$pid; print STDERR "\\nharness: time limit reached, the install's process group was killed\\n"; exit 124 };
+my $s = shift; our $pid = fork() // die "fork: $!";
+if (!$pid) { setpgrp(0, 0); exec @ARGV or die "exec: $!" }
+alarm $s; waitpid($pid, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)`
+
+export function run(
+  sb: Sandbox,
+  args: string[],
+  env: Record<string, string> = {},
+  opts: { groupTimeoutMs?: number } = {},
+) {
+  const limit = opts.groupTimeoutMs
+  const [cmd, argv] = limit
+    ? ['perl', ['-e', GROUP_LIMIT, String(Math.ceil(limit / 1000)), 'bash', SCRIPT, ...args]]
+    : ['bash', [SCRIPT, ...args]]
+  const r = spawnSync(cmd as string, argv as string[], {
     encoding: 'utf8',
     cwd: REPO,
     env: {

@@ -61,6 +61,20 @@ export function recordVoiceAsk(ctx: Pick<BridgeContext, 'store' | 'clock'>, thre
  * by every change made this way being told to the owner at once with how to undo it.
  */
 export function ownerAskedIn(ctx: Pick<BridgeContext, 'store' | 'clock' | 'config'>, threadId: string): boolean {
+  return ownerAskedAt(ctx, threadId) !== undefined
+}
+
+/** When outside text last reached the agent in `thread` (noteOutsideText), or undefined. */
+export function outsideTextAt(ctx: Pick<BridgeContext, 'store'>, thread: string): number | undefined {
+  const t = Number(ctx.store.kvGet(OUTSIDE_KEY(thread)))
+  return Number.isFinite(t) ? t : undefined
+}
+
+/** `ownerAskedIn`, giving the time (ms) of his words when every check passes, else undefined. */
+export function ownerAskedAt(
+  ctx: Pick<BridgeContext, 'store' | 'clock' | 'config'>,
+  threadId: string,
+): number | undefined {
   const now = ctx.clock.now()
   const rows = ctx.store.ownerRowsSince(new Date(now - OWNER_SPOKE_MS).toISOString(), 200)
   let spoke = Number.NEGATIVE_INFINITY
@@ -73,13 +87,15 @@ export function ownerAskedIn(ctx: Pick<BridgeContext, 'store' | 'clock' | 'confi
     const v = Number(ctx.store.kvGet(VOICE_KEY(threadId)))
     if (Number.isFinite(v) && v <= now && now - v < OWNER_SPOKE_MS && v > spoke) spoke = v
   }
-  if (spoke === Number.NEGATIVE_INFINITY) return false
+  if (spoke === Number.NEGATIVE_INFINITY) return undefined
   // this thread's lead talking to main after the owner's words is another session's text, not the owner: it cancels them
-  if (leadSpokeSince(ctx.store.db, threadId, spoke, now)) return false
+  if (leadSpokeSince(ctx.store.db, threadId, spoke, now)) return undefined
   // and so does any outside text that reached the agent in this thread after them (noteOutsideText)
   const outside = Number(ctx.store.kvGet(OUTSIDE_KEY(threadId)))
-  if (Number.isFinite(outside) && outside >= spoke) return false
-  return !rows.some((m) => m.thread_id === threadId && isShareOnly(m) && Date.parse(m.created_at) > spoke)
+  if (Number.isFinite(outside) && outside >= spoke) return undefined
+  return rows.some((m) => m.thread_id === threadId && isShareOnly(m) && Date.parse(m.created_at) > spoke)
+    ? undefined
+    : spoke
 }
 
 /**

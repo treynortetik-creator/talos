@@ -46,6 +46,9 @@ describe('the agent runs them only when the owner asked', () => {
     const env = world()
     expect(onRequestRefusal(env, ['theme', 'reset'])).toMatch(/only when the owner asked/)
     expect(onRequestRefusal(env, ['memory', 'init'])).toMatch(/only when the owner asked/)
+    expect(onRequestRefusal(env, ['memory', 'set-root', 'journal', 'memory/journal'])).toMatch(
+      /only when the owner asked/,
+    )
     expect(onRequestRefusal(env, ['lead', 'init', 'inbox'])).toMatch(/in thread inbox or the default thread/)
   })
 

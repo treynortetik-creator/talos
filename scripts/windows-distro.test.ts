@@ -339,8 +339,9 @@ describe('isolation from Windows (R1-3, R2-1, R2-2, R2-4, R2-9: interop, drives,
     expect(mounts()).not.toMatch(/wslg|X11/)
     expect(mounts().trim().split('\n').at(-1)).toMatch(/^talos-private \/mnt\/wsl tmpfs /)
     expect(lastLine(r.out)).toMatch(/^isolated from Windows: /)
+    // no default route in this test: the public fallbacks only
     expect(readFileSync(join(root, 'mnt', 'wsl', 'resolv.conf'), 'utf8')).toBe(
-      'nameserver 10.255.255.254\nsearch lan\n',
+      'nameserver 10.255.255.254\nsearch lan\nnameserver 1.1.1.1\nnameserver 8.8.8.8\noptions timeout:2 attempts:2\n',
     )
     // the second time there is nothing to do
     rmSync(join(root, '.calls'))
@@ -362,8 +363,9 @@ describe('isolation from Windows (R1-3, R2-1, R2-2, R2-4, R2-9: interop, drives,
     )
     const r = run('isolate-mounts')
     expect(r.code, r.err).toBe(0)
+    // glibc reads three nameservers: the tunnel, the gateway, then one public resolver
     expect(readFileSync(join(root, 'mnt', 'wsl', 'resolv.conf'), 'utf8')).toBe(
-      'nameserver 10.255.255.254\nsearch lan\nnameserver 172.21.32.1\noptions timeout:2 attempts:2\n',
+      'nameserver 10.255.255.254\nsearch lan\nnameserver 172.21.32.1\nnameserver 1.1.1.1\noptions timeout:2 attempts:2\n',
     )
     expect(lastLine(r.out)).toMatch(/^isolated from Windows: /)
   })
@@ -380,22 +382,50 @@ describe('isolation from Windows (R1-3, R2-1, R2-2, R2-4, R2-9: interop, drives,
     )
     expect(run('isolate-mounts').code).toBe(0)
     expect(readFileSync(join(root, 'mnt', 'wsl', 'resolv.conf'), 'utf8')).toBe(
-      'nameserver 10.255.255.254\nnameserver 172.21.32.1\noptions timeout:2 attempts:2\n',
+      'nameserver 10.255.255.254\nnameserver 172.21.32.1\nnameserver 1.1.1.1\noptions timeout:2 attempts:2\n',
     )
   })
 
-  it('isolate-mounts adds no second nameserver when WSL already names the gateway, or there is no default route', () => {
-    for (const [conf, route] of [
-      ['nameserver 172.21.32.1\n', 'Iface\tDestination\tGateway\neth0\t00000000\t012015AC\n'],
-      ['nameserver 172.21.32.1 \n', 'Iface\tDestination\tGateway\neth0\t00000000\t012015ac\n'],
-      ['nameserver 10.255.255.254\n', 'Iface\tDestination\tGateway\neth0\t002015AC\t00000000\n'],
+  // Titan, 2026-11-16: WSL named only the NAT gateway (dnsTunneling off), and the gateway timed out on every name it had
+  // not cached; the owner's first sign-in failed on it. Public resolvers that do not go through Windows come after it.
+  it('isolate-mounts adds public resolvers after WSL’s own, and never names one twice (when WSL already names the gateway, or there is no default route)', () => {
+    for (const [conf, route, want] of [
+      [
+        'nameserver 172.21.32.1\n',
+        'Iface\tDestination\tGateway\neth0\t00000000\t012015AC\n',
+        'nameserver 172.21.32.1\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n',
+      ],
+      [
+        'nameserver 172.21.32.1 \n',
+        'Iface\tDestination\tGateway\neth0\t00000000\t012015ac\n',
+        'nameserver 172.21.32.1\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n',
+      ],
+      [
+        'nameserver 10.255.255.254\n',
+        'Iface\tDestination\tGateway\neth0\t002015AC\t00000000\n',
+        'nameserver 10.255.255.254\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n',
+      ],
+      // a network whose own resolver is already a public one: named once, and the list still stops at three
+      [
+        'nameserver 1.1.1.1\nsearch corp.example\n',
+        'Iface\tDestination\tGateway\neth0\t00000000\t012015AC\n',
+        'nameserver 1.1.1.1\nsearch corp.example\nnameserver 172.21.32.1\nnameserver 8.8.8.8\n',
+      ],
+      // a nameserver line with no address takes no place (Opus review on d516bae0)
+      [
+        'nameserver \nnameserver 10.255.255.254\n',
+        'Iface\tDestination\tGateway\neth0\t002015AC\t00000000\n',
+        'nameserver 10.255.255.254\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n',
+      ],
     ] as const) {
       proc({ wsl: SHARED_WSL })
       writeFileSync(join(root, 'mnt', 'wsl', 'resolv.conf'), conf)
       mkdirSync(join(root, 'proc', 'net'), { recursive: true })
       writeFileSync(join(root, 'proc', 'net', 'route'), route)
       expect(run('isolate-mounts').code).toBe(0)
-      expect(readFileSync(join(root, 'mnt', 'wsl', 'resolv.conf'), 'utf8')).toBe(conf)
+      expect(readFileSync(join(root, 'mnt', 'wsl', 'resolv.conf'), 'utf8')).toBe(
+        `${want}options timeout:2 attempts:2\n`,
+      )
     }
   })
 
@@ -1105,6 +1135,62 @@ describe('setup-user.sh: what it downloads (R1-6)', () => {
   })
 })
 
+// WINPROTO-3: Setup run again with a newer pinned Claude Code kept the old claude_path in supervisor.json, so the new
+// version was installed and never launched. repin_claude (setup-user.sh), run on its own.
+describe('setup-user.sh: a kept supervisor.json moves to the newly pinned Claude Code, and only from an earlier pin', () => {
+  const sh = readFileSync(join(ROOT, 'apps', 'windows', 'distro', 'setup-user.sh'), 'utf8')
+  const fn = sh.slice(sh.indexOf('# >>> repin_claude'), sh.indexOf('# <<< repin_claude'))
+  const py = spawnSync('python3', ['-c', '1']).status === 0
+  const made: string[] = []
+  afterEach(() => {
+    for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const world = (claudePath: (home: string) => string) => {
+    const home = mkdtempSync(join(tmpdir(), 'repin-'))
+    made.push(home)
+    const conf = join(home, 'supervisor.json')
+    const d = {
+      agent_dir: join(home, 'talos-agent'),
+      claude_path: claudePath(home),
+      args: ['--a'],
+      extra: { kept: true },
+    }
+    writeFileSync(conf, `${JSON.stringify(d, null, 2)}\n`, { mode: 0o600 })
+    return { home, conf, d, want: join(home, '.local', 'share', 'claude', 'versions', '2.1.400') }
+  }
+  const repin = (w: ReturnType<typeof world>, dry = '0') =>
+    spawnSync('bash', ['-c', `${fn}\nrepin_claude "$1" "$2"`, 'sh', w.conf, w.want], {
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: w.home, DRY: dry },
+      encoding: 'utf8',
+    })
+  const read = (w: ReturnType<typeof world>) => JSON.parse(readFileSync(w.conf, 'utf8'))
+
+  it.skipIf(!py)('an earlier pinned default moves to this one; nothing else changes, the file stays 0600', () => {
+    const w = world((h) => join(h, '.local', 'share', 'claude', 'versions', '2.1.322'))
+    const r = repin(w)
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stdout).toContain('Claude Code moves from 2.1.322 to 2.1.400; approve the change in the tray')
+    expect(read(w)).toEqual({ ...w.d, claude_path: w.want })
+    expect(statSync(w.conf).mode & 0o777).toBe(0o600)
+  })
+
+  it.skipIf(!py)('a path the owner set, the same version, or a dry run: kept as it is', () => {
+    for (const p of [
+      () => '/opt/my-claude/claude',
+      (h: string) => join(h, '.local', 'share', 'claude', 'versions', 'latest'),
+      (h: string) => join(h, '.local', 'share', 'claude', 'versions', '2.1.400'),
+    ]) {
+      const w = world(p)
+      const r = repin(w)
+      expect(r.stdout, r.stderr).toBe('supervisor.json: kept as it is\n')
+      expect(read(w)).toEqual(w.d)
+    }
+    const w = world((h) => join(h, '.local', 'share', 'claude', 'versions', '2.1.322'))
+    expect(repin(w, '1').stdout).toContain('would move')
+    expect(read(w)).toEqual(w.d)
+  })
+})
+
 // Chronos in the distro (setup-user.sh install_chronos), run on its own: the download is a stand-in tarball, its install.sh
 // and bin/chronos stand-ins that write down how they were run. Real tar, real files.
 describe("setup-user.sh: Chronos, pinned, with a fresh install's jobs Talos's to run", () => {
@@ -1403,6 +1489,27 @@ describe("launch.py: the owner's approval of how Talos starts Claude (Hestia's c
       },
     )
 
+    // WINPROTO-4: restore's agent folder is the approved launch's, from root's own file (talos's supervisor.json never counts)
+    it.skipIf(!py || linuxOnly)(
+      "approved-folder prints the approved launch's folder from root's file, and nothing without one (Linux)",
+      () => {
+        expect(launch('approved-folder').status).toBe(1)
+        const d = freshInstall()
+        launch('approve-install')
+        let r = launch('approved-folder')
+        expect(r.status, r.stderr).toBe(0)
+        expect(r.stdout).toBe(`${d.agent_dir}\n`)
+        // talos's own supervisor.json naming another folder changes nothing here
+        writeFileSync(join(t, 'app', 'supervisor.json'), JSON.stringify({ ...d, agent_dir: '/tmp/elsewhere' }))
+        expect(launch('approved-folder').stdout).toBe(`${d.agent_dir}\n`)
+        // an approval written before it named a folder: nothing
+        writeFileSync(approved(), JSON.stringify({ v: 1, fingerprint: 'a'.repeat(64), parts: {} }))
+        r = launch('approved-folder')
+        expect(r.status).toBe(1)
+        expect(r.stdout).toBe('')
+      },
+    )
+
     it.skipIf(!py || linuxOnly)(
       'install approves nothing once Talos has run, or once anything is approved, whatever supervisor.json says (Linux)',
       () => {
@@ -1694,6 +1801,12 @@ describe('signin.py, run for real against a stand-in claude (Fable R1-2, R1-8 on
       cut: `printf 'Your OAuth token:\\r\\n%s' '${t1}'; exit 0`,
       bad: `printf '\\r\\nOAuth error: Invalid code. Press Enter to retry. ${t1}\\r\\n'; sleep 5`,
       other: `printf '\\r\\nSomething failed at the server: tell nobody\\r\\n'; sleep 5`,
+      // Claude Code 2.1.322's own words (seen on the Windows test PC, 2026-11-16): the error line has NO newline after it,
+      // and Claude Code then waits for Enter. The sleep is longer than the test's own limit: it must be read without an end.
+      rejected: `printf '\\r\\nOAuth error: That code wasn%st accepted. It may be incomplete, expired, already used, or from an earlier sign-in attempt. Sign in again to get a new code.Press Enter to retry. ' "'"; sleep 60`,
+      offline: `printf '\\r\\nOAuth error: getaddrinfo EAI_AGAIN platform.claude.comPress Enter to retry. '; sleep 60`,
+      // nothing at all after the code: the one case that is still "did not finish", and it says which step it waited on
+      silent: `sleep 60`,
     }
     writeFileSync(
       f,
@@ -1702,7 +1815,7 @@ describe('signin.py, run for real against a stand-in claude (Fable R1-2, R1-8 on
     )
     return f
   }
-  const drive = (ending: string) =>
+  const drive = (ending: string, extra: Record<string, string> = {}) =>
     new Promise<{ events: { event: string; url?: string; message?: string }[]; raw: string; home: string }>((res) => {
       const home = mkdtempSync(join(tmpdir(), 'talos-signin-'))
       const p = spawn('python3', ['-I', SIGNIN], {
@@ -1711,6 +1824,7 @@ describe('signin.py, run for real against a stand-in claude (Fable R1-2, R1-8 on
           TALOS_SIGNIN_USER: me,
           TALOS_SIGNIN_HOME: home,
           TALOS_SIGNIN_CLAUDE: fake(home, ending),
+          ...extra,
         },
       })
       let raw = ''
@@ -1782,6 +1896,64 @@ describe('signin.py, run for real against a stand-in claude (Fable R1-2, R1-8 on
     },
     30000,
   )
+
+  // The owner's first try on the Windows test PC (2026-11-16, 05:07): the code went in, and 90 s later the tray said only
+  // "Claude Code did not finish signing in". Claude Code had answered at once, but its error line never ends with a newline
+  // (it waits for Enter), and only whole lines were read.
+  it.skipIf(!py)(
+    'a code Claude does not accept is said at once, in fixed words, though the line never ends',
+    async () => {
+      const t0 = Date.now()
+      const r = await drive('rejected')
+      expect(Date.now() - t0).toBeLessThan(15000)
+      expect(r.events.at(-1)).toEqual({ event: 'error', message: expect.stringContaining('did not accept that code') })
+      // "expired" is in Claude Code's sentence too, as one guess of several: it is not taken as the answer
+      expect(r.events.at(-1)?.message).not.toContain('had expired')
+      expect(r.raw).not.toContain('OAuth error')
+    },
+    20000,
+  )
+
+  it.skipIf(!py)(
+    'a sign-in that could not reach Claude says so, at once',
+    async () => {
+      const t0 = Date.now()
+      const r = await drive('offline')
+      expect(Date.now() - t0).toBeLessThan(15000)
+      const m = r.events.at(-1)?.message ?? ''
+      expect(r.events.at(-1)?.event).toBe('error')
+      expect(m).toContain('could not reach Claude')
+      expect(r.raw).not.toContain('EAI_AGAIN')
+      expect(r.raw).not.toContain('platform.claude.com')
+    },
+    20000,
+  )
+
+  it.skipIf(!py)(
+    'the name look-ups while she signs in end with the sign-in, and never hold its output open (both endings)',
+    async () => {
+      for (const ending of ['split', 'rejected']) {
+        const t0 = Date.now()
+        // 'close' fires only once every holder of signin.py's stdout has let go: a look-up child that kept it would hang here
+        const r = await drive(ending, { TALOS_SIGNIN_WARM_HOSTS: 'localhost' })
+        expect(Date.now() - t0).toBeLessThan(15000)
+        expect(r.events.at(-1)?.event).toBe(ending === 'split' ? 'signed_in' : 'error')
+      }
+    },
+    40000,
+  )
+
+  it.skipIf(!py)(
+    'no answer at all after the code says what it waited for, and how long',
+    async () => {
+      const r = await drive('silent', { TALOS_SIGNIN_RESULT_WAIT: '2' })
+      const m = r.events.at(-1)?.message ?? ''
+      expect(r.events.at(-1)?.event).toBe('error')
+      expect(m).toContain('no answer from Claude')
+      expect(m).toContain('2 seconds')
+    },
+    20000,
+  )
 })
 describe.skipIf(linuxOnly)('restart and restore, root verbs for the tray: fixed words only (Linux)', () => {
   // stand-ins: id (talos is 1000), getent (talos's home), runuser (prints $FAKE_OUT, exits $FAKE_RC, and writes down what it
@@ -1793,16 +1965,36 @@ describe.skipIf(linuxOnly)('restart and restore, root verbs for the tray: fixed 
       { mode: 0o755 },
     )
     writeFileSync(join(bin, 'getent'), '#!/bin/sh\necho "talos:x:1000:1000::/home/talos:/bin/bash"\n', { mode: 0o755 })
+    // runuser by what it runs: `supervise stop` exits $FAKE_STOP_RC, Main's state file reads $FAKE_MAIN_STATE (stopped by
+    // default), tmux and rm succeed; anything else (restore-last-good, the supervisor's restart) prints $FAKE_OUT, exits $FAKE_RC
     writeFileSync(
       join(bin, 'runuser'),
-      '#!/bin/sh\necho "runuser $*" >> "$TALOS_WSL_ROOT/.ran"\nprintf "%s" "$FAKE_OUT"\nexit "${FAKE_RC:-0}"\n',
+      [
+        '#!/bin/sh',
+        'echo "runuser $*" >> "$TALOS_WSL_ROOT/.ran"',
+        'case "$*" in',
+        '*"supervise stop"*) exit "${FAKE_STOP_RC:-0}" ;;',
+        '*main-state*) printf "%s\\n" "${FAKE_MAIN_STATE-main=stopped}"; exit 0 ;;',
+        '*has-session*) exit "${FAKE_SESSION_RC:-0}" ;;',
+        '*list-sessions*) printf "agent\\nt-abc\\nt-def\\nother\\n"; exit 0 ;;',
+        '*" tmux "* | *" rm -f "*) exit 0 ;;',
+        'esac',
+        'printf "%s" "$FAKE_OUT"',
+        'exit "${FAKE_RC:-0}"',
+        '',
+      ].join('\n'),
       { mode: 0o755 },
     )
     writeFileSync(join(bin, 'fake-systemctl'), '#!/bin/sh\necho "systemctl $*" >> "$TALOS_WSL_ROOT/.ran"\n', {
       mode: 0o755,
     })
     // root's own launch state (launch.py state): $FAKE_LAUNCH, approved unless a test says otherwise
-    writeFileSync(join(bin, 'fake-launch.py'), 'import os\nprint(os.environ.get("FAKE_LAUNCH", "approved"))\n')
+    // approved-folder: $FAKE_FOLDER, or nothing (exit 1) without one
+    writeFileSync(
+      join(bin, 'fake-launch.py'),
+      'import os, sys\nif sys.argv[1:2] == ["approved-folder"]:\n    f = os.environ.get("FAKE_FOLDER")\n' +
+        '    print(f) if f else sys.exit(1)\nelse:\n    print(os.environ.get("FAKE_LAUNCH", "approved"))\n',
+    )
     return (out = '', rc = 0, launch = 'approved') => ({
       PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}`,
       FAKE_OUT: out,
@@ -1828,6 +2020,106 @@ describe.skipIf(linuxOnly)('restart and restore, root verbs for the tray: fixed 
     expect(ran()).toContain(`systemctl start user${'@'}1000.service`)
     expect(ran()).toContain('systemctl --user restart talos-supervisor.service')
     expect(runWith(env('', 1), 'restart').out).toBe('failed\n')
+  })
+
+  // WINPROTO-2 (GPT Sol's review, confirmed at 2aea624d): the unit is KillMode=process and a quitting supervisor detaches
+  // Main, so a bare restart re-adopted the same Claude session; and the owner's stop flag kept a new Main from starting.
+  const lines = () => ran().trim().split('\n')
+  const at = (needle: string) => lines().findIndex((l) => l.includes(needle))
+  it('restart stops Main through the supervisor first, waits for it, clears the owner’s stop, then restarts the supervisor', () => {
+    proc()
+    const env = stubs()
+    expect(runWith(env(), 'restart').out).toBe('restarted\n')
+    const stop = at('talos-app supervise stop')
+    expect(stop, ran()).toBeGreaterThanOrEqual(0)
+    // as talos, in a clean environment, like restore's talos-app
+    expect(lines()[stop]).toMatch(/^runuser -u talos -- env -i HOME=\/home\/talos USER=talos /)
+    expect(at('run/main-state')).toBeGreaterThan(stop)
+    expect(at('rm -f /home/talos/.config/talos/app/supervisor-stopped')).toBeGreaterThan(stop)
+    expect(at('systemctl --user restart talos-supervisor.service')).toBeGreaterThan(
+      at('rm -f /home/talos/.config/talos/app/supervisor-stopped'),
+    )
+    // and its session is killed after the wait whatever main-state says (talos could fake stopped: Opus review on eb96ae42)
+    expect(at('tmux -L talos kill-session -t agent')).toBeGreaterThan(stop)
+  })
+
+  it('a supervisor that is not there or does not take the stop: Main’s tmux session is killed, then the restart', () => {
+    proc()
+    const env = stubs()
+    expect(runWith({ ...env(), FAKE_STOP_RC: '1', FAKE_MAIN_STATE: 'main=running' }, 'restart').out).toBe('restarted\n')
+    const kill = at('tmux -L talos kill-session -t agent')
+    expect(kill, ran()).toBeGreaterThan(at('talos-app supervise stop'))
+    expect(at('systemctl --user restart talos-supervisor.service')).toBeGreaterThan(kill)
+  })
+
+  it('a stop taken but Main never reaching stopped (a hung Main, a stuck supervisor): killed after the wait, then the restart', () => {
+    proc()
+    const env = stubs()
+    const t0 = Date.now()
+    const r = runWith({ ...env(), FAKE_MAIN_STATE: 'main=running', TALOS_WSL_STOP_WAIT: '2' }, 'restart')
+    expect(r.out).toBe('restarted\n')
+    expect(Date.now() - t0).toBeLessThan(10000)
+    // it looked more than once before giving up
+    expect(lines().filter((l) => l.includes('run/main-state')).length).toBeGreaterThan(1)
+    expect(at('tmux -L talos kill-session -t agent')).toBeGreaterThan(at('talos-app supervise stop'))
+  })
+
+  it('a Main stopped at the sign-in screen (its state stays signin): its session gone counts, with no wait', () => {
+    proc()
+    const env = stubs()
+    const t0 = Date.now()
+    const r = runWith({ ...env(), FAKE_MAIN_STATE: 'main=signin', FAKE_SESSION_RC: '1' }, 'restart')
+    expect(r.out).toBe('restarted\n')
+    expect(Date.now() - t0).toBeLessThan(5000)
+  })
+
+  it('restore works on the approved launch’s agent folder, the install’s own when the approval names none (WINPROTO-4)', () => {
+    proc()
+    const env = stubs()
+    const out = 'restore-last-good: restored 2 files from version 1'
+    expect(runWith({ ...env(out), FAKE_FOLDER: '/home/talos/Agents/My Agent' }, 'restore').out).toBe(
+      'restored\nrestarted\n',
+    )
+    expect(ran()).toContain('restore-last-good --yes --newest-start --agent-dir /home/talos/Agents/My Agent')
+    rmSync(join(root, '.ran'))
+    expect(runWith(env(out), 'restore').out).toBe('restored\nrestarted\n')
+    expect(ran()).toContain('--agent-dir /home/talos/talos-agent')
+  })
+
+  // WINPROTO-7: running sessions keep the token they started with; the file going alone signed nothing out
+  // the order (Opus review on 9c5aed05): the token first, then the supervisor stops (nothing woken or adopted meanwhile), then
+  // every Main and thread session; the owner's own stop flag is left alone (a sign-out is not a start)
+  it('sign out: the token goes first, the supervisor stops, every Main and thread session is killed, then the supervisor starts', () => {
+    proc()
+    const env = stubs()
+    expect(runWith(env(), 'signout').out).toBe('signed out\n')
+    const rm = at('rm -f /home/talos/.config/talos/app/claude-oauth-token')
+    const stop = at('systemctl --user stop talos-supervisor.service')
+    const kills = ['agent', 't-abc', 't-def'].map((s) => at(`tmux -L talos kill-session -t =${s}`))
+    expect(rm, ran()).toBe(0)
+    expect(stop).toBeGreaterThan(rm)
+    for (const k of kills) expect(k, ran()).toBeGreaterThan(stop)
+    expect(at('kill-session -t =other')).toBe(-1)
+    expect(at('systemctl --user start talos-supervisor.service')).toBeGreaterThan(Math.max(...kills))
+    expect(at('supervisor-stopped')).toBe(-1)
+  })
+
+  it('sign out with a launch the owner has not approved: the token goes and everything stops, but nothing starts', () => {
+    proc()
+    const env = stubs()
+    expect(runWith(env('', 0, 'pending'), 'signout').out).toBe('signed out\n')
+    expect(at('rm -f /home/talos/.config/talos/app/claude-oauth-token')).toBe(0)
+    expect(at('kill-session -t =t-abc')).toBeGreaterThan(0)
+    expect(at('systemctl --user start')).toBe(-1)
+  })
+
+  it('restore stops Main for real too, so the restored settings reach a new Main', () => {
+    proc()
+    const env = stubs()
+    const r = runWith(env('restore-last-good: restored 2 files from version 1'), 'restore')
+    expect(r.out).toBe('restored\nrestarted\n')
+    expect(at('talos-app supervise stop')).toBeGreaterThan(at('restore-last-good'))
+    expect(at('systemctl --user restart talos-supervisor.service')).toBeGreaterThan(at('talos-app supervise stop'))
   })
 
   it('restore maps talos-app restore-last-good to fixed words, restarting only after a restore', () => {

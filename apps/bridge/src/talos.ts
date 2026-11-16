@@ -153,7 +153,7 @@ export const COMMANDS: readonly CommandInfo[] = [
   },
   {
     name: 'memory',
-    args: 'init [--agent-dir <dir>] | on | off | show | reindex',
+    args: 'init [--agent-dir <dir>] | set-root <name> <path> | on | off | show | reindex',
     summary: 'Show the memory browser or rebuild its index; the subcommands below set it up',
   },
   {
@@ -161,6 +161,12 @@ export const COMMANDS: readonly CommandInfo[] = [
     args: '[--agent-dir <dir>]',
     summary:
       'Set up the memory folder for an agent (the agent: only when the owner asked, and his settings are not locked)',
+  },
+  {
+    name: 'memory set-root',
+    args: '<name> <path> [--agent-dir <dir>]',
+    summary:
+      'Share one memory folder: creates memory.json with only it, or adds/updates that root (the agent: only when the owner asked, and his settings are not locked)',
   },
   { name: 'memory on', summary: 'Turn the memory browser on' },
   { name: 'memory off', summary: 'Turn the memory browser off' },

@@ -2,7 +2,7 @@
 import { getConnInfo } from '@hono/node-server/conninfo'
 import { b64urlEncode, randomBytes, sha256Hex } from '@talos-app/protocol'
 import type { Context } from 'hono'
-import { pickClientIp } from '../client-ip.ts'
+import { pickClientIp, pickLockoutKey } from '../client-ip.ts'
 import type { AppEnv } from '../services.ts'
 
 export const COOKIE_NAME = '__Host-talos_s'
@@ -42,18 +42,27 @@ export function clearedCookie(): string {
 
 /** The client address (see `pickClientIp`): X-Real-IP behind a proxy, else the socket peer. */
 export function clientIp(c: Context<AppEnv>): string {
+  return pickClientIp(clientIpInput(c))
+}
+
+/** The key the pairing-code lockout counts on (see `pickLockoutKey`), or null when this request has no safe one. */
+export function enrollIpKey(c: Context<AppEnv>): string | null {
+  return pickLockoutKey(clientIpInput(c))
+}
+
+function clientIpInput(c: Context<AppEnv>) {
   let remote: string | undefined
   try {
     remote = getConnInfo(c).remote.address ?? undefined
   } catch {
     remote = undefined
   }
-  return pickClientIp({
+  return {
     realIp: c.req.header('x-real-ip'),
     xff: c.req.header('x-forwarded-for'),
     remote,
     hops: c.get('services').env.TRUST_PROXY_HOPS,
-  })
+  }
 }
 
 export const relayHost = (publicOrigin: string): string => new URL(publicOrigin).host

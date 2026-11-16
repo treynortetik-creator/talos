@@ -232,8 +232,51 @@ step "the supervisor"
 # its settings: the agent folder and the same mod and channel flags the Mac app gets in desktop.json (install.sh APP_FLAGS).
 # Written once; an owner's own supervisor.json is never overwritten.
 conf="$HOME/.config/talos/app/supervisor.json"
+# >>> repin_claude
+# A kept supervisor.json (Setup run again) still names the Claude Code an earlier Setup pinned (WINPROTO-3, 2026-11-16): the
+# new pinned version was installed but never launched. When its claude_path is exactly an earlier pinned default
+# ($HOME/.local/share/claude/versions/<x.y.z>) and not this one, only that field moves to this version; the launch then
+# differs from the approved one, so the tray asks the owner to approve it again. A path the owner set himself is kept.
+repin_claude() {
+  local conf="$1" want="$2" old v
+  old="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1])).get("claude_path", ""))' "$conf" 2>/dev/null)" || old=""
+  v="${old#"$HOME/.local/share/claude/versions/"}"
+  case "$v" in
+  "$old" | "" | *[!0-9.]* | .* | *. | *..*)
+    echo "supervisor.json: kept as it is"
+    return 0
+    ;;
+  esac
+  if [ "$old" = "$want" ]; then
+    echo "supervisor.json: kept as it is"
+    return 0
+  fi
+  if [ "$DRY" = 1 ]; then
+    echo "would move supervisor.json's Claude Code from $v to ${want##*/}"
+    return 0
+  fi
+  python3 -I - "$conf" "$want" <<'PY' || { echo "setup-user: could not move supervisor.json to Claude Code ${want##*/}" >&2; return 1; }
+import json, os, sys
+p, want = sys.argv[1], sys.argv[2]
+with open(p, encoding="utf-8") as f:
+    d = json.load(f)
+d["claude_path"] = want
+tmp = p + ".tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    f.write(json.dumps(d, indent=2) + "\n")
+os.replace(tmp, p)
+PY
+  echo "supervisor.json: Claude Code moves from $v to ${want##*/}; approve the change in the tray (Approve this change)"
+}
+# <<< repin_claude
 if [ -f "$conf" ]; then
-  echo "supervisor.json: kept as it is"
+  CLAUDE_REAL="$HOME/.local/share/claude/versions/$CLAUDE_VERSION"
+  if [ "$(realpath -e "$CLAUDE_REAL" 2>/dev/null)" = "$CLAUDE_REAL" ]; then
+    repin_claude "$conf" "$CLAUDE_REAL"
+  else
+    echo "supervisor.json: kept as it is (Claude Code $CLAUDE_VERSION is not at $CLAUDE_REAL)"
+  fi
 else
   run mkdir -p "$(dirname "$conf")"
   if [ "$DRY" = 1 ]; then echo "would write $conf"; else

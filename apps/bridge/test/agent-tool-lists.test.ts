@@ -39,7 +39,7 @@ describe('agent tool name lists', () => {
       'schedule_run_done',
       'wake_me',
     ])
-    expect([...CONFIG_BRIDGE_TOOLS]).toEqual(['config_propose'])
+    expect([...CONFIG_BRIDGE_TOOLS]).toEqual(['config_propose', 'settings_read'])
     expect([...ATTACHMENT_BRIDGE_TOOLS]).toEqual(['retry_attachment'])
     expect([...MOD_BRIDGE_TOOLS]).toEqual(['talos_mod_hello', 'talos_mod_sync'])
   })
@@ -59,6 +59,7 @@ describe('agent tool name lists', () => {
       'schedule_run_done',
       'wake_me',
       'config_propose',
+      'settings_read',
       'publish_page',
       'read_inbound',
       'memory_note_read',

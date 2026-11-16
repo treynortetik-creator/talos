@@ -1,11 +1,13 @@
 // Voice notes: record (hold, slide up to lock, slide left to cancel, tap to lock), pause with a preview, and send the
 // finished recording (queued on the phone when offline).
 import { type Dispatch, type MutableRefObject, type SetStateAction, useEffect, useRef, useState } from 'react'
+import { useStore } from 'zustand'
 import { holdCapture } from '../../lib/appUpdate.ts'
 import type { TalosClient } from '../../lib/client.ts'
 import { micOffText } from '../../lib/micOff.ts'
 import { getPlatform } from '../../lib/platform.ts'
 import type { SocketClient } from '../../lib/socketClient.ts'
+import { canQueue, getKeptNotes } from './keptNotes.ts'
 import {
   extFor,
   isStrayTap,
@@ -22,7 +24,7 @@ const TAP_MS = 350
 
 export type Mode = 'idle' | 'holding' | 'locked'
 
-export const canQueue = (c: TalosClient): c is SocketClient => 'queueVoiceNote' in c
+export { canQueue }
 
 /** What the recorder row shows. Declared before the box's own effects, which depend on `mode`. */
 export function useRecorderState() {
@@ -179,30 +181,17 @@ export function useComposerVoice(o: {
     }
   }
 
+  // Recordings that could not be saved or sent yet live in a per-client store (keptNotes.ts), not here: leaving the thread
+  // or a call replacing the composer must not lose them.
+  const kept = getKeptNotes(client)
+  const keptCount = useStore(kept.store, (s) => s.items.filter((i) => i.threadId === threadId).length)
+
   const sendNote = async (r: Recording) => {
-    const name = `voice-note-${Date.now()}.${extFor(r.mime)}`
-    const meta = { name, durationMs: r.durationMs, waveform: r.waveform }
-    const offline = !navigator.onLine || client.store.getState().connection !== 'online'
-    // Saving the recording to this device is the one thing that can fail without the note going anywhere: say so, and never
-    // leave a second copy behind. `queueVoiceNote` saves before it queues, so a throw means nothing was kept.
-    const keep = async (c: SocketClient) => {
-      try {
-        await c.queueVoiceNote({ threadId, blob: r.blob, ...meta })
-      } catch {
-        setError("Couldn't save the voice note on this device, so it was not sent. Record it again.")
-      }
-    }
-    if (offline && canQueue(client)) return keep(client)
-    try {
-      const att = await client.uploadMedia(r.blob, meta)
-      await client.sendVoiceNote({ threadId, attachment: { ...att, kind: 'voice_note' } })
-      getPlatform().haptic('light')
-    } catch {
-      // The upload or the send failed before anything was queued (sendVoiceNote throws only before it queues).
-      if (canQueue(client)) await keep(client)
-      else setError("Couldn't send the voice note.")
-    }
+    if (!canQueue(client)) return setError("Couldn't send the voice note.")
+    await kept.submit({ r, threadId, name: `voice-note-${Date.now()}.${extFor(r.mime)}` })
   }
+  const retryUnsaved = () => kept.retry(threadId)
+  const discardUnsaved = () => kept.discard(threadId)
 
   finishRef.current = finish
   letGoRef.current = letGo
@@ -228,7 +217,7 @@ export function useComposerVoice(o: {
     }
   }
 
-  return { begin, discard, finish, sendRecording, togglePause }
+  return { begin, discard, finish, sendRecording, togglePause, keptCount, retryUnsaved, discardUnsaved }
 }
 
 /** The mic button's pointer gestures. Off while dictation holds the microphone. */

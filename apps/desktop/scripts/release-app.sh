@@ -63,6 +63,9 @@ TALOS_SIGN_ID="$ID" TALOS_REQUIRE_SIGN_ID=1 bash "$HERE/scripts/build-app.sh" "$
 APP="$WORK/Talos.app"
 [ -d "$APP" ] || die "build-app.sh finished but $APP is not there"
 
+# No path of the builder's Mac inside any Mach-O (all slices): refuse before anything goes to Apple.
+bash "$HERE/scripts/path-leak-check.sh" "$APP" "$REPO" || die "the build carries paths of this Mac (see the line above); nothing was sent to Apple" 1
+
 # The signature, read back: strict and deep, the hardened runtime flag, a secure timestamp, a team, no clone path inside.
 codesign --verify --strict --deep --verbose=1 "$APP" || die "codesign --verify --strict --deep failed on the build"
 INFO="$(codesign -dv --verbose=4 "$APP" 2>&1)"

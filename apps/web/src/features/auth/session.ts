@@ -12,6 +12,7 @@ import { clearRecent } from '../search/logic.ts'
 import { audioDock } from '../threads/audioDock.ts'
 import { resetSpeak } from '../threads/speak.ts'
 import { clearThreadDescriptions } from '../threads/threadMeta.ts'
+import { getCallController } from '../voice/controller.ts'
 
 export type Me = RouteRes<'me'> & { vapid_public_key?: string }
 
@@ -76,17 +77,25 @@ export async function retryPendingWipe(storage: Storage): Promise<boolean> {
 }
 
 /**
- * What only this tab holds in memory: playing audio, read-aloud asks, an unsaved Settings > Agent draft, and what the
+ * What only this tab holds in memory: playing audio, a live voice call, read-aloud asks, an unsaved Settings > Agent draft, and what the
  * composer kept: words of a send that failed, a prefill, dropped files, attachments. It runs on every session end, because
  * nothing else can reach it: no queue removal, Discard or sign-out in another tab empties a tab's memory, so anything left
  * could go out later under a different device key or after the owner signed out elsewhere. Each is tried even if another
  * fails; the first failure is thrown afterwards.
  */
+function endLiveCall(): void {
+  // A call open on a signed-out or revoked device would keep the microphone and the relay session. end() lets go of the
+  // microphone before anything slow, and does nothing when no call is active.
+  getCallController()
+    .end()
+    .catch(() => {})
+}
+
 function resetTabMemory(): void {
   let failure: unknown
   // Audio keeps playing across routes now (D37): a signed-out phone must go quiet, and what was listened to goes with the chats.
   // Read aloud: asks still going to the Mac stop, and the notes and failures it kept for the previous owner's messages go.
-  for (const reset of [() => audioDock.resetForSignOut(), resetSpeak, resetAgentDraft, resetComposer]) {
+  for (const reset of [() => audioDock.resetForSignOut(), endLiveCall, resetSpeak, resetAgentDraft, resetComposer]) {
     try {
       reset()
     } catch (e) {

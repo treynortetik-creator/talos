@@ -108,8 +108,43 @@ describe('gcal Apps Script (run_ port, spec 7.6)', () => {
     }
     g.run('sync()')
     const items = g.posted.flatMap((p) => JSON.parse(p.body).items as Array<{ change: string }>)
-    // The key includes the start, so the old slot is reported gone. Nothing is reported twice and no invite is invented.
-    expect(items.map((i) => i.change)).toEqual(['cancelled'])
+    // The key includes the start, so the moved instance has a new key and its old slot vanished: the same event, so one
+    // change (RELAY-10), never a cancellation, a duplicate or an invented invite.
+    expect(items.map((i) => i.change)).toEqual(['changed'])
+  })
+  // RELAY-10: a rescheduled accepted meeting read as cancelled (its key holds its start, so the old key vanished)
+  it('a rescheduled meeting is one change, naming its old key; never a cancellation', () => {
+    const evs = [mk(0, { status: 'YES' }), mk(1)]
+    const { g } = setup(() => evs)
+    const before = Object.keys(JSON.parse(g.props.get('TALOS_STATE') as string))
+    evs[0] = {
+      ...(evs[0] as FakeEvent),
+      start: (evs[0] as FakeEvent).start + 3 * H,
+      end: (evs[0] as FakeEvent).end + 3 * H,
+    }
+    g.run('sync()')
+    const items = g.posted.flatMap(
+      (p) => JSON.parse(p.body).items as Array<{ change: string; event_id?: string; previous_key?: string }>,
+    )
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ change: 'changed', event_id: 'uid0@example.com' })
+    expect(before).toContain(items[0]?.previous_key)
+    // an invite still waiting for an answer, moved: a change too, not a second invite
+    const inv = [mk(0, { status: 'INVITED' })]
+    const s2 = setup(() => inv)
+    inv[0] = { ...(inv[0] as FakeEvent), start: (inv[0] as FakeEvent).start + H, end: (inv[0] as FakeEvent).end + H }
+    s2.g.run('sync()')
+    expect(s2.g.posted.flatMap((p) => JSON.parse(p.body).items.map((i: { change: string }) => i.change))).toEqual([
+      'changed',
+    ])
+    // a new event and a cancelled one with different ids are still an invite and a cancellation
+    const two = [mk(0)]
+    const s3 = setup(() => two)
+    two[0] = mk(5, { status: 'INVITED' })
+    s3.g.run('sync()')
+    expect(
+      s3.g.posted.flatMap((p) => JSON.parse(p.body).items.map((i: { change: string }) => i.change)).sort(),
+    ).toEqual(['cancelled', 'invite'])
   })
   it('an event that disappears inside the window is cancelled', () => {
     const evs = [mk(0), mk(1)]

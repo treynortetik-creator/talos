@@ -331,10 +331,14 @@ async function cmdRotate(env: BridgeEnv, args: string[], io: CliIO) {
       'Until you do, Railway still trusts the OLD key, and a restored or emptied relay volume would bring it back.',
     )
   }
-  const commit = (keyId: string, newPubkey: string) => {
+  const commit = async (keyId: string, newPubkey: string) => {
     try {
       commitRotation(p)
     } catch (e) {
+      // A running bridge that was refused and found bridge.key.next worked finished the switch first: bridge.key.next is gone
+      // and bridge.key already is the new key. That is the switch done, so the owner still gets the BRIDGE_PUBKEY line.
+      const done = await loadKeyFile(p.bridgeKey).catch(() => undefined)
+      if (!existsSync(p.bridgeKeyNext) && done?.publicKeyB64 === newPubkey) return switched(keyId, newPubkey)
       // the relay has switched; a running bridge may have finished the switch on its own (it tries bridge.key.next when
       // refused), so bridge.key may already be the new key
       throw new CliError(
@@ -366,7 +370,7 @@ async function cmdRotate(env: BridgeEnv, args: string[], io: CliIO) {
     const kept = leftover
     try {
       const res = await new RelayHttp(needRelay(env), () => kept).rotate(body)
-      return commit(res.key_id, leftover.publicKeyB64)
+      return await commit(res.key_id, leftover.publicKeyB64)
     } catch (e) {
       if (e instanceof CliError) throw e
       if (!(e instanceof RelayHttpError && e.status === 401))
@@ -385,7 +389,7 @@ async function cmdRotate(env: BridgeEnv, args: string[], io: CliIO) {
       `rotation failed, bridge.key is unchanged: ${(e as Error).message}. If the relay switched without answering, the next talos-app rotate finds out and finishes it.`,
     )
   }
-  commit(res.key_id, prepared.newPubkey)
+  await commit(res.key_id, prepared.newPubkey)
 }
 
 // ---- status / doctor ----------------------------------------------------------------------------------------------

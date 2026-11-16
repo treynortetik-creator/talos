@@ -4,7 +4,7 @@
 // the four words at the Mac. Until the Mac says y the session reaches nothing but the pairing routes (requireSession
 // answers 403 device_not_pinned), exactly like a passkey session the Mac has not pinned.
 //
-// Rules: wrong, used and expired codes count toward the five-failures-burn-all rule (checkCode); a code that already
+// Rules: wrong, used and expired codes count toward the per-address five-failures lockout (checkCode); a code that already
 // registered a passkey is refused; a second call with the same live code deletes the session the first one made; the
 // route is rate limited under `auth` and sits behind CSRF + Origin like every /api change; the code is never logged and
 // only its hash is ever stored.
@@ -13,7 +13,7 @@ import { type Context, Hono } from 'hono'
 import type { AppEnv } from '../services.ts'
 import { implFor, sessionFor } from './impl.ts'
 import { authState } from './state.ts'
-import { sessionCookie, sessionTtlMs } from './util.ts'
+import { enrollIpKey, sessionCookie, sessionTtlMs } from './util.ts'
 
 export const enrollSessionRoutes = new Hono<AppEnv>()
 
@@ -34,7 +34,8 @@ enrollSessionRoutes.post(
     const b = R.enrollSession.req.safeParse(raw)
     if (!b.success) return c.json({ error: 'bad_request' }, 400)
 
-    const code = st.core.checkCode(b.data.code_auth) // a miss is counted here; the fifth burns every code
+    const code = st.core.checkCode(b.data.code_auth, enrollIpKey(c)) // a miss is counted here; the fifth locks out this address
+    if (code === 'locked') return c.json({ error: 'too_many_attempts' }, 429)
     if (!code || code.registeredCredentialId) return c.json({ error: 'code_invalid' }, 410)
 
     st.core.purge()

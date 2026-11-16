@@ -130,6 +130,11 @@ export interface RelayServices {
   clock: Clock
   log: Logger
   env: RelayEnv
+  /**
+   * Set by the core runtime: the auth module calls it after it wrote a new active bridge key, so the hub can close a bridge
+   * socket that was opened with another key. Absent on the unit-test fakes.
+   */
+  onBridgeKeyRotated?: (newKeyId: string) => void
 }
 
 /** Hono app type shared by every sub-app. `routes.ts` puts the services on the context. */

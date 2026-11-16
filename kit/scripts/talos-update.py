@@ -610,13 +610,23 @@ class MigrationFailed(Stop):
     def __init__(self, mid, msg):
         Stop.__init__(self, msg)
         self.mid = mid
+        self.sig = None  # set when a signal stopped the migration
 
 
 def run_migrations(agent, vendor, fd, new_rel):
     """Each pending migration of `new_rel`, one at a time, the marker moving after each. Raises MigrationFailed naming the one that failed."""
     tm, marker, pending = pending_ids(new_rel, agent)
     for n, (mid, _) in enumerate(pending):
-        rc = migrate_run(new_rel, agent, vendor, "up", fd, ["--limit", "1"])
+        try:
+            rc = migrate_run(new_rel, agent, vendor, "up", fd, ["--limit", "1"])
+        except (Stop, Interrupted) as e:
+            # a migration past its time limit, or a stop by signal, may have left its up() half done: name it, so its own
+            # down() runs before anything else is undone (a plain Stop has no id, and the half-done change would stay). If the
+            # marker already moved past it, it finished: the normal undo of finished migrations runs its down, once.
+            done = tm.read_marker(agent).get("migration", "") >= mid
+            f = MigrationFailed(None if done else mid, "migration %s did not finish: %s" % (mid, "interrupted (%s)" % e if isinstance(e, Interrupted) else e))
+            f.sig = getattr(e, "sig", None)  # a stop by signal still ends with 128 + the signal, after the rollback
+            raise f from e
         if rc != 0:
             raise MigrationFailed(mid, "migration %s failed (exit %d)" % (mid, rc))
         if n == 0:
@@ -674,7 +684,7 @@ def catch_up(agent, vendor, fd, cur, why):
             warn("talos update: and undoing it failed too: %s" % r)
             return HALF
         warn("talos update: this agent folder is as it was; `current` (%s) was not changed." % cur)
-        return 128 + e.sig if isinstance(e, Interrupted) else FAILED
+        return 128 + e.sig if getattr(e, "sig", None) else FAILED
     say("This agent is now on release %s. Run `talos update` again to look for a newer one." % cur)
     request_restart()
     return OK
@@ -763,7 +773,7 @@ def forward(a, agent, vendor, fd, j):
                  "again). The record of this update is %s." % (cur_ver, to, journal_path(vendor)))
             return HALF
         warn("talos update: rolled back to %s; %s was not kept running and your files are as they were." % (cur_ver, to))
-        return 128 + e.sig if isinstance(e, Interrupted) else FAILED
+        return 128 + e.sig if getattr(e, "sig", None) else FAILED
     finally:
         for s, h in prev_handlers.items():
             try:

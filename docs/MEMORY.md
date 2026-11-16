@@ -6,6 +6,7 @@ Clio, Talos's memory system: in the app it is the Memory screen. A read-only vie
 
 ```
 talos-app memory init [--agent-dir <dir>]   # pick folders (y/N each), then subfolders to exclude; writes memory.json
+talos-app memory set-root <name> <path>     # share one folder: creates memory.json with only it, or adds/updates that root
 talos-app memory show                       # what is shared: notes per folder, the first 20 paths, hidden folders
 talos-app memory on | off                   # both switches at once
 talos-app memory reindex                    # rebuild the search index

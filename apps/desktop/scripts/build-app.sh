@@ -6,6 +6,7 @@
 #     --no-checkout-stamp  leave out TalosCheckout (the path of this clone): a prebuilt app for another Mac, where install.sh
 #                          records that Mac's own clone instead (release-app.sh)
 #     --hardened           sign with the hardened runtime and a secure timestamp (needs a real identity; release-app.sh)
+#     --release builds carry no path of this Mac (no /Users/<name>, no checkout path); release-app.sh checks (path-leak-check.sh).
 # Signs with $TALOS_SIGN_ID if set, else the "Talos Local Signing" identity if present (scripts/make-signing-identity.sh).
 # With neither it stops before building: an ad hoc build looks like a new app to macOS after every rebuild, so privacy grants
 # reset and the launch seal cannot be read. TALOS_SIGN_ID=- asks for ad hoc on purpose (tests and CI). TALOS_REQUIRE_SIGN_ID=1
@@ -59,6 +60,16 @@ ARGS=(-c "$CONFIG")
 [ "$UNIVERSAL" = 1 ] && ARGS+=(--arch arm64 --arch x86_64)
 [ -n "${TALOS_SWIFTPM_CACHE:-}" ] && ARGS+=(--cache-path "$TALOS_SWIFTPM_CACHE")
 [ -n "${TALOS_SWIFT_SCRATCH:-}" ] && ARGS+=(--scratch-path "$TALOS_SWIFT_SCRATCH")
+
+# A release carries no path of this Mac: the compiler maps the checkout and the home folder to neutral names, and the linker
+# leaves out its debug map (the N_OSO/N_SO symbol entries, which hold the absolute object and source paths of the build).
+if [ "$CONFIG" = release ]; then
+  CHECKOUT_REAL="$(cd "$REPO" && pwd -P)"
+  ARGS+=(-Xswiftc -file-prefix-map -Xswiftc "$CHECKOUT_REAL=/talos" -Xcc "-ffile-prefix-map=$CHECKOUT_REAL=/talos")
+  [ "$REPO" != "$CHECKOUT_REAL" ] && ARGS+=(-Xswiftc -file-prefix-map -Xswiftc "$REPO=/talos")
+  [ -n "${HOME:-}" ] && [ "$HOME" != "/" ] && ARGS+=(-Xswiftc -file-prefix-map -Xswiftc "$HOME=/home/builder" -Xcc "-ffile-prefix-map=$HOME=/home/builder")
+  ARGS+=(-Xlinker -S)
+fi
 
 swift build ${ARGS[@]+"${ARGS[@]}"}
 BIN="$(swift build ${ARGS[@]+"${ARGS[@]}"} --show-bin-path)/TalosDesktop"

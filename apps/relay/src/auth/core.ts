@@ -221,34 +221,47 @@ export class AuthCore {
   }
 
   /**
-   * Checks a presented code_auth. A miss is recorded; the 5th miss in 10 minutes (from any IP) burns every outstanding
-   * code, because a wrong code_auth matches no code so failures cannot be counted per code (spec 5.2).
+   * Checks a presented code_auth from `ip`, the lockout key (`enrollIpKey`), or null when the request has no safe key:
+   * then nothing is counted and nothing locks. Returns `'locked'` (recording nothing) while that address has used up its
+   * misses; otherwise the hit, or null after recording one miss for that address. Misses never burn other codes (spec 5.2).
    */
-  checkCode(codeAuth: string): ReturnType<AuthCore['findCode']> {
+  checkCode(codeAuth: string, ip: string | null): ReturnType<AuthCore['findCode']> | 'locked' {
+    if (ip !== null && this.enrollLocked(ip)) return 'locked'
     const hit = this.findCode(codeAuth)
     if (hit) return hit
-    this.recordEnrollFailure()
+    this.recordEnrollFailure(ip)
     return null
   }
 
+  /** True while `ip` has ENROLL_FAILURE_LIMIT or more misses inside the window. */
+  enrollLocked(ip: string): boolean {
+    const { n } = this.db
+      .prepare('select count(*) as n from auth_enroll_failures where ip = ? and at > ?')
+      .get(ip, this.now() - ENROLL_FAILURE_WINDOW_MS) as { n: number }
+    return n >= ENROLL_FAILURE_LIMIT
+  }
+
   /**
-   * Counts one failed code attempt; the 5th in 10 minutes burns every outstanding code. `heldCodeId` is a code the failing
-   * call has claimed (used_at set, so "outstanding" skips it): it burns too, or whoever holds a leaked code could loop
-   * wrong proofs, burn the owner's other codes and keep their own.
+   * Counts one failed code attempt from `ip` (null = no safe key: not counted per address); the 5th in 10 minutes locks
+   * out that address (its rows stay as the lockout). No other code is burned. `heldCodeId` is a code the failing call has
+   * claimed (a wrong device proof): the miss is also counted per CODE, and the code's own 5th wrong proof inside the
+   * window, from any mix of addresses, burns it, so a leaked code's holder cannot loop wrong proofs.
    */
-  recordEnrollFailure(heldCodeId?: string): void {
+  recordEnrollFailure(ip: string | null, heldCodeId?: string): void {
+    if (ip === null && heldCodeId === undefined) return
     const now = this.now()
-    this.db.prepare('insert into auth_enroll_failures (at) values (?)').run(now)
+    this.db
+      .prepare('insert into auth_enroll_failures (at, ip, code_id) values (?, ?, ?)')
+      .run(now, ip ?? '', heldCodeId ?? null)
     this.db.prepare('delete from auth_enroll_failures where at <= ?').run(now - ENROLL_FAILURE_WINDOW_MS)
-    const { n } = this.db.prepare('select count(*) as n from auth_enroll_failures').get() as { n: number }
-    if (n >= ENROLL_FAILURE_LIMIT) {
-      this.db.prepare('update auth_enroll_codes set burned_at = ? where used_at is null and burned_at is null').run(now)
-      if (heldCodeId !== undefined)
-        this.db
-          .prepare('update auth_enroll_codes set burned_at = ? where code_id = ? and burned_at is null')
-          .run(now, heldCodeId)
-      this.db.prepare('delete from auth_enroll_failures').run()
-    }
+    if (heldCodeId === undefined) return
+    const { n } = this.db
+      .prepare('select count(*) as n from auth_enroll_failures where code_id = ?')
+      .get(heldCodeId) as { n: number }
+    if (n >= ENROLL_FAILURE_LIMIT)
+      this.db
+        .prepare('update auth_enroll_codes set burned_at = ? where code_id = ? and burned_at is null')
+        .run(now, heldCodeId)
   }
 
   /** The setup code (public id) that minted this session via enroll/session, or null for a passkey session. */
@@ -640,6 +653,22 @@ export class AuthCore {
     return keys
   }
 
+  /** The keys a bridge may open a socket with: the active key only (FORCE: the env key), never a previous key in its grace. */
+  helloKeys(): TrustedKey[] {
+    const env = this.envKey()
+    if (env && this.services.env.BRIDGE_PUBKEY_FORCE) return [env]
+    const active = this.activeKey()
+    return active ? [active] : []
+  }
+
+  private activeIdCache: string | null | undefined
+
+  /** Whether `keyId` is the active bridge key. The answer is kept in memory (one check per bridge frame) and dropped by a rotation. */
+  isActiveKeyId(keyId: string): boolean {
+    if (this.activeIdCache === undefined) this.activeIdCache = this.helloKeys()[0]?.keyId ?? null
+    return this.activeIdCache === keyId
+  }
+
   /** The key allowed to rotate: the active row, else the env bootstrap key. */
   activeKey(): TrustedKey | null {
     const r = this.db.prepare("select key_id, pubkey from auth_bridge_keys where status = 'active'").get() as
@@ -669,6 +698,7 @@ export class AuthCore {
         )
         .run(newId, newPubkeyB64, now)
     })()
+    this.activeIdCache = undefined
     return newId
   }
 

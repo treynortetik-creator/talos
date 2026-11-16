@@ -106,6 +106,83 @@ describe('+ menu', () => {
   })
 })
 
+describe('+ menu: the picker opens inside the tap', () => {
+  it('clicks the input while the menu is still open, then closes it', async () => {
+    mount()
+    let openAtClick: boolean | null = null
+    vi.spyOn(photoInput(), 'click').mockImplementation(() => {
+      openAtClick = menuIsOpen()
+    })
+    openMenu()
+    fireEvent.click(screen.getByTestId('attach-photos'))
+    expect(openAtClick).toBe(true)
+    await waitFor(() => expect(menuIsOpen()).toBe(false))
+  })
+})
+
+describe('+ menu per platform', () => {
+  const g = globalThis as unknown as Record<string, unknown>
+  const realUa = navigator.userAgent
+  const setUa = (ua: string) => Object.defineProperty(navigator, 'userAgent', { value: ua, configurable: true })
+  afterEach(() => {
+    delete g.Capacitor
+    delete (window as unknown as Record<string, unknown>).matchMedia
+    setUa(realUa)
+    vi.restoreAllMocks()
+  })
+  const shell = (picker: Record<string, unknown>) => {
+    g.Capacitor = { isNativePlatform: () => true, getPlatform: () => 'ios', Plugins: { TalosPicker: picker } }
+  }
+
+  it('in the iPhone app, Photos calls TalosPicker and never clicks an input', async () => {
+    const pickPhotos = vi.fn(() =>
+      Promise.resolve({ files: [{ name: 'a.jpg', mime: 'image/jpeg', base64: btoa('x') }] }),
+    )
+    shell({ pickPhotos, takePhoto: vi.fn(), pickFiles: vi.fn() })
+    const client = mount()
+    const up = vi.spyOn(client, 'uploadMedia')
+    const click = vi.spyOn(HTMLInputElement.prototype, 'click')
+    openMenu()
+    fireEvent.click(screen.getByTestId('attach-photos'))
+    expect(pickPhotos).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(up).toHaveBeenCalledTimes(1))
+    expect(click).not.toHaveBeenCalled()
+  })
+
+  it('in the iPhone app, a missing camera shows the message and attaches nothing', async () => {
+    shell({
+      pickPhotos: vi.fn(),
+      pickFiles: vi.fn(),
+      takePhoto: () => Promise.reject({ message: 'This device has no camera.' }),
+    })
+    const client = mount()
+    const up = vi.spyOn(client, 'uploadMedia')
+    openMenu()
+    fireEvent.click(screen.getByTestId('attach-camera'))
+    expect(await screen.findByText(/no camera/)).toBeTruthy()
+    expect(up).not.toHaveBeenCalled()
+  })
+
+  it('in iPhone Safari, + clicks the one plain input and opens no menu', () => {
+    setUa('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1')
+    ;(window as unknown as Record<string, unknown>).matchMedia = () => ({ matches: true })
+    mount()
+    const files = screen.getByTestId('pick-files') as HTMLInputElement
+    expect(files.getAttribute('accept')).toBeNull()
+    expect(files.multiple).toBe(true)
+    const click = vi.spyOn(files, 'click')
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    expect(click).toHaveBeenCalledTimes(1)
+    expect(menuIsOpen()).toBe(false)
+  })
+
+  it('on desktop the menu shows three entries', () => {
+    mount()
+    openMenu()
+    expect(screen.getAllByTestId(/^attach-/)).toHaveLength(3)
+  })
+})
+
 describe('+ menu and voice notes', () => {
   it('a menu left open when recording starts does not come back open afterwards', async () => {
     mount()

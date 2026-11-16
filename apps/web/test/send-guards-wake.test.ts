@@ -159,9 +159,11 @@ describe('D16 coming back to the app', () => {
 describe('D31 queued voice notes', () => {
   it('a failed upload is retried on a timer, with no reconnect needed', async () => {
     let calls = 0
-    const fetchImpl = (async () => {
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
       calls++
       if (calls === 1) throw new TypeError('network down')
+      // Answer honestly: the client refuses a relay that reports another hash or size than it sent.
+      const h = init.headers as Record<string, string>
       return new Response(
         JSON.stringify({
           media_id: newId('md'),
@@ -169,8 +171,8 @@ describe('D31 queued voice notes', () => {
           role: 'attachment',
           mime: 'audio/webm',
           name: 'v.webm',
-          size: 3,
-          sha256: '0'.repeat(64),
+          size: (init.body as Uint8Array).length,
+          sha256: h['X-Talos-Sha256'],
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       )

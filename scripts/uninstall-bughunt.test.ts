@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { fakeTool } from './fake-tool'
+import { recordPnpmInstall } from './root-install-harness.ts'
 
 const REPO = resolve(__dirname, '..')
 const ROOT_INSTALL = join(REPO, 'install.sh')
@@ -62,6 +63,7 @@ function sandbox(): Sandbox {
     'claude',
     `case "$1" in --version) echo "2.1.330 (Claude Code)"; exit 0 ;; esac\necho "claude $*" >> "${log}"`,
   )
+  recordPnpmInstall(bin, log) // never a real install into the shared checkout (root-install-harness.ts says why)
   return { root, home, bin, log, agent: join(home, 'talos-agent') }
 }
 

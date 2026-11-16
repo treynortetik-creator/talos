@@ -41,7 +41,7 @@ type Rig = {
   bridgeKey: BridgeKeyPair
   logs: string[]
   mintCode(): Promise<{ code: string; codeAuth: string; codeId: string }>
-  post(path: string, body: unknown, cookie?: string): Promise<Response>
+  post(path: string, body: unknown, cookie?: string, ip?: string): Promise<Response>
   get(path: string, cookie?: string): Promise<Response>
   stop(): Promise<void>
 }
@@ -83,13 +83,14 @@ async function startRig(): Promise<Rig> {
     base,
     bridgeKey,
     logs,
-    post: (path, body, cookie) =>
+    post: (path, body, cookie, ip = '198.51.100.50') =>
       fetch(`${base}${path}`, {
         method: 'POST',
         headers: {
           origin: ORIGIN,
           'x-talos-csrf': '1',
           'content-type': 'application/json',
+          'x-real-ip': ip, // the header the production edge sets; the lockout keys on it
           ...(cookie ? { cookie } : {}),
         },
         body: JSON.stringify(body),
@@ -384,13 +385,14 @@ describe('N0 review: probes (PASS on 3b2c637)', () => {
     expect(up.status).toBe(403)
   })
 
-  it('P5: a session minted from a code that is then burned (five failures) can never pin, and the code cannot mint again', async () => {
+  it('P5: five wrong codes from one IP lock that IP out of the code, but burn nothing', async () => {
     const c = await rig.mintCode()
     const cookie = cookieOf(await rig.post('/api/auth/enroll/session', { code_auth: c.codeAuth }))
     const bad = deriveEnrollAuth(newEnrollCode())
     for (let i = 0; i < 5; i++) await rig.post('/api/auth/enroll/session', { code_auth: bad })
-    expect((await verifyDevice(rig, c.code, cookie, await createExtractableDeviceKeyForTests())).status).toBe(410)
-    expect((await rig.post('/api/auth/enroll/session', { code_auth: c.codeAuth })).status).toBe(410)
+    expect((await verifyDevice(rig, c.code, cookie, await createExtractableDeviceKeyForTests())).status).toBe(429)
+    expect((await rig.post('/api/auth/enroll/session', { code_auth: c.codeAuth })).status).toBe(429)
+    expect(authState(rig.relay.services).core.findCode(c.codeAuth)).not.toBeNull()
   })
 
   it('P6: the "setup-code" sentinel never lands in the device registry, and a passkey login cannot ride a native device', async () => {

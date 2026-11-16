@@ -15,6 +15,8 @@ const TALOS = {
   CHUNK: 50,
   PREVIEW_CHARS: 300,
   FULL_CHARS: 4000,
+  LABEL_PAGES: 2, // the label search has no cursor: its 80 newest conversations each run
+  FWD_KEEP: 400, // labelled message ids remembered as sent (a script property holds 9 KB)
 }
 function install() {
   claim_()
@@ -54,22 +56,48 @@ function tick() {
     if (!secret) throw new Error('Talos: not installed. Run install.')
     const cursor = Number(p.getProperty('TALOS_CURSOR') || 0)
     const after = ' after:' + (cursor - 120) // 2-minute overlap; the relay dedups on message_id
+    // the labelled messages already sent in full (newest last, at most FWD_KEEP): labelling is the owner's act, whenever the
+    // mail arrived, so the label search has no cursor, and this list is what keeps a message from going out twice. With no
+    // list yet (a new install, or the first run of this version) the run only records what is labelled now, sending none of
+    // it: the label's history is never sent in one burst (Opus review on 924d204f).
+    const seeding = p.getProperty('TALOS_FWD_SENT') === null
+    let sentFwd = []
+    try {
+      sentFwd = JSON.parse(p.getProperty('TALOS_FWD_SENT') || '[]')
+    } catch (e) {}
+    if (!Array.isArray(sentFwd)) sentFwd = []
     const items = []
+    const taken = {}
+    const newFwd = []
     let max = cursor,
       truncated = false
     const add = (query, full) => {
-      // search returns newest first: page until a short page
-      for (let page = 0; page < TALOS.MAX_PAGES; page++) {
-        const threads = GmailApp.search(query + after, page * TALOS.PAGE, TALOS.PAGE)
+      // search returns newest first: page until a short page. The label has no cursor, so it reads fewer pages each run: what
+      // is labelled is found while it is among the label's LABEL_PAGES x PAGE newest conversations
+      for (let page = 0; page < (full ? TALOS.LABEL_PAGES : TALOS.MAX_PAGES); page++) {
+        const threads = GmailApp.search(full ? query : query + after, page * TALOS.PAGE, TALOS.PAGE)
         threads.forEach((t) => addThread(t, full))
         if (threads.length < TALOS.PAGE) return
       }
-      truncated = true // >200 threads in one run: the Inbox shows "some mail was skipped"
+      // >200 threads in one run: the Inbox shows "some mail was skipped". Not for the label: it has no cursor, so a long
+      // label fills every page each run, and its newest (what was just labelled) always comes first
+      if (!full) truncated = true
     }
     const addThread = (t, full) => {
       t.getMessages().forEach((m) => {
         const at = Math.floor(m.getDate().getTime() / 1000)
-        if (at < cursor - 120 || m.isInTrash() || m.isDraft()) return
+        if (m.isInTrash() || m.isDraft()) return
+        const id = m.getId()
+        // the label search runs first, and every labelled message is taken, sent now or before: a labelled message is never
+        // sent as an inbox preview (it would come under its own key, a second notification)
+        if (taken[id]) return
+        taken[id] = true
+        if (full && (seeding || sentFwd.indexOf(id) >= 0)) {
+          if (seeding) newFwd.push(id)
+          return
+        }
+        if (!full && at < cursor - 120) return
+        if (full) newFwd.push(id)
         const body = m.getPlainBody() || ''
         items.push({
           message_id: m.getId(),
@@ -85,12 +113,20 @@ function tick() {
           text: body.slice(0, full ? TALOS.FULL_CHARS : TALOS.PREVIEW_CHARS),
           link: 'https://mail.google.com/mail/u/0/#all/' + t.getId(),
         })
-        if (at > max) max = at
+        if (!full && at > max) max = at
       })
     }
-    add(TALOS.QUERY, false)
+    // the label first (RELAY-9): the relay keeps the first copy of a message, so the full one must come before any preview
     if (TALOS.FORWARD_LABEL) add('label:"' + TALOS.FORWARD_LABEL + '"', true)
-    if (!items.length) return
+    add(TALOS.QUERY, false)
+    const saveFwd = () => {
+      if (seeding || newFwd.length)
+        p.setProperty('TALOS_FWD_SENT', JSON.stringify(sentFwd.concat(newFwd).slice(-TALOS.FWD_KEEP)))
+    }
+    if (!items.length) {
+      saveFwd()
+      return
+    }
     const account = Session.getActiveUser().getEmail()
     for (let i = 0; i < items.length; i += TALOS.CHUNK) {
       // ≤50 items per POST keeps bodies well under 1 MB
@@ -107,6 +143,7 @@ function tick() {
       }
     }
     p.setProperty('TALOS_CURSOR', String(max)) // only after every chunk landed
+    saveFwd()
   } finally {
     lock.releaseLock()
   }

@@ -6,6 +6,7 @@ import { fakeClock } from '@talos-app/testkit'
 import { Bridge, type Bridge as BridgeT } from '../src/bridge.ts'
 import { runCli } from '../src/cli.ts'
 import { paths } from '../src/config.ts'
+import { commitRotation } from '../src/keys.ts'
 import { BRIDGE_ENTRY, isOurBridge, type PidRecord, takeOver } from '../src/lifecycle.ts'
 import { createLogger, nullLogger } from '../src/log.ts'
 import { problemDirs } from '../src/problems/store.ts'
@@ -246,6 +247,24 @@ describe('key rotation', () => {
     await waitFor(() => h.relay.bridgeConnected)
     expect(h.bridge.live).toBe(true)
     expect(h.notes.filter((n) => n.meta.kind === 'system')).toEqual([]) // no supersede notice
+  })
+
+  test('the running bridge finished the switch before the CLI did: the owner still gets the BRIDGE_PUBKEY line', async () => {
+    h = await startHarness({ relay: { bridgeAuth: 'off' }, startBridge: false })
+    const p = paths(h.home)
+    // the relay has answered (the request is recorded as it arrives): a bridge that was refused with the old key and read
+    // bridge.key.next commits the rotation itself, before the CLI gets to
+    const record = h.relay.http.push.bind(h.relay.http)
+    h.relay.http.push = (...rs) => {
+      if (rs.some((r) => r.path === '/bridge/rotate')) commitRotation(p)
+      return record(...rs)
+    }
+    const { out, err, io } = cliIO()
+    expect(await runCli(['rotate'], io, { TALOS_APP_HOME: h.home, TALOS_APP_RELAY_URL: h.relay.httpUrl })).toBe(0)
+    expect(err).toEqual([])
+    const now = JSON.parse(readFileSync(p.bridgeKey, 'utf8'))
+    expect(out.join('\n')).toContain(`BRIDGE_PUBKEY=${now.public}`)
+    expect(existsSync(p.bridgeKeyNext)).toBe(false)
   })
 
   test('a failed rotation leaves bridge.key untouched', async () => {

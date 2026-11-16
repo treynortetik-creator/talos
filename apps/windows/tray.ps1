@@ -349,7 +349,7 @@ function Show-SignIn {
             Start-Status
           }
           'error' {
-            $msg.Text = "Not signed in: $($e.message)`r`n`r`nClose this and choose Sign in to Claude again to try once more."
+            $msg.Text = "Not signed in: $($e.message)`r`n`r`nClose this and choose Sign in to Claude again: you get a new link and a new code."
             $open.Enabled = $false; $box.Enabled = $false; $send.Enabled = $false; $close.Text = 'Close'
           }
         }
@@ -728,7 +728,7 @@ function Start-TalosRootVerb([string]$Verb, [string]$Title, [string]$Busy) {
 }
 $startItem.add_Click({
     if ($startItem.Text -like 'Restart*') {
-      $a = [Windows.Forms.MessageBox]::Show("Restart Talos?`n`nWhat Claude is doing in Talos right now stops, and Talos starts again in a minute or so.",
+      $a = [Windows.Forms.MessageBox]::Show("Restart Talos?`n`nTalos's main Claude session stops and starts fresh in a minute or so. Thread sessions carry on.",
         'Talos', [Windows.Forms.MessageBoxButtons]::YesNo, [Windows.Forms.MessageBoxIcon]::Question)
       if ($a -ne [Windows.Forms.DialogResult]::Yes) { return }
     }

@@ -154,6 +154,7 @@ describe('talos commands', () => {
     hook: { argv: ['hook', '--no-such-flag'], code: 0 }, // Claude Code's entry: silent unless run by the bridge
     memory: { argv: ['memory', '--no-such-flag'], says: /usage: talos-app memory/, code: 2 },
     'memory init': { argv: ['memory', 'init', '--agent-dir', AGENT], says: /has no folders to share/, code: 1 },
+    'memory set-root': { argv: ['memory', 'set-root'], says: /usage: talos-app memory/, code: 2 },
     'memory on': { argv: ['memory', 'on'], says: /memory browser is not set up/, code: 1 },
     'memory off': { argv: ['memory', 'off'], says: /memory browser is not set up/, code: 1 },
     'memory show': { argv: ['memory', 'show'], says: /memory browser is not set up/, code: 0 },

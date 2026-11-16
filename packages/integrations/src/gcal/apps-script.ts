@@ -48,17 +48,19 @@ function run_(silent) {
     const p = PropertiesService.getScriptProperties()
     const secret = p.getProperty('TALOS_SECRET')
     if (!secret) throw new Error('Talos: not installed. Run install.')
-    const prev = JSON.parse(p.getProperty('TALOS_STATE') || '{}') // key -> [hash, startEpochMin, startingSent]
+    const prev = JSON.parse(p.getProperty('TALOS_STATE') || '{}') // key -> [hash, startEpochMin, startingSent, idHash]
     const now = Date.now(),
       end = now + TALOS.DAYS_AHEAD * 864e5
     const events = CalendarApp.getDefaultCalendar().getEvents(new Date(now), new Date(end)).slice(0, TALOS.MAX_EVENTS)
     const lastStart = events.length === TALOS.MAX_EVENTS ? events[events.length - 1].getStartTime().getTime() : end
     const md5 = (s) => Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, s))
     const next = {},
-      items = []
+      items = [],
+      fresh = []
     events.forEach((e) => {
       const start = e.getStartTime().getTime()
       const key = md5(e.getId() + '|' + start).slice(0, 12) // getId() is the iCalUID, shared by every instance of a recurring event
+      const idh = md5(e.getId()).slice(0, 6)
       const h = md5([e.getTitle(), start, e.getEndTime().getTime(), e.getLocation(), e.getMyStatus()].join('|')).slice(
         0,
         10,
@@ -76,19 +78,34 @@ function run_(silent) {
         organizer: (e.getCreators() || [])[0] || '',
       }
       let startingSent = old ? old[2] : 0
-      if (!old && String(e.getMyStatus()) === 'INVITED') items.push(Object.assign({ change: 'invite' }, info))
-      else if (old && old[0] !== h) items.push(Object.assign({ change: 'changed' }, info))
+      // a key not seen before: an invite, or a known event at a new time (decided below, once the vanished keys are known)
+      if (!old) fresh.push({ idh: idh, start: start, info: info, invited: String(e.getMyStatus()) === 'INVITED' })
+      else if (old[0] !== h) items.push(Object.assign({ change: 'changed' }, info))
       if (!startingSent && start > now && start - now <= TALOS.STARTING_MIN * 6e4) {
         items.push(Object.assign({ change: 'starting' }, info))
         startingSent = 1
       }
-      next[key] = [h, Math.floor(start / 6e4), startingSent]
+      next[key] = [h, Math.floor(start / 6e4), startingSent, idh]
     })
-    // Cancelled = known before, inside the window, not past the last fetched event (events cut by the cap aren't cancelled).
-    Object.keys(prev).forEach((k) => {
+    // Vanished = known before, inside the window, not past the last fetched event (events cut by the cap aren't vanished).
+    const gone = Object.keys(prev).filter((k) => {
       const st = prev[k][1] * 6e4
-      if (!next[k] && st > now && st <= lastStart) items.push({ change: 'cancelled', event_key: k })
+      return !next[k] && st > now && st <= lastStart
     })
+    // A rescheduled event (RELAY-10): its key holds its start, so moving it makes a new key and the old one vanish. A new key
+    // whose event matches a vanished one's (the idHash; the nearest start when a series has several) is that event, changed.
+    fresh.forEach((f) => {
+      let best = -1
+      gone.forEach((k, i) => {
+        if (prev[k][3] !== f.idh) return
+        if (best < 0 || Math.abs(prev[k][1] * 6e4 - f.start) < Math.abs(prev[gone[best]][1] * 6e4 - f.start)) best = i
+      })
+      if (best >= 0) {
+        items.push(Object.assign({ change: 'changed', previous_key: gone[best] }, f.info))
+        gone.splice(best, 1)
+      } else if (f.invited) items.push(Object.assign({ change: 'invite' }, f.info))
+    })
+    gone.forEach((k) => items.push({ change: 'cancelled', event_key: k }))
     let json = JSON.stringify(next)
     const keys = Object.keys(next).sort((a, b) => next[b][1] - next[a][1]) // farthest first
     while (json.length >= 8500 && keys.length) {

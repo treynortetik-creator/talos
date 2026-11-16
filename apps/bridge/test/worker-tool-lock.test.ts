@@ -36,6 +36,7 @@ const HOW = {
   schedule_run_start: 'via-main',
   schedule_run_done: 'via-main',
   wake_me: 'via-main',
+  settings_read: 'via-main',
   restart_main: 'lead-only',
   screen_shot: 'own-mac',
   screen_click: 'own-mac',

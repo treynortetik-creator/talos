@@ -2,7 +2,8 @@
 // opened: nothing that is there is overwritten or reached through a link, a taken name becomes "name (2).ext", hidden names
 // and instruction files are refused, the folder is fenced as a listing of it is, and a device has a daily byte budget.
 // Every case runs in a temp folder with made-up files and a fake media fetch.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import * as fs from 'node:fs'
 import {
   chmodSync,
   existsSync,
@@ -306,6 +307,40 @@ describe('the review of 2026-11-11', () => {
     }
     expect((await fail(put('a.md', 'docs'))).message).toBe(FILES_PUT_WORDING.failed)
     expect(existsSync(join(outside, 'a.md'))).toBe(true)
+  })
+
+  test('a folder swapped for a link while the bytes are being written: the file of that name over there is not removed', async () => {
+    writeFileSync(join(outside, 'a.md'), 'NOT YOURS\n')
+    // the write fails after the create, and the folder was swapped meanwhile: the cleanup must not follow the new link
+    let swapped = 0
+    const spy = spyOn(fs, 'fsyncSync').mockImplementation(() => {
+      swapped++
+      renameSync(join(root, 'docs'), join(root, 'docs-moved'))
+      symlinkSync(outside, join(root, 'docs'))
+      throw new Error('disk full')
+    })
+    try {
+      expect((await fail(put('a.md', 'docs'))).message).toBe(FILES_PUT_WORDING.failed)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(swapped).toBe(1)
+    expect(readFileSync(join(outside, 'a.md'), 'utf8')).toBe('NOT YOURS\n')
+  })
+
+  test('the name taken over by another file while the bytes are being written: that file is not removed', async () => {
+    // same folder, but a.md is no longer the file this call created (it was replaced meanwhile)
+    const spy = spyOn(fs, 'fsyncSync').mockImplementation(() => {
+      renameSync(join(root, 'docs', 'other.md'), join(root, 'docs', 'a.md'))
+      throw new Error('disk full')
+    })
+    writeFileSync(join(root, 'docs', 'other.md'), 'NOT YOURS\n')
+    try {
+      expect((await fail(put('a.md', 'docs'))).message).toBe(FILES_PUT_WORDING.failed)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(readFileSync(join(root, 'docs', 'a.md'), 'utf8')).toBe('NOT YOURS\n')
   })
 
   test('a wrong folder is said before the download', async () => {

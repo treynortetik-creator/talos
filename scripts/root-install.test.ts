@@ -55,6 +55,11 @@ describe('root install.sh', () => {
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain('Nothing to change')
     expect(snapshot(sb.agent)).toEqual(before)
+    // KIT-8: a rerun installs the clone's dependencies again (after a `git pull` the lockfile may name new packages)
+    const installs = readFileSync(sb.log, 'utf8')
+      .split('\n')
+      .filter((l) => l.startsWith('pnpm install --frozen-lockfile'))
+    expect(installs.length, readFileSync(sb.log, 'utf8')).toBe(2)
   }, 120_000)
 
   it('refreshing an edited start-talos.sh keeps the old copy as a .bak', () => {

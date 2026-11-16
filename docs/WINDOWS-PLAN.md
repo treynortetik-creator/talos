@@ -372,6 +372,17 @@ tested in `scripts/windows-distro.test.ts`):
   first (`--make-rprivate`), then unmounted or covered. Checked live: three restarts, then a new distro, all start.
 - (Round 1 rerun.) WSL points `/etc/resolv.conf` at `/mnt/wsl/resolv.conf`, so the private `/mnt/wsl` carries WSL's
   `nameserver` and `search` lines over; without them the distro had no DNS.
+- **DNS fallbacks (2026-11-16).** WSL's own resolver can stop answering while Windows stays online: the tunnel
+  (10.255.255.254) on 11-14, and on 11-16 the NAT gateway (named alone with `dnsTunneling=false`) timed out on every name
+  it had not cached, so the owner's first sign-in failed (Claude Code's code exchange: `EAI_AGAIN platform.claude.com`).
+  From the distro, 1.1.1.1 and 8.8.8.8 answered in 12-64 ms. The distro's resolv.conf is now WSL's own nameservers, then
+  the gateway, then 1.1.1.1 and 8.8.8.8, cut at glibc's three, `options timeout:2 attempts:2`. Nothing changes while
+  WSL's resolver answers within 2 s.
+  - What it costs, plainly: when WSL's resolver is slow or down, or answers SERVFAIL, the name goes unencrypted to Cloudflare
+    or Google, past a VPN's DNS, a Pi-hole or a parental filter. An NXDOMAIN answer is final, so a name the owner's network
+    says does not exist goes nowhere else. A split-horizon internal name can resolve to its public address in that case.
+  - `talos-app doctor` looks up platform.claude.com, api.anthropic.com and claude.ai for real and gives the fix in one line
+    (restart the distro, run Setup again when the installed `talos-wsl.sh` predates this, or the network or a VPN).
 - **A name that does not exist takes 10-20 s to fail in WSL** (measured 2026-11-13 on Titan, Ubuntu and `talos-ci` alike:
   WSL's resolver 10.255.255.254 with the LAN's `search ht.home`; `getent hosts push.example.com` 20 s, Node's
   `dns.lookup` 10 s, then ENOTFOUND; `localhost` and real names answer in milliseconds). A Mac answers the same lookup in

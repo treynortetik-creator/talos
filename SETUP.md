@@ -121,8 +121,10 @@ tuned, never deletes anything in an agent folder, and a second run only does wha
 - **A 1.x folder with no `.talos-version`** (made before versions were stamped): `./install.sh --agent-dir <folder>` prints
   what `kit/scripts/upgrade.sh --dry-run`, `kit/scripts/settings-merge.py` and `talos-app adopt --dry-run` would each do,
   and changes nothing. [YOU] add **`--apply`** to do it, typed in Terminal: it checks all three first, then upgrade.sh takes
-  a full backup, the kit self-test runs as the gate, settings-merge.py backs up `settings.json`, and adopt runs last (only
-  when you typed the command; from an agent it is printed for you). CLAUDE.md, `memory/`, `wiki/`, `.learnings/` and `.env`
+  a full backup, the kit self-test runs as the gate, settings-merge.py backs up `settings.json`, adopt runs (only
+  when you typed the command; from an agent it is printed for you), and last comes semantic memory search, as a new install
+  gets it (it can fail without failing the carry; `talos-app doctor` then gives the one command; `--no-memory-search` and
+  `--no-reranker` apply). CLAUDE.md, `memory/`, `wiki/`, `.learnings/` and `.env`
   are never written. A carry that stopped is finished by the same command. Then run `./install.sh --agent-dir <folder>`
   again for the rest. The full walk-through is [`docs/MAC-SECOND-USER-RUN-SHEET.md`](docs/MAC-SECOND-USER-RUN-SHEET.md).
 - **`--no-tmux`**: install the Mac app without tmux. The agent then stops when the app quits, and thread sessions are off.

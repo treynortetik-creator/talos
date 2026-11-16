@@ -32,7 +32,7 @@ export function ownerAskedRecently(env: BridgeEnv, now: number = Date.now()): bo
 }
 
 /** The commands an agent may run when the owner asked. */
-export const ON_REQUEST_COMMANDS = ['theme reset', 'memory init', 'lead init'] as const
+export const ON_REQUEST_COMMANDS = ['theme reset', 'memory init', 'memory set-root', 'lead init'] as const
 
 /** Which of them `argv` runs, or undefined. */
 export function onRequestCommand(argv: readonly string[]): (typeof ON_REQUEST_COMMANDS)[number] | undefined {

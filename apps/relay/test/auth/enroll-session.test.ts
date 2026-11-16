@@ -86,6 +86,7 @@ async function startRig(): Promise<Rig> {
         origin: ORIGIN,
         'x-talos-csrf': '1',
         'content-type': 'application/json',
+        'x-real-ip': '198.51.100.50', // the header the production edge sets; the lockout keys on it
         ...(over.cookie ? { cookie: over.cookie } : {}),
         ...over.headers,
       },
@@ -295,27 +296,28 @@ describe('POST /api/auth/enroll/session', () => {
     expect(res.headers.get('set-cookie')).toBeNull()
   })
 
-  it('five bad codes in 10 minutes burn every outstanding code', async () => {
+  it('five bad codes from one network lock out that network only; every code stays alive', async () => {
     const good = await rig.mintCode()
-    const other = await rig.mintCode()
     const bad = deriveEnrollAuth(newEnrollCode())
-    for (let i = 0; i < 4; i++)
-      expect((await rig.post('/api/auth/enroll/session', { code_auth: bad })).status).toBe(410)
-    expect((await rig.post('/api/auth/enroll/session', { code_auth: bad })).status).toBe(410) // the fifth
-    for (const c of [good, other]) {
-      const res = await rig.post('/api/auth/enroll/session', { code_auth: c.codeAuth })
-      expect(res.status).toBe(410)
-    }
-    const core = authState(rig.relay.services).core
-    expect(core.db.prepare('select count(*) from auth_enroll_codes where burned_at is null').pluck().get()).toBe(0)
+    const a = { 'x-real-ip': '198.51.100.1' }
+    const b = { 'x-real-ip': '198.51.100.2' }
+    for (let i = 0; i < 5; i++)
+      expect((await rig.post('/api/auth/enroll/session', { code_auth: bad }, { headers: a })).status).toBe(410)
+    const locked = await rig.post('/api/auth/enroll/session', { code_auth: good.codeAuth }, { headers: a })
+    expect(locked.status).toBe(429)
+    expect(await locked.json()).toEqual({ error: 'too_many_attempts' })
+    expect((await rig.post('/api/auth/enroll/session', { code_auth: good.codeAuth }, { headers: b })).status).toBe(200)
+    rig.skew.ms = 11 * 60_000 // the first code has expired by now; a fresh one works from A again
+    const fresh = await rig.mintCode()
+    expect((await rig.post('/api/auth/enroll/session', { code_auth: fresh.codeAuth }, { headers: a })).status).toBe(200)
   })
 
-  it('misses on enroll/session and on enroll/options share one counter', async () => {
+  it('misses on enroll/session and on enroll/options share one per-IP counter', async () => {
     const good = await rig.mintCode()
     const bad = deriveEnrollAuth(newEnrollCode())
     for (let i = 0; i < 3; i++) await rig.post('/api/auth/enroll/session', { code_auth: bad })
     for (let i = 0; i < 2; i++) await rig.post('/api/auth/enroll/options', { code_auth: bad })
-    expect((await rig.post('/api/auth/enroll/session', { code_auth: good.codeAuth })).status).toBe(410)
+    expect((await rig.post('/api/auth/enroll/session', { code_auth: good.codeAuth })).status).toBe(429)
   })
 
   it('a second call with the same live code deletes the first session and mints a new one', async () => {
@@ -347,7 +349,7 @@ describe('POST /api/auth/enroll/session', () => {
     expect((await deviceHalf(rig, a.code, cookie)).res.status).toBe(202)
   })
 
-  it('that refusal counts toward the five-failures rule', async () => {
+  it('that refusal counts toward the per-IP five-failures lockout, and burns nothing', async () => {
     const a = await rig.mintCode()
     const b = await rig.mintCode()
     const core = authState(rig.relay.services).core
@@ -356,8 +358,9 @@ describe('POST /api/auth/enroll/session', () => {
     for (let i = 0; i < 4; i++) await rig.post('/api/auth/enroll/session', { code_auth: bad })
     expect(core.findCode(a.codeAuth)).not.toBeNull() // four misses: still alive
     expect((await deviceHalf(rig, b.code, cookie)).res.status).toBe(410) // the fifth failure
-    expect(core.findCode(a.codeAuth)).toBeNull()
-    expect(core.findCode(b.codeAuth)).toBeNull()
+    expect(core.findCode(a.codeAuth)).not.toBeNull()
+    expect(core.findCode(b.codeAuth)).not.toBeNull()
+    expect((await rig.post('/api/auth/enroll/session', { code_auth: a.codeAuth })).status).toBe(429)
   })
 
   it('a passkey session is unaffected: it can still verify a device with any live code', async () => {

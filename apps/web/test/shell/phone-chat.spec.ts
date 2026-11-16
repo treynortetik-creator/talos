@@ -65,6 +65,21 @@ const inside = async (loc: Locator, page: Page, label: string) => {
   expect((b?.y ?? 0) + (b?.height ?? 0), `${label} bottom above the keyboard`).toBeLessThanOrEqual(v.bottom + 0.5)
 }
 
+/** iPhone Safari (the `iphone` project): + is the picker itself and iOS's own sheet is the one menu (424d419). Elsewhere + opens
+ * our menu and a choice opens the picker. Resolves to the file chooser either way. */
+async function pick(page: Page, project: string, which: 'photos' | 'files', onMenu?: () => Promise<unknown>) {
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: 'Attach' }).click()
+  if (project === 'iphone') {
+    await expect(page.getByRole('dialog', { name: 'Attach' })).toHaveCount(0) // no menu of ours over iOS's sheet
+  } else {
+    await expect(page.getByRole('dialog', { name: 'Attach' })).toBeVisible() // the menu is announced by name
+    await onMenu?.()
+    await page.getByTestId(`attach-${which}`).click()
+  }
+  return chooser
+}
+
 for (const scheme of ['light', 'dark'] as const) {
   test.describe(`${scheme}`, () => {
     test.use({ colorScheme: scheme })
@@ -74,11 +89,8 @@ for (const scheme of ['light', 'dark'] as const) {
     }, info) => {
       await open(page)
       await seed(page, 30)
-      await page.getByRole('button', { name: 'Attach' }).click()
-      await expect(page.getByRole('dialog', { name: 'Attach' })).toBeVisible() // the menu is announced by name
-      const chooser = page.waitForEvent('filechooser')
-      await page.getByTestId('attach-photos').click()
-      await (await chooser).setFiles({ name: 'IMG_8114.png', mimeType: 'image/png', buffer: Buffer.from('x') })
+      const chooser = await pick(page, info.project.name, 'photos')
+      await chooser.setFiles({ name: 'IMG_8114.png', mimeType: 'image/png', buffer: Buffer.from('x') })
       await expect(page.getByText('IMG_8114.png')).toBeVisible()
       const box = page.getByLabel('Message', { exact: true })
       await box.fill(`Order was placed. It's just taking a minute. ${'More words to make the box grow. '.repeat(6)}`)
@@ -230,14 +242,11 @@ for (const scheme of ['light', 'dark'] as const) {
     test('2: the + menu closes on a choice and on a pick; focus goes back to the box', async ({ page }, info) => {
       await withKeyboardPlugin(page)
       await open(page)
-      const attach = page.getByRole('button', { name: 'Attach' })
-      await attach.click()
-      await expect(page.getByTestId('attach-photos')).toBeVisible()
-      await page.screenshot({ path: shot(`menu-open-${scheme}`, info.project.name) })
-      const chooser = page.waitForEvent('filechooser')
-      await page.getByTestId('attach-photos').click()
+      const chooser = await pick(page, info.project.name, 'photos', () =>
+        page.screenshot({ path: shot(`menu-open-${scheme}`, info.project.name) }),
+      )
       await expect(page.getByTestId('attach-photos')).toHaveCount(0) // closed by the choice, picker still "open"
-      await (await chooser).setFiles({ name: 'IMG_8115.png', mimeType: 'image/png', buffer: Buffer.from('y') })
+      await chooser.setFiles({ name: 'IMG_8115.png', mimeType: 'image/png', buffer: Buffer.from('y') })
       await expect(page.getByText('IMG_8115.png')).toBeVisible()
       await expect(page.getByTestId('attach-photos')).toHaveCount(0)
       await expect(page.getByLabel('Message', { exact: true })).toBeFocused()
@@ -246,13 +255,10 @@ for (const scheme of ['light', 'dark'] as const) {
       await page.screenshot({ path: shot(`menu-closed-${scheme}`, info.project.name) })
     })
 
-    test('2b: a cancelled picker closes the menu and returns focus too', async ({ page }) => {
+    test('2b: a cancelled picker closes the menu and returns focus too', async ({ page }, info) => {
       await withKeyboardPlugin(page)
       await open(page)
-      await page.getByRole('button', { name: 'Attach' }).click()
-      const chooser = page.waitForEvent('filechooser')
-      await page.getByTestId('attach-files').click()
-      await chooser
+      await pick(page, info.project.name, 'files')
       await page.getByTestId('pick-files').dispatchEvent('cancel')
       await expect(page.getByTestId('attach-files')).toHaveCount(0)
       await expect(page.getByLabel('Message', { exact: true })).toBeFocused()
@@ -263,10 +269,8 @@ for (const scheme of ['light', 'dark'] as const) {
     }, info) => {
       test.skip(info.project.name === 'desktop', 'a mouse device keeps the refocus')
       await open(page)
-      await page.getByRole('button', { name: 'Attach' }).click()
-      const chooser = page.waitForEvent('filechooser')
-      await page.getByTestId('attach-photos').click()
-      await (await chooser).setFiles({ name: 'IMG_8116.png', mimeType: 'image/png', buffer: Buffer.from('y') })
+      const chooser = await pick(page, info.project.name, 'photos')
+      await chooser.setFiles({ name: 'IMG_8116.png', mimeType: 'image/png', buffer: Buffer.from('y') })
       await expect(page.getByText('IMG_8116.png')).toBeVisible()
       await expect(page.getByTestId('attach-photos')).toHaveCount(0)
       await expect(page.getByLabel('Message', { exact: true })).not.toBeFocused()
@@ -282,10 +286,8 @@ for (const scheme of ['light', 'dark'] as const) {
           throw new Error('boom')
         }
       })
-      await page.getByRole('button', { name: 'Attach' }).click()
-      const chooser = page.waitForEvent('filechooser')
-      await page.getByTestId('attach-files').click()
-      await (await chooser).setFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('z') })
+      const chooser = await pick(page, info.project.name, 'files')
+      await chooser.setFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('z') })
       await expect(page.getByText("Couldn't upload")).toBeVisible()
       await expect(page.getByTestId('attach-files')).toHaveCount(0)
       await expect(page.getByLabel('Message', { exact: true })).toBeFocused()

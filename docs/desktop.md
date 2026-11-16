@@ -159,7 +159,7 @@ owner switches it on.
   moved; a swap already started finishes.
 
 Publishing (on the owner's Mac, by hand, gh signed in as the owner): `release-app.sh` (its manifest records `source_sha`, the
-private commit it was built from), then the public snapshot (`scripts/publish-public.sh`; its commit carries the trailer
+private commit it was built from), then the public snapshot (`scripts/publish-public.sh`, from main's head or from `origin/green` when that commit is on main with six local-ci successes; its commit carries the trailer
 `Talos-Source: <private sha>`) and its tag, then `release-sign-manifest.sh --tag <tag>` (latest.json's `git_sha` is the public
 commit, taken from the tag as git fetches it and signed only when that commit's trailer names the build's `source_sha` and its
 tree equals a fresh local export of that private commit, so a tag moved to someone else's commit is refused; signed by

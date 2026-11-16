@@ -53,7 +53,8 @@ import { cardActionNotification, systemNotification } from '../notify.ts'
 import { say } from '../owner-words.ts'
 import { isScreenAllowCard } from '../screen-consent.ts'
 import { assertFrameFits } from '../transport.ts'
-import { OWNER_SPOKE_MS, ownerAskedIn, SETTINGS_LOCKED } from '../trust.ts'
+import { OWNER_SPOKE_MS, outsideTextAt, ownerAskedAt, SETTINGS_LOCKED } from '../trust.ts'
+import { anyLeadSpokeSince } from '../worker/handoff.ts'
 import { liveThreadIds, removeGoneInboxes } from '../worker/inbox.ts'
 
 /** How recently the owner must have spoken in the thread for the agent to propose a setting there. */
@@ -89,6 +90,12 @@ export const decidesAlerts = (path: string): boolean =>
 const changedText = (changes: ConfigChange[]) =>
   `${clip(`Changed ${changes.map(describeChange).join('; ')}.`, 280)} ${clip(undoText(changes), 200)}`
 
+/**
+ * The fixed id of the line told for a card: a message id must be `m_` + 26 ULID characters, so it is the card's own 26 characters
+ * reversed (the card's own row in the thread uses them as they are, and the two must differ).
+ */
+const toldId = (cardId: string) => `m_${[...cardId.slice(2)].reverse().join('')}`
+
 /** The send kinds a change ADDS to always_allow (an add is always a card, Pantheon 2026-11-14); empty for none or a removal. */
 export function alwaysAllowAdded(changes: readonly ConfigChange[]): SendKind[] {
   const out: SendKind[] = []
@@ -115,8 +122,8 @@ export class ConfigProposals {
   }
 
   /** The owner asked in `threadId` (see `ownerAskedIn`: his own words, within two hours, no untrusted text since). */
-  private ownerAsked(threadId: string): boolean {
-    return ownerAskedIn(this.ctx, threadId)
+  private ownerAsked(threadId: string): number | undefined {
+    return ownerAskedAt(this.ctx, threadId)
   }
 
   async propose(args: Record<string, unknown>, opts: ProposeOpts = {}): Promise<ProposeResult> {
@@ -157,15 +164,22 @@ export class ConfigProposals {
     // asked, or locked: a card, which is his check. The rows the agent may never name (trust_mode, devices, keys, the relay's
     // passkey settings) are not on its list at all (settings-table.ts), so they never reach here.
     // A theme too: applying it is the preview, and its undo line names "reset the theme" (Pantheon, 2026-11-14).
-    const asked = this.ownerAsked(threadId)
+    const askedAt = this.ownerAsked(threadId)
+    const asked = askedAt !== undefined
     const locked = ctx.config.config.settings_lock === true
     // ADDING an always-allow is always a one-tap card, asked or not, lock or not (Pantheon 2026-11-14): it is a standing grant to
     // send or pay as him, and the two-hour window must never lead to one. Removing one stays direct.
     const addsAlways = alwaysAllowAdded(resolved.changes)
-    // turning the developer thread fence OFF is always a one-tap card too (Delphi's review of the fence): it opens the Talos home
-    // to every thread session, and "he spoke in this thread in the last two hours" can't tell that he asked for THIS. On is direct.
+    // the owner's ruling 2026-11-16: fence off is like any other row (direct when he asked, a card otherwise)
+    // The owner's ruling (2026-11-16) makes the fence direct when he asked; it stays a card when any other session or outside
+    // text reached main since his words, because the fence is what holds those sessions back.
     const opensFence = resolved.changes.some((c) => c.path === 'dev.thread_fence' && c.new === false)
-    const direct = asked && !locked && addsAlways.length === 0 && !opensFence
+    const fenceQuiet =
+      !opensFence ||
+      (askedAt !== undefined &&
+        !anyLeadSpokeSince(ctx.store.db, askedAt, ctx.clock.now()) &&
+        !ctx.config.config.threads.some((t) => (outsideTextAt(ctx, t.id) ?? Number.NEGATIVE_INFINITY) >= askedAt))
+    const direct = asked && !locked && addsAlways.length === 0 && fenceQuiet
     const now = ctx.clock.now()
     this.proposalAt = this.proposalAt.filter((t) => now - t < 3600_000)
     const warnings = [...(resolved.warnings ?? [])]
@@ -278,19 +292,28 @@ export class ConfigProposals {
       }
     await this.commit(cur, r.config, 'agent_asked')
     ctx.log.info('config applied as the owner asked', { rev: r.config.rev, paths: v.changes.map((c) => c.path) })
-    // the owner is told at once, in the thread he asked in: what changed and how to undo it, and for the one change whose undo
-    // has a deadline (shorter attachment keeping: the hour's hold, then files go) what goes and until when undo stops it
+    await this.tellOwner(threadId, v.changes)
+    return { ok: true, text: `${savedText(v.changes)} (applied: the owner asked; he was told how to undo it)` }
+  }
+
+  /**
+   * The owner is told at once, in the thread: what changed and how to undo it, and for the one change whose undo has a deadline
+   * (shorter attachment keeping: the hour's hold, then files go) what goes and until when undo stops it. A direct change and an
+   * approved card post the same line; a thread that is gone gets it in the default thread.
+   */
+  private async tellOwner(threadId: string, changes: ConfigChange[], id?: string) {
+    const { ctx } = this
     const until = new Date(ctx.clock.now() + MEDIA_HOLD_MS).toISOString()
-    const notes = v.changes.flatMap((c) =>
+    const notes = changes.flatMap((c) =>
       c.path === 'media_keep_days' && typeof c.new === 'number' && (typeof c.old !== 'number' || c.new < c.old)
         ? (shorteningNote(ctx, c.new, ctx.clock.now(), localClock(ctx, until).local_time ?? until.slice(11, 16)) ?? [])
         : [],
     )
-    await postSystemNotice(ctx, [changedText(v.changes), ...notes].join(' '), {
-      thread: threadRef(ctx, threadId),
-      settingsChanged: v.changes.some((c) => decidesAlerts(c.path)),
+    await postSystemNotice(ctx, [changedText(changes), ...notes].join(' '), {
+      thread: ctx.config.thread(threadId) ? threadRef(ctx, threadId) : defaultThreadRef(ctx),
+      ...(id ? { id } : {}),
+      settingsChanged: changes.some((c) => decidesAlerts(c.path)),
     }).catch(() => {})
-    return { ok: true, text: `${savedText(v.changes)} (applied: the owner asked; he was told how to undo it)` }
   }
 
   /**
@@ -335,6 +358,13 @@ export class ConfigProposals {
       if (p.success) {
         if (p.data.changes.every((c) => fresh(c.path, c.new))) {
           ok = true
+          // the restart may have come before the line was posted; its fixed id says whether it was
+          if (!ctx.store.getMessage(toldId(row.id)))
+            await this.tellOwner(
+              row.thread_id,
+              p.data.changes.map((c) => ({ path: c.path, old: c.old, new: c.new })),
+              toldId(row.id),
+            )
           text = savedText(p.data.changes.map((c) => ({ path: c.path, old: c.old, new: c.new })))
         } else if (p.data.changes.every((c) => fresh(c.path, c.old)))
           text = 'The bridge restarted before this was saved. Nothing was changed. Ask again.'
@@ -407,6 +437,7 @@ export class ConfigProposals {
     }
     await this.commit(cur, r.config, 'agent_card')
     ctx.log.info('config card applied', { rev: r.config.rev, paths: v.changes.map((c) => c.path) })
+    await this.tellOwner(row.thread_id, v.changes, toldId(cardId))
     return this.end(row, cardId, true, savedText(v.changes))
   }
 

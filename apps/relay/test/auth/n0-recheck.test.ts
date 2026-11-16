@@ -43,7 +43,7 @@ type Rig = {
   logs: string[]
   skew: { ms: number }
   mintCode(): Promise<{ code: string; codeAuth: string; codeId: string }>
-  post(path: string, body: unknown, cookie?: string): Promise<Response>
+  post(path: string, body: unknown, cookie?: string, ip?: string): Promise<Response>
   get(path: string, cookie?: string): Promise<Response>
   stop(): Promise<void>
 }
@@ -87,13 +87,14 @@ async function startRig(): Promise<Rig> {
     bridgeKey,
     logs,
     skew,
-    post: (path, body, cookie) =>
+    post: (path, body, cookie, ip = '198.51.100.50') =>
       fetch(`${base}${path}`, {
         method: 'POST',
         headers: {
           origin: ORIGIN,
           'x-talos-csrf': '1',
           'content-type': 'application/json',
+          'x-real-ip': ip, // the header the production edge sets; the lockout keys on it
           ...(cookie ? { cookie } : {}),
         },
         body: JSON.stringify(body),
@@ -166,7 +167,14 @@ async function ownerPinsNativeShell(rig: Rig, bridge: FakeBridge) {
 type Key = Awaited<ReturnType<typeof createExtractableDeviceKeyForTests>>
 
 /** device/verify with an optional proof. */
-const verifyWith = (rig: Rig, code: string, cookie: string, dev: Dev, proof?: { nonce: string; sig: string }) =>
+const verifyWith = (
+  rig: Rig,
+  code: string,
+  cookie: string,
+  dev: Dev,
+  proof?: { nonce: string; sig: string },
+  ip?: string,
+) =>
   rig.post(
     '/api/auth/device/verify',
     {
@@ -176,6 +184,7 @@ const verifyWith = (rig: Rig, code: string, cookie: string, dev: Dev, proof?: { 
       ...(proof ? { proof } : {}),
     },
     cookie,
+    ip,
   )
 
 async function askNonce(rig: Rig, code: string, cookie: string, dev: Dev): Promise<string> {
@@ -343,7 +352,7 @@ describe('N0 re-check: probes (PASS on 72a21b1)', () => {
 })
 
 describe('v6fu review: a wrong device proof burns the code it was sent with (finding 16)', () => {
-  it('five wrong proofs on a held code burn the owner other codes AND the leaked one', async () => {
+  it('five wrong proofs on a held code burn that code only, not the owner other codes', async () => {
     const bridge = await new FakeBridge({ relayWs: `ws://127.0.0.1:${rig.relay.port}`, key: rig.bridgeKey }).connect()
     try {
       const owner = await ownerPinsNativeShell(rig, bridge)
@@ -362,10 +371,46 @@ describe('v6fu review: a wrong device proof burns the code it was sent with (fin
         expect(r.status).toBe(409)
         challenge = ((await r.json()) as { challenge: string }).challenge
       }
-      expect(burned(other.codeId)).not.toBeNull()
+      expect(burned(other.codeId)).toBeNull()
       expect(burned(held.codeId)).not.toBeNull()
-      // and the leaker cannot mint a fresh session with the burned code
-      expect((await rig.post('/api/auth/enroll/session', { code_auth: held.codeAuth })).status).toBe(410)
+      // and the leaker is locked out of this address
+      expect((await rig.post('/api/auth/enroll/session', { code_auth: held.codeAuth })).status).toBe(429)
+      // and the burned code is refused from a clean IP too (410, not 429)
+      expect(
+        (await rig.post('/api/auth/enroll/session', { code_auth: held.codeAuth }, undefined, '198.51.100.99')).status,
+      ).toBe(410)
+    } finally {
+      await bridge.close()
+    }
+  })
+
+  it('five wrong proofs from two IPs (3 + 2) burn the held code; the right proof from a clean IP is then 410', async () => {
+    const bridge = await new FakeBridge({ relayWs: `ws://127.0.0.1:${rig.relay.port}`, key: rig.bridgeKey }).connect()
+    try {
+      const owner = await ownerPinsNativeShell(rig, bridge)
+      const held = await rig.mintCode()
+      const cookie = cookieOf(await rig.post('/api/auth/enroll/session', { code_auth: held.codeAuth }))
+      let challenge = await askNonce(rig, held.code, cookie, owner.dev)
+      const burned = () =>
+        authState(rig.relay.services)
+          .core.db.prepare('select burned_at from auth_enroll_codes where code_id = ?')
+          .pluck()
+          .get(held.codeId)
+      for (let i = 0; i < 5; i++) {
+        expect(burned()).toBeNull()
+        const ip = i < 3 ? '198.51.100.11' : '198.51.100.12'
+        const r = await verifyWith(rig, held.code, cookie, owner.dev, { nonce: challenge, sig: 'A'.repeat(86) }, ip)
+        expect(r.status).toBe(409)
+        challenge = ((await r.json()) as { challenge: string }).challenge
+      }
+      expect(burned()).not.toBeNull()
+      const good = await signDeviceProof(owner.dev.privateKey, {
+        nonce: challenge,
+        codeId: held.codeId,
+        deviceId: owner.dev.deviceId,
+      })
+      const res = await verifyWith(rig, held.code, cookie, owner.dev, { nonce: challenge, sig: good }, '198.51.100.77')
+      expect(res.status).toBe(410)
     } finally {
       await bridge.close()
     }

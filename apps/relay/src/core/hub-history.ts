@@ -3,7 +3,7 @@
 // Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks (session, pairing,
 // schema) are in hub-app-conn.ts and hub-app-frames.ts; some handlers here run their own device, seen-id, step-up
 // or card-state checks, so read both when auditing trust.
-import { type FrameOf, MAX_FRAME_BYTES, type MessageT, ownValue } from '@talos-app/protocol'
+import { type FrameOf, isNativeReplyMessageId, MAX_FRAME_BYTES, type MessageT, ownValue } from '@talos-app/protocol'
 import type { RateLimiter } from '../auth/limits.ts'
 import type { AppConn, HubDeps, Ref } from './hub.ts'
 import { CATCHUP_PAGE } from './hub-types.ts'
@@ -241,8 +241,15 @@ export const historyFrames = {
       }
     } else if (f.type === 'reply' || f.type === 'message.stored') {
       const msg = (f as unknown as { message: MessageT }).message
-      // Owner rows come from a `message` frame, except a share: it has no such frame, so it is kept (docs/V2-FEATURES.md V4.4).
-      if (f.type === 'message.stored' && msg.author === 'owner' && msg.via !== 'share') return null
+      // Owner rows come from a `message` frame, except a share and a reply typed in a notification (RELAY-5): neither has
+      // such a frame, so they are kept (docs/V2-FEATURES.md V4.4; hub-cards.ts stores the native reply as message.stored)
+      if (
+        f.type === 'message.stored' &&
+        msg.author === 'owner' &&
+        msg.via !== 'share' &&
+        !isNativeReplyMessageId(msg.id)
+      )
+        return null
       m = { ...msg }
     }
     if (!m) return null

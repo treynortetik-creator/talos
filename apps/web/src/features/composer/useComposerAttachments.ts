@@ -14,7 +14,7 @@ import {
   useState,
 } from 'react'
 import type { TalosClient } from '../../lib/client.ts'
-import { coarsePointer, hasKeyboardPlugin } from '../../lib/native.ts'
+import { coarsePointer, hasKeyboardPlugin, isIosWeb, type NativePickedFile, nativePicker } from '../../lib/native.ts'
 import type { Storage as AppStorage } from '../../lib/storage.ts'
 import { composerResets, EMPTY_CHIPS, removeChip, saveDraft, uploadChip, useComposerStore } from './composerStore.ts'
 
@@ -25,8 +25,9 @@ export function useComposerAttachments(o: {
   text: string
   taRef: RefObject<HTMLTextAreaElement | null>
   setText: Dispatch<SetStateAction<string>>
+  setError: (e: string | null) => void
 }) {
-  const { client, storage, threadId, text, taRef, setText } = o
+  const { client, storage, threadId, text, taRef, setText, setError } = o
   // The + menu. Its three file inputs live OUTSIDE the popover (always mounted): the menu closes the moment a choice is
   // made, and an input unmounted with it would never deliver the picked files (iOS returns from the picker later).
   const [menuOpen, setMenuOpen] = useState(false)
@@ -109,11 +110,39 @@ export function useComposerAttachments(o: {
     e.target.value = ''
     pickerDone()
   }
+  // What + shows, per platform. 'native': the iPhone app, our one menu and each choice one native picker (TalosPicker, no
+  // iOS sheet). 'ios-web': iPhone Safari, where iOS's own sheet on one plain file input is the single menu (Take Photo
+  // lives in that sheet). 'menu': desktop and everything else, our popover over three inputs.
+  const attachMode = (): 'native' | 'ios-web' | 'menu' => (nativePicker() ? 'native' : isIosWeb() ? 'ios-web' : 'menu')
+  const fromNative = (f: NativePickedFile) => {
+    const bin = atob(f.base64)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    return new File([bytes], f.name, { type: f.mime })
+  }
+  const chooseNative = async (which: keyof typeof pickers) => {
+    const plugin = nativePicker()
+    if (!plugin) return
+    try {
+      const run = which === 'photos' ? plugin.pickPhotos : which === 'camera' ? plugin.takePhoto : plugin.pickFiles
+      const { files } = await run.call(plugin)
+      if (files.length > 0) void attach(files.map(fromNative))
+    } catch (e) {
+      const msg = (e as { message?: string } | null)?.message
+      setError(msg ? `Couldn't attach: ${msg}` : "Couldn't attach that")
+    } finally {
+      pickerDone()
+    }
+  }
   const choosePicker = (which: keyof typeof pickers) => {
     choseOnce.current = true
+    // The picker opens FIRST, inside the tap: closing the menu first can cost iOS the gesture, and the first tap did nothing.
+    if (nativePicker()) void chooseNative(which)
+    else pickers[which].current?.click()
     setMenuOpen(false)
-    pickers[which].current?.click() // inside the tap, or iOS refuses to open the picker
   }
+  /** iPhone Safari: the + button is the picker. One input, no accept, multiple: iOS's sheet offers photos, camera, files. */
+  const openIosSheet = () => pickers.files.current?.click()
   // `cancel` fires on a dismissed picker (Safari 16.4+, Chromium); nothing else reports it. The inputs are unmounted
   // while a voice note is locked and come back new, so the listener goes on through the ref, every time one mounts.
   const pickerRef = (which: keyof typeof pickers) => (n: HTMLInputElement | null) => {
@@ -121,5 +150,17 @@ export function useComposerAttachments(o: {
     n?.addEventListener('cancel', pickerDone) // same function, same node: adding twice is a no-op
   }
 
-  return { menuOpen, setMenuOpen, choseOnce, sendAsFile, clearIfUnchanged, onPaste, onPick, choosePicker, pickerRef }
+  return {
+    attachMode,
+    openIosSheet,
+    menuOpen,
+    setMenuOpen,
+    choseOnce,
+    sendAsFile,
+    clearIfUnchanged,
+    onPaste,
+    onPick,
+    choosePicker,
+    pickerRef,
+  }
 }

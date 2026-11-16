@@ -299,6 +299,11 @@ export function nativeReplyMessageId(actId: string): string {
   return `m_${actId}`
 }
 
+/** The id is a native reply's (`m_` + a 22-character action id), never an app message's (`m_` + a 26-character ULID). */
+export function isNativeReplyMessageId(id: string): boolean {
+  return /^m_[A-Za-z0-9_-]{22}$/.test(id)
+}
+
 /** Test and reference signer (a phone does this in Swift). */
 export async function signNativeAct(args: {
   deviceId: string

@@ -48,7 +48,9 @@ export function normalizeGmail(
         actor: from,
         ts: toIso(it.date, raw.receivedAt),
         priority: forwarded || vip ? 'high' : low ? 'low' : 'normal',
-        dedup_key: `gmail:${it.message_id}`,
+        // a forwarded copy has its own key (RELAY-8): the owner labelling mail whose preview already came must still bring
+        // it in full; within one run the script sends one copy only (the label search first, then the inbox skips it)
+        dedup_key: forwarded ? `gmail:fwd:${it.message_id}` : `gmail:${it.message_id}`,
       }),
     )
   }

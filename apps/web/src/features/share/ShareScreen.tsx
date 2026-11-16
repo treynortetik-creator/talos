@@ -4,7 +4,7 @@
 // whose `text` is the note ONLY and whose `share_content` is the material, so the shared words can never pass as the
 // owner's instruction (V4.7).
 import { newId, SHARE_FEATURE } from '@talos-app/protocol'
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
 import { useFeature } from '../../lib/v2Client.ts'
@@ -33,6 +33,8 @@ export function ShareScreen({ store }: { store?: PendingStore } = {}) {
   const [loaded, setLoaded] = useState<Loaded>(
     pendingId ? { state: 'loading' } : { state: 'ready', material: fromQuery, expired: false },
   )
+  // One id per loaded share: a Send retried after a lost answer is the same message (the Mac runs it once), not a new one.
+  const msgId = useRef<{ share: Loaded; id: string } | null>(null)
   const [note, setNote] = useState('')
   const [thread, setThread] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -69,6 +71,7 @@ export function ShareScreen({ store }: { store?: PendingStore } = {}) {
   const send = async () => {
     setBusy(true)
     setError(null)
+    if (msgId.current?.share !== loaded) msgId.current = { share: loaded, id: newId('m') }
     try {
       if (!client.sendOwnerFrame) throw new TalosClientError('internal', 'This app cannot send shares yet.')
       const attachments = []
@@ -79,7 +82,7 @@ export function ShareScreen({ store }: { store?: PendingStore } = {}) {
           note: note.trim(),
           content: norm.content,
           attachments,
-          clientMsgId: newId('m'),
+          clientMsgId: msgId.current.id,
         }),
       )
       if (pendingId) await pendingStore.delete(pendingId).catch(() => {})

@@ -47,6 +47,11 @@ export function DriveScreen(_props: DriveScreenProps) {
   const onCall = callPhase !== 'idle'
   const [speed, setSpeed] = useState<Speed>(loadSpeed)
   const [error, setError] = useState<string | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  // The ask belongs to the notes it was asked about: when the list empties (a Retry, a sign-out) it is closed again.
+  useEffect(() => {
+    if (d.kept === 0) setConfirmingDelete(false)
+  }, [d.kept])
   const [talking, setTalking] = useState(false)
   const tapMode = useRef(loadTapToTalk())
 
@@ -312,6 +317,38 @@ export function DriveScreen(_props: DriveScreenProps) {
                   ? 'Tap to talk'
                   : 'Hold to talk'}
             </button>
+            {d.kept > 0 && (
+              <p role="alert" data-testid="drive-unsaved" className="m-0 text-center">
+                {d.kept === 1 ? '1 voice note not sent yet' : `${d.kept} voice notes not sent yet`}{' '}
+                {confirmingDelete ? (
+                  <>
+                    Delete {d.kept} unsent voice {d.kept === 1 ? 'note' : 'notes'}?{' '}
+                    <button
+                      type="button"
+                      data-testid="drive-delete-confirm"
+                      onClick={() => {
+                        controller.deleteKept()
+                        setConfirmingDelete(false)
+                      }}
+                    >
+                      Delete
+                    </button>{' '}
+                    <button type="button" onClick={() => setConfirmingDelete(false)}>
+                      Keep
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" data-testid="drive-retry" onClick={() => void controller.retryNote()}>
+                      Retry
+                    </button>{' '}
+                    <button type="button" data-testid="drive-delete" onClick={() => setConfirmingDelete(true)}>
+                      Delete
+                    </button>
+                  </>
+                )}
+              </p>
+            )}
             {(d.error || error || (callError && !onCall)) && (
               <p role="alert" data-testid="drive-error" className="m-0 text-center">
                 {d.error ?? error ?? callError}

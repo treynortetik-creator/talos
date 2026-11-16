@@ -67,7 +67,10 @@ async function jar(
   ip: string,
 ): Promise<{ page: Page; authenticator: string; cdp: Awaited<ReturnType<BrowserContext['newCDPSession']>> }> {
   const page = await browserContext.newPage()
-  await browserContext.setExtraHTTPHeaders({ 'X-Forwarded-For': ip })
+  // X-Real-IP too (bc69061a): the enroll lockout keys only on a source a client cannot share (pickLockoutKey: X-Real-IP
+  // behind the proxy hops), never on X-Forwarded-For, so without it nothing was counted per address and the lockout spec
+  // got 200 (main's browser e2e at 67f8480)
+  await browserContext.setExtraHTTPHeaders({ 'X-Forwarded-For': ip, 'X-Real-IP': ip })
   const cdp = await browserContext.newCDPSession(page)
   await cdp.send('WebAuthn.enable')
   const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', {
@@ -198,7 +201,9 @@ test('an expired code is 410', async ({ browser }) => {
   await ctx.close()
 })
 
-test('the 6th failed enroll call in 10 minutes burns every outstanding code', async ({ browser }) => {
+test('the 6th enroll call from an IP with 5 misses in 10 minutes is locked out, and no code is burned', async ({
+  browser,
+}) => {
   const ctx = await browser.newContext()
   const { page } = await jar(ctx, relay, '198.51.100.4')
   const { codeAuth } = await newCode(relay)
@@ -210,8 +215,8 @@ test('the 6th failed enroll call in 10 minutes burns every outstanding code', as
     (c) => (window as unknown as { register(c: string): Promise<Reply> }).register(c),
     codeAuth,
   )
-  expect(reg.status).toBe(410)
-  expect((await call(page, '/api/auth/enroll/options', { code_auth: other.codeAuth })).status).toBe(410)
+  expect(reg.status).toBe(429)
+  expect((await call(page, '/api/auth/enroll/options', { code_auth: other.codeAuth })).status).toBe(429)
   await ctx.close()
 })
 

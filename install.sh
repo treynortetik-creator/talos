@@ -11,7 +11,7 @@
 #   --no-tmux         install the Mac app without tmux (the agent then stops when the app quits, and thread sessions are off)
 #   --dry-run         print every step and change nothing
 #   --apply           for an agent folder from kit 1.x that has no .talos-version: carry it onto this kit (connect it, upgrade
-#                     the kit code with a backup, merge the new hooks into .claude/settings.json). Without --apply that folder
+#                     the kit code with a backup, merge the new hooks into .claude/settings.json, add memory search). Without --apply that folder
 #                     only gets the plan, and nothing changes. CLAUDE.md, memory/, wiki/, .learnings and .env are never written.
 #   --yes             no confirmation prompt (required when there is no terminal to ask on)
 #   --repoint         an agent whose .mcp.json or start-talos.sh points at ANOTHER clone of this repo is refused unless you
@@ -433,8 +433,8 @@ fi
 # The gate (the kit's self-test in the upgraded folder, as upgrade.sh would run it) is run by this installer, after upgrade.sh
 # --no-gate, so its result is recorded in .talos-carry: a carry is not done until it passes, and a run that finds a carry whose
 # gate did not pass runs it again before anything else.
-# Without --apply this prints each tool's own plan and changes nothing. Test hook (not for normal use): TALOS_INSTALL_GATE_CMD
-# is run in the folder instead of the self-test, and the output says so.
+# Without --apply this prints each tool's own plan and changes nothing. Test hooks (not for normal use): TALOS_INSTALL_GATE_CMD is
+# run in the folder instead of the self-test (the output says so); TALOS_INSTALL_MEMSEARCH_CMD instead of setup.sh.
 if [ "$V1" = 1 ]; then
   step "2b/7 Carry this kit 1.x agent onto this kit"
   # no .pyc files in the clone's kit/: upgrade.sh would copy them into the agent as kit files
@@ -514,9 +514,9 @@ if [ "$V1" = 1 ]; then
   # adopt is this clone's own CLI, so it needs the clone's JS dependencies (step 3 installs them on a normal run). With --apply
   # they are installed first, into this clone only, so adopt's own checks run before anything in the folder is written.
   DEPS=0; { [ -f "$REPO/node_modules/.modules.yaml" ] && [ -d "$REPO/apps/bridge/node_modules" ]; } && DEPS=1
-  if [ "$APPLY" = 1 ] && [ "$DEPS" != 1 ]; then
+  if [ "$APPLY" = 1 ]; then  # every --apply, a rerun too (KIT-8: a pulled fix must not run adopt on old packages)
     CURRENT="2b/7 dependencies of this clone"
-    (cd "$REPO" && pnpm install --frozen-lockfile) || fail 1 "pnpm install --frozen-lockfile failed in $REPO. Nothing in $AGENT_DIR was changed."
+    (cd "$REPO" && pnpm install --frozen-lockfile --config.confirm-modules-purge=false) || fail 1 "pnpm install --frozen-lockfile failed in $REPO. Nothing in $AGENT_DIR was changed."
     did "installed dependencies"; DEPS=1
   fi
   # adopt's own refusals (another clone's talos-app server, an mcpServers that is not an object, a catalog that does not parse,
@@ -552,7 +552,7 @@ if [ "$V1" = 1 ]; then
       printf '%s\n' "$AD_OUT" | sed 's/^/      /'
       [ "$TTY" = 1 ] || say "      (with --apply it runs only when you type it in Terminal; from here it is printed for you: $ADOPT_TYPED)"
     fi
-    printf '\n== Plan only\n'
+    carry_memsearch_step; printf '\n== Plan only\n'
     say "Nothing was changed. To do it (upgrade.sh takes a full backup first, and .mcp.json and settings.json go into it):"
     say "  ./install.sh --agent-dir $Q_AGENT --apply"
     exit 0
@@ -630,8 +630,8 @@ if [ "$V1" = 1 ]; then
   say "Done: $(IFS=';'; echo "${DONE[*]}")"
   [ -z "$BACKUP" ] || say "Undo all of it: bash $(printf '%q' "$KIT/scripts/upgrade.sh") --rollback $(printf '%q' "$BACKUP") --into $Q_AGENT"
   [ "$ADOPT_LEFT" = 0 ] || say "Still to do, typed by you in Terminal: $ADOPT_TYPED"
-  say "Next: ./install.sh --agent-dir $Q_AGENT   (it now finds a Talos agent and adds the launch script, the MCP server and the Mac app)"
-  exit 0
+  carry_memsearch_step   # the carry is done and its summary printed: a slow or failed search changes neither
+  say "Next: ./install.sh --agent-dir $Q_AGENT   (it now finds a Talos agent and adds the launch script, the MCP server and the Mac app)"; exit 0
 fi
 [ "$APPLY" = 1 ] && say "   note: --apply only does something for a kit 1.x folder with no .talos-version; this one is not, so it is ignored."
 
@@ -648,12 +648,12 @@ fi
 
 # ---------------------------------------------------------------- 3. dependencies of this clone
 step "3/7 Dependencies of this clone"
-# pnpm writes node_modules/.modules.yaml last: without it the folders are what an interrupted install left
-if [ -f "$REPO/node_modules/.modules.yaml" ] && [ -d "$REPO/apps/bridge/node_modules" ]; then skip "pnpm install (node_modules present)"
-elif [ "$DRY" = 1 ]; then plan "pnpm install --frozen-lockfile in $REPO"
+# every run, a rerun too: after a `git pull` the lockfile may name new packages, and a fix must not run on the old ones (when
+# nothing changed pnpm says so in a second). A moved pnpm store makes pnpm rebuild this clone's node_modules, terminal or not.
+if [ "$DRY" = 1 ]; then plan "pnpm install --frozen-lockfile in $REPO"
 else
-  (cd "$REPO" && pnpm install --frozen-lockfile) || fail 1 "pnpm install --frozen-lockfile failed in $REPO."
-  did "installed dependencies"
+  (cd "$REPO" && pnpm install --frozen-lockfile --config.confirm-modules-purge=false) || fail 1 "pnpm install --frozen-lockfile failed in $REPO."
+  say "   dependencies are as the lockfile says (pnpm install --frozen-lockfile)"
 fi
 
 # ---------------------------------------------------------------- 4. the kit

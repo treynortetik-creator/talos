@@ -409,6 +409,14 @@ def main():
         write_approved(full, parts, {"folder": d["agent_dir"], "program": d["claude_path"], "flags": d["args"], "env": {}})
         print("approved the install's launch %s" % full)
         return
+    if cmd == "approved-folder":
+        # restore's agent folder (WINPROTO-4, 2026-11-16): the folder of the launch the owner approved, from root's own
+        # approval file, never from talos's files. Nothing printed (exit 1) for an approval that does not name one.
+        folder = (((read_approved() or {}).get("shown") or {}) or {}).get("folder")
+        if not isinstance(folder, str) or not folder.startswith("/") or any(c in folder for c in "\n\r\0"):
+            sys.exit(1)
+        print(folder)
+        return
     if cmd == "state":
         # one word for the tray's status (Fable R3-5): decided here, from root's own check, never from talos's files
         raw = read_as_talos("supervisor.json")
@@ -457,7 +465,7 @@ def main():
         write_approved(full, parts, shown)
         print("approved %s" % full)
         return
-    die("usage: launch.py check | approve <fingerprint> | approve-install | install-defaults | state | relay-key | relay-set <url> | fingerprint")
+    die("usage: launch.py check | approve <fingerprint> | approve-install | install-defaults | state | approved-folder | relay-key | relay-set <url> | fingerprint")
 
 
 if __name__ == "__main__":

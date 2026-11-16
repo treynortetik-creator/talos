@@ -17,12 +17,17 @@ const tmp = () => {
   dirs.push(d)
   return d
 }
-const py = (script: string, args: string[], input?: string, o: { path?: string; cwd?: string } = {}) =>
+const py = (
+  script: string,
+  args: string[],
+  input?: string,
+  o: { path?: string; cwd?: string; env?: Record<string, string> } = {},
+) =>
   spawnSync('python3', [join(here, script), ...args], {
     encoding: 'utf8',
     input,
     cwd: o.cwd,
-    env: { PATH: o.path ?? process.env.PATH ?? '' },
+    env: { PATH: o.path ?? process.env.PATH ?? '', ...o.env },
   })
 
 const usage = (i: number, cn: number, cr: number, o: number) => ({
@@ -125,6 +130,41 @@ describe('spend.py: one machine, the previous UTC day', () => {
     expect(lines[0]).toMatch(/^agent\s+runs\s+turns\s+input\s+cache_new\s+cache_read\s+output$/)
     expect(lines.find((l) => l.startsWith('TOTAL'))).toMatch(/^TOTAL\s+3\s+5\s+33\s+304\s+3005\s+18$/)
     expect(lines.at(-1)).toBe('raw tokens, not plan usage; records expire ~30 days')
+  })
+
+  // Titan, 2026-11-16: its sessions run in the Windows Claude app, so their transcripts are under the Windows user's
+  // .claude, and spend.py, run in WSL, read 0 runs from the distro's own home.
+  it("on WSL the Windows user's transcripts count too, beside the distro home's; --root alone reads only that folder", () => {
+    const linux = tmp()
+    const win = tmp()
+    write(
+      join(linux, '.claude', 'projects', '-home-me-Talos', 's1.jsonl'),
+      `${turn('l1', '2026-11-11T09:00:00Z', 'claude-opus-5-5', usage(1, 0, 0, 1))}\n`,
+    )
+    write(
+      join(win, '.claude', 'projects', 'C--Users-me-Desktop-Talos', 's2.jsonl'),
+      [
+        turn('w1', '2026-11-11T09:00:00Z', 'claude-opus-5-5', usage(2, 0, 0, 2)),
+        turn('w2', '2026-11-11T10:00:00Z', 'claude-opus-5-5', usage(3, 0, 0, 3)),
+      ].join('\n'),
+    )
+    const env = { HOME: linux, TALOS_SPEND_WINDOWS_HOME: win }
+    const both = JSON.parse(
+      py('spend.py', [...DAY, '--json', '--machine', 'titan', '--by', 'project'], undefined, { env }).stdout,
+    )
+    expect(both.rows.map((r: { key: string }) => r.key).sort()).toEqual(['-home-me-Talos', 'C--Users-me-Desktop-Talos'])
+    expect(both.total).toMatchObject({ turns: 3, input: 6, output: 6 })
+    const one = JSON.parse(
+      py(
+        'spend.py',
+        [...DAY, '--json', '--machine', 'titan', '--root', join(linux, '.claude', 'projects')],
+        undefined,
+        {
+          env,
+        },
+      ).stdout,
+    )
+    expect(one.total).toMatchObject({ turns: 1, input: 1 })
   })
 
   it('no transcripts at all: zero rows, exit 0', () => {

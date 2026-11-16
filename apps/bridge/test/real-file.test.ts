@@ -346,6 +346,7 @@ const FOLDER_ONLY: Record<string, string[]> = {
   'memory/cli.ts': [
     "import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs'",
     'agentDir = realpathSync(dir)',
+    'return realpathSync(p)', // memory set-root's --agent-dir: a folder
   ],
   'memory/config.ts': [
     "import { existsSync, realpathSync, statSync } from 'node:fs'",

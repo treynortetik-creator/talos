@@ -12,6 +12,7 @@ import { createCryptoService } from './crypto.ts'
 import { openDatabase } from './db.ts'
 import { HealthWatch } from './health.ts'
 import { Hub } from './hub.ts'
+import { closeBridgeNotOnKey } from './hub-bridge-conn.ts'
 import { createLogger } from './log.ts'
 import { FileMediaStore } from './media.ts'
 import { pagesBytes, sweepPages } from './pages-store.ts'
@@ -133,7 +134,8 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
         })
       : null,
   })
-  hub = new Hub({ store, clock, log: log.child({ mod: 'hub' }), env, push, media })
+  const hubDeps = { store, clock, log: log.child({ mod: 'hub' }), env, push, media }
+  hub = new Hub(hubDeps)
 
   const health = new HealthWatch({
     store,
@@ -227,6 +229,7 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
     clock,
     log,
     env,
+    onBridgeKeyRotated: (newKeyId) => closeBridgeNotOnKey(hubDeps, newKeyId),
   }
   runtimes.set(services, {
     sessionWait,

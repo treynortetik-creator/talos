@@ -11,7 +11,15 @@ import {
   type SearchHitT,
 } from '@talos-app/protocol'
 import { TalosClientError } from './client.ts'
-import type { FilesClient, FilesListing, FolderClient, MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
+import type {
+  FilesClient,
+  FilesListing,
+  FolderClient,
+  MemoryClient,
+  MemoryGraph,
+  SearchClient,
+  SpeakClient,
+} from './v2Client.ts'
 
 /** Marks (start, end) in `text` for each folded term, mapped back to original string offsets. */
 function marksFor(text: string, terms: string[]): Array<[number, number]> {
@@ -118,6 +126,50 @@ const TREE: Record<string, string> = {
   'projects/plan.md': '# Plan\n\nDraft the outline, review it, then publish.\n',
 }
 
+// The owner's measuring switch: `localStorage['talos.fakeGraphSize']` (or `?fakeGraph=N` on the first load, like the other
+// fake switches in main.tsx) makes the fake graph N generated notes, so the 3D view can be tried at 2,000.
+const FIRST_QUERY = typeof location === 'undefined' ? '' : location.search
+function fakeGraphSize(): number {
+  let raw: string | null = new URLSearchParams(FIRST_QUERY).get('fakeGraph')
+  try {
+    raw ??= localStorage.getItem('talos.fakeGraphSize')
+  } catch {
+    // storage blocked: the default graph
+  }
+  const n = Number(raw)
+  return Number.isInteger(n) && n > 0 ? Math.min(n, 20_000) : 0
+}
+
+/** N neutral notes over 3 folders; each links to 1-3 earlier ones (a seeded PRNG, so the same every time), 10% to none. */
+function bigFakeGraph(n: number): MemoryGraph {
+  let seed = 0x9e3779b9
+  const rand = () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const roots = [
+    { id: 'notes', label: 'Notes' },
+    { id: 'journal', label: 'Journal' },
+    { id: 'projects', label: 'Projects' },
+  ]
+  const nodes = Array.from({ length: n }, (_, i) => ({
+    root: i % 3,
+    path: `note-${String(i).padStart(4, '0')}.md`,
+    title: `Note ${String(i).padStart(4, '0')}`,
+  }))
+  const edges: Array<[number, number]> = []
+  for (let i = 1; i < n; i++) {
+    if (rand() < 0.1) continue
+    const want = 1 + Math.floor(rand() * 3)
+    const to = new Set<number>()
+    for (let k = 0; k < want; k++) to.add(Math.floor(rand() * i))
+    for (const j of to) edges.push([i, j])
+  }
+  return { roots, nodes, edges, total: n, truncated: false }
+}
+
 export function createFakeMemory(deps: { macOnline: () => boolean }): MemoryClient {
   const gate = () => {
     if (!deps.macOnline()) throw new TalosClientError('mac_offline')
@@ -126,6 +178,8 @@ export function createFakeMemory(deps: { macOnline: () => boolean }): MemoryClie
   return {
     async graph() {
       gate()
+      const big = fakeGraphSize()
+      if (big > 0) return bigFakeGraph(big)
       const paths = Object.keys(TREE).sort()
       const stemOf = (p: string) =>
         p

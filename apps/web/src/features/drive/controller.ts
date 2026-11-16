@@ -15,6 +15,9 @@ import { holdCapture } from '../../lib/appUpdate.ts'
 import type { ClientState, TalosClient } from '../../lib/client.ts'
 import { micOffText } from '../../lib/micOff.ts'
 import { getPlatform } from '../../lib/platform.ts'
+import type { SocketClient } from '../../lib/socketClient.ts'
+import { uploadVoiceWithDeadline } from '../../lib/uploadDeadline.ts'
+import { canQueue } from '../composer/keptNotes.ts'
 import type { RecorderHandle } from '../composer/recorder.ts'
 import { extFor } from '../composer/recorder.ts'
 import type { Heard } from './prefs.ts'
@@ -30,6 +33,8 @@ const MIN_NOTE_MS = 400
 /** Messages with no relay seq (local ones) count as new if created this close to activation or later. */
 const LIVE_SLACK_MS = 5_000
 
+type Kept = { note: Awaited<ReturnType<RecorderHandle['stop']>>; thread: string; name: string }
+
 export type DriveStatus = 'ready' | 'listening' | 'sending' | 'thinking' | 'speaking'
 
 export type DriveState = {
@@ -40,6 +45,8 @@ export type DriveState = {
   thread: string
   cardsWaiting: number
   error: string | null
+  /** How many finished notes could not be saved or sent yet: kept in memory, and `retryNote` tries them again. */
+  kept: number
 }
 
 export type DriveDeps = {
@@ -82,7 +89,15 @@ export class DriveController {
   private sayTimer: unknown = null
   private lastMessages: ClientState['messages'] | null = null
   private recording: RecorderHandle | Promise<RecorderHandle> | null = null
-  private sending = false
+  /** Notes being saved or sent right now (a talk's, or a Retry's): the status says 'sending' while any is. */
+  private sending = 0
+  /** Recordings that could not be saved or sent yet, in order: each stays until it is saved or sent, and a new note never
+   * touches another. A reload is held off while any is kept. */
+  private unsaved: Kept[] = []
+  private unsavedHold: (() => void) | null = null
+  private retrying = false
+  /** Bumped by a sign-out: a save or Retry that began before it keeps and sends nothing afterwards. */
+  private generation = 0
   /**
    * The hold of the talk being recorded (lib/appUpdate.ts: no automatic reload while a voice note is only in memory). Each
    * talk owns its own: endTalk takes it with the recording and releases it once that talk's send settles, so a second talk
@@ -107,6 +122,7 @@ export class DriveController {
   private textThread = new Map<string, string>()
 
   constructor(private readonly d: DriveDeps) {
+    if ('onQueueWiped' in d.client) (d.client as SocketClient).onQueueWiped(() => this.discardKept())
     this.store = createStore<DriveState>(() => ({
       active: false,
       status: 'ready',
@@ -114,6 +130,7 @@ export class DriveController {
       thread: d.loadThread() ?? 'general',
       cardsWaiting: 0,
       error: null,
+      kept: 0,
     }))
   }
 
@@ -191,7 +208,7 @@ export class DriveController {
     const q = this.d.queue.store.getState()
     const status: DriveStatus = this.recording
       ? 'listening'
-      : this.sending
+      : this.sending > 0
         ? 'sending'
         : q.playing
           ? 'speaking'
@@ -519,26 +536,127 @@ export class DriveController {
       this.refresh()
       return
     }
-    this.sending = true
+    this.sending++
     this.refresh()
     const thread = this.store.getState().thread
     try {
-      const att = await this.d.client.uploadMedia(note.blob, {
-        name: `voice-note-${Date.now()}.${extFor(note.mime)}`,
-        durationMs: note.durationMs,
-        waveform: note.waveform,
-      })
-      await this.d.client.sendVoiceNote({ threadId: thread, attachment: { ...att, kind: 'voice_note' } })
-      getPlatform().haptic('success')
-      this.thinking = true
-      if (this.thinkingTimer) this.d.clearTimeout(this.thinkingTimer) // a second note restarts the wait, not a second one
-      this.thinkingTimer = this.d.setTimeout(() => this.endThinking(), THINKING_MAX_MS)
-    } catch {
-      this.say("Couldn't send that. Try again.")
-      this.set({ error: "Couldn't send. Try again." })
-      getPlatform().haptic('error')
+      await this.place({ note, thread, name: `voice-note-${Date.now()}.${extFor(note.mime)}` })
     } finally {
-      this.sending = false
+      this.sending--
+      this.refresh()
+    }
+  }
+
+  /** Saves the note on this device (only the outbox flush uploads it); if that fails and the phone is online it is sent
+   * straight away as before; otherwise it is kept in memory for `retryNote`. */
+  private async place(u: Kept, announceFailure = true, fresh = true): Promise<boolean> {
+    const began = this.generation
+    const client = this.d.client
+    const offline = !navigator.onLine || client.store.getState().connection !== 'online'
+    const meta = { name: u.name, durationMs: u.note.durationMs, waveform: u.note.waveform }
+    let saved = false
+    if (canQueue(client)) {
+      try {
+        await client.queueVoiceNote({ threadId: u.thread, blob: u.note.blob, ...meta })
+        saved = true
+      } catch {
+        // nothing was kept
+      }
+    }
+    if (!saved && !offline) {
+      try {
+        const att = await uploadVoiceWithDeadline(client, u.note.blob, meta)
+        await client.sendVoiceNote({ threadId: u.thread, attachment: { ...att, kind: 'voice_note' } })
+        this.unkeep(u)
+        this.startThinking()
+        return true
+      } catch {
+        // still in memory below
+      }
+    }
+    if (!saved) {
+      if (this.generation !== began) return false // wiped or deleted meanwhile: it does not come back
+      if (fresh) this.keep(u) // a Retry's note is already listed, or was deleted meanwhile
+      if (announceFailure) this.announceUnsaved()
+      return false
+    }
+    this.unkeep(u)
+    if (offline) {
+      // Nothing to wait for: it goes when the connection is back.
+      this.say('Saved. It will send when the connection is back.')
+      return true
+    }
+    this.startThinking()
+    return true
+  }
+
+  private announceUnsaved() {
+    this.say("Couldn't save that. Tap to try again.")
+    this.set({ error: "Couldn't save that. Tap to try again." })
+    getPlatform().haptic('error')
+  }
+
+  private keep(u: Kept) {
+    if (!this.unsaved.includes(u)) this.unsaved = [...this.unsaved, u]
+    if (!this.unsavedHold) this.unsavedHold = holdCapture()
+    this.set({ kept: this.unsaved.length })
+  }
+
+  /** Takes out exactly this recording (by identity), never "the current one". */
+  private unkeep(u: Kept) {
+    this.unsaved = this.unsaved.filter((k) => k !== u)
+    if (this.unsaved.length === 0) {
+      this.unsavedHold?.()
+      this.unsavedHold = null
+      this.set({ error: null })
+    }
+    this.set({ kept: this.unsaved.length })
+  }
+
+  private startThinking() {
+    getPlatform().haptic('success')
+    this.thinking = true
+    if (this.thinkingTimer) this.d.clearTimeout(this.thinkingTimer) // a second note restarts the wait, not a second one
+    this.thinkingTimer = this.d.setTimeout(() => this.endThinking(), THINKING_MAX_MS)
+  }
+
+  /** Drops every kept note (a sign-out that wipes the queue, or the owner confirmed a Delete) and lets go of the hold. */
+  discardKept(): void {
+    this.generation++
+    this.unsaved = []
+    this.unsavedHold?.()
+    this.unsavedHold = null
+    this.set({ kept: 0, error: null })
+  }
+
+  /** The owner confirmed Delete: the kept notes go. A save still running is not touched (only a sign-out drops those),
+   * and a Retry skips notes that are no longer listed. */
+  deleteKept(): void {
+    this.unsaved = []
+    this.unsavedHold?.()
+    this.unsavedHold = null
+    this.set({ kept: 0, error: null })
+  }
+
+  /** Tap to try again: each kept note is saved again in turn (sent directly when the save fails and the phone is online).
+   * One run at a time; a talk that ends meanwhile adds its own note and touches none of these. */
+  async retryNote(): Promise<void> {
+    if (this.retrying || this.unsaved.length === 0) return
+    this.retrying = true
+    this.sending++
+    this.set({ error: null })
+    this.refresh()
+    try {
+      let failed = false
+      const began = this.generation
+      for (const u of [...this.unsaved]) {
+        if (!this.unsaved.includes(u)) continue // deleted or wiped while an earlier one was being saved
+        if (!(await this.place(u, false, false)) && this.generation === began) failed = true
+      }
+      if (failed) this.announceUnsaved() // once per Retry, not once per note
+    } finally {
+      this.sending--
+      this.retrying = false
       this.refresh()
     }
   }

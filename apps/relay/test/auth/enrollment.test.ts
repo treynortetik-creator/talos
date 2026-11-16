@@ -117,7 +117,7 @@ describe('enrollment codes gate registration (spec 5.2)', () => {
     }
     const b = (await (
       await h.post('/api/auth/enroll/options', { code_auth: c.codeAuth }, undefined, {
-        'X-Forwarded-For': '198.51.100.9',
+        'X-Real-IP': '198.51.100.9',
       })
     ).json()) as { user: { id: string } }
     expect(a.user.id).toBe(b.user.id)
@@ -143,49 +143,31 @@ describe('enrollment codes gate registration (spec 5.2)', () => {
     expect((await h.post('/api/auth/enroll/options', { code_auth: c.codeAuth })).status).toBe(410)
   })
 
-  it('5 wrong code_auth calls burn every outstanding code, even a valid one', async () => {
+  it('5 wrong code_auth calls lock out that IP only; no code is burned', async () => {
     const h = await makeHarness()
     const a = await newCode(h)
     const b = await newCode(h)
-    for (let i = 0; i < 4; i++) {
-      expect(
-        (
-          await h.post('/api/auth/enroll/options', { code_auth: `wrong-${i}` }, undefined, {
-            'X-Forwarded-For': `198.51.100.${i + 1}`,
-          })
-        ).status,
-      ).toBe(410)
-    }
-    // 4 failures: codes still alive
+    const ip = { 'X-Real-IP': '198.51.100.1' }
+    for (let i = 0; i < 5; i++)
+      expect((await h.post('/api/auth/enroll/options', { code_auth: `wrong-${i}` }, undefined, ip)).status).toBe(410)
+    // the guesser's IP is locked, even for a correct code
+    expect((await h.post('/api/auth/enroll/options', { code_auth: a.codeAuth }, undefined, ip)).status).toBe(429)
+    // other IPs keep working and both codes are alive
     expect(h.state.core.findCode(a.codeAuth)).not.toBeNull()
-    expect(
-      (
-        await h.post('/api/auth/enroll/options', { code_auth: 'wrong-4' }, undefined, {
-          'X-Forwarded-For': '198.51.100.20',
-        })
-      ).status,
-    ).toBe(410)
-    // from any IP: counted globally, so the 6th call (a correct one) is gone
-    expect(
-      (
-        await h.post('/api/auth/enroll/options', { code_auth: a.codeAuth }, undefined, {
-          'X-Forwarded-For': '198.51.100.30',
-        })
-      ).status,
-    ).toBe(410)
+    expect(h.state.core.findCode(b.codeAuth)).not.toBeNull()
     expect(
       (
         await h.post('/api/auth/enroll/options', { code_auth: b.codeAuth }, undefined, {
-          'X-Forwarded-For': '198.51.100.31',
+          'X-Real-IP': '198.51.100.31',
         })
       ).status,
-    ).toBe(410)
+    ).toBe(200)
     // a code registered afterwards is fine
     const c = await newCode(h)
     expect(
       (
         await h.post('/api/auth/enroll/options', { code_auth: c.codeAuth }, undefined, {
-          'X-Forwarded-For': '198.51.100.32',
+          'X-Real-IP': '198.51.100.32',
         })
       ).status,
     ).toBe(200)
@@ -196,13 +178,13 @@ describe('enrollment codes gate registration (spec 5.2)', () => {
     await newCode(h, 600_000)
     for (let i = 0; i < 4; i++)
       await h.post('/api/auth/enroll/options', { code_auth: `wrong-${i}` }, undefined, {
-        'X-Forwarded-For': `198.51.100.${i + 1}`,
+        'X-Real-IP': `198.51.100.${i + 1}`,
       })
     h.fake.clock.advance(9 * 60_000)
     const fresh = await newCode(h)
     h.fake.clock.advance(2 * 60_000)
     await h.post('/api/auth/enroll/options', { code_auth: 'wrong-x' }, undefined, {
-      'X-Forwarded-For': '198.51.100.40',
+      'X-Real-IP': '198.51.100.40',
     })
     expect(h.state.core.findCode(fresh.codeAuth)).not.toBeNull()
   })
@@ -354,16 +336,17 @@ describe('POST /api/auth/device/verify (half 2)', () => {
     expect((await h.post('/api/auth/device/verify', second, cookie)).status).toBe(410)
   })
 
-  it('a wrong code_auth is 410 and counts toward the burn rule: the fifth burns the valid code too', async () => {
+  it('a wrong code_auth is 410 and counts toward the per-IP lockout: the fifth locks this IP, the valid code stays alive', async () => {
     const { h, cookie, body } = await setup()
+    const ip = { 'X-Real-IP': '198.51.100.1' }
     for (let i = 0; i < 4; i++) {
-      const res = await h.post('/api/auth/device/verify', { ...body, code_auth: `wrong-${i}` }, cookie)
+      const res = await h.post('/api/auth/device/verify', { ...body, code_auth: `wrong-${i}` }, cookie, ip)
       expect(res.status).toBe(410)
     }
     expect(h.state.core.findCode(body.code_auth)).not.toBeNull() // four misses leave the real code alive
-    expect((await h.post('/api/auth/device/verify', { ...body, code_auth: 'wrong-4' }, cookie)).status).toBe(410)
-    expect(h.state.core.findCode(body.code_auth)).toBeNull()
-    expect((await h.post('/api/auth/device/verify', body, cookie)).status).toBe(410)
+    expect((await h.post('/api/auth/device/verify', { ...body, code_auth: 'wrong-4' }, cookie, ip)).status).toBe(410)
+    expect(h.state.core.findCode(body.code_auth)).not.toBeNull() // not burned
+    expect((await h.post('/api/auth/device/verify', body, cookie, ip)).status).toBe(429) // this IP is locked out
   })
 
   it('a device id that is not the hash of its key is 400', async () => {

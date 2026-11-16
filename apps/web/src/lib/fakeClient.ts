@@ -212,6 +212,14 @@ export const DEMO_FOLDERS: FakeFolderTree = {
 }
 
 export type FakeClient = TalosClient & {
+  /** The real client's way to hand over a recording (it saves it on the device first); the fake sends it straight away. */
+  queueVoiceNote(args: {
+    threadId: string
+    blob: Blob
+    durationMs?: number
+    waveform?: string
+    name: string
+  }): Promise<SendResult>
   /** Every owner frame the client signed, in order (raw objects, as they would go on the wire). */
   readonly sent: Array<Record<string, unknown>>
   /** Public half of the fake device key, for verifying `sent` in tests. */
@@ -612,6 +620,15 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         }, opts.replyDelayMs ?? 0)
       }
       return { clientMsgId, state: sendState() }
+    },
+    // No device storage here: the fake saves nothing, it uploads and sends straight away.
+    async queueVoiceNote({ threadId, blob, durationMs, waveform, name }) {
+      const att = await client.uploadMedia(blob, {
+        name,
+        ...(durationMs ? { durationMs } : {}),
+        ...(waveform ? { waveform } : {}),
+      })
+      return client.sendVoiceNote({ threadId, attachment: { ...att, kind: 'voice_note' } })
     },
     async sendVoiceNote({ threadId, attachment }): Promise<SendResult> {
       const clientMsgId = newId('m')

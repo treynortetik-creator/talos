@@ -112,9 +112,14 @@ export class MediaStore {
     ensureDir(p.media)
   }
 
-  /** Where a stored media file lives (by id, so a name chosen by the sender never reaches the file system). */
+  /**
+   * Where a downloaded payload lives (by id, so a name chosen by the sender never reaches the file system). The sidecar is
+   * `<id>.json`, so a payload whose extension is `.json` is stored as `<id>.data.json`: the two can never share a path.
+   * No lookup falls back from `<id>.data.json` to `<id>.json`: on a Mac with files from before this, `<id>.json` IS the
+   * sidecar (it replaced the payload), so the old payload is lost and reads as missing (rehydrate answers false on the sha).
+   */
   private localPath(mediaId: string, ext: string) {
-    return join(this.p.media, `${mediaId}${ext}`)
+    return join(this.p.media, `${mediaId}${ext === '.json' ? '.data.json' : ext}`)
   }
 
   /** The bytes of an owner attachment, checked for size and sha256 against the signed AttachmentRef; nothing is written. */

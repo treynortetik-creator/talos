@@ -4,7 +4,16 @@
 // that kit/scripts/self-test.sh builds and ages (scripts/v1-agent-fixture.sh), in a sandbox HOME.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { REPO, run, type Sandbox, sandbox, treeHash } from './root-install-harness.ts'
@@ -198,4 +207,199 @@ describe('root install.sh on an unstamped kit 1.x agent folder', () => {
     expect(r.stderr).toContain(`talos-app adopt --agent-dir ${dir}`)
     expect(treeHash(dir)).toBe(before)
   })
+})
+
+// A carried folder gets the semantic memory search a new agent gets (scripts/install-memory.sh carry_memsearch_step). The
+// harness turns the default off; these turn it on and replace setup.sh by the installer's test hook, so nothing is downloaded.
+describe('root install.sh carrying a kit 1.x folder: semantic memory search', () => {
+  const ON = { ...NO_GATE, TALOS_INSTALL_MEMSEARCH_DEFAULT: 'on' }
+  const logOf = (sb: Sandbox) => join(sb.root, 'memsearch.log')
+  /** A setup.sh stand-in that logs its arguments and exits `code`; it fails (and leaves a marker) if the carry is still marked under way. */
+  const fake = (sb: Sandbox, code: number) => ({
+    ...ON,
+    TALOS_INSTALL_MEMSEARCH_CMD: `[ ! -e "$2/.talos-carry" ] || { : > "${join(sb.root, 'carry-still-there')}"; exit 9; }; echo "$@" >> "${logOf(sb)}"; exit ${code}`,
+    TALOS_MEM_BYTES: '1073741824', // under 3 GiB: the reranker step skips itself, so it downloads nothing either
+  })
+  const calls = (sb: Sandbox) => (existsSync(logOf(sb)) ? readFileSync(logOf(sb), 'utf8').trim().split('\n') : [])
+  const ARGS = (dir: string, extra = '') => `--agent-dir ${dir} --embed-model auto --no-job${extra}`
+
+  it("plan only: the plan says what would be set up (the reranker in the fetch script's own words), and nothing changes", () => {
+    const sb = sandbox()
+    const dir = v1Agent(sb)
+    const before = treeHash(dir)
+    const r = run(sb, ['--agent-dir', dir, '--no-app'], fake(sb, 0))
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain(`would: semantic memory search for this agent: bash ${dir}/scripts/memory/setup.sh`)
+    expect(r.out).toContain('the install goes on if it fails')
+    // the 1 GiB computer: the fetch script's dry run says the reranker would be skipped
+    expect(r.out).toContain('reranker: would be skipped (1 GiB of memory here')
+    expect(calls(sb)).toEqual([])
+    expect(treeHash(dir)).toBe(before)
+    // with enough memory it describes the model
+    const big = run(sb, ['--agent-dir', dir, '--no-app'], { ...fake(sb, 0), TALOS_MEM_BYTES: String(8 * 2 ** 30) })
+    expect(big.out).toContain('reranker model: bge-reranker-v2-m3')
+    expect(treeHash(dir)).toBe(before)
+  }, 180_000)
+
+  it('--apply: setup.sh runs once, after the carry is done and its summary printed; the hook says so; the order holds', () => {
+    const sb = sandbox()
+    const dir = v1Agent(sb)
+    const r = run(sb, ['--agent-dir', dir, '--no-app', '--apply', '--yes', '--no-reranker'], fake(sb, 0))
+    expect(r.code, r.out).toBe(0)
+    expect(calls(sb)).toEqual([ARGS(dir)])
+    expect(existsSync(join(sb.root, 'carry-still-there'))).toBe(false) // .talos-carry was already gone when it ran
+    expect(existsSync(join(dir, '.index', '.wanted'))).toBe(true)
+    expect(r.out).toContain(
+      'test hook TALOS_INSTALL_MEMSEARCH_CMD runs instead of scripts/memory/setup.sh (not for normal use)',
+    )
+    const at = (t: string) => r.out.indexOf(t)
+    expect(at('Undo all of it:')).toBeGreaterThan(at('== Carried onto this kit'))
+    expect(at('== Semantic memory search')).toBeGreaterThan(at('Undo all of it:'))
+    expect(at('Still to do, typed by you')).toBeLessThan(at('== Semantic memory search'))
+    expect(at('   set up semantic memory search')).toBeGreaterThan(at('== Semantic memory search'))
+    expect(at('Next: ./install.sh')).toBeGreaterThan(at('   set up semantic memory search'))
+    expect(r.out).not.toMatch(/Done: .*semantic memory search/)
+    expect(existsSync(join(dir, '.talos-carry'))).toBe(false)
+  }, 180_000)
+
+  it('a carry that stopped and is run again finishes it, and the step runs once', () => {
+    const sb = sandbox()
+    const dir = v1Agent(sb)
+    const first = run(sb, ['--agent-dir', dir, '--no-app', '--apply', '--yes', '--no-reranker'], {
+      ...fake(sb, 0),
+      TALOS_INSTALL_GATE_CMD: 'exit 1',
+    })
+    expect(first.code, first.out).toBe(1)
+    expect(existsSync(join(dir, '.talos-carry'))).toBe(true)
+    expect(calls(sb)).toEqual([])
+    const again = run(sb, ['--agent-dir', dir, '--no-app', '--apply', '--yes', '--no-reranker'], fake(sb, 0))
+    expect(again.code, again.out).toBe(0)
+    expect(again.out).toContain('carry onto this kit that did not finish')
+    expect(calls(sb)).toEqual([ARGS(dir)])
+    expect(existsSync(join(dir, '.talos-carry'))).toBe(false)
+  }, 240_000)
+
+  it('Chronos: --no-job unless --with-chronos (and then unless --no-jobs), even when a Chronos config exists', () => {
+    const sb = sandbox()
+    const cfg = join(sb.root, 'chronos.json')
+    writeFileSync(cfg, '{}\n')
+    const withCfg = (code: number) => ({ ...fake(sb, code), CHRONOS_CONFIG: cfg })
+    const a = v1Agent(sb)
+    expect(run(sb, ['--agent-dir', a, '--no-app', '--apply', '--yes', '--no-reranker'], withCfg(0)).code).toBe(0)
+    expect(calls(sb)).toEqual([ARGS(a)])
+    const sb2 = sandbox()
+    const cfg2 = join(sb2.root, 'chronos.json')
+    writeFileSync(cfg2, '{}\n')
+    const b = v1Agent(sb2)
+    const r = run(sb2, ['--agent-dir', b, '--no-app', '--apply', '--yes', '--no-reranker', '--with-chronos'], {
+      ...fake(sb2, 0),
+      CHRONOS_CONFIG: cfg2,
+    })
+    expect(r.code, r.out).toBe(0)
+    expect(calls(sb2)).toEqual([`--agent-dir ${b} --embed-model auto`])
+    const sb3 = sandbox()
+    const c = v1Agent(sb3)
+    run(
+      sb3,
+      ['--agent-dir', c, '--no-app', '--apply', '--yes', '--no-reranker', '--with-chronos', '--no-jobs'],
+      fake(sb3, 0),
+    )
+    expect(calls(sb3)).toEqual([ARGS(c)])
+  }, 360_000)
+
+  it('--embed-model reaches setup.sh; an explicit --with-memory-search wins over the default being off', () => {
+    const sb = sandbox()
+    const dir = v1Agent(sb)
+    const env = { ...fake(sb, 0), TALOS_INSTALL_MEMSEARCH_DEFAULT: 'off' }
+    const r = run(
+      sb,
+      [
+        '--agent-dir',
+        dir,
+        '--no-app',
+        '--apply',
+        '--yes',
+        '--no-reranker',
+        '--embed-model',
+        'small',
+        '--with-memory-search',
+      ],
+      env,
+    )
+    expect(r.code, r.out).toBe(0)
+    expect(calls(sb)).toEqual([`--agent-dir ${dir} --embed-model small --no-job`])
+  }, 180_000)
+
+  it('an explicit --with-reranker is not memory-gated and runs even when search failed', () => {
+    const sb = sandbox()
+    const dir = v1Agent(sb)
+    const r = run(sb, ['--agent-dir', dir, '--no-app', '--apply', '--yes', '--with-reranker'], fake(sb, 1))
+    // fetch-reranker.sh really runs here, without the memory gate: with no curl on the PATH it stops at once and downloads nothing
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).not.toContain('reranker: skipped')
+    expect(r.out).toContain('reranker model: bge-reranker-v2-m3')
+  }, 180_000)
+
+  it('setup.sh exits 3 (Python 3.9): the carry still succeeds, the uv line is printed, the want marker stays for the doctor', () => {
+    const sb = sandbox()
+    const dir = v1Agent(sb)
+    const r = run(sb, ['--agent-dir', dir, '--no-app', '--apply', '--yes'], fake(sb, 3))
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain('needs Python 3.10+')
+    expect(r.out).toContain(`brew install uv && bash ${dir}/scripts/memory/setup.sh`)
+    expect(r.out).toContain('reranker: skipped (semantic search is not set up)')
+    expect(r.out).not.toContain('   set up semantic memory search')
+    expect(existsSync(join(dir, '.index', '.wanted'))).toBe(true)
+    expect(existsSync(join(dir, '.talos-carry'))).toBe(false)
+    expect(existsSync(join(dir, '.talos-version'))).toBe(true)
+  }, 180_000)
+
+  it('--apply on a small computer: the reranker is skipped with its own line, no marker left', () => {
+    const sb = sandbox()
+    const dir = v1Agent(sb)
+    const r = run(sb, ['--agent-dir', dir, '--no-app', '--apply', '--yes'], fake(sb, 0))
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain('reranker: skipped (1 GiB of memory here')
+    expect(existsSync(join(dir, '.index', '.rerank-wanted'))).toBe(false)
+  }, 180_000)
+
+  it('setup.sh fails some other way: the carry succeeds and the later command is named', () => {
+    const sb = sandbox()
+    const dir = v1Agent(sb)
+    const r = run(sb, ['--agent-dir', dir, '--no-app', '--apply', '--yes', '--no-reranker'], fake(sb, 1))
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain('Semantic search was NOT enabled (setup.sh exited 1)')
+    expect(r.out).toContain(`Add it later with:  bash ${dir}/scripts/memory/setup.sh`)
+  }, 180_000)
+
+  it('an unwritable .index never fails the finished carry: the summary is printed and one line says the marker is missing', () => {
+    const sb = sandbox()
+    const dir = v1Agent(sb)
+    mkdirSync(join(dir, '.index'))
+    chmodSync(join(dir, '.index'), 0o500)
+    try {
+      const r = run(sb, ['--agent-dir', dir, '--no-app', '--apply', '--yes'], {
+        ...fake(sb, 0),
+        TALOS_MEM_BYTES: String(8 * 2 ** 30),
+      })
+      expect(r.code, r.out).toBe(0)
+      expect(r.out).toContain('== Carried onto this kit')
+      expect(r.out).toContain('is not writable')
+      expect(r.out).toContain('Next: ./install.sh')
+    } finally {
+      chmodSync(join(dir, '.index'), 0o700)
+    }
+  }, 180_000)
+
+  it('--no-memory-search: not run, one line says it is off and how to add it later', () => {
+    const sb = sandbox()
+    const dir = v1Agent(sb)
+    const r = run(sb, ['--agent-dir', dir, '--no-app', '--apply', '--yes', '--no-memory-search'], fake(sb, 0))
+    expect(r.code, r.out).toBe(0)
+    expect(calls(sb)).toEqual([])
+    expect(r.out).toContain(
+      `semantic memory search: off (--no-memory-search). Add it later: bash ${dir}/scripts/memory/setup.sh`,
+    )
+    expect(existsSync(join(dir, '.index', '.wanted'))).toBe(false)
+  }, 180_000)
 })

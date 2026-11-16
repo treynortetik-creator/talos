@@ -7,7 +7,7 @@ import {
   signChallenge,
   signRotation,
 } from '@talos-app/protocol'
-import { fakeClock } from '@talos-app/testkit'
+import { FakeBridge, fakeClock } from '@talos-app/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { verifyBridgeHello } from '../../src/auth/contract.ts'
@@ -437,5 +437,155 @@ describe('a bridge socket the relay has refused', () => {
     const code = await new Promise<number>((done) => ws.once('close', (c) => done(c)))
     expect(code).toBe(4401)
     expect(r.auth.helloGuard.isBlocked('127.0.0.1')).toBe(false)
+  })
+})
+
+describe('a rotated bridge key takes the slot and the old key loses its socket', () => {
+  let r: RealRelay | null = null
+  afterEach(async () => {
+    await r?.stop()
+    r = null
+  })
+
+  const startAt = () => fakeClock(new Date().toISOString())
+  const rotateTo = async (relay: RealRelay, next: Awaited<ReturnType<typeof generateBridgeKey>>) => {
+    const ts = Math.floor(Date.now() / 1000)
+    return relay.bridgePost('/bridge/rotate', {
+      new_pubkey: next.publicKeyB64,
+      sig_new: await signRotation(next.privateKey, next.publicKeyB64, ts),
+      ts,
+    })
+  }
+  const closeOf = (b: { ws: WebSocket | null }) =>
+    new Promise<number>((done) => {
+      const ws = b.ws as WebSocket
+      if (ws.readyState === ws.CLOSED) return done(-1)
+      ws.once('close', (c) => done(c))
+    })
+  const sendPing = (b: { ws: WebSocket | null }) =>
+    b.ws?.send(JSON.stringify({ v: 1, id: newUlid(), ts: new Date().toISOString(), type: 'ping', nonce: 'abcdefgh' }))
+
+  it('closes the socket opened with the old key (1012) after the answer is out, and the real bridge comes back on its new key as the live bridge', async () => {
+    const clock = startAt()
+    r = await startRealRelay({ clock })
+    const hub = r.runtime.hub
+    const a = r.bridge()
+    await a.connect()
+    expect(hub.bridgeOnline()).toBe(true)
+    const closed = closeOf(a)
+    const next = await generateBridgeKey()
+    expect((await rotateTo(r, next)).status).toBe(200)
+    // not inside the route: the 200 is on its way first
+    await new Promise((d) => setTimeout(d, 100))
+    expect(a.connected).toBe(true)
+    clock.advance(1500)
+    expect(await closed).toBe(1012)
+    // what the real bridge does on a 1012: redial within its fast-retry delay, hello with its current key, no standby
+    const back = new FakeBridge({ relayWs: r.wsBase, key: next })
+    await back.connect()
+    expect(back.connected).toBe(true)
+    expect(hub.bridgeOnline()).toBe(true)
+    const owner = await r.owner()
+    const ready = await r.app(owner).connect()
+    expect(ready.presence.bridge_online).toBe(true)
+    expect(ready.presence.superseded).not.toBe(true)
+    await back.close()
+  })
+
+  it('an open socket on the old key ends with 1012 on its next frame, grace or not (the real bridge comes straight back; a hello needs the active key)', async () => {
+    r = await startRealRelay({ clock: startAt() })
+    const a = r.bridge()
+    await a.connect()
+    const next = await generateBridgeKey()
+    sendPing(a) // the active key: fine
+    await new Promise((d) => setTimeout(d, 50))
+    expect(a.connected).toBe(true)
+    // rotate on the database alone, so only the per-frame check can end the socket
+    r.auth.core.rotateBridgeKey({ keyId: r.bridgeKey.keyId, publicKeyB64: r.bridgeKey.publicKeyB64 }, next.publicKeyB64)
+    const closed = closeOf(a)
+    sendPing(a)
+    expect(await closed).toBe(1012)
+  })
+
+  it('a hello checked before a rotation that finishes while its signature is pending is refused, and the real bridge is not parked', async () => {
+    const clock = startAt()
+    r = await startRealRelay({ clock })
+    const live = r.bridge()
+    await live.connect() // the real bridge, on the old key
+    const liveClosed = closeOf(live)
+    const next = await generateBridgeKey()
+    // the rotation lands right after the old key's signature checked out: useNonce runs after it, before the hello is let in
+    const core = r.auth.core
+    const useNonce = core.useNonce.bind(core)
+    core.useNonce = (nonce: string) => {
+      core.useNonce = useNonce
+      const ok = useNonce(nonce)
+      core.rotateBridgeKey(
+        { keyId: r?.bridgeKey.keyId ?? '', publicKeyB64: r?.bridgeKey.publicKeyB64 ?? '' },
+        next.publicKeyB64,
+      )
+      r?.relay.services.onBridgeKeyRotated?.(next.keyId)
+      return ok
+    }
+    expect(await new FakeBridge({ relayWs: r.wsBase, key: r.bridgeKey }).connectExpectingRefusal()).toBe(4401)
+    clock.advance(1500)
+    expect(await liveClosed).toBe(1012) // closed by the rotation, never superseded (4409)
+    const back = new FakeBridge({ relayWs: r.wsBase, key: next })
+    await back.connect()
+    expect(r.runtime.hub.bridgeOnline()).toBe(true)
+    await back.close()
+  })
+
+  it('old-key hellos inside the grace are refused but do not add up to the per-address block, and set no refusal mark', async () => {
+    r = await startRealRelay({ clock: startAt() })
+    const next = await generateBridgeKey()
+    expect((await rotateTo(r, next)).status).toBe(200)
+    const hub = r.runtime.hub
+    const hello = async (key: Awaited<ReturnType<typeof generateBridgeKey>>) => {
+      const closes: number[] = []
+      const sent: Array<Record<string, unknown>> = []
+      const sock = hub.attachBridge(
+        {
+          send: (t: string) => void sent.push(JSON.parse(t)),
+          close: (c: number) => void closes.push(c),
+          terminate: () => {},
+        },
+        { ip: '198.51.100.9', relayHost: 'relay.example.com' },
+      )
+      const challenge = sent[0] as never
+      sock.onMessage(
+        JSON.stringify({
+          v: 1,
+          type: 'hello',
+          id: newUlid(),
+          ts: new Date().toISOString(),
+          role: 'bridge',
+          key_id: key.keyId,
+          sig: await signChallenge(key.privateKey, challenge),
+          client: { name: 'bridge', version: '1' },
+          agent_config_rev: 0,
+        }),
+      )
+      await new Promise((d) => setTimeout(d, 60))
+      return closes
+    }
+    for (let i = 0; i < 6; i++) expect(await hello(r.bridgeKey)).toEqual([4401])
+    expect(r.auth.helloGuard.isBlocked('198.51.100.9')).toBe(false)
+    // a stranger's unknown key still counts
+    const stranger = await generateBridgeKey()
+    for (let i = 0; i < 5; i++) await hello(stranger)
+    expect(r.auth.helloGuard.isBlocked('198.51.100.9')).toBe(true)
+  })
+
+  it('the already-active retry closes nothing', async () => {
+    r = await startRealRelay({ clock: startAt() })
+    const next = await generateBridgeKey()
+    expect((await rotateTo(r, next)).status).toBe(200)
+    const back = new FakeBridge({ relayWs: r.wsBase, key: next })
+    await back.connect()
+    expect((await rotateTo(r, next)).status).toBe(200) // signed by the old key inside its grace: the retry branch
+    await new Promise((d) => setTimeout(d, 150))
+    expect(back.connected).toBe(true)
+    await back.close()
   })
 })
