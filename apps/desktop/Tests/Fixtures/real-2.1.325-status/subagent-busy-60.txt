@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.325
+▝▜██████▀  Fable 5.2 · Claude Max  
+ ▝▝   ▝▝   /…xxxxxxxxxxxxxxxxxxxxxxx
+
+
+❯ Use the Task tool to start one general-purpose subagent.
+  Its only job: write a 500-word essay about lighthouses as
+  plain prose and use no tools. Wait for it, then reply
+  done.
+
+⏺ Agent(Write lighthouse essay)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to
+
+⏺ Agent's running — I'll say done when it finishes.
+
+✻ Waiting for 1 background agent to finish
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  You've used 50% of your weekly limit · resets Dec 01 at…
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ↓ to manage
+
+  ⏺ main
+  ◯ general-purpose  Write lighthouse… 4s · ↑ 34.0k tokens

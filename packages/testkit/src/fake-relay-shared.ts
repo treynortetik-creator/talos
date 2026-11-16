@@ -67,6 +67,7 @@ export const CONSUMABLE = new Set<string>([
   'session.control',
   'thread.session.control',
   'agent.recover',
+  'undo.request',
 ])
 export const BRIDGE_DURABLE = new Set([...CONSUMABLE, 'config.patch', 'device.enrolled', 'device.revoked'])
 export const OWNER_FRAMES = new Set([
@@ -99,6 +100,7 @@ export const BRIDGE_STORED = new Set([
   'device.pinned',
   'session.control.result',
   'agent.recover.result',
+  'undo.request.result',
   'app.update',
 ])
 /** Bridge frames that reach the apps. */
@@ -119,6 +121,7 @@ export const BRIDGE_TO_APPS = new Set([
   'session.inventory',
   'session.control.result',
   'agent.recover.result',
+  'undo.request.result',
   'session.agents',
   'workers.status',
   'app.update',

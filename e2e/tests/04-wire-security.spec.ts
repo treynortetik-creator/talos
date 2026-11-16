@@ -17,8 +17,8 @@ test('5. a replayed card.resolve (same bytes, new socket) changes nothing and re
     .click()
   await stack.claude.waitForNotification((n) => n.meta.kind === 'card_action' && n.meta.card_id === id)
   await expect(card(page, id).getByTestId('collapse-line')).toHaveText(/^✓ Published/)
-  // The step-up was a real passkey ceremony against the relay, not a client-side flag.
-  expect(stepups).toEqual(['POST /api/auth/stepup/options', 'POST /api/auth/stepup/verify'])
+  // No step-up since 2026-11-14 (the owner: zero Face ID approvals): the signed tap alone approved a high-risk card.
+  expect(stepups).toEqual([])
 
   const hello = sentFrames(page, 'hello')[0]
   const resolve = sentFrames(page, 'card.resolve')[0]

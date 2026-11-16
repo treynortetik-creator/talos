@@ -1,4 +1,4 @@
-// D56: the phone no longer waits forever on "Check your Mac". After CONFIRM_WAIT_MS it says what to check, and it keeps
+// D56: the phone no longer waits forever on "Check your computer". After CONFIRM_WAIT_MS it says what to check, and it keeps
 // listening, so a late "y" on the Mac still finishes setup. The real EnrollPage and parser; only the passkey call and the
 // network are stubbed.
 import { newEnrollCode } from '@talos-app/protocol'
@@ -71,28 +71,29 @@ async function toConfirm() {
   await act(async () => {
     screen.getByRole('button', { name: /^Continue/ }).click()
   })
-  expect(screen.getByText('Check your Mac')).toBeTruthy()
+  expect(screen.getByText('Check your computer')).toBeTruthy()
   return view
 }
 
 describe('enroll waits for the Mac, then says what to do', () => {
-  it('shows "Check your Mac" before the limit and the timeout state after it, with the next steps', async () => {
+  it('shows "Check your computer" before the limit and the timeout state after it, with the next steps', async () => {
     await toConfirm()
     await act(async () => {
       vi.advanceTimersByTime(CONFIRM_WAIT_MS - 1000)
     })
-    expect(screen.queryByText('Your Mac has not answered')).toBeNull()
+    expect(screen.queryByText('Your computer has not answered')).toBeNull()
     await act(async () => {
       vi.advanceTimersByTime(1500)
     })
-    expect(screen.getByRole('heading', { name: 'Your Mac has not answered' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Your computer has not answered' })).toBeTruthy()
     expect(screen.getByTestId('fingerprint').textContent).toBe('amber birch cedar dune')
     const text = document.body.textContent ?? ''
     expect(text).toContain('talos-app enroll --confirm')
     // the link was spent when the device registered: the page must not promise it still works
     expect(text).not.toContain('link still works')
-    expect(text).toContain('only your Mac saying yes finishes it')
-    expect(text).toContain('talos-app start')
+    expect(text).toContain('only your computer saying yes finishes it')
+    expect(text).toContain('wake it and start Talos')
+    expect(text).not.toContain('Mac') // before pairing the app cannot tell Mac from PC: "your computer" throughout
     expect(screen.getByRole('button', { name: 'Start over with a new link' })).toBeTruthy()
   })
 
@@ -101,7 +102,7 @@ describe('enroll waits for the Mac, then says what to do', () => {
     await act(async () => {
       vi.advanceTimersByTime(CONFIRM_WAIT_MS + 100)
     })
-    expect(screen.getByText('Your Mac has not answered')).toBeTruthy()
+    expect(screen.getByText('Your computer has not answered')).toBeTruthy()
     expect(handlers.length).toBeGreaterThan(0)
     await act(async () => {
       for (const h of handlers) h({ device_id: 'dev_1', ok: true })
@@ -118,7 +119,7 @@ describe('enroll waits for the Mac, then says what to do', () => {
     await act(async () => {
       for (const h of handlers) h({ device_id: 'dev_1', ok: false })
     })
-    expect(screen.getByRole('heading', { name: 'Your Mac said no to this device' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Your computer said no to this device' })).toBeTruthy()
   })
 
   it('a yes inside the limit never shows the timeout', async () => {
@@ -129,6 +130,6 @@ describe('enroll waits for the Mac, then says what to do', () => {
     await act(async () => {
       vi.advanceTimersByTime(CONFIRM_WAIT_MS * 2)
     })
-    expect(screen.queryByText('Your Mac has not answered')).toBeNull()
+    expect(screen.queryByText('Your computer has not answered')).toBeNull()
   })
 })

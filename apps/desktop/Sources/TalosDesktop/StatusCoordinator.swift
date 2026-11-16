@@ -93,6 +93,9 @@ final class StatusCoordinator: ObservableObject {
     }
     // No removeDuplicates: `notice` is never cleared, so the same text again is a new event; the 60 s tag limit handles bursts.
     model.$notice.sink { [weak self] text in self?.noticeChanged(text) }.store(in: &bag)
+    // A thread session's lines are not in `notice` (the menu shows them apart from Main's): its banners come from the events.
+    model.onThreadNeedsYou = { [weak self] in self?.notify(.needsYou) }
+    model.onThreadFailed = { [weak self] thread, name, code in self?.threadFailed(thread: thread, name: name, code: code) }
     // The feed is not @Published (it would rebuild the menu bar scene on every frame): its change callback recomputes the pet's
     // inputs here, so a store change reaches him within the frame's own 250 ms coalescing.
     WebController.shared.onCompanionFeed = { [weak self] _ in self?.recompute() }
@@ -128,11 +131,11 @@ final class StatusCoordinator: ObservableObject {
 
   // MARK: inputs
 
+  /// The same rule the worker manager's home is chosen by (`TalosHomeChange.home`), so the two halves of the app read one folder.
   private var appHome: String {
-    let cfgEnv = model?.supervisor.currentConfig().env["TALOS_APP_HOME"]
-    return cfgEnv.flatMap { $0.isEmpty ? nil : $0 }
-      ?? ProcessInfo.processInfo.environment["TALOS_APP_HOME"].flatMap { $0.isEmpty ? nil : $0 }
-      ?? NSHomeDirectory() + "/.config/talos/app"
+    TalosHomeChange.home(
+      configEnv: model?.supervisor.currentConfig().env ?? [:], processEnv: ProcessInfo.processInfo.environment,
+      userHome: NSHomeDirectory())
   }
 
   private func readBridge() {
@@ -258,6 +261,15 @@ final class StatusCoordinator: ObservableObject {
     Notifier.shared.show(NotificationPolicy.notice(event, agent: agentName))
   }
 
+  /// A thread session ended as failed. Quiet inside the owner's quiet window, like every supervisor banner; the menu line stays.
+  func threadFailed(thread: String, name: String, code: String) {
+    if quiet?.isQuiet(now()) == true {
+      collected += 1
+      return
+    }
+    Notifier.shared.show(ThreadNotices.failedBanner(agent: agentName, thread: thread, name: name, code: code))
+  }
+
   static func describe(_ r: Supervisor.StopReason) -> String {
     switch r {
     case .user: return "stopped"
@@ -265,6 +277,7 @@ final class StatusCoordinator: ObservableObject {
     case .resumeMissing: return "the conversation can't be resumed"
     case .noNotice: return "the restart wasn't confirmed"
     case .crashedNoAutoRestart: return "crashed (auto-restart is off)"
+    case .cleanExitLoop: return "stopped restarting: it keeps exiting cleanly"
     case .startFailed: return "couldn't start"
     }
   }

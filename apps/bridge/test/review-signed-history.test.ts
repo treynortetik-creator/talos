@@ -88,7 +88,9 @@ describe('1. signature coverage: swap a field under a valid signature', () => {
 
   test('HOLDS: the relay-only `relay` meta field is unsigned but changes nothing the Mac returns', async () => {
     h = await startHarness()
-    seed(h, 'general', SECRET_A, 3)
+    // numbered, as the relay's rows are: a run of rows with no seq is one unit to the app's cursor and is paged whole
+    const store = h.bridge.ctx.store
+    for (const [i, id] of seed(h, 'general', SECRET_A, 3).entries()) store.setSeq(id, i + 1)
     const req = await h.app.buildHistoryRequest('general', { limit: 1 })
     h.app.sendRaw(JSON.stringify({ ...req, relay: { seq: 1, received_at: new Date().toISOString() } }))
     const page = await h.relay.expectFrame('history.page', (f) => f.request_id === req.request_id, {

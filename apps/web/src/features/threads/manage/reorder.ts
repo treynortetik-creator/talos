@@ -30,3 +30,23 @@ export function slotShift(from: number, to: number, j: number, h: number): numbe
   if (to < from && j >= to && j < from) return h
   return 0
 }
+
+/**
+ * The row a dragged row is dropped ONTO (its centre over the middle half of another row, as the rows stood at drag start),
+ * or null: then the drop is a reorder. The top and bottom quarters of each row stay "between", so reordering still works.
+ */
+export function nestTarget(
+  rects: ReadonlyArray<{ top: number; height: number }>,
+  from: number,
+  dy: number,
+): number | null {
+  const r = rects[from]
+  if (!r) return null
+  const center = r.top + r.height / 2 + dy
+  for (let j = 0; j < rects.length; j++) {
+    if (j === from) continue
+    const o = rects[j] as { top: number; height: number }
+    if (center > o.top + o.height / 4 && center < o.top + (o.height * 3) / 4) return j
+  }
+  return null
+}

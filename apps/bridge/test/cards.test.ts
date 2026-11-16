@@ -352,6 +352,23 @@ describe('cards', () => {
     expect(b.id).not.toBe(a.id)
   })
 
+  test("a card the bridge made, or of a kind the agent cannot make, is not the agent's to supersede", async () => {
+    h = await startHarness()
+    const a = await makeCard()
+    const ledger = h.bridge.ctx.ledger
+    const rehash = (c: CardT): CardT => ({ ...c, payload_hash: payloadHash(bindingFrom(c)) })
+    const theBridges = rehash({ ...a, id: 'c_01JBF3V7Q8K2M4N6P8R0S2T4B1' })
+    ledger.create(theBridges, 'bridge')
+    const permission = rehash({ ...a, id: 'c_01JBF3V7Q8K2M4N6P8R0S2T4B2', kind: 'permission' } as CardT)
+    ledger.create(permission)
+    for (const id of [theBridges.id, permission.id]) {
+      const res = await h.bridge.callTool('card', cardArgs({ supersedes: id }))
+      expect(res.isError, id).toBe(true)
+      expect(res.content[0]?.text).toMatch(/supersedes/)
+      expect(ledger.get(id)?.state).toBe('pending')
+    }
+  })
+
   test('a resolve for an unknown card is card_not_pending', async () => {
     h = await startHarness()
     const card = await makeCard()

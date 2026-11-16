@@ -123,7 +123,10 @@ function cli(home: string, deps: AppsCliDeps = {}, answers: string[] = []) {
   }
   const env = {
     TALOS_APP_HOME: home,
-    TALOS_APP_RELAY_URL: 'https://relay.example.com',
+    // A closed port on this machine: `doctor` asks the relay's /healthz for real, and this one is refused at once, with no DNS.
+    // relay.example.com took Titan's WSL resolver about 10 s to fail; Bun 1.3 kept the failed lookup, Bun 1.4 asks again, so
+    // the four doctor runs of one test passed its 20 s only by luck of that cache.
+    TALOS_APP_RELAY_URL: 'http://127.0.0.1:9',
     PATH: process.env.PATH,
     HOME: tmp('empty-home-'),
   }
@@ -239,10 +242,11 @@ describe('talos-app apps', () => {
     expect(await stop.run(['apps', 'scan', '--agent-dir', agentDir])).toBe(1)
     expect(stop.err[0]).toContain('too old for apps')
   })
-  it('unknown subcommand: usage and exit 2; no subcommand: usage and 0', async () => {
+  it('unknown subcommand or none: usage and exit 2 (a usage error, as in every group); help: usage and 0', async () => {
     const c = cli(tmp())
     expect(await c.run(['apps', 'frobnicate'])).toBe(2)
-    expect(await c.run(['apps'])).toBe(0)
+    expect(await c.run(['apps'])).toBe(2)
+    expect(await c.run(['apps', 'help'])).toBe(0)
     expect(c.out.join('\n')).toContain('usage: talos-app apps scan')
   })
 })
@@ -357,76 +361,95 @@ describe('the loaded environment', () => {
 })
 
 describe('doctor: the apps part', () => {
+  // `doctor` runs the whole doctor (it spawns bun, codex and the gate command): about 1.2 s alone, longer under a full gate
+  // run's load, so the 5 s default ran out on Titan (WSL). These wait as long as the real work takes, not a clock guess.
+  const DOCTOR_MS = 20_000
   const doctor = async (home: string, agentDir: string, extra: string[] = [], deps: AppsCliDeps = {}) => {
     const c = cli(home, deps)
     const code = await c.run(['doctor', '--agent-dir', agentDir, ...extra])
     return { code, lines: c.out.filter((l) => /^\S+\s+apps /.test(l)) }
   }
-  it('silent unless apps are on or a catalog exists', async () => {
-    const r = await doctor(tmp(), tmp('agent-'))
-    expect(r.lines).toEqual([])
-  })
-  it('healthy: catalog, version, hook entries with onFailure block, and the gate command really runs', async () => {
-    const home = tmp()
-    const agentDir = tmp('agent-')
-    await approvedFixture(home)
-    const c = cli(home)
-    await c.run(['install-app-hooks', '--agent-dir', agentDir])
-    const r = await doctor(home, agentDir)
-    expect(r.lines.join('\n')).toContain('ok    apps catalog: rev 1, 1 server(s) with an approved app')
-    expect(r.lines.join('\n')).toContain('ok    apps hooks: 1 gate entry with onFailure block')
-    expect(r.lines.join('\n')).toContain('ok    apps gate runs: exit 0')
-  })
-  it('FAILs when the gate entry would fail open, when there is no entry, and when the catalog is corrupt; warns on a version change', async () => {
-    const home = tmp()
-    const agentDir = tmp('agent-')
-    await approvedFixture(home)
-    const c = cli(home)
-    await c.run(['install-app-hooks', '--agent-dir', agentDir])
-    const file = join(agentDir, '.claude', 'settings.local.json')
-    const cfg = JSON.parse(readFileSync(file, 'utf8'))
-    delete cfg.hooks.PreToolUse[0].hooks[0].onFailure
-    writeFileSync(file, JSON.stringify(cfg))
-    const open = await doctor(home, agentDir)
-    expect(open.code).toBe(1)
-    expect(open.lines.join('\n')).toContain('FAIL  apps hooks: the gate entry is missing "onFailure": "block"')
-    writeFileSync(file, '{}')
-    expect((await doctor(home, agentDir)).lines.join('\n')).toContain('FAIL  apps hooks: no gate entry for probe')
-    const P = appPaths(home)
-    mkdirSync(P.dir, { recursive: true })
-    writeFileSync(P.liveVersion, '9.9.9\n')
-    expect((await doctor(home, agentDir)).lines.join('\n')).toContain(
-      'warn  apps Claude Code version: scanned with 2.1.312, live session runs 9.9.9',
-    )
-    writeFileSync(P.catalog, '{broken')
-    expect((await doctor(home, agentDir)).lines.join('\n')).toContain('FAIL  apps catalog: catalog is not JSON')
-  })
-  it('--deep runs the scan check through the same session and reports drift', async () => {
-    const home = tmp()
-    const agentDir = tmp('agent-')
-    const sec = memSecrets()
-    const probe = await readProbe()
-    const mk = (p: typeof probe) =>
-      new ScriptedSource(
-        '2.1.312',
-        [{ name: 'probe', status: 'connected', source: 'local', config: stdioConfig(), tools: p.tools as never }],
-        { 'probe:ui://probe/view.html': p.contents },
+  it(
+    'silent unless apps are on or a catalog exists',
+    async () => {
+      const r = await doctor(tmp(), tmp('agent-'))
+      expect(r.lines).toEqual([])
+    },
+    DOCTOR_MS,
+  )
+  it(
+    'healthy: catalog, version, hook entries with onFailure block, and the gate command really runs',
+    async () => {
+      const home = tmp()
+      const agentDir = tmp('agent-')
+      await approvedFixture(home)
+      const c = cli(home)
+      await c.run(['install-app-hooks', '--agent-dir', agentDir])
+      const r = await doctor(home, agentDir)
+      expect(r.lines.join('\n')).toContain('ok    apps catalog: rev 1, 1 server(s) with an approved app')
+      expect(r.lines.join('\n')).toContain('ok    apps hooks: 1 gate entry with onFailure block')
+      expect(r.lines.join('\n')).toContain('ok    apps gate runs: exit 0')
+    },
+    DOCTOR_MS,
+  )
+  it(
+    'FAILs when the gate entry would fail open, when there is no entry, and when the catalog is corrupt; warns on a version change',
+    async () => {
+      const home = tmp()
+      const agentDir = tmp('agent-')
+      await approvedFixture(home)
+      const c = cli(home)
+      await c.run(['install-app-hooks', '--agent-dir', agentDir])
+      const file = join(agentDir, '.claude', 'settings.local.json')
+      const cfg = JSON.parse(readFileSync(file, 'utf8'))
+      delete cfg.hooks.PreToolUse[0].hooks[0].onFailure
+      writeFileSync(file, JSON.stringify(cfg))
+      const open = await doctor(home, agentDir)
+      expect(open.code).toBe(1)
+      expect(open.lines.join('\n')).toContain('FAIL  apps hooks: the gate entry is missing "onFailure": "block"')
+      writeFileSync(file, '{}')
+      expect((await doctor(home, agentDir)).lines.join('\n')).toContain('FAIL  apps hooks: no gate entry for probe')
+      const P = appPaths(home)
+      mkdirSync(P.dir, { recursive: true })
+      writeFileSync(P.liveVersion, '9.9.9\n')
+      expect((await doctor(home, agentDir)).lines.join('\n')).toContain(
+        'warn  apps Claude Code version: scanned with 2.1.312, live session runs 9.9.9',
       )
-    const scan = cli(home, { source: mk(probe), secrets: sec.secrets, bridgeDir: BRIDGE_DIR }, ['y', 'Notes', 'auto'])
-    await scan.run(['apps', 'scan', '--agent-dir', agentDir])
-    const clean = await doctor(home, agentDir, ['--deep'], {
-      source: mk(probe),
-      secrets: sec.secrets,
-      bridgeDir: BRIDGE_DIR,
-    })
-    expect(clean.lines.join('\n')).toContain('ok    apps scan --check: no drift')
-    const drifted = await doctor(home, agentDir, ['--deep'], {
-      source: mk(await readProbe({ PROBE_GEN: '1', PROBE_DRIFT: 'csp' })),
-      secrets: sec.secrets,
-      bridgeDir: BRIDGE_DIR,
-    })
-    expect(drifted.lines.join('\n')).toContain('warn  apps scan --check: drift: probe')
-  })
+      writeFileSync(P.catalog, '{broken')
+      expect((await doctor(home, agentDir)).lines.join('\n')).toContain('FAIL  apps catalog: catalog is not JSON')
+    },
+    DOCTOR_MS,
+  )
+  it(
+    '--deep runs the scan check through the same session and reports drift',
+    async () => {
+      const home = tmp()
+      const agentDir = tmp('agent-')
+      const sec = memSecrets()
+      const probe = await readProbe()
+      const mk = (p: typeof probe) =>
+        new ScriptedSource(
+          '2.1.312',
+          [{ name: 'probe', status: 'connected', source: 'local', config: stdioConfig(), tools: p.tools as never }],
+          { 'probe:ui://probe/view.html': p.contents },
+        )
+      const scan = cli(home, { source: mk(probe), secrets: sec.secrets, bridgeDir: BRIDGE_DIR }, ['y', 'Notes', 'auto'])
+      await scan.run(['apps', 'scan', '--agent-dir', agentDir])
+      const clean = await doctor(home, agentDir, ['--deep'], {
+        source: mk(probe),
+        secrets: sec.secrets,
+        bridgeDir: BRIDGE_DIR,
+      })
+      expect(clean.lines.join('\n')).toContain('ok    apps scan --check: no drift')
+      const drifted = await doctor(home, agentDir, ['--deep'], {
+        source: mk(await readProbe({ PROBE_GEN: '1', PROBE_DRIFT: 'csp' })),
+        secrets: sec.secrets,
+        bridgeDir: BRIDGE_DIR,
+      })
+      expect(drifted.lines.join('\n')).toContain('warn  apps scan --check: drift: probe')
+    },
+    DOCTOR_MS,
+  )
 })
 
 describe('the agent folder is never the home folder', () => {

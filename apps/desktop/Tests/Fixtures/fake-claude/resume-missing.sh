@@ -1,7 +1,7 @@
 # With --resume: the CLI's resume failure. With --session-id (a new conversation): the normal dialog.
 . "$(dirname "$0")/lib.sh"
 for a in "$@"; do
-  if [ "$a" = "--resume" ]; then
+  if [ "$a" = "--resume" ] || [ "${a#--resume=}" != "$a" ]; then  # both forms: `--resume <id>`, `--resume=<id>` (Main's)
     echo "${FAKE_RESUME_LINE:-No session found with ID} ${FAKE_SESSION_ID}"
     [ -n "${FAKE_RESUME_EXIT_NOW:-}" ] || sleep 0.3  # FAKE_RESUME_EXIT_NOW: exit before the host can read a pid
     exit 1

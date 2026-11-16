@@ -3,6 +3,7 @@ import { AgentConfig, type MessageT } from '@talos-app/protocol'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { DriveController } from '../../src/features/drive/controller.ts'
 import { createVoiceQueue } from '../../src/features/drive/queue.ts'
+import { captureInFlight, resetAppUpdate } from '../../src/lib/appUpdate.ts'
 import { createFakeClient, type FakeClient } from '../../src/lib/fakeClient.ts'
 
 const NOW = Date.parse('2026-10-28T16:00:00.000Z')
@@ -267,6 +268,23 @@ describe('DriveController', () => {
     expect(t.drive.store.getState().status).toBe('ready')
   })
 
+  it('a second question restarts the Thinking wait instead of keeping the first one running', async () => {
+    const t = setup()
+    t.drive.watch()
+    t.drivingOn()
+    await t.drive.beginTalk()
+    await t.drive.endTalk(true)
+    t.advance(60_000)
+    await t.drive.beginTalk()
+    await t.drive.endTalk(true)
+    expect(t.drive.store.getState().status).toBe('thinking')
+    // 100 s after the first question, 40 s after the second: the first one's 90 s wait must not end the second's
+    t.advance(40_000)
+    expect(t.drive.store.getState().status).toBe('thinking')
+    t.advance(50_000) // 90 s after the second question: no answer came, so it gives up
+    expect(t.drive.store.getState().status).toBe('ready')
+  })
+
   it('history with a seq at or below the one seen at activation is never spoken', () => {
     const t = setup()
     t.drive.watch()
@@ -314,6 +332,45 @@ describe('DriveController', () => {
     t.audio.dispatchEvent(new Event('ended'))
     t.advance(2_000)
     expect(t.spoken).toEqual(['Inbox.'])
+  })
+
+  it('a talk holds off an automatic app reload from the first sound until its send settles, sent or cancelled', async () => {
+    resetAppUpdate()
+    const t = setup()
+    t.drive.watch()
+    t.drivingOn()
+    await t.drive.beginTalk()
+    expect(captureInFlight(), 'listening').toBe(true)
+    await t.drive.endTalk(false)
+    expect(captureInFlight(), 'cancelled').toBe(false)
+    await t.drive.beginTalk()
+    expect(captureInFlight()).toBe(true)
+    await t.drive.endTalk(true)
+    expect(t.client.sent.some((f) => f.type === 'voice_note')).toBe(true)
+    expect(captureInFlight(), 'sent').toBe(false)
+  })
+
+  it("overlapping talks: a second talk's end never uncovers the first's upload, nor the first's the second", async () => {
+    resetAppUpdate()
+    const t = setup()
+    t.drive.watch()
+    t.drivingOn()
+    const pending: { finish?: () => void } = {}
+    const upload = t.client.uploadMedia.bind(t.client)
+    t.client.uploadMedia = ((blob: Blob, meta: never) =>
+      new Promise((done) => {
+        pending.finish = () => void upload(blob, meta).then(done)
+      })) as typeof t.client.uploadMedia
+    await t.drive.beginTalk()
+    const first = t.drive.endTalk(true) // A uploads, held open
+    await new Promise((r) => setTimeout(r, 0))
+    expect(pending.finish, 'A is uploading').toBeDefined()
+    await t.drive.beginTalk() // B starts during A's upload
+    await t.drive.endTalk(false) // B is cancelled
+    expect(captureInFlight(), "A's audio is still only in memory").toBe(true)
+    pending.finish?.()
+    await first
+    expect(captureInFlight(), 'both settled').toBe(false)
   })
 
   it('the phone voice waits while Talk is held and never starts one while a clip plays', async () => {

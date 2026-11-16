@@ -21,6 +21,7 @@ import {
   signOwnerFrame,
   withLegacyMirror,
 } from '../src/index.ts'
+import { readFixtures } from './fixtures-reads.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -605,6 +606,21 @@ unsigned['agent.recover.result'] = {
   text: RECOVER_SENT_TEXT,
   at: TS,
 }
+// "Undo to here": the owner asks for the undo card of one message; the bridge answers with the card's id, or why not
+signedSrc['undo.request'] = {
+  ...env('undo.request', 190),
+  control_id: ulid(191),
+  thread_id: 'general',
+  message_id: msgId(192),
+  ...owner,
+}
+unsigned['undo.request.result'] = {
+  ...env('undo.request.result', 193),
+  control_id: ulid(191),
+  ok: false,
+  text: 'Nothing to undo: the files already match.',
+  at: TS,
+}
 unsigned['workers.status'] = {
   ...env('workers.status', 122),
   status: {
@@ -876,48 +892,10 @@ unsigned['app.update'] = {
   state: 'superseded',
   reason: 'Replaced by a newer view',
 }
-signedSrc['speak.request'] = {
-  ...env('speak.request', 132),
-  request_id: ulid(133),
-  message_id: msgId(2),
-  thread_id: 'general',
-  fresh: true,
-  ...owner,
-}
-unsigned['speak.result'] = {
-  ...env('speak.result', 134),
-  request_id: ulid(133),
-  state: 'ready',
-  media: {
-    media_id: mdId(135),
-    kind: 'audio',
-    role: 'voice_reply',
-    mime: 'audio/mp4',
-    name: 'read-aloud.m4a',
-    size: 48213,
-    sha256: SHA,
-  },
-  chars: 66,
-  total_chars: 66,
-  truncated: false,
-}
-
-signedSrc['fs.list'] = {
-  ...env('fs.list', 136),
-  request_id: ulid(137),
-  path: '/Users/alex/Projects',
-  hidden: false,
-  ...owner,
-}
-unsigned['fs.listing'] = {
-  ...env('fs.listing', 138),
-  request_id: ulid(137),
-  home: '/Users/alex',
-  agent_dir: '/Users/alex/talos-agent',
-  path: '/Users/alex/Projects',
-  parent: '/Users/alex',
-  entries: [{ name: 'alpha' }, { name: 'beta' }],
-  more: 0,
+{
+  const reads = readFixtures({ env, ulid, msgId, mdId, owner, SHA })
+  Object.assign(unsigned, reads.unsigned)
+  Object.assign(signedSrc, reads.signed)
 }
 
 // A phone's Reply, signed by the phone's action key (not a device-key owner frame), as the relay hands it to the Mac. The bytes
@@ -935,13 +913,22 @@ const sameButSig = (a: Record<string, unknown>, b: Record<string, unknown>) => {
   const { osig: _b, ...y } = b
   return JSON.stringify(x) === JSON.stringify(y)
 }
+// `--check`: compare only, and fail when a committed fixture is not what this script makes (a schema change that was not
+// regenerated). test/fixtures-fresh.test.ts runs it.
+const check = process.argv.includes('--check')
+const stale: string[] = []
 for (const [name, frame] of Object.entries(out)) {
   const res = parseFrame(frame)
   if (!res.ok) throw new Error(`fixture ${name} does not parse: ${res.message}`)
   const file = join(root, 'fixtures', 'frames', `${name}.json`)
   if (existsSync(file) && sameButSig(JSON.parse(readFileSync(file, 'utf8')), frame)) continue
-  writeFileSync(file, `${JSON.stringify(frame, null, 2)}\n`)
+  if (check) stale.push(name)
+  else writeFileSync(file, `${JSON.stringify(frame, null, 2)}\n`)
+}
+if (stale.length > 0) {
+  console.error(`fixtures out of date (run pnpm --filter @talos-app/protocol gen:fixtures): ${stale.join(', ')}`)
+  process.exit(1)
 }
 const covered = new Set(Object.keys(out).map((n) => (n.split('.')[0] === 'hello' ? 'hello' : n)))
 for (const t of FRAME_TYPES) if (!covered.has(t)) throw new Error(`no fixture for frame type ${t}`)
-console.log(`wrote ${Object.keys(out).length} fixtures`)
+console.log(check ? `${Object.keys(out).length} fixtures up to date` : `wrote ${Object.keys(out).length} fixtures`)

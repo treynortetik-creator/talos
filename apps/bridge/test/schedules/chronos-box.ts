@@ -1,11 +1,19 @@
 // A real Chronos install in a temp HOME (third_party/chronos at v0.5.0), reachable through a wrapper script the bridge
 // can use as TALOS_APP_CHRONOS_BIN. No bridge imports here: the vitest contract suites (Node) use it too.
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ChronosDraftT } from '@talos-app/protocol'
+import { testTempDir } from '../temp-dirs.ts'
+
+/**
+ * One bytecode cache for every box in this run, outside the vendored copy. PYTHONDONTWRITEBYTECODE recompiled Chronos on
+ * every call (~155 ms against ~43 ms), and a schedules test makes dozens of them. tmpdir() is per user on a Mac; on a CI box
+ * there is one account.
+ */
+const PYCACHE = join(tmpdir(), `talos-chronos-pycache-${process.getuid?.() ?? 'u'}`)
 
 export const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
 export const CHRONOS_SRC = join(REPO, 'third_party', 'chronos')
@@ -47,7 +55,7 @@ export function draft(over: Partial<ChronosDraftT> = {}): ChronosDraftT {
 
 /** A real Chronos install in a temp HOME, reachable through a wrapper script the bridge can use as TALOS_APP_CHRONOS_BIN. */
 export class ChronosBox {
-  readonly dir = mkdtempSync(join(tmpdir(), 'talos-chronos-box-'))
+  readonly dir = testTempDir('talos-chronos-box-')
   readonly home = join(this.dir, 'home')
   readonly bin = join(this.dir, 'chronos')
   now: string
@@ -72,9 +80,19 @@ export class ChronosBox {
     )
     writeFileSync(
       this.bin,
-      `#!/bin/sh\nexport HOME='${this.home}' TZ='${tz}' CHRONOS_TEST_MODE=1 PYTHONDONTWRITEBYTECODE=1 FAKE_LAUNCHCTL_DIR='${this.dir}/launchctl' CHRONOS_LAUNCHCTL='${join(src, 'tests', 'fake-launchctl.sh')}'\nunset CHRONOS_CONFIG\nexec '${realPython()}' '${join(src, 'bin', 'chronos')}' "$@"\n`,
+      `#!/bin/sh\nexport HOME='${this.home}' TZ='${tz}' CHRONOS_TEST_MODE=1 PYTHONPYCACHEPREFIX='${PYCACHE}' FAKE_LAUNCHCTL_DIR='${this.dir}/launchctl' CHRONOS_LAUNCHCTL='${join(src, 'tests', 'fake-launchctl.sh')}'\nunset CHRONOS_CONFIG\nexec '${realPython()}' '${join(src, 'bin', 'chronos')}' "$@"\n`,
     )
     chmodSync(this.bin, 0o755)
+  }
+
+  /**
+   * Starts this box from another one's files: everything Chronos keeps (config, jobs, approvals, state) is under `home`, and
+   * only the `chronos` wrapper names the box's own folder. Copying a home is ~1 ms; building it through Chronos is ~100 ms a call.
+   */
+  copyHomeFrom(template: ChronosBox): this {
+    rmSync(this.home, { recursive: true, force: true })
+    cpSync(template.home, this.home, { recursive: true })
+    return this
   }
 
   /** Runs `chronos <args>` (not `api`). `env` adds variables (CHRONOS_RUN_ID, say). */
@@ -108,7 +126,7 @@ export class ChronosBox {
         HOME: this.home,
         TZ: this.tz,
         CHRONOS_TEST_MODE: '1',
-        PYTHONDONTWRITEBYTECODE: '1',
+        PYTHONPYCACHEPREFIX: PYCACHE,
         CHRONOS_NOW: this.now,
         CHRONOS_POLL_S: '1',
         ...extra,

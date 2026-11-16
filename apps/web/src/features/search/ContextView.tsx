@@ -9,6 +9,7 @@ import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
 import { dayLabel } from '../../lib/format.ts'
 import { RowErrorBoundary } from '../../ui/ErrorBoundary.tsx'
 import { Button } from '../../ui/index.ts'
+import { BugCornerButton } from '../bugreport/BugButton.tsx'
 import type { ContextViewProps } from '../contracts.ts'
 import { ImageViewer } from '../threads/Attachments.tsx'
 import { MessageView } from '../threads/MessageView.tsx'
@@ -123,7 +124,8 @@ export function ContextView({ threadId, messageId }: ContextViewProps) {
   let prevDay = ''
   const upToDate = load === 'ready' && !hasNewer
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="context-view">
+    <div className="relative flex h-full min-h-0 flex-col" data-testid="context-view">
+      <BugCornerButton />
       <div
         className="flex items-center justify-between gap-3 border-b border-line/60 bg-surface px-4 py-2 text-sm"
         role="status"

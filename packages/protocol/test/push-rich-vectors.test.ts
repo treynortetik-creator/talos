@@ -9,6 +9,7 @@ import {
   checkNativeAct,
   importRawP256,
   NativeActWire,
+  NOTICE_TITLE,
   openPush,
   shownHash,
 } from '../src/index.ts'
@@ -45,6 +46,10 @@ describe('captured seals and actions', () => {
     expect(c?.s).toBe(V.approve.subtitle)
     expect(shownHash(V.approve.notice, V.approve.subtitle)).toBe(V.approve.shown)
     expect(shownHash(V.approve.notice)).not.toBe(V.approve.shown) // the subtitle is part of what was shown
+    expect(V.approve.title).toBe(NOTICE_TITLE) // so is the title, which the phone sets itself
+    expect(shownHash(V.approve.notice, V.approve.subtitle, 'Approve this')).not.toBe(V.approve.shown)
+    const w = V.shown_wide
+    expect(shownHash(w.body, w.subtitle, w.title)).toBe(w.shown)
   })
 
   it('the captured action passes the whole chain, and its signing input is the documented string', async () => {

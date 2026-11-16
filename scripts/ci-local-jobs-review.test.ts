@@ -3,13 +3,14 @@
 // fake `pnpm` and `bun` that source $HOME/fake-hook, so a test can act inside a real step without replacing the script's
 // own functions. Nothing here runs a real suite. A fake home means real slots and locks are never touched.
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanEnv } from './ci-test-env'
+import { cleanEnv, copyCiLocalParts } from './ci-test-env'
+import { fakeTool } from './fake-tool'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
@@ -54,14 +55,12 @@ function repo(jobs = '') {
   mkdirSync(join(clone, 'scripts'))
   const copy = join(clone, 'scripts', 'ci-local.sh')
   writeFileSync(copy, readFileSync(script, 'utf8').replace('\ncd "$WT"\n', `\n${waitfor}\n${jobs}\ncd "$WT"\n`))
+  copyCiLocalParts(join(clone, 'scripts')) // the parts ci-local.sh sources in place
   const bin = join(T, 'bin')
   mkdirSync(bin)
   const home = join(T, 'home')
   mkdirSync(home)
-  const tool = (name: string, body: string) => {
-    writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`)
-    chmodSync(join(bin, name), 0o755)
-  }
+  const tool = (name: string, body: string) => fakeTool(bin, name, `#!/bin/bash\n${body}\n`)
   tool('gh', 'case "$1" in repo) echo owner/repo ;; api) echo "$*" >> "$GH_LOG" ;; esac')
   const fake = (n: string) => `echo "${n} $*" >> "$CALLS"; [ ! -f "$HOME/fake-hook" ] || . "$HOME/fake-hook"; exit 0`
   tool('pnpm', fake('pnpm'))
@@ -240,7 +239,41 @@ job_x() { echo "force=\${TALOS_CI_FORCE_DESKTOP:-0} gui=\${TALOS_GUI_TESTS:-0}" 
     },
   )
 
-  // A skip is stored as exit 0, and the key leaves out --full, so a --full run waiting behind a run that skipped a job took the
+  // The key used to leave out CI_STATUS_PREFIX: a report-ci (or ci-part) run of check holding the commit handed its result to a
+  // local-ci run waiting behind it, which then said "statuses are already posted" while local-ci/check never was.
+  it.each(['report-ci', 'ci-part'])('a local-ci run is not answered by a %s run of the same job', async (prefix) => {
+    const r = repo(`
+job_x() { echo ran >> "$HOME/runs"; waitfor "$HOME/go"; }`)
+    const lines = () => (existsSync(r.at('runs')) ? readFileSync(r.at('runs'), 'utf8').trim().split('\n') : [])
+    const a = r.start([...noStatus, '--ref', 'HEAD', '--jobs', 'x'], { CI_SLOTS: '2', CI_STATUS_PREFIX: prefix })
+    await until(() => lines().length === 1)
+    const b = r.start([...noStatus, '--ref', 'HEAD', '--jobs', 'x'], { CI_SLOTS: '2' })
+    await inFlight(b, () => lines().length > 1)
+    r.touch('go')
+    await a.done
+    expect(await b.done).toBe(0)
+    expect(b.out()).not.toContain('statuses are already posted')
+    expect(lines()).toHaveLength(2) // the local-ci run tested it itself
+  })
+
+  // A part refused for a missing tool is not a failure (docs/CI-MACHINES.md, "Tools a test file needs"): a run of the same
+  // commit waiting behind it must not read it as "the run that tested it first failed". It tests the job itself.
+  it('a run waiting behind a run that refused a job is not answered "failed" by it: it runs the job itself', async () => {
+    const r = repo(`
+job_x() { echo ran >> "$HOME/runs"; echo "x needs tmux 3.2+, which here does not have; it runs on Lemnos" > "$RESULTS/x.refused"; waitfor "$HOME/go"; return 1; }`)
+    const count = () => (existsSync(r.at('runs')) ? readFileSync(r.at('runs'), 'utf8').trim().split('\n').length : 0)
+    const a = r.start([...noStatus, '--ref', 'HEAD', '--jobs', 'x'], { CI_SLOTS: '2' })
+    await until(() => count() === 1)
+    const b = r.start([...noStatus, '--ref', 'HEAD', '--jobs', 'x'], { CI_SLOTS: '2' })
+    await inFlight(b, () => count() > 1)
+    r.touch('go')
+    expect(await a.done).toBe(0) // a refusal alone ends green
+    expect(await b.done, b.out()).toBe(0)
+    expect(b.out()).not.toContain('the run that tested it first failed')
+    expect(count()).toBe(2)
+  })
+
+  // A skip is stored as exit 0, and the key used to leave out --full, so a --full run waiting behind a run that skipped a job took the
   // skip for a pass. --full means no job is skipped: it must run the job itself. A run without --full still takes the skip.
   it.each([
     ['--full', 2],
@@ -258,6 +291,30 @@ job_x() { echo ran >> "$HOME/runs"; SKIPPED+=(x); SKIP_WHY="stub skip"; waitfor 
     expect(await b.done).toBe(0)
     expect(count()).toBe(expected)
   })
+
+  // A passed job of a run without --full is not an answer to --full either: its check left out the kit suites inside a rendered
+  // agent folder, which only a --full run keeps (scripts/kit-tests.test.ts). So --full is part of the key.
+  it.each([
+    ['--full', 2],
+    ['', 1],
+  ])(
+    'a run with %j waiting behind a run without --full that passed runs the job %i time(s) in all',
+    async (flag, expected) => {
+      const r = repo(`
+job_x() { echo ran >> "$HOME/runs"; waitfor "$HOME/go"; }`)
+      const count = () => (existsSync(r.at('runs')) ? readFileSync(r.at('runs'), 'utf8').trim().split('\n').length : 0)
+      const a = r.start([...noStatus, '--ref', 'HEAD', '--jobs', 'x'], { CI_SLOTS: '2' })
+      await until(() => count() === 1)
+      const b = r.start([...noStatus, ...(flag ? [flag] : []), '--ref', 'HEAD', '--jobs', 'x'], { CI_SLOTS: '2' })
+      await inFlight(b, () => count() > 1)
+      r.touch('go')
+      await a.done
+      if (count() < expected) await until(() => count() === expected)
+      r.touch('go')
+      expect(await b.done).toBe(0)
+      expect(count()).toBe(expected)
+    },
+  )
 
   it('a run that posts is not answered by a --no-status run, which posted nothing', async () => {
     const r = repo(`

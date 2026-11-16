@@ -21,6 +21,7 @@ import {
 import { Mascot } from '../../ui/Mascot.tsx'
 import { Meander } from '../../ui/Meander.tsx'
 import { ThreadIcon } from '../../ui/ThreadIcon.tsx'
+import { BugHeaderButton } from '../bugreport/BugButton.tsx'
 import { isAltered, resultOverdue } from '../cards/logic.ts'
 import { NavScope } from '../cards/nav.tsx'
 import { revealHidden, useNow } from '../cards/util.ts'
@@ -252,6 +253,7 @@ function HomeScreenInner({ navigate }: { navigate: NavigateFunction }) {
             </h1>
             <p className="m-0 text-sm text-text-2">{dateLine(now, timeZone)}</p>
           </div>
+          <BugHeaderButton />
         </header>
         <Meander />
       </div>

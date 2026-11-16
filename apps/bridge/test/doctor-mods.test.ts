@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { t } from '@talos-app/testkit'
 import { runCli } from '../src/cli.ts'
 import { runTalos } from '../src/talos.ts'
 import { installFakeClaude, withoutClaude } from './fake-claude.ts'
-import { type Harness, startHarness } from './helpers.ts'
+import { type Harness, startHarness, waitFor } from './helpers.ts'
 
 type Row = { level: string; name: string; detail: string }
 
@@ -154,23 +155,28 @@ describe('doctor: claude doctor', () => {
     expect(readFileSync(record, 'utf8')).not.toContain('args=doctor')
   })
 
-  test('a claude plugin list that hangs warns within 7 s, the run finishes, and the whole process group is killed', async () => {
-    const record = join(mkdtempSync(join(tmpdir(), 'rc')), 'rec')
-    restore = installFakeClaude({ listHang: true, record })
-    const t0 = performance.now()
-    const { rows } = await doctor(undefined, { once: true })
-    const took = performance.now() - t0
-    expect(find(rows, /^claude mods$/)[0]?.level).toBe('warn')
-    expect(rows.some((x) => x.level === 'FAIL')).toBe(false)
-    expect(took).toBeLessThan(7000)
-    const pids = readFileSync(record, 'utf8')
-      .split('\n')
-      .filter((l) => l.startsWith('pid='))
-      .map((l) => Number(l.slice(4)))
-    expect(pids.length).toBeGreaterThan(0)
-    await Bun.sleep(300)
-    for (const pid of pids) expect(alive(pid), `fake child ${pid} survived the timeout`).toBe(false)
-  }, 20_000)
+  test(
+    'a claude plugin list that hangs warns within 7 s, the run finishes, and the whole process group is killed',
+    async () => {
+      const record = join(mkdtempSync(join(tmpdir(), 'rc')), 'rec')
+      restore = installFakeClaude({ listHang: true, record })
+      const t0 = performance.now()
+      const { rows } = await doctor(undefined, { once: true })
+      const took = performance.now() - t0
+      expect(find(rows, /^claude mods$/)[0]?.level).toBe('warn')
+      expect(rows.some((x) => x.level === 'FAIL')).toBe(false)
+      expect(took).toBeLessThan(t(7000)) // the product's own limit, with the machine's slack
+      const pids = readFileSync(record, 'utf8')
+        .split('\n')
+        .filter((l) => l.startsWith('pid='))
+        .map((l) => Number(l.slice(4)))
+      expect(pids.length).toBeGreaterThan(0)
+      // the kill is sent before doctor returns; a loaded machine can take a moment to reap it
+      await waitFor(() => pids.every((pid) => !alive(pid)), 1000, 'the hung fake claude to die').catch(() => {})
+      for (const pid of pids) expect(alive(pid), `fake child ${pid} survived the timeout`).toBe(false)
+    },
+    t(20_000),
+  )
 
   test('claude missing from PATH warns for the mod list, never fails', async () => {
     restore = withoutClaude()
@@ -353,16 +359,20 @@ describe('doctor: kit manifest safety', () => {
     expect(r?.detail).toContain('1 skipped')
   })
 
-  test('R1-4: a FIFO is skipped and the doctor does not block on it', async () => {
-    restore = installFakeClaude()
-    const agent = kit({ 'pipe.md': sha('x') }, (ag) => {
-      expect(Bun.spawnSync(['mkfifo', join(ag, 'pipe.md')]).exitCode).toBe(0)
-    })
-    const t0 = performance.now()
-    const r = find((await doctor(agent, { once: true })).rows, /^kit files$/)[0]
-    expect(performance.now() - t0).toBeLessThan(6000)
-    expect(r?.detail).toContain('1 skipped')
-  }, 15_000)
+  test(
+    'R1-4: a FIFO is skipped and the doctor does not block on it',
+    async () => {
+      restore = installFakeClaude()
+      const agent = kit({ 'pipe.md': sha('x') }, (ag) => {
+        expect(Bun.spawnSync(['mkfifo', join(ag, 'pipe.md')]).exitCode).toBe(0)
+      })
+      const t0 = performance.now()
+      const r = find((await doctor(agent, { once: true })).rows, /^kit files$/)[0]
+      expect(performance.now() - t0).toBeLessThan(6000)
+      expect(r?.detail).toContain('1 skipped')
+    },
+    t(15_000),
+  )
 
   test('R1-4: a file over 5 MB is skipped and reported', async () => {
     restore = installFakeClaude()

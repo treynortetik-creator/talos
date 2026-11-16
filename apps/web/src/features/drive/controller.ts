@@ -11,6 +11,7 @@
 // Rule behind all of it: a failure must never be silent, because the owner cannot look at the phone.
 import { DETAILS_IN_THREAD, drivingActive, type MessageT, spokenText } from '@talos-app/protocol'
 import { createStore, type StoreApi } from 'zustand/vanilla'
+import { holdCapture } from '../../lib/appUpdate.ts'
 import type { ClientState, TalosClient } from '../../lib/client.ts'
 import { micOffText } from '../../lib/micOff.ts'
 import { getPlatform } from '../../lib/platform.ts'
@@ -82,6 +83,12 @@ export class DriveController {
   private lastMessages: ClientState['messages'] | null = null
   private recording: RecorderHandle | Promise<RecorderHandle> | null = null
   private sending = false
+  /**
+   * The hold of the talk being recorded (lib/appUpdate.ts: no automatic reload while a voice note is only in memory). Each
+   * talk owns its own: endTalk takes it with the recording and releases it once that talk's send settles, so a second talk
+   * started during the first's upload can never release the first's, or the first's the second's.
+   */
+  private talkHold: (() => void) | null = null
   private thinking = false
   private thinkingTimer: unknown = null
   private expiryTimer: unknown = null
@@ -442,31 +449,63 @@ export class DriveController {
     this.d.queue.hold('record')
     this.d.audioSession.set('play-and-record')
     getPlatform().haptic('light')
+    const hold = holdCapture()
+    this.talkHold = hold
     const p = this.d.recorder()
     this.recording = p
     this.refresh()
     try {
-      this.recording = await p
+      const handle = await p
+      // Talk may have been let go while the microphone was starting (a quick tap, the permission prompt): endTalk then took
+      // this recording and finishes it. Writing the handle back would leave it "Listening…" with nothing to end it.
+      if (this.recording === p) this.recording = handle
     } catch (e) {
-      this.recording = null
-      this.d.audioSession.set('playback')
-      this.d.queue.release('record')
-      this.say("Couldn't record. Try again.")
-      this.set({
-        error:
-          e instanceof DOMException && (e.name === 'NotAllowedError' || e.name === 'SecurityError')
-            ? micOffText()
-            : "Couldn't record. Try again.",
-      })
-      this.refresh()
+      // let go already: endTalk took the recording, and it reports the refusal
+      if (this.recording === p) {
+        this.recording = null
+        this.talkHold = null
+        hold()
+        this.recordFailed(e)
+      }
     }
+  }
+
+  /** The microphone could not start: back to playback, the queue goes on, and the owner is told why. */
+  private recordFailed(e: unknown) {
+    this.d.audioSession.set('playback')
+    this.d.queue.release('record')
+    this.say("Couldn't record. Try again.")
+    this.set({
+      error:
+        e instanceof DOMException && (e.name === 'NotAllowedError' || e.name === 'SecurityError')
+          ? micOffText()
+          : "Couldn't record. Try again.",
+    })
+    this.refresh()
   }
 
   async endTalk(send: boolean): Promise<void> {
     const rec = this.recording
     if (!rec) return
+    // this talk's own hold, released however it ends: refused, cancelled, too short, sent or failed
+    const hold = this.talkHold
     this.recording = null
-    const handle = await rec
+    this.talkHold = null
+    try {
+      await this.finishTalk(rec, send)
+    } finally {
+      hold?.()
+    }
+  }
+
+  private async finishTalk(rec: Promise<RecorderHandle> | RecorderHandle, send: boolean): Promise<void> {
+    let handle: RecorderHandle
+    try {
+      handle = await rec
+    } catch (e) {
+      this.recordFailed(e) // refused after the finger was up (the first permission prompt): not an error of endTalk's
+      return
+    }
     this.d.audioSession.set('playback')
     let note: Awaited<ReturnType<RecorderHandle['stop']>> | null = null
     try {
@@ -492,6 +531,7 @@ export class DriveController {
       await this.d.client.sendVoiceNote({ threadId: thread, attachment: { ...att, kind: 'voice_note' } })
       getPlatform().haptic('success')
       this.thinking = true
+      if (this.thinkingTimer) this.d.clearTimeout(this.thinkingTimer) // a second note restarts the wait, not a second one
       this.thinkingTimer = this.d.setTimeout(() => this.endThinking(), THINKING_MAX_MS)
     } catch {
       this.say("Couldn't send that. Try again.")

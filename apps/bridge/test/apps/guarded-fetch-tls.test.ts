@@ -3,7 +3,8 @@
 // request body, a redirect and a streamed body are each proven here instead of assumed from the vitest run.
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { generateKeyPairSync } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import https from 'node:https'
 import net, { type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -13,27 +14,28 @@ import type { TLSSocket } from 'node:tls'
 const CLIENT = join(import.meta.dir, 'fixtures', 'guarded-tls-client.ts')
 const dir = mkdtempSync(join(tmpdir(), 'guarded-tls-'))
 
+// The key is made here (a P-256 key, PKCS#8 with a named curve), never by `openssl -newkey`: macOS's /usr/bin/openssl is
+// LibreSSL, whose `req -newkey ec` key Bun cannot read ("elliptic curve routines: DECODE_ERROR"), so the suite failed on a
+// Mac where that one comes first on PATH. openssl only signs the certificate, which LibreSSL and OpenSSL both do the same.
 function makeCert(name: string, file: string) {
   const key = join(dir, `${file}.key.pem`)
   const crt = join(dir, `${file}.crt.pem`)
+  const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+  writeFileSync(key, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 })
   execFileSync(
     'openssl',
     [
       'req',
+      '-new',
       '-x509',
-      '-newkey',
-      'ec',
-      '-pkeyopt',
-      'ec_paramgen_curve:prime256v1',
-      '-nodes',
+      '-key',
+      key,
       '-subj',
       `/CN=${name}`,
       '-addext',
       `subjectAltName=DNS:${name}`,
       '-days',
       '2',
-      '-keyout',
-      key,
       '-out',
       crt,
     ],

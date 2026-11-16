@@ -41,3 +41,42 @@ struct WorkersFileLastActiveTests {
     #expect(f.threads["walk"] != nil)
   }
 }
+
+/// `stopping_since`: when a worker was asked to stop after its turn, so a relaunched app can count the turn's time from the stop and
+/// not from its own start. Optional, like `last_active_at`: a file without it is every earlier build's, a value that is not a time is
+/// no value (never an unreadable file), and it round-trips.
+@Suite("workers.json stop time")
+struct WorkersFileStoppingSinceTests {
+  private func file(_ extra: String) -> Data {
+    Data(
+      """
+      {"v":1,"supervisor":{"pid":7,"heartbeat_at":"2026-10-30T00:00:00.000Z","workers_supported":true,"main_pane_pid":0},
+       "threads":{"trip":{"state":"stopping","tmux":"t-trip","cwd":"/tmp/x"\(extra)}}}
+      """.utf8)
+  }
+
+  private func entry(_ f: WorkersFile) throws -> [String: Any] {
+    let root = try #require(try JSONSerialization.jsonObject(with: f.encoded()) as? [String: Any])
+    return try #require((root["threads"] as? [String: Any])?["trip"] as? [String: Any])
+  }
+
+  @Test func aFileWithoutItLoadsAndIsWrittenWithoutIt() throws {
+    let f = try #require(WorkersFile.decode(file("")))
+    #expect(f.threads["trip"]?.stopping_since == nil)
+    #expect(try entry(f)["stopping_since"] == nil)
+  }
+
+  @Test func theStopTimeSurvivesALoadAndAWrite() throws {
+    let f = try #require(WorkersFile.decode(file(",\"stopping_since\":\"2026-10-30T00:01:02.500Z\"")))
+    #expect(f.threads["trip"]?.stopping_since == "2026-10-30T00:01:02.500Z")
+    #expect(try entry(f)["stopping_since"] as? String == "2026-10-30T00:01:02.500Z")
+    #expect(WorkersFile.decode(try f.encoded()) == f)
+  }
+
+  @Test(arguments: [",\"stopping_since\":17", ",\"stopping_since\":\"yesterday\"", ",\"stopping_since\":null", ",\"stopping_since\":{\"a\":1}"])
+  func aValueThatIsNotATimeIsNoValueAndNeverAnUnreadableFile(extra: String) throws {
+    let f = try #require(WorkersFile.decode(file(extra)), "the file must still load")
+    #expect(f.threads["trip"]?.stopping_since == nil)
+    #expect(f.threads["trip"]?.state == "stopping")
+  }
+}

@@ -33,6 +33,12 @@ final class ShellPolicyTests: XCTestCase {
         XCTAssertFalse(guardian.needsRetry(currentURL: URL(string: "https://relay.example.test/threads")!))
     }
 
+    func testAServerErrorFromTheRelayIsAFailedLoadSoItIsRetried() {
+        for status in [500, 502, 503, 504, 408, 429] { XCTAssertTrue(BridgeGuard.isFailedPageLoad(statusCode: status), "\(status)") }
+        for status in [200, 204, 304, 401, 403, 404] { XCTAssertFalse(BridgeGuard.isFailedPageLoad(statusCode: status), "\(status)") }
+        XCTAssertFalse(BridgeGuard.isFailedPageLoad(statusCode: nil), "not an HTTP answer")
+    }
+
     // D49
     func testLaunchFallsToOfflineBetween10And15Seconds() {
         XCTAssertGreaterThanOrEqual(BridgeGuard.launchTimeout, 10)
@@ -123,5 +129,30 @@ final class ShellPolicyTests: XCTestCase {
         let pdf = MediaPolicy.safeFileName(String(repeating: "\u{6F22}", count: 110) + ".pdf")
         XCTAssertTrue(pdf.hasSuffix(".pdf"))
         XCTAssertEqual(MediaPolicy.safeFileName("budget \u{6F22}\u{5B57}.csv"), "budget \u{6F22}\u{5B57}.csv")
+    }
+
+    // The resume check: only the script's own answer proves a page.
+    func testOnlyTheScriptsPageAnswerIsALivePage() {
+        XCTAssertTrue(BridgeGuard.isLivePage(probeResult: "page"))
+        for other: Any? in ["blank", "", "PAGE", "page ", 1, true, ["page"], NSNull(), nil] {
+            XCTAssertFalse(BridgeGuard.isLivePage(probeResult: other), "\(String(describing: other))")
+        }
+    }
+
+    func testTheLivenessScriptAnswersWithOneOfItsTwoWordsAndNeverThrows() {
+        XCTAssertTrue(BridgeGuard.livenessScript.contains("'page'"))
+        XCTAssertTrue(BridgeGuard.livenessScript.contains("'blank'"))
+        XCTAssertTrue(BridgeGuard.livenessScript.contains("catch"))
+    }
+
+    // Review R1-8: the watchdog across a trip to the background.
+    func testAWatchedUnfinishedLoadIsWatchedAgainOnReturn() {
+        XCTAssertTrue(BridgeGuard.shouldRestartWatchdogOnReturn(wasWatching: true, relayPageFinished: false, showingFallback: false))
+    }
+
+    func testNothingIsRestartedWhenNoLoadWasWatchedOrAPageIsUp() {
+        XCTAssertFalse(BridgeGuard.shouldRestartWatchdogOnReturn(wasWatching: false, relayPageFinished: false, showingFallback: false))
+        XCTAssertFalse(BridgeGuard.shouldRestartWatchdogOnReturn(wasWatching: true, relayPageFinished: true, showingFallback: false))
+        XCTAssertFalse(BridgeGuard.shouldRestartWatchdogOnReturn(wasWatching: true, relayPageFinished: false, showingFallback: true))
     }
 }

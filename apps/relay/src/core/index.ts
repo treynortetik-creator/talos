@@ -26,6 +26,7 @@ import {
   NativeGrant,
   NativeGrantRevoke,
   type NativeGrantT,
+  PAGE_CSP,
   PushSubscriptionJson,
   parseFrame,
   routes as protocolRoutes,
@@ -47,6 +48,7 @@ import {
   requireSession,
   type Session,
   sessionActive,
+  takeRate,
   verifyBridgeHttp,
   verifyBridgeHttpHash,
 } from '../auth/contract.ts'
@@ -58,6 +60,7 @@ import { DEFAULT_AGENT_CONFIG } from './default-config.ts'
 import { type Conn, FrameRejected } from './hub.ts'
 import { cleanName, dispositionHeader, parseRange } from './media.ts'
 import { registerProblems } from './problems.ts'
+import { pushEndpointAllowed } from './push.ts'
 import { type CoreRuntime, findRuntime, runtimeOf } from './runtime.ts'
 import { registerShare, shareBytesSince } from './share.ts'
 import { isInlineMime, sniffMime } from './sniff.ts'
@@ -69,14 +72,12 @@ export const routes = new Hono<AppEnv>()
 const MIB = 1024 * 1024
 const asBody = (b: Uint8Array): BodyInit => b as unknown as BodyInit
 const MEDIA_CSP = "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'"
-const PAGE_CSP =
-  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:"
 /** An MCP app page is at most this big (spec M3.5). */
 const APP_PAGE_MAX_BYTES = 8 * MIB
 /** Spec M3.5, byte for byte. */
 const APP_PERMISSIONS_POLICY =
   'camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=(), payment=(), usb=(), serial=(), hid=(), bluetooth=(), display-capture=(), fullscreen=()'
-const RESERVED = /^\/(api|hook|bridge|media|ws|healthz|\.well-known)(\/|$)/
+const RESERVED = /^\/(api|hook|bridge|media|ws|healthz|p|\.well-known)(\/|$)/
 
 export function register(services: RelayServices): void {
   // Services made by createRelayServices carry a runtime; the unit-test fakes do not, and need no timers.
@@ -113,7 +114,12 @@ routes.use('/media/*', async (c, next) => {
 
 // ---- health -----------------------------------------------------------------------------------------------------
 
-routes.get('/healthz', (c) => c.json({ ok: true as const, version: VERSION }))
+// `session_wait`: the once-per-wait push watcher (core/session-wait.ts) is running, so a deploy can be checked without the
+// relay's logs. Two fixed times and a boolean: nothing about any thread, wait or person.
+routes.get('/healthz', (c) => {
+  const sw = findRuntime(c.get('services'))?.sessionWait.health()
+  return c.json({ ok: true as const, version: VERSION, ...(sw ? { session_wait: sw } : {}) })
+})
 
 // ---- Apple App Site Association (IOS-SPEC WP-I6) ----------------------------------------------------------------
 // webcredentials only, from APNS_TEAM_ID + APNS_BUNDLE_ID. Without both it is a plain 404 (JSON, never the app shell).
@@ -163,14 +169,20 @@ routes.get(
     const session = wsSessions.get(c.req.raw) ?? getSession(c as unknown as Context<AppEnv>)
     const hub = rt(c as unknown as Context<AppEnv>).hub
     const ip = ipOf(c as unknown as Context<AppEnv>)
+    const log = (c as unknown as Context<AppEnv>).get('services').log
+    let opened = Date.now()
     let handle: ReturnType<typeof hub.attachApp> | null = null
     return {
       onOpen: (_e, ws) => {
+        opened = Date.now()
         handle = hub.attachApp(connOf(ws), { session: session ?? null, ip })
       },
       onMessage: (e) =>
         handle?.onMessage(typeof e.data === 'string' ? e.data : Buffer.from(e.data as ArrayBuffer).toString('utf8')),
-      onClose: () => handle?.onClose(),
+      onClose: (evt) => {
+        log.info({ role: 'app', close_code: evt.code, open_ms: Date.now() - opened }, 'socket closed')
+        handle?.onClose()
+      },
     }
   }),
 )
@@ -183,14 +195,20 @@ routes.get(
     const hub = rt(cc).hub
     const ip = ipOf(cc)
     const relayHost = new URL(cc.get('services').env.PUBLIC_ORIGIN).host
+    const log = cc.get('services').log
+    let opened = Date.now()
     let handle: ReturnType<typeof hub.attachBridge> | null = null
     return {
       onOpen: (_e, ws) => {
+        opened = Date.now()
         handle = hub.attachBridge(connOf(ws), { ip, relayHost })
       },
       onMessage: (e) =>
         handle?.onMessage(typeof e.data === 'string' ? e.data : Buffer.from(e.data as ArrayBuffer).toString('utf8')),
-      onClose: () => handle?.onClose(),
+      onClose: (evt) => {
+        log.info({ role: 'bridge', close_code: evt.code, open_ms: Date.now() - opened }, 'socket closed')
+        handle?.onClose()
+      },
     }
   }),
 )
@@ -200,6 +218,8 @@ routes.get(
 routes.post('/api/push/subscribe', requireSession, requireCsrf, async (c) => {
   const body = PushSubscriptionJson.safeParse(await c.req.json().catch(() => null))
   if (!body.success) return c.json({ error: 'bad_request' }, 400)
+  // The relay will POST to this URL on every notification: only a public https host (a real push service) is kept.
+  if (!pushEndpointAllowed(body.data.endpoint)) return c.json({ error: 'bad_request' }, 400)
   // The body took time to arrive; the session and device are checked again now, in the same step as the write.
   const session = getSession(c)
   if (!sessionActive(session)) return c.json({ error: 'unauthorized' }, 401)
@@ -444,7 +464,29 @@ const mediaBodyGuard = [limitBody(maxMediaBytes), idleBodyTimeout()] as const
 const bridgeMediaBodyGuard = [limitBody(maxMediaBytes), bodyTimeout(120_000)] as const
 const frameBodyGuard = [limitBody(() => MAX_FRAME_BYTES), bodyTimeout()] as const
 
-routes.post('/api/media', ...mediaBodyGuard, requireSession, requireCsrf, rateLimit('media'), async (c) => {
+/**
+ * When an upload over the daily budget would fit: the owner's own uploads in the last 24 h (share uploads have their own
+ * budget and are not counted), oldest first, leave the window until enough room is free. Undefined when it never fits.
+ */
+function dailyRetryAfterS(db: RelayServices['db'], now: number, used: number, incoming: number, cap: number) {
+  if (incoming > cap) return undefined
+  const rows = db
+    .prepare(
+      `select created_at at, size from core_media m where origin = 'app' and created_at >= ?
+         and not exists (select 1 from core_share_uploads s where s.media_id = m.media_id) order by created_at`,
+    )
+    .all(now - DAY_MS) as Array<{ at: number; size: number }>
+  let left = used
+  for (const row of rows) {
+    left -= row.size
+    if (left + incoming <= cap) return Math.max(60, Math.ceil((row.at + DAY_MS - now) / 1000))
+  }
+  return undefined
+}
+
+// The hourly media token is taken only once an upload passed every other check, so a refused one (too big, the wrong
+// type, over the daily budget) never spends it (bug hunt R14).
+routes.post('/api/media', ...mediaBodyGuard, requireSession, requireCsrf, async (c) => {
   const max = maxMediaBytes(c)
   const declared = Number(c.req.header('content-length') ?? 0)
   if (declared > max) return c.json({ error: 'too_large' }, 413)
@@ -453,19 +495,34 @@ routes.post('/api/media', ...mediaBodyGuard, requireSession, requireCsrf, rateLi
   if (declaredType !== null && !fileTypeAllowed(declaredType)) return c.json({ error: 'file_type_not_allowed' }, 415)
   const bytes = new Uint8Array(await c.req.arrayBuffer())
   if (lateRequest(c)) return c.json({ error: 'request_timeout' }, 408) // the client was told it failed; save nothing
-  if (bytes.length === 0) return c.json({ error: 'bad_request' }, 400)
+  // A refusal after the body was read spends no hourly token, but has its own bound (`media_refused`): each one cost a read.
+  const refused = (body: Record<string, string>, status: 400 | 429, retryAfterS?: number) => {
+    const bound = takeRate(c, 'media_refused')
+    if (!bound.ok) {
+      c.header('Retry-After', String(bound.retryAfterS))
+      return c.json({ error: 'rate_limited' }, 429)
+    }
+    if (retryAfterS !== undefined) c.header('Retry-After', String(retryAfterS))
+    return c.json(body, status)
+  }
+  if (bytes.length === 0) return refused({ error: 'bad_request' }, 400)
   if (bytes.length > max) return c.json({ error: 'too_large' }, 413)
   const r = rt(c)
   const claimed = c.req.header('x-talos-sha256')
   const sha = sha256Hex(bytes)
-  if (claimed && claimed.toLowerCase() !== sha) return c.json({ error: 'sha256 mismatch' }, 400)
+  if (claimed && claimed.toLowerCase() !== sha) return refused({ error: 'sha256 mismatch' }, 400)
   const now = c.get('services').clock.now()
   // Share uploads have their own daily budget (core/share.ts) and do not count against the owner's daily budget (MEDIA_DAILY_MAX_MB, 200 by default).
-  if (
-    r.store.uploadedBytesSince(now - DAY_MS) - shareBytesSince(r.store.db, now - DAY_MS) + bytes.length >
-    c.get('services').env.MEDIA_DAILY_MAX_MB * MIB
-  )
+  // Its own word, so the app does not call the hourly limit "daily" or the other way round, and both say when to retry.
+  const cap = c.get('services').env.MEDIA_DAILY_MAX_MB * MIB
+  const used = r.store.uploadedBytesSince(now - DAY_MS) - shareBytesSince(r.store.db, now - DAY_MS)
+  if (used + bytes.length > cap)
+    return refused({ error: 'daily_limit' }, 429, dailyRetryAfterS(r.store.db, now, used, bytes.length, cap))
+  const hourly = takeRate(c, 'media')
+  if (!hourly.ok) {
+    c.header('Retry-After', String(hourly.retryAfterS))
     return c.json({ error: 'rate_limited' }, 429)
+  }
   const dur = Number(c.req.header('x-talos-duration-ms'))
   const { ref } = r.media.save({
     bytes,
@@ -593,7 +650,7 @@ routes.get('/media/:id/app', requireSession, (c) => {
 
 type Authed = { keyId: string; body: Uint8Array }
 
-async function bridgeAuth(c: Context<AppEnv>, maxBytes: number): Promise<Authed | Response> {
+export async function bridgeAuth(c: Context<AppEnv>, maxBytes: number): Promise<Authed | Response> {
   // Header first: a caller who names no trusted key, or a stale time, is turned away before one body byte is read.
   const pre = preflightBridgeHttp(c)
   if (!pre.ok) return c.json({ error: 'unauthorized' }, 401)

@@ -1,4 +1,5 @@
 // Service worker registration and the notification-click bridge into the router.
+import { setWorkerUpdater } from '../../lib/appUpdate.ts'
 import { startPendingSweep } from '../share/shareTarget.ts'
 
 export async function registerServiceWorker(onNavigate: (url: string) => void): Promise<void> {
@@ -11,10 +12,13 @@ export async function registerServiceWorker(onNavigate: (url: string) => void): 
   })
   try {
     const dev = import.meta.env.DEV
-    await navigator.serviceWorker.register(dev ? '/dev-sw.js?dev-sw' : '/sw.js', {
+    const reg = await navigator.serviceWorker.register(dev ? '/dev-sw.js?dev-sw' : '/sw.js', {
       scope: '/',
       type: dev ? 'module' : 'classic',
     })
+    // asked when the server says a newer build is out, and when a page kept open comes to the front (at most once a minute)
+    // register() can resolve to nothing where workers are blocked (Playwright's serviceWorkers: 'block', some managed browsers)
+    if (reg) setWorkerUpdater(() => void reg.update().catch(() => {}))
   } catch {
     // Unsupported (private mode, WebKit without a secure context): the app works without it.
   }

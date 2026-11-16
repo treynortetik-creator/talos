@@ -63,11 +63,18 @@ Install what is missing. `./install.sh --dry-run` (step 3) checks most of these 
 | git                      | any                                                                | comes with the tools above                                                                             | `git --version`       |
 | Node                     | 24                                                                 | https://nodejs.org or a version manager                                                                | `node -v`             |
 | pnpm                     | 10.33                                                              | `corepack enable`                                                                                      | `pnpm -v`             |
-| Bun                      | 1.3.11 or newer                                                    | https://bun.sh                                                                                         | `bun -v`              |
+| Bun                      | 1.4.4 or newer                                                     | https://bun.sh                                                                                         | `bun -v`              |
 | Claude Code              | 2.1.304 or newer (older works, without the Talos mod)              | https://claude.com/claude-code, then run `claude` once and sign in                                     | `claude --version`    |
 | tmux                     | 3.2 or newer                                                       | `brew install tmux` (needed by the Mac app, and by thread sessions in step 9.6)                        | `tmux -V`             |
 | A GitHub account         | any                                                                | https://github.com                                                                                     | [YOU] you can sign in |
 | A Railway account        | any                                                                | https://railway.com                                                                                    | [YOU]                 |
+
+**No admin password on this Mac** (a company Mac, for example): `./install.sh --dry-run` checks every row above with its
+version and prints, for each one that is missing or too old, the way to get it without admin where there is one: Node with
+fnm, pnpm with corepack, Bun and Claude Code with their own installers (all into your home folder), and tmux with micromamba
+and conda-forge's tmux under `~/.local` (no Homebrew needed). The Xcode command line tools (Swift 6.2 or newer) have no such
+route: ask IT for them. The full walk-through, with who does what and the questions for IT, is
+[`docs/MAC-SECOND-USER-RUN-SHEET.md`](docs/MAC-SECOND-USER-RUN-SHEET.md).
 
 An iPhone needs iOS 18.4 or newer for notifications from the Home Screen app. An Android phone or a desktop browser works too.
 Linux works for the terminal-only agent (`./install.sh --no-app`); the Mac app and the scheduler need macOS.
@@ -106,9 +113,19 @@ tuned, never deletes anything in an agent folder, and a second run only does wha
 `--yes` is required when no terminal is attached (an agent running it). Variants:
 
 - Terminal only, no Mac app: `./install.sh --yes --no-app`. This is the only mode on Linux.
+- **`--no-relay-wait`**: on a Mac already paired with a relay, the app install first waits (up to 10 minutes) for the relay
+  to serve the same build or a newer one, and stops if it doesn't. This flag installs without waiting.
 - **Coming from version 1.x?** The old default folder was `~/my-agent`. With no `--agent-dir`, if `~/my-agent` exists and
   `~/talos-agent` does not, the installers stop and ask instead of creating a second agent. Keep the old one with
   `--agent-dir ~/my-agent`, or `mv ~/my-agent ~/talos-agent` and run `./install.sh --repoint`.
+- **A 1.x folder with no `.talos-version`** (made before versions were stamped): `./install.sh --agent-dir <folder>` prints
+  what `kit/scripts/upgrade.sh --dry-run`, `kit/scripts/settings-merge.py` and `talos-app adopt --dry-run` would each do,
+  and changes nothing. [YOU] add **`--apply`** to do it, typed in Terminal: it checks all three first, then upgrade.sh takes
+  a full backup, the kit self-test runs as the gate, settings-merge.py backs up `settings.json`, and adopt runs last (only
+  when you typed the command; from an agent it is printed for you). CLAUDE.md, `memory/`, `wiki/`, `.learnings/` and `.env`
+  are never written. A carry that stopped is finished by the same command. Then run `./install.sh --agent-dir <folder>`
+  again for the rest. The full walk-through is [`docs/MAC-SECOND-USER-RUN-SHEET.md`](docs/MAC-SECOND-USER-RUN-SHEET.md).
+- **`--no-tmux`**: install the Mac app without tmux. The agent then stops when the app quits, and thread sessions are off.
 - **`--with-vault DIR`** makes a private vault. It must be outside this clone (the installer refuses a path in it) and outside any
   git repository whose remote is GitHub. A vault this installer made earlier is recognised on a re-run, so the same flags can be
   repeated with `--with-chronos` added.
@@ -116,7 +133,11 @@ tuned, never deletes anything in an agent folder, and a second run only does wha
   agent folder name `~/talos-agent` is used everywhere in this guide.
 - **Kit options pass straight through to the kit installer** (`kit/install.sh`): `--with-vault DIR` (a private vault),
   `--with-memory-search`, `--with-reranker`, `--with-voice`, `--with-qwen-voice`, `--with-parakeet`, `--with-diarize`,
-  `--global-pointer`, `--embed-model small`. All are off by default; see [`kit/README.md`](kit/README.md), "Optional extras".
+  `--global-pointer`, `--embed-model small`. All are off by default except memory search: a new agent gets semantic memory
+  search and the phone's memory browser (memory/ and wiki/) with no flag; `--no-memory-search` skips the search. The reranker
+  model (about 571 MB) comes with the search by default too, except on a computer with under 3 GiB of memory; `--no-reranker`
+  skips it. An agent
+  that already exists is not changed. See [`kit/README.md`](kit/README.md), "Optional extras".
 - The scheduler (Chronos) is off unless you pass `--with-chronos`. You can add it later; see step 9.1.
 - **If you already have the relay address** (a re-install, or step 4 is done), add `--relay-url https://relay.example.com` to
   the command to run the bridge step now. Otherwise leave it out: step 5 does it, and the installer prints the exact command.

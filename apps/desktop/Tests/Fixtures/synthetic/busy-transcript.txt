@@ -1,0 +1,11 @@
+ ▐▛███▛█   Claude Code v2.1.322
+▝▜██████▀  Haiku 5.5 · Claude Enterprise
+ ▝▝   ▝▝   /private/tmp/tcap/proj
+
+
+❯ Clean the build folder
+
+⏺ Bash(cleanup)
+  ⎿  Running…
+
+✻ Working… (esc to interrupt)

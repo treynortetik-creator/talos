@@ -219,3 +219,34 @@ describe('R2-2 version skew: app_features only goes to a bridge and relay that k
     ).toBe(false)
   })
 })
+
+describe('socket schedules: a list request let go (the Mac went away) writes nothing', () => {
+  it('aborted: it rejects at once, and its 20 s timer firing later writes no error over the list', async () => {
+    vi.useFakeTimers()
+    try {
+      const r = rig()
+      const ac = new AbortController()
+      const p = r.c.listSchedules({ signal: ac.signal }).catch((e: unknown) => e)
+      await vi.advanceTimersByTimeAsync(0)
+      ac.abort()
+      expect(((await p) as Error).message).toBe('abandoned')
+      r.d.setSlice({ status: 'ready', error: null }) // a newer request has since filled the list
+      await vi.advanceTimersByTimeAsync(NO_ANSWER_MS + 1000)
+      expect(r.slice()).toMatchObject({ status: 'ready', error: null })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborted while its answer was on the way: what it found is not written over the list', async () => {
+    const r = rig()
+    const ac = new AbortController()
+    r.replyWith((f) => {
+      ac.abort() // let go just before the answer lands
+      r.emit('schedules.snapshot', { request_id: f.request_id, snapshot: base })
+    })
+    const e = await r.c.listSchedules({ signal: ac.signal }).catch((x: unknown) => x)
+    expect(e).toBeInstanceOf(TalosClientError)
+    expect(r.slice().snapshot).toBeNull()
+  })
+})

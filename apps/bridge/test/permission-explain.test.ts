@@ -335,6 +335,43 @@ describe('the floor under the model', () => {
     expect(calls()).toBeGreaterThan(0)
   })
 
+  test('a failure hands its reason to onFail, from a fixed set, never the command; a success hands nothing', async () => {
+    const seen: string[] = []
+    const onFail = (r: string) => seen.push(r)
+    setMode('exit1')
+    await explainToCard(make(), REQ, onFail)
+    setMode('sleep')
+    await explainToCard(make({ timeoutMs: 300 }), REQ, onFail)
+    setMode('ok')
+    sayRaw('I think this is fine')
+    await explainToCard(make(), REQ, onFail)
+    await explainToCard(make(), { ...REQ, input: `rm -rf x ${'#'.repeat(9000)}` }, onFail)
+    await explainToCard({ explain: () => Promise.reject(new Error(`boom ${REQ.input}`)) }, REQ, onFail)
+    sayRaw('x'.repeat(200_001))
+    await explainToCard(make({ cacheMax: 0 }), REQ, onFail)
+    const noTemp = make({
+      cacheMax: 0,
+      mkdtemp: () => {
+        throw new Error('cannot make /Users/alex/Downloads/x')
+      },
+    })
+    await explainToCard(noTemp, REQ, onFail)
+    expect(seen).toEqual([
+      'exit 1',
+      'timeout',
+      'unreadable answer',
+      'too long',
+      'threw',
+      'answer too long',
+      'could not run',
+    ])
+    for (const r of seen) expect(r).not.toContain('Downloads')
+    seen.length = 0
+    say({ tag: 'Deletes', mismatch: false, sentence: 'Cleans up.' })
+    await explainToCard(make({ cacheMax: 0 }), REQ, onFail)
+    expect(seen).toEqual([])
+  })
+
   test('a failure with no floor stays failed', async () => {
     setMode('exit1')
     expect(await explainToCard(make(), { tool: 'Bash', input: 'pnpm test', description: 'runs the tests' })).toEqual({

@@ -15,8 +15,11 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { runCli } from '../src/cli.ts'
-import { COMMANDS, runTalos, terminalOnly } from '../src/talos.ts'
+import { ACCOUNT_HOME_TEST, COMMANDS, runTalos, terminalOnly } from '../src/talos.ts'
 import { type Harness, startHarness } from './helpers.ts'
+
+/** The terminal-only refusal, from a CLI this test spawns: it speaks for the computer it runs on (owner-words.ts), a Mac or not. */
+const TERMINAL_ONLY = /only runs in (?:Terminal|a terminal)/
 
 let h: Harness | undefined
 /** Temp folders a test made. A real release folder is read-only by design, so each is made writable before it is removed. */
@@ -67,59 +70,43 @@ describe('talos commands', () => {
       expect(typeof c.agent_may_run).toBe('boolean')
     }
     const byName = new Map(parsed.commands.map((c) => [c.name, c]))
-    for (const name of [
-      'enroll',
-      'devices',
-      'rotate',
-      'memory init',
-      'apps scan',
-      'install-ask-rules',
-      'rollback',
-      'trust',
-    ]) {
+    // the owner's at a terminal, and what only Talos itself runs: not the agent's
+    for (const name of ['enroll', 'devices', 'rotate', 'trust on', 'hook', 'start', 'supervise', 'guards refresh'])
       expect(byName.get(name)?.agent_may_run, name).toBe(false)
-    }
-    for (const name of ['status', 'doctor', 'commands']) expect(byName.get(name)?.agent_may_run, name).toBe(true)
+    // since 2026-11-14 the rest is the agent's when the owner asks (apps scan, rollback, trust off/show among them)
+    for (const name of ['status', 'doctor', 'commands', 'apps scan', 'install-ask-rules', 'rollback', 'trust'])
+      expect(byName.get(name)?.agent_may_run, name).toBe(true)
   })
 
-  test('every subcommand that changes approvals, keys, tokens, settings or sign-ins is marked owner only', async () => {
+  test('who runs what: the agent (when the owner asks), Talos itself, or the owner at a terminal (2026-11-14)', async () => {
     const { out, io } = cliIO()
     expect(await runTalos(['commands', '--json'], io, {})).toBe(0)
-    const byName = new Map((JSON.parse(out.join('\n')) as { commands: Row[] }).commands.map((c) => [c.name, c]))
+    const byName = new Map(
+      (JSON.parse(out.join('\n')) as { commands: Array<Row & { who: string }> }).commands.map((c) => [c.name, c]),
+    )
+    const whoOf = (n: string) => byName.get(n)?.who
+    for (const name of ['enroll', 'devices', 'rotate', 'trust on']) expect(whoOf(name), name).toBe('owner_terminal')
+    for (const name of ['hook', 'start', 'supervise', 'guards refresh']) expect(whoOf(name), name).toBe('internal')
     for (const name of [
-      'hook',
       'report',
-      'schedules',
-      'apps strict',
-      'apps revoke',
-      'apps login',
-      'apps logout',
-      'apps scan',
       'schedules adopt',
+      'apps strict',
+      'apps login',
+      'apps scan',
       'share shortcut',
-      'share revoke',
       'memory on',
-      'memory off',
-      'memory init',
-      // A parent that only holds sensitive subcommands is owner only too.
-      'apps',
-      'share',
-      'memory',
-    ]) {
-      expect(byName.get(name), `${name} is listed`).toBeDefined()
-      expect(byName.get(name)?.agent_may_run, name).toBe(false)
-    }
-    // The read-only subcommands stay open to the agent.
-    for (const name of [
+      'update',
+      'rollback',
+      'restore',
+      'restore-last-good',
+      'install-mcp',
+      'supervise start',
+      'supervise stop',
+      'init',
       'apps list',
       'memory show',
-      'memory reindex',
-      'search reindex',
-      'codex',
-      'codex check',
-      'codex run',
     ])
-      expect(byName.get(name)?.agent_may_run, name).toBe(true)
+      expect(whoOf(name), name).toBe('agent')
   })
 
   test('the plain listing lines up its columns, and a name is never cut', async () => {
@@ -130,7 +117,7 @@ describe('talos commands', () => {
     const width = Math.max(...COMMANDS.map((c) => c.name.length))
     rows.forEach((line, i) => {
       const c = COMMANDS[i] as (typeof COMMANDS)[number]
-      const mark = c.agent_may_run ? 'agent ok' : 'owner only'
+      const mark = c.needs_terminal ? 'terminal' : c.who === 'internal' ? 'Talos only' : 'agent ok'
       expect(line, c.name).toBe(`${c.name.padEnd(width)}  ${mark.padEnd(10)}  ${c.summary}`)
     })
     // Every row has its summary starting in the same column.
@@ -205,7 +192,15 @@ describe('talos commands', () => {
     'install-app-hooks': { argv: ['install-app-hooks', '--no-such-flag'], says: unknown, code: 1 },
     'install-ask-rules': { argv: ['install-ask-rules', '--no-such-flag'], says: unknown, code: 1 },
     'install-guards': { argv: ['install-guards', '--no-such-flag'], says: unknown, code: 1 },
+    'install-guards --remove': { argv: ['install-guards', '--remove', '--no-such-flag'], says: unknown, code: 1 },
+    // the app's own (no terminal needed): an empty home has no guards, and a refresh never installs them
+    'guards refresh': { argv: ['guards', 'refresh'], says: /guards refresh: refused not-installed/, code: 1 },
     'install-subagent-tee': { argv: ['install-subagent-tee', '--no-such-flag'], says: unknown, code: 1 },
+    supervise: { argv: ['supervise', '--no-such-flag'], says: /talos-app supervise: unknown --no-such-flag/, code: 2 },
+    // the owner's Stop and Start (terminal-only): with no supervisor running in the probe's home, they say so and ask nothing
+    'supervise start': { argv: ['supervise', 'start'], says: /no supervisor is running/, code: 1 },
+    'supervise stop': { argv: ['supervise', 'stop'], says: /no supervisor is running/, code: 1 },
+    'update-check': { argv: ['update-check', '--dry'], says: /the saved sessions cannot be read/, code: 1 },
   }
   // Answered by talos itself, or too tied to stdin to run in this process; the next tests drive these two for real.
   const NOT_PROBED = new Set(['commands', 'subagent-tee'])
@@ -296,7 +291,7 @@ describe('talos update, rollback and restore', () => {
     return vendor
   }
 
-  test('the five commands are owner terminal commands, listed with that', async () => {
+  test("the kit updater and the app pull are the agent's when the owner asks (2026-11-14: signed releases only), none terminal-gated", async () => {
     const { out, io } = cliIO()
     expect(await runTalos(['commands', '--json'], io, {})).toBe(0)
     const byName = new Map(
@@ -305,26 +300,21 @@ describe('talos update, rollback and restore', () => {
         c,
       ]),
     )
-    for (const n of ['update', 'rollback', 'restore']) {
-      expect(byName.get(n)?.agent_may_run, n).toBe(false)
-      expect(byName.get(n)?.needs_terminal, n).toBe(true)
-    }
-    // the app's own pull and rollback stay what they were: not for the agent to choose, but ask-gated rather than terminal-only
-    for (const n of ['update app', 'rollback app']) {
-      expect(byName.get(n)?.agent_may_run, n).toBe(false)
+    for (const n of ['update', 'rollback', 'restore', 'update app', 'rollback app']) {
+      expect(byName.get(n)?.agent_may_run, n).toBe(true)
       expect(byName.get(n)?.needs_terminal, n).toBeUndefined()
     }
     // talos-app's own update (the app checkout) is not terminal-gated; talos's is the kit's
     expect(terminalOnly(['update'], 'talos-app')).toBeUndefined()
     expect(terminalOnly(['rollback'], 'talos-app')).toBeUndefined()
-    expect(terminalOnly(['update'], 'talos')).toBe('update')
+    expect(terminalOnly(['update'], 'talos')).toBeUndefined()
     expect(terminalOnly(['update', 'app'], 'talos')).toBeUndefined()
     const app = cliIO()
     expect(await runCli(['update', '--no-such-flag'], { ...app.io, isTerminal: false }, {})).toBe(1)
     expect(app.err.join('\n')).toMatch(/Unknown option/)
   })
 
-  test('without a terminal each one is refused and the updater is never started', async () => {
+  test("without a terminal (the agent): the installed kit's updater runs; a kit folder chosen another way is refused and never started (Fable R1-1)", async () => {
     const marker = join(mkdtempSync(join(tmpdir(), 'talos-marker-')), 'ran')
     const vendor = fakeKit(marker)
     for (const argv of [
@@ -334,11 +324,57 @@ describe('talos update, rollback and restore', () => {
       ['rollback', '1.2.0'],
       ['restore', 'CLAUDE.md'],
     ]) {
+      for (const env of [{ TALOS_KIT_HOME: vendor }, { TALOS_VENDOR_DIR: vendor }, { XDG_DATA_HOME: vendor }]) {
+        const { err, io } = cliIO()
+        const code = await runTalos(argv, { ...io, isTerminal: false }, env)
+        expect(code, `${argv.join(' ')} ${Object.keys(env)[0]}`).toBe(2)
+        expect(err.join('\n')).toMatch(/needs the owner at a terminal/)
+      }
       const { err, io } = cliIO()
-      const code = await runTalos(argv, { ...io, isTerminal: false }, { TALOS_KIT_HOME: vendor })
-      expect(code, argv.join(' ')).toBe(2)
-      expect(err.join('\n')).toContain('only runs in Terminal')
+      expect(await runTalos([...argv, '--vendor', vendor], { ...io, isTerminal: false }, {})).toBe(2)
+      expect(err.join('\n')).toMatch(/--vendor/)
     }
+    expect(existsSync(marker)).toBe(false)
+    // the installed kit (the default place under the ACCOUNT's home, which ACCOUNT_HOME_TEST stands in for here): its updater
+    // runs, with the arguments as given
+    const home = mkdtempSync(join(tmpdir(), 'talos-home-'))
+    ACCOUNT_HOME_TEST.home = home
+    const installed = join(home, '.local', 'share', 'talos', 'kit', 'current', 'talos-kit', 'bin')
+    mkdirSync(installed, { recursive: true })
+    writeFileSync(join(installed, 'talos-update'), `#!/bin/sh\necho "$@" > "${marker}"\n`)
+    chmodSync(join(installed, 'talos-update'), 0o755)
+    const { io } = cliIO()
+    expect(await runTalos(['update', '--dry-run'], { ...io, isTerminal: false }, { HOME: home })).toBe(0)
+    expect(readFileSync(marker, 'utf8').trim()).toBe('update --dry-run')
+    rmSync(marker)
+    // the REAL account home, in its own process (no seam) with HOME moved: the password database's answer, never $HOME's (under
+    // Bun os.userInfo().homedir follows $HOME: Fable on 2beef7b0)
+    const fake = mkdtempSync(join(tmpdir(), 'talos-fakehome-'))
+    const real = spawnSync('bun', ['-e', "import { accountHome } from './src/talos.ts'; console.log(accountHome())"], {
+      cwd: join(REPO, 'apps', 'bridge'),
+      env: { PATH: process.env.PATH ?? '', HOME: fake },
+      encoding: 'utf8',
+    })
+    const passwd = spawnSync('/usr/bin/getent', ['passwd', String(process.getuid?.())], { encoding: 'utf8' })
+    const want = process.platform === 'darwin' ? null : (passwd.stdout.trim().split(':')[5] ?? null)
+    expect(real.stdout.trim()).not.toBe(fake)
+    if (want) expect(real.stdout.trim()).toBe(want)
+    // and the real front door, as a program with no terminal and HOME moved: refused before any updater is looked for
+    const door = spawnSync('bun', [join(REPO, 'apps', 'bridge', 'src', 'talos.ts'), 'update', '--dry-run'], {
+      env: { PATH: process.env.PATH ?? '', HOME: fake },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    expect(door.status).toBe(2)
+    expect(door.stderr).toMatch(/choosing which kit folder to use \(HOME\)/)
+    // a session that sets HOME somewhere else (its own kit and signer there) is refused, the updater never started
+    // (Lemnos's review: the installed kit is the account's, never $HOME's)
+    const elsewhere = mkdtempSync(join(tmpdir(), 'talos-moved-'))
+    const moved = cliIO()
+    expect(await runTalos(['update'], { ...moved.io, isTerminal: false }, { HOME: elsewhere })).toBe(2)
+    expect(moved.err.join('\n')).toMatch(/choosing which kit folder to use \(HOME\)/)
+    expect(existsSync(marker)).toBe(false)
+    ACCOUNT_HOME_TEST.home = null
     // the app's own update and rollback are not the kit's: they reach the app handler (behind the ask card), never the updater
     for (const argv of [
       ['update', 'app'],
@@ -506,7 +542,8 @@ describe('talos update, rollback and restore', () => {
     // the migration the update ran was undone by the rollback
     expect(readFileSync(join(tmp, 'migrations.log'), 'utf8')).toBe('up 202611050001\ndown 202611050001\n')
 
-    // refused from a script: no terminal
+    // from a script (no terminal, as the agent runs it) with this test's moved kit folder (TALOS_VENDOR_DIR): refused, since
+    // off a terminal only the installed kit may be updated (Fable R1-1)
     const piped = spawnSync(
       'bun',
       [join(REPO, 'apps', 'bridge', 'src', 'talos.ts'), 'update', '--agent-dir', agent, '--source', src],
@@ -517,7 +554,10 @@ describe('talos update, rollback and restore', () => {
       },
     )
     expect(piped.status).toBe(2)
-    expect(piped.stderr).toContain('only runs in Terminal')
+    // this test's HOME is a temp folder too, so HOME is named beside TALOS_VENDOR_DIR
+    expect(piped.stderr).toMatch(
+      /choosing which kit folder to use \(HOME, TALOS_VENDOR_DIR\) needs the owner at a terminal/,
+    )
     expect(cur()).toBe(`releases/${v1}`)
   }, 240_000)
 })
@@ -642,8 +682,9 @@ describe('talos as a program: the early exits never load the full CLI', () => {
       expect(r.err, args.join(' ')).not.toContain('TRAP')
       expect(r.err, args.join(' ')).not.toContain('Cannot find module')
     }
-    // the kit verbs from a script (no terminal) are refused before anything else loads
-    expect(run('update').err).toContain('only runs in Terminal')
+    // the kit verbs from a script (no terminal) are decided before anything else loads: here the copy runs with a temp HOME,
+    // which is not the account's, so it is refused as a moved kit folder
+    expect(run('update').err).toMatch(/choosing which kit folder to use \(HOME/)
     expect(run('update').code).toBe(2)
     expect(run('subagent-tee').code).toBe(0)
     expect(run('commands').out).toContain('rollback')

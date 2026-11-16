@@ -5,6 +5,7 @@
 // owner option anywhere in this module, and the relay has none to grant: a Shortcut cannot sign, so what it posts is
 // always `external` Inbox data (docs/V2-FEATURES.md V4.7). The owner rejected a "trusted" token.
 import { spawn } from 'node:child_process'
+import { stillRunning, waitChild } from '../child-wait.ts'
 
 export type Sign = (input: string, output: string) => Promise<{ ok: true } | { ok: false; error: string }>
 
@@ -165,8 +166,14 @@ export function buildShortcutPlist(spec: ShortcutSpec): string {
 
 // ---- signing (macOS only) -------------------------------------------------------------------------------------------
 
-/** `shortcuts sign --mode anyone`: macOS 12+, needs the Shortcuts CLI and an iCloud sign-in. */
-export const signWithShortcutsCli: Sign = (input, output) =>
+export const SIGN_TIMEOUT_MS = 60_000
+
+/** `shortcuts sign --mode anyone`: macOS 12+, needs the Shortcuts CLI and an iCloud sign-in. Gives up after `timeoutMs`. */
+export const signWithShortcutsCli = (
+  input: string,
+  output: string,
+  timeoutMs = SIGN_TIMEOUT_MS,
+): Promise<{ ok: true } | { ok: false; error: string }> =>
   new Promise((resolve) => {
     let stderr = ''
     let child: ReturnType<typeof spawn>
@@ -177,17 +184,21 @@ export const signWithShortcutsCli: Sign = (input, output) =>
     } catch (e) {
       return resolve({ ok: false, error: (e as Error).message })
     }
-    const timer = setTimeout(() => child.kill(), 60_000)
     child.stderr?.on('data', (d: Buffer) => {
       stderr += d.toString()
     })
+    let spawnError = ''
     child.on('error', (e) => {
-      clearTimeout(timer)
-      resolve({ ok: false, error: e.message })
+      spawnError ||= e.message
     })
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      resolve(code === 0 ? { ok: true } : { ok: false, error: stderr.trim().slice(0, 300) || `exit ${code}` })
+    // Bounded however it ends: a helper it leaves holding stderr, or a sign that never finishes, must not hang `talos-app share`.
+    void waitChild(child, { deadlineMs: timeoutMs }).then((end) => {
+      if (end.how === 'deadline' && stillRunning(child)) child.kill()
+      child.stderr?.destroy()
+      if (end.how === 'error') return resolve({ ok: false, error: spawnError })
+      if (end.how === 'deadline')
+        return resolve({ ok: false, error: `shortcuts sign did not finish within ${Math.round(timeoutMs / 1000)} s` })
+      resolve(end.code === 0 ? { ok: true } : { ok: false, error: stderr.trim().slice(0, 300) || `exit ${end.code}` })
     })
   })
 

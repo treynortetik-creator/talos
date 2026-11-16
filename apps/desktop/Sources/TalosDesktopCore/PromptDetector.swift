@@ -43,6 +43,17 @@ public enum PromptDetector {
       return String(h, radix: 16)
     }
 
+    /// The last row is a tool permission's footer (`Esc to cancel …`; the agent's question and the pickers say `Enter to …`).
+    public var toolFooter = false
+
+    /// A tool's ask (Bash, a file create or edit), not the owner's own question or picker: the phone must hear about it. Also one
+    /// whose header is not on the pane (a window shorter than the prompt cuts its top off, and the kind can't be told): `Do you want
+    /// to …?` over a tool permission's footer.
+    public var isTool: Bool {
+      if kind == .bashCommand || kind == .fileCreate || kind == .fileEdit { return true }
+      return kind == .other && toolFooter && question?.hasPrefix("Do you want to ") == true
+    }
+
     /// The name in the owner's words; nil when the kind can't be told.
     public var title: String? {
       switch kind {
@@ -111,28 +122,58 @@ public enum PromptDetector {
     return l.col == label - 2 && l.text.hasPrefix("\u{2714} ")
   }
 
-  /// Claude's idle input box is on screen (its status bar is the last row): whatever prompt was there is over.
+  /// The mode line as 2.1.322 draws it once other items push its hint off (`⏵⏵ bypass permissions on · 3 shells`). Only ever looked
+  /// for right under an input box.
+  static let modeLine = statusBar + ["permissions on", "edits on"]
+
+  /// Claude's idle input box is on screen: whatever prompt was there is over. Its status bar is the last row, or (2.1.322, with
+  /// background agents running) the agents' rows stand under it: then the box itself is found (a rule, a `❯` row, a rule) with a
+  /// mode line in the rows right under it. Words like "mode on" anywhere else (a command inside a prompt) say nothing.
   public static func isIdle(_ rows: [String]) -> Bool {
     var tail = rows
     while let l = tail.last, isBlank(l) { tail.removeLast() }
     guard let bottom = tail.last.map(DialogMatcher.clean) else { return false }
-    return statusBar.contains(where: bottom.contains)
+    if statusBar.contains(where: bottom.contains) { return true }
+    guard let lower = tail.lastIndex(where: isRule), let upper = tail[..<lower].lastIndex(where: isRule), lower - upper >= 2,
+      lead(tail[upper + 1]).text.first == DialogMatcher.Strings.pointer, !tail[(upper + 1)..<lower].contains(where: isBlank)
+    else { return false }
+    for row in tail[(lower + 1)...].prefix(while: { !isBlank($0) }).map(DialogMatcher.clean) where modeLine.contains(where: row.contains) {
+      return true
+    }
+    return false
+  }
+
+  /// Several sub-agents asking at once: the prompt's header row (the one right under its frame rule) gains a right-aligned `1 of 3`
+  /// that counts up as more of them ask, while the prompt in front stays the same. It is taken off: the counter is neither the
+  /// prompt's region (its ticking would start the wait over) nor its signature (it would read as another prompt, announced again).
+  static func maskQueueCounter(_ rows: [String]) -> [String] {
+    var out = rows
+    for i in out.indices.dropFirst() where isRule(out[i - 1]) {
+      guard let r = out[i].range(of: #"\S {3,}\d+ of \d+\s*$"#, options: .regularExpression) else { continue }
+      out[i] = String(out[i][..<out[i].index(after: r.lowerBound)])
+    }
+    return out
   }
 
   /// The countdown row of Claude Code's own auto-block (` ⚠ Claude Code will automatically block this request in 1:54, to avoid …`):
   /// its seconds, and the rows with its digits masked. Only a row that says "automatically block" is touched (digits in a command or a
   /// question are not).
+  /// The most a countdown read off the screen is taken to say (a day): the real one starts near two minutes.
+  static let countdownCap = 86_400
+
   static func maskCountdown(_ rows: [String]) -> (rows: [String], seconds: Int?) {
     var seconds: Int?
     let masked = rows.map { row -> String in
       guard row.contains("automatically block") else { return row }
       if let r = row.range(of: #"\d+:\d\d"#, options: .regularExpression) {
-        let parts = row[r].split(separator: ":").compactMap { Int($0) }
-        if parts.count == 2 { seconds = parts[0] * 60 + parts[1] }
+        // screen text: any digits can stand there, so the minutes are bounded before they are multiplied (an unchecked `* 60` on a
+        // number near Int.max ends the app, on every look while the row is on the pane)
+        let parts = row[r].split(separator: ":").map { Int($0) ?? countdownCap }
+        if parts.count == 2 { seconds = min(countdownCap, min(parts[0], countdownCap / 60) * 60 + min(parts[1], 59)) }
         return row.replacingCharacters(in: r, with: "#:##")
       }
       if let r = row.range(of: #"\d+ ?(seconds|s)\b"#, options: .regularExpression) {
-        seconds = Int(row[r].prefix(while: { $0.isNumber }))
+        seconds = min(countdownCap, Int(row[r].prefix(while: { $0.isNumber })) ?? countdownCap)
         return row.replacingCharacters(in: r, with: "#s")
       }
       return row
@@ -145,7 +186,7 @@ public enum PromptDetector {
     while let l = tail.last, isBlank(l) { tail.removeLast() }
     guard !tail.isEmpty else { return nil }
     let counted = maskCountdown(tail)
-    tail = counted.rows
+    tail = maskQueueCounter(counted.rows)
     let cleaned = tail.map(DialogMatcher.clean)
     if let bottom = cleaned.last, statusBar.contains(where: bottom.contains) { return nil }
     if DialogMatcher.liveDialog(tail) != .none { return nil }
@@ -193,7 +234,7 @@ public enum PromptDetector {
       let region = Array(tail[start...])
       guard region.filter({ lead($0).text.first == DialogMatcher.Strings.pointer }).count == 1 else { continue }
       switch DialogMatcher.classify(region) {
-      case .trust, .mcpConsent, .bypassDisclaimer, .loginExpired, .devChannels: return nil
+      case .trust, .mcpConsent, .bypassDisclaimer, .loginExpired, .devChannels, .computerUsePermissions, .usageLimit: return nil
       default: break
       }
       let footer = footers.contains(cleaned[tail.count - 1])
@@ -201,7 +242,8 @@ public enum PromptDetector {
         kind: kind(of: region, question: questionRow.map { cleaned[$0] }),
         question: questionRow.flatMap { question(from: tail[$0]) }, footer: footer, region: region,
         signature: signature(tail, from: start, optionsFrom: top, label: cur.label, footer: footer),
-        autoBlockSeconds: region.contains(where: { $0.contains("automatically block") }) ? counted.seconds : nil)
+        autoBlockSeconds: region.contains(where: { $0.contains("automatically block") }) ? counted.seconds : nil,
+        toolFooter: footer && cleaned[tail.count - 1].hasPrefix("Esc to cancel"))
     }
     return nil
   }

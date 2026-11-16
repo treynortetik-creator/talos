@@ -5,6 +5,13 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const DEFAULT_PORT = 4173
+
+/**
+ * The host the preview server binds and the specs open: IPv4, never `localhost`. Playwright's route.fetch tries ::1 for
+ * localhost, and where a connect to ::1 with nothing listening hangs instead of being refused (WSL 2), every spec that
+ * fetches through page.route ran into its timeout (the themes specs: 48 tests on three engines).
+ */
+export const WEB_PREVIEW_HOST = '127.0.0.1'
 const CI_SCRIPT = fileURLToPath(new URL('../../../../scripts/ci-local.sh', import.meta.url))
 
 function fromScript(name: string): number {

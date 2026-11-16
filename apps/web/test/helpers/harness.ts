@@ -46,7 +46,14 @@ const b64url = (b: Buffer) => b.toString('base64url')
 const rand = (n = 32) => b64url(Buffer.from(crypto.getRandomValues(new Uint8Array(n))))
 
 type Session = { id: string; deviceId?: string; pinned: boolean }
-type EnrolledDevice = { id: string; name: string; pubkey_jwk: Record<string, string>; binding: string; pinned: boolean }
+type EnrolledDevice = {
+  id: string
+  name: string
+  pubkey_jwk: Record<string, string>
+  binding: string
+  pinned: boolean
+  first?: boolean
+}
 
 export type Harness = Awaited<ReturnType<typeof startHarness>>
 
@@ -214,23 +221,6 @@ export async function startHarness(relayOpts: FakeRelayOptions = {}) {
       }
       return send(res, 200, { ok: true }, cookieHeader(newSession(attach && claimed ? { deviceId: claimed.id } : {})))
     }
-    if (path === '/api/auth/stepup/options' && method === 'POST') {
-      if (!session) return send(res, 401, { error: 'session' })
-      const challenge = rand()
-      challenges.set(challenge, { kind: 'get', purpose: String(body.purpose) })
-      return send(res, 200, {
-        challenge,
-        rpId: rpId(),
-        userVerification: 'required',
-        timeout: 60_000,
-        allowCredentials: [],
-      })
-    }
-    if (path === '/api/auth/stepup/verify' && method === 'POST') {
-      if (!session) return send(res, 401, { error: 'session' })
-      if (!checkCeremony(body.response, 'get', String(body.purpose))) return send(res, 401, { error: 'verify' })
-      return send(res, 200, { stepup_token: relay.mintStepup(String(body.purpose)) })
-    }
     if (path === '/api/auth/device/verify' && method === 'POST') {
       if (!session) return send(res, 401, { error: 'session' })
       const parsed = routes.deviceVerify.req.safeParse(body)
@@ -260,6 +250,7 @@ export async function startHarness(relayOpts: FakeRelayOptions = {}) {
       return send(res, 200, {
         ...(session.deviceId ? { device_id: session.deviceId } : {}),
         device_pinned: session.pinned || Boolean(dev?.pinned),
+        ...(dev?.first ? { first_run: true } : {}),
         has_passkey: credentials.size > 0,
         rp_id: rpId(),
         version: 'test',
@@ -447,11 +438,20 @@ export async function startHarness(relayOpts: FakeRelayOptions = {}) {
       return { code, link: `${origin}/enroll#${code}` }
     },
     /** What the Mac's y/N does: pin (or refuse) a device and tell the apps. */
-    pinDevice(deviceId: string, ok = true, reason?: string) {
+    /** `first`: the bridge's word that this was the agent's first device, on an agent never set up (first run). */
+    pinDevice(deviceId: string, ok = true, reason?: string, opts: { first?: boolean } = {}) {
       const d = devices.get(deviceId)
       if (d) d.pinned = ok
+      if (d && ok && opts.first) d.first = true
       for (const s of sessions.values()) if (s.deviceId === deviceId) s.pinned = ok
-      relay.sendToApps(mkFrame('device.pinned', { device_id: deviceId, ok, ...(reason ? { reason } : {}) }))
+      relay.sendToApps(
+        mkFrame('device.pinned', {
+          device_id: deviceId,
+          ok,
+          ...(reason ? { reason } : {}),
+          ...(opts.first ? { first: true } : {}),
+        }),
+      )
     },
     /** A signed-in session with a seeded device key (skips enrollment; used on WebKit where passkeys cannot be automated). */
     async seedDevice(context: BrowserContext, page: Page, opts: { pinned?: boolean } = {}) {

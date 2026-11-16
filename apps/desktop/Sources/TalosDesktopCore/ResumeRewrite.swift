@@ -1,7 +1,7 @@
 import Foundation
 
 /// Rewrites claude's session flags (DESKTOP-SPEC 4.1, 4.3 step 6). The stored `args` never carry a session flag: every
-/// start strips them and appends exactly one `--resume <id>` or `--session-id <uuid>`.
+/// start strips them and appends exactly one `--resume=<uuid>` or `--session-id=<uuid>`. The readers below take both forms.
 public enum ResumeRewrite {
   public enum Mode: Equatable, Sendable {
     case resume(String)
@@ -33,11 +33,16 @@ public enum ResumeRewrite {
     return out
   }
 
+  /// The stored args with exactly one session flag, as ONE argument (`--resume=<id>`, `--session-id=<id>`), so the id can never be read as
+  /// a flag of its own. The id comes from desktop.json, which an agent may be able to write, and is outside the launch seal (the fingerprint
+  /// strips it): anything but a UUID gets no session flag at all here. Main's start refuses such an id before it gets this far
+  /// (`launchLocked`, `SupervisorNotice.sessionIdInvalid`); this is the second fence.
   public static func apply(_ args: [String], _ mode: Mode) -> [String] {
     var out = strip(args)
     switch mode {
-    case .resume(let id): out += ["--resume", id]
-    case .newSession(let id): out += ["--session-id", id]
+    case .resume(let id) where isUUID(id): out.append("--resume=" + id)
+    case .newSession(let id) where isUUID(id): out.append("--session-id=" + id)
+    case .resume, .newSession: break
     }
     return out
   }

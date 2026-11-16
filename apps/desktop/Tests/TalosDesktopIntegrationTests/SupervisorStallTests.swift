@@ -402,4 +402,57 @@ struct SupervisorStallTests {
     #expect(count("needs_you why=", in: r.audit) == 3, "the question, the stall and the folder-trust dialog, once each: \(r.audit)")
     #expect(r.phase() == .starting)
   }
+
+  /// The dialog stall is timed on the supervisor's own clock. The pane's last output is a wall time, and a Mac clock set forward makes it
+  /// look an hour old at once: the "a dialog needs you" warning must still wait for `dialogStall` of real quiet, not go off at once.
+  @Test(arguments: bothHosts)
+  func aWallClockSetForwardDoesNotRaiseTheDialogStallEarly(kind: HostKind) throws {
+    var t = Self.timings()
+    t.dialogStall = 60
+    let r = try Rig(kind, scenario: "dev-dialog-then-trust.sh", timings: t, configure: { $0.autoConfirmRestart = false })
+    defer { r.teardown() }
+    r.sup.detach()
+    r.wrapHost = { ClockSetForwardHost($0) }
+    r.makeSupervisor()
+    r.start()
+    #expect(r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart }, "audit: \(r.audit)")
+    r.humanEnter()
+    #expect(r.wait(10) { r.screenContains("Yes, I trust this folder") }, "the second dialog is up")
+    for _ in 0..<10 { r.sup.tickNow() }
+    #expect(r.sup.status.needsYou != .dialog("folder trust"), "not quiet for long yet: \(r.audit)")
+    r.clock.advance(61)
+    #expect(
+      r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .dialog("folder trust") },
+      "needsYou \(String(describing: r.sup.status.needsYou)), audit: \(r.audit)")
+  }
+}
+
+/// The real host, with its last output read as if the Mac's clock had been set an hour forward since. Everything else goes to the real one.
+private final class ClockSetForwardHost: PtyHost, @unchecked Sendable {
+  private let base: PtyHost
+  init(_ base: PtyHost) { self.base = base }
+  var kind: HostKind { base.kind }
+  func start(executable: String, args: [String], env: [String: String], cwd: String) throws {
+    try base.start(executable: executable, args: args, env: env, cwd: cwd)
+  }
+  func restart(executable: String, args: [String], env: [String: String], cwd: String) throws {
+    try base.restart(executable: executable, args: args, env: env, cwd: cwd)
+  }
+  func attachIfRunning() -> Bool { base.attachIfRunning() }
+  func send(keys: [UInt8]) -> SendOutcome { base.send(keys: keys) }
+  func sendDialogKey(_ key: DialogKey) -> SendOutcome { base.sendDialogKey(key) }
+  func visibleRows() -> [String]? { base.visibleRows() }
+  func lastOutputAt() -> Date? { base.lastOutputAt()?.addingTimeInterval(-3600) }
+  func terminate(graceSeconds: Double) { base.terminate(graceSeconds: graceSeconds) }
+  func close() { base.close() }
+  func detach() { base.detach() }
+  func clientActivity() -> Double? { base.clientActivity() }
+  func clientActivities() -> [Double]? { base.clientActivities() }
+  var childPid: Int32? { base.childPid }
+  var onExit: (@Sendable (ExitInfo) -> Void)? {
+    get { base.onExit }
+    set { base.onExit = newValue }
+  }
+  func setMarker(_ key: String, _ value: String) { base.setMarker(key, value) }
+  func marker(_ key: String) -> String? { base.marker(key) }
 }

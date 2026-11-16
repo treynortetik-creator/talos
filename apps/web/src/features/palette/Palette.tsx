@@ -1,11 +1,13 @@
 // The Cmd+K palette (and the Cmd+J Needs-you list, which is the same box with another list). One component for the desktop dialog and the
 // phone's full-screen sheet. It only ever OPENS things: a Needs-you card opens at /card/:id, and the answer is that card's own buttons.
+
 import { useEffect, useId, useMemo, useState } from 'react'
 import { useLocation, useMatch, useNavigate } from 'react-router'
 import { useStore } from 'zustand'
 import { DEFAULT_KEYMAP, isMacPlatform, type KeyEntry } from '../../lib/keymap.ts'
 import { cn } from '../../ui/cn.ts'
 import { Dialog, DialogContent, DialogTitle } from '../../ui/index.ts'
+import { openBugReport } from '../bugreport/store.ts'
 import { useAwaitingOwner } from '../cards/useAwaitingOwner.ts'
 import { commandBlock, filterCommands } from '../session/logic.ts'
 import { useSessionController } from '../session/store.ts'
@@ -125,6 +127,7 @@ export function Palette({
       toggleSession: ctx.toggleSession ?? (() => false),
       toggleSidebar: ctx.toggleSidebar ?? (() => {}),
       closeDetail: close,
+      openBugReport: () => void openBugReport(),
     })
   }
 

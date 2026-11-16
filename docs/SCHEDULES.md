@@ -402,6 +402,10 @@ export const ScheduleCardPayload = z.strictObject({
 })
 ```
 
+The 120 stays (every shipped app refuses a longer `when_text`). Chronos's own words for many fire times run past it (12 times,
+the documented maximum, is about 140 characters), so the bridge cuts its validate answer where it reads it
+(`shortWhenText`, `ChronosValidateOk`): as many times as fit, then "and N more"; any other long text ends in an ellipsis.
+
 **Runner storage (Chronos fields; the only mapping):**
 
 | `runner`                             | `in_session` | `headless`       | Meaning                                                                                                      | Editable from Talos                                                                                          |
@@ -893,6 +897,31 @@ job can have it; a heartbeat (a check the bridge runs itself) is refused with a 
 
 ---
 
+### S3.9 Chronos on Linux and the Windows PC
+
+- **Install.** Chronos's own `install.sh` runs on Linux (Chronos 670c94c, "Install on Linux: session jobs without launchd"): it
+  copies the runtime to `~/.local/share/chronos`, makes the config, jobs and UI token as on a Mac, and loads nothing. Discovery
+  finds it there unchanged (`TALOS_APP_CHRONOS_AUTODISCOVER` is on by default). On the Windows PC, Setup installs it in the
+  distro as the talos user from a pinned, checksummed Chronos (the Windows kit).
+- **Then Talos takes it over (S3.7).** A fresh Chronos reports `session_runner: "hook"`, so the bridge stays read-only
+  (`session_runner_conflict`) until it is switched: on Linux the owner runs `talos-app schedules adopt`; on the Windows PC, Setup
+  runs the same switch on the fresh install, which has no jobs to approve (`chronos api config set session_runner talos
+  approval_required true`).
+- **What runs.** Jobs that run in a Talos thread (`runner: session`): the bridge's 60 s loop is their clock (`dueForSession`,
+  with catch-up at start inside `catchup_min`). Jobs that run by themselves (`runner: headless`, and command jobs) run from
+  Chronos's own tick, which on Linux is a systemd user timer its installer starts (`chronos-tick.timer`, every 5 minutes,
+  `KillMode=process` so the runs it starts outlive it; Chronos PR #10). Whether that tick runs is judged by its beat, never by the
+  platform (Pantheon 2026-11-15): the adapter's `validate` and `apply` allow a background job off a Mac only while the snapshot's
+  `tick_age_s` is within two intervals plus a minute (`tickBeating`), and refuse it in plain words otherwise (`headlessOffMac`).
+  A job limited to the tools it lists is refused off a Mac whatever the timer: the narrow run it needs comes with Chronos's
+  runtime at a root-owned path (Later, below). Health names the jobs that can't run (`cannot_run_here`) and why. The kit's jobs
+  register with `talos-jobs.py register --full-access` off a Mac; its version check reads the runtime from the timer's service
+  (`ExecStart`) there, as it reads the launchd plist on a Mac.
+- **Words.** Every schedules sentence follows the computer (owner-words.ts). With no Chronos found: a Linux computer is told it
+  can be installed, the Windows PC that Setup installs it.
+- **Later.** When headless jobs with restricted tool lists come off a Mac, Chronos's runtime moves
+  to a root-owned fixed path the bridge uses on a Talos distro with no env override (as the permission hook's path is checked).
+
 ## S4. Relay responsibilities (minimal)
 
 The relay never stores the registry, a snapshot, a prompt or a run record. Changes go in
@@ -1141,6 +1170,9 @@ Accessibility follows SPEC 8.9:
   unknown id answer `SKIP: …` / `not yours: …`. `schedule_run_start` is repeatable for the session's own open claim (it
   answers `GO` again, so a lost answer costs nothing); after the run is closed it answers `SKIP: already done`. A successful
   `schedule_run_done` settles the router's claim, so a session that parks afterwards is not reported as having stopped.
+- With no hub socket the answer says to try again shortly, but once the link has been down for over 2 minutes (`HUB_DOWN_STALE_MS`),
+  or since the session's bridge started, it says since when instead, that this session may be older than the main bridge, and
+  that it needs a restart: waiting will not bring that link back.
 - A request the hub cannot answer (no hub socket, a main bridge too old to know the request, no reply in 60 to 150 s depending on
   the tool) comes back as a failure that says the action may or may not have run and what to do next (for a start: check
   `schedules_list`, asking again is safe; for a propose: a card may be waiting, don't propose again until you've looked); it is
@@ -1305,7 +1337,19 @@ Why this and not the alternatives:
 3. **Session returns inside the window.** The next `dueForSession` (≤ 60 s after the bridge goes live) offers the job.
    It runs normally, and `last_run.started_at` shows it ran late.
 4. **Window passes.** The day becomes `missed`. Nothing re-runs on its own. The bridge posts the S3.6 system row when it
-   next comes up, and Run now is the recovery path.
+   next comes up, and Run now is the recovery path. The row says why from what the bridge did that day: "no session was
+   running in its window" only when the job was never offered; "it was skipped at its time (paused) and did not come due
+   again in its window" when the session answered the offer with SKIP; "the session was asked to run it and never started
+   it" when an offer went out and no `schedule_run_start` claimed it.
+5. **An offer that ends in SKIP is given back.** When `schedule_run_start` answers SKIP before anything was claimed (the
+   job was paused, on hold, not due), the offer is marked released in the sidecar. If Chronos lists the job as due again
+   (the owner resumed it inside the window), the runner offers it again under a new run id; the old id is dead. At most
+   three offers of one job and slot end in SKIP before the runner stops asking. A heartbeat slot whose claim call throws
+   (the scheduler did not answer) is given back the same way and tried again on the next ticks; after three failed tries
+   the owner gets one system row, the run list shows a failed entry and `schedule.status` carries the alert.
+6. **A background job whose result thread is archived.** Its run posts to the default thread (an archived thread is in
+   no list and no badge). The live bridge pauses the job once and says so in the default thread; if the owner resumes it
+   without changing the thread, it runs and keeps posting to the default thread.
 
 ### S7.5 State machine per `(job, ds)`
 

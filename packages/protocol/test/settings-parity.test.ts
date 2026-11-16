@@ -154,7 +154,11 @@ function probe() {
       describeChange({ path: p, old: readConfigPath(current, p), new: validFor(p) }),
     ),
     read_default: AGENT_CONFIG_ALLOWLIST.map((p) => readConfigPath(current, p)),
-    patch_for_all: agentConfigPatch(AGENT_CONFIG_ALLOWLIST.map((p) => ({ path: p, new: validFor(p) }))),
+    patch_for_all: agentConfigPatch(
+      AGENT_CONFIG_ALLOWLIST.map((p) => ({ path: p, new: validFor(p) })),
+      current,
+      '2026-11-09T00:00:00.000Z',
+    ),
   }
   // unknown fields from a newer peer: top level, and one inside every section
   const future = base()
@@ -169,9 +173,7 @@ function probe() {
   return out
 }
 function readConfigSafe(path: string) {
-  return AGENT_CONFIG_ALLOWLIST.includes(path as AgentConfigPath)
-    ? readConfigPath(current, path as AgentConfigPath)
-    : null
+  return (AGENT_CONFIG_ALLOWLIST as readonly string[]).includes(path) ? readConfigPath(current, path) : null
 }
 function validFor(p: AgentConfigPath) {
   return p === 'quiet_window' ? { start: '22:00', end: '07:00' } : p === 'agent.name' ? 'Atlas' : VALID[p]

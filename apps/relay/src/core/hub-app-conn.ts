@@ -8,6 +8,7 @@ import {
   MAX_FRAME_BYTES_UNAUTH,
   newUlid,
   parseFrameText,
+  WIDE_FEATURES_FEATURE,
   WS_CLOSE,
 } from '@talos-app/protocol'
 import { noteDeviceUse, type Session, sessionActive, sessionEndReason, sessionPinned } from '../auth/contract.ts'
@@ -72,6 +73,7 @@ export const appConnFrames = {
       handshake: null,
       limited: false,
       helloSeq: 0,
+      wideFeatures: false,
     }
     this.apps.set(a.id, a)
     a.handshake = this.d.clock.setTimeout(() => {
@@ -172,7 +174,18 @@ export const appConnFrames = {
     this.d.clock.clearTimeout(a.handshake)
     a.helloSeq = frame.last_seq
     a.limited = !sessionPinned(a.session)
+    a.wideFeatures = frame.client.features?.includes(WIDE_FEATURES_FEATURE) === true
     this.sendApp(a, this.ready(!a.limited))
     if (!a.limited && frame.last_seq > 0) this.sendCatchup(a, frame.last_seq)
   },
+}
+
+/**
+ * How many signed-in, pinned app connections read the bridge's whole features list (their hello listed
+ * WIDE_FEATURES_FEATURE) and how many get the first FEATURES_MAX_V1 only: counts for /api/status, no identifiers.
+ */
+export function appWidthOf(apps: ReadonlyMap<string, AppConn>): { wide: number; narrow: number } {
+  const on = [...apps.values()].filter((a) => a.authed && !a.limited)
+  const wide = on.filter((a) => a.wideFeatures).length
+  return { wide, narrow: on.length - wide }
 }

@@ -1,5 +1,5 @@
 // Pins who may change each setting, exactly as it behaves today: the phone path (checkConfigPatch), the agent path
-// (resolveConfigChanges / verifyConfigPayload) and which fields need step-up. The expectations below are written out by
+// (resolveConfigChanges / verifyConfigPayload); no field needs a passkey step-up since 2026-11-14. The expectations below are written out by
 // hand and do not read the settings table, so moving a field from one side to the other turns a line red here.
 import { describe, expect, it } from 'vitest'
 import defaultConfig from '../../../examples/config.default.json' with { type: 'json' }
@@ -7,7 +7,6 @@ import {
   AGENT_CONFIG_ALLOWLIST,
   AgentConfig,
   CONFIG_PATCH_ALLOWLIST,
-  CONFIG_SESSION_STEPUP_FIELDS,
   checkConfigPatch,
   resolveConfigChanges,
   STOCK_THEMES,
@@ -22,10 +21,12 @@ function patchFor(path: string, value: unknown): Record<string, unknown> {
   return sub === undefined ? { [top as string]: value } : { [top as string]: { [sub]: value } }
 }
 
-const PLAIN = { ok: true, touchesWorkEnabled: false } as const
-const WORK = { ok: true, touchesWorkEnabled: true } as const
-const SESSION = { ok: true, touchesWorkEnabled: false, stepupPurpose: 'config:session' } as const
-const TRUST_ON = { ok: true, touchesWorkEnabled: false, stepupPurpose: 'config:session', turnsOnTrust: true } as const
+// owner ruling 2026-11-14: no step-up anywhere but sign-in, so every allowed patch is just allowed (the work, session and
+// trust-on purposes are gone); the bug webhook keeps its flag for the relay's address check
+const PLAIN = { ok: true } as const
+const WORK = PLAIN
+const SESSION = PLAIN
+const TRUST_ON = PLAIN
 const refused = (path: string) => ({ ok: false, path }) as const
 
 describe('phone path: checkConfigPatch result for every field', () => {
@@ -62,9 +63,16 @@ describe('phone path: checkConfigPatch result for every field', () => {
     ['permission_relay', true, SESSION],
     ['session_models', ['default'], PLAIN],
     ['memory_browser', false, PLAIN],
+    ['media_keep_days', 30, PLAIN],
+    ['always_allow', [], PLAIN],
+    ['dev', {}, PLAIN],
+    ['dev.thread_fence', false, PLAIN],
+    ['dev.note_lookup', false, PLAIN],
+    ['dev.unlisted_key', 1, refused('dev.unlisted_key')],
+    ['settings_lock', false, PLAIN],
     ['dedicated', {}, PLAIN],
     ['theme', 'paper', PLAIN],
-    // trust mode: off is free, on needs the session step-up, anything else is refused (docs/SECURITY.md "Trust mode")
+    // trust mode: a boolean or null, anything else is refused
     ['trust_mode', true, TRUST_ON],
     ['trust_mode', false, PLAIN],
     ['trust_mode', null, PLAIN],
@@ -92,17 +100,14 @@ describe('phone path: checkConfigPatch result for every field', () => {
   it('anything that is not an object is refused with an empty path', () => {
     for (const bad of [null, undefined, [], 'x', 3]) expect(checkConfigPatch(bad)).toEqual(refused(''))
   })
-  it('two work step-up fields in one patch are one work step-up', () => {
+  it('the work fields in one patch are one plain patch', () => {
     expect(checkConfigPatch({ work: { enabled: [], retention: 'buffer' } })).toEqual(WORK)
     expect(checkConfigPatch({ work: { label: 'x', retention: 'buffer' } })).toEqual(WORK)
   })
-  it('the session step-up and the work step-up cannot share a patch; the session field is named', () => {
-    expect(checkConfigPatch({ permission_relay: true, work: { enabled: [] } })).toEqual(refused('permission_relay'))
-    expect(checkConfigPatch({ permission_relay: true, work: { retention: 'buffer' } })).toEqual(
-      refused('permission_relay'),
-    )
-    expect(checkConfigPatch({ permission_relay: true, work: { label: 'x' } })).toEqual(SESSION)
-    expect(checkConfigPatch({ permission_relay: true, timezone: 'UTC' })).toEqual(SESSION)
+  it('fields that once needed different step-ups now share a patch', () => {
+    expect(checkConfigPatch({ permission_relay: true, work: { enabled: [] } })).toEqual(PLAIN)
+    expect(checkConfigPatch({ permission_relay: true, work: { retention: 'buffer' } })).toEqual(PLAIN)
+    expect(checkConfigPatch({ permission_relay: true, timezone: 'UTC' })).toEqual(PLAIN)
   })
   it('the first forbidden path is the one named', () => {
     expect(checkConfigPatch({ timezone: 'UTC', mirror: {}, bogus: 1 })).toEqual(refused('mirror'))
@@ -131,46 +136,63 @@ describe('phone path: the exported lists', () => {
       'permission_relay',
       'session_models',
       'memory_browser',
+      'media_keep_days',
+      'always_allow',
+      'dev.thread_fence',
+      'dev.note_lookup',
+      'settings_lock',
       'dedicated',
       'theme',
       'trust_mode',
+      'bug_webhook_url',
     ])
   })
-  it('only permission_relay needs the session step-up every time; trust_mode needs it only to turn on', () => {
-    expect([...CONFIG_SESSION_STEPUP_FIELDS]).toEqual(['permission_relay'])
+  it('no setting needs a step-up (2026-11-14): the list that named them is gone', async () => {
+    expect('CONFIG_SESSION_STEPUP_FIELDS' in (await import('../src/index.ts'))).toBe(false)
   })
 })
 
 describe('agent path: config_propose result for every field', () => {
   const ALLOWED_LIST =
-    'agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme'
+    'agent.name, agent.voice, agent.voice_persona, owner.display_name, threads.<id>.<field>, default_thread, timezone, quiet_window, notifications.master, notifications.show_thread_names, voice_notes.reply_with_voice, voice_notes.driving_until, work.label, work.ask_note, session_models, memory_browser, media_keep_days, always_allow, dev.thread_fence, dev.note_lookup, settings_lock, dedicated, theme'
+  // owner ruling 2026-11-14: the agent changes the rest when he asks; these stay the owner's
   const NAMED = new Set([
     'permission_relay',
-    'work',
-    'notifications',
-    'threads',
-    'default_thread',
-    'session_models',
-    'dedicated',
-    'memory_browser',
-    'agent.voice_persona',
+    'work.enabled',
+    'work.thread',
+    'work.retention',
     'trust_mode',
+    'bug_webhook_url',
   ])
-  const named = (p: string) => NAMED.has(p) || NAMED.has(p.split('.')[0] as string)
+  const named = (p: string) => NAMED.has(p)
   const refusal = (p: string) =>
     named(p)
       ? `${p} can't be changed by you. The owner changes it in Settings. Allowed: ${ALLOWED_LIST}.`
       : `${p} is not a setting you may propose. Allowed: ${ALLOWED_LIST}. Devices, keys, enrollment and security settings are never on the list.`
 
-  // the seven the agent may propose (six settings and the theme), with a new value that is valid and different from the example config, and what is there now
+  // the table rows the agent may propose (threads through the per-thread paths below), with a new value that is valid and different from the example config, and what is there now
   const allowed: Array<[string, unknown, unknown]> = [
     ['agent.name', 'Atlas', 'Talos'],
     ['agent.voice', 'marin', 'meridian'],
     ['owner.display_name', 'Alex Example', 'You'],
     ['timezone', 'Europe/Paris', 'UTC'],
     ['quiet_window', { start: '22:00', end: '07:00' }, null],
+    ['notifications.master', false, true],
+    ['notifications.show_thread_names', 'all', 'fixed_only'],
     ['voice_notes.reply_with_voice', 'always', 'when_voice'],
+    ['voice_notes.driving_until', '2026-11-09T18:00:00.000Z', null],
+    ['session_models', ['default', 'opus'], ['default', 'opus', 'sonnet', 'haiku']],
+    ['dedicated', true, false],
     ['theme', { ...structuredClone(STOCK_THEMES[1]), name: 'dusk' }, 'talos'],
+    ['agent.voice_persona', 'Speak briefly.', ''],
+    ['work.label', 'Office', 'Work systems'],
+    ['work.ask_note', 'Ask Sam first.', 'Ask your IT team before connecting these.'],
+    ['memory_browser', false, true],
+    ['media_keep_days', 30, null],
+    ['always_allow', ['email'], []],
+    ['dev.thread_fence', false, true],
+    ['dev.note_lookup', false, true],
+    ['settings_lock', true, false],
   ]
   it.each(allowed)('%s is allowed', (path, value, old) => {
     expect(resolveConfigChanges([{ path, value }], config)).toEqual({
@@ -183,28 +205,20 @@ describe('agent path: config_propose result for every field', () => {
     'version',
     'rev',
     'agent',
-    'agent.voice_persona',
     'owner',
     'threads',
-    'default_thread',
     'notifications',
-    'notifications.master',
-    'notifications.show_thread_names',
     'work',
     'work.enabled',
     'work.thread',
-    'work.label',
-    'work.ask_note',
     'work.retention',
     'voice_notes',
-    'voice_notes.driving_until',
     'permission_relay',
     'permission_stepup',
     'sessions_view',
-    'session_models',
-    'memory_browser',
-    'dedicated',
     'trust_mode',
+    'bug_webhook_url',
+    'bug_webhook_host',
     'no_such_setting',
   ]
   it.each(notAllowed)('%s is refused with its exact words', (path) => {
@@ -234,12 +248,54 @@ describe('agent path: config_propose result for every field', () => {
     expect([...AGENT_CONFIG_ALLOWLIST]).toEqual([
       'agent.name',
       'agent.voice',
+      'agent.voice_persona',
       'owner.display_name',
+      'threads',
+      'default_thread',
       'timezone',
       'quiet_window',
+      'notifications.master',
+      'notifications.show_thread_names',
       'voice_notes.reply_with_voice',
+      'voice_notes.driving_until',
+      'work.label',
+      'work.ask_note',
+      'session_models',
+      'memory_browser',
+      'media_keep_days',
+      'always_allow',
+      'dev.thread_fence',
+      'dev.note_lookup',
+      'settings_lock',
+      'dedicated',
       'theme',
     ])
+  })
+  it('default_thread and the thread paths are allowed with a valid value (the example config has two threads)', () => {
+    const base = AgentConfig.parse({
+      ...defaultConfig,
+      threads: [
+        ...defaultConfig.threads,
+        {
+          id: 'trip',
+          name: 'Trip',
+          kind: 'agent',
+          order: 5,
+          notify: 'all',
+          voice_context: 'recent',
+          archived: false,
+          created_at: '2026-10-28T00:00:00.000Z',
+        },
+      ],
+    })
+    expect(resolveConfigChanges([{ path: 'default_thread', value: 'trip' }], base)).toEqual({
+      ok: true,
+      changes: [{ path: 'default_thread', old: 'general', new: 'trip' }],
+    })
+    expect(resolveConfigChanges([{ path: 'threads.trip.name', value: 'Travel' }], base)).toEqual({
+      ok: true,
+      changes: [{ path: 'threads.trip.name', old: 'Trip', new: 'Travel' }],
+    })
   })
   it('a proposal for a field changes nothing about which fields need step-up: the agent path has no step-up of its own', () => {
     const r = resolveConfigChanges([{ path: 'permission_relay', value: true }], config)

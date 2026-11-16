@@ -21,11 +21,22 @@ ok()   { printf '  \033[32mPASS\033[0m  %s\n' "$1"; pass=$((pass+1)); }
 bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; fail=$((fail+1)); }
 note() { printf '        %s\n' "$1"; }
 
+# where the wiki is: wiki/ unless .talos-version has a layout line (a layout-1 agent needs no resolver, and so no python3, for this);
+# with one, the one resolver answers (layout 2: memory/wiki/) and a refusal stops this script with its message
+WIKI_REL=wiki
+if grep -qi '^[[:space:]]*layout' "$PWD/.talos-version" 2>/dev/null; then
+  [ -f "$HERE/_talos_layout.py" ] || { echo "$PWD/.talos-version has a layout line but $HERE/_talos_layout.py is missing: refusing to guess where the wiki is"; exit 1; }
+  _w="$(python3 "$HERE/_talos_layout.py" "$PWD" wiki)" || exit 1
+  WIKI_REL="${_w#"$PWD"/}"
+fi
+WIKI_TOP="${WIKI_REL%%/*}"      # the folder git sees: "wiki", or "memory" (which holds it) on layout 2
+WIKI_SCAN="$WIKI_REL/"; [ "$WIKI_TOP" = memory ] && WIKI_SCAN=""   # a layout-2 wiki is inside memory/, scanned anyway
+
 echo "Verifying install in: $(pwd)"
 echo
 
 # 1. no unrendered placeholders anywhere live
-hits=$(grep -rlE '\{\{[A-Z_]+\}\}' CLAUDE.md wiki/ memory/ .learnings/ .claude/ 2>/dev/null | grep -v '/examples/')
+hits=$(grep -rlE '\{\{[A-Z_]+\}\}' CLAUDE.md $WIKI_SCAN memory/ .learnings/ .claude/ 2>/dev/null | grep -v '/examples/')
 if [ -z "$hits" ]; then ok "no unrendered {{placeholders}}"
 else bad "unrendered placeholders remain"; note "$(echo "$hits" | tr '\n' ' ')"; fi
 
@@ -114,7 +125,7 @@ else bad "hooks/session-start.py missing"; fi
 
 # 5. required files exist
 for f in memory/STATE.md memory/tasks.md memory/decisions-ledger.md memory/rules-ledger.md \
-         memory/HANDOFF.md wiki/_index.md wiki/me.md \
+         memory/HANDOFF.md $WIKI_REL/_index.md $WIKI_REL/me.md \
          .learnings/ERRORS.md .learnings/LEARNINGS.md \
          .learnings/FEATURE_REQUESTS.md .learnings/GRADUATION_LOG.md; do
   [ -f "$f" ] && ok "$f" || bad "$f missing"
@@ -133,24 +144,24 @@ if [ -f memory/STATE.md ]; then
 fi
 
 # 6. me.md is real: frontmatter + >=2 links, and something links back to it
-if [ -f wiki/me.md ]; then
-  head -1 wiki/me.md | grep -q '^---' && ok "wiki/me.md has frontmatter" || bad "wiki/me.md has no frontmatter"
-  n=$(grep -o '\[\[[^]|#]*' wiki/me.md | sort -u | wc -l | tr -d ' ')
-  [ "$n" -ge 2 ] && ok "wiki/me.md has $n outbound links" || bad "wiki/me.md has only $n outbound links (need 2)"
-  grep -q '\[\[me\]\]' wiki/_index.md 2>/dev/null && ok "wiki/_index.md links to me" || bad "wiki/_index.md does not link to [[me]]"
+if [ -f "$WIKI_REL/me.md" ]; then
+  head -1 "$WIKI_REL/me.md" | grep -q '^---' && ok "$WIKI_REL/me.md has frontmatter" || bad "$WIKI_REL/me.md has no frontmatter"
+  n=$(grep -o '\[\[[^]|#]*' "$WIKI_REL/me.md" | sort -u | wc -l | tr -d ' ')
+  [ "$n" -ge 2 ] && ok "$WIKI_REL/me.md has $n outbound links" || bad "$WIKI_REL/me.md has only $n outbound links (need 2)"
+  grep -q '\[\[me\]\]' "$WIKI_REL/_index.md" 2>/dev/null && ok "$WIKI_REL/_index.md links to me" || bad "$WIKI_REL/_index.md does not link to [[me]]"
 fi
 
 # 6b. the onboarding progress file (BOOTSTRAP's done-criteria requires it; it is the resume anchor)
-[ -f wiki/_onboarding-progress.md ] && ok "wiki/_onboarding-progress.md" \
-  || bad "wiki/_onboarding-progress.md missing -- a dead session cannot resume without it"
+[ -f "$WIKI_REL/_onboarding-progress.md" ] && ok "$WIKI_REL/_onboarding-progress.md" \
+  || bad "$WIKI_REL/_onboarding-progress.md missing -- a dead session cannot resume without it"
 
 # 7. the wiki lints clean
 if [ -f scripts/wiki-lint.py ]; then
-  out=$(python3 scripts/wiki-lint.py wiki 2>/dev/null | tail -1)
+  out=$(python3 scripts/wiki-lint.py "$WIKI_REL" 2>/dev/null | tail -1)
   case "$out" in
     clean*) ok "wiki lints clean" ;;
-    empty*) bad "wiki is empty -- step 7 never wrote any notes"; note "run: python3 scripts/wiki-lint.py wiki" ;;
-    *)     bad "wiki lint: $out"; note "run: python3 scripts/wiki-lint.py wiki" ;;
+    empty*) bad "wiki is empty -- step 7 never wrote any notes"; note "run: python3 scripts/wiki-lint.py $WIKI_REL" ;;
+    *)     bad "wiki lint: $out"; note "run: python3 scripts/wiki-lint.py $WIKI_REL" ;;
   esac
 fi
 
@@ -191,7 +202,7 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
   if git log -1 >/dev/null 2>&1; then ok "git repo with a commit (undo history exists)"
   else bad "git repo has no commits -- BOOTSTRAP step 7.7 (day-zero commit) never ran"; fi
 else bad "no git repo -- BOOTSTRAP step 7.7 (git init + day-zero commit) never ran"
-     note "git init && git add memory wiki .claude CLAUDE.md && git commit -m 'day zero'"; fi
+     note "git init && git add memory $([ "$WIKI_TOP" = memory ] || echo "$WIKI_TOP ").claude CLAUDE.md && git commit -m 'day zero'"; fi
 
 # ── scheduling (Chronos). Informational only: the agent works without it, so this never fails the install. ──
 if [ -f "${CHRONOS_CONFIG:-$HOME/.config/chronos/config.json}" ] && [ -f scripts/talos-jobs.py ]; then

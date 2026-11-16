@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { psInfo } from '../../src/lifecycle.ts'
 import { InstanceRegistry } from '../../src/schedules/instances.ts'
 import { ChronosBox, draft, MON_0700_EDT, type SchedHarness, sleep, startSched, tempHome, waitFor } from './harness.ts'
 
@@ -23,10 +24,10 @@ function deadPid(): number {
   return r.pid
 }
 
-function psStart(pid: number): string {
-  const r = Bun.spawnSync(['ps', '-p', String(pid), '-o', 'lstart='], { env: { ...process.env, LC_ALL: 'C' } })
-  return r.stdout.toString().trim()
-}
+/** The start time the registry records for a pid, read the way the registry reads it (ps on macOS, /proc on Linux). */
+const psStart = (pid: number): string => psInfo(pid)?.lstart ?? ''
+/** A start time of the same kind as psStart's that no live process has: the pid was recycled. */
+const OTHER_START = process.platform === 'linux' ? 'linux:000000000000:1' : 'Mon Jan  1 00:00:00 2024'
 
 /** What a bridge leaves in its home: instances/<id>.json. */
 function record(home: string, instance: string, pid: number, startedAt: string, extra: object = {}) {
@@ -96,7 +97,7 @@ describe('orphan sweep only closes claims whose owner is gone', () => {
 
   test('a recycled pid (running, but started at another time) counts as gone', async () => {
     const home = tempHome('ow')
-    record(home, 'bi_old', process.pid, 'Mon Jan  1 00:00:00 2024')
+    record(home, 'bi_old', process.pid, OTHER_START)
     const box = boxWithClaimBy('bi_old')
     await startNext(box, home)
     await waitFor(() => markers(box).length > 0, 10_000, 'the failed- marker')
@@ -171,7 +172,7 @@ describe('a superseded bridge is still alive', () => {
     const reg = new InstanceRegistry(join(home, 'instances'))
     expect(reg.stateOf('bi_sup')).toBe('alive')
     h.relay.kickBridge(4409)
-    await waitFor(() => h?.bridge.ctx.mode === 'headless', 10_000, 'headless')
+    await waitFor(() => h?.bridge.client?.superseded === true, 10_000, 'superseded')
     expect(JSON.parse(readFileSync(join(home, 'instances', 'bi_sup.json'), 'utf8')).stopped_at).toBeUndefined()
     expect(reg.stateOf('bi_sup')).toBe('alive')
     await h.stop()

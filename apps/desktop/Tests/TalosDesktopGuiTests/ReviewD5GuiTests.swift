@@ -4,6 +4,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 @testable import TalosDesktop
+import TalosTestSupport
 
 /// Regression tests for the quick-compose panel, through the real panel and real Carbon. Needs TALOS_GUI_TESTS=1.
 /// The two Send tests keep the panel off screen and send to a real web view whose page records what it is handed
@@ -125,7 +126,7 @@ struct ReviewD5HotkeyConflictTests {
   /// gets noErr; the exclusive option on our side gets -9878 (eventHotKeyExistsErr). HotKeys.swift:43 passes 0.
   @Test func aCombinationAnotherProcessHoldsIsReportedAsTaken() throws {
     _ = NSApplication.shared
-    let dir = NSTemporaryDirectory() + "talos-rv-hk-\(UUID().uuidString)"
+    let dir = TestTemp.base + "talos-rv-hk-\(UUID().uuidString)"
     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: dir) }
     try Self.helper.write(toFile: dir + "/h.c", atomically: true, encoding: .utf8)

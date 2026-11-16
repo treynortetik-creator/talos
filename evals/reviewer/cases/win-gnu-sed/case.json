@@ -1,0 +1,16 @@
+{
+  "id": "win-gnu-sed",
+  "title": "A Windows distro script used GNU sed's \\U, which BSD sed prints as a literal U",
+  "base": "38cea9a54b662ad35b849a9a274e6ac49d33ed0a",
+  "buggy": "3714c08b7406482fbc27861b393fc2b64c8bef91",
+  "fix": "2ac36e1f9ace6617ff1f48bd9e323d87357b308f",
+  "expect": [
+    {
+      "file": "apps/windows/distro/talos-wsl.sh",
+      "lines": [64, 76],
+      "severity": "medium",
+      "must": [["sed", "\\\\U"], ["BSD|macOS|GNU|portab|literal U|uppercase|upper-case"]],
+      "note": "normalize() upper-cases the drive letter with GNU sed's \\U; BSD sed prints a literal U, so the path becomes UC:/..."
+    }
+  ]
+}

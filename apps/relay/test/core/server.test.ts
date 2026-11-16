@@ -106,7 +106,12 @@ describe('security headers and static serving', () => {
     relay = await startTestRelay()
     const res = await fetch(`${relay.httpBase}/healthz`)
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ ok: true, version: expect.any(String) })
+    // the session-wait watcher is running: checkable after a deploy without the relay's logs (two times, nothing personal)
+    expect(await res.json()).toEqual({
+      ok: true,
+      version: expect.any(String),
+      session_wait: { running: true, after_ms: 600_000, tick_ms: 60_000 },
+    })
     expect(((await (await fetch(`${relay.httpBase}/healthz`)).json()) as { version: string }).version).not.toBe('0.0.0')
   })
 

@@ -1,12 +1,19 @@
 // What happens after a connection: `ready`, catch-up batches (the lastSeq logic), the reset, and history pages.
 // Handlers of the frame switch in socketClient.ts, which dispatches to them. Each reads the closure through ctx.
-import { type FrameOf, parseFrame } from '@talos-app/protocol'
+import { cardExpiryMs, type FrameOf, hostOf, parseFrame } from '@talos-app/protocol'
+import { rememberHost } from './hostWords.ts'
 import type { FrameContext } from './socket-frames-context.ts'
 import { unknownOfFrame } from './unknownFrames.ts'
 
 export function onReady(ctx: FrameContext, frame: FrameOf<'ready'>): void {
+  rememberHost(hostOf(frame.presence.features)) // presence frames come only on a change: the host is learned here too
   const { store, set, now, lostIds, patchMessage } = ctx
+  // A new connection (or a device just pinned) starts its catch-up over: a seq held on the last one was never counted,
+  // so the relay sends that frame again.
+  ctx.dropHeldSeq()
   const s = store.getState()
+  // `expires_at` is the relay's and the Mac's time: judged on the relay's clock (the offset this `ready` just taught).
+  const relayNow = now() + (s.clockOffset ?? 0)
   const open = frame.open_cards ?? []
   const openIds = new Set(open.map((c) => c.id))
   // A cached card still pending here but not open now was decided or expired while this device was away. It is kept,
@@ -17,7 +24,7 @@ export function onReady(ctx: FrameContext, frame: FrameOf<'ready'>): void {
   // the card stays as it was until the Mac's update lands, and a second tap gets `card_not_pending` from the relay.
   const cards = [
     ...s.cards.map((c) =>
-      c.state === 'pending' && !openIds.has(c.id) && Date.parse(c.expires_at) <= now()
+      c.state === 'pending' && !openIds.has(c.id) && cardExpiryMs(c) <= relayNow
         ? { ...c, state: 'expired' as const }
         : c,
     ),
@@ -53,7 +60,9 @@ export function onCatchupBatch(ctx: FrameContext, frame: FrameOf<'catchup.batch'
     else if (isRecord(raw) && (raw.type === 'message' || raw.type === 'voice_note')) applyStoredOwnerFrame(raw)
     else noteUnknown(unknownOfFrame(raw))
   }
+  // The page itself is contiguous with what came before it, so it always counts. Anything else waits for the last page.
   set((s) => ({ lastSeq: Math.max(s.lastSeq, frame.to_seq) }))
+  ctx.holdSeq(frame.more)
   if (frame.more) send({ type: 'catchup.request', since_seq: frame.to_seq })
   return
 }
@@ -88,7 +97,7 @@ export function onCatchupSummary(ctx: FrameContext, frame: FrameOf<'catchup.summ
 }
 
 export function onHistoryPage(ctx: FrameContext, frame: FrameOf<'history.page'>): void {
-  const { store, set, upsertMessage, historyGen, historyAsked, contextRequests, latestRequests, historyWaiters } = ctx
+  const { upsertMessage, historyGen, historyAsked, contextRequests, latestRequests, historyWaiters } = ctx
   const resetGen = ctx.getResetGen()
   const gen = historyGen.get(frame.request_id)
   historyGen.delete(frame.request_id)
@@ -104,7 +113,7 @@ export function onHistoryPage(ctx: FrameContext, frame: FrameOf<'history.page'>)
     // relay sends no catch-up on the next hello, so what this page holds is where the device now stands.
     if (latestRequests.delete(frame.request_id)) {
       const top = frame.messages.reduce((n, m) => Math.max(n, m.seq ?? 0), 0)
-      if (top > store.getState().lastSeq) set(() => ({ lastSeq: top }))
+      ctx.advanceSeq(top)
     }
   }
   historyWaiters.get(frame.request_id)?.(frame)

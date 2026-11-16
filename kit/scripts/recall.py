@@ -5,7 +5,8 @@
     python3 scripts/recall.py "vendor contract" -k 8 --expand        # + the [[links]] of each top hit
     python3 scripts/recall.py --batch "q1" "q2" "q3"                  # many queries, one process, JSON out
     python3 scripts/recall.py "..." --json
-    python3 scripts/recall.py "what did we decide about X" --rerank   # OPT-IN cross-encoder rerank of the top 15 (below)
+    python3 scripts/recall.py "what did we decide about X" --rerank   # force the cross-encoder rerank of the top 15 (below)
+    python3 scripts/recall.py "vendor contract" --expand --hubs        # the link menu, with hub notes kept in
 
 Standard library only, so it runs on the system python3 (3.9). Two search arms run side by side and are fused
 with Reciprocal-Rank Fusion (semantic weighted a little higher for fuzzy questions), then recently edited notes
@@ -27,11 +28,27 @@ A weak or empty result prints a diagnosis, because "nothing recorded" and "the s
 alike: a control query for a term that has to exist (the title of wiki/me.md) separates `broken` from `stale`
 from `empty`. Absence is a claim about the query, not about the world.
 
---rerank (or RECALL_RERANK=1) is an OPT-IN third step: a cross-encoder (bge-reranker-v2-m3, int8, CPU) re-sorts the top 15
-files by their best chunk. It needs the semantic stack AND the reranker model (bash scripts/memory/setup.sh --rerank, about
-571 MB), costs several seconds per query, and says on the banner line whether it ran. Without either it does nothing and
-the normal order stands. It helped vague "what did we decide" questions and slightly hurt exact name lookups, so ask for
-it on the former. See scripts/memory/mem_rerank.py.
+Link menu: --expand lists, under each top hit, the notes it links to with their `type` and one-line `description` (from
+frontmatter; "(no description)" when absent). Hubs (the top 1% of wiki notes by inbound links, never fewer than 30) are left
+out and counted on a "skipped N hubs" line; --hubs keeps them. Inbound counts are cached in .index/wiki-inbound.json and
+rebuilt when a note is newer. The ranking of the results is never touched.
+
+Keyword arm: with ripgrep (TALOS_RG, then PATH, then /opt/homebrew/bin and /usr/local/bin) ONE rg pass finds the notes that
+contain any query word, and only those are read and scored; the ranked list is identical to reading every note. Without rg
+it reads every note (one stderr note). It runs in a thread while the semantic search answers.
+
+Rerank: a cross-encoder (bge-reranker-v2-m3, int8, CPU) re-sorts the top 15 files by their best chunk. It runs by itself for
+a QUESTION (ends with "?", starts with who/what/when/where/why/how/which/did/do/does/is/are/was/were/can/should, or has
+decide/decided/decision in it) only when the model is installed AND .index/rerank-time.json (from `mem_rerank.py --probe`)
+says one COLD rerank (a fresh worker: start, load, rerank 15, exit, which is what a plain run pays) took under 8.0 seconds. Otherwise it stays off and, once a day, one stderr line says why. --rerank
+forces it on, --no-rerank off; TALOS_RECALL_RERANK=1/0 does the same, and flags beat the variable (RECALL_RERANK, the old
+name, still works). The banner line says whether it ran. See scripts/memory/mem_rerank.py.
+
+Degraded: when the semantic backend was tried and failed, or a rerank was wanted and could not run, the first AND last lines
+of the text output are a WARNING (and --json gets a `degraded` object with the reason). The exit code stays 0 and the keyword
+results still print. Not installed / no index is the opt-in state, not a failure.
+
+Dream-cycle preimage copies (memory/dream/<date>/preimage/) are never indexed and never returned.
 
 Single-writer caution: never fan this script out to parallel sub-agents. Gather with --batch in the main session
 and paste the results into their briefs.
@@ -39,9 +56,11 @@ and paste the results into their briefs.
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict
 
@@ -56,6 +75,10 @@ MEM_SEARCH = os.path.join(HERE, "memory", "mem_search.py")
 RRF_K = 60
 RERANK_TOP = 15            # files fed to the reranker; ranks 16+ keep their order
 RERANK_INFO = {}           # last rerank status per query, surfaced on the banner line and in --json
+RERANK_TIME_FILE = os.path.join(ROOT, ".index", "rerank-time.json")       # written by `mem_rerank.py --probe`
+RERANK_NOTE_FILE = os.path.join(ROOT, ".index", "rerank-off-note-date")   # the day the "reranking is off" line last printed
+RG_NOTE_FILE = os.path.join(ROOT, ".index", "rg-off-note-date")           # the day the "ripgrep unavailable" line last printed
+RERANK_MAX_SECONDS = 8.0   # a question is reranked by default only where one measured cold rerank took less than this
 W_LEXICAL, W_SEMANTIC = 1.0, 1.2
 STALE_HOURS = 48
 SEM_TIMEOUT = 60
@@ -97,13 +120,111 @@ def text_of(path):
     return _TEXT[path]
 
 
+# Fast arm: when ripgrep is installed, ONE `rg -l` pass over the raw notes (all query words at once, no keyword index) names
+# the notes that contain at least one word; only those are read and scored. Scoring is the same loop either way, so the
+# ranked list (and its tie order: -score, then path) is identical. No rg, or an rg that fails: every note is read, as before.
+RG_TIMEOUT = 20
+_RG_CACHE = []          # [path-or-None] once resolved
+_RG_NOTED = False
+
+
+def _in_claude_code_install(real):
+    """True when a real path sits inside a Claude Code install: a folder named claude-code, a .claude folder, or
+    node_modules/@anthropic-ai/. A user or folder that merely has 'claude' in its name is not."""
+    parts = real.split(os.sep)
+    return "claude-code" in parts or ".claude" in parts or any(
+        a == "node_modules" and b == "@anthropic-ai" for a, b in zip(parts, parts[1:]))
+
+
+def find_rg():
+    """A real ripgrep binary or None. Order: $TALOS_RG (when set it is the only candidate, so a missing file there forces
+    the fallback), PATH, /opt/homebrew/bin/rg, /usr/local/bin/rg. A binary bundled inside Claude Code is never used (its
+    path changes with every update, and the PATH entry may be a shell function's target)."""
+    if _RG_CACHE:
+        return _RG_CACHE[0]
+    env = os.environ.get("TALOS_RG")
+    cands = [env] if env else [shutil.which("rg"), "/opt/homebrew/bin/rg", "/usr/local/bin/rg"]
+    found = None
+    for c in cands:
+        if not c or not os.path.isfile(c) or not os.access(c, os.X_OK):
+            continue
+        if not env and _in_claude_code_install(os.path.realpath(c)):
+            continue
+        found = c
+        break
+    _RG_CACHE.append(found)
+    return found
+
+
+def once_a_day(path):
+    """True when the day-stamp file at `path` is not today's, and stamps it. Fail-soft: a folder that cannot be read or
+    written (read-only install) just means the line may print again, never an error."""
+    today = time.strftime("%Y-%m-%d")
+    try:
+        with open(path) as fh:
+            if fh.read().strip() == today:
+                return False
+    except OSError:
+        pass
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(today + "\n")
+    except OSError:
+        pass
+    return True
+
+
+QUIET_NOTES = False     # set by main() for --json / --batch: machine-read output carries no human notes
+
+
+def _note_rg_fallback(why):
+    """No ripgrep is a normal setup: the note prints at most once a day, on stderr, and never for --json / --batch.
+    A misconfiguration (TALOS_RG set but not runnable, or an rg that fails) is a fault, so it says so on every run
+    (once per process)."""
+    global _RG_NOTED
+    if _RG_NOTED or QUIET_NOTES:
+        return
+    _RG_NOTED = True
+    broken = bool(os.environ.get("TALOS_RG")) or not why.startswith("RuntimeError: no rg binary")
+    if broken or once_a_day(RG_NOTE_FILE):
+        print("recall: ripgrep unavailable (%s); using the slower note-by-note keyword search" % why, file=sys.stderr)
+
+
+def _rg_candidates(ws):
+    """Set of corpus files that contain at least one of the words (rg: fixed strings, case-insensitive). Raises on any rg
+    problem, so the caller falls back. rg only narrows the notes that are read; it never decides a score."""
+    rg = find_rg()
+    if not rg:
+        raise RuntimeError("no rg binary")
+    roots = [os.path.join(ROOT, d) for d in corpus.corpus_dirs(ROOT) if os.path.isdir(os.path.join(ROOT, d))]
+    if not roots:
+        return set()
+    cmd = [rg, "-l", "-i", "-F", "-a", "--no-config", "--no-messages", "--hidden", "--no-ignore", "--iglob", "*.md"]
+    for w in dict.fromkeys(ws):
+        cmd += ["-e", w]
+    r = subprocess.run(cmd + ["--"] + roots, capture_output=True, text=True, timeout=RG_TIMEOUT, stdin=subprocess.DEVNULL)
+    if r.returncode not in (0, 1):
+        raise RuntimeError("rg exit %s" % r.returncode)
+    found = set(f for f in r.stdout.splitlines() if f)
+    if found and not any(f.startswith(os.path.join(ROOT, "")) for f in found):
+        raise RuntimeError("rg printed paths outside the agent folder")      # a path-spelling mismatch must not read as 'no match'
+    return found
+
+
 def lexical_rank(query):
     """Files ranked by how many distinct query terms they contain, plus a bonus for a term in the name or title."""
     ws = terms(query)
     if not ws:
         return []
+    files = corpus_files()
+    try:
+        cand = _rg_candidates(ws)
+        files = [f for f in files if f in cand]
+    except Exception as e:  # noqa: BLE001  any rg trouble: read every note, as before
+        _note_rg_fallback("%s: %s" % (type(e).__name__, e))
     score = defaultdict(float)
-    for f in corpus_files():
+    for f in files:
         low = text_of(f).lower()
         if not low:
             continue
@@ -183,7 +304,7 @@ def semantic_rank(hits):
     seen, order, chunks = set(), [], {}
     for h in hits:
         p = h.get("path")
-        if not p:
+        if not p or corpus.is_index_excluded(p):
             continue
         full = os.path.join(ROOT, p)
         if p not in seen:
@@ -229,8 +350,234 @@ def links_of(path):
     return sorted(set(re.findall(r"\[\[([^\]|#]+)", text_of(path))))
 
 
+# --------------------------------------------------------------------------------------- link menu (--expand)
+# --expand lists, for each top hit, the notes it links to: name, type and a one-line description from their frontmatter.
+# A hub (a note that very many notes link to: the top 1% by inbound links, never fewer than HUB_FLOOR) tells you nothing
+# about the hit, so it is left out and counted ("skipped N hubs"); --hubs keeps them. Computed AFTER ranking from plain
+# file reads: it cannot change a score or an order.
+INBOUND_CACHE = os.path.join(ROOT, ".index", "wiki-inbound.json")
+HUB_PCTL = 0.01
+HUB_FLOOR = 30
+MENU_MAX = 12
+DESC_MAX = 110
+INCLUDE_HUBS = False        # --hubs
+_LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+_MENU = {}                  # per-process copy of the inbound index
+
+
+def link_slug(raw):
+    """[[slug]] / [[slug|Shown]] / [[dir/slug]] / [[slug#heading]] / [[slug.md]] -> lowercase slug."""
+    t = os.path.basename(raw.split("|")[0].split("#")[0].strip()).lower()
+    return t[:-3] if t.endswith(".md") else t
+
+
+def hub_threshold(counts, n_notes):
+    """The inbound count at the top HUB_PCTL position over ALL wiki notes (zeros included), but never below HUB_FLOOR."""
+    allv = sorted(list(counts.values()) + [0] * max(0, n_notes - len(counts)), reverse=True)
+    if not allv:
+        return HUB_FLOOR
+    return max(HUB_FLOOR, allv[min(len(allv) - 1, int(len(allv) * HUB_PCTL))])
+
+
+def _wiki_notes():
+    """{slug: path relative to the agent folder} for every searchable note under the wiki folder (the layout resolver's)."""
+    wiki = os.path.realpath(corpus.WIKI)
+    out = {}
+    for f in corpus_files():
+        if os.path.realpath(f).startswith(wiki + os.sep):
+            out.setdefault(os.path.splitext(os.path.basename(f))[0].lower(), os.path.relpath(f, ROOT).replace(os.sep, "/"))
+    return out
+
+
+def build_inbound(paths):
+    """slug -> inbound count: the number of DISTINCT other notes that link to it."""
+    inb = defaultdict(set)
+    for slug, rel in paths.items():
+        for raw in _LINK_RE.findall(text_of(os.path.join(ROOT, rel))):
+            t = link_slug(raw)
+            if t in paths and t != slug:
+                inb[t].add(slug)
+    counts = dict((s, len(v)) for s, v in inb.items())
+    return {"built": time.time(), "paths": paths, "counts": counts, "threshold": hub_threshold(counts, len(paths))}
+
+
+def load_inbound():
+    """The inbound-link index, from .index/wiki-inbound.json while no wiki note is newer than it (and none was added or
+    removed), else rebuilt and saved. The cache is only a speed-up: a read or write failure just rebuilds."""
+    if "idx" in _MENU:
+        return _MENU["idx"]
+    paths = _wiki_notes()
+    newest = 0.0
+    for rel in paths.values():
+        try:
+            newest = max(newest, os.path.getmtime(os.path.join(ROOT, rel)))
+        except OSError:
+            pass
+    idx = None
+    try:
+        with open(INBOUND_CACHE) as fh:
+            idx = json.load(fh)
+        if idx.get("built", 0) < newest or idx.get("paths") != paths:
+            idx = None
+    except Exception:  # noqa: BLE001
+        idx = None
+    if idx is None:
+        idx = build_inbound(paths)
+        try:
+            os.makedirs(os.path.dirname(INBOUND_CACHE), exist_ok=True)
+            tmp = "%s.%d.tmp" % (INBOUND_CACHE, os.getpid())
+            with open(tmp, "w") as fh:
+                json.dump(idx, fh)
+            os.replace(tmp, INBOUND_CACHE)
+        except OSError:
+            pass
+    _MENU["idx"] = idx
+    return idx
+
+
+def note_card(path):
+    """(type, one-line description) from a note's frontmatter; ("", "") when it has none."""
+    typ = desc = ""
+    m = re.match(r"^---\s*\n(.*?)\n---\s*(\n|$)", text_of(path)[:6000], re.S)
+    if m:
+        t = re.search(r"(?m)^type:[ \t]*(.*?)\s*$", m.group(1))
+        d = re.search(r"(?m)^description:[ \t]*(.*?)\s*$", m.group(1))
+        typ = t.group(1).strip("\"' ") if t else ""
+        desc = d.group(1).strip("\"' ") if d else ""
+    desc = _LINK_RE.sub(lambda mm: link_slug(mm.group(1)), desc)       # show names, not raw [[ ]]
+    return typ, " ".join(desc.split())
+
+
+def link_menu(path, include_hubs=None):
+    """-> {"links": [{slug, path, type, description, inbound, hub}], "hubs_skipped": [{slug, inbound}], "unresolved": [raw]}.
+    In order of first appearance, one entry per linked note; the note's own name is skipped."""
+    idx = load_inbound()
+    include_hubs = INCLUDE_HUBS if include_hubs is None else include_hubs
+    me = os.path.splitext(os.path.basename(path))[0].lower()
+    links, hubs, unresolved, seen = [], [], [], set()
+    for raw in _LINK_RE.findall(text_of(path)):
+        slug = link_slug(raw)
+        if not slug or slug == me or slug in seen:
+            continue
+        seen.add(slug)
+        rel = idx["paths"].get(slug)
+        if not rel:
+            unresolved.append(raw.split("|")[0].split("#")[0].strip())
+            continue
+        n = idx["counts"].get(slug, 0)
+        is_hub = n >= idx["threshold"]
+        if is_hub and not include_hubs:
+            hubs.append({"slug": slug, "inbound": n})
+            continue
+        typ, desc = note_card(os.path.join(ROOT, rel))
+        links.append({"slug": slug, "path": rel, "type": typ, "description": desc, "inbound": n, "hub": is_hub})
+    hubs.sort(key=lambda h: -h["inbound"])
+    return {"links": links, "hubs_skipped": hubs, "unresolved": unresolved}
+
+
+def format_menu(menu, cap=MENU_MAX):
+    """The menu as text lines (no indent)."""
+    out = []
+    for e in menu["links"][:cap]:
+        d = e["description"]
+        d = d if len(d) <= DESC_MAX else d[:DESC_MAX - 3].rstrip() + "..."
+        out.append("%s (%s)%s -- %s" % (e["slug"], e["type"] or "?", "  [hub]" if e["hub"] else "", d or "(no description)"))
+    if len(menu["links"]) > cap:
+        out.append("(+%d more)" % (len(menu["links"]) - cap))
+    if menu["unresolved"]:
+        u = menu["unresolved"]
+        out.append("unresolved: " + ", ".join(u[:8]) + (" (+%d more)" % (len(u) - 8) if len(u) > 8 else ""))
+    if menu["hubs_skipped"]:
+        h = menu["hubs_skipped"]
+        out.append("skipped %d hubs: " % len(h) + ", ".join("%s (in %d)" % (x["slug"], x["inbound"]) for x in h[:8])
+                   + (" (+%d more)" % (len(h) - 8) if len(h) > 8 else ""))
+    return out
+
+
+# ------------------------------------------------------------------------------------ rerank: when it runs by itself
+QUESTION_WORDS = frozenset("who what when where why how which did do does is are was were can should".split())
+DECISION_WORDS = frozenset(("decide", "decided", "decision"))
+
+
+def is_question_shaped(query):
+    """True when the query ends with '?', starts with a question word, or has decide/decided/decision as a word. Dumb on
+    purpose, so it is easy to predict: a name, a ticket key or a two-word topic stays False."""
+    q = (query or "").strip()
+    if q.endswith("?"):
+        return True
+    toks = [t.strip("\"'`()[]{}<>,.;:!?") for t in q.lower().split()]
+    toks = [t for t in toks if t]
+    return bool(toks) and (toks[0] in QUESTION_WORDS or any(t in DECISION_WORDS for t in toks))
+
+
+def rerank_force(argv, environ=None):
+    """(on, source) when the caller forced it, else None. --no-rerank beats --rerank; flags beat the environment.
+    TALOS_RECALL_RERANK is the variable; RECALL_RERANK (the older name) still works when it is not set."""
+    environ = os.environ if environ is None else environ
+    if "--no-rerank" in argv:
+        return (False, "--no-rerank")
+    if "--rerank" in argv:
+        return (True, "--rerank")
+    for var in ("TALOS_RECALL_RERANK", "RECALL_RERANK"):
+        v = str(environ.get(var, "")).strip().lower()
+        if v in ("1", "true", "yes", "on"):
+            return (True, "%s=1" % var)
+        if v in ("0", "false", "no", "off"):
+            return (False, "%s=0" % var)
+    return None
+
+
+def probe_seconds():
+    """Seconds one COLD rerank took here (a fresh worker: start, load the models, rerank 15, exit: what a plain recall.py
+    run pays), from .index/rerank-time.json as written by `mem_rerank.py --probe`. None when the file is missing, unreadable,
+    or has no cold_seconds (an older install: only a warm time, which says nothing about the cold start)."""
+    try:
+        with open(RERANK_TIME_FILE) as fh:
+            v = float(json.load(fh)["cold_seconds"])
+    except Exception:  # noqa: BLE001
+        return None
+    return v if 0 <= v < float("inf") else None
+
+
+def rerank_gate():
+    """-> (ok, reason): may a question be reranked by default on this computer? reason is the text for the 'off' line."""
+    try:
+        import mem_rerank
+        have = mem_rerank.installed()
+    except Exception:  # noqa: BLE001
+        have = False
+    if not have:
+        return False, "model not installed"
+    secs = probe_seconds()
+    if secs is None:
+        return False, "no timing yet"
+    if not secs < RERANK_MAX_SECONDS:
+        return False, "it took %.1f s" % secs
+    return True, "measured %.1f s" % secs
+
+
+def rerank_decision(query, force, sem_state, gate):
+    """-> {"on", "mode": forced|auto, "why", "off_note"}. off_note is the reason to tell the owner (auto mode only)."""
+    if force is not None:
+        return {"on": force[0], "mode": "forced", "why": "forced %s by %s" % ("on" if force[0] else "off", force[1]), "off_note": None}
+    if not is_question_shaped(query):
+        return {"on": False, "mode": "auto", "why": "auto: not a question", "off_note": None}
+    if not gate[0]:
+        return {"on": False, "mode": "auto", "why": "auto: off (%s)" % gate[1], "off_note": gate[1]}
+    if sem_state not in ("live", "stale"):
+        return {"on": False, "mode": "auto", "why": "auto: needs the semantic search stack", "off_note": None}
+    return {"on": True, "mode": "auto", "why": "auto: a question, and a cold rerank took %s here" % gate[1].replace("measured ", ""), "off_note": None}
+
+
+def note_rerank_off(reason):
+    """Once a day, on stderr: reranking is not running by itself on this computer, and why."""
+    if once_a_day(RERANK_NOTE_FILE):
+        print("reranking is off on this computer (%s); use --rerank to force it" % reason, file=sys.stderr)
+
+
 def _rerank(query, fused, methods, sem_state):
-    """Opt-in cross-encoder re-sort of the top RERANK_TOP files. Fail soft: any problem leaves the order alone."""
+    """Cross-encoder re-sort of the top RERANK_TOP files. Fail soft: any problem leaves the order alone, and info["error"]
+    says why (that is what the degraded warning prints). Nothing to reorder is not an error."""
     info = {"applied": False}
     RERANK_INFO[query] = info
     if len(fused) < 2:
@@ -238,6 +585,7 @@ def _rerank(query, fused, methods, sem_state):
         return fused
     if sem_state not in ("live", "stale"):
         info["why"] = "needs the semantic search stack (bash scripts/memory/setup.sh)"
+        info["error"] = info["why"]
         return fused
     t0 = time.time()
     try:
@@ -245,11 +593,13 @@ def _rerank(query, fused, methods, sem_state):
         import mem_rerank
         if not mem_rerank.installed():
             info["why"] = "the reranker model is not downloaded (bash scripts/memory/setup.sh --rerank)"
+            info["error"] = info["why"]
             return fused
         head = fused[:RERANK_TOP]
         new, sc = mem_rerank.rerank(query, head)
         if sc is None:
-            info["why"] = "the reranker failed (see the note above); normal order"
+            info["error"] = mem_rerank.LAST_ERROR or "the reranker did not run"
+            info["why"] = "the reranker failed (%s); normal order" % info["error"]
             return fused
         before = {f: i for i, f in enumerate(head, 1)}
         for f in new:
@@ -257,12 +607,14 @@ def _rerank(query, fused, methods, sem_state):
         info.update(applied=True, n=len(head), moved=sum(before[f] != i for i, f in enumerate(new, 1)), seconds=round(time.time() - t0, 1))
         return new + fused[RERANK_TOP:]
     except Exception as e:  # noqa: BLE001
-        info["why"] = "%s: %s" % (type(e).__name__, e)
+        info["error"] = "%s: %s" % (type(e).__name__, e)
+        info["why"] = info["error"]
         return fused
 
 
-def search_one(query, k, expand, sem_hits, sem_err, sem_state, rerank=False):
-    lex = lexical_rank(query)
+def search_one(query, k, expand, sem_hits, sem_err, sem_state, rerank=False, lex=None):
+    if lex is None:
+        lex = lexical_rank(query)
     sem, chunks = ([], {})
     if sem_state in ("live", "stale") and sem_err is None:
         sem, chunks = semantic_rank(sem_hits)
@@ -283,6 +635,8 @@ def search_one(query, k, expand, sem_hits, sem_err, sem_state, rerank=False):
         ch = chunks.get(f)
         row = {"file": os.path.relpath(f, ROOT), "via": sorted(methods[f]), "snippet": snippet(f, query),
                "links": links_of(f) if expand else None}
+        if expand:
+            row["link_menu"] = link_menu(f)
         if ch:
             row.update(heading=ch["heading"], chunk=ch["text"][:400], chunk_score=ch["score"], line=line_of(f, ch["text"]))
         results.append(row)
@@ -326,7 +680,7 @@ def coverage(query, results):
 
 def control_term():
     """A term that MUST exist in a non-empty corpus: the H1 of wiki/me.md, else the familiar's name from CLAUDE.md."""
-    for path, rx in ((os.path.join(ROOT, "wiki", "me.md"), r"^#\s+(.+)$"), (os.path.join(ROOT, "CLAUDE.md"), r"\*\*Name:\*\*\s*(.+)$")):
+    for path, rx in ((os.path.join(corpus.WIKI, "me.md"), r"^#\s+(.+)$"), (os.path.join(ROOT, "CLAUDE.md"), r"\*\*Name:\*\*\s*(.+)$")):
         try:
             with open(path, encoding="utf-8", errors="replace") as fh:
                 m = re.search(rx, fh.read(), re.M)
@@ -360,17 +714,81 @@ BANNERS = {"broken": "SEARCH DEGRADED -- this is NOT evidence of absence",
            "stale": "INDEX STALE -- recent material is not searchable semantically yet"}
 
 
-def run_queries(queries, k, expand, rerank=False):
+SEM_WARNING = ("WARNING: MEANING SEARCH IS DOWN. These results come from keyword search only and can miss notes "
+               "that use other words. Reason: %s. Diagnose: %s")
+RR_WARNING = "NOTE: RERANKER DID NOT RUN (%s). Results are in normal order, not reranked. Reason: %s. Diagnose: %s"
+
+
+def degraded_info(state, sem_err, decision, rr_info):
+    """-> None when healthy, else {"semantic": {...}, "rerank": {...}} with only the parts that failed. A semantic search that
+    is simply not set up (not installed, no index) is the opt-in state, not a failure; one that was tried and failed is.
+    A rerank that was wanted (forced, or by default) and did not run is; one with nothing to reorder is not."""
+    d = {}
+    if state == "unavailable":
+        d["semantic"] = {"reason": sem_err or "unknown",
+                         "diagnose": "%s %s --top-k 3 test" % (venv_python(), MEM_SEARCH)}
+    if decision.get("on") and rr_info.get("applied") is False and rr_info.get("error"):
+        d["rerank"] = {"requested": decision["why"], "reason": rr_info["error"],
+                       "diagnose": "bash scripts/memory/setup.sh --rerank   (and: %s %s --probe <agent folder> --force)"
+                                   % (venv_python(), os.path.join(HERE, "memory", "mem_rerank.py"))}
+    return d or None
+
+
+def degraded_lines(deg):
+    out = []
+    if deg and "semantic" in deg:
+        out.append(SEM_WARNING % (deg["semantic"]["reason"], deg["semantic"]["diagnose"]))
+    if deg and "rerank" in deg:
+        x = deg["rerank"]
+        out.append(RR_WARNING % (x["requested"], x["reason"], x["diagnose"]))
+    return out
+
+
+def merge_degraded(per_query):
+    """{query: degraded-or-None} -> one object: the first reason per part, plus the queries it hit."""
+    agg = {}
+    for q, d in per_query.items():
+        for part, x in (d or {}).items():
+            agg.setdefault(part, dict(x, queries=[]))["queries"].append(q)
+    return agg or None
+
+
+def run_queries(queries, k, expand, force=None):
+    """-> (results per query, semantic state, status text, extra) where extra = {"decisions", "degraded"}.
+    The keyword arm runs in a thread while the semantic subprocess answers; the thread opens nothing the other side uses."""
+    lex_by_q, lex_err = {}, []
+
+    def _lex():
+        try:
+            for q in queries:
+                lex_by_q[q] = lexical_rank(q)
+        except Exception as e:  # noqa: BLE001  re-raised below, on the main thread
+            lex_err.append(e)
+
+    th = threading.Thread(target=_lex, daemon=True)
+    th.start()
     state, status_text = semantic_status()
     sem_by_q, sem_err = {}, None
     if state in ("live", "stale"):
         sem_by_q, sem_err = _semantic_call(queries, k)
         if sem_err is not None:
             state, status_text = "unavailable", "UNAVAILABLE: lexical only (%s)" % sem_err
+    th.join()
+    if lex_err:
+        raise lex_err[0]
+    gate = rerank_gate() if any(force is None and is_question_shaped(q) for q in queries) else (False, "")
+    decisions, degraded, off_notes = {}, {}, []
     out = {}
     for q in queries:
-        out[q] = search_one(q, k, expand, sem_by_q.get(q, []), sem_err, state, rerank)
-    return out, state, status_text
+        dec = rerank_decision(q, force, state, gate)
+        decisions[q] = dec
+        if dec["off_note"]:
+            off_notes.append(dec["off_note"])
+        out[q] = search_one(q, k, expand, sem_by_q.get(q, []), sem_err, state, dec["on"], lex_by_q.get(q))
+        degraded[q] = degraded_info(state, sem_err, dec, RERANK_INFO.get(q, {}) if dec["on"] else {})
+    if off_notes:
+        note_rerank_off(off_notes[0])
+    return out, state, status_text, {"decisions": decisions, "degraded": degraded}
 
 
 def main(argv):
@@ -389,11 +807,15 @@ def main(argv):
             print("recall: -k needs a positive number, e.g. -k 8", file=sys.stderr)
             return 2
         del argv[i:i + 2]
-    FLAGS = ("--expand", "--json", "--batch", "--rerank")
-    rerank = "--rerank" in argv or os.environ.get("RECALL_RERANK", "") in ("1", "true", "yes")
+    global INCLUDE_HUBS
+    FLAGS = ("--expand", "--json", "--batch", "--rerank", "--no-rerank", "--hubs")
+    force = rerank_force(argv)
+    INCLUDE_HUBS = "--hubs" in argv
     expand = "--expand" in argv
     as_json = "--json" in argv
     batch = "--batch" in argv
+    global QUIET_NOTES
+    QUIET_NOTES = as_json or batch
     # only the known flags are flags: a query word that starts with "-" ("-5 degrees", "--legacy") is part of the query
     positional = [a for a in argv if a not in FLAGS]
     if batch:
@@ -405,7 +827,10 @@ def main(argv):
         print('usage: recall.py "<query>" [-k N] [--expand] [--json]  |  recall.py --batch "q1" "q2" ...', file=sys.stderr)
         return 2
 
-    results, state, status_text = run_queries(queries, k, expand, rerank)
+    results, state, status_text, extra = run_queries(queries, k, expand, force)
+    decisions, per_q_degraded = extra["decisions"], extra["degraded"]
+    deg = merge_degraded(per_q_degraded)
+    rerank = any(d["on"] for d in decisions.values())
     if rerank:
         try:
             import mem_rerank
@@ -417,7 +842,9 @@ def main(argv):
         cov = {q: coverage(q, results[q]) for q in queries}
         payload = {"semantic": state, "semantic_status": status_text, "coverage": cov}
         if rerank:
-            payload["rerank"] = {q: RERANK_INFO.get(q, {"applied": False}) for q in queries}
+            payload["rerank"] = {q: RERANK_INFO.get(q, {"applied": False}) if decisions[q]["on"] else {"applied": False} for q in queries}
+        if deg:
+            payload["degraded"] = deg
         zero = [q for q in queries if not results[q]]
         if zero:
             verdict, why = diagnose_empty(state)
@@ -432,7 +859,10 @@ def main(argv):
     q = queries[0]
     res = results[q]
     rr_txt = ""
-    if rerank:
+    warn = degraded_lines(deg)
+    for line in warn:
+        print(line)
+    if decisions[q]["on"]:
         rr = RERANK_INFO.get(q, {})
         rr_txt = ("   (rerank: applied to the top %s, %s moved, %ss)" % (rr.get("n"), rr.get("moved"), rr.get("seconds"))
                   if rr.get("applied") else "   (rerank: requested but NOT applied: %s)" % rr.get("why", "unavailable"))
@@ -447,7 +877,9 @@ def main(argv):
         elif r["snippet"]:
             print("      > %s" % r["snippet"])
         if expand and r["links"]:
-            print("      links: %s" % ", ".join("[[%s]]" % x for x in r["links"][:8]))
+            print("      links:")
+            for line in format_menu(r["link_menu"]):
+                print("        %s" % line)
     cov = coverage(q, res)
     if (not res) or cov.get("confidence") in ("none", "low"):
         verdict, why = diagnose_empty(state)
@@ -469,6 +901,10 @@ def main(argv):
             print("      gap: %s" % g)
         for n in cov.get("notes", []):
             print("      note: %s" % n)
+    if warn:
+        print()
+        for line in warn:
+            print(line)
     return 0
 
 

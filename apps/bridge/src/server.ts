@@ -16,6 +16,7 @@ import {
 import { z } from 'zod'
 import { recordLiveVersion } from './apps/live-version.ts'
 import { agentInstructions, Bridge } from './bridge.ts'
+import { reportOldBun } from './bun-floor.ts'
 import { loadEnv, paths } from './config.ts'
 import { recordHealthyStart } from './good-starts.ts'
 import { agentDirFromEnv, saveLastGood } from './last-good.ts'
@@ -101,6 +102,8 @@ async function main() {
     if (instance) removePidFileIfOurs(p, instance)
     process.exit(1)
   }
+  // after create, so the error line is filed as a problem report the phone shows
+  reportOldBun(Bun.version, log, (s) => process.stderr.write(s))
 
   // Declared only when the owner turned the relay on: Claude Code sends permission_request to a server that declared it.
   // A worker is not a channel (no --channels, nothing to push) and relays no permission prompts.

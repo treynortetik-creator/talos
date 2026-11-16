@@ -68,12 +68,19 @@ public enum DialogVisibleText {
 }
 
 /// Whether a button's action is the owner's own click: the event the app is handling is a left mouse button event, under a second old, in this
-/// button's window and on the button. An Accessibility press or an AppleScript click reaches the same action method with no such event. Pure,
-/// so CI checks it without a window (the view only reads the event and asks this).
+/// button's window and on the button, and it came from the mouse or trackpad itself. An Accessibility press or an AppleScript click reaches the
+/// same action method with no such event. A click a program posts (`CGEvent.post`, as cliclick and computer-use tools do) is a real mouse event,
+/// but the system stamps it with the poster's process id: that is the check that counts. The source state must also be the hardware one, which
+/// only refuses clicks made in other ways (any program can post from the hardware state). It does not stop a program that moves the pointer
+/// onto the button so the owner's own click lands there.
+/// Pure, so CI checks it without a window (the view only reads the event and asks this).
 public enum PopupClickCheck {
   public enum Kind: Sendable { case leftMouseDown, leftMouseUp, other }
-  public static func isRealClick(kind: Kind, age: Double, sameWindow: Bool, onButton: Bool) -> Bool {
-    kind != .other && abs(age) < 1 && sameWindow && onButton
+  /// `CGEventSourceStateID.hidSystemState`: events from the mouse, trackpad or keyboard.
+  public static let hidSystemStateId: Int64 = 1
+  /// `sourcePid` and `sourceStateId` are the event's `eventSourceUnixProcessID` and `eventSourceStateID` fields (-1 when it has no CGEvent).
+  public static func isRealClick(kind: Kind, age: Double, sameWindow: Bool, onButton: Bool, sourcePid: Int64, sourceStateId: Int64) -> Bool {
+    kind != .other && abs(age) < 1 && sameWindow && onButton && sourcePid == 0 && sourceStateId == hidSystemStateId
   }
 }
 

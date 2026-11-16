@@ -119,11 +119,27 @@ export function parseAddress(from: string): { name?: string; email?: string } {
  * Optional extras a module may carry beyond `IntegrationModule` (the interface is a frozen seam). The relay reads them
  * through `moduleExtras()` and works without them.
  */
+/** A sibling connection as `siblingExtra` sees it: when it was made (Unix ms). */
+export type SiblingConnection = NormalizeConnection & { createdAt: number }
+
 export interface ModuleExtras {
   /** Per-connection toggle (a `setup.filters` key). Return false to drop `event` while that toggle is `enabled`/disabled. */
   toggle?(key: string, enabled: boolean, event: NormalizedEventT, conn: NormalizeConnection): boolean
   /** A JSON body for the connection "Test" button. Only for push-style modules the relay can sign for. */
   sample?(conn: NormalizeConnection): Record<string, unknown>
+  /**
+   * Runs after verification, before the pre-filter: what this delivery teaches the connection about itself (`extra` keys,
+   * merged into the stored extra before the pre-filter runs), or a refusal with its own reason (`refuse`, recorded as the
+   * delivery's reason in Recent deliveries; 200, nothing stored).
+   * Slack: a bot connection learns its bot user id from its first event and refuses another bot's events after that.
+   */
+  learn?(raw: RawDelivery, conn: NormalizeConnection): { extra: Record<string, string> } | { refuse: string } | null
+  /**
+   * Values from the connection's siblings (the other connections of the same integration) that it needs to see, merged
+   * into its `extra` whenever the relay hands it to `prefilter`/`normalize`. Slack: the owner's connection gets the bot
+   * user ids of the bot connections, so it drops what the agents' bots say.
+   */
+  siblingExtra?(conn: NormalizeConnection, siblings: SiblingConnection[], now: number): Record<string, string>
   /** A non-JSON acknowledgement (Salesforce wants a SOAP `<Ack>true</Ack>`). */
   ack?(): { contentType: string; body: string }
   /**

@@ -1,0 +1,367 @@
+{
+  "_comment": "Made by scripts/gen-release-manifest-vectors.ts from the TEST keys in test-key.json. Read by test/release-manifest.test.ts and apps/desktop ReleaseManifestTests.swift.",
+  "trust": {
+    "keys": [
+      {
+        "kid": "6525d5cf268c7497",
+        "publicKey": "BCXinZCnOOOafAOfzAsuRKfBGVxzRuna+9MWEFfmVp/gPjz4od8odDfwWt0q62XszgXr07SXFEdyBQI4Vr0k23o="
+      }
+    ],
+    "retired": [
+      "92809146a99c6ce1"
+    ]
+  },
+  "manifests": [
+    {
+      "name": "good",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "UkEG7cR+kRLxddsfShKW5qE36YHxgsLwT1p5YmO4hBNotT063sJ+gCIYdFxqL6lXGnmtIuKeSSZnztRynZQmlQ==",
+      "expect": "ok"
+    },
+    {
+      "name": "good, the signature file ends with a newline",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "UkEG7cR+kRLxddsfShKW5qE36YHxgsLwT1p5YmO4hBNotT063sJ+gCIYdFxqL6lXGnmtIuKeSSZnztRynZQmlQ==\n",
+      "expect": "ok"
+    },
+    {
+      "name": "good, a key this build does not know is ignored",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"notes\":\"x\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "BICboog5crXJxhljsX7HYgmXharF4JKCo/l0w69w96k2lggTlY2BjgwmQEqmAHXrDXXNvPt8+wME9g+z721Q+A==",
+      "expect": "ok"
+    },
+    {
+      "name": "good, with a key update",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"keys\":{\"add\":[{\"kid\":\"abc7db49e88ddacd\",\"pub\":\"BMxWjLvLnyow1qeOznCwfv+3ToyHYHZUPQPhEFM9E5oqbFX2Ba4GwYd6tHYj7FRzfUCqNiBPzp0hkpEFAnR8SPs=\"}],\"retire\":[\"6525d5cf268c7497\"]},\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "j3r8j47pnfHlSgUNL/OH/hNwnMpARn5wCw34qnyT1KMQInEQjgSqcaRU/EV8YChhq/LZfLhgYGb+3yKQZ3p9Qw==",
+      "expect": "ok"
+    },
+    {
+      "name": "tampered: the version changed after signing",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"9.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "UkEG7cR+kRLxddsfShKW5qE36YHxgsLwT1p5YmO4hBNotT063sJ+gCIYdFxqL6lXGnmtIuKeSSZnztRynZQmlQ==",
+      "expect": "bad_signature"
+    },
+    {
+      "name": "tampered: the zip sha256 changed after signing",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"bbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "UkEG7cR+kRLxddsfShKW5qE36YHxgsLwT1p5YmO4hBNotT063sJ+gCIYdFxqL6lXGnmtIuKeSSZnztRynZQmlQ==",
+      "expect": "bad_signature"
+    },
+    {
+      "name": "the same manifest pretty-printed keeps the signature of the compact bytes",
+      "json": "{\n  \"v\": 1,\n  \"kid\": \"6525d5cf268c7497\",\n  \"version\": \"1.4.0\",\n  \"git_sha\": \"0123456789abcdef0123456789abcdef01234567\",\n  \"tag\": \"v1.4.0\",\n  \"min_app_version\": \"1.0.0\",\n  \"zip_url\": \"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\",\n  \"zip_name\": \"Talos-1.4.0-universal.zip\",\n  \"zip_sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"size\": 41234567,\n  \"team_id\": \"ABCDE12345\",\n  \"published_at\": \"2026-11-14T20:00:00Z\"\n}",
+      "sig": "UkEG7cR+kRLxddsfShKW5qE36YHxgsLwT1p5YmO4hBNotT063sJ+gCIYdFxqL6lXGnmtIuKeSSZnztRynZQmlQ==",
+      "expect": "bad_signature"
+    },
+    {
+      "name": "wrong kid: names the trusted key, signed by another",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "ebW9wyaOZeel+KTkbdF9pcLBPwORgRjTKX0Uu5C2yM9KFemra93Lb1vdFUjF7b4BXBapDXy3CqCia5iR5gDNnA==",
+      "expect": "bad_signature"
+    },
+    {
+      "name": "unknown kid: a key that is not trusted, naming itself",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"e8423f86b21907a7\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "2hRrq1Ck+WbKZnKDT4FTNZ50k943HiTJX5+Ye6wM0FRO7I02ZIgP8g/ipcKk6b0R04A/vSvadHVA9FVPb4FObQ==",
+      "expect": "unknown_kid"
+    },
+    {
+      "name": "retired kid: the retired key, naming itself",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"92809146a99c6ce1\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "eYjfjhv5uaMOYw0HfsOTOkqVM5zAonbMeMdhfg7siawbwnb8nNIJL3V68e7a2cFnuibyxPdYoi/LD3RlvTxlEQ==",
+      "expect": "retired_kid"
+    },
+    {
+      "name": "high-S: the twin of a good signature",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "UkEG7cR+kRLxddsfShKW5qE36YHxgsLwT1p5YmO4hBOXSsLEIT2BgN3ni6OV0Faoom1NisR5VV6L6vZQXs7+vA==",
+      "expect": "non_canonical_signature"
+    },
+    {
+      "name": "DER: a good signature written as DER",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "MEQCIFJBBu3EfpES8XXbH0oSluahN+mB8YLC8E9aeWJjuIQTAiBotT063sJ+gCIYdFxqL6lXGnmtIuKeSSZnztRynZQmlQ==",
+      "expect": "bad_signature_encoding"
+    },
+    {
+      "name": "the signature is cut short",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "UkEG7cR+kRLxddsfShKW5qE36YHxgsLwT1p5YmO4",
+      "expect": "bad_signature_encoding"
+    },
+    {
+      "name": "the signature is not base64",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "UkEG7cR+kRLxddsfShKW5qE36YHxgsLwT1p5YmO4hBNotT063sJ+gCIYdFxqL6lXGnmtIuKeSSZnztRynZQmlQ!!",
+      "expect": "bad_signature_encoding"
+    },
+    {
+      "name": "no signature",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "",
+      "expect": "bad_signature_encoding"
+    },
+    {
+      "name": "too large",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ",
+      "sig": "b4psDaU1LcA8bsbCSgPFAdQeLhM+XVpCfSZtKQiXRyZpIU2y42Jflgyp/WLpjLsHE7DXiTpRaHGJXAo7WNcmtA==",
+      "expect": "too_large"
+    },
+    {
+      "name": "signed bytes that are not JSON",
+      "json": "not json at all",
+      "sig": "qFsnqKyAZr7ZsLRKV6ddhlUyu/Nd57pSZ83xLA0OwZl1SdtYk5RZ2BXBy+xJhs2jhOENUfVoV9o12d7HeZUPHA==",
+      "expect": "not_json"
+    },
+    {
+      "name": "signed JSON that is not an object",
+      "json": "[1,2,3]",
+      "sig": "SyuhreuZqJC+F+Uinl8E1ckpiC+Vds3J/G5PFltV/elmOUi97JAim28opKvhhLyddI22h3aJoyGcRTe9uQKCrw==",
+      "expect": "not_json"
+    },
+    {
+      "name": "no kid",
+      "json": "{\"v\":1,\"version\":\"1.4.0\",\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"tag\":\"v1.4.0\",\"min_app_version\":\"1.0.0\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":41234567,\"team_id\":\"ABCDE12345\",\"published_at\":\"2026-11-14T20:00:00Z\"}",
+      "sig": "QYimiJ9IT6MDqZMUxmmFE4hPdh/jO4O4gIbLGsS3Q0YfbpMlxfNpSKILcoflWXmJvXXe0H/S3FE+osiTAVi2rw==",
+      "expect": "bad_field:kid"
+    },
+    {
+      "name": "a newer manifest version",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":2,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "XNxjyxGMIEosGCwVtcgw5lh7juccIJqvqGGkmZjqVohJCShF2JkEY4K5Sg+J2JqiHG0scK2/Et1FhTeOtQp/uQ==",
+      "expect": "unsupported_version"
+    },
+    {
+      "name": "git_sha is short",
+      "json": "{\"git_sha\":\"0123456\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "EtmicyTiQgathIk15//f/YOcKdqWDUcZlC1Rm7HxWp9AxBevcZU/R+puib828aQrvutmBHOGDdw+6XkfUvxIsw==",
+      "expect": "bad_field:git_sha"
+    },
+    {
+      "name": "zip_url is plain http",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"http://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "UKAPg3xultK7BpPv8c2XmrDwwqQdNNxQCYweK3gPcvF1jXxqnmRZnSCLYsBtVnlHYY+TJfwGe7GE4pAMrFCimQ==",
+      "expect": "bad_field:zip_url"
+    },
+    {
+      "name": "zip_url names another file",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-arm64.zip\"}",
+      "sig": "9xA8qDGoLCKQ3A+gV2SXvImKlKa5uGxuzacDJ8jWF5pL2gKHpSeNC+rNQudkLN80ljBsEl/H3RB4Yg/gcuJxHg==",
+      "expect": "bad_field:zip_url"
+    },
+    {
+      "name": "size over the cap",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":400000000,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "78TYqfPrPVHXSMfJuFnx9J6gikQYcM9J7fC4kP3TBfsVOmTZgUb4VGW4wG1LISYy7ixRA0Pvjg4IqxUeXs872w==",
+      "expect": "bad_field:size"
+    },
+    {
+      "name": "size is not an integer",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":1.5,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "JdnQmTT10DDaSyKl2OKYs87t2C4EkcPF656Bv9cbFLVNIYmZHXj38DkIgJugQSgjP9Cqf0CQUV5ihtwT2amFTg==",
+      "expect": "bad_field:size"
+    },
+    {
+      "name": "team_id is lowercase",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"abcde12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "afzKnFllfGksGk6YyoHobRX8CpFt+O4NPkHjG581zGgOuQKM5YQ8Sit/5V6aKnFHQWobRfEmAHJEaTHnt2VIsA==",
+      "expect": "bad_field:team_id"
+    },
+    {
+      "name": "version has a leading zero",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"01.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "AF10hXl1BOKmOtSwqrqtKyTtKyhLtN6h3mFYtV03dql+0TnONI1m/fRFmQFsPQHGJS6NL55LcpZcyFenxAIFjw==",
+      "expect": "bad_field:version"
+    },
+    {
+      "name": "version with a line break",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\\nTalos updated\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "W2vDR9F/k8KnniimH9i38Q6PsT8ATY8YrMDqWvbR3VB7eit9VnclrzGgsxK76Sq8AnHN/4LrsEq7bcLWJnH8ZA==",
+      "expect": "bad_field:version"
+    },
+    {
+      "name": "zip_name with a slash",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"../Talos-1.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "RI2dS73AL4G590MM7Or53y9M4hA3vRw/yJmh+t2aloREFbgMuLfBL8WvOquTi2xgHUqEyLxtCPjkcQzK2UrGGg==",
+      "expect": "bad_field:zip_name"
+    },
+    {
+      "name": "a key update whose kid is not its key",
+      "json": "{\"git_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"keys\":{\"add\":[{\"kid\":\"6525d5cf268c7497\",\"pub\":\"BMxWjLvLnyow1qeOznCwfv+3ToyHYHZUPQPhEFM9E5oqbFX2Ba4GwYd6tHYj7FRzfUCqNiBPzp0hkpEFAnR8SPs=\"}],\"retire\":[]},\"kid\":\"6525d5cf268c7497\",\"min_app_version\":\"1.0.0\",\"published_at\":\"2026-11-14T20:00:00Z\",\"size\":41234567,\"tag\":\"v1.4.0\",\"team_id\":\"ABCDE12345\",\"v\":1,\"version\":\"1.4.0\",\"zip_name\":\"Talos-1.4.0-universal.zip\",\"zip_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"zip_url\":\"https://example.com/releases/download/v1.4.0/Talos-1.4.0-universal.zip\"}",
+      "sig": "DHIxskk1H1q29PRHHEGPKE6J/JBFcEJ4RpT/yc688PRb0L8ivsF7Vo12tedlQ5Xg7Tz2Ei7qokLeOa6X8hsvyQ==",
+      "expect": "bad_field:keys"
+    }
+  ],
+  "rotations": [
+    {
+      "name": "add next, retire test",
+      "before": {
+        "keys": [
+          {
+            "kid": "6525d5cf268c7497",
+            "publicKey": "BCXinZCnOOOafAOfzAsuRKfBGVxzRuna+9MWEFfmVp/gPjz4od8odDfwWt0q62XszgXr07SXFEdyBQI4Vr0k23o="
+          }
+        ],
+        "retired": []
+      },
+      "update": {
+        "add": [
+          {
+            "kid": "abc7db49e88ddacd",
+            "pub": "BMxWjLvLnyow1qeOznCwfv+3ToyHYHZUPQPhEFM9E5oqbFX2Ba4GwYd6tHYj7FRzfUCqNiBPzp0hkpEFAnR8SPs="
+          }
+        ],
+        "retire": [
+          "6525d5cf268c7497"
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "after": {
+          "keys": [
+            {
+              "kid": "abc7db49e88ddacd",
+              "publicKey": "BMxWjLvLnyow1qeOznCwfv+3ToyHYHZUPQPhEFM9E5oqbFX2Ba4GwYd6tHYj7FRzfUCqNiBPzp0hkpEFAnR8SPs="
+            }
+          ],
+          "retired": [
+            "6525d5cf268c7497"
+          ]
+        }
+      }
+    },
+    {
+      "name": "retire the only key",
+      "before": {
+        "keys": [
+          {
+            "kid": "6525d5cf268c7497",
+            "publicKey": "BCXinZCnOOOafAOfzAsuRKfBGVxzRuna+9MWEFfmVp/gPjz4od8odDfwWt0q62XszgXr07SXFEdyBQI4Vr0k23o="
+          }
+        ],
+        "retired": []
+      },
+      "update": {
+        "add": [],
+        "retire": [
+          "6525d5cf268c7497"
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "why": "would_empty"
+      }
+    },
+    {
+      "name": "add a retired kid back",
+      "before": {
+        "keys": [
+          {
+            "kid": "6525d5cf268c7497",
+            "publicKey": "BCXinZCnOOOafAOfzAsuRKfBGVxzRuna+9MWEFfmVp/gPjz4od8odDfwWt0q62XszgXr07SXFEdyBQI4Vr0k23o="
+          }
+        ],
+        "retired": [
+          "abc7db49e88ddacd"
+        ]
+      },
+      "update": {
+        "add": [
+          {
+            "kid": "abc7db49e88ddacd",
+            "pub": "BMxWjLvLnyow1qeOznCwfv+3ToyHYHZUPQPhEFM9E5oqbFX2Ba4GwYd6tHYj7FRzfUCqNiBPzp0hkpEFAnR8SPs="
+          }
+        ],
+        "retire": []
+      },
+      "expect": {
+        "ok": false,
+        "why": "adds_retired"
+      }
+    },
+    {
+      "name": "add a key already trusted",
+      "before": {
+        "keys": [
+          {
+            "kid": "6525d5cf268c7497",
+            "publicKey": "BCXinZCnOOOafAOfzAsuRKfBGVxzRuna+9MWEFfmVp/gPjz4od8odDfwWt0q62XszgXr07SXFEdyBQI4Vr0k23o="
+          }
+        ],
+        "retired": []
+      },
+      "update": {
+        "add": [
+          {
+            "kid": "6525d5cf268c7497",
+            "pub": "BCXinZCnOOOafAOfzAsuRKfBGVxzRuna+9MWEFfmVp/gPjz4od8odDfwWt0q62XszgXr07SXFEdyBQI4Vr0k23o="
+          }
+        ],
+        "retire": []
+      },
+      "expect": {
+        "ok": true,
+        "after": {
+          "keys": [
+            {
+              "kid": "6525d5cf268c7497",
+              "publicKey": "BCXinZCnOOOafAOfzAsuRKfBGVxzRuna+9MWEFfmVp/gPjz4od8odDfwWt0q62XszgXr07SXFEdyBQI4Vr0k23o="
+            }
+          ],
+          "retired": []
+        }
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "version": "1.4.0",
+      "min_app_version": "1.0.0",
+      "running": "1.3.9",
+      "expect": "install"
+    },
+    {
+      "version": "1.4.0",
+      "min_app_version": "1.0.0",
+      "running": "1.4.0",
+      "expect": "up_to_date"
+    },
+    {
+      "version": "1.4.0",
+      "min_app_version": "1.0.0",
+      "running": "1.10.0",
+      "expect": "downgrade"
+    },
+    {
+      "version": "1.10.0",
+      "min_app_version": "1.0.0",
+      "running": "1.9.0",
+      "expect": "install"
+    },
+    {
+      "version": "2.0.0",
+      "min_app_version": "1.5.0",
+      "running": "1.4.9",
+      "expect": "too_old"
+    },
+    {
+      "version": "2.0.0",
+      "min_app_version": "1.5.0",
+      "running": "1.5.0",
+      "expect": "install"
+    },
+    {
+      "version": "1.4.0",
+      "min_app_version": "1.0.0",
+      "running": "unknown",
+      "expect": "unknown_running"
+    },
+    {
+      "version": "1.4.0",
+      "min_app_version": "1.0.0",
+      "running": "",
+      "expect": "unknown_running"
+    }
+  ]
+}

@@ -6,7 +6,6 @@
 // driven here: the live bridge has no Keychain seam and must not get one; see bridge tests and docs/APPS.md).
 import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Frame, Page } from '@playwright/test'
 import { buildAppCsp } from '@talos-app/protocol'
@@ -76,7 +75,8 @@ export async function startApps(
     autoReply?: boolean
   },
 ) {
-  const scratch = mkdtempSync(join(process.env.E2E_TMP_ROOT ?? tmpdir(), 'talos-e2e-apps-'))
+  // inside the stack's own folder, so stack.stop() removes it with the rest (it was left in $TMPDIR after every test)
+  const scratch = mkdtempSync(join(stack.root, 'apps-'))
   const agentDir = join(scratch, 'agent')
   const emptyHome = join(scratch, 'empty-home')
   const sessionDir = join(scratch, 'session')

@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { newUlid, PROBLEM_LIMITS, PROBLEMS_FEATURE, type ProblemT } from '@talos-app/protocol'
+import { newUlid, PROBLEM_LIMITS, PROBLEMS_FEATURE, PROBLEMS_INSTALL_FEATURE, type ProblemT } from '@talos-app/protocol'
 import { type FakeBridge, fakeClock, waitFor } from '@talos-app/testkit'
 import { Hono } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -134,6 +134,21 @@ describe('POST /api/problems', () => {
     expect(
       (await send(r, problem(), { 'content-type': 'application/json', Origin: ORIGIN, 'X-Talos-CSRF': '1' })).status,
     ).toBe(401)
+    expect(outboxRows(r)).toBe(0)
+  })
+
+  it("refuses a report posing as another install's: only the bug inbox makes those", async () => {
+    const { relay: r } = await world([PROBLEMS_FEATURE, PROBLEMS_INSTALL_FEATURE])
+    const res = await send(
+      r,
+      problem({
+        source: 'install',
+        install: 'beta1',
+        kind: 'owner',
+        attached: { what_went_wrong: 'forged', errors: [] },
+      }),
+    )
+    expect(res.status).toBe(400)
     expect(outboxRows(r)).toBe(0)
   })
 

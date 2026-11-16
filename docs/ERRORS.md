@@ -17,12 +17,21 @@ bridge: own `error` log lines + unhandled rejections ──► problems/open/<fi
                                               one line in the Inbox thread (first sighting only)
 ```
 
+The Mac app files its own problems (source `mac`, `apps/desktop/Sources/TalosSupervisor/MacProblem.swift`) straight into the same
+folder, in the same shape. Today that is one kind: the thread sessions' heartbeat stopped while the app runs. These send no Inbox line.
+
 - **One schema.** `Problem` in `packages/protocol/src/problems.ts`, strict: a key it does not list (for example `text`) is refused.
 - **One route.** `POST /api/problems` (session and CSRF; bucket `problems`, 30 an hour for the owner as a whole; the
   default 64 KiB body cap). `202` once queued for the Mac, `429` with `Retry-After`, `400` for a body that is not a report.
 - **One frame.** `problem.item`, relay to Mac, durable and consumable. The Mac answers `consumed` only after the file is on
   disk; a write that fails is not consumed, so the relay sends it again. The relay holds the frame until the Mac's hello lists
-  `problems/1`. The frame id is the problem id, so a retried POST is stored once.
+  `problems/1` (a report from another install, until it lists `problems-install/1`). The frame id is the problem id, so a retried
+  POST is stored once. A report the Mac has not taken outlives the relay's buffer (`BUFFER_DAYS`, 7 by default): it and its
+  screenshot stay for up to 30 days, the newest 500 of them, and past that backstop they go with a `bug reports dropped`
+  warning in the relay log. From the day the oldest held report is 5 days old, the owner's default thread gets one plain
+  line, "Bug reports are waiting for a newer Talos on your computer. Update Talos there and they will arrive.", sent by the
+  relay itself (a system `message.stored`, which any Mac and app already show); once nothing is held, a later episode is
+  told again.
 - **One folder.** `$TALOS_APP_HOME/problems/open/<fingerprint>.json` (0600, written atomically) with `count`, `first_seen`,
   `last_seen` and the versions seen; a screenshot sits beside it. `closed/` holds what was dealt with.
 
@@ -39,6 +48,19 @@ The Mac and the relay scrub again: the sender is never trusted. The fingerprint 
 it from the scrubbed content and uses only its own answer (it is a file name).
 
 A screenshot can show messages. The form says so, shows the report before it is sent, and the owner chooses to attach it.
+
+## Reports from another install
+
+A beta user's relay can send her bug reports to the team relay's bug inbox (`POST /api/bug-inbox`; set-up in
+`docs/MAC-SECOND-USER-RUN-SHEET.md`, step B4; the rules in `docs/SECURITY.md`, "The bug inbox"). Each one becomes a problem with
+`source: install`, `install: <name>` (the name of the secret that signed it) and `kind: owner` (one file per report, never
+merged), filed through the same `problem.item` frame. What she typed in full, the error lines, the cleaned log, the thread and
+screen, and the messages she chose to attach are in `attached`; the screenshot sits beside the file as usual. Its versions are
+hers, not this Mac's. `talos-app errors list` shows it as `install:<name> from another install`, with your local time beside UTC:
+
+```
+970a49ce9552  open    x1  install:beta1 from another install  last 2026-11-14T21:07:33.715Z (local 2026-11-14T16:07:33-05:00)  bug report: Tapping Send on a photo does nothing
+```
 
 ## Dedupe, caps and warnings
 

@@ -1,9 +1,10 @@
 // Shows the approval card for a change the owner asked for (docs/SCHEDULES.md S5.4): sends `schedule.patch`, then renders
 // the bridge's card in place through CardView (no second component), matched by `payload.client_ref`. The card binds the
-// revision; approving sends card.resolve with the hash of what is on screen, with step-up when the card is high-risk.
+// revision; approving sends card.resolve with the hash of what is on screen.
 import { type CardT, ScheduleCardPayload, type ScheduleChangeT, type ScheduleT } from '@talos-app/protocol'
 import { Suspense, useEffect, useRef, useState } from 'react'
 import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
+import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { SlowPatch } from '../../lib/socketSchedules.ts'
 import { Button, Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from '../../ui/index.ts'
 import { CardView } from '../registry.ts'
@@ -39,8 +40,11 @@ export function useCardFor(clientRef: string | null): CardT | undefined {
   )
 }
 
+/** The bridge's conflict line, in any host's words: "your Mac", "your computer" (Linux), "your PC" (Windows). */
+export const SCHEDULE_CONFLICT_TEXT = /changed on your (?:Mac|computer|PC)\b/i
+
 export function isConflict(card: CardT): boolean {
-  return card.state === 'failed' && /changed on your Mac/i.test(card.result?.text ?? '')
+  return card.state === 'failed' && SCHEDULE_CONFLICT_TEXT.test(card.result?.text ?? '')
 }
 
 /** Waits for, then renders, the card for `clientRef`. */
@@ -58,6 +62,7 @@ export function ProposalCard({
   /** The Mac has not acked yet; keep waiting for the card instead of reporting a failure. */
   slow?: boolean
 }) {
+  const host = useHost()
   const card = useCardFor(clientRef)
   const threadName = useTalos((s) => s.threads.find((t) => t.id === threadId)?.name ?? threadId)
   const decided = card !== undefined && card.state !== 'pending'
@@ -71,16 +76,19 @@ export function ProposalCard({
   if (!card)
     return (
       <p role="status" className="py-4 text-sm text-text-2">
-        {slow
-          ? 'Your Mac is slow to answer. The card shows up here if it does.'
-          : 'Waiting for the card from your Mac…'}
+        {placeWords(
+          slow
+            ? 'Your Mac is slow to answer. The card shows up here if it does.'
+            : 'Waiting for the card from your Mac…',
+          host,
+        )}
       </p>
     )
   if (isConflict(card))
     return (
       <div data-testid="card-conflict" className="space-y-2 rounded-card border border-warn p-3">
         <p role="alert" className="text-sm font-medium text-warn">
-          {COPY.conflict}
+          {placeWords(COPY.conflict, host)}
         </p>
         <Button variant="outline" onClick={onReviewAgain}>
           Review again
@@ -114,6 +122,7 @@ export function ProposalSheet({
   title: string
   onClose: () => void
 }) {
+  const host = useHost()
   const client = useTalosClient()
   const [ref, setRef] = useState<string | null>(null)
   const [slow, setSlow] = useState(false)
@@ -175,7 +184,7 @@ export function ProposalSheet({
             />
           ) : (
             <p role="status" className="text-sm text-text-2">
-              Asking your Mac…
+              {placeWords('Asking your Mac…', host)}
             </p>
           )}
         </div>

@@ -12,39 +12,83 @@ final class OnboardingModel: ObservableObject {
   /// Whether Claude is signed in, from the last check (nil = couldn't tell). Create, Adopt and Choose start nothing when false.
   @Published var auth: Bool?
 
+  /// The tools as found (absolute paths, versions), and the login environment they were found with. The sign-in step and the fixes use these.
+  @Published var found: PrereqProbe.Found?
+  @Published var fixNote = ""
+  @Published var fixing = false
+  private(set) var loginEnv: [String: String] = [:]
+  private var lastConfig: DesktopConfig?
+  private var lastSetupDone = false
+  private var generation = 0
+
+  /// The same check again, after a sign-in or a fix finished.
+  func recheck() { if let c = lastConfig { refresh(config: c, setupDone: lastSetupDone) } }
+
+  func fix(for id: String) -> PrereqPlan.Fix? {
+    PrereqPlan.fix(for: id, brew: found?.brew, existingPath: id == "tmux" ? found?.tmux?.path : nil)
+  }
+
+  func runFix(_ fix: PrereqPlan.Fix) {
+    switch fix {
+    case .openPage(_, let url): if let u = URL(string: url) { NSWorkspace.shared.open(u) }
+    case .brewInstall:
+      fixing = true
+      fixNote = OnboardingText.brewNeedsUser
+      let env = loginEnv
+      Task.detached {
+        let failure = PrereqProbe.runFix(fix, env: env)
+        await MainActor.run {
+          self.fixing = false
+          self.fixNote = failure ?? ""
+          self.recheck()
+        }
+      }
+    }
+  }
+
   func refresh(config: DesktopConfig, setupDone: Bool) {
     checking = true
+    lastConfig = config
+    lastSetupDone = setupDone
+    generation += 1
+    let mine = generation
     let home = NSHomeDirectory()
     Task.detached {
       let probe = LiveSystem()
       let env = LoginShellEnv.build(shellEnv: probe.loginShellEnv() ?? [:], overrides: config.env)
-      let exec = FileManager.default.isExecutableFile
-      let claudeName = config.claudePath == "auto" ? "claude" : config.claudePath
-      let claude = LoginShellEnv.which(claudeName, path: env["PATH"], isExecutable: exec)
-      let version = claude.flatMap { probe.cliVersion(claude: $0, env: env) }
+      let found = PrereqProbe.probe(env: env, claudeName: config.claudePath == "auto" ? "claude" : config.claudePath, home: home)
       var auth: Bool?
-      if let claude {
-        let r = ProcessRunner.run([claude, "auth", "status"], env: env, timeout: 10)
-        auth = r.ok ? true : (r.timedOut ? nil : false)
+      if let claude = found.claude {
+        switch ClaudeSignIn.check(claude: claude.path, env: env) {
+        case .signedIn: auth = true
+        case .notSignedIn: auth = false
+        case .unknown: auth = nil
+        }
       }
-      let bunPath = env["PATH"].flatMap { LoginShellEnv.which("bun", path: $0 + ":\(home)/.bun/bin", isExecutable: exec) }
-      var tmuxOut: String?
-      if let t = LoginShellEnv.which("tmux", path: (env["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin", isExecutable: exec) {
-        let r = ProcessRunner.run([t, "-V"], timeout: 5)
-        if r.ok { tmuxOut = r.out.trimmingCharacters(in: .whitespacesAndNewlines) }
+      let tmuxOut = found.tmux.map { t in
+        ProcessRunner.run([t.path, "-V"], env: env, timeout: 5).out.trimmingCharacters(in: .whitespacesAndNewlines)
       }
       let appHome = env["TALOS_APP_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.config/talos/app"
       let cliFound = TalosAppCLI.resolve(config: config) != nil
       let folder = AgentFolderCheck.check(config.agentDir, home: home)
+      var paths: [String: String] = [:]
+      for (k, t) in [("claude", found.claude), ("bun", found.bun), ("tmux", found.tmux)] { if let t { paths[k] = t.path } }
       let rows = FirstRun.rows(
         .init(
-          claudeVersion: version ?? (claude != nil ? "" : nil), authSignedIn: auth, bunPath: bunPath, tmuxVersionOutput: tmuxOut,
+          claudeVersion: found.claude.map { $0.version ?? "" }, authSignedIn: auth, bunPath: found.bun?.path, tmuxVersionOutput: tmuxOut,
           bridgeEnvPresent: FileManager.default.fileExists(atPath: appHome + "/bridge.env"), agentDir: config.agentDir,
           agentDirTrusted: FirstRun.trust(setupDone: setupDone, confirmedAt: config.session.confirmedAt), home: home,
-          talosAppFound: cliFound, setupDone: setupDone, agentFolderProblem: folder.isProblem ? folder.text : nil))
+          talosAppFound: cliFound, setupDone: setupDone, agentFolderProblem: folder.isProblem ? folder.text : nil,
+          paths: paths, bunVersion: found.bun?.version))
       await MainActor.run {
+        guard mine == self.generation else { return }  // a newer check already landed
         self.rows = rows
         self.auth = auth
+        if case .finished(let o) = ClaudeSignInCoordinator.shared.state, ClaudeSignInPlan.isStale(outcome: o, authSignedIn: auth) {
+          ClaudeSignInCoordinator.shared.reset()
+        }
+        self.found = found
+        self.loginEnv = env
         self.checking = false
       }
     }
@@ -84,11 +128,22 @@ struct OnboardingView: View {
             case .ok: EmptyView()
             case .fix(let m), .unknown(let m): Text(m).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+            if let d = r.detail { Text(d).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+            if case .fix = r.state, let f = ob.fix(for: r.id) {
+              Button(f.label) { ob.runFix(f) }.disabled(ob.fixing)
+            }
           }
         }
         if r.id == "agentfolder" { AgentFolderPanel(flow: flow).padding(.leading, 24) }
         }
       }
+      if !ob.fixNote.isEmpty { Text(ob.fixNote).font(.caption).foregroundStyle(.secondary) }
+      Divider()
+      SignInClaudePanel(ob: ob)
+      Divider()
+      FirstStartPanel(model: model)
+      Divider()
+      OwnerRulesPanel(model: model)
       Divider()
       SignInPanel(model: model)
       Divider()

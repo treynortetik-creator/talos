@@ -17,8 +17,11 @@ import {
 } from '@talos-app/protocol'
 import type { Clock } from '../clock.ts'
 import type { Logger } from '../log.ts'
+import { applyDurableSync } from '../sqlite-sync.ts'
+import { applySqliteTestSeam } from '../sqlite-test-seam.ts'
 import { type MemoryService, ReadError } from '../v2-seams.ts'
 import { loadMemoryConfig, type MemoryConfig, memoryIndexPath, memoryJsonMtime } from './config.ts'
+import { buildGraph, type GraphBody } from './graph.ts'
 import { asText, MemoryScope, readCapped } from './scope.ts'
 import { capLinks, extractLinks, resolveLinks, titleOf } from './text.ts'
 
@@ -65,9 +68,13 @@ export type MemoryServiceOptions = {
   afterNoteIndexed?: (n: number) => void
   /** Test seam: the index text cap (default MAX_TEXT_BYTES). */
   maxTextBytes?: number
+  /** Test seam: opens a watch (default `fs.watch`); a test gives one that misses a change. */
+  watchFn?: typeof watch
 }
 
-/** Yield to the event loop after this many indexed bytes as well as every 100 files. */
+/** Notes written per commit while indexing; the build also commits and yields after YIELD_BYTES of text. */
+export const MEMORY_INDEX_BATCH = 100
+/** Yield to the event loop (and commit) after this many indexed bytes as well as every MEMORY_INDEX_BATCH notes. */
 const YIELD_BYTES = 2 * 1024 * 1024
 const MEM_FTS_DDL = `CREATE VIRTUAL TABLE IF NOT EXISTS mem_fts USING fts5(title, body,
   tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3')`
@@ -142,6 +149,8 @@ export class MemoryBrowser implements MemoryService {
     try {
       const db = new Database(this.o.indexPath ?? memoryIndexPath(this.o.home), { create: true })
       db.exec('PRAGMA journal_mode = WAL')
+      applyDurableSync(db) // the product's syncing (sqlite-sync.ts), before the test seam can lower it
+      applySqliteTestSeam(db) // nothing outside the bridge's tests (sqlite-test-seam.ts)
       // the FTS5 probe (V3.1): the system SQLite may lack it
       db.exec('CREATE VIRTUAL TABLE IF NOT EXISTS temp.mem_probe USING fts5(x)')
       db.exec('DROP TABLE temp.mem_probe')
@@ -205,13 +214,17 @@ export class MemoryBrowser implements MemoryService {
     if (this.o.watch === false || !this.scope) return
     for (const r of this.scope.roots) {
       try {
-        const w = watch(r.dir, { recursive: true }, () => this.schedule())
+        const w = (this.o.watchFn ?? watch)(r.dir, { recursive: true }, () => this.schedule())
         w.on('error', () => {})
         this.watchers.push(w)
       } catch (e) {
         this.o.log.warn('memory watch failed; the 5-minute poll still runs', { error: (e as Error).message })
       }
     }
+    // One catch-up pass once the watch is open: a change made between the first walk and the watch opening is never reported,
+    // and macOS's fs.watch can miss one made just as it opens. Without this such a file waits for the 5-minute poll. The pass
+    // is the usual walk (stat only; a file is re-read only when its size or mtime changed), after the usual debounce.
+    if (this.watchers.length > 0) this.schedule()
   }
   private closeWatchers() {
     for (const w of this.watchers) w.close()
@@ -287,12 +300,30 @@ export class MemoryBrowser implements MemoryService {
       })
   }
 
-  /** Brings `idx_files` / `mem_fts` in line with the walk, in small batches so the event loop stays free. */
+  /**
+   * Brings `idx_files` / `mem_fts` in line with the walk, in small batches so the event loop stays free. Each batch is ONE
+   * write transaction, committed before the yield: every commit waits for a full sync (sqlite-sync.ts), so one commit per note
+   * would make a large build wait for thousands of them. A note's row and its text are always in the same commit; a failure
+   * rolls back the batch it was in and keeps the ones before it.
+   */
   private async indexAll(): Promise<void> {
     const db = this.db
     const scope = this.scope
     if (!db || !scope || this.stopped) return
     this.indexing = true
+    let open = false
+    const write = (fn: () => void) => {
+      if (!open) {
+        db.exec('BEGIN IMMEDIATE')
+        open = true
+      }
+      fn()
+    }
+    const commit = () => {
+      if (!open) return
+      db.exec('COMMIT')
+      open = false // only once COMMIT has returned
+    }
     try {
       const have = new Map<string, { id: number; size: number; mtime_ms: number; title: string }>()
       for (const r of db.query('SELECT id, root, path, size, mtime_ms, title FROM idx_files').all() as Array<{
@@ -310,8 +341,10 @@ export class MemoryBrowser implements MemoryService {
       for (const [key, r] of have) {
         const [root, path] = key.split('\0') as [string, string]
         if (!this.files.get(root)?.has(path)) {
-          del.run(r.id)
-          delFts.run(r.id)
+          write(() => {
+            del.run(r.id)
+            delFts.run(r.id)
+          })
           have.delete(key)
         }
       }
@@ -335,8 +368,10 @@ export class MemoryBrowser implements MemoryService {
           if (textBytes >= (this.o.maxTextBytes ?? MAX_TEXT_BYTES)) {
             // changed but not re-indexable under the cap: its old row must not keep serving old text
             if (old) {
-              del.run(old.id)
-              delFts.run(old.id)
+              write(() => {
+                del.run(old.id)
+                delFts.run(old.id)
+              })
               have.delete(`${rootId}\0${path}`)
             }
             this.o.log.warn('memory index text cap reached; the rest is not searchable', { root: rootId })
@@ -346,32 +381,42 @@ export class MemoryBrowser implements MemoryService {
           if (!loaded) {
             // not shown after all: drop it from listings too, and from search (an old row would keep serving old text)
             m.delete(path)
-            if (old) {
-              del.run(old.id)
-              delFts.run(old.id)
-            }
+            if (old)
+              write(() => {
+                del.run(old.id)
+                delFts.run(old.id)
+              })
             continue
           }
           const text = loaded.buf.toString('utf8')
           const title = titleOf(text, path.split('/').pop() as string)
           info.title = title
           textBytes += Buffer.byteLength(text)
-          // ONE transaction: a kill between the row and its text would leave a row that claims the note is indexed
-          db.transaction(() => {
+          // the same transaction: a kill between the row and its text would leave a row that claims the note is indexed
+          write(() => {
             const row = upIdx.get(rootId, path, info.size, info.mtimeMs, title) as { id: number }
             delFts.run(row.id)
             insFts.run(row.id, title, text)
-          })()
+          })
           n++
           this.o.afterNoteIndexed?.(n)
           sinceYield += Buffer.byteLength(text)
-          if (n % 100 === 0 || sinceYield >= YIELD_BYTES) {
+          if (n % MEMORY_INDEX_BATCH === 0 || sinceYield >= YIELD_BYTES) {
             sinceYield = 0
+            commit()
             await new Promise((r) => setImmediate(r))
           }
         }
       }
+      commit()
     } finally {
+      // a failure (or a stop) partway: the batch it was in goes, whole; the batches before it stay. Asked of SQLite itself, not
+      // the flag: a COMMIT that failed, or a statement after which SQLite rolled back on its own, leaves the two apart.
+      try {
+        if (db.inTransaction) db.exec('ROLLBACK')
+      } catch {
+        // the index was closed by stop()
+      }
       this.indexing = false
     }
   }
@@ -442,6 +487,25 @@ export class MemoryBrowser implements MemoryService {
   }
   private notFound(): never {
     throw new ReadError('memory_not_found', 'That note is not available.')
+  }
+
+  /** Built once per file list (a new walk makes a new map), so opening the graph again is instant. */
+  private graphCache: { files: Map<string, Map<string, Info>>; body: GraphBody } | null = null
+
+  graph(): GraphBody {
+    const scope = this.need()
+    const c = this.graphCache
+    // reused only while every note in it may still be shown (a private marker or a move since the walk rebuilds it)
+    if (c?.files === this.files && c.body.nodes.every((n) => scope.allowed(c.body.roots[n.r]?.id ?? '', n.p)))
+      return c.body
+    const body = buildGraph({
+      roots: scope.roots.map((r) => ({ id: r.id, label: r.cfg.label })),
+      files: this.files,
+      read: (r, p) => this.loadFile(scope, r, p)?.buf.toString('utf8') ?? null,
+      visible: (r, p) => scope.allowed(r, p),
+    })
+    this.graphCache = { files: this.files, body }
+    return body
   }
 
   async tree(f: FrameOf<'memory.tree'>): Promise<Body<'memory.listing'>> {

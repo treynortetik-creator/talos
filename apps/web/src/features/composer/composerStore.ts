@@ -6,6 +6,7 @@ import type { AttachmentRefT } from '@talos-app/protocol'
 import { ownValue } from '@talos-app/protocol'
 import { create } from 'zustand'
 import type { TalosClient } from '../../lib/client.ts'
+import { hostFrom } from '../../lib/hostWords.ts'
 import { MAX_UPLOAD_BYTES } from '../../lib/socketClient.ts'
 import type { Storage } from '../../lib/storage.ts'
 import { tooBigNote, uploadFailureNote } from './uploadError.ts'
@@ -36,8 +37,11 @@ type State = {
   consumePrefill(threadId: string): Prefill | undefined
   /** Files dropped on the chat, waiting for that thread's composer to take them through its attach flow. */
   dropped: Record<string, File[]>
-  dropFiles(threadId: string, files: File[]): void
+  /** `focus`: the box takes focus once the composer has taken them (a screenshot from the Mac app, ready for a line). */
+  dropFiles(threadId: string, files: File[], opts?: { focus?: boolean }): void
   takeDropped(threadId: string): File[]
+  dropFocus: Record<string, boolean | undefined>
+  takeDropFocus(threadId: string): boolean
   chips: Record<string, Chip[]>
   setChips(threadId: string, next: Chip[] | ((cur: Chip[]) => Chip[])): void
   /** Sends that failed after the owner left their thread: the words in the order the sends failed, and the failure line. */
@@ -55,9 +59,18 @@ export const useComposerStore = create<State>((set, get) => ({
     set((s) => ({ prefill: { ...s.prefill, [threadId]: { text, mode } } }))
   },
   dropped: {},
-  dropFiles(threadId, files) {
+  dropFiles(threadId, files, opts) {
     if (files.length === 0) return
-    set((s) => ({ dropped: { ...s.dropped, [threadId]: [...(ownValue(s.dropped, threadId) ?? []), ...files] } }))
+    set((s) => ({
+      dropped: { ...s.dropped, [threadId]: [...(ownValue(s.dropped, threadId) ?? []), ...files] },
+      ...(opts?.focus ? { dropFocus: { ...s.dropFocus, [threadId]: true } } : {}),
+    }))
+  },
+  dropFocus: {},
+  takeDropFocus(threadId) {
+    const v = ownValue(get().dropFocus, threadId) === true
+    if (v) set((s) => ({ dropFocus: { ...s.dropFocus, [threadId]: undefined } }))
+    return v
   },
   takeDropped(threadId) {
     const v = ownValue(get().dropped, threadId) ?? []
@@ -157,7 +170,7 @@ export async function uploadChip(
     return true
   } catch (e) {
     if (ctl.signal.aborted) return false // cancelled: the chip is already gone
-    const note = uploadFailureNote(e)
+    const note = uploadFailureNote(e, hostFrom(client.store.getState().presence.features))
     patch({ state: 'error', ...(note ? { note } : {}) })
     return false
   } finally {

@@ -61,7 +61,7 @@ export async function sendAppCard(ctx: BridgeContext, s: AppCardSpec): Promise<C
     kind: 'app_action',
     title: clean(s.title, 120),
     destination: s.destination.map((d) => ({ label: clean(d.label, 20), value: clean(d.value, 500) })),
-    body: s.body.slice(0, 20_000),
+    body: s.body.slice(0, APP_CARD_BODY_MAX),
     body_format: 'plain',
     fields: [],
     attachments: [],
@@ -105,4 +105,13 @@ export function cardPayloadOf(binding: { payload?: unknown }): AppCardPayloadT |
   return r.success ? r.data : undefined
 }
 
-export const prettyArgs = (a: Record<string, unknown>): string => JSON.stringify(a, null, 2)
+/** The longest body an app card shows. */
+export const APP_CARD_BODY_MAX = 20_000
+/**
+ * The arguments as the card shows them: indented, or on one line when the indented form would not fit. Never cut: the owner
+ * approves exactly what runs, so every key has to be on the card (arguments are at most 16 KiB of JSON, which always fits).
+ */
+export const prettyArgs = (a: Record<string, unknown>): string => {
+  const pretty = JSON.stringify(a, null, 2)
+  return pretty.length <= APP_CARD_BODY_MAX ? pretty : JSON.stringify(a)
+}

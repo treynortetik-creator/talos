@@ -39,7 +39,8 @@ function world() {
   return { root, install, seed, origin, push, sha: (dir = install) => sh(dir, 'rev-parse', '--short=7', 'HEAD') }
 }
 
-function harness(repoDir: string, pnpmCode = 0) {
+/** `bun`: what the pulled code's Bun check answers (the stand-in for running apps/bridge/src/bun-floor.ts). */
+function harness(repoDir: string, pnpmCode = 0, bun = { code: 0, out: '' }) {
   const calls: string[][] = []
   const out: string[] = []
   const err: string[] = []
@@ -52,6 +53,7 @@ function harness(repoDir: string, pnpmCode = 0) {
           const r = Bun.spawnSync(cmd, { cwd, stdout: 'pipe', stderr: 'pipe' })
           return { code: r.exitCode ?? 1, out: `${r.stdout}${r.stderr}`.trim() }
         }
+        if (cmd[0] === process.execPath) return bun
         return { code: pnpmCode, out: pnpmCode ? 'ERR_PNPM_OUTDATED_LOCKFILE' : '' }
       },
     },
@@ -171,6 +173,45 @@ describe('talos-app update', () => {
     expect(e).toContain(`now at ${w.sha()}`)
     expect(e).toContain('pnpm install --frozen-lockfile failed')
     expect(h.out.join('\n')).not.toContain('updated:')
+  })
+
+  test('the pulled code checks the Bun that runs it: an older one is refused with its new version and how to upgrade', async () => {
+    const w = world()
+    mkdirSync(join(w.seed, 'apps', 'bridge', 'src'), { recursive: true })
+    writeFileSync(join(w.seed, 'apps', 'bridge', 'src', 'bun-floor.ts'), '// stand-in')
+    w.push('two')
+    const words =
+      'Bun 1.3.11 is older than 1.4.4, the oldest Talos supports. Upgrade it, then restart the agent:\n  bun upgrade'
+    const h = harness(w.install, 0, { code: 1, out: words })
+    expect(await h.run()).toBe(1)
+    // the check is the pulled file, run by this same Bun, after the packages are in
+    const check = h.calls.findIndex((c) => c[0] === process.execPath)
+    expect(h.calls[check]).toEqual([
+      process.execPath,
+      '--no-env-file',
+      join(w.install, 'apps', 'bridge', 'src', 'bun-floor.ts'),
+    ])
+    expect(check).toBeGreaterThan(h.calls.findIndex((c) => c[0] === 'pnpm'))
+    const e = h.err.join('\n')
+    expect(e).toContain(`the code is now at ${w.sha()}, but this Bun is too old to run it.`)
+    expect(e).toContain(words)
+    expect(h.out.join('\n')).not.toContain('updated:')
+    // a new enough Bun: the usual report
+    const ok = harness(w.install)
+    expect(await ok.run()).toBe(0)
+    expect(ok.calls.some((c) => c[0] === process.execPath)).toBe(true)
+  })
+
+  test('a Bun check that fails for another reason is not called "too old"', async () => {
+    const w = world()
+    mkdirSync(join(w.seed, 'apps', 'bridge', 'src'), { recursive: true })
+    writeFileSync(join(w.seed, 'apps', 'bridge', 'src', 'bun-floor.ts'), '// stand-in')
+    w.push('two')
+    const h = harness(w.install, 0, { code: 1, out: 'SyntaxError: Unexpected token' })
+    expect(await h.run()).toBe(1)
+    const e = h.err.join('\n')
+    expect(e).toContain('its Bun check failed (SyntaxError: Unexpected token). Run talos-app doctor')
+    expect(e).not.toContain('too old')
   })
 
   test('a folder that is not the checkout is refused', async () => {

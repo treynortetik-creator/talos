@@ -73,9 +73,34 @@ final class WebViewReplaceTests: XCTestCase {
         XCTAssertNil(oldWebView.uiDelegate)
         window.isHidden = true
     }
+
+    func testANewPageClearsTheThreadTheOldOneWasShowing() throws {
+        let (_, window) = try makeWindow()
+        let vc = TalosBridgeViewController()
+        window.rootViewController = vc
+        window.makeKeyAndVisible()
+        vc.loadViewIfNeeded()
+        let gate = try XCTUnwrap(vc.webView?.navigationDelegate as? NavigationGate,
+                                 "no relay is configured in this build (run `pnpm --filter @talos-app/mobile cap:sync` with TALOS_RELAY_URL set)")
+        let web = try XCTUnwrap(vc.webView)
+        TalosPushCenter.shared.viewingThread = "general"
+        gate.webView(web, didCommit: nil) // a reload, or any new document
+        XCTAssertNil(TalosPushCenter.shared.viewingThread)
+        TalosPushCenter.shared.viewingThread = "general"
+        gate.webViewWebContentProcessDidTerminate(web)
+        XCTAssertNil(TalosPushCenter.shared.viewingThread, "a page whose process died shows no thread")
+        window.isHidden = true
+    }
 }
 
 final class PushTapReplaceTests: XCTestCase {
+    func testGoingToTheBackgroundClearsTheThreadOnScreen() {
+        let c = TalosPushCenter()
+        c.viewingThread = "general"
+        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        XCTAssertNil(c.viewingThread, "a push for that thread is shown when it arrives after the app comes back")
+    }
+
     private func center(at start: Date) -> (TalosPushCenter, Clock) {
         let c = TalosPushCenter()
         let clock = Clock(start)

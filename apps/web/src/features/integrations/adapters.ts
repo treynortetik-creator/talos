@@ -1,15 +1,15 @@
 // Adapters between the relay's connection-created response and the wizard's `{{...}}` variables and script steps.
 // `claim_code` (Gmail, Calendar, Forward) comes straight from the relay's response; the Slack manifest link is derived
-// here from `hook_url`; the Apps Script text comes from the browser-safe catalog export of `@talos-app/integrations`.
-import { renderSetupScript, slackManifestUrl } from '@talos-app/integrations/catalog'
+// here from `hook_url` (the owner's app, and an agent's bot app); the Apps Script text comes from the browser-safe catalog export of `@talos-app/integrations`.
+import { renderSetupScript, slackBotManifestUrl, slackManifestUrl } from '@talos-app/integrations/catalog'
 import type { RouteRes } from '@talos-app/protocol'
 import type { TemplateContext } from './template.tsx'
 
 type Created = RouteRes<'connectionCreate'>
 
-function manifestUrl(hookUrl: string): string | undefined {
+function manifestUrl(hookUrl: string, make = slackManifestUrl): string | undefined {
   try {
-    return slackManifestUrl(hookUrl)
+    return make(hookUrl)
   } catch {
     return undefined
   }
@@ -23,6 +23,8 @@ export function templateContext(created: Created | null): TemplateContext {
     SECRET: created.secret,
     CLAIM_CODE: created.claim_code,
     MANIFEST_URL: created.integration === 'slack' ? manifestUrl(created.hook_url) : undefined,
+    // an agent's bot: the bot app's manifest (bot events and scopes, a Messages tab)
+    BOT_MANIFEST_URL: created.integration === 'slack' ? manifestUrl(created.hook_url, slackBotManifestUrl) : undefined,
   }
 }
 

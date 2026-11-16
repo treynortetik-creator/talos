@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// Re-review of PR #68 at 0b5c05c: what the fix round missed or broke. Private tmux (`talos-test-…`) and the fake claude
 /// only. Tests named FINDING fail until the finding is fixed; the others are controls.
@@ -20,10 +21,13 @@ extension WorkerRig {
     #!/bin/bash
     d='\(faultDir)'
     for a in "$@"; do
+      case "$a" in send-keys\\ *\\ Enter | send-keys\\ *\\ Enter\\ *) a=Enter ;; esac  # the pointer's Enter is the send of an if-shell: one string
       case "$a" in
         display-message|has-session|capture-pane|list-clients|Enter|-e)
           if [ -f "$d/$a" ]; then
             m=$(cat "$d/$a")
+            # swallow: the send reports it went (as the pane's if-shell does) and nothing reaches the pane; each one is counted
+            if [ "$m" = swallow ]; then echo x >> "$d/$a.swallowed"; echo talos-sent; exit 0; fi
             [ "$m" = hold ] || rm -f "$d/$a"
             [ "$m" = slow ] && sleep 0.4
             echo "error connecting to the socket (Resource temporarily unavailable)" >&2
@@ -43,18 +47,32 @@ extension WorkerRig {
 
   func clearFault(_ verb: String) { unlink(faultDir + "/" + verb) }
 
+  /// How many sends of `verb` the shim swallowed (`fault(verb, "swallow")`).
+  func swallowed(_ verb: String) -> Int { lines(faultDir + "/" + verb + ".swallowed").count }
+
   /// A live worker, then the app gone: tmux and the worker stay, `workers.json` stays. `pointerTyped`: not until the first pointer
   /// is in too (it waits for Claude's input box, which can be drawn after the worker is live). An owed pointer is in `workers.json` and
   /// survives the app (PointerOwedTests); these tests are about something else, and want exactly one line typed before the app goes.
+  /// The waits here are upper bounds on a start, not what a test is about: a start is a tmux session, the fake's shell and its ready
+  /// file, and with the whole suite running beside it that has taken longer than the 8 s these used to allow (the manager's own ready
+  /// timeout included, which then failed the start). They end the moment the worker is up, so a quiet machine waits no longer. A
+  /// worker that never came up throws here, as what it is, and is never handed on as pid 0 for a later check to misread as "killed".
   func liveWorkerThenAppGone(_ id: String = "trip", tmux: String? = nil, pointerTyped: Bool = false) throws -> Int32 {
-    manager(tmux: tmux)
+    manager(tmux: tmux, readyTimeout: 60)
     mgr.startTicking()
     try wake(id)
-    #expect(wait(8) { up(id) })
-    #expect(wait(3) { (fileOnDisk?.threads[id]?.pane_pid ?? 0) > 1 })
-    if pointerTyped { #expect(wait(8) { typedLines.count == 1 }, "the first pointer was never typed: \(why(id))") }
+    #expect(wait(60) { up(id) }, "the worker never came up: \(why(id))")
+    #expect(wait(15) { (fileOnDisk?.threads[id]?.pane_pid ?? 0) > 1 }, "the worker's pid never reached workers.json: \(why(id))")
+    if pointerTyped {
+      #expect(wait(30) { typedLines.count == 1 }, "the first pointer was never typed: \(why(id))")
+      // the fake logs the line as the Enter lands, the manager writes the file at the end of that tick: wait for the file too, or the
+      // copy that comes back finds the pointer still owed
+      let settled = waitUntil(timeout: 15, observe: { fileOnDisk?.threads[id]?.pointer_owed_until }) { $0 == nil }
+      #expect(settled.ok, "the typed pointer is still owed in workers.json: \(settled)")
+    }
     let pid = fileOnDisk?.threads[id]?.pane_pid ?? 0
     mgr.detach()
+    try #require(pid > 1 && ProcessInspect.groupAlive(pid), "no live worker to go on with: pid \(pid), \(why(id))")
     return pid
   }
 
@@ -234,15 +252,29 @@ struct ReviewOC3R2FailedReads {
     let r = try WorkerRig(scenario: scenario)
     defer { r.teardown() }
     let shim = try r.faultShim()
-    let pid = try r.liveWorkerThenAppGone(tmux: shim)
+    // The first pointer is in before the app goes. A pointer still owed then is in workers.json (PointerOwedTests), so the copy that
+    // comes back starts the worker for it at its first tick, with the reads still working, and stops the thread's own running worker
+    // to do so, on purpose (WorkerStraySessionTests). That made this test a race: on a busy machine the app often went first, and
+    // the control below found the worker gone before any read had failed.
+    let pid = try r.liveWorkerThenAppGone(tmux: shim, pointerTyped: true)
     try r.fileSaysParked()
+    #expect(r.fileOnDisk?.threads["trip"]?.pointer_owed_until == nil, "control: nothing is owed when the app goes")
     r.manager(tmux: shim)
     r.firstTick()
-    try r.fault("display-message")
+    // every read fails (held): a read that does work finds the thread's own worker and replaces it on purpose (WorkerStraySessionTests)
+    try r.fault("display-message", "hold")
+    #expect(ProcessInspect.groupAlive(pid), "control: the worker is running when the failing reads begin")
     try r.wake("trip")
-    r.mgr.tickOnce()
-    usleep(400_000)
-    #expect(ProcessInspect.groupAlive(pid), "kill-session on a live worker over one failed read")
+    // The tick is synchronous, and a stop inside it waits for the group to go before it returns (`stopNow`), so what the ticks did is
+    // settled when they return: three of them, each taking the wake's start as far as the failing read, instead of one and a pause.
+    for _ in 0..<3 { r.mgr.tickOnce() }
+    #expect(ProcessInspect.groupAlive(pid), "kill-session on a live worker over a failed read")
+    // The test's own `has-session` is a tmux client with a 5 s limit, which a loaded machine can run out: one that did not answer is
+    // asked again. A killed session never answers yes, so the poll cannot turn a kill into a pass; it only stops a slow answer reading
+    // as one.
+    let session = waitUntil(timeout: 15, observe: { r.tmuxCmd(["has-session", "-t", "=t-trip"]) }) { $0.ok }
+    #expect(session.ok, "the session itself was killed: \(session)")
+    #expect(ProcessInspect.groupAlive(pid), "the worker went after the ticks")
   }
 
   /// A failed `capture-pane` reads as an empty screen, an empty screen is `.none`, and `.none` may be typed at: the text and
@@ -376,12 +408,12 @@ struct ReviewOC3R2Relaunch {
     #expect(r.up("trip"), "\(String(describing: r.state("trip")))")
   }
 
-  /// launch.sh is the whole login environment. The "already running" refusal returns without removing it.
+  /// launch.sh is the whole login environment. The "already running" refusal returns without removing it. (The thread's own worker
+  /// under the name is stopped and replaced, WorkerStraySessionTests; a session that is not a worker is what still refuses the start.)
   @Test func FINDING_aRefusedStartLeavesNoLaunchScript() throws {
     let r = try WorkerRig(scenario: scenario)
     defer { r.teardown() }
-    _ = try r.liveWorkerThenAppGone()
-    try r.fileSaysParked()
+    #expect(r.tmuxCmd(["new-session", "-d", "-s", "t-trip", "--", "/bin/sleep", "60"]).ok)
     r.manager()
     r.firstTick()
     try r.wake("trip")

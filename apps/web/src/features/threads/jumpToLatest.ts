@@ -6,6 +6,23 @@ export const NEAR_BOTTOM_PX = 80
 export const isNearBottom = (el: { scrollHeight: number; scrollTop: number; clientHeight: number }): boolean =>
   el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX
 
+/**
+ * THE SWITCH (owner, 2026-11-15, "if I don't like it, we'll just undo it"): new text in the open thread follows to the newest
+ * (a new row, a reply growing as it streams, a card) whenever the owner is within a screen of the bottom; further up the view
+ * stays where it is and the down arrow counts what came; the owner's own send always goes to the bottom, and on a phone the keyboard
+ * goes down after a send (useComposerTextBox). `false` puts back the old behaviour: follow only within NEAR_BOTTOM_PX, rows
+ * only, and the keyboard stays up.
+ */
+export const FOLLOW_NEW_TEXT = true
+
+/** Still following: within a screen of the end with the switch on, else within NEAR_BOTTOM_PX. */
+export const isFollowing = (el: { scrollHeight: number; scrollTop: number; clientHeight: number }): boolean =>
+  el.scrollHeight - el.scrollTop - el.clientHeight <
+  (FOLLOW_NEW_TEXT ? Math.max(NEAR_BOTTOM_PX, el.clientHeight) : NEAR_BOTTOM_PX)
+
+/** After a tap or key in the thread, growth is the owner's own doing (an expanded row), not news: not followed for this long. */
+export const OWN_CHANGE_MS = 600
+
 type R = {
   key: string
   author?: string | undefined

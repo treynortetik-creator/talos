@@ -117,6 +117,36 @@ def _find_project_dir():
     return _agent_above(os.getcwd())
 
 
+def wiki_dir(project_dir):
+    """The agent's wiki folder: <agent>/wiki, or <agent>/memory/wiki when .talos-version has the line `layout=2`. Strict, never a
+    guess: a UTF-8 BOM at the start is ignored; any line that starts with "layout" and then (after optional spaces) `=` or `:` is
+    a layout line, there may be at most one, and it must be exactly `layout`, optional spaces, `=`, optional spaces, `1` or `2`
+    (so `Layout=2`, `layout: 2`, `layout=zz` and a second line are all refused with SystemExit "unknown layout ...").
+    A private copy of scripts/_talos_layout.py (hooks stay standalone, like _agent_root.py); scripts/test-layout.sh checks that
+    every copy gives the same answer."""
+    import re
+    agent = os.path.abspath(project_dir)
+    path = os.path.join(agent, ".talos-version")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read(65536)
+    except OSError:
+        text = ""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    found = [ln.strip() for ln in text.splitlines() if re.match(r"layout\s*[=:]", ln.strip(), re.I)]
+    if len(found) > 1:
+        raise SystemExit("unknown layout: more than one layout line in %s; refusing to guess where the wiki is." % path)
+    if found:
+        m = re.fullmatch(r"layout\s*=\s*([12])", found[0])
+        if not m:
+            raise SystemExit("unknown layout %r in %s (expected exactly layout=1 or layout=2); refusing to guess where the wiki is."
+                             % (found[0], path))
+        if m.group(1) == "2":
+            return os.path.join(agent, "memory", "wiki")
+    return os.path.join(agent, "wiki")
+
+
 PROJECT_DIR = _find_project_dir()
 if PROJECT_DIR is None:
     # Valid, empty, harmless output and nothing touched. Say so on stderr: a silent no-op is indistinguishable from
@@ -224,7 +254,13 @@ LOOK_BACK_DAYS = 3                     # if today's log is missing, walk back
 LEDGER_FILE       = os.path.join(MEMORY_DIR, "decisions-ledger.md")
 LEDGER_STAMP      = os.path.join(MEMORY_DIR, ".last-ledger-review")
 LEDGER_EVERY_DAYS = 7
-WIKI_DIR          = os.path.join(PROJECT_DIR, "wiki")
+try:
+    WIKI_DIR = wiki_dir(PROJECT_DIR)          # <agent>/wiki, or <agent>/memory/wiki on a layout-2 agent
+except SystemExit as _layout_err:           # an unknown `layout=` line: the wiki cannot be placed, so nothing is touched
+    sys.stderr.write("talos session-start: refusing to run. %s\n" % _layout_err)
+    sys.stdout.write("{}")
+    sys.exit(0)
+WIKI_REL          = os.path.relpath(WIKI_DIR, PROJECT_DIR).replace(os.sep, "/")
 LINT_SCRIPT       = os.path.join(CODE_ROOT, "scripts", "wiki-lint.py")      # code: from this file's own release
 LINT_STAMP        = os.path.join(MEMORY_DIR, ".last-lint")
 LINT_EXTRA_DIRS   = [MEMORY_DIR]   # link targets that legitimately live outside wiki/ (the reason --extra-dir exists)
@@ -466,7 +502,7 @@ def wiki_maintenance():
             # than no maintenance check.
             return ("--- WIKI MAINTENANCE ---\n"
                     "The wiki lint is due (%s) but could not be run from the hook.\n"
-                    "Run it yourself: python3 scripts/wiki-lint.py wiki" % why)
+                    "Run it yourself: python3 scripts/wiki-lint.py %s" % (why, WIKI_REL))
 
         tail = [l for l in out.splitlines() if l.strip()]
         verdict = tail[-1] if tail else ""
@@ -550,7 +586,7 @@ def commit_nudge():
         except OSError:
             pass
 
-        paths = [p for p in ("memory", "wiki") if C.contained(os.path.join(PROJECT_DIR, p)) and os.path.isdir(os.path.join(PROJECT_DIR, p))]
+        paths = [p for p in (("memory",) if WIKI_REL.startswith("memory/") else ("memory", WIKI_REL)) if C.contained(os.path.join(PROJECT_DIR, p)) and os.path.isdir(os.path.join(PROJECT_DIR, p))]
         if not paths:
             return None
 

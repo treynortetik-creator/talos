@@ -42,12 +42,28 @@ test.describe('desktop chat header', () => {
     })
     await expect(page.getByTestId('thread-purpose')).toHaveCount(0)
     await page.getByTestId('thread-settings-trigger').click()
+    await page.getByTestId('thread-settings-open').click()
     await expect(page.getByLabel('What goes here')).toHaveValue('Everything that has no other home')
+  })
+
+  test('Esc closes the thread settings and puts focus back on the button that opened them', async ({ page }) => {
+    await page.goto('/t/general')
+    const trigger = page.getByTestId('thread-settings-trigger')
+    await trigger.focus()
+    // the "..." is a menu now: Enter opens it on its first item, Thread settings, and Enter again opens the sheet
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('thread-settings-open')).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('thread-settings')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('thread-settings')).toBeHidden()
+    await expect(trigger).toBeFocused()
   })
 
   test('"Search this thread" is in the thread settings menu and opens the search for that thread', async ({ page }) => {
     await page.goto('/t/general')
     await page.getByTestId('thread-settings-trigger').click()
+    await page.getByTestId('thread-settings-open').click()
     await page.getByRole('button', { name: 'Search this thread' }).click()
     await expect(page).toHaveURL(/\/search\?thread=general/)
   })

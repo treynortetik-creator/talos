@@ -2,6 +2,7 @@
 // EVERY process that opens the store (live bridge, headless writers, the CLI): it creates the tables if missing and
 // registers the post-commit indexer. It never throws into a message write.
 import type { HistoryStore } from '../history-store.ts'
+import { say } from '../owner-words.ts'
 import { ReadError, type SearchService } from '../v2-seams.ts'
 import { FILE_TICK_MS, FileIndexer } from './files.ts'
 import { SearchIndexer } from './indexer.ts'
@@ -109,7 +110,11 @@ export function createSearchService(store: HistoryStore, opts: SearchServiceOpts
   return {
     available: Boolean(indexer && q),
     async query(f) {
-      if (!q) throw new ReadError('search_unavailable', 'Search is not available on this Mac.')
+      if (!q)
+        throw new ReadError(
+          'search_unavailable',
+          say({ mac: 'Search is not available on this Mac.', linux: 'Search is not available on this computer.' }),
+        )
       return q.query(f)
     },
     history: (f) => (q ? q.history(f) : null),

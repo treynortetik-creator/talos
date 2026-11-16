@@ -7,9 +7,9 @@
 //            header and Origin checks (`appAuth`, `origin`) like the real upgrade guard.
 //   HTTP     the bridge-signed routes (/bridge/post, /bridge/media/:id, ...), checked with the real signature scheme,
 //            and /api/media for uploads.
-// Step-up: `mintStepup(purpose)` issues a single-use token; high-risk `card.resolve` and `config.patch` touching
-// `work.enabled` are refused with `stepup_required` / `stepup_invalid` without one, and the token is stripped before
-// the frame goes to the bridge.
+// Step-up: none since 2026-11-14 (the owner's "zero Face ID approvals"). `mintStepup(purpose)` still hands out a token for
+// tests that model an older app, which sends one; like the real relay it is never checked, and it is stripped before the
+// frame goes to the bridge.
 // Two-stage ack: a bridge-bound consumable frame stays in the replay buffer until the bridge acks it with stage
 // 'consumed'. On every bridge `hello` the relay re-sends all unconsumed frames in `relay.seq` order (delivered or not),
 // so a crash never reorders messages; `replay.request` is an optional hint that re-sends the named ids in the same order.
@@ -17,6 +17,7 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
   type AgentConfigT,
+  BRIDGE_STANDBY_FEATURE,
   type BridgeKeyPair,
   b64urlDecode,
   bridgeKeyId,
@@ -35,7 +36,7 @@ import {
   WS_CLOSE,
 } from '@talos-app/protocol'
 import { WebSocket, WebSocketServer } from 'ws'
-import { cardProblem, RESOLVE_REFUSALS, RelayCards } from './fake-relay-cards.ts'
+import { CARD_CLOSED_ON_MAC, cardProblem, RelayCards } from './fake-relay-cards.ts'
 import { RelayHttp } from './fake-relay-http.ts'
 import {
   BRIDGE_DURABLE,
@@ -70,6 +71,13 @@ export class FakeRelay {
   get media() {
     return this.httpRoutes.media
   }
+  /** Org pages published over /bridge/pages, and a refusal a test can set (null = store). */
+  get pages() {
+    return this.httpRoutes.pages
+  }
+  refusePages(r: { status: number; body: unknown } | null) {
+    this.httpRoutes.pageRefusal = r
+  }
   /** Replay buffer for bridge-bound frames, by frame id, in relay.seq order. */
   readonly buffer = new Map<string, BufferEntry>()
   readonly stored: Array<Record<string, unknown>> = []
@@ -89,7 +97,6 @@ export class FakeRelay {
   /** Bridge durable frame ids already stored, with the seq they got (hub.ts `bf:`): a re-sent frame is acked again, never applied twice. */
   private seenBridgeIds = new Map<string, number>()
   private sockets = new Set<WebSocket>()
-  private stepups = new Map<string, string>() // token -> purpose
   /** Cards this relay carried, with the relay's own rules about them. */
   private cards: RelayCards
   private httpRoutes: RelayHttp
@@ -113,6 +120,8 @@ export class FakeRelay {
   /** MCP apps: request_id -> the socket that asked; `app.response` goes only there (MCP-APPS-SPEC M3.4). Not stored, not replayed. */
   private appReqs = new Map<string, WebSocket>()
   private bridgeFeatures: string[] = []
+  /** A replaced bridge was seen alive (its standby hello was turned away) and no hello has found the slot empty since (presence.superseded). */
+  private superseded = false
   /** docs/SUBAGENTS.md: the last session.agents snapshot, memory only, handed out in `ready.session_agents`. */
   private lastAgents: Record<string, unknown> | undefined
   private opts: FakeRelayOptions
@@ -212,11 +221,9 @@ export class FakeRelay {
     return this.rec.expectNoFrame(type, predicate, ms)
   }
 
-  /** Issues a single-use step-up token for `card:<id>`, `config:work` or `device:revoke`. */
-  mintStepup(purpose: string): string {
-    const token = `st_${newUlid()}`
-    this.stepups.set(token, purpose)
-    return token
+  /** A token like an older app's step-up token: accepted and never checked (no step-up since 2026-11-14). */
+  mintStepup(_purpose: string): string {
+    return `st_${newUlid()}`
   }
 
   /** Sends a frame to every connected app. Fills in envelope fields. */
@@ -342,6 +349,7 @@ export class FakeRelay {
       last_seen: now(),
       queue_depth: 0,
       ...(this.bridgeConnected && this.bridgeFeatures.length ? { features: this.bridgeFeatures } : {}),
+      ...(this.superseded ? { superseded: true } : {}),
     }
   }
 
@@ -399,15 +407,33 @@ export class FakeRelay {
             )
             if (!keyIdOk || !sigOk) return void ws.close(WS_CLOSE.UNAUTHORIZED)
           }
+          // a standby hello never replaces the bridge that is connected: it is turned away the way a replaced one is
+          const live =
+            this.bridge && this.bridge !== ws && this.bridge.readyState === WebSocket.OPEN ? this.bridge : null
+          if (frame.standby && live) {
+            if (!this.superseded) {
+              this.superseded = true
+              this.broadcastPresence()
+            }
+            return void ws.close(WS_CLOSE.SUPERSEDED)
+          }
           authed = true
           clearTimeout(timer)
           this.bridgeFeatures = frame.client.features ?? []
-          if (this.bridge && this.bridge !== ws) this.bridge.close(WS_CLOSE.SUPERSEDED)
+          live?.close(WS_CLOSE.SUPERSEDED)
+          if (!live) this.superseded = false
           this.bridge = ws
           this.sendTo(
             ws,
             'to_bridge',
-            this.ready({ features: this.opts.relayFeatures ?? ['schedules/1', 'schedules/2', 'thread-sessions/1'] }),
+            this.ready({
+              features: this.opts.relayFeatures ?? [
+                'schedules/1',
+                'schedules/2',
+                'thread-sessions/1',
+                BRIDGE_STANDBY_FEATURE,
+              ],
+            }),
           )
           this.broadcastPresence()
           // Re-send everything the bridge has not consumed, in relay.seq order (Map keeps insertion order). Receivers
@@ -451,7 +477,13 @@ export class FakeRelay {
       case 'memory.file':
       case 'memory.results':
       case 'speak.result':
-      case 'fs.listing': {
+      case 'fs.listing':
+      case 'files.listing':
+      case 'files.file':
+      case 'bug.context_result':
+      case 'agents_md.file':
+      case 'files.put_result':
+      case 'files.sent_list': {
         const p = this.readReqs.get(frame.request_id)
         if (!p || p.want !== frame.type) return // unknown, expired or the wrong answer type: dropped
         this.readReqs.delete(frame.request_id)
@@ -463,7 +495,7 @@ export class FakeRelay {
         // The Mac refused a card.resolve before acting on it: the card is pending again, or expired if it lapsed, and the
         // apps are told (hub.ts rollbackRejectedResolve).
         const resolved = frame.ref ? this.resolveRefs.get(frame.ref) : undefined
-        if (resolved && RESOLVE_REFUSALS.includes(frame.code)) {
+        if (resolved && !CARD_CLOSED_ON_MAC.includes(frame.code)) {
           const update = this.cards.rollbackRejected(resolved, 'resolve_rejected')
           if (update) this.fanOutStamped(mkFrame('card.update', update))
         }
@@ -667,19 +699,6 @@ export class FakeRelay {
     )
   }
 
-  private stepupError(ws: WebSocket, frameId: unknown, token: unknown, purpose: string): boolean {
-    if (typeof token !== 'string') {
-      this.error(ws, 'to_app', 'stepup_required', `step-up ${purpose} required`, frameId)
-      return true
-    }
-    if (this.stepups.get(token) !== purpose) {
-      this.error(ws, 'to_app', 'stepup_invalid', 'step-up token is invalid for this purpose', frameId)
-      return true
-    }
-    this.stepups.delete(token) // single use
-    return false
-  }
-
   private onAppFrame(ws: WebSocket, frame: Frame, raw: Record<string, unknown>) {
     if (SCHEDULE_OWNER.has(frame.type)) return this.onScheduleFrame(ws, frame, raw)
     if (V2_READ.has(frame.type)) return this.onReadFrame(ws, frame, raw)
@@ -734,13 +753,10 @@ export class FakeRelay {
         return this.forwardOwnerFrame(stamped)
       }
       case 'card.resolve': {
-        // Like the real relay (core/hub.ts, core/cards.ts): a card it never carried is not pending, step-up comes
-        // before the card's own state, then expired, already decided and a changed card are each refused by name.
+        // Like the real relay (core/hub.ts, core/cards.ts): a card it never carried is not pending; then expired, already
+        // decided and a changed card are each refused by name. No step-up, high risk or not (2026-11-14).
         const known = this.cards.get(frame.card_id)
         if (!known) return this.error(ws, 'to_app', 'card_not_pending', 'unknown card', frame.id)
-        if (known.card.risk === 'high' && frame.action === 'primary') {
-          if (this.stepupError(ws, frame.id, frame.stepup_token, `card:${frame.card_id}`)) return
-        }
         const refused = this.cards.checkResolve(frame)
         if (refused) {
           this.error(ws, 'to_app', refused.code, refused.message, frame.id)
@@ -763,17 +779,16 @@ export class FakeRelay {
         if (frame.action !== 'restart') return this.error(ws, 'to_app', 'bad_frame', RECOVER_NEEDS_MAC_TEXT, frame.id)
         if (!this.bridgeConnected) return this.error(ws, 'to_app', 'mac_offline', 'your Mac is offline', frame.id)
         return this.acceptOwnerFrame(ws, frame.id, raw)
+      case 'undo.request':
+        // Like the real relay: queued for the Mac, never for one that is away
+        if (!this.bridgeConnected) return this.error(ws, 'to_app', 'mac_offline', 'your Mac is offline', frame.id)
+        return this.acceptOwnerFrame(ws, frame.id, raw)
       case 'config.patch': {
         const check = checkConfigPatch(frame.patch)
         // Like the real relay: a field the app may never change is refused here and never reaches the Mac.
         if (!check.ok)
           return this.error(ws, 'to_app', 'config_field_forbidden', `field not allowed: ${check.path}`, frame.id)
-        if (check.ok && check.touchesWorkEnabled) {
-          if (this.stepupError(ws, frame.id, frame.stepup_token, 'config:work')) return
-        }
-        if (check.ok && check.stepupPurpose === 'config:session') {
-          if (this.stepupError(ws, frame.id, frame.stepup_token, 'config:session')) return
-        }
+        // like the real relay: no passkey step-up for any setting (2026-11-14)
         return this.acceptOwnerFrame(ws, frame.id, raw)
       }
       case 'voice.ask':
@@ -876,7 +891,7 @@ export class FakeRelay {
     this.forwardOwnerFrame(stamped)
   }
 
-  /** Strips `stepup_token` (the relay checks it, the bridge never sees it) and buffers for the bridge. */
+  /** Strips `stepup_token` (an older app's, never checked; the bridge never sees it) and buffers for the bridge. */
   private forwardOwnerFrame(stamped: Record<string, unknown>) {
     const { stepup_token: _drop, ...forwarded } = stamped
     this.sendToBridge(forwarded)

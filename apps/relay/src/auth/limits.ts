@@ -14,12 +14,6 @@ export const LIMITS: Record<string, Limit[]> = {
     { capacity: 10, windowMs: MIN },
     { capacity: 50, windowMs: DAY },
   ],
-  // Step-up (options + verify = 2 calls per Face-ID approval) is separate from the login budget, so approving cards
-  // cannot lock the owner out of signing in. Both routes need a pinned session.
-  stepup: [
-    { capacity: 30, windowMs: MIN },
-    { capacity: 500, windowMs: DAY },
-  ],
   // Device proof in place (options + prove, run on page loads): its own budget so opening the app all day cannot use up the
   // sign-in budget above and lock out login or "Sign out everywhere". Only a signed-in session reaches it.
   prove: [
@@ -35,6 +29,9 @@ export const LIMITS: Record<string, Limit[]> = {
   /** Per connection (keyed by connection id): spec 5.4. */
   hook_conn: [{ capacity: 120, windowMs: MIN }],
   media: [{ capacity: 60, windowMs: HOUR }],
+  // Uploads refused after their body was read (empty, a checksum that does not match, over the daily budget): they spend
+  // no `media` token, but each one cost a read of up to MEDIA_MAX_MB, so they have their own bound.
+  media_refused: [{ capacity: 60, windowMs: HOUR }],
   // Native push registration (WP-I5): a phone registers on a tap and refreshes once per open.
   push_apns: [{ capacity: 60, windowMs: HOUR }],
   // Reply / Approve from a notification (no cookie: the signature is the credential). Per IP, checked before any signature work.
@@ -60,13 +57,32 @@ export const LIMITS: Record<string, Limit[]> = {
   speak: [{ capacity: 90, windowMs: MIN }],
   // The folder picker: one listing per folder opened, so a person browsing stays far under this.
   folders: [{ capacity: 60, windowMs: MIN }],
+  // The Files pane: a listing per folder opened and a read per file shown (a long file in a few chunks).
+  files: [{ capacity: 240, windowMs: MIN }],
   // Signed history pages and media re-uploads, per socket: a page or a file per tap is far under these.
   history: [{ capacity: 60, windowMs: MIN }],
+  // The bug reporter's read of the Mac's versions, errors and cleaned log: one per time the owner opens the report form.
+  bug_context: [{ capacity: 12, windowMs: MIN }],
   media_fetch: [{ capacity: 120, windowMs: MIN }],
   // MCP Apps (spec M4.6): app.request, one budget for the owner (sockets and reconnects share it), on top of the 30/s app-frame bucket.
   app_request: [{ capacity: 60, windowMs: MIN }],
   // Problem reports (docs/ERRORS.md): one budget for the owner, however many pages and devices send.
   problems: [{ capacity: 30, windowMs: HOUR }],
+  // In-app bug reports: per paired device (keyed by device id, charged after the signature checks out). BUG_REPORT_LIMITS has the numbers.
+  bug_report: [
+    { capacity: 6, windowMs: HOUR },
+    { capacity: 20, windowMs: DAY },
+  ],
+  // The bug inbox (core/bug-inbox.ts), outside input: per address before any body is read, then per install once its
+  // signature checked out (a few devices each, every one with its own `bug_report` limit at home).
+  bug_inbox_ip: [
+    { capacity: 30, windowMs: MIN },
+    { capacity: 300, windowMs: DAY },
+  ],
+  bug_inbox: [
+    { capacity: 30, windowMs: HOUR },
+    { capacity: 100, windowMs: DAY },
+  ],
   share_ip: [{ capacity: 10, windowMs: MIN }],
   share_token: [{ capacity: 30, windowMs: HOUR }],
 }
@@ -75,6 +91,7 @@ export const LIMITS: Record<string, Limit[]> = {
 const GLOBAL = new Set([
   'hook',
   'media',
+  'media_refused',
   'problems',
   'voice',
   'dictate',

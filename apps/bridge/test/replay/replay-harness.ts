@@ -140,6 +140,12 @@ const cardIds = (h: Harness): string[] =>
 const ULID = /[0-9A-HJKMNP-TV-Z]{26}|\bd_[a-z2-7]{20}\b|sha256:[0-9a-f]{64}/g
 const ISO = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/
 const VOLATILE_NUMBERS = new Set(['server_time', 'disk_free_bytes', 'uptime_s'])
+/**
+ * Keys whose very presence follows the wall clock, not the scenario: the health beat carries media_by_age only once the media
+ * retention has had its second poll, which a slower machine (Linux, a loaded box) reaches inside a scenario and a fast one does
+ * not. Left out of every transcript.
+ */
+const VOLATILE_KEYS = new Set(['media_by_age'])
 const SECRET_KEYS = new Set(['version', 'sig', 'osig', 'public_key', 'pubkey', 'session_id', 'stepup_token'])
 
 /** Renames random ids by first appearance and blanks signatures, so the same behaviour always prints the same text. */
@@ -149,6 +155,8 @@ export function scrub(value: unknown, aliases: Map<string, string>): unknown {
     if (typeof v === 'number' && key && VOLATILE_NUMBERS.has(key)) return '<number>'
     if (typeof v === 'string') {
       if (key && SECRET_KEYS.has(key)) return '<secret>'
+      // the bridge's host feature names the machine the test runs on (host/mac, host/linux, host/windows)
+      if (/^host\/[a-z]+$/.test(v)) return '<host>'
       // The relay stand-in stamps its own frames with the wall clock; only the bridge's fake-clock times are kept.
       if (ISO.test(v) && !v.startsWith('2026-10-28') && !v.startsWith('2026-10-29')) return '<wall-time>'
       let s = v
@@ -172,10 +180,9 @@ export function scrub(value: unknown, aliases: Map<string, string>): unknown {
       // echoes the wrong one shows up.
       const challenge = (v as { type?: unknown }).type === 'challenge'
       return Object.fromEntries(
-        Object.entries(v as Record<string, unknown>).map(([k, x]) => [
-          walk(k),
-          challenge && k === 'nonce' ? '<challenge-nonce>' : walk(x, k),
-        ]),
+        Object.entries(v as Record<string, unknown>)
+          .filter(([k]) => !VOLATILE_KEYS.has(k))
+          .map(([k, x]) => [walk(k), challenge && k === 'nonce' ? '<challenge-nonce>' : walk(x, k)]),
       )
     }
     return v

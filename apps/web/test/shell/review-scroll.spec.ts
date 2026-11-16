@@ -7,6 +7,7 @@ import type { Page } from '@playwright/test'
 import { mkFrame } from '@talos-app/testkit'
 import { expect, test } from '../helpers/fixtures.ts'
 import type { Harness } from '../helpers/harness.ts'
+import { WEB_PREVIEW_HOST } from '../helpers/pw-port.ts'
 import { agentReply, newId, openSignedIn } from '../helpers/util.ts'
 
 const DESKTOP = [
@@ -15,7 +16,7 @@ const DESKTOP = [
 ]
 const isDesktop = (name: string) => name === 'desktop'
 // The schedules harness lives in the fake-mode build (vite preview on PW_PORT), not on the relay harness's origin.
-const FAKE_ORIGIN = `http://localhost:${process.env.PW_PORT ?? 4173}`
+const FAKE_ORIGIN = `http://${WEB_PREVIEW_HOST}:${process.env.PW_PORT ?? 4173}`
 async function openSchedules(page: Page, route: string) {
   await page.goto(
     `${FAKE_ORIGIN}/test/schedules/harness/index.html?${new URLSearchParams({ route, variant: 'healthyRan' })}`,
@@ -382,6 +383,10 @@ async function longHome(page: Page, context: Parameters<Harness['seedDevice']>[0
   for (let i = 0; i < 30; i++) harness.relay.sendToApps(agentReply({ thread: `topic_${i}`, text: `Update ${i}` }))
   const last = page.getByRole('region', { name: 'Needs you' }).getByText('Topic number 0', { exact: true })
   await expect(last).toHaveCount(1)
+  // and the last reply sent, so Home holds all 30 rows before anything is measured (the first one alone is not the list)
+  await expect(
+    page.getByRole('region', { name: 'Needs you' }).getByText('Topic number 29', { exact: true }),
+  ).toHaveCount(1)
   // whichever row sorts last in the list is the one the owner must be able to reach
   return page.locator('section[aria-label="Needs you"] li').last()
 }
@@ -406,7 +411,8 @@ test.describe('2a. REGRESSION: Home (Needs you) must still scroll to its last ro
     })
   })
 
-  test('Pixel touch swipe', async ({ page, context, harness }, info) => {
+  // @mac-only (playwright.config.ts): Chromium's synthetic touch scroll does not move the page on Linux.
+  test('Pixel touch swipe', { tag: '@mac-only' }, async ({ page, context, harness }, info) => {
     test.skip(info.project.name !== 'pixel', 'needs CDP touch')
     const lastRow = await longHome(page, context, harness)
     expect(await inView(page, lastRow), 'precondition: the last row starts off screen').toBe(false)
@@ -456,7 +462,8 @@ test.describe('2a. REGRESSION: Home (Needs you) must still scroll to its last ro
 })
 
 test.describe('2b. phones: inner timeline scrolls by touch, the page does not', () => {
-  test('Pixel (Chromium touch gesture via CDP)', async ({ page, context, harness }, info) => {
+  // @mac-only (playwright.config.ts): Chromium's synthetic touch scroll does not move the page on Linux.
+  test('Pixel (Chromium touch gesture via CDP)', { tag: '@mac-only' }, async ({ page, context, harness }, info) => {
     test.skip(info.project.name !== 'pixel', 'needs CDP touch')
     await openSignedIn(harness, page, context)
     for (let i = 0; i < 20; i++) harness.relay.sendToApps(agentReply({ text: `Reply ${i}\n\n${'para '.repeat(80)}` }))

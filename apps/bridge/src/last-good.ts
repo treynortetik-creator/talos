@@ -263,6 +263,7 @@ export type RestoreIo = {
   prompt(question: string): Promise<string>
 }
 
+// for folders only: a file's real path goes through realFileSync (real-file.ts), as realpath can name a hard-linked file by another of its names
 /** A symlinked folder (/var -> /private/var) must compare equal to the path it was saved under. */
 function realpathOr(p: string): string {
   try {

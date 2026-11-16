@@ -1,6 +1,7 @@
 // Reply / Approve from a notification, on the Mac: the real Bridge and Inbound behind the testkit's FakeRelay.
 // The relay is not trusted, so every check here is re-done from what the phone signed and this Mac pinned.
 import { afterEach, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -149,6 +150,7 @@ describe('an Approve tapped while the Mac slept', () => {
       dev.deviceId,
       {
         a: 'approve',
+        shown_v: '3',
         card_id: card.id,
         payload_hash: card.payload_hash,
         shown: shownHash(cardNotice(card).text, 'General'),
@@ -172,6 +174,7 @@ describe('an Approve tapped while the Mac slept', () => {
       dev.deviceId,
       {
         a: 'approve',
+        shown_v: '3',
         card_id: card.id,
         payload_hash: card.payload_hash,
         shown: shownHash(cardNotice(card).text, 'General'),
@@ -190,6 +193,7 @@ describe('an Approve tapped while the Mac slept', () => {
       dev.deviceId,
       {
         a: 'approve',
+        shown_v: '3',
         card_id: card2.id,
         payload_hash: card2.payload_hash,
         shown: shownHash(cardNotice(card2).text, 'General'),
@@ -214,6 +218,7 @@ describe('an Approve tapped while the Mac slept', () => {
       dev.deviceId,
       {
         a: 'approve',
+        shown_v: '3',
         card_id: card.id,
         payload_hash: card.payload_hash,
         shown: shownHash(cardNotice(card).text, 'General'),
@@ -243,7 +248,7 @@ describe('an Approve tapped while the Mac slept', () => {
     const inside = await tap(
       p11,
       dev.deviceId,
-      { a: 'approve', card_id: okCard.id, payload_hash: okCard.payload_hash, shown: shownOf(okCard) },
+      { a: 'approve', shown_v: '3', card_id: okCard.id, payload_hash: okCard.payload_hash, shown: shownOf(okCard) },
       t11,
       t11 + 60_000, // the stamp the relay chose: believable, unsigned
     )
@@ -257,7 +262,13 @@ describe('an Approve tapped while the Mac slept', () => {
     const late = await tap(
       p13,
       dev.deviceId,
-      { a: 'approve', card_id: lateCard.id, payload_hash: lateCard.payload_hash, shown: shownOf(lateCard) },
+      {
+        a: 'approve',
+        shown_v: '3',
+        card_id: lateCard.id,
+        payload_hash: lateCard.payload_hash,
+        shown: shownOf(lateCard),
+      },
       t13,
       t13 + 60_000,
     )
@@ -316,6 +327,7 @@ describe('an Approve tapped while the Mac slept', () => {
       dev.deviceId,
       {
         a: 'approve',
+        shown_v: '3',
         card_id: card.id,
         payload_hash: card.payload_hash,
         shown: shownHash(cardNotice(card).text, 'General'),
@@ -332,7 +344,7 @@ describe('an Approve tapped while the Mac slept', () => {
     expect(h.bridge.ctx.store.hasSeen(f.id)).toBe(false) // not forgotten
     drop = false
     h.relay.sendToBridge(f, { durable: true }) // the relay replays it on the next hello
-    expect((await errorFor(f.id)).code).toBe('stepup_required')
+    expect((await errorFor(f.id)).code).toBe('open_in_app')
     expect(h.bridge.ctx.store.hasSeen(f.id)).toBe(true)
   })
 
@@ -375,6 +387,7 @@ describe('who may tap', () => {
       dev.deviceId,
       {
         a: 'approve',
+        shown_v: '3',
         card_id: card.id,
         payload_hash: card.payload_hash,
         shown: shownHash(cardNotice(card).text, 'General'),
@@ -422,7 +435,7 @@ describe('Approve binds what the notification showed', () => {
     const f = await tap(
       p,
       dev.deviceId,
-      { a: 'approve', card_id: card.id, payload_hash: over.hash ?? card.payload_hash, shown },
+      { a: 'approve', shown_v: '3', card_id: card.id, payload_hash: over.hash ?? card.payload_hash, shown },
       now,
       now,
     )
@@ -438,12 +451,15 @@ describe('Approve binds what the notification showed', () => {
     expect(h.bridge.ctx.ledger.get(card.id)?.state).toBe('resolved')
   })
 
-  test('the subtitle is part of what was shown: a hash of the body alone, or with another thread name, is refused', async () => {
+  test('the subtitle and title are part of what was shown, and an older phone hash is refused', async () => {
     h = await startHarness()
     const card = await makeCard()
+    const text = cardNotice(card).text
     for (const shown of [
-      shownHash(cardNotice(card).text), // body only, as if the subtitle were not displayed
-      shownHash(cardNotice(card).text, 'Payroll'), // a name this card's thread does not have
+      shownHash(text), // body only, as if the subtitle were not displayed
+      shownHash(text, 'Payroll'), // a name this card's thread does not have
+      shownHash(text, 'General', 'Approve: pay the invoice'), // a title the phone does not set
+      `sha256:${createHash('sha256').update(`talos-shown/v2\n7\nGeneral\n${text}`).digest('hex')}`, // no title: an older phone
     ]) {
       const f = await approve(card, { shown })
       expect((await errorFor(f.id)).code).toBe('card_hash_mismatch')
@@ -451,6 +467,24 @@ describe('Approve binds what the notification showed', () => {
     expect(h.bridge.ctx.ledger.get(card.id)?.state).toBe('pending')
     await approve(card) // the control: body plus the thread's real name runs
     await h.waitNotes(1)
+  })
+
+  test('an older phone, which signs the shown hash its notification data held, is refused even when that hash is right', async () => {
+    h = await startHarness()
+    const card = await makeCard()
+    const dev = h.app.device
+    const p = await phone(dev.deviceId, dev.privateKey)
+    const now = Date.now()
+    const body = {
+      a: 'approve',
+      card_id: card.id,
+      payload_hash: card.payload_hash,
+      shown: shownHash(cardNotice(card).text, 'General'),
+    }
+    const f = await tap(p, dev.deviceId, body as never, now, now)
+    h.relay.sendToBridge(f, { durable: true })
+    expect((await errorFor(f.id)).code).toBe('sig_invalid') // the body is not one this Mac accepts
+    expect(h.bridge.ctx.ledger.get(card.id)?.state).toBe('pending')
   })
 
   test('refuses words the relay chose: the phone signed a different text, so the card stays pending', async () => {
@@ -599,9 +633,9 @@ describe('Approve binds what the notification showed', () => {
   test('a replayed tap that was refused earlier gets the stored refusal again, not just an ack', async () => {
     h = await startHarness()
     const card = await makeCard({ risk: 'high' })
-    const f = await approve(card) // refused: stepup_required, and marked seen
-    expect((await errorFor(f.id)).code).toBe('stepup_required')
-    expect(h.bridge.ctx.store.seenOutcome(f.id)).toBe('rejected:stepup_required')
+    const f = await approve(card) // refused: open_in_app (approved in the app, never from a notification), and marked seen
+    expect((await errorFor(f.id)).code).toBe('open_in_app')
+    expect(h.bridge.ctx.store.seenOutcome(f.id)).toBe('rejected:open_in_app')
     // that refusal went out on a socket that then died; the relay never got the push trigger and replays the tap
     const refusals = () =>
       h.relay.frames.filter((x) => x.direction === 'from_bridge' && x.frame.type === 'error' && x.frame.ref === f.id)
@@ -612,7 +646,7 @@ describe('Approve binds what the notification showed', () => {
       (x) => x.direction === 'from_bridge' && x.frame.type === 'error' && x.frame.ref === f.id,
     )
     expect(again.length).toBe(2)
-    expect((again[1]?.frame as { code?: string } | undefined)?.code).toBe('stepup_required')
+    expect((again[1]?.frame as { code?: string } | undefined)?.code).toBe('open_in_app')
     expect(h.bridge.ctx.ledger.get(card.id)?.state).toBe('pending')
     expect(h.notes).toHaveLength(0)
   })
@@ -621,7 +655,7 @@ describe('Approve binds what the notification showed', () => {
     h = await startHarness()
     const card = await makeCard({ risk: 'high' })
     const f = await approve(card)
-    expect((await errorFor(f.id)).code).toBe('stepup_required') // refused once and remembered
+    expect((await errorFor(f.id)).code).toBe('open_in_app') // refused once and remembered
     const transport = h.bridge.ctx.transport
     const real = transport.sendEphemeral.bind(transport)
     let drop = true
@@ -656,7 +690,7 @@ describe('Approve binds what the notification showed', () => {
     h = await startHarness()
     const card = await makeCard({ risk: 'high' })
     const f = await approve(card)
-    expect((await errorFor(f.id)).code).toBe('stepup_required')
+    expect((await errorFor(f.id)).code).toBe('open_in_app')
     expect(h.bridge.ctx.ledger.get(card.id)?.state).toBe('pending')
   })
 
@@ -744,6 +778,7 @@ describe('Approve binds what the notification showed', () => {
       dev.deviceId,
       {
         a: 'approve',
+        shown_v: '3',
         card_id: card.id,
         payload_hash: card.payload_hash,
         shown: shownHash(cardNotice(card).text, 'General'),

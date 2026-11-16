@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "agent.recover",
+  "id": "01KA0000000000000000000001",
+  "ts": "2026-11-12T17:00:00.000Z",
+  "control_id": "01KA0000000000000000000002",
+  "action": "restart",
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "B3qqJAvj39KHXXpACdpROHLqVeEgT9AlUmwz8A7-P0Jlqw1Op3TqBqtToqLUTyL4yfF1lLjFpI3Dq0xv5Drk_w"
+}

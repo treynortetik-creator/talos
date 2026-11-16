@@ -15,12 +15,21 @@ import type { Logger } from './log.ts'
 import type { MediaStore } from './media.ts'
 import type { ModLink } from './mod/link.ts'
 import { type Notification, systemNotification, type ThreadRef } from './notify.ts'
+import { say } from './owner-words.ts'
 import type { PermissionRelay } from './permission/relay.ts'
 import type { RelayHttp } from './relay-http.ts'
 import type { ScheduleService } from './schedules/service.ts'
 import type { SessionControls } from './session/controls.ts'
 import type { Transport } from './transport.ts'
-import type { FolderServiceSeam, HealthService, MemoryService, SearchService, SpeakServiceSeam } from './v2-seams.ts'
+import type {
+  BugContextSeam,
+  FilesServiceSeam,
+  FolderServiceSeam,
+  HealthService,
+  MemoryService,
+  SearchService,
+  SpeakServiceSeam,
+} from './v2-seams.ts'
 
 /** kv key holding the ids the agent was told about and has not touched (D39). */
 const UNANSWERED_KEY = 'unanswered_v1'
@@ -55,13 +64,51 @@ export class SeenTracker {
 
   /** Ids the thread router took for a dedicated worker session: it tracks those claims itself, so they are not persisted here. */
   private routerOwned = new Set<string>()
+  /**
+   * Per thread: when this session was first told about a message there, with no tool call from it since (ms). Messages the router
+   * gave to a thread's own worker are left out (another process reads those) until the router falls back to this session.
+   */
+  private unseenSince = new Map<string, number>()
+  /** Called when `oldestUnseenAt` may have changed (the live bridge rewrites status.json). */
+  onChange?: () => void
 
   add(thread: string, messageId: string, opts: { persist?: boolean } = {}) {
     const l = this.pending.get(thread) ?? []
     l.push(messageId)
     this.pending.set(thread, l)
-    if (opts.persist === false || this.routerOwned.delete(messageId)) return
+    const routed = this.routerOwned.delete(messageId)
+    if (!routed) this.markUnseen(thread)
+    if (opts.persist === false || routed) return
     this.track(thread, messageId)
+  }
+
+  /** The router gave this session a message a thread's own worker did not claim in time: it is this session's to read now. */
+  heldForMain(thread: string, messageId: string) {
+    this.markUnseen(thread)
+    this.track(thread, messageId)
+  }
+
+  /** Any tool call from this session: it is reading and working, so nothing it was told about counts as unseen any more. */
+  toolCalled() {
+    if (this.unseenSince.size === 0) return
+    this.unseenSince.clear()
+    this.onChange?.()
+  }
+
+  private markUnseen(thread: string) {
+    if (this.unseenSince.has(thread)) return
+    this.unseenSince.set(thread, this.persist?.clock.now() ?? Date.now())
+    this.onChange?.()
+  }
+
+  /**
+   * status.json's `unseen_oldest_at`: the oldest time this session was told about an owner message with no tool call since, or
+   * null when there is none. A supervisor reads it to tell a session that stopped reading (packages/protocol supervisor.ts).
+   */
+  oldestUnseenAt(): string | null {
+    let oldest: number | undefined
+    for (const at of this.unseenSince.values()) if (oldest === undefined || at < oldest) oldest = at
+    return oldest === undefined ? null : new Date(oldest).toISOString()
   }
 
   /** The router handed this message to a thread's own worker session (another process): its claim is the router's to report. */
@@ -93,6 +140,7 @@ export class SeenTracker {
   take(thread: string): string[] {
     const l = this.pending.get(thread) ?? []
     this.pending.delete(thread)
+    if (this.unseenSince.delete(thread)) this.onChange?.()
     return l
   }
   /**
@@ -164,6 +212,8 @@ export class SeenTracker {
 
 export type BridgeContext = {
   mode: 'live' | 'headless'
+  /** Another bridge owns the key (4409) and this one has not rejoined: no tool prompts or live-only tools until it does. */
+  superseded?: boolean
   env: BridgeEnv
   paths: BridgePaths
   log: Logger
@@ -182,6 +232,8 @@ export type BridgeContext = {
   seen: SeenTracker
   /** The Talos mod's link (C2.3): `talos_mod_*` tools, session state and inventory, the C3.4 event feed. */
   mod: ModLink
+  /** Plan usage from main and every thread session, newest per kind (router/usage-pool.ts). Live bridge only. */
+  usage?: import('./router/usage-pool.ts').UsagePool
   /** App controls for the live Claude session (C4): policy check, queue for the mod, recorded result. */
   session: SessionControls
   /** Schedules (docs/SCHEDULES.md): present in live and headless mode; loops and writes only ever run when live and gated. */
@@ -190,6 +242,10 @@ export type BridgeContext = {
   configProposals?: ConfigProposals
   /** Needs-you prompts: a card for a known dialog in a thread session (docs/OPTION-C.md). Live main session only. */
   dialogs?: DialogCards
+  /** Screen helper consent: one card per app per Mac (screen-consent.ts). Live main session only. */
+  screenConsent?: import('./screen-consent.ts').ScreenConsent
+  /** The kit's "ask first" rules as cards (action-rule-asks.ts): live main bridge only. */
+  actionRuleAsks?: import('./action-rule-asks.ts').ActionRuleAsks
   /** v2 features (docs/V2-FEATURES.md V8): set by WP-V2, WP-V5 and WP-V1; absent = the read answers a fixed error. */
   search?: SearchService
   memory?: MemoryService
@@ -198,6 +254,18 @@ export type BridgeContext = {
   speak?: SpeakServiceSeam
   /** The folder picker's lister (live main bridge only); absent = `fs.list` answers a fixed error. */
   folders?: FolderServiceSeam
+  /** The Files pane's fenced list and read of a thread's folder (live main bridge only); absent = `files.*` answers a fixed error. */
+  files?: FilesServiceSeam
+  /** The thread's AGENTS.md in its settings (src/files/agents-md.ts; live main bridge only); absent = `agents_md.*` answers a fixed error. */
+  agentsMd?: import('./files/agents-md.ts').AgentsMdService
+  /** Uploads into a thread's folder (src/files/put.ts; live main bridge only); absent = `files.put` answers a fixed error. */
+  filesPut?: import('./files/put.ts').FilesPutService
+  /** The files sent in Talos, from history (src/files/sent.ts); absent = `files.sent` answers a fixed error. */
+  filesSent?: import('./files/sent.ts').FilesSentService
+  /** Which folders Memory's Notes show, picked in Settings (src/memory/roots.ts): a live main bridge. */
+  memoryRoots?: import('./memory/roots.ts').MemoryRoots
+  /** The bug reporter's read of versions, filed errors and the cleaned log tail (live main bridge only); absent = `bug.context` answers a fixed error. */
+  bugContext?: BugContextSeam
   /** MCP apps (docs/APPS.md): present on a live bridge; it answers app requests with a fixed refusal while the feature is off. */
   apps?: AppService
   /** Problem reports (docs/ERRORS.md): the live main bridge files them; absent elsewhere. */
@@ -209,6 +277,12 @@ export type BridgeContext = {
   }
   /** Live bridge only: reaches thread leads for the `handoff` tool (router.ts). */
   leads?: { unreachable(thread: string): string | undefined; deliver(): Promise<void> }
+  /** Undo points (undo/service.ts): the live main bridge only. Absent elsewhere, and no point is taken. */
+  undo?: import('./undo/route-point.ts').UndoSeam
+  /** The undo card (undo/card.ts): the live main bridge only. */
+  undoCards?: import('./undo/card.ts').UndoCards
+  /** A message's undo point on its receipt and history rows (undo/marks.ts): the live main bridge only. */
+  undoMarks?: import('./undo/marks.ts').UndoMarks
   /** Pushes a channel notification into the Claude session. A no-op in headless mode. */
   emit: (n: Notification) => Promise<void>
 }
@@ -240,7 +314,18 @@ export function touchThread(ctx: BridgeContext, thread: string) {
 export async function postSystemNotice(
   ctx: BridgeContext,
   text: string,
-  opts: { toAgent?: boolean; thread?: ThreadRef; id?: string; handoff?: MessageT['handoff'] } = {},
+  opts: {
+    toAgent?: boolean
+    thread?: ThreadRef
+    id?: string
+    handoff?: MessageT['handoff']
+    /** The agent changed a setting that decides which alerts reach the owner: pushed through quiet hours (frames.ts). */
+    settingsChanged?: boolean
+    /** A send made without a card because its kind is always allowed: pushed through quiet hours (always-allow.ts). */
+    sentAlwaysAllowed?: boolean
+    /** Posted to the thread without a phone notification (always-allow passes, owner 2026-11-15). */
+    silent?: boolean
+  } = {},
 ) {
   const now = ctx.clock.now()
   const thread = opts.thread ?? defaultThreadRef(ctx)
@@ -258,7 +343,13 @@ export async function postSystemNotice(
   }
   ctx.store.addMessage(message)
   try {
-    await ctx.transport.sendDurable(replyFrame(now, message) as Frame)
+    await ctx.transport.sendDurable(
+      replyFrame(now, message, {
+        ...(opts.silent ? { silent: true } : {}),
+        ...(opts.settingsChanged ? { settings_changed: true } : {}),
+        ...(opts.sentAlwaysAllowed ? { sent_always_allowed: true } : {}),
+      }) as Frame,
+    )
   } catch (e) {
     ctx.log.warn('system notice not sent', { error: (e as Error).message })
   }
@@ -277,7 +368,7 @@ export async function reportUnansweredFromEarlierRuns(ctx: BridgeContext): Promi
   if (ctx.mode !== 'live' || ctx.worker) return
   for (const [thread, ids] of ctx.seen.takeUnansweredFromEarlierRuns()) {
     const many = ids.length > 1
-    const text = `${many ? `${ids.length} messages` : 'A message'} you sent may not have been answered: the session on your Mac stopped while ${many ? 'they were' : 'it was'} being handled. Send ${many ? 'them' : 'it'} again if ${many ? 'they still matter' : 'it still matters'}.`
+    const text = `${many ? `${ids.length} messages` : 'A message'} you sent may not have been answered: the session on ${say({ mac: 'your Mac', linux: 'your computer' })} stopped while ${many ? 'they were' : 'it was'} being handled. Send ${many ? 'them' : 'it'} again if ${many ? 'they still matter' : 'it still matters'}.`
     try {
       await postSystemNotice(ctx, text, { toAgent: true, thread: threadRef(ctx, thread) })
     } catch (e) {

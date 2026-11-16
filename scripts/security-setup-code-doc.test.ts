@@ -109,9 +109,8 @@ describe('docs/SECURITY.md: setup-code sign-in', () => {
     expect(security).toMatch(/Unsigned rows can steer which old files the app asks for/i)
   })
 
-  it('names the step-up limit and labels it an inference, not a tested claim', () => {
-    expect(security).toMatch(/step-up on a native app[\s\S]{0,1200}INFERENCE/i)
-    expect(security).toMatch(/no passkey bound to it, so[\s\S]{0,120}accept any passkey/i)
-    expect(security).toMatch(/shell most likely cannot produce an assertion/i)
+  it('says step-up is gone (owner 2026-11-14), so the old native-app step-up limit no longer applies', () => {
+    expect(security).not.toMatch(/step-up on a native app/i)
+    expect(security).toMatch(/No step-up tokens/)
   })
 })

@@ -40,3 +40,5 @@ apps/.build/
 **/.build/
 *.app
 .desktop-out/
+# release-install-test.sh: its copies of install.sh, removed at the end of each run
+apps/desktop/scripts/.install-under-test-*

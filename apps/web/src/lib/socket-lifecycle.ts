@@ -22,12 +22,14 @@ export function createSocketLifecycle(c: SocketCtx) {
     c.ready = false
     c.stopPing()
     c.rejectAllPending(new NoAnswerError('internal', 'Offline'))
+    c.inboxSocketGone(s)
     try {
       s?.close()
     } catch {}
   }
   function onVisibility() {
     c.lastReportAt = now()
+    c.lastPointer = null // the first pointermove after coming back only records where the cursor is
     c.send({ type: 'visibility', state: isVisible() ? 'visible' : 'hidden' })
     if (!isVisible() || c.closed) return
     // Coming back to the front: a phone that slept can hold a dead socket for ~25 s (until the next ping). Ask now, and
@@ -53,11 +55,24 @@ export function createSocketLifecycle(c: SocketCtx) {
         sock.close()
       } catch {}
       // A dead socket may not finish closing for a long time: run the close path ourselves (it ignores a later real one).
+      c.closedByHand.add(sock)
       sock.onclose?.({ code: 4000 } as CloseEvent)
     }, WAKE_PROBE_MS)
   }
-  /** Pointer, key, touch or wheel while the screen is showing: tell the relay someone is here (at most once per ACTIVITY_REPORT_MS). */
-  function onActivity() {
+  /**
+   * Pointer, key, touch or wheel while the screen is showing: tell the relay someone is here (at most once per
+   * ACTIVITY_REPORT_MS). A pointermove counts only when the pointer really moved on the screen: one at the same spot is the
+   * page reflowing under a still cursor, and counting it would keep an owner who walked away "here", so the relay would
+   * hold the push. The first pointermove (after load, or after the page was hidden) only records where the cursor is.
+   */
+  function onActivity(e?: Event) {
+    if (e?.type === 'pointermove') {
+      const p = e as PointerEvent
+      const last = c.lastPointer
+      c.lastPointer = { x: p.screenX, y: p.screenY }
+      // under a sub-pixel: zoom and display scaling can make the same spot fractional
+      if (!last || (Math.abs(last.x - p.screenX) < 1 && Math.abs(last.y - p.screenY) < 1)) return
+    }
     if (!isVisible() || now() - c.lastReportAt < ACTIVITY_REPORT_MS) return
     // Only the presence frame: the wake probe in onVisibility is for coming back to the front, not for every tap.
     c.lastReportAt = now()

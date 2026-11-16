@@ -50,6 +50,28 @@ export function defineRelayContract(name: string, harness: RelayHarness) {
       await app.close()
     })
 
+    it('a second bridge replaces the first with 4409; a standby hello never replaces a connected bridge and takes an empty slot', async () => {
+      const k = kit(relay)
+      const first = await k.bridge().connect()
+      expect(await k.bridge({ standby: true }).connectExpectingRefusal()).toBe(4409)
+      expect(first.connected).toBe(true)
+      const second = await k.bridge().connect()
+      await waitFor(() => first.closeCode === 4409, 3000, 'the first bridge to be replaced')
+      expect(second.connected).toBe(true)
+      await second.close()
+      // the slot is empty once the relay has seen the close: until then the standby hello is still turned away
+      let back: FakeBridge | undefined
+      for (let i = 0; i < 100 && !back; i++) {
+        try {
+          back = await k.bridge({ standby: true }).connect()
+        } catch {
+          await sleep(20) // the relay has not handled the close yet; it turned this hello away
+        }
+      }
+      expect(back?.connected).toBe(true)
+      await back?.close()
+    })
+
     it('message: ack with seq, message.stored to the app, forwarded to the bridge with the signature intact', async () => {
       const k = kit(relay)
       const app = await k.connectedApp()
@@ -92,7 +114,7 @@ export function defineRelayContract(name: string, harness: RelayHarness) {
       await app.expectFrame('card.update', (f) => f.card_id === card.id && f.state === 'resolved')
     })
 
-    describe('step-up', () => {
+    describe('high-risk cards and settings: no step-up (owner ruling 2026-11-14)', () => {
       async function highRisk() {
         const k = kit(relay)
         const app = await k.connectedApp()
@@ -109,7 +131,7 @@ export function defineRelayContract(name: string, harness: RelayHarness) {
         return { app, bridge, card, hash: payloadHash(bindingFrom(card)) }
       }
 
-      it('a high-risk primary resolve with a minted token is forwarded without the token, signature intact', async () => {
+      it("an older app's token on a high-risk resolve is stripped before the bridge, signature intact", async () => {
         const { app, bridge, card, hash } = await highRisk()
         const token = await relay.mintStepup(`card:${card.id}`)
         const sent = await app.resolveCard(card, 'primary', hash, { stepup_token: token })
@@ -123,79 +145,32 @@ export function defineRelayContract(name: string, harness: RelayHarness) {
         expect(await verifyOwnerFrame(raw, app.device.publicJwk)).toBe(true)
       })
 
-      it('without a token: error stepup_required and nothing reaches the bridge', async () => {
+      it('without a token a high-risk primary resolve reaches the bridge (no step-up since 2026-11-14)', async () => {
         const { app, bridge, card, hash } = await highRisk()
         const sent = await app.resolveCard(card, 'primary', hash)
-        const err = await app.expectFrame('error', (f) => f.ref === sent.id)
-        expect(err.code).toBe('stepup_required')
-        await sleep(150)
-        expect(bridge.rec.of('card.resolve', 'in')).toHaveLength(0)
+        await bridge.expectFrame('card.resolve', (f) => f.id === sent.id, { direction: 'in' })
       })
 
-      it('a token for another purpose, an unknown token and a reused token are all refused', async () => {
-        const { app, bridge, card, hash } = await highRisk()
-        const wrong = await app.resolveCard(card, 'primary', hash, {
-          stepup_token: await relay.mintStepup('device:revoke'),
-        })
-        expect((await app.expectFrame('error', (f) => f.ref === wrong.id)).code).toBe('stepup_invalid')
-        const unknown = await app.resolveCard(card, 'primary', hash, { stepup_token: 'st_made_up' })
-        expect((await app.expectFrame('error', (f) => f.ref === unknown.id)).code).toBe('stepup_invalid')
-        const token = await relay.mintStepup(`card:${card.id}`)
-        const ok = await app.resolveCard(card, 'primary', hash, { stepup_token: token })
-        await bridge.expectFrame('card.resolve', (f) => f.id === ok.id, { direction: 'in' })
-        const reuse = await app.resolveCard(card, 'primary', hash, { stepup_token: token })
-        expect((await app.expectFrame('error', (f) => f.ref === reuse.id)).code).toMatch(/^stepup_(invalid|required)$/)
-      })
-
-      it('config.patch needs config:work only when it touches work.enabled', async () => {
+      it('config.patch of work.enabled needs no token', async () => {
         const k = kit(relay)
         const app = await k.connectedApp()
         const bridge = k.bridge({ verifyOwner: false, consume: 'manual' })
         await bridge.connect()
-        const plain = await app.sendConfigPatch(0, { quiet_window: null })
-        await bridge.expectFrame('config.patch', (f) => f.id === plain.id, { direction: 'in' })
         const work = await app.sendConfigPatch(0, { work: { enabled: ['slack'] } })
-        expect((await app.expectFrame('error', (f) => f.ref === work.id)).code).toBe('stepup_required')
-        const withToken = await app.sendConfigPatch(
-          0,
-          { work: { enabled: ['slack'] } },
-          { stepup_token: await relay.mintStepup('config:work') },
-        )
-        await bridge.expectFrame('config.patch', (f) => f.id === withToken.id, { direction: 'in' })
+        await bridge.expectFrame('config.patch', (f) => f.id === work.id, { direction: 'in' })
       })
     })
 
-    describe('trust mode from the app: off is free, on needs the passkey step-up', () => {
-      it('on without a token is stepup_required and never reaches the Mac; with the config:session token it does, once', async () => {
+    describe('trust mode from the app: on and off are plain signed patches (no passkey since 2026-11-14)', () => {
+      it('on and off reach the Mac with no token; a value that is not a boolean is config_field_forbidden', async () => {
         const k = kit(relay)
         const app = await k.connectedApp()
         const bridge = k.bridge({ verifyOwner: false, consume: 'manual' })
         await bridge.connect()
-        const bare = await app.sendConfigPatch(0, { trust_mode: true })
-        expect((await app.expectFrame('error', (f) => f.ref === bare.id)).code).toBe('stepup_required')
-        const wrong = await app.sendConfigPatch(
-          0,
-          { trust_mode: true },
-          { stepup_token: await relay.mintStepup('config:work') },
-        )
-        expect((await app.expectFrame('error', (f) => f.ref === wrong.id)).code).toBe('stepup_invalid')
-        const token = await relay.mintStepup('config:session')
-        const ok = await app.sendConfigPatch(0, { trust_mode: true }, { stepup_token: token })
-        await bridge.expectFrame('config.patch', (f) => f.id === ok.id, { direction: 'in' })
-        const reuse = await app.sendConfigPatch(0, { trust_mode: true }, { stepup_token: token })
-        expect((await app.expectFrame('error', (f) => f.ref === reuse.id)).code).toMatch(/^stepup_(invalid|required)$/)
-        expect(
-          bridge.rec.of('config.patch', 'in').filter((f) => [bare.id, wrong.id, reuse.id].includes(f.id)),
-        ).toHaveLength(0)
-      })
-
-      it('off needs no token and reaches the Mac; a value that is not a boolean is config_field_forbidden', async () => {
-        const k = kit(relay)
-        const app = await k.connectedApp()
-        const bridge = k.bridge({ verifyOwner: false, consume: 'manual' })
-        await bridge.connect()
-        const off = await app.sendConfigPatch(0, { trust_mode: false })
-        await bridge.expectFrame('config.patch', (f) => f.id === off.id, { direction: 'in' })
+        for (const v of [true, false]) {
+          const f = await app.sendConfigPatch(0, { trust_mode: v })
+          await bridge.expectFrame('config.patch', (x) => x.id === f.id, { direction: 'in' })
+        }
         const junk = await app.sendConfigPatch(0, { trust_mode: 'yes' })
         expect((await app.expectFrame('error', (f) => f.ref === junk.id)).code).toBe('config_field_forbidden')
       })

@@ -1,0 +1,15 @@
+{
+  "id": "files-put-queue",
+  "title": "An upload's 50 MB fetch ran on the bridge's one read queue, holding every search and listing behind it",
+  "base": "36f4a9b651e69f6dc562b42d9e089f32488b195c",
+  "buggy": "uncommitted",
+  "fix": "f33ad64a",
+  "expect": [
+    {
+      "file": ["apps/bridge/src/inbound-reads.ts", "apps/bridge/src/files/put.ts"],
+      "severity": "medium",
+      "must": [["queue|serial|block|await|one at a time|held up|starv"], ["fetch|download|upload|put|50 ?MB|media"]],
+      "note": "files.put is answered on the one read queue (await answerRead), so a 50 MB fetch holds every search, listing and history page behind it; the put's own cap of two at once can never be reached."
+    }
+  ]
+}

@@ -119,6 +119,20 @@ describe('buildHome', () => {
     expect(m.upNext.map((r) => r.kind).sort()).toEqual(['snoozed', 'thread'])
   })
 
+  it('an archived thread is never Working or Up next (no list shows it)', () => {
+    const client = setup()
+    client.store.setState((s) => ({
+      ...s,
+      threads: s.threads.map((t) => (t.id === 'general' ? { ...t, archived: true } : t)),
+      statuses: { general: status('general', 'working') },
+    }))
+    let m = buildHome(client.store.getState(), { nowMs: NOW, timeZone: 'UTC', localSnoozed: new Map() })
+    expect(m.groups.find((g) => g.id === 'working')?.rows ?? []).toEqual([])
+    client.store.setState((s) => ({ ...s, statuses: { general: status('general', 'queued') } }))
+    m = buildHome(client.store.getState(), { nowMs: NOW, timeZone: 'UTC', localSnoozed: new Map() })
+    expect(m.upNext.filter((r) => r.kind === 'thread')).toEqual([])
+  })
+
   it('"today" is the owner timezone day, not UTC', () => {
     const c = makeCard({
       state: 'done',

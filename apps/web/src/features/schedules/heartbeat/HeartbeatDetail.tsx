@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { useTalos, useTalosClient } from '../../../lib/client.ts'
 import { cn } from '../../../ui/cn.ts'
 import { Button, Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from '../../../ui/index.ts'
-import { dayKey, runKeyLabel } from '../logic.ts'
+import { dayKey, runTimeToday } from '../logic.ts'
 import { ProposalSheet } from '../Proposal.tsx'
 import { CAPS, FIELD, Field, TONE, useSchedTime } from '../shared.tsx'
 import {
@@ -200,7 +200,7 @@ export function HeartbeatDetailBody({
               const o = outcomeOfRun(r)
               return (
                 <li key={r.run_id ?? r.ds}>
-                  <span className="font-mono text-xs">{runKeyLabel(r.ds).slice(-5)}</span>{' '}
+                  <span className="font-mono text-xs">{runTimeToday(r, t.time)}</span>{' '}
                   <span className={TONE[o.tone]}>{o.word}</span>
                 </li>
               )

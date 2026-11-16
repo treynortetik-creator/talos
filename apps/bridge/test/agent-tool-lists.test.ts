@@ -37,6 +37,7 @@ describe('agent tool name lists', () => {
       'schedule_propose',
       'schedule_run_start',
       'schedule_run_done',
+      'wake_me',
     ])
     expect([...CONFIG_BRIDGE_TOOLS]).toEqual(['config_propose'])
     expect([...ATTACHMENT_BRIDGE_TOOLS]).toEqual(['retry_attachment'])
@@ -56,8 +57,20 @@ describe('agent tool name lists', () => {
       'schedule_propose',
       'schedule_run_start',
       'schedule_run_done',
+      'wake_me',
+      'config_propose',
+      'publish_page',
       'read_inbound',
+      'memory_note_read',
       'handoff',
+      'restart_main',
+      'screen_shot',
+      'screen_click',
+      'screen_type',
+      'screen_key',
+      'screen_scroll',
+      'screen_apps',
+      'screen_open_app',
     ])
     expect([...WORKER_THREAD_LOCKED_TOOLS]).toEqual([
       'reply',
@@ -66,6 +79,8 @@ describe('agent tool name lists', () => {
       'set_status',
       'read_thread',
       'schedule_propose',
+      'config_propose',
+      'publish_page',
       'handoff',
     ])
   })

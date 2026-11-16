@@ -1075,7 +1075,8 @@ describe('restore-last-good is owner only and asks first', () => {
     )
     expect(code).toBe(0)
     const rows = JSON.parse(out.join('\n')).commands as Array<{ name: string; agent_may_run: boolean }>
-    expect(rows.find((c) => c.name === 'restore-last-good')?.agent_may_run).toBe(false)
-    expect(COMMANDS.find((c) => c.name === 'restore-last-good')?.agent_may_run).toBe(false)
+    // owner ruling 2026-11-14: a person may ask the agent to put the last-good setup back
+    expect(rows.find((c) => c.name === 'restore-last-good')?.agent_may_run).toBe(true)
+    expect(COMMANDS.find((c) => c.name === 'restore-last-good')?.who).toBeUndefined()
   })
 })

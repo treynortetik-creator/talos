@@ -204,6 +204,42 @@ describe('hostile text in every field stays plain text', () => {
   })
 })
 
+describe('hostile text through a Slack bot connection stays plain text', () => {
+  it('a hostile DM, group DM and mention to the bot', async () => {
+    const c = conn({ integration: 'slack', work: true, extra: { identity: 'bot', bot_user_id: 'U0BOT00001' } })
+    const ev = (over: object) =>
+      JSON.stringify({
+        type: 'event_callback',
+        event_id: 'Ev1',
+        team_id: 'T1',
+        authorizations: [{ user_id: 'U0BOT00001', is_bot: true }],
+        event: {
+          type: 'message',
+          channel: 'D1',
+          channel_type: 'im',
+          user: EVIL,
+          text: EVIL,
+          ts: '1792940700.0001',
+          ...over,
+        },
+      })
+    const bodies = [
+      ev({}),
+      ev({ channel_type: 'mpim' }),
+      ev({ channel_type: 'channel', text: `<@U0BOT00001> ${EVIL}` }),
+    ]
+    const events = (await Promise.all(bodies.map((b) => getIntegration('slack').normalize(raw(b), c)))).flat()
+    expect(events.map((e) => e.kind)).toEqual(['slack.bot_dm', 'slack.bot_mpim', 'slack.bot_mention'])
+    for (const e of events) {
+      expect(NormalizedEvent.safeParse(e).success).toBe(true)
+      for (const field of [e.title, e.summary, e.actor.id, e.dedup_key])
+        if (field) expect(hasControl(field)).toBe(false)
+      expect(e.title.length).toBeLessThanOrEqual(200)
+      expect(e.summary.length).toBeLessThanOrEqual(280)
+    }
+  })
+})
+
 describe('github setup', () => {
   it('has no repository step (per-repo webhooks are v1.1; the relay rejects a repos field)', () => {
     expect(githubSetup.connect.some((s) => s.type === 'repo_picker')).toBe(false)

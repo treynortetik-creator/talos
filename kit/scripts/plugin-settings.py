@@ -35,8 +35,13 @@ import re
 import shutil
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _rooted  # noqa: E402  (the marker check the supervisor makes too)
+
 PLUGIN_KEY = "talos@talos-local"
 MARKETPLACE = "talos-local"
+# On a Talos distro the kit Main loads is root's sealed copy, and root's managed settings allow only that marketplace path,
+# compared as written (not resolved): a link to it, or the home vendor, is blocked and Main would lose its kit (_rooted.py).
 STATE_DIR = ".talos-pre-plugin"
 STATE_FILE = "plugin-move.json"
 PYPATH = 'export PYTHONPATH="$CLAUDE_PROJECT_DIR/hooks${PYTHONPATH:+:$PYTHONPATH}"; '
@@ -78,8 +83,16 @@ def backup(path, mig, suffix=""):
     return bak
 
 
+def rooted():
+    """A Talos distro (root's marker); a marker that is there but not root's stops the change, nothing written."""
+    try:
+        return _rooted.mode() == "rooted"
+    except _rooted.Bad as e:
+        raise SystemExit("plugin-settings: %s; open Talos in the tray and choose \"Update the kit\"" % e)
+
+
 def market_entry(kit_home):
-    return {"source": {"source": "directory", "path": os.path.abspath(kit_home)}}
+    return _rooted.market_entry() if rooted() else {"source": {"source": "directory", "path": os.path.abspath(kit_home)}}
 
 
 def release_hook_scripts(release):
@@ -93,9 +106,13 @@ def with_plugin_keys(cfg, kit_home):
     prev = {"marketplace": copy.deepcopy((cfg.get("extraKnownMarketplaces") or {}).get(MARKETPLACE)),
             "enabled": (cfg.get("enabledPlugins") or {}).get(PLUGIN_KEY)}
     cur = prev["marketplace"]
-    same = (isinstance(cur, dict) and isinstance(cur.get("source"), dict) and cur["source"].get("source") == "directory"
-            and isinstance(cur["source"].get("path"), str) and os.path.realpath(cur["source"]["path"]) == os.path.realpath(kit_home))
-    if not same:        # the same folder reached through a symlink is the same marketplace: leave the entry as it is
+    path = cur["source"].get("path") if isinstance(cur, dict) and isinstance(cur.get("source"), dict) else None
+    if rooted():        # root's managed settings compare the path as written: only exactly root's kit is the same
+        same = cur == market_entry(kit_home)
+    else:
+        same = (cur["source"].get("source") == "directory" and isinstance(path, str)
+                and os.path.realpath(path) == os.path.realpath(kit_home)) if path is not None else False
+    if not same:        # the same folder reached through a symlink is the same marketplace (not on a Talos distro): leave it
         cfg.setdefault("extraKnownMarketplaces", {})[MARKETPLACE] = market_entry(kit_home)
     cfg.setdefault("enabledPlugins", {})[PLUGIN_KEY] = True
     return prev
@@ -476,6 +493,11 @@ def cmd_reconcile(a):
         raise SystemExit("plugin-settings: %s is not a JSON object; it was left alone" % path)
     new = copy.deepcopy(cfg)
     lines = reconcile_hooks(new, old_hooks, new_hooks)
+    # on a Talos distro an older entry naming the home vendor is moved to root's kit (root's policy blocks any other path)
+    mk = (new.get("extraKnownMarketplaces") or {}).get(MARKETPLACE)
+    if rooted() and mk is not None and mk != _rooted.market_entry():
+        new["extraKnownMarketplaces"][MARKETPLACE] = _rooted.market_entry()
+        lines.append("reconcile: talos-local now names root's kit at %s" % _rooted.ROOTED_KIT)
     if new == cfg:
         for l in lines:
             print(l)

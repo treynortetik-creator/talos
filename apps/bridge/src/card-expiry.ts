@@ -1,6 +1,7 @@
 // Card expiry (spec 4.5): at `expires_at` a pending card becomes `expired`, the agent hears `card_action=expired`, and the
 // app gets `card.update`. Timers live in the live bridge; headless processes only write the ledger, so the live bridge
 // re-syncs its timers from the ledger on every poll.
+import { isRuleAskCard } from './action-rule-asks.ts'
 import { type BridgeContext, threadRef } from './context.ts'
 import { cardUpdateFrame } from './frames-out.ts'
 import { cardActionNotification } from './notify.ts'
@@ -60,11 +61,13 @@ export class CardExpiry {
     if (!row) return
     const now = ctx.clock.now()
     ctx.permission.onCardGone(id)
+    ctx.actionRuleAsks?.onCardGone(id)
     ctx.schedules?.forgetCard(id) // a schedule card's proposer row has no reader left
     ctx.transport
       .sendDurable(cardUpdateFrame(now, { card_id: id, state: 'expired', reason }))
       .catch((e) => ctx.log.warn('card.update not sent', { error: (e as Error).message }))
     if (row.binding.kind === 'permission') return // the agent never hears about a permission card
+    if (row.actor === 'bridge' && isRuleAskCard(row.binding)) return // nor about an "Allow once" card: `approve` was answered
     if (row.binding.kind === 'dialog') return ctx.dialogs?.onCardExpired(row) // nor about a dialog card: the owner gets the one thread line
     // MCP apps: the app hears `card_expired`; a bridge-run card never involved the agent
     if (row.binding.kind === 'app_action' && ctx.apps && (await ctx.apps.onCardExpired(row)) === 'quiet') return

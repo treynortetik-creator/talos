@@ -63,10 +63,6 @@ LEGACY_PROMPT_HASHES = {
     ("talos-morning-brief", "guard.md"): "d96688a425d59b30ea2ac1d2a20efa57cde8574349b259a89e1832c7ebe3a436",
     ("talos-state-sweep", "prompt.md"): "b8215f0a730b577dd7f51588876bbe2afc88867c8e828df6965d07f6aa0c63b3",
     ("talos-state-sweep", "guard.md"): "aa5ebb46e63a94bed2a8384001f4c427fc6858058626731bbbcc685ddcc3f19a",
-    ("talos-weekly-snapshot", "prompt.md"): "fea2a96cf90383f6e42313b9a9a85ce1ed765a4ae7844dd4776d751567c3e579",
-    ("talos-weekly-snapshot", "guard.md"): "a48ceb4db484379e2065984d547ebf64d495534e719867f2f8c28245b9f70b15",
-    ("talos-weekly-wiki-lint", "prompt.md"): "39ac61e4a2e291b5dc4d9d43a142db44f48b8e7b5eee23ac6752ba8af7f77466",
-    ("talos-weekly-wiki-lint", "guard.md"): "811548b63f57cd72e1085499bba92bb2b06bac289cd27f741d7ad3e18fb345e0",
 }
 
 # Chronos 0.2.1 added the command job ("kind": "command"): a plain shell command on the schedule, no claude run.
@@ -276,24 +272,46 @@ UPDATE_CHRONOS_HELP = (
     "(the Chronos clone is a detached checkout, so `git pull` does nothing there).")
 
 
-def installed_chronos():
-    """(version tuple or None, description) for the Chronos that LAUNCHD actually runs.
-
-    The clone Talos made (recorded in ~/.config/talos/chronos-dir) is NOT authoritative: when a Chronos config already existed,
-    install.sh leaves Chronos's installer alone, so launchd can still be running an older copy than the pinned clone. The tick
-    agent's plist names the script it runs (<runtime>/bin/chronos-tick.sh), so the version is read from THAT runtime's
-    lib/chronoslib.py. Anything that cannot be read is None: the caller must treat None as unknown, not as new enough."""
-    import plistlib
+def tick_runtime():
+    """(script path or None, how, description): what runs Chronos's tick here. A launchd plist when there is one (a Mac; the kit
+    tests fake one), else Chronos's systemd user timer (Linux, Chronos PR #10), whose service's LAST ExecStart names the script
+    (systemd uses the last one; drop-ins are not read). `how` is "launchd", "systemd" or None."""
     agents = os.environ.get("CHRONOS_LAUNCHAGENTS_DIR") or os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents")
     plist = os.path.join(agents, TICK_LABEL + ".plist")
+    if os.path.exists(plist):
+        import plistlib
+        try:
+            with open(plist, "rb") as fh:
+                data = plistlib.load(fh)
+        except Exception:
+            return None, "launchd", "no Chronos scheduler is installed (no %s)" % plist
+        script = next((str(x) for x in (data.get("ProgramArguments") or []) if str(x).endswith("chronos-tick.sh")), "")
+        return (script or None), "launchd", ("" if script else "%s does not name a chronos-tick.sh" % plist)
+    units = os.environ.get("CHRONOS_SYSTEMD_DIR") or os.path.join(os.path.expanduser("~"), ".config", "systemd", "user")
+    unit = os.path.join(units, "chronos-tick.service")
     try:
-        with open(plist, "rb") as fh:
-            data = plistlib.load(fh)
-    except Exception:
-        return None, "no Chronos scheduler is installed (no %s)" % plist
-    script = next((str(x) for x in (data.get("ProgramArguments") or []) if str(x).endswith("chronos-tick.sh")), "")
+        with open(unit, "rb") as fh:
+            text = fh.read(20000).decode("utf-8", "replace")
+    except OSError:
+        return None, None, "no Chronos scheduler is installed (no %s and no %s)" % (plist, unit)
+    found = re.findall(r'^ExecStart=.*?(?:"([^"\n]*/bin/chronos-tick\.sh)"|(\S*/bin/chronos-tick\.sh))\s*$', text, re.M)
+    if not found:
+        return None, "systemd", "%s does not name a chronos-tick.sh" % unit
+    last = found[-1]
+    return (last[0] or last[1]), "systemd", ""
+
+
+def installed_chronos():
+    """(version tuple or None, description) for the Chronos that actually runs the tick (launchd on a Mac, the systemd timer on
+    Linux).
+
+    The clone Talos made (recorded in ~/.config/talos/chronos-dir) is NOT authoritative: when a Chronos config already existed,
+    install.sh leaves Chronos's installer alone, so the tick can still be running an older copy than the pinned clone. What runs the
+    tick names the script (<runtime>/bin/chronos-tick.sh), so the version is read from THAT runtime's lib/chronoslib.py. Anything
+    that cannot be read is None: the caller must treat None as unknown, not as new enough."""
+    script, _how, why = tick_runtime()
     if not script:
-        return None, "%s does not name a chronos-tick.sh" % plist
+        return None, why
     runtime = os.path.dirname(os.path.dirname(script))
     try:
         txt = open(os.path.join(runtime, "lib", "chronoslib.py"), encoding="utf-8").read(20000)
@@ -315,6 +333,11 @@ def restricted_blocker():
     """None when the Chronos that launchd runs is known to be 0.2.2 or newer; otherwise the plain-English reason a restricted
     job must not be registered or enabled. An older Chronos IGNORES "restricted": true and would run the job with permission
     prompts skipped, and an UNKNOWN version cannot be trusted either: both refuse."""
+    # off a Mac (the tick is Chronos's systemd timer) a restricted job is refused whatever the version, as the bridge refuses it there:
+    # the narrow run it needs comes with Chronos's runtime at a root-owned path, later (docs/SCHEDULES.md S3.9)
+    if tick_runtime()[1] == "systemd":
+        return "restricted jobs don't run on this computer yet (only on a Mac): register them with --full-access, which runs them " \
+               "unattended with full permissions, or leave them off."
     v, where = installed_chronos()
     if v is None:
         return "I cannot tell which Chronos will run your jobs (%s). Restricted jobs need Chronos 0.2.2 or newer, and a Chronos that " \
@@ -678,6 +701,10 @@ def cmd_harden(a):
         for j in jobs:
             jid = str(j.get("id", "")) if isinstance(j, dict) else ""
             if not jid.startswith(PREFIX) or is_command(j) or "restricted" in j or jid not in tmpl:
+                continue
+            if is_command(tmpl[jid]):
+                # shipped as a Claude job once, a plain command now (talos-weekly-wiki-lint, talos-weekly-snapshot): the old
+                # registration is left as it is; unregister + register brings the command version
                 continue
             new = render_job(tmpl[jid], agent, a.full_access)
             upd = dict(j)

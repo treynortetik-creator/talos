@@ -3,8 +3,11 @@ import { z } from 'zod'
 export const ErrorCode = z.enum([
   'bad_frame',
   'unauthorized',
+  // the passkey step-up was removed (2026-11-14): no relay or bridge sends these two any more; kept so an older app reads them
   'stepup_required',
   'stepup_invalid',
+  // a high-risk card answered from a notification: it is approved in the app, never from the lock screen
+  'open_in_app',
   'card_not_pending',
   'card_expired',
   'card_hash_mismatch',
@@ -18,6 +21,8 @@ export const ErrorCode = z.enum([
   'rate_limited',
   'too_large',
   'internal',
+  // a downloaded attachment this Mac removed under the owner's retention setting (media_keep_days)
+  'media_removed',
   // Schedules (docs/SCHEDULES.md S2.2)
   'scheduler_unavailable',
   'schedule_invalid',
@@ -61,9 +66,17 @@ export const ErrorCode = z.enum([
   'thread_session_refused', // a config.patch the Mac refused for an Option C reason (front-door thread, bad folder)
 ])
 export type ErrorCodeT = z.infer<typeof ErrorCode>
+/**
+ * An error code as frames carry it (protocol audit O5): a short string, read as 'internal' when this build does not know
+ * it, so an  or a result from a newer relay or Mac still arrives, with its words in  or .
+ * Dropping it would leave a refused card.resolve never rolled back and the app's pending request waiting forever.
+ */
+export const WireErrorCode = z.string().max(64).pipe(ErrorCode.catch('internal'))
 
 /** WebSocket close codes (3.4). */
 export const WS_CLOSE = {
+  /** Standard 1012 "Service Restart": the relay is stopping for a deploy; come back at once. */
+  RESTARTING: 1012,
   BAD_FRAME: 4400,
   UNAUTHORIZED: 4401,
   BAD_ORIGIN: 4403,

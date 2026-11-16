@@ -55,10 +55,16 @@ test.describe('on-screen keyboard', () => {
     // 80px near-bottom band, yet still fit the full scroller.
     for (let n = 1; n < 30; n++) {
       await seed(page, n)
-      const [rows, ch] = await tl.evaluate((el) => [
-        Array.from(el.children).reduce((h, c) => h + (c as HTMLElement).offsetHeight, 0),
-        el.clientHeight,
-      ])
+      // the scroller's own padding counts too (room kept below the last row for the Report a bug button)
+      const [rows, ch] = await tl.evaluate((el) => {
+        const cs = getComputedStyle(el)
+        return [
+          Array.from(el.children).reduce((h, c) => h + (c as HTMLElement).offsetHeight, 0) +
+            Number.parseFloat(cs.paddingTop) +
+            Number.parseFloat(cs.paddingBottom),
+          el.clientHeight,
+        ]
+      })
       if ((rows as number) > (ch as number) - 222 + 100) break
     }
     await keyboard(page, 336)

@@ -79,6 +79,8 @@ public enum NotificationPolicy {
     #"^Overnight: [0-9]{1,5} items$"#, #"^[^\n\r]{1,40}'s Mac session stopped$"#, #"^New device pinned$"#,
     #"^Your bridge key may be in use somewhere else$"#, #"^Relay storage is nearly full$"#, #"^A scheduled job failed$"#,
     #"^Your scheduler needs you$"#, #"^[^\n\r]{1,40}'s mod stopped reporting$"#, #"^[^\n\r]{1,40}'s Mac is back$"#,
+    #"^New sign-in to Talos$"#, #"^Sign-in on a device that did not prove its key$"#,
+    #"^Another Mac took over your Talos bridge( at ([01][0-9]|2[0-3]):[0-5][0-9])?$"#,
   ]
 
   public static func isPushPhrase(_ body: String) -> Bool {

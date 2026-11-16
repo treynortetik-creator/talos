@@ -115,12 +115,12 @@ describe('which blocks of a message can be run', () => {
     expect(l?.script).toBe('echo hi\n')
   })
 
-  it('says whether the script is one tap (plain ASCII, at most 6 lines and 300 characters) or two', () => {
+  it('says whether the script is one tap (plain ASCII of any length) or two (anything beyond plain ASCII)', () => {
     expect(run('```sh\necho "a b"\n\tls\n```')[0]?.oneTap).toBe(true)
     expect(run(`\`\`\`sh\n${'echo a\n'.repeat(6)}\`\`\``)[0]?.oneTap).toBe(true)
-    expect(run(`\`\`\`sh\n${'echo a\n'.repeat(7)}\`\`\``)[0]?.oneTap).toBe(false)
-    expect(run(`\`\`\`sh\n${'a'.repeat(299)}\n\`\`\``)[0]?.oneTap).toBe(true)
-    expect(run(`\`\`\`sh\n${'a'.repeat(300)}\n\`\`\``)[0]?.oneTap).toBe(false)
+    expect(run(`\`\`\`sh\n${'echo a\n'.repeat(7)}\`\`\``)[0]?.oneTap).toBe(true)
+    expect(run(`\`\`\`sh\n${'a'.repeat(300)}\n\`\`\``)[0]?.oneTap).toBe(true)
+    expect(run(`\`\`\`sh\n${'a'.repeat(301)}\n\`\`\``)[0]?.oneTap).toBe(true)
     for (const odd of ['caf\u00e9', 'a\u00a0b', '\u0430dmin', '\uff41']) {
       const [b] = run(`\`\`\`sh\necho ${odd}\n\`\`\``)
       expect(b?.oneTap, JSON.stringify(odd)).toBe(false)

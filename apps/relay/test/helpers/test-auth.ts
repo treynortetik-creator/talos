@@ -30,7 +30,6 @@ export type TestAuthOptions = {
   origin?: string
 }
 
-const stepups = new Map<string, string>() // token -> purpose
 const UNPINNED = '-unpinned'
 const pinnedLater = new Set<string>()
 
@@ -39,11 +38,9 @@ export function pinTestDevice(deviceId: string): void {
   pinnedLater.add(deviceId)
 }
 
-/** Mints a single-use step-up token for a purpose (what a passkey step-up would return). */
-export function mintTestStepup(purpose: string): string {
-  const token = `st_test_${newUlid()}`
-  stepups.set(token, purpose)
-  return token
+/** A token like an older app's step-up token: never checked (no step-up since 2026-11-14). */
+export function mintTestStepup(_purpose: string): string {
+  return `st_test_${newUlid()}`
 }
 
 /** Headers for a FakeApp: `X-Test-Session: <device id or "none">` plus the Origin the guard expects. */
@@ -74,18 +71,6 @@ export function createTestAuth(opts: TestAuthOptions = {}): AuthContract {
       await next()
     },
     requireCsrf: async (_c, next) => next(),
-    requireStepup: (purpose) => async (c, next) => {
-      const p = typeof purpose === 'function' ? purpose(c) : purpose
-      const token = c.req.header('X-Test-Stepup') ?? ''
-      if (stepups.get(token) !== p) return c.json({ error: 'stepup_invalid' }, 403)
-      stepups.delete(token)
-      await next()
-    },
-    consumeStepupToken: async ({ token, purpose }) => {
-      if (stepups.get(token) !== purpose) return false
-      stepups.delete(token)
-      return true
-    },
     guardWsUpgrade: async (c) => {
       const origin = opts.origin ?? c.get('services').env.PUBLIC_ORIGIN
       const v = c.req.header(TEST_SESSION_HEADER)

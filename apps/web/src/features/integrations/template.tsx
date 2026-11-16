@@ -26,6 +26,11 @@ export function safeUrl(value: string | null): string | null {
   return r.success ? r.data : null
 }
 
+/** Catalog text names the agent as `{agent}`: the configured name goes in (a function replacer: no `$` patterns). */
+export function withAgent(text: string, agent: string): string {
+  return text.replace(/\{agent\}/g, () => agent)
+}
+
 let keySeed = 0
 
 /** `**bold**` and `` `code` `` only. Paragraphs split on blank lines. Everything else is literal text. */

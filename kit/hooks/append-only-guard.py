@@ -33,12 +33,27 @@ except Exception as _e:        # the shared helpers will not load: fail open in 
     sys.exit(0)
 
 KILL_NAME = "append-only-guard.off"
-PROTECTED = (
+PROTECTED_FIXED = (
     re.compile(r"^memory/\d{4}-\d{2}-\d{2}\.md$"),
-    re.compile(r"^wiki/_changelog\.md$"),
     re.compile(r"^memory/decisions-ledger\.md$"),
     re.compile(r"^memory/agent-log\.md$"),
 )
+
+
+def wiki_changelogs():
+    """Where this agent's wiki change log is. When the layout line cannot be read (a bad value, a second line) the guard does
+    not go deaf and does not guess: BOTH places it could be are protected."""
+    try:
+        return (os.path.relpath(C.wiki_dir(C.ROOT), C.ROOT).replace(os.sep, "/") + "/_changelog.md",)
+    except SystemExit:
+        return ("wiki/_changelog.md", "memory/wiki/_changelog.md")
+
+
+def is_protected(rel):
+    if any(p.match(rel) for p in PROTECTED_FIXED):
+        return True                         # the daily logs, the ledger, the agent log: no layout lookup at all
+    return rel in wiki_changelogs()
+
 SHRINK_TOLERANCE = 0.90      # a rewrite keeping under 90% of the bytes is suspicious
 MIN_BYTES = 500
 
@@ -63,7 +78,7 @@ def main():
     ti = d.get("tool_input") or {}
     path = ti.get("file_path") or ti.get("path") or ""
     rel = relpath_in_root(str(path)) if path else None
-    if not rel or not any(p.match(rel) for p in PROTECTED):
+    if not rel or not is_protected(rel):
         print("{}")
         return
     new = ti.get("content")

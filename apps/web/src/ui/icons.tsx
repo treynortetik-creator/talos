@@ -68,6 +68,8 @@ export const IconChat = (p: P) => <Icon d={'M5 5h14v10H10l-4 4v-4H5z'} {...p} />
 export const IconRocket = (p: P) => (
   <Icon d={'M12 3c3 2 5 5 5 9l-2 4H9l-2-4c0-4 2-7 5-9zM12 10h.01M9 16l-2 4M15 16l2 4M12 16v5'} {...p} />
 )
+/** An arrow up out of a tray: code pushed to its remote (the push card). */
+export const IconPush = (p: P) => <Icon d={'M12 16V4M7 9l5-5 5 5M4 15v5h16v-5'} {...p} />
 export const IconMegaphone = (p: P) => <Icon d={'M4 10v4h3l8 4V6L7 10zM18 9a4 4 0 0 1 0 6M7 14l1 5h2l-1-5'} {...p} />
 export const IconCardPay = (p: P) => <Icon d={'M3 6h18v12H3zM3 10h18M7 15h4'} {...p} />
 export const IconScale = (p: P) => (
@@ -96,3 +98,21 @@ export const IconSun = (p: P) => (
 export const IconSearch = (p: P) => <Icon d={'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4'} {...p} />
 export const IconTerminal = (p: P) => <Icon d={'M4 5h16v14H4zM8 10l3 2-3 2M13 15h4'} {...p} />
 export const IconBook = (p: P) => <Icon d={'M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM5 17a3 3 0 0 1 3-3h10'} {...p} />
+export const IconBug = (p: P) => (
+  <Icon
+    d={
+      'M8 2l1.5 2M16 2l-1.5 2M9 7h6a3 3 0 0 1 3 3v4a6 6 0 0 1-12 0v-4a3 3 0 0 1 3-3zM3 13h3M18 13h3M4 7l2.5 2M20 7l-2.5 2M4 20l2.5-2M20 20l-2.5-2'
+    }
+    {...p}
+  />
+)
+export const IconArrowUpRight = (p: P) => <Icon d={'M5 19L19 5M9 5h10v10'} {...p} />
+export const IconBox = (p: P) => (
+  <Icon d={'M6 5h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z'} {...p} />
+)
+export const IconType = (p: P) => <Icon d={'M5 6h14M12 6v13M9 19h6'} {...p} />
+export const IconBlur = (p: P) => (
+  <Icon d={'M4 8h2M9 8h2M14 8h2M19 8h1M4 12h1M7 12h2M12 12h2M17 12h3M4 16h2M9 16h2M14 16h2M19 16h1'} {...p} />
+)
+export const IconUndo = (p: P) => <Icon d={'M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3'} {...p} />
+export const IconShield = (p: P) => <Icon d={'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z'} {...p} />

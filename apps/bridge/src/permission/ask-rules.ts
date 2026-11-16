@@ -7,10 +7,10 @@
 // on the command text, so an agent that tries can get past it with other spellings, a different capitalisation (a macOS disk
 // ignores case in file names), odd spacing or indirection. Rollback and restore-last-good stay safe because each one shows what it
 // will do, keeps a backup, and can be undone. Covering more spellings was tried and made the list far too long for little gain.
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { writeFileAtomic } from '../fsutil.ts'
+import { basename, dirname, join, relative } from 'node:path'
+import { realFileSync } from '../real-file.ts'
 
 /**
  * Rules for one owner-only subcommand (`rollback`, `restore-last-good`). A rule is a glob on the command text, so "the word right after the program" can only be written as
@@ -57,6 +57,8 @@ export const DEFAULT_ASK_RULES: readonly string[] = Object.freeze([
 
 export type AskRulesPlan = {
   path: string
+  /** Where the file really is: `path`, or the target of a link to it or to its folder; read and written, never re-resolved. */
+  target: string
   /** Rules that are not in the file yet, in order. */
   added: string[]
   /** Rules already in `permissions.ask`. */
@@ -79,11 +81,61 @@ export function settingsPath(scope: 'project' | 'user', agentDir: string, claude
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
+/**
+ * Where a settings file really is: itself, or through a link to it or to its folder (a `.claude` that is a link). A link is
+ * followed only to a regular file named settings.json or settings.local.json, in a folder named `.claude`, and never into
+ * `protected` (for the project scope: the Claude config folder and the Talos home). The agent can make links in its own
+ * folder, and the owner's install-ask-rules must never turn into a write the agent may not make: ~/.zshrc, ~/.ssh/config,
+ * another repo's file, ~/.claude/settings.json or the guards' settings. A dotfiles copy (~/dotfiles/.claude/settings.json)
+ * is the owner's and is written through the link (bug hunt core #8, its follow-up).
+ */
+export type SettingsGuard = {
+  /** The folder the file belongs to (the agent folder, or the Claude config folder): links above it are not the agent's. */
+  root?: string
+  /** The agent folder's own file (project scope): a link is held to the .claude settings shape and kept out of these. */
+  protectedRoots?: readonly string[]
+}
+
+function settingsTarget(path: string, guard: SettingsGuard = {}): string {
+  const real = (p: string): string => {
+    // on macOS the realpath of a file can report another hard-linked name; resolve files with realFileSync (real-file.ts)
+    if (existsSync(p)) return realFileSync(p)
+    const up = dirname(p)
+    return up === p ? p : join(real(up), basename(p))
+  }
+  const target = real(path)
+  const root = guard.root ?? dirname(path)
+  // a link above the folder (macOS /var -> /private/var, a home on another volume) is not one the agent made
+  if (target === join(real(root), relative(root, path))) return target
+  if (guard.protectedRoots === undefined) {
+    // the owner's own file (user scope): followed anywhere, to a regular file
+    if (existsSync(target) && !statSync(target).isFile())
+      throw new AskRulesError(`${path} leads to ${target}, which is not a regular file; nothing was changed`)
+    return target
+  }
+  const refuse = (why: string) =>
+    new AskRulesError(`${path} leads to ${target}, ${why}; nothing was changed. Replace the link with the file itself.`)
+  if (!['settings.json', 'settings.local.json'].includes(basename(target)) || basename(dirname(target)) !== '.claude')
+    throw refuse('which is not a .claude/settings.json file')
+  if (existsSync(target) && !statSync(target).isFile()) throw refuse('which is not a regular file')
+  for (const p of guard.protectedRoots) {
+    const r = real(p)
+    if (target === r || target.startsWith(`${r}/`))
+      throw refuse(`inside ${r}, which this command never writes for an agent folder`)
+  }
+  return target
+}
+
 /** Pure plan: merges the rules into `permissions.ask`, keeps every other key and entry, adds each rule at most once. */
-export function planAskRules(path: string, rules: readonly string[] = DEFAULT_ASK_RULES): AskRulesPlan {
+export function planAskRules(
+  path: string,
+  rules: readonly string[] = DEFAULT_ASK_RULES,
+  opts: SettingsGuard = {},
+): AskRulesPlan {
   let existing: unknown
-  const created = !existsSync(path)
-  const raw = created ? null : readFileSync(path, 'utf8')
+  const target = settingsTarget(path, opts)
+  const created = !existsSync(target)
+  const raw = created ? null : readFileSync(target, 'utf8')
   if (raw !== null) {
     try {
       existing = JSON.parse(raw)
@@ -107,7 +159,7 @@ export function planAskRules(path: string, rules: readonly string[] = DEFAULT_AS
   }
   permissions.ask = [...ask, ...added]
   cfg.permissions = permissions
-  return { path, added, present, next: cfg, created, raw }
+  return { path, target, added, present, next: cfg, created, raw }
 }
 
 /** A short, human diff: only the lines that would change. */
@@ -124,8 +176,11 @@ export function describePlan(plan: AskRulesPlan): string[] {
  * 0600; a new file is 0644), atomically. Re-reads the file first and refuses if it changed after the plan was made, so
  * an edit made while the y/N prompt was open is never overwritten.
  */
-export function writePlan(plan: AskRulesPlan): void {
-  const target = existsSync(plan.path) ? realpathSync(plan.path) : plan.path
+export function writePlan(plan: AskRulesPlan, opts: SettingsGuard = {}): void {
+  const target = plan.target
+  // a link swapped while the y/N prompt was open points somewhere new: refused, like a changed file
+  if (settingsTarget(plan.path, opts) !== target)
+    throw new AskRulesError(`${plan.path} now leads somewhere else; nothing was written. Run the command again.`)
   const now = existsSync(target) ? readFileSync(target, 'utf8') : null
   if (now !== plan.raw)
     throw new AskRulesError(
@@ -133,7 +188,23 @@ export function writePlan(plan: AskRulesPlan): void {
     )
   const mode = now === null ? 0o644 : statSync(target).mode & 0o777
   mkdirSync(dirname(target), { recursive: true })
-  writeFileAtomic(target, `${JSON.stringify(plan.next, null, 2)}\n`, mode)
+  // The temp file is written next to the target, the link checked once more, then renamed: an agent swapping a `.claude`
+  // link in a loop has a window of one rename, not one read-and-write, and a swap that lands is reported, never silent.
+  const tmp = join(dirname(target), `.${basename(target)}.tmp-${process.pid}`)
+  writeFileSync(tmp, `${JSON.stringify(plan.next, null, 2)}\n`, { mode, flag: 'wx' })
+  chmodSync(tmp, mode)
+  try {
+    if (settingsTarget(plan.path, opts) !== target || realFileSync(tmp) !== tmp)
+      throw new AskRulesError(`${plan.path} now leads somewhere else; nothing was written. Run the command again.`)
+    renameSync(tmp, target)
+  } catch (e) {
+    rmSync(tmp, { force: true })
+    throw e
+  }
+  if (settingsTarget(plan.path, opts) !== target)
+    throw new AskRulesError(
+      `${plan.path} changed to lead somewhere else while it was written; the rules went to ${target}. Check that file and the link.`,
+    )
 }
 
 /** Headless `claude -p` runs have no dialog, so a call an ask rule catches is denied there (docs: headless, permissions). */

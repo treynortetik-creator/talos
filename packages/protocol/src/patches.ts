@@ -1,12 +1,7 @@
 // RFC 7386 JSON merge patch and the config.patch allowlist walk (spec 3.4). Shared by the bridge (enforces), the web
 // app (builds) and the testkit fakes, so all of them agree on which paths a patch may touch.
 import { IntegrationId } from './ids.ts'
-import {
-  PHONE_PATCH_ENTRIES,
-  SESSION_STEPUP_TOP_FIELDS,
-  STEPUP_ON_TRUE_TOP_FIELDS,
-  WORK_STEPUP_PATHS,
-} from './settings-table.ts'
+import { PHONE_PATCH_ENTRIES } from './settings-table.ts'
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -38,18 +33,18 @@ export function applyMergePatch(target: unknown, patch: unknown): unknown {
 }
 
 export type ConfigPatchCheck =
-  | { ok: true; touchesWorkEnabled: boolean; stepupPurpose?: 'config:session'; turnsOnTrust?: true }
+  | {
+      ok: true
+      /** The patch sets where bug reports are sent: the relay checks the address before it takes the patch. */
+      setsBugWebhook?: true
+    }
   | { ok: false; path: string }
 
 /**
  * Walks a `config.patch` against the settings table (`settings-table.ts`). A top-level entry (`agent`) allows its whole subtree; a dotted
- * entry (`work.enabled`, `work.thread`) allows only that leaf. Returns the first forbidden path
- * (the bridge answers `config_field_forbidden`) and whether the patch touches `work.enabled` or `work.retention` (needs step-up
- * `config:work`). `stepupPurpose: 'config:session'` is set when the patch touches a setting the table marks `config:session`
- * (docs/CLAUDE-CODE.md C3.6). A patch that would need both step-ups is refused at the session path, since one step-up
- * token carries one purpose: send them separately. `trust_mode` is a boolean (or null) that needs the session step-up only
- * when set to `true`: that sets `turnsOnTrust`, which a relay must honour even with trust mode already on (the copy of
- * the Mac's config it holds can be stale). Any other value for it is refused.
+ * entry (`work.enabled`, `work.thread`) allows only that leaf. Returns the first forbidden path (the bridge answers
+ * `config_field_forbidden`). `trust_mode` must be a boolean or null. No change asks for a passkey step-up: the owner's ruling of
+ * 2026-11-14 removed it everywhere but sign-in (a signed tap is the approval).
  */
 export function checkConfigPatch(patch: unknown): ConfigPatchCheck {
   if (!isObject(patch)) return { ok: false, path: '' }
@@ -64,7 +59,6 @@ export function checkConfigPatch(patch: unknown): ConfigPatchCheck {
       leaves.get(top)?.add(entry.slice(dot + 1))
     }
   }
-  let touchesWorkEnabled = false
   for (const [k, v] of Object.entries(patch)) {
     if (whole.has(k)) continue
     const allowed = leaves.get(k)
@@ -78,28 +72,17 @@ export function checkConfigPatch(patch: unknown): ConfigPatchCheck {
       const known = (x: unknown) => IntegrationId.safeParse(x).success
       if (e !== null && (!Array.isArray(e) || !e.every(known))) return { ok: false, path: 'work.enabled' }
     }
-    // what leaves a work system and how long the relay keeps it: both need the work step-up
-    if (WORK_STEPUP_PATHS.some((p) => p.startsWith(`${k}.`) && p.slice(k.length + 1) in v)) touchesWorkEnabled = true
   }
-  let turnsOnTrust = false
-  for (const k of STEPUP_ON_TRUE_TOP_FIELDS) {
-    if (!(k in patch)) continue
-    const v = patch[k]
-    if (v !== null && typeof v !== 'boolean') return { ok: false, path: k }
-    if (v === true) turnsOnTrust = true
+  if ('trust_mode' in patch) {
+    const v = patch.trust_mode
+    if (v !== null && typeof v !== 'boolean') return { ok: false, path: 'trust_mode' }
   }
-  const session = Object.keys(patch).find((k) => SESSION_STEPUP_TOP_FIELDS.includes(k))
-  const sessionPath =
-    session ?? (turnsOnTrust ? (STEPUP_ON_TRUE_TOP_FIELDS.find((k) => patch[k] === true) ?? '') : undefined)
-  if (sessionPath !== undefined && touchesWorkEnabled) return { ok: false, path: sessionPath }
-  if (sessionPath !== undefined)
-    return {
-      ok: true,
-      touchesWorkEnabled,
-      stepupPurpose: 'config:session',
-      ...(turnsOnTrust ? { turnsOnTrust: true as const } : {}),
-    }
-  return { ok: true, touchesWorkEnabled }
+  if ('bug_webhook_url' in patch) {
+    const v = patch.bug_webhook_url
+    if (v !== null && (typeof v !== 'string' || v.length > 2048)) return { ok: false, path: 'bug_webhook_url' }
+    return { ok: true, setsBugWebhook: true }
+  }
+  return { ok: true }
 }
 
 /**

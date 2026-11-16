@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./guarded-fetch": "./src/guarded-fetch.ts",
+    "./release-manifest": "./src/release-manifest.ts",
     "./fixtures/*": "./fixtures/*"
   },
   "scripts": {

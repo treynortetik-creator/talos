@@ -1,8 +1,10 @@
 import { expect, test } from '@playwright/test'
 import { closePhoneMenu, expectPurpose, openThreadSettings } from '../helpers/phone.ts'
 
-// Fake mode (VITE_FAKE=1). Screenshots land in test/threads/shots/<project>-*.png for the PR.
-const shot = (name: string, project: string) => `test/threads/shots/${project}-${name}.png`
+// Fake mode (VITE_FAKE=1). Screenshots land in test-results/shots/threads/<project>-*.png; with TALOS_SHOTS=1 they replace the
+// committed ones in test/threads/shots (as manage.spec.ts does), so an ordinary run never rewrites tracked files.
+const SHOTS = process.env.TALOS_SHOTS ? 'test/threads/shots' : 'test-results/shots/threads'
+const shot = (name: string, project: string) => `${SHOTS}/${project}-${name}.png`
 
 test('threads list explains itself, creates and shows notify state', async ({ page }, info) => {
   await page.goto('/threads')

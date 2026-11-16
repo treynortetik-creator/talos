@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Thread } from '@talos-app/protocol'
-import { type Harness, startHarness } from './helpers.ts'
+import { approveLatestConfigCard, CARD_RELAY, type Harness, startHarness } from './helpers.ts'
 
 let h: Harness
 afterEach(async () => h?.stop())
@@ -62,9 +62,10 @@ describe('PR60 review: default thread / archive invariants live only in one UI',
   })
 
   test('REVIEW-FAIL: archive_thread (agent) refuses the thread the owner made the default', async () => {
-    h = await startHarness()
+    h = await startHarness({ relay: CARD_RELAY })
     await h.relay.expectFrame('config.sync', () => true, { direction: 'from_bridge' })
-    expect(text(await h.bridge.callTool('create_thread', { name: 'Builds' }))).toContain('created thread builds')
+    expect(text(await h.bridge.callTool('create_thread', { name: 'Builds' }))).toContain('builds')
+    await approveLatestConfigCard(h)
     const cfg = onDisk()
     const f = await h.app.sendConfigPatch(cfg.rev, { default_thread: 'builds' })
     await ackFor(f.id)

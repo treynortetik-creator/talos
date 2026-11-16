@@ -110,7 +110,7 @@ export function createSocketDispatch(c: SocketCtx) {
   function addSystemRow(text: string, id: string, threadId?: string) {
     const thread = threadId ?? store.getState().config?.default_thread ?? 'general'
     c.upsertMessage({
-      id: `m_${id}`,
+      id: `m_${id}`, // an update note's id is `unknown-...`: see UPDATE_NOTE_ID_PREFIX
       thread_id: thread,
       author: 'system',
       kind: 'text',
@@ -161,12 +161,20 @@ export function createSocketDispatch(c: SocketCtx) {
     set,
     now,
     lostIds,
+    ackedRefs: c.ackedRefs,
     patchMessage: c.patchMessage,
     upsertMessage: c.upsertMessage,
     upsertCard: c.upsertCard,
     withSeq: c.withSeq,
     bumpSeq: c.bumpSeq,
+    advanceSeq: c.advanceSeq,
+    holdSeq: c.holdSeq,
+    dropHeldSeq: () => {
+      c.seqHold = { open: false, held: 0 }
+    },
     bumpUnread: c.bumpUnread,
+    noteUnreadSeq: c.noteUnreadSeq,
+    forgetUnreadSeqs: c.forgetUnreadSeqs,
     findMessage,
     clearFailed: c.clearFailed,
     markFailed: c.markFailed,
@@ -186,6 +194,7 @@ export function createSocketDispatch(c: SocketCtx) {
     onAcked: c.onAcked,
     dropFromOutbox: c.dropFromOutbox,
     flushOutbox: c.flushOutbox,
+    flushReads: () => c.flushReads(),
     dispatch,
     send: c.send,
     isRecord,

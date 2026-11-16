@@ -57,6 +57,7 @@ test('folder-picker: open settings, Choose…, pick a folder, and the Mac saves 
     await enrollDevice(stack, page, context)
     await page.goto(`${stack.origin}/t/work`)
     await page.getByTestId('thread-settings-trigger').click()
+    await page.getByTestId('thread-settings-open').click()
     const sheet = page.getByTestId('thread-settings')
     await expect(sheet.getByTestId('folder-current')).toContainText('~/talos-agent')
 

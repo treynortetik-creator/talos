@@ -5,15 +5,18 @@ import {
   drivingActive,
   type MessageT,
   newId,
+  parentThread,
   spokenText,
   wantVoiceReply,
 } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
 import { replyFrame } from '../frames-out.ts'
 import { kindFor } from '../media.ts'
-import { assertFrameFits } from '../transport.ts'
+import { say } from '../owner-words.ts'
+import { RelayHttpError } from '../relay-http.ts'
+import { assertFrameFits, RelayRejectedError } from '../transport.ts'
 import { synthesize } from '../tts.ts'
-import { fail, needStr, ok, str, ToolError, threadArg, threadProps } from './common.ts'
+import { fail, needStr, ok, postThreadArg, str, ToolError, threadProps } from './common.ts'
 import { OWN_THREAD, type ToolRecord } from './define.ts'
 
 const MAX_FILES = 10
@@ -22,7 +25,14 @@ const MAX_FILES = 10
 function workerOpts(ctx: BridgeContext) {
   if (!ctx.worker) return { worker: false }
   const cwd = ctx.config.thread(ctx.worker.thread)?.session_opts?.cwd
-  return { worker: true, thread: ctx.worker.thread, ...(cwd ? { leadCwd: cwd } : {}) }
+  // a sub-thread is bound by its parent lead's markers as well as its own folder's (it may keep a folder outside the parent's)
+  const parentCwd = parentThread(ctx.config.config, ctx.worker.thread)?.session_opts?.cwd
+  return {
+    worker: true,
+    thread: ctx.worker.thread,
+    ...(cwd ? { leadCwd: cwd } : {}),
+    ...(parentCwd ? { leadParentCwd: parentCwd } : {}),
+  }
 }
 
 export async function uploadAll(ctx: BridgeContext, paths: string[]): Promise<AttachmentRefT[]> {
@@ -36,8 +46,19 @@ export async function uploadAll(ctx: BridgeContext, paths: string[]): Promise<At
     }
   }
   const out: AttachmentRefT[] = []
-  for (const p of paths) out.push(await ctx.media.upload(p))
+  for (const p of paths) out.push(await ctx.media.upload(p, { sender: workerOpts(ctx) }))
   return out
+}
+
+/**
+ * The frame itself was refused, so it can never land: the hub or the relay said no, or the relay answered 400 or 413 (it checks
+ * a repeated frame id before those, so a frame it already holds never gets them). A 401, 408 or 429 says only that this one
+ * request was not stored, while the frame may have landed another way (main's own send of a thread session's post); anything
+ * else may have landed too.
+ */
+function neverDelivered(e: unknown): boolean {
+  if (e instanceof RelayRejectedError) return true
+  return e instanceof RelayHttpError && (e.status === 400 || e.status === 413)
 }
 
 /** Sends the message and records it. Returns the status text for the tool result. */
@@ -48,8 +69,17 @@ export async function deliverAgentMessage(
 ): Promise<string> {
   const frame = replyFrame(ctx.clock.now(), message, extra)
   assertFrameFits(frame) // before the local history takes a message that could never be delivered
+  // stored first, so the relay's ack can set its seq; taken out again only when it is certain nothing will ever deliver it (the
+  // hub refused a thread session's post, the relay rejected it): a refused reply must not stay in the Mac's history as if the
+  // owner had seen it. A timeout, a dropped connection or a server error may still have reached the relay, so that row stays.
   ctx.store.addMessage(message)
-  const r = await ctx.transport.sendDurable(frame)
+  let r: Awaited<ReturnType<typeof ctx.transport.sendDurable>>
+  try {
+    r = await ctx.transport.sendDurable(frame)
+  } catch (e) {
+    if (neverDelivered(e) && !ctx.store.outboxGet(frame.id)) ctx.store.deleteMessage(message.id)
+    throw e
+  }
   if (r.state === 'acked' && r.seq !== undefined) ctx.store.setSeq(message.id, r.seq)
   ctx.seen.answered(message.thread_id) // D39: only a post in the thread settles what the owner sent; a read or a status line does not
   return r.state === 'acked'
@@ -86,7 +116,13 @@ export const reply: ToolRecord = {
         description: 'Absolute paths, 50 MB each at most.',
       },
       format: { type: 'string', enum: ['markdown', 'plain'], description: 'Default markdown.' },
-      voice: { type: 'boolean', description: 'Also send a spoken version (needs a TTS command on the Mac).' },
+      voice: {
+        type: 'boolean',
+        description: say({
+          mac: 'Also send a spoken version (needs a TTS command on the Mac).',
+          linux: 'Also send a spoken version (needs a TTS command on this computer).',
+        }),
+      },
       voice_text: { type: 'string', description: 'Spoken version, up to 1500 characters.' },
       speak: { type: 'string', description: 'Up to 600 characters, spoken on a live call.' },
       voice_delegation_id: { type: 'string' },
@@ -96,7 +132,7 @@ export const reply: ToolRecord = {
   },
   async handler(ctx, args) {
     try {
-      const threadId = threadArg(ctx, args)
+      const threadId = postThreadArg(ctx, args)
       const text = needStr(args, 'text', 32_000)
       const speak = str(args.speak)
       if (speak && speak.length > 600) throw new ToolError('speak is over 600 characters')
@@ -205,13 +241,13 @@ export const attach: ToolRecord = {
   },
   async handler(ctx, args) {
     try {
-      const threadId = threadArg(ctx, args)
+      const threadId = postThreadArg(ctx, args)
       const path = needStr(args, 'path')
       const caption = str(args.caption)
       if (caption && caption.length > 32_000) throw new ToolError('caption is too long')
       ctx.media.checkUploadable(path, workerOpts(ctx))
       const title = str(args.title)
-      const ref = await ctx.media.upload(path, title ? { name: title } : {})
+      const ref = await ctx.media.upload(path, { sender: workerOpts(ctx), ...(title ? { name: title } : {}) })
       const message: MessageT = {
         id: newId('m'),
         thread_id: threadId,

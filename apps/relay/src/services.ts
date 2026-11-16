@@ -68,6 +68,8 @@ export interface Bus {
   settleWorking?(scope: 'main' | { thread_id: string }): void
   /** Adds fields to the app's `ready` frame. Optional so test buses need not implement it. */
   readyExtra?(fn: () => Record<string, unknown>): void
+  /** The connected bridge went away (closed or dropped, not replaced): what it last said about its session no longer holds. */
+  onBridgeGone?(fn: () => void): void
   /**
    * Re-checks every live app socket against the auth store: a socket whose session is gone is closed (4401), one whose
    * device is no longer pinned goes back to pairing-only, and one whose device the Mac just pinned gets its real
@@ -100,9 +102,9 @@ export interface PushService {
   /**
    * Builds the fixed-template payload (never message text) and sends it to every subscription of the owner. `opts.rich` is
    * the text a phone that registered a grant may read: it is sealed to that phone's key and never put in the alert, in a
-   * web push or in a log.
+   * web push or in a log. What it resolves to is the implementation's (CorePush says how many sends were accepted).
    */
-  notify(intent: PushIntent, opts?: { rich?: RichPushInput }): Promise<void>
+  notify(intent: PushIntent, opts?: { rich?: RichPushInput }): Promise<unknown>
 }
 
 export interface MediaStore {

@@ -153,12 +153,15 @@ struct NotificationPolicyTests {
       NotificationPolicy.web(title: "Talos", body: b, navigate: "/", tag: nil, windowIsKey: false)?.body
     }
     for good in ["New reply in General", "Needs you in a thread", "Answer ready in Work", "Overnight: 3 items", "Talos's Mac session stopped",
-      "New device pinned", "Your scheduler needs you", "Talos's Mac is back"]
+      "New device pinned", "Your scheduler needs you", "Talos's Mac is back", "New sign-in to Talos",
+      "Sign-in on a device that did not prove its key", "Another Mac took over your Talos bridge",
+      "Another Mac took over your Talos bridge at 09:41", "Another Mac took over your Talos bridge at 23:59"]
     {
       #expect(body(good) == good, "\(good)")
     }
     for bad in ["the biopsy came back", "New reply in General\nand more text", "New reply in " + String(repeating: "x", count: 60),
-      "Hello from Dr Lee", "", "New reply"]
+      "Hello from Dr Lee", "", "New reply", "Another Mac took over your Talos bridge at 24:00",
+      "Another Mac took over your Talos bridge at 9:41", "New sign-in to Talos from Alex Example"]
     {
       #expect(body(bad) == "New activity", "\(bad.debugDescription)")
     }
@@ -186,18 +189,19 @@ struct NotificationPolicyTests {
 
 @Suite("QuietWindow")
 struct QuietWindowTests {
-  func cfg(_ s: String, _ e: String, tz: String = "Etc/GMT+7") -> Data {
+  func cfg(_ s: String, _ e: String, tz: String = "Etc/GMT+5") -> Data {
     Data("{\"quiet_window\":{\"start\":\"\(s)\",\"end\":\"\(e)\"},\"timezone\":\"\(tz)\"}".utf8)
   }
-  // 2026-01-06 03:00 UTC = 20:00 on 2026-01-05 in a fixed UTC-7 zone (no DST)
-  let eightPM = Date(timeIntervalSince1970: 1_767_668_400)
+  // 2026-01-06 01:00 UTC = 20:00 on 2026-01-05 in a fixed UTC-5 zone (no DST)
+  let eightPM = Date(timeIntervalSince1970: 1_767_661_200)
 
   @Test func aWindowThatWrapsMidnight() throws {
-    let q = try #require(QuietWindow.read(cfg("20:30", "04:00")))
+    let q = try #require(QuietWindow.read(cfg("22:00", "06:00")))
     #expect(!q.isQuiet(eightPM))
-    #expect(q.isQuiet(eightPM.addingTimeInterval(30 * 60)))  // 20:30
+    #expect(!q.isQuiet(eightPM.addingTimeInterval(90 * 60)))  // 21:30
+    #expect(q.isQuiet(eightPM.addingTimeInterval(2 * 3600)))  // 22:00
     #expect(q.isQuiet(eightPM.addingTimeInterval(6 * 3600)))  // 02:00
-    #expect(!q.isQuiet(eightPM.addingTimeInterval(9 * 3600)))  // 05:00
+    #expect(!q.isQuiet(eightPM.addingTimeInterval(11 * 3600)))  // 07:00
   }
 
   @Test func aSameDayWindowAndAnEmptyOne() throws {
@@ -208,7 +212,7 @@ struct QuietWindowTests {
 
   @Test func theOwnersTimeZoneDecides() throws {
     let utc = try #require(QuietWindow.read(cfg("19:00", "21:00", tz: "UTC")))
-    #expect(!utc.isQuiet(eightPM))  // 03:00 UTC
+    #expect(!utc.isQuiet(eightPM))  // 01:00 UTC
   }
 
   @Test func garbageAndMissingAreNoWindow() {

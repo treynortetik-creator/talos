@@ -4,8 +4,8 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
-import { reapOrphans } from '../../src/heartbeat/orphans.ts'
-import { processInfo } from '../../src/heartbeat/spawn.ts'
+import { reapOrphans, sameProcess } from '../../src/heartbeat/orphans.ts'
+import { baseEnv, processInfo, runSource } from '../../src/heartbeat/spawn.ts'
 import { emptyStore, storeFile } from '../../src/heartbeat/store.ts'
 import { longTimeouts, type SchedHarness, startSched, tempHome, waitFor } from '../schedules/harness.ts'
 
@@ -236,5 +236,83 @@ describe('leftover source processes', () => {
     expect(Object.keys(readStore(home).running)).toEqual(['src'])
     release()
     await waitFor(() => orphan.isGone(), 15_000, 'the leftover to be killed once the queue is free')
+  })
+})
+
+// A source's identity is the argv it was spawned with; ps only gives its start time. ps can show the forked shell, "(sh)",
+// before the exec: that is "not confirmed yet", retried briefly and never a reason to kill.
+describe('the identity a source is recorded under', () => {
+  test('the stored command is the spawned argv, even while ps shows the process before its exec', async () => {
+    const home = tempHome()
+    const script = `${home}/rec.sh`
+    // a wrapper that holds before it execs the real work: what ps shows is not what was started
+    writeFileSync(script, '#!/bin/sh\nsleep 0.3\nexec /bin/cat > /dev/null\n', { mode: 0o755 })
+    let got: { command: string; lstart: string } | undefined
+    const r = await runSource({
+      argv: [script],
+      env: baseEnv(home),
+      stdin: '{}',
+      timeoutMs: 10_000,
+      onStart: (p) => {
+        got = p
+      },
+    })
+    expect(r.ok).toBe(true)
+    expect(got?.command).toBe(script)
+    expect(got?.lstart).toMatch(/\d/)
+  })
+
+  test('a leader ps shows as "(sh)" is never killed: asked again briefly, then kept for the next start', async () => {
+    const home = tempHome()
+    const c = leader(300)
+    const real = await infoOf(c.pid)
+    writeStore(home, {
+      src: { pgid: c.pid, command: '/path/rec.sh', lstart: real.lstart, at: '2026-10-05T10:00:00.000Z' },
+    })
+    let asked = 0
+    const out = await reapOrphans(home, log, {
+      info: async () => {
+        asked++
+        return { lstart: real.lstart, command: '(sh)' }
+      },
+    })
+    expect(out.killed).toEqual([])
+    expect(asked).toBeGreaterThan(1) // asked again
+    expect(await stays(c)).toBe(true)
+    expect(readStore(home).running.src).toBeDefined() // kept: the next start looks again
+  })
+
+  test('"(sh)" that turns into the recorded script is the recorded process: killed', async () => {
+    const home = tempHome()
+    const c = leader(300)
+    const real = await infoOf(c.pid)
+    writeStore(home, {
+      src: { pgid: c.pid, command: '/path/rec.sh', lstart: real.lstart, at: '2026-10-05T10:00:00.000Z' },
+    })
+    let n = 0
+    const out = await reapOrphans(home, log, {
+      info: async () => ({ lstart: real.lstart, command: n++ === 0 ? '(sh)' : '/bin/sh /path/rec.sh' }),
+    })
+    expect(out.killed).toEqual([c.pid])
+    await c.exited
+  })
+
+  test('another start time, or another command, is not the recorded process: never killed, and the record is dropped', async () => {
+    for (const leaderSays of [
+      (l: string) => ({ lstart: `${l}x`, command: '/bin/sh /path/rec.sh' }),
+      (l: string) => ({ lstart: l, command: '/usr/bin/something-else' }),
+      (l: string) => ({ lstart: l, command: '/bin/sh /other/path/rec.sh.bak' }),
+    ]) {
+      const home = tempHome()
+      const c = leader(300)
+      const real = await infoOf(c.pid)
+      writeStore(home, {
+        src: { pgid: c.pid, command: '/path/rec.sh', lstart: real.lstart, at: '2026-10-05T10:00:00.000Z' },
+      })
+      const out = await reapOrphans(home, log, { info: async () => leaderSays(real.lstart) })
+      expect(out.killed).toEqual([])
+      expect(await stays(c, 100)).toBe(true)
+    }
+    expect(sameProcess({ command: 'ps own line', lstart: 'L' }, { command: 'ps own line', lstart: 'L' })).toBe(true)
   })
 })

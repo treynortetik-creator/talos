@@ -1,0 +1,9 @@
+# Text files are stored and checked out with LF on every platform, whatever core.autocrlf says (Git for Windows sets it
+# to true system-wide, which turned every file CRLF and failed the formatter). Windows-only scripts keep CRLF.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+# CHANGELOG.md takes both sides when two landings each add an entry at the top (a union merge), so gate-push's rebase
+# never stops on it; the result is still read in review. Nothing else merges this way (scripts/changelog-union.test.ts).
+CHANGELOG.md merge=union

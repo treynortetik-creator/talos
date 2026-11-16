@@ -3,12 +3,14 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
+import { PC_PAIR, useHost } from '../../lib/hostWords.ts'
 import { createHttp } from '../../lib/http.ts'
 import { inShell } from '../../lib/native/shell.ts'
 import { getPlatform } from '../../lib/platform.ts'
 import type { SocketClient } from '../../lib/socketClient.ts'
 import { Button, Input } from '../../ui/index.ts'
 import { Mascot, type MascotState } from '../../ui/Mascot.tsx'
+import { markFirstRun } from '../agent-config/firstRun.ts'
 import { EnrollError, parseSetupLink, runEnrollment } from './passkeys.ts'
 import { useSession } from './session.ts'
 
@@ -48,6 +50,7 @@ export function EnrollPage() {
   const nav = useNavigate()
   const client = useTalosClient() as Partial<SocketClient> & ReturnType<typeof useTalosClient>
   const agent = useTalos((s) => s.config?.agent.name) ?? 'Talos'
+  const host = useHost()
   const platform = getPlatform()
   const ios = platform.isIos()
   const installed = platform.installState() === 'installed'
@@ -90,6 +93,8 @@ export function EnrollPage() {
       if (!ok) return setStep({ kind: 'denied' })
       client.setPinned?.(true)
       await useSession.getState().refresh()
+      // the agent's first device, never set up: /api/me says so even when the device.pinned frame never reached this page
+      if (useSession.getState().me?.first_run) markFirstRun()
       setStep({ kind: 'done' })
       setTimeout(() => nav('/', { replace: true }), 1500)
     }
@@ -151,9 +156,26 @@ export function EnrollPage() {
     case 'paste':
       return (
         <Card mascot="pleased" title={`Set up ${agent} on this device`}>
-          <p className="m-0 text-text-2">
-            Run <code>talos-app enroll</code> on your Mac, copy the link it prints, then paste it here.
-          </p>
+          {host === 'windows' ? (
+            <p className="m-0 text-text-2">{PC_PAIR}</p>
+          ) : host === 'linux' ? (
+            <p className="m-0 text-text-2">
+              Start pairing on your computer (<code>talos-app enroll</code> in a terminal there), copy the link it gives
+              you, then paste it here.
+            </p>
+          ) : host === 'mac' ? (
+            // a Mac has no pairing menu item (the old sentence named the PC tray's): Terminal is its way
+            <p className="m-0 text-text-2">
+              Start pairing on your Mac: run <code>talos-app enroll</code> in Terminal, copy the link it gives you, then
+              paste it here.
+            </p>
+          ) : (
+            <p className="m-0 text-text-2">
+              Start pairing on your computer: on a Mac or Linux, run <code>talos-app enroll</code> in Terminal; on a
+              Windows PC, click the Talos icon by the clock and choose <strong>Pair a phone…</strong>. Copy the link it
+              gives you, then paste it here.
+            </p>
+          )}
           <Button className="w-full" onClick={async () => paste(await platform.clipboard.read())}>
             Paste setup link
           </Button>
@@ -191,8 +213,8 @@ export function EnrollPage() {
         <Card mascot="pleased" title={`Set up ${agent} on this device`}>
           <p className="m-0 text-text-2">
             {shell
-              ? 'This setup link signs you in, then your Mac asks you to confirm this device.'
-              : 'You will create a passkey, then your Mac asks you to confirm this device.'}
+              ? 'This setup link signs you in, then your computer asks you to confirm this device.'
+              : 'You will create a passkey, then your computer asks you to confirm this device.'}
           </p>
           <Button className="w-full" onClick={() => code && void start(code)}>
             {shell ? 'Continue' : ios ? 'Continue with Face ID' : 'Continue with passkey'}
@@ -209,42 +231,43 @@ export function EnrollPage() {
       )
     case 'confirm':
       return (
-        <Card mascot="pleased" title="Check your Mac">
+        <Card mascot="pleased" title="Check your computer">
           <p className="m-0 text-text-2">Confirm these four words at the prompt in your terminal:</p>
           <p className="m-0 font-mono text-lg font-semibold" data-testid="fingerprint">
             {step.words.join(' ')}
           </p>
           <p role="status" className="m-0 text-sm text-text-2">
-            Waiting for your Mac to confirm this device.
+            Waiting for your computer to confirm this device.
           </p>
         </Card>
       )
     case 'timeout':
       return (
-        <Card mascot="worried" title="Your Mac has not answered">
+        <Card mascot="worried" title="Your computer has not answered">
           <p className="m-0 text-text-2">
-            Nothing on your Mac has confirmed the words{' '}
+            Nothing on your computer has confirmed the words{' '}
             <span className="font-mono font-semibold" data-testid="fingerprint">
               {step.words.join(' ')}
             </span>{' '}
-            yet. This device is already waiting on your Mac, so the link you scanned is used up; only your Mac saying
-            yes finishes it from here.
+            yet. This device is already waiting on your computer, so the link you scanned is used up; only your computer
+            saying yes finishes it from here.
           </p>
           <ol className="m-0 w-full list-decimal pl-6 text-left text-text-2">
             <li>
-              Look at the terminal where you ran <code>talos-app enroll</code>. If it asks <code>[y/N]</code>, check the
-              four words and type <strong>y</strong>.
+              Look at your computer: it shows the same four words. If they match, answer <strong>Yes</strong> (in a
+              terminal, type <strong>y</strong>).
             </li>
             <li>
-              If that terminal is closed, run <code>talos-app enroll --confirm</code> on your Mac.
+              If that window or terminal is closed, answer from a terminal with <code>talos-app enroll --confirm</code>,
+              or start pairing again for a new link.
             </li>
             <li>
-              If your Mac is asleep or Claude is not running there, wake it and run <code>talos-app start</code>, then{' '}
-              <code>talos-app enroll</code> again for a new link.
+              If your computer is asleep or Talos is not running there, wake it and start Talos (on Windows: open Talos
+              from its icon by the clock and choose <strong>Start Talos</strong>), then pair again for a new link.
             </li>
           </ol>
           <p role="status" className="m-0 text-sm text-text-2">
-            This page keeps listening and finishes by itself once your Mac says yes.
+            This page keeps listening and finishes by itself once your computer says yes.
           </p>
           <Button variant="outline" className="w-full" onClick={() => setStep({ kind: 'paste' })}>
             Start over with a new link
@@ -261,9 +284,9 @@ export function EnrollPage() {
       )
     case 'denied':
       return (
-        <Card mascot="worried" title="Your Mac said no to this device">
+        <Card mascot="worried" title="Your computer said no to this device">
           <p role="alert" className="m-0 text-text-2">
-            Run <code>talos-app enroll</code> again if this was a mistake.
+            If this was a mistake, start pairing again on your computer.
           </p>
         </Card>
       )
@@ -271,7 +294,7 @@ export function EnrollPage() {
       return (
         <Card mascot="worried" title="This link expired">
           <p role="alert" className="m-0 text-text-2">
-            This link expired. Run <code>talos-app enroll</code> on your Mac for a fresh one.
+            This link expired. Start pairing again on your computer for a fresh one.
           </p>
         </Card>
       )

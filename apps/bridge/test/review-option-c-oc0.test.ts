@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { newUlid, threadSessionMode } from '@talos-app/protocol'
 import { loadExampleConfig } from '@talos-app/testkit'
 import { ConfigFile } from '../src/config-file.ts'
-import { type Harness, startHarness } from './helpers.ts'
+import { approveLatestConfigCard, CARD_RELAY, type Harness, startHarness } from './helpers.ts'
 
 let h: Harness | undefined
 afterEach(async () => {
@@ -26,9 +26,10 @@ const text = (r: { content: Array<{ text?: string }> }) => r.content[0]?.text ??
 
 /** Owner dedicates an agent thread the agent created, with the master switch on. Returns the rev after. */
 async function dedicatedAgentThread(): Promise<number> {
-  h = await startHarness()
+  h = await startHarness({ relay: CARD_RELAY })
   await syncAt(0)
   expect((await H().bridge.callTool('create_thread', { name: 'Trip', id: 'trip' })).isError).toBeFalsy()
+  await approveLatestConfigCard(H())
   await syncAt(1)
   const threads = onDisk().threads.map((t: { id: string }) => (t.id === 'trip' ? { ...t, session: 'dedicated' } : t))
   await H().app.sendConfigPatch(1, { threads, dedicated: { enabled: true } })
@@ -42,6 +43,7 @@ describe('review OC0: the owner can always turn it off', () => {
     let rev = await dedicatedAgentThread()
     // the agent's own MCP tool (threads.ts archive_thread -> config.update, no Option C check)
     expect((await H().bridge.callTool('archive_thread', { thread_id: 'trip' })).isError).toBeFalsy()
+    await approveLatestConfigCard(H())
     rev += 1
     await syncAt(rev)
     // builder fix: archiving turns the thread's own session off, so no archived+dedicated thread is left behind
@@ -98,7 +100,7 @@ describe('review OC0: backward compat with an older app (THREADS-REVIEW finding 
 
 describe('review OC0: controls (pass on 9b0aa80)', () => {
   test('control: the agent cannot dedicate a thread through create_thread', async () => {
-    h = await startHarness()
+    h = await startHarness({ relay: CARD_RELAY })
     await syncAt(0)
     const r = await H().bridge.callTool('create_thread', {
       name: 'Sneaky',
@@ -107,6 +109,7 @@ describe('review OC0: controls (pass on 9b0aa80)', () => {
       session_opts: { cwd: '/tmp' },
     })
     expect(r.isError).toBeFalsy()
+    await approveLatestConfigCard(H())
     await syncAt(1)
     const t = onDisk().threads.find((x: { id: string }) => x.id === 'sneaky')
     expect(t.session).toBeUndefined()

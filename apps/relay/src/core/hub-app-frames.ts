@@ -63,6 +63,8 @@ export const appFrames = {
         return configFrames.onConfigPatch.call(this.configCtx, a, frame, raw)
       case 'agent.recover':
         return configFrames.onAgentRecover.call(this.configCtx, a, frame, raw)
+      case 'undo.request':
+        return configFrames.onUndoRequest.call(this.configCtx, a, frame, raw)
       case 'voice.ask': {
         // The core NEVER queues this for the bridge. Only the voice module may emit it, and only after it has matched
         // the frame to a live call, a delegation it created and the call's own thread (spec 6.3). Without the voice
@@ -137,8 +139,23 @@ export const appFrames = {
       case 'memory.tree':
       case 'memory.read':
       case 'memory.search':
+      // the 3D graph of the notes (frames-memory-graph.ts): from the Mac, never stored here
+      case 'memory.graph':
       case 'speak.request':
       case 'fs.list':
+      case 'files.list':
+      case 'files.read':
+      case 'bug.context':
+      // the thread's AGENTS.md (frames-agents-md.ts): the save too goes to the Mac and back, never stored or replayed
+      case 'agents_md.read':
+      case 'agents_md.write':
+      // an upload into a thread's folder (frames-files-put.ts): the file itself went up the media path already
+      case 'files.put':
+      // the files sent in Talos (frames-files-sent.ts): a list from the Mac's history, never stored here
+      case 'files.sent':
+      // which folders Memory's Notes show (frames-memory-roots.ts): the list and the save go to the Mac and back, never stored
+      case 'memory.folders':
+      case 'memory.roots_set':
         if (!this.ownerDeviceOk(a, frame.device_id, frame.id)) return
         return this.ephemeral.onRequest(a.id, frame, raw)
       // MCP Apps (spec M3.4): signed, never stored or replayed, answered to this socket only

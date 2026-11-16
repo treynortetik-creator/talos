@@ -112,6 +112,37 @@ def owner_terminal_only(verb):
                    "agent, a script or a pipe." % verb, USAGE)
 
 
+def account_home():
+    """The account's home from the passwd entry: a session cannot move it by setting HOME."""
+    import pwd
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+def owner_at_terminal():
+    return (not os.environ.get("CLAUDECODE")) and sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def vendor_choice_check(a, verb):
+    """Since the agent may run update, rollback and restore (2026-11-14), the kit folder (where the trusted signers and the
+    releases are read from) must be the installed one unless the owner is at a real terminal: --vendor, TALOS_KIT_HOME,
+    TALOS_VENDOR_DIR or a moved XDG_DATA_HOME would let a caller bring its own signer (Fable R1-1). Called before anything is
+    read from the folder. The `talos` front door checks the same (apps/bridge/src/talos.ts kitVendorChoiceRefusal)."""
+    if owner_at_terminal():
+        return
+    home = account_home()
+    moved = (["--vendor"] if getattr(a, "vendor", None) else [])
+    # $HOME is the session's to set: the installed kit is found from the account's own home (Fable/Lemnos review)
+    if os.environ.get("HOME") and os.path.realpath(os.environ["HOME"]) != os.path.realpath(home):
+        moved.append("HOME")
+    moved += [k for k in ("TALOS_KIT_HOME", "TALOS_VENDOR_DIR") if os.environ.get(k)]
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg and os.path.realpath(xdg) != os.path.realpath(os.path.join(home, ".local", "share")):
+        moved.append("XDG_DATA_HOME")
+    if moved:
+        raise Stop("choosing which kit folder to use (%s) needs you at a terminal; the agent runs `talos %s` on the installed kit only."
+                   % (", ".join(moved), verb), USAGE)
+
+
 def resolve_vendor(arg):
     if arg:
         return os.path.abspath(arg)

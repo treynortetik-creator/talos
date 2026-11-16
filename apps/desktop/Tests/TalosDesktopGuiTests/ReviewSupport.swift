@@ -4,6 +4,7 @@ import SwiftTerm
 import Testing
 import TalosDesktopCore
 @testable import TalosDesktop
+import TalosTestSupport
 
 /// A tiny real HTTP server on 127.0.0.1, used as the relay: RelayOrigin allows http on loopback, so redirects, CSP headers
 /// and real origins are exercised end to end instead of being faked with `loadHTMLString`.
@@ -150,7 +151,7 @@ enum AlertSpy {
 
 /// Temp folder + `HOME` pointing at it, so the login-shell read (`zsh -lic`) never runs the owner's rc files.
 @MainActor func withScratchHome<T>(_ body: @MainActor (String) async throws -> T) async rethrows -> T {
-  let base = (NSTemporaryDirectory() as NSString).appendingPathComponent("talos-rv-\(UUID().uuidString.prefix(8))")
+  let base = (TestTemp.base as NSString).appendingPathComponent("talos-rv-\(UUID().uuidString.prefix(8))")
   try? FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
   let old = getenv("HOME").map { String(cString: $0) }
   setenv("HOME", base, 1)

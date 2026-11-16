@@ -8,6 +8,7 @@ import {
   composeScheduleCard,
   type ErrorCodeT,
   fromChronosChange,
+  isWakeJobId,
   newUlid,
   runsInSession,
   type ScheduleApproved,
@@ -15,9 +16,11 @@ import {
   ScheduleCardBindingError,
   ScheduleCardPayload,
   type ScheduleChangeT,
+  shortWhenText,
   toChronosChange,
   trustOn,
   type ValidateResult,
+  WAKE_ID_PREFIX,
 } from '@talos-app/protocol'
 import type { LedgerRow } from '../cards-ledger.ts'
 import { localClock } from '../clock-meta.ts'
@@ -25,6 +28,7 @@ import { defaultThreadRef, threadRef } from '../context.ts'
 import { cardCreateFrame, cardUpdateFrame } from '../frames-out.ts'
 import { TEST_REQUIRED_FIELD, testRequiredProblem } from '../heartbeat/tested.ts'
 import { cardActionNotification, systemNotification } from '../notify.ts'
+import { say } from '../owner-words.ts'
 import { assertFrameFits, RelayRejectedError } from '../transport.ts'
 import { localZone } from './discovery.ts'
 import { shortWhen } from './format.ts'
@@ -56,6 +60,15 @@ export async function prepareCard(
   | { ok: true; card: CardT }
   | { ok: false; error: string; code?: ErrorCodeT; fields?: Array<{ path: string; message: string }> }
 > {
+  // The wake range belongs to wake_me (the bridge writes those jobs itself, with no card): no card makes or edits one there.
+  const wakeId = change.op === 'create' ? change.draft.id : change.op === 'update' ? change.id : null
+  if (wakeId !== null && isWakeJobId(wakeId))
+    return {
+      ok: false,
+      error: `Job ids starting "${WAKE_ID_PREFIX}" are kept for wake_me timers. Pick another id; to change a wake, cancel it and set a new one.`,
+      code: 'schedule_invalid',
+      fields: [{ path: 'id', message: 'kept for wake_me timers' }],
+    }
   const old = this.tooOldFor(change)
   if (old)
     return {
@@ -81,12 +94,22 @@ export async function prepareCard(
     base = b.base
     nextRuns = b.detail.next_runs
     if ((change.op === 'update' || change.op === 'delete') && base.schedule.etag !== change.base_etag)
-      return { ok: false, error: 'The job changed on your Mac. Reload it and try again.', code: 'schedule_conflict' }
+      return {
+        ok: false,
+        error: say({
+          mac: 'The job changed on your Mac. Reload it and try again.',
+          linux: 'The job changed on your computer. Reload it and try again.',
+        }),
+        code: 'schedule_conflict',
+      }
     if (change.op === 'adopt') {
       if (base.schedule.content_hash !== change.content_hash)
         return {
           ok: false,
-          error: 'The job changed on your Mac again. Reload it and try again.',
+          error: say({
+            mac: 'The job changed on your Mac again. Reload it and try again.',
+            linux: 'The job changed on your computer again. Reload it and try again.',
+          }),
           code: 'schedule_conflict',
         }
       const ap = await this.adapter.approved(change.id)
@@ -131,7 +154,7 @@ export async function prepareCard(
           ok: true,
           normalized: split.chronos,
           preview: {
-            when_text: base.schedule.when_text.slice(0, 120),
+            when_text: shortWhenText(base.schedule.when_text),
             next_runs: nextRuns,
             tz: this.lastGood?.health.tz ?? localZone(this.ctx.env),
           },
@@ -298,7 +321,13 @@ export async function applyCardInner(
   if (!this.managed(await this.safeSnapshot()))
     return finish(
       false,
-      'Talos no longer manages this scheduler (approval is off at the Mac). Nothing was saved. Run `talos-app schedules adopt` at the Mac, then ask again.',
+      say({
+        mac: 'Talos no longer manages this scheduler (approval is off at the Mac). Nothing was saved. Run `talos-app schedules adopt` at the Mac, then ask again.',
+        linux:
+          'Talos no longer manages this scheduler (approval is off on this computer). Nothing was saved. Run `talos-app schedules adopt` on this computer, then ask again.',
+        windows:
+          "Talos no longer manages this scheduler, and it can't take it over on a Windows PC yet. Nothing was saved.",
+      }),
     )
   const { change, expected_etag: expected, preview } = p.data
   const split = toChronosChange(change)
@@ -335,7 +364,10 @@ export async function applyCardInner(
   } else r = await d.adapter.apply(split.chronos as ChronosChangeT, expected)
   if (!r.ok) {
     const text: Record<string, string> = {
-      schedule_conflict: 'The job changed on your Mac after this card was drawn. Nothing was saved. Ask again.',
+      schedule_conflict: say({
+        mac: 'The job changed on your Mac after this card was drawn. Nothing was saved. Ask again.',
+        linux: 'The job changed on your computer after this card was drawn. Nothing was saved. Ask again.',
+      }),
       schedule_invalid: 'The scheduler no longer accepts this change as drawn. Nothing was saved. Ask again.',
       held: 'The job is on hold because its files changed outside the app. Nothing was saved. Review it in Schedules.',
       schedule_not_found: 'The job no longer exists. Nothing was saved.',
@@ -382,6 +414,7 @@ export async function failStuckCards(this: ScheduleService) {
     if (this.ctx.apps?.isRunning(row.id)) continue // an app card whose tool this process is running right now
     if (row.binding.kind === 'config') continue // a settings card: ConfigProposals.recover() reads the config and says what is true
     if (row.binding.kind === 'dialog') continue // the dialog-card service settles its own cards after a restart
+    if (row.binding.kind === 'undo') continue // UndoCards.recover() says what may be true after a restart
     if (!this.ctx.ledger.finish(row.id, false)) continue // closed by someone else meanwhile: say nothing more
     await this.ctx.transport
       .sendDurable(

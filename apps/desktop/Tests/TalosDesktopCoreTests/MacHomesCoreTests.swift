@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 // Mac settings get one home (SETTINGS-MAP 3.1, 3.2). Each suite below backs one claim of the PR.
 
@@ -789,7 +790,7 @@ struct FolderAndAboutTests {
   }
 
   @Test func theRealFileSystemAnswersToo() throws {
-    let dir = NSTemporaryDirectory() + "talos-folder-\(UUID().uuidString.prefix(6))"
+    let dir = TestTemp.base + "talos-folder-\(UUID().uuidString.prefix(6))"
     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: dir) }
     #expect(AgentFolderCheck.check(dir, home: home) == .ok)

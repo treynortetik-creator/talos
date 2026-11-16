@@ -1,9 +1,11 @@
 import { FakeApp, FakeBridge, type FakeBridgeOptions, type FakeClock, sleep, waitFor } from '@talos-app/testkit'
+import { PING_MS } from '../../src/core/hub-types.ts'
 import type { TestRelay } from './harness.ts'
 
 export function kit(relay: TestRelay) {
-  const app = (opts: { deviceKey?: FakeApp['device']; visible?: boolean; lastSeq?: number } = {}) =>
-    new FakeApp({ relayWs: relay.wsBase, headers: relay.appHeaders, ...opts })
+  const app = (
+    opts: { deviceKey?: FakeApp['device']; visible?: boolean; lastSeq?: number; features?: string[] } = {},
+  ) => new FakeApp({ relayWs: relay.wsBase, headers: relay.appHeaders, ...opts })
   const bridge = (opts: Partial<FakeBridgeOptions> = {}) =>
     new FakeBridge({ relayWs: relay.wsBase, key: relay.bridgeKey, ...opts })
   const connectedApp = async (opts: Parameters<typeof app>[0] = {}) => {
@@ -15,11 +17,51 @@ export function kit(relay: TestRelay) {
 }
 
 /** Moves a fake clock forward in steps, letting socket I/O (pongs, acks) run between steps. */
+/** When the relay's hub last heard from its connected bridge (its own dead-man clock), or undefined with no bridge connected. */
+export function bridgeHeardAt(r: TestRelay): number | undefined {
+  const b = (r.runtime.hub as unknown as { bridge?: { authed?: boolean; lastInbound: number } | null }).bridge
+  return b?.authed ? b.lastInbound : undefined
+}
+
+/**
+ * Steps `clock` while bridges stay connected, in steps well under the hub's DEAD_MS (75 s). After each step it waits until every
+ * relay in `relays` (those on this clock) has heard from its bridge within one ping period, so a pong due in that step has
+ * landed: as long as that takes and no longer, where a fixed sleep per step was both slow and, on a loaded machine, too short.
+ */
+export async function advanceHeard(clock: FakeClock, ms: number, relays: readonly TestRelay[], step = 20_000) {
+  for (let left = ms; left > 0; left -= step) {
+    clock.advance(Math.min(step, left))
+    await waitFor(
+      () =>
+        relays.every((r) => {
+          const at = bridgeHeardAt(r)
+          return at === undefined || clock.now() - at <= PING_MS
+        }),
+      10_000,
+      'the bridge pong for a clock step',
+    )
+  }
+}
+
 export async function advance(clock: FakeClock, ms: number, step = 20_000) {
   for (let left = ms; left > 0; left -= step) {
     clock.advance(Math.min(step, left))
     await sleep(15)
   }
+}
+
+/**
+ * `ms` of fake time with no bridge to ping, as a Mac or a relay asleep: the clock jumps to `tail` before the end (each timer
+ * that came due fires once, not once per step), then the last `tail` goes in ordinary steps, so the looks just before the end
+ * still run. Stepping hours in 5-minute steps cost a 15 ms real pause each, seconds a test.
+ */
+export async function asleep(clock: FakeClock, ms: number, tail = 3_600_000, step = 5 * 60_000) {
+  if (ms > tail) {
+    clock.set(clock.now() + ms - tail)
+    clock.advance(0)
+    await sleep(15)
+  }
+  await advance(clock, Math.min(ms, tail), step)
 }
 
 export const sha256 = async (bytes: Uint8Array) => {
@@ -32,7 +74,8 @@ import { mkFrame } from '@talos-app/testkit'
 import { WebSocket } from 'ws'
 
 /** A bridge socket that authenticates and then does nothing: never acks, so the relay's resend schedule can be observed. */
-export async function silentBridge(relay: { wsBase: string }, key: BridgeKeyPair) {
+/** A bridge that answers pings and nothing else. `clockOffsetMs`: how far its clock is from the relay's (negative: slow). */
+export async function silentBridge(relay: { wsBase: string }, key: BridgeKeyPair, clockOffsetMs = 0) {
   const received: Array<Record<string, unknown>> = []
   const ws = new WebSocket(`${relay.wsBase}/bridge`)
   let closeCode: number | null = null
@@ -48,13 +91,11 @@ export async function silentBridge(relay: { wsBase: string }, key: BridgeKeyPair
         const sig = await signChallenge(key.privateKey, f as never)
         ws.send(
           JSON.stringify(
-            mkFrame('hello', {
-              role: 'bridge',
-              key_id: key.keyId,
-              sig,
-              client: { name: 'silent', version: '0' },
-              agent_config_rev: 0,
-            }),
+            mkFrame(
+              'hello',
+              { role: 'bridge', key_id: key.keyId, sig, client: { name: 'silent', version: '0' }, agent_config_rev: 0 },
+              new Date(Number(f.server_time) * 1000 + clockOffsetMs).toISOString(),
+            ),
           ),
         )
       }

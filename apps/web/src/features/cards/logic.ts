@@ -6,10 +6,13 @@ import {
   type CardEditsT,
   type CardKind,
   type CardT,
+  cardExpiryMs,
+  type Host,
   isBodyEditable,
   payloadHash,
   editedHash as protocolEditedHash,
 } from '@talos-app/protocol'
+import { placeWords } from '../../lib/hostWords.ts'
 import { formatClock } from './util.ts'
 
 /** The hash of exactly what the card renders. `card.resolve` carries this and never `card.payload_hash`. */
@@ -24,7 +27,7 @@ export function isAltered(card: CardT): boolean {
 
 /** Still waiting on the owner: pending, approvable and not past its expiry. The one rule behind every "Needs you" count. */
 export function awaitsOwner(card: CardT, nowMs: number): boolean {
-  return card.state === 'pending' && Date.parse(card.expires_at) > nowMs && !isAltered(card)
+  return card.state === 'pending' && cardExpiryMs(card) > nowMs && !isAltered(card)
 }
 
 /**
@@ -32,7 +35,7 @@ export function awaitsOwner(card: CardT, nowMs: number): boolean {
  * at the bottom of its thread for. Altered (hash mismatch) cards count: they must stay visible, and are flagged.
  */
 export function needsOwnerNow(card: CardT, nowMs: number): boolean {
-  return card.state === 'pending' && Date.parse(card.expires_at) > nowMs
+  return card.state === 'pending' && cardExpiryMs(card) > nowMs
 }
 
 /**
@@ -85,6 +88,7 @@ const DONE_VERB: Record<CardT['kind'], string> = {
   email: 'Sent',
   message: 'Sent',
   deploy: 'Deployed',
+  push: 'Pushed',
   publish: 'Published',
   purchase: 'Paid',
   decision: 'Approved',
@@ -94,11 +98,13 @@ const DONE_VERB: Record<CardT['kind'], string> = {
   app_action: 'Done',
   config: 'Changed',
   dialog: 'Answered',
+  undo: 'Undone',
 }
 const FAIL_VERB: Record<CardT['kind'], string> = {
   email: 'send',
   message: 'send',
   deploy: 'deploy',
+  push: 'push',
   publish: 'publish',
   purchase: 'pay',
   decision: 'finish',
@@ -108,6 +114,7 @@ const FAIL_VERB: Record<CardT['kind'], string> = {
   app_action: 'finish',
   config: 'change it',
   dialog: 'answer',
+  undo: 'undo it',
 }
 
 /** The verb for a kind, or the generic card's verb for a kind this build does not know (own keys only: "constructor" is unknown). */
@@ -117,7 +124,7 @@ function verbFor(table: Record<CardT['kind'], string>, kind: string): string {
 
 /** True once the card can no longer be acted on (decided, failed, expired, superseded or past `expires_at`). */
 export function isExpiredNow(card: CardT, nowMs: number): boolean {
-  return card.state === 'pending' && Date.parse(card.expires_at) <= nowMs
+  return card.state === 'pending' && cardExpiryMs(card) <= nowMs
 }
 
 /** A needs-you dialog card that is no longer waiting: the words its result already carries (the bridge wrote them). */
@@ -132,7 +139,16 @@ function dialogLine(card: CardT, expired: boolean): string | null {
 /**
  * The one-line summary shown after a decision (8.4 / 8.7). Null for a live pending card.
  */
-export function collapseLine(card: CardT, o: { agent: string; timeZone?: string; nowMs: number }): string | null {
+export function collapseLine(
+  card: CardT,
+  o: { agent: string; timeZone?: string; nowMs: number; host?: Host | null },
+): string | null {
+  // the Mac's words (the default), or only their place words for another host (lib/hostWords.ts)
+  const line = macCollapseLine(card, o)
+  return o.host === undefined || o.host === 'mac' || line === null ? line : placeWords(line, o.host)
+}
+
+function macCollapseLine(card: CardT, o: { agent: string; timeZone?: string; nowMs: number }): string | null {
   if (card.kind === 'dialog') return dialogLine(card, isExpiredNow(card, o.nowMs))
   const at = (iso: string | undefined) => (iso ? ` ${formatClock(iso, o.timeZone)}` : '')
   // Only that it expired: a card the relay left out of `ready`, or one past its time, may still have been decided here or
@@ -149,7 +165,9 @@ export function collapseLine(card: CardT, o: { agent: string; timeZone?: string;
       // The Mac says nothing ran (the request was gone, Apps were off), or that it cannot tell whether the agent got the
       // decision ('unknown'): "ask it to retry" would be wrong either way. Show the Mac's own words.
       if (card.result?.ran === false || card.result?.ran === 'unknown') return `⚠ ${card.result.text}`
-      if (card.kind === 'schedule' && /changed on your Mac/i.test(card.result?.text ?? ''))
+      // the bridge says it in its host's words ("your computer" on Linux, "your PC" on Windows); the line below is the Mac's,
+      // turned into the host's by collapseLine
+      if (card.kind === 'schedule' && /changed on your (?:Mac|computer|PC)\b/i.test(card.result?.text ?? ''))
         return '⚠ The job changed on your Mac before you approved. Nothing was saved.'
       return `⚠ Couldn't ${verbFor(FAIL_VERB, card.kind)} · Ask ${o.agent} to retry`
     case 'resolved':

@@ -118,6 +118,8 @@ export function Composer({
     <div
       className="composer-root relative border-t border-line bg-bg px-3 pt-2 pb-[max(0.5rem,var(--safe-b))]"
       data-testid="composer"
+      // a voice note or dictation is being taken: a reload now would lose it (lib/appUpdate.ts safeToReload)
+      data-capturing={rec.mode !== 'idle' || dictation.busy ? 'true' : undefined}
     >
       <SlashPicker picker={picker} onChoose={(it) => void choose(it)} />
       {note && <NoteLine note={note} />}

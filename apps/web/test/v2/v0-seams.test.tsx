@@ -120,8 +120,8 @@ describe('routes (fake mode, real App)', () => {
   }
 
   it.each([
-    ['/memory', 'Memory'],
-    ['/memory/notes/todo.md', 'Memory'],
+    ['/memory', 'Clio'],
+    ['/memory/notes/todo.md', 'Clio'],
   ])('%s renders its placeholder', async (url, heading) => {
     await mount(url)
     expect(await screen.findByRole('heading', { name: heading, level: 1 })).toBeTruthy()

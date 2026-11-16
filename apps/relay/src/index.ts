@@ -3,7 +3,7 @@
 import { createServer } from 'node:http'
 import { pathToFileURL } from 'node:url'
 import { serve } from '@hono/node-server'
-import { MAX_FRAME_BYTES } from '@talos-app/protocol'
+import { MAX_FRAME_BYTES, WS_CLOSE } from '@talos-app/protocol'
 import { WebSocketServer } from 'ws'
 import { fileFatalProblem, installFatalHandlers } from './core/problems.ts'
 import { type CreateOptions, createRelayServices, runtimeOf } from './core/runtime.ts'
@@ -22,6 +22,8 @@ export type RunningRelay = {
   port: number
   /** The node server, for tests that look at its limits. */
   http: import('node:http').Server
+  /** Open WebSockets right now (apps and the bridge), for the stop log line. */
+  socketCount(): number
   stop(): Promise<void>
 }
 
@@ -66,7 +68,9 @@ export async function startRelay(
   // that was an uncaught ECONNRESET that killed the whole process (bughunt D). Tracked so shutdown can destroy them too.
   const http = server as unknown as import('node:http').Server
   const sockets = new Set<import('node:net').Socket>()
+  let stopping = false
   http.on('connection', (s) => {
+    if (stopping) return void s.destroy()
     sockets.add(s)
     s.on('close', () => sockets.delete(s))
     s.on('error', () => s.destroy())
@@ -84,11 +88,26 @@ export async function startRelay(
     services,
     port,
     http,
+    /** Open WebSockets right now (apps and the bridge), for the stop log line. */
+    socketCount: () => wss.clients.size,
     async stop() {
+      // no new connection while this one drains: a client coming straight back must reach the next relay, not this one (a
+      // dropped dial is retried within the client's restart window)
+      stopping = true
       shutdownVoice(services)
       runtimeOf(services).stop()
-      // A client that never finished its handshake, or a phone that went half-open, would otherwise keep close() waiting
-      // until the platform's SIGKILL. Terminate every websocket and destroy every socket, with a deadline as the backstop.
+      // Say "restarting" (1012) so clients come straight back, give them up to 500 ms to finish closing, then terminate what
+      // is left: a client that never finished its handshake, or a phone that went half-open, would otherwise keep close()
+      // waiting until the platform's SIGKILL. Every socket is destroyed after, with a deadline as the backstop.
+      for (const c of wss.clients) {
+        try {
+          c.close(WS_CLOSE.RESTARTING, 'restarting')
+        } catch {
+          c.terminate()
+        }
+      }
+      const drainBy = Date.now() + 500
+      while (wss.clients.size > 0 && Date.now() < drainBy) await new Promise<void>((r) => setTimeout(r, 20))
       for (const c of wss.clients) c.terminate()
       wss.close()
       await Promise.race([
@@ -114,12 +133,22 @@ async function main(): Promise<void> {
   const webDir = process.env.TALOS_WEB_DIR
   installFatalHandlers({ dataDir: env.DATA_DIR })
   const relay = await startRelay({ env, ...(webDir ? { webDir } : {}) })
-  const shutdown = () => {
+  // One line when the platform stops this container and one when it is down: with "relay listening" from the next one, the
+  // logs give each deploy's real outage (Pantheon 2026-11-15, the "disconnected" flashes). No ids, no addresses.
+  let stopping = false
+  const shutdown = (signal: string) => {
+    if (stopping) return
+    stopping = true
+    const t0 = Date.now()
+    relay.services.log.info({ signal, sockets: relay.socketCount() }, 'relay stopping')
     setTimeout(() => process.exit(1), 10_000).unref() // never wait for the platform's SIGKILL
-    void relay.stop().then(() => process.exit(0))
+    void relay.stop().then(() => {
+      relay.services.log.info({ ms: Date.now() - t0 }, 'relay stopped')
+      process.exit(0)
+    })
   }
-  process.on('SIGTERM', shutdown)
-  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', () => shutdown('SIGTERM'))
+  process.on('SIGINT', () => shutdown('SIGINT'))
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

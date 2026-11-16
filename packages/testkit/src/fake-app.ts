@@ -27,6 +27,8 @@ export type FakeAppOptions = {
   visible?: boolean
   platform?: string
   standalone?: boolean
+  /** `hello.client.features`, e.g. WIDE_FEATURES_FEATURE. */
+  features?: readonly string[]
 }
 
 export class FakeApp {
@@ -35,7 +37,14 @@ export class FakeApp {
   readonly sentBytes: string[] = []
   device!: DeviceKey
   ws: WebSocket | null = null
+  /**
+   * What the next `hello` says this device has. It follows the web client's rule (apps/web/src/lib/socket-state.ts,
+   * `advanceSeq` / `holdSeq`): a catch-up page counts up to its `to_seq`; while a page said more follow, the seq of any
+   * other frame is above pages not fetched yet, so it is held and counted at the last page, and forgotten at the next
+   * `ready` (the relay then sends that frame again).
+   */
   lastSeq: number
+  private seqHold = { open: false, held: 0 }
   private opts: FakeAppOptions
 
   constructor(opts: FakeAppOptions) {
@@ -76,8 +85,7 @@ export class FakeApp {
       if (!parsed.ok) return
       const raw = parsed.raw as Record<string, unknown>
       this.rec.record('in', raw, text)
-      const seq = (raw.relay as { seq?: number } | undefined)?.seq
-      if (typeof seq === 'number') this.lastSeq = Math.max(this.lastSeq, seq)
+      this.countSeq(raw)
       if (raw.type === 'ping') this.send({ type: 'pong', nonce: raw.nonce })
     })
     await new Promise<void>((resolve, reject) => {
@@ -90,9 +98,35 @@ export class FakeApp {
       device_id: this.device.deviceId,
       last_seq: this.lastSeq,
       visible: this.opts.visible ?? true,
-      client: { version: '0.0.0', standalone: this.opts.standalone ?? true, platform: this.opts.platform ?? 'test' },
+      client: {
+        version: '0.0.0',
+        standalone: this.opts.standalone ?? true,
+        platform: this.opts.platform ?? 'test',
+        ...(this.opts.features ? { features: [...this.opts.features] } : {}),
+      },
     })
     return this.rec.expectFrame('ready', () => true, { since: startAt })
+  }
+
+  private countSeq(raw: Record<string, unknown>) {
+    if (raw.type === 'ready') {
+      this.seqHold = { open: false, held: 0 }
+      return
+    }
+    if (raw.type === 'catchup.batch' && typeof raw.to_seq === 'number') {
+      this.lastSeq = Math.max(this.lastSeq, raw.to_seq)
+      if (raw.more === true) {
+        this.seqHold.open = true
+        return
+      }
+      this.lastSeq = Math.max(this.lastSeq, this.seqHold.held)
+      this.seqHold = { open: false, held: 0 }
+      return
+    }
+    const seq = (raw.relay as { seq?: number } | undefined)?.seq
+    if (typeof seq !== 'number') return
+    if (this.seqHold.open) this.seqHold.held = Math.max(this.seqHold.held, seq)
+    else this.lastSeq = Math.max(this.lastSeq, seq)
   }
 
   async close(code = 1000) {
@@ -204,8 +238,18 @@ export class FakeApp {
   }
 
   /** Signs and sends a `thread.session.control` (docs/OPTION-C.md): park, resume, restart or fresh. */
-  async sendThreadSessionControl(thread_id: string, action: 'park' | 'resume' | 'restart' | 'fresh') {
-    const f = await this.sign({ ...mkFrame('thread.session.control'), control_id: newUlid(), thread_id, action })
+  async sendThreadSessionControl(
+    thread_id: string,
+    action: 'park' | 'resume' | 'restart' | 'fresh' | 'cancel_wake',
+    extra: { wake_id?: string } = {},
+  ) {
+    const f = await this.sign({
+      ...mkFrame('thread.session.control'),
+      control_id: newUlid(),
+      thread_id,
+      action,
+      ...(extra.wake_id !== undefined ? { wake_id: extra.wake_id } : {}),
+    })
     this.send(f)
     return f
   }
@@ -214,6 +258,18 @@ export class FakeApp {
   async sendAgentRecover(action: string, extra: { control_id?: string; stepup_token?: string } = {}) {
     const f = await this.sign({ ...mkFrame('agent.recover'), control_id: extra.control_id ?? newUlid(), action })
     this.send(extra.stepup_token ? { ...f, stepup_token: extra.stepup_token } : f)
+    return f
+  }
+
+  /** Signs and sends an `undo.request` ("Undo to here") for one owner message. */
+  async sendUndoRequest(thread_id: string, message_id: string, extra: { control_id?: string } = {}) {
+    const f = await this.sign({
+      ...mkFrame('undo.request'),
+      control_id: extra.control_id ?? newUlid(),
+      thread_id,
+      message_id,
+    })
+    this.send(f)
     return f
   }
 

@@ -48,7 +48,7 @@ above are the final word.
 
 ## Run it
 
-Needs Node 24, pnpm 10.33 and Bun 1.3. From the repo root:
+Needs Node 24, pnpm 10.33 and Bun 1.4.4 or newer. From the repo root:
 
 ```bash
 pnpm install --frozen-lockfile   # never regenerate pnpm-lock.yaml on a feature branch
@@ -60,10 +60,11 @@ pnpm check:personal              # exits 1 if personal data (names, emails, mach
 node scripts/size-report.ts      # line counts by area, the files and functions over the limits, and any listed one that grew
 ```
 
-`pnpm drive <journey>|all|list [--no-build]` runs a whole-product journey (real relay, real bridge, a fake Claude, a real browser) and prints each step; the journeys are `e2e/tests/journeys`. `pnpm test:browser` and `pnpm test:e2e` need Playwright browsers; `apps/desktop/scripts/test.sh` runs the Swift tests. Full CI
+`pnpm drive <journey>|all|list [--no-build]` runs a whole-product journey (real relay, real bridge, a fake Claude, a real browser) and prints each step; the journeys are `e2e/tests/journeys`. `pnpm sandbox up` starts a throwaway Talos beside your own and `pnpm sandbox drive` plays its owner, for break tests ([`docs/SANDBOX.md`](docs/SANDBOX.md)). `pnpm test:browser` and `pnpm test:e2e` need Playwright browsers; `apps/desktop/scripts/test.sh` runs the Swift tests. Full CI
 (`scripts/ci-local.sh`) runs the same jobs on a Mac, or in the cloud through the manual `.github/workflows/ci.yml` workflow; do not edit that file unless your task
-is about CI. A pre-push hook (`scripts/pre-push.sh`) runs the personal-data check, which only warns, then Biome and a type check
-on what you changed.
+is about CI. Before a push, `scripts/gate.sh` runs the type check, Biome, the personal-data check, the size budget and the tests
+of what you changed (`--full` runs every suite); it refuses on any failure. The pre-push hook (`scripts/pre-push.sh`) runs it.
+Stress loops and evals: `scripts/heavy-lock.sh run <name> -- <cmd>` (one heavy lock per machine).
 
 ## Size rules
 
@@ -110,8 +111,8 @@ Simple base rules. Every agent, every PR.
   that is not.
 - **No personal data anywhere, tests included:** no real names, emails, chat ids, employers or secrets. Use `owner`,
   `Alex Example`, `alex@example.com`, `example.com`, `UTC`. In `apps/desktop`, no `/Users/<name>` paths; use `/home/alex` in
-  fixtures. Write all text in your own words. `pnpm check:personal` warns in the pre-push hook and in CI by default
-  (`docs/CI-LOCAL.md`, "The personal-data scan").
+  fixtures. Write all text in your own words. `pnpm check:personal` stops the push in the pre-push hook and the gate, and
+  warns in CI by default (`docs/CI-LOCAL.md`, "The personal-data scan").
 - **Never commit** keys, tokens, `.env` files, `*.p8` or `*.p12` files. `.env.example` holds placeholders and empty values only; keep it that way.
 - **`third_party` is read-only** reference code with its licences. `THIRD_PARTY_NOTICES.md` lists it.
 
@@ -120,15 +121,18 @@ Simple base rules. Every agent, every PR.
 Tests must fail when the code breaks. A test that answers a review finding must prove it: break the code on purpose, watch the
 test go red, then restore it. Do not set fixed millisecond limits or depend on wall-clock time: measure growth or use the fake
 clock in `packages/testkit`. Any screen change needs a browser check at phone width. A new screen also needs both themes and
-its empty, loading and failed states. Do not start more than one full suite at the same time: CI timing in `docs/CI-LOCAL.md` shows why.
+its empty, loading and failed states. Run one full suite at a time (CI timing in `docs/CI-LOCAL.md`).
 
-## Pull requests
+## Landing a change
 
-1. Work in a branch or worktree and run fast local checks for what you touched: `pnpm lint` and the tests of the files you
-   changed. The pre-push hook adds the personal-data check, as a warning, and a quick Biome and type filter. It is not the gate;
-   `scripts/ci-local.sh` and `docs/CI-LOCAL.md` describe the full run.
-2. Ask for a review of the diff before it lands. Fix what the review finds once, have the fix checked once, and put smaller
-   findings in an issue rather than another round.
-3. `git pull --rebase origin main`, then open a pull request. Do not merge your own, and never force-push `main`.
+Maintainer builders push small commits straight to `main` and load the `talos-build` skill; outside
+contributors open a pull request.
+
+1. Push with `bash scripts/gate.sh --push`, the only push path: it gates, then pushes under a short lease. Never
+   `git push --no-verify`. A machine that cannot gate pushes a handoff branch, and a faster one lands it with
+   `--push --from` (both in `scripts/gate-push.sh`). Full CI then runs on `main` (`docs/CI-LOCAL.md`).
+2. Security code, data recovery and other risky areas get a review before the push. Opus 5.5 builds and Fable 5.2 reviews:
+   one model never does both. Fix what the review finds once, have the fix checked once, and put smaller findings in an issue.
+3. Do not push while `main` is red or while a push hold is on, and never force-push `main`.
 4. User-visible changes go in `CHANGELOG.md` in plain language.
 5. If a change breaks `main`, fix forward; if that needs more than one round, revert the commit that broke it.

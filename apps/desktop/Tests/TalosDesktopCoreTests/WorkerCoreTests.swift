@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 /// Option C (docs/OPTION-C.md), the pure half: WorkerSpec, the shared files (decoded from the protocol package's own
 /// fixtures), the cap and the pointer guard.
@@ -22,7 +23,8 @@ struct WorkerSpecTests {
   func inputs(resume: Bool = false, model: String = "inherit", effort: String? = nil) -> WorkerSpec.Inputs {
     .init(
       threadId: "trip", claudePath: "/usr/local/bin/claude", baseEnv: base, talosHome: "/home/example/.talos",
-      agentDir: "/home/example/agent", model: model, effort: effort, permissionFlag: "--dangerously-skip-permissions",
+      agentDir: "/home/example/agent", permissionHook: testHook, model: model, effort: effort,
+      permissionFlag: "--dangerously-skip-permissions",
       sessionId: sid, resume: resume, nonce: "n0nce-0123456789abcdef", preamble: "Be the trip thread.")
   }
 
@@ -51,7 +53,7 @@ struct WorkerSpecTests {
     }
   }
 
-  @Test func aWorkersSettingsRegisterThePermissionHookWithTheAgentFoldersScript() throws {
+  @Test func aWorkersSettingsRegisterThePermissionHookItWasGiven() throws {
     let s = try WorkerSpec.build(inputs())
     let settings = jsonObject(s.settingsJSON)
     let entries = (settings?["hooks"] as? [String: Any])?["PermissionRequest"] as? [[String: Any]]
@@ -61,9 +63,45 @@ struct WorkerSpecTests {
     #expect(hook?["type"] as? String == "command")
     #expect(hook?["timeout"] as? Int == 3600)  // a backstop: Claude Code ends the hook when the prompt is answered or auto-blocked
     let cmd = hook?["command"] as? String ?? ""
-    #expect(cmd.contains("/home/example/agent/hooks/permission-relay.py"), "\(cmd)")  // the agent folder's script, not the thread folder
-    #expect(cmd.hasSuffix("exec python3 \"$f\""), "exec, so Claude Code's signal reaches the hook and not a shell around it")
-    #expect(cmd.contains("TALOS_APP_PERM_HOOK_SOURCE=worker exec python3"), "this copy marks itself, so the agent folder's copy stays silent")
+    // `/home/example` is not on this machine: the hook runs with this account's real home instead (Apple's tools stall on a missing one)
+    let realHome = WorkerHook.hookHome("/home/example")
+    #expect(realHome == NSHomeDirectory())
+    let session = WorkerHook.Session(home: realHome, talosHome: "/home/example/.talos", threadId: "trip", folder: "/home/example/agent", folderHooksCount: false)
+    #expect(cmd == WorkerHook.command(testHook, for: session), "\(cmd)")
+    // the hook's hub, thread, home and folder are this start's, written as text: the session's environment cannot name others (R1-1)
+    #expect(cmd.contains("exec /usr/bin/env -i HOME=\(WorkerHook.quote(realHome)) ") && cmd.contains(" TALOS_APP_HOME='/home/example/.talos' TALOS_APP_WORKER_THREAD='trip' "), "\(cmd)")
+    #expect(cmd.contains(" TALOS_APP_HOOK_CHECK_DIR='/home/example/agent' TALOS_APP_HOOK_CHECK_HOOKS=0 "), "the agent folder's kit hooks do not count: \(cmd)")
+    #expect(!cmd.contains("n0nce-0123456789abcdef"), "the thread's proof is passed through, never written into the settings")
+    // no session may edit the Claude Code settings of a folder a thread session works in, or the owner's: they add variables and
+    // hooks to the shell that runs this hook
+    var i = inputs()
+    i.cwd = "/home/example/trip"
+    i.otherFolders = ["/home/example/garden"]
+    i.baseEnv["CLAUDE_CONFIG_DIR"] = "/home/example/cfg"
+    let deny = ((jsonObject(try WorkerSpec.build(i).settingsJSON)?["permissions"] as? [String: Any])?["deny"] as? [String]) ?? []
+    for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
+      for file in [
+        // the whole .claude folder of each folder a thread session works in (R1-8), and the owner's settings
+        "/home/example/trip/.claude/**", "/home/example/trip/.claude", "/home/example/agent/.claude/**", "/home/example/garden/.claude/**",
+        "/home/example/garden/.mcp.json", "/home/example/agent/.env*", "/home/example/.claude/settings.json", "/home/example/cfg/settings.local.json",
+        "/home/example/cfg/.claude.json",
+      ] {
+        #expect(deny.contains("\(tool)(/\(file))"), "\(tool) \(file): \(deny)")
+      }
+    }
+    // Hestia's third review on the Mac: the subagents folder too (F1), no EnterWorktree (F6), no auto mode (F2), no skill shell (F3)
+    for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
+      for dir in ["/home/example/.claude/agents/**", "/home/example/cfg/agents/**", "/home/example/cfg/skills/**", "/home/example/cfg/commands/**"] {
+        #expect(deny.contains("\(tool)(/\(dir))"), "\(tool) \(dir)")
+      }
+    }
+    #expect(deny.contains("EnterWorktree"))
+    let built = jsonObject(try WorkerSpec.build(i).settingsJSON) ?? [:]
+    #expect(built["disableAutoMode"] as? String == "disable")
+    #expect(built["disableSkillShellExecution"] as? Bool == true)
+    #expect(cmd.contains(testHook.script) && cmd.contains(testHook.python))
+    // never a path guessed inside the agent folder (2026-11-11: an older agent folder has no hooks/ and the command ran nothing)
+    #expect(!cmd.replacingOccurrences(of: "TALOS_APP_HOOK_CHECK_DIR='/home/example/agent'", with: "").contains("/home/example/agent"), "\(cmd)")
     // still a worker: the hook did not bring a channel, a flag or the live-bridge marker with it
     #expect(!s.args.contains("--channels") && s.env["TALOS_APP_BRIDGE"] == nil)
     #expect(s.env["TALOS_APP_WORKER_NONCE"] == "n0nce-0123456789abcdef")  // what the hook sends as proof
@@ -71,15 +109,14 @@ struct WorkerSpecTests {
 
   @Test func theHookJoinsTheGuardsHooksInsteadOfReplacingThem() throws {
     let guards: [String: Any] = ["PreToolUse": [["matcher": "Bash", "hooks": [["type": "command", "command": "guard"]]]]]
-    let merged = WorkerSpec.withPermissionHook(["hooks": guards, "effortLevel": "high"], agentDir: "/home/example/my agent")
+    let session = WorkerHook.Session(home: "/home/example", talosHome: "/home/example/.talos", threadId: "trip")
+    let merged = WorkerSpec.withPermissionHook(["hooks": guards, "effortLevel": "high"], hook: testHook, session: session)
     let hooks = merged["hooks"] as? [String: Any]
     #expect(hooks?["PreToolUse"] != nil, "the guards' hook was lost")
     #expect(hooks?["PermissionRequest"] != nil)
     #expect(merged["effortLevel"] as? String == "high")
-    let cmd = ((hooks?["PermissionRequest"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])?.first?["command"] as? String ?? ""
-    #expect(cmd.hasPrefix("f='/home/example/my agent/hooks/permission-relay.py';"), "a path with a space is quoted: \(cmd)")
     // hooks of an unexpected shape are left alone, never overwritten
-    #expect((WorkerSpec.withPermissionHook(["hooks": "nonsense"], agentDir: "/a")["hooks"] as? String) == "nonsense")
+    #expect((WorkerSpec.withPermissionHook(["hooks": "nonsense"], hook: testHook, session: session)["hooks"] as? String) == "nonsense")
   }
 
   @Test func aWorkerNeverInheritsAnotherSessionsMarkers() throws {
@@ -88,7 +125,7 @@ struct WorkerSpecTests {
     let s = try WorkerSpec.build(i)
     for k in pollutedClaudeEnv.keys { #expect(s.env[k] == nil, "\(k) reached the worker") }
     #expect(s.env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "400000")
-    #expect(!s.launchScript().contains("CLAUDE_CODE_CHILD_SESSION"))
+    #expect(try !s.launchScript().contains("CLAUDE_CODE_CHILD_SESSION"))
   }
 
   @Test func argsCarryTheNameModelAndSession() throws {
@@ -104,6 +141,19 @@ struct WorkerSpecTests {
     #expect(jsonObject(resumed.settingsJSON)?["effortLevel"] as? String == "high")
     #expect(resumed.tmuxSession == "t-trip")
     #expect(TmuxCommands.isValidSessionName(resumed.tmuxSession))
+  }
+
+  /// WORKER.md is the thread's own instructions, passed as the value of `--append-system-prompt`. Text that starts like a flag or a
+  /// channel spec is still only that value: the thread starts, the text is all there, and no argument reads as `-p` or `server:`.
+  @Test(arguments: ["-p is how this thread prints", "--channels are a topic here", "server: the build box", "plugin: notes"])
+  func aWorkerFileThatStartsLikeAFlagStillStarts(text: String) throws {
+    var i = inputs()
+    i.preamble = text
+    let s = try WorkerSpec.build(i)
+    let at = try #require(s.args.firstIndex(of: "--append-system-prompt"))
+    let value = s.args[at + 1]
+    #expect(value.trimmingCharacters(in: .whitespacesAndNewlines) == text)
+    #expect(!value.hasPrefix("-") && !value.hasPrefix("server:") && !value.hasPrefix("plugin:"), "\(value.debugDescription)")
   }
 
   @Test func refusesBadInputs() {
@@ -147,7 +197,7 @@ struct WorkerSpecTests {
 @Suite("Worker folder re-check")
 struct WorkerFolderTests {
   @Test func refusesWhatTheBridgeRefusesEvenAfterASwap() throws {
-    let base = (NSTemporaryDirectory() as NSString).appendingPathComponent("oc-folder-\(UUID().uuidString.prefix(8))")
+    let base = (TestTemp.base as NSString).appendingPathComponent("oc-folder-\(UUID().uuidString.prefix(8))")
     let fm = FileManager.default
     let home = base + "/home"
     let talos = home + "/.talos-app"
@@ -256,13 +306,17 @@ struct WorkerRulesTests {
     let s = try WorkerSpec.build(
       .init(
         threadId: "trip", claudePath: "/usr/local/bin/claude", baseEnv: ["PROMPT_COMMAND": "history -a;", "A": "it's"],
-        talosHome: "/home/example/.talos", agentDir: "/home/example/agent", sessionId: "6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c41",
+        talosHome: "/home/example/.talos", agentDir: "/home/example/agent", permissionHook: testHook, sessionId: "6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c41",
         resume: false, nonce: "n0nce-0123456789abcdef", preamble: "Line one.\nLine two;"))
-    let text = s.launchScript()
-    #expect(text.hasPrefix("#!/bin/sh\nexec /usr/bin/env -i "))
-    #expect(text.contains("'PROMPT_COMMAND=history -a;'"))
+    let text = try s.launchScript()
+    #expect(text.hasPrefix("rm -f -- \"$0\"\nexport "))
+    #expect(text.contains("\nexport PROMPT_COMMAND='history -a;'\n"))
     #expect(text.contains("'Line one.\nLine two;'"))
     #expect(!text.contains("TELEGRAM_BOT_TOKEN"))
+    // the variables are shell builtins, never an argv: the nonce is not on the exec line, where `ps` would show it
+    let exec = try #require(text.components(separatedBy: "\nexec ").last)
+    #expect(!exec.contains("n0nce-0123456789abcdef") && !exec.contains("env -i"))
+    #expect(text.contains("\nexport TALOS_APP_WORKER_NONCE='n0nce-0123456789abcdef'\n"))
   }
 
   @Test func aDialogNeedsItsShapeInAWorker() {

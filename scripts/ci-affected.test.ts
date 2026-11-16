@@ -1,15 +1,18 @@
 // scripts/ci-affected.sh: which of the six CI jobs a change can affect, and which commit it is compared with. Two layers:
 //   `jobs <base> <head>`  pure git, one throwaway repo: every path class, the unknown path, renames, deletes, odd names
-//   `plan <repo> <head>`  the base is the last GREEN commit (a fake `gh` answers the statuses): inner commits, a red base, a PR
+//   `plan <repo> <head>`  per job, the base is the last commit where THAT job passed (a fake `gh` answers the statuses)
 // and, at the end, scripts/ci-local.sh itself with stub jobs: what it runs, what it posts for a job it skips, and that the
 // verdict reader accepts that post. Nothing here touches a real repository, runner, cache or simulator.
+// One check reads the install and kit tests for what they import, so the gate runs this file when one changes (scripts/gate.sh,
+// guards_reading):
+// gate-reads: scripts/root-install*.test.ts scripts/kit-tests.test.ts
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { cleanEnv } from './ci-test-env'
+import { cleanEnv, copyCiLocalParts } from './ci-test-env'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const affected = join(here, 'ci-affected.sh')
@@ -269,6 +272,129 @@ describe('ci-affected.sh jobs: a path class decides the jobs', () => {
   })
 })
 
+describe('scripts/ci-desktop-gate.sh itself', () => {
+  // job_desktop lives in scripts/ci-local/jobs-swift.sh, which ci-local.sh sources: a change there is a change to the desktop
+  // job's CI, as a change to ci-local.sh is, so the desktop job runs
+  it('a change to ci-local.sh or to the parts it sources (scripts/ci-local/) runs desktop; a docs change alone does not', () => {
+    const gate = join(here, 'ci-desktop-gate.sh')
+    const w = work()
+    const base = w.commit(
+      { 'apps/web/src/a.ts': 'a', 'scripts/ci-local.sh': 'a', 'scripts/ci-local/jobs-swift.sh': 'a', 'docs/x.md': 'a' },
+      'base',
+    )
+    const rc = (head: string) => spawnSync('bash', [gate, base, head], { cwd: w.dir, env: cleanEnv() }).status
+    for (const f of ['scripts/ci-local.sh', 'scripts/ci-local/jobs-swift.sh', 'scripts/ci-local/locks.sh']) {
+      w.git('reset', '-q', '--hard', base)
+      expect(rc(w.commit({ [f]: 'changed' }, f)), f).toBe(0)
+    }
+    w.git('reset', '-q', '--hard', base)
+    expect(rc(w.commit({ 'docs/x.md': 'changed' }, 'docs'))).toBe(1)
+  })
+})
+
+// ---------- the install and kit tests: only when what they run changed ----------
+const kit = (dir: string, base: string, head: string) =>
+  spawnSync('bash', [affected, 'kit', base, head], { cwd: dir, encoding: 'utf8', env: cleanEnv() }).status
+// What root-install.test.ts and kit-tests.test.ts run: install.sh, kit/, the plugin, the bridge CLI and its packages, the
+// lockfile and root config, and the two tests with the helpers they import.
+const KIT_INPUTS = [
+  'install.sh',
+  'kit/scripts/test-hooks.sh',
+  'kit/install.sh',
+  'plugins/talos-app-mod/plugin.json',
+  'apps/bridge/src/cli.ts',
+  'packages/protocol/src/models.ts',
+  'pnpm-lock.yaml',
+  'package.json',
+  'vitest.config.ts',
+  'scripts/root-install.test.ts',
+  'scripts/root-install-flags.test.ts',
+  'scripts/root-install-harness.ts',
+  'scripts/kit-tests.test.ts',
+  'scripts/kit-run.ts',
+  'scripts/size-report.ts',
+  'brand-new-folder/file.txt',
+]
+const NOT_KIT_INPUTS = [
+  'apps/web/src/a.ts',
+  'apps/relay/src/a.ts',
+  'apps/mobile/ios/a.swift',
+  'apps/desktop/Sources/a.swift',
+  'docs/a.md',
+  'CHANGELOG.md',
+  'scripts/ci-local.sh',
+  'scripts/kit-run.test.ts',
+]
+
+describe('ci-affected.sh kit: the install and kit tests run only when what they run changed', () => {
+  it('each input alone runs them (exit 0), and so does a path nobody listed', () => {
+    for (const p of KIT_INPUTS) {
+      const w = work()
+      const base = w.commit({ 'apps/web/src/a.ts': 'a' }, 'base')
+      expect(kit(w.dir, base, w.commit({ [p]: 'changed' })), p).toBe(0)
+    }
+  })
+
+  it('a change of only other paths skips them (exit 1); one input among them runs them', () => {
+    const w = work()
+    const base = w.commit({ 'apps/web/src/a.ts': 'a' }, 'base')
+    const head = w.commit(Object.fromEntries(NOT_KIT_INPUTS.map((p) => [p, `changed ${p}`])), 'no inputs')
+    expect(kit(w.dir, base, head)).toBe(1)
+    expect(kit(w.dir, base, w.commit({ 'kit/VERSION': 'x' }, 'one input'))).toBe(0)
+  })
+
+  it('a deleted input and a rename out of kit/ count as changes', () => {
+    const w = work()
+    const base = w.commit({ 'kit/a.sh': 'a', 'docs/keep.md': 'a' }, 'base')
+    w.git('mv', 'kit/a.sh', 'docs/a.sh')
+    w.git('commit', '-qm', 'move')
+    expect(kit(w.dir, base, w.git('rev-parse', 'HEAD'))).toBe(0)
+    const w2 = work()
+    const base2 = w2.commit({ 'install.sh': 'a' }, 'base')
+    expect(kit(w2.dir, base2, w2.commit({ 'install.sh': null }, 'delete'))).toBe(0)
+  })
+
+  it('every file the install and kit tests import, however deep, is one of their inputs', () => {
+    // A helper they start importing must run them when it changes: this fails until ci-affected.sh lists it.
+    const tests = readdirSync(here).filter((f) => /^(root-install.*|kit-tests)\.test\.ts$/.test(f))
+    expect(tests).toContain('root-install.test.ts')
+    expect(tests).toContain('kit-tests.test.ts')
+    const seen = new Set<string>()
+    const walk = (f: string) => {
+      if (seen.has(f)) return
+      seen.add(f)
+      for (const m of readFileSync(join(here, f), 'utf8').matchAll(/(?:from|import)\s*\(?'\.\/([^']+)'/g))
+        walk(m[1] as string)
+    }
+    for (const t of tests) walk(t)
+    expect(seen.size).toBeGreaterThan(tests.length) // they do import helpers
+    for (const f of seen) {
+      const w = work()
+      const base = w.commit({ 'apps/web/src/a.ts': 'a' }, 'base')
+      expect(kit(w.dir, base, w.commit({ [`scripts/${f}`]: 'changed' })), f).toBe(0)
+    }
+  })
+
+  it('no kit script reads the paths that skip them (docs, scripts, the web, relay, mobile or desktop app)', () => {
+    const r = spawnSync(
+      'git',
+      ['grep', '-nE', 'KIT"?/\\.\\./(docs|scripts|apps/(web|relay|mobile|desktop))', '--', 'kit'],
+      {
+        cwd: join(here, '..'),
+        encoding: 'utf8',
+      },
+    )
+    expect(r.status, r.stdout).toBe(1) // git grep: 1 is no match
+  })
+
+  it('a base git cannot find is an error (exit 2), never a skip', () => {
+    const w = work()
+    w.commit({ 'apps/web/src/a.ts': 'a' }, 'base')
+    expect(kit(w.dir, 'f'.repeat(40), 'HEAD')).toBe(2)
+    expect(kit(w.dir, '', 'HEAD')).toBe(2)
+  })
+})
+
 // ---------- the base: the last green commit ----------
 const ok = (c: string) => `local-ci/${c}\tsuccess\tpassed on ci-runner in 40s`
 const skippedOk = (c: string) => `local-ci/${c}\tsuccess\tskipped: no affected files`
@@ -286,7 +412,8 @@ case "$1" in
     for a in "$@"; do case "$a" in --paginate) pg=1 ;; repos/*) p="$a" ;; esac; done
     sha="\${p#*commits/}"; sha="\${sha%%/*}"
     [ "\${GH_FAIL_SHA:-}" != "$sha" ] || exit 1
-    echo "GET $sha" >> "$GH_READS"
+    kind=status; case "$p" in *"/$sha/statuses"*) kind=statuses ;; esac
+    echo "GET $sha $kind" >> "$GH_READS"
     # like GitHub: a page holds per_page rows (30 when not asked); --paginate follows every page
     n=30; case "$p" in *per_page=*) n="\${p#*per_page=}"; n="\${n%%&*}" ;; esac
     if [ "$pg" = 1 ]; then cat "$GH_STATUS_DIR/$sha" 2>/dev/null; else head -n "$n" "$GH_STATUS_DIR/$sha" 2>/dev/null; fi
@@ -332,6 +459,9 @@ function world() {
       code: r.status,
       jobs: line.trim().split(/\s+/).filter(Boolean),
       why: rest.join('\n').trim(),
+      // lines 4 on: "skip <job> <sha of the commit where that job last passed>", and "base <job> <sha>" for every job with one
+      skips: rest.filter((l) => l.startsWith('skip ')).map((l) => l.slice(5)),
+      bases: rest.filter((l) => l.startsWith('base ')).map((l) => l.slice(5)),
       err: r.stderr,
     }
   }
@@ -345,7 +475,7 @@ const seedFiles = {
 }
 const web = (n = 1) => ({ 'apps/web/src/a.ts': `web ${n}` })
 
-describe('ci-affected.sh plan: the base is the last green commit, never just the parent', () => {
+describe("ci-affected.sh plan: each job is compared with the last commit where that job passed, whatever main's colour", () => {
   it('a green parent is the base: a web-only change skips desktop and mobile', () => {
     const w = world()
     const g = w.commit(seedFiles, 'green')
@@ -354,7 +484,9 @@ describe('ci-affected.sh plan: the base is the last green commit, never just the
     w.publish()
     const r = w.plan(head)
     expect(r.jobs).toEqual(only('browser'))
-    expect(r.why).toContain(g.slice(0, 7))
+    expect(r.skips).toEqual([`desktop ${g}`, `mobile ${g}`])
+    // every job's base is listed too (report-ci/fast runs the unit tests the change since check's base can reach)
+    expect(r.bases).toEqual(ALL.map((j) => `${j} ${g}`))
   })
 
   it('inner commits that never got a status are passed over, and what they changed counts', () => {
@@ -369,7 +501,7 @@ describe('ci-affected.sh plan: the base is the last green commit, never just the
     expect(w.plan(head).jobs).toEqual(only('browser', 'desktop', 'mobile'))
   })
 
-  it('a red nearest verdict means everything runs: a skip cannot hide an earlier red', () => {
+  it('a job that failed on the nearest commit runs; a job that passed there is compared with it, though main is red', () => {
     const w = world()
     const g = w.commit(seedFiles, 'green')
     w.status(g, greenRows)
@@ -381,11 +513,12 @@ describe('ci-affected.sh plan: the base is the last green commit, never just the
     const head = w.commit(web(), 'web only, on top of a red base')
     w.publish()
     const r = w.plan(head)
-    expect(r.jobs).toEqual(ALL)
-    expect(r.why).toMatch(/red|not green/i)
+    // desktop failed at red, so it runs; mobile passed at red and nothing it reads changed since, so it skips
+    expect(r.jobs).toEqual(only('browser', 'desktop'))
+    expect(r.skips).toEqual([`mobile ${red}`])
   })
 
-  it('an older green behind a red does not count: the nearest tested commit decides', () => {
+  it("the nearest commit with a result for a job decides that job: a red check there does not stop the others' skips", () => {
     const w = world()
     const g = w.commit(seedFiles, 'green')
     w.status(g, greenRows)
@@ -397,32 +530,52 @@ describe('ci-affected.sh plan: the base is the last green commit, never just the
     w.commit({}, 'untested')
     const head = w.commit(web(3), 'tip')
     w.publish()
-    expect(w.plan(head).jobs).toEqual(ALL)
+    const r = w.plan(head)
+    expect(r.jobs).toEqual(only('browser'))
+    expect(r.skips).toEqual([`desktop ${red}`, `mobile ${red}`])
   })
 
-  it('a base that is pending, partly reported, errored or skipped the old way is not green: everything runs', () => {
-    const cases: Record<string, string[]> = {
-      pending: greenRows.map((l) =>
-        l.startsWith('local-ci/browser\t') ? 'local-ci/browser\tpending\trunning on ci-runner' : l,
-      ),
-      partial: greenRows.slice(0, 3),
-      error: greenRows.map((l) => (l.startsWith('local-ci/mod\t') ? 'local-ci/mod\terror\tcancelled' : l)),
-      'old skip text': greenRows.map((l) =>
-        l.startsWith('local-ci/desktop\t') ? 'local-ci/desktop\tsuccess\tskipped (no desktop changes)' : l,
-      ),
-      'check skipped': greenRows.map((l) => (l.startsWith('local-ci/check\t') ? skippedOk('check') : l)),
+  it('only a final pass is a base: a pending, failed or errored job runs; a skipped or missing one is walked past', () => {
+    const at = (job: string, row: string) => greenRows.map((l) => (l.startsWith(`local-ci/${job}\t`) ? row : l))
+    const cases: Record<string, { rows: string[]; jobs: string[] }> = {
+      pending: {
+        rows: at('desktop', 'local-ci/desktop\tpending\trunning on ci-runner'),
+        jobs: only('browser', 'desktop'),
+      },
+      failure: { rows: at('mobile', 'local-ci/mobile\tfailure\tfailed on ci-runner'), jobs: only('browser', 'mobile') },
+      error: { rows: at('desktop', 'local-ci/desktop\terror\tcancelled'), jobs: only('browser', 'desktop') },
+      // no older commit to walk to, so a job with no result here has no base
+      partial: { rows: greenRows.slice(0, 3), jobs: ALL },
+      'old skip text': {
+        rows: at('desktop', 'local-ci/desktop\tsuccess\tskipped (no desktop changes)'),
+        jobs: only('browser', 'desktop'),
+      },
     }
-    for (const [name, rows] of Object.entries(cases)) {
+    for (const [name, { rows, jobs }] of Object.entries(cases)) {
       const w = world()
       const g = w.commit(seedFiles, 'base')
       w.status(g, rows)
       const head = w.commit(web(), 'web')
       w.publish()
-      expect(w.plan(head).jobs, name).toEqual(ALL)
+      expect(w.plan(head).jobs, name).toEqual(jobs)
     }
   })
 
-  it('a commit whose own skips were honest is a good base: desktop and mobile stay skipped down a chain of web changes', () => {
+  it('"passed on retry" is a pass: it is a base like any other', () => {
+    const w = world()
+    const g = w.commit(seedFiles, 'base')
+    w.status(
+      g,
+      greenRows.map((l) =>
+        l.startsWith('local-ci/mobile\t') ? `${l}, passed on retry (1 flaky test, see flakes.tsv)` : l,
+      ),
+    )
+    const head = w.commit(web(), 'web')
+    w.publish()
+    expect(w.plan(head).skips).toEqual([`desktop ${g}`, `mobile ${g}`])
+  })
+
+  it('a skipped job is walked past to the commit where it last passed, and what changed since counts: a chain of web changes', () => {
     const w = world()
     const g = w.commit(seedFiles, 'real run')
     w.status(g, greenRows)
@@ -435,7 +588,70 @@ describe('ci-affected.sh plan: the base is the last green commit, never just the
     w.publish()
     const r = w.plan(head)
     expect(r.jobs).toEqual(only('browser'))
-    expect(r.why).toContain(s.slice(0, 7))
+    expect(r.skips).toEqual([`desktop ${g}`, `mobile ${g}`]) // g, where they last ran and passed, not s
+    // and a skip in the new words is walked past the same way
+    const w2 = world()
+    const g2 = w2.commit(seedFiles, 'real run')
+    w2.status(g2, greenRows)
+    const s2 = w2.commit(web(1), 'skipped in the new words')
+    w2.status(
+      s2,
+      ALL.map((j) =>
+        j === 'mobile' ? `local-ci/mobile\tsuccess\tskipped: no mobile inputs changed since ${g2.slice(0, 7)}` : ok(j),
+      ),
+    )
+    const head2 = w2.commit(web(2), 'web again')
+    w2.publish()
+    // mobile is compared with g2 (s2 only skipped it), desktop with s2 (where it passed): two bases in one plan
+    expect(w2.plan(head2).skips).toEqual([`desktop ${s2}`, `mobile ${g2}`])
+  })
+
+  it('jobs with different bases are each diffed from their own: a change behind one base and not the other', () => {
+    const w = world()
+    const g = w.commit(seedFiles, 'all ran')
+    w.status(g, greenRows)
+    w.commit({ 'apps/desktop/Sources/a.swift': 'desktop change' }, 'inner, never tested')
+    const x = w.commit(web(1), 'desktop skipped here (wrongly, say), browser passed')
+    w.status(
+      x,
+      ALL.map((j) =>
+        j === 'desktop' ? 'local-ci/desktop\tsuccess\tskipped: no desktop inputs changed since 0000000' : ok(j),
+      ),
+    )
+    const head = w.commit(web(2), 'web again')
+    w.publish()
+    const r = w.plan(head)
+    // desktop's base is g, and the desktop change after g is in its diff, so it runs; mobile's base is x and skips
+    expect(r.jobs).toEqual(only('browser', 'desktop'))
+    expect(r.skips).toEqual([`mobile ${x}`])
+  })
+
+  it('a failure row is read however many statuses the commit has: a long list does not lose it to a closed pipe', () => {
+    const w = world()
+    const g = w.commit(seedFiles, 'green')
+    w.status(g, greenRows)
+    const red = w.commit({}, 'red, then a very long list of other contexts')
+    const filler = Array.from({ length: 2500 }, (_, i) => `ci/other-${i}\tsuccess\t${'x'.repeat(80)}`)
+    w.status(red, ['local-ci/mobile\tfailure\tfailed on ci-runner', ...greenRows.slice(0, 5), ...filler])
+    const head = w.commit(web(), 'web')
+    w.publish()
+    expect(w.plan(head).jobs).toEqual(only('browser', 'mobile'))
+  })
+
+  it('line 2 says why a job has no base: failed or pending where, or none in reach', () => {
+    const w = world()
+    const g = w.commit(seedFiles, 'base')
+    w.status(
+      g,
+      ALL.map((j) =>
+        j === 'desktop' ? 'local-ci/desktop\tfailure\tx' : j === 'mobile' ? 'local-ci/mobile\tpending\trunning' : ok(j),
+      ),
+    )
+    const head = w.commit(web(), 'web')
+    w.publish()
+    const why = w.plan(head).why
+    expect(why).toContain(`desktop: failure at ${g.slice(0, 7)}`)
+    expect(why).toContain(`mobile: pending at ${g.slice(0, 7)}`)
   })
 
   it('no status anywhere in reach and a missing repo are both "run everything"', () => {
@@ -518,18 +734,102 @@ describe('ci-affected.sh plan: the base is the last green commit, never just the
     expect(w.plan(m2).jobs).toEqual(ALL)
   })
 
+  // docs/CI-MACHINES.md, "The rerun rule and this attempt": the statuses this workflow attempt posted itself (another machine
+  // of the same attempt can post before Lemnos plans) are not an earlier run; every other run's or attempt's are.
+  describe("the rerun rule leaves out this attempt's own statuses", () => {
+    const RUN = 'https://github.com/owner/repo/actions/runs/7'
+    const A2 = `${RUN}/attempts/2#`
+    const setup = () => {
+      const w = world()
+      const m1 = w.commit(seedFiles, 'main 1')
+      w.status(m1, greenRows)
+      const m2 = w.commit(web(), 'main 2')
+      w.publish()
+      return { w, m2 }
+    }
+    const skipsNormally = only('browser') // a web-only change on a green base: desktop and mobile skip
+
+    it("1. this attempt's part, report-only and local-ci statuses are not an earlier run", () => {
+      const { w, m2 } = setup()
+      w.status(m2, [
+        `ci-part/vitest\tpending\trunning on delphi\t${A2}delphi`,
+        `ci-part/bridge-shard-2\tfailure\tfailed on cyclops\t${A2}cyclops`,
+        `report-ci/linux\tsuccess\tpassed on hestia in 9s\t${A2}hestia`,
+        `local-ci/image\tpending\trunning on titan\t${A2}titan`,
+      ])
+      const r = w.plan(m2, { CI_ATTEMPT_URL: A2 })
+      expect(r.jobs).toEqual(skipsNormally)
+      expect(r.why).not.toContain('already has')
+    })
+
+    it("2. a part's or report-only status of an earlier attempt or another run is an earlier run", () => {
+      const { w, m2 } = setup()
+      for (const [ctx, url] of [
+        ['ci-part/vitest', `${RUN}/attempts/1#delphi`],
+        ['ci-part/bridge-shard-1', `${RUN}/attempts/20#delphi`], // attempts/2# must not take attempts/20#
+        ['report-ci/linux', 'https://github.com/owner/repo/actions/runs/6/attempts/1#hestia'],
+        ['report-ci/fast', RUN], // a run link, with no attempt: never this attempt's
+        ['local-ci/check', ''],
+      ]) {
+        w.status(m2, [`${ctx}\tfailure\tx\t${url}`])
+        const r = w.plan(m2, { CI_ATTEMPT_URL: A2 })
+        expect(r.jobs, `${ctx} ${url}`).toEqual(ALL)
+        expect(r.why, `${ctx} ${url}`).toContain('already has')
+      }
+    })
+
+    it('3. "Re-run failed jobs": attempt 2 of the same run, with attempt 1\'s statuses there, runs everything', () => {
+      const { w, m2 } = setup()
+      // attempt 1 with the split on (attempt links), and attempt 2's own part already pending: still a rerun
+      w.status(m2, [
+        `ci-part/vitest\tpending\trunning on delphi\t${A2}delphi`,
+        ...ALL.map((j) => `local-ci/${j}\t${j === 'desktop' ? 'failure' : 'success'}\tx\t${RUN}/attempts/1#lemnos`),
+      ])
+      expect(w.plan(m2, { CI_ATTEMPT_URL: A2 }).jobs).toEqual(ALL)
+      // only attempt 1's part answered (Lemnos's statuses not in yet when it was re-run): a rerun too
+      w.status(m2, [`ci-part/vitest\tfailure\tx\t${RUN}/attempts/1#delphi`, `ci-part/vitest\tpending\tx\t${A2}delphi`])
+      expect(w.plan(m2, { CI_ATTEMPT_URL: A2 }).jobs).toEqual(ALL)
+      // every switch off: attempt 1's statuses link to the run and the attempt link is not set; a rerun, as today
+      w.status(
+        m2,
+        ALL.map((j) => `local-ci/${j}\tsuccess\tx\t${RUN}`),
+      )
+      expect(w.plan(m2).jobs).toEqual(ALL)
+    })
+
+    it("3b. the full status list is read, not the combined status: this attempt's newer status does not hide an earlier one", () => {
+      const { w, m2 } = setup()
+      // the same context twice: attempt 2's (newest first, as GitHub lists them) over attempt 1's
+      w.status(m2, [
+        `local-ci/image\tpending\trunning on titan\t${A2}titan`,
+        `local-ci/image\tfailure\tx\t${RUN}/attempts/1#titan`,
+      ])
+      expect(w.plan(m2, { CI_ATTEMPT_URL: A2 }).jobs).toEqual(ALL)
+      expect(readFileSync(w.env.GH_READS as string, 'utf8')).toContain(`GET ${m2} statuses`)
+    })
+
+    it('4. every switch off (no attempt link): exactly as before; no status is left out', () => {
+      const { w, m2 } = setup()
+      expect(w.plan(m2).jobs).toEqual(skipsNormally)
+      w.status(m2, [`local-ci/check\tpending\trunning on ci-runner\t${RUN}`])
+      expect(w.plan(m2).jobs).toEqual(ALL)
+      w.status(m2, [`local-ci/check\tpending\trunning on ci-runner\t${A2}lemnos`])
+      expect(w.plan(m2).jobs).toEqual(ALL) // without CI_ATTEMPT_URL nothing is this attempt's
+    })
+  })
+
   it('more than 30 statuses on a commit are all read: a red local-ci row past the first page is not hidden', () => {
     const w = world()
     const g = w.commit(seedFiles, 'green')
     w.status(g, greenRows)
     const red = w.commit({}, 'red behind 30 other contexts')
     const filler = Array.from({ length: 35 }, (_, i) => `ci/other-${i}\tsuccess\tfine`)
-    w.status(red, [...filler, 'local-ci/check\tfailure\tfailed on ci-runner'])
+    w.status(red, [...filler, 'local-ci/mobile\tfailure\tfailed on ci-runner'])
     const head = w.commit(web(), 'web')
     w.publish()
     const r = w.plan(head)
-    expect(r.jobs).toEqual(ALL) // red nearest tested commit: no base. A 30-row read sees no local-ci and skips against g
-    expect(r.why).toContain(red.slice(0, 7))
+    // mobile failed at red, so it runs. A 30-row read sees no mobile status there, walks on to g and skips it
+    expect(r.jobs).toEqual(only('browser', 'mobile'))
   })
 
   it('it stops looking after a bounded number of commits and then runs everything', () => {
@@ -544,6 +844,48 @@ describe('ci-affected.sh plan: the base is the last green commit, never just the
       .trim()
       .split('\n').length
     expect(reads).toBeLessThanOrEqual(31) // 30 commits of the walk, and the head's own statuses before it
+  })
+})
+
+describe('ci-affected.sh plan: line 3 says whether the install and kit tests run', () => {
+  const line3 = (r: { why: string }) => r.why.split('\n')[1]
+  it('a web-only change on a green base skips them; a kit change runs them', () => {
+    const w = world()
+    const g = w.commit(seedFiles, 'green')
+    w.status(g, greenRows)
+    const head = w.commit(web(), 'web')
+    w.publish()
+    expect(line3(w.plan(head))).toBe('kit-tests: skip')
+    const w2 = world()
+    const g2 = w2.commit(seedFiles, 'green')
+    w2.status(g2, greenRows)
+    const head2 = w2.commit({ 'kit/install.sh': 'changed' }, 'kit')
+    w2.publish()
+    expect(line3(w2.plan(head2))).toBe('kit-tests: run')
+  })
+
+  it("check's own pass is their base: another job's red there does not stop the skip", () => {
+    const w = world()
+    const g = w.commit(seedFiles, 'check passed, desktop failed')
+    w.status(
+      g,
+      greenRows.map((l) => (l.startsWith('local-ci/desktop\t') ? 'local-ci/desktop\tfailure\tx' : l)),
+    )
+    const head = w.commit(web(), 'web')
+    w.publish()
+    expect(line3(w.plan(head))).toBe('kit-tests: skip')
+  })
+
+  it("a check that failed on the nearest commit runs them, even for a web-only change: they are compared with check's own last pass", () => {
+    const w = world()
+    const g = w.commit(seedFiles, 'red')
+    w.status(
+      g,
+      greenRows.map((l) => (l.startsWith('local-ci/check\t') ? 'local-ci/check\tfailure\tfailed on ci-runner' : l)),
+    )
+    const head = w.commit(web(), 'web')
+    w.publish()
+    expect(line3(w.plan(head))).toBe('kit-tests: run')
   })
 })
 
@@ -564,9 +906,10 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
         encoding: 'utf8',
       }).trim()
     mkdirSync(join(clone, 'scripts'), { recursive: true })
-    writeFileSync(join(clone, '.git/info/exclude'), 'scripts/\n') // the scripts under test are not part of any commit
+    writeFileSync(join(clone, '.git/info/exclude'), '/scripts/\n') // the scripts under test (the root folder only) are not part of any commit
     const text = readFileSync(join(here, 'ci-local.sh'), 'utf8').replace('\ncd "$WT"\n', `\n${stubs}\ncd "$WT"\n`)
     writeFileSync(join(clone, 'scripts/ci-local.sh'), text)
+    copyCiLocalParts(join(clone, 'scripts')) // the parts ci-local.sh sources in place
     const names = ['ci-runner.sh', 'ci-desktop-gate.sh', ...(opts.affectedScript === false ? [] : ['ci-affected.sh'])]
     for (const n of names) writeFileSync(join(clone, 'scripts', n), readFileSync(join(here, n), 'utf8'))
     const home = join(w.T, 'home')
@@ -635,7 +978,8 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
     return { ...w, g0, clone, land, start, ran, posts, post, env }
   }
   const sorted = (...j: string[]) => [...j].sort()
-  const SKIP_TEXT = 'description=skipped: no affected files'
+  // a skip names the commit where the job last passed: here the seed commit, g0
+  const SKIP = (r: { g0: string }, j: string) => `description=skipped: no ${j} inputs changed since ${r.g0.slice(0, 7)}`
 
   it('a web-only change on a green base: check, mod, browser and image run; desktop and mobile are skipped and say so', () => {
     const r = run()
@@ -648,12 +992,62 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
       const p = r.post(j)
       expect(p, j).toHaveLength(1) // one answer, success: never a pending first
       expect(p[0], j).toContain('state=success')
-      expect(p[0], j).toContain(SKIP_TEXT)
+      expect(p[0], j).toContain(SKIP(r, j))
       expect(p[0], j).not.toContain('passed on')
     }
     for (const j of ['check', 'mod', 'browser', 'image'])
       expect(r.post(j, 'success').join('\n'), j).toContain('passed on')
-    expect(out.stdout).toContain('desktop skipped: no affected files')
+    expect(out.stdout).toContain('desktop skipped: no desktop inputs changed since')
+  })
+
+  it("ci-local.sh hands the plan this attempt's link: another machine's status of the same attempt does not stop the skips", () => {
+    const r = run()
+    r.status(r.g0, greenRows)
+    const head = r.land(web(), 'web only')
+    const A = 'https://github.com/owner/repo/actions/runs/7/attempts/1#'
+    r.status(head, [
+      `ci-part/vitest\tpending\trunning on delphi\t${A}delphi`,
+      `local-ci/image\tpending\trunning on titan\t${A}titan`,
+    ])
+    r.env.CI_ATTEMPT_URL = A
+    const out = r.start()
+    delete r.env.CI_ATTEMPT_URL
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    expect(out.stdout).not.toContain('already has')
+    for (const j of ['desktop', 'mobile']) expect(r.post(j)[0], j).toContain(SKIP(r, j))
+    // without the link (every switch off) the same statuses are an earlier run, as today
+    rmSync(r.env.GH_LOG as string, { force: true })
+    expect(r.start().stdout).toContain('already has')
+  })
+
+  it("Hestia on alone (no attempt link in Lemnos's env): the run's own attempt, from GitHub's run variables, is still left out", () => {
+    const r = run()
+    r.status(r.g0, greenRows)
+    const head = r.land(web(), 'web only')
+    r.status(head, [
+      'report-ci/linux\tpending\trunning on hestia\thttps://github.com/owner/repo/actions/runs/7/attempts/3#hestia',
+    ])
+    const gh = { GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '7' }
+    Object.assign(r.env, { ...gh, GITHUB_RUN_ATTEMPT: '3' })
+    const out = r.start()
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    expect(out.stdout).not.toContain('already has')
+    for (const j of ['desktop', 'mobile']) expect(r.post(j)[0], j).toContain(SKIP(r, j))
+    // attempt 4 of the same run (a re-run): attempt 3's report is an earlier run
+    rmSync(r.env.GH_LOG as string, { force: true })
+    r.env.GITHUB_RUN_ATTEMPT = '4'
+    expect(r.start().stdout).toContain('already has')
+    for (const k of [...Object.keys(gh), 'GITHUB_RUN_ATTEMPT']) delete r.env[k]
+  })
+
+  it('an attempt link without its closing # is not used (attempts/2 would also match attempts/20): every status counts', () => {
+    const w = world()
+    const m1 = w.commit(seedFiles, 'main 1')
+    w.status(m1, greenRows)
+    const m2 = w.commit(web(), 'main 2')
+    w.publish()
+    w.status(m2, ['ci-part/vitest\tfailure\tx\thttps://github.com/owner/repo/actions/runs/7/attempts/20#delphi'])
+    expect(w.plan(m2, { CI_ATTEMPT_URL: 'https://github.com/owner/repo/actions/runs/7/attempts/2' }).jobs).toEqual(ALL)
   })
 
   it('the verdict reader takes those statuses for a green commit, and the next run can use it as its base', () => {
@@ -687,8 +1081,8 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
     r.land({ 'apps/desktop/Sources/a.swift': 'changed' }, 'desktop')
     expect(r.start().status).toBe(0)
     expect(r.ran()).toEqual(sorted('check', 'mod', 'image', 'desktop'))
-    expect(r.post('browser')[0]).toContain(SKIP_TEXT)
-    expect(r.post('mobile')[0]).toContain(SKIP_TEXT)
+    expect(r.post('browser')[0]).toContain(SKIP(r, 'browser'))
+    expect(r.post('mobile')[0]).toContain(SKIP(r, 'mobile'))
   })
 
   it('only mobile changed: mobile and check run; browser and desktop are skipped', () => {
@@ -697,8 +1091,8 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
     r.land({ 'apps/mobile/ios/a.swift': 'changed' }, 'mobile')
     expect(r.start().status).toBe(0)
     expect(r.ran()).toEqual(sorted('check', 'mod', 'image', 'mobile'))
-    expect(r.post('browser')[0]).toContain(SKIP_TEXT)
-    expect(r.post('desktop')[0]).toContain(SKIP_TEXT)
+    expect(r.post('browser')[0]).toContain(SKIP(r, 'browser'))
+    expect(r.post('desktop')[0]).toContain(SKIP(r, 'desktop'))
   })
 
   it('bridge only: check and the browser job; desktop and mobile are skipped', () => {
@@ -716,7 +1110,7 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
     r.land(web(), 'tip: web')
     expect(r.start().status).toBe(0)
     expect(r.ran()).toEqual(sorted('check', 'mod', 'image', 'browser', 'desktop'))
-    expect(r.post('mobile')[0]).toContain(SKIP_TEXT)
+    expect(r.post('mobile')[0]).toContain(SKIP(r, 'mobile'))
   })
 
   it('an unknown path runs all six jobs and skips nothing', () => {
@@ -728,7 +1122,7 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
     expect(r.posts().join('\n')).not.toContain('skipped')
   })
 
-  it('a base that was red runs everything, even for a web-only change', () => {
+  it('a job that failed on the base runs, even for a web-only change; a job that passed there still skips', () => {
     const r = run()
     r.status(
       r.g0,
@@ -736,8 +1130,8 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
     )
     r.land(web(), 'web only, base red')
     expect(r.start().status).toBe(0)
-    expect(r.ran()).toEqual(sorted(...ALL))
-    expect(r.posts().join('\n')).not.toContain('skipped')
+    expect(r.ran()).toEqual(sorted('check', 'mod', 'image', 'browser', 'desktop'))
+    expect(r.post('mobile')[0]).toContain(SKIP(r, 'mobile'))
   })
 
   it('no green base in reach, or GitHub unreadable, runs everything', () => {
@@ -809,7 +1203,7 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
     const out = r.start()
     expect(out.status).toBe(1)
     expect(r.post('check', 'failure')).toHaveLength(1)
-    expect(r.post('desktop')[0]).toContain(SKIP_TEXT)
+    expect(r.post('desktop')[0]).toContain(SKIP(r, 'desktop'))
   })
 
   it('a gh that hangs is stopped at the plan limit and the run goes on with every job', () => {
@@ -849,5 +1243,135 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
     r.land(web(), 'web only')
     expect(r.start().status).toBe(0)
     expect(r.ran()).toEqual(sorted(...ALL))
+  })
+
+  it("TALOS_FUZZ_MS reaches the bridge's bun tests: ci-local.sh does not scrub it", () => {
+    const r = run()
+    r.status(r.g0, greenRows)
+    // the commit has the bridge runner, so both halves go through bun; bun writes down what it was given
+    r.land({ 'apps/bridge/scripts/test-parallel.ts': '' }, 'change')
+    const text = readFileSync(join(r.clone, 'scripts/ci-local.sh'), 'utf8').replace(
+      'job_check() { echo check >> "$CALLS"; }',
+      'job_check() { echo check >> "$CALLS"; step_bun_rest > /dev/null; step_bun_schedules > /dev/null; }',
+    )
+    writeFileSync(join(r.clone, 'scripts/ci-local.sh'), text)
+    const log = join(r.T, 'bun.env')
+    writeFileSync(join(r.T, 'bin/bun'), `#!/bin/bash\necho "$* fuzz=\${TALOS_FUZZ_MS:-}" >> "${log}"\nexit 0\n`)
+    r.env.TALOS_FUZZ_MS = '60000'
+    const out = r.start()
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    const lines = readFileSync(log, 'utf8')
+      .split('\n')
+      .filter((l) => l.includes('test-parallel.ts'))
+    expect(lines).toHaveLength(2)
+    for (const l of lines) expect(l).toMatch(/fuzz=60000$/)
+    // this commit's runner does not know --retry-failed, so it is not given it (it would read it as the folder to test)
+    for (const l of lines) expect(l).not.toContain('--retry-failed')
+  })
+
+  it("the bridge's bun runner is told to rerun failed files once, when the commit's runner knows the flag", () => {
+    const r = run()
+    r.status(r.g0, greenRows)
+    r.land({ 'apps/bridge/scripts/test-parallel.ts': '// knows --retry-failed\n' }, 'change')
+    const text = readFileSync(join(r.clone, 'scripts/ci-local.sh'), 'utf8').replace(
+      'job_check() { echo check >> "$CALLS"; }',
+      'job_check() { echo check >> "$CALLS"; step_bun_rest > /dev/null; step_bun_schedules > /dev/null; }',
+    )
+    writeFileSync(join(r.clone, 'scripts/ci-local.sh'), text)
+    const log = join(r.T, 'bun.args')
+    writeFileSync(join(r.T, 'bin/bun'), `#!/bin/bash\necho "$*" >> "${log}"\nexit 0\n`)
+    expect(r.start().status).toBe(0)
+    const lines = readFileSync(log, 'utf8')
+      .split('\n')
+      .filter((l) => l.includes('test-parallel.ts'))
+    expect(lines).toHaveLength(2)
+    for (const l of lines) expect(l).toContain(' --retry-failed')
+  })
+
+  it("report-ci/fast runs the unit tests the change since check's last pass can reach; without that pass, typecheck and lint only", () => {
+    const fastArgs = (green: boolean, args?: string[]) => {
+      const r = run()
+      if (green) r.status(r.g0, greenRows)
+      r.land(web(), 'web only')
+      const log = join(r.T, 'pnpm.args')
+      writeFileSync(join(r.T, 'bin/pnpm'), `#!/bin/bash\necho "$*" >> "${log}"\nexit 0\n`)
+      const out = r.start(args)
+      expect(out.status, out.stdout + out.stderr).toBe(0)
+      const all = readFileSync(log, 'utf8').split('\n')
+      return { vitest: all.filter((l) => l.includes('--project protocol')), all, g0: r.g0 }
+    }
+    const withBase = fastArgs(true)
+    expect(withBase.vitest).toHaveLength(1)
+    expect(withBase.vitest[0]).toContain(`--changed ${withBase.g0}`)
+    // one retry per failed test and the flake reporter, as in check's own Vitest
+    expect(withBase.vitest[0]).toMatch(/--retry=1 --reporter=default --reporter=\S+\/scripts\/ci-flake-vitest\.ts/)
+    // check's own base, when the jobs' bases differ: check passed at c1, browser was only skipped there (its base is g0)
+    {
+      const r = run()
+      r.status(r.g0, greenRows)
+      const c1 = r.land(web(1), 'check passed here, browser skipped')
+      r.status(
+        c1,
+        ALL.map((j) =>
+          j === 'browser'
+            ? `local-ci/browser\tsuccess\tskipped: no browser inputs changed since ${r.g0.slice(0, 7)}`
+            : ok(j),
+        ),
+      )
+      r.land(web(2), 'web again')
+      const log = join(r.T, 'pnpm.args')
+      writeFileSync(join(r.T, 'bin/pnpm'), `#!/bin/bash\necho "$*" >> "${log}"\nexit 0\n`)
+      expect(r.start().status).toBe(0)
+      const v = readFileSync(log, 'utf8')
+        .split('\n')
+        .filter((l) => l.includes('--project protocol'))
+      expect(v).toEqual([expect.stringContaining(`--changed ${c1}`)])
+    }
+    // no pass of check in reach, or the full run: the unit tests would be a second copy of check's, so only typecheck and lint
+    for (const f of [fastArgs(false), fastArgs(true, ['--ref', 'HEAD', '--full'])]) {
+      expect(f.vitest).toEqual([])
+      expect(f.all.filter((l) => l === 'typecheck' || l === 'lint').length).toBeGreaterThanOrEqual(2)
+    }
+  })
+
+  it('the check job leaves out the install and kit tests only when the plan says so, and --full keeps them', () => {
+    const vitestArgs = (files: Record<string, string>, args?: string[]) => {
+      const r = run()
+      r.status(r.g0, greenRows)
+      r.land(files, 'change')
+      // check runs the real vitest step; pnpm writes down what it was asked
+      const text = readFileSync(join(r.clone, 'scripts/ci-local.sh'), 'utf8').replace(
+        'job_check() { echo check >> "$CALLS"; }',
+        'job_check() { echo check >> "$CALLS"; step_vitest > /dev/null; }',
+      )
+      writeFileSync(join(r.clone, 'scripts/ci-local.sh'), text)
+      const log = join(r.T, 'pnpm.args')
+      writeFileSync(
+        join(r.T, 'bin/pnpm'),
+        `#!/bin/bash\necho "$* full-self-test=\${TALOS_KIT_FULL_SELF_TEST:-}" >> "${log}"\nexit 0\n`,
+      )
+      const out = r.start(args)
+      expect(out.status, out.stdout + out.stderr).toBe(0)
+      return {
+        args: readFileSync(log, 'utf8')
+          .split('\n')
+          .filter((l) => l.startsWith('test ')),
+        out: out.stdout,
+      }
+    }
+    const EXCLUDE = '--exclude **/root-install*.test.ts --exclude **/kit-tests.test.ts'
+    const skipped = vitestArgs(web())
+    expect(skipped.args).toEqual([expect.stringContaining(EXCLUDE)])
+    // one retry per failed test, and the reporter that logs a test that passed only on it
+    expect(skipped.args).toEqual([
+      expect.stringMatching(/ --retry=1 --reporter=default --reporter=\S+\/scripts\/ci-flake-vitest\.ts( |$)/),
+    ])
+    expect(skipped.out).toContain('install and kit tests skipped')
+    expect(vitestArgs({ 'kit/install.sh': 'changed' }).args).toEqual([expect.not.stringContaining('--exclude')])
+    const full = vitestArgs(web(), ['--ref', 'HEAD', '--full']).args
+    expect(full).toEqual([expect.not.stringContaining('--exclude')])
+    // the full run is also the one that runs self-test.sh's suites inside test-default-agent.sh
+    expect(full).toEqual([expect.stringMatching(/full-self-test=1$/)])
+    expect(skipped.args).toEqual([expect.stringMatching(/full-self-test=0$/)])
   })
 })

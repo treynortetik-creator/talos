@@ -143,6 +143,12 @@ export function isBlockedHostname(host: string): boolean {
     h.endsWith('.localhost') ||
     h.endsWith('.local') ||
     h.endsWith('.internal') ||
+    // names that only ever resolve inside a home or company network (RFC 8375 home.arpa; .lan, .corp, .intranet by custom)
+    h === 'home.arpa' ||
+    h.endsWith('.home.arpa') ||
+    h.endsWith('.lan') ||
+    h.endsWith('.corp') ||
+    h.endsWith('.intranet') ||
     (!h.includes('.') && !h.includes(':'))
   )
 }

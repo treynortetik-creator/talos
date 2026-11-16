@@ -4,7 +4,7 @@
 import type { AttachmentRefT, MessageT } from '@talos-app/protocol'
 import { type AttachmentSource, attachmentDropNote } from './attachment-retry.ts'
 import { clockMeta, localTime } from './clock-meta.ts'
-import { defaultThreadRef, threadRef } from './context.ts'
+import { type BridgeContext, defaultThreadRef, threadRef } from './context.ts'
 import { receiptFrame, transcriptFrame } from './frames-out.ts'
 import type { Inbound } from './inbound.ts'
 import { BACKLOG_PART_BYTES, backlogRowBytes, type Item, type Of, oneLine } from './inbound-shared.ts'
@@ -17,6 +17,15 @@ import {
   wrapShared,
 } from './notify.ts'
 import { transcribe } from './stt.ts'
+
+/**
+ * The owner's last message time ("what did I miss" counts from it). Sessions deliver side by side (inbound-lanes.ts), so
+ * an older message can be delivered after a newer one: the time only moves forward.
+ */
+export function bumpLastOwnerTs(ctx: BridgeContext, ts: string): void {
+  const prev = ctx.store.kvGet('last_owner_ts')
+  if (prev === undefined || !(Date.parse(prev) > Date.parse(ts))) ctx.store.kvSet('last_owner_ts', ts)
+}
 
 export const messagesFrames = {
   async fetchAttachments(this: Inbound, refs: AttachmentRefT[], threadId?: string, source: AttachmentSource = 'owner') {
@@ -84,6 +93,7 @@ export const messagesFrames = {
     if (f.intent === 'run') return this.onRun(it, f, thread)
     const { files, notes, refMeta } = await this.messageExtras(f)
     const prev = ctx.store.kvGet('last_owner_ts')
+    const replyTo = this.replyContext(f)
     this.record(this.messageRow(it, f))
     await ctx.emit(
       textNotification({
@@ -99,18 +109,32 @@ export const messagesFrames = {
         shareContent: f.share_content,
         extraMeta: refMeta,
         clock: clockMeta(ctx, thread.id, f.ts, f.client_msg_id),
+        ...(replyTo ? { replyTo } : {}),
       }),
     )
-    ctx.store.kvSet('last_owner_ts', f.ts)
+    bumpLastOwnerTs(ctx, f.ts)
     this.afterOwnerNotify(thread.id, f.client_msg_id)
     this.done(it, [f.client_msg_id])
+  },
+
+  /**
+   * Reply: the message replied to travels with the new one, but only a message of this same thread (a reply_to naming another
+   * thread's message must not carry that thread's words into this thread's session). Read before the new row is recorded.
+   */
+  replyContext(this: Inbound, f: Of<'message'>) {
+    if (!f.reply_to) return undefined
+    const q = this.ctx.store.getMessage(f.reply_to)
+    if (!q || q.thread_id !== f.thread_id) return { id: f.reply_to }
+    return { id: f.reply_to, author: q.author, text: q.text ?? q.transcript?.text ?? undefined }
   },
 
   afterOwnerNotify(this: Inbound, threadId: string, messageId: string) {
     // A message the router gave to a thread's own worker is not persisted here (SeenTracker.routerOwns): the router tracks it.
     // One that fell back to this session is, so a main session that dies with it in flight is reported.
     this.ctx.seen.add(threadId, messageId)
-    this.ctx.transport.sendEphemeral(receiptFrame(this.ctx.clock.now(), messageId, 'delivered'))
+    // with the message's undo point, when the relay keeps it (undo/marks.ts)
+    const undo = this.ctx.undoMarks?.delivered(messageId)
+    this.ctx.transport.sendEphemeral(receiptFrame(this.ctx.clock.now(), messageId, 'delivered', undo))
   },
 
   /** Download, transcribe, and produce the content for one voice note (shared by single and backlog paths). */
@@ -192,7 +216,7 @@ export const messagesFrames = {
         clock: clockMeta(ctx, thread.id, f.ts, f.client_msg_id),
       }),
     )
-    ctx.store.kvSet('last_owner_ts', f.ts)
+    bumpLastOwnerTs(ctx, f.ts)
     this.afterOwnerNotify(thread.id, f.client_msg_id)
     this.done(it, [f.client_msg_id])
   },
@@ -210,6 +234,7 @@ export const messagesFrames = {
       const thread = threadRef(ctx, f.thread_id)
       if (f.type === 'message') {
         const { files: fs, notes, refMeta } = await this.messageExtras(f)
+        const replyTo = this.replyContext(f)
         this.record(this.messageRow(it, f))
         if (refMeta?.memory_path)
           notes.push(
@@ -223,6 +248,7 @@ export const messagesFrames = {
             messageId: f.client_msg_id,
             at: f.ts,
             text: f.text,
+            ...(replyTo ? { replyTo } : {}),
             // outside material: wrapped as data exactly as the single-message path does, file names included
             ...(f.share_content && (Object.keys(f.share_content).length > 0 || fs.length > 0)
               ? {
@@ -273,6 +299,11 @@ export const messagesFrames = {
         size += backlogRowBytes(rows[end++]?.entry)
       const part = rows.slice(at, end)
       at = end
+      // a backlog is always main's turn (router.ts gives it to main): its undo point is of main's folder
+      await ctx.undo?.before({
+        messages: part.map((r) => ({ id: r.entry.messageId, thread: r.entry.thread.id })),
+        folder: ctx.undo.mainFolder(),
+      })
       await ctx.emit(
         backlogNotification({
           items: part.map((r) => r.entry),
@@ -283,7 +314,7 @@ export const messagesFrames = {
           clock: { local_time: localTime(new Date(now).toISOString(), ctx.config.config.timezone) },
         }),
       )
-      ctx.store.kvSet('last_owner_ts', part[part.length - 1]?.it.frame.ts ?? new Date(now).toISOString())
+      bumpLastOwnerTs(ctx, part[part.length - 1]?.it.frame.ts ?? new Date(now).toISOString())
       for (const { it } of part) {
         const f = it.frame as Of<'message'> | Of<'voice_note'>
         this.afterOwnerNotify(f.thread_id, f.client_msg_id)

@@ -1,0 +1,262 @@
+{
+  "about": "Test vectors for the launch fingerprint the Linux supervisor (apps/bridge/src/supervisor/launch-approval.ts) and the Windows tray's root `talos-wsl.sh launch-approve` both compute from supervisor.json as written (agent_dir, claude_path, args, env), the Mac's DesktopConfig.launchFingerprint encoding: SHA-256 over each item as <UTF-8 byte count>:<bytes>, in the order dir, agent_dir, claude, claude_path, args, <count>, ...args, env, <2 x count>, ...key, value rows with the keys sorted by their UTF-8 bytes (code point order). Parts: each piece alone, cut to 8 bytes. Lowercase hex. Computed by an independent Python implementation. Each case says whether supervisor.json is approvable under the strict schema both sides hold to (no defaults: agent_dir and claude_path absolute strings, args a list of strings and required, env an object of strings or absent; claude_path must also be its own real path, which these vectors leave to the machine). A case that is not approvable has no fingerprint to compare: neither side ever approves it. session.id and every session.previous_ids entry must be absent, null or a lowercase UUID (they reach Claude Code's argv as --resume=<id>), but are never hashed: a valid session leaves the fingerprint as it is.",
+  "cases": [
+    {
+      "name": "the WSL install's launch",
+      "supervisor": {
+        "agent_dir": "/home/talos/talos-agent",
+        "claude_path": "/home/talos/.local/bin/claude",
+        "args": [
+          "--plugin-dir",
+          "/home/talos/talos-app/plugins/talos-app-mod",
+          "--dangerously-load-development-channels",
+          "server:talos-app"
+        ]
+      },
+      "fingerprint": "2c16465bd30e8f8ddf8c093c0967a9851be722e216650f6d67f9b296f0ecdfe2",
+      "parts": {
+        "folder": "a148cd4385ff8c8e",
+        "program": "7b73e09f7e611974",
+        "flags": "ead87390e553d308",
+        "env": "e3b0c44298fc1c14"
+      },
+      "approvable": true
+    },
+    {
+      "name": "an env, sorted by key",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "env": {
+          "ZED": "1",
+          "ALPHA": "two words"
+        }
+      },
+      "fingerprint": "24adf1bba3527d72d06b914c6d5eddb3a046c596adf954f58d867e2a18c79381",
+      "parts": {
+        "folder": "53d88b52c6196b6a",
+        "program": "8519acda344ef3e0",
+        "flags": "e3b0c44298fc1c14",
+        "env": "65dbe5a4d2425c85"
+      },
+      "approvable": true
+    },
+    {
+      "name": "a value with a colon, a newline and unicode stays one value",
+      "supervisor": {
+        "agent_dir": "/a:b\nc",
+        "claude_path": "/c/ü",
+        "args": [
+          "4:x",
+          "--name=é"
+        ],
+        "env": {
+          "K": "v\n:1"
+        }
+      },
+      "fingerprint": "e9e7309466c10c1b4d874af7b04646f17d85afe0de57d3b6c68d87c2e7180cc7",
+      "parts": {
+        "folder": "cd5d9adf8b7139f3",
+        "program": "c71dfc84c31c044f",
+        "flags": "0fd6e9e77d4fd5f1",
+        "env": "7878d4a9d9701134"
+      },
+      "approvable": true
+    },
+    {
+      "name": "no args and no env",
+      "supervisor": {
+        "agent_dir": "~/agent",
+        "claude_path": "claude",
+        "args": []
+      },
+      "fingerprint": "8db7b2860b854b34b672c62395b3f008d9ab2f439995eed7eac185eb91bf1a6b",
+      "parts": {
+        "folder": "90fb479782a8789d",
+        "program": "f7dc8cdb3dca3f72",
+        "flags": "e3b0c44298fc1c14",
+        "env": "e3b0c44298fc1c14"
+      },
+      "approvable": false
+    },
+    {
+      "name": "env keys in UTF-8 byte order: B, Z, a, é, U+FFFD, then the astral 😀 (UTF-16 order would put it before U+FFFD)",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "env": {
+          "a": "1",
+          "B": "2",
+          "é": "3",
+          "😀": "4",
+          "�": "5",
+          "Z": "6"
+        }
+      },
+      "fingerprint": "055cb87f6a3f5d010d38035824c4b573a310b835e340047e293672ddbb1264e3",
+      "parts": {
+        "folder": "53d88b52c6196b6a",
+        "program": "8519acda344ef3e0",
+        "flags": "e3b0c44298fc1c14",
+        "env": "109bfc9c6b971183"
+      },
+      "approvable": true
+    },
+    {
+      "name": "not approvable: no args (never a default)",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c"
+      },
+      "approvable": false
+    },
+    {
+      "name": "not approvable: env false",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "env": false
+      },
+      "approvable": false
+    },
+    {
+      "name": "not approvable: env an empty string",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "env": ""
+      },
+      "approvable": false
+    },
+    {
+      "name": "not approvable: env a list",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "env": []
+      },
+      "approvable": false
+    },
+    {
+      "name": "not approvable: an env value that is not a string",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "env": {
+          "A": 1
+        }
+      },
+      "approvable": false
+    },
+    {
+      "name": "not approvable: claude_path looked up on PATH",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "claude",
+        "args": []
+      },
+      "approvable": false
+    },
+    {
+      "name": "not approvable: agent_dir with ~",
+      "supervisor": {
+        "agent_dir": "~/agent",
+        "claude_path": "/c",
+        "args": []
+      },
+      "approvable": false
+    },
+    {
+      "name": "approvable: a session with a UUID id leaves the fingerprint unchanged (never hashed)",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "session": {
+          "id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "previous_ids": []
+        }
+      },
+      "approvable": true,
+      "fingerprint": "f07b74a471bc04b741f18fe2f9ffd06c22cbbed93494af6284fd6fcad7828486",
+      "parts": {
+        "folder": "53d88b52c6196b6a",
+        "program": "8519acda344ef3e0",
+        "flags": "e3b0c44298fc1c14",
+        "env": "e3b0c44298fc1c14"
+      }
+    },
+    {
+      "name": "not approvable: session.id is a flag",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "session": {
+          "id": "--dangerously-skip-permissions"
+        }
+      },
+      "approvable": false
+    },
+    {
+      "name": "not approvable: session.previous_ids holds a flag",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "session": {
+          "id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "previous_ids": [
+            "-c"
+          ]
+        }
+      },
+      "approvable": false
+    },
+    {
+      "name": "not approvable: session.id in upper case",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "session": {
+          "id": "AAAAAAAA-1111-4111-8111-AAAAAAAAAAAA"
+        }
+      },
+      "approvable": false
+    },
+    {
+      "name": "not approvable: session.id a UUID with a trailing newline",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "session": {
+          "id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\n"
+        }
+      },
+      "approvable": false
+    },
+    {
+      "name": "not approvable: session.previous_ids holds a UUID with a trailing newline",
+      "supervisor": {
+        "agent_dir": "/a",
+        "claude_path": "/c",
+        "args": [],
+        "session": {
+          "id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "previous_ids": [
+            "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\n"
+          ]
+        }
+      },
+      "approvable": false
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "setting-sources-instructions",
+  "title": "A thread session started with --setting-sources user loads none of its folder's CLAUDE.md or AGENTS.md",
+  "base": "b8301384d6a581211567e9e7692b5ebd37ea69a1",
+  "buggy": "4435b8a8",
+  "fix": "ea6a2d49",
+  "expect": [
+    {
+      "file": [
+        "apps/desktop/Sources/TalosDesktopCore/WorkerSpec.swift",
+        "apps/desktop/Sources/TalosSupervisor/WorkerManager.swift",
+        "apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift",
+        "docs/CLAUDE-CODE.md"
+      ],
+      "severity": "medium",
+      "must": [
+        ["setting[- ]?sources|userSourcesOnly|project source"],
+        ["CLAUDE\\.md|AGENTS\\.md|\\.claude/rules|instruction files?|memory files?"],
+        ["not load|n't (load|get|read|see)|no longer|los[et]|drop|without|none of|never|silently|missing"]
+      ],
+      "note": "--setting-sources user also drops the project and local sources, so Claude Code loads none of the thread folder's CLAUDE.md/AGENTS.md/.claude/rules: the session silently loses its project instructions."
+    }
+  ]
+}

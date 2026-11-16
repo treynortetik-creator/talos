@@ -2,21 +2,33 @@
 // drawer on the right, and the edge swipes that open them. Renders nothing at tablet width and up.
 
 import { ownValue, type ThreadT } from '@talos-app/protocol'
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { Fragment, lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react'
 import { NavLink, useLocation, useSearchParams } from 'react-router'
 import { useTalos } from '../../lib/client.ts'
 import { useThreadStatus } from '../../lib/threadStatus.ts'
 import { useFeature } from '../../lib/v2Client.ts'
 import { cn } from '../../ui/cn.ts'
-import { IconBell, IconBook, IconClock, IconClose, IconMic, IconSettings, IconThreads } from '../../ui/icons.tsx'
+import {
+  IconBell,
+  IconBook,
+  IconBug,
+  IconClock,
+  IconClose,
+  IconMic,
+  IconSettings,
+  IconThreads,
+} from '../../ui/icons.tsx'
 import { Sheet, SheetClose, SheetContent, SheetTitle } from '../../ui/index.ts'
 import { ThreadIcon } from '../../ui/ThreadIcon.tsx'
+import { openBugReport } from '../bugreport/store.ts'
 import { useSchedulesDot } from '../schedules/sync.ts'
 import { useMediaQuery } from '../settings/useMedia.ts'
 import { ThreadEditor } from '../threads/manage/ThreadEditor.tsx'
 import { ThreadManageList } from '../threads/manage/ThreadManageList.tsx'
 import { useNeedsYouCount } from '../threads/Nav.tsx'
 import { StatusWord } from '../threads/StatusPill.tsx'
+import { SUB_TOGGLE_PAD, SubThreadToggle } from '../threads/SubThreadToggle.tsx'
+import { groupSubThreads, rolledUpUnread, useOpenSubThreads } from '../threads/subThreads.ts'
 import { ThreadRowWithSettings } from '../threads/ThreadMoreButton.tsx'
 import { ThreadRowMenu } from '../threads/ThreadRowMenu.tsx'
 import { ThreadSearchResults, ThreadTools, useThreadSearch } from '../threads/ThreadSearch.tsx'
@@ -184,6 +196,8 @@ function MenuBody({ onClose, onEditThread }: { onClose: () => void; onEditThread
   const search = useThreadSearch()
   const [managing, setManaging] = useState(false)
   const inbox = useTalos((s) => s.threads.find((t) => t.id === 'inbox'))
+  const openSubs = useOpenSubThreads()
+  const current = /^\/t\/([^/]+)/.exec(useLocation().pathname)?.[1]
   const needs = useNeedsYouCount()
   const memory = useFeature('memory/1')
   const driving = useFeature('driving/1')
@@ -230,29 +244,56 @@ function MenuBody({ onClose, onEditThread }: { onClose: () => void; onEditThread
               All threads
             </NavLink>
             {!managing &&
-              threads
-                .filter((t) => t.id !== 'inbox')
-                .map((t) => (
+              (() => {
+                const groups = groupSubThreads(threads.filter((t) => t.id !== 'inbox'))
+                const nested = groups.some((g) => g.subs.length > 0)
+                const threadRow = (t: ThreadT, shown: number, sub: boolean, toggle?: ReactNode) => (
                   <ThreadRowWithSettings
                     key={t.id}
                     thread={t}
                     tone="chrome"
+                    controls={toggle}
                     onOpenSettings={onEditThread}
                     wrap={(inner) => <ThreadRowMenu thread={t}>{inner}</ThreadRowMenu>}
                   >
                     <NavLink
                       to={`/t/${t.id}`}
-                      className={(st) => cn(link(st), 'pr-14')}
+                      className={(st) =>
+                        cn(link(st), sub ? 'pr-11' : toggle ? SUB_TOGGLE_PAD : 'pr-14', sub && 'ml-11')
+                      }
                       onClick={onClose}
                       draggable={false}
                     >
                       <ThreadIcon id={t.id} icon={t.icon} color={t.color} size={24} framed />
-                      <span className="truncate">{t.name}</span>
-                      {(ownValue(unread, t.id) ?? 0) > 0 &&
-                        count(ownValue(unread, t.id) ?? 0, `${ownValue(unread, t.id)} unread`)}
+                      <span className="min-w-0 truncate" title={t.name}>
+                        {t.name}
+                      </span>
+                      {shown > 0 && count(shown, `${shown} unread`)}
                     </NavLink>
                   </ThreadRowWithSettings>
-                ))}
+                )
+                return groups.map((g) => {
+                  const hasSubs = g.subs.length > 0
+                  const isOpen = hasSubs && (openSubs.has(g.thread.id) || g.subs.some((x) => x.id === current))
+                  const shown = rolledUpUnread(g, unread, isOpen)
+                  if (!nested) return <Fragment key={g.thread.id}>{threadRow(g.thread, shown, false)}</Fragment>
+                  return (
+                    <div key={g.thread.id}>
+                      {threadRow(
+                        g.thread,
+                        shown,
+                        false,
+                        hasSubs ? <SubThreadToggle parent={g.thread} subs={g.subs} open={isOpen} /> : undefined,
+                      )}
+                      {isOpen && (
+                        <div id={`subthreads-${g.thread.id}`}>
+                          {g.subs.map((x) => threadRow(x, ownValue(unread, x.id) ?? 0, true))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              })()}
             {(() => {
               const row = (
                 <NavLink to="/t/inbox" className={(st) => cn(link(st), inbox && 'pr-14')} onClick={onClose}>
@@ -302,7 +343,30 @@ function MenuBody({ onClose, onEditThread }: { onClose: () => void; onEditThread
           <IconSettings width={20} height={20} />
           Settings
         </NavLink>
+        <button
+          type="button"
+          data-testid="menu-report-bug"
+          className={cn(link({ isActive: false }), 'w-full text-left')}
+          onClick={() => {
+            onClose()
+            // the picture is of the screen behind the menu: wait until the menu has gone before taking it
+            void whenGone('[data-testid="phone-menu"]').then(openBugReport)
+          }}
+        >
+          <IconBug width={20} height={20} />
+          Report a bug
+        </button>
       </div>
     </div>
   )
+}
+
+/** Resolves once nothing matches `selector` (a sheet that has finished closing), or after a second at most. */
+function whenGone(selector: string): Promise<void> {
+  const end = performance.now() + 1000
+  return new Promise((done) => {
+    const look = () =>
+      !document.querySelector(selector) || performance.now() > end ? done() : requestAnimationFrame(look)
+    requestAnimationFrame(look)
+  })
 }

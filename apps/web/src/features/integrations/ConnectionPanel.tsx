@@ -5,6 +5,8 @@ import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { Badge, Button, Dialog, DialogContent, DialogDescription, DialogTitle, Input } from '../../ui/index.ts'
 import { copyText, relativeTime, useNow } from '../cards/util.ts'
 import { type Conn, type Spec, statusWord, useDeliveries } from './data.ts'
+import { filterLabel, IDENTITY_LINE, identityOf } from './slackBot.ts'
+import { withAgent } from './template.tsx'
 
 // Apps Script modules (claim) and provisioned ones (Linear, Calendly): a new secret cannot reach the pasted script or
 // the vendor's webhook yet, so Rotate would silently break them. Re-claim support is a follow-up.
@@ -28,6 +30,7 @@ export function ConnectionPanel({
   const [nameText, setNameText] = useState<string | null>(null)
   const now = useNow(30_000)
   const timeZone = useTalos((s) => s.config?.timezone ?? 'UTC')
+  const agentName = useTalos((s) => s.config?.agent.name ?? 'Talos')
   const [showFilters, setShowFilters] = useState(false)
   const [filters, setFilters] = useState<Record<string, boolean>>(() => ({
     ...Object.fromEntries((spec?.filters ?? []).map((f) => [f.key, f.default])),
@@ -54,6 +57,12 @@ export function ConnectionPanel({
     <section aria-label={`${name} connection`} className="space-y-3">
       <p className="text-text" data-testid="conn-status">
         <strong>{name}</strong> ·{' '}
+        {identityOf(conn) ? (
+          <>
+            <span data-testid="conn-identity">{IDENTITY_LINE[identityOf(conn) ?? 'owner']}</span>
+            {' · '}
+          </>
+        ) : null}
         <Badge tone={conn.status === 'active' ? 'ok' : 'warn'}>{statusWord(conn.status)}</Badge>
         {' · '}
         {conn.last_event_at ? `Last event ${relativeTime(conn.last_event_at, now)} ago` : 'No events yet'}
@@ -166,7 +175,9 @@ export function ConnectionPanel({
 
       {showFilters ? (
         <fieldset className="space-y-1 rounded-card border border-line p-3">
-          <legend className="px-1 text-sm text-text-2">What reaches you</legend>
+          <legend className="px-1 text-sm text-text-2">
+            {identityOf(conn) === 'bot' ? 'What reaches the agent' : 'What reaches you'}
+          </legend>
           {(spec?.filters ?? []).length === 0 ? <p className="text-sm text-text-2">No filters for this app.</p> : null}
           {(spec?.filters ?? []).map((f) => (
             <label key={f.key} className="flex min-h-11 items-center gap-2 text-text">
@@ -176,7 +187,7 @@ export function ConnectionPanel({
                 checked={filters[f.key] ?? f.default}
                 onChange={(e) => setFilters((cur) => ({ ...cur, [f.key]: e.target.checked }))}
               />
-              {f.label}
+              {withAgent(filterLabel(f.key, f.label, identityOf(conn)), agentName)}
             </label>
           ))}
           <Button onClick={() => act(async () => onChange(await client.api.connections.patch(conn.id, { filters })))}>

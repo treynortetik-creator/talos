@@ -1,0 +1,2181 @@
+{
+  "about": "Read by both key guards' tests: the Linux supervisor's (apps/bridge/test/supervisor/usage-limit.test.ts) and the Mac's (Tests/TalosDesktopCoreTests/KeyGuardTests.swift). captures: every real capture under Fixtures/real-*, and the intents a key may be sent with on it (each side checks the ones it has: Linux has theme and security_notes, the Mac has computer_use). usage_limit: the synthetic usage-limit screens, each with the model and the reset both readers must give. not_usage_limit: screens neither may read as it. Reviewed by hand, 2026-11-13. Every pattern is a whole-string match (Swift wholeMatch, TypeScript ^…$), digits written [0-9] (never \\d, which is Unicode in ICU).",
+  "captures": {
+    "real-2.1.318/after-esc.txt": ["box-empty"],
+    "real-2.1.318/askuser-select-6s.txt": [],
+    "real-2.1.318/askuser-select.txt": [],
+    "real-2.1.318/bash-permission-6s.txt": [],
+    "real-2.1.318/bash-permission-cursor2.txt": [],
+    "real-2.1.318/bash-permission.txt": [],
+    "real-2.1.318/bypass-disclaimer.txt": [],
+    "real-2.1.318/draft-input.txt": [],
+    "real-2.1.318/empty-input.txt": ["box-empty"],
+    "real-2.1.318/idle-input-auto.txt": [],
+    "real-2.1.318/idle-input-manual.txt": [],
+    "real-2.1.318/input-e-cleared.txt": ["box-empty"],
+    "real-2.1.318/input-e-draft-looks-like-placeholder.txt": [],
+    "real-2.1.318/input-e-idle-placeholder.txt": ["box-empty"],
+    "real-2.1.318/input-e-real-draft.txt": [],
+    "real-2.1.318/input-e-theme-auto-draft.txt": [],
+    "real-2.1.318/input-e-theme-auto-placeholder.txt": ["box-empty"],
+    "real-2.1.318/input-e-theme-dark-ansi-draft.txt": [],
+    "real-2.1.318/input-e-theme-dark-ansi-placeholder.txt": ["box-empty"],
+    "real-2.1.318/input-e-theme-dark-cb-draft.txt": [],
+    "real-2.1.318/input-e-theme-dark-cb-placeholder.txt": ["box-empty"],
+    "real-2.1.318/input-e-theme-light-ansi-draft.txt": [],
+    "real-2.1.318/input-e-theme-light-ansi-placeholder.txt": ["box-empty"],
+    "real-2.1.318/input-e-theme-light-cb-draft.txt": [],
+    "real-2.1.318/input-e-theme-light-cb-placeholder.txt": ["box-empty"],
+    "real-2.1.318/input-e-theme-light-draft.txt": [],
+    "real-2.1.318/input-e-theme-light-placeholder.txt": ["box-empty"],
+    "real-2.1.318/login-not-logged-in.txt": ["box-empty"],
+    "real-2.1.318/mcp-consent.txt": ["mcp_consent"],
+    "real-2.1.318/onboarding-security-notes.txt": ["security_notes"],
+    "real-2.1.318/onboarding-theme.txt": ["theme"],
+    "real-2.1.318/perm-ask-rule-bypass.txt": [],
+    "real-2.1.318/perm-askuserquestion.txt": [],
+    "real-2.1.318/perm-background-bash-ask.txt": [],
+    "real-2.1.318/perm-dangerous-rm-bypass.txt": [],
+    "real-2.1.318/perm-dangerous-rm-t0.txt": [],
+    "real-2.1.318/perm-dangerous-rm-t1.txt": [],
+    "real-2.1.318/perm-dangerous-rm-t2.txt": [],
+    "real-2.1.318/perm-dangerous-rm-t3.txt": [],
+    "real-2.1.318/perm-hook-ask.txt": [],
+    "real-2.1.318/perm-subagent-ask.txt": [],
+    "real-2.1.318/reply-quotes-prompt.txt": ["box-empty"],
+    "real-2.1.318/trust-dialog-tcap.txt": ["trust"],
+    "real-2.1.318/trust-dialog.txt": ["trust"],
+    "real-2.1.318/turn-done.txt": ["box-empty"],
+    "real-2.1.318/write-permission-6s.txt": [],
+    "real-2.1.318/write-permission.txt": [],
+    "real-2.1.319/needs-you-capture/01-trust-first.txt": ["trust"],
+    "real-2.1.319/needs-you-capture/02-trust-down.txt": ["trust"],
+    "real-2.1.319/needs-you-capture/03-trust-down2.txt": ["trust"],
+    "real-2.1.319/needs-you-capture/04-trust-up.txt": ["trust"],
+    "real-2.1.319/needs-you-capture/05-trust-first.txt": ["trust"],
+    "real-2.1.319/needs-you-capture/06-trust-after-2.txt": ["trust"],
+    "real-2.1.319/needs-you-capture/07-trust-after-2-later.txt": ["trust"],
+    "real-2.1.319/needs-you-capture/08-trust-first.txt": ["trust"],
+    "real-2.1.319/needs-you-capture/09-trust-on-yes.txt": ["trust"],
+    "real-2.1.319/needs-you-capture/10-trust-after-enter.txt": ["box-empty"],
+    "real-2.1.319/needs-you-capture/11-trust-after-enter-later.txt": ["box-empty"],
+    "real-2.1.319/needs-you-capture/12-trust-first.txt": ["trust"],
+    "real-2.1.319/needs-you-capture/13-trust-after-no.txt": [],
+    "real-2.1.319/needs-you-capture/14-trust-after-no-later.txt": [],
+    "real-2.1.319/needs-you-capture/20-mcp-first.txt": ["mcp_consent"],
+    "real-2.1.319/needs-you-capture/21-mcp-up.txt": ["mcp_consent"],
+    "real-2.1.319/needs-you-capture/22-mcp-up2.txt": ["mcp_consent"],
+    "real-2.1.319/needs-you-capture/23-mcp-down.txt": ["mcp_consent"],
+    "real-2.1.319/needs-you-capture/24-mcp-to-top.txt": ["mcp_consent"],
+    "real-2.1.319/needs-you-capture/25-mcp-after-enter.txt": ["box-empty"],
+    "real-2.1.319/needs-you-capture/26-mcp-after-enter-later.txt": ["box-empty"],
+    "real-2.1.319/needs-you-capture/27-mcp-first.txt": ["mcp_consent"],
+    "real-2.1.319/needs-you-capture/28-mcp-after-1.txt": ["mcp_consent"],
+    "real-2.1.319/needs-you-capture/29-mcp-after-1-later.txt": ["mcp_consent"],
+    "real-2.1.319/owed-capture/01-first.txt": ["box-empty"],
+    "real-2.1.319/owed-capture/02-typed-120.txt": ["box-ours"],
+    "real-2.1.319/owed-capture/03-after-burst-120.txt": ["box-empty"],
+    "real-2.1.319/owed-capture/03b-cleared-120.txt": ["box-empty"],
+    "real-2.1.319/owed-capture/04-after-split-120.txt": ["box-empty"],
+    "real-2.1.319/owed-capture/05-typed-30.txt": ["box-ours"],
+    "real-2.1.319/owed-capture/05-typed-40.txt": ["box-ours"],
+    "real-2.1.319/owed-capture/06-after-burst-30.txt": ["box-empty"],
+    "real-2.1.319/owed-capture/06-after-burst-40.txt": ["box-empty"],
+    "real-2.1.319/owed-capture/06b-cleared-30.txt": ["box-empty"],
+    "real-2.1.319/owed-capture/06b-cleared-40.txt": ["box-empty"],
+    "real-2.1.322/computer-use-permissions-6s.txt": ["computer_use"],
+    "real-2.1.322/computer-use-permissions-after-esc.txt": ["box-empty"],
+    "real-2.1.322/computer-use-permissions-e.txt": ["computer_use"],
+    "real-2.1.322/computer-use-permissions.txt": ["computer_use"],
+    "real-2.1.322/idle-after-esc.txt": ["box-empty"],
+    "real-2.1.322/idle-agents-panel.txt": ["box-empty"],
+    "real-2.1.322/perm-subagent-rm-120x40.txt": [],
+    "real-2.1.322/perm-subagent-rm-queued-3.txt": [],
+    "real-2.1.322/perm-subagent-rm-queued-4.txt": [],
+    "real-2.1.322/perm-subagent-rm-two-agents.txt": [],
+    "real-2.1.322/perm-subagent-rm-unchecked-cursor2.txt": [],
+    "real-2.1.322/perm-subagent-rm-unchecked.txt": [],
+    "real-2.1.322/perm-subagent-rm-withheld.txt": [],
+    "real-2.1.323-statusline/thread-30.txt": ["box-empty"],
+    "real-2.1.323-statusline/thread-long-30.txt": ["box-empty"],
+    "real-2.1.323-statusline/thread-long.txt": ["box-empty"],
+    "real-2.1.323-statusline/thread.txt": ["box-empty"],
+    "real-2.1.323-statusline/user-only.txt": [],
+    "real-2.1.325-queued/busy-120.txt": ["box-empty"],
+    "real-2.1.325-queued/busy-30.txt": ["box-empty"],
+    "real-2.1.325-queued/queued-draft-120.txt": [],
+    "real-2.1.325-queued/queued-draft-30.txt": [],
+    "real-2.1.325-queued/queued-one-120.txt": ["box-empty"],
+    "real-2.1.325-queued/queued-one-30.txt": ["box-empty"],
+    "real-2.1.325-queued/queued-one-box-empty-120.txt": ["box-empty"],
+    "real-2.1.325-queued/queued-several-30.txt": ["box-empty"],
+    "real-2.1.325-queued/queued-two-120.txt": ["box-empty"],
+    "real-2.1.325-queued/queued-two-box-empty-120.txt": ["box-empty"],
+    "real-2.1.325-queued/queued-two-box-empty-30.txt": ["box-empty"],
+    "real-2.1.325-status/bg-finished-120.txt": ["box-empty"],
+    "real-2.1.325-status/bg-finished-30.txt": ["box-empty"],
+    "real-2.1.325-status/bg-finished-60.txt": ["box-empty"],
+    "real-2.1.325-status/bg-idle-shell-120.txt": ["box-empty"],
+    "real-2.1.325-status/bg-idle-shell-30.txt": ["box-empty"],
+    "real-2.1.325-status/bg-idle-shell-60.txt": ["box-empty"],
+    "real-2.1.325-status/bg-running-120.txt": ["box-empty"],
+    "real-2.1.325-status/bg-running-30.txt": ["box-empty"],
+    "real-2.1.325-status/bg-running-60.txt": ["box-empty"],
+    "real-2.1.325-status/idle-accept-edits-120.txt": ["box-empty"],
+    "real-2.1.325-status/idle-accept-edits-30.txt": ["box-empty"],
+    "real-2.1.325-status/idle-accept-edits-60.txt": ["box-empty"],
+    "real-2.1.325-status/idle-manual-120.txt": ["box-empty"],
+    "real-2.1.325-status/idle-manual-30.txt": ["box-empty"],
+    "real-2.1.325-status/idle-manual-60.txt": ["box-empty"],
+    "real-2.1.325-status/idle-plan-120.txt": ["box-empty"],
+    "real-2.1.325-status/idle-plan-30.txt": ["box-empty"],
+    "real-2.1.325-status/idle-plan-60.txt": ["box-empty"],
+    "real-2.1.325-status/mcp-failed-120.txt": ["box-empty"],
+    "real-2.1.325-status/mcp-failed-30.txt": ["box-empty"],
+    "real-2.1.325-status/mcp-failed-60.txt": ["box-empty"],
+    "real-2.1.325-status/subagent-busy-120.txt": ["box-empty"],
+    "real-2.1.325-status/subagent-busy-30.txt": ["box-empty"],
+    "real-2.1.325-status/subagent-busy-60.txt": ["box-empty"],
+    "real-2.1.325-status/subagent-done-120.txt": ["box-empty"],
+    "real-2.1.325-status/subagent-done-30.txt": ["box-empty"],
+    "real-2.1.325-status/subagent-done-60.txt": ["box-empty"],
+    "real-2.1.325-status/subagent-later-120.txt": ["box-empty"],
+    "real-2.1.325-status/subagent-later-30.txt": ["box-empty"],
+    "real-2.1.325-status/subagent-later-60.txt": ["box-empty"],
+    "real-2.1.325-status/todo-busy-120.txt": ["box-empty"],
+    "real-2.1.325-status/todo-busy-30.txt": ["box-empty"],
+    "real-2.1.325-status/todo-busy-60.txt": ["box-empty"],
+    "real-dev-channels/dev-channels-capture.txt": ["dev_channels"],
+    "real-first-start-2.1.322/api-key.txt": [],
+    "real-first-start-2.1.322/login-method.txt": [],
+    "real-first-start-2.1.322/mcp-consent.txt": ["mcp_consent"],
+    "real-first-start-2.1.322/not-logged-in.txt": ["box-empty"],
+    "real-first-start-2.1.322/ready-auto-notice.txt": ["box-empty"],
+    "real-first-start-2.1.322/security-notes.txt": ["security_notes"],
+    "real-first-start-2.1.322/theme.txt": ["theme"],
+    "real-first-start-2.1.322/token-refused-401.txt": ["box-empty"],
+    "real-first-start-2.1.322/trust.txt": ["trust"]
+  },
+  "usage_limit": {
+    "usage-limit": {
+      "model": "Fable",
+      "resets": "4pm (Europe/Paris)"
+    },
+    "usage-limit-cursor3": {
+      "model": "Fable",
+      "resets": "4pm (Europe/Paris)"
+    },
+    "usage-limit-session": {
+      "model": null,
+      "resets": "Aug 8, 3:10pm"
+    },
+    "usage-limit-weekly-model": {
+      "model": "Opus 5.5",
+      "resets": null
+    },
+    "usage-limit-add-funds": {
+      "model": "Opus",
+      "resets": "4pm (Europe/Paris)"
+    },
+    "usage-limit-switch-to-usage": {
+      "model": null,
+      "resets": "Dec 1"
+    },
+    "usage-limit-admin": {
+      "model": null,
+      "resets": null
+    },
+    "usage-limit-upgrade-only": {
+      "model": null,
+      "resets": "3:10pm"
+    },
+    "usage-limit-footer-status": {
+      "model": "Fable",
+      "resets": "4pm (Europe/Paris)"
+    },
+    "usage-limit-hint-row": {
+      "model": "Fable",
+      "resets": "4pm (Europe/Paris)"
+    },
+    "usage-limit-narrow": {
+      "model": "Fable",
+      "resets": "4pm"
+    },
+    "usage-limit-fake-frame-status": {
+      "model": "Fable",
+      "resets": "4pm (Europe/Paris)"
+    }
+  },
+  "not_usage_limit": [
+    "usage-limit-quoted",
+    "usage-limit-after-esc",
+    "usage-limit-quoted-user-status",
+    "usage-limit-quoted-old-model-row"
+  ],
+  "status_row_vectors": {
+    "about": "Rows drawn under Claude's empty input box ('⏺ Done.', a rule, '❯ ', a rule, then these rows) and whether the empty-box key goes (box_empty). Positive-shape spec (after Fable R3): only a mode head seen in the captures (manual mode, plan mode, accept edits, auto mode, bypass permissions, each optionally with '(shift+tab to cycle)' or its cut '(shift+tab') or Talos's current row opens parts Talos does not know: each ASCII [a-z0-9 /+.:,-], 1 to 24 characters, not a single word of 4 letters or fewer, not starting with an option number (digits then . or )), no \"y/n\"; at most 2 per row and 1 such row; the old recorder row opens none, and its model must start with Opus, Sonnet, Haiku, Fable or Claude then a space or its end; a row with a control, format or replacement character is refused whole.",
+    "vectors": [
+      {
+        "name": "an unknown part after the manual mode",
+        "rows": ["  ⏸ manual mode on · ctrl+r to search"],
+        "box_empty": true
+      },
+      {
+        "name": "two unknown parts after accept edits",
+        "rows": ["  ⏵⏵ accept edits on · 2 hooks · /context"],
+        "box_empty": true
+      },
+      {
+        "name": "an unknown part after plan mode",
+        "rows": ["  ⏸ plan mode on · something new"],
+        "box_empty": true
+      },
+      {
+        "name": "after Talos's row and Claude's mode",
+        "rows": ["  Talos: Opus 5 | 7d: 12%  ⏸ manual mode on · v2 tip"],
+        "box_empty": true
+      },
+      {
+        "name": "accept edits with a search hint",
+        "rows": ["  ⏵⏵ accept edits on · ctrl+r to search"],
+        "box_empty": true
+      },
+      {
+        "name": "an unknown part between known ones",
+        "rows": ["  ⏸ manual mode on · 1 shell · ctrl+r to search · ↓ to manage"],
+        "box_empty": true
+      },
+      {
+        "name": "an unknown part cut at the edge",
+        "rows": ["  ⏸ manual mode on · ctrl+r to sea…"],
+        "box_empty": false
+      },
+      {
+        "name": "two unknown parts",
+        "rows": ["  ⏸ manual mode on · new thing · other thing"],
+        "box_empty": true
+      },
+      {
+        "name": "one row with unknown parts among Claude's rows",
+        "rows": ["  ⏸ manual mode on · ctrl+r to search", "  ⏺ main"],
+        "box_empty": true
+      },
+      {
+        "name": "a cursor and an option",
+        "rows": ["  ⏸ manual mode on · ❯ 1. Yes"],
+        "box_empty": false
+      },
+      {
+        "name": "a select shaped like a status row",
+        "rows": ["  ❯ 1. Yes · 2. No"],
+        "box_empty": false
+      },
+      {
+        "name": "a dialog footer",
+        "rows": ["  Enter to confirm · Esc to cancel"],
+        "box_empty": false
+      },
+      {
+        "name": "a checkbox",
+        "rows": ["  ⏸ manual mode on · ☐ Buy credits"],
+        "box_empty": false
+      },
+      {
+        "name": "a long unknown part",
+        "rows": ["  ⏸ manual mode on · an unknown part that is far too long"],
+        "box_empty": false
+      },
+      {
+        "name": "a first part Claude does not draw",
+        "rows": ["  custom thing · ? for shortcuts"],
+        "box_empty": false
+      },
+      {
+        "name": "an unknown part without a known first part",
+        "rows": ["  custom · new thing"],
+        "box_empty": false
+      },
+      {
+        "name": "three unknown parts",
+        "rows": ["  ⏸ manual mode on · one · two · three"],
+        "box_empty": false
+      },
+      {
+        "name": "two rows with unknown parts",
+        "rows": ["  ⏸ manual mode on · new thing", "  ⏸ plan mode on · other thing"],
+        "box_empty": false
+      },
+      {
+        "name": "a choice word",
+        "rows": ["  ⏸ manual mode on · Allow once"],
+        "box_empty": false
+      },
+      {
+        "name": "a price",
+        "rows": ["  ⏸ manual mode on · $50 credit"],
+        "box_empty": false
+      },
+      {
+        "name": "an option number with a bracket",
+        "rows": ["  ⏸ manual mode on · 2) Deny"],
+        "box_empty": false
+      },
+      {
+        "name": "an option number inside",
+        "rows": ["  ⏸ manual mode on · see 2. next"],
+        "box_empty": true
+      },
+      {
+        "name": "a question",
+        "rows": ["  ⏸ manual mode on · Proceed?"],
+        "box_empty": false
+      },
+      {
+        "name": "a question mark alone",
+        "rows": ["  ⏸ manual mode on · ok?"],
+        "box_empty": false
+      },
+      {
+        "name": "Cancel",
+        "rows": ["  ⏸ manual mode on · Cancel"],
+        "box_empty": false
+      },
+      {
+        "name": "Always",
+        "rows": ["  ⏸ manual mode on · always on"],
+        "box_empty": true
+      },
+      {
+        "name": "a zero-width space",
+        "rows": ["  ⏸ manual mode on · v2\u200btip"],
+        "box_empty": false
+      },
+      {
+        "name": "a bidi override",
+        "rows": ["  ⏸ manual mode on · abc\u202edef"],
+        "box_empty": false
+      },
+      {
+        "name": "a ticked box",
+        "rows": ["  ⏸ manual mode on · [x] done"],
+        "box_empty": false
+      },
+      {
+        "name": "a radio mark",
+        "rows": ["  ⏸ manual mode on · (x) one"],
+        "box_empty": false
+      },
+      {
+        "name": "a Tab hint",
+        "rows": ["  ⏸ manual mode on · press Tab"],
+        "box_empty": false
+      },
+      {
+        "name": "an arrow",
+        "rows": ["  ⏸ manual mode on · ↑ older"],
+        "box_empty": false
+      },
+      {
+        "name": "a pointer mark",
+        "rows": ["  ⏸ manual mode on · a > b"],
+        "box_empty": false
+      },
+      {
+        "name": "a filled bullet",
+        "rows": ["  ⏸ manual mode on · ● live"],
+        "box_empty": false
+      },
+      {
+        "name": "a background shell count, then Claude's own parts",
+        "rows": ["  ⏸ manual mode on · 1 shell · esc to interrupt · ↓ to manage"],
+        "box_empty": true
+      },
+      {
+        "name": "a known last part cut at the pane's edge",
+        "rows": ["  ⏸ manual mode on · esc to…"],
+        "box_empty": true
+      },
+      {
+        "name": "the todo hint cut at the pane's edge",
+        "rows": ["  ⏸ manual mode on · ctrl+t to hide ta…"],
+        "box_empty": true
+      },
+      {
+        "name": "2.1.325's subagent row at 120 columns",
+        "rows": ["  ◯ general-purpose  Write lighthouse essay  …  3s · ↑ 50 tokens"],
+        "box_empty": true
+      },
+      {
+        "name": "2.1.325's subagent row at 30 columns",
+        "rows": ["  ◯ general-purpose 6s · ↑"],
+        "box_empty": true
+      },
+      {
+        "name": "the todo hint as a known part on a row that is not a mode row (only the exact rule allows it)",
+        "rows": ["  ? for shortcuts · ctrl+t to hide tasks"],
+        "box_empty": true
+      },
+      {
+        "name": "three unknown parts on one row",
+        "rows": ["  ⏸ manual mode on · one new · two new · three new"],
+        "box_empty": false
+      },
+      {
+        "name": "two rows each with an unknown part",
+        "rows": ["  ⏸ manual mode on · one new", "  ⏵⏵ accept edits on · two new"],
+        "box_empty": false
+      },
+      {
+        "name": "a checkbox mark",
+        "rows": ["  ⏸ manual mode on · [x] keep"],
+        "box_empty": false
+      },
+      {
+        "name": "an arrow key",
+        "rows": ["  ⏸ manual mode on · Press ↑ to edit"],
+        "box_empty": false
+      },
+      {
+        "name": "an unknown part on a known row that is not a mode row",
+        "rows": ["  ? for shortcuts · something new"],
+        "box_empty": false
+      },
+      {
+        "name": "a question with no answer word (only the ? rule refuses it)",
+        "rows": ["  ⏸ manual mode on · Ready to go?"],
+        "box_empty": false
+      },
+      {
+        "name": "an option number alone (only the number rule refuses it)",
+        "rows": ["  ⏸ manual mode on · 3. later"],
+        "box_empty": false
+      },
+      {
+        "name": "a replacement character (U+FFFD) in a part",
+        "rows": ["  ⏸ manual mode on · v2�tip"],
+        "box_empty": false
+      },
+      {
+        "name": "an unknown part that reads like a second Talos row",
+        "rows": ["  ⏸ manual mode on · Talos: Opus"],
+        "box_empty": false
+      },
+      {
+        "name": "the word enter: a prompt's key (Pantheon, R4-2)",
+        "rows": ["  ⏸ manual mode on · enter to confirm"],
+        "box_empty": false
+      },
+      {
+        "name": "the word enter at the end (R4-2)",
+        "rows": ["  ⏸ manual mode on · press enter"],
+        "box_empty": false
+      },
+      {
+        "name": "the word enter, a hint's shape (R4-2)",
+        "rows": ["  ⏸ manual mode on · enter to view"],
+        "box_empty": false
+      },
+      {
+        "name": "entering is another word: allowed (R4-2)",
+        "rows": ["  ⏸ manual mode on · entering plan"],
+        "box_empty": true
+      }
+    ]
+  },
+  "status_row_probes": {
+    "about": "Fable's round-3 probes (271): rows drawn under Claude's empty input box, each with the outcome the positive-shape spec gives (box_empty), decided from the spec text, not by either side's code. Both key guards must give exactly these. Every probe left allowed carries `why`: the decision, so a reviewer sees it was meant.",
+    "probes": [
+      {
+        "name": "r3-001",
+        "rows": ["  ⏸ manual mode on · Sí · Non"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-002",
+        "rows": ["  ⏸ manual mode on · Oui · Non"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-003",
+        "rows": ["  ⏸ manual mode on · Ja · Nein"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-004",
+        "rows": ["  ⏸ manual mode on · はい · いいえ"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-005",
+        "rows": ["  ⏸ manual mode on · OK · Skip"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-006",
+        "rows": ["  ⏸ manual mode on · Sure · Later"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-007",
+        "rows": ["  ⏸ manual mode on · Grant · Dismiss"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-008",
+        "rows": ["  ⏸ manual mode on · Trust · Retry"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-009",
+        "rows": ["  ⏸ manual mode on · Install · Skip"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-010",
+        "rows": ["  ⏸ manual mode on · Run · Got it"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-011",
+        "rows": ["  ⏸ manual mode on · y/n"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-012",
+        "rows": ["  ⏸ manual mode on · (y/n)"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-013",
+        "rows": ["  ⏸ manual mode on · (Y)es · (N)o"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-014",
+        "rows": ["  ⏸ manual mode on · y to trust · n to skip"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r3-015",
+        "rows": ["  ⏸ manual mode on · Okay"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-016",
+        "rows": ["  ⏸ manual mode on · Ok, go ahead"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-017",
+        "rows": ["  ⏸ manual mode on · Submit"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-018",
+        "rows": ["  ⏸ manual mode on · Send"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-019",
+        "rows": ["  ⏸ manual mode on · Reply"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-020",
+        "rows": ["  ⏸ manual mode on · Decline"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-021",
+        "rows": ["  ⏸ manual mode on · Refuse"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-022",
+        "rows": ["  ⏸ manual mode on · Block"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-023",
+        "rows": ["  ⏸ manual mode on · Permit"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-024",
+        "rows": ["  ⏸ manual mode on · Agree"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-025",
+        "rows": ["  ⏸ manual mode on · Disagree"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-026",
+        "rows": ["  ⏸ manual mode on · Abort"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-027",
+        "rows": ["  ⏸ manual mode on · Stop"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-028",
+        "rows": ["  ⏸ manual mode on · Quit"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-029",
+        "rows": ["  ⏸ manual mode on · Exit"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-030",
+        "rows": ["  ⏸ manual mode on · Back"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-031",
+        "rows": ["  ⏸ manual mode on · Next"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-032",
+        "rows": ["  ⏸ manual mode on · Done"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-033",
+        "rows": ["  ⏸ manual mode on · Save"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-034",
+        "rows": ["  ⏸ manual mode on · Delete"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-035",
+        "rows": ["  ⏸ manual mode on · Remove"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-036",
+        "rows": ["  ⏸ manual mode on · Purchase"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-037",
+        "rows": ["  ⏸ manual mode on · Upgrade"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-038",
+        "rows": ["  ⏸ manual mode on · Pay"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-039",
+        "rows": ["  ⏸ manual mode on · Switch model"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-040",
+        "rows": ["  ⏸ manual mode on · Add funds"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-041",
+        "rows": ["  ⏸ manual mode on · Wait for reset"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-042",
+        "rows": ["  ⏸ manual mode on · Don't ask again"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-043",
+        "rows": ["  ⏸ manual mode on · Not now"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-044",
+        "rows": ["  ⏸ manual mode on · Maybe later"],
+        "note": "synonyms and non-English answer words (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-045",
+        "rows": ["  ⏸ manual mode on · space to select"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r3-046",
+        "rows": ["  ⏸ manual mode on · return to submit"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r3-047",
+        "rows": ["  ⏸ manual mode on · ⏎ to send"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-048",
+        "rows": ["  ⏸ manual mode on · ↵ grant"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-049",
+        "rows": ["  ⏸ manual mode on · ↵ to select"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-050",
+        "rows": ["  ⏸ manual mode on · ctrl+c to exit"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r3-051",
+        "rows": ["  ⏸ manual mode on · press return"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r3-052",
+        "rows": ["  ⏸ manual mode on · Return"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-053",
+        "rows": ["  ⏸ manual mode on · Space"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-054",
+        "rows": ["  ⏸ manual mode on · Escape"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-055",
+        "rows": ["  ⏸ manual mode on · ESC"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-056",
+        "rows": ["  ⏸ manual mode on · escape to close"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r3-057",
+        "rows": ["  ⏸ manual mode on · Ctrl-C again to exit"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-058",
+        "rows": ["  ⏸ manual mode on · ← to go back"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-059",
+        "rows": ["  ⏸ manual mode on · → to expand"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-060",
+        "rows": ["  ⏸ manual mode on · j/k to move"],
+        "note": "arrow-less footers and key names (R3-5)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r3-061",
+        "rows": ["  ⏸ manual mode on · Ｙｅｓ · Ｎｏ"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-062",
+        "rows": ["  ⏸ manual mode on · Ｅnter"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-063",
+        "rows": ["  ⏸ manual mode on · Yеs"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-064",
+        "rows": ["  ⏸ manual mode on · Уes"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-065",
+        "rows": ["  ⏸ manual mode on · Yés"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-066",
+        "rows": ["  ⏸ manual mode on · Yeś"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-067",
+        "rows": ["  ⏸ manual mode on · Nö"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-068",
+        "rows": ["  ⏸ manual mode on · Ye͏s"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-069",
+        "rows": ["  ⏸ manual mode on · Y︀es"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-070",
+        "rows": ["  ⏸ manual mode on · Yㅤes"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-071",
+        "rows": ["  ⏸ manual mode on · yeſ"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-072",
+        "rows": ["  ⏸ manual mode on · alwayſ"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-073",
+        "rows": ["  ⏸ manual mode on · eſc"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-074",
+        "rows": ["  ⏸ manual mode on · Noé"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-075",
+        "rows": ["  ⏸ manual mode on · éNo"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-076",
+        "rows": ["  ⏸ manual mode on · はいYes"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-077",
+        "rows": ["  ⏸ manual mode on · Yesです"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-078",
+        "rows": ["  ⏸ manual mode on · Enterキー"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-079",
+        "rows": ["  ⏸ manual mode on · 確認Enter"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-080",
+        "rows": ["  ⏸ manual mode on · Yes_"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-081",
+        "rows": ["  ⏸ manual mode on · _No_"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-082",
+        "rows": ["  ⏸ manual mode on · Yes1"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-083",
+        "rows": ["  ⏸ manual mode on · 1Yes"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-084",
+        "rows": ["  ⏸ manual mode on · YES"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-085",
+        "rows": ["  ⏸ manual mode on · yEs"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-086",
+        "rows": ["  ⏸ manual mode on · N0"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-087",
+        "rows": ["  ⏸ manual mode on · Ⅹ"],
+        "note": "lookalikes, fullwidth, homoglyphs, combining marks, word boundaries (R3-2, R3-3, R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-088",
+        "rows": ["  ⏸ manual mode on · ✓ Trust"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-089",
+        "rows": ["  ⏸ manual mode on · ✔ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-090",
+        "rows": ["  ⏸ manual mode on · ✗ Skip"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-091",
+        "rows": ["  ⏸ manual mode on · ✘ Skip"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-092",
+        "rows": ["  ⏸ manual mode on · → Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-093",
+        "rows": ["  ⏸ manual mode on · ▶ Run"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-094",
+        "rows": ["  ⏸ manual mode on · ► Grant"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-095",
+        "rows": ["  ⏸ manual mode on · ⮕ Go"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-096",
+        "rows": ["  ⏸ manual mode on · ▸ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-097",
+        "rows": ["  ⏸ manual mode on · ➤ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-098",
+        "rows": ["  ⏸ manual mode on · ➜ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-099",
+        "rows": ["  ⏸ manual mode on · » Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-100",
+        "rows": ["  ⏸ manual mode on · ＞ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-101",
+        "rows": ["  ⏸ manual mode on · ❱ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-102",
+        "rows": ["  ⏸ manual mode on · ⟩ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-103",
+        "rows": ["  ⏸ manual mode on · ‣ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-104",
+        "rows": ["  ⏸ manual mode on · ▷ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-105",
+        "rows": ["  ⏸ manual mode on · • Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-106",
+        "rows": ["  ⏸ manual mode on · ◦ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-107",
+        "rows": ["  ⏸ manual mode on · ◆ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-108",
+        "rows": ["  ⏸ manual mode on · ◇ Skip"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-109",
+        "rows": ["  ⏸ manual mode on · ◎ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-110",
+        "rows": ["  ⏸ manual mode on · ⦿ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-111",
+        "rows": ["  ⏸ manual mode on · ⊙ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-112",
+        "rows": ["  ⏸ manual mode on · □ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-113",
+        "rows": ["  ⏸ manual mode on · ■ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-114",
+        "rows": ["  ⏸ manual mode on · ▢ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-115",
+        "rows": ["  ⏸ manual mode on · ☒ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-116",
+        "rows": ["  ⏸ manual mode on · ✅ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-117",
+        "rows": ["  ⏸ manual mode on · 🔘 Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-118",
+        "rows": ["  ⏸ manual mode on · ⚪ Skip"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-119",
+        "rows": ["  ⏸ manual mode on · ⬤ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-120",
+        "rows": ["  ⏸ manual mode on · * Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-121",
+        "rows": ["  ⏸ manual mode on · - Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-122",
+        "rows": ["  ⏸ manual mode on · + Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-123",
+        "rows": ["  ⏸ manual mode on · ~ Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-124",
+        "rows": ["  ⏸ manual mode on · | Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-125",
+        "rows": ["  ⏸ manual mode on · · Sure"],
+        "note": "cursor and bullet lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-126",
+        "rows": ["  ⏸ manual mode on · ？"],
+        "note": "question and money lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-127",
+        "rows": ["  ⏸ manual mode on · Go？"],
+        "note": "question and money lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-128",
+        "rows": ["  ⏸ manual mode on · ¿Go"],
+        "note": "question and money lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-129",
+        "rows": ["  ⏸ manual mode on · Go⁇"],
+        "note": "question and money lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-130",
+        "rows": ["  ⏸ manual mode on · ＄50"],
+        "note": "question and money lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-131",
+        "rows": ["  ⏸ manual mode on · €50 credit"],
+        "note": "question and money lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-132",
+        "rows": ["  ⏸ manual mode on · £50"],
+        "note": "question and money lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-133",
+        "rows": ["  ⏸ manual mode on · 50 USD"],
+        "note": "question and money lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-134",
+        "rows": ["  ⏸ manual mode on · USD 50"],
+        "note": "question and money lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-135",
+        "rows": ["  ⏸ manual mode on · US＄50"],
+        "note": "question and money lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-136",
+        "rows": ["  ⏸ manual mode on · ¥500"],
+        "note": "question and money lookalikes (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-137",
+        "rows": ["  ⏸ manual mode on · １. Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-138",
+        "rows": ["  ⏸ manual mode on · ① Sure · ② Skip"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-139",
+        "rows": ["  ⏸ manual mode on · ⑴ Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-140",
+        "rows": ["  ⏸ manual mode on · (1) Sure · (2) Skip"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-141",
+        "rows": ["  ⏸ manual mode on · 1 - Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-142",
+        "rows": ["  ⏸ manual mode on · 1: Bad · 0: Dismiss"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-143",
+        "rows": ["  ⏸ manual mode on · 1- Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-144",
+        "rows": ["  ⏸ manual mode on · 1 Sure 2 Skip"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-145",
+        "rows": ["  ⏸ manual mode on · #1 Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-146",
+        "rows": ["  ⏸ manual mode on · a) Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-147",
+        "rows": ["  ⏸ manual mode on · a. Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-148",
+        "rows": ["  ⏸ manual mode on · A) Sure · B) Skip"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-149",
+        "rows": ["  ⏸ manual mode on · i. Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-150",
+        "rows": ["  ⏸ manual mode on · 1.Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-151",
+        "rows": ["  ⏸ manual mode on · x1. Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-152",
+        "rows": ["  ⏸ manual mode on · x 1. Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-153",
+        "rows": ["  ⏸ manual mode on · x\u00a01. Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-154",
+        "rows": ["  ⏸ manual mode on · 1\u00a0. Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-155",
+        "rows": ["  ⏸ manual mode on · 1， Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-156",
+        "rows": ["  ⏸ manual mode on · 1、Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-157",
+        "rows": ["  ⏸ manual mode on · 1] Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-158",
+        "rows": ["  ⏸ manual mode on · 1} Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-159",
+        "rows": ["  ⏸ manual mode on · 1> Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-160",
+        "rows": ["  ⏸ manual mode on · 1/ Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-161",
+        "rows": ["  ⏸ manual mode on · ١. Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-162",
+        "rows": ["  ⏸ manual mode on · 1．Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-163",
+        "rows": ["  ⏸ manual mode on · 1） Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-164",
+        "rows": ["  ⏸ manual mode on · [1"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-165",
+        "rows": ["  ⏸ manual mode on · {1} Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-166",
+        "rows": ["  ⏸ manual mode on · <1 Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-167",
+        "rows": ["  ⏸ manual mode on · F1 Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-168",
+        "rows": ["  ⏸ manual mode on · ⌘1 Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-169",
+        "rows": ["  ⏸ manual mode on · ^1 Sure"],
+        "note": "option numbers (R3-5)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-170",
+        "rows": ["  ⏸ manual mode on · talos: Opus"],
+        "note": "Talos as a later part (R3-2 for the non-ASCII neighbours)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-171",
+        "rows": ["  ⏸ manual mode on · TALOS"],
+        "note": "Talos as a later part (R3-2 for the non-ASCII neighbours)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-172",
+        "rows": ["  ⏸ manual mode on · Tаlos"],
+        "note": "Talos as a later part (R3-2 for the non-ASCII neighbours)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-173",
+        "rows": ["  ⏸ manual mode on · xTalos"],
+        "note": "Talos as a later part (R3-2 for the non-ASCII neighbours)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-174",
+        "rows": ["  ⏸ manual mode on · Talos_fake"],
+        "note": "Talos as a later part (R3-2 for the non-ASCII neighbours)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-175",
+        "rows": ["  ⏸ manual mode on · Talosé"],
+        "note": "Talos as a later part (R3-2 for the non-ASCII neighbours)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-176",
+        "rows": ["  ⏸ manual mode on · Taloś"],
+        "note": "Talos as a later part (R3-2 for the non-ASCII neighbours)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-177",
+        "rows": ["  ⏸ manual mode on · Talos2"],
+        "note": "Talos as a later part (R3-2 for the non-ASCII neighbours)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-178",
+        "rows": ["  ⏸ manual mode on · Talos"],
+        "note": "Talos as a later part (R3-2 for the non-ASCII neighbours)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-179",
+        "rows": ["  ⏸ manual mode on · Talos-x"],
+        "note": "Talos as a later part (R3-2 for the non-ASCII neighbours)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-180",
+        "rows": ["  ⏸ manual mode on · Talos: Opus 5 | 7d: 1%"],
+        "note": "Talos as a later part (R3-2 for the non-ASCII neighbours)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-181",
+        "rows": ["  ⏸ manual mode on · ()"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-182",
+        "rows": ["  ⏸ manual mode on · run()"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-183",
+        "rows": ["  ⏸ manual mode on · (X)"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-184",
+        "rows": ["  ⏸ manual mode on · ( )"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-185",
+        "rows": ["  ⏸ manual mode on · (x )"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-186",
+        "rows": ["  ⏸ manual mode on · ( x)"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-187",
+        "rows": ["  ⏸ manual mode on · (✓)"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-188",
+        "rows": ["  ⏸ manual mode on · (*)"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-189",
+        "rows": ["  ⏸ manual mode on · (•)"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-190",
+        "rows": ["  ⏸ manual mode on · <x>"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-191",
+        "rows": ["  ⏸ manual mode on · {x}"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-192",
+        "rows": ["  ⏸ manual mode on · [ ]"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-193",
+        "rows": ["  ⏸ manual mode on · ⟦x⟧"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-194",
+        "rows": ["  ⏸ manual mode on · ［x］"],
+        "note": "radio and bracket marks (R3-6 for the empty brackets)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-195",
+        "rows": ["  ⏸ manual mode on · aaaaaaaaaaaaaaaaaaaaaaaa"],
+        "note": "length in code points",
+        "box_empty": true,
+        "why": "allowed by design: plain lower-case text of 24 characters, the most an unknown part may be"
+      },
+      {
+        "name": "r3-196",
+        "rows": ["  ⏸ manual mode on · aaaaaaaaaaaaaaaaaaaaaaaaa"],
+        "note": "length in code points",
+        "box_empty": false
+      },
+      {
+        "name": "r3-197",
+        "rows": ["  ⏸ manual mode on · 👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍"],
+        "note": "length in code points",
+        "box_empty": false
+      },
+      {
+        "name": "r3-198",
+        "rows": ["  ⏸ manual mode on · 👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍👍"],
+        "note": "length in code points",
+        "box_empty": false
+      },
+      {
+        "name": "r3-199",
+        "rows": ["  ⏸ manual mode on · éééééééééééé"],
+        "note": "length in code points",
+        "box_empty": false
+      },
+      {
+        "name": "r3-200",
+        "rows": ["  ⏸ manual mode on · ééééééééééééé"],
+        "note": "length in code points",
+        "box_empty": false
+      },
+      {
+        "name": "r3-201",
+        "rows": ["  ⏸ manual mode on · 👨\u200d👩"],
+        "note": "length in code points",
+        "box_empty": false
+      },
+      {
+        "name": "r3-202",
+        "rows": ["  ⏸ manual mode on ·  · b"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-203",
+        "rows": ["  ⏸ manual mode on · a ·  · b"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-204",
+        "rows": ["  ⏸ manual mode on ·  · ? for shortcuts"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-205",
+        "rows": ["  ⏸ manual mode on · x\ty"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-206",
+        "rows": ["  ⏸ manual mode on · x\t\ty"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-207",
+        "rows": ["  ⏸ manual mode on · x\u2028y"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-208",
+        "rows": ["  ⏸ manual mode on · x\u00a0\u00a0y"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-209",
+        "rows": ["  ⏸ manual mode on · x\u3000\u3000y"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-210",
+        "rows": ["  ⏸ manual mode on · x \u00a0y"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-211",
+        "rows": ["  ⏸ manual mode on · xy"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-212",
+        "rows": ["  ⏸ manual mode on · x\u180ey"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-213",
+        "rows": ["  ⏸ manual mode on · xy"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-214",
+        "rows": ["  ⏸ manual mode on · x1y"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-215",
+        "rows": ["  ⏸ manual mode on · x️y"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-216",
+        "rows": ["  ⏸ manual mode on · x⠀y"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-217",
+        "rows": ["  ⏸ manual mode on · x\u00ady"],
+        "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-218",
+        "rows": ["  ⏸ do you want to run rm on · Sure · Skip"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-219",
+        "rows": ["  ⏸ press return to approve on"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-220",
+        "rows": ["  ⏸ manual mode on"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": true,
+        "why": "Claude's own mode head alone"
+      },
+      {
+        "name": "r3-221",
+        "rows": ["  ⏸ Manual mode on · x"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-222",
+        "rows": ["  ⏸  manual mode on · x"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-223",
+        "rows": ["  ⏸ manual mode on (shift+tab · x"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-224",
+        "rows": ["  ⏵⏵ a on · Sure"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-225",
+        "rows": ["  ⏵ auto mode on · x"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-226",
+        "rows": ["  Do you want to run rm | 7d: 5%  Sure  Skip"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-227",
+        "rows": ["  Approve (y) or deny (n) | 7d: 0%"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-228",
+        "rows": ["  Proceed | 7d: 0% · Sure"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-229",
+        "rows": ["  Talos | 7d: 5% · x"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-230",
+        "rows": ["  Talos: Yes | 7d: 5% · Sure · Skip"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-231",
+        "rows": ["  Talos: 1. Yes"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": true,
+        "why": "allowed by design: Talos's own recorder row (its model, at most 8 characters of [A-Za-z0-9 .()+-], may read like this)"
+      },
+      {
+        "name": "r3-232",
+        "rows": ["  Talos: (y)es"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-233",
+        "rows": ["  Talos: Opus 5  Sure  Skip"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-234",
+        "rows": ["  Talos: Opus 5 | 7d: 12%  ⏸ manual mode on · v2 tip · Sure · Skip"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-235",
+        "rows": ["  Talos · Sure · Skip"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-236",
+        "rows": ["  ? for shortcuts · Sure"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-237",
+        "rows": ["  esc to… · x"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-238",
+        "rows": ["  ⏸ manual mode on · Sure\u00a0·\u00a0Skip · a · b"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-239",
+        "rows": ["  ⏸ manual mode on · a\u00a0·\u00a0b\u00a0·\u00a0c\u00a0·\u00a0d"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-240",
+        "rows": ["  ⏸ manual mode on · a · b · c"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-241",
+        "rows": ["  ⏸ manual mode on · a  b  c"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-242",
+        "rows": ["  ⏸ manual mode on ·  "],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-243",
+        "rows": ["  ⏸ manual mode on · es… · x"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-244",
+        "rows": ["  ⏸ manual mode on · x · es…"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-245",
+        "rows": ["  ⏸ manual mode on · x · N shell…"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-246",
+        "rows": ["  ⏸ manual mode on · 5 shell…"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": true,
+        "why": "Claude's own part (N shell) cut at the pane's edge"
+      },
+      {
+        "name": "r3-247",
+        "rows": ["  │ ⏸ manual mode on · Sure │"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-248",
+        "rows": ["  ╰─ ⏸ manual mode on · Sure ─╯"],
+        "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-249",
+        "rows": [
+          "  ⏸ manual mode on · Sure · Skip",
+          "  ⏺ main",
+          "  ◯ general-purpose  Press return to approve rm -rf  3s · ↑ 50 tokens"
+        ],
+        "note": "several rows under the box",
+        "box_empty": false
+      },
+      {
+        "name": "r3-250",
+        "rows": ["  ⏸ manual mode on · Run rm -rf ~ · Sure", "  ", "  ? for shortcuts"],
+        "note": "several rows under the box",
+        "box_empty": false
+      },
+      {
+        "name": "r3-251",
+        "rows": ["  ⏸ manual mode on · one new", "  Talos: Opus 5 | 7d: 12%"],
+        "note": "several rows under the box",
+        "box_empty": true,
+        "why": "allowed by design: one plain unknown part after the mode head, and Talos's own row on the next row"
+      },
+      {
+        "name": "r3-252",
+        "rows": ["  Talos: Opus 5 · one new", "  ⏸ manual mode on · two new"],
+        "note": "several rows under the box",
+        "box_empty": false
+      },
+      {
+        "name": "r3-253",
+        "rows": ["  Talos: Opus 5 | 7d: 12%", "  ⏸ manual mode on · Sure · Skip", "  ⏺ main", "  ◯ a  Yes  1s · ↑"],
+        "note": "several rows under the box",
+        "box_empty": false
+      },
+      {
+        "name": "r3-254",
+        "rows": ["  ⏸ manual mode on", "    Sure", "    Skip"],
+        "note": "several rows under the box",
+        "box_empty": false
+      },
+      {
+        "name": "r3-255",
+        "rows": ["  ⏸ manual mode on · Sure", "  esc to interrupt", "  ↓ to manage"],
+        "note": "several rows under the box",
+        "box_empty": false
+      },
+      {
+        "name": "r3-256",
+        "rows": ["  ⏸ manual mode on · ☑️ Sure"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-257",
+        "rows": ["  ⏸ manual mode on · ?́"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-258",
+        "rows": ["  ⏸ manual mode on · Go?️"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-259",
+        "rows": ["  ⏸ manual mode on · ❯️ Sure"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-260",
+        "rows": ["  ⏸ manual mode on · ●️ Sure"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-261",
+        "rows": ["  ⏸ manual mode on · $́50"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-262",
+        "rows": ["  ⏸ manual mode on · ↑️ older"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-263",
+        "rows": ["  ⏸ manual mode on · [́x]"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-264",
+        "rows": ["  ⏸ manual mode on · (x)́"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-265",
+        "rows": ["  ⏸ manual mode on · ◉️ a"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-266",
+        "rows": ["  ⏸ manual mode on · 1.́ a"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-267",
+        "rows": ["  ⏸ manual mode on · 1️⃣ Sure"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-268",
+        "rows": ["  ⏸ manual mode on · a\u2028\u2028b"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-269",
+        "rows": ["  ⏸ manual mode on · a\u20281. b"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-270",
+        "rows": ["  ⏸ manual mode on · a\u1680\u1680b"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r3-271",
+        "rows": ["  ⏸ manual mode on · a\u001fb"],
+        "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
+        "box_empty": false
+      },
+      {
+        "name": "r4-001",
+        "rows": ["  ⏸ manual mode on · yes/no"],
+        "note": "answer-like but hint-shaped (Fable R4-2, Pantheon)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r4-002",
+        "rows": ["  ⏸ manual mode on · y or n"],
+        "note": "answer-like but hint-shaped (Fable R4-2, Pantheon)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r4-003",
+        "rows": ["  ⏸ manual mode on · allow once"],
+        "note": "answer-like but hint-shaped (Fable R4-2, Pantheon)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r4-004",
+        "rows": ["  ⏸ manual mode on · always allow"],
+        "note": "answer-like but hint-shaped (Fable R4-2, Pantheon)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r4-005",
+        "rows": ["  ⏸ manual mode on · 1: yes"],
+        "note": "answer-like but hint-shaped (Fable R4-2, Pantheon)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r4-006",
+        "rows": ["  ⏸ manual mode on · 1 yes 2 no"],
+        "note": "answer-like but hint-shaped (Fable R4-2, Pantheon)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      },
+      {
+        "name": "r4-007",
+        "rows": ["  ⏸ manual mode on · tab to amend"],
+        "note": "answer-like but hint-shaped (Fable R4-2, Pantheon)",
+        "box_empty": true,
+        "why": "allowed by design: hint-shaped"
+      }
+    ]
+  }
+}

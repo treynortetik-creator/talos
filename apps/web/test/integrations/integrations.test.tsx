@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ConnectionDetail, IntegrationsScreen, IntegrationWizard } from '../../src/features/integrations/index.tsx'
 import { fillTemplate, safeUrl } from '../../src/features/integrations/template.tsx'
 import { TEST_WAIT_MS } from '../../src/features/integrations/Wizard.tsx'
+import { NOT_CONNECTED_LINE } from '../../src/features/settings/offline.ts'
 import { setPlatform, webPlatform } from '../../src/lib/platform.ts'
 import { makeItem, renderWith, setup } from '../cards/helpers.tsx'
 
@@ -81,23 +82,22 @@ describe('integrations list and work gate', () => {
     expect(within(work).getAllByText('Check with IT.').length).toBeGreaterThan(0)
   })
 
-  it('enabling a work integration needs step-up and sends a config.patch touching work.enabled', async () => {
+  it('enabling a work integration sends a signed config.patch touching work.enabled, with no passkey', async () => {
     const client = setup()
-    const stepup = vi.spyOn(client, 'stepup')
     renderWith(<IntegrationsScreen />, client)
     await userEvent.click(await screen.findByRole('button', { name: /Slack/ }))
     const dialog = await screen.findByRole('dialog')
     expect(dialog.textContent).toMatch(/pass through your relay/)
     expect(dialog.textContent).toMatch(/Passthrough/)
     expect(client.sent).toHaveLength(0)
-    await userEvent.click(within(dialog).getByRole('button', { name: "Confirm it's you" }))
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Turn on' }))
     await waitFor(() => expect(client.store.getState().config?.work.enabled).toContain('slack'))
-    expect(stepup).toHaveBeenCalledWith('config:work')
     const frame = client.sent.at(-1) as Record<string, unknown>
     expect(frame.type).toBe('config.patch')
     expect(frame.patch).toEqual({ work: { enabled: ['slack'] } })
     expect(frame.base_rev).toBe(client.store.getState().config ? (client.store.getState().config?.rev ?? 0) - 1 : -1)
-    expect(checkConfigPatch(frame.patch)).toEqual({ ok: true, touchesWorkEnabled: true })
+    expect(frame).not.toHaveProperty('stepup_token')
+    expect(checkConfigPatch(frame.patch).ok).toBe(true)
     expect(await verifyOwnerFrame(frame, await client.publicJwk())).toBe(true)
     // the tile is unlocked now
     await waitFor(() =>
@@ -105,14 +105,12 @@ describe('integrations list and work gate', () => {
     )
   })
 
-  it('a refused step-up changes nothing', async () => {
+  it('a refused change changes nothing', async () => {
     const client = setup()
-    client.stepup = async () => {
-      throw new Error('cancelled')
-    }
+    client.failNextPatchWith('internal')
     renderWith(<IntegrationsScreen />, client)
     await userEvent.click(await screen.findByRole('button', { name: /Slack/ }))
-    await userEvent.click(await screen.findByRole('button', { name: "Confirm it's you" }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Turn on' }))
     expect((await screen.findByRole('alert')).textContent).toMatch(/Nothing was changed/)
     expect(client.sent).toHaveLength(0)
     expect(client.store.getState().config?.work.enabled).toEqual([])
@@ -125,24 +123,35 @@ describe('integrations list and work gate', () => {
     expect((await screen.findByRole('button', { name: 'Mac is offline' })).hasAttribute('disabled')).toBe(true)
   })
 
+  it('with this device not connected the confirm button is disabled and says so, never that the Mac is offline', async () => {
+    const client = setup() // the Mac was last heard online: not current while this device reconnects
+    client.store.setState({ connection: 'offline' } as never)
+    renderWith(<IntegrationsScreen />, client)
+    await userEvent.click(await screen.findByRole('button', { name: /Slack/ }))
+    const dialog = await screen.findByRole('dialog')
+    const confirm = within(dialog).getByRole('button', { name: 'Turn on' })
+    expect(confirm.hasAttribute('disabled')).toBe(true)
+    expect(dialog.textContent).toContain(NOT_CONNECTED_LINE)
+    expect(dialog.textContent).not.toMatch(/Mac is offline/)
+  })
+
   it('a work system that is on can be turned off from its tile (the dialog had no way in before, U3)', async () => {
     const client = setup()
     client.store.setState((s) =>
       s.config ? { ...s, config: { ...s.config, work: { ...s.config.work, enabled: ['slack'] } } } : s,
     )
-    const stepup = vi.spyOn(client, 'stepup')
     renderWith(<IntegrationsScreen />, client)
     await userEvent.click(await screen.findByRole('button', { name: 'Turn off Slack' }))
     const dialog = await screen.findByRole('dialog')
     expect(dialog.textContent).toMatch(/Turn off Slack\?/)
     await userEvent.click(within(dialog).getByRole('button', { name: 'Turn off' }))
     await waitFor(() => expect(client.store.getState().config?.work.enabled).toEqual([]))
-    expect(stepup).toHaveBeenCalledWith('config:work')
+    expect(dialog.textContent).not.toMatch(/confirm it's you/i)
     expect(document.querySelector('[data-tile="slack"]')?.getAttribute('data-locked')).toBe('true')
     expect(screen.queryByRole('button', { name: 'Turn off Slack' })).toBeNull()
   })
 
-  it('turning a work integration off also goes through step-up', async () => {
+  it('turning a work integration off sends the list without it', async () => {
     const client = setup()
     client.store.setState((s) =>
       s.config ? { ...s, config: { ...s.config, work: { ...s.config.work, enabled: ['slack'] } } } : s,

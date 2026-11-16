@@ -6,7 +6,7 @@ import { useTalos } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import { Mascot } from '../../ui/Mascot.tsx'
 import { useNow } from '../cards/util.ts'
-import { formatTime, type RowStatus, rowStatus, type Tone, whenLabel, zoneSuffix } from './logic.ts'
+import { type RowStatus, rowStatus, type Tone, timeOnDay, whenLabel, zoneSuffix } from './logic.ts'
 
 export const TONE: Record<Tone, string> = {
   ok: 'text-ok',
@@ -32,7 +32,8 @@ export function useSchedTime(health: SchedulerHealthT | null) {
     tz,
     macOnline,
     ownerTz,
-    time: (iso: string) => `${formatTime(iso, tz)}${zoneSuffix(iso, tz, ownerTz)}`,
+    // a past time names its day when it is not today (the offline banner over a weeks-old list, a run's time)
+    time: (iso: string) => `${timeOnDay(iso, now, tz)}${zoneSuffix(iso, tz, ownerTz)}`,
     when: (iso: string) => `${whenLabel(iso, now, tz)}${zoneSuffix(iso, tz, ownerTz)}`,
     status: (s: ScheduleT): RowStatus => rowStatus(s, { nowMs: now, tz, macOnline, ownerTz }),
   }

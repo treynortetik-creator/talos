@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef, useState } from 'react'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { useConnectionMeta } from '../../lib/connectionMeta.ts'
 import { clockTime, formatDuration } from '../../lib/format.ts'
+import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { getPlatform } from '../../lib/platform.ts'
 import type { SocketClient } from '../../lib/socketClient.ts'
 import { cn } from '../../ui/cn.ts'
@@ -11,6 +12,7 @@ import { IconCheck, IconChecks, IconClock, IconCopy, IconMic } from '../../ui/ic
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '../../ui/index.ts'
 import { Mascot } from '../../ui/Mascot.tsx'
 import { useComposerStore } from '../composer/composerStore.ts'
+import { PageCard } from '../pages/PageCard.tsx'
 import { AppEchoRow, AppViewCard, CardView, EventRow } from '../registry.ts'
 import { SharedContentBox } from '../share/SharedContentBox.tsx'
 import { AttachmentView } from './Attachments.tsx'
@@ -18,6 +20,7 @@ import { Markdown } from './Markdown.tsx'
 import { REVEAL } from './messageRow.ts'
 import { runContextOf } from './runBlock.ts'
 import { SpeakButton } from './SpeakButton.tsx'
+import { UndoToHere } from './UndoToHere.tsx'
 import { useAgentName } from './useThreads.ts'
 
 /** Delete and Edit for a message that did not go: Edit takes it back into the box (text and files), Delete drops it. */
@@ -84,6 +87,7 @@ function FailedActions({ m }: { m: MessageT }) {
 
 /** What a not-yet-confirmed owner message says about itself (visible text, not only an icon). */
 function SendState({ m }: { m: MessageT }) {
+  const host = useHost()
   const client = useTalosClient()
   const failed = useConnectionMeta((s) => s.failed[m.id])
   const queued = useConnectionMeta((s) => s.queuedIds.includes(m.id))
@@ -128,7 +132,7 @@ function SendState({ m }: { m: MessageT }) {
   if (queued && waitingForPin) {
     return (
       <p role="status" data-testid="send-held" className="m-0 text-sm text-text-2">
-        Waiting for your Mac to confirm this device
+        {placeWords('Waiting for your Mac to confirm this device', host)}
       </p>
     )
   }
@@ -250,7 +254,7 @@ const PRESS_MS = 500
 const LIFT_GRACE_MS = 600
 
 /**
- * Copy, Share and Reply for one message. The "..." button sits in the row under the message (`MessageMenuButton`), and the
+ * Copy, Share and Reply for one message, and "Undo to here" on the owner's own (UndoToHere.tsx). The "..." button sits in the row under the message (`MessageMenuButton`), and the
  * same menu opens on a long press or right-click. Only for rows with text. The menu is anchored to the row itself.
  */
 function MessageActions({ m, owner, children }: { m: MessageT; owner: boolean; children: React.ReactNode }) {
@@ -348,6 +352,7 @@ function MessageActions({ m, owner, children }: { m: MessageT; owner: boolean; c
         </div>
       </PopoverAnchor>
       <PopoverContent
+        aria-label="Message actions"
         className="flex w-44 flex-col gap-1 p-1"
         align={owner ? 'end' : 'start'}
         // The finger that opened the menu is still down, or has only just lifted: the focus and click events the browser
@@ -399,6 +404,7 @@ function MessageActions({ m, owner, children }: { m: MessageT; owner: boolean; c
         >
           Reply
         </button>
+        {owner && <UndoToHere m={m} onCard={() => setOpen(false)} />}
       </PopoverContent>
     </Popover>
   )
@@ -457,8 +463,14 @@ function Body({ m, onOpenImage }: { m: MessageT; onOpenImage: (a: AttachmentRefT
       {m.kind === 'voice_note' && (m.attachments ?? []).length === 0 && (
         <p className="m-0 text-sm text-text-2">Voice note (uploading…)</p>
       )}
+      <PublishedPage m={m} />
     </>
   )
+}
+
+/** A message that published an org page carries a card for it (an app without this shows the text alone). */
+function PublishedPage({ m }: { m: MessageT }) {
+  return m.page ? <PageCard pageRef={m.page} threadId={m.thread_id} className={cn(m.text && 'mt-2')} /> : null
 }
 
 export function MessageView({

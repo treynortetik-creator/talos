@@ -4,9 +4,13 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { useTalos } from '../../lib/client.ts'
 import { IconBack } from '../../ui/icons.tsx'
-import { Input } from '../../ui/index.ts'
+import { Button, Input } from '../../ui/index.ts'
 import { Meander } from '../../ui/Meander.tsx'
 import { ScrollRegion } from '../../ui/ScrollRegion.tsx'
+import { useSession } from '../auth/session.ts'
+import { BugReporter } from '../bugreport/BugReporter.tsx'
+import { openBugReport } from '../bugreport/store.ts'
+import { BUG_TEXT } from '../bugreport/text.ts'
 import { type Block, blockText, HELP_SECTIONS, type Section } from './content.ts'
 import { AboutBuild, AskAgent } from './HelpAbout.tsx'
 import { BlockView, matches, narrowBlock } from './HelpBlocks.tsx'
@@ -29,6 +33,7 @@ function jump(id: string) {
 
 export function HelpScreen() {
   const [query, setQuery] = useState('')
+  const signedOut = useSession((s) => s.status) === 'anon'
   const agent = useTalos((s) => s.config?.agent.name) ?? 'Talos'
   const shown = HELP_SECTIONS.map((s) => ({ s, blocks: visibleBlocks(s, query) })).filter((x) => x.blocks.length > 0)
   const searching = query.trim() !== ''
@@ -116,6 +121,13 @@ export function HelpScreen() {
                 />
               ))}
               {s.id === 'about' && <AboutBuild />}
+              {s.id === 'report-bug' && !signedOut && (
+                <div>
+                  <Button variant="outline" onClick={() => void openBugReport()}>
+                    {BUG_TEXT.helpRow}
+                  </Button>
+                </div>
+              )}
             </section>
           ))}
 
@@ -127,6 +139,7 @@ export function HelpScreen() {
           </section>
         </main>
       </ScrollRegion>
+      {!signedOut && <BugReporter />}
     </div>
   )
 }

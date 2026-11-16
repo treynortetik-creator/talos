@@ -8,7 +8,7 @@ import TalosSupervisor
 /// key is made if there is none); "Exit" stores nothing and leaves Main stopped; a pane Enter still seals nothing. The phone gets one plain
 /// line per start from the Mac itself (`talos-app post`), which needs no bridge. Auto-accept is off where the dialog must stay on screen
 /// (`launchConfirmed: false`).
-private final class NoWorkers: NeedsYouPopupSource, @unchecked Sendable {
+final class NoWorkers: NeedsYouPopupSource, @unchecked Sendable {
   private let lock = NSLock()
   private var asked: [String] = []
   var threads: [String] { lock.withLock { asked } }
@@ -31,7 +31,7 @@ extension Rig {
 
   /// The popup's button, as the controller wires it: through the source. Waits for the answer.
   @discardableResult
-  fileprivate func popupClick(_ item: NeedsYouPopupItem, choice: Int, id: String? = nil, label: String? = nil, workers: NeedsYouPopupSource = NoWorkers()) -> PopupAnswerResult? {
+  func popupClick(_ item: NeedsYouPopupItem, choice: Int, id: String? = nil, label: String? = nil, workers: NeedsYouPopupSource = NoWorkers()) -> PopupAnswerResult? {
     let source = MainAndWorkersPopupSource(workers: workers, main: sup)
     let got = Answer()
     let sem = DispatchSemaphore(value: 0)
@@ -216,8 +216,7 @@ struct DevChannelsPopupTests {
     #expect(!FileManager.default.fileExists(atPath: r.talosHome + "/status.json"), "no bridge")
     r.start()
     _ = try #require(r.waitForOffer(), "audit: \(r.audit)")
-    let ts = Int(r.clock.wallMs())
-    try #"{"v":1,"control_id":"c1","action":"restart","ts":\#(ts)}"#.write(toFile: r.talosHome + "/" + AgentRequest.fileName, atomically: true, encoding: .utf8)
+    try r.writeOwnerRequest("c1")
     #expect(r.wait(30) { r.sup.tickNow(); return r.starts.count == 2 && r.phonePosts.count == 1 }, "posts \(r.posts) audit \(r.audit)")
     for _ in 0..<12 {
       usleep(150_000)
@@ -240,8 +239,7 @@ struct DevChannelsPopupTests {
   }
 
   private func phoneRestart(_ r: Rig) throws {
-    let ts = Int(r.clock.wallMs())
-    try #"{"v":1,"control_id":"c1","action":"restart","ts":\#(ts)}"#.write(toFile: r.talosHome + "/" + AgentRequest.fileName, atomically: true, encoding: .utf8)
+    try r.writeOwnerRequest("c1")
   }
 
   @Test func anExpiredOfferIsMadeAgainWhileTheWarningIsStillThereAndTheClickWorks() throws {

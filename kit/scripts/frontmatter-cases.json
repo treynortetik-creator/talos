@@ -1,0 +1,235 @@
+[
+ {
+  "name": "plain keys",
+  "text": "---\nname: helper\ndescription: plain\ntools: Read, Grep\n---\nBody.\n",
+  "keys": [
+   "name",
+   "description",
+   "tools"
+  ]
+ },
+ {
+  "name": "no frontmatter",
+  "text": "# Title\nhooks: x\n",
+  "keys": []
+ },
+ {
+  "name": "empty frontmatter",
+  "text": "---\n---\nbody\n",
+  "keys": []
+ },
+ {
+  "name": "a key in the body is not frontmatter",
+  "text": "---\nname: ok\n---\nhooks: none here\n",
+  "keys": [
+   "name"
+  ]
+ },
+ {
+  "name": "uniform indentation",
+  "text": "---\n  name: a\n  hooks:\n    PreToolUse: []\n---\n",
+  "keys": [
+   "name",
+   "hooks"
+  ]
+ },
+ {
+  "name": "a whole flow mapping",
+  "text": "---\n{name: a, hooks: {PreToolUse: []}}\n---\n",
+  "keys": [
+   "name",
+   "hooks"
+  ]
+ },
+ {
+  "name": "a flow mapping over lines, quoted key",
+  "text": "---\n{name: a,\n  \"allowed-tools\": [Bash, Read],\n  'mcpServers': {x: {}}}\n---\n",
+  "keys": [
+   "name",
+   "allowed-tools",
+   "mcpServers"
+  ]
+ },
+ {
+  "name": "quoted keys",
+  "text": "---\n'hooks': x\n\"mcpServers\": {}\n'it''s': y\n---\n",
+  "keys": [
+   "hooks",
+   "mcpServers",
+   "it's"
+  ]
+ },
+ {
+  "name": "an escape in a key is unclear",
+  "text": "---\n\"hoo\\x6bs\": x\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "CRLF",
+  "text": "---\r\nname: a\r\nhooks: x\r\n---\r\nbody\r\n",
+  "keys": [
+   "name",
+   "hooks"
+  ]
+ },
+ {
+  "name": "lone CR",
+  "text": "---\rname: a\rpermissionMode: auto\r---\r",
+  "keys": [
+   "name",
+   "permissionMode"
+  ]
+ },
+ {
+  "name": "a byte order mark",
+  "text": "\ufeff---\nhooks: x\n---\n",
+  "keys": [
+   "hooks"
+  ]
+ },
+ {
+  "name": "a block scalar hides nothing",
+  "text": "---\ndescription: |\n  hooks: not a key\n  more\nname: x\n---\n",
+  "keys": [
+   "description",
+   "name"
+  ]
+ },
+ {
+  "name": "a folded scalar with indicators",
+  "text": "---\ndescription: >-\n  text\n\n  hooks: no\nallowed-tools: Bash\n---\n",
+  "keys": [
+   "description",
+   "allowed-tools"
+  ]
+ },
+ {
+  "name": "a quote over lines",
+  "text": "---\ndescription: \"a\n  hooks: no\n  b\"\nname: x\n---\n",
+  "keys": [
+   "description",
+   "name"
+  ]
+ },
+ {
+  "name": "a flow value over lines",
+  "text": "---\ntools: [Read,\n  Grep]\nhooks: {}\n---\n",
+  "keys": [
+   "tools",
+   "hooks"
+  ]
+ },
+ {
+  "name": "a quote open at a top-level line is unclear",
+  "text": "---\ndescription: 'a\nhooks: x\n'\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "a flow open at a top-level line is unclear",
+  "text": "---\ntools: [a,\nhooks: x]\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "a tab indentation is unclear",
+  "text": "---\nname: a\n\thooks: x\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "a line less indented than the first is unclear",
+  "text": "---\n  name: a\nhooks: x\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "an anchor and a merge key are unclear",
+  "text": "---\nbase: &b {hooks: x}\n<<: *b\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "a tag is unclear",
+  "text": "---\nhooks: !!map {}\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "no closing line is unclear",
+  "text": "---\nhooks: x\n",
+  "unclear": true
+ },
+ {
+  "name": "a ... line is unclear",
+  "text": "---\nname: a\n...\nhooks: x\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "a line separator is unclear",
+  "text": "---\nname: a\u2028hooks: x\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "a next-line character is unclear",
+  "text": "---\nname: a\u0085hooks: x\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "an opening line that is not plain is unclear",
+  "text": "--- x\nhooks: y\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "comments",
+  "text": "---\n# hooks: x\nname: a # hooks: y\n---\n",
+  "keys": [
+   "name"
+  ]
+ },
+ {
+  "name": "nested keys are not top-level",
+  "text": "---\nname: a\nlist:\n  - hooks: x\n  - {mcpServers: y}\n---\n",
+  "keys": [
+   "name",
+   "list"
+  ]
+ },
+ {
+  "name": "a quote in a plain value",
+  "text": "---\ndescription: don't stop\nhooks: x\n---\n",
+  "keys": [
+   "description",
+   "hooks"
+  ]
+ },
+ {
+  "name": "a top-level line that is not a key is unclear",
+  "text": "---\njust text\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "a sequence is unclear",
+  "text": "---\n- a\n- b\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "a flow sequence is unclear",
+  "text": "---\n[a, b]\n---\n",
+  "unclear": true
+ },
+ {
+  "name": "a colon inside a plain key",
+  "text": "---\na:b: c\n---\n",
+  "keys": [
+   "a:b"
+  ]
+ },
+ {
+  "name": "a plain multi-line value",
+  "text": "---\ndescription: a long\n  'quoted' words\nmodel: x\n---\n",
+  "keys": [
+   "description",
+   "model"
+  ]
+ },
+ {
+  "name": "a plain continuation that opens a quote is unclear",
+  "text": "---\ndescription: it is\n  'not closed\nhooks: x\n---\n",
+  "unclear": true
+ }
+]

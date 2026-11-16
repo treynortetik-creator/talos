@@ -62,6 +62,28 @@ public enum DeviceKeys {
   }
 }
 
+/// The two steps every owner proof starts with, whatever it proves (a dialog answer here, a restart request in `RestartProofCheck`): the
+/// signer is a device pinned in devices.json (`pinnedKey`), and its `talos-owner/v1` P-256 signature is over exactly `signed`, the bytes
+/// whose SHA-256 the device signed (packages/protocol owner-sig.ts). What was signed is each caller's own check.
+public enum OwnerSignature {
+  public enum Failure: Equatable, Sendable {
+    /// Not a device paired and not revoked, or the key is not that id's.
+    case device
+    /// Not a 64-byte raw signature, or not one by that key over these bytes.
+    case signature
+  }
+
+  /// nil when both steps pass. Never throws.
+  public static func check(signed: Data, osig: String, deviceId: String, pinnedKey: (String) -> P256.Signing.PublicKey?) -> Failure? {
+    guard let key = pinnedKey(deviceId), DeviceKeys.deviceId(of: key) == deviceId else { return .device }
+    let digest = SHA256.hash(data: signed).map { String(format: "%02x", $0) }.joined()
+    guard let raw = DeviceKeys.base64url(osig), raw.count == 64, let sig = try? P256.Signing.ECDSASignature(rawRepresentation: raw),
+      key.isValidSignature(sig, for: Data("talos-owner/v1\n\(deviceId)\n\(digest)".utf8))
+    else { return .signature }
+    return nil
+  }
+}
+
 public enum DialogProofCheck {
   /// What the Mac itself recorded of the dialog on a pane (never re-read from workers.json, which anyone can write).
   public struct Pane: Equatable, Sendable {
@@ -114,12 +136,12 @@ public enum DialogProofCheck {
     let proof = a.proof
     func no(_ step: Int, _ reason: DialogResult.Reason = .unverified) -> Verdict { .no(reason: reason, step: step) }
     guard ExactText.equal(a.dialogId, env.pane.dialogId) else { return no(0) }
-    // 1: a device paired and not revoked, and its key is that device's
-    guard let key = env.pinnedKey(proof.deviceId), DeviceKeys.deviceId(of: key) == proof.deviceId else { return no(1) }
-    // 2: the owner's signature over the exact text
-    guard let raw = DeviceKeys.base64url(proof.osig), raw.count == 64, let sig = try? P256.Signing.ECDSASignature(rawRepresentation: raw),
-      key.isValidSignature(sig, for: Data("talos-owner/v1\n\(proof.deviceId)\n\(hex(proof.signed))".utf8))
-    else { return no(2) }
+    // 1: a device paired and not revoked, and its key is that device's; 2: the owner's signature over the exact text
+    switch OwnerSignature.check(signed: Data(proof.signed.utf8), osig: proof.osig, deviceId: proof.deviceId, pinnedKey: env.pinnedKey) {
+    case .device?: return no(1)
+    case .signature?: return no(2)
+    case nil: break
+    }
     // 3: what was signed
     guard let signed = object(proof.signed), signed["type"] as? String == "card.resolve", signed["action"] as? String == "primary",
       signed["edited"] == nil, signed["device_id"] as? String == proof.deviceId

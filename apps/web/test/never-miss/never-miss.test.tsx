@@ -317,17 +317,17 @@ describe('O21: opening the Inbox clears its webhook items on the relay too', () 
 })
 
 describe('O2: a card that can live a day says which day it expires', () => {
-  const now = Date.parse('2026-10-31T21:00:00Z') // 14:00 in the UTC-7 zone
+  const now = Date.parse('2026-10-31T19:00:00Z') // 14:00 in the UTC-5 zone
   it('same day: the time; tomorrow: "tomorrow"; later in the week: the weekday; far off: the date', () => {
-    const tz = 'Etc/GMT+7'
-    expect(formatExpiry('2026-11-01T01:30:00Z', tz, now)).toBe('18:30') // 18:30 today
-    expect(formatExpiry('2026-11-01T21:00:00Z', tz, now)).toBe('tomorrow 14:00')
-    expect(formatExpiry('2026-11-03T21:00:00Z', tz, now)).toBe('Tue 14:00')
-    expect(formatExpiry('2026-12-25T21:00:00Z', tz, now)).toBe('2026-12-25 14:00')
+    const tz = 'Etc/GMT+5'
+    expect(formatExpiry('2026-10-31T23:30:00Z', tz, now)).toBe('18:30') // 18:30 today
+    expect(formatExpiry('2026-11-01T19:00:00Z', tz, now)).toBe('tomorrow 14:00')
+    expect(formatExpiry('2026-11-03T19:00:00Z', tz, now)).toBe('Tue 14:00')
+    expect(formatExpiry('2026-12-25T19:00:00Z', tz, now)).toBe('2026-12-25 14:00')
   })
-  it('judges the day in the agent zone, not UTC: 23:00 in the UTC-7 zone is already tomorrow in UTC', () => {
-    expect(formatExpiry('2026-11-01T06:00:00Z', 'Etc/GMT+7', now)).toBe('23:00')
-    expect(formatExpiry('2026-11-01T06:00:00Z', 'UTC', now)).toBe('tomorrow 06:00')
+  it('judges the day in the agent zone, not UTC: 23:00 in the UTC-5 zone is already tomorrow in UTC', () => {
+    expect(formatExpiry('2026-11-01T04:00:00Z', 'Etc/GMT+5', now)).toBe('23:00')
+    expect(formatExpiry('2026-11-01T04:00:00Z', 'UTC', now)).toBe('tomorrow 04:00')
   })
   it('the card shows it: a background card with a day to live says "tomorrow", not a bare clock time', () => {
     vi.useFakeTimers({ toFake: ['Date'] })

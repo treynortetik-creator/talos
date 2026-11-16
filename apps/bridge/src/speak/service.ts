@@ -23,6 +23,7 @@ import { writeFileAtomic } from '../fsutil.ts'
 import type { HistoryStore } from '../history-store.ts'
 import type { Logger } from '../log.ts'
 import type { MediaStore } from '../media.ts'
+import { say as hostSay } from '../owner-words.ts'
 import { readRegularFile } from '../safe-open.ts'
 import { SPEAK_CACHE_PREFIX, synthesize } from '../tts.ts'
 import type { SpeakBody } from '../v2-seams.ts'
@@ -39,6 +40,12 @@ export const SPEAK_JOB_MEMORY_MS = 60_000
 export const SPEAK_REUPLOAD_AFTER_MS = 24 * 3600_000
 
 export const BUSY_MESSAGE = 'Your Mac is already making audio for other messages. Wait a minute, then tap again.'
+/** BUSY_MESSAGE in this computer's words (the Mac's is the constant, byte for byte). */
+export const busyMessage = (): string =>
+  hostSay({
+    mac: BUSY_MESSAGE,
+    linux: 'Your computer is already making audio for other messages. Wait a minute, then tap again.',
+  })
 export const NO_TTS_MESSAGE =
   'Your Mac has no voice set up yet. Set TALOS_APP_TTS_CMD in bridge.env to a text-to-speech command (a JSON list, see docs/SETUP.md) and restart Talos.'
 
@@ -97,14 +104,26 @@ export class SpeakService {
 
   async request(f: Pick<FrameOf<'speak.request'>, 'message_id' | 'thread_id' | 'fresh'>): Promise<SpeakBody> {
     const { env, store } = this.d
-    if (!env.ttsCmd) return failed({ reason: 'no_tts', message: NO_TTS_MESSAGE })
+    if (!env.ttsCmd)
+      return failed({
+        reason: 'no_tts',
+        message: hostSay({
+          mac: NO_TTS_MESSAGE,
+          linux:
+            'Your computer has no voice set up yet. Set TALOS_APP_TTS_CMD in bridge.env to a text-to-speech command (a JSON list, see docs/SETUP.md) and restart Talos.',
+          windows: "Your PC has no voice set up yet, and a voice can't be set up on a Windows PC yet.",
+        }),
+      })
     // Identity: the id names a message, the Mac's own row decides everything else. Only an agent message in the thread the
     // app named is read; the app never supplies text.
     const msg = store.getMessage(f.message_id)
     if (!msg || msg.thread_id !== f.thread_id || msg.author !== 'agent' || !msg.text) {
       return failed({
         reason: 'not_found',
-        message: 'That message is no longer on your Mac, so it cannot be read aloud.',
+        message: hostSay({
+          mac: 'That message is no longer on your Mac, so it cannot be read aloud.',
+          linux: 'That message is no longer on your computer, so it cannot be read aloud.',
+        }),
       })
     }
     const say = speakableText(msg.text)
@@ -143,7 +162,7 @@ export class SpeakService {
     }
     if (!job) {
       // A new job past the cap is refused where the owner sees it; a job already running is always joined.
-      if (this.active >= this.maxParallel + this.maxWaiting) return failed({ reason: 'busy', message: BUSY_MESSAGE })
+      if (this.active >= this.maxParallel + this.maxWaiting) return failed({ reason: 'busy', message: busyMessage() })
       job = this.start(f.message_id, say.text, sha, say)
     }
     // Only the first ask of a tap waits (for a quick synthesis). A follow-up answers now.
@@ -160,7 +179,14 @@ export class SpeakService {
       (o) => this.finish(job, o),
       (e) => {
         this.d.log.error('read aloud crashed', { error: (e as Error).message })
-        return this.finish(job, { ok: false, reason: 'tts_failed', message: "Your Mac couldn't make the audio." })
+        return this.finish(job, {
+          ok: false,
+          reason: 'tts_failed',
+          message: hostSay({
+            mac: "Your Mac couldn't make the audio.",
+            linux: "Your computer couldn't make the audio.",
+          }),
+        })
       },
     )
     this.jobs.set(messageId, job)
@@ -205,7 +231,11 @@ export class SpeakService {
       const tts = await this.synth(env, paths, text, newId('m').slice(2))
       if (!tts.ok) {
         log.warn('read aloud failed', { reason: tts.reason })
-        return { ok: false, reason: 'tts_failed', message: `Your Mac couldn't make the audio (${tts.reason}).` }
+        return {
+          ok: false,
+          reason: 'tts_failed',
+          message: `${hostSay({ mac: 'Your Mac', linux: 'Your computer' })} couldn't make the audio (${tts.reason}).`,
+        }
       }
       let ref: AttachmentRefT
       try {
@@ -220,7 +250,10 @@ export class SpeakService {
         return {
           ok: false,
           reason: 'upload_failed',
-          message: "The audio was made, but your Mac couldn't send it to the relay.",
+          message: hostSay({
+            mac: "The audio was made, but your Mac couldn't send it to the relay.",
+            linux: "The audio was made, but your computer couldn't send it to the relay.",
+          }),
         }
       }
       const entry: Entry = {

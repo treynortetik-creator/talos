@@ -1,25 +1,62 @@
 #!/usr/bin/env bash
 # Builds Talos.app with SwiftPM + the Command Line Tools only (no Xcode, no .xcodeproj).
-#   build-app.sh [--release] [--out DIR]       default out: apps/desktop/.build/app
-# Signs with $TALOS_SIGN_ID if set, else the "Talos Local Signing" identity if present, else ad hoc. Ends with
-# `codesign --verify --strict` and `Talos --selftest`; either failing makes this script fail.
+#   build-app.sh [--release] [--out DIR] [--universal] [--no-checkout-stamp] [--hardened]
+#     default out: apps/desktop/.build/app
+#     --universal          one binary for Apple Silicon and Intel (arm64 + x86_64)
+#     --no-checkout-stamp  leave out TalosCheckout (the path of this clone): a prebuilt app for another Mac, where install.sh
+#                          records that Mac's own clone instead (release-app.sh)
+#     --hardened           sign with the hardened runtime and a secure timestamp (needs a real identity; release-app.sh)
+# Signs with $TALOS_SIGN_ID if set, else the "Talos Local Signing" identity if present (scripts/make-signing-identity.sh).
+# With neither it stops before building: an ad hoc build looks like a new app to macOS after every rebuild, so privacy grants
+# reset and the launch seal cannot be read. TALOS_SIGN_ID=- asks for ad hoc on purpose (tests and CI). TALOS_REQUIRE_SIGN_ID=1
+# also refuses the local identity: only the one named in TALOS_SIGN_ID is used (release-app.sh sets it).
+# Ends with `codesign --verify --strict` and `Talos --selftest`; either failing makes this script fail.
+# Env: TALOS_COMPANION_SRC, TALOS_MENUBAR_SRC, TALOS_HOOKS_SRC (other folders for the bundled art and hooks; guards-test.sh only).
+# The hooks are otherwise taken from the checked-out commit, never the working tree, and a working tree that differs fails the build.
 # Env: TALOS_SWIFTPM_CACHE, TALOS_SWIFT_SCRATCH (CI uses both).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 cd "$HERE"
 
-CONFIG=debug OUT="$HERE/.build/app"
+CONFIG=debug OUT="$HERE/.build/app" UNIVERSAL=0 STAMP_CHECKOUT=1 HARDENED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --release) CONFIG=release; shift ;;
-    --out) OUT="$2"; shift 2 ;;
+    --out) [ $# -ge 2 ] || { echo "build-app: --out needs a folder" >&2; exit 64; }; OUT="$2"; shift 2 ;;
+    --universal) UNIVERSAL=1; shift ;;
+    --no-checkout-stamp) STAMP_CHECKOUT=0; shift ;;
+    --hardened) HARDENED=1; shift ;;
     *) echo "build-app: unknown argument $1" >&2; exit 64 ;;
   esac
 done
+
+# Signing identity, decided before anything is built: explicit, then the local self-signed one, never a silent ad hoc.
+IDENTITY_NAME="${TALOS_IDENTITY_NAME:-Talos Local Signing}"
+ID="${TALOS_SIGN_ID:-}"
+if [ -z "$ID" ]; then
+  if [ -n "${TALOS_REQUIRE_SIGN_ID:-}" ]; then
+    echo "build-app: stopped before building: TALOS_REQUIRE_SIGN_ID is set, so only the identity named in TALOS_SIGN_ID is used, and TALOS_SIGN_ID is empty" >&2
+    exit 65
+  fi
+  # The list is read whole, then matched: `security ... | grep -q` under pipefail fails when grep stops early and security dies
+  # writing the rest (SIGPIPE), which read as "no identity" now and then.
+  IDS="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  if case "$IDS" in *"\"$IDENTITY_NAME\""*) true ;; *) false ;; esac; then
+    ID="$IDENTITY_NAME"
+  else
+    echo "build-app: stopped before building: no signing identity on this Mac. Run bash apps/desktop/scripts/make-signing-identity.sh once (it asks for your login password one time), then build again. Without one the app would be signed ad hoc, and macOS would forget its privacy permissions after every rebuild. To build ad hoc anyway (tests, CI), set TALOS_SIGN_ID=-" >&2
+    exit 65
+  fi
+fi
+if [ "$HARDENED" = 1 ] && [ "$ID" = "-" ]; then
+  echo "build-app: --hardened needs a real signing identity in TALOS_SIGN_ID, not ad hoc" >&2
+  exit 65
+fi
 command -v swift >/dev/null || { echo "build-app: swift is not installed" >&2; exit 127; }
 
 ARGS=(-c "$CONFIG")
+[ "$UNIVERSAL" = 1 ] && ARGS+=(--arch arm64 --arch x86_64)
 [ -n "${TALOS_SWIFTPM_CACHE:-}" ] && ARGS+=(--cache-path "$TALOS_SWIFTPM_CACHE")
 [ -n "${TALOS_SWIFT_SCRATCH:-}" ] && ARGS+=(--scratch-path "$TALOS_SWIFT_SCRATCH")
 
@@ -39,7 +76,12 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Talos"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUM/" Resources/Info.plist.template > "$APP/Contents/Info.plist"
 # The clone this app was built from: Create, Adopt and Choose run its install.sh and bridge (the path may hold any character, so it goes in with plutil, which takes the value as one argument; not sed, and not PlistBuddy, whose command string has quotes of its own). The physical path: the app refuses a clone that is a link.
-plutil -replace TalosCheckout -string "$(cd "$REPO" && pwd -P)" "$APP/Contents/Info.plist"
+# A prebuilt app (--no-checkout-stamp) carries none: the Mac it is installed on records its own clone (install.sh).
+[ "$STAMP_CHECKOUT" = 0 ] || plutil -replace TalosCheckout -string "$(cd "$REPO" && pwd -P)" "$APP/Contents/Info.plist"
+# The commit it was built from, so install.sh can say which build is installed and which is kept. Left out (not guessed) when
+# this is not a git checkout.
+GIT_SHA="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
+[ -z "$GIT_SHA" ] || plutil -replace TalosGitSha -string "$GIT_SHA" "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 # Icon: committed .icns if present, else made from the brand PNG with sips + iconutil.
@@ -57,6 +99,8 @@ else
 fi
 
 cp Resources/tmux.conf "$APP/Contents/Resources/tmux.conf"
+# The updater's last step (AutoUpdater), run from a copy so the checkout it moves never holds the script that is running.
+cp scripts/auto-update-apply.sh "$APP/Contents/Resources/auto-update-apply.sh"
 
 # The desktop companion's atlases. Copied before codesign so they are sealed into the bundle. They are committed, so absent is a
 # broken checkout and the build fails: shipping without them gave an app icon on an orange square where the character belongs.
@@ -110,16 +154,86 @@ for src in "$MENUBAR_SRC"/*.png; do
   fi
 done
 
-# Signing identity: explicit, then the local self-signed one (scripts/make-signing-identity.sh), then ad hoc.
-IDENTITY_NAME="${TALOS_IDENTITY_NAME:-Talos Local Signing}"
-ID="${TALOS_SIGN_ID:-}"
-if [ -z "$ID" ] && security find-identity -v -p codesigning 2>/dev/null | grep -qF "\"$IDENTITY_NAME\""; then
-  ID="$IDENTITY_NAME"
-fi
-[ -n "$ID" ] || ID="-"
-codesign --force --sign "$ID" --entitlements Resources/entitlements.plist "$APP"
+# The thread sessions' permission hook and the helper it imports. Copied before codesign so they are sealed into the bundle, and
+# read-only (0444): the app takes the hook from here and from nowhere else (WorkerHookSource.swift), because a thread working in
+# the checkout could edit the kit's copy, which is the script that answers its own approval prompts.
+# For the same reason the files are NOT read from the working tree: they are the ones the checked-out commit holds
+# (`git cat-file blob HEAD:kit/hooks/...`), and the build is refused when the working tree's copy is not that same text. An edit
+# a thread session left in kit/hooks, never committed and never reviewed, would otherwise be sealed into the app and trusted by it.
+# No git checkout (an unpacked archive) has no commit to take them from: the build is refused, and says how to name a folder.
+# Absent is a broken checkout and the build fails: the app would refuse to start any thread session. TALOS_HOOKS_SRC names a
+# folder to take them from instead, as they are (scripts/guards-test.sh uses it to prove the gate gates; a build from an archive).
+HOOKS_OUT="$APP/Contents/Resources/talos-hooks"
+rm -rf "$HOOKS_OUT"
+mkdir -p "$HOOKS_OUT"
+# whatever the umask: the app refuses a hook folder another account can write (WorkerHookSource.swift)
+chmod 0755 "$HOOKS_OUT"
+for f in permission-relay.py _talos_common.py; do
+  if [ -n "${TALOS_HOOKS_SRC:-}" ]; then
+    if [ ! -s "$TALOS_HOOKS_SRC/$f" ] || [ -L "$TALOS_HOOKS_SRC/$f" ]; then
+      echo "build-app: $TALOS_HOOKS_SRC/$f is missing, empty or a link; thread sessions would have no permission hook" >&2
+      exit 1
+    fi
+    echo "build-app: taking $f from TALOS_HOOKS_SRC ($TALOS_HOOKS_SRC), not from the checked-out commit" >&2
+    cp "$TALOS_HOOKS_SRC/$f" "$HOOKS_OUT/$f"
+    WANT="$TALOS_HOOKS_SRC/$f"
+  else
+    if ! git -C "$REPO" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+      echo "build-app: $REPO is not a git checkout, so there is no commit to take kit/hooks/$f from; set TALOS_HOOKS_SRC to a folder that holds the hooks you trust" >&2
+      exit 1
+    fi
+    # a plain file in the commit (never a link or a submodule), and its bytes exactly as committed
+    case "$(git -C "$REPO" ls-tree HEAD -- "kit/hooks/$f" | awk '{print $1 " " $2}')" in
+      "100644 blob" | "100755 blob") ;;
+      *) echo "build-app: kit/hooks/$f is not a plain file in the checked-out commit; thread sessions would have no permission hook" >&2; exit 1 ;;
+    esac
+    if ! git -C "$REPO" cat-file blob "HEAD:kit/hooks/$f" > "$HOOKS_OUT/$f" || [ ! -s "$HOOKS_OUT/$f" ]; then
+      echo "build-app: kit/hooks/$f could not be read from the checked-out commit, or is empty" >&2
+      exit 1
+    fi
+    if [ -L "$REPO/kit/hooks/$f" ] || ! cmp -s "$REPO/kit/hooks/$f" "$HOOKS_OUT/$f"; then
+      echo "build-app: kit/hooks/$f in the working tree is not the file the checked-out commit holds (edited, missing or a link). The app seals and trusts this file, so it is only taken as committed: commit the change, or put the file back with 'git checkout -- kit/hooks/$f', then build again" >&2
+      exit 1
+    fi
+    WANT="$REPO/kit/hooks/$f"
+  fi
+  chmod 0444 "$HOOKS_OUT/$f"
+  if ! cmp -s "$WANT" "$HOOKS_OUT/$f" || [ "$(stat -f %Lp "$HOOKS_OUT/$f")" != 444 ]; then
+    echo "build-app: $f in the bundle differs from its source, or is not read-only" >&2
+    exit 1
+  fi
+done
+
+# Signing (the identity was chosen at the top). Hardened: the runtime flag and a secure timestamp, which notarization requires.
+SIGN=(codesign --force --sign "$ID")
+[ "$HARDENED" = 1 ] && SIGN+=(--options runtime --timestamp)
+# Any other Mach-O in the bundle is signed first, deepest first, so the outer signature seals signed code (inside-out). Today the
+# bundle holds one Mach-O (Contents/MacOS/Talos); this keeps a later helper or framework from shipping unsigned.
+while IFS= read -r nested; do
+  [ -n "$nested" ] || continue
+  echo "build-app: signing nested code $nested"
+  "${SIGN[@]}" "$nested"
+done < <(find "$APP/Contents" -type f ! -path "$APP/Contents/MacOS/Talos" -print0 \
+  | xargs -0 file -h 2>/dev/null | sed -n 's/^\(.*\): *Mach-O.*/\1/p' | awk -F/ '{print NF "\t" $0}' | sort -rn | cut -f2-)
+# The hardened build takes the release entitlements: the resources a local build has without asking (Resources/entitlements-release.plist).
+ENTITLEMENTS=Resources/entitlements.plist
+[ "$HARDENED" = 1 ] && ENTITLEMENTS=Resources/entitlements-release.plist
+"${SIGN[@]}" --entitlements "$ENTITLEMENTS" "$APP"
 codesign --verify --strict --verbose=1 "$APP"
-echo "signed: $([ "$ID" = "-" ] && echo 'ad hoc' || echo "$ID")"
+echo "signed: $([ "$ID" = "-" ] && echo 'ad hoc' || echo "$ID")$([ "$HARDENED" = 1 ] && echo ', hardened runtime')"
+
+# After signing: the hook is still in place and read-only, and the signature covers it (the selftest below asks the app itself,
+# through the same check every thread session's start makes).
+if [ "$(stat -f %Lp "$HOOKS_OUT")" != 755 ]; then
+  echo "build-app: $HOOKS_OUT is not a folder only its owner can write (0755) after signing" >&2
+  exit 1
+fi
+for f in permission-relay.py _talos_common.py; do
+  if [ ! -s "$HOOKS_OUT/$f" ] || [ "$(stat -f %Lp "$HOOKS_OUT/$f")" != 444 ]; then
+    echo "build-app: $HOOKS_OUT/$f is missing or not read-only after signing" >&2
+    exit 1
+  fi
+done
 
 "$APP/Contents/MacOS/Talos" --selftest
 echo "built: $APP"

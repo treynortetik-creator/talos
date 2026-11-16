@@ -5,9 +5,11 @@ import { existsSync, readFileSync } from 'node:fs'
 import type { BridgePaths } from './config.ts'
 import { readJsonFile, removeFile, writeJsonAtomic } from './fsutil.ts'
 import type { Logger } from './log.ts'
+import { isProcToken, processStartTime } from './proc-identity.ts'
 
 export type PidRecord = { pid: number; started_at: string; instance: string }
-export type PsInfo = { lstart: string; command: string }
+/** `psLstart`: on Linux, ps's own start-time text beside the /proc token in `lstart`, for pid files an older build wrote. */
+export type PsInfo = { lstart: string; command: string; psLstart?: string }
 export const BRIDGE_ENTRY = 'apps/bridge/src/server.ts'
 
 /** One line of `ps -o lstart=,command=`: lstart is a fixed 24 characters, the command follows. */
@@ -16,7 +18,17 @@ export const parsePsLine = (line: string): PsInfo => ({
   command: line.slice(24).trim(),
 })
 
-/** `ps -p <pid> -o lstart=,command=`. Undefined when the pid is gone. */
+/**
+ * On Linux the start time ps prints is replaced by the /proc token (proc-identity.ts): WSL's ps prints one that drifts. When
+ * /proc cannot answer (the pid went between the two reads) there is no answer at all, never ps's drifting text.
+ */
+export function withStableStart(pid: number, info: PsInfo): PsInfo | undefined {
+  if (process.platform !== 'linux') return info
+  const token = processStartTime(pid)
+  return token ? { ...info, lstart: token, psLstart: info.lstart } : undefined
+}
+
+/** `ps -p <pid> -o lstart=,command=`, with the start time from withStableStart. Undefined when the pid is gone or unreadable. */
 export function psInfo(pid: number): PsInfo | undefined {
   try {
     const r = Bun.spawnSync(['ps', '-p', String(pid), '-o', 'lstart=,command='], {
@@ -27,7 +39,7 @@ export function psInfo(pid: number): PsInfo | undefined {
     if (r.exitCode !== 0) return undefined
     const line = r.stdout.toString().replace(/\n$/, '')
     if (line.trim() === '') return undefined
-    return parsePsLine(line)
+    return withStableStart(pid, parsePsLine(line))
   } catch {
     return undefined
   }
@@ -39,7 +51,10 @@ export function psInfo(pid: number): PsInfo | undefined {
  */
 export function isOurBridge(rec: PidRecord, ps: (pid: number) => PsInfo | undefined = psInfo): boolean {
   const info = ps(rec.pid)
-  return Boolean(info && info.lstart === rec.started_at && info.command.includes(BRIDGE_ENTRY))
+  if (!info?.command.includes(BRIDGE_ENTRY)) return false
+  if (info.lstart === rec.started_at) return true
+  // a pid file from a build before Linux read /proc holds ps's text: that one is compared the old way
+  return info.psLstart !== undefined && !isProcToken(rec.started_at) && info.psLstart === rec.started_at
 }
 
 export type TakeOverDeps = {

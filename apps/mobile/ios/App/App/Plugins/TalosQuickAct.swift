@@ -24,8 +24,9 @@ enum TalosQuickAct {
 
     static func handle(_ action: PushCore.QuickAction, response: UNNotificationResponse, done: @escaping () -> Void) {
         let text = (response as? UNTextInputNotificationResponse)?.userText
-        let info = response.notification.request.content.userInfo
-        guard let act = RichPush.act(for: action, userInfo: info, userText: text) else {
+        let content = response.notification.request.content
+        let shown = RichPush.Shown(title: content.title, subtitle: content.subtitle, body: content.body)
+        guard let act = RichPush.act(for: action, shown: shown, userInfo: content.userInfo, userText: text) else {
             return fail("Talos couldn't read that notification. Open Talos.", done: done)
         }
         guard let grant = NativeKeyStore.grant(), let key = NativeKeyStore.actKey() else {

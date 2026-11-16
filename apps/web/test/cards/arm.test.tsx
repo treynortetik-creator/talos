@@ -27,47 +27,44 @@ const open = (card: ReturnType<typeof makeCard>, client: ReturnType<typeof setup
 }
 
 describe('Approve from a push', () => {
-  it('a live high-risk card starts its normal flow: Face ID first, and only then is anything sent', async () => {
+  // No passkey any more (owner ruling 2026-11-14): the primary flow has no second step, so the arm never starts it. It only
+  // puts focus on the button, in a browser and in the iPhone app alike, and nothing is sent until the owner taps.
+  it('a live high-risk card is NOT approved by the link: Publish gets focus, nothing sent', async () => {
     const card = makeCard({ risk: 'high', kind: 'publish', primary_label: 'Publish' })
     const client = setup({ cards: [card] })
-    const order: string[] = []
-    const stepup = client.stepup.bind(client)
-    client.stepup = async (p) => {
-      order.push('stepup')
-      expect(sent(client)).toHaveLength(0)
-      return stepup(p)
-    }
+    const resolve = vi.spyOn(client, 'resolveCard')
     open(card, client)
-    await waitFor(() => expect(sent(client)).toHaveLength(1))
-    expect(order).toEqual(['stepup'])
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Publish' })))
+    await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
+    expect(resolve).not.toHaveBeenCalled()
+    expect(sent(client)).toHaveLength(0)
   })
 
-  it('audit finding: in the iPhone app a push Approve on a high-risk card waits for a real tap (no passkey prompt without a gesture)', async () => {
+  it('in the iPhone app the same: a high-risk card waits for a real tap', async () => {
     const g = globalThis as Record<string, unknown>
     g.Capacitor = { isNativePlatform: () => true, getPlatform: () => 'ios' }
     try {
       const card = makeCard({ risk: 'high', kind: 'publish', primary_label: 'Publish' })
       const client = setup({ cards: [card] })
-      const stepup = vi.spyOn(client, 'stepup')
       open(card, client)
-      await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: /Publish/ })))
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Publish' })))
       await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
-      expect(stepup).not.toHaveBeenCalled()
       expect(sent(client)).toHaveLength(0)
     } finally {
       delete g.Capacitor
     }
   })
 
-  it('a cancelled Face ID sends nothing and says so', async () => {
-    const card = makeCard({ risk: 'high' })
+  it('the tap after the focus is what sends it', async () => {
+    const card = makeCard({ risk: 'high', kind: 'publish', primary_label: 'Publish' })
     const client = setup({ cards: [card] })
-    client.stepup = async () => {
-      throw Object.assign(new Error('cancelled'), { name: 'NotAllowedError' })
-    }
     open(card, client)
-    expect((await screen.findByRole('alert')).textContent).toMatch(/cancelled/i)
+    const button = screen.getByRole('button', { name: 'Publish' })
+    await waitFor(() => expect(document.activeElement).toBe(button))
     expect(sent(client)).toHaveLength(0)
+    button.click()
+    await waitFor(() => expect(sent(client)).toHaveLength(1))
+    expect(sent(client)[0]?.action).toBe('primary')
   })
 
   it('a low-risk card is NOT approved by the link: it is shown with Send focused, nothing sent', async () => {
@@ -83,23 +80,23 @@ describe('Approve from a push', () => {
   it('an Open tap (no arm) never starts anything, even on a high-risk card', async () => {
     const card = makeCard({ risk: 'high' })
     const client = setup({ cards: [card] })
-    const stepup = vi.spyOn(client, 'stepup')
     open(card, client, '', false)
-    await screen.findByRole('button', { name: /Send/ })
+    const button = await screen.findByRole('button', { name: /Send/ })
     await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
-    expect(stepup).not.toHaveBeenCalled()
+    expect(document.activeElement).not.toBe(button)
+    expect(sent(client)).toHaveLength(0)
   })
 
   it.each(['?arm=primary', '?arm=secondary', '?arm=', '?arm=primary,kill', '?arm=PRIMARY', '?armed=primary'])(
-    'a URL never arms (%s): a link in agent text cannot start an approval prompt',
+    'a URL never arms (%s): a link in agent text cannot start an approval',
     async (q) => {
       const card = makeCard({ risk: 'high' })
       const client = setup({ cards: [card] })
-      const stepup = vi.spyOn(client, 'stepup')
       open(card, client, q, false)
-      await screen.findByRole('button', { name: /Send/ })
+      const button = await screen.findByRole('button', { name: /Send/ })
       await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
-      expect(stepup).not.toHaveBeenCalled()
+      expect(document.activeElement).not.toBe(button)
+      expect(sent(client)).toHaveLength(0)
     },
   )
 
@@ -116,10 +113,8 @@ describe('Approve from a push', () => {
   ])('a stale card (%s) ignores it', async (_n, over) => {
     const card = makeCard({ risk: 'high', ...over })
     const client = setup({ cards: [card] })
-    const stepup = vi.spyOn(client, 'stepup')
     open(card, client)
     await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
-    expect(stepup).not.toHaveBeenCalled()
     expect(sent(client)).toHaveLength(0)
   })
 
@@ -127,31 +122,27 @@ describe('Approve from a push', () => {
     const original = makeCard({ risk: 'high' })
     const card = { ...original, body: 'Send the money somewhere else.' }
     const client = setup({ cards: [card] })
-    const stepup = vi.spyOn(client, 'stepup')
     open(card, client)
     await screen.findByRole('alert')
     await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
-    expect(stepup).not.toHaveBeenCalled()
-  })
-
-  it('the arm is spent: a re-render, or a second card view for the same card, does not run it twice', async () => {
-    const card = makeCard({ risk: 'high' })
-    const client = setup({ cards: [card] })
-    const stepup = vi.spyOn(client, 'stepup')
-    open(card, client)
-    await waitFor(() => expect(sent(client)).toHaveLength(1))
-    expect(screen.getByTestId('location').textContent).toBe(`/card/${card.id}`)
-    await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
-    expect(stepup).toHaveBeenCalledTimes(1)
+    expect(sent(client)).toHaveLength(0)
   })
 
   it('a card that is gone shows the plain notice and runs nothing', async () => {
     const client = setup()
-    const stepup = vi.spyOn(client, 'stepup')
     armCard('c_01JBF3V7Q8K2M4N6P8R0S2T4ZZ')
     renderWith(<CardDeepLink />, client, '/card/c_01JBF3V7Q8K2M4N6P8R0S2T4ZZ', '/card/:id')
     expect(screen.getByText(/no longer here/)).toBeTruthy()
-    expect(stepup).not.toHaveBeenCalled()
+    expect(sent(client)).toHaveLength(0)
+  })
+
+  it('the URL keeps no arm', async () => {
+    const card = makeCard({ risk: 'high' })
+    const client = setup({ cards: [card] })
+    open(card, client)
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: /Send/ })))
+    expect(screen.getByTestId('search').textContent).toBe('')
+    expect(screen.getByTestId('location').textContent).toBe(`/card/${card.id}`)
   })
 })
 
@@ -161,37 +152,34 @@ describe('the arm belongs to one card', () => {
     const b = makeCard({ risk: 'high' })
     armCard(a.id)
     const client = setup({ cards: [a, b] })
-    const stepup = vi.spyOn(client, 'stepup')
     renderWith(<CardDeepLink />, client, `/card/${b.id}`, '/card/:id')
-    await screen.findByRole('button', { name: /Send/ })
+    const button = await screen.findByRole('button', { name: /Send/ })
     await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
-    expect(stepup).not.toHaveBeenCalled()
+    expect(document.activeElement).not.toBe(button)
+    expect(sent(client)).toHaveLength(0)
   })
 
   it('a spent arm stays spent: a second view of the same card later is not armed', async () => {
     const card = makeCard({ risk: 'high' })
     const client = setup({ cards: [card] })
-    // A cancelled Face ID leaves the card live and pending, so only the spent arm stops a second run.
-    const stepup = vi.fn(async () => {
-      throw new Error('cancelled')
-    })
-    client.stepup = stepup
     const first = open(card, client)
-    await waitFor(() => expect(stepup).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: /Send/ })))
     first.unmount()
     renderWith(<CardDeepLink />, client, `/card/${card.id}`, '/card/:id')
+    const button = await screen.findByRole('button', { name: /Send/ })
     await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
-    expect(stepup).toHaveBeenCalledTimes(1)
+    expect(document.activeElement).not.toBe(button)
+    expect(sent(client)).toHaveLength(0)
   })
 
   it('an arm older than two minutes lapses', async () => {
     const card = makeCard({ risk: 'high' })
     const client = setup({ cards: [card] })
-    const stepup = vi.spyOn(client, 'stepup')
     armCard(card.id, Date.now() - 121_000)
     open(card, client, '', false)
-    await screen.findByRole('button', { name: /Send/ })
+    const button = await screen.findByRole('button', { name: /Send/ })
     await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
-    expect(stepup).not.toHaveBeenCalled()
+    expect(document.activeElement).not.toBe(button)
+    expect(sent(client)).toHaveLength(0)
   })
 })

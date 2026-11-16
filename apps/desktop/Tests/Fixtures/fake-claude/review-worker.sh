@@ -20,7 +20,7 @@
 # nothing meanwhile); the keys are not lost. FAKE_RV_SWALLOW_UNTIL=<file>: every key is dropped until this file exists.
 # FAKE_RV_EMPTY_ENTER_LOG=<file>: an Enter that arrives with the box empty (it sends nothing) is logged here, one line each.
 # FAKE_RV_STATUS=<seconds>: repaint a status line on the row under the box's footer every N seconds, with text that changes each time
-# ("Sonnet 5.5 | 20% | 7d: 38%", as the owner's statusLine does when usage changes). No turn, no key: the only thing on the pane that moves.
+# ("Talos: Sonnet 5 | 7d: 20%": the status line Talos sets in every thread session, WorkerUsage, which repaints when usage changes). No turn, no key: the only thing on the pane that moves.
 # FAKE_RV_STATUS_ONLY=<comma list of threads> limits it to those threads. FAKE_RV_TURN=<file>: while this file exists, a turn is "running":
 # a changing line ("thinking N") on row 1, above the box, every 0.3 s. FAKE_RV_DEAF=<file>: once this file exists the pane's tty
 # stops echoing what is typed (plain mode), so a key typed by an attached client changes nothing on the screen. (Before that, the pointer
@@ -84,7 +84,7 @@ fi
 case ",${FAKE_RV_STATUS_ONLY:-$T}," in
   *",$T,"*)
     if [ -n "${FAKE_RV_STATUS:-}" ]; then  # row 6: under the footer, the last row of the box's layout (lib.sh `input_box`)
-      ( n=19; while :; do n=$((n+1)); printf '\0337\033[6;1H\033[2K  Sonnet 5.5 | %d%% | 7d: 38%%\0338' "$n"; sleep "$FAKE_RV_STATUS"; done ) &
+      ( n=19; while :; do n=$(( (n + 1) % 101 )); printf '\0337\033[6;1H\033[2K  Talos: Sonnet 5 | 7d: %d%%\0338' "$n"; sleep "$FAKE_RV_STATUS"; done ) &
     fi ;;
 esac
 if [ -n "${FAKE_RV_TURN:-}" ]; then

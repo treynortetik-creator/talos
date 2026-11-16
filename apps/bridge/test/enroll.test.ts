@@ -33,6 +33,7 @@ function cli(): Cli {
   const err: string[] = []
   const prompts: string[] = []
   const answer = { value: 'y' }
+  let skew = 0 // a person reads the words before answering: the prompt moves this io's clock on 600 ms
   return {
     out,
     err,
@@ -43,10 +44,11 @@ function cli(): Cli {
       err: (l) => err.push(l),
       prompt: async (q) => {
         prompts.push(q)
+        skew += 600
         return answer.value
       },
       sleep: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
-      now: () => Date.now(),
+      now: () => Date.now() + skew,
     },
   }
 }
@@ -220,7 +222,7 @@ describe('enrollment (Mac side)', () => {
       await h.stop()
     }
     h = await startHarness({ startBridge: false })
-  })
+  }, 60_000) // three whole enrollments: ~6 s alone, past 20 s under a full gate (2026-11-15)
 
   test('a bad binding is device.pinned{ok:false, reason:bad_binding} and no confirm file is written', async () => {
     h = await startHarness()

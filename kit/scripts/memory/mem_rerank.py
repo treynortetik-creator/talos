@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mem_rerank.py: OPT-IN cross-encoder rerank for recall.py (bge-reranker-v2-m3, int8 ONNX, CPU).
 
-Off by default. recall.py turns it on with --rerank or RECALL_RERANK=1, and only when the semantic search stack is
+Off unless asked for or measured fast. recall.py turns it on with --rerank, TALOS_RECALL_RERANK=1, or by itself for a question when the timing probe says it is quick (below), and only when the semantic search stack is
 installed (scripts/memory/setup.sh) AND the reranker model has been downloaded (bash scripts/memory/setup.sh --rerank).
 
 API (what recall.py calls):
@@ -20,12 +20,18 @@ to the first 1800 characters of the file. READ-ONLY: the index is opened read-on
 Measured trade-off (one maintainer's 33-query bench, so a hint, not a promise): it helped hard, vague "what did we decide
 about..." questions a lot and slightly hurt exact name / file lookups. That is why it is opt-in per query, not on.
 Model dir: $TALOS_RERANK_MODEL_DIR or ${XDG_DATA_HOME:-~/.local/share}/talos/models/bge-reranker-v2-m3-int8 (about 571 MB).
+
+`mem_rerank.py --probe <agent_dir> [--force]` (run with the venv python) times one COLD rerank (a fresh worker process, the way recall.py makes it) and one WARM rerank of up to 15 of the agent's
+notes and keeps it in <agent_dir>/.index/rerank-time.json ({"seconds" (one warm rerank), "cold_seconds" (a fresh worker: start, load, rerank, exit), "n", "measured", "cpus"}). The install runs it once
+after the model download; the daily index job runs it at most once per 20 hours (--force measures again). recall.py reads it:
+it reranks question-shaped queries by default only when this file's cold_seconds is under 8.0 (a plain recall.py run starts a fresh worker).
 """
 import json
 import os
 import select
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "talos")
@@ -35,6 +41,7 @@ PAD_ID, MAX_LEN, BATCH, DOC_CHARS = 1, 512, 8, 1800
 WORKER_TIMEOUT_S = 180          # cold: model load plus embedder load plus scoring
 
 _warned = False
+LAST_ERROR = None               # the last failure, as text: recall.py reads it to say WHY a rerank did not run
 _disabled = False               # after one failure, stop retrying in this process
 _worker = None
 _session = None                 # (tokenizer, onnx session, input names): in-process cache
@@ -195,7 +202,7 @@ def close():
 # ------------------------------------------------------------------ public API
 def rerank(query, paths):
     """Return (ordered_paths, scores). On ANY failure: (list(paths), None) plus one stderr note."""
-    global _disabled
+    global _disabled, LAST_ERROR
     paths = list(paths)
     if len(paths) < 2 or _disabled:
         return paths, None
@@ -213,13 +220,94 @@ def rerank(query, paths):
         return [paths[i] for i in order], [scores[i] for i in order]
     except Exception as e:
         _disabled = True
-        _note("%s: %s" % (type(e).__name__, e))
+        LAST_ERROR = "%s: %s" % (type(e).__name__, e)
+        _note(LAST_ERROR)
         _kill_worker()
         return paths, None
+
+
+# ------------------------------------------------------------------ speed probe
+PROBE_QUERY = "what did we decide about the next step"
+PROBE_MAX_AGE_H = 20
+
+
+def _probe_notes(agent_dir):
+    found = []
+    for root, dirs, files in os.walk(agent_dir):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "node_modules"]
+        found += [os.path.join(root, f) for f in files if f.endswith(".md")]
+    return sorted(found)[:15]
+
+
+def time_cold(query, paths):
+    """Seconds for ONE rerank the way recall.py really makes it: a fresh worker process that starts, loads the embedder and
+    the reranker model, scores the paths and exits. None when that failed. (A rerank that finds the model in-process is not
+    what a plain recall.py run does, so this always goes through a new worker child.)"""
+    close()
+    t0 = time.monotonic()
+    try:
+        scores = _ask_worker(query, list(paths))
+        if len(scores) != len(paths):
+            raise ValueError("got %d scores for %d files" % (len(scores), len(paths)))
+        close()
+    except Exception as e:  # noqa: BLE001
+        _kill_worker()
+        _note("cold timing: %s: %s" % (type(e).__name__, e))
+        return None
+    return time.monotonic() - t0
+
+
+def probe(agent_dir, force=False):
+    """Time one warm rerank and write <agent_dir>/.index/rerank-time.json. Prints one line; returns 0 on every path."""
+    import datetime
+    out = os.path.join(agent_dir, ".index", "rerank-time.json")
+    if not force:
+        try:
+            with open(out) as fh:
+                prev = json.load(fh)
+            prev["cold_seconds"]        # a file from before the cold timing existed is measured again
+            when = datetime.datetime.strptime(prev["measured"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+            age_h = (datetime.datetime.now(datetime.timezone.utc) - when).total_seconds() / 3600.0
+            if 0 <= age_h < PROBE_MAX_AGE_H:
+                print("reranking speed here: measured %.1f h ago (%s s); not timed again" % (age_h, prev["seconds"]))
+                return 0
+        except Exception:
+            pass
+    if not installed():
+        print("reranking speed here: not timed (the reranker model is not downloaded)")
+        return 0
+    paths = _probe_notes(agent_dir)
+    if len(paths) < 2:
+        print("reranking speed here: not timed (too few notes to time)")
+        return 0
+    cold = time_cold(PROBE_QUERY, paths)            # first, so no worker of ours is warm yet
+    _, scores = rerank(PROBE_QUERY, paths)          # loads the model: the warm-up, not timed
+    if scores is not None:
+        t0 = time.monotonic()
+        _, scores = rerank(PROBE_QUERY, paths)
+        secs = time.monotonic() - t0
+    if scores is None:
+        print("reranking speed here: the timing failed (the reranker did not run)")
+        return 0
+    rec = {"seconds": round(secs, 1), "n": len(paths),
+           "measured": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "cpus": os.cpu_count()}
+    if cold is not None:
+        rec["cold_seconds"] = round(cold, 1)        # recall.py's default-on gate reads this one, not "seconds"
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    tmp = "%s.%d.tmp" % (out, os.getpid())
+    with open(tmp, "w") as fh:
+        json.dump(rec, fh)
+        fh.write("\n")
+    os.replace(tmp, out)
+    print("reranking speed here: %s s for %d notes (%s)" % (rec["seconds"], rec["n"], "cold start %s s" % rec["cold_seconds"]
+          if cold is not None else "cold start timing failed"))
+    return 0
 
 
 if __name__ == "__main__":
     if "--worker" in sys.argv:
         _worker_main()
+    elif "--probe" in sys.argv and sys.argv.index("--probe") + 1 < len(sys.argv):
+        sys.exit(probe(sys.argv[sys.argv.index("--probe") + 1], force="--force" in sys.argv))
     else:
         sys.exit("mem_rerank.py is a library for recall.py (--rerank). `--worker` runs the child process.")

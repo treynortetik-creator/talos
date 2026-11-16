@@ -10,6 +10,11 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { memoryIndexPath } from '../src/memory/config.ts'
+import { durableSqlite } from './sqlite-durable.ts'
+
+// this file's point is what survives a kill mid-write: SQLite syncs as the product runs (sqlite-test-seam.ts). Its children
+// (the killed processes) never load the preload, so they always do.
+durableSqlite()
 
 const SRC = join(import.meta.dir, '../src')
 const BOOT_MS = 30_000 // starting Bun on a loaded Mac

@@ -5,6 +5,7 @@
 export PYTHONDONTWRITEBYTECODE=1
 set -uo pipefail
 G="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/hooks/pre-tool-guard.py"
+. "$(dirname "${BASH_SOURCE[0]}")/_test-env.sh"
 PASS=0; FAIL=0
 verdict(){ printf '{"tool_name":"Bash","tool_input":{"command":%s}}' "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1")" | python3 "$G" 2>/dev/null; echo $?; }
 expect(){ local want="$1" cmd="$2"; local got; got=$(verdict "$cmd")

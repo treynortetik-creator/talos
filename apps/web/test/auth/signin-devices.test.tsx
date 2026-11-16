@@ -433,8 +433,6 @@ describe('Account section: sign out and revoke', () => {
     })
     const client = createFakeClient()
     client.store.setState((s) => ({ ...s, deviceId: mine.deviceId }))
-    const stepup = vi.fn(async () => 'token')
-    client.stepup = stepup as never
     const close = vi.spyOn(client, 'close')
     render(
       <ClientProvider client={client}>
@@ -448,7 +446,7 @@ describe('Account section: sign out and revoke', () => {
         </StorageProvider>
       </ClientProvider>,
     )
-    return { calls, stepup, close }
+    return { calls, close }
   }
   const here = () => screen.getByTestId('location').textContent
 
@@ -577,26 +575,29 @@ describe('Account section: sign out and revoke', () => {
   })
 
   it('revoking THIS device warns first; confirming signs out, wipes chats and drops the dead key', async () => {
-    const { calls, stepup } = mount({ [`POST /api/devices/${mine.deviceId}/revoke`]: () => json(200, { ok: true }) })
+    const { calls } = mount({ [`POST /api/devices/${mine.deviceId}/revoke`]: () => json(200, { ok: true }) })
     await screen.findByText('Old laptop')
     await userEvent.click(screen.getByRole('button', { name: 'Revoke This phone' }))
     const dialog = await screen.findByRole('dialog')
     expect(dialog.textContent).toMatch(/signs you out here/)
-    expect(stepup).not.toHaveBeenCalled()
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
     await userEvent.click(within(dialog).getByRole('button', { name: 'Revoke this device' }))
     await waitFor(() => expect(here()).toBe('/login'))
-    expect(stepup).toHaveBeenCalledWith('device:revoke')
+    // no passkey (owner ruling 2026-11-14): the confirm sheet is the check, and the revoke carries no step-up token
+    expect(calls.find((c) => c.url === `/api/devices/${mine.deviceId}/revoke`)?.body).toEqual({})
     expect(await privateCounts(storage)).toEqual({ cache: 0, drafts: 0, outbox: 0, blobs: 0, keys: 0 })
   })
 
-  it('revoking another device needs no warning and leaves this device signed in', async () => {
-    const { calls, stepup } = mount({ [`POST /api/devices/${other.deviceId}/revoke`]: () => json(200, { ok: true }) })
+  it('revoking another device asks on the confirm sheet first (no passkey), then leaves this device signed in', async () => {
+    const { calls } = mount({ [`POST /api/devices/${other.deviceId}/revoke`]: () => json(200, { ok: true }) })
     await screen.findByText('Old laptop')
     await userEvent.click(screen.getByRole('button', { name: 'Revoke Old laptop' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).not.toMatch(/does not remove that passkey/)
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Revoke Old laptop' }))
     await waitFor(() => expect(calls.some((c) => c.url === `/api/devices/${other.deviceId}/revoke`)).toBe(true))
-    expect(screen.queryByRole('dialog')).toBeNull()
-    expect(stepup).toHaveBeenCalled()
+    expect(calls.find((c) => c.url === `/api/devices/${other.deviceId}/revoke`)?.body).toEqual({})
     expect(here()).not.toBe('/login')
     expect((await privateCounts(storage)).cache).toBe(2)
   })
@@ -625,7 +626,7 @@ describe('Account section: sign out and revoke', () => {
     const shared = (k: DeviceKey, name: string) => ({ ...device(k, name), shared_passkey: true })
 
     it('revoking a device on a shared passkey warns first that the passkey stays, and sends nothing until confirmed', async () => {
-      const { calls, stepup } = mount({
+      const { calls } = mount({
         'GET /api/devices': () => json(200, [shared(mine, 'This phone'), shared(other, 'Old laptop')]),
         [`POST /api/devices/${other.deviceId}/revoke`]: () => json(204),
       })
@@ -633,9 +634,8 @@ describe('Account section: sign out and revoke', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Revoke Old laptop' }))
       const dialog = await screen.findByRole('dialog')
       expect(dialog.textContent).toMatch(/does not remove that passkey/)
-      expect(stepup).not.toHaveBeenCalled()
       expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
-      await userEvent.click(within(dialog).getByRole('button', { name: 'Revoke this device' }))
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Revoke Old laptop' }))
       await waitFor(() => expect(calls.some((c) => c.url === `/api/devices/${other.deviceId}/revoke`)).toBe(true))
       expect((await screen.findByRole('status')).textContent).toMatch(
         /passkey is shared with another device and still works/,
@@ -652,12 +652,14 @@ describe('Account section: sign out and revoke', () => {
       expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
     })
 
-    it('an older relay (no shared_passkey field) keeps the plain one-tap revoke', async () => {
+    it('an older relay (no shared_passkey field) gets the plain sheet, with no shared-passkey warning or notice', async () => {
       const { calls } = mount({ [`POST /api/devices/${other.deviceId}/revoke`]: () => json(204) })
       await screen.findByText('Old laptop')
       await userEvent.click(screen.getByRole('button', { name: 'Revoke Old laptop' }))
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog.textContent).not.toMatch(/does not remove that passkey/)
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Revoke Old laptop' }))
       await waitFor(() => expect(calls.some((c) => c.url === `/api/devices/${other.deviceId}/revoke`)).toBe(true))
-      expect(screen.queryByRole('dialog')).toBeNull()
       expect(screen.queryByRole('status')).toBeNull()
     })
 

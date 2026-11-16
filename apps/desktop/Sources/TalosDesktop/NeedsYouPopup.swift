@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import TalosDesktopCore
 import TalosSupervisor
 
@@ -189,17 +190,29 @@ final class NeedsYouPopupView: NSView {
   /// Whether this action is the owner's own click on this button: the event the app is handling is a left mouse button event, a moment old at
   /// most, in this button's window and on the button. WHY: an Accessibility press (VoiceOver, another app driving the UI) or an AppleScript
   /// click reaches the same action method but sends no mouse event, so `NSApp.currentEvent` is nil or something that has nothing to do with
-  /// this button. Only the owner's hand at the Mac may answer; a program that can press a button for him may not.
+  /// this button. A click a program posts as a mouse event (cliclick, a computer-use tool) carries that program's process id. Only the owner's
+  /// hand at the Mac may answer; a program that can press a button for him may not.
   static func isRealClick(_ event: NSEvent?, on button: NSButton, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
     guard let e = event else { return false }
     let kind: PopupClickCheck.Kind = e.type == .leftMouseUp ? .leftMouseUp : e.type == .leftMouseDown ? .leftMouseDown : .other
+    let cg = e.cgEvent
     return PopupClickCheck.isRealClick(
       kind: kind, age: now - e.timestamp, sameWindow: button.window.map { $0.windowNumber == e.windowNumber } ?? false,
-      onButton: button.bounds.contains(button.convert(e.locationInWindow, from: nil)))
+      onButton: button.bounds.contains(button.convert(e.locationInWindow, from: nil)),
+      sourcePid: cg?.getIntegerValueField(.eventSourceUnixProcessID) ?? -1, sourceStateId: cg?.getIntegerValueField(.eventSourceStateID) ?? -1)
   }
 
+  private static let log = Logger(subsystem: "app.talos.desktop", category: "popup")
+
   @objc private func answerClicked(_ sender: NSButton) {
-    guard Self.isRealClick(currentEvent(), on: sender) else { return }
+    let e = currentEvent()
+    let real = Self.isRealClick(e, on: sender)
+    // Where the click came from (process id and source state only), so one real click shows what the mouse or trackpad gives:
+    // `log stream --predicate 'subsystem == "app.talos.desktop" && category == "popup"'`
+    let cg = e?.cgEvent
+    Self.log.notice(
+      "answer click: source pid \(cg?.getIntegerValueField(.eventSourceUnixProcessID) ?? -1, privacy: .public), state \(cg?.getIntegerValueField(.eventSourceStateID) ?? -1, privacy: .public), counted \(real, privacy: .public)")
+    guard real else { return }
     onClick(sender.tag)
   }
   @objc private func closeClicked() { onClose() }
@@ -289,24 +302,23 @@ final class NeedsYouPopupController {
       shown[id] = Shown(content: p.content, phase: p.phase)
       fresh.append(panel)
     }
-    place(popups.map(\.item.dialog.id), fresh: fresh)
+    place(popups.map { ($0.item.dialog.id, $0.item.thread == Supervisor.mainPopupThread) }, fresh: fresh)
     for panel in fresh { orderFront(panel) }  // after it stands where it belongs: none flashes at the bottom left
   }
 
-  /// Top right of the main screen, stacked downward, the oldest on top. A popup that was already up and now stands somewhere else (the one
-  /// above it closed or grew) has its first-moment click delay restarted: the next click is not for it.
-  private func place(_ order: [String], fresh: [NeedsYouPanel]) {
+  /// Top right of the main screen, stacked downward, the oldest on top; Main's own popup (its development-channels warning) is centred
+  /// on the screen instead, and takes no slot in the stack. A popup that was already up and now stands somewhere else (the one above it
+  /// closed or grew) has its first-moment click delay restarted: the next click is not for it.
+  private func place(_ order: [(id: String, isMain: Bool)], fresh: [NeedsYouPanel]) {
     let area = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-    var top = area.maxY - 16
-    for id in order {
-      guard let panel = panels[id] else { continue }
-      let h = panel.frame.height
-      let target = NSPoint(x: area.maxX - panel.frame.width - 16, y: top - h)
+    let present = order.filter { panels[$0.id] != nil }
+    let origins = NeedsYouPlacement.origins(panels: present.map { (isMain: $0.isMain, size: panels[$0.id]!.frame.size) }, area: area)
+    for (p, target) in zip(present, origins) {
+      guard let panel = panels[p.id] else { continue }
       if panel.frame.origin != target {
         panel.setFrameOrigin(target)
-        if !fresh.contains(where: { $0 === panel }) { coordinator.rearm(dialogId: id) }
+        if !fresh.contains(where: { $0 === panel }) { coordinator.rearm(dialogId: p.id) }
       }
-      top -= h + 12
     }
   }
 

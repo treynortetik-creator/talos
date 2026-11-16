@@ -19,7 +19,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },
@@ -196,7 +197,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },
@@ -346,7 +348,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },
@@ -510,7 +513,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },
@@ -782,7 +786,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },
@@ -886,7 +891,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },
@@ -997,7 +1003,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },
@@ -1119,7 +1126,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },
@@ -1184,7 +1192,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },
@@ -1359,7 +1368,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },
@@ -1474,7 +1484,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },
@@ -1529,7 +1540,8 @@
           "client": {
             "version": "0.0.0",
             "standalone": true,
-            "platform": "replay"
+            "platform": "replay",
+            "features": ["features-64/1"]
           }
         }
       },

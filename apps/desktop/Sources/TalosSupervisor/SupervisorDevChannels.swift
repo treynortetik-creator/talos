@@ -45,10 +45,21 @@ extension Supervisor {
   func confirmDevDialog(_ screen: DialogMatcher.Screen, launch l: inout Launch, loop: CrashLoop, now: Double) -> DevConfirm {
     if case .refuse(let why) = AutoConfirmGuard.decide(devDialogInputs(screen, l, loop, now)) { return .refused(why) }
     if case .refuse(let why) = AutoConfirmGuard.decide(devDialogInputs(screen, l, loop, now)) { return .refused(why) }
-    guard let rows = host.visibleRows(), DialogMatcher.classify(rows) == screen else { return .refused(.screenChanged) }
+    // never onto the usage-limit screen (one of its options spends usage credits), whatever else the rows say
+    guard let rows = host.visibleRows(), !DialogMatcher.takesNoKeys(rows), DialogMatcher.classify(rows) == screen else {
+      return .refused(.screenChanged)
+    }
+    // The key guard reads the screen once more and lets the Enter go only onto the live warning itself (`KeyGuard`, the live region
+    // alone: the warning's words quoted above some other select name nothing). Refused: nothing went, and the owner is told as for any
+    // refusal that may clear by itself (the warning still up after `devRefusalHold` passes).
     // A definite failure (no pane, tmux exited non-zero) means the Enter never arrived: it does not count, and the next tick tries
     // again. A timeout may have delivered it, and the rule is never press twice, so it counts.
-    if host.send(keys: [0x0d]) == .failed {
+    // the Enter lands on "I am using this for local development", with the channels the decision read (AutoConfirmGuard checked them
+    // against the launch): any other row under the cursor, or another list, and no key goes
+    guard case .devChannels(let d) = screen, let channels = d.channels else { return .refused(.screenChanged) }
+    let sent = sendKey(.devWarning(highlighted: DialogMatcher.Strings.devConfirm, channels: channels)) { $0.send(keys: [0x0d]) }
+    if sent == .refused { return .refused(.screenChanged) }
+    if sent == .failed {
       audit("auto_confirm_send_failed", ["session": l.sessionId, "pid": "\(l.childPid)"])
       return .notSent
     }

@@ -18,7 +18,8 @@ async function open(page: Page, route = '/memory', o: { offline?: boolean } = {}
 
 test('the tree, a note with frontmatter and links, and a script that stays text', async ({ page }) => {
   await open(page)
-  await expect(page.getByRole('heading', { level: 1, name: 'Memory' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Clio' })).toBeVisible() // the Memory tab's screen: Clio
+  await expect(page.getByText("Your agent's memory")).toBeVisible()
   await page.getByTestId('memory-entry-Overview.md').click()
   await expect(page.getByTestId('memory-frontmatter')).toContainText('draft')
   const body = page.getByTestId('memory-body')

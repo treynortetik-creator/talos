@@ -40,6 +40,19 @@ public enum TalosAppLocator {
       ?? ["\(home)/.bun/bin", "/opt/homebrew/bin", "/usr/local/bin"].map { "\($0)/\(n)" }.first(where: isExecutable)
   }
 
+  /// The folders tmux is looked in after the PATH it was given: Homebrew's two, then the two the no-admin route puts it in
+  /// (`install.sh` prints it; docs/MAC-SECOND-USER-RUN-SHEET.md): `~/.local/bin` and micromamba's `~/.local/talos-tmux/bin`.
+  /// An app started from Finder or at login has a bare PATH (/usr/bin:/bin:...) that holds none of them.
+  public static func tmuxFolders(home: String) -> [String] {
+    ["/opt/homebrew/bin", "/usr/local/bin", "\(home)/.local/bin", "\(home)/.local/talos-tmux/bin"]
+  }
+
+  /// The first tmux on `envPath`, then in `tmuxFolders`. Whether it is new enough is the caller's question.
+  public static func findTmux(envPath: String?, home: String, isExecutable: (String) -> Bool) -> String? {
+    let path = ([envPath ?? ""] + tmuxFolders(home: home)).filter { !$0.isEmpty }.joined(separator: ":")
+    return LoginShellEnv.which("tmux", path: path, isExecutable: isExecutable)
+  }
+
   /// The owner's typed command made runnable: first word resolved by `findProgram`, `~` expanded in the rest. nil when the
   /// program can't be found, so callers say so instead of failing at exec.
   public static func runnable(_ command: [String], searchPath: String?, home: String, isExecutable: (String) -> Bool) -> [String]? {

@@ -23,7 +23,7 @@ import type { RelayEnv } from '../env.ts'
 import type { Bus, Clock, Logger } from '../services.ts'
 import { VERSION } from '../version.ts'
 import { DEFAULT_AGENT_CONFIG } from './default-config.ts'
-import { registerRelayFeature } from './features.ts'
+import { isBridgeSuperseded, registerRelayFeature } from './features.ts'
 import type { CorePush } from './push.ts'
 import type { Store } from './store.ts'
 
@@ -64,6 +64,8 @@ export type HealthDeps = {
   log: Logger
   env: RelayEnv
   bus: Pick<Bus, 'bridgeOnline' | 'onBridgeFrame'>
+  /** The app connections that read the whole features list, and those that do not (counts only). */
+  appWidth?: () => { wide: number; narrow: number }
   push: CorePush
   config: () => AgentConfigT | null
   /** Media bytes + the database file: compared with VOLUME_SOFT_CAP_MB for `storage_full`. */
@@ -172,8 +174,23 @@ export class HealthWatch {
     const last = this.st.last_mac_alert_at
     // inside the gap: wait. A short outage ends before the gap does (silent); a long one is alerted when the gap runs out.
     if (last !== null && now - last < gapMs) return
-    this.update({ down_handled: true, heard: 'down', last_mac_alert_at: now })
-    this.fire('session_stopped')
+    this.update({ down_handled: true, last_mac_alert_at: now })
+    // "heard down" only once a push may have reached the owner: a "Mac is back" for an outage the owner was never told about
+    // is noise (bug hunt R15)
+    void this.d.push
+      .notifyCounted({ template: 'session_stopped' }, { fromHealth: true })
+      .then((res) => {
+        // heard: a send was accepted, or ran out of time (the service may well have delivered it), or ntfy took it
+        if (res === null || (res.ok === 0 && (res.timedOut ?? 0) === 0 && res.ntfy !== true)) return
+        this.st = this.load()
+        this.update({ heard: 'down' })
+      })
+      .catch((e) =>
+        this.d.log.error(
+          { err: e instanceof Error ? e.name : 'error', template: 'session_stopped' },
+          'health push failed',
+        ),
+      )
   }
 
   private modRule(now: number, quiet: boolean): void {
@@ -282,7 +299,9 @@ export class HealthWatch {
     if (this.d.storageBytes() > this.d.env.VOLUME_SOFT_CAP_MB * 1024 * 1024) relayProblems.push('storage_full')
     if (subs === 0 && !ntfy) relayProblems.push('no_alert_path')
     const beat = this.lastBeat()
-    const downSince = online ? null : this.rawDownSince()
+    // clamped to this process' start, as the watchdog reads it: right after a redeploy the bridge is only waiting out its
+    // backoff, not offline since its last hello before the deploy (bug hunt R7)
+    const downSince = online ? null : this.downSince()
     const macProblems: MacProblemT[] = []
     if (!online && downSince !== null && now - downSince > BRIDGE_GONE_MS) macProblems.push('bridge_offline')
     if (online && this.modQuiet(now)) macProblems.push('mod_quiet')
@@ -305,11 +324,14 @@ export class HealthWatch {
       mac_problems: macProblems,
       bridge: {
         online,
-        last_seen: online ? new Date(now).toISOString() : iso(this.rawDownSince()),
+        last_seen: online ? new Date(now).toISOString() : iso(downSince),
         down_since: iso(downSince),
         ...(refused !== null ? { auth_refused_at: iso(refused) } : {}),
+        ...(isBridgeSuperseded(this.d.store) ? { superseded: true } : {}),
+        ...(this.lastBeat()?.bridge.version ? { version: this.lastBeat()?.bridge.version } : {}),
       },
       mod,
+      ...(this.d.appWidth ? { apps: this.d.appWidth() } : {}),
       push: { subscriptions: subs, last_ok_at: iso(out.last_ok_at), last_error_at: iso(out.last_error_at) },
       ntfy,
       limits: {

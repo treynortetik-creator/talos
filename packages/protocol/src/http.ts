@@ -1,6 +1,7 @@
 // Request/response schemas for every HTTP route in spec 3.8, plus a machine-readable route table.
 // WebAuthn JSON (SimpleWebAuthn) is typed as opaque objects: the relay hands it straight to @simplewebauthn/server.
 import { z } from 'zod'
+import { BugInboxDelivery, BugReportAck, BugReportDestination, BugReportPost } from './bug-report.ts'
 import {
   AppUpdateFrame,
   CardCreateFrame,
@@ -12,6 +13,7 @@ import {
 import { HealthStatus } from './health.ts'
 import { ConnId, DeviceId, HttpsUrl, IntegrationId, IsoTs, MediaId, ThreadId, VoiceId } from './ids.ts'
 import { AttachmentRef, Device, InboxItem, isAgentCardKind, isAppMessage, JwkP256 } from './models.ts'
+import { PageInfo, PageList, PageOwnerAction, PagePublished } from './org-pages.ts'
 import { Problem } from './problems.ts'
 import { ApnsRegistration, ApnsStatus } from './push.ts'
 import { NativeActWire, NativeGrant, NativeGrantRevoke } from './push-rich.ts'
@@ -35,14 +37,12 @@ export type RouteAuth =
   // docs/IOS-PUSH.md "Message text and quick actions": no cookie; the signature chain device key -> grant -> action key
   // is the credential, checked by the relay and again by the Mac. One route.
   | 'native-act'
-export type RouteOwner = 'WP-N0' | 'WP1' | 'WP2' | 'WP3' | 'WP4' | 'WP8' | 'WP-V1' | 'WP-V4'
+  // The bug inbox on the Talos team's relay: no cookie; a Standard Webhooks signature with one install's BUG_INBOX_SECRETS
+  // entry is the credential. One route.
+  | 'bug-inbox'
+export type RouteOwner = 'WP-N0' | 'WP1' | 'WP2' | 'WP3' | 'WP4' | 'WP8' | 'WP-V1' | 'WP-V4' | 'ORG-PAGES'
 
 // ---- shared pieces ----------------------------------------------------------------------------------------------
-
-export const StepupPurpose = z
-  .string()
-  .regex(/^(card:c_[0-9A-HJKMNP-TV-Z]{26}|config:work|config:session|device:revoke|session:control|permission:allow)$/)
-export const StepupToken = z.object({ stepup_token: z.string() })
 
 export const PushSubscriptionJson = z.object({
   endpoint: HttpsUrl,
@@ -62,6 +62,8 @@ export const Connection = z.object({
   last_event_at: IsoTs.nullable(),
   kept_24h: z.number().int(),
   received_24h: z.number().int(),
+  /** Slack only: whose Slack it listens to, the owner's or an agent's bot (set when the connection is made). */
+  identity: z.enum(['owner', 'bot']).optional(),
 })
 export const Delivery = z.object({
   at: IsoTs,
@@ -120,7 +122,15 @@ export const routes = {
     path: '/healthz',
     auth: 'none',
     owner: 'WP1',
-    res: z.object({ ok: z.literal(true), version: z.string() }),
+    res: z.object({
+      ok: z.literal(true),
+      version: z.string(),
+      /** The once-per-wait push watcher (relay core/session-wait.ts): running, and its two fixed times. */
+      session_wait: z
+        .object({ running: z.boolean(), after_ms: z.number().int(), tick_ms: z.number().int() })
+        .optional()
+        .catch(undefined),
+    }),
   },
   enrollOptions: {
     id: 'enrollOptions',
@@ -218,24 +228,6 @@ export const routes = {
     res: z.object({ ok: z.literal(true) }),
     note: '401 device_proof_invalid on a wrong or reused proof; the first proof also ends sessions attached to the device without one',
   },
-  stepupOptions: {
-    id: 'stepupOptions',
-    method: 'POST',
-    path: '/api/auth/stepup/options',
-    auth: 'session',
-    owner: 'WP2',
-    req: z.object({ purpose: StepupPurpose }),
-    res: Opaque,
-  },
-  stepupVerify: {
-    id: 'stepupVerify',
-    method: 'POST',
-    path: '/api/auth/stepup/verify',
-    auth: 'session',
-    owner: 'WP2',
-    req: z.object({ purpose: StepupPurpose, response: Opaque }),
-    res: StepupToken,
-  },
   logout: { id: 'logout', method: 'POST', path: '/api/auth/logout', auth: 'session', owner: 'WP2', note: '204' },
   logoutAll: {
     id: 'logoutAll',
@@ -254,6 +246,11 @@ export const routes = {
     res: z.object({
       device_id: DeviceId.optional(),
       device_pinned: z.boolean(),
+      /**
+       * This device was pinned as the agent's first, on an agent never set up (device.pinned `first`), within the last
+       * hour: the app starts the setup interview by itself (first run). Absent otherwise, and from an older relay.
+       */
+      first_run: z.literal(true).optional(),
       has_passkey: z.boolean(),
       rp_id: z.string(),
       version: z.string(),
@@ -282,8 +279,9 @@ export const routes = {
     path: '/api/devices/:id/revoke',
     auth: 'session',
     owner: 'WP2',
-    req: StepupToken,
-    note: '204; step-up purpose device:revoke',
+    // an older app still sends `stepup_token` (the passkey step-up, removed 2026-11-14): accepted, never read
+    req: z.object({ stepup_token: z.string().optional() }),
+    note: '204; a signed-in session and the confirm sheet in the app, no passkey',
   },
   pushSubscribe: {
     id: 'pushSubscribe',
@@ -710,6 +708,35 @@ export const routes = {
     res: z.object({ ok: z.literal(true), id: z.string() }),
     note: 'one problem report (docs/ERRORS.md): session + CSRF, bucket `problems` 30/hour, body cap 64 KiB; 202 once queued for the Mac, 429 with retry_after_s',
   },
+  bugReportPost: {
+    id: 'bugReportPost',
+    method: 'POST',
+    path: '/api/bug-reports',
+    auth: 'session',
+    owner: 'WP-V1',
+    req: BugReportPost,
+    res: BugReportAck,
+    note: "one in-app bug report, signed by the session's pinned device (osig over the whole object, fresh ts, single-use nonce); session + CSRF; body cap 8 MiB, image 5 MiB; per-device bucket `bug_report` (6/hour, 20/day); kept 90 days; 201 stored (a retry of the same id is 200), 400 bad_request | bad_image | stale, 401 bad_signature, 403 wrong_device, 409 replay, 413 too_large, 429 rate_limited with Retry-After",
+  },
+  bugReportDestination: {
+    id: 'bugReportDestination',
+    method: 'GET',
+    path: '/api/bug-reports/destination',
+    auth: 'session',
+    owner: 'WP-V1',
+    res: BugReportDestination,
+    note: 'where a new bug report goes after this relay keeps it, for the reporter to say so: relay (nowhere else), team (the BUG_TEAM_INBOX_URL of this deploy) or webhook (the host of bug_webhook_url, never the address). Only a target the relay would really call counts: both need BUG_WEBHOOK_SECRET',
+  },
+  bugInbox: {
+    id: 'bugInbox',
+    method: 'POST',
+    path: '/api/bug-inbox',
+    auth: 'bug-inbox',
+    owner: 'WP-V1',
+    req: BugInboxDelivery,
+    res: z.object({ ok: z.literal(true) }),
+    note: "another install's bug report, sent by its relay's webhook. 404 (nothing read) unless BUG_INBOX_SECRETS is set. Per-IP bucket `bug_inbox_ip` (30/min, 300/day) before the body; webhook-id, webhook-timestamp (within 5 min) and webhook-signature, checked against each install's secret, which names the sender; body cap 8 MiB, picture 5 MiB and its bytes must match its type; per-install bucket `bug_inbox` (30/hour, 100/day); one problem per report id. 202 filed as a problem.item for the Mac, 400 bad_request | bad_image | stale, 401 bad_signature, 409 replay, 413 too_large, 429 rate_limited with Retry-After",
+  },
   shareTokensList: {
     id: 'shareTokensList',
     method: 'GET',
@@ -773,6 +800,89 @@ export const routes = {
     auth: 'none',
     owner: 'WP-V4',
     note: 'the service worker normally answers; if a POST reaches the relay -> 303 /share?retry=1',
+  },
+  // ---- org pages, phase 1 (docs/ORG-PAGES-SPEC.md): the owner's devices only; no viewer route until phase 3 ----
+  bridgePagePublish: {
+    id: 'bridgePagePublish',
+    method: 'POST',
+    path: '/bridge/pages',
+    auth: 'bridge-sig',
+    owner: 'ORG-PAGES',
+    res: PagePublished,
+    note: 'raw HTML (UTF-8, 10 MiB) + X-Talos-Sha256; query thread_id, title, page_id? (signed with the request). 201 a new page or version, 200 the same bytes (unchanged); 404 not_found for a page_id this thread did not publish; 400 bad_request | bad_html; 413 too_large; 507 pages_full past PAGES_MAX_MB / PAGES_MAX',
+  },
+  pagesList: {
+    id: 'pagesList',
+    method: 'GET',
+    path: '/api/pages',
+    auth: 'session',
+    owner: 'ORG-PAGES',
+    res: PageList,
+    note: "every page, newest change first, with its versions, its stored share and how full the store is; ?thread=<id> one thread's pages only (400 bad_request for a malformed id)",
+  },
+  pageGet: {
+    id: 'pageGet',
+    method: 'GET',
+    path: '/api/pages/:id',
+    auth: 'session',
+    owner: 'ORG-PAGES',
+    res: PageInfo,
+    note: '404 not_found (missing and malformed look the same)',
+  },
+  pageShare: {
+    id: 'pageShare',
+    method: 'POST',
+    path: '/api/pages/:id/share',
+    auth: 'session',
+    owner: 'ORG-PAGES',
+    req: PageOwnerAction,
+    res: PageInfo,
+    note: "page.share, signed by the session's pinned device (osig, fresh ts, single-use nonce); session + CSRF. Makes or replaces the share (extend = share again); expires_at left out = 30 days, null = until unshared. Stored only: nobody else can open a page before phase 3. 400 bad_request | stale, 401 bad_signature, 403 wrong_device, 404 not_found, 409 replay",
+  },
+  pageUnshare: {
+    id: 'pageUnshare',
+    method: 'POST',
+    path: '/api/pages/:id/unshare',
+    auth: 'session',
+    owner: 'ORG-PAGES',
+    req: PageOwnerAction,
+    res: PageInfo,
+    note: 'page.unshare, signed as page.share is; ends the share at once',
+  },
+  pageCurrent: {
+    id: 'pageCurrent',
+    method: 'POST',
+    path: '/api/pages/:id/current',
+    auth: 'session',
+    owner: 'ORG-PAGES',
+    req: PageOwnerAction,
+    res: PageInfo,
+    note: 'page.current {hash}, signed as page.share is: restores a kept version as the current one; 404 not_found for a hash this page does not keep',
+  },
+  pageDelete: {
+    id: 'pageDelete',
+    method: 'DELETE',
+    path: '/api/pages/:id',
+    auth: 'session',
+    owner: 'ORG-PAGES',
+    req: PageOwnerAction,
+    note: 'page.delete, signed as page.share is: the page, every version and its share go; 204',
+  },
+  pageOpen: {
+    id: 'pageOpen',
+    method: 'GET',
+    path: '/p/:id',
+    auth: 'session',
+    owner: 'ORG-PAGES',
+    note: "the page's link. Phase 1: 302 to /p/:id/frame for the owner's session (the viewer shell and sign-in come in phase 3); 404 otherwise",
+  },
+  pageFrame: {
+    id: 'pageFrame',
+    method: 'GET',
+    path: '/p/:id/frame',
+    auth: 'session',
+    owner: 'ORG-PAGES',
+    note: 'the current version (or ?v=<hash>, one the page keeps) as text/html under PAGE_CSP, Cache-Control private, no-store; 404 not_found for missing, malformed or not kept, all identical',
   },
   aasa: {
     id: 'aasa',

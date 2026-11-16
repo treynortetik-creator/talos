@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// Main accepts the development-channels warning at every start (owner decision 2026-11-07, retiring TG 24520 "cold starts are always
 /// human"): the exact real screen is answered on a cold start, on a supervisor restart and after a CLI version change, and anything else
@@ -90,7 +91,7 @@ struct DevChannelsAcceptTests {
   /// A supervisor restart is accepted too (and keeps its quiet menu note).
   @Test(arguments: bothHosts)
   func aSupervisorRestartIsAccepted(kind: HostKind) throws {
-    let r = try Rig(kind, scenario: "crash-after.sh", env: ["FAKE_CRASH_SECONDS": "1"])
+    let r = try Rig(kind, scenario: "crash-after.sh", env: ["FAKE_CRASH_SECONDS": "1"], timings: Rig.crashTolerantTimings())
     defer { r.teardown() }
     r.start()
     #expect(r.wait(60) { r.sup.tickNow(); return r.starts.count >= 2 && isRunning(r.phase()) }, "restarted and running: \(r.phase()), audit: \(r.audit)")
@@ -98,7 +99,7 @@ struct DevChannelsAcceptTests {
     #expect(lines.count == 2, "\(lines)")
     #expect(lines.first?.contains(" kind=cold") == true && lines.last?.contains(" kind=supervisorRestart") == true, "\(lines)")
     #expect(r.allEvents.filter { if case .autoConfirmed = $0 { return true } else { return false } }.count == 1, "the restart's note only")
-    #expect(!r.allEvents.contains { if case .needsYou = $0 { return true } else { return false } })
+    #expect(!r.allEvents.contains { if case .needsYou = $0 { return true } else { return false } }, "told needsYou: \(r.allEvents), audit: \(r.audit)")
   }
 
   /// After a CLI version change: a cold start of a conversation a human once confirmed under another version.
@@ -111,13 +112,13 @@ struct DevChannelsAcceptTests {
     let cap: Double = kind == .tmux ? 30 : 10
     #expect(r.wait(cap) { r.sup.tickNow(); return isRunning(r.phase()) }, "\(r.phase()), audit: \(r.audit)")
     #expect(kindsOf(r.audit).first?.contains(" cli=2.1.313") == true, "\(kindsOf(r.audit))")
-    #expect(r.starts.first?.contains("--resume \(Rig.sessionId)") == true)
+    #expect(r.starts.first?.contains("--resume=\(Rig.sessionId)") == true)
   }
 
   /// ... and a restart of a running one whose CLI changed in between (the native installer moved `claude`).
   @Test(arguments: bothHosts)
   func aRestartAfterACliVersionChangeIsAccepted(kind: HostKind) throws {
-    let versionFile = NSTemporaryDirectory() + "talos-devch-ver-\(UUID().uuidString.prefix(6))"
+    let versionFile = TestTemp.base + "talos-devch-ver-\(UUID().uuidString.prefix(6))"
     defer { try? FileManager.default.removeItem(atPath: versionFile) }
     let r = try Rig(kind, scenario: "crash-after.sh", env: ["FAKE_CLI_VERSION_FILE": versionFile, "FAKE_CRASH_SECONDS": "4"])
     defer { r.teardown() }
@@ -326,7 +327,7 @@ struct DevChannelsAcceptTests {
 
   /// A first-ever start has no stored launch fingerprint, so it counts as changed: the owner confirms it. A plain Enter in the pane (anyone with
   /// tmux can press one) confirms THIS start only: nothing is stored or sealed and no key is made, so the next start is refused again. Only a
-  /// verified tap on the card seals (DevChannelsCardTests).
+  /// click on the Mac popup seals (DevChannelsCardTests).
   @Test(arguments: bothHosts)
   func aPaneEnterConfirmsOnlyThatStartAndSealsNothing(kind: HostKind) throws {
     let r = try Rig(kind, scenario: "dev-dialog.sh", launchConfirmed: false)

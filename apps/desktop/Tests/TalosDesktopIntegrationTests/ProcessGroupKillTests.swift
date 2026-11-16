@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// Option C smoke O14a: when the session's process is killed (SIGKILL), what it left in its group goes with it. Every signal the
 /// supervisor sends goes to the group (`killpg`), through `GroupSignaller`, which refuses pgid 0 and 1, its own group, a group it
@@ -66,7 +67,7 @@ struct ProcessGroupKillTests {
   }
 
   @Test(.enabled(if: Rig.hasTmux)) func aSigkilledWorkerLeavesNothingBehindInItsGroup() throws {
-    let pidFile = NSTemporaryDirectory() + "gc-\(UUID().uuidString.prefix(8))"
+    let pidFile = TestTemp.base + "gc-\(UUID().uuidString.prefix(8))"
     let r = try WorkerRig(scenario: "worker-grandchild.sh", extraEnv: ["FAKE_GRANDCHILD_PID_FILE": pidFile])
     var gc: Int32 = 0
     defer {
@@ -86,7 +87,7 @@ struct ProcessGroupKillTests {
   }
 
   @Test(.enabled(if: Rig.hasTmux)) func aSigkilledMainLeavesNothingBehindInItsGroup() throws {
-    let pidFile = NSTemporaryDirectory() + "gc-\(UUID().uuidString.prefix(8))"
+    let pidFile = TestTemp.base + "gc-\(UUID().uuidString.prefix(8))"
     var t = Supervisor.Timings()
     t.tick = 0.2
     t.agentsPoll = 0.5

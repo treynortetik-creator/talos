@@ -87,8 +87,17 @@ What the phone has to do, and what each side checks:
 4. **Approve.** Offered only for a low-risk card whose notification showed the whole card, and never for a card that leaves the
    app (email, message, deploy, publish, purchase), a schedule or an app action, and never for any card that lists a destination
    (a "To:" line), whatever kind the agent gave it: those open in the app whatever risk the agent
-   gave them. The phone signs `shown`, a hash of everything it displayed: the subtitle (the thread name, or none) and the body (`shownHash`, `talos-shown/v2`). The relay and the Mac each rebuild that text from
-   their own copy of the card and refuse a mismatch, so a relay cannot have the phone show one thing and sign another. A card
+   gave them. The phone signs `shown`, a hash of everything it displayed: the title (always "Talos", which the extension sets
+   itself), the subtitle (the thread name, or none) and the body (`shownHash`, `talos-shown/v3`). The relay and the Mac each rebuild that text from
+   their own copy of the card and refuse a mismatch, so a relay cannot have the phone show one thing and sign another. The
+   guarantee is the check at the press: the phone hashes what the notification on the screen actually displays and signs
+   nothing unless it is the hash the extension stored, so a push the extension never rewrote cannot show one card and carry
+   another. On top of that, when the extension runs it keeps button data and the Reply and Approve buttons only from a seal it
+   opened, so a seal it cannot open is shown plain, with no button that signs. A push sent without `mutable-content` never
+   reaches the extension and keeps whatever buttons the relay gave it; its Approve is refused by the press check, and its
+   Reply goes to the thread the relay named, which a relay could always choose inside the seal anyway. The signed approval
+   also carries `shown_v` (the hash version), which an older phone never sends: an older build signed whatever hash the
+   notification data held, so the relay and the Mac refuse its approvals, and it is told to open Talos. A card
    with an attachment or a hidden payload is never approvable here. High-risk cards need the passkey step-up in the app.
 5. **Sleeping Mac.** (An Approve is also capped at 12 hours from the phone's signed time, on the Mac's own clock; the relay's stamp cannot extend that. Past it the card stays pending and you get the failed-tap push. A Reply keeps the 8-day rule.) A tap is good for 10 minutes by the phone's clock, judged at the moment the relay took it (the relay stamps
    `relay.received_at`). The Mac judges both a Reply and an Approve at that stamp, so a tap queued while the Mac slept still runs

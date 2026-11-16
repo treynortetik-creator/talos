@@ -63,13 +63,6 @@ struct ClaudeEnvScrubTests {
     #expect(p?.env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "400000")
   }
 
-  @Test func tmuxEnvironmentListingYieldsOnlyTheInheritedNames() {
-    let out = "PATH=/usr/bin\nCLAUDE_CODE_CHILD_SESSION=1\n-CLAUDE_CODE_SESSION_ID\nCLAUDE_CODE_AUTO_COMPACT_WINDOW=1\nTMUX_PANE=%1\nHOME=/home/alex\n"
-    #expect(
-      Set(ClaudeEnvScrub.inheritedNames(inShowEnvironment: out))
-        == ["CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "TMUX_PANE"])
-  }
-
   /// Every place the app builds an environment to start claude (or run it) goes through `LoginShellEnv.build`. The GUI
   /// target cannot be linked here, so the paths are pinned by source: each file must call the shared helper and none
   /// may hand `ProcessInfo.processInfo.environment` to a claude launch directly.
@@ -91,9 +84,10 @@ struct ClaudeEnvScrubTests {
     let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
       .deletingLastPathComponent().appendingPathComponent("Sources")
     let host = try String(contentsOf: sources.appendingPathComponent("TalosSupervisor/TmuxPtyHost.swift"), encoding: .utf8)
-    #expect(host.contains("ClaudeEnvScrub.inheritedNames"), "the tmux host must unset markers a running server holds")
+    // `env -i` and a launch file: a marker the tmux server holds never reaches a pane, and nothing is set on the server
+    #expect(host.contains("LaunchFile.tmuxArgv"), "the tmux host must launch through the launch file")
     let tm = try String(contentsOf: sources.appendingPathComponent("TalosDesktopCore/TmuxCommands.swift"), encoding: .utf8)
-    #expect(tm.contains("removeEnvironment"))
+    #expect(!tm.contains("set-environment") && !tm.contains("env: [String: String]"), "no tmux command may carry or set an environment")
   }
 
   // MARK: "open claude here" (ThreadSessions.claudeEnvironment)
@@ -166,5 +160,57 @@ struct ClaudeEnvScrubTests {
     #expect(try tsList("KEEP") == ClaudeEnvScrub.keep.sorted())
     #expect(try tsList("KEEP_PREFIXES") == ClaudeEnvScrub.keepPrefixes.sorted())
     #expect(try tsList("SESSION_MARKERS") == ClaudeEnvScrub.sessionMarkers.sorted())
+  }
+}
+
+/// Main's environment is the login shell's plus `desktop.json` `env`, and never a thread session's identity: `install.sh` run from a thread
+/// session left TALOS_APP_WORKER_THREAD (with the role and the nonce) in the app's environment, and Main's bridge refused to be the live one.
+@Suite("Main's launch env never carries a thread session's identity")
+struct MainLaunchEnvTests {
+  static let worker: [String: String] = [
+    "TALOS_APP_WORKER_THREAD": "talos", "TALOS_SESSION_ROLE": "worker", "TALOS_APP_WORKER_NONCE": "0123abcd",
+  ]
+
+  @Test func theLoginEnvAndDesktopJsonEnvAreMergedWithoutTheWorkerIdentity() {
+    let shell = ["PATH": "/usr/bin:/bin", "HOME": "/home/alex", "MY_LOGIN_VAR": "1"].merging(Self.worker) { a, _ in a }
+    let env = LoginShellEnv.build(shellEnv: shell, overrides: ["PATH": "/opt/bun/bin:/usr/bin:/bin", "TALOS_APP_BRIDGE": "1"])
+    for k in Self.worker.keys { #expect(env[k] == nil, "\(k) leaked into Main's env") }
+    #expect(env["PATH"] == "/opt/bun/bin:/usr/bin:/bin", "desktop.json env wins over the login env")
+    #expect(env["MY_LOGIN_VAR"] == "1" && env["HOME"] == "/home/alex" && env["TALOS_APP_BRIDGE"] == "1")
+  }
+
+  @Test func desktopJsonCannotSetThemEither() {
+    let env = LoginShellEnv.build(shellEnv: ["PATH": "/bin"], overrides: Self.worker.merging(["KEEP": "1"]) { a, _ in a })
+    for k in Self.worker.keys { #expect(env[k] == nil, "\(k) set from desktop.json") }
+    #expect(env["KEEP"] == "1")
+  }
+
+  /// What a worker launch sets for itself (WorkerSpec): the no-channel state dirs and the claude.ai connectors switch. Main gets none of them from
+  /// a leaked environment; `desktop.json` can still set them on purpose, and a state dir that is the owner's own stays.
+  @Test func aWorkersChannelSwitchesDoNotReachMain() {
+    let shell = [
+      "PATH": "/bin", "TELEGRAM_STATE_DIR": "/h/.config/talos/app/workers/_nochannel",
+      "IMESSAGE_STATE_DIR": "/h/.config/talos/app/workers/_nochannel", "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+    ]
+    let env = LoginShellEnv.build(shellEnv: shell, overrides: [:])
+    #expect(env["TELEGRAM_STATE_DIR"] == nil && env["IMESSAGE_STATE_DIR"] == nil && env["ENABLE_CLAUDEAI_MCP_SERVERS"] == nil)
+    let own = LoginShellEnv.build(shellEnv: ["TELEGRAM_STATE_DIR": "/h/.claude/channels/telegram", "PATH": "/bin"], overrides: [:])
+    #expect(own["TELEGRAM_STATE_DIR"] == "/h/.claude/channels/telegram", "the owner's own state dir stays")
+    let set = LoginShellEnv.build(shellEnv: shell, overrides: ["ENABLE_CLAUDEAI_MCP_SERVERS": "true"])
+    #expect(set["ENABLE_CLAUDEAI_MCP_SERVERS"] == "true", "desktop.json sets it on purpose")
+  }
+
+  @Test func theMarkersAreInheritedNames() {
+    for k in Self.worker.keys { #expect(ClaudeEnvScrub.isInherited(k)) }
+  }
+}
+
+@Suite("Main running without its bridge: the owner's line")
+struct BridgeNotLiveWordingTests {
+  @Test func saysItWithAndWithoutTheReason() {
+    #expect(SupervisorNotice.bridgeNotLive(nil) == "Main is running but its Talos bridge didn't start")
+    #expect(
+      SupervisorNotice.bridgeNotLive("Executable not found in $PATH: \"bun\"")
+        == "Main is running but its Talos bridge didn't start: Executable not found in $PATH: \"bun\"")
   }
 }

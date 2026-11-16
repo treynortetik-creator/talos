@@ -10,13 +10,14 @@ public enum LaunchChange: Equatable, Sendable {
   case restart(wanted: Signature, changed: [String])
   case fresh(wanted: Signature)
 
-  /// What a launch is made from. The list is compared as a set; `nil` (no list) and `[]` (a list with nothing on it) differ.
+  /// What a launch is made from. The list is compared as a set; `nil` (no list) and `[]` (a list with nothing on it) differ. A `cwd` of
+  /// nil is a folder that cannot be known now (its setting cannot be read): never compared.
   public struct Signature: Equatable, Sendable {
-    public var cwd: String
+    public var cwd: String?
     public var model: String
     public var effort: String?
     public var mcpAllow: [String]?
-    public init(cwd: String, model: String, effort: String?, mcpAllow: [String]?) {
+    public init(cwd: String?, model: String, effort: String?, mcpAllow: [String]?) {
       self.cwd = cwd
       self.model = model
       self.effort = effort
@@ -24,13 +25,23 @@ public enum LaunchChange: Equatable, Sendable {
     }
   }
 
-  /// A worker with no record of its launch (an entry an older build wrote) is never changed: it records the launch at its next start.
-  public static func compare(launched: WorkersFile.Launched?, wanted: Signature) -> LaunchChange {
-    guard let l = launched else { return .none }
-    if l.cwd != wanted.cwd { return .fresh(wanted: wanted) }
+  /// A worker with no record of its launch (an entry an older build wrote) has only its folder compared, against `entryCwd` (the entry's
+  /// own `cwd`: every start set it to the folder it launched in, resolved), so a folder change is not missed; its model, effort and list
+  /// are not known, and it records them at its next start. A launch field whose setting cannot be read (`unread`, see
+  /// `ThreadSessionSettings.optsUnread`) is its default, not the owner's setting, and restarts nothing; the MCP list is always compared
+  /// (one that cannot be read is the empty list: a narrowing is never put off).
+  public static func compare(
+    launched: WorkersFile.Launched?, wanted: Signature, unread: [String] = [], entryCwd: String? = nil
+  ) -> LaunchChange {
+    func isUnread(_ f: String) -> Bool { unread.contains("session_opts") || unread.contains(f) }
+    guard let l = launched else {
+      if let was = entryCwd, let w = wanted.cwd, !isUnread("cwd"), was != w { return .fresh(wanted: wanted) }
+      return .none
+    }
+    if let w = wanted.cwd, !isUnread("cwd"), l.cwd != w { return .fresh(wanted: wanted) }
     var changed: [String] = []
-    if l.model != wanted.model { changed.append("model") }
-    if l.effort != wanted.effort { changed.append("effort") }
+    if !isUnread("model"), l.model != wanted.model { changed.append("model") }
+    if !isUnread("effort"), l.effort != wanted.effort { changed.append("effort") }
     if l.mcp_allow?.sorted() != wanted.mcpAllow { changed.append("mcp_allow") }
     return changed.isEmpty ? .none : .restart(wanted: wanted, changed: changed)
   }
@@ -60,14 +71,16 @@ public enum LaunchChange: Equatable, Sendable {
 
   // MARK: the lines the thread gets
 
-  public static func folderLine(_ folder: String) -> String { "Started a new conversation in \(folder)." }
+  /// The folder is not named: it is the owner's setting, and the line is a system row (`WorkerNotice`).
+  public static func folderLine() -> String { "Started a new conversation in this thread's new folder." }
 
+  /// The servers are named, since the owner needs them to act, in quotes (`WorkerNotice.quoted`).
   public static func missingServersLine(_ names: [String]) -> String {
-    "These MCP servers on this thread's list were not found, so the session started without them: \(names.joined(separator: ", "))."
+    "These MCP servers on this thread's list were not found, so the session started without them: \(WorkerNotice.quoted(names))."
   }
 
   public static func refusedServersLine(_ names: [String]) -> String {
-    "These servers can't be on a thread session's list (a claude.ai connector, the browser or screen tools, a messaging plugin) or the Mac can't set them up, so the session started without them: \(names.joined(separator: ", "))."
+    "These servers can't be on a thread session's list (a claude.ai connector, the browser or screen tools, a messaging plugin) or the Mac can't set them up, so the session started without them: \(WorkerNotice.quoted(names))."
   }
 
   public static func ceilingLine(_ d: PrivilegeCeiling.Denial) -> String {

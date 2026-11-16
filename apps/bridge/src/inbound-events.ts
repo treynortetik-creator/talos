@@ -51,6 +51,12 @@ export const eventsFrames = {
     if (ctx.store.hasSeen(m.id)) return this.done(it)
     if (m.thread_id !== SHARE_THREAD || m.via !== 'share' || m.author !== 'owner')
       return this.reject(it, 'bad_frame', 'a share must be an owner row in inbox via share', [m.id])
+    // A share is not signed, and history rows are replaced by id: one that names a row the Mac already has (an agent's reply,
+    // a notice, a card row, the owner's signed words) would overwrite it. A share only ever adds a row, or lands again on its
+    // own (the same share delivered twice around a restart).
+    const had = ctx.store.getMessage(m.id)
+    if (had && (had.via !== 'share' || had.thread_id !== SHARE_THREAD))
+      return this.reject(it, 'bad_frame', 'a share cannot reuse a message id')
     const thread = ctx.config.thread(SHARE_THREAD) ? threadRef(ctx, SHARE_THREAD) : defaultThreadRef(ctx)
     const fetched = await this.fetchAttachments(m.attachments, thread.id, 'token')
     const { files } = fetched

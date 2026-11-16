@@ -93,7 +93,7 @@ describe('labels', () => {
   it('zoneSuffix only when the zones differ', () => {
     expect(zoneSuffix('2026-10-05T09:00:00-04:00', TZ, TZ)).toBe('')
     expect(zoneSuffix('2026-10-05T09:00:00-04:00', TZ, undefined)).toBe('')
-    expect(zoneSuffix('2026-10-05T09:00:00-04:00', TZ, 'Etc/GMT+7')).toMatch(/^ \S+$/)
+    expect(zoneSuffix('2026-10-05T09:00:00-04:00', TZ, 'Etc/GMT+5')).toMatch(/^ \S+$/)
   })
 })
 

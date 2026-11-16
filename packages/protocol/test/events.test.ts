@@ -7,18 +7,36 @@ import {
   EVENT_STATUSES,
   EVENTS,
   eventInfo,
+  SETTING_CHANGED_EVENT,
+  THREAD_ARCHIVED_EVENT,
+  THREAD_CREATED_EVENT,
   THREAD_FOLDER_CHOSEN_EVENT,
+  THREAD_RENAMED_EVENT,
 } from '../src/index.ts'
 
 const CARD = 'c_01HZX0000000000000000000AA'
 
 describe('the events registry', () => {
-  test('the three existing names moved here and keep their values', () => {
+  test('the three existing names moved here and keep their values; the app-control moments are registered beside them', () => {
     expect(THREAD_FOLDER_CHOSEN_EVENT).toBe('thread.folder_chosen')
     expect(DIALOG_CARD_POSTED_EVENT).toBe('dialog.card_posted')
     expect(DIALOG_CARD_ANSWERED_EVENT).toBe('dialog.card_answered')
+    expect(THREAD_CREATED_EVENT).toBe('thread.created')
+    expect(THREAD_RENAMED_EVENT).toBe('thread.renamed')
+    expect(THREAD_ARCHIVED_EVENT).toBe('thread.archived')
+    expect(SETTING_CHANGED_EVENT).toBe('setting.changed')
     expect(EVENTS.map((e) => e.name).sort()).toEqual(
-      ['dialog.card_answered', 'dialog.card_posted', 'thread.folder_chosen'].sort(),
+      [
+        'bug.reported',
+        'dialog.card_answered',
+        'dialog.card_posted',
+        'setting.changed',
+        'thread.archived',
+        'thread.created',
+        'thread.folder_chosen',
+        'thread.renamed',
+        'thread.unarchived',
+      ].sort(),
     )
   })
 
@@ -40,6 +58,12 @@ describe('the events registry', () => {
       'thread.folder_chosen': { thread_id: 'trip', cleared: false },
       'dialog.card_posted': { dialog_kind: 'dev_channels', thread_id: 'main', card_id: CARD },
       'dialog.card_answered': { dialog_kind: 'login', thread_id: 'main', card_id: CARD, choice: null },
+      'thread.created': { thread_id: 'trip', source: 'agent_card' },
+      'thread.renamed': { thread_id: 'trip', source: 'owner' },
+      'thread.archived': { thread_id: 'trip', source: 'agent_trust' },
+      'thread.unarchived': { thread_id: 'trip', source: 'agent_card' },
+      'setting.changed': { setting: 'threads.topic', thread_id: 'trip', source: 'agent_card' },
+      'bug.reported': { report_id: '01HZX0000000000000000000AA', device_id: 'd_abcdefghijklmnopqrst', webhook: 'off' },
     }
     for (const e of EVENTS) {
       const fields = good[e.name]
@@ -50,5 +74,18 @@ describe('the events registry', () => {
     expect(
       eventInfo('thread.folder_chosen')?.payload.safeParse({ thread_id: 'Not A Thread', cleared: true }).success,
     ).toBe(false)
+  })
+
+  test('setting.changed names a setting of the table and nothing else: no free text, no value', () => {
+    const info = eventInfo('setting.changed')
+    expect(info?.payload.safeParse({ setting: 'timezone', source: 'owner' }).success).toBe(true)
+    expect(info?.payload.safeParse({ setting: 'my private note', source: 'owner' }).success).toBe(false)
+    expect(info?.payload.safeParse({ setting: 'timezone', source: 'owner', value: 'Europe/Paris' }).success).toBe(false)
+    expect(info?.payload.safeParse({ setting: 'timezone', source: 'someone' }).success).toBe(false)
+    for (const name of ['thread.created', 'thread.renamed', 'thread.archived'])
+      expect(
+        eventInfo(name)?.payload.safeParse({ thread_id: 'trip', source: 'owner', name: 'Trip' }).success,
+        name,
+      ).toBe(false)
   })
 })

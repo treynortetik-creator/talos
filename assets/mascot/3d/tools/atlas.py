@@ -30,6 +30,7 @@ import tempfile
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+import label_font
 from scipy import ndimage
 
 os.environ['TALOS_DESKTOP'] = '1'
@@ -43,7 +44,6 @@ import finish  # noqa: E402
 
 DEFAULT_OUT = os.path.join(REPO, 'apps', 'desktop', 'Resources', 'companion')
 CREAM = np.array([0xF3, 0xE6, 0xCF], np.float32)
-FONT = '/System/Library/Fonts/Supplemental/Arial.ttf'
 
 CELL_PT = (96, 104)                       # the panel, in points
 SCALES = {2: (192, 208), 1: (96, 104)}    # cell px per scale
@@ -413,7 +413,7 @@ def cmd_sheet(src, out, scale=2):
     m = json.load(open(os.path.join(src, 'companion.json')))
     sc = '%dx' % scale
     w, h = m['cell'][sc]
-    font = ImageFont.truetype(FONT, 14)
+    font = label_font.font(14)
     tiles = []
     for name, c in m['clips'].items():
         atlas = Image.open(os.path.join(src, m['atlases'][c['atlas']]['files'][sc]))

@@ -11,10 +11,11 @@ import { cmdInstallAppHooks, homeAsAgentDir } from './apps/cli.ts'
 import { appPaths } from './apps/paths.ts'
 import type { CliIO } from './cli-main.ts'
 import { type BridgeEnv, defaultHome } from './config.ts'
-import { installMcp, mcpEntry } from './mcp-config.ts'
+import { installMcp, mcpEntry, mcpProtectedRoots } from './mcp-config.ts'
 
 const BRIDGE_DIR = resolve(import.meta.dir, '..')
 const REPO = resolve(BRIDGE_DIR, '..', '..')
+// for folders only: a file's real path goes through realFileSync (real-file.ts), as realpath can name a hard-linked file by another of its names
 const real = (p: string) => {
   try {
     return realpathSync(p)
@@ -157,11 +158,11 @@ export async function cmdAdopt(env: BridgeEnv, argv: string[], io: CliIO): Promi
     return refused.code
   }
   const entry = mcpEntry(BRIDGE_DIR, env.home, dir)
-  const plan = installMcp(dir, entry, true)
+  const plan = installMcp(dir, entry, true, mcpProtectedRoots(env.home))
   io.out(`agent folder: ${dir}`)
   io.out(
     plan.changed
-      ? `${values['dry-run'] ? 'would write' : 'will write'} the talos-app server into ${plan.path} (other servers are kept)`
+      ? `${values['dry-run'] ? 'would write' : 'will write'} the talos-app server into ${plan.target === plan.path ? plan.path : `${plan.target} (through the link ${plan.path})`} (other servers are kept)`
       : `${plan.path} is already up to date`,
   )
   io.out(
@@ -183,7 +184,7 @@ export async function cmdAdopt(env: BridgeEnv, argv: string[], io: CliIO): Promi
       return 0
     }
   }
-  installMcp(dir, entry, false)
+  installMcp(dir, entry, false, mcpProtectedRoots(env.home))
   if (hooks) {
     let rc: number
     try {

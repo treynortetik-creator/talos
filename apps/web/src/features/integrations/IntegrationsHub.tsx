@@ -4,9 +4,11 @@ import { useId, useState } from 'react'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { Badge, Button } from '../../ui/index.ts'
 import { relativeTime, useNow } from '../cards/util.ts'
-import { friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
+import { NOT_CONNECTED_LINE, useWriteBlock } from '../settings/offline.ts'
+import { connectionRefusal, friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
 import { ConnectionPanel } from './ConnectionPanel.tsx'
 import { type Conn, statusWord, useCatalog, useConnection, useConnections } from './data.ts'
+import { IDENTITY_LINE, identityOf } from './slackBot.ts'
 import { IntegrationWizard, PickScreen } from './Wizard.tsx'
 import { WorkWording } from './WorkWording.tsx'
 
@@ -14,8 +16,8 @@ type View = { kind: 'list' } | { kind: 'wizard'; id?: string } | { kind: 'conn';
 
 export function IntegrationsHub({ readOnly: readOnlyProp }: { readOnly?: boolean }) {
   // Follows the Mac unless a caller says otherwise: the work switches and the work thread are synced config (audit U11)
-  const macOnline = useTalos((s) => s.presence.bridge_online)
-  const readOnly = readOnlyProp ?? !macOnline
+  const block = useWriteBlock()
+  const readOnly = readOnlyProp ?? block !== null
   const [view, setView] = useState<View>({ kind: 'list' })
   const catalog = useCatalog()
   const conns = useConnections()
@@ -60,7 +62,9 @@ export function IntegrationsHub({ readOnly: readOnlyProp }: { readOnly?: boolean
       </p>
       {readOnly ? (
         <p role="status" className="rounded-card border border-line p-2 text-sm text-text-2">
-          Your Mac is offline, so work systems can't be switched on or off right now.
+          {block === 'link'
+            ? NOT_CONNECTED_LINE
+            : "Your Mac is offline, so work systems can't be switched on or off right now."}
         </p>
       ) : null}
       {conns.data && conns.data.length > 0 ? (
@@ -75,6 +79,11 @@ export function IntegrationsHub({ readOnly: readOnlyProp }: { readOnly?: boolean
               >
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium text-text">{c.name}</span>
+                  {identityOf(c) ? (
+                    <span className="block text-sm text-text-2" data-testid="conn-identity">
+                      {IDENTITY_LINE[identityOf(c) ?? 'owner']}
+                    </span>
+                  ) : null}
                   <span className="block text-sm text-text-2">
                     {c.last_event_at ? `Last event ${relativeTime(c.last_event_at, now)} ago` : 'No events yet'}
                   </span>

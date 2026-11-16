@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import type { BridgeContext } from '../src/context.ts'
 import { AGENT_TOOL_GROUPS, READ_THREAD_TOOLS, type ToolMembership, type ToolRecord } from '../src/tools/define.ts'
-import { ALL_TOOLS, callTool, mainGroups, toolsFor, toolTableProblems, WORKER_TOOLS } from '../src/tools/index.ts'
+import { ALL_TOOLS, callTool, mainGroups, toolsFor, WORKER_TOOLS } from '../src/tools/index.ts'
 import { toolInstructions } from '../src/tools/instructions.ts'
 import { workerStoreOf } from '../src/tools/read-inbound.ts'
 import {
@@ -81,7 +81,17 @@ describe('AGENT_TOOLS', () => {
   })
 
   test('the main session lists every group but the ones kept apart, so a new group is registered by adding it', () => {
-    expect(mainGroups(AGENT_TOOL_GROUPS)).toEqual(['core', 'mod', 'schedule', 'config', 'attachment', 'handoff'])
+    expect(mainGroups(AGENT_TOOL_GROUPS)).toEqual([
+      'core',
+      'mod',
+      'schedule',
+      'config',
+      'attachment',
+      'handoff',
+      'pages',
+      'sessions',
+      'screen',
+    ])
     expect(mainGroups([...AGENT_TOOL_GROUPS, 'brand_new']) as string[]).toContain('brand_new')
     const listed = new Set(toolsFor({ scheduler: 'auto' }).map((t) => t.name))
     for (const n of AGENT_TOOL_NAMES) {
@@ -135,16 +145,49 @@ describe('a worker is held to its own thread, tool by tool (callTool -> workerRe
   const text = async (ctx: BridgeContext, name: string, args: Record<string, unknown>) =>
     (await callTool(ctx, name, args)).content[0]?.text ?? ''
 
-  const THREAD_ARG_TOOLS = ['reply', 'attach', 'card', 'set_status', 'read_thread', 'handoff', 'schedule_propose']
+  const THREAD_ARG_TOOLS = [
+    'reply',
+    'attach',
+    'card',
+    'set_status',
+    'read_thread',
+    'handoff',
+    'schedule_propose',
+    'config_propose',
+    'publish_page',
+  ]
   // Every tool a worker has must be classified here, so a new worker tool cannot arrive unchecked.
-  const READ_ONLY_TOOLS = ['list_threads', 'read_inbound']
+  // memory_note_read takes no thread id and reads one note of the owner's memory scope (memory-note-read.test.ts)
+  const READ_ONLY_TOOLS = ['list_threads', 'read_inbound', 'memory_note_read']
   const CARD_TOOLS = ['card_result']
   // main's Schedules service answers these over the hub, as the thread the connection proved (thread-schedules.test.ts)
-  const HUB_SCHEDULE_TOOLS = ['schedules_list', 'schedule_run_start', 'schedule_run_done']
+  // wake_me takes no thread id either: the hub sets it for the proven thread (schedules/wake-me.test.ts, "scope")
+  const HUB_SCHEDULE_TOOLS = ['schedules_list', 'schedule_run_start', 'schedule_run_done', 'wake_me']
+  // takes no thread id; lead-only, checked by its handler (worker-tool-lock.test.ts, restart-main.test.ts)
+  const LEAD_ONLY_TOOLS = ['restart_main']
+  // take no thread id; they talk to this Mac's Talos app over its screen socket (screen-tools.test.ts)
+  const SCREEN_TOOLS = [
+    'screen_shot',
+    'screen_click',
+    'screen_type',
+    'screen_key',
+    'screen_scroll',
+    'screen_apps',
+    'screen_open_app',
+  ]
 
   test('the table classes every worker tool into exactly one case above', () => {
     const workerTools = AGENT_TOOL_NAMES.filter((n) => AGENT_TOOLS[n].worker).sort()
-    expect([...THREAD_ARG_TOOLS, ...READ_ONLY_TOOLS, ...CARD_TOOLS, ...HUB_SCHEDULE_TOOLS].sort()).toEqual(workerTools)
+    expect(
+      [
+        ...THREAD_ARG_TOOLS,
+        ...READ_ONLY_TOOLS,
+        ...CARD_TOOLS,
+        ...HUB_SCHEDULE_TOOLS,
+        ...LEAD_ONLY_TOOLS,
+        ...SCREEN_TOOLS,
+      ].sort(),
+    ).toEqual(workerTools)
     expect([...WORKER_THREAD_LOCKED_TOOLS].map(String).sort()).toEqual([...THREAD_ARG_TOOLS].sort())
   })
 

@@ -1,5 +1,5 @@
 // Journey: Cmd+K, type a thread name, Enter, and that thread opens (real relay and bridge, the palette reads the live thread list).
-import { expect, signedIn, test } from '../../harness/fixtures.ts'
+import { applySettingsCard, expect, signedIn, test } from '../../harness/fixtures.ts'
 
 test('palette: Ctrl+K, type a thread name, Enter opens the thread, and nothing was answered or sent', async ({
   stack,
@@ -9,6 +9,7 @@ test('palette: Ctrl+K, type a thread name, Enter opens the thread, and nothing w
   await signedIn(stack, page, context)
   const made = await stack.claude.callTool('create_thread', { name: 'Errands' })
   expect(made.isError).toBeFalsy()
+  await applySettingsCard(page, made) // a new thread is a card for the owner to approve
   await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: /^Errands/i })).toBeVisible()
   await page.keyboard.press('ControlOrMeta+k')
   await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible()

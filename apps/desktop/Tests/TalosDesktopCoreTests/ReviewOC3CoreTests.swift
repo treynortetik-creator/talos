@@ -26,7 +26,7 @@ struct ReviewOC3CoreTests {
   private func spec() throws -> WorkerSpec {
     try WorkerSpec.build(
       .init(
-        threadId: "trip", claudePath: "/bin/claude", baseEnv: ["HOME": "/h"], talosHome: "/h/t", agentDir: "/h/a",
+        threadId: "trip", claudePath: "/bin/claude", baseEnv: ["HOME": "/h"], talosHome: "/h/t", agentDir: "/h/a", permissionHook: testHook,
         sessionId: "11111111-2222-4333-8444-555555555555", resume: true, nonce: "n"))
   }
 
@@ -50,21 +50,21 @@ struct ReviewOC3CoreTests {
       #expect(throws: WorkerSpec.BuildError.self) {
         _ = try WorkerSpec.build(
           .init(
-            threadId: "trip", claudePath: "/bin/claude", baseEnv: [:], talosHome: "/h/t", agentDir: "/h/a", model: bad,
+            threadId: "trip", claudePath: "/bin/claude", baseEnv: [:], talosHome: "/h/t", agentDir: "/h/a", permissionHook: testHook, model: bad,
             sessionId: "11111111-2222-4333-8444-555555555555", resume: true, nonce: "n"))
       }
       #expect(throws: WorkerSpec.BuildError.self) {
         _ = try WorkerSpec.build(
           .init(
-            threadId: "trip", claudePath: "/bin/claude", baseEnv: [:], talosHome: "/h/t", agentDir: "/h/a", sessionId: bad,
+            threadId: "trip", claudePath: "/bin/claude", baseEnv: [:], talosHome: "/h/t", agentDir: "/h/a", permissionHook: testHook, sessionId: bad,
             resume: true, nonce: "n"))
       }
-      #expect(throws: WorkerSpec.BuildError.self) {
-        _ = try WorkerSpec.build(
-          .init(
-            threadId: "trip", claudePath: "/bin/claude", baseEnv: [:], talosHome: "/h/t", agentDir: "/h/a",
-            sessionId: "11111111-2222-4333-8444-555555555555", resume: true, nonce: "n", preamble: bad))
-      }
+      // the preamble is WORKER.md, the thread's own text: it starts, as a value that cannot read as an option (WorkerCoreTests)
+      let s = try WorkerSpec.build(
+        .init(
+          threadId: "trip", claudePath: "/bin/claude", baseEnv: [:], talosHome: "/h/t", agentDir: "/h/a", permissionHook: testHook,
+          sessionId: "11111111-2222-4333-8444-555555555555", resume: true, nonce: "n", preamble: bad))
+      #expect(!s.args.contains(bad), "\(bad) landed in an option position")
     }
   }
 }

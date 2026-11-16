@@ -23,7 +23,13 @@ MAX_BYTES = 65536
 AGENT = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
 STATE_DIR = os.path.join(AGENT, ".agent-state")
 STATE_FILE = os.path.join(STATE_DIR, "onboarding.json")
-PROGRESS = os.path.join(AGENT, "wiki", "_onboarding-progress.md")
+try:        # where the wiki is: wiki/, or memory/wiki/ on a layout-2 agent (one resolver, scripts/_talos_layout.py)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _talos_layout import paths as _layout_paths
+    WIKI = _layout_paths(AGENT)["wiki"]
+except ImportError:        # a lone copy with no helper beside it: the old rule
+    WIKI = os.path.join(AGENT, "wiki")
+PROGRESS = os.path.join(WIKI, "_onboarding-progress.md")
 
 
 def now():

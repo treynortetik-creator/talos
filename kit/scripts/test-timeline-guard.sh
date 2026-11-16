@@ -6,10 +6,12 @@
 set -uo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 T="$(mktemp -d)" || exit 2
 case "$T" in /*/*) ;; *) echo "suspicious temp dir '$T'" >&2; exit 2 ;; esac
 trap 'rm -rf "$T"' EXIT
 export HOME="$T/home" XDG_STATE_HOME="$T/state" XDG_CONFIG_HOME="$T/cfg"; mkdir -p "$HOME"
+talos_test_sandbox "$T"
 unset CHRONOS_CONFIG TALOS_TIMELINE_GUARD_OFF
 A="$T/agent"; mkdir -p "$A/hooks" "$A/scripts" "$A/memory" "$A/wiki/people" "$A/wiki/examples"
 cp "$KIT"/hooks/*.py "$A/hooks/"; cp "$KIT/scripts/wiki-lint.py" "$A/scripts/"

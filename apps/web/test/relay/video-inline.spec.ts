@@ -246,12 +246,10 @@ test('a file the browser cannot decode says so and still hands over the file', a
   expect(((await link.boundingBox()) as { height: number }).height).toBeGreaterThanOrEqual(43)
 })
 
-test('starting the audio dock pauses a playing video, and a second video takes over from the first', async ({
-  page,
-  context,
-  harness,
-  browserName,
-}) => {
+// @mac-only (playwright.config.ts): Linux WebKit's media stack does not reliably pause the first video for the dock.
+test('starting the audio dock pauses a playing video, and a second video takes over from the first', {
+  tag: '@mac-only',
+}, async ({ page, context, harness, browserName }) => {
   const webkit = browserName === 'webkit'
   const bytes = webkit ? MP4 : WEBM
   const ext = webkit ? 'mp4' : 'webm'

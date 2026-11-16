@@ -282,6 +282,7 @@ connection itself"). If it stops, it prints the exact reason and host and nothin
 Tokens and the client registration go to the Keychain. A server without dynamic client registration cannot be used for
 app-only buttons. `apps logout <server>` deletes the server's Keychain items. Afterward its app-only buttons fail with
 `direct_auth` and its no-tap calls become cards until the next scan.
+On a Mac, a value over about 2,200 characters is stored as several Keychain items; saves are read back, and logout removes every piece, leftovers too.
 
 ## The three hooks
 

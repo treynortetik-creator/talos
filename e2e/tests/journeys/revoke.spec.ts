@@ -55,7 +55,12 @@ async function revokeTabletInSettings(stack: Stack, page: Page): Promise<void> {
   await page.goto(`${stack.origin}/settings/account`)
   const row = page.getByTestId('device-row').filter({ hasNotText: 'This device' })
   await expect(row).toHaveCount(1)
-  await row.getByRole('button', { name: /^Revoke/ }).click() // step-up: the virtual authenticator answers
+  await row.getByRole('button', { name: /^Revoke/ }).click()
+  // no Face ID since 2026-11-14; a revoke can't be undone, so the confirm sheet asks first (the owner's ruling)
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: /^Revoke / })
+    .click()
   await expect(row.getByText('Revoked', { exact: true })).toBeVisible()
   await expect(row.getByRole('button', { name: /^Revoke/ })).toHaveCount(0)
 }

@@ -1,0 +1,15 @@
+{
+  "id": "agents-md-forged-sha",
+  "title": "The app took AGENTS.md text from the relay without checking it against its sha, so forged lines could be signed in the next save",
+  "base": "38cea9a54b662ad35b849a9a274e6ac49d33ed0a",
+  "buggy": "uncommitted",
+  "fix": "36f4a9b6",
+  "expect": [
+    {
+      "file": "apps/web/src/lib/socketAgentsMd.ts",
+      "severity": "high",
+      "must": [["sha|hash|digest"], ["relay|forg|tamper|inject|text|verif|match"]],
+      "note": "toAgentsMdFile checks the sha's shape but not that it is the sha256 of the text, so a relay can send extra lines under the file's real sha; the owner's next save signs them with a matching base_sha."
+    }
+  ]
+}

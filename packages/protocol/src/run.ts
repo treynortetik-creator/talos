@@ -24,14 +24,13 @@ export const RUN_SCRIPT_MAX_CHARS = 4000
 /**
  * Which block a Run is for: the agent message it is in, and its place among that message's code blocks (fenced and indented,
  * in order, counted from 0). Carried on the `message` frame as `run_block`, inside the signature, and required when
- * `intent` is `run`. The Mac allows each block one Run, ever (within its seen-id memory): the app is not the guard.
+ * `intent` is `run`. Each tap runs once (the Mac remembers the tap's message id); a fresh tap on the same block runs it again.
  */
 export const RunBlockRef = z.strictObject({ message_id: MsgId, index: z.number().int().min(0).max(999) })
 export type RunBlockRefT = z.infer<typeof RunBlockRef>
 
 /**
- * A block older than this, by the time in its message id (a ULID), is refused: the Mac's memory of which blocks ran lasts a
- * day longer (8 days and an hour), so a block inside this limit is always still remembered.
+ * A block older than this, by the time in its message id (a ULID), is refused: a Run is for a script the agent posted this week.
  */
 export const RUN_BLOCK_MAX_AGE_MS = 7 * 24 * 3600_000
 
@@ -57,17 +56,11 @@ export const RUN_META_VALUE = 'tap'
 export const isPlainRunScript = (script: string): boolean => /^[\x20-\x7e\n\t]*$/.test(script)
 
 /**
- * One tap is for a script that is plain (above) and short: at most this many lines and characters. A trailing line break
- * does not count as a line (`echo a\n` is one line); every character counts, line breaks and tabs included. Anything longer
- * is still a Run, with a second confirm. The app decides one tap or two from this (phone and web alike), on the bytes
- * alone: no part of it looks at the screen. The Mac does not use it; it accepts a Run of any length up to the cap.
+ * One tap is for any plain script (above), whatever its length up to the cap (owner, 2026-11-15: a second tap only where a
+ * character could hide or pass for another). The app decides one tap or two from this (phone and web alike), on the bytes
+ * alone: no part of it looks at the screen. The Mac does not use it.
  */
-export const RUN_ONE_TAP_MAX_LINES = 6
-export const RUN_ONE_TAP_MAX_CHARS = 300
-export const isOneTapRunScript = (script: string): boolean =>
-  isPlainRunScript(script) &&
-  script.length <= RUN_ONE_TAP_MAX_CHARS &&
-  script.replace(/\n$/, '').split('\n').length <= RUN_ONE_TAP_MAX_LINES
+export const isOneTapRunScript = (script: string): boolean => isPlainRunScript(script)
 
 /** Controls other than line feed and tab, and every invisible or direction-changing character. */
 const hasHiddenChars = (script: string): boolean => INVISIBLE_OR_BIDI.test(script.replace(/[\n\t]/g, ''))

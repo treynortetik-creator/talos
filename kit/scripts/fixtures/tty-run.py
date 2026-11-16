@@ -91,6 +91,11 @@ while True:
         sys.exit(124)
     ready, _, _ = select.select([fd], [], [], min(left, 1.0))
     if not ready:
+        # On Linux a grandchild that outlives the command keeps the terminal open, so its end never reads as EOF: ask directly
+        exited, child_status = os.waitpid(pid, os.WNOHANG)
+        if exited:
+            status = child_status
+            break
         continue
     try:
         data = os.read(fd, 65536)

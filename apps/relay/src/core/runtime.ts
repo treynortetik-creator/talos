@@ -6,6 +6,7 @@ import type Database from 'better-sqlite3'
 import type { RelayEnv } from '../env.ts'
 import type { Clock, CryptoService, Logger, PushTransport, RelayServices } from '../services.ts'
 import { createNtfySink } from './alerts-ntfy.ts'
+import { bugReportBytes, sweepBugReports } from './bug-reports.ts'
 import { CardReminder } from './card-reminder.ts'
 import { createCryptoService } from './crypto.ts'
 import { openDatabase } from './db.ts'
@@ -13,9 +14,11 @@ import { HealthWatch } from './health.ts'
 import { Hub } from './hub.ts'
 import { createLogger } from './log.ts'
 import { FileMediaStore } from './media.ts'
+import { pagesBytes, sweepPages } from './pages-store.ts'
 import { CorePush, createWebPushTransport, NoopTransport } from './push.ts'
 import { type ApnsSender, apnsConfigFromEnv, createApnsSender } from './push-apns.ts'
 import { QuietSummary } from './quiet-summary.ts'
+import { SessionWait } from './session-wait.ts'
 import { Store } from './store.ts'
 
 export const systemClock: Clock = {
@@ -34,6 +37,8 @@ export type CoreRuntime = {
   media: FileMediaStore
   push: CorePush
   health: HealthWatch
+  /** Tells the owner once when a thread's session has waited on him too long (core/session-wait.ts). */
+  sessionWait: SessionWait
   transport: PushTransport
   webDir: string | null
   dataDir: string
@@ -136,9 +141,14 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
     log: log.child({ mod: 'health' }),
     env,
     bus: hub,
+    appWidth: () => hub.appWidth(),
     push,
     config: () => hub.agentConfig(),
-    storageBytes: () => store.totalMediaBytes() + fileSize(join(env.DATA_DIR, 'relay.sqlite')),
+    storageBytes: () =>
+      store.totalMediaBytes() +
+      fileSize(join(env.DATA_DIR, 'relay.sqlite')) +
+      bugReportBytes({ db }) +
+      pagesBytes({ db }),
   })
 
   // Never-miss timers (owner calls O2, O7). They use the injected clock and are stopped by `stop()` below, so nothing
@@ -147,6 +157,13 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
     store,
     clock,
     log: log.child({ mod: 'card-reminder' }),
+    push,
+    config: () => hub.agentConfig(),
+  })
+  const sessionWait = new SessionWait({
+    store,
+    clock,
+    log: log.child({ mod: 'session-wait' }),
     push,
     config: () => hub.agentConfig(),
   })
@@ -169,10 +186,26 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
     }, SWEEP_MS)
   }
   let lastCapWarn = 0
+  const volumeBytes = () =>
+    store.totalMediaBytes() + fileSize(join(env.DATA_DIR, 'relay.sqlite')) + bugReportBytes({ db }) + pagesBytes({ db })
   const runSweep = () => {
     try {
       hub.sweep()
-      const bytes = store.totalMediaBytes() + fileSize(join(env.DATA_DIR, 'relay.sqlite'))
+      // its own guard: a failing report sweep must not skip the storage warning below
+      try {
+        const removed = sweepBugReports({ db, crypto, clock, dataDir: env.DATA_DIR })
+        if (removed > 0) log.info({ reports: removed }, 'bug report retention sweep')
+      } catch (e) {
+        log.error({ err: e instanceof Error ? e.name : 'error' }, 'bug report retention sweep failed')
+      }
+      // org pages: shares past their end, and files no row names; its own guard like the reports'
+      try {
+        const swept = sweepPages({ db, clock, dataDir: env.DATA_DIR })
+        if (swept.sharesEnded + swept.orphans > 0) log.info(swept, 'org page sweep')
+      } catch (e) {
+        log.error({ err: e instanceof Error ? e.name : 'error' }, 'org page sweep failed')
+      }
+      const bytes = volumeBytes()
       if (bytes > env.VOLUME_SOFT_CAP_MB * 1024 * 1024 && clock.now() - lastCapWarn > 86_400_000) {
         lastCapWarn = clock.now()
         log.warn({ mb: Math.round(bytes / 1048576), cap_mb: env.VOLUME_SOFT_CAP_MB }, 'volume soft cap exceeded')
@@ -196,6 +229,7 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
     env,
   }
   runtimes.set(services, {
+    sessionWait,
     store,
     hub,
     media,
@@ -209,6 +243,7 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
       hub.start()
       health.start()
       cardReminder.start()
+      sessionWait.start()
       quietSummary.start()
       runSweep()
       armSweep()
@@ -221,6 +256,7 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
       if (sweepTimer) clock.clearTimeout(sweepTimer)
       for (const fn of stoppers.splice(0)) fn()
       cardReminder.stop()
+      sessionWait.stop()
       quietSummary.stop()
       health.stop()
       hub.stop()

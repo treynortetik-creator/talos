@@ -10,7 +10,10 @@ import { IconExpand, IconFile, IconPause, IconPlay } from '../../ui/icons.tsx'
 import { FrameOverlay, SandboxedFrame } from '../../ui/SandboxedFrame.tsx'
 import { audioDock, type DockItem, savedPosition, useDock } from './audioDock.ts'
 import { rememberOpener } from './ImageViewer.tsx'
-import { mediaPageUrl, mediaUrl, useMediaGate, useMediaSrc } from './media.ts'
+import { MarkdownFileCard } from './MarkdownFileCard.tsx'
+import { MediaStatus } from './MediaStatus.tsx'
+import { isMarkdownAtt } from './markdownDoc.ts'
+import { mediaPageUrl, mediaUrl, removedAfterDays, useMediaGate, useMediaSrc } from './media.ts'
 import { DeliveryNoteView, ShareButton } from './ShareButton.tsx'
 import { safeFileName } from './shareAttachment.ts'
 import { formatSpeed, nextSpeed } from './speed.ts'
@@ -65,7 +68,7 @@ export function ImageAttachment({ att, onOpen }: { att: AttachmentRefT; onOpen: 
   if (state !== 'ok')
     return (
       <div className="block max-w-full rounded-card border border-line bg-surface-2 p-4 text-sm text-text-2">
-        <MediaStatus state={state} what={att.name} onRetry={retry} />
+        <MediaStatus removedDays={removedAfterDays(att.media_id)} state={state} what={att.name} onRetry={retry} />
       </div>
     )
   return (
@@ -92,43 +95,6 @@ export function ImageAttachment({ att, onOpen }: { att: AttachmentRefT; onOpen: 
 }
 
 export { ImageViewer } from './ImageViewer.tsx'
-
-/** One truthful line for a file that is coming back from the Mac or did not: never "Loading" forever. */
-function MediaStatus({
-  state,
-  what,
-  onRetry,
-  onLoad,
-}: {
-  state: 'fetching' | 'failed' | 'gone'
-  what: string
-  onRetry: () => void
-  onLoad?: () => void
-}) {
-  if (state === 'fetching')
-    return (
-      <span role="status" data-testid="media-fetching">
-        Loading {what} from your Mac…
-      </span>
-    )
-  if (state === 'gone')
-    return (
-      <span role="status" data-testid="media-gone" className="flex flex-wrap items-center gap-x-3">
-        <span>{what} is only on your Mac now.</span>
-        <button type="button" onClick={onLoad} className="min-h-11 text-accent-text underline">
-          Load from your Mac
-        </button>
-      </span>
-    )
-  return (
-    <span role="alert" data-testid="media-failed" className="flex flex-wrap items-center gap-x-3">
-      <span>Couldn't load {what}. Your Mac may be offline, or the file is gone.</span>
-      <button type="button" onClick={onRetry} className="min-h-11 text-accent-text underline">
-        Retry
-      </button>
-    </span>
-  )
-}
 
 // ---- audio -----------------------------------------------------------------------------------------------------------
 const MAX_BARS = 40
@@ -350,7 +316,12 @@ export function AudioPlayer({
       </div>
       {mediaState !== 'ok' && (
         <div className="px-1 text-sm text-text-2">
-          <MediaStatus state={mediaState} what={att.name} onRetry={retryMedia} />
+          <MediaStatus
+            removedDays={removedAfterDays(att.media_id)}
+            state={mediaState}
+            what={att.name}
+            onRetry={retryMedia}
+          />
         </div>
       )}
       {variant === 'voice_note' && (
@@ -431,8 +402,14 @@ export function HtmlPageCard({ att }: { att: AttachmentRefT }) {
         <SandboxedFrame title={att.name} src={url} loading="lazy" className="block h-80 w-full bg-surface" />
       ) : (
         <div className="grid h-40 place-items-center bg-surface p-4 text-sm text-text-2">
-          {state === 'failed' || state === 'fetching' || state === 'gone' ? (
-            <MediaStatus state={state} what={att.name} onRetry={retry} onLoad={load} />
+          {state === 'failed' || state === 'fetching' || state === 'gone' || state === 'removed' ? (
+            <MediaStatus
+              removedDays={removedAfterDays(att.media_id)}
+              state={state}
+              what={att.name}
+              onRetry={retry}
+              onLoad={load}
+            />
           ) : (
             <span role="status">Loading…</span>
           )}
@@ -444,7 +421,8 @@ export function HtmlPageCard({ att }: { att: AttachmentRefT }) {
 }
 
 /**
- * The same page, full viewport. The overlay (focus, scroll lock, real fullscreen on desktop, Escape) is
+ * The same page, full viewport. The overlay (focus, scroll lock, real fullscreen with a mouse and never on a touch screen,
+ * Escape, Close as an X at the top right) is
  * `ui/SandboxedFrame.tsx`, shared with MCP app views.
  */
 function HtmlFullscreen({ att, url, onClose }: { att: AttachmentRefT; url: string; onClose: () => void }) {
@@ -536,13 +514,14 @@ export function VideoAttachment({ att }: { att: AttachmentRefT }) {
       </div>
     )
   const shown = broken ? 'failed' : state
-  if (shown === 'fetching' || shown === 'failed' || shown === 'gone')
+  if (shown === 'fetching' || shown === 'failed' || shown === 'gone' || shown === 'removed')
     return (
       <div
         className="block max-w-full rounded-card border border-line bg-surface-2 p-4 text-sm text-text-2"
         data-testid="video-unavailable"
       >
         <MediaStatus
+          removedDays={removedAfterDays(att.media_id)}
           state={shown}
           what={att.name}
           onRetry={() => {
@@ -570,12 +549,18 @@ export function FileChip({ att }: { att: AttachmentRefT }) {
   const d = useDelivery(att, state)
   const look =
     'inline-flex min-h-11 max-w-full items-center gap-2 rounded-pill border border-line bg-surface px-3 text-sm'
-  if (state === 'fetching' || state === 'failed' || state === 'gone')
+  if (state === 'fetching' || state === 'failed' || state === 'gone' || state === 'removed')
     return (
       <span className={cn(look, 'flex-wrap py-1 text-text-2')} data-testid="file-chip-unavailable">
         <IconFile width={18} height={18} />
         <span className="truncate">{att.name}</span>
-        <MediaStatus state={state} what={att.name} onRetry={retry} onLoad={load} />
+        <MediaStatus
+          removedDays={removedAfterDays(att.media_id)}
+          state={state}
+          what={att.name}
+          onRetry={retry}
+          onLoad={load}
+        />
       </span>
     )
   // No download link until the probe says the file is there: a tap in that window would land on the relay's 410.
@@ -647,12 +632,13 @@ function AttachmentBody({
     case 'video':
       return <VideoAttachment att={att} />
     default:
-      return <FileChip att={att} />
+      return isMarkdownAtt(att) ? <MarkdownFileCard att={att} siblings={message.attachments} /> : <FileChip att={att} />
   }
 }
 
 /** A file chip is itself the Share / Download control, so it gets no second one. */
-const hasOwnControl = (att: AttachmentRefT) => !['image', 'voice_note', 'audio', 'html', 'video'].includes(att.kind)
+const hasOwnControl = (att: AttachmentRefT) =>
+  !['image', 'voice_note', 'audio', 'html', 'video'].includes(att.kind) && !isMarkdownAtt(att)
 
 /** Every attachment, with a Share / Download action under it (the viewer has its own). */
 export function AttachmentView(props: {

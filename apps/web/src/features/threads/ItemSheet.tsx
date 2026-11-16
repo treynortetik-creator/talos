@@ -1,5 +1,6 @@
 // Inbox item sheet (8.2 `/t/inbox`): title, summary, source link (only if it passes HttpsUrl), related card and the
 // actions. All hook-origin text is rendered as plain text.
+
 import { HttpsUrl, type InboxItemT } from '@talos-app/protocol'
 import { Suspense } from 'react'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
@@ -9,13 +10,14 @@ import { prefillComposer } from '../composer/composerStore.ts'
 import { snoozeUntil } from '../inbox/logic.ts'
 import { offerUndo } from '../inbox/undo.tsx'
 import { CardView } from '../registry.ts'
-import { useAgentName } from './useThreads.ts'
+import { useAgentName, useThreadName } from './useThreads.ts'
 
 export function ItemSheet({ item, onClose }: { item: InboxItemT | null; onClose: () => void }) {
   const client = useTalosClient()
   const agent = useAgentName()
   const config = useTalos((s) => s.config)
   const card = useTalos((s) => (item?.card_id ? s.cards.find((c) => c.id === item.card_id) : undefined))
+  const threadName = useThreadName(card?.thread_id)
   const safeUrl = item?.url && HttpsUrl.safeParse(item.url).success ? item.url : null
   return (
     <Sheet open={item !== null} onOpenChange={(o) => !o && onClose()}>
@@ -32,7 +34,7 @@ export function ItemSheet({ item, onClose }: { item: InboxItemT | null; onClose:
             )}
             {card && (
               <Suspense fallback={null}>
-                <CardView card={card} threadName={card.thread_id} inline />
+                <CardView card={card} threadName={threadName} inline />
               </Suspense>
             )}
             <div className="flex flex-wrap gap-2">

@@ -2,6 +2,7 @@ import AppKit
 import ServiceManagement
 import SwiftTerm
 import TalosDesktopCore
+import TalosSupervisor
 import UserNotifications
 
 enum SelfTest {
@@ -23,11 +24,18 @@ enum SelfTest {
       notifications = sem.wait(timeout: .now() + 3) == .success
     }
 
+    // The thread sessions' permission hook as every start checks it: in this bundle, read-only, inside a signature that holds.
+    let hook: String
+    switch WorkerHook.appSource.verified() {
+    case .ok: hook = "ok"
+    case .problem(let why): hook = why
+    }
+
     let report = SelfTestReport(
       version: version, bundleId: bundleId, swiftterm: swiftterm,
       notificationsReachable: notifications,
       loginItemStatus: SMAppService.mainApp.status.rawValue,
-      configDefaultsDecode: defaultsDecode)
+      configDefaultsDecode: defaultsDecode, workerHook: hook)
 
     // Test hook for scripts/guards-test.sh: proves build-app.sh really fails when the selftest fails.
     if ProcessInfo.processInfo.environment["TALOS_SELFTEST_FORCE_FAIL"] == "1" {

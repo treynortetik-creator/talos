@@ -55,7 +55,7 @@ test('FINDING: a worker that dies after claiming a message leaves a row in the t
     })) as never,
   })
   const hh = h
-  await waitFor(() => existsSync(join(hh.home, 'hub.sock')))
+  await waitFor(() => existsSync(join(hh.home, 'run', 'hub.sock')))
   const me = pgidOf(process.pid) as number
   writeWorkers(hh.home, 'live', me, [])
   mkdirSync(join(hh.home, 'workers', 'trip'), { recursive: true })

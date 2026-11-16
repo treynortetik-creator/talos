@@ -1,14 +1,14 @@
 import { type MouseEvent, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
-import { getMathVersion, renderMarkdown, subscribeMath } from '../../lib/markdown.ts'
+import { getMathVersion, type MdImages, renderMarkdown, subscribeMath } from '../../lib/markdown.ts'
 import { getPlatform } from '../../lib/platform.ts'
 import { type RunContext, useRunSlots } from './RunButton.tsx'
 
 /** Agent and owner markdown. Links leave the app only through `platform.openExternal`. */
-export function Markdown({ text, run }: { text: string; run?: RunContext }) {
+export function Markdown({ text, run, images }: { text: string; run?: RunContext; images?: MdImages }) {
   // Temml loads the first time a formula appears; the version bump draws the formulas once it is there.
   const math = useSyncExternalStore(subscribeMath, getMathVersion)
   // biome-ignore lint/correctness/useExhaustiveDependencies: `math` is the trigger
-  const html = useMemo(() => renderMarkdown(text), [text, math])
+  const html = useMemo(() => renderMarkdown(text, images ? { images } : undefined), [text, images, math])
   const box = useRef<HTMLDivElement>(null)
   // Shell blocks get a Run button when the caller says where the message sits (a thread message, never a note or a caption).
   const runSlots = useRunSlots(box, html, text, run)
@@ -27,6 +27,8 @@ export function Markdown({ text, run }: { text: string; run?: RunContext }) {
         'position:absolute;top:4px;right:4px;min-height:32px;min-width:44px;padding:0 8px;font-size:12px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text-2);cursor:pointer'
       pre.appendChild(b)
     }
+    // A wide table scrolls sideways inside itself (app.css); it takes focus so the arrow keys can scroll it too.
+    for (const table of Array.from(box.current?.querySelectorAll('table') ?? [])) table.tabIndex = 0
   }, [html])
   const onClick = (e: MouseEvent<HTMLDivElement>) => {
     const copy = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-copy-code]')

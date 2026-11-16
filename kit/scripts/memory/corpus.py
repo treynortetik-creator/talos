@@ -15,8 +15,11 @@ Left out on purpose:
   - memory/briefs/        generated daily; restates notes that are already indexed
   - *.local.md            machine-local scratch
   - anything under a personal/ folder: a private vault is NEVER indexed into the work agent's search
+  - memory/dream/<date>/preimage/   the dream cycle's byte-exact copies of notes it edited (for undo): near-duplicates
+                          of real notes that would rank as if they were notes (see is_index_excluded)
 """
 import os
+import re
 import sys
 
 try:        # the agent folder, not the folder above this file (that is a plugin release in the plugin layout)
@@ -25,14 +28,46 @@ try:        # the agent folder, not the folder above this file (that is a plugin
     ROOT = agent_root(__file__, 2)
 except ImportError:        # a lone copy of this file with no helper beside it: the old rule
     ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+try:        # where the wiki is: wiki/, or memory/wiki/ on a layout-2 agent (one resolver, scripts/_talos_layout.py)
+    from _talos_layout import paths as _layout_paths
+    WIKI = _layout_paths(ROOT)["wiki"]
+except ImportError:        # a lone copy with no helper beside it: the old rule
+    WIKI = os.path.join(ROOT, "wiki")
 CORPUS_DIRS = ("wiki", "memory", ".learnings")
+
+
+def corpus_dirs(root=None):
+    """The top folders searched under `root`. On a layout-2 agent the wiki sits inside memory/, which is a root already, so a
+    stray top-level wiki/ is not one."""
+    root = root or ROOT
+    try:
+        from _talos_layout import paths
+        wiki_top = os.path.relpath(paths(root)["wiki"], root).split(os.sep)[0]
+    except ImportError:
+        wiki_top = "wiki"
+    return tuple(d for d in CORPUS_DIRS if d != "wiki" or wiki_top == "wiki")
+
+
 EXCLUDE_NAMES = {"GRADUATION_LOG.md", "agent-log.md"}
 EXCLUDE_PREFIXES = ("_changelog",)
 EXCLUDE_DIR_PARTS = ("examples", "briefs", "personal", "node_modules", ".git")
 
 
-def is_indexable(rel):
+# The dream cycle (scripts/dream/apply.py) saves a pre-edit copy of every note it changes under
+# memory/dream/<date>/preimage/. They are near-duplicates of real notes; they stay on disk for the undo and nowhere else.
+PREIMAGE_RE = re.compile(r"(^|[\\/])memory[\\/]dream[\\/][^\\/]+[\\/]preimage([\\/]|$)")
+
+
+def is_index_excluded(path):
+    """True for a markdown path the search must never index or return: a dream-cycle preimage copy. Works on a
+    relative or an absolute path, with / or \\ separators."""
+    return bool(PREIMAGE_RE.search(path))
+
+
+def is_indexable(rel, dirs=CORPUS_DIRS):
     """rel: path relative to the agent folder, '/'-separated."""
+    if is_index_excluded(rel):
+        return False
     parts = rel.split("/")
     name = parts[-1]
     # case-insensitive throughout: on macOS (a case-insensitive filesystem) wiki/Personal/ IS wiki/personal/, and a
@@ -44,14 +79,15 @@ def is_indexable(rel):
         return False
     if any(p.lower() in EXCLUDE_DIR_PARTS for p in parts[:-1]):
         return False
-    return parts[0].lower() in CORPUS_DIRS
+    return parts[0].lower() in dirs
 
 
 def source_files(root=None):
     """Sorted absolute paths of every markdown file that belongs in the corpus. Never follows symlinks out."""
     root = root or ROOT
     out = []
-    for d in CORPUS_DIRS:
+    dirs = corpus_dirs(root)
+    for d in dirs:
         base = os.path.join(root, d)
         if not os.path.isdir(base) or os.path.islink(base):
             continue
@@ -62,6 +98,6 @@ def source_files(root=None):
                 if os.path.islink(p):
                     continue
                 rel = os.path.relpath(p, root).replace(os.sep, "/")
-                if is_indexable(rel):
+                if is_indexable(rel, dirs):
                     out.append(p)
     return sorted(out)

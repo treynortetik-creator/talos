@@ -107,9 +107,10 @@ public enum ThreadSessions {
     // the optional guards ride in the same inline settings, since Claude Code takes one --settings; the Talos-home deny goes in after
     // them, as a union, exactly as a worker's does
     guard let base = (try? JSONSerialization.jsonObject(with: Data(pluginsOffSettings.utf8))) as? [String: Any],
-      let merged = GuardsSettings.merged(base, talosHome: home),
+      let merged = GuardsSettings.merged(InstructionFiles.merged(base), talosHome: home),
       let fenced = WorkerFence.applying(merged, talosHome: home),
-      let data = try? JSONSerialization.data(withJSONObject: fenced, options: [.sortedKeys])
+      // and Claude Code's own computer use off, as for every other Talos session (Talos's screen tools replace it)
+      let data = try? JSONSerialization.data(withJSONObject: GuardsSettings.denyingComputerUse(fenced), options: [.sortedKeys])
     else { return nil }
     args += ["--settings", String(decoding: data, as: UTF8.self)]
     return Invocation(executable: claudePath, args: args, cwd: row.cwd)

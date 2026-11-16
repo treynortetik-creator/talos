@@ -4,6 +4,7 @@
 // `unreadable` entry plus an issue, never a dead list), anything else failing the schema is an AdapterError that the
 // service turns into a `registry_unreadable` health issue carrying the zod path.
 import { spawn } from 'node:child_process'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   type ApplyResult,
@@ -30,6 +31,9 @@ import {
   scheduleFromChronos,
   type ValidateResult,
 } from '@talos-app/protocol'
+import { stillRunning, waitChild } from '../child-wait.ts'
+import { say } from '../owner-words.ts'
+import { ownerHost } from '../platform.ts'
 
 export class AdapterError extends Error {
   constructor(
@@ -64,6 +68,11 @@ export type ChronosAdapterOptions = {
   env?: { path?: string; home?: string; tz?: string } | undefined
   meta?: AdapterMeta
   hostLabel?: string
+  /**
+   * The owner's computer, for what Chronos can run there (headlessOffMac). Absent: `ownerHost()`. The testkit contract pins
+   * 'mac', since its expectations are the Mac's whatever machine runs it.
+   */
+  ownerHost?: 'mac' | 'windows' | 'linux'
   /** Clock for the single-flight window (the bridge's injected clock). */
   now?: () => number
   /** Told about every call that timed out or came back unreadable. */
@@ -82,8 +91,10 @@ const errOf = (x: unknown): Err | null => {
 }
 const mapCode = (c: string) => (c === 'not_found' ? 'schedule_not_found' : c)
 
-const TCC_FIX =
-  "macOS is probably waiting for permission. 1. At the Mac, look for a dialog saying Claude Code would like to access a folder and click Allow (it may be behind other windows). 2. Or open System Settings → Privacy & Security → Files and Folders and allow it. 3. Lasting fix: keep your agent folder outside Desktop, Documents and Downloads. 4. Tap Retry background runs. Session jobs aren't affected."
+const TCC_FIX = say({
+  mac: "macOS is probably waiting for permission. 1. At the Mac, look for a dialog saying Claude Code would like to access a folder and click Allow (it may be behind other windows). 2. Or open System Settings → Privacy & Security → Files and Folders and allow it. 3. Lasting fix: keep your agent folder outside Desktop, Documents and Downloads. 4. Tap Retry background runs. Session jobs aren't affected.",
+  linux: 'A background run seems stuck. Check the run log in Schedules → Recent runs.',
+})
 
 /** S7.2: severity, text, fix per code. */
 const ISSUES: Record<string, [HealthIssueT['severity'], string, string | null]> = {
@@ -96,46 +107,88 @@ const ISSUES: Record<string, [HealthIssueT['severity'], string, string | null]> 
   tick_missing: [
     'error',
     "Your scheduler hasn't checked in lately.",
-    '1. Check the Mac is awake. 2. At the Mac run `chronos doctor`. 3. If the tick is stuck: `launchctl kickstart -k gui/$(id -u)/io.github.chronos.tick`.',
+    say({
+      mac: '1. Check the Mac is awake. 2. At the Mac run `chronos doctor`. 3. If the tick is stuck: `launchctl kickstart -k gui/$(id -u)/io.github.chronos.tick`.',
+      linux: '1. Check this computer is awake. 2. On this computer run `chronos doctor`.',
+      windows: '1. Check this PC is awake. 2. On the PC, run Talos Setup again; it repairs the scheduler.',
+    }),
   ],
   launch_stalled: [
     'warn',
     'A background run is stuck.',
-    'Read the run log in Schedules → Recent runs. If macOS is the cause, see "Background runs are stuck".',
+    say({
+      mac: 'Read the run log in Schedules → Recent runs. If macOS is the cause, see "Background runs are stuck".',
+      linux: 'Read the run log in Schedules → Recent runs.',
+    }),
   ],
-  tcc_suspected: ['warn', 'Background runs are stuck. macOS is probably waiting for your permission.', TCC_FIX],
+  tcc_suspected: [
+    'warn',
+    say({
+      mac: 'Background runs are stuck. macOS is probably waiting for your permission.',
+      linux: 'Background runs are stuck.',
+    }),
+    TCC_FIX,
+  ],
   headless_blocked: [
     'warn',
     'Background runs are off until this is fixed. Session jobs are unaffected.',
     `${TCC_FIX.split(' 4.')[0]} Then tap Retry background runs.`,
   ],
-  run_hung: ['error', 'A background run is stuck.', 'At the Mac run `chronos doctor`; it lists the stuck process.'],
+  run_hung: [
+    'error',
+    'A background run is stuck.',
+    say({
+      mac: 'At the Mac run `chronos doctor`; it lists the stuck process.',
+      linux: 'On this computer run `chronos doctor`; it lists the stuck process.',
+      windows: 'On the PC, run Talos Setup again; it repairs the scheduler.',
+    }),
+  ],
   adapter_timeout: [
     'error',
     "The scheduler didn't answer in time.",
     "The scheduler's files may be in a protected or cloud-synced folder that isn't available.",
   ],
-  not_installed: ['info', 'No scheduler is installed on this Mac.', null],
+  not_installed: [
+    'info',
+    say({ mac: 'No scheduler is installed on this Mac.', linux: 'No scheduler is installed on this computer.' }),
+    null,
+  ],
   version_unsupported: ['warn', 'This Chronos is too old for Talos.', 'Update Chronos: `git pull && ./install.sh`.'],
   registry_unreadable: [
     'error',
     "Some of your scheduler's jobs can't be read.",
-    "Fix jobs.json at the Mac or restore it from the scheduler's history.",
+    say({
+      mac: "Fix jobs.json at the Mac or restore it from the scheduler's history.",
+      linux: "Fix jobs.json on this computer or restore it from the scheduler's history.",
+      windows: 'On the PC, run Talos Setup again; it repairs the scheduler.',
+    }),
   ],
   registry_synced_folder: [
     'warn',
     "Your scheduler's files are in a synced folder.",
-    "Move the scheduler's files to a local folder. One Mac per relay.",
+    say({
+      mac: "Move the scheduler's files to a local folder. One Mac per relay.",
+      linux: "Move the scheduler's files to a local folder. One computer per relay.",
+    }),
   ],
   legacy_both_runner: [
     'warn',
     'Jobs still have a background backup.',
-    'At the Mac run `talos-app schedules adopt` to turn the backup off.',
+    say({
+      mac: 'At the Mac run `talos-app schedules adopt` to turn the backup off.',
+      linux: 'On this computer run `talos-app schedules adopt` to turn the backup off.',
+      windows: "Talos can't take over this schedule on a Windows PC yet.",
+    }),
   ],
   held_jobs: [
     'warn',
     'Jobs changed outside the app and are on hold.',
-    'Open each job and review the change. After an upgrade from Chronos 0.2, run `talos-app schedules adopt` at the Mac.',
+    say({
+      mac: 'Open each job and review the change. After an upgrade from Chronos 0.2, run `talos-app schedules adopt` at the Mac.',
+      linux:
+        'Open each job and review the change. After an upgrade from Chronos 0.2, run `talos-app schedules adopt` on this computer.',
+      windows: 'Open each job and review the change.',
+    }),
   ],
   missed_recently: ['info', 'Jobs were missed in the last day.', "Missed jobs don't re-run on their own. Use Run now."],
   truncated: ['warn', 'Only the first 200 jobs are shown.', null],
@@ -144,6 +197,8 @@ const ISSUES: Record<string, [HealthIssueT['severity'], string, string | null]> 
 const COLLAPSE = new Set(['held_jobs', 'missed_recently', 'legacy_both_runner'])
 /** The beat is older than two tick intervals (5 min) plus a minute. */
 const TICK_STALE_S = 2 * 300 + 60
+/** The scheduler's tick has beaten within TICK_STALE_S (null: it never has). */
+export const tickBeating = (ageS: number | null): boolean => ageS !== null && ageS <= TICK_STALE_S
 
 export function issueFor(
   code: HealthIssueT['code'],
@@ -161,6 +216,31 @@ export function healthState(issues: HealthIssueT[], pausedAll: boolean): Schedul
   if (pausedAll) return 'paused'
   if (issues.some((i) => i.severity === 'warn')) return 'degraded'
   return 'ok'
+}
+
+/** Where Python keeps Chronos's compiled bytecode: in the owner's home, which only the owner can write. */
+export function chronosPycache(home = homedir()): string {
+  return join(home, '.cache', 'talos', 'chronos-pycache')
+}
+
+/**
+ * Why a change cannot be saved on this computer, or null. A Mac answers null for everything (launchd runs the tick). Off a Mac a
+ * job that runs by itself in the background needs Chronos's own timer running there (on Linux a systemd user timer, which
+ * Chronos's installer starts): `tickAlive` is whether the tick has beaten lately, never the platform alone (Pantheon 2026-11-15).
+ * A job limited to the tools it lists is refused off a Mac whatever the timer: the narrow run it needs comes with Chronos's
+ * runtime at a root-owned path, later (docs/SCHEDULES.md S3.9).
+ */
+export function headlessOffMac(change: ChronosChangeT, host = ownerHost(), tickAlive = false): string | null {
+  if (host === 'mac') return null
+  const set = change.op === 'create' ? change.draft : change.op === 'update' ? change.set : undefined
+  const where = host === 'windows' ? 'this PC' : 'this computer'
+  // a job limited to the tools it lists always runs in the background, whatever its runner says (Chronos never offers a
+  // restricted job to a session): the fix is its permissions, so the words name them (Fable)
+  if (set?.permissions === 'restricted')
+    return `A job limited to the tools it lists can't run on ${where} yet. Give it full permissions: it then runs by itself, unattended, or in a Talos thread.`
+  if (set?.runner === 'headless' && !tickAlive)
+    return `This job would run by itself in the background, which needs the scheduler's background timer, and it isn't running on ${where}. Reinstall Chronos (its installer starts the timer), or set the job to run in a Talos thread instead.`
+  return null
 }
 
 export class ChronosAdapter implements SchedulerAdapter {
@@ -191,7 +271,10 @@ export class ChronosAdapter implements SchedulerAdapter {
     const e: Record<string, string> = {
       PATH: this.o.env?.path || DEFAULT_PATH,
       LANG: 'en_US.UTF-8',
-      PYTHONDONTWRITEBYTECODE: '1', // the vendored copy must not be dirtied by a run
+      // Compiled bytecode goes to the owner's own cache, never next to the vendored copy (which a run must not dirty).
+      // Not PYTHONDONTWRITEBYTECODE: that recompiles Chronos on every call, ~110 ms each on a Mac, and the bridge calls it
+      // every 30 s. Not a shared /tmp folder either: another account could plant a .pyc there that this one would run.
+      PYTHONPYCACHEPREFIX: chronosPycache(this.o.env?.home),
     }
     if (this.o.env?.home) e.HOME = this.o.env.home
     if (this.o.env?.tz) e.TZ = this.o.env.tz
@@ -201,8 +284,12 @@ export class ChronosAdapter implements SchedulerAdapter {
     return e
   }
 
-  /** Kills a child by PID (its own process group), never by name. */
+  /**
+   * Kills a child by PID (its own process group), never by name, and only while it has not exited: once it has, it is reaped,
+   * and its number (and a group of that number) can be someone else's.
+   */
   private kill(child: ReturnType<typeof spawn>) {
+    if (!stillRunning(child)) return
     try {
       if (child.pid) process.kill(-child.pid, 'SIGKILL')
     } catch {
@@ -236,50 +323,42 @@ export class ChronosAdapter implements SchedulerAdapter {
       this.children.add(child)
       let out = ''
       let errText = ''
-      let settled = false
-      const finish = (f: () => void) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        this.children.delete(child)
-        f()
-      }
-      const timer = setTimeout(() => {
-        this.kill(child)
-        child.stdout?.destroy()
-        child.stderr?.destroy()
-        const e = new AdapterError(
-          'timeout',
-          `chronos api ${args[0]} did not answer within ${Math.round(timeoutMs / 1000)} s`,
-        )
-        finish(() => {
-          if (!quiet) this.o.onProblem?.(e)
-          reject(e)
-        })
-      }, timeoutMs)
       child.stdout?.on('data', (d: Buffer) => {
         out += d.toString('utf8')
       })
       child.stderr?.on('data', (d: Buffer) => {
         errText += d.toString('utf8')
       })
-      child.on('error', (e) =>
-        finish(() => reject(new AdapterError('spawn', `could not run ${this.o.bin}: ${e.message}`))),
-      )
-      child.on('close', (code) =>
-        finish(() => {
-          try {
-            resolve(JSON.parse(out))
-          } catch {
-            const e = new AdapterError(
-              'parse',
-              `chronos api ${args[0]}: no JSON (exit ${code}): ${(errText || out).slice(0, 200)}`,
-            )
-            this.o.onProblem?.(e)
-            reject(e)
-          }
-        }),
-      )
+      let spawnError = ''
+      child.on('error', (e) => {
+        spawnError ||= e.message
+      })
+      // The first of close, or exit plus a short grace for the output (a grandchild may hold the pipe open), or the timeout.
+      void waitChild(child, { deadlineMs: timeoutMs }).then((end) => {
+        this.children.delete(child)
+        if (end.how === 'deadline') this.kill(child) // still running: kill() checks
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+        if (end.how === 'error') return reject(new AdapterError('spawn', `could not run ${this.o.bin}: ${spawnError}`))
+        if (end.how === 'deadline') {
+          const e = new AdapterError(
+            'timeout',
+            `chronos api ${args[0]} did not answer within ${Math.round(timeoutMs / 1000)} s`,
+          )
+          if (!quiet) this.o.onProblem?.(e)
+          return reject(e)
+        }
+        try {
+          resolve(JSON.parse(out))
+        } catch {
+          const e = new AdapterError(
+            'parse',
+            `chronos api ${args[0]}: no JSON (exit ${end.code}): ${(errText || out).slice(0, 200)}`,
+          )
+          this.o.onProblem?.(e)
+          reject(e)
+        }
+      })
       child.stdin?.on('error', () => {})
       child.stdin?.end(stdin === undefined ? '' : JSON.stringify(stdin))
     })
@@ -326,6 +405,12 @@ export class ChronosAdapter implements SchedulerAdapter {
       sessionRunner: v.session_runner,
       features: this.features,
     }
+  }
+
+  /** Takes what a probe on the same binary just learned from `version`, instead of asking Chronos a second time. */
+  adoptDetected(probe: ChronosAdapter): void {
+    this.version = probe.version
+    this.features = [...probe.features]
   }
 
   snapshot(): Promise<ScheduleSnapshotT> {
@@ -401,9 +486,27 @@ export class ChronosAdapter implements SchedulerAdapter {
     return this.ds.get(id)
   }
 
+  /**
+   * Is the scheduler's own tick beating (it writes chronos.beat each run; the snapshot says how old it is)? A Mac never asks (launchd).
+   * Off a Mac, a snapshot that can't be read, or no beat at all, is no.
+   */
+  private async tickAlive(): Promise<boolean> {
+    if ((this.o.ownerHost ?? ownerHost()) === 'mac') return true
+    try {
+      const p = parseChronosSnapshot(await this.raw(['snapshot']))
+      return p.ok && tickBeating(p.head.tick_age_s)
+    } catch {
+      return false
+    }
+  }
+
   // ---- the one writer -------------------------------------------------------------------------------------------
 
   async validate(change: ChronosChangeT): Promise<ValidateResult> {
+    // Off a Mac there is no background timer yet (Chronos's Linux install loads nothing): a job that would run by itself in the
+    // background would never run, so it is refused in words before Chronos is asked (Pantheon, Chronos on Linux)
+    const background = headlessOffMac(change, this.o.ownerHost ?? ownerHost(), await this.tickAlive())
+    if (background) return { ok: false, code: 'schedule_invalid', errors: [{ path: 'runner', message: background }] }
     // Chronos's own floor between fire times is 15 minutes; Talos's is 60 (docs/HEARTBEAT.md). The owner form and the agent
     // are held to it by the ScheduleChange schema; this is the same rule at the last door, so a change built any other way
     // is refused in words instead of being sent, or read back as an unreadable answer.
@@ -426,6 +529,9 @@ export class ChronosAdapter implements SchedulerAdapter {
   }
 
   async apply(change: ChronosChangeT, expectedEtag: string | null): Promise<ApplyResult> {
+    // the same refusal as validate's, at the writer too: a change that reaches apply by any other path is refused alike (Fable)
+    const background = headlessOffMac(change, this.o.ownerHost ?? ownerHost(), await this.tickAlive())
+    if (background) return { ok: false, code: 'schedule_invalid', message: background }
     this.invalidate()
     const a = await this.call('apply', ['apply'], { change, expected_etag: expectedEtag })
     this.invalidate()
@@ -709,6 +815,31 @@ export class ChronosAdapter implements SchedulerAdapter {
       const text = ids.length ? `${base.replace(/\.$/, '')}: ${ids.join(', ')}.` : base
       add(issueFor(code as HealthIssueT['code'], since, ids.length === 1 ? (ids[0] as string) : null, text))
     }
+    // off a Mac a job that runs by itself in the background runs only with the scheduler's timer beating, and a restricted one not
+    // at all yet: say which, once (Fable)
+    if ((this.o.ownerHost ?? ownerHost()) !== 'mac') {
+      const beating = tickBeating(h.tick_age_s)
+      const stuck = jobs
+        .filter((j) => j.enabled && (j.permissions !== 'full' || (j.runner !== 'session' && !beating)))
+        .map((j) => j.id)
+      if (stuck.length)
+        add({
+          code: 'cannot_run_here',
+          severity: 'warn',
+          text: say({
+            mac: '',
+            linux: `Some jobs can't run on this computer: ${stuck.join(', ')}.`,
+          }).slice(0, 200),
+          fix: say({
+            mac: '',
+            linux: beating
+              ? "Give them full permissions: a job limited to the tools it lists can't run on this computer yet."
+              : 'Reinstall Chronos so its background timer runs, or set them to run in a Talos thread with full permissions.',
+          }),
+          schedule_id: stuck.length === 1 ? (stuck[0] as string) : null,
+          since,
+        })
+    }
     if (h.tcc_suspected) add(issueFor('tcc_suspected', since, null))
     if (h.registry_synced_folder) add(issueFor('registry_synced_folder', since, null))
     if (h.tick_age_s !== null && h.tick_age_s > TICK_STALE_S) add(issueFor('tick_missing', since, null))
@@ -732,7 +863,7 @@ export class ChronosAdapter implements SchedulerAdapter {
       state: healthState(issues, h.paused_all),
       adapter: { id: 'chronos', version: this.version, api: 1 },
       tz: h.tz,
-      host_label: this.o.hostLabel ?? 'This Mac',
+      host_label: this.o.hostLabel ?? say({ mac: 'This Mac', linux: 'This computer' }),
       session_runner: h.session_runner,
       paused_all: h.paused_all,
       headless: h.headless,

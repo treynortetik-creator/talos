@@ -4,6 +4,7 @@
 set -uo pipefail
 export PYTHONPATH= PYTHONDONTWRITEBYTECODE=1
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
@@ -11,8 +12,10 @@ SB="$(mktemp -d)" || exit 2
 case "$SB" in /*/*) ;; *) echo "suspicious temp dir '$SB'" >&2; exit 2 ;; esac
 trap 'rm -rf "$SB"' EXIT
 REALHOME="$HOME"; export HOME="$SB/home"; mkdir -p "$HOME"
+talos_test_sandbox "$SB"
 export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
 unset TALOS_TTS TALOS_TTS_ENGINE TALOS_STT TALOS_FORCE_ARCH HF_HOME
+export TALOS_FORCE_ARCH=arm64 # the suite fakes MLX and the rest, so its default machine is an Apple Silicon Mac whatever runs it; Intel cases set x86_64
 A="$SB/agent"; mkdir -p "$A/scripts/voice" "$A/scripts/stt-diarize"
 cp "$KIT"/scripts/tts.sh "$KIT"/scripts/stt.sh "$A/scripts/"
 cp "$KIT"/scripts/voice/* "$A/scripts/voice/"; cp "$KIT"/scripts/stt-diarize/* "$A/scripts/stt-diarize/"

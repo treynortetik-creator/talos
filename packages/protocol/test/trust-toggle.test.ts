@@ -13,35 +13,23 @@ import {
 } from '../src/index.ts'
 
 describe('checkConfigPatch for trust_mode', () => {
-  it('on: the session step-up is required, and the result says it is trust being turned on', () => {
-    expect(checkConfigPatch({ trust_mode: true })).toEqual({
-      ok: true,
-      touchesWorkEnabled: false,
-      stepupPurpose: 'config:session',
-      turnsOnTrust: true,
-    })
+  it('on: a plain patch since 2026-11-14 (a signed tap, no passkey)', () => {
+    expect(checkConfigPatch({ trust_mode: true })).toEqual({ ok: true })
   })
   it('off (false, or null which deletes the field): no step-up', () => {
-    for (const v of [false, null])
-      expect(checkConfigPatch({ trust_mode: v })).toEqual({ ok: true, touchesWorkEnabled: false })
+    for (const v of [false, null]) expect(checkConfigPatch({ trust_mode: v })).toEqual({ ok: true })
   })
   it('a value that is not a boolean or null is refused, naming the field (it could never be read as on)', () => {
     for (const v of ['true', 1, 0, {}, [], ['x']])
       expect(checkConfigPatch({ trust_mode: v }), JSON.stringify(v)).toEqual({ ok: false, path: 'trust_mode' })
   })
-  it('turning it on beside another setting still needs the step-up; beside permission_relay it is the one session token', () => {
-    expect(checkConfigPatch({ trust_mode: true, timezone: 'UTC' })).toMatchObject({ stepupPurpose: 'config:session' })
-    expect(checkConfigPatch({ trust_mode: true, permission_relay: true })).toMatchObject({
-      stepupPurpose: 'config:session',
-      turnsOnTrust: true,
-    })
+  it('turning it on beside other settings is one plain patch', () => {
+    expect(checkConfigPatch({ trust_mode: true, timezone: 'UTC' })).toEqual({ ok: true })
+    expect(checkConfigPatch({ trust_mode: true, permission_relay: true })).toEqual({ ok: true })
   })
-  it('one token carries one purpose: trust on with a work step-up field is refused, naming trust_mode', () => {
-    expect(checkConfigPatch({ trust_mode: true, work: { enabled: [] } })).toEqual({ ok: false, path: 'trust_mode' })
-    expect(checkConfigPatch({ trust_mode: false, work: { enabled: [] } })).toMatchObject({
-      ok: true,
-      touchesWorkEnabled: true,
-    })
+  it('trust on beside a work field: one plain patch (there are no step-up tokens to keep apart)', () => {
+    expect(checkConfigPatch({ trust_mode: true, work: { enabled: [] } })).toEqual({ ok: true })
+    expect(checkConfigPatch({ trust_mode: false, work: { enabled: [] } })).toEqual({ ok: true })
   })
 })
 
@@ -67,8 +55,7 @@ describe('read tolerance', () => {
   it('the table is sound with the new row', () => {
     expect(settingsTableProblems(SETTINGS_TABLE as never)).toEqual([])
   })
-  it('stepupOnTrue is only read on top-level rows: a dotted row with it is reported', () => {
-    const bad = { ...SETTINGS_TABLE, 'work.label': { ...SETTINGS_TABLE['work.label'], stepupOnTrue: 'config:session' } }
-    expect(settingsTableProblems(bad as never).join('\n')).toContain('work.label: stepupOnTrue')
+  it('no row carries stepupOnTrue any more (the step-up is gone)', () => {
+    for (const [p, r] of Object.entries(SETTINGS_TABLE)) expect('stepupOnTrue' in r, p).toBe(false)
   })
 })

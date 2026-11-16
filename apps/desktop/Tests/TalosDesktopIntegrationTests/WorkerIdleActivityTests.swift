@@ -2,15 +2,16 @@ import Foundation
 import Testing
 import TalosDesktopCore
 @testable import TalosSupervisor
+import TalosTestSupport
 
-/// Idle parking follows what the session does, not what the pane repaints (docs/OPTION-C.md, "Idle"). The owner's Claude Code status line
-/// ("Sonnet 5.5 | 20% | 7d: 38%", under the input box) repaints when usage changes, from any session, so tmux's `window_activity` moves
+/// Idle parking follows what the session does, not what the pane repaints (docs/OPTION-C.md, "Idle"). A thread session's status line
+/// ("Talos: Sonnet 5 | 7d: 20%": the one Talos sets, WorkerUsage, under the input box) repaints when usage changes, so tmux's `window_activity` moves
 /// with no turn at all. The fake worker (`review-worker.sh`) repaints such a row on `FAKE_RV_STATUS`. Private tmux (`talos-test-…`,
 /// never `-L talos`) and the fake claude only.
 private let scenario = "review-worker.sh"
 
 /// A tmux client on the thread's session with a tty (`script`), as the Terminals window is. Its activity time is its last key.
-private final class AttachedClient: @unchecked Sendable {
+final class AttachedClient: @unchecked Sendable {
   private let process = Process()
   private let input = Pipe()
 
@@ -53,9 +54,25 @@ extension WorkerRig {
     return seen.count >= Int(seconds) - 1
   }
 
+  /// Whether the pane's tty echoes what is typed (`stty` on the pane's own tty); nil when it cannot be read.
+  func paneEcho(_ id: String = "trip") -> Bool? {
+    let tty = tmuxCmd(["display-message", "-p", "-t", "=t-\(id):", "#{pane_tty}"]).out.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard tty.hasPrefix("/dev/") else { return nil }
+    let out = ProcessRunner.run(["/bin/stty", "-f", tty, "-a"], env: ["PATH": "/usr/bin:/bin"], timeout: 5)
+    guard out.ok else { return nil }
+    let flags = out.out.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+    if flags.contains("-echo") { return false }
+    return flags.contains("echo") ? true : nil
+  }
+
+  /// The newest activity time of the clients attached to the thread's session (tmux's `client_activity`, whole seconds).
+  func clientActivity(_ id: String = "trip") -> Double? {
+    tmuxCmd(["list-clients", "-t", "=t-\(id)", "-F", "#{client_activity}"]).out.split(separator: "\n").compactMap { Double($0) }.max()
+  }
+
   /// The screen as the pane shows it now, without the status row, which repaints on its own.
   func screenWithoutStatusRow(_ id: String = "trip") -> String {
-    TmuxCommands.parseCapture(screen(id)).filter { !$0.contains("Sonnet 5.5") }.joined(separator: "\n")
+    TmuxCommands.parseCapture(screen(id)).filter { !$0.contains("Talos: Sonnet 5 |") }.joined(separator: "\n")
   }
 
   /// One thread's entry in `workers.json`, as plain JSON: the keys are what the file holds, not what a type calls them.
@@ -79,16 +96,25 @@ extension WorkerRig {
   }
 
   /// Stays up for `seconds`, checked every 100 ms. The message names the state if it does not.
-  func staysUp(for seconds: Double, _ why: String) -> Bool {
-    let until = Date().addingTimeInterval(seconds)
-    while Date() < until {
-      if !up("trip") {
+  func staysUp(for seconds: Double, _ why: String) -> Bool { staysUp(until: Date().addingTimeInterval(seconds), why) }
+
+  /// Stays up until `deadline`, checked every 100 ms. Only a look that came back before the deadline counts: on a busy machine one
+  /// read of the state can take a second or more (it waits for a tick to end), and a park it sees after the window is not a park
+  /// inside it. At least one look must come back in time, or nothing was checked.
+  func staysUp(until deadline: Date, _ why: String) -> Bool {
+    var looks = 0
+    while Date() < deadline {
+      let isUp = up("trip")
+      guard Date() < deadline else { break }
+      looks += 1
+      if !isUp {
         Issue.record("\(why): \(String(describing: state("trip"))) \(self.why("trip"))")
         return false
       }
       usleep(100_000)
     }
-    return true
+    if looks == 0 { Issue.record("\(why): no look at the state came back inside the window") }
+    return looks > 0
   }
 }
 
@@ -124,11 +150,11 @@ struct WorkerIdleActivity {
     #expect(r.wait(8) { r.typedLines.count == 1 }, "the pointer never went in: \(r.why("trip"))")
     FileManager.default.createFile(atPath: turn, contents: nil)
     #expect(r.staysUp(for: 6.5, "parked in the middle of a turn"), "a turn longer than the idle limit")
-    try FileManager.default.removeItem(atPath: turn)
     let ended = Date()
-    // past the busy window, well inside one idle time after the turn: only the turn's own activity keeps it up
-    #expect(r.staysUp(for: 2.5, "parked right after the turn ended"))
-    #expect(Date().timeIntervalSince(ended) < 4)
+    try FileManager.default.removeItem(atPath: turn)
+    // past the busy window, well inside one idle time after the turn: only the turn's own activity keeps it up. The window is fixed
+    // from the turn's end, so a slow look cannot carry it past the idle time (the manager sees the end no sooner than this).
+    #expect(r.staysUp(until: ended.addingTimeInterval(2.5), "parked right after the turn ended"))
     #expect(r.wait(12) { r.state("trip") == "parked" }, "control: it parks once a whole idle time has passed since the turn: \(r.why("trip"))")
   }
 
@@ -212,6 +238,25 @@ struct WorkerIdleActivity {
     #expect(r.mgr.needsYou()["trip"] == nil, "a stuck needs-you flag")
   }
 
+  /// A dialog drawn just before the idle limit has not held still for `dialogSettle` yet, so it is not flagged when the limit passes. It
+  /// must still hold the park: here the settle (6 s) outlasts the idle limit (3 s), and drawing it under the box changes nothing the idle
+  /// clock reads, so only the dialog on the screen can keep the worker up until it is flagged.
+  @Test func aDialogStillSettlingWhenTheIdleLimitPassesHoldsThePark() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    let flag = r.root + "/dialog"
+    r.env["FAKE_RV_DIALOG"] = flag
+    r.manager(idle: 3, busyWindow: 0.5)
+    r.mgr.tune { $0.dialogSettle = 6 }
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(8) { r.up("trip") }, "\(r.why("trip"))")
+    #expect(r.wait(8) { r.typedLines.count == 1 }, "the pointer never went in: \(r.why("trip"))")
+    FileManager.default.createFile(atPath: flag, contents: nil)
+    #expect(r.staysUp(for: 8, "parked with a dialog on screen that had not settled yet"), "past the idle limit and the settle")
+    #expect(r.mgr.needsYou()["trip"] != nil, "the dialog was never flagged: \(r.mgr.needsYou())")
+  }
+
   /// A prompt nobody named, on a pane whose status line repaints faster than the settle: the screen is never still, so only "no dialog
   /// shape for `dialogSettle` running" can end the hold once the question is answered.
   @Test func aPromptHoldEndsWhenItIsGoneEvenWithAStatusLineRepaintingFasterThanTheSettle() throws {
@@ -280,15 +325,22 @@ struct WorkerIdleActivity {
     defer { r.teardown() }
     r.makeManager(idle: 600)
     r.mgr.startTicking()
+    let woke = Date().timeIntervalSince1970
     try r.wake("trip")
     #expect(r.wait(8) { r.up("trip") }, "\(r.why("trip"))")
     #expect(r.wait(8) { r.typedLines.count == 1 }, "the pointer never went in: \(r.why("trip"))")
     let typed = Date().timeIntervalSince1970
-    sleep(4)  // the status row repaints four times meanwhile
-    var saved: Double?
-    #expect(r.wait(5) { saved = (r.rawEntry()?["last_active_at"] as? String).flatMap(ISOTime.parse); return saved != nil }, "no last_active_at in workers.json: \(String(describing: r.rawEntry()))")
-    let at = try #require(saved)
-    #expect(at > typed - 3 && at < typed + 2, "saved \(at - typed) s from the pointer; the status row must not move it")
+    // The status row repaints every second. Wait until tmux has seen it repaint 5 s past the moment the pointer was seen in, then for
+    // the manager to have looked at the pane since: a status row that moved the saved activity would have put it 5 s on by then.
+    let painted = waitUntil(timeout: 20, observe: { r.paneActivity() }) { ($0 ?? 0) >= (typed + 5).rounded(.up) }
+    #expect(painted.ok, "precondition: the status row kept repainting after the pointer: \(painted)")
+    r.ticksPass()
+    let saved = waitUntil(timeout: 15, observe: { (r.rawEntry()?["last_active_at"] as? String).flatMap(ISOTime.parse) }) { $0 != nil }
+    #expect(saved.ok, "no last_active_at in workers.json: \(String(describing: r.rawEntry()))")
+    let at = try #require(saved.last)
+    // The pointer's own activity lies after the wake, and at most a tick or two after the test saw the line (the screen it changed is
+    // read at the next tick); one the status row moved would be 5 s on. A busy machine only widens the gap between the wake and the line.
+    #expect(at >= woke - 1 && at < typed + 3, "saved \(at - typed) s from the pointer (\(at - woke) s after the wake); the status row must not move it")
     try r.wakeFile("trip", action: "park", reason: "control")
     #expect(r.wait(10) { r.state("trip") == "parked" }, "\(r.why("trip"))")
     #expect(r.wait(3) { r.rawEntry()?["state"] as? String == "parked" })
@@ -328,21 +380,29 @@ struct WorkerIdleActivity {
     #expect(r.wait(8) { r.up("trip") }, "\(r.why("trip"))")
     #expect(r.wait(8) { r.typedLines.count == 1 }, "the pointer never went in: \(r.why("trip"))")
     FileManager.default.createFile(atPath: deaf, contents: nil)  // the pointer is in; from here a typed key is not drawn
-    usleep(500_000)
+    let deafened = waitUntil(timeout: 15, observe: { r.paneEcho() }) { $0 == false }
+    #expect(deafened.ok, "the fake never turned its tty's echo off: \(deafened)")
     let client = try AttachedClient(r)
     defer { client.stop() }
     // precondition: a key from the client changes nothing on the screen (the status row aside), so only the client's activity time can
-    // be what keeps the worker up below
+    // be what keeps the worker up below. The key is known to have reached tmux once the client's activity time has moved past the
+    // moment it was typed (whole seconds), and the manager has looked at the pane since.
     let before = r.screenWithoutStatusRow()
+    let keyAt = Date().timeIntervalSince1970
     client.type()
-    usleep(700_000)
+    let reached = waitUntil(timeout: 15, observe: { r.clientActivity() }) { ($0 ?? 0) >= keyAt.rounded(.down) }
+    #expect(reached.ok, "control: the key never reached tmux: \(reached)")
+    r.ticksPass(1)
     let after = r.screenWithoutStatusRow()
     #expect(!before.isEmpty && before == after, "the key was drawn:\n\(before)\n--\n\(after)")
-    let until = Date().addingTimeInterval(8)  // well past one idle time since the pointer
-    while Date() < until {
+    // Keys every 0.2 s for well past one idle time since the pointer, on the monotonic clock. Each key is followed by a whole tick of
+    // the manager, so every look at the state is one the manager made with that key already in tmux's activity time.
+    let until = ProcessInfo.processInfo.systemUptime + 8
+    while ProcessInfo.processInfo.systemUptime < until {
       client.type()
+      r.ticksPass(1)
       #expect(r.up("trip"), "parked while a client was typing: \(r.why("trip"))")
-      usleep(500_000)
+      usleep(200_000)
     }
     #expect(r.wait(15) { r.state("trip") == "parked" }, "the client stopped typing, it is still attached: \(r.why("trip"))")
   }

@@ -22,6 +22,7 @@ import {
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { checkWorkerCwd } from '@talos-app/protocol'
 import { real } from '../guards/rules.ts'
+import { say } from '../owner-words.ts'
 import { defaultLeadRoots, LEAD_SECRET_PATHS, readOwnerMcp } from './fence.ts'
 import {
   deniedToolsFor,
@@ -500,7 +501,10 @@ export function leadCheckNotes(folder: string): { profile: LeadProfile; notes: s
   const probable = probableStopgap(folder, marker)
   if (probable.length)
     notes.push(
-      `.claude/settings.json denies MCP servers the way the first version of the allow list wrote them (${probable.slice(0, 5).join(', ')}${probable.length > 5 ? `, and ${probable.length - 5} more` : ''}). A deny blocks a server the thread's list allows, and the Mac app applies the list itself now. If you did not write these yourself, remove them with: talos-app lead init ${marker?.thread ?? '<thread>'} --remove-stopgap`,
+      say({
+        mac: `.claude/settings.json denies MCP servers the way the first version of the allow list wrote them (${probable.slice(0, 5).join(', ')}${probable.length > 5 ? `, and ${probable.length - 5} more` : ''}). A deny blocks a server the thread's list allows, and the Mac app applies the list itself now. If you did not write these yourself, remove them with: talos-app lead init ${marker?.thread ?? '<thread>'} --remove-stopgap`,
+        linux: `.claude/settings.json denies MCP servers the way the first version of the allow list wrote them (${probable.slice(0, 5).join(', ')}${probable.length > 5 ? `, and ${probable.length - 5} more` : ''}). A deny blocks a server the thread's list allows, and the supervisor applies the list itself now. If you did not write these yourself, remove them with: talos-app lead init ${marker?.thread ?? '<thread>'} --remove-stopgap`,
+      }),
     )
   return { profile, notes }
 }

@@ -1,5 +1,5 @@
 // Persistence for the relay core: the replay buffer (events), the bridge outbox, seen ids, cards, thread and status
-// rows, message meta (receipts, transcripts), read cursors, media rows, push subscriptions and small state.
+// rows, message meta (receipts, transcripts, undo points), read cursors, media rows, push subscriptions and small state.
 // Everything that can carry content is encrypted with the CryptoService (AAD = table:id).
 import { createHash, randomBytes } from 'node:crypto'
 import {
@@ -12,10 +12,13 @@ import {
   ownValue,
   type ThreadStatusT,
   type ThreadT,
+  UndoPointState,
+  type UndoPointStateT,
 } from '@talos-app/protocol'
 import type Database from 'better-sqlite3'
 import type { Clock, CryptoService } from '../services.ts'
 import { openJson, sealJson } from './crypto.ts'
+import { heldProblemsToKeep, outboxTtl, waitingProblems } from './held-problems.ts'
 
 export type Audience = 'app' | 'bridge' | 'both'
 export type StoredFrame = Record<string, unknown> & {
@@ -145,6 +148,18 @@ export class Store {
     )
   }
 
+  /**
+   * One past the highest app-visible seq a sweep ever deleted, or null when none was. A device that holds every app frame
+   * below it missed nothing, however many bridge-only frames (session control, hooks, shares) went after them. A relay
+   * whose sweeps ran before this mark existed falls back to floor() until its first sweep seeds the mark.
+   */
+  appFloor(): number | null {
+    const v = this.getState('app_floor')
+    if (v === null) return this.floor()
+    const n = Number(v)
+    return n > 0 ? n : null
+  }
+
   /** Lowest seq the buffer still holds, or null when nothing was ever pruned. */
   floor(): number | null {
     const v = this.getState('floor')
@@ -259,11 +274,12 @@ export class Store {
 
   enqueueOutbox(args: { frameId: string; seq: number; type: string; consumable: boolean; ttlMs: number }): void {
     const now = this.clock.now()
+    const until = now + outboxTtl(args.type, args.ttlMs)
     this.db
       .prepare(
         'insert or replace into core_outbox (frame_id, seq, type, consumable, delivered, attempts, next_try_at, created_at, expires_at) values (?, ?, ?, ?, 0, 0, ?, ?, ?)',
       )
-      .run(args.frameId, args.seq, args.type, args.consumable ? 1 : 0, now + 5_000, now, now + args.ttlMs)
+      .run(args.frameId, args.seq, args.type, args.consumable ? 1 : 0, now + 5_000, now, until)
   }
 
   outboxRow(frameId: string): OutboxRow | undefined {
@@ -365,6 +381,11 @@ export class Store {
     return null
   }
 
+  /** Bug reports the Mac has not taken, oldest first (held-problems.ts). */
+  waitingProblems(): Array<{ created_at: number; frame: StoredFrame }> {
+    return waitingProblems(this.db, (r) => this.openEvent(r))
+  }
+
   touchOutbox(frameId: string, nextTryAt: number): void {
     this.db
       .prepare('update core_outbox set attempts = attempts + 1, next_try_at = ? where frame_id = ?')
@@ -400,6 +421,11 @@ export class Store {
 
   // ---- cards ------------------------------------------------------------------------------------------------------
 
+  /**
+   * A new card from the Mac. Its `expires_at` is the Mac's clock; the row's expiry is on the relay's, shifted by the
+   * offset the last bridge hello measured (`mac_clock_skew_ms`), so a Mac 15 minutes slow does not hand the owner a
+   * 10-minute card that is already dead (bug hunt R12). The signed card itself is never changed.
+   */
   putCard(card: CardT): void {
     this.db
       .prepare(
@@ -413,10 +439,22 @@ export class Store {
         card.state,
         card.risk,
         card.payload_hash,
-        Date.parse(card.expires_at),
+        this.relayExpiryFor(card),
         sealJson(this.crypto, card, `core_cards:${card.id}`),
         this.clock.now(),
       )
+  }
+  /** A new card's expiry on the relay's clock: its `expires_at` moved by the Mac's measured offset (see putCard). */
+  relayExpiryFor(card: Pick<CardT, 'expires_at'>): number {
+    const skew = Number(this.getState('mac_clock_skew_ms') ?? 0) || 0
+    return Date.parse(card.expires_at) + skew
+  }
+  /** When the card dies on the relay's clock (see putCard), or null for an unknown card. */
+  cardExpiresAt(id: string): number | null {
+    const r = this.db.prepare('select expires_at from core_cards where card_id = ?').get(id) as
+      | { expires_at: number }
+      | undefined
+    return r ? r.expires_at : null
   }
   getCard(id: string): CardT | null {
     const r = this.db.prepare('select card from core_cards where card_id = ?').get(id) as { card: Buffer } | undefined
@@ -426,14 +464,23 @@ export class Store {
     const card = this.getCard(id)
     if (!card) return null
     const next = { ...card, ...patch } as CardT
-    this.putCard(next)
+    // the row keeps the expiry putCard set on the relay's clock
+    this.db
+      .prepare('update core_cards set state = ?, card = ? where card_id = ?')
+      .run(next.state, sealJson(this.crypto, next, `core_cards:${id}`), id)
     return next
   }
   openCards(now: number): CardT[] {
     const rows = this.db
-      .prepare("select card_id id, card from core_cards where state = 'pending' and expires_at > ? order by created_at")
-      .all(now) as Array<{ id: string; card: Buffer }>
-    return rows.map((r) => openJson<CardT>(this.crypto, r.card, `core_cards:${r.id}`))
+      .prepare(
+        "select card_id id, card, expires_at from core_cards where state = 'pending' and expires_at > ? order by created_at",
+      )
+      .all(now) as Array<{ id: string; card: Buffer; expires_at: number }>
+    // each with the relay's own expiry beside it, for the apps (advisory, outside the binding)
+    return rows.map((r) => ({
+      ...openJson<CardT>(this.crypto, r.card, `core_cards:${r.id}`),
+      relay_expires_at: new Date(r.expires_at).toISOString(),
+    }))
   }
   pendingCardsExpiringBy(ts: number): Array<{ id: string; expires_at: number }> {
     return this.db
@@ -534,19 +581,31 @@ export class Store {
       )
       .run(messageId, sealJson(this.crypto, transcript, `core_message_meta:${messageId}`), this.clock.now())
   }
+  /** A message's undo point, from the bridge's `delivered` receipt (undo.ts). Only a state this build knows is kept. */
+  setUndo(messageId: string, state: UndoPointStateT): void {
+    this.db
+      .prepare(
+        `insert into core_message_meta (message_id, undo, updated_at) values (?, ?, ?)
+         on conflict(message_id) do update set undo = excluded.undo, updated_at = excluded.updated_at`,
+      )
+      .run(messageId, state, this.clock.now())
+  }
   getMeta(messageId: string): {
     receipt?: 'delivered' | 'seen' | 'not_delivered'
     transcript?: { text: string; engine: string; status: 'pending' | 'done' | 'failed' }
+    undo?: { state: UndoPointStateT }
   } {
     const r = this.db
-      .prepare('select receipt, transcript from core_message_meta where message_id = ?')
+      .prepare('select receipt, transcript, undo from core_message_meta where message_id = ?')
       .get(messageId) as
-      | { receipt: 'delivered' | 'seen' | 'not_delivered' | null; transcript: Buffer | null }
+      | { receipt: 'delivered' | 'seen' | 'not_delivered' | null; transcript: Buffer | null; undo: string | null }
       | undefined
     if (!r) return {}
+    const undo = UndoPointState.safeParse(r.undo)
     return {
       ...(r.receipt ? { receipt: r.receipt } : {}),
       ...(r.transcript ? { transcript: openJson(this.crypto, r.transcript, `core_message_meta:${messageId}`) } : {}),
+      ...(undo.success ? { undo: { state: undo.data } } : {}),
     }
   }
 
@@ -858,11 +917,34 @@ export class Store {
     dedupMs: number
     /** The card an owner frame decides, if it decides one. A decided card is kept while such a frame is still queued. */
     decisionCard?: (type: string, body: StoredFrame) => string | undefined
-  }): { mediaIds: string[]; events: number } {
+  }): { mediaIds: string[]; events: number; problemsDropped: number } {
     const now = this.clock.now()
     const cutoff = now - args.bufferMs
     const tx = this.db.transaction(() => {
-      const ev = this.db.prepare('delete from core_events where created_at < ?').run(cutoff)
+      // Bug reports the Mac has not taken stay past the buffer, and so does each one's screenshot (held-problems.ts).
+      const { keepSeqs, keepMedia, problemsDropped } = heldProblemsToKeep(
+        this.db,
+        (r) => this.openEvent(r),
+        now,
+        cutoff,
+      )
+      // A relay that swept before the app floor existed: what is below today's floor is gone already, so it is the mark to
+      // start from ('0': nothing was ever pruned).
+      if (this.getState('app_floor') === null) this.setState('app_floor', String(this.floor() ?? 0))
+      const prunedApp = (
+        this.db
+          .prepare(
+            "select max(seq) m from core_events where created_at < ? and audience in ('app', 'both') and seq not in (select value from json_each(?))",
+          )
+          .get(cutoff, JSON.stringify(keepSeqs)) as { m: number | null }
+      ).m
+      if (prunedApp !== null) {
+        const was = Number(this.getState('app_floor') ?? 0)
+        this.setState('app_floor', String(Math.max(was, prunedApp + 1)))
+      }
+      const ev = this.db
+        .prepare('delete from core_events where created_at < ? and seq not in (select value from json_each(?))')
+        .run(cutoff, JSON.stringify(keepSeqs))
       if (ev.changes > 0) {
         const min = (this.db.prepare('select min(seq) m from core_events').get() as { m: number | null }).m
         this.setState('floor', String(min ?? this.maxSeq() + 1))
@@ -900,15 +982,18 @@ export class Store {
         )
         .run(cutoff, JSON.stringify([...held]))
       this.db.prepare('delete from core_message_meta where updated_at < ?').run(cutoff)
+      const notHeld = 'media_id not in (select value from json_each(?))'
       const old = this.db
-        .prepare('select media_id from core_media where created_at < ? and evicted = 0')
-        .all(cutoff) as Array<{
+        .prepare(`select media_id from core_media where created_at < ? and evicted = 0 and ${notHeld}`)
+        .all(cutoff, JSON.stringify(keepMedia)) as Array<{
         media_id: string
       }>
-      this.db.prepare('update core_media set evicted = 1 where created_at < ? and evicted = 0').run(cutoff)
+      this.db
+        .prepare(`update core_media set evicted = 1 where created_at < ? and evicted = 0 and ${notHeld}`)
+        .run(cutoff, JSON.stringify(keepMedia))
       // An evicted row only exists so the app can ask the Mac for the bytes back; after 90 days it is just clutter.
       this.db.prepare('delete from core_media where evicted = 1 and created_at < ?').run(now - EVICTED_MEDIA_ROW_MS)
-      return { mediaIds: old.map((m) => m.media_id), events: ev.changes }
+      return { mediaIds: old.map((m) => m.media_id), events: ev.changes, problemsDropped }
     })
     return tx()
   }

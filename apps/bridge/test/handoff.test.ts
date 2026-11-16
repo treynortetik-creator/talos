@@ -9,6 +9,7 @@ import { loadEnv } from '../src/config.ts'
 import { pgidOf } from '../src/hub/server.ts'
 import { nullLogger } from '../src/log.ts'
 import { ownerAskedIn } from '../src/trust.ts'
+import { HANDOFF_DAILY_LIMIT } from '../src/worker/handoff.ts'
 import { type Harness, sleep, startHarness, waitFor } from './helpers.ts'
 
 const NONCE = 'test-nonce-0123456789abcdef'
@@ -84,7 +85,7 @@ async function desk(state = 'live', extra: Record<string, unknown> = {}) {
     })) as never,
   })
   h = hub
-  await waitFor(() => existsSync(join(hub.home, 'hub.sock')))
+  await waitFor(() => existsSync(join(hub.home, 'run', 'hub.sock')))
   const me = pgidOf(process.pid) as number
   writeWorkers(hub.home, 'live', me, ['trip', 'garden'])
   mkdirSync(join(hub.home, 'workers', 'trip'), { recursive: true })
@@ -111,7 +112,7 @@ const aged = (hub: Harness, ms: number, type?: string) =>
 const MIN = 60_000
 
 const say = (b: Bridge, args: Record<string, unknown>) => b.callTool('handoff', args)
-const text = (r: { content: Array<{ text: string }> }) => r.content[0]?.text ?? ''
+const text = (r: { content: Array<{ text?: string }> }) => r.content[0]?.text ?? ''
 const rows = (hub: Harness, id: string) =>
   hub.bridge.ctx.store
     .page({ thread_id: id, limit: 50 })
@@ -218,9 +219,9 @@ describe('a lead answers main', () => {
 })
 
 describe('the budget', () => {
-  test('the 6th TASK in a day is refused', async () => {
+  test("the TASK past the day's budget (20, Pantheon 2026-11-15) is refused", async () => {
     const hub = await desk()
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= HANDOFF_DAILY_LIMIT; i++) {
       expect(
         (await say(hub.bridge, { thread_id: 'trip', type: 'TASK', text: `Job ${i}.` })).isError,
         `task ${i}`,
@@ -230,7 +231,8 @@ describe('the budget', () => {
       ).toBeFalsy()
       aged(hub, 11 * MIN, 'RESULT')
     }
-    const sixth = await say(hub.bridge, { thread_id: 'trip', type: 'TASK', text: 'Job 6.' })
+    expect(HANDOFF_DAILY_LIMIT).toBe(20)
+    const sixth = await say(hub.bridge, { thread_id: 'trip', type: 'TASK', text: 'One more.' })
     expect(sixth.isError).toBe(true)
     expect(text(sixth)).toContain('Hand-off budget used')
     // and the lead's own side is spent too
@@ -300,7 +302,7 @@ describe('hostile hand-off text reaches no one raw', () => {
   })
 })
 
-describe("an agent hand-off cancels the owner's earlier words", () => {
+describe("the lead's hand-off to main cancels the owner's earlier words in that thread; main's own TASK does not", () => {
   const propose = (hub: Harness) =>
     hub.bridge.callTool('config_propose', {
       thread_id: 'trip',
@@ -308,7 +310,7 @@ describe("an agent hand-off cancels the owner's earlier words", () => {
       changes: [{ path: 'agent.name', value: 'Atlas' }],
     })
 
-  test('owner at 10:00, hand-off at 10:05: config_propose in that thread is not satisfied, even in trust mode', async () => {
+  test("owner at 10:00, main's TASK at 10:05 keeps his words; the lead's RESULT after them cancels them: a card, nothing written", async () => {
     const hub = await desk('live', { trust_mode: true })
     const ownerAt = new Date(Date.now() - 5 * MIN).toISOString()
     hub.bridge.ctx.store.addMessage({
@@ -322,13 +324,16 @@ describe("an agent hand-off cancels the owner's earlier words", () => {
       via: 'app',
       created_at: ownerAt,
     })
-    // the owner's words alone satisfy it (so the refusal below is the hand-off's doing)
+    // the owner's words alone satisfy it (so the card below is the lead's doing)
     expect(ownerAskedIn(hub.bridge.ctx, 'trip')).toBe(true)
     await task(hub, 'Look into ferries.')
+    expect(ownerAskedIn(hub.bridge.ctx, 'trip')).toBe(true) // main's own words are not outside text
+    expect(
+      (await say(worker as Bridge, { thread_id: 'trip', type: 'RESULT', text: 'Ferries at 9.' })).isError,
+    ).toBeFalsy()
     expect(ownerAskedIn(hub.bridge.ctx, 'trip')).toBe(false)
     const r = await propose(hub)
-    expect(r.isError).toBe(true)
-    expect(text(r)).toMatch(/owner has not asked/)
+    expect(text(r)).toMatch(/card c_\S+ pending/)
     expect(hub.bridge.ctx.config.config.agent.name).not.toBe('Atlas')
   })
 })
@@ -368,7 +373,9 @@ describe('delivery happens once, in order', () => {
     expect(handoffRows(hub, 'trip')).toHaveLength(0)
     expect((await readInbound()).messages).toHaveLength(0)
     tick(hub)
-    await waitFor(() => handoffRows(hub, 'trip').length === 1)
+    // the row is posted before the delivery is marked done: wait for the mark, as the test above does
+    await waitFor(() => store.db.query('SELECT 1 FROM handoffs WHERE delivered_at IS NOT NULL').get() != null)
+    expect(handoffRows(hub, 'trip')).toHaveLength(1)
     expect((await readInbound()).messages).toHaveLength(1)
   })
 

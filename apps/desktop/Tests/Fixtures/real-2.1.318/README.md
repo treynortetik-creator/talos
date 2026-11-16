@@ -52,9 +52,8 @@ Not prompts:
   amend` in the transcript, with the real idle box below it. Ordinary output with the same words.
 - `onboarding-security-notes.txt` (02): `Press Enter to continue…`. A wait for Enter, not a Select, and not detected.
 
-Not captured: the computer-use access prompt. The structure rule (one `❯` cursor with aligned sibling options, in the region below the
-last frame rule, no status bar, no input box around it) is meant to cover it and any other Select; there is no capture to test it on,
-so it has no test of its own.
+The computer-use permission dialog was captured later, from Claude Code 2.1.322: `../real-2.1.322/computer-use-permissions*.txt`
+(see that folder's README). It is a known dialog of its own (`DialogMatcher.computerUseBlock`), not a prompt nobody named.
 
 Tests use these files as they are. Do not edit them; capture again the same way when Claude Code changes.
 

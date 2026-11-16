@@ -63,13 +63,13 @@ def changed_paths(days):
     if git_is_own_repo():
         ts = 0
         out = git("log", "--since=%s days ago" % days, "--name-only", "--pretty=format:@@%ct", "--",
-                  "wiki", "memory")
+                  *C.TOPS)
         for ln in out.splitlines():
             if ln.startswith("@@"):
                 ts = int(ln[2:] or 0)
             elif ln.strip():
                 found[ln.strip()] = max(found.get(ln.strip(), 0), ts)
-        for ln in git("status", "--porcelain", "--untracked-files=all", "--", "wiki", "memory").splitlines():
+        for ln in git("status", "--porcelain", "--untracked-files=all", "--", *C.TOPS).splitlines():
             p = ln[3:].strip().strip('"')
             if " -> " in p:
                 p = p.split(" -> ")[-1]
@@ -77,7 +77,7 @@ def changed_paths(days):
                 found.setdefault(p, 0)
     # mtime scan: also the only source outside git. 'personal' folders are walked for mtimes only so they can be
     # COUNTED and rejected; nothing in them is ever read.
-    for top in ("wiki", "memory"):
+    for top in C.TOPS:
         for dp, dn, fns in os.walk(os.path.join(C.ROOT, top)):
             dn[:] = [d for d in dn if not d.startswith(".") and d not in ("dream", "briefs")]
             for fn in fns:
@@ -152,7 +152,7 @@ def lint_hits(slugs):
     lint = os.path.join(C.ROOT, "scripts", "wiki-lint.py")
     if not os.path.isfile(lint) or not os.path.isdir(C.WIKI):
         return [], ""                          # skip quietly: the linter is optional here
-    args = [sys.executable, lint, "wiki"]
+    args = [sys.executable, lint, C.WIKI_REL]
     if os.path.isdir(C.MEM):
         args += ["--extra-dir", "memory"]
     try:
@@ -191,7 +191,7 @@ def recall_neighbours(queries, k=8, timeout=300):
 
 def neighbour_ok(relpath):
     r = relpath.replace(os.sep, "/")
-    return (r.startswith("wiki/") and C.allowed_input(r) and not C.is_personal_path(os.path.join(C.ROOT, r)))
+    return (r.startswith(C.WIKI_REL + "/") and C.allowed_input(r) and not C.is_personal_path(os.path.join(C.ROOT, r)))
 
 
 def title_desc(text, path):

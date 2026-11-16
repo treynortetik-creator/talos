@@ -1,6 +1,7 @@
 // config.json: load, validate, patch and write atomically (spec 1.2, 3.4). The Mac file is authoritative; every write
 // bumps `rev` and the caller emits `config.sync`.
 
+import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   AgentConfig,
@@ -9,17 +10,28 @@ import {
   checkConfigPatch,
   clearArchivedSessions,
   DRIVING_MAX_MS,
+  HIGH_RISK_SETTING_PATHS,
   isInheritedName,
   jcs,
   phoneValueIssue,
   resolveThreadsPatch,
   sessionFieldsIssue,
+  subThreadPatchIssue,
   threadOptsIssue,
   threadPatchIssue,
   validateAgentConfig,
 } from '@talos-app/protocol'
 import { saveConfigVersion } from './config-history.ts'
 import { mtimeMs, readJsonFile, writeJsonAtomic } from './fsutil.ts'
+import {
+  clearedPaths,
+  isCleared,
+  lossesOf,
+  pathsWithin,
+  quarantineArchivedSessions,
+  restoreLosses,
+  stripRetired,
+} from './keep-unknown.ts'
 import type { Logger } from './log.ts'
 import { recordedWrite } from './tripwire.ts'
 import { defaultWorkerRoots, optionCPatchIssue, type WorkerRoots } from './worker/patch-check.ts'
@@ -32,8 +44,14 @@ export type PatchResult =
       message: string
     }
 
-export function parseConfig(value: unknown): { ok: true; config: AgentConfigT } | { ok: false; message: string } {
-  const r = AgentConfig.safeParse(value)
+/** What `parseConfig` needs from a schema; tests hand in an older, smaller one to play a build that knows fewer keys. */
+export type ConfigSchema = { safeParse(v: unknown): ReturnType<typeof AgentConfig.safeParse> }
+
+export function parseConfig(
+  value: unknown,
+  schema: ConfigSchema = AgentConfig,
+): { ok: true; config: AgentConfigT } | { ok: false; message: string } {
+  const r = schema.safeParse(value)
   if (!r.success)
     return { ok: false, message: `config.json invalid at ${r.error.issues[0]?.path.join('.') || '(root)'}` }
   const issues = validateAgentConfig(r.data)
@@ -57,20 +75,34 @@ export class ConfigFile {
 
   private readonly roots: WorkerRoots
   private readonly log: Pick<Logger, 'warn'> | undefined
+  private readonly schema: ConfigSchema
+  private readonly macSubThreads: () => boolean
+  private readonly macOwnFolder: () => boolean
 
   constructor(
     private readonly path: string,
-    opts: { roots?: WorkerRoots; log?: Pick<Logger, 'warn'> } = {},
+    opts: {
+      roots?: WorkerRoots
+      log?: Pick<Logger, 'warn'>
+      schema?: ConfigSchema
+      /** Does the Mac app check a sub-thread's folder before every start (workers.json)? Absent = no: no thread gets a parent. */
+      subthreadsSupported?: () => boolean
+      /** Does it also start a dedicated sub-thread in its own folder outside the parent's? Absent = no (the old inside-only rule). */
+      subthreadsOwnFolder?: () => boolean
+    } = {},
   ) {
     this.roots = opts.roots ?? defaultWorkerRoots(path)
+    this.macSubThreads = opts.subthreadsSupported ?? (() => false)
+    this.macOwnFolder = opts.subthreadsOwnFolder ?? (() => false)
     this.log = opts.log
+    this.schema = opts.schema ?? AgentConfig
   }
 
   /** Loads (throws a readable error when missing or invalid). */
   load(): AgentConfigT {
     const raw = readJsonFile(this.path)
     if (raw === undefined) throw new Error(`cannot read ${this.path}; run: talos-app init --relay-url <url>`)
-    const r = parseConfig(raw)
+    const r = parseConfig(raw, this.schema)
     if (!r.ok) throw new Error(r.message)
     this.current = r.config
     this.seenMtime = mtimeMs(this.path)
@@ -96,13 +128,14 @@ export class ConfigFile {
     if (m === this.seenMtime) return false
     const before = this.current ? jcs(this.current) : ''
     const raw = readJsonFile(this.path)
-    const r = raw === undefined ? undefined : parseConfig(raw)
+    const r = raw === undefined ? undefined : parseConfig(raw, this.schema)
     this.seenMtime = m
     if (!r?.ok) return false // keep the last good config; the owner is probably mid-edit
     if (jcs(r.config) === before) return false
     const prevRev = this.current ? this.current.rev : -1
-    this.current = r.config
-    if (this.current.rev <= prevRev) this.write({ ...this.current, rev: prevRev + 1 })
+    this.current = clearArchivedSessions(r.config)
+    if (this.current.rev <= prevRev || this.current !== r.config)
+      this.write({ ...this.current, rev: Math.max(this.current.rev, prevRev + 1) })
     return true
   }
 
@@ -114,7 +147,7 @@ export class ConfigFile {
     const m = mtimeMs(this.path)
     if (m === this.seenMtime) return
     const raw = readJsonFile(this.path)
-    const r = raw === undefined ? undefined : parseConfig(raw)
+    const r = raw === undefined ? undefined : parseConfig(raw, this.schema)
     this.seenMtime = m
     if (r?.ok) this.current = r.config
   }
@@ -126,31 +159,65 @@ export class ConfigFile {
     return jcs(this.config) !== this.syncedKey
   }
 
+  /** The Mac app reports that it checks a sub-thread's folder before every start; only then may a thread get a parent. */
+  subthreadsSupported(): boolean {
+    try {
+      return this.macSubThreads()
+    } catch {
+      return false
+    }
+  }
+
+  /** The supervisor starts a dedicated sub-thread in its own existing folder outside its parent's. */
+  subthreadsOwnFolder(): boolean {
+    try {
+      return this.macOwnFolder()
+    } catch {
+      return false
+    }
+  }
+
+  /** What the sub-thread rule is judged with. */
+  subThreadOpts(): { macSupports: boolean; ownFolder: boolean } {
+    return { macSupports: this.subthreadsSupported(), ownFolder: this.subthreadsOwnFolder() }
+  }
+
   /** Writes `next` with rev bumped. */
   update(mutate: (c: AgentConfigT) => AgentConfigT, opts: { setsTrustMode?: boolean } = {}): AgentConfigT {
     const base = this.config
     const next = mutate(structuredClone(base))
-    const checked = parseConfig({ ...next, rev: base.rev + 1 })
+    const checked = parseConfig({ ...next, rev: base.rev + 1 }, this.schema)
     if (!checked.ok) throw new Error(checked.message)
     const inherited = newInheritedThread(base, checked.config)
     if (inherited) throw new Error(inheritedMessage(inherited))
     // the same Mac-only rule as a patch, so a tool that writes through update() cannot skip it
     const macOnly = threadOptsIssue(base, checked.config)
     if (macOnly) throw new Error(macOnly)
+    const sub = subThreadPatchIssue(base, checked.config, this.subThreadOpts())
+    if (sub) throw new Error(sub)
     // archiving a thread (the agent's archive_thread) also turns its own session off (docs/OPTION-C.md 9.2)
     this.write(clearArchivedSessions(checked.config), opts.setsTrustMode === true)
     return this.current
   }
 
-  /** `config.patch` from the app: allowlist, optimistic concurrency, schema + structure validation. */
-  applyPatch(baseRev: number, patch: Record<string, unknown>, now: number = Date.now()): PatchResult {
+  /**
+   * `config.patch` from the app: allowlist, optimistic concurrency, schema + structure validation. `agent`: the bridge writing a
+   * change the agent made (a card or the owner's ask), already checked against the agent's own rules in the settings table, so the
+   * phone's off-only rule (the memory browser) does not apply to it.
+   */
+  applyPatch(
+    baseRev: number,
+    patch: Record<string, unknown>,
+    now: number = Date.now(),
+    opts: { agent?: boolean } = {},
+  ): PatchResult {
     // A hand edit not yet picked up must not be judged against the copy in memory: Settings echoes the values it last saw, and a
     // stale `ops_read: true` would otherwise put back what the owner just took away.
     this.reloadIfChanged()
     const check = checkConfigPatch(patch)
     if (!check.ok) return { ok: false, code: 'config_field_forbidden', message: `field not allowed: ${check.path}` }
     // Settings the phone may only turn off (the memory browser kill switch, docs/V2-FEATURES.md V5.1): `on` comes from the Mac.
-    const offOnly = phoneValueIssue(patch)
+    const offOnly = opts.agent ? null : phoneValueIssue(patch)
     if (offOnly) return { ok: false, code: 'config_field_forbidden', message: offOnly }
     const cur = this.config
     if (baseRev !== cur.rev) return { ok: false, code: 'config_conflict', message: `config is at rev ${cur.rev}` }
@@ -166,7 +233,7 @@ export class ConfigFile {
     // Mac-only thread options (ops_read): never turned on from an app patch or an agent card; off and echoes are fine
     const macOnly = threadOptsIssue(cur, merged)
     if (macOnly) return { ok: false, code: 'config_field_forbidden', message: macOnly }
-    const checked = parseConfig({ ...merged, rev: cur.rev + 1, version: 1 })
+    const checked = parseConfig({ ...merged, rev: cur.rev + 1, version: 1 }, this.schema)
     if (!checked.ok) return { ok: false, code: 'bad_frame', message: checked.message }
     const inherited = newInheritedThread(cur, checked.config)
     if (inherited) return { ok: false, code: 'bad_frame', message: inheritedMessage(inherited) }
@@ -177,13 +244,25 @@ export class ConfigFile {
     const next = clearArchivedSessions(checked.config)
     const optionC = optionCPatchIssue(cur, next, this.roots)
     if (optionC) return { ok: false, code: 'thread_session_refused', message: optionC }
+    // sub-threads (docs/THREADS.md "Sub-threads"): one level, folder and MCP list inside the parent's, Mac support first
+    const sub = subThreadPatchIssue(cur, next, this.subThreadOpts())
+    if (sub) return { ok: false, code: 'bad_frame', message: sub }
     // Trust mode is the one setting `write` keeps from the file rather than from memory. A patch that names it is the
     // owner's signed change (the relay already asked for the passkey on `true`), so its value is written as it stands, in the
     // same shape `talos-app trust off` leaves: on is `true`, off is no key at all.
-    if ('trust_mode' in patch) {
-      const { trust_mode: _t, ...rest } = next
-      this.write((next.trust_mode === true ? { ...rest, trust_mode: true } : rest) as AgentConfigT, true)
-    } else this.write(next)
+    try {
+      if ('trust_mode' in patch) {
+        const { trust_mode: _t, ...rest } = next
+        this.write(
+          (next.trust_mode === true ? { ...rest, trust_mode: true } : rest) as AgentConfigT,
+          true,
+          clearedPaths(patch),
+        )
+      } else this.write(next, false, clearedPaths(patch))
+    } catch (e) {
+      // the file on disk cannot be read, so nothing was written (see `write`)
+      return { ok: false, code: 'bad_frame', message: (e as Error).message }
+    }
     return { ok: true, config: this.current }
   }
 
@@ -192,17 +271,52 @@ export class ConfigFile {
    * from a stale copy in memory: a write made between that edit and the next reload must not put the old value back, or
    * `trust off` would silently undo itself.
    */
-  private write(c: AgentConfigT, fromMemory = false) {
-    if (!fromMemory) {
-      const raw = readJsonFile(this.path) as { trust_mode?: unknown } | undefined
-      if (raw !== undefined) {
-        const { trust_mode: _t, ...rest } = c
-        c = (raw.trust_mode === true ? { ...rest, trust_mode: true } : rest) as AgentConfigT
+  private write(c: AgentConfigT, fromMemory = false, cleared: ReturnType<typeof clearedPaths> = []) {
+    const raw = readJsonFile(this.path)
+    let onDisk: unknown = c // what goes into the file; `this.current` stays what this build reads
+    if (existsSync(this.path)) {
+      // A file this build cannot read (invalid JSON, or a newer value, too many threads, an owner typo) is not replaced with
+      // the copy in memory: that would erase what the owner has there. The caller gets the error; the file is left alone.
+      const readable = raw === undefined ? undefined : parseConfig(raw, this.schema)
+      if (!readable?.ok) {
+        const why = readable ? readable.message : 'it is not valid JSON'
+        this.log?.warn('config.json not written: the file on disk cannot be read, so it was left as it is', {
+          path: this.path,
+          why,
+        })
+        throw new Error(
+          `config.json was not written: the file on disk cannot be read (${why}); fix or restore it first`,
+        )
       }
+      if (!fromMemory) {
+        const { trust_mode: _t, ...rest } = c
+        c = (
+          (raw as { trust_mode?: unknown }).trust_mode === true ? { ...rest, trust_mode: true } : rest
+        ) as AgentConfigT
+      }
+      // What this build's schema cannot read (a key an older build does not know, a value that failed its parse) stays in the
+      // file as the owner left it, at every depth. A patch that names trust_mode decides it itself.
+      onDisk = restoreLosses(c, lossesOf(raw, readable.config), {
+        skip: (l) =>
+          (fromMemory && l.path.length === 1 && l.path[0] === 'trust_mode') ||
+          // a value this write cleared on purpose does not come back, even when it reads as the default it fell back to
+          isCleared(cleared, l.path),
+        onRestore: (p, restored) => {
+          // a high-risk value can come back inside a parent that was restored whole
+          const inside = pathsWithin(
+            p.filter((x) => x !== '*'),
+            restored,
+          )
+          for (const path of inside)
+            if (HIGH_RISK_SETTING_PATHS.includes(path) || path.endsWith('session_opts.mcp_allow'))
+              this.log?.warn('config.json: kept a value this build cannot read in a high-risk setting', { path })
+        },
+      })
     }
+    onDisk = stripRetired(quarantineArchivedSessions(onDisk))
     // the file as it is now becomes a version first; this never throws and never stops the save
     saveConfigVersion({ configPath: this.path, dir: join(dirname(this.path), 'config-history'), log: this.log })
-    recordedWrite(this.path, 'config', () => writeJsonAtomic(this.path, c, 0o600))
+    recordedWrite(this.path, 'config', () => writeJsonAtomic(this.path, onDisk, 0o600))
     this.current = c
     this.seenMtime = mtimeMs(this.path)
   }

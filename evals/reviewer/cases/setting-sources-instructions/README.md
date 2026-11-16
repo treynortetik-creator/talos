@@ -1,0 +1,3 @@
+# A thread session started with --setting-sources user loads none of its folder's CLAUDE.md or AGENTS.md
+
+Thread sessions outside the agent folder were started with `--setting-sources user` so the folder's settings could not widen what they may do (4435b8a8). That flag also stops Claude Code from loading the folder's instruction files: a real session got none of its CLAUDE.md. Fixed in ea6a2d49: the app reads the same instruction files Claude Code would and appends them as text. Not one of the cases the prompt was tuned on. The patch states the loss as a deliberate trade-off (docs/CLAUDE-CODE.md and a WorkerSpec.swift comment), so the case tests whether a review challenges a documented trade-off that costs the owner something real.

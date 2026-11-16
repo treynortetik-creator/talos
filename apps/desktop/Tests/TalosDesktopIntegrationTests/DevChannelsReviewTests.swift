@@ -13,6 +13,7 @@ private func timings(_ edit: (inout Supervisor.Timings) -> Void = { _ in }) -> S
   t.backoff = Backoff(steps: [0.3, 0.5, 0.5, 0.5, 0.5], jitter: 0)
   t.dialogStall = 600
   t.stopGrace = 3
+  t.hangPolls = 20  // a crashed pane is "alive" until the host reports the exit; see `Rig.crashTolerantTimings`
   edit(&t)
   return t
 }
@@ -20,6 +21,7 @@ private func timings(_ edit: (inout Supervisor.Timings) -> Void = { _ in }) -> S
 private extension Rig {
   /// The phone's restart request (what `AgentRecoveryTests` writes with its own file-private helper).
   func askForRestart(_ action: String, id: String) throws {
+    if action == "restart" { return try writeOwnerRequest(id) }
     let ts = Int(clock.wallMs())
     try #"{"v":1,"control_id":"\#(id)","action":"\#(action)","ts":\#(ts)}"#.write(
       toFile: talosHome + "/" + AgentRequest.fileName, atomically: true, encoding: .utf8)
@@ -67,7 +69,7 @@ struct DevChannelsReviewTests {
     #expect(answers(r).last?.contains(" kind=supervisorRestart") == true)
     #expect(!r.audit.contains(" crash_loop"), "\(r.audit)")
     #expect(stopReason(r.phase()) == nil)
-    #expect(!r.allEvents.contains { if case .needsYou = $0 { return true } else { return false } })
+    #expect(!r.allEvents.contains { if case .needsYou = $0 { return true } else { return false } }, "told needsYou: \(r.allEvents), audit: \(r.audit)")
   }
 
   /// Cold starts have a cap of their own (`coldConfirmCap`): past it the warning waits for the owner.
@@ -84,19 +86,30 @@ struct DevChannelsReviewTests {
     r.expectHeldAtNeedsYou("rateLimited", answeredBefore: 2)
   }
 
-  /// The crash loop's own cap still stops a loop of crash restarts, and the cold start before it spent none of it: with a cap of one, the
-  /// first restart is answered; the second crash is the loop.
+  /// The auto-confirm cap counts crash restarts only (the cold start before spent none of it), and reaching it ends the pressing, not
+  /// the restarting: with a cap of one, the first restart is answered; after the second crash the agent is restarted again and its
+  /// warning waits for the owner. It used to be stopped there as a "crash loop", which also put back the last good setup.
   @Test(arguments: bothHosts)
-  func theCrashLoopsCapCountsRestartsOnly(kind: HostKind) throws {
+  func pastTheAutoConfirmCapTheRestartWaitsForTheOwnerAndIsNotACrashLoop(kind: HostKind) throws {
     let r = try Rig(
       kind, scenario: "crash-after.sh", env: ["FAKE_CRASH_SECONDS": "1", "FAKE_CRASHES": "2"], timings: timings { $0.confirmCap = 1 })
     defer { r.teardown() }
     r.start()
     #expect(r.wait(60) { r.sup.tickNow(); return r.starts.count >= 2 && answers(r).count == 2 }, "the restart was answered: \(r.phase()), audit: \(r.audit)")
     #expect(answers(r).last?.contains(" kind=supervisorRestart") == true, "\(answers(r))")
-    // The loop is audited when it stops the agent. The phase is not what to look at: a crash loop brings the automatic restore, which
-    // restarts the agent a moment later, so a poll can miss `.stopped(.crashLoop)` altogether.
-    #expect(r.wait(60) { r.sup.tickNow(); return r.audit.contains(" crash_loop") }, "the second crash is a crash loop: \(r.phase()), audit: \(r.audit)")
+    #expect(r.wait(60) { r.sup.tickNow(); return r.starts.count == 3 }, "the second crash is restarted too: \(r.phase()), audit: \(r.audit)")
+    #expect(
+      r.tickThrough { r.sup.status.needsYou == .restartNotConfirmed(.rateLimited) },
+      "its warning waits for the owner: \(String(describing: r.sup.status.needsYou)), audit: \(r.audit)")
+    #expect(r.tickThrough { r.sup.mainPopupItem() != nil }, "offered on the popup: \(r.audit)")
+    for _ in 0..<10 {
+      usleep(200_000)
+      r.sup.tickNow()
+    }
+    #expect(r.phase() == .starting && r.starts.count == 3 && answers(r).count == 2, "held, not pressed: \(r.phase())")
+    #expect(!r.audit.contains(" crash_loop") && !r.allEvents.contains(.stoppedRestarting), "not a crash loop: \(r.audit)")
+    #expect(!r.audit.contains("restore_start") && !r.posts.contains { $0.hasPrefix("restore-last-good") }, "no restore: \(r.posts)")
+    #expect(r.crashPosts.isEmpty && r.devChannelPosts.count == 1, "the phone hears Main is waiting, once: \(r.posts)")
   }
 
   // MARK: the last look is the last thing before the Enter
@@ -124,7 +137,8 @@ struct DevChannelsReviewTests {
     #expect(r.wait(30) { r.sup.tickNow(); return isRunning(r.phase()) }, "\(r.phase()), audit: \(r.audit)")
     let verbs = ((try? String(contentsOfFile: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
     let send = try #require(verbs.firstIndex(of: "if-shell"), "no Enter was sent: \(verbs)")
-    #expect(send >= 2 && verbs[send - 1] == "capture-pane" && verbs[send - 2] == "list-clients", "the Enter follows the fresh read, which follows the clients: \(verbs)")
+    // the sender's fresh read, then the key guard's own read right before the key (`KeyGuard`): only reads sit between the clients and it
+    #expect(send >= 2 && verbs[send - 1] == "capture-pane", "the Enter follows a fresh read: \(verbs)")
     #expect(whatIsWrongWithTheEnterOrder(verbs) == nil, "\(String(describing: whatIsWrongWithTheEnterOrder(verbs))): \(verbs)")
   }
 

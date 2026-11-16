@@ -5,6 +5,7 @@ import Testing
 import TalosDesktopCore
 import TalosSupervisor
 @testable import TalosDesktop
+import TalosTestSupport
 
 /// One process-wide scratch world for the real TerminalWindowController + SupervisorController.
 ///
@@ -17,7 +18,7 @@ import TalosSupervisor
 final class TmuxWorld {
   nonisolated static let realTmux = "/opt/homebrew/bin/tmux"
   static let root: String = {
-    let base = (NSTemporaryDirectory() as NSString).appendingPathComponent("talos-rv-world-\(UUID().uuidString.prefix(8))")
+    let base = (TestTemp.base as NSString).appendingPathComponent("talos-rv-world-\(UUID().uuidString.prefix(8))")
     try? FileManager.default.createDirectory(atPath: base + "/bin", withIntermediateDirectories: true)
     setenv("HOME", base, 1)
     setenv("CFFIXED_USER_HOME", base, 1)

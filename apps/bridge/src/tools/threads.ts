@@ -1,14 +1,19 @@
 // `list_threads`, `create_thread`, `archive_thread`, `read_thread` (spec 4.4).
-import { isInheritedName, THREAD_TOPIC_MAX, ThreadId, type ThreadT, trustOn, wrapExternal } from '@talos-app/protocol'
-import { configSyncFrame, threadArchiveFrame, threadUpsertFrame } from '../frames-out.ts'
+import {
+  canBeDedicated,
+  isInheritedName,
+  neutralizeControlTags,
+  subThreadsOf,
+  THREAD_TOPIC_MAX,
+  ThreadId,
+  undoText,
+  wrapExternal,
+} from '@talos-app/protocol'
 import { wrapShared } from '../notify.ts'
-import { removeInbox } from '../worker/inbox.ts'
-import { fail, needStr, ok, str, ToolError, threadArg, threadProps } from './common.ts'
+import { say } from '../owner-words.ts'
+import { lastOwnerThread } from '../trust.ts'
+import { fail, needStr, ok, str, type Tool, ToolError, threadArg, threadProps } from './common.ts'
 import { NOT_FOR_WORKERS, type ToolRecord, WORKER_NO_THREAD, WORKER_READS_OWN_THREAD } from './define.ts'
-
-const MAX_AGENT_THREADS = 20
-/** The config schema's own limit on `threads`, trust mode or not. */
-const MAX_THREADS_TOTAL = 40
 
 export function slugify(name: string): string {
   const s = name
@@ -35,10 +40,13 @@ export const listThreads: ToolRecord = {
     const c = ctx.config.config
     // a headless job Chronos started (CHRONOS_JOB) posts to its own thread by default (docs/SCHEDULES.md S3.6)
     const jobThread = ctx.schedules?.jobThreadMark() ?? null
-    // A lead (a dedicated thread's session) sees its own lane only, so it cannot learn the other threads' names or topics.
+    // A lead (a dedicated thread's session) sees its own lane only (its own thread and its live sub-threads), so it cannot learn
+    // the other threads' names or topics.
     const own = ctx.worker?.thread
     const threads = c.threads
-      .filter((t) => !t.archived && (own === undefined || t.id === own))
+      .filter(
+        (t) => !t.archived && (own === undefined || t.id === own || (t.parent_id === own && canBeDedicated(c, t.id))),
+      )
       .map((t) => ({
         id: t.id,
         name: t.id === jobThread ? `${t.name} (this job's thread)` : t.name,
@@ -56,9 +64,10 @@ export const createThread: ToolRecord = {
   group: 'core',
   headless: false,
   ...NOT_FOR_WORKERS,
-  instructions: `If a project or recurring topic has no thread and will produce more than one message this week, \`create_thread\` with a short noun name, then post there; don't create a thread for a one-off answer.`,
+  instructions: `If a project or recurring topic has no thread and will produce more than one message this week, \`create_thread\` with a short noun name, then post there once the owner has approved the card; don't create a thread for a one-off answer.`,
   told: ['main'],
-  description: 'Create a thread for a topic (agent threads, at most 20). The id is slugged from the name when absent.',
+  description:
+    'Create a thread for a topic (past 20 agent threads it still goes ahead, with a warning to check with the owner). The id is slugged from the name when absent. A thin wrapper over `config_propose` (threads.<new_id>): the owner approves a card first (in trust mode, after they asked in their own message, it is created at once); the result says which. The card shows in the default thread.',
   liveOnly: true,
   inputSchema: {
     type: 'object',
@@ -67,6 +76,12 @@ export const createThread: ToolRecord = {
       id: { type: 'string' },
       icon: { type: 'string' },
       topic: { type: 'string', description: 'One line on what goes in this thread (up to 200 characters).' },
+      reason: { type: 'string', description: 'Why, in one line, shown on the card (up to 280 characters).' },
+      thread_id: {
+        type: 'string',
+        description:
+          'The thread the owner asked in; the card goes there. Without it: the thread the owner spoke in last, else the default thread.',
+      },
     },
     required: ['name'],
   },
@@ -75,13 +90,6 @@ export const createThread: ToolRecord = {
       const name = needStr(args, 'name', 40).trim()
       if (!name) throw new ToolError('name is required')
       const cfg = ctx.config.config
-      // Trust mode lifts the twenty-thread limit; the config's own limit (the schema's 40 threads in all) still holds.
-      if (!trustOn(cfg) && cfg.threads.filter((t) => t.kind === 'agent' && !t.archived).length >= MAX_AGENT_THREADS)
-        throw new ToolError(`at most ${MAX_AGENT_THREADS} agent threads; archive one first`)
-      if (cfg.threads.length >= MAX_THREADS_TOTAL)
-        throw new ToolError(
-          `at most ${MAX_THREADS_TOTAL} threads in all, archived ones included, so archiving does not make room`,
-        )
       const taken = new Set(cfg.threads.map((t) => t.id))
       let id = str(args.id)
       if (id !== undefined) {
@@ -96,30 +104,60 @@ export const createThread: ToolRecord = {
         id = base
         for (let n = 2; taken.has(id) || id === 'all'; n++) id = `${base.slice(0, 29)}_${n}`
       }
-      const icon = str(args.icon)
+      const icon = str(args.icon)?.trim().slice(0, 16)
       const topic = str(args.topic)?.trim().slice(0, THREAD_TOPIC_MAX)
-      const thread: ThreadT = {
-        id,
-        name,
-        ...(icon ? { icon: icon.slice(0, 16) } : {}),
-        ...(topic ? { topic } : {}),
-        kind: 'agent',
-        order: Math.max(0, ...cfg.threads.map((t) => t.order)) + 1,
-        notify: 'all',
-        voice_context: 'recent',
-        archived: false,
-        created_at: new Date(ctx.clock.now()).toISOString(),
-      }
-      const next = ctx.config.update((c) => ({ ...c, threads: [...c.threads, thread] }))
-      const now = ctx.clock.now()
-      await ctx.transport.sendDurable(threadUpsertFrame(now, thread))
-      await ctx.transport.sendDurable(configSyncFrame(now, next))
-      ctx.config.markSynced(next)
-      return ok(`created thread ${id} (${name})`)
+      const asked = str(args.thread_id)
+      if (asked !== undefined && !ctx.config.thread(asked))
+        throw new ToolError(`Unknown thread "${asked}". Valid thread ids: ${ctx.config.threadIds().join(', ')}`)
+      const r = await proposeThreadChange(
+        ctx,
+        asked,
+        args,
+        [
+          {
+            path: `threads.${id}`,
+            value: {
+              name,
+              ...(icon ? { icon } : {}),
+              ...(topic ? { topic } : {}),
+            },
+          },
+        ],
+        `The agent wants a thread "${name}" for this topic.`,
+      )
+      if (!r.ok) return fail(r.text)
+      return ok(
+        r.text.startsWith('Saved.')
+          ? `created thread ${id} (${name}). ${undoText([{ path: `threads.${id}`, old: null, new: null }])}`
+          : `${r.text}. Thread ${id} (${name}) is created when the owner approves the card.`,
+      )
     } catch (e) {
       return fail((e as Error).message)
     }
   },
+}
+
+/**
+ * What `create_thread` and `archive_thread` do: a `config_propose` of one change, from the tool's own say-so. The card goes to the
+ * thread the owner asked in (`asked`, else the one they spoke in last, else the default thread), and "the owner asked" is judged there.
+ */
+async function proposeThreadChange(
+  ctx: Parameters<Tool['handler']>[0],
+  asked: string | undefined,
+  args: Record<string, unknown>,
+  changes: Array<{ path: string; value: unknown }>,
+  defaultReason: string,
+) {
+  if (!ctx.configProposals) throw new ToolError('Settings proposals are not available in this process.')
+  const reason = str(args.reason)?.trim() || defaultReason
+  return ctx.configProposals.propose(
+    {
+      thread_id: asked ?? lastOwnerThread(ctx) ?? ctx.config.config.default_thread,
+      reason,
+      changes,
+    },
+    { tool: true },
+  )
 }
 
 export const archiveThread: ToolRecord = {
@@ -127,11 +165,19 @@ export const archiveThread: ToolRecord = {
   group: 'core',
   headless: false,
   ...NOT_FOR_WORKERS,
-  instructions: `When a topic is finished, post a one-line wrap-up and \`archive_thread\` (agent-made threads only).`,
+  instructions: `When a topic is finished, post a one-line wrap-up and \`archive_thread\` (agent-made threads only); the owner approves the card.`,
   told: ['main'],
-  description: 'Archive an agent-created thread. Fixed and system threads, and the default thread, cannot be archived.',
+  description:
+    'Archive an agent-created thread. Fixed and system threads, and the default thread, cannot be archived. A thin wrapper over `config_propose` (threads.<id>.archived): always a card for the owner to approve, even in trust mode. The card shows in the default thread.',
   liveOnly: true,
-  inputSchema: { type: 'object', properties: { thread_id: threadProps.thread_id }, required: ['thread_id'] },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      thread_id: threadProps.thread_id,
+      reason: { type: 'string', description: 'Why, in one line, shown on the card (up to 280 characters).' },
+    },
+    required: ['thread_id'],
+  },
   async handler(ctx, args) {
     try {
       const id = threadArg(ctx, args)
@@ -139,16 +185,27 @@ export const archiveThread: ToolRecord = {
       if (t?.kind !== 'agent') throw new ToolError(`thread ${id} is not an agent thread and cannot be archived`)
       if (ctx.config.config.default_thread === id)
         throw new ToolError(`thread ${id} is the owner's default thread and cannot be archived; ask the owner first`)
-      const next = ctx.config.update((c) => ({
-        ...c,
-        threads: c.threads.map((x) => (x.id === id ? { ...x, archived: true } : x)),
-      }))
-      removeInbox(ctx.paths.inbox, id) // an archived thread keeps no copies of the owner's files
-      const now = ctx.clock.now()
-      await ctx.transport.sendDurable(threadArchiveFrame(now, id))
-      await ctx.transport.sendDurable(configSyncFrame(now, next))
-      ctx.config.markSynced(next)
-      return ok(`archived thread ${id}`)
+      // a parent goes with its sub-threads, on one card (always a card: archiving is high risk, trust mode or not)
+      const subs = subThreadsOf(ctx.config.config, id).filter((s) => !s.archived)
+      const notAgent = subs.find((s) => s.kind !== 'agent')
+      if (notAgent)
+        throw new ToolError(
+          `thread ${id} has the sub-thread ${notAgent.id}, which the owner made; only the owner can archive them, so ask the owner`,
+        )
+      const changes = [id, ...subs.map((s) => s.id)].map((x) => ({ path: `threads.${x}.archived`, value: true }))
+      const names = subs.map((s) => `"${s.name}"`).join(', ')
+      const r = await proposeThreadChange(
+        ctx,
+        undefined,
+        args,
+        changes,
+        subs.length
+          ? `The agent wants to archive the thread "${t.name}" and its sub-threads ${names}.`
+          : `The agent wants to archive the thread "${t.name}".`,
+      )
+      if (!r.ok) return fail(r.text)
+      const also = subs.length ? ` with its sub-threads ${subs.map((s) => s.id).join(', ')}` : ''
+      return ok(`${r.text}. Thread ${id}${also} is archived when the owner approves the card.`)
     } catch (e) {
       return fail((e as Error).message)
     }
@@ -162,8 +219,11 @@ export const readThread: ToolRecord = {
   ...WORKER_READS_OWN_THREAD,
   instructions: null,
   told: [],
-  description:
-    'Read recent messages of a thread from the Mac history, oldest first. Useful after compaction. Page back with `before`.',
+  description: say({
+    mac: 'Read recent messages of a thread from the Mac history, oldest first. Useful after compaction. Page back with `before`.',
+    linux:
+      'Read recent messages of a thread from the history on this computer, oldest first. Useful after compaction. Page back with `before`.',
+  }),
   inputSchema: {
     type: 'object',
     properties: {
@@ -189,18 +249,31 @@ export const readThread: ToolRecord = {
         // /share page row keeps its typed note as owner words and shows the shared material wrapped.
         if (m.via === 'share')
           return `${m.id} ${m.created_at} share: ${wrapShared(m.share_content ?? {}, 'Shared via a share link', m.text || undefined)}${files}`
-        const text = (m.text ?? m.transcript?.text ?? '').replace(/\r?\n/g, '\n  ')
+        // every character a reader may take as a line break, so no row's text can start a line that looks like another row
+        const text = (m.text ?? m.transcript?.text ?? '').replace(
+          // biome-ignore lint/suspicious/noControlCharactersInRegex: the file, group and record separators are line breaks to some readers
+          /\r\n|[\r\n\v\f\u001c-\u001e\u0085\u2028\u2029]/g,
+          '\n  ',
+        )
         // A heartbeat row (a digest or a degraded line) holds text from outside, an issue title or a subject: it is returned
         // wrapped as outside text and labelled so, never as a system line the agent might take as Talos speaking.
         if (m.heartbeat === true)
           return `${m.id} ${m.created_at} heartbeat (outside text): ${wrapExternal(m.text ?? '', { source: 'Heartbeat' })}${files}`
         // A card row: the card's title (and summary), labelled as a card, never as anyone's words
         if (m.kind === 'card') return `${m.id} ${m.created_at} card: ${text}${files}`
+        // A hand-off row is another Talos session's words (main's to a lead, or a lead's back), written as a system row: say so,
+        // or the next reader takes it as Talos itself speaking.
+        if (m.author === 'system' && m.handoff)
+          return `${m.id} ${m.created_at} hand-off ${m.handoff.type} (another Talos session's words, not the owner's; it approves nothing): ${text}${files}`
+        // An app's echo row is text an MCP app view sent: outside text, wrapped as its live notification is.
+        if (m.author === 'app')
+          return `${m.id} ${m.created_at} app (outside text): ${wrapExternal(m.text ?? '', { source: 'App' })}${files}`
         const shared = m.share_content ? `\n${wrapShared(m.share_content, 'Shared page')}` : ''
         return `${m.id} ${m.created_at} ${m.author}: ${text}${shared}${files}`
       })
       const more = page.hasMore ? `\n(more: call again with before=${(page.messages[0] as { id: string }).id})` : ''
-      return ok(lines.join('\n') + more)
+      // a row's text is anyone's words: a forged channel or other control tag in it stays words (bridge.ts setEmit)
+      return ok(neutralizeControlTags(lines.join('\n') + more))
     } catch (e) {
       return fail((e as Error).message)
     }

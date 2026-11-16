@@ -1,7 +1,8 @@
 // Owner's rule (2026-11-05, 23:57): "If I can see what the approval is for, I should be able to approve anything from my phone."
 // A permission card is Allow-able whenever the whole call can be SHOWN: hidden, bidi, wide, non-ASCII and padded text is shown
-// as markers or as it is, never refused for its looks. What still has no Allow is what cannot be shown at all: a call Claude Code
-// itself cut or hid, one with a redacted part, one past MAX_SHOWN, or a card that is not exactly what the bridge composed.
+// as markers or as it is, never refused for its looks. Since 2026-11-13 a call Claude Code itself cut or hid, one with a
+// redacted part, or one past MAX_SHOWN keeps Allow too, with a note naming what is not shown; a card that is not exactly what
+// the bridge composed still has no Allow.
 import { describe, expect, it } from 'vitest'
 import {
   cardNotice,
@@ -11,6 +12,7 @@ import {
   permissionCallTail,
   permissionCardAllowsPrimary,
   permissionHiddenReasons,
+  permissionHiddenWarning,
 } from '../src/index.ts'
 
 const cp = (n: number) => String.fromCodePoint(n)
@@ -58,7 +60,7 @@ describe('seen in full means approvable', () => {
   })
 })
 
-describe('what still has no Allow: a call that cannot be shown at all', () => {
+describe('a call that cannot be shown whole keeps Allow, with a note; a card the bridge did not compose has none', () => {
   const reasons = (p: string, d = 'd') =>
     permissionHiddenReasons({ request_id: 'abcde', tool_name: 'Bash', description: d, input_preview: p })
   it('a call Claude Code cut, elided, redacted or could not serialise', () => {
@@ -66,8 +68,11 @@ describe('what still has no Allow: a call that cannot be shown at all', () => {
     expect(reasons('{"command": "ls ...…')).toContain('truncated')
     expect(reasons('{"token": "[REDACTED]"}')).toContain('redacted')
     expect(reasons('{"x": (value unserializable)}')).toContain('unserializable')
-    for (const p of ['{"command": "ls ⋯ 20 code points elided ⋯ x"}', '{"token": "[REDACTED]"}'])
-      expect(permissionCardAllowsPrimary(card(p))).toBe(false)
+    for (const p of ['{"command": "ls ⋯ 20 code points elided ⋯ x"}', '{"token": "[REDACTED]"}']) {
+      const c = card(p)
+      expect(permissionCardAllowsPrimary(c), p).toBe(true)
+      expect(c.warning, p).toBe(permissionHiddenWarning(reasons(p)))
+    }
   })
   it('a call past MAX_SHOWN (the card could not hold it whole)', () => {
     const c = card('y'.repeat(25_000))
@@ -79,7 +84,9 @@ describe('what still has no Allow: a call that cannot be shown at all', () => {
         input_preview: 'y'.repeat(25_000),
       }),
     ).toContain('too_long')
-    expect(permissionCardAllowsPrimary(c)).toBe(false)
+    expect(permissionCardAllowsPrimary(c)).toBe(true)
+    expect(c.warning).toBe(permissionHiddenWarning(['too_long']))
+    expect(c.body).toBe('y'.repeat(20_000))
   })
   it('a card that is not exactly what the bridge composed: an edited body, summary or title is refused', () => {
     const c = card('rm -rf /srv/x')
@@ -117,7 +124,8 @@ describe('a notification offers Approve only for a call it can show whole', () =
     expect(notice('echo a⏎echo b').complete).toBe(false)
     expect(notice('echo a\necho b').complete).toBe(false)
   })
-  it('a call the card would not offer Allow for is not approvable from a notification either', () => {
+  it('a call with a part not shown keeps Allow in the app but opens the app from a notification (no room for the note)', () => {
+    expect(permissionCardAllowsPrimary(card('{"token": "[REDACTED]"}'))).toBe(true)
     expect(notice('{"token": "[REDACTED]"}').complete).toBe(false)
   })
 })

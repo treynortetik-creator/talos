@@ -17,6 +17,7 @@ import {
 import type { BridgeContext } from '../context.ts'
 import { sessionControlResultFrame } from '../frames-out.ts'
 import { RESET_REFUSAL, signedBeforeReset } from '../history-recover.ts'
+import { say } from '../owner-words.ts'
 
 type Of<T extends Frame['type']> = Extract<Frame, { type: T }>
 
@@ -125,7 +126,14 @@ export class SessionControls {
     }
     ctx.store.kvSet(`ctd:${f.control_id}`, '1') // dispatched (R5); cleared when a result is recorded
     if (!ctx.mod.enqueue(control)) {
-      this.record(f.control_id, { ok: false, code: 'mac_offline', text: 'The Mac is busy. Try again in a moment.' })
+      this.record(f.control_id, {
+        ok: false,
+        code: 'mac_offline',
+        text: say({
+          mac: 'The Mac is busy. Try again in a moment.',
+          linux: 'This computer is busy. Try again in a moment.',
+        }),
+      })
       finish()
       return
     }
@@ -133,7 +141,11 @@ export class SessionControls {
       () => {
         if (!this.pending.delete(f.control_id)) return
         ctx.log.warn('session control: the mod did not answer', { action: f.action })
-        this.record(f.control_id, { ok: false, code: 'mac_offline', text: 'The Mac did not answer.' })
+        this.record(f.control_id, {
+          ok: false,
+          code: 'mac_offline',
+          text: say({ mac: 'The Mac did not answer.', linux: 'This computer did not answer.' }),
+        })
         finish()
       },
       SLOW_ACTIONS.has(f.action) ? CONTROL_NO_ANSWER_MS : QUICK_NO_ANSWER_MS,

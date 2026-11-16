@@ -7,6 +7,7 @@ import {
   bridgeKeyId,
   type Frame,
   newId,
+  PagePublishQuery,
   parseBridgeAuthHeader,
   parseFrameText,
   routes,
@@ -35,6 +36,10 @@ export type RelayHttpHost = {
 export class RelayHttp {
   readonly records: HttpRecord[] = []
   readonly media = new Map<string, { bytes: Buffer; sha256: string; mime: string; name?: string }>()
+  /** Org pages the bridge published (POST /bridge/pages): the thread that owns each, and its versions by hash, oldest first. */
+  readonly pages = new Map<string, { thread_id: string; title: string; versions: string[]; current: string }>()
+  /** A status /bridge/pages answers with instead of storing (a test's 507 or 413). */
+  pageRefusal: { status: number; body: unknown } | null = null
   private seenNonces = new Set<string>()
 
   constructor(private readonly host: RelayHttpHost) {}
@@ -155,6 +160,32 @@ export class RelayHttp {
     if (mediaId && method === 'GET') {
       const m = this.media.get(mediaId[1] as string)
       return m ? send(200, m.bytes, { 'content-type': m.mime }) : send(404)
+    }
+    if (method === 'POST' && path === '/bridge/pages') {
+      // like the real relay (core/pages.ts): the query is signed with the request; a page_id of another thread is not_found
+      if (this.pageRefusal) return send(this.pageRefusal.status, this.pageRefusal.body)
+      const parsed = PagePublishQuery.safeParse(Object.fromEntries(url.searchParams))
+      if (!parsed.success || body.length === 0) return send(400, { error: 'bad_request' })
+      const q = parsed.data
+      const hash = sha256Hex(body)
+      const owner_url = (id: string) => `https://relay.example.com/p/${id}`
+      if (q.page_id) {
+        const p = this.pages.get(q.page_id)
+        if (!p || p.thread_id !== q.thread_id) return send(404, { error: 'not_found' })
+        const unchanged = p.versions.includes(hash)
+        if (!unchanged) p.versions.push(hash)
+        p.current = hash
+        p.title = q.title
+        return send(unchanged ? 200 : 201, {
+          page_id: q.page_id,
+          version: hash,
+          unchanged,
+          owner_url: owner_url(q.page_id),
+        })
+      }
+      const id = newId('pg')
+      this.pages.set(id, { thread_id: q.thread_id, title: q.title, versions: [hash], current: hash })
+      return send(201, { page_id: id, version: hash, unchanged: false, owner_url: owner_url(id) })
     }
     if (method === 'GET' && path === '/bridge/digest') {
       const since = url.searchParams.get('since') ?? now()

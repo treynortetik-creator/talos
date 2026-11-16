@@ -135,16 +135,19 @@ export function SchedulesScreen() {
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="schedules-screen">
       <div className="top-band">
-        <header className="flex items-center gap-3 px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-3">
+        {/* The buttons sit beside the title while both fit; at a larger text size they drop to a row of their own. */}
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-3">
           <h1 className="m-0 flex-1 font-display text-2xl font-semibold">Schedules</h1>
-          {canPauseAll ? (
-            <Button variant="outline" onClick={() => setPauseAskOpen(true)} disabled={!macOnline}>
-              Pause all
+          <div className="flex min-w-0 flex-[1_1_9rem] items-center justify-end gap-3">
+            {canPauseAll ? (
+              <Button variant="outline" onClick={() => setPauseAskOpen(true)} disabled={!macOnline}>
+                Pause all
+              </Button>
+            ) : null}
+            <Button variant="outline" onClick={() => setNewOpen(true)} disabled={!macOnline}>
+              <IconPlus width={18} height={18} /> New
             </Button>
-          ) : null}
-          <Button variant="outline" onClick={() => setNewOpen(true)} disabled={!macOnline}>
-            <IconPlus width={18} height={18} /> New
-          </Button>
+          </div>
         </header>
         <Meander />
       </div>

@@ -55,7 +55,7 @@ describe('agent.recover frames', () => {
     expect(isFrameFor('app_to_relay', { type: 'agent.recover.result' })).toBe(false)
   })
 
-  it('the request file is exactly v, control_id, action and ts, and its only action is restart', () => {
+  it('the request file is v, control_id, action and ts (proof, by_thread, why optional), and its only action is restart', () => {
     const ok = { v: 1, control_id: fx('agent.recover').control_id, action: 'restart', ts: 1_788_000_000_000 }
     expect(AgentRequestFile.safeParse(ok).success).toBe(true)
     expect(AgentRequestFile.safeParse({ ...ok, action: 'restore_last_good' }).success).toBe(false)

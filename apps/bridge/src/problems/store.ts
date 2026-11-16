@@ -4,7 +4,14 @@
 // the file says `trust: external`, because a builder agent reads these and none of it is an instruction.
 import { existsSync, readdirSync, renameSync, statSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { PROBLEM_LIMITS, type ProblemT, problemFingerprint, sanitizeExternal, scrubProblem } from '@talos-app/protocol'
+import {
+  PROBLEM_LIMITS,
+  type ProblemAttachedT,
+  type ProblemT,
+  problemFingerprint,
+  sanitizeExternal,
+  scrubProblem,
+} from '@talos-app/protocol'
 import { ensureDir, readJsonFile, writeFileAtomic, writeJsonAtomic } from '../fsutil.ts'
 import { redact } from '../redact.ts'
 
@@ -40,6 +47,10 @@ export type StoredProblem = {
   truncated: boolean
   /** The last problem ids merged in: a replay of one of them changes nothing. */
   ids: string[]
+  /** A report from another install: its name (from the relay's BUG_INBOX_SECRETS, proven by the signature). */
+  install?: string
+  /** A report from another install: what its person typed in full, and the parts they sent that the relay let through. */
+  attached?: ProblemAttachedT
 }
 
 export type FileOutcome =
@@ -62,6 +73,23 @@ export function cleanProblem(p: ProblemT, paths: { userHome?: string; appHome?: 
     })),
     routes: s.routes.map(r),
     ...(s.steps !== undefined ? { steps: sanitizeExternal(redact(s.steps, paths), PROBLEM_LIMITS.stepsChars) } : {}),
+    ...(s.attached !== undefined ? { attached: cleanAttached(s.attached, paths) } : {}),
+  }
+}
+
+/** This Mac's home folders out of another install's report too (scrubProblem already scrubbed it once more). */
+function cleanAttached(a: ProblemAttachedT, paths: { userHome?: string; appHome?: string }): ProblemAttachedT {
+  const r = (t: string, max: number) => sanitizeExternal(redact(t, paths), max)
+  const L = PROBLEM_LIMITS
+  return {
+    ...a,
+    what_went_wrong: r(a.what_went_wrong, L.typedChars),
+    ...(a.expected !== undefined ? { expected: r(a.expected, L.typedChars) } : {}),
+    errors: a.errors.map((e) => r(e, L.errorChars)),
+    ...(a.logs !== undefined ? { logs: r(a.logs, L.logChars) } : {}),
+    ...(a.messages !== undefined
+      ? { messages: a.messages.map((m) => ({ ...m, text: r(m.text, L.attachedMessageChars) })) }
+      : {}),
   }
 }
 
@@ -180,8 +208,9 @@ export function fileProblem(
   const shot = o.screenshot
   const shotBytes = shot && shot !== 'unavailable' ? shot.bytes.length : 0
   // An owner report is never refused for room: the app already told them it was sent, and the relay has dropped its copy.
-  // It makes what room it can (closed problems go first) and is filed either way.
-  if (!makeRoom(home, shotBytes + 4096) && clean.kind !== 'owner')
+  // It makes what room it can (closed problems go first) and is filed either way. A report from another install is not the
+  // owner's: past the cap it is refused like an automatic one, so other people cannot fill this Mac's disk.
+  if (!makeRoom(home, shotBytes + 4096) && (clean.kind !== 'owner' || clean.source === 'install'))
     return { result: 'refused', fingerprint, reason: 'full' }
   const rec: StoredProblem = {
     v: 1,
@@ -201,6 +230,8 @@ export function fileProblem(
     last_seen: seenAt,
     truncated: clean.truncated,
     ids: [clean.id],
+    ...(clean.install !== undefined ? { install: clean.install } : {}),
+    ...(clean.attached !== undefined ? { attached: clean.attached } : {}),
   }
   if (shot === 'unavailable') rec.screenshot_unavailable = true
   else if (shot) {

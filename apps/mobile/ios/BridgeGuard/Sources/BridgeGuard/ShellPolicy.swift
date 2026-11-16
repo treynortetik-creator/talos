@@ -28,6 +28,14 @@ extension BridgeGuard {
         BridgeGuard.isRetryURL(url) && isMainFrame && needsRetry(currentURL: currentURL)
     }
 
+    /// A relay page answered with this HTTP status: true when it is a server failure or a "try later" (5xx, 408, 429), so the
+    /// shell treats the load as failed and shows the offline page, whose retries then apply. Any other answer is the relay's
+    /// real page and is shown.
+    public static func isFailedPageLoad(statusCode: Int?) -> Bool {
+        guard let statusCode else { return false }
+        return statusCode >= 500 || statusCode == 408 || statusCode == 429
+    }
+
     /// A relay page that has COMMITTED (the relay answered and the HTML is arriving) is progressing, not stalled; its
     /// scripts may take longer than a stall before commit. It gets this longer limit, then the watchdog still ends it.
     public static let committedLaunchTimeout: TimeInterval = 60
@@ -40,6 +48,26 @@ extension BridgeGuard {
     /// commit uses `launchTimeout`; a committed, still-loading relay page uses `committedLaunchTimeout`.
     public static func shouldFallToOffline(elapsed: TimeInterval, relayPageFinished: Bool, relayPageCommitted: Bool = false) -> Bool {
         !relayPageFinished && elapsed >= launchLimit(relayPageCommitted: relayPageCommitted)
+    }
+
+    // MARK: Is there a page? (asked on every return to the front)
+
+    /// What the shell runs in the page when the app comes back to the front. It answers "page" only when a document with
+    /// content is there. A web process that was started again with nothing in it answers "blank": it runs scripts, so asking
+    /// it for `1` (the first version of this check) read as a live page while the screen stayed empty.
+    public static let livenessScript =
+        "(function(){try{var b=document.body;return b&&b.childElementCount>0?'page':'blank'}catch(e){return 'blank'}})()"
+
+    /// True only for the script's own "page" answer. Nothing, another type or any other text is not proof of a page.
+    public static func isLivePage(probeResult: Any?) -> Bool {
+        (probeResult as? String) == "page"
+    }
+
+    /// The launch watchdog when the app leaves the screen and comes back. A timer keeps counting while the app is suspended and
+    /// fires the moment it wakes, so a load that never had its time would fall to the offline page. The watch is stopped on the
+    /// way out and, on the way back, started again with the full limit when a load is still unfinished.
+    public static func shouldRestartWatchdogOnReturn(wasWatching: Bool, relayPageFinished: Bool, showingFallback: Bool) -> Bool {
+        wasWatching && !relayPageFinished && !showingFallback
     }
 }
 

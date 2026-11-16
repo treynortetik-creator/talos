@@ -64,12 +64,24 @@ function dropPending(store: StoreName, key: string, only?: string) {
 const isDeadConnection = (e: unknown): boolean =>
   e instanceof DOMException && (e.name === 'InvalidStateError' || e.name === 'UnknownError')
 
+const isHidden = (): boolean => typeof document !== 'undefined' && document.visibilityState === 'hidden'
+const untilVisible = (): Promise<void> =>
+  new Promise((resolve) => {
+    const on = () => {
+      if (isHidden()) return
+      document.removeEventListener('visibilitychange', on)
+      resolve()
+    }
+    document.addEventListener('visibilitychange', on)
+  })
+
 export function createIdbStorage(): Storage {
   /** One connection per database, opened on first use and reopened after a refused open or a dead connection. */
   const holder = (name: string, version: number, stores: readonly StoreName[]) => {
     let dbp: Promise<IDBPDatabase<TalosDB>> | null = null
-    const forget = () => {
-      dbp = null
+    /** Drops the cached connection; with `failed`, only if it is still that one (a newer one stays). */
+    const forget = (failed?: Promise<IDBPDatabase<TalosDB>>) => {
+      if (failed === undefined || dbp === failed) dbp = null
     }
     const db = () => {
       if (!dbp) {
@@ -99,18 +111,60 @@ export function createIdbStorage(): Storage {
   const main = holder(DB_NAME, DB_VERSION, MAIN_STORES)
   const problems = holder(PROBLEMS_DB_NAME, PROBLEMS_DB_VERSION, SEPARATE_STORES)
   /**
+   * Write counters, so a write parked while the app was hidden can tell it went stale: per key (puts and deletes), per
+   * store for clears, and per store for any write at all.
+   */
+  const keyWrites = new Map<string, number>()
+  const clears = new Map<StoreName, number>()
+  const storeWrites = new Map<StoreName, number>()
+  const bump = <K>(m: Map<K, number>, k: K) => {
+    const n = (m.get(k) ?? 0) + 1
+    m.set(k, n)
+    return n
+  }
+  /**
    * Runs one operation. A connection that opened fine but has since died fails here, at transaction time: the cached
    * handle is dropped and the operation is tried once on a fresh connection, so Try again and sends recover on their own.
+   * `write` is the key a put or delete changes, or `{ clear: true }`; reads leave it out.
    */
-  const run = async <T>(store: StoreName, op: (d: IDBPDatabase<TalosDB>) => Promise<T>): Promise<T> => {
+  const run = async <T>(
+    store: StoreName,
+    op: (d: IDBPDatabase<TalosDB>) => Promise<T>,
+    write?: string | { clear: true },
+  ): Promise<T | undefined> => {
     const h = SEPARATE_STORES.includes(store) ? problems : main
-    const d = await h.db()
+    let stale = () => false
+    if (write !== undefined) {
+      const all = bump(storeWrites, store)
+      if (typeof write === 'string') {
+        const k = `${store}:${write}`
+        const mine = bump(keyWrites, k)
+        const cleared = clears.get(store) ?? 0
+        stale = () => keyWrites.get(k) !== mine || (clears.get(store) ?? 0) !== cleared
+      } else {
+        bump(clears, store)
+        stale = () => storeWrites.get(store) !== all // anything written after this clear began must survive it
+      }
+    }
+    const first = h.db()
     try {
-      return await op(d)
+      return await op(await first)
     } catch (e) {
       if (!isDeadConnection(e)) throw e
-      h.forget()
-      return op(await h.db())
+      h.forget(first)
+      const second = h.db()
+      try {
+        return await op(await second)
+      } catch (e2) {
+        // WebKit closes IndexedDB while the iPhone app is in the background ("... without an in-progress transaction"):
+        // the retry fails too. Run it once more when the app is back in front, so the write is not lost; unless a newer
+        // write to the same key (or a clear of the store) started meanwhile, which already says what the row should be.
+        if (!isDeadConnection(e2) || !isHidden()) throw e2
+        await untilVisible()
+        if (stale()) return undefined
+        h.forget(second)
+        return op(await h.db())
+      }
     }
   }
   return {
@@ -120,7 +174,7 @@ export function createIdbStorage(): Storage {
         if (raw) {
           // A write made as the last page went away: newer than anything in IndexedDB. Promote it, then drop the mirror.
           const value = JSON.parse(raw) as T
-          await run(store, (d) => d.put(store, value, key))
+          await run(store, (d) => d.put(store, value, key), key)
           dropPending(store, key, raw)
           return value
         }
@@ -129,7 +183,7 @@ export function createIdbStorage(): Storage {
     },
     async put(store, key, value) {
       dropPending(store, key)
-      await run(store, (d) => d.put(store, value, key))
+      await run(store, (d) => d.put(store, value, key), key)
     },
     putSync(store, key, value) {
       let raw: string | undefined
@@ -139,7 +193,7 @@ export function createIdbStorage(): Storage {
       } catch {
         raw = undefined // over quota or no localStorage: the IndexedDB put below is all there is
       }
-      void run(store, (d) => d.put(store, value, key))
+      void run(store, (d) => d.put(store, value, key), key)
         .then(() => {
           if (raw !== undefined) dropPending(store, key, raw)
         })
@@ -147,7 +201,7 @@ export function createIdbStorage(): Storage {
     },
     async del(store, key) {
       dropPending(store, key)
-      await run(store, (d) => d.delete(store, key))
+      await run(store, (d) => d.delete(store, key), key)
     },
     async all<T>(store: StoreName) {
       return (await run(store, (d) => d.getAll(store))) as T[]
@@ -160,7 +214,7 @@ export function createIdbStorage(): Storage {
           for (const k of Object.keys(l)) if (k.startsWith(prefix)) l.removeItem(k)
         }
       } catch {}
-      await run(store, (d) => d.clear(store))
+      await run(store, (d) => d.clear(store), { clear: true })
     },
   }
 }

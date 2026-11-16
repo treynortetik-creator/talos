@@ -1,0 +1,552 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 64d17871..2cedf83e 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -126,10 +126,10 @@ its empty, loading and failed states. Do not start more than one full suite at t
+ 
+ Maintainer builders push small commits straight to `main`; outside contributors open a pull request.
+ 
+-1. Run `bash scripts/gate.sh` (the pre-push hook runs it too, and refuses the push on any failure). Full CI then runs on
+-   `main`; `scripts/ci-local.sh` and `docs/CI-LOCAL.md` describe the full run.
++1. Push with `bash scripts/gate.sh --push`, the only push path: it rebases on `main`, runs the gate, pushes, and retries a
++   push that lost a race. Never `git push --no-verify`. Full CI then runs on `main` (`docs/CI-LOCAL.md`).
+ 2. Security code, data recovery and other risky areas get a review before the push. Opus 5.5 builds and Fable 5.2 reviews:
+    one model never does both. Fix what the review finds once, have the fix checked once, and put smaller findings in an issue.
+-3. `git pull --rebase origin main`, then push. Do not push while `main` is red, and never force-push `main`.
++3. Do not push while `main` is red or while a push hold is on, and never force-push `main`.
+ 4. User-visible changes go in `CHANGELOG.md` in plain language.
+ 5. If a change breaks `main`, fix forward; if that needs more than one round, revert the commit that broke it.
+diff --git a/docs/CI-LOCAL.md b/docs/CI-LOCAL.md
+index 0a304a44..da616422 100644
+--- a/docs/CI-LOCAL.md
++++ b/docs/CI-LOCAL.md
+@@ -224,6 +224,27 @@ cannot run is not a pass. In order, stopping at the first that fails:
+ against another ref. `--plan` prints the steps and the suites' files and runs nothing. `scripts/gate.test.ts` checks the
+ mapping.
+ 
++### Pushing: `scripts/gate.sh --push`
++
++The one way builders and sessions push (`scripts/gate-push.sh`; `--push [<remote> [<branch>]]`, default origin main). Never
++`git push --no-verify`. It refuses with a rebase in progress or uncommitted changes, then:
++
++1. **Takes the push lease**, `refs/locks/push` on the remote: a parentless commit with an empty tree whose message names the
++   machine (`$TALOS_MACHINE`, else `hostname -s`) and when the lease runs out (10 minutes). It is taken and renewed with
++   `--force-with-lease`, so two machines cannot both hold it. A lease another machine holds is waited on (every 15 s, up to
++   20 minutes, saying who holds it); one that ran out is taken over. It is let go at the end, and on Ctrl-C. The lease is
++   advisory: a plain push ignores it. It is not a branch, so it starts no CI run. The pre-push hook lets a `refs/locks/*` push
++   through only when it is such a lease.
++2. **Fetches, rebases and runs the gate**, then records what passed in `.git/talos-gate.pass`: the tree, the base, the plan
++   and the sha256 of `gate.sh` and `pre-push.sh`. The pre-push hook trusts that stamp, and does not run the gate again, only
++   for exactly that tree, base, plan and gate version, within 30 minutes. Anything else runs the gate in the hook as usual.
++3. **Pushes.** A push rejected because the branch moved is rebased and tried again, up to 3 times; a rebase conflict stops at
++   once. When the new commits touch none of this change's files, none of the tests its plan runs, nothing everything depends
++   on (the protocol, the testkit, a `package.json`, the lockfile, a `tsconfig`, `biome.json`, `vitest.config.ts`, the gate
++   and hook scripts) and nothing under a test root the plan runs from, **only typecheck, lint, personal and size run again**
++   (`gate.sh --checks-only`). That is not the full gate: it relies on CI, which runs every suite on `main` after the merge.
++   Otherwise the whole touched set runs again.
++
+ ### The pre-push hook
+ 
+ `pnpm install` turns on a pre-push hook (`.githooks/pre-push`, `scripts/pre-push.sh`) for the repo and every worktree of it. It
+diff --git a/scripts/gate-push.sh b/scripts/gate-push.sh
+new file mode 100755
+index 00000000..b16202aa
+--- /dev/null
++++ b/scripts/gate-push.sh
+@@ -0,0 +1,160 @@
++#!/usr/bin/env bash
++# The one way to push (scripts/gate.sh --push [<remote> [<branch>]], default origin main): rebase, gate, push, and when the
++# push loses a race (main moved while the gate ran), rebase and push again without running the whole gate twice for nothing.
++#   1. Refuses with a rebase in progress or uncommitted changes (the gate checks the files on disk).
++#   2. Takes the push lease, refs/locks/push on the remote (advisory: a plain push ignores it): a parentless commit with an
++#      empty tree whose message names the machine and the time it runs out. Taken and renewed with --force-with-lease, so two
++#      machines cannot both hold it; one held by another machine is waited on (every 15 s, up to 20 min), an expired one is
++#      taken over. Released at the end, and on Ctrl-C. A remote that refuses the ref means no lease: the push goes on.
++#   3. Fetches, rebases onto <remote>/<branch>, runs the gate, and records what passed in .git/talos-gate.pass: the tree, the
++#      base, the plan and the sha256 of gate.sh and pre-push.sh. The pre-push hook trusts that stamp for that exact tree (and
++#      runs the gate itself for anything else), so the push does not run the gate a second time.
++#   4. Pushes. Rejected because the branch moved: fetch, rebase, and look at what the new commits on the branch changed. When
++#      they touch none of this change's files, none of the tests its plan runs, nothing everything depends on, and nothing
++#      under a test root its plan runs from, only typecheck, lint, personal and size run again (CI runs every suite after the
++#      merge); otherwise the whole touched set runs again. At most 3 tries; a rebase conflict stops at once.
++set -uo pipefail
++cd "$(git rev-parse --show-toplevel)" || exit 2
++
++REMOTE="${1:-origin}"
++BRANCH="${2:-main}"
++LOCK=refs/locks/push
++MACHINE="${TALOS_MACHINE:-$(hostname -s 2>/dev/null || echo unknown)}"
++LEASE_S="${GATE_PUSH_LEASE_S:-600}"     # how long a lease holds
++WAIT_S="${GATE_PUSH_WAIT_S:-1200}"      # how long to wait for another machine's lease
++POLL_S="${GATE_PUSH_POLL_S:-15}"
++RENEW_S="${GATE_PUSH_RENEW_S:-420}"     # a gate past this renews the lease before the push
++TRIES=3
++GIT_DIR_ABS="$(git rev-parse --absolute-git-dir)"
++STAMP="$GIT_DIR_ABS/talos-gate.pass"
++EMPTY_TREE="$(git hash-object -t tree /dev/null)"
++
++say() { printf 'gate-push: %s\n' "$*" >&2; }
++refuse() {
++  say "REFUSED: $*"
++  exit 1
++}
++sha256() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
++rebasing() { [ -d "$GIT_DIR_ABS/rebase-merge" ] || [ -d "$GIT_DIR_ABS/rebase-apply" ]; }
++
++# ---- the lease ------------------------------------------------------------------------------------------------------------
++LEASE="" # the lease commit this run holds
++lease_seen() { git ls-remote "$REMOTE" "$LOCK" 2>/dev/null | cut -f1; }
++lease_field() { # lease_field <sha> <key>: a key=value line of the lease's message
++  git fetch -q "$REMOTE" "$LOCK" 2>/dev/null
++  git log -1 --format=%B "$1" 2>/dev/null | sed -n "s/^$2=//p" | head -1
++}
++lease_put() { # lease_put <expected sha or ''>: a new lease over exactly that one; prints the new sha on success
++  local new
++  new="$(printf 'talos push lease\n\nmachine=%s\nuntil=%s\nuntil_iso=%s\npid=%s\n' "$MACHINE" "$(($(date +%s) + LEASE_S))" \
++    "$(date -u -r $(($(date +%s) + LEASE_S)) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" |
++    git commit-tree "$EMPTY_TREE")" || return 2
++  git push -q --force-with-lease="$LOCK:$1" "$REMOTE" "$new:$LOCK" >/dev/null 2>&1 || return 1
++  echo "$new"
++}
++lease_take() {
++  local waited=0 seen until who got
++  while :; do
++    seen="$(lease_seen)"
++    if [ -n "$seen" ] && [ "$seen" != "$LEASE" ]; then
++      until="$(lease_field "$seen" until)"
++      who="$(lease_field "$seen" machine)"
++      if [ -n "$until" ] && [ "$until" -gt "$(date +%s)" ] 2>/dev/null; then
++        [ "$waited" -lt "$WAIT_S" ] || refuse "the push lease is held by ${who:-another machine} until $(lease_field "$seen" until_iso); try again then"
++        say "the push lease is held by ${who:-another machine} until $(lease_field "$seen" until_iso): waiting"
++        sleep "$POLL_S"
++        waited=$((waited + POLL_S))
++        continue
++      fi
++      [ -z "$until" ] || say "the lease of ${who:-another machine} ran out: taking it over"
++    fi
++    if got="$(lease_put "${seen:-}")"; then
++      LEASE="$got"
++      return 0
++    fi
++    # lost a race for it, or the remote does not take the ref: look again once, then go on without a lease
++    if [ -z "$(lease_seen)" ] && ! lease_put "" >/dev/null; then
++      say "the remote does not take $LOCK: pushing without a lease"
++      return 0
++    fi
++  done
++}
++lease_release() {
++  [ -n "$LEASE" ] || return 0
++  git push -q --force-with-lease="$LOCK:$LEASE" "$REMOTE" ":$LOCK" >/dev/null 2>&1 || true
++  LEASE=""
++}
++trap 'lease_release' EXIT
++trap 'exit 130' INT TERM
++
++# ---- one pass of the gate, stamped ----------------------------------------------------------------------------------------
++plan_of() { bash scripts/gate.sh --plan --base "$1" 2>/dev/null; }
++gate_and_stamp() { # gate_and_stamp <base> <full|cheap>
++  local base="$1" mode="$2" plan
++  if [ "$mode" = cheap ]; then bash scripts/gate.sh --base "$base" --checks-only || refuse "the gate failed (above)"
++  else bash scripts/gate.sh --base "$base" || refuse "the gate failed (above)"; fi
++  plan="$(plan_of "$base")"
++  {
++    echo "tree=$(git rev-parse 'HEAD^{tree}')"
++    echo "base=$base"
++    echo "plan=$(printf '%s' "$plan" | shasum -a 256 | cut -d' ' -f1)"
++    echo "gate=$(sha256 scripts/gate.sh)"
++    echo "hook=$(sha256 scripts/pre-push.sh)"
++    echo "mode=$mode"
++    echo "at=$(date +%s)"
++  } >"$STAMP.tmp" && mv "$STAMP.tmp" "$STAMP"
++}
++
++# When the branch moved from <old> to <new>: cheap when what it brought touches nothing this change's gate depends on.
++race_mode() {
++  local old="$1" new="$2" f mine planned roots r
++  mine="$(git diff --name-only "$new" HEAD)"
++  planned="$(plan_of "$new" | sed -n 's/^\t//p')"
++  roots=""
++  for r in packages/protocol packages/testkit packages/integrations apps/relay apps/web apps/mobile scripts apps/bridge e2e; do
++    if printf '%s\n' "$planned" | grep -Eq "^(${r}/|tests/)"; then roots="$roots $r"; fi
++  done
++  plan_of "$new" | grep -Eq '^(vitest-all|bun-all|e2e-all)$' && { echo full; return; }
++  while IFS= read -r f; do
++    [ -n "$f" ] || continue
++    if printf '%s\n' "$mine" "$planned" | grep -Fxq "$f"; then echo full; return; fi
++    case "$f" in
++      packages/protocol/* | packages/testkit/* | package.json | */package.json | pnpm-lock.yaml | tsconfig*.json | */tsconfig*.json | \
++        biome.json | vitest.config.ts | scripts/gate.sh | scripts/gate-push.sh | scripts/pre-push.sh)
++        echo full
++        return
++        ;;
++    esac
++    for r in $roots; do case "$f" in "$r"/*) echo full && return ;; esac; done
++  done < <(git diff --name-only "$old" "$new")
++  echo cheap
++}
++
++# ---- the push -------------------------------------------------------------------------------------------------------------
++rebasing && refuse "a rebase is in progress: finish or abort it first"
++[ -z "$(git status --porcelain --untracked-files=no)" ] || refuse "there are uncommitted changes: the gate checks the files on disk, so commit or stash them"
++lease_take
++
++mode=full base=""
++for try in $(seq 1 "$TRIES"); do
++  git fetch -q "$REMOTE" "$BRANCH" || refuse "cannot fetch $REMOTE $BRANCH"
++  new="$(git rev-parse "$REMOTE/$BRANCH")" || refuse "no $REMOTE/$BRANCH"
++  [ -z "$base" ] || mode="$(race_mode "$base" "$new")"
++  if ! git rebase -q "$new" >/dev/null 2>&1; then
++    git rebase --abort >/dev/null 2>&1
++    refuse "the rebase onto $REMOTE/$BRANCH has conflicts: rebase by hand, then push again"
++  fi
++  base="$new"
++  [ "$try" = 1 ] || say "the branch moved: $( [ "$mode" = cheap ] && echo "the new commits touch nothing this change's tests depend on, so only typecheck, lint, personal and size run again" || echo "running the touched set again")"
++  started=$SECONDS
++  gate_and_stamp "$base" "$mode"
++  [ $((SECONDS - started)) -lt "$RENEW_S" ] || [ -z "$LEASE" ] || { got="$(lease_put "$LEASE")" && LEASE="$got"; }
++  out="$(git push "$REMOTE" "HEAD:$BRANCH" 2>&1)"
++  rc=$?
++  printf '%s\n' "$out" >&2
++  [ "$rc" = 0 ] && { say "pushed"; exit 0; }
++  # only a lost race is tried again; any other refusal (the hook, permissions) is the answer
++  printf '%s' "$out" | grep -Eq 'fetch first|non-fast-forward|cannot lock ref|stale info|\[rejected\]' ||
++    refuse "the push was refused (above)"
++done
++refuse "the branch kept moving: $TRIES tries"
+diff --git a/scripts/gate-push.test.ts b/scripts/gate-push.test.ts
+new file mode 100644
+index 00000000..6d6bc8c3
+--- /dev/null
++++ b/scripts/gate-push.test.ts
+@@ -0,0 +1,245 @@
++// scripts/gate.sh --push (gate-push.sh), for real: a temp repo, a bare origin, the real hook, gate and push script, with
++// stand-ins for pnpm and biome that write down what they were asked to do. One push runs the gate once (the hook trusts the
++// stamp for that tree); a push that loses a race rebases and runs only the cheap checks when the new commits touch nothing
++// this change's tests depend on, the whole touched set otherwise; the push lease is taken, waited on, taken over when it ran
++// out, and released, Ctrl-C included.
++import { spawn, spawnSync } from 'node:child_process'
++import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { basename, dirname, join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import { afterAll, describe, expect, it, vi } from 'vitest'
++import { fakeTool } from './fake-tool'
++
++const here = dirname(fileURLToPath(import.meta.url))
++const repoRoot = join(here, '..')
++vi.setConfig({ testTimeout: 60_000 })
++const dirs: string[] = []
++afterAll(() => {
++  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
++})
++
++const TYPECHECK = 'pnpm -s typecheck'
++
++function setup() {
++  const T = mkdtempSync(join(tmpdir(), 'gp-'))
++  dirs.push(T)
++  const clone = join(T, 'clone')
++  const other = join(T, 'other')
++  const log = join(T, 'calls.log')
++  const bin = join(T, 'bin')
++  const env = {
++    ...process.env,
++    PATH: `${bin}:${process.env.PATH}`,
++    CALLS: log,
++    TALOS_CI_NESTED: '0',
++    TALOS_NO_HOOKS: '0',
++    TALOS_MACHINE: 'cyclops',
++    GIT_CONFIG_GLOBAL: '/dev/null',
++    GIT_CONFIG_SYSTEM: '/dev/null',
++    GIT_AUTHOR_NAME: 't',
++    GIT_AUTHOR_EMAIL: 't@example.com',
++    GIT_COMMITTER_NAME: 't',
++    GIT_COMMITTER_EMAIL: 't@example.com',
++  }
++  const git = (cwd: string, ...a: string[]) => spawnSync('git', a, { cwd, env, encoding: 'utf8' })
++  const ok = (cwd: string, ...a: string[]) => {
++    const r = git(cwd, ...a)
++    if (r.status !== 0) throw new Error(`git ${a.join(' ')}: ${r.stderr}`)
++    return r.stdout.trim()
++  }
++  mkdirSync(bin)
++  const stub = (path: string, body: string) => {
++    mkdirSync(dirname(path), { recursive: true })
++    fakeTool(dirname(path), basename(path), `#!/bin/sh\n${body}\n`)
++  }
++  // pnpm: the type check and the suites write themselves down; ON_TYPECHECK, a command run on the first type check (a
++  // push from another machine while this gate runs)
++  stub(
++    join(bin, 'pnpm'),
++    `echo "pnpm $*" >> "$CALLS"
++if [ "$*" = "-s typecheck" ] && [ -n "$ON_TYPECHECK" ] && [ ! -e "$CALLS.once" ]; then : > "$CALLS.once"; sh -c "$ON_TYPECHECK"; fi
++[ -n "$SLOW" ] && sleep "$SLOW"
++exit 0`,
++  )
++  mkdirSync(clone)
++  ok(clone, 'init', '-q', '-b', 'main')
++  for (const f of [
++    'pre-push.sh',
++    'gate.sh',
++    'gate-push.sh',
++    'install-hooks.sh',
++    'check-no-personal.sh',
++    'denylist.generic.txt',
++  ]) {
++    mkdirSync(join(clone, 'scripts'), { recursive: true })
++    cpSync(join(here, f), join(clone, 'scripts', f))
++  }
++  cpSync(join(repoRoot, '.githooks'), join(clone, '.githooks'), { recursive: true })
++  const put = (dir: string, file: string, text = 'x\n') => {
++    mkdirSync(dirname(join(dir, file)), { recursive: true })
++    writeFileSync(join(dir, file), text)
++  }
++  for (const p of ['apps/web', 'apps/relay', 'packages/protocol']) put(clone, `${p}/tsconfig.json`, '{}\n')
++  put(clone, 'apps/web/src/a.ts')
++  put(clone, 'docs/a.md')
++  put(clone, '.gitignore', 'node_modules\n')
++  ok(clone, 'add', '-A')
++  ok(clone, 'commit', '-qm', 'base')
++  const origin = join(T, 'origin.git')
++  ok(T, 'clone', '-q', '--bare', clone, origin)
++  ok(clone, 'remote', 'add', 'origin', origin)
++  ok(clone, 'fetch', '-q', 'origin')
++  ok(clone, 'branch', '-q', '--set-upstream-to=origin/main', 'main')
++  stub(join(clone, 'node_modules/.bin/biome'), 'echo "biome $*" >> "$CALLS"; exit 0')
++  spawnSync('bash', ['scripts/install-hooks.sh'], { cwd: clone, env, encoding: 'utf8' })
++  // another machine: a plain clone of origin, no hooks
++  ok(T, 'clone', '-q', origin, other)
++  const change = (dir: string, files: Record<string, string>) => {
++    for (const [f, t] of Object.entries(files)) put(dir, f, t)
++    ok(dir, 'add', '-A')
++    ok(dir, 'commit', '-qm', 'change')
++  }
++  /** A commit from the other machine, pushed to origin: a shell line for ON_TYPECHECK. */
++  const otherPushes = (file: string) =>
++    `cd '${other}' && git pull -q && mkdir -p '${dirname(file)}' && echo y > '${file}' && git add -A && git commit -qm other && git push -q origin HEAD:main`
++  const gatePush = (e: Record<string, string> = {}) => {
++    rmSync(log, { force: true })
++    rmSync(`${log}.once`, { force: true })
++    const r = spawnSync('bash', ['scripts/gate.sh', '--push'], { cwd: clone, env: { ...env, ...e }, encoding: 'utf8' })
++    return { code: r.status, err: r.stderr }
++  }
++  const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : [])
++  const lease = () => ok(clone, 'ls-remote', 'origin', 'refs/locks/push')
++  /** A lease on origin held by another machine until `until` (seconds since 1970). */
++  const leaseHeld = (machine: string, until: number) => {
++    const sha = ok(
++      clone,
++      'commit-tree',
++      ok(clone, 'hash-object', '-t', 'tree', '/dev/null'),
++      '-m',
++      `talos push lease\n\nmachine=${machine}\nuntil=${until}\nuntil_iso=then\npid=1`,
++    )
++    ok(clone, 'push', '-q', 'origin', `${sha}:refs/locks/push`)
++  }
++  return { T, clone, other, origin, env, git, ok, change, otherPushes, gatePush, calls, lease, leaseHeld }
++}
++
++describe('gate.sh --push', () => {
++  it('runs the gate once and pushes: the hook trusts the stamp for that tree, and the lease is let go', () => {
++    const r = setup()
++    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
++    const p = r.gatePush()
++    expect(p.code, p.err).toBe(0)
++    expect(p.err).toContain('gate-push: pushed')
++    expect(p.err).toContain('the gate passed on this tree')
++    expect(r.calls().filter((c) => c === TYPECHECK)).toHaveLength(1)
++    expect(r.ok(r.origin, 'rev-parse', 'main')).toBe(r.ok(r.clone, 'rev-parse', 'HEAD'))
++    expect(r.lease()).toBe('')
++  })
++
++  it('a stamp for another tree, or from another version of the gate, is not trusted: a plain push runs the gate', () => {
++    const r = setup()
++    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
++    expect(r.gatePush().code).toBe(0)
++    // a new commit: the stamp is for the tree before it
++    r.change(r.clone, { 'apps/web/src/c.ts': 'y\n' })
++    rmSync(join(r.T, 'calls.log'), { force: true })
++    const plain = r.git(r.clone, 'push', '-q', 'origin', 'HEAD:main')
++    expect(plain.status, plain.stderr).toBe(0)
++    expect(plain.stderr).not.toContain('the gate passed on this tree')
++    expect(readFileSync(join(r.T, 'calls.log'), 'utf8')).toContain(TYPECHECK)
++    // the same tree, but a stamp written by another version of the gate
++    r.change(r.clone, { 'apps/web/src/d.ts': 'y\n' })
++    expect(r.gatePush().code).toBe(0)
++    const stamp = join(r.clone, '.git', 'talos-gate.pass')
++    writeFileSync(stamp, readFileSync(stamp, 'utf8').replace(/^gate=.*$/m, 'gate=0000'))
++    r.ok(r.clone, 'commit', '-q', '--allow-empty', '-m', 'empty') // a new sha with the same tree as the stamp's
++    r.ok(r.clone, 'reset', '-q', '--soft', 'HEAD~1')
++    r.ok(r.clone, 'commit', '-q', '--allow-empty', '-m', 'again')
++    const p = r.git(r.clone, 'push', '-q', 'origin', 'HEAD:main')
++    expect(p.status, p.stderr).toBe(0)
++    expect(p.stderr).not.toContain('the gate passed on this tree')
++  })
++
++  it('a race with a commit that touches nothing this change depends on: rebased, only the cheap checks again, pushed', () => {
++    const r = setup()
++    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
++    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('docs/news.md') })
++    expect(p.code, p.err).toBe(0)
++    expect(p.err).toContain('only typecheck, lint, personal and size run again')
++    const c = r.calls()
++    expect(c.filter((x) => x === TYPECHECK)).toHaveLength(2)
++    expect(c.filter((x) => x.startsWith('pnpm exec vitest related'))).toHaveLength(1) // the suites ran once, not twice
++    expect(r.ok(r.origin, 'log', '-1', '--format=%s', 'main')).toBe('change')
++    expect(r.ok(r.origin, 'log', '-2', '--format=%s', 'main').split('\n')).toEqual(['change', 'other'])
++  })
++
++  it('a race with a commit under a test root this change runs: the whole touched set again', () => {
++    const r = setup()
++    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
++    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts') })
++    expect(p.code, p.err).toBe(0)
++    expect(p.err).toContain('running the touched set again')
++    expect(r.calls().filter((x) => x.startsWith('pnpm exec vitest related'))).toHaveLength(2)
++  })
++
++  it('a rebase that conflicts stops at once, and nothing is pushed', () => {
++    const r = setup()
++    r.change(r.clone, { 'apps/web/src/a.ts': 'mine\n' })
++    r.change(r.other, { 'apps/web/src/a.ts': 'theirs\n' })
++    r.ok(r.other, 'push', '-q', 'origin', 'HEAD:main')
++    const p = r.gatePush()
++    expect(p.code).toBe(1)
++    expect(p.err).toContain('has conflicts')
++    expect(r.ok(r.origin, 'log', '-1', '--format=%s', 'main')).toBe('change') // the other machine's, not mine
++    expect(r.lease()).toBe('')
++  })
++})
++
++describe('the push lease', () => {
++  it("another machine's lease that has not run out is waited on, then refused, naming who holds it", () => {
++    const r = setup()
++    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
++    r.leaseHeld('lemnos', Math.floor(Date.now() / 1000) + 600)
++    const p = r.gatePush({ GATE_PUSH_WAIT_S: '0' })
++    expect(p.code).toBe(1)
++    expect(p.err).toContain('the push lease is held by lemnos')
++    expect(r.calls()).toEqual([]) // no gate ran
++    expect(r.lease()).not.toBe('') // theirs, untouched
++  })
++
++  it('a lease that ran out is taken over, and let go at the end', () => {
++    const r = setup()
++    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
++    r.leaseHeld('lemnos', Math.floor(Date.now() / 1000) - 5)
++    const p = r.gatePush()
++    expect(p.code, p.err).toBe(0)
++    expect(p.err).toContain('ran out: taking it over')
++    expect(r.lease()).toBe('')
++  })
++
++  it('Ctrl-C while the gate runs lets the lease go', async () => {
++    const r = setup()
++    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
++    const child = spawn('bash', ['scripts/gate.sh', '--push'], {
++      cwd: r.clone,
++      env: { ...r.env, SLOW: '30' },
++      detached: true,
++    })
++    const exited = new Promise<number | null>((res) => child.on('exit', (c) => res(c)))
++    await vi.waitUntil(() => r.lease() !== '', { timeout: 30_000, interval: 100 })
++    expect(r.ok(r.clone, 'log', '-1', '--format=%B', r.lease().split('\t')[0] as string)).toContain('machine=cyclops')
++    process.kill(-(child.pid as number), 'SIGINT')
++    await exited
++    expect(r.lease()).toBe('')
++  })
++
++  it('refs/locks/ takes only a lease: anything else pushed there is refused by the hook', () => {
++    const r = setup()
++    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
++    const p = r.git(r.clone, 'push', '-q', 'origin', 'HEAD:refs/locks/push')
++    expect(p.status).not.toBe(0)
++    expect(p.stderr).toContain('refs/locks/ holds only push leases')
++  })
++})
+diff --git a/scripts/gate.sh b/scripts/gate.sh
+index 958f6a8c..abf3226d 100755
+--- a/scripts/gate.sh
++++ b/scripts/gate.sh
+@@ -9,9 +9,12 @@
+ #   5. suites     the tests the change touches, from the changed paths against the base (see `plan_suites`), the e2e specs
+ #                 among them (Playwright, one worker); --full runs every Vitest project, the whole bridge suite and every e2e
+ #                 spec instead
+-# Usage: scripts/gate.sh [--full] [--base <ref>] [--plan]
++# Usage: scripts/gate.sh [--full] [--base <ref>] [--plan] [--checks-only]
++#        scripts/gate.sh --push [<remote> [<branch>]]   the one way to push: rebase, gate, push, retry a race (gate-push.sh)
+ #   --base <ref>  what the change is measured against (default: the merge base with origin/main)
+ #   --plan        print what it would run and exit 0, running nothing (tests and a look before a long run)
++#   --checks-only typecheck, lint, personal and size, no suites (gate-push.sh after a race whose new commits touch none of
++#                 this change's tests; CI runs everything after the merge)
+ # It checks the files on disk. Run from the pre-push hook, the hook first makes sure those are the ones being pushed.
+ set -uo pipefail
+ cd "$(git rev-parse --show-toplevel)" || exit 2
+@@ -20,11 +23,13 @@ cd "$(git rev-parse --show-toplevel)" || exit 2
+ # from the folder it is in.
+ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+ 
+-FULL=0 PLAN=0 BASE=""
++[ "${1:-}" = --push ] && { shift; exec bash scripts/gate-push.sh "$@"; }
++FULL=0 PLAN=0 CHECKS_ONLY=0 BASE=""
+ while [ $# -gt 0 ]; do
+   case "$1" in
+     --full) FULL=1 ;;
+     --plan) PLAN=1 ;;
++    --checks-only) CHECKS_ONLY=1 ;;
+     --base)
+       shift
+       BASE="${1:-}"
+@@ -130,6 +135,7 @@ plan_suites() {
+ }
+ 
+ if [ "$FULL" = 1 ]; then VIT_ALL=1 BUN_ALL=1 E2E_ALL=1; else plan_suites; fi
++if [ "$CHECKS_ONLY" = 1 ]; then VIT=() BUN=() E2E=() VIT_ALL=0 BUN_ALL=0 E2E_ALL=0; fi
+ [ -d e2e ] || E2E_ALL=0 # a checkout with no e2e package has no e2e to run (the hook's tests run in such a clone)
+ NEED_BUN=0
+ { [ "$BUN_ALL" = 1 ] || [ "${#BUN[@]}" -gt 0 ]; } && NEED_BUN=1
+diff --git a/scripts/pre-push.sh b/scripts/pre-push.sh
+index f3d7bfa5..740addf4 100755
+--- a/scripts/pre-push.sh
++++ b/scripts/pre-push.sh
+@@ -113,9 +113,17 @@ EOF
+   return $bad
+ }
+ ANY=0 ALL=0 SHAS="" GATE_BASE=""
+-while read -r _lref lsha _rref rsha; do
++while read -r _lref lsha rref rsha; do
+   [ -n "${lsha:-}" ] || continue
+   [ "$lsha" = "$ZERO" ] && continue # deleting a branch: nothing to check
++  # the push lease (scripts/gate.sh --push): a commit with an empty tree and a one-line message, never code; it is checked below
++  case "$rref" in refs/locks/*)
++    [ "$(git rev-parse "$lsha^{tree}" 2>/dev/null)" = "$(git hash-object -t tree /dev/null)" ] &&
++      [ "$(git rev-list --parents -n 1 "$lsha" | wc -w | tr -d ' ')" = 1 ] && continue
++    echo "pre-push: REFUSED: refs/locks/ holds only push leases (an empty commit with no parent)" >&2
++    exit 1
++    ;;
++  esac
+   ANY=1
+   SHAS="$SHAS $lsha"
+   if b="$(base_of "$lsha" "$rsha")"; then
+@@ -145,4 +153,20 @@ done
+ rm -f "$CHANGED"
+ trap - EXIT
+ if [ "$ALL" = 1 ] || [ -z "$GATE_BASE" ]; then exec bash scripts/gate.sh --full; fi
++# scripts/gate.sh --push ran the gate on exactly this tree, from this base, with this plan and this gate, a moment ago: the
++# stamp says so, and the gate is not run a second time. Anything else about it (another tree or base, another version of the
++# gate or of this hook, older than 30 minutes) and the gate runs here as usual.
++stamp="$(git rev-parse --absolute-git-dir)/talos-gate.pass"
++field() { sed -n "s/^$1=//p" "$stamp" 2>/dev/null | head -1; }
++sum() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
++one_sha="${SHAS# }"
++if [ -f "$stamp" ] && [ "${one_sha#* }" = "$one_sha" ] &&
++  [ "$(field tree)" = "$(git rev-parse "$one_sha^{tree}" 2>/dev/null)" ] && [ "$(field base)" = "$GATE_BASE" ] &&
++  [ "$(field gate)" = "$(sum scripts/gate.sh)" ] && [ "$(field hook)" = "$(sum scripts/pre-push.sh)" ] &&
++  [ "$(($(date +%s) - $(field at || echo 0)))" -lt 1800 ] 2>/dev/null &&
++  plan="$(bash scripts/gate.sh --plan --base "$GATE_BASE" 2>/dev/null)" &&
++  [ "$(field plan)" = "$(printf '%s' "$plan" | shasum -a 256 | cut -d' ' -f1)" ]; then
++  echo "pre-push: the gate passed on this tree $(($(date +%s) - $(field at))) s ago ($(field mode)): not run again" >&2
++  exit 0
++fi
+ exec bash scripts/gate.sh --base "$GATE_BASE"

@@ -10,9 +10,18 @@ scripts/ci-local.sh --ref feat/x            # any branch, tag or sha
 scripts/ci-local.sh --pr 39 --jobs check,browser --no-status
 ```
 
+The script is in parts: `scripts/ci-local.sh` (the options, the run itself, and the results) sources, in place, the files in
+`scripts/ci-local/`: `locks.sh` (locks, run records, statuses, reaping, slots, the suites mutex), `machine.sh` (sleep and wake,
+slot environment, network git, time limits, the iOS simulator), and one file per job group: `jobs-check.sh`,
+`jobs-mod-browser.sh`, `jobs-image.sh`, `jobs-swift.sh`. A copy of `ci-local.sh` needs the `ci-local/` folder beside it; without
+it the script stops at once (exit 64). The desktop gate (`ci-desktop-gate.sh`) watches the folder as it watches the script. The parts are read before any wait, so a run keeps
+the job code it started with; the helpers it runs later (`ci-affected.sh`, `ci-desktop-gate.sh`, `ci-flake-vitest.ts`,
+`ci-swift-retry.sh`) are still read from the checkout when used, so **do not `git pull` into a checkout while a hand run of
+`ci-local.sh` from it is waiting** (the runners are not exposed: one job each, in a workspace nothing changes meanwhile).
+
 Options: `--jobs check,mod,browser,image,desktop,mobile` (default all, exactly the ones named), `--full` (no job is skipped, see "Running only what a change can affect"), `--latest` (also the advisory latest-CLI mod run),
 `--no-status` (post nothing), `--keep` (keep the scratch worktree), `--reap` (stop and clean up after runs that died, then exit). `TALOS_CI_FORCE_DESKTOP=1` runs the desktop job even
-when no desktop path changed (only a hand run needs it; `apps/desktop/scripts/review-d0-test.sh` uses it as its control; `ci-local.sh` keeps it out of every job's environment). A commit that is already on `origin/main` runs the desktop and mobile jobs with no flag at all, unless "Running only what a change can affect" shows the change cannot reach them. Logs: `~/.cache/talos-ci/logs/<sha>-<job>.log`, plus `<sha>-setup.log`. Exit 0 only if every
+when no desktop path changed (only a hand run needs it; `apps/desktop/scripts/review-d0-test.sh` uses it as its control; `ci-local.sh` keeps it out of every job's environment). A commit that is already on `origin/main` runs the desktop and mobile jobs with no flag at all, unless "Running only what a change can affect" shows the change cannot reach them. Logs: `~/.cache/talos-ci/logs/<sha>-<job>.log`, plus `<sha>-setup.log`. A rerun of the same commit moves the earlier ones to `logs/prev/<sha>-<job>.<time>.log` first. Exit 0 only if every
 job passed.
 
 ## Running only what a change can affect
@@ -35,34 +44,55 @@ of desktop paths; `ci-affected.sh` asks it, so there is no second gate). So two 
 tests read them: `apps/bridge/src/claude-env.ts` and `apps/bridge/test/fixtures/agent-instructions/worker.txt`. Renames count
 both paths (`--no-renames`) and a deleted file is a change. Names are read NUL-separated, so spaces, quotes and newlines in a path are one path.
 
-**The base.** The diff is against the last green commit, not the parent. The inner commits of a push get no status
-("Pushing to main"), so a parent can be a commit nobody tested. `ci-affected.sh plan` starts at the parent of a commit that is on
-`origin/main` (at the merge-base with `origin/main` for a PR) and walks the first-parent line back, at most 30 commits. A commit
-with no `local-ci/*` status is passed over, and what it changed counts, because the diff is taken to the green commit. The
-nearest commit that has a status decides, through the same `ci_classify` the verdict uses (`ci-runner.sh`): green is the base.
-Red, pending, partly reported, errored, or skipped any other way means no base, and **every job runs**: a skip can never hide an
-earlier red. Nothing found in 30 commits, GitHub not readable (`gh` failing is not "no status", for the head or for any commit on the
-walk), no repository, a missing script: all six. The statuses are read from GitHub, so the base can come from either machine.
+**The base, per job.** Each job is compared with the last commit where **that job** passed, not with the parent and not with
+the last all-green commit: another job's red says nothing about this job's inputs, so main's overall colour does not matter. The
+inner commits of a push get no status ("Pushing to main"), so a parent can be a commit nobody tested. `ci-affected.sh plan`
+starts at the parent of a commit that is on `origin/main` (at the merge-base with `origin/main` for a PR) and walks the
+first-parent line back, at most 30 commits, reading each commit's statuses once. Per job, the nearest commit with a result for
+that job decides: a final pass (`passed on ...`, `passed on retry` included, which the verdict also counts green) is its base;
+`pending`, `failure` or `error` there means no base, and **that job runs**: a skip can never hide the job's own red, or a result
+not in yet. A commit where the job has no status, or was skipped, is walked past, and what it changed counts, because the diff is
+taken to the base. The job then skips only if `affected_jobs` (the path table above, the one list) says the diff from its base
+cannot reach it; `check`, `mod` and `image` are reached by every diff, so they always run. Nothing found in 30 commits: that job
+runs. GitHub not readable (`gh` failing is not "no status", for the head or for any commit on the walk), no repository, a missing
+script: all six. The statuses are read from GitHub, so the base can come from either machine.
 
-**A rerun runs everything.** If the commit being tested already has any `local-ci/*` status, whatever its state, the plan
-is all six and no base is looked for. The statuses are the sign of an earlier run, and that run may have failed a job this
+**A rerun runs everything.** If the commit being tested already has any `local-ci/*`, `ci-part/*` or `report-ci/*` status
+of an earlier run, whatever its state, the plan is all six and no base is looked for. The statuses of this workflow attempt
+(`CI_ATTEMPT_URL`, or on the runner the same link made from `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT`) are not an earlier run (docs/CI-MACHINES.md, "The rerun rule and this attempt"). The statuses are the sign of an earlier run, and that run may have failed a job this
 commit's own change cannot reach: a skip proved against a base that has gone green since would post `success` over that
 failure. This covers the GitHub re-run button and `scripts/ci-local.sh --ref <sha>`. A first run posts its `pending`
 statuses only after the plan, so it never sees its own.
 
 **What a skipped job says.** The job is not started (it takes no mutex and no slot time) and the run posts `success` with the
-description `skipped: no affected files`, and nothing before it (no `pending`). It is not "passed on": `verdict` lists it apart
-("skipped, no affected files") and treats a commit with such skips as a verdict, **only when the description is exactly those
-words and the job is not `check`**; every other skip text ("skipped (swift is not installed)", "skipped (no desktop changes)")
-is still no verdict. A skip chain is honest by induction: each skip is proved against a commit whose own jobs passed or were
-skipped the same way, back to a real run.
+description `skipped: no <job> inputs changed since <sha>`, the commit where that job last passed, and nothing before it (no
+`pending`). It is not "passed on": `verdict` lists it apart ("skipped, no affected files") and treats a commit with such skips as a
+verdict, **only when the description is exactly those words, for that job, with a commit sha, and the job is not `check`** (the
+older words `skipped: no affected files` count the same way). Every other skip text ("skipped (swift is not installed)",
+"skipped (no desktop changes)") is still no verdict. A skip chain is honest by induction: each skip is proved against a commit
+where that job really ran and passed, and every change since is in the diff.
 
 **When nothing is skipped.** `--full`; `--jobs` (it names exactly what to run); `--no-status` (a skip is a posted status, and a
 run that posts nothing has nowhere to say it); `TALOS_GUI_TESTS=1` or `TALOS_CI_FORCE_DESKTOP=1` (the GUI desktop tests read
 `apps/web`: the companion harness imports `apps/web/src`, and a test reads `apps/web/src/theme/tokens.css`); a rerun of a commit
 that already has `local-ci/*` statuses (above); and every `workflow_dispatch` of the runner (`ci-runner.sh run` adds `--full`):
-a manual trigger is the full run. A nightly full run is not scheduled; `gh workflow run "CI runner" -f ref=main` is one. Pushes and
+a manual trigger is the full run; and the nightly (`schedule`, 09:17 UTC), which tests main's tip with `--full` (and runs the
+bridge's security fuzz for 60 s, `TALOS_FUZZ_MS=60000`, instead of 8 s), in its own
+concurrency group that never cancels or is cancelled by a push run. `gh workflow run "CI runner" -f ref=main` is one by hand. A
+waiting `--full` run never takes over a non-full run's result for the same commit (`--full` is part of that key). Pushes and
 pull requests skip. The job-level gates in `job_desktop` and `job_mobile` are unchanged and still apply to a job that runs.
+
+**The install and kit tests inside `check`.** `scripts/root-install*.test.ts` (one suite in four files, so vitest runs them side
+by side: 155 s as one file, 56 s split) and `scripts/kit-tests.test.ts` (every `kit/scripts/test-*.sh`) are most of the vitest
+step. `kit/scripts/test-default-agent.sh` runs `self-test.sh` on a rendered agent folder, and `self-test.sh` runs 17 of those same
+suites again; `kit-tests.test.ts` sets `TALOS_SELF_TEST_SUITES=skip` so they run once (that script: 216 s before, 13 s after),
+except on a `--full` run, which sets `TALOS_KIT_FULL_SELF_TEST=1` and keeps the second run inside the rendered folder. Beyond
+that, `ci-affected.sh kit` says whether the change can reach these tests at all, and `plan` reports it as its third line. They are
+left out (`--exclude`) only when the plan has a green base and every changed path is under `apps/web`, `apps/relay`,
+`apps/mobile`, `apps/desktop`, `docs`, `CHANGELOG.md` or `scripts/`, except their own files: `root-install*.ts`,
+`kit-tests.test.ts`, `kit-run.ts` and `size-report.ts` (a test fails if they import a helper not on that list). `install.sh`,
+`kit/`, `plugins/`, `apps/bridge` (the CLI they call), `packages/`, the lockfile, root config and any unlisted path run them. The
+check job still posts its own result, and its log says they were skipped. Everything in "When nothing is skipped" runs them too.
 
 The earlier audit (`docs/CI-AUDIT-2026-10-31.md`) declined to skip beyond desktop and mobile because a skip is the one change that
 can turn a real failure green. This is the owner's call to take it; the red-base rule, the exact-words rule and the full-run
@@ -83,8 +113,8 @@ trigger are what keep it from doing that. Tests: `scripts/ci-affected.test.ts`.
    stop the others. A job that dies without a result is red.
 3. **Inside `check`:** the personal-data scan, which only warns, then the quick gates (types, lint, and `pnpm notices:check`: THIRD_PARTY_NOTICES.md must match what setup's web build
    bundles), then the quiet group: the contract suite, then the bridge's
-   `test/schedules/` files, `CI_SCHED_JOBS` at a time (a third of the cores, biggest file first). Then the loud group side by side: the other bridge files 4 at once, Vitest and the
-   capture check. Output of the loud group goes to `<log>.<step>` while it runs and into the job log, whole, with failed steps
+   `test/schedules/` files, `CI_SCHED_JOBS` at a time (a third of the cores, biggest file first). Then the loud group side by side: the other bridge files 4 at once and
+   Vitest. Output of the loud group goes to `<log>.<step>` while it runs and into the job log, whole, with failed steps
    last so the reason is in the tail a failed job prints. Last comes the known-vulnerability audit (`pnpm audit --prod
    --audit-level high`), which also only warns, because an advisory or a registry outage says nothing about this commit's code.
    A step that warns adds a `warning:` line to the log, a `!` line to the run's output and "with warnings" to the job's status,
@@ -99,8 +129,12 @@ A run that ends any way at all answers for itself: every status it posted pendin
 closed as `error`, "cancelled or interrupted; re-run", never left pending), the scratch worktree and temp dir go, and every lock
 it holds goes, including a mutex a job took inside its own subshell. The same cleanup is done by the watchdog if the run is
 killed outright, by a waiter that takes a lock from a dead run, by the start of the next run, and by `ci-local.sh --reap`. The
-record `runs/<nonce>` holds what that needs (`owner`, `worktree`, `tmp`, `repo`, `posted`, `reported/`), so no one needs the
-dead run's memory.
+record `runs/<nonce>` holds what that needs (`owner`, `worktree`, `tmp`, `repo`, `posted`, `posted-contexts`, `reported/`), so
+no one needs the dead run's memory. `posted` lists the bare job names (`local-ci/<job>`, `report-ci/fast`), which every
+`ci-local.sh` reads the same way; the contexts under another prefix (`ci-part/*`, and `report-ci/<job>` other than `fast`)
+are in `posted-contexts`, which an older `ci-local.sh` never opens. It would read every row of `posted` as a bare job and
+close `ci-part/vitest` as `local-ci/ci-part/vitest`, an extra `local-ci/*` status that turns the verdict red. An older reaper
+removes the record with `posted-contexts` unread, so those statuses are left to the workflow's sweep (`ci-runner.sh sweep`).
 
 Each run has a record, `~/.cache/talos-ci/runs/<nonce>`: its job process groups, worktree, container and results. Results are per
 run, not per slot, so an orphan has nowhere to write that a later run reads. Four things enforce it:
@@ -147,8 +181,14 @@ Starting a process is what gets slow on a loaded Mac: the CPU can be half idle w
 waits are ever made robust, or agents stop running suites on this Mac at the same time, overlapping `check` and `browser` is
 the next 6 minutes to win: the side-by-side code (`together`, `wait_for_job`) stays for that.
 
-Every run ends with `ci-local: timing: waited Ns, setup Ns, jobs Ns` and adds a line to `logs/timings.tsv`. Each step's time
-is in the job log as `[step] <seconds> exit <code>: <command>`, so the next audit needs no detective work.
+Every run ends with `ci-local: timing: waited Ns, setup Ns, jobs Ns` and adds a line to `logs/timings.tsv`: date, sha, slot,
+jobs, waited, setup, jobs' wall time, failures, then each job that ran as `<job>=<wall>/<own steps>` seconds. A job's wall
+time includes any wait for another job (browser waits for the whole of check), so its own steps are the wall time less that
+wait; the result line says both (`✓ browser (984s: 457s of its own steps, 527s waiting for another job)`). Each step's time
+is in the job log as `[step] <seconds> exit <code>: <command>`, so the next audit needs no detective work. Each job log
+starts with the bun it runs (`bun: 1.4.4 (<path>)`), and the row ends with the run's bun (`bun=1.4.4`; older rows lack it).
+On the runner that bun is a copy of the pinned one kept in the cache (`bun-bin/<version>/`, scripts/ci-runner.sh
+`ci_bun_pinned`), never `~/.bun/bin/bun`, which an upgrade replaces in place while a run is going.
 
 `apps/bridge/scripts/test-parallel.ts` is the `bun test` runner: one process per file, one result per file, green only if every
 file exited 0 and reported at least one test. Its default test timeout is 20 s, not 5: that timeout only catches hangs, and
@@ -156,35 +196,201 @@ fired on tests that passed every assertion but ran slowly beside other files. Ex
 written. A file also has a wall-clock limit, 5 minutes (`--file-timeout <seconds>` or `BUN_TEST_FILE_TIMEOUT`): bun's test
 timeout cannot stop a file stuck in one synchronous call, so past the limit the runner kills that file's process tree, reports
 the file red and carries on; a file still alive 10 s after the kill is red as "did not die after SIGKILL" and left behind.
-`scripts/test-parallel.test.ts` also asks `bun test` which files it would run and compares, so a file can't drop
+`--shard K/N` runs pile K of N: the files (after `--only` and `--skip`) sorted biggest first and dealt each to the lightest pile so far, the same piles on every machine, every file in exactly one (`docs/CI-MACHINES.md`). `scripts/test-parallel.test.ts` also asks `bun test` which files it would run and compares, so a file can't drop
 out of CI unnoticed. `pnpm test:bun` is still the plain one.
 
 ## Before you push
 
-The flow: work in a worktree, run fast local checks (`pnpm lint`, the tests of what you changed, the hook below), rebase on
-`main`, push. Full CI then runs on the newest `main` (see "Pushing to main" below). A conflict resolved by hand gets one check
-of the changed code, with no loop.
+The flow: work in a worktree, run the gate (below), rebase on `main`, push. Full CI then runs on the newest `main` (see
+"Pushing to main" below). A conflict resolved by hand gets one check of the changed code, with no loop.
 
-`pnpm install` turns on a pre-push hook (`.githooks/pre-push`, `scripts/pre-push.sh`) for the repo and every worktree of it:
-biome on the changed files, `tsc` on the changed packages. Run by a hook, not a doc, because agents skip steps. Before any of that it runs the personal-data check (`pnpm check:personal`, `scripts/check-no-personal.sh`), which **warns and lets the push go** by default (`TALOS_PERSONAL_SCAN=stop` stops the push instead; see "The personal-data scan"). It reads what is being pushed: every commit in the range (the files it changes, read from the commit and not from the working tree, and not counting commits already on the main of the remote being pushed to (`<remote>/main`, so a push to a fork has not got origin's); for a merge only the files that differ from every parent, so a value a later commit removes, an edit or a deletion on disk, or a push of another branch cannot hide it) and each commit message; the whole tree of the tip when the hook cannot tell where the push starts. The generic rules are in the repo. The private list, `scripts/personal-denylist.txt`, and the list of private documents, `scripts/private-docs.txt`, are gitignored and exist only in the owner's main checkout: the hook looks for them there when it runs in a worktree and passes them in, so a push from any worktree of that checkout gets it; a clone elsewhere checks the generic rules only and the hook says so. A missing `check-no-personal.sh` is reported the same way. **A very large push is warned about, not refused, unless `TALOS_PERSONAL_SCAN=stop`:** past `PRE_PUSH_SCAN_COMMITS` commits (a whole number from 1 to 999,999,999, default 100; empty, text, a negative, 0 or a longer number mean no limit) it reads the newest ones one by one plus the whole tree of the tip, and says the older commits' messages, and a value added and removed again inside them, are not checked. In stop mode there is no limit: every commit is read, however many. Files go to the scanner in numbered folders, so two paths that differ only by case are each scanned on a disk that ignores case, and a pushed file named `.commit-message` cannot replace the message. The rest never
-takes much over 10 s: `tsc` gets 8 s (`PRE_PUSH_TSC_SECONDS`) and is cut off with a note past that, which only happens when the Mac is busy. It is a quick filter, not a gate: it doesn't check packages that depend on the changed one, and
-`git push --no-verify` skips it. CI checks everything, but for a push to `main` only after the code has landed, so it is not a gate.
-`git config talos.nohooks true` keeps it off for good; `TALOS_NO_HOOKS=1 pnpm install` is for one install. CI's scratch worktrees
-never install it, and neither does a repo with hooks of its own in `.git/hooks`, because `core.hooksPath` would stop them. It says
-so and lets the push go when it can't check honestly: no node or pnpm on PATH, or files on disk that aren't what is being pushed.
+### The builder skill: `talos-build`
+
+The rules every builder follows (worktrees, tests first, heavy work and group time limits, the gate, handoffs, review tiers,
+what a landing note carries) are one Claude Code project skill, `.claude/skills/talos-build/SKILL.md`. A builder brief says
+"load talos-build" instead of pasting them. Claude Code loads project skills from `.claude/skills/` in the folder it starts
+in and each parent up to the repository root, so any builder started inside a checkout or worktree of this repository has
+it, on every system:
+
+- **macOS and Linux:** start Claude Code in the repository root (or any folder of a worktree).
+- **Windows:** use WSL. Clone the repository inside the WSL file system, and start Claude Code there, in the repository root.
+
+There is nothing to install: pulling `main` brings the newest copy. The skill's own version line and changelog say what changed.
+
+### The gate: `scripts/gate.sh`
+
+One gate for every machine and every builder. It **refuses** on any failure, and when it cannot run at all (no node or pnpm on
+PATH, no `node_modules`, a `pnpm-lock.yaml` newer than `node_modules`, or no bun when bridge tests are needed): a gate that
+cannot run is not a pass. In order, stopping at the first that fails:
+
+1. **typecheck**: `pnpm typecheck`, the whole workspace.
+2. **lint**: `biome check .`, the whole tree.
+3. **personal**: `scripts/check-no-personal.sh` on the working tree, with the private list (`scripts/personal-denylist.txt`) from
+   this checkout or the main checkout of the repository. When there is none it says so, and only the generic rules run.
+4. **size**: the production file size budget (`scripts/size-budget.test.ts`).
+5. **suites**: the tests of what changed since the base (by default the merge base with `origin/main`), uncommitted and
+   untracked files included. A file in a Vitest project goes to `vitest related`, which runs the tests that import it. A bridge
+   source file runs the bridge test files that import it by name; a changed bridge test file runs itself. A change to
+   `packages/protocol` or `packages/testkit` runs the whole bridge suite. A shell or Python script runs the tests that name it, and any file under `kit/`, or a script anywhere, also runs the tests
+   that list its folder: they scan `kit/` or `kit/scripts` with a glob, git ls-tree and the like (kit-tests, kit-pipefail,
+   kit-source). Those are found by grep, so a new folder-scanning test is picked up without a list to keep. A folder counts
+   when it is two or more levels deep (the file's own, or one above it); of the top-level folders only `kit`, which its tests
+   read whole. Never `apps` or `scripts`, which tests name only to build paths. `--plan` prints on stderr which test was picked
+   for which folder.
+   A changed e2e spec (`e2e/tests/`) runs itself, and a change to what every spec runs on (the e2e harness, its config or
+   package) runs them all: Playwright, one worker, Chromium. The gate refuses when Playwright or its Chromium isn't
+   installed. A docs-only change runs no suite.
+
+`--full` runs every Vitest project, the whole bridge suite and every e2e spec instead of the touched ones. `--base <ref>` measures the change
+against another ref. `--plan` prints the steps and the suites' files and runs nothing. `scripts/gate.test.ts` checks the
+mapping.
+
+### The fast gate: `scripts/gate.sh --fast`
+
+The pre-push gate, with CI as the safety net: CI runs every suite on `main` after the push, and a red goes to a fixer. Push
+gates waited a median 19 minutes for the heavy lock behind CI, and any bridge change ran all of the bridge suite (bun has no
+`related`). `--fast` runs the four checks, `vitest related`, and of the bridge tests only:
+
+- the changed bridge test files;
+- the test files whose own quoted relative paths name a changed `apps/bridge/src` or `apps/bridge/test` file (`'../src/x.ts'`
+  in an import, an export from, a dynamic import, a require or a spawned path). Direct importers only, written with the
+  extension, as every bridge import is;
+- the guards that read a changed file (`// gate-reads:`).
+
+Its personal-data step scans this change only: the changed files as they are on disk and the messages of its commits
+(`base..HEAD`), with the same rules, the private list included, so a hit refuses exactly as before. The full gate scans the
+whole tree. A change to only **test files** is fast whatever folder they sit in: `*.test.ts`, `*.test.tsx`, `*.spec.ts` and
+Swift files under a `Tests/` folder (regular files, still there, named by no gate-input line but `^scripts/`). The gate-inputs
+rule and the keep-out list are for the code a test checks, not the test, so a `scripts/*.test.ts` or a guard's own test no
+longer forces the full gate. A test helper that is not a test file (`scripts/root-install-harness.ts`,
+`apps/bridge/test/helpers.ts`, a fixture) still counts as code; the protected paths and the 60-file limit apply as before. Every
+fall back to the full gate adds one line to `~/.cache/talos-ci/logs/fast-fallbacks.tsv` (`TALOS_CI_CACHE`): UTC time, machine,
+sha, the printed reason and the changed files that tripped it, so the keep-out list can be cut by evidence. It runs no e2e, old-client or browser specs, and **takes no heavy lock**: the bridge files run through `test-parallel.ts
+--files`, 2 at a time (`GATE_FAST_JOBS`). Why direct only: `src/bridge.ts` reaches 317 of the 321 bridge source files, and 283
+of the 371 bridge test files reach `bridge.ts` (through `test/helpers.ts` and four harnesses). Following imports further picks
+about 283 test files for almost any source change (measured 2026-11-14), which is most of the suite.
+
+It runs the full gate instead, and says why, for a change to: the keep-out list (`scripts/gate-fast-keepout.txt`: the protocol,
+anything named for a guard, the plugin's hooks, the relay's sign-in and bug inbox, the pairing path, lock files), anything in
+`scripts/gate-inputs.txt` (the push path, CI, package and tsconfig files), anything in `docs/protected-paths.txt`; a deleted
+bridge file; a bridge file that is not a module (data, fixtures); anything else the bridge tests read outside the scan (the
+testkit, the Mac app, `kit/`, examples); a module the bridge test preload loads; or a selection over 60 bridge test files.
+The three lists are read as the base has them, so a change never takes itself off them, and one missing or empty there
+runs the full gate. Paths the scan does not see (a path joined from parts, `join(dir, 'src', 'cli.ts')`) are CI's. The node
+second count makes the same choice and the same list, or the gate refuses. `--plan --fast` prints `fast` or
+`full-gate: <why>` first. Both counts of these rules are in `scripts/gate-fast.sh`; `scripts/gate-fast.test.ts` covers
+them.
+
+### Pushing: `scripts/gate.sh --push`
+
+The one way builders and sessions push (`scripts/gate-push.sh`; `--push [--full] [<remote> [<branch>]]`, default origin main).
+It gates with `--fast` (above), which runs the full gate by itself where it must; `--full` asks for the full gate. Never
+`git push --no-verify`. It refuses with a rebase in progress or uncommitted changes, then:
+
+1. **Takes the push lease**, `refs/locks/push` on the remote: a parentless commit with an empty tree whose message names the
+   machine (`$TALOS_MACHINE`, else `hostname -s`) and when the lease runs out (10 minutes). It is taken and renewed with
+   `--force-with-lease`, so two machines cannot both hold it. A lease another machine holds is waited on (every 15 s, up to
+   20 minutes, saying who holds it); one that ran out is taken over. It is let go at the end, and on Ctrl-C. The lease is
+   advisory: a plain push ignores it. It is not a branch, so it starts no CI run. The pre-push hook lets a `refs/locks/*` push
+   through only when it is such a lease: `refs/locks/push`, an empty parentless commit whose message is exactly the lease's
+   five lines (the machine name is cut to letters, digits and `._-`), so nothing else can ride on it past the personal-data
+   check.
+2. **Fetches, rebases and runs the gate**, then records what passed in `.git/talos-gate.pass`: the tree, the base, the plan
+   and the sha256 of `gate.sh` and `pre-push.sh`. The pre-push hook trusts that stamp, and does not run the gate again, only
+   for exactly that tree, base, plan and gate version, within 30 minutes. Anything else runs the gate in the hook as usual.
+3. **Pushes the gated commit**, by its sha: a commit made, or a tracked file changed, while the gate ran refuses the push.
+   A push rejected because the branch moved is rebased and tried again, up to 3 times; a rebase that fails stops at once.
+   When the new commits are words only (under `docs/`, or a Markdown file at the top), none of them is this change's, and
+   this change runs no test suite at all (tests in every project read docs from disk), **only typecheck, lint, personal and
+   size run again** (`gate.sh --checks-only`). That is not the full gate: it relies on CI, which runs every suite on `main`
+   after the merge. Anything else, or a diff that cannot be read, runs the whole touched set again.
+
+While the gate runs, a background loop renews the lease every 4 minutes (over exactly the one it set). If another machine
+took it meanwhile, it says so and stops, and nothing of the other machine's is touched. The loop stops after the gate and on
+any exit, Ctrl-C included. A lease lasts at least 10 minutes, or twice this machine's last full gate (`.git/talos-gate.time`),
+up to an hour. It is advisory: what keeps `main` right is the gate and the force-with-lease on the push itself.
+
+### The pre-push hook
+
+`pnpm install` turns on a pre-push hook (`.githooks/pre-push`, `scripts/pre-push.sh`) for the repo and every worktree of it. It
+fails closed; there is no warning-only mode. Run by a hook, not a doc, because agents skip steps. It does two things:
+
+1. **The personal-data check of what is being pushed.** Every commit in the range: the files it changes, read from the commit,
+   not the working tree, and its message. Commits already on the main of the remote being pushed to (`<remote>/main`) are not
+   counted, so a push to a fork has not got origin's. For a merge, only the files that differ from every parent are read. So a
+   value a later commit removes, an edit or a deletion on disk, or a push of another branch cannot hide it. When the hook cannot
+   tell where the push starts, it reads the whole tree of the tip. Every commit is read, however many. Files go to the scanner
+   in numbered folders, so two paths that differ only by case are each scanned on a disk that ignores case, and a pushed file
+   named `.commit-message` cannot replace the message. The private list and the list of private documents,
+   `scripts/private-docs.txt`, are gitignored and exist only in the owner's main checkout. The hook looks for them there when it
+   runs in a worktree, and says so when there are none. A hit, or a missing `check-no-personal.sh`, refuses the push.
+2. **The gate**, measured from where the push starts. The gate reads files on disk, so they must be the ones being pushed:
+   uncommitted edits to the pushed files, or another branch checked out, refuse the push. When the hook cannot tell what the push
+   contains (no `<remote>/main`, a new branch from nowhere), it runs `gate.sh --full`. Otherwise it runs the fast gate
+   (`gate.sh --fast`, which falls back to the full gate where it must, and prints which gate ran and why), measured from the
+   remote's old tip, or for a new branch from its merge base with `<remote>/main`. A hook takes no flags: `GATE_FULL=1 git push`
+   runs the full gate, and `gate.sh --push --full` sets it for the push it makes.
+
+`git push --no-verify` skips the hook; that is the owner's own override, never a builder's. `git config talos.nohooks true` keeps
+it off for good; `TALOS_NO_HOOKS=1 pnpm install` is for one install. CI's scratch worktrees never install it, and neither does a
+repo with hooks of its own in `.git/hooks`, because `core.hooksPath` would stop them.
 
 ## The personal-data scan
 
 `pnpm check:personal` (`scripts/check-no-personal.sh`) looks for names, emails, chat ids and machine paths that do not belong in a
-repository. By default it warns: in the pre-push hook, in the `check` job, in the cloud workflow, and for `/Users/` paths in
-`apps/desktop/scripts/guards-test.sh`. To make it a hard stop:
+repository. It matches bytes (the C locale), whatever the caller's locale, so a Latin-1 line can't slip past. Each rule is
+rewritten into bytes first: a non-ASCII letter in a case-insensitive rule matches both its cases, and `.` or a negated set
+matches a whole non-ASCII character. A rule with a non-ASCII bracket set is refused (exit 2, naming its line); write those
+letters as an alternation. The pre-push hook and the gate stop on a hit. Elsewhere it still warns by default: in the `check` job, in the cloud
+workflow, and for `/Users/` paths in `apps/desktop/scripts/guards-test.sh`. To make those a hard stop too:
 
 1. Run `bash scripts/check-no-personal.sh <path>` on the tree you want to check. It must exit 0. It loads the generic rules in
    `scripts/denylist.generic.txt`, plus any extra rules file named in `CHECK_EXTRA_RULES`.
 2. `apps/desktop/scripts/guards-test.sh` must print no `warn` line.
-3. Change the default of `SCAN_MODE` (`warn` to `stop`) near the top of `scripts/pre-push.sh`, the one place the hook reads
-   `TALOS_PERSONAL_SCAN`, the personal-data `warn_step` in `scripts/ci-local.sh` back to `run`, `continue-on-error` off that step
-   in `.github/workflows/ci.yml`, and the `/Users/` guard in `apps/desktop/scripts/guards-test.sh` from `warn` back to `bad`.
+3. Change the personal-data `warn_step` in `scripts/ci-local.sh` back to `run`, take `continue-on-error` off that step in
+   `.github/workflows/ci.yml`, and change the `/Users/` guard in `apps/desktop/scripts/guards-test.sh` from `warn` back to `bad`.
+
+### The personal-data watch
+
+The private list (`scripts/personal-denylist.txt`) lives on one Mac only, so a push from any other machine passes the generic
+rules alone. The watch closes that gap within minutes instead of at the next gate on that Mac.
+
+- `scripts/check-ref-personal.sh <ref> [<base>]` checks every commit in base..ref, all parents, one at a time: the files the
+  commit changed as committed, the list of its changed paths as text, and its message (not who made it: author, committer and
+  tagger are not checked, the owner's ruling). A value added and removed again in one push, or inside a branch merged with
+  `--no-ff`, is still found. The base defaults to the merge-base with main, or the commit's
+  parent when it is already on main (so a merge brings in what it merged). `--tree <ref>` checks every file and path of one tree.
+  Nothing is skipped: `node_modules`, lockfiles, PDFs and binaries are read (`check-no-personal.sh` with `CHECK_ALL_FILES=1`),
+  UTF-16 text is converted first, a link is read as its link text and never followed, a name that is not UTF-8 is checked under
+  a `%XX` name (so are `:`, `%` and control characters in any name, so a printed `path:line` is never cut wrong; a name part
+  that escaping pushes past 200 bytes is written under a short hashed name and still shown escaped), a path that is
+  absolute or has a `..` part refuses the commit (a `note:` and exit 2), and a file named like the private list is a hit by its name. The generic list alone keeps its
+  old exclusions (its email and phone shapes match byte noise in images and lockfiles); the private list reads everything. A submodule entry prints a `note:` line. The files
+  are copied out of git into a temp folder that is removed on exit; no worktree, index or ref is touched. The rules are the
+  generic list, the private list found the way the gate finds it, and `CHECK_EXTRA_RULES`. One line per hit:
+  `<sha12> <path>:<line> [<rule file> rule line N]`; a path that itself hits shows as `<path hidden #N>@<sha12>`. Exit 0 clean,
+  1 hits, 2 an error.
+- `scripts/personal-watch.sh --rules <main checkout>/scripts/personal-denylist.txt` fetches branches and tags every 120 s
+  (`--interval`) into a bare cache clone of its own (`~/.cache/talos-personal-watch/repo`, `--home` to move it). It checks each
+  new first-parent commit on main and each new or moved branch or tag (`handoff/*` included; an annotated tag's message too),
+  and every ref's name as text. A hit prints one `personal-watch: HIT <kind>@<sha12> <sha12> <path>:<line> [<rule>]` line
+  (`main`, `branch` or `tag`) and is appended to `hits.log`, once per ref, commit, path and line. No ref name is printed or
+  stored: the state files key refs by a hash. Neither is git's own error text (it can carry the remote's address); it stays in
+  `fetch.err` and `clone.err` beside the cache, readable by the owner only (the watch runs with `umask 077`).
+- Failures are loud. Without the private list it refuses to start. A fetch that fails, or runs past 120 s
+  (`PERSONAL_WATCH_FETCH_TIMEOUT`, killed with its whole process group), prints an `ERROR` line and runs again next pass. A main
+  commit whose check fails (the `ERROR` line gives the checker's own value-free reason, never git's text) goes on an unchecked
+  list: the watch moves on to later commits and tries it again every pass, saying
+  so at most every 10 minutes (`PERSONAL_WATCH_ERROR_EVERY`) but always again. `--once` runs one pass (exit 0 clean, 1 a new hit,
+  2 an error or a commit still unchecked).
+- One watch per cache folder: a lock is taken with `mkdir`, and is stale only when its pid is gone, or when it has no pid and is
+  older than 10 minutes. The first pass records the refs already there (`--scan-existing` checks them too). SIGTERM stops it
+  cleanly.
+- `--scan-main` checks every file and path of the current main tree once and prints the hits and a count (`main@<sha12>: 0
+  hit(s)`; exit 0 only when main is clean). It works beside a running watch, on main as last fetched.
+- Start it on the Mac that holds the list, from its main checkout:
+  `bash scripts/personal-watch.sh --rules "$PWD/scripts/personal-denylist.txt"`, then relay its stdout (a Monitor or a
+  `tail -f` of `hits.log`). Neither script prints the matched text: open the named rule line to see what it looks for.
 
 ## Several runs at once
 
@@ -234,6 +440,89 @@ that step only, and the rest of the run goes on in parallel:
 | `playwright-install` | `playwright install chromium webkit` | one shared browser download folder          |
 | `docker`             | starting Docker (`colima start`)     | one Docker VM                               |
 
+### The heavy lock and its guard
+
+The `suites` mutex is also the machine's one heavy-work lock for everything outside a CI run: `scripts/heavy-lock.sh run
+<name> -- <cmd>` queues the gate's suites, the desktop Swift suites, stress loops and evals on it (`heavy-lock.sh status`
+shows the holder and the queue, in the order it goes, each waiter with its kind). Who goes next: CI's suites first (a ci-local
+slot's ticket, kind `ci`), then everything else, first come first served within each; a holder is never stopped for anyone. A
+push gate (the gate `gate-push.sh` runs; kind `push`) and a builder's own `heavy-lock.sh run` (a whole suite, `cpu-burn.sh`, a
+stress loop; kind `run`) never go before CI, however long they wait; the same holds for the desktop mutex. The one exception
+is a `jump` ticket: a checked `gate.sh --push --red-main` gate.
+
+A gate's wait behind CI is bounded by CI's arrivals: CI comes from pushes (to `main`, PRs), reruns and the nightly, and a push
+needs a gate, so gates that wait trigger no more CI and the oldest goes once CI already queued is done. `HEAVY_LOCK_TIMEOUT`
+(default 3600 s) caps a wait behind a stream of reruns or other machines' pushes: the gate then refuses, saying it could not
+get the heavy lock (exit 75). During a changeover a waiter on the old lock code may still let a late push gate go first. (A
+30-minute cap that let a waiting push gate go before CI was removed: four late gates in a row once left `main` with no verdict
+for 2 h.) A ticket is CI only by its kind line, which only ci-local writes; a `heavy-lock.sh run` named `slot 1` is not CI.
+
+A waiter that is not first in line still takes the lock once it has sat free, with no living holder, for `CI_DEFER_GRACE`
+seconds (default 15): a waiter running other lock code (main's old first come first served during a changeover, or a branch's
+gate) can then never leave the lock free with both waiting. Every wait of 1 s or more is a row in
+`~/.cache/talos-ci/logs/lock-waits.tsv` (UTC time, lock, what, seconds, `got` or `timed out`, kind: `ci`, `push` or `run`).
+
+**One heavy lock across WSL distros (Titan).** Titan's Ubuntu (gates, the whole-suite runs other machines ask for) and talos-ci
+(the runner) share one VM but each has its own `~/.cache/talos-ci` and its own PID namespace, so neither side's mutex can see
+the other's holder. `CI_SHARED_LOCK=/mnt/wsl/talos-ci-suites.lock` (`/mnt/wsl` is one tmpfs for every distro), set in the
+runner's `.env` and in the gate's environment, adds a kernel flock on that file around the `suites` mutex's command, so a heavy
+run on one side waits for the other. The kernel frees it with its holder; the command runs without the lock's fd, so a server a
+test leaves behind never keeps it; a holder's descendants (`TALOS_SHARED_LOCK_HELD`) pass straight through. Titan's
+`browser-e2e` part takes the `suites` mutex around its tests for this. Unset (every other machine): nothing changes.
+
+Load testing (N runs under a CPU burner, for flake hunting) goes through `scripts/cpu-burn.sh [--cores N] [--seconds S] --
+<cmd>` and nothing else: it takes the heavy lock itself (or refuses with exit 75 and never burns), caps the run at 600 s,
+and stops every burner on its way out. A burner started by hand outside the lock saturates a CI run beside it.
+
+Before a heavy job takes the lock, `scripts/heavy-guard.sh` may hold it back for memory, load or a booked window. **It is
+off until a machine turns it on**: with no `~/.cache/talos-ci/guard/guard.env` (or `TALOS_CI_CACHE/guard/guard.env`) it
+answers go without looking at anything, and each check is off until its own setting exists:
+
+| Setting                    | Turns on                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------- |
+| `HEAVY_GUARD_MIN_FREE_PCT` | the memory floor: not now when free memory is below this percentage (40 suits a 32 GB Mac)  |
+| `HEAVY_GUARD_MAX_LOAD`     | the load limit on the 1-minute load. No default, and only for machines that are not runners |
+| `HEAVY_GUARD_BOOKINGS=1`   | booked windows (`book`)                                                                     |
+
+`heavy-guard.sh init --min-free-pct 40 --bookings` writes guard.env (KEY=value lines, read without being run);
+`heavy-guard.sh off --yes` removes it; `HEAVY_GUARD_OFF=1` switches it off for one call. The environment wins over
+guard.env. Three ways to use it:
+
+1. **The hook.** `heavy-lock.sh` calls it with the job's name before the job starts (`TALOS_HEAVY_GUARD` names another
+   guard; ci-local's lock tells it which cache the lock lives in). **One argument is always a job name**, whatever the
+   word, except `status`, `--help` and `-h`: a job called `off` or `init` is checked like any other job and changes
+   nothing, which is why turning the guard off takes `off --yes` and `init` takes at least one flag. The name is data
+   only, cut to 80 characters with control characters removed. Exit 0 is go; exit 75 is not now: the job keeps its place
+   in the queue, does not hold the lock, prints the guard's one-line reason ("not now: memory is tight (31% free, needs
+   40%)") and asks again. The memory floor always applies. The load limit never refuses the lock's own work: it is not
+   checked while the lock is held, nor for `HEAVY_GUARD_LOAD_SETTLE_S` seconds (300) after the lock last changed hands
+   (one CI run takes it several times in a row, and the load between two holds is still its own), so it only decides
+   whether a new job may start on a lock that has been idle a while. **A load limit is for machines that are not CI
+   runners**: a runner's own runs sit far above any per-core number. On a machine whose heavy jobs start less than the
+   settle time apart, the load limit never applies at all. `status` says whether it is live right now or skipped, and why.
+2. **`ask` for work that is not a Talos job** (a local model, a video encode): `heavy-guard.sh ask <gb> [who]` answers 0
+   when free memory after taking `<gb>` GB stays at or above the floor, the load is under the limit and nobody else has
+   booked now.
+3. **`book` for a window**: `heavy-guard.sh book <who> 14:00 16:00 model eval` (or `YYYY-MM-DDTHH:MM`) holds every other
+   heavy job back in that window; a job or an `ask` under the booker's own name still runs. A window is at most 12 hours,
+   starts at most 48 hours ahead and never overlaps someone else's; one name holds at most 12 hours in all, and the file
+   at most 20 bookings. `unbook <who> [<from>]` removes a booking; `unbook --all --yes` removes the file and its lock
+   without taking the lock, so it works whatever state they are in. Bookings live in `guard/bookings.tsv` beside the
+   lock, never in the repo; a row `book` could not have written (hand-edited, damaged) is ignored, and so is any row that
+   starts more than 48 hours after the file was last written, or past its first 20 rows. So a file stops holding jobs back
+   at most 60 hours after its last write, whatever it holds. `who` is whatever the caller says; this is a courtesy queue
+   between cooperating sessions, not access control.
+
+`heavy-guard.sh status` shows memory, load, swap, the bookings, the lock's holder and queue, the last refusal and why, and
+possible strays: heavy-looking processes (tests, builds, local models) older than `HEAVY_GUARD_STRAY_MIN` minutes (30) that
+are not the lock holder's, never the live `tmux -L talos` server. It prints the first 100 characters of each stray's command
+line, which can include its arguments. **The guard lists and refuses; it never stops, signals or reprioritises anyone's
+process.** Stopping a job is its owner's act, by pid; the one signal the guard sends goes to its own probe when that probe
+outlives its deadline (3 s each, the whole hook within about 5 s; status 5 s each, 15 s in all). A probe, setting or file it
+cannot read, or a probe that runs out of time, switches that check off, so a broken guard never blocks: it can only say not
+now from a number it actually read. The probe overrides its tests use (`HEAVY_GUARD_FREE_PCT`, `HEAVY_GUARD_NOW` and the
+like) count only with `HEAVY_GUARD_TEST=1`, and `status` marks each reading they supply.
+
 ### The window-opening desktop tests
 
 About 270 desktop tests open real windows (`apps/desktop/Tests/TalosDesktopGuiTests`) and run only with `TALOS_GUI_TESTS=1` in a
@@ -241,6 +530,130 @@ logged-in session. The runner does not set it, so they are not in the default ru
 process through `apps/desktop/scripts/gui-tests.sh`, which fails a process that exits 0 without printing Swift Testing's summary
 (AppKit has ended a whole test process early that way) and one that matched no tests. `gui-tests-test.sh` checks that gate in every
 run, with a stand-in runner and no windows.
+
+## Pieces for the split over machines (docs/CI-MACHINES.md, phase A)
+
+`ci-local.sh` now has the pieces `docs/CI-MACHINES.md` builds on. **With none of these set, a run is today's run**; the workflow
+that sets them comes with phase A step 4.
+
+- `CI_SHARD_TOOLS` (from the plan, e.g. `tmux|`): the tools of the machine that runs each bridge shard, handed to the
+  runner as `--pile-tools`; a part machine missing a tool its pile needs refuses the part (`error`) and the machine that
+  runs check takes it (docs/CI-MACHINES.md, "Tools a test file needs").
+- `CI_REMOTE_JOBS` (phase B, `image` with `CI_TITAN_IMAGE=on`): jobs another machine of the run posts. They are left out
+  here (not run, nothing posted) and the rest is a default run, skips planned as before; `ci-runner.sh fallback` takes one over
+  in a run of its own when that machine does not answer.
+- `--sha <full sha>`: the commit the plan fixed. A PR or ref that now points elsewhere is tested by its newer run; this one says
+  so, tests nothing and posts nothing.
+- `CI_STATUS_PREFIX` (`local-ci`, `ci-part` or `report-ci`): where a job's status goes. The part jobs (`bridge-shard-1`,
+  `bridge-shard-2`, `vitest`, `browser-e2e`) and the report-only ones (`linux`, `stock-mac`) are refused under `local-ci/`, so
+  they can never post into a gating context. A run's record keeps each context, so a cancel closes it under its own prefix.
+- `CI_ATTEMPT_URL` (the workflow attempt's link prefix): two answers for one context. A context another machine of this attempt
+  already answered is not run; right before a final post the commit's full status list is read again, so a red from any
+  machine of the attempt stays red (with its own words) and a second green posts nothing; a cancel re-posts that red, not an
+  error. Without it nothing is read.
+- The part jobs run a piece of `check`: `bridge-shard-K` is `test-parallel.ts --skip test/schedules/ --shard K/2` on
+  `CI_PART_JOBS` processes (dropped, with nothing posted, for a commit whose runner has no `--shard`), `vitest` is the root
+  suite on `CI_PART_WORKERS` workers. `linux` runs the supervisor files and `history-corrupt.test.ts` on 2 processes.
+- `CI_REMOTE_PARTS` (`<part>:<machine> ...`, with `CI_RUN_ID` for the jobs API): `check` folds those parts in instead of running
+  them. The quiet group and the loud group become one hold of `suites`; at its end a part whose machine never picked it up
+  runs here; one still working gets `CI_PART_WAIT` (120 s) and then runs here too. A part red on its machine fails `check`
+  ("bridge shard 2 failed on cyclops; see its run"); a pass says where each part ran. Without `CI_ATTEMPT_URL` every part
+  runs here.
+- `CI_OWNER_MACHINE=1` (Delphi): before its slot the run refuses, naming the reason, if the runner's user is an admin, can list
+  the owner's home (`CI_LIVE_HOME`, default `/Users/$CI_LIVE_OWNER`), live folders or tmux folder (`CI_LIVE_TMUX`), has
+  `claude` or `chronos` on `PATH`, or runs inside tmux.
+- `docker_up` on Linux starts rootless Docker with `systemctl --user start docker`; colima only on a Mac.
+
+`ci-runner.sh` has the commands the split workflow calls (phase A step 3):
+
+- `plan`: the commit, fixed once (a PR's head, a push's sha, a dispatch's ref resolved once), and each machine's jobs from the
+  repository's switches: `CI_DELPHI` and `CI_CYCLOPS` (`on` sends their parts there and tells Lemnos to fold them in; `shadow`
+  runs them there as well, only recorded), `CI_HESTIA` (`on`: the report-only Linux job). Lines for `$GITHUB_OUTPUT`: `sha`,
+  `remote_parts`, `delphi`, `cyclops`, `hestia`, `titan`. Lemnos still plans its own skips, so with every switch off the run is
+  today's.
+- `run` passes `CI_PLAN_SHA` as `--sha`, and `GITHUB_RUN_ID` as `CI_RUN_ID`. On a part or report-only machine (`CI_RUN_JOBS`)
+  it runs those jobs under `ci-part/` (or `report-ci/` for `linux`), with `--full` on the nightly and a dispatch; one that
+  starts after `check` was answered in this attempt tests nothing.
+- `fallback`, after Lemnos's own run: each gating job handed elsewhere (`CI_FALLBACK`, `<machine>:<job,...>`, phase B on) with
+  no final answer in this attempt is run here, in one `ci-local.sh` call: at once when its machine never picked it up or ended
+  without answering, after `CI_REMOTE_DEADLINE` (900 s from the run's start) when it is still working.
+- `preflight`: the owner's-Mac check (`ci-local.sh --preflight`), the first step of the Delphi job.
+- `guard` refuses a draft PR (`PR_DRAFT`) and a `CI_RUN_JOBS` that is not check's parts or `linux` alone.
+
+**The workflow (phase A step 4).** `.github/workflows/ci-runner.yml` has six jobs: `plan` (fixes the commit and reads the
+repository variables `CI_DELPHI`, `CI_CYCLOPS`, `CI_HESTIA`; a base whose `ci-runner.sh` has no `plan` plans nothing, so the run
+is the one-machine run), `ci` (Lemnos, as before, given the planned commit and the parts to fold in), `delphi`, `cyclops` and
+`hestia` (each skipped unless `plan` gave it jobs; `delphi` sets `CI_OWNER_MACHINE: 1` itself and runs the preflight first;
+`hestia` is `continue-on-error`; each uploads its own logs on a failure), and `close`. Only when a part of check runs elsewhere
+do Lemnos's statuses link to the run's attempt (`.../attempts/<n>#lemnos`) and read the attempt's other answers; with every
+switch off they link to the run, as before. `close` runs only when a remote job was planned, after `ci`, checks nothing out,
+and cancels the run when a remote job is still queued once Lemnos is done (its machine is off). It decides from the jobs' states,
+so a run whose `ci-local.sh` reused another run's result is closed the same way; it waits up to an hour for a remote job still
+working, and never fails the run. With no variable set the remote jobs and `close` are skipped, and the six statuses are
+today's, with today's links; the run gains the `plan` job and `--sha`.
+
+## A fast answer: report-ci/fast
+
+A run that tests `check` and posts its answers also posts `report-ci/fast`, about 3 minutes in: `pnpm typecheck`, `pnpm lint` and
+the unit tests (every Vitest project but `scripts/`, the CI and install suites) that the change since `check`'s last pass can reach
+(`vitest --changed <that commit>`, by imports; a change to `package.json` or the Vitest config reruns all of them), with one retry
+per failed test and the flake log, as in `check`. With no such pass (a rerun, `--full`, the nightly, none in reach) it runs
+typecheck and lint only: every unit test took 470 s on 2 workers at nice 15 on a loaded Mac, a second copy of `check`'s beside
+its suites.
+
+It is outside the verdict: `ci_classify` reads the six `local-ci/<job>` contexts only, so a red or pending `report-ci/fast`
+never changes it, and `check` runs all of it again. A failed fast lane does fail the run, as `check` will. It costs the full run
+little: it takes no mutex (never the `suites` one, so it neither waits for nor holds up a running full run's suites) and no slot
+of its own, every step runs at `nice -n 15` so the run's jobs come first for the CPU, and Vitest gets `CI_FAST_WORKERS` workers
+(2). It reuses the run's one install and build, and its typecheck and lint write nothing (`tsc --noEmit`, `biome check`), so
+they cannot race `check`'s. Memory is not limited by nice: two typechecks at once means twice the `tsc` processes. A cancel
+closes a pending `report-ci/fast` as an error, like a job; `ci-runner.sh sweep` closes it too. `--no-status` and a run without
+`check` have no fast lane, and `--jobs` cannot name it.
+
+## No proxy in front of localhost
+
+The browser job talks to localhost only. A proxy put in front of it on the CI Mac (web protection software) once failed
+`page.goto` with `ERR_UNEXPECTED_PROXY_AUTH`. Under ci-local (`CI_FLAKE_FILE` set) every Playwright config starts Chromium with
+`--no-proxy-server`; a spec that sets its own `launchOptions` replaces the project's whole, so it must carry the flag too (a test
+checks every one). After the browser download (which may need a proxy), `ci_browser_env` clears `http_proxy`, `https_proxy` and
+`all_proxy` (both cases) and sets `NO_PROXY=localhost,127.0.0.1`: that reaches Node and the tools that read those variables. The
+browsers on macOS read the system proxy settings, not these variables. WebKit takes no Chromium flag, so nothing here covers it:
+a proxy set in System Settings still reaches WebKit. A run by hand changes nothing. Checked in
+`scripts/ci-flake-reporters.test.ts` and `scripts/ci-local-runner*.test.ts`.
+
+## A test that failed once
+
+A failed test runs once more, on its own where the runner allows it, never the whole job. If it passes then, the job is green,
+but it says so: "passed on retry (N flaky tests, see flakes.tsv)" in its status (a pass, like "with warnings"; `verdict` lists
+these jobs), a `! <job>: passed on retry: <test> (<file>)` line in the run's output, the same line in the job's log, and a row
+in `~/.cache/talos-ci/logs/flakes.tsv`: date, sha, job, test, file. A test that fails twice stays red. Each job gets its own
+`CI_FLAKE_FILE`, where the runners write the tests that passed only on the retry:
+
+| Runner                                            | How it retries                                                                                                                                                                                                                                                     |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Vitest (`check`)                                  | `--retry=1`; `scripts/ci-flake-vitest.ts` reports a test whose retry passed                                                                                                                                                                                        |
+| bun (`check`, the bridge)                         | `test-parallel.ts --retry-failed` runs a failed file once more; a file killed at the file limit is not rerun                                                                                                                                                       |
+| Swift (`desktop`'s main run, `mobile`'s packages) | `scripts/ci-swift-retry.sh` reruns only the failed tests (`--filter`), and passes only if each printed a pass line; not rerun: a crash, a run with no end-of-run summary, an issue no failed test accounts for, a test known only by a display name, a build error |
+| Playwright (`browser`)                            | `retries: 1` in every config when `CI_FLAKE_FILE` is set, except the web voice specs (`chromium-media`: a stuck mic times out the same way twice); `scripts/ci-flake-playwright.ts` reports the flaky ones                                                         |
+
+Not retried: the desktop job's other scripts (starvation, the packed app, the install tests), the iPhone app's own tests
+(`xcodebuild test`) and the mobile package's Vitest. By hand (no `CI_FLAKE_FILE`) nothing retries.
+
+## git never waits for a person
+
+Titan's runner once hung 4 h 23 m in `git fetch -q origin`: there was no credential, and git waited on a prompt nobody could
+answer. `ci-local.sh` and `ci-runner.sh` export `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never` and (unless set)
+`GIT_SSH_COMMAND="ssh -o BatchMode=yes"` (unless the owner set an ssh command of their own), so no git below them asks. Each call that talks to the remote (the fetches, the PR
+head's `ls-remote`) also has stdin from `/dev/null` and a time limit, `CI_GIT_LIMIT` (300 s). A small perl in front of it
+puts git in a process group of its own; at the limit the whole group (git and its helpers: `git-remote-https`, a credential
+helper, ssh) gets TERM, on which git removes its `.lock` files, and 5 s later KILL. The perl holds the limit even if the script
+above it is killed, and passes on a TERM, INT or HUP it gets. A `.lock` file made during the call and still there (in the git dir, or the common one of a linked worktree) is named
+in the failure line and left alone, since another git may own it. One that fails or is stopped says
+which remote and why: `ci-local: git fetch of https://github.com/<repo>.git failed (exit 128): no credential? (git may not ask
+for one here); git said: ...`, with no user or token in the link. The fetches are not required (the commit may already be
+here), so the run goes on; a PR head it cannot fetch is the run's failure, as before, and a PR head's `ls-remote` that fails
+leaves the run testing the head it was given. Tests: `scripts/ci-local-jobs.test.ts`
+and `scripts/ci-runner-machines.test.ts`, "git never waits for a person".
 
 ## A Mac that slept
 
@@ -290,7 +703,7 @@ from the previous script counts as held for the grace period, then as dead.
 If `ps` fails, a live pid counts as alive (only a different start time means the pid was reused). Start times are read in
 the C locale and UTC, and once per process, so a later failed `ps` can't make a run stop recognising its own lock.
 
-`scripts/ci-lock-stress.sh <copy of ci-local.sh> [rounds]` stresses all of this: run it beside real load. On 2026-10-31, at
+`scripts/ci-lock-stress.sh <copy of ci-local.sh> [rounds]` stresses all of this (the copy with its `ci-local/` folder beside it): run it beside real load. On 2026-10-31, at
 load 25 to 50, against the code before and after this rule:
 
 | Rounds                                           | Before: two live holders | After |
@@ -311,7 +724,7 @@ port as slot 1) to finish; that lock is never touched.
 To see who holds what: `cat ~/.cache/talos-ci/locks/*/what`. Nothing needs clearing by hand after a crash: the next run
 takes the dead run's slot over.
 
-`scripts/ci-local-runner.test.ts` covers what the runner needs of this script: a cancelled or killed run leaving no pending
+`scripts/ci-local-runner*.test.ts` covers what the runner needs of this script: a cancelled or killed run leaving no pending
 status, no held lock (a mutex from inside a job too), no container, image tag, half-started colima, worktree or temp dir; the
 watchdog surviving a runner that signals everything under the job; `--reap`; the text and link of the statuses; and the sleep
 check. `scripts/ci-runner.test.ts` covers `scripts/ci-runner.sh` and the two workflow files: the fork and ref guard, the pins,
@@ -319,8 +732,8 @@ the sizing, the cache check, the call into `ci-local.sh`, the sweep, and what th
 interpolation into a command, `ci.yml` still manual-only).
 
 `scripts/ci-local-jobs.test.ts` covers a run from the inside: jobs that can only finish if they overlap, a failing job, a job
-killed from outside, a cancelled run stopping what its jobs started, one shared install and build, and every gate of
-`check` and `browser` failing the run on its own.
+killed from outside, a cancelled run stopping what its jobs started, and one shared install and build.
+`scripts/ci-local-jobs-gates.test.ts` (the same harness) covers every gate of `check` and `browser` failing the run on its own.
 
 The tests are `scripts/ci-local-slots.test.ts` (part of `pnpm test`): the stale-takeover race with many waiters, a
 waiter that looked before someone else took the lock, pid reuse, the grace period, the load guard, the mutex, per-slot

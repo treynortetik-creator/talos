@@ -167,8 +167,17 @@ describe('heartbeat.test answered by the bridge', () => {
     expect(Date.now() - t0).toBeLessThan(3200) // the source's own limit is 3.6 s here; the run's is 1.8 s
     expect(res.sources[0]).toMatchObject({ id: 'slow', ok: false })
     expect(res.sources[0].error).toContain('time limit')
-    await new Promise((r) => setTimeout(r, 200))
-    expect(() => process.kill(Number(readFileSync(pidFile, 'utf8').trim()), 0)).toThrow()
+    const pid = Number(readFileSync(pidFile, 'utf8').trim())
+    const gone = () => {
+      try {
+        process.kill(pid, 0)
+        return false
+      } catch {
+        return true
+      }
+    }
+    await waitFor(gone, 1000, 'the hung child to die').catch(() => {}) // a loaded machine reaps it late
+    expect(() => process.kill(pid, 0)).toThrow()
     expect(existsSync(testsFile(h.home))).toBe(false)
   })
 

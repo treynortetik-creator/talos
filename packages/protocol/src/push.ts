@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { CardId, DeviceId, IsoTs, ThreadId } from './ids.ts'
+import { cardExpiryMs } from './models.ts'
 
 export const PushPayload = z.object({
   web_push: z.literal(8030), // Declarative Web Push (iOS 18.4+); the SW path parses the same JSON
@@ -30,6 +31,7 @@ export type PushTemplate =
   | 'session_stopped' // {agent}'s Mac session stopped
   | 'device_pinned' // New device pinned
   | 'bridge_key' // Your bridge key may be in use somewhere else
+  | 'bridge_takeover' // Another Mac took over your Talos bridge at {HH:MM}
   | 'sign_in' // New sign-in to Talos
   | 'sign_in_unproven' // A sign-in named a device without proving it holds the key
   | 'storage_full' // The relay's storage is nearly full
@@ -46,6 +48,16 @@ export type PushTemplate =
   // Never-miss (owner calls O2, O7): both are fixed text. Neither can carry a title, a name or a message.
   | 'card_expiring' // A card in {thread} is about to expire (sent once, about an hour before). A needs-you push for per-thread rules.
   | 'quiet_summary' // What the quiet window held back: "3 replies, 1 card waiting". Counts only.
+  // A thread's session has waited on the owner (a dialog at the Mac, a usage limit, sign-in) longer than SESSION_WAIT_PUSH_MS:
+  // once per wait. With `count` over 1 it is one push for several sessions that came due together. Fixed text only.
+  | 'session_waiting' // A session in {thread} is waiting on you / {n} sessions are waiting on you
+  // The agent changed, because the owner asked, a setting that decides which alerts reach him (notifications, the quiet window,
+  // a thread's alerts, the default thread). Fixed text; it ignores the quiet window, the master switch and thread alerts, so a
+  // change that silences him is never itself silenced.
+  | 'settings_changed' // {agent} changed a setting that affects your alerts
+  // A send the owner always allows went ahead without a card (always-allow.ts). Fixed text; it ignores the quiet window, the
+  // master switch and thread alerts like settings_changed, so nothing is ever sent unseen.
+  | 'sent_always_allowed' // {agent} sent something you always allow
 
 const PUSH_TEMPLATE_FLAGS: Record<PushTemplate, true> = {
   reply: true,
@@ -55,6 +67,7 @@ const PUSH_TEMPLATE_FLAGS: Record<PushTemplate, true> = {
   session_stopped: true,
   device_pinned: true,
   bridge_key: true,
+  bridge_takeover: true,
   sign_in: true,
   sign_in_unproven: true,
   storage_full: true,
@@ -67,6 +80,9 @@ const PUSH_TEMPLATE_FLAGS: Record<PushTemplate, true> = {
   messages_waiting: true,
   card_expiring: true,
   quiet_summary: true,
+  session_waiting: true,
+  settings_changed: true,
+  sent_always_allowed: true,
 }
 /** Every push template, in one list. The record above fails to compile when a template is added to the type and not here. */
 export const PUSH_TEMPLATES = Object.keys(PUSH_TEMPLATE_FLAGS) as PushTemplate[]
@@ -93,6 +109,8 @@ export type PushIntent = {
   app_badge?: number
   /** A card's own expiry. It never reaches the payload; it only caps how long the transport keeps the push (`pushTtlSeconds`). */
   expires_at?: string
+  /** `bridge_takeover` only: when it happened, `HH:MM` in the owner's time zone. Anything else is left out of the text. */
+  time?: string
 }
 
 /** The slice of AgentConfig that push needs. */
@@ -150,13 +168,16 @@ export function quietSummaryBody(replies?: number, cards?: number): string {
   return parts.length > 0 ? parts.join(', ') : 'Nothing new'
 }
 
-/** How a push is judged "needs you" for per-thread rules: the approval itself and its single expiry reminder. */
+/**
+ * How a push is judged "needs you" for per-thread rules: the approval itself, its single expiry reminder, and a session that
+ * waits on the owner.
+ */
 export function isNeedsYouTemplate(t: PushTemplate): boolean {
-  return t === 'needs_you' || t === 'card_expiring'
+  return t === 'needs_you' || t === 'card_expiring' || t === 'session_waiting'
 }
 
 /** The slice of a card the app badge looks at. */
-export type BadgeCard = { state: string; expires_at: string; thread_id: string }
+export type BadgeCard = { state: string; expires_at: string; relay_expires_at?: string; thread_id: string }
 /** The slice of a thread the app badge looks at. */
 export type BadgeThread = { id: string; archived?: boolean; notify?: string }
 
@@ -176,7 +197,7 @@ export function badgeCount(
   nowMs: number,
 ): number {
   const quiet = new Set(s.threads.filter((t) => t.archived === true || t.notify === 'off').map((t) => t.id))
-  const cards = s.cards.filter((c) => c.state === 'pending' && Date.parse(c.expires_at) > nowMs).length
+  const cards = s.cards.filter((c) => c.state === 'pending' && cardExpiryMs(c) > nowMs).length
   let unread = 0
   for (const [id, n] of Object.entries(s.unread)) if (!quiet.has(id) && n > 0) unread += n
   return cards + unread
@@ -194,6 +215,15 @@ export function buildPushPayload(intent: PushIntent, config: PushConfig): PushPa
     session_stopped: { body: `${agent}'s Mac session stopped`, kind: 'system' },
     device_pinned: { body: 'New device pinned', kind: 'system' },
     bridge_key: { body: 'Your bridge key may be in use somewhere else', kind: 'system' },
+    settings_changed: { body: `${agent} changed a setting that affects your alerts`, kind: 'system' },
+    sent_always_allowed: { body: `${agent} sent something you always allow`, kind: 'system' },
+    bridge_takeover: {
+      body:
+        intent.time && /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(intent.time)
+          ? `Another Mac took over your Talos bridge at ${intent.time}`
+          : 'Another Mac took over your Talos bridge',
+      kind: 'system',
+    },
     sign_in: { body: 'New sign-in to Talos', kind: 'system' },
     sign_in_unproven: { body: 'Sign-in on a device that did not prove its key', kind: 'system' },
     storage_full: { body: 'Relay storage is nearly full', kind: 'system' },
@@ -206,6 +236,12 @@ export function buildPushPayload(intent: PushIntent, config: PushConfig): PushPa
     messages_waiting: { body: `Your messages have not reached ${agent} yet. Wake its Mac today.`, kind: 'system' },
     card_expiring: { body: `A card in ${thread} expires soon`, kind: 'card' },
     quiet_summary: { body: quietSummaryBody(intent.replies, intent.cards), kind: 'digest' },
+    session_waiting: {
+      body: n > 1 ? `${n} sessions are waiting on you` : `A session in ${thread} is waiting on you`,
+      // a needs-you push like a card: high urgency, and time-sensitive on iPhone (through a Focus mode; quiet hours still hold
+      // it). No card id, so the phone offers Open, never Approve.
+      kind: 'card',
+    },
   } as const
   const entry = T[intent.template]
   const tid = intent.thread_id && ThreadId.safeParse(intent.thread_id).success ? intent.thread_id : undefined
@@ -215,6 +251,7 @@ export function buildPushPayload(intent: PushIntent, config: PushConfig): PushPa
   else if ((HEALTH_TEMPLATES as readonly string[]).includes(intent.template)) navigate = '/settings/health'
   else if (intent.template === 'messages_waiting') navigate = '/settings/health'
   else if (intent.template === 'quiet_summary') navigate = '/'
+  else if (intent.template === 'session_waiting' && n > 1) navigate = '/'
   else if (entry.kind === 'digest') navigate = '/t/inbox'
   else if (cid) navigate = `/card/${cid}`
   else if (tid) navigate = `/t/${tid}`
@@ -228,6 +265,8 @@ export function buildPushPayload(intent: PushIntent, config: PushConfig): PushPa
   // The reminder shares its card's tag (so one card is one banner and a decided card clears it), and a notification that
   // replaces another with the same tag is silent unless it asks to renotify: the unseen first banner is the usual case.
   if (intent.template === 'card_expiring' && notification.tag) notification.renotify = true
+  // A session's wait shares its thread's tag with the reply banner that usually came just before: it must still be heard.
+  if (intent.template === 'session_waiting' && notification.tag) notification.renotify = true
   if (intent.app_badge !== undefined) notification.app_badge = Math.trunc(intent.app_badge)
   const talos: PushPayloadT['talos'] = { v: 1, kind: entry.kind }
   if (tid) talos.thread_id = tid

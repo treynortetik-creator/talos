@@ -1,9 +1,9 @@
 // Settings -> Voice: the driving mode toggle and its preferences (docs/V2-FEATURES.md V4.1).
 import { useState } from 'react'
 import { Link, useInRouterContext } from 'react-router'
-import { useTalos } from '../../lib/client.ts'
 import { useFeature } from '../../lib/v2Client.ts'
 import { Switch } from '../../ui/index.ts'
+import { useWriteBlock } from '../settings/offline.ts'
 import { useDrivingState, useDrivingToggle } from './driving.ts'
 import { loadPhoneVoiceFallback, loadTapToTalk, savePhoneVoiceFallback, saveTapToTalk } from './prefs.ts'
 
@@ -13,14 +13,14 @@ const Row = ({ children }: { children: React.ReactNode }) => (
 
 export function DrivingRow({ readOnly }: { readOnly: boolean }) {
   const feature = useFeature('driving/1')
-  const macOnline = useTalos((s) => s.presence.bridge_online)
+  const block = useWriteBlock()
   const { set, busy, error } = useDrivingToggle()
   const { active, until } = useDrivingState()
   const [phoneVoice, setPhoneVoice] = useState(loadPhoneVoiceFallback)
   const [tap, setTap] = useState(loadTapToTalk)
   const inRouter = useInRouterContext()
   const off = feature === 'off'
-  const disabled = readOnly || busy || !macOnline || off
+  const disabled = readOnly || busy || block !== null || off
   return (
     <fieldset className="m-0 flex flex-col gap-2 border-0 p-0" data-testid="driving-row" aria-label="Driving mode">
       <Row>
@@ -32,7 +32,7 @@ export function DrivingRow({ readOnly }: { readOnly: boolean }) {
       <p className="m-0 text-sm text-text-2">
         {off
           ? 'Your Mac needs the latest Talos update for driving mode.'
-          : !macOnline
+          : block === 'mac' // not connected: the settings screen says so once, above the section
             ? 'Your Mac is offline, so this can’t be changed right now.'
             : active && until
               ? `On until ${new Date(until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Every reply is sent as text and read to you. Keep Talos open on screen.`

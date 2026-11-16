@@ -4,16 +4,18 @@
 // worker fetches it with `read_inbound`. If nobody claims it in time, the hub claims it for main and main answers, with a
 // system row saying so. A message is never pushed to both: main is told only after the hub's own claim succeeds.
 import {
+  AGENTS_MD_WORDING,
   CLAIM_DEADLINE_COLD_MS,
   CLAIM_DEADLINE_MS,
-  dedicatedSettings,
   type ErrorCodeT,
   HUB_FEATURE_SCHEDULES,
+  leadThreadFor,
   type SessionStateT,
   supervisorFresh,
   THREAD_SESSIONS_FEATURE,
   threadSessionMode,
   trustOn,
+  WAKE_STATUS_MAX,
   WORKER_LIVE_STATES,
   type WorkerEntryT,
   type WorkerStatusItemT,
@@ -24,6 +26,11 @@ import { claudeConfigDir } from '../claude-dir.ts'
 import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { statusFrame } from '../frames-out.ts'
 import type { Notification } from '../notify.ts'
+import { say } from '../owner-words.ts'
+import { noteHandOver, pointBefore, waitForRestore, workerFolder } from '../undo/route-point.ts'
+import { dropWake } from '../wake-me/drop.ts'
+import { pendingOf } from '../wake-me/service.ts'
+import { WakeMeStore } from '../wake-me/store.ts'
 import { WorkersReader, writeWake } from '../worker/files.ts'
 import {
   cleanHandoffText,
@@ -36,7 +43,8 @@ import {
 } from '../worker/handoff.ts'
 import { placeFilesInInbox } from '../worker/inbox.ts'
 import { type RouteRow, WorkerStore } from '../worker/store.ts'
-import { allowsStart, type GovernorReading, governor } from './governor.ts'
+import { allowsStart, type GovernorReading, governorNow } from './governor.ts'
+import { mainNeedsYou, statusLine } from './status-line.ts'
 import { WorkerContextFeed } from './worker-context.ts'
 
 export type Emit = (n: Notification) => Promise<void>
@@ -61,7 +69,9 @@ const REASON_TEXT: Partial<Record<ErrorCodeT, string>> = {
   worker_cap: 'every thread session is busy',
   usage_governor: 'plan limits are close, so thread sessions are paused',
   worker_folder_claimed: 'another session is working in its folder',
-  needs_mac: 'its session needs you at the Mac',
+  get needs_mac() {
+    return say({ mac: 'its session needs you at the Mac', linux: 'its session needs you at your computer' })
+  },
 }
 
 /**
@@ -74,16 +84,31 @@ function runEnded(e: WorkerEntryT, at: number): boolean {
   return Date.parse(e.started_at) > at
 }
 
+/**
+ * How long a live thread may stay live after the governor's park wake before the bridge writes another. Well past the reader's
+ * take (each second) and its next workers.json (every 5 s); well inside WAKE_MAX_AGE_MS, so a retry is never itself stale.
+ */
+export const GOVERNOR_PARK_RETRY_MS = 30_000
+
 export class ThreadRouter {
   readonly store: WorkerStore
   readonly workers: WorkersReader
   readonly handoffs: HandoffLedger
+  /** The agents' wake_me timers, read for `workers.status` (the Schedules service writes them). */
+  private readonly wakes: WakeMeStore
   private timers = new Map<string, unknown>()
   private delivering: Promise<void> = Promise.resolve()
   private lastStatusKey = ''
-  private parkAllSent = false
+  /**
+   * Park-all: when the governor's park wake was last written for each thread, on the bridge's clock. A thread that is still live
+   * GOVERNOR_PARK_RETRY_MS later (the reader refused it as stale, dropped it, or never saw it) gets another, and so does one whose
+   * time is ahead of the clock (the clock was set back): a park that did not take is never left for good.
+   */
+  private parkSentAt = new Map<string, number>()
   private relayListsFeature = false
   private readonly contextFeed: WorkerContextFeed
+  /** Each thread's session as last seen (id, start time, pane), so a session that started since is noticed once. */
+  private readonly sessionsSeen = new Map<string, string>()
   private readonly workerFeatures: (thread: string) => readonly string[] | undefined
   private readonly onCardUndelivered: (cardId: string, told?: false | 'unknown') => void
 
@@ -104,6 +129,7 @@ export class ThreadRouter {
     this.store = opts.store ?? new WorkerStore(ctx.store.db)
     this.workers = opts.workers ?? new WorkersReader(ctx.paths.home)
     this.handoffs = new HandoffLedger(ctx.store.db)
+    this.wakes = new WakeMeStore(ctx.store.db)
     this.contextFeed = new WorkerContextFeed({
       claudeDir: () => {
         try {
@@ -162,6 +188,9 @@ export class ThreadRouter {
         })
       this.handoffs.markPosted(row.id, now)
     }
+    const into = row.dir === 'to_main' ? 'main' : { worker: workerFolder(ctx, this.workers.read(), row.lead) }
+    await waitForRestore(ctx, into)
+    noteHandOver(ctx, into)
     if (row.dir === 'to_main') await this.mainEmit(n)
     else {
       const cold = (() => {
@@ -228,7 +257,7 @@ export class ThreadRouter {
   }
 
   governor(): GovernorReading {
-    return governor(dedicatedSettings(this.ctx.config.config), this.ctx.mod.liveState())
+    return governorNow(this.ctx)
   }
 
   decide(n: Notification): Decision {
@@ -246,14 +275,31 @@ export class ThreadRouter {
       if (n.meta.trust !== 'owner' || n.meta.heartbeat !== undefined) return { to: 'main' }
       // only a plain session job: a headless or "both" job, a command and a job nobody can read are main's
       if (!ctx.schedules?.sessionOnly(n.meta.schedule_id ?? '')) return { to: 'main' }
+    } else if (kind === 'wake') {
+      // A wake_me timer goes back to the session that set it: a thread session's own wake wakes that session (starting it if
+      // parked), main's is main's. Only the bridge's own wake (trust=agent) is ever routed to a thread.
+      if (n.meta.trust !== 'agent' || n.meta.wake_for !== 'thread') return { to: 'main' }
+      // never main's to take: a session that can't have it any more drops it (fallback -> dropWake)
+      const t = ctx.config.thread(thread)
+      if (!t || t.archived || threadSessionMode(ctx.config.config, thread) !== 'dedicated')
+        return { to: 'fallback', thread, reason: 'worker_unavailable' }
+      return this.reach(thread)
     } else if (!WORKER_KINDS.has(kind) || n.meta.trust !== 'owner') return { to: 'main' }
-    if (threadSessionMode(ctx.config.config, thread) !== 'dedicated') return { to: 'main' }
-    // a session that is already running and did not say it can take a scheduled run (an older worker) is not handed one: main runs it
     if (kind === 'schedule_run') {
+      // a job runs in its own thread's session only; a sub-thread without a lead of its own leaves its jobs to main
+      if (threadSessionMode(ctx.config.config, thread) !== 'dedicated') return { to: 'main' }
+      // a session that is already running and did not say it can take a scheduled run (an older worker) is not handed one: main runs it
       const f = this.workerFeatures(thread)
       if (f && !f.includes(HUB_FEATURE_SCHEDULES)) return { to: 'fallback', thread, reason: 'worker_unavailable' }
+      return this.reach(thread)
     }
-    return this.reach(thread)
+    // a card's answer goes back to the session that raised it, or to main: never on to a parent's lead, which did not raise it
+    if (kind === 'card_action')
+      return threadSessionMode(ctx.config.config, thread) === 'dedicated' ? this.reach(thread) : { to: 'main' }
+    // the thread's own lead, or, for a sub-thread without one, its parent's lead (docs/THREADS.md "Sub-threads")
+    const lead = leadThreadFor(ctx.config.config, thread)
+    if (!lead) return { to: 'main' }
+    return this.reach(lead)
   }
 
   /** Can the thread's session take something now? Not-reachable becomes a fallback to main; a cold one is started by the wake. */
@@ -262,6 +308,8 @@ export class ThreadRouter {
     const file = this.workers.read()
     if (!supervisorFresh(file, ctx.clock.now()) || !file?.supervisor.workers_supported)
       return { to: 'fallback', thread, reason: 'worker_unavailable' }
+    // an entry the Mac set aside or this build cannot read: never "off", never started on a guess (protocol audit O3)
+    if (file.unavailable.includes(thread)) return { to: 'fallback', thread, reason: 'worker_unavailable' }
     const entry = file.threads[thread]
     const state = entry?.state ?? 'off'
     if (state === 'failed' && entry) return { to: 'fallback', thread, reason: failureReason(entry) }
@@ -275,12 +323,24 @@ export class ThreadRouter {
 
   /** The emit the bridge installs (after driving-mode meta). */
   async route(n: Notification): Promise<void> {
+    const first = this.decide(n)
+    // nothing starts a turn in a folder being undone (an owner message, a scheduled run, a notice alike); then decide
+    // again, on what is true after the wait. pointBefore waits once more right before each hand-over.
+    await waitForRestore(
+      this.ctx,
+      first.to === 'worker' ? { worker: workerFolder(this.ctx, this.workers.read(), first.thread) } : 'main',
+    )
     const d = this.decide(n)
-    if (d.to === 'main') return this.mainEmit(n)
+    // an owner message's undo point is taken of the folder its turn runs in, right before each hand-over
+    if (d.to === 'main') {
+      await pointBefore(this.ctx, n, 'main')
+      return this.mainEmit(n)
+    }
     const messageId = n.meta.message_id ?? ''
     if (d.to === 'fallback') {
       // claimed for main first, so a late read_inbound can't take it too
       this.store.claim(messageId, 'main', this.ctx.clock.now())
+      await pointBefore(this.ctx, n, 'main')
       return this.fallback(n, d.thread, d.reason)
     }
     // the thread's session reads files from its own inbox only: copy them there, or let main have the whole message
@@ -295,8 +355,10 @@ export class ThreadRouter {
     } catch (e) {
       this.ctx.log.warn('files not placed in the thread inbox', { thread: d.thread, error: (e as Error).message })
       this.store.claim(messageId, 'main', this.ctx.clock.now())
+      await pointBefore(this.ctx, n, 'main')
       return this.fallback(n, d.thread, 'worker_unavailable')
     }
+    await pointBefore(this.ctx, n, { worker: workerFolder(this.ctx, this.workers.read(), d.thread) })
     this.ctx.seen.routerOwns(messageId)
     const now = this.ctx.clock.now()
     const row: RouteRow = {
@@ -309,18 +371,34 @@ export class ThreadRouter {
     }
     // A route still waiting on this thread means a worker start is already under way: only the first cold message starts it
     const startsWorker = d.cold && this.store.unclaimed(d.thread).length === 0
-    if (!this.store.addRoute(row)) return this.mainEmit(held) // the same id routed before: never hold it twice
+    // the same id routed before: never hold it twice. Main runs it now: its point is taken only when the one recorded
+    // is of another folder (main may already have run it, and a point of its folder now could hold that turn's edits)
+    if (!this.store.addRoute(row)) {
+      await pointBefore(this.ctx, n, 'main', { replace: 'elsewhere' })
+      return this.mainEmit(held)
+    }
     this.wake(d.thread, n.meta.kind === 'card_action' ? 'card_action' : 'message')
     if (d.cold) {
-      this.ctx.transport.sendEphemeral(statusFrame(now, d.thread, 'working', 'Starting a session for this thread…'))
+      // shown where the owner is waiting: the message's own thread (a sub-thread answered by its parent's lead included)
+      const shownIn = this.shownIn(n, d.thread)
+      this.ctx.transport.sendEphemeral(statusFrame(now, shownIn, 'working', 'Starting a session for this thread…'))
       // Only trust mode gets here in the "limits are close" band (allowsStart); say so, as the phone's resume button does
       // Said once, on the message that starts the worker; later messages to the same starting thread do not repeat it
       if (startsWorker && this.governor().state === 'paused')
         postSystemNotice(this.ctx, 'Plan limits are close, so this thread session may run out sooner.', {
-          thread: threadRef(this.ctx, d.thread),
+          thread: threadRef(this.ctx, shownIn),
         }).catch((e) => this.ctx.log.warn('limits notice not posted', { error: (e as Error).message }))
     }
     this.arm(row)
+  }
+
+  /**
+   * Where the owner is waiting on a routed item: a card action's card thread, else the message's own thread (a sub-thread
+   * answered by its parent's lead included), else the session's thread.
+   */
+  private shownIn(n: Notification, lead: string): string {
+    if (n.meta.kind === 'card_action') return (n.meta.card_id && this.ctx.ledger.get(n.meta.card_id)?.thread_id) || lead
+    return n.meta.thread_id || lead
   }
 
   /** Writes the thread's wake file naming every message its worker has not claimed yet. */
@@ -331,14 +409,18 @@ export class ThreadRouter {
       .slice(-50)
     if (!ids.length) return
     try {
-      writeWake(this.ctx.paths.home, {
-        v: 1,
-        thread_id: thread,
-        message_ids: ids,
-        at: new Date(this.ctx.clock.now()).toISOString(),
-        reason,
-        action: 'pointer',
-      })
+      writeWake(
+        this.ctx.paths.home,
+        {
+          v: 1,
+          thread_id: thread,
+          message_ids: ids,
+          at: new Date(this.ctx.clock.now()).toISOString(),
+          reason,
+          action: 'pointer',
+        },
+        (msg, f) => this.ctx.log.warn(msg, f),
+      )
     } catch (e) {
       this.ctx.log.warn('wake file not written', { thread, error: (e as Error).message })
     }
@@ -370,6 +452,9 @@ export class ThreadRouter {
    */
   private async fallbackLate(n: Notification, thread: string, reason: ErrorCodeT) {
     try {
+      // main runs it now, in its own folder: that point replaces the one taken of the worker's
+      await waitForRestore(this.ctx, 'main')
+      await pointBefore(this.ctx, n, 'main', { replace: true })
       await this.fallback(n, thread, reason)
     } catch (e) {
       const cardId = n.meta.kind === 'card_action' ? n.meta.card_id : undefined
@@ -379,12 +464,18 @@ export class ThreadRouter {
     }
   }
 
-  private async fallback(n: Notification, thread: string, reason: ErrorCodeT) {
+  private async fallback(n: Notification, lead: string, reason: ErrorCodeT) {
     const { ctx } = this
-    ctx.log.info('thread session fallback', { thread, reason })
+    // the message's own thread: a sub-thread's message held for its parent's lead is still that sub-thread's
+    // a thread session's wake is only ever that session's: dropped with a report, never main's own words
+    if (n.meta.kind === 'wake')
+      return dropWake(ctx, n, this.wakeDropReason(n.meta.thread_id ?? '', reason), this.mainEmit)
+    const thread = this.shownIn(n, lead)
+    ctx.log.info('thread session fallback', { thread, lead, reason })
     // main has it now: a main session that dies with it in flight must be reported (D39). A scheduled run is not an owner message:
     // the Schedules service reports a run nobody finished.
-    if (n.meta.message_id && n.meta.kind !== 'schedule_run') ctx.seen.track(thread, n.meta.message_id)
+    if (n.meta.message_id && n.meta.kind !== 'schedule_run' && n.meta.kind !== 'wake')
+      ctx.seen.heldForMain(thread, n.meta.message_id)
     await this.mainEmit({ content: n.content, meta: { ...n.meta, routed: 'fallback', reason } })
     try {
       await postSystemNotice(
@@ -397,11 +488,30 @@ export class ThreadRouter {
     }
   }
 
+  private wakeDropReason(thread: string, reason: ErrorCodeT): string {
+    const t = this.ctx.config.thread(thread)
+    if (!t) return 'its thread was deleted'
+    if (t.archived) return 'its thread was archived'
+    if (threadSessionMode(this.ctx.config.config, thread) !== 'dedicated')
+      return 'its thread no longer has its own session'
+    return REASON_TEXT[reason] ?? `its session did not take it (${reason})`
+  }
+
   /** A thread switched off with messages still waiting: they are main's now, at once. */
   private releaseSwitchedOff() {
     const { ctx } = this
     for (const row of this.store.allUnclaimed()) {
-      if (threadSessionMode(ctx.config.config, row.thread_id) === 'dedicated') continue
+      // still that lead's: it has its session, and (for an owner message) it is still the lead that answers the message's
+      // thread. A sub-thread that got its own lead, lost its parent or was archived meanwhile is main's at once.
+      const msgThread = row.notification.meta.thread_id
+      const answers =
+        row.notification.meta.kind === 'card_action' ||
+        row.notification.meta.kind === 'handoff' ||
+        row.notification.meta.kind === 'schedule_run' ||
+        row.notification.meta.kind === 'wake' ||
+        !msgThread ||
+        leadThreadFor(ctx.config.config, msgThread) === row.thread_id
+      if (threadSessionMode(ctx.config.config, row.thread_id) === 'dedicated' && answers) continue
       if (row.notification.meta.kind === 'handoff') {
         // the lead is gone: the TASK comes back to main, which is told
         if (!this.store.claim(row.message_id, 'main', ctx.clock.now())) continue
@@ -447,7 +557,12 @@ export class ThreadRouter {
         settled.push(c.message_id)
         continue
       }
-      if (this.store.answeredSince(c.thread_id, c.at)) {
+      // a wake the session read is done with: it asks for no answer, so a session parking after it is not "unanswered"
+      if (c.kind === 'wake') {
+        settled.push(c.message_id)
+        continue
+      }
+      if (this.store.answeredIn(c.thread_id, c.message_thread, c.at)) {
         settled.push(c.message_id)
         continue
       }
@@ -457,7 +572,8 @@ export class ThreadRouter {
         jobs.set(c.thread_id, [...(jobs.get(c.thread_id) ?? []), c.message_id])
         continue
       }
-      report.set(c.thread_id, [...(report.get(c.thread_id) ?? []), c.message_id])
+      // said where the owner sent it: a sub-thread's message answered by its parent's lead gets the notice in the sub-thread
+      report.set(c.message_thread, [...(report.get(c.message_thread) ?? []), c.message_id])
     }
     // end the cards first: a crash between the two leaves the claim open, and the next tick tries again
     for (const id of unfinished) this.onCardUndelivered(id, 'unknown')
@@ -488,33 +604,45 @@ export class ThreadRouter {
   tick(send: (status: WorkersStatusT) => void, sendState?: (state: SessionStateT) => void): void {
     const { ctx } = this
     const now = ctx.clock.now()
-    const g = this.governor()
     const file = this.workers.read()
+    // every thread session's latest usage reading first, so the governor below sees the newest
+    ctx.usage?.readThreads(ctx.paths.home, file, now)
+    const g = this.governor()
+    this.noteSessionStarts(file)
     this.releaseSwitchedOff()
     for (const lead of this.handoffs.openLeads())
       if (threadSessionMode(ctx.config.config, lead) !== 'dedicated') this.handoffs.closeLead(lead)
     this.expireUnclaimedHandoffs(now)
     void this.deliverHandoffs().catch((e) => ctx.log.warn('hand-offs not delivered', { error: (e as Error).message }))
     if (file && supervisorFresh(file, now)) this.reportUnanswered(file, now)
-    if (g.state === 'park_all' && !this.parkAllSent && file && supervisorFresh(file, now)) {
-      this.parkAllSent = true
+    if (g.state === 'park_all' && file && supervisorFresh(file, now)) {
       for (const [id, e] of Object.entries(file.threads)) {
-        if (!WORKER_LIVE_STATES.includes(e.state)) continue
+        if (!WORKER_LIVE_STATES.includes(e.state)) {
+          this.parkSentAt.delete(id)
+          continue
+        }
+        const sent = this.parkSentAt.get(id)
+        if (sent !== undefined && sent <= now && now - sent < GOVERNOR_PARK_RETRY_MS) continue
         try {
-          writeWake(ctx.paths.home, {
-            v: 1,
-            thread_id: id,
-            message_ids: [],
-            at: new Date(now).toISOString(),
-            reason: 'governor',
-            action: 'park',
-          })
+          writeWake(
+            ctx.paths.home,
+            {
+              v: 1,
+              thread_id: id,
+              message_ids: [],
+              at: new Date(now).toISOString(),
+              reason: 'governor',
+              action: 'park',
+            },
+            (msg, f) => this.ctx.log.warn(msg, f),
+          )
+          this.parkSentAt.set(id, now)
         } catch (err) {
           ctx.log.warn('park wake not written', { thread: id, error: (err as Error).message })
         }
       }
     }
-    if (g.state !== 'park_all') this.parkAllSent = false
+    if (g.state !== 'park_all') this.parkSentAt.clear()
     const status = this.status(file, g, now)
     const key = JSON.stringify({ ...status, at: '' })
     if (this.relayListsFeature && key !== this.lastStatusKey) {
@@ -524,6 +652,33 @@ export class ThreadRouter {
     // A scoped session.state only goes to a relay that lists thread-sessions/1: an older app's strict SessionState refuses `scope`.
     if (this.relayListsFeature && sendState)
       this.contextFeed.tick(file, (t) => threadSessionMode(ctx.config.config, t) === 'dedicated', sendState)
+  }
+
+  /**
+   * A thread session that started since the last look (a new session id, or the same one started again; after a bridge
+   * restart, each live one once): when its AGENTS.md was changed outside Settings, one quiet line in its thread. Never waited on, never holds it.
+   */
+  private noteSessionStarts(file: WorkersFileT | null): void {
+    const { ctx } = this
+    const am = ctx.agentsMd
+    if (!am || !file) return
+    for (const [thread, e] of Object.entries(file.threads)) {
+      // only a running session counts: a park or an exit (pane 0) is no start, and its key is not kept
+      if (!e.session_id || !e.pane_pid || !WORKER_LIVE_STATES.includes(e.state)) continue
+      // a start resumed under the same session id (an idle session woken with --resume) is a start too: its time and pane change
+      const key = `${e.session_id}|${e.started_at ?? ''}|${e.pane_pid ?? ''}`
+      if (this.sessionsSeen.get(thread) === key) continue
+      this.sessionsSeen.set(thread, key)
+      if (!ctx.config.thread(thread) || threadSessionMode(ctx.config.config, thread) !== 'dedicated') continue
+      void am
+        .changedOutside(thread)
+        .then((changed) =>
+          changed
+            ? postSystemNotice(ctx, AGENTS_MD_WORDING.changedOutside, { thread: threadRef(ctx, thread) })
+            : undefined,
+        )
+        .catch((err) => ctx.log.warn('AGENTS.md start line not posted', { thread, error: (err as Error).message }))
+    }
   }
 
   /** Forget the last status so the next tick sends it again (after `ready`). */
@@ -544,16 +699,42 @@ export class ThreadRouter {
       if (e?.cwd) item.cwd = e.cwd
       if (e?.last_turn_at) item.last_turn_at = e.last_turn_at
       if (e?.parked_at) item.parked_at = e.parked_at
-      if (e?.error) item.error = e.error.code
+      if (e?.error) {
+        item.error = e.error.code
+        item.error_at = e.error.at
+      }
+      if (e) Object.assign(item, statusLine(e, now))
+      const w = pendingOf(this.wakes, t.id)
+      if (w.total > 0) Object.assign(item, { wakes: w.wakes, wakes_total: w.total })
       threads.push(item)
     }
+    // main's own wakes, and those of any lane that is not a dedicated thread now (it went back to main, which runs them)
+    const mainWakes = this.mainWakes(cfg)
+    // Main's own wait (a prompt at the Mac), for the app and the relay's once-per-wait push
+    const mainWait = mainNeedsYou(this.ctx.paths.home, now)
     return {
       supported: fresh && file?.supervisor.workers_supported === true,
       supervisor_online: fresh,
       threads: threads.slice(0, 40),
       governor: g.resets_at ? { state: g.state, resets_at: g.resets_at } : { state: g.state },
       at: new Date(now).toISOString(),
+      ...(mainWait ? { main_needs_you: mainWait } : {}),
+      ...(mainWakes.total > 0 ? { main_wakes: mainWakes.wakes, main_wakes_total: mainWakes.total } : {}),
     }
+  }
+
+  private mainWakes(cfg: typeof this.ctx.config.config): ReturnType<typeof pendingOf> {
+    const lanes = new Set(this.wakes.allOpen().map((r) => r.lane))
+    const all: ReturnType<typeof pendingOf> = { wakes: [], total: 0 }
+    for (const lane of lanes) {
+      if (lane !== 'main' && threadSessionMode(cfg, lane) === 'dedicated') continue
+      const p = pendingOf(this.wakes, lane)
+      all.wakes.push(...p.wakes)
+      all.total += p.total
+    }
+    all.wakes.sort((a, b) => a.at.localeCompare(b.at))
+    all.wakes = all.wakes.slice(0, WAKE_STATUS_MAX)
+    return all
   }
 
   close(): void {

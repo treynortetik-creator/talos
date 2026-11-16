@@ -222,14 +222,14 @@ export function cmdLead(
       `  profile: ${res.profile}${res.switched ? ' (changed, as you asked)' : ''}. ${res.profile === 'light' ? 'Light stops accidents, not a determined process; add --sandbox for the OS sandbox.' : 'The OS sandbox is on; add --light to switch it off.'}`,
     )
     io.out(
-      `  MCP: ${mcpAllow.length ? `talos-app and ${mcpAllow.join(', ')}` : 'talos-app only'} (the thread's allow list; the Mac app applies it when the session starts)`,
+      `  MCP: ${mcpAllow.length ? `talos-app and ${mcpAllow.join(', ')}` : 'talos-app only'} (the thread's allow list; the session starts with it, and one already running restarts with it after its current turn)`,
     )
     if (res.stopgapRemoved.length)
       io.out(
         `  removed ${res.stopgapRemoved.length} MCP deny rule(s) the first version of the allow list wrote (recorded in .talos-lead as stopgap_removed)`,
       )
     io.out(
-      `thread "${threadId}" now starts its session there. Fill in CLAUDE.md (job, authority, rules from main), then turn on Own session for the thread in the app.`,
+      `thread "${threadId}" now starts its session there (a session already running starts a new conversation there after its current turn). Fill in CLAUDE.md (job, authority, rules from main), then turn on Own session for the thread in the app.`,
     )
     return 0
   } catch (e) {

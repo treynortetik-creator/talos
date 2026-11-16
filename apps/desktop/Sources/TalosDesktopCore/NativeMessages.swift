@@ -32,6 +32,14 @@ public enum WebToNative: Equatable, Sendable {
   case terminalLeave
   /// Choose… next to a thread's folder (`pick_folder`): show the open panel, beginning at `start` when it is given.
   case pickFolder(req: String, start: String?)
+  /// Where the page left room for a thread's Terminal pane, or nil while the slot is not showing (`shell_pane`). Geometry and a
+  /// thread id, nothing else: the message has no field for a folder the shell must use, a command, or text to type.
+  case shellPane(threadId: String, rect: TerminalViewRect?)
+  /// The owner closed that thread's Terminal pane (`shell_pane_close`): its shells end.
+  case shellPaneClose(threadId: String)
+  /// The page's answer to `capture_drop` (the screenshot hotkey): ok = the image is in a composer as a pending attachment, not
+  /// sent; not ok = why (`not_signed_in`, `bad_image`, `no_thread`), and the shell discards the image.
+  case captureAck(req: String, ok: Bool, reason: String?)
 
   /// Decodes what `WKScriptMessage.body` carries (a JSON object). nil = refuse.
   public static func decode(_ body: Any) -> WebToNative? {
@@ -108,6 +116,28 @@ public enum WebToNative: Equatable, Sendable {
     case "terminal_resume":
       guard only(["thread_id"]), let t = o["thread_id"] as? String, ThreadIdRule.isValid(t) else { return nil }
       return .terminalResume(threadId: t)
+    case "shell_pane":
+      guard allowed(required: ["thread_id", "rect"], optional: ["cwd"]), let t = o["thread_id"] as? String, ThreadIdRule.isValid(t)
+      else { return nil }
+      // `cwd` is the page's idea of the thread's folder. It is checked for shape and then dropped: the shell starts in the
+      // folder this Mac's own config names (`ShellPane.folder`), never where the page says.
+      if let raw = o["cwd"] { guard let s = raw as? String, FolderPath.isValid(s) else { return nil } }
+      if o["rect"] is NSNull { return .shellPane(threadId: t, rect: nil) }
+      guard let r = rect(o["rect"]) else { return nil }
+      return .shellPane(threadId: t, rect: r)
+    case "shell_pane_close":
+      guard only(["thread_id"]), let t = o["thread_id"] as? String, ThreadIdRule.isValid(t) else { return nil }
+      return .shellPaneClose(threadId: t)
+    case "capture_ack":
+      guard allowed(required: ["req", "ok"], optional: ["reason"]), let req = o["req"] as? String, CompanionReq.isValid(req),
+        let ok = JSONValue.bool(o["ok"])
+      else { return nil }
+      var reason: String?
+      if let raw = o["reason"] {
+        guard let s = raw as? String, ["not_signed_in", "bad_image", "no_thread"].contains(s) else { return nil }
+        reason = s
+      }
+      return .captureAck(req: req, ok: ok, reason: reason)
     case "terminal_view":
       guard allowed(required: ["rect"], optional: ["session"]) else { return nil }
       // Absent = Main (a page that predates the tabs). Present and not "main" or a thread id = refused, the whole message.
@@ -117,14 +147,20 @@ public enum WebToNative: Equatable, Sendable {
         session = sid
       }
       if o["rect"] is NSNull { return .terminalView(nil, session: session) }
-      guard let r = o["rect"] as? [String: Any], Set(r.keys) == ["x", "y", "width", "height"],
-        let x = JSONValue.int(r["x"]), let y = JSONValue.int(r["y"]), let w = JSONValue.int(r["width"]),
-        let h = JSONValue.int(r["height"]), [x, y, w, h].allSatisfy({ (0...TerminalViewRect.max).contains($0) })
-      else { return nil }
-      return .terminalView(TerminalViewRect(x: x, y: y, width: w, height: h), session: session)
+      guard let r = rect(o["rect"]) else { return nil }
+      return .terminalView(r, session: session)
     default:
       return nil
     }
+  }
+
+  /// A rectangle in page pixels: exactly x, y, width and height, whole numbers from 0 to `TerminalViewRect.max`.
+  static func rect(_ raw: Any?) -> TerminalViewRect? {
+    guard let r = raw as? [String: Any], Set(r.keys) == ["x", "y", "width", "height"],
+      let x = JSONValue.int(r["x"]), let y = JSONValue.int(r["y"]), let w = JSONValue.int(r["width"]),
+      let h = JSONValue.int(r["height"]), [x, y, w, h].allSatisfy({ (0...TerminalViewRect.max).contains($0) })
+    else { return nil }
+    return TerminalViewRect(x: x, y: y, width: w, height: h)
   }
 
   /// Decodes message text (what a test or a log holds).

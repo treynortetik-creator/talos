@@ -7,6 +7,7 @@ import {
   HEARTBEAT_TEST_WAIT_MS,
   newUlid,
   parseScheduleSnapshot,
+  SCHEDULES_ANSWER_MS,
   SCHEDULES_FEATURE,
   SCHEDULES_FEATURE_V2,
   type ScheduleChangeT,
@@ -16,10 +17,10 @@ import {
 import { TalosClientError } from './client.ts'
 import type { SchedulesClient, SchedulesSlice } from './schedulesClient.ts'
 
-export const NO_ANSWER_MS = 20_000
+export const NO_ANSWER_MS = SCHEDULES_ANSWER_MS
 type AnswerType = 'schedules.snapshot' | 'schedule.detail' | 'heartbeat.test_result'
 
-/** A patch the Mac has not acked within 20 s; its card may still arrive (`clientRef`). */
+/** A patch the Mac has not acked within NO_ANSWER_MS (20 s); its card may still arrive (`clientRef`). */
 export class SlowPatch extends TalosClientError {
   readonly clientRef: string
   constructor(clientRef: string) {
@@ -87,9 +88,11 @@ export function createSocketSchedules(d: SocketSchedulesDeps): SchedulesClient {
     listWide = true,
     /** true: when the socket reconnects while this is still waiting, ask again with the SAME request_id (see testHeartbeat). */
     askAgainOnReconnect = false,
+    /** Aborted: the caller let this request go; it rejects at once and writes nothing to the store. */
+    signal?: AbortSignal,
   ): Promise<T> {
     const failed = (error: string, code: ConstructorParameters<typeof TalosClientError>[0], message: string) =>
-      listWide ? fail(error, code, message) : new TalosClientError(code, message)
+      listWide && !signal?.aborted ? fail(error, code, message) : new TalosClientError(code, message)
     const reqId = String(frame.request_id)
     let off: () => void = () => {}
     let timeout: ReturnType<typeof setTimeout> | undefined
@@ -103,6 +106,7 @@ export function createSocketSchedules(d: SocketSchedulesDeps): SchedulesClient {
         }
       })
       timeout = timer(() => reject(failed('no_answer', 'internal', 'no_answer')), answerMs)
+      signal?.addEventListener('abort', () => reject(new TalosClientError('internal', 'abandoned')), { once: true })
     })
     // A dropped socket takes its pending request with it; the relay keeps a Heartbeat test for its owner, so the same
     // request_id from the new socket picks the answer up (and is not run again). A refusal here is not the test's failure.
@@ -130,7 +134,8 @@ export function createSocketSchedules(d: SocketSchedulesDeps): SchedulesClient {
   }
 
   return {
-    async listSchedules() {
+    async listSchedules(opts) {
+      const signal = opts?.signal
       d.setSlice({ status: d.getSlice().snapshot ? 'ready' : 'loading' })
       gate()
       const snapshot = await ask(
@@ -138,10 +143,19 @@ export function createSocketSchedules(d: SocketSchedulesDeps): SchedulesClient {
         { type: 'schedules.list', request_id: newUlid(), ...readsField() },
         (f) => {
           const r = parseScheduleSnapshot(f.snapshot)
-          if (!r.ok) throw fail(r.reason === 'update_app' ? 'update_app' : 'invalid', 'internal', r.message)
+          if (!r.ok)
+            throw signal?.aborted
+              ? new TalosClientError('internal', r.message)
+              : fail(r.reason === 'update_app' ? 'update_app' : 'invalid', 'internal', r.message)
           return r.snapshot
         },
+        NO_ANSWER_MS,
+        true,
+        false,
+        signal,
       )
+      // let go while it waited: what it found is not written over the list a newer request keeps
+      if (signal?.aborted) throw new TalosClientError('internal', 'abandoned')
       d.setSlice({
         snapshot,
         status: 'ready',

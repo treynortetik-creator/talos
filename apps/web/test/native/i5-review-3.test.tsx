@@ -46,7 +46,7 @@ async function coldStart(url: string, snapshot: Card[], arm?: string) {
   const { createMemoryStorage } = await import('../../src/lib/storage.ts')
   const client = createFakeClient()
   client.store.setState((s) => ({ ...s, cards: snapshot, connection: 'connecting' }))
-  const stepup = vi.spyOn(client, 'stepup')
+  const resolve = vi.spyOn(client, 'resolveCard')
   // Since the decision to keep the arm out of URLs, the native shell arms the card in memory (onNativePushAction).
   if (arm) (await import('../../src/features/cards/arm.tsx')).armCard(arm)
   render(<App client={client} storage={createMemoryStorage()} />)
@@ -56,7 +56,7 @@ async function coldStart(url: string, snapshot: Card[], arm?: string) {
       client.store.setState((s) => ({ ...s, connection: 'online' }))
       client.store.setState((s) => ({ ...s, cards }))
     })
-  return { ready, stepup }
+  return { ready, resolve }
 }
 
 describe('I5-R14 a tap on a card the phone has not received yet', () => {
@@ -80,15 +80,16 @@ describe('I5-R14 a tap on a card the phone has not received yet', () => {
     expect(window.location.pathname).toBe(`/card/${fresh.id}`)
   })
 
-  it('control: Approve on a card that arrives late starts Face ID exactly once', async () => {
+  it('control: Approve on a card that arrives late focuses its button and sends nothing', async () => {
     const older = decided()
     const fresh = makeCard({ risk: 'high' })
-    const { ready, stepup } = await coldStart(`/card/${fresh.id}`, [older], fresh.id)
+    const { ready, resolve } = await coldStart(`/card/${fresh.id}`, [older], fresh.id)
     await settle()
     await ready([older, fresh])
-    await waitFor(() => expect(stepup).toHaveBeenCalledWith(`card:${fresh.id}`), long)
+    const button = await screen.findByRole('button', { name: /Send/ }, long)
+    await waitFor(() => expect(document.activeElement).toBe(button), long)
     await settle(600)
-    expect(stepup).toHaveBeenCalledTimes(1)
+    expect(resolve).not.toHaveBeenCalled()
   })
 })
 
@@ -96,14 +97,14 @@ describe('I5-R15 Approve on a card that never arrives', () => {
   it('R15 the card was decided elsewhere: the owner lands on the start page, not a blank page', async () => {
     const older = decided()
     const gone = makeCard({ risk: 'high' })
-    const { ready, stepup } = await coldStart(`/card/${gone.id}`, [older], gone.id)
+    const { ready, resolve } = await coldStart(`/card/${gone.id}`, [older], gone.id)
     await settle()
     await ready([older])
     await waitFor(() => expect(window.location.pathname).toBe('/'), long)
     expect(window.location.search).toBe('')
     await waitFor(() => expect(document.querySelector('main')?.childElementCount).toBeGreaterThan(0), long)
     await settle(600)
-    expect(stepup).not.toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
   })
 })
 

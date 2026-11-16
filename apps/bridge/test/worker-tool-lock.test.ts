@@ -14,7 +14,9 @@ import { WorkerStore } from '../src/worker/store.ts'
  * card: acts on a card id, refused unless this session raised the card.
  * own-lane: takes no thread id; its handler answers from the session's own thread only.
  * own-inbox: takes no thread id; returns this thread's routed messages only.
+ * own-memory: takes no thread id and no thread's rows; reads one note of the owner's memory scope, and nothing else.
  * via-main: takes no thread id; forwarded to the main bridge over the socket, which scopes it to the thread it proved.
+ * lead-only: takes no thread id and touches no thread's rows; refused unless the session is still its thread's lead.
  */
 const HOW = {
   reply: 'locked',
@@ -22,15 +24,30 @@ const HOW = {
   card: 'locked',
   set_status: 'locked',
   schedule_propose: 'locked',
+  config_propose: 'locked',
   handoff: 'locked',
   read_thread: 'locked',
+  publish_page: 'locked',
   card_result: 'card',
   list_threads: 'own-lane',
   read_inbound: 'own-inbox',
+  memory_note_read: 'own-memory',
   schedules_list: 'via-main',
   schedule_run_start: 'via-main',
   schedule_run_done: 'via-main',
-} as const satisfies Record<string, 'locked' | 'card' | 'own-lane' | 'own-inbox' | 'via-main'>
+  wake_me: 'via-main',
+  restart_main: 'lead-only',
+  screen_shot: 'own-mac',
+  screen_click: 'own-mac',
+  screen_type: 'own-mac',
+  screen_key: 'own-mac',
+  screen_scroll: 'own-mac',
+  screen_apps: 'own-mac',
+  screen_open_app: 'own-mac',
+} as const satisfies Record<
+  string,
+  'locked' | 'card' | 'own-lane' | 'own-inbox' | 'own-memory' | 'via-main' | 'lead-only' | 'own-mac'
+>
 const named = (how: string) =>
   Object.entries(HOW)
     .filter(([, h]) => h === how)
@@ -165,12 +182,58 @@ describe('every tool a worker is given is held to its own thread', () => {
     })
   })
 
+  test('restart_main: refused once the thread is back to shared, and never reaches main over the socket', async () => {
+    const { ctx, rpcs, touched } = fakeCtx()
+    const c = (ctx.config as unknown as { config: { threads: Array<{ id: string; session?: string }> } }).config
+    c.threads = c.threads.map((t) => (t.id === 'trip' ? { ...t, session: 'shared' } : t))
+    for (const action of ['check', 'go']) {
+      const r = await callTool(ctx, 'restart_main', { action, why: 'x' })
+      expect(r.isError, action).toBe(true)
+      expect(text(r)).toContain('not its lead')
+    }
+    expect(rpcs).toEqual([])
+    expect(touched).toEqual([])
+  })
+
   test('list_threads shows the session its own thread only', async () => {
     const { ctx } = fakeCtx()
     const r = JSON.parse(text(await callTool(ctx, 'list_threads', {})))
     expect(r.threads.map((t: { id: string }) => t.id)).toEqual(['trip'])
     expect(r.default_thread).toBe('trip')
     expect(JSON.stringify(r)).not.toMatch(/garden|general/i)
+  })
+
+  test("list_threads also shows a lead's own live sub-threads, and nothing else", async () => {
+    const { ctx } = fakeCtx()
+    const threads = (ctx.config.config as unknown as { threads: unknown[] }).threads
+    threads.push(
+      thread('visas', { parent_id: 'trip' }),
+      thread('hotels', { parent_id: 'trip', session: 'dedicated' }),
+      thread('old', { parent_id: 'trip', archived: true }),
+      thread('other-sub', { parent_id: 'garden' }),
+    )
+    const r = JSON.parse(text(await callTool(ctx, 'list_threads', {})))
+    expect(r.threads.map((t: { id: string }) => t.id).sort()).toEqual(['hotels', 'trip', 'visas'])
+    expect(JSON.stringify(r)).not.toMatch(/garden|general|other-sub|"old"/i)
+  })
+
+  test("list_threads keeps main's front doors hidden from a lead even when one is put under it", async () => {
+    const { ctx } = fakeCtx()
+    const threads = (ctx.config.config as unknown as { threads: Array<{ id: string; parent_id?: string }> }).threads
+    const general = threads.find((t) => t.id === 'general')
+    if (general) general.parent_id = 'trip' // the default thread, placed under the lead by a hand edit
+    threads.push(thread('visas', { parent_id: 'trip' }))
+    const r = JSON.parse(text(await callTool(ctx, 'list_threads', {})))
+    expect(r.threads.map((t: { id: string }) => t.id).sort()).toEqual(['trip', 'visas'])
+  })
+
+  test('a sub-thread with its own session sees only itself in list_threads', async () => {
+    const { ctx } = fakeCtx()
+    const threads = (ctx.config.config as unknown as { threads: unknown[] }).threads
+    threads.push(thread('hotels', { parent_id: 'trip', session: 'dedicated' }))
+    ;(ctx.worker as { thread: string }).thread = 'hotels'
+    const r = JSON.parse(text(await callTool(ctx, 'list_threads', {})))
+    expect(r.threads.map((t: { id: string }) => t.id)).toEqual(['hotels'])
   })
 
   test("read_inbound returns this thread's messages only, whatever it is asked", async () => {

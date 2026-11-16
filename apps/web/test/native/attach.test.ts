@@ -189,6 +189,49 @@ describe('startNativeNotify', () => {
     t.emit('reply', reply({ message: { author: 'owner', thread_id: threadId } }))
     expect(t.posted.filter((m) => m.type === 'notify')).toHaveLength(0)
   })
+  // "Always allow": a send that went out without a card is never unseen. Like the relay's sent_always_allowed push, it goes
+  // through the master switch, quiet hours and thread alerts, with fixed words, and opens its thread.
+  it('a sent_always_allowed line notifies even with every alert off, fixed words only, and opens its thread', () => {
+    const t = setup(true)
+    t.client.store.setState({
+      config: {
+        ...config,
+        notifications: { ...config.notifications, master: false },
+        threads: config.threads.map((x) => ({ ...x, notify: 'off' as const })),
+      },
+    } as never)
+    startNativeNotify(t.client, t.bridge, { background: () => true, now: () => new Date('2026-01-05T18:00:00Z') })
+    const line = 'Allowed without a card (you always allow emails): SECRET TITLE. To stop: Settings → Always allowed.'
+    t.emit(
+      'reply',
+      reply({ message: { author: 'system', thread_id: threadId, text: line }, sent_always_allowed: true }),
+    )
+    const n = t.posted.filter((m) => m.type === 'notify')
+    expect(n).toHaveLength(1)
+    expect(n[0]).toMatchObject({
+      body: expect.stringMatching(/sent something you always allow$/),
+      navigate: `/t/${threadId}`,
+    })
+    expect(JSON.stringify(n[0])).not.toContain('SECRET')
+  })
+  it('a sent_always_allowed line makes a banner with the window in front too (the owner may be in another thread), never when silent', () => {
+    const t = setup(true)
+    startNativeNotify(t.client, t.bridge, { background: () => false, now: () => new Date('2026-01-05T18:00:00Z') })
+    const msg = { author: 'system', thread_id: threadId, text: 'x' }
+    t.emit('reply', reply({ message: msg, sent_always_allowed: true }))
+    expect(t.posted.filter((m) => m.type === 'notify')).toHaveLength(1)
+    t.emit('reply', reply({ message: msg, sent_always_allowed: true, silent: true }))
+    expect(t.posted.filter((m) => m.type === 'notify')).toHaveLength(1)
+  })
+  it('a silent sent_always_allowed line makes no banner', () => {
+    const t = setup(true)
+    startNativeNotify(t.client, t.bridge, { background: () => true, now: () => new Date('2026-01-05T18:00:00Z') })
+    t.emit(
+      'reply',
+      reply({ message: { author: 'system', thread_id: threadId, text: 'x' }, sent_always_allowed: true, silent: true }),
+    )
+    expect(t.posted.filter((m) => m.type === 'notify')).toHaveLength(0)
+  })
 })
 
 describe("the Terminal screen's messages from the Mac", () => {

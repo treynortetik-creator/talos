@@ -1,13 +1,20 @@
 // The app shell: sidebar + center + optional detail panel on tablet/desktop, content + bottom bar on phones.
+
 import { type CSSProperties, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation, useMatch, useNavigate } from 'react-router'
+import { FirstRunGate } from './features/agent-config/FirstRun.tsx'
+import { BugReporter } from './features/bugreport/BugReporter.tsx'
+import { openBugReport } from './features/bugreport/store.ts'
 import { useAwaitingOwner } from './features/cards/useAwaitingOwner.ts'
+import { noteViewedThread } from './features/native/capture.ts'
 import { type ActionCtx, DIALOG_GUARDED, dialogOpen, runAction } from './features/palette/actions.ts'
 import { Palette } from './features/palette/Palette.tsx'
 import { attachPullToSearch } from './features/palette/pull.ts'
 import { usePalette } from './features/palette/store.ts'
+import { PaneColumn } from './features/panes/Panes.tsx'
 import { PHONE_QUERY, PhoneChrome } from './features/phone/PhoneChrome.tsx'
 import { usePhonePanel } from './features/phone/phoneStore.ts'
+import { UpdateReady } from './features/pwa/UpdateReady.tsx'
 import { toggleSessionDock, useSessionDockOpen } from './features/session/dockPref.ts'
 import { SessionDock } from './features/session/SessionDock.tsx'
 import { SessionTrigger, useSessionSupported } from './features/session/SessionTrigger.tsx'
@@ -18,10 +25,11 @@ import { toggleSidebar, useSidebarCollapsed } from './features/threads/sidebarPr
 import { ThreadBanner } from './features/threads/ThreadBanner.tsx'
 import { useAgentName, useVisibleThreads } from './features/threads/useThreads.ts'
 import { useApprovalOpen } from './lib/approvalOpen.ts'
+import { useTalos } from './lib/client.ts'
 import { useKeyboardLayout } from './lib/keyboardViewport.ts'
 import type { KeyEntry } from './lib/keymap.ts'
 import { detectShell } from './lib/native/detect.ts'
-import { setNativeViewing } from './lib/nativePush.ts'
+import { watchNativeViewing } from './lib/nativePush.ts'
 import { useGlobalKeys } from './lib/useKeyboard.ts'
 import { cn } from './ui/cn.ts'
 import { IconClose } from './ui/icons.tsx'
@@ -59,11 +67,14 @@ export function Shell() {
   useEffect(() => {
     document.title = needs > 0 ? `(${needs}) ${agent}` : agent
   }, [needs, agent])
-  const viewing = onThread?.params.thread ?? null
-  useEffect(() => {
-    setNativeViewing(viewing)
-    return () => setNativeViewing(null)
-  }, [viewing])
+  // the thread on screen: /t/:thread, or the thread of the card on /card/:id (CardScreen shows that thread's view, as
+  // ThreadBanner already reads it), so the iPhone shell holds that thread's replies and Ctrl/Cmd+F searches it
+  const cardThread = useTalos((s) =>
+    onCard ? (s.cards.find((c) => c.id === onCard.params.id)?.thread_id ?? null) : null,
+  )
+  const viewing = onThread?.params.thread ?? cardThread
+  useEffect(() => watchNativeViewing(viewing), [viewing])
+  useEffect(() => noteViewedThread(viewing), [viewing])
   // biome-ignore lint/correctness/useExhaustiveDependencies: the panel closes on navigation
   useEffect(() => setDetail(null), [loc.pathname])
 
@@ -88,9 +99,10 @@ export function Shell() {
     () => ({
       nav,
       threads,
-      currentThreadId: onThread?.params.thread ?? null,
+      currentThreadId: viewing,
       topCardId: awaiting[0]?.id ?? null,
       togglePalette: (mode) => usePalette.getState().toggle(mode),
+      openBugReport: () => void openBugReport(),
       // The docked panel on a desktop, the drawer on a phone; with no Session on screen the chord is left to the browser.
       toggleSession: () => {
         if (!hasSession) return false
@@ -116,7 +128,7 @@ export function Shell() {
         setDetail(null)
       },
     }),
-    [nav, threads, onThread, awaiting, desktop, hasSession],
+    [nav, threads, viewing, awaiting, desktop, hasSession],
   )
   // The boxes this opens stay out of an open dialog and the approval sheet (a New thread editor must not be wiped by Cmd+K).
   const handlers = useMemo(
@@ -164,6 +176,8 @@ export function Shell() {
             </main>
             {!inThread && <BottomBar />}
           </div>
+          {/* the thread's stacked panes (Files, Terminal, Pages), beside the reading column on a desktop (features/panes) */}
+          {sessionThread && desktop && !detail && <PaneColumn threadId={sessionThread} />}
           {/* the Session panel docks on the right of a thread on a desktop; it is not a modal, the chat stays usable */}
           {sessionThread && desktop && dockOpen && sessionSupported && !detail && (
             <SessionDock threadId={sessionThread} />
@@ -196,6 +210,9 @@ export function Shell() {
           </Sheet>
         </div>
         <ThreadBanner />
+        <FirstRunGate />
+        <UpdateReady />
+        <BugReporter />
         <Palette phone={phone} macApp={macApp} hasSession={hasSession} hasSidebar={!phone} ctx={ctx} />
         {approving ? null : <ToastViewport />}
       </DetailPanelContext.Provider>

@@ -146,7 +146,7 @@ struct TmuxCommandsTests {
 
   @Test func everyCommandNamesOurSocketAndConfig() {
     for argv in [
-      t.hasSession(), t.newSession(argv: ["claude"], env: [:], cwd: "/a"), t.respawnPane(argv: ["c"], env: [:], cwd: "/a"),
+      t.hasSession(), t.newSession(argv: ["claude"], cwd: "/a"), t.respawnPane(argv: ["c"], cwd: "/a"),
       t.paneState(), t.capturePane(), t.sendBytes([13]), t.killSession(), t.attach(), t.setOption("k", "v"),
       t.showOption("k"), t.clearHistory(), t.captureRecent(lines: 10),
     ] {
@@ -156,16 +156,13 @@ struct TmuxCommandsTests {
 
   @Test func respawnClearsHistoryInTheSameInvocation() {
     // One tmux invocation (one `;` list): a later call could wipe the line a child that exits at once has printed.
-    let a = t.withPane("%7").respawnPane(argv: ["c", "--resume", "id"], env: [:], cwd: "/a")
+    let a = t.withPane("%7").respawnPane(argv: ["c", "--resume", "id"], cwd: "/a")
     #expect(a.suffix(8) == ["--", "c", "--resume", "id", ";", "clear-history", "-t", "%7"])
   }
 
   @Test func argvNotAShellString() {
-    let a = t.newSession(argv: ["/bin/claude", "--name", "a b"], env: ["B": "2", "A": "1"], cwd: "/x y")
-    #expect(
-      a.suffix(14) == [
-        "-x", "120", "-y", "40", "-c", "/x y", "-e", "A=1", "-e", "B=2", "--", "/bin/claude", "--name", "a b",
-      ])
+    let a = t.newSession(argv: ["/bin/claude", "--name", "a b"], cwd: "/x y")
+    #expect(a.suffix(10) == ["-x", "120", "-y", "40", "-c", "/x y", "--", "/bin/claude", "--name", "a b"])
     #expect(t.sendBytes([0x0d, 0x1b]).suffix(3) == ["-H", "0d", "1b"])
     // Leave-copy-mode-then-send is ONE tmux invocation (one binary, one `;` list): two would leave a gap for a wheel-up.
     let one = t.withPane("%7").sendBytesLeavingMode([0x0d])
@@ -178,13 +175,13 @@ struct TmuxCommandsTests {
     #expect(t.sessionTarget == "=agent")
     // Once the pane exists, every pane command names it by id, never "the active pane".
     let p = t.withPane("%7")
-    for argv in [p.paneState(), p.capturePane(), p.sendBytes([13]), p.respawnPane(argv: ["c"], env: [:], cwd: "/"),
+    for argv in [p.paneState(), p.capturePane(), p.sendBytes([13]), p.respawnPane(argv: ["c"], cwd: "/"),
       p.clearHistory(), p.captureRecent(lines: 5)]
     {
       #expect(argv.contains("%7") && !argv.contains("=agent:"), "\(argv)")
     }
     #expect(t.withPane("=agent:").paneId == nil, "only a real %N id is accepted")
-    #expect(t.newSession(argv: ["c"], env: [:], cwd: "/").contains("#{pane_id}"))
+    #expect(t.newSession(argv: ["c"], cwd: "/").contains("#{pane_id}"))
     #expect(TmuxCommands.parsePaneState("12|0|||1|2|%3")?.paneId == "%3")
   }
 
@@ -196,21 +193,16 @@ struct TmuxCommandsTests {
 
   @Test func everyUserElementOfAPaneCommandIsEscapedForTmux() {
     let p = t.withPane("%7")
-    let env = ["A": "x;", "B": "y"]
-    let sentEnv = ["-e", "A=x\\;", "-e", "B=y"]
-    let s = t.newSession(argv: Self.semicolons, env: env, cwd: "/a;")
+    let s = t.newSession(argv: Self.semicolons, cwd: "/a;")
     #expect(s.contains("/a\\;"))
     #expect(s.suffix(Self.semicolons.count) == Self.semicolonsSent[...])
-    #expect(Array(s[s.firstIndex(of: "-e")!..<s.firstIndex(of: "--")!]) == sentEnv)
-    let w = t.newWindow(argv: Self.semicolons, env: env, cwd: "/a;")
+    let w = t.newWindow(argv: Self.semicolons, cwd: "/a;")
     #expect(w.suffix(Self.semicolons.count) == Self.semicolonsSent[...])
-    #expect(Array(w[w.firstIndex(of: "-e")!..<w.firstIndex(of: "--")!]) == sentEnv)
     #expect(w.contains("/a\\;"))
-    let r = p.respawnPane(argv: Self.semicolons, env: env, cwd: "/a;")
+    let r = p.respawnPane(argv: Self.semicolons, cwd: "/a;")
     // the agent's elements are escaped; the `;` that starts the clear-history command is a real separator and stays one
     #expect(r.suffix(4) == [";", "clear-history", "-t", "%7"])
     #expect(Array(r.dropLast(4).suffix(Self.semicolons.count)) == Self.semicolonsSent)
-    #expect(Array(r[r.firstIndex(of: "-e")!..<r.firstIndex(of: "--")!]) == sentEnv)
     #expect(r.contains("/a\\;"))
   }
 
@@ -218,7 +210,41 @@ struct TmuxCommandsTests {
     #expect(t.sendLiteral("hello;").suffix(2) == ["--", "hello\\;"])
     #expect(t.setOption("k", "v;").suffix(2) == ["@k", "v\\;"])
     #expect(t.withPane("%7").sendBytesLeavingMode([0x0d]).contains(";"), "the if-shell separator stays a separator")
-    #expect(!t.newSession(argv: ["c"], env: [:], cwd: "/a").contains { $0.contains("\\") })
+    #expect(!t.newSession(argv: ["c"], cwd: "/a").contains { $0.contains("\\") })
+  }
+
+  /// The pointer's sends are conditional on the pane's mode inside one tmux invocation: the check and the keys cannot be split by a
+  /// scroll. The send is one string for tmux's parser, so every word that is not plainly safe is single-quoted for it.
+  @Test func aSendThatIsConditionalOnTheModeIsOneInvocation() {
+    let p = t.withPane("%7")
+    #expect(Array(p.sendEnterUnlessInMode().dropFirst(5)) == ["if-shell", "-F", "-t", "%7", "#{pane_in_mode}", "display-message -p talos-in-mode", "send-keys -t %7 Enter ; display-message -p talos-sent"])
+    #expect(p.sendBackspacesUnlessInMode(3).last == "send-keys -t %7 BSpace BSpace BSpace ; display-message -p talos-sent")
+    #expect(p.sendLiteralUnlessInMode(PointerTyper.text).last == "send-keys -t %7 -l -- 'Talos: new message in this thread. Call read_inbound.' ; display-message -p talos-sent")
+    // no element is a bare `;` or ends in one: the whole list is one if-shell
+    for cmd in [p.sendEnterUnlessInMode(), p.sendBackspacesUnlessInMode(2), p.sendLiteralUnlessInMode("a;")] {
+      #expect(cmd.filter { $0 == "if-shell" }.count == 1 && !cmd.contains(";") && !cmd.contains("send-keys"), "\(cmd)")
+    }
+    // with no pane id the session's own target is used, as everywhere else
+    #expect(t.sendEnterUnlessInMode().last == "send-keys -t =\(t.session): Enter ; display-message -p talos-sent")
+  }
+
+  @Test func aWordForTmuxsParserIsQuotedUnlessItIsPlain() {
+    #expect(TmuxCommands.commandWord("send-keys") == "send-keys")
+    #expect(TmuxCommands.commandWord("%12") == "%12" && TmuxCommands.commandWord("=t-trip:") == "=t-trip:" && TmuxCommands.commandWord("--") == "--")
+    #expect(TmuxCommands.commandWord("") == "''")
+    #expect(TmuxCommands.commandWord("two words") == "'two words'")
+    #expect(TmuxCommands.commandWord("it's; #{pane_id} $HOME \\ \"x\"") == "'it'\\''s; #{pane_id} $HOME \\ \"x\"'")
+    #expect(TmuxCommands.commandWord("a\nb") == "'a\nb'")
+  }
+
+  /// Sent only on tmux's own word for it: the sent marker, alone. The in-mode marker alone is a hold. Nothing, both, or anything else
+  /// is neither (the caller treats it as a failure, never as keys that went).
+  @Test func aSendCountsOnlyOnItsOwnMarker() {
+    #expect(TmuxCommands.parseModeSend("talos-sent\n") == true && TmuxCommands.parseModeSend(" talos-sent ") == true)
+    #expect(TmuxCommands.parseModeSend("talos-in-mode\n") == false)
+    for junk in ["", "0", "1", "talos-in-mode\ntalos-sent", "talos-sent extra", "talos-in-mode extra", "sent"] {
+      #expect(TmuxCommands.parseModeSend(junk) == nil, "\(junk)")
+    }
   }
 
   @Test func parsesPaneState() {

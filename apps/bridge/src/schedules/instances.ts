@@ -12,6 +12,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { ensureDir, readJsonFile, removeFile, writeJsonAtomic } from '../fsutil.ts'
 import { psInfo } from '../lifecycle.ts'
+import { comparableStarts } from '../proc-identity.ts'
 import { hostLabel } from './discovery.ts'
 
 export type InstanceRecord = { instance: string; pid: number; started_at: string; host?: string; stopped_at?: string }
@@ -87,8 +88,9 @@ export class InstanceRegistry {
     if (typeof rec.stopped_at === 'string') return 'gone'
     if (!(this.probe.running ?? defaultRunning)(rec.pid)) return 'gone'
     const now = (this.probe.startedAt ?? ((p) => psInfo(p)?.lstart))(rec.pid)
-    // the pid is running; a different start time means the number was recycled for another process
-    if (rec.started_at && now && now !== rec.started_at) return 'gone'
+    // the pid is running; a different start time means the number was recycled for another process (a record from before
+    // Linux read /proc cannot be compared with a /proc token: no answer, like a start time that could not be read)
+    if (rec.started_at && now && comparableStarts(rec.started_at, now) && now !== rec.started_at) return 'gone'
     return 'alive'
   }
 

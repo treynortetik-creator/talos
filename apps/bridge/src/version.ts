@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import pkg from '../package.json' with { type: 'json' }
+import { say } from './owner-words.ts'
 
 export const MCP_SERVER_NAME = 'talos-app'
 export const CHANNEL_CAPABILITY = 'claude/channel'
@@ -76,7 +77,10 @@ export function versionSkew(bridgeCommit: string | undefined, relayVersion: stri
   if (b === r) return { level: 'ok', text: `bridge and relay are both at ${b}` }
   return {
     level: 'warn',
-    text: `this Mac runs ${b} and the relay runs ${r}. If the update changed the relay, deploy it from Railway; if it did not, they can differ safely`,
+    text: say({
+      mac: `this Mac runs ${b} and the relay runs ${r}. If the update changed the relay, deploy it from Railway; if it did not, they can differ safely`,
+      linux: `this computer runs ${b} and the relay runs ${r}. If the update changed the relay, deploy it from Railway; if it did not, they can differ safely`,
+    }),
   }
 }
 

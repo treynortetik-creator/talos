@@ -66,11 +66,15 @@ test('a long call scrolls inside the sheet, every character is in the page, and 
   await expect(sheet.getByRole('button', { name: /^Allow/ })).toBeEnabled()
 })
 
-test('an elided call has no Allow, says so, and Deny still sends a kill with the card hash', async ({ page }) => {
+test('an elided call keeps Allow with a note saying what is not shown, and Deny still sends a kill with the card hash', async ({
+  page,
+}) => {
   await open(page, '/cards', { seed: 'permission' })
   const c = card(page, PERM_IDS.elided)
-  await expect(c.getByText('Part of this call is hidden. Approve at the Mac.')).toBeVisible()
-  await expect(c.getByRole('button', { name: /allow/i })).toHaveCount(0)
+  // the owner's rule (2026-11-13): a tap approves; what is not shown is said, never "approve at the Mac"
+  await expect(c.getByText(/^Not all of this call is shown: Claude Code shortened part of it/)).toBeVisible()
+  await expect(c.getByText(/at the Mac/)).toHaveCount(0)
+  await expect(c.getByRole('button', { name: /allow/i })).toHaveCount(1)
   await c.getByRole('button', { name: 'Deny' }).click()
   await expect(c.getByTestId('collapse-line')).toHaveText(/^✕ Killed/)
   const last = (await sentFrames(page)).at(-1) as Record<string, unknown>

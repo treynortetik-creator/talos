@@ -40,8 +40,11 @@ import {
   WakeFile,
   WORKER_FORBIDDEN_ARGS,
   WORKER_POINTER_TEXT,
+  WorkerNeedsYou,
   WorkerStatusFailure,
+  WorkerStatusItem,
   WorkersFile,
+  WorkersStatus,
   workerSessionName,
   workerTmuxName,
 } from '../src/index.ts'
@@ -100,6 +103,7 @@ describe('the switch', () => {
       enabled: false,
       max_live: 3,
       governor: { five_hour: 80, weekly: 85, park_all: 95, off: false },
+      restart_on_update: true,
     })
     expect(dedicatedSettings({ dedicated: { enabled: true } }).max_live).toBe(3)
     expect(dedicatedSettings({ dedicated: { enabled: 'yes' } }).enabled).toBe(false) // junk is off, never on
@@ -143,7 +147,12 @@ describe('the switch', () => {
 
   it('one field this build cannot read falls back alone: the switch, the folder and the rest survive', () => {
     const d = DedicatedConfig.parse({ enabled: true, max_live: 8, governor: { five_hour: 0, weekly: 90 } })
-    expect(d).toEqual({ enabled: true, max_live: 3, governor: { five_hour: 80, weekly: 90, park_all: 95, off: false } })
+    expect(d).toEqual({
+      enabled: true,
+      max_live: 3,
+      governor: { five_hour: 80, weekly: 90, park_all: 95, off: false },
+      restart_on_update: true,
+    })
     expect(DedicatedConfig.parse({ enabled: true, governor: 'x' }).governor.five_hour).toBe(80)
     const t = Thread.parse({
       ...base,
@@ -203,7 +212,7 @@ describe('the switch', () => {
       threads: [...cfg.threads, { ...base, session: 'dedicated', session_opts: { model: 'sonnet' } }],
       dedicated: { enabled: true, governor: { off: true } },
     }
-    expect(checkConfigPatch(patch)).toEqual({ ok: true, touchesWorkEnabled: false })
+    expect(checkConfigPatch(patch)).toEqual({ ok: true })
     const next = AgentConfig.parse({ ...(applyMergePatch(cfg, patch) as object), rev: cfg.rev + 1 })
     expect(validateAgentConfig(next)).toEqual([])
     expect(dedicatedPatchIssue(cfg, next)).toBeNull()
@@ -326,6 +335,17 @@ describe('workers.json, the wake file, hub lines', () => {
     expect(WakeFile.parse({ ...w, text: 'content' })).not.toHaveProperty('text')
   })
 
+  it('the wake file says who asked for a control, and an unknown asker never drops the wake', () => {
+    const w = { v: 1, thread_id: 'trip', message_ids: [], at: '2026-11-12T10:00:00.000Z', reason: 'control' }
+    expect(WakeFile.parse({ ...w, action: 'restart', by: 'main' }).by).toBe('main')
+    expect(WakeFile.parse({ ...w, action: 'resume', by: 'owner' }).by).toBe('owner')
+    const odd = WakeFile.safeParse({ ...w, action: 'restart', by: 'robot' })
+    expect(odd.success).toBe(true)
+    expect(odd.success && odd.data.by).toBeUndefined()
+    expect(odd.success && odd.data.action).toBe('restart')
+    expect(WakeFile.parse({ ...w, action: 'park' })).not.toHaveProperty('by') // an older hub's file reads as before
+  })
+
   it('hub lines parse by direction and refuse extras', () => {
     const lines = fx('hub-lines.jsonl')
       .trim()
@@ -435,7 +455,7 @@ describe('frames, errors, meta', () => {
     }
     expect(ChannelMeta.safeParse(meta).success).toBe(true)
     expect(ChannelMeta.safeParse({ ...meta, routed: 'worker' }).success).toBe(false)
-    expect(CHANNEL_KINDS).toHaveLength(15)
+    expect(CHANNEL_KINDS).toHaveLength(16) // 15, and `wake` (wake_me), which is not a fallback kind
   })
 
   it('session.state may say which session it describes; absent = main', () => {
@@ -445,5 +465,68 @@ describe('frames, errors, meta', () => {
     expect(SessionState.parse({ ...s, scope: { thread_id: 'trip' } }).scope).toEqual({ thread_id: 'trip' })
     expect(SessionState.safeParse({ ...s, scope: { thread_id: 'trip', x: 1 } }).success).toBe(false)
     expect(SessionKind.safeParse('thread').success).toBe(true)
+  })
+})
+
+describe('the status line fields on workers.status (and needs_you.resets_at in workers.json)', () => {
+  const at = '2026-11-13T12:00:00.000Z'
+  it('an item without them (an older bridge) parses as before; one with them keeps them', () => {
+    expect(WorkerStatusItem.parse({ thread_id: 'trip', state: 'live' })).toEqual({ thread_id: 'trip', state: 'live' })
+    const full = {
+      thread_id: 'trip',
+      state: 'live',
+      error_at: at,
+      needs_you: { kind: 'usage limit', since: at, step: 'press Esc', resets_at: at },
+      stopped_why: 'idle',
+      started_at: at,
+      turn_started_at: at,
+      restarts_1h: 3,
+    }
+    expect(WorkerStatusItem.parse(full)).toEqual(full)
+  })
+  it('a value this build cannot read costs only that field, never the item', () => {
+    const r = WorkerStatusItem.parse({
+      thread_id: 'trip',
+      state: 'live',
+      needs_you: { kind: '', since: at },
+      stopped_why: 'bored',
+      turn_started_at: 'yesterday',
+      restarts_1h: 99,
+      error_at: 5,
+    })
+    expect(r).toEqual({ thread_id: 'trip', state: 'live' })
+    const bad = WorkerStatusItem.parse({
+      thread_id: 'trip',
+      state: 'live',
+      needs_you: { kind: 'x', since: at, resets_at: 'soon' },
+    })
+    expect(bad.needs_you).toEqual({ kind: 'x', since: at })
+    const longStep = WorkerStatusItem.parse({
+      thread_id: 'trip',
+      state: 'live',
+      needs_you: { kind: 'x', since: at, step: 's'.repeat(301) },
+    })
+    expect(longStep.needs_you).toMatchObject({ kind: 'x', since: at }) // a step this build cannot show costs the step only
+    expect(longStep.needs_you?.step).toBeUndefined()
+  })
+  it('workers.json needs_you takes resets_at, and a reading that is not a time is none', () => {
+    expect(WorkerNeedsYou.parse({ kind: 'usage limit', since: at, resets_at: at }).resets_at).toBe(at)
+    expect(WorkerNeedsYou.parse({ kind: 'usage limit', since: at, resets_at: 'Aug 8, 4pm' }).resets_at).toBeUndefined()
+  })
+})
+
+describe('workers.status main_needs_you', () => {
+  const base = {
+    supported: true,
+    supervisor_online: true,
+    threads: [],
+    governor: { state: 'ok' },
+    at: '2026-11-13T12:00:00.000Z',
+  }
+  it('is optional, kept when it fits, and none when it does not, never the frame', () => {
+    expect(WorkersStatus.parse(base).main_needs_you).toBeUndefined()
+    const ny = { kind: 'sign in', since: '2026-11-13T11:50:00.000Z' }
+    expect(WorkersStatus.parse({ ...base, main_needs_you: ny }).main_needs_you).toEqual(ny)
+    expect(WorkersStatus.parse({ ...base, main_needs_you: { kind: '' } }).main_needs_you).toBeUndefined()
   })
 })

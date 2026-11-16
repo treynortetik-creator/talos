@@ -9,12 +9,18 @@ import { card, cardResult } from './card.ts'
 import { configPropose } from './config.ts'
 import { type AgentToolGroup, READ_THREAD_TOOLS, type ToolRecord } from './define.ts'
 import { handoffTool } from './handoff.ts'
+import { memoryNoteReadTool } from './memory-note-read.ts'
 import { inboxRaw, inboxTriage, setStatus, voiceProgress } from './misc.ts'
 import { talosModHello, talosModSync } from './mod.ts'
+import { publishPage } from './pages.ts'
 import { readInboundTool } from './read-inbound.ts'
+import { restartMain } from './restart-main.ts'
 import { schedulePropose, scheduleRunDone, scheduleRunStart, schedulesList } from './schedules.ts'
+import { SCREEN_TOOL_RECORDS } from './screen.ts'
 import { attach, reply } from './send.ts'
+import { threadSession } from './sessions.ts'
 import { archiveThread, createThread, listThreads, readThread } from './threads.ts'
+import { wakeMe } from './wake-me.ts'
 
 /** In the order agents are shown the tools: this order is the order of every list below, and of tools/list. */
 export const TOOL_RECORDS: readonly ToolRecord[] = [
@@ -36,11 +42,17 @@ export const TOOL_RECORDS: readonly ToolRecord[] = [
   schedulePropose,
   scheduleRunStart,
   scheduleRunDone,
+  wakeMe,
   configPropose,
   retryAttachmentTool,
+  publishPage,
   ...APP_TOOL_RECORDS,
   readInboundTool,
+  memoryNoteReadTool,
   handoffTool,
+  threadSession,
+  restartMain,
+  ...SCREEN_TOOL_RECORDS,
 ]
 
 /** The records by name, in table order. */
@@ -54,7 +66,7 @@ const inGroup = (g: AgentToolGroup) => where((t) => t.group === g)
 
 /** The 12 tools of spec 4.4. */
 export const BRIDGE_TOOLS = inGroup('core')
-/** The four Schedules tools (docs/SCHEDULES.md S6.1). */
+/** The Schedules tools (docs/SCHEDULES.md S6.1), and `wake_me`, which writes its one-shot job through the same scheduler. */
 export const SCHEDULE_BRIDGE_TOOLS = inGroup('schedule')
 /** The one tool by which the agent may PROPOSE a settings change (main session, live only); the owner's card applies it. */
 export const CONFIG_BRIDGE_TOOLS = inGroup('config')
@@ -64,6 +76,10 @@ export const ATTACHMENT_BRIDGE_TOOLS = inGroup('attachment')
 export const APP_BRIDGE_TOOLS = inGroup('apps')
 /** `talos_mod_hello` / `talos_mod_sync`: mod-only, denied to the model by the mod's guard. */
 export const MOD_BRIDGE_TOOLS = inGroup('mod')
+/** Org pages (docs/ORG-PAGES-SPEC.md): publish only; sharing is the owner's. */
+export const PAGE_BRIDGE_TOOLS = inGroup('pages')
+/** The screen tools: Talos.app's screen helper on the Mac (main and thread sessions, never headless). */
+export const SCREEN_BRIDGE_TOOLS = inGroup('screen')
 /** Tools a scheduled headless job may call. */
 export const HEADLESS_BRIDGE_TOOLS = where((t) => t.headless)
 /** Tools a worker-mode `talos-app` server lists. */

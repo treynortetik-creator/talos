@@ -3,6 +3,7 @@ import SwiftTerm
 import Testing
 import TalosDesktopCore
 @testable import TalosSupervisor
+import TalosTestSupport
 
 /// D2 review: the viewer's real pty into a real tmux server on the Rig's private socket, under the app's real tmux.conf.
 private final class Viewer: LocalProcessDelegate, @unchecked Sendable {
@@ -175,7 +176,7 @@ struct ReviewD2ViewerTests {
   /// leave a gap in which a wheel-up re-enters copy mode and swallows the key. A shim counts the processes that carry
   /// `send-keys`; the pane also really is in copy mode for the second send, and the key still reaches the program.
   @Test func aSendIsOneTmuxProcessAndReachesTheProgramEvenFromCopyMode() throws {
-    let root = Rig.realPath((NSTemporaryDirectory() as NSString).appendingPathComponent("talos-send-\(UUID().uuidString.prefix(8))"))
+    let root = Rig.realPath((TestTemp.base as NSString).appendingPathComponent("talos-send-\(UUID().uuidString.prefix(8))"))
     try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
     let socket = "talos-test-\(getpid())-\(UInt32.random(in: 0...UInt32.max))"
     let sends = root + "/sends"
@@ -189,14 +190,15 @@ struct ReviewD2ViewerTests {
     exec '\(Rig.tmuxPath!)' "$@"
     """.write(toFile: shim, atomically: true, encoding: .utf8)
     chmod(shim, 0o755)
-    let env = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": root, "LANG": "en_US.UTF-8", "TMPDIR": NSTemporaryDirectory()]
+    let env = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": root, "LANG": "en_US.UTF-8", "TMPDIR": TestTemp.base]
     let host = TmuxPtyHost(
-      commands: TmuxCommands(tmux: shim, socket: socket, configPath: Rig.tmuxConf), baseEnv: env, pollInterval: 0.2)
+      commands: TmuxCommands(tmux: shim, socket: socket, configPath: Rig.tmuxConf), launchDir: root + "/launch", baseEnv: env,
+      pollInterval: 0.2)
     let raw = [Rig.tmuxPath!, "-L", socket, "-f", Rig.tmuxConf]
     defer {
       host.close()
       _ = ProcessRunner.run(raw + ["kill-server"], env: env)
-      unlink("/tmp/tmux-\(getuid())/\(socket)")
+      unlink(Rig.tmuxSocketPath(socket))
       try? FileManager.default.removeItem(atPath: root)
     }
     try host.start(

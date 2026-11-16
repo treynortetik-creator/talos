@@ -1,0 +1,840 @@
+diff --git a/apps/windows/add-folder.ps1 b/apps/windows/add-folder.ps1
+new file mode 100644
+index 00000000..3f7dc953
+--- /dev/null
++++ b/apps/windows/add-folder.ps1
+@@ -0,0 +1,36 @@
++<#
++.SYNOPSIS
++  Shares one Windows folder with the Talos distro, for a thread that needs it (docs/WINDOWS-PLAN.md section 8). None is shared
++  by default. It is mounted at /mnt/win/<name>, read-write, owned by the talos user; give that path to the thread as its
++  folder. System folders, AppData, a whole profile and whole drives are refused.
++
++.EXAMPLE
++  powershell -ExecutionPolicy Bypass -File apps\windows\add-folder.ps1 'C:\Users\you\Projects\atlas'
++  powershell -ExecutionPolicy Bypass -File apps\windows\add-folder.ps1 -List
++  powershell -ExecutionPolicy Bypass -File apps\windows\add-folder.ps1 -Remove /mnt/win/atlas
++#>
++[CmdletBinding(DefaultParameterSetName = 'Add')]
++param(
++  [Parameter(ParameterSetName = 'Add', Mandatory = $true, Position = 0)][string]$Path,
++  [Parameter(ParameterSetName = 'List', Mandatory = $true)][switch]$List,
++  [Parameter(ParameterSetName = 'Remove', Mandatory = $true)][string]$Remove,
++  [string]$Distro = 'talos'
++)
++$ErrorActionPreference = 'Stop'
++$tool = '/opt/talos-wsl/talos-wsl.sh'
++# --exec: the arguments reach the script as they are, never through a Linux shell (backslashes, spaces)
++switch ($PSCmdlet.ParameterSetName) {
++  'List' { & wsl.exe -d $Distro -u root --exec $tool folder-list }
++  'Remove' { & wsl.exe -d $Distro -u root --exec $tool folder-remove $Remove }
++  'Add' {
++    $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
++    if (-not $item -or -not $item.PSIsContainer) { Write-Host "add-folder: not a folder: $Path" -ForegroundColor Red; exit 1 }
++    # the real folder, not a link or junction to somewhere else
++    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
++      Write-Host "add-folder: $Path is a link or junction; share the folder it points to instead" -ForegroundColor Red
++      exit 1
++    }
++    & wsl.exe -d $Distro -u root --exec $tool folder-add $item.FullName
++  }
++}
++exit $LASTEXITCODE
+diff --git a/apps/windows/distro/setup-user.sh b/apps/windows/distro/setup-user.sh
+new file mode 100644
+index 00000000..17d93669
+--- /dev/null
++++ b/apps/windows/distro/setup-user.sh
+@@ -0,0 +1,151 @@
++#!/usr/bin/env bash
++# Talos inside its WSL distro, as the `talos` user (docs/WINDOWS-PLAN.md section 8). install.ps1 runs it after talos-wsl.sh.
++#
++#   setup-user.sh --bundle /var/tmp/talos-install/talos-src.bundle [--origin URL] [--relay-url https://host] [--dry-run]
++#
++# 1. Node, pnpm and bun under ~/.local (no sudo; each download checked against its publisher's SHA-256 list), and Claude Code
++#    from Anthropic's installer, unless present.
++# 2. This repo at ~/talos-app, from the git bundle install.ps1 made of the Windows clone: no credential ever enters the
++#    distro. `origin` is set to the Windows clone's origin, for reading only; pulling it later needs the owner's own login.
++# 3. ./install.sh --yes --no-app (the Linux install: the agent folder, the MCP server, the bridge with --relay-url).
++# 4. The supervisor's systemd user unit, enabled and started (linger keeps it running with nobody logged in).
++# Every step checks what is already there, so a second run changes nothing that is right.
++set -euo pipefail
++
++NODE_VERSION=24.22.2
++BUN_VERSION=1.3.11
++BUNDLE=''
++ORIGIN=''
++RELAY=''
++DRY=0
++while [ $# -gt 0 ]; do
++  case "$1" in
++  --bundle) BUNDLE="$2" && shift 2 ;;
++  --origin) ORIGIN="$2" && shift 2 ;;
++  --relay-url) RELAY="$2" && shift 2 ;;
++  --dry-run) DRY=1 && shift ;;
++  *) echo "setup-user: unknown option $1" >&2 && exit 64 ;;
++  esac
++done
++[ -n "$BUNDLE" ] || {
++  echo "setup-user: --bundle is required" >&2
++  exit 64
++}
++[ "$(id -un)" = talos ] || {
++  echo "setup-user: runs as talos" >&2
++  exit 1
++}
++
++step() { echo "== $*"; }
++run() { if [ "$DRY" = 1 ]; then echo "would run: $*"; else "$@"; fi; }
++export PATH="$HOME/.local/bin:$HOME/.local/node/bin:$HOME/.bun/bin:$PATH"
++REPO="$HOME/talos-app"
++
++fetch_checked() { # fetch_checked <url> <sums-url> <name-in-sums> <out>
++  curl -fsSL "$1" -o "$4"
++  curl -fsSL "$2" -o "$4.sums"
++  local want
++  want="$(grep -E " \*?$3\$" "$4.sums" | head -1 | cut -d' ' -f1)"
++  [ -n "$want" ] || {
++    echo "setup-user: $3 is not in $2" >&2
++    return 1
++  }
++  echo "$want  $4" | sha256sum -c --quiet - || {
++    echo "setup-user: $3 does not match its SHA-256" >&2
++    return 1
++  }
++  rm -f "$4.sums"
++}
++
++step "toolchain"
++if ! node -v 2>/dev/null | grep -q "^v24\."; then
++  d="$(mktemp -d)"
++  run fetch_checked "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz" \
++    "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" "node-v$NODE_VERSION-linux-x64.tar.xz" "$d/node.tar.xz"
++  run mkdir -p "$HOME/.local/node"
++  run tar -xJf "$d/node.tar.xz" -C "$HOME/.local/node" --strip-components=1
++  rm -rf "$d"
++fi
++want_pnpm="$(sed -n 's/.*"packageManager": *"pnpm@\([0-9.]*\)".*/\1/p' "$REPO/package.json" 2>/dev/null || true)"
++if ! command -v pnpm >/dev/null || { [ -n "$want_pnpm" ] && [ "$(pnpm -v)" != "$want_pnpm" ]; }; then
++  run npm install -g --silent --prefix "$HOME/.local/node" "pnpm@${want_pnpm:-10}"
++fi
++if ! bun --version 2>/dev/null | grep -q "^$BUN_VERSION$"; then
++  d="$(mktemp -d)"
++  run fetch_checked "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64.zip" \
++    "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/SHASUMS256.txt" "bun-linux-x64.zip" "$d/bun.zip"
++  run unzip -q -o "$d/bun.zip" -d "$d"
++  run mkdir -p "$HOME/.bun/bin"
++  run install -m 755 "$d/bun-linux-x64/bun" "$HOME/.bun/bin/bun"
++  rm -rf "$d"
++fi
++for f in "$HOME/.profile" "$HOME/.bashrc"; do
++  grep -q 'talos: toolchain' "$f" 2>/dev/null ||
++    run sh -c "printf '%s\n' '# talos: toolchain' 'export PATH=\"\$HOME/.local/bin:\$HOME/.local/node/bin:\$HOME/.bun/bin:\$PATH\"' >> '$f'"
++done
++# Claude Code for Linux, from Anthropic's own installer (it checks what it downloads). Signing in is the owner's, once:
++# install.ps1 says how at the end.
++if ! command -v claude >/dev/null; then
++  if [ "$DRY" = 1 ]; then echo "would install Claude Code: curl -fsSL https://claude.ai/install.sh | bash"; else
++    curl -fsSL https://claude.ai/install.sh | bash
++  fi
++fi
++
++step "this repo at $REPO"
++if [ -d "$REPO/.git" ]; then
++  run git -C "$REPO" fetch -q "$BUNDLE" "+HEAD:refs/remotes/bundle/HEAD"
++  run git -C "$REPO" merge -q --ff-only refs/remotes/bundle/HEAD
++else
++  run git clone -q "$BUNDLE" "$REPO"
++fi
++[ -z "$ORIGIN" ] || run git -C "$REPO" remote set-url origin "$ORIGIN"
++
++step "the Linux install"
++args=(--yes --no-app)
++[ -z "$RELAY" ] || args+=(--relay-url "$RELAY")
++[ "$DRY" = 0 ] || args+=(--dry-run)
++(cd "$REPO" && ./install.sh "${args[@]}")
++
++step "the supervisor"
++# its settings: the agent folder and the same mod and channel flags the Mac app gets in desktop.json (install.sh APP_FLAGS).
++# Written once; an owner's own supervisor.json is never overwritten.
++conf="$HOME/.config/talos/app/supervisor.json"
++if [ -f "$conf" ]; then
++  echo "supervisor.json: kept as it is"
++else
++  run mkdir -p "$(dirname "$conf")"
++  if [ "$DRY" = 1 ]; then echo "would write $conf"; else
++    MOD="$REPO/plugins/talos-app-mod" AGENT="$HOME/talos-agent" python3 -c 'import json, os
++print(json.dumps({"agent_dir": os.environ["AGENT"], "args": ["--plugin-dir", os.environ["MOD"],
++  "--dangerously-load-development-channels", "server:talos-app"]}, indent=2))' >"$conf"
++    chmod 600 "$conf"
++    echo "supervisor.json: written"
++  fi
++fi
++unit="$HOME/.config/systemd/user/talos-supervisor.service"
++run mkdir -p "$(dirname "$unit")"
++if [ "$DRY" = 1 ]; then
++  echo "would write $unit and enable it"
++else
++  (cd "$REPO" && bun run apps/bridge/src/cli.ts supervise unit) >"$unit.tmp"
++  if cmp -s "$unit.tmp" "$unit"; then rm -f "$unit.tmp"; else mv "$unit.tmp" "$unit"; fi
++  if systemctl --user show-environment >/dev/null 2>&1; then
++    systemctl --user daemon-reload
++    systemctl --user enable talos-supervisor.service
++    systemctl --user restart talos-supervisor.service
++    # "active" the instant after a start proves nothing: a supervisor that cannot read its settings exits and is
++    # restarted every few seconds. It has to stay up, with no NEW restart (the count survives a restart), for 10 s.
++    before="$(systemctl --user show talos-supervisor.service -p NRestarts --value)"
++    sleep 10
++    state="$(systemctl --user is-active talos-supervisor.service || true)"
++    after="$(systemctl --user show talos-supervisor.service -p NRestarts --value)"
++    if [ "$state" = active ] && [ "$after" = "$before" ]; then echo "supervisor: running"; else
++      echo "setup-user: the supervisor is not staying up ($state, $((after - before)) restarts in 10 s). Its log:" >&2
++      journalctl --user -u talos-supervisor.service --no-pager -n 8 >&2 || true
++      exit 1
++    fi
++  else
++    echo "supervisor: the unit is written; it starts once systemd runs (after the distro restarts)"
++  fi
++fi
++echo "== Talos is set up in this distro"
+diff --git a/apps/windows/distro/talos-wsl.sh b/apps/windows/distro/talos-wsl.sh
+new file mode 100644
+index 00000000..184bbf80
+--- /dev/null
++++ b/apps/windows/distro/talos-wsl.sh
+@@ -0,0 +1,207 @@
++#!/usr/bin/env bash
++# The Talos WSL distro's own settings, run as root inside it (docs/WINDOWS-PLAN.md section 8). install.ps1 calls it; the
++# owner's add-folder.ps1 calls `folder-add`. Everything it writes is under $TALOS_WSL_ROOT (empty: the real /), so
++# scripts/windows-distro.test.ts runs it against a scratch folder.
++#
++#   talos-wsl.sh wsl-conf                     interop and automount off, systemd on, default user talos, fstab mounts on
++#   talos-wsl.sh root-setup                   the talos user, the packages Talos needs, linger (a real distro only)
++#   talos-wsl.sh isolation                    exit 1 unless interop is off and no Windows drive is mounted
++#   talos-wsl.sh folder-add 'C:\Some\Folder'  one Windows folder at /mnt/win/<name> (prints that path last)
++#   talos-wsl.sh folder-remove /mnt/win/<name>
++#   talos-wsl.sh folder-list                  /mnt/win/<name><TAB>C:\Some\Folder, one a line
++#
++# No Windows folder is shared by default (owner, 2026-11-11): interop off means a Linux process cannot start a Windows one,
++# automount off means C: is not under /mnt; only the folders the owner adds, one by one, are mounted.
++set -euo pipefail
++
++R="${TALOS_WSL_ROOT:-}"
++USER_NAME=talos
++MARK='# written by Talos (apps/windows/distro/talos-wsl.sh); the previous file, if any, is wsl.conf.before-talos'
++
++die() {
++  echo "talos-wsl: $*" >&2
++  exit 1
++}
++owner_ids() {
++  OWN_UID="${TALOS_WSL_UID:-$(id -u "$USER_NAME" 2>/dev/null || echo 1000)}"
++  OWN_GID="${TALOS_WSL_GID:-$(id -g "$USER_NAME" 2>/dev/null || echo 1000)}"
++}
++
++conf_text() {
++  cat <<EOF
++$MARK
++[boot]
++systemd=true
++[user]
++default=$USER_NAME
++[interop]
++enabled=false
++appendWindowsPath=false
++[automount]
++enabled=false
++mountFsTab=true
++EOF
++}
++
++wsl_conf() {
++  local f="$R/etc/wsl.conf" want
++  want="$(conf_text)"
++  if [ -f "$f" ] && [ "$(cat "$f")" = "$want" ]; then
++    echo "wsl.conf already set"
++    return
++  fi
++  # one backup of a file Talos did not write; never overwritten by a later run
++  if [ -f "$f" ] && ! grep -qF "$MARK" "$f" && [ ! -e "$f.before-talos" ]; then cp -p "$f" "$f.before-talos"; fi
++  printf '%s\n' "$want" >"$f.talos-tmp"
++  mv "$f.talos-tmp" "$f"
++  echo "wsl.conf written (it takes effect when the distro starts again)"
++}
++
++# ---- Windows folders -------------------------------------------------------------------------------------------------
++
++# 'C:\Users\x\' -> 'C:\Users\x' (backslashes, the drive upper case, no trailing backslash); refuses what is not a plain
++# drive path: relative, UNC, device paths, `..`.
++normalize() {
++  local p="${1//\//\\}"
++  case "$p" in
++  \\\\*) die "not shared: a network or device path ($1); use a folder on a local drive" ;;
++  esac
++  [[ "$p" =~ ^[A-Za-z]:(\\|$) ]] || die "not shared: not a full Windows path with a drive letter ($1)"
++  case "\\$p\\" in
++  *\\..\\* | *\\.\\*) die "not shared: the path climbs with . or .. ($1)" ;;
++  esac
++  while [ "${#p}" -gt 3 ] && [ "${p: -1}" = '\' ]; do p="${p%\\}"; done
++  printf '%s%s' "${p:0:1}" "${p:1}" | sed 's/^./\U&/'
++}
++
++refuse_system() {
++  local low
++  low="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
++  [[ "$low" =~ ^[a-z]:\\?$ ]] && die "not shared: a whole drive ($1)"
++  [[ "$low" =~ ^[a-z]:\\(windows|programdata|program\ files|program\ files\ \(x86\)|\$recycle\.bin|system\ volume\ information|recovery)(\\|$) ]] &&
++    die "not shared: a system folder ($1)"
++  [[ "$low" =~ ^[a-z]:\\users$ ]] && die "not shared: every user's profile ($1)"
++  [[ "$low" =~ ^[a-z]:\\users\\[^\\]+$ ]] && die "not shared: a whole profile; pick a folder inside it ($1)"
++  [[ "$low" =~ ^[a-z]:\\users\\[^\\]+\\appdata(\\|$) ]] && die "not shared: AppData holds programs' own data and secrets ($1)"
++  return 0
++}
++
++# the fstab source: forward slashes, spaces and tabs escaped as fstab wants
++fstab_source() {
++  local s="${1//\\//}"
++  s="${s// /\\040}"
++  printf '%s' "${s//$'\t'/\\011}"
++}
++# the other way, for folder-list
++windows_path() {
++  local s="${1//\\040/ }"
++  s="${s//\\011/$'\t'}"
++  printf '%s' "${s//\//\\}"
++}
++
++folder_name() {
++  local base="${1##*\\}" n
++  n="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
++  printf '%s' "${n:-folder}"
++}
++
++fstab_file() { printf '%s' "$R/etc/fstab"; }
++
++folder_add() {
++  [ $# -eq 1 ] || die "usage: folder-add 'C:\\Some\\Folder'"
++  owner_ids
++  local win src f name base i line existing
++  win="$(normalize "$1")"
++  refuse_system "$win"
++  src="$(fstab_source "$win")"
++  f="$(fstab_file)"
++  touch "$f"
++  # already shared (Windows folds case): say where, change nothing
++  # ENVIRON, not -v: awk -v would turn the escaped \040 back into a space and never match the stored line
++  existing="$(TALOS_SRC="$src" awk '$3 == "drvfs" && tolower($1) == tolower(ENVIRON["TALOS_SRC"]) { print $2; exit }' "$f")"
++  if [ -n "$existing" ]; then
++    echo "already shared"
++    echo "$existing"
++    return
++  fi
++  base="$(folder_name "$win")"
++  name="$base"
++  i=2
++  while awk -v m="/mnt/win/$name" '$2 == m { found = 1 } END { exit !found }' "$f"; do
++    name="$base-$i"
++    i=$((i + 1))
++  done
++  # nofail: a shared folder deleted on the Windows side must not stop the distro's start (measured on Titan: without it, WSL
++  # also fails to start talos's systemd user session, which is the session that runs the supervisor)
++  line="$src /mnt/win/$name drvfs metadata,nofail,uid=$OWN_UID,gid=$OWN_GID,umask=022,fmask=011 0 0"
++  cp -p "$f" "$f.talos-tmp"
++  printf '%s\n' "$line" >>"$f.talos-tmp"
++  mv "$f.talos-tmp" "$f"
++  mkdir -p "$R/mnt/win/$name"
++  if [ -z "$R" ]; then mount "/mnt/win/$name" || die "the folder is listed but did not mount; is $win there?"; fi
++  echo "shared $win"
++  echo "/mnt/win/$name"
++}
++
++folder_remove() {
++  [ $# -eq 1 ] || die "usage: folder-remove /mnt/win/<name>"
++  local at="$1" f
++  [[ "$at" =~ ^/mnt/win/[a-z0-9-]+$ ]] || die "not a shared Windows folder: $at"
++  f="$(fstab_file)"
++  [ -f "$f" ] && awk -v m="$at" '$3 == "drvfs" && $2 == m { found = 1 } END { exit !found }' "$f" ||
++    die "no Windows folder is shared at $at"
++  if [ -z "$R" ]; then umount "$at" 2>/dev/null || true; fi
++  awk -v m="$at" '!($3 == "drvfs" && $2 == m)' "$f" >"$f.talos-tmp"
++  mv "$f.talos-tmp" "$f"
++  rmdir "$R$at" 2>/dev/null || true
++  echo "no longer shared: $at"
++}
++
++folder_list() {
++  local f
++  f="$(fstab_file)"
++  [ -f "$f" ] || return 0
++  awk '$3 == "drvfs" && $2 ~ /^\/mnt\/win\// { print $2 "\t" $1 }' "$f" | while IFS=$'\t' read -r at src; do
++    printf '%s\t%s\n' "$at" "$(windows_path "$src")"
++  done
++}
++
++# After the restart: interop must be off (no WSLInterop handler) and no whole Windows drive mounted at /mnt/<letter>. An empty
++# /mnt/c folder is not a mount; a folder the owner shared lives at /mnt/win/<name> and is fine. Exits 1 and says which.
++isolation() {
++  local bad=0 drives
++  if [ -e "$R/proc/sys/fs/binfmt_misc/WSLInterop" ]; then
++    echo "talos-wsl: interop is on (Linux processes can start Windows programs)" >&2
++    bad=1
++  fi
++  drives="$(awk '$2 ~ /^\/mnt\/[a-z]$/ { print $2 }' "$R/proc/mounts" | tr '\n' ' ')"
++  if [ -n "$drives" ]; then
++    echo "talos-wsl: Windows drives are mounted: $drives" >&2
++    bad=1
++  fi
++  [ "$bad" = 0 ] || exit 1
++  echo "isolated: interop off, no Windows drive mounted"
++}
++
++root_setup() {
++  [ -z "$R" ] || die "root-setup changes the real distro; it does not take TALOS_WSL_ROOT"
++  [ "$(id -u)" -eq 0 ] || die "root-setup runs as root"
++  id -u "$USER_NAME" >/dev/null 2>&1 || useradd --create-home --shell /bin/bash --uid 1000 "$USER_NAME"
++  export DEBIAN_FRONTEND=noninteractive
++  apt-get update -qq
++  apt-get install -y -qq git curl ca-certificates tmux python3 python3-venv build-essential unzip jq xz-utils >/dev/null
++  mkdir -p /mnt/win
++  # systemd is on only after the distro restarts with the new wsl.conf; linger needs it
++  if [ -d /run/systemd/system ]; then loginctl enable-linger "$USER_NAME"; else echo "linger: after the restart"; fi
++  echo "root setup done"
++}
++
++case "${1:-}" in
++wsl-conf) wsl_conf ;;
++root-setup) root_setup ;;
++isolation) isolation ;;
++folder-add) shift && folder_add "$@" ;;
++folder-remove) shift && folder_remove "$@" ;;
++folder-list) folder_list ;;
++*) die "usage: talos-wsl.sh wsl-conf | root-setup | folder-add 'C:\\Folder' | folder-remove /mnt/win/<name> | folder-list" ;;
++esac
+diff --git a/apps/windows/install.ps1 b/apps/windows/install.ps1
+new file mode 100644
+index 00000000..8d602008
+--- /dev/null
++++ b/apps/windows/install.ps1
+@@ -0,0 +1,141 @@
++<#
++.SYNOPSIS
++  Talos on Windows: its own WSL distro, Talos set up inside it, and the keep-alive (docs/WINDOWS-PLAN.md section 8).
++
++.DESCRIPTION
++  Run it from this clone, in Windows PowerShell (no administrator):
++    powershell -ExecutionPolicy Bypass -File apps\windows\install.ps1 [-RelayUrl https://your-relay] [-DryRun]
++
++  1. Checks Windows (build 19041 or later) and WSL. With no WSL it asks once to run `wsl --install --no-distribution` as
++     administrator; restart Windows, then run this again.
++  2. Creates the distro (default `talos`) from Microsoft's own Ubuntu 24.04 image, unless it exists.
++  3. As root inside it: wsl.conf (interop and automount off, systemd on, default user talos), the talos user, packages,
++     linger. The distro restarts once so wsl.conf takes effect.
++  4. As talos: this clone brought in as a git bundle (no credential enters the distro), Node, pnpm and bun, ./install.sh,
++     the supervisor's systemd unit.
++  5. The keep-alive: a logon task for you (no administrator) that keeps the distro running (WSL stops an idle one).
++  No Windows folder is shared; add one per thread with add-folder.ps1. Running it again changes nothing that is right.
++#>
++[CmdletBinding()]
++param(
++  [string]$Distro = 'talos',
++  [string]$Location = (Join-Path $env:LOCALAPPDATA 'Talos\wsl'),
++  [string]$RelayUrl = '',
++  [switch]$Yes,
++  [switch]$DryRun,
++  [switch]$NoKeepAlive
++)
++$ErrorActionPreference = 'Stop'
++$here = Split-Path -Parent $MyInvocation.MyCommand.Path
++$repo = (Resolve-Path (Join-Path $here '..\..')).Path
++$taskName = "Talos keep-alive ($Distro)"
++
++function Say([string]$m) { Write-Host "== $m" }
++function Fail([string]$m) { Write-Host "install: $m" -ForegroundColor Red; exit 1 }
++# wsl.exe writes UTF-16 to a pipe; the NULs go
++function WslOut([string[]]$a) {
++  # stderr joined in, never thrown: in Windows PowerShell 5.1 a redirected native stderr line is an error record, and with
++  # ErrorActionPreference Stop it would end the script (`wsl --status` writes to stderr when WSL is missing)
++  $ErrorActionPreference = 'Continue'
++  ((& wsl.exe @a 2>&1 | ForEach-Object { "$_" }) -join "`n") -replace "`0", ''
++}
++function Wsl([string[]]$a) {
++  if ($DryRun) { Write-Host "would run: wsl $($a -join ' ')"; return }
++  & wsl.exe @a
++  if ($LASTEXITCODE -ne 0) { Fail "wsl $($a -join ' ') failed (exit $LASTEXITCODE)" }
++}
++# a file into the distro over \\wsl.localhost, with LF line ends (bash refuses CR)
++function PutText([string]$text, [string]$linuxPath) {
++  $unc = "\\wsl.localhost\$Distro" + ($linuxPath -replace '/', '\')
++  if ($DryRun) { Write-Host "would write $linuxPath"; return }
++  New-Item -ItemType Directory -Force -Path (Split-Path $unc) | Out-Null
++  [IO.File]::WriteAllText($unc, ($text -replace "`r`n", "`n"), (New-Object Text.UTF8Encoding $false))
++}
++
++# ---- 1. Windows and WSL --------------------------------------------------------------------------------------------------
++$build = [Environment]::OSVersion.Version.Build
++if ($build -lt 19041) { Fail "Windows 10 version 2004 (build 19041) or later is needed; this is build $build." }
++
++$status = WslOut @('--status')
++if ($LASTEXITCODE -ne 0) {
++  Say 'WSL is not installed. Installing it needs an administrator once, then a restart of Windows.'
++  if ($DryRun) { Write-Host 'would run as administrator: wsl --install --no-distribution'; exit 0 }
++  if (-not $Yes -and (Read-Host 'Install WSL now? (y/N)') -notmatch '^[yY]') { Fail 'WSL is needed. Nothing was changed.' }
++  Start-Process -FilePath 'wsl.exe' -ArgumentList '--install', '--no-distribution' -Verb RunAs -Wait
++  Say 'WSL is installed. Restart Windows, then run this script again.'
++  exit 0
++}
++$version = WslOut @('--version')
++if ($version -match 'WSL[^:]*:\s*(\d+)\.(\d+)') {
++  if ([int]$Matches[1] -lt 2 -or ([int]$Matches[1] -eq 2 -and [int]$Matches[2] -lt 4)) {
++    Fail "WSL $($Matches[1]).$($Matches[2]) is too old (2.4 or later names a distro). Run: wsl --update"
++  }
++}
++
++# ---- 2. the distro --------------------------------------------------------------------------------------------------------
++$have = (WslOut @('--list', '--quiet')) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
++if ($have -contains $Distro) {
++  Say "the $Distro distro is there"
++} else {
++  Say "creating the $Distro distro (Ubuntu 24.04) in $Location"
++  if (-not $DryRun) { New-Item -ItemType Directory -Force -Path $Location | Out-Null }
++  Wsl @('--install', 'Ubuntu-24.04', '--name', $Distro, '--location', $Location, '--no-launch')
++}
++
++# ---- 3. as root ----------------------------------------------------------------------------------------------------------
++Say 'the distro''s own settings (as root)'
++Wsl @('-d', $Distro, '-u', 'root', '--exec', '/bin/true')
++# handed over in /var/tmp: once systemd runs, a file written to \\wsl.localhost\<distro>\tmp is not seen inside (measured)
++foreach ($f in 'talos-wsl.sh', 'setup-user.sh') {
++  PutText ([IO.File]::ReadAllText((Join-Path $here "distro\$f"))) "/var/tmp/talos-install/$f"
++}
++Wsl @('-d', $Distro, '-u', 'root', '--exec', '/bin/sh', '-c',
++  'install -D -m 755 /var/tmp/talos-install/talos-wsl.sh /opt/talos-wsl/talos-wsl.sh && install -D -m 755 /var/tmp/talos-install/setup-user.sh /opt/talos-wsl/setup-user.sh')
++Wsl @('-d', $Distro, '-u', 'root', '--exec', '/opt/talos-wsl/talos-wsl.sh', 'wsl-conf')
++Wsl @('-d', $Distro, '-u', 'root', '--exec', '/opt/talos-wsl/talos-wsl.sh', 'root-setup')
++Say 'restarting the distro so wsl.conf takes effect (systemd, no interop, no automount)'
++Wsl @('--terminate', $Distro)
++Wsl @('-d', $Distro, '-u', 'root', '--exec', '/opt/talos-wsl/talos-wsl.sh', 'root-setup')
++# interop off and no Windows drive mounted, checked inside (no quoted arguments: Windows PowerShell 5.1 drops their quotes)
++Wsl @('-d', $Distro, '-u', 'root', '--exec', '/opt/talos-wsl/talos-wsl.sh', 'isolation')
++
++# ---- 4. as talos ---------------------------------------------------------------------------------------------------------
++Say 'this clone into the distro, as a git bundle'
++$branch = (& git -C $repo rev-parse --abbrev-ref HEAD).Trim()
++$origin = ''
++try { $origin = (& git -C $repo remote get-url origin 2>$null).Trim() } catch {}
++$bundle = Join-Path $env:TEMP "talos-src-$PID.bundle"
++if (-not $DryRun) {
++  & git -C $repo bundle create $bundle HEAD $branch 2>$null
++  if ($LASTEXITCODE -ne 0) { Fail 'git bundle failed: is this a git clone?' }
++  New-Item -ItemType Directory -Force -Path "\\wsl.localhost\$Distro\var\tmp\talos-install" | Out-Null
++  Copy-Item $bundle "\\wsl.localhost\$Distro\var\tmp\talos-install\talos-src.bundle" -Force
++  Remove-Item $bundle -Force
++}
++Say 'Talos inside the distro (as talos)'
++$userArgs = @('-d', $Distro, '-u', 'talos', '--cd', '~', '--exec', '/opt/talos-wsl/setup-user.sh', '--bundle', '/var/tmp/talos-install/talos-src.bundle')
++if ($origin) { $userArgs += @('--origin', $origin) }
++if ($RelayUrl) { $userArgs += @('--relay-url', $RelayUrl) }
++Wsl $userArgs
++
++# ---- 5. the keep-alive -------------------------------------------------------------------------------------------------
++if ($NoKeepAlive) {
++  Say 'no keep-alive (-NoKeepAlive): the distro stops when no window holds it, and Talos with it'
++} else {
++  Say "the keep-alive: logon task '$taskName'"
++  $ka = Join-Path $here 'keepalive.ps1'
++  if ($DryRun) {
++    Write-Host "would register a logon task running: powershell -WindowStyle Hidden -File `"$ka`" -Distro $Distro"
++  } else {
++    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ka`" -Distro $Distro"
++    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
++    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
++    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
++    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
++    Start-ScheduledTask -TaskName $taskName
++  }
++}
++Say "done. Talos runs in the $Distro distro."
++Write-Host "   Sign in to Claude Code once:  wsl -d $Distro -- claude"
++Write-Host "   (interop is off, so it prints a sign-in link instead of opening a browser: open it, then paste the code back)"
++Write-Host "   Share a Windows folder with a thread:  apps\windows\add-folder.ps1 'C:\path\to\folder'"
+diff --git a/apps/windows/keepalive.ps1 b/apps/windows/keepalive.ps1
+new file mode 100644
+index 00000000..931d6384
+--- /dev/null
++++ b/apps/windows/keepalive.ps1
+@@ -0,0 +1,39 @@
++<#
++.SYNOPSIS
++  Keeps the Talos WSL distro running (docs/WINDOWS-PLAN.md section 8). WSL stops a distro once no Windows process holds it,
++  its systemd services and Talos with it; this holds it with one idle process and starts it again if WSL stops it anyway.
++  install.ps1 runs it at logon, hidden, as a task of yours. One copy runs per distro: a second one exits at once.
++#>
++[CmdletBinding()]
++param([string]$Distro = 'talos')
++$ErrorActionPreference = 'Continue'
++$dir = Join-Path $env:LOCALAPPDATA 'Talos'
++New-Item -ItemType Directory -Force -Path $dir | Out-Null
++$log = Join-Path $dir "keepalive-$Distro.log"
++
++function Log([string]$m) {
++  # a small log: the last 200 lines
++  $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK'), $m
++  $old = @()
++  if (Test-Path $log) { $old = @(Get-Content $log -Tail 199) }
++  Set-Content -Path $log -Value ($old + $line) -Encoding UTF8
++}
++
++$created = $false
++$mutex = New-Object Threading.Mutex($true, "Local\TalosKeepAlive-$Distro", [ref]$created)
++if (-not $created) { exit 0 }
++Log "keep-alive started for $Distro"
++$wait = 5
++try {
++  while ($true) {
++    $start = Get-Date
++    & wsl.exe -d $Distro --exec /bin/sleep infinity
++    $ran = [int]((Get-Date) - $start).TotalSeconds
++    Log "the $Distro distro let go after ${ran}s (exit $LASTEXITCODE); starting it again in ${wait}s"
++    Start-Sleep -Seconds $wait
++    # a distro that will not stay up is not hammered: up to 5 minutes between tries, back to 5 s once it holds
++    if ($ran -lt 60) { $wait = [Math]::Min($wait * 2, 300) } else { $wait = 5 }
++  }
++} finally {
++  $mutex.ReleaseMutex()
++}
+diff --git a/apps/windows/uninstall.ps1 b/apps/windows/uninstall.ps1
+new file mode 100644
+index 00000000..4c292066
+--- /dev/null
++++ b/apps/windows/uninstall.ps1
+@@ -0,0 +1,29 @@
++<#
++.SYNOPSIS
++  Stops Talos on Windows (docs/WINDOWS-PLAN.md section 8). Always: the keep-alive logon task, and the distro is stopped.
++  Only with -RemoveDistro, after you type its name: the distro and everything in it (the agent folder, its memory, the
++  bridge's keys) are deleted for good. Windows folders you shared are never touched: they were only mounted.
++#>
++[CmdletBinding()]
++param(
++  [string]$Distro = 'talos',
++  [switch]$RemoveDistro
++)
++$ErrorActionPreference = 'Stop'
++$taskName = "Talos keep-alive ($Distro)"
++$task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
++if ($task) {
++  Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
++  Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
++  Write-Host "== removed the logon task '$taskName'"
++} else {
++  Write-Host "== no logon task '$taskName'"
++}
++& wsl.exe --terminate $Distro 2>$null | Out-Null
++Write-Host "== stopped the $Distro distro"
++if ($RemoveDistro) {
++  Write-Host "This deletes the $Distro distro and everything in it, for good: the agent folder, its memory, the bridge's keys."
++  if ((Read-Host "Type $Distro to delete it") -ne $Distro) { Write-Host '== kept the distro'; exit 0 }
++  & wsl.exe --unregister $Distro
++  Write-Host "== deleted the $Distro distro"
++}
+diff --git a/docs/WINDOWS-PLAN.md b/docs/WINDOWS-PLAN.md
+index 60ac2fe6..eee7d920 100644
+--- a/docs/WINDOWS-PLAN.md
++++ b/docs/WINDOWS-PLAN.md
+@@ -169,4 +169,23 @@ first install on a clean Windows VM; (4) the tray piece; later, the Bun hook.
+   root itself) and prints the path to give the thread as its folder.
+ - `uninstall.ps1`: the logon task always; the distro and its files only when asked.
+ 
++**What the live runs on Titan found** (a throwaway distro, removed after; each is handled in the code and, where it can be,
++tested in `scripts/windows-distro.test.ts`):
++
++- Once systemd runs, a file Windows writes to `\\wsl.localhost\<distro>\tmp` is not seen inside, so files are handed over in
++  `/var/tmp/talos-install`.
++- Windows PowerShell 5.1 drops the double quotes inside arguments to `wsl.exe`, so nothing quoted is passed: checks run as
++  subcommands of `talos-wsl.sh` (`isolation`) through `wsl --exec`, which also keeps backslashes and spaces in folder paths.
++- With `ErrorActionPreference Stop`, a redirected native stderr line ends a 5.1 script; reading `wsl.exe` output never throws.
++- An empty `/mnt/c` folder is not a mount: the isolation check reads `/proc/mounts`.
++- The Linux `install.sh` needs Claude Code in the distro: `setup-user.sh` installs it with Anthropic's installer; signing in
++  is the owner's once (`wsl -d talos -- claude`; interop is off, so it prints a link).
++- The supervisor needs `supervisor.json` (`agent_dir`, and the Mac's `desktop.json` flags); without it it restarts every few
++  seconds while systemd says "active". `setup-user.sh` writes it once and requires 10 s with no new restart.
++- A shared folder deleted on the Windows side broke the next start, the systemd user session for `talos` (the supervisor's)
++  included. Every share is `nofail`.
++- `awk -v` turned the escaped spaces of a stored share back into spaces, so sharing a folder with spaces twice made a second
++  mount; compared through `ENVIRON` now.
++- The keep-alive held the distro for 3 minutes with nothing else attached, and had it running again 20 s after a forced stop.
++
+ **Step 2: the tray** (keep-alive and status only): after step 1 is reviewed.
+diff --git a/scripts/windows-distro.test.ts b/scripts/windows-distro.test.ts
+new file mode 100644
+index 00000000..4a6bfad5
+--- /dev/null
++++ b/scripts/windows-distro.test.ts
+@@ -0,0 +1,167 @@
++// Windows step 1 (docs/WINDOWS-PLAN.md section 8): the setup that runs inside the `talos` WSL distro, as root. These run the
++// real script against a scratch root (TALOS_WSL_ROOT), so what it writes to /etc is checked here, on Linux, without a distro.
++import { spawnSync } from 'node:child_process'
++import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { afterEach, beforeEach, describe, expect, it } from 'vitest'
++import { ROOT } from './size-report.ts'
++
++const SCRIPT = join(ROOT, 'apps', 'windows', 'distro', 'talos-wsl.sh')
++let root: string
++beforeEach(() => {
++  root = mkdtempSync(join(tmpdir(), 'talos-wsl-'))
++  mkdirSync(join(root, 'etc'))
++})
++afterEach(() => rmSync(root, { recursive: true, force: true }))
++
++function run(...args: string[]) {
++  const r = spawnSync('bash', [SCRIPT, ...args], {
++    env: {
++      PATH: process.env.PATH ?? '/usr/bin:/bin',
++      TALOS_WSL_ROOT: root,
++      TALOS_WSL_UID: '1000',
++      TALOS_WSL_GID: '1000',
++    },
++    encoding: 'utf8',
++  })
++  return { code: r.status, out: r.stdout, err: r.stderr }
++}
++const etc = (f: string) => readFileSync(join(root, 'etc', f), 'utf8')
++const fstabLines = () =>
++  existsSync(join(root, 'etc', 'fstab'))
++    ? etc('fstab')
++        .split('\n')
++        .filter((l) => l.includes('drvfs'))
++    : []
++
++describe('wsl.conf', () => {
++  it('turns interop and automount off, systemd on, mounts what fstab lists, and logs in as talos', () => {
++    expect(run('wsl-conf').code).toBe(0)
++    const conf = etc('wsl.conf')
++    for (const line of [
++      '[boot]',
++      'systemd=true',
++      '[user]',
++      'default=talos',
++      '[interop]',
++      'enabled=false',
++      'appendWindowsPath=false',
++      '[automount]',
++      'mountFsTab=true',
++    ])
++      expect(conf.split('\n')).toContain(line)
++    // interop and automount are both off: `enabled=false` under each
++    expect(conf).toMatch(/\[interop\]\nenabled=false/)
++    expect(conf).toMatch(/\[automount\]\nenabled=false/)
++  })
++
++  it('keeps a wsl.conf it did not write, as a backup, and is a no-op the second time', () => {
++    writeFileSync(join(root, 'etc', 'wsl.conf'), '[network]\nhostname=mine\n')
++    expect(run('wsl-conf').code).toBe(0)
++    expect(readFileSync(join(root, 'etc', 'wsl.conf.before-talos'), 'utf8')).toBe('[network]\nhostname=mine\n')
++    const first = etc('wsl.conf')
++    const again = run('wsl-conf')
++    expect(again.code).toBe(0)
++    expect(again.out).toContain('already')
++    expect(etc('wsl.conf')).toBe(first)
++  })
++})
++
++describe('the isolation check install.ps1 runs after the restart', () => {
++  const proc = (interop: boolean, mounts: string) => {
++    mkdirSync(join(root, 'proc', 'sys', 'fs', 'binfmt_misc'), { recursive: true })
++    if (interop) writeFileSync(join(root, 'proc', 'sys', 'fs', 'binfmt_misc', 'WSLInterop'), 'enabled\n')
++    writeFileSync(join(root, 'proc', 'mounts'), mounts)
++  }
++  const ROOTFS = '/dev/sdc / ext4 rw,relatime 0 0\n'
++  const DRIVERS = 'drivers /usr/lib/wsl/drivers 9p ro,nosuid,nodev 0 0\n'
++
++  it('passes with no interop and no Windows drive mounted (an empty /mnt/c folder is not a mount)', () => {
++    proc(false, ROOTFS + DRIVERS)
++    mkdirSync(join(root, 'mnt', 'c'), { recursive: true })
++    const r = run('isolation')
++    expect(r.code).toBe(0)
++    expect(r.out.trim()).toBe('isolated: interop off, no Windows drive mounted')
++  })
++
++  it('fails when interop is registered, or a drive is mounted, and says which', () => {
++    proc(true, ROOTFS)
++    expect(run('isolation')).toMatchObject({ code: 1 })
++    expect(run('isolation').err).toContain('interop is on')
++    rmSync(join(root, 'proc'), { recursive: true })
++    proc(false, `${ROOTFS}C:\\134 /mnt/c 9p rw,noatime,aname=drvfs 0 0\n`)
++    expect(run('isolation').err).toContain('/mnt/c')
++  })
++
++  it('a folder the owner shared, at /mnt/win/<name>, is not a whole drive', () => {
++    proc(false, `${ROOTFS}C:/Users/alex/Projects/atlas /mnt/win/atlas 9p rw,aname=drvfs 0 0\n`)
++    expect(run('isolation').code).toBe(0)
++  })
++})
++
++describe('a Windows folder for a thread', () => {
++  it('is one drvfs line in fstab, owned by talos, at /mnt/win/<name>, with spaces escaped', () => {
++    const r = run('folder-add', 'C:\\Users\\alex\\My Projects\\Atlas App')
++    expect(r.code).toBe(0)
++    expect(r.out.trim().split('\n').at(-1)).toBe('/mnt/win/atlas-app')
++    expect(fstabLines()).toEqual([
++      // nofail: a folder deleted on the Windows side must not stop the distro's start or its systemd user session
++      'C:/Users/alex/My\\040Projects/Atlas\\040App /mnt/win/atlas-app drvfs metadata,nofail,uid=1000,gid=1000,umask=022,fmask=011 0 0',
++    ])
++  })
++
++  it('the same folder twice is one line; another folder with the same name gets its own', () => {
++    run('folder-add', 'C:\\Users\\alex\\Projects\\atlas')
++    expect(run('folder-add', 'c:\\users\\alex\\projects\\atlas\\').out.trim().split('\n').at(-1)).toBe('/mnt/win/atlas')
++    expect(fstabLines()).toHaveLength(1) // Windows paths fold case, and a trailing backslash is the same folder
++    expect(run('folder-add', 'D:\\Work\\atlas').out.trim().split('\n').at(-1)).toBe('/mnt/win/atlas-2')
++    expect(fstabLines()).toHaveLength(2)
++  })
++
++  it('a folder with spaces shared twice is still one line (found live on Titan: the escaped spaces did not compare)', () => {
++    run('folder-add', 'C:\\Users\\Public\\Documents\\Talos E2E Test')
++    const again = run('folder-add', 'C:\\Users\\Public\\Documents\\Talos E2E Test')
++    expect(again.out).toContain('already shared')
++    expect(again.out.trim().split('\n').at(-1)).toBe('/mnt/win/talos-e2e-test')
++    expect(fstabLines()).toHaveLength(1)
++  })
++
++  it('refuses a drive root, the system folders, AppData and a whole profile', () => {
++    for (const bad of [
++      'C:\\',
++      'C:',
++      'C:\\Windows',
++      'C:\\Windows\\System32',
++      'C:\\Program Files\\App',
++      'C:\\Program Files (x86)',
++      'C:\\ProgramData\\x',
++      'C:\\Users\\alex',
++      'C:\\Users\\alex\\AppData\\Roaming',
++      'C:\\Users',
++      'relative\\path',
++      '\\\\server\\share\\x',
++      'C:\\Users\\alex\\..\\bob\\x',
++    ]) {
++      const r = run('folder-add', bad)
++      expect(r.code, bad).not.toBe(0)
++      expect(r.err, bad).toMatch(/not shared/)
++    }
++    expect(fstabLines()).toEqual([])
++  })
++
++  it('leaves every other fstab line alone, and remove takes out only its own', () => {
++    writeFileSync(join(root, 'etc', 'fstab'), 'LABEL=cloudimg-rootfs / ext4 defaults 0 1\n')
++    run('folder-add', 'C:\\Users\\alex\\Projects\\atlas')
++    run('folder-add', 'C:\\Users\\alex\\Projects\\notes')
++    expect(run('folder-remove', '/mnt/win/atlas').code).toBe(0)
++    expect(etc('fstab')).toContain('LABEL=cloudimg-rootfs / ext4 defaults 0 1')
++    expect(fstabLines().map((l) => l.split(' ')[1])).toEqual(['/mnt/win/notes'])
++    expect(run('folder-remove', '/mnt/win/nothing-here').code).not.toBe(0)
++  })
++
++  it('folder-list prints each mounted Windows folder and where it is', () => {
++    run('folder-add', 'C:\\Users\\alex\\Projects\\atlas')
++    expect(run('folder-list').out.trim()).toBe('/mnt/win/atlas\tC:\\Users\\alex\\Projects\\atlas')
++  })
++})

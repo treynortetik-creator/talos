@@ -247,7 +247,8 @@ test('About: while the server has not answered it says it is reading', async ({ 
   })
   await page.goto('/help')
   await expect(page.getByTestId('help-build-loading')).toBeVisible()
-  await expect(page.getByTestId('help-build')).toContainText('App build')
+  // the page's own build is known before the server answers: its row is there
+  await expect(page.getByTestId('help-build').getByText('Web app build', { exact: true })).toBeVisible()
   release()
   await expect(page.getByTestId('help-build')).toContainText('0.4.1')
 })

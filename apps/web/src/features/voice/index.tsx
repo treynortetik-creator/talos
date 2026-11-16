@@ -7,7 +7,7 @@ import { Button, Textarea } from '../../ui/index.ts'
 import { Mascot } from '../../ui/Mascot.tsx'
 import type { CallBarProps, CallScreenProps, LiveCallButtonProps, SettingsSectionProps } from '../contracts.ts'
 import { DrivingRow } from '../drive/DrivingRow.tsx'
-import { friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
+import { connectionRefusal, friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
 import type { CallController } from './callController.ts'
 import { type Handoff, useCallStore } from './callStore.ts'
 import { getCallController, setCallController, useIsOnCall } from './controller.ts'
@@ -299,7 +299,7 @@ const MODES: Array<{ id: TalkMode; label: string; hint: string }> = [
   { id: 'hold', label: 'Hold to talk', hint: 'The mic opens only while you press and hold.' },
 ]
 
-export function VoiceSettingsSection({ readOnly }: SettingsSectionProps) {
+export function VoiceSettingsSection({ readOnly, readOnlyWhy = 'mac' }: SettingsSectionProps) {
   const client = useTalosClient()
   const voice = useTalos((s) => s.config?.agent.voice ?? 'meridian')
   const [mode, setMode] = useState<TalkMode>(() => loadTalkMode())
@@ -313,7 +313,7 @@ export function VoiceSettingsSection({ readOnly }: SettingsSectionProps) {
       await client.patchConfig({ agent: { voice: next } })
       setSaved(true)
     } catch (e) {
-      setError(`Couldn't change the voice. ${friendlyPatchError(e)}`)
+      setError(connectionRefusal(e) ?? `Couldn't change the voice. ${friendlyPatchError(e)}`)
     }
   }
   const pickMode = (next: TalkMode) => {
@@ -350,7 +350,8 @@ export function VoiceSettingsSection({ readOnly }: SettingsSectionProps) {
           ))}
         </select>
         <p className="m-0 text-sm text-text-2">
-          {readOnly ? 'Your Mac is offline, so this can’t be changed right now. ' : ''}Applies to your next call.
+          {readOnly && readOnlyWhy === 'mac' ? 'Your Mac is offline, so this can’t be changed right now. ' : ''}Applies
+          to your next call.
         </p>
         {saved && (
           <p role="status" className="m-0 text-sm text-ok">
@@ -462,7 +463,7 @@ function Persona({ readOnly }: { readOnly: boolean }) {
       setText(null)
       setMsg({ tone: 'ok', text: 'Saved. It applies to your next call.' })
     } catch (e) {
-      setMsg({ tone: 'error', text: `Not saved. ${friendlyPatchError(e)}` }) // the words stay in the box
+      setMsg({ tone: 'error', text: connectionRefusal(e) ?? `Not saved. ${friendlyPatchError(e)}` }) // the words stay in the box
     } finally {
       setBusy(false)
     }

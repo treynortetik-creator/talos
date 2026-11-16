@@ -6,6 +6,9 @@
 // Motion rules: `prefers-reduced-motion: reduce` always shows the still; only ONE mascot on the page plays at a time
 // (the largest visible one wins, ties go to the newest); a mascot that is offscreen or in a hidden tab shows its still.
 // The state is always also given in words (`role="img"` + label, or `decorative` when the words are already next to it).
+// No clip is put on the page before the page's load event: a <video> holds that event until its media is ready, which on a
+// slow connection or a slow media stack held a whole page's load for seconds. Until then (and whenever it may not play) the
+// still shows.
 import { type CSSProperties, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { cn } from './cn.ts'
 
@@ -58,6 +61,26 @@ function prefersReducedMotion(): boolean {
     return false
   }
 }
+
+// ---- not before the page has loaded --------------------------------------------------------------------------------
+let pageLoaded = typeof document === 'undefined' || document.readyState === 'complete'
+const loadListeners = new Set<() => void>()
+if (!pageLoaded && typeof window !== 'undefined')
+  window.addEventListener(
+    'load',
+    () => {
+      pageLoaded = true
+      for (const l of loadListeners) l()
+    },
+    { once: true },
+  )
+const onLoad = (l: () => void) => {
+  loadListeners.add(l)
+  return () => loadListeners.delete(l)
+}
+const loadedNow = () => pageLoaded
+/** True once the page's load event has fired (a clip mounted earlier would hold it). */
+const usePageLoaded = (): boolean => useSyncExternalStore(onLoad, loadedNow, loadedNow)
 
 // ---- one clip at a time -------------------------------------------------------------------------------------------
 type Entry = { id: number; size: number; visible: boolean }
@@ -135,7 +158,8 @@ export function Mascot({
   const [failed, setFailed] = useState<string | null>(null)
   const clip = CLIP[state]
   const wants = animate && failed !== clip && !prefersReducedMotion()
-  const turn = useClipTurn(size, wants, root)
+  const loaded = usePageLoaded()
+  const turn = useClipTurn(size, wants, root) && loaded
   const still = mascotStill(state)
   const style: CSSProperties & Record<string, string | number> = { width: size, height: size }
   if (state === 'speaking' && level !== undefined) style['--mascot-level'] = Math.max(0, Math.min(1, level))

@@ -2,6 +2,8 @@
 // install.sh puts the wrapper next to bun when no --bin-dir is given, which on a developer Mac is the real command
 // (it was repointed at a throwaway home on 2026-11-01). Every test that runs the script must pass a temp --bin-dir,
 // or put a fake bun in a temp folder first (install-path.test.ts does, via fakeBunDir).
+// It reads every test file here, so the gate runs it when one changes (scripts/gate.sh, guards_reading):
+// gate-reads: apps/bridge/test/*.test.ts
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'

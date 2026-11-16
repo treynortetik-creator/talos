@@ -8,10 +8,12 @@ public struct SelfTestReport: Codable, Equatable, Sendable {
   public var notificationsReachable: Bool
   public var loginItemStatus: Int
   public var configDefaultsDecode: Bool
+  /// "ok", or why the app refuses its own bundled permission hook (`WorkerHook.BundleSource`): then no thread session would start.
+  public var workerHook: String
 
   public init(
     version: String, bundleId: String, swiftterm: Bool, notificationsReachable: Bool,
-    loginItemStatus: Int, configDefaultsDecode: Bool
+    loginItemStatus: Int, configDefaultsDecode: Bool, workerHook: String
   ) {
     self.version = version
     self.bundleId = bundleId
@@ -19,6 +21,7 @@ public struct SelfTestReport: Codable, Equatable, Sendable {
     self.notificationsReachable = notificationsReachable
     self.loginItemStatus = loginItemStatus
     self.configDefaultsDecode = configDefaultsDecode
+    self.workerHook = workerHook
   }
 
   enum CodingKeys: String, CodingKey {
@@ -27,11 +30,12 @@ public struct SelfTestReport: Codable, Equatable, Sendable {
     case notificationsReachable = "notifications_reachable"
     case loginItemStatus = "login_item_status"
     case configDefaultsDecode = "config_defaults_decode"
+    case workerHook = "worker_hook"
   }
 
   /// The checks that must hold for exit 0. Notifications and login-item status are informational (they depend on the
   /// machine's privacy state, and an unbundled debug run has neither).
-  public var ok: Bool { swiftterm && configDefaultsDecode && bundleId == SelfTestReport.expectedBundleId }
+  public var ok: Bool { swiftterm && configDefaultsDecode && bundleId == SelfTestReport.expectedBundleId && workerHook == "ok" }
 
   public static let expectedBundleId = "app.talos.desktop"
 

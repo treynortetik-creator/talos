@@ -260,7 +260,8 @@ test('after a failed "Send as a text file", Retry on the chip sends the text fil
   expect(await box(page).inputValue()).toHaveLength(50_000) // the text stays while the upload has not arrived
   await page.getByTestId('chip-retry').click()
   await expect(page.getByTestId('chip')).toHaveAttribute('data-state', 'ready')
-  expect(await box(page).inputValue()).toBe('') // one copy of the text now, as the file
+  // one copy of the text now, as the file (the box is emptied a step after the chip is ready: waited for, not read once)
+  await expect(box(page)).toHaveValue('')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await waitUntil(() => frameOfType(harness, 'message').length === 1, 'message with the text file')
   const m = frameOfType(harness, 'message')[0]?.raw as { text?: string; attachments: Array<{ name: string }> }

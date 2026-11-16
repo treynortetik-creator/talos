@@ -7,7 +7,9 @@ process.env.TALOS_APP_CHRONOS_AUTODISCOVER = 'off'
 
 export default function globalSetup(): void {
   if (process.env.E2E_SKIP_BUILD) return // several suites at once share one build (scripts/e2e-clock-sweep.sh)
-  for (const filter of ['@talos-app/relay', '@talos-app/web']) {
+  // with a saved web bundle (E2E_WEB_DIST, the old-client step) only the relay is built from this tree
+  const filters = process.env.E2E_WEB_DIST ? ['@talos-app/relay'] : ['@talos-app/relay', '@talos-app/web']
+  for (const filter of filters) {
     const r = spawnSync('pnpm', ['--filter', filter, 'build'], {
       cwd: ROOT,
       stdio: 'inherit',

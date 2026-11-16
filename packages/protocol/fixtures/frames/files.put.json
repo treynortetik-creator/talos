@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "type": "files.put",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T455",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T456",
+  "thread_id": "general",
+  "dir": "docs",
+  "name": "plan.md",
+  "media": {
+    "media_id": "md_01JBF3V7Q8K2M4N6P8R0S2T4AB",
+    "name": "plan.md",
+    "mime": "text/markdown",
+    "size": 7,
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "kind": "file",
+    "role": "attachment"
+  },
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "Pi-4AzBWTnfylOm_P99GDTJfNPrEdVpjNwCAb7e_ya4qtwelbZk58axTr6sL342FAiGryhDDrf1AJHv5eSM1cQ"
+}

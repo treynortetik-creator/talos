@@ -5,6 +5,7 @@
 export PYTHONDONTWRITEBYTECODE=1
 set -u
 KIT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 T="$(mktemp -d)" || exit 2
 case "$T" in /*/*) ;; *) echo "suspicious temp dir: $T" >&2; exit 2;; esac
 trap 'rm -rf "$T"' EXIT
@@ -16,6 +17,7 @@ A="$T/agent"; mkdir -p "$A/hooks" "$A/scripts" "$A/templates" "$A/wiki" "$A/memo
 cp "$KIT/hooks/session-start.py" "$KIT/hooks/_talos_session.py" "$A/hooks/"; cp "$KIT/scripts/onboarding-state.py" "$A/scripts/"
 cp "$KIT/templates/_onboarding-progress.md.tmpl" "$A/templates/"
 export CLAUDE_PROJECT_DIR="$A" TALOS_APP_HOME="$T/app"
+talos_test_sandbox "$T"
 S="$A/.agent-state/onboarding.json"
 st()   { (cd "$A" && python3 scripts/onboarding-state.py "$@"); }
 hook() { (cd "$A" && echo '{"source":"startup"}' | python3 hooks/session-start.py | python3 -c 'import json,sys; print(json.load(sys.stdin).get("hookSpecificOutput",{}).get("additionalContext",""))'); }

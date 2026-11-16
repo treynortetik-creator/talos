@@ -102,30 +102,6 @@ export function createAuthImplementation(
     await next()
   }
 
-  async function stepupToken(c: Context<AppEnv>): Promise<string> {
-    const header = c.req.header('x-talos-stepup')
-    if (header) return header
-    try {
-      const body = (await c.req.json()) as unknown
-      if (body && typeof body === 'object' && typeof (body as { stepup_token?: unknown }).stepup_token === 'string')
-        return (body as { stepup_token: string }).stepup_token
-    } catch {
-      /* no JSON body */
-    }
-    return ''
-  }
-
-  const requireStepup: AuthContract['requireStepup'] = (purpose) => async (c, next) => {
-    const session = sessionFor(state, c)
-    if (!session) return c.json({ error: 'unauthorized' }, 401)
-    const p = typeof purpose === 'function' ? purpose(c) : purpose
-    // Trust mode (set on the Mac): revoking a device needs the session, not a fresh passkey tap. Nothing else is relaxed here.
-    if (p === 'device:revoke' && trustOn(services.agentConfig())) return next()
-    const token = await stepupToken(c)
-    if (!core.consumeStepup(token, p, session.sessionId)) return c.json({ error: 'stepup_invalid' }, 403)
-    await next()
-  }
-
   // When the last hello was refused; a good hello clears it. In memory: a restart forgets it and the next refused hello sets it again.
   let helloRefusedAt: number | null = null
   const verifyBridgeHello: AuthContract['verifyBridgeHello'] = async ({ hello, challenge, ip }) => {
@@ -204,11 +180,8 @@ export function createAuthImplementation(
       if (deviceId) core.noteDeviceUse(deviceId)
     },
     requireCsrf,
-    requireStepup,
     verifyBridgeHello,
     bridgeAuthRefusedAt: () => helloRefusedAt,
-    consumeStepupToken: async ({ token, purpose, session }) =>
-      core.consumeStepup(token, purpose, session?.sessionId ?? null),
     guardWsUpgrade: async (c) => {
       if (c.req.header('origin') !== origin) return c.json({ error: 'bad_origin' }, 403)
       const session = sessionFor(state, c, { stamp: false })

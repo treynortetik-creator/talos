@@ -3,9 +3,12 @@ import TalosDesktopCore
 
 /// Needs-you prompts, the Mac side. A known dialog the pane shows (folder trust, MCP server consent, login) that `DialogReader` can read
 /// exactly is put in the worker's `workers.json` entry as `dialog`, so the bridge can make a card the owner answers with a tap. The line
-/// the thread has always got ("open Terminals → …") is the fallback, not the first thing: it waits `cardAckWait` (15 s) for the bridge's card file
-/// (`workers/<id>/dialog-card.json`, naming the dialog, in any status), and a dialog the bridge has a card for never gets it from the Mac. A dialog
-/// the reader refuses, the bypass disclaimer and every unknown question keep the line at once. Answering is `WorkerDialogAnswer.swift`.
+/// the thread has always got ("This thread's session is waiting on …; open this thread in Terminals on the Mac to answer.") is the
+/// fallback, not the first thing: it waits `cardAckWait` (15 s) for the bridge's card file (`workers/<id>/dialog-card.json`, naming
+/// the dialog, in any status), and a dialog the bridge has a card for never gets it from the Mac. A dialog
+/// the reader refuses, the bypass disclaimer and every unknown question keep the line at once. So does a dialog whose subject cannot be read
+/// (a folder path wrapped over rows, a consent with no server name on its row): with nothing to tell it from another dialog of its kind, a
+/// card for it could be answered onto a lookalike that took its place. Answering is `WorkerDialogAnswer.swift`.
 
 /// What the manager keeps about a worker's offered dialog (the offer itself is in `Runtime.entry.dialog`, so it is in `workers.json` and a
 /// relaunch finds it).
@@ -19,9 +22,10 @@ struct OfferState {
   /// The dialog id an Enter was sent for: no second Enter for it, whatever arrives.
   var enterSentFor: String?
   /// The screen changed while an offer stood, so what holds still next may be another dialog that looks the same (the owner's Enter in the
-  /// pane, a second server): a new sighting, a new id.
+  /// pane, a second server): a new sighting, a new id. Until then no answer for the old id presses anything (`take`, `popupClick`).
   var disturbed = false
-  /// "dialog id | signature" of every proof that checked out, so one signed tap is used once, whatever happened to it.
+  /// Every proof that checked out (`DialogProofsUsed.key`), so one signed tap is used once, whatever happened to it (kept on disk too,
+  /// `DialogProofsUsed`, so a relaunch does not forget it).
   var proofsUsed: [String] = []
   /// The dialog id Terminals was brought forward for (login): the press-once rule for a dialog that has no Enter. Shared by the card and the popup.
   var openedFor: String?
@@ -40,11 +44,7 @@ extension WorkerManager {
   func syncOffer(_ id: String, rows: [String], seen: DialogMatcher.Screen, settled: Bool) {
     guard let r = rt[id] else { return }
     guard seen.isDialog else {
-      if settled, r.entry.dialog != nil {
-        endOffer(id)
-      } else if !settled, r.entry.dialog != nil, r.offer.sinceAwake != nil {
-        rt[id]?.offer.disturbed = true  // an offer this process has verified, and the screen is changing
-      }
+      if settled, r.entry.dialog != nil { endOffer(id) }
       return
     }
     // colours too: the reader takes the Select Claude draws, not text that looks like one. A failed capture says nothing.
@@ -56,21 +56,18 @@ extension WorkerManager {
       if (rt[id]?.offer.misses ?? 0) >= 2 { endOffer(id) }
       return
     }
+    // Nothing to tell this dialog from another of its kind: the line, never a card. Login is offered without one: its card sends no key
+    // (it brings Terminals forward), so there is nothing to land on a lookalike.
+    if d.kind != .login, d.subject == nil { return endOffer(id) }
     rt[id]?.offer.misses = 0
     let t = now()
-    // The same dialog, still there, and not one the Mac pressed Enter on or saw the screen change under. A record read back from disk after a
-    // relaunch is the same only if it equals what the screen shows now; from then on it is this process's own.
+    // The same dialog, still there: one THIS process offered (`sinceAwake`), and not one the Mac pressed Enter on or saw the screen change
+    // under. A record read back from disk after a relaunch is never the same, however exactly it equals the screen: this process did not
+    // see what happened on the pane while the app was away (the dialog answered there and another that reads alike in its place, the file
+    // edited), so what it sees now is a new sighting with a new id, and a card or a tap for the old id applies to nothing.
     if let o = r.entry.dialog, o.kind == d.kind, ExactText.equal(o.subject, d.subject), ExactText.equal(o.options, d.options),
-      !r.offer.disturbed, r.offer.enterSentFor != o.id, r.offer.sinceAwake != nil || (ISOTime.parse(o.seen_at) ?? t + 3600) <= t + 60
+      !r.offer.disturbed, r.offer.enterSentFor != o.id, r.offer.sinceAwake != nil
     {
-      if r.offer.sinceAwake == nil {
-        // first look at it by this process: its life is the Mac's, not what the file says
-        rt[id]?.offer.sinceAwake = awake()
-        if let seen = ISOTime.parse(o.seen_at), (ISOTime.parse(o.expires_at) ?? 0) > seen + options.cardLifetime {
-          rt[id]?.entry.dialog?.expires_at = ISOTime.string(seen + options.cardLifetime)
-          dirty = true
-        }
-      }
       if o.cursor != d.cursor {
         rt[id]?.entry.dialog?.cursor = d.cursor
         dirty = true
@@ -88,6 +85,13 @@ extension WorkerManager {
   /// `workers` and the thread's folder in it are folders themselves, not links: nothing is read from or written to a folder that is somewhere else.
   func folderIsReal(_ id: String) -> Bool {
     SafePath.isRealFolder(options.talosHome + "/workers") && SafePath.isRealFolder(dir(id))
+  }
+
+  /// The pane's screen is not what it was at the last look. Called for every look, whatever the screen shows: an offer this process has
+  /// verified is from then on one the screen changed under, until a still screen is read again and gets a new id.
+  func noteScreenChanged(_ id: String) {
+    guard let r = rt[id], r.entry.dialog != nil, r.offer.sinceAwake != nil else { return }
+    rt[id]?.offer.disturbed = true
   }
 
   func endOffer(_ id: String) {

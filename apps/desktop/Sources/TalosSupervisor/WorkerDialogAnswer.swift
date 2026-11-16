@@ -11,8 +11,9 @@ import TalosDesktopCore
 /// twice; each control id is acted on once, ever (in memory and in the last result); it is not older than five minutes; it names the
 /// current dialog id and the card has not expired; THE PROOF (nothing in the file is believed otherwise: the key must be a paired device's in
 /// devices.json, the signature must verify, what was signed must be this card for this dialog as the Mac recorded it, and the Mac has pressed
-/// nothing for this dialog id before); no tmux client typed within `clientQuiet`; the screen is read again, as the same kind of dialog with the
-/// same labels (and the same subject, if the offer had one). Then ONE arrow at a time, each followed by a read that must show the highlighted
+/// nothing for this dialog id before); the screen has not been seen to change since the offer was made (a dialog that replaced the offered one
+/// can read exactly the same, and the tap was for the one the card showed); no tmux client typed within `clientQuiet`; the screen is read again,
+/// as the same kind of dialog with the same labels (and the same subject, if the offer had one). Then ONE arrow at a time, each followed by a read that must show the highlighted
 /// row one step on; Enter only when the highlighted label is the signed choice's, never twice for one dialog. Anything else sends nothing
 /// more and the result says "nothing pressed" and why. A key whose send timed out counts as sent: it is never repeated.
 extension WorkerManager {
@@ -93,14 +94,20 @@ extension WorkerManager {
     guard !a.isStale(nowMs: now() * 1000) else { return .nothing(.unverified) }
     guard ExactText.equal(a.dialogId, offer.id) else { return .nothing(.unverified) }  // not the dialog on this pane
     guard let expires = ISOTime.parse(offer.expires_at), now() < expires else { return .nothing() }
-    // a signed tap is used once per dialog, whatever came of it (the control id is not signed)
-    let used = a.dialogId + "|" + a.proof.osig
-    guard rt[id]?.offer.proofsUsed.contains(used) != true else { return .nothing(.alreadyAnswered) }
+    // a signed tap is used once per dialog, whatever came of it (the control id is not signed), across a relaunch too: the list is on disk
+    let used = DialogProofsUsed.key(dialogId: a.dialogId, proof: a.proof)
+    let usedPath = dir(id) + "/" + DialogProofsUsed.fileName
+    guard !DialogProofsUsed.contains(used, memory: rt[id]?.offer.proofsUsed ?? [], path: usedPath) else { return .nothing(.alreadyAnswered) }
     switch isAuthentic(id, offer, a) {
     case .no(let why, _): return .nothing(why)
     case .ok(let choice, let label, _):
-      let before = rt[id]?.offer.proofsUsed ?? []
-      rt[id]?.offer.proofsUsed = Array((before + [used]).suffix(64))
+      // on disk before anything is pressed: a copy of this tap is refused whatever happens next, the app going away included
+      let rec = DialogProofsUsed.record(used, memory: rt[id]?.offer.proofsUsed ?? [], path: usedPath) { folderIsReal(id) }
+      rt[id]?.offer.proofsUsed = rec.memory
+      guard rec.written else { return .nothing(nil) }  // not written, so not acted on
+      // The screen was seen to change under this offer: the dialog there now may not be the one the tap was for, however alike it reads.
+      // Checked after the proof is used up, so this tap is refused for good, a relaunch (which forgets what it saw) included.
+      guard rt[id]?.offer.disturbed != true else { return .nothing() }
       guard let choice, let label else {
         // login: no key. The Terminals window comes to the thread. With no window to bring (no handler, or it can't), nothing happened.
         guard let open = openTerminals, open(id) else { return .nothing(nil) }
@@ -124,6 +131,8 @@ extension WorkerManager {
     let plain = run(tmux(id).capturePane())
     let coloured = run(tmux(id).capturePaneEscaped())
     guard plain.ok, coloured.ok else { return nil }
+    // no key ever goes to the usage-limit screen: nothing is read off it, so nothing is pressed
+    guard !DialogMatcher.takesNoKeys(TmuxCommands.parseCapture(plain.out)) else { return nil }
     return DialogReader.read(rows: TmuxCommands.parseCapture(plain.out), escapedRows: TmuxCommands.parseCapture(coloured.out))
   }
 
@@ -137,6 +146,8 @@ extension WorkerManager {
   }
 
   func press(_ id: String, _ offer: DialogOffer, _ choice: Int, _ chosen: String) -> AnswerOutcome {
+    // every key states the offered dialog's kind, and the key guard lets it go only onto that dialog, read exactly (`KeyGuard`)
+    guard let intent = KeyGuard.intent(for: offer.kind) else { return .nothing() }
     for _ in 0...offer.options.count {
       if let b = typingBlock(id) { return .blocked(b) }
       let fresh = readDialog(id)
@@ -148,13 +159,13 @@ extension WorkerManager {
         guard let last = readDialog(id), DialogAnswer.differs(offered: offer.dialog, fresh: last) == nil, let c = last.cursor,
           last.options.indices.contains(c), ExactText.equal(last.options[c], chosen)
         else { return .nothing() }
-        let sent = run(tmux(id).sendDialogKey(.enter))
-        guard sent.ok || sent.timedOut else { return .nothing() }  // a timeout may have been delivered: counted, never repeated
+        guard let sent = sendKey(id, tmux(id).sendDialogKey(.enter), intent), sent.ok || sent.timedOut else { return .nothing() }  // a timeout may have been delivered: counted, never repeated
         rt[id]?.offer.enterSentFor = offer.id
         return .init(outcome: .pressed, choice: choice, label: chosen)
       }
-      let sent = run(tmux(id).sendDialogKey(key))
-      guard sent.ok || sent.timedOut, moved(id, offer, key, from: from) else { return .nothing() }
+      guard let sent = sendKey(id, tmux(id).sendDialogKey(key), intent), sent.ok || sent.timedOut, moved(id, offer, key, from: from) else {
+        return .nothing()
+      }
     }
     return .nothing()
   }

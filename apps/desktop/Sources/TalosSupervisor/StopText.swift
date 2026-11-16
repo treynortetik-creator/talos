@@ -11,6 +11,7 @@ extension Supervisor.StopReason {
     case .resumeMissing: return "The last conversation can't be resumed."
     case .noNotice: return "The restart wasn't confirmed in time."
     case .crashedNoAutoRestart: return "The agent crashed and auto-restart is off."
+    case .cleanExitLoop: return "The agent keeps exiting cleanly, so Talos stopped restarting it."
     case .startFailed:
       let d = startDetail
       return d.isEmpty ? "The agent couldn't start." : "The agent couldn't start: \(d)."

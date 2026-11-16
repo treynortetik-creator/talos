@@ -1,5 +1,5 @@
 import { bindingFrom, editedHash, payloadHash, verifyOwnerFrame } from '@talos-app/protocol'
-import { act, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CardDeepLink } from '../../src/features/cards/CardDeepLink.tsx'
@@ -137,44 +137,27 @@ describe('CardView: pending card', () => {
     expect(frame.payload_hash).toBe(payloadHash(bindingFrom(card)))
   })
 
-  it('primary on a low-risk card sends without step-up and collapses to "Sent"', async () => {
+  it('primary on a low-risk card sends and collapses to "Sent"', async () => {
     const card = makeCard()
     const client = setup({ cards: [card] })
-    const stepup = vi.spyOn(client, 'stepup')
     renderWith(view(card), client)
     await userEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(screen.getByTestId('collapse-line').textContent).toMatch(/^✓ Sent/))
-    expect(stepup).not.toHaveBeenCalled()
   })
 
-  it('a high-risk primary runs the step-up first, then sends a verifiable card.resolve', async () => {
+  it('a high-risk primary sends a verifiable card.resolve straight from the tap: no passkey, nothing asked first', async () => {
     const card = makeCard({ risk: 'high', kind: 'publish', primary_label: 'Publish', kill_label: 'Kill release notes' })
     const client = setup({ cards: [card] })
-    const order: string[] = []
-    const stepup = client.stepup.bind(client)
-    client.stepup = async (p) => {
-      order.push(`stepup:${p}`)
-      expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(false)
-      return stepup(p)
-    }
     renderWith(view(card), client)
-    await userEvent.click(screen.getByRole('button', { name: /Publish/ }))
+    const button = screen.getByRole('button', { name: 'Publish' })
+    expect(button.textContent).not.toMatch(/face id|passkey/i)
+    await userEvent.click(button)
     await waitFor(() => expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true))
-    expect(order).toEqual([`stepup:card:${card.id}`])
     const frame = client.sent.at(-1) as Record<string, unknown>
+    expect(frame.action).toBe('primary')
+    expect(frame).not.toHaveProperty('stepup_token')
+    expect(frame).not.toHaveProperty('stepup')
     expect(await verifyOwnerFrame(frame, await client.publicJwk())).toBe(true)
-  })
-
-  it('a failed step-up sends nothing and says so', async () => {
-    const card = makeCard({ risk: 'high' })
-    const client = setup({ cards: [card] })
-    client.stepup = async () => {
-      throw Object.assign(new Error('cancelled'), { name: 'NotAllowedError' })
-    }
-    renderWith(view(card), client)
-    await userEvent.click(screen.getByRole('button', { name: /Send/ }))
-    expect((await screen.findByRole('alert')).textContent).toMatch(/cancelled/i)
-    expect(client.sent).toHaveLength(0)
   })
 
   it('revise sends the note and the card collapses', async () => {
@@ -191,17 +174,15 @@ describe('CardView: pending card', () => {
     expect(frame.note).toBe('shorter please')
   })
 
-  it('a card that expires while the Face ID prompt is open is not sent, and says that about this tap only', async () => {
+  it('a card that runs out while it sits on screen is not sent, and says that about this tap only', async () => {
     const card = makeCard({ risk: 'high', expires_at: new Date(Date.now() + 60_000).toISOString() })
     const client = setup({ cards: [card] })
-    client.stepup = async () => {
-      // the owner takes longer than the card has: only the clock moves, the screen still shows it as live
-      vi.useFakeTimers({ toFake: ['Date'] })
-      vi.setSystemTime(Date.now() + 120_000)
-      return 'stepup-token'
-    }
     renderWith(view(card), client)
-    await userEvent.click(screen.getByRole('button', { name: /Send/ }))
+    const button = screen.getByRole('button', { name: 'Send' })
+    // only the clock moves before the tap: the screen still shows the card as live
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + 120_000)
+    fireEvent.click(button)
     // an earlier tap, or another device, may already have approved it, so nothing is said about what ran
     expect((await screen.findByRole('alert')).textContent).toBe('This card expired, so this tap was not sent.')
     expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(false)

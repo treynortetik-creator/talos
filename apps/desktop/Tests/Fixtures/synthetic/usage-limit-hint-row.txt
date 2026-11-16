@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.323
+▝▜██████▀  Fable 5.2 · Claude Max
+ ▝▝   ▝▝   /home/alex/proj
+
+
+❯ Run the gate and tell me what failed.
+
+⏺ Running the gate now.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  You've hit your Fable limit · resets 4pm (Europe/Paris)
+
+  What do you want to do?
+
+    1. Stop and wait for limit to reset
+    2. Wait here, then continue automatically when the limit resets
+  ❯ 3. Switch to usage credits
+     Your usage credit balance: $12.40
+
+  Enter to confirm · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -58,17 +58,15 @@ describe('reconnect', () => {
     expect(hellos()).toBe(2)
   })
 
-  test('on 4409 the bridge never reconnects: it goes headless for the rest of the process and tells the agent', async () => {
+  test('on 4409 the bridge tells the agent, stays whole, and does not take the slot back while the other bridge is connected', async () => {
     h = await startHarness({ bridge: { random: () => 0 } })
     expect(h.bridge.live).toBe(true)
     h.relay.kickBridge(4409)
     await h.waitNotes(1)
     expect(h.notes[0]?.meta.kind).toBe('system')
     expect(h.notes[0]?.content).toContain('Another bridge connected')
-    expect(h.bridge.live).toBe(false)
-    await sleep(1400) // longer than the 0.8 s first backoff step
-    expect(h.relay.bridgeConnected).toBe(false)
-    expect(h.relay.frames.filter((r) => r.direction === 'from_bridge' && r.frame.type === 'hello')).toHaveLength(1)
+    expect(h.bridge.client?.superseded).toBe(true)
+    expect(h.bridge.client?.connected).toBe(false)
     // replies still work, over signed HTTP
     const res = await h.bridge.callTool('reply', { thread_id: 'general', text: 'still here' })
     expect(res.isError).toBeFalsy()
@@ -259,6 +257,48 @@ describe('key rotation', () => {
     expect(code).toBe(1)
     expect(err.join('\n')).toContain('bridge.key is unchanged')
     expect(readFileSync(p.bridgeKey, 'utf8')).toBe(before)
+  })
+
+  test('a rotation tried again while the relay cannot be reached keeps the key the first try made', async () => {
+    // bug hunt core #9: two failed tries used to leave two different keys in bridge.key.next
+    h = await startHarness({ startBridge: false })
+    const p = paths(h.home)
+    const env = { TALOS_APP_HOME: h.home, TALOS_APP_RELAY_URL: 'http://127.0.0.1:1' }
+    const first = cliIO()
+    expect(await runCli(['rotate'], first.io, env)).toBe(1)
+    const next1 = JSON.parse(readFileSync(p.bridgeKeyNext, 'utf8')).key_id
+    expect(first.err.join('\n')).toContain('the next talos-app rotate finds out')
+    expect(await runCli(['rotate'], cliIO().io, env)).toBe(1)
+    expect(JSON.parse(readFileSync(p.bridgeKeyNext, 'utf8')).key_id).toBe(next1)
+  })
+
+  test('a key an earlier try left that the relay never took is not reused: the rotation goes to a fresh key', async () => {
+    // a key that sat on disk may be as exposed as the one being replaced, so it is only ever checked, never rotated to
+    h = await startHarness({ startBridge: false })
+    const p = paths(h.home)
+    const { newStoredKey } = await import('../src/keys.ts')
+    const stale = await newStoredKey()
+    writeFileSync(p.bridgeKeyNext, JSON.stringify(stale), { mode: 0o600 })
+    const { out, io } = cliIO()
+    expect(await runCli(['rotate'], io, { TALOS_APP_HOME: h.home, TALOS_APP_RELAY_URL: h.relay.httpUrl })).toBe(0)
+    const now = JSON.parse(readFileSync(p.bridgeKey, 'utf8')).key_id
+    expect(now).not.toBe(stale.key_id)
+    expect(out.join('\n')).toContain(`new key id ${now}`)
+  })
+
+  test('a relay that switched on a try whose answer was lost: the retry signs with bridge.key.next, and the switch completes', async () => {
+    h = await startHarness({ startBridge: false })
+    const p = paths(h.home)
+    const { newStoredKey } = await import('../src/keys.ts')
+    const next = await newStoredKey()
+    writeFileSync(p.bridgeKeyNext, JSON.stringify(next), { mode: 0o600 }) // left by the try whose 200 was lost
+    // the old key is past its 5 minutes: the relay trusts only the new one now
+    h.relay.bridgeKey = { ...h.relay.bridgeKey, publicKeyB64: next.public, keyId: next.key_id }
+    const { out, io } = cliIO()
+    expect(await runCli(['rotate'], io, { TALOS_APP_HOME: h.home, TALOS_APP_RELAY_URL: h.relay.httpUrl })).toBe(0)
+    expect(out.join('\n')).toContain(`new key id ${next.key_id}`)
+    expect(JSON.parse(readFileSync(p.bridgeKey, 'utf8')).key_id).toBe(next.key_id)
+    expect(existsSync(p.bridgeKeyNext)).toBe(false)
   })
 
   test('on 4401 with the current key the bridge retries with bridge.key.prev and logs rotation_incomplete', async () => {

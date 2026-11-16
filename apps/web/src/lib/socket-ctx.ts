@@ -8,6 +8,7 @@ import type {
   DeviceKey,
   Frame,
   FrameOf,
+  InboxItemT,
   MessageT,
   OwnerAttachmentRef,
 } from '@talos-app/protocol'
@@ -21,7 +22,9 @@ import {
 } from './client.ts'
 import { type ConnectionMeta, createMetaStore } from './connectionMeta.ts'
 import { createHttp } from './http.ts'
+import { INBOX_ANSWER_GRACE_MS } from './socket-constants.ts'
 import type {
+  InboxOutcome,
   InboxPatch,
   OutboxEntry,
   OutboxKind,
@@ -78,7 +81,11 @@ export type SocketCtx = {
   discarding: Set<string>
   writtenOn: Map<string, number>
   uploadFailures: Map<string, { connection: number; count: number; round: number }>
-  inboxInFlight: Map<string, { eventId: string; patch: InboxPatch }>
+  /**
+   * Inbox changes sent and not yet answered (frame id -> change), with the socket each went out on. An entry stays
+   * while its socket can still deliver the answer, so a reconnect does not send the change a second time.
+   */
+  inboxInFlight: Map<string, { eventId: string; patch: InboxPatch; sock: WebSocket | null }>
   /**
    * Signed `media.fetch` frames sent (frame id -> media id), so the Mac's refusal of one is not shown as a failed message
    * and can tell the file's chip at once that it will not come.
@@ -86,6 +93,11 @@ export type SocketCtx = {
   mediaFetchIds: Map<string, string>
   /** Message ids the relay reported as never taken by the Mac (receipt `not_delivered`, or `ready.not_delivered`). */
   lostIds: Set<string>
+  /**
+   * Messages and voice notes the relay acked on this run (frame id -> its row), newest last, at most ACKED_REFS_MAX. The
+   * signed frame is dropped at the ack, so this is the only way a later refusal by the Mac (`error{ref}`) finds its row.
+   */
+  ackedRefs: Map<string, { clientMsgId: string; threadId: string; voiceNote: boolean }>
 
   /**
    * The relay's clock minus ours, learned from each `ready`. Owner frames are signed with the corrected time, so a phone
@@ -94,6 +106,12 @@ export type SocketCtx = {
    */
   clockOffset: number
   resetGen: number
+  /**
+   * Catch-up paging. `open` from a page that says more are coming until the page that says none are (or the next `ready`).
+   * A seq that arrives outside those pages meanwhile (a live frame, a newest-history page) sits above pages not fetched
+   * yet, so it waits in `held` and `lastSeq` stays at the last page: a drop mid-way then resumes from there.
+   */
+  seqHold: { open: boolean; held: number }
   key: DeviceKey | null
   ws: WebSocket | null
   ready: boolean
@@ -101,6 +119,8 @@ export type SocketCtx = {
   epoch: number
   started: boolean
   attempt: number
+  /** Until this time (ms) a relay restart (close 1012) is being waited out: retries use a short fixed delay. 0 = not in one. */
+  restartUntil: number
   retryTimer: ReturnType<typeof setTimeout> | null
   pingTimer: ReturnType<typeof setInterval> | null
   lastPong: number
@@ -109,6 +129,16 @@ export type SocketCtx = {
   outbox: OutboxEntry[]
   outboxOrder: number
   inboxQueue: Map<string, InboxPatch>
+  /** What an inbox row held before the changes still queued for it, so a change the relay refuses can be taken back. */
+  inboxBefore: Map<string, { state: InboxItemT['state']; snooze_until?: string }>
+  /**
+   * Read marks made while the socket could not carry them, per thread: how far the owner read, and how many unread the
+   * mark cleared here, and the relay's mark as this device knew it before. Sent at the next `ready` (once this device
+   * is pinned) unless the relay's mark has moved since; the relay's count in that `ready` predates them.
+   */
+  readQueue: Map<string, { upTo: number; cleared: number; known?: number }>
+  /** Per thread, the seqs of the rows this device counted (or would count) as unread, for a read mark that stops short. */
+  unreadSeqs: Map<string, Set<number>>
   voiceQueue: PendingVoice[]
   flushing: boolean
   flushAgain: boolean
@@ -117,7 +147,18 @@ export type SocketCtx = {
   saveTimer: ReturnType<typeof setTimeout> | null
   probing: boolean
   wakeTimer: ReturnType<typeof setTimeout> | null
+  /** Sockets whose close the wake probe runs by hand: they have not closed, so their inbox answers may still come. */
+  closedByHand: WeakSet<WebSocket>
+  inboxAnswerGraceMs: number
+  /** Ends the inbox changes' wait on sockets let go of (client.close()). */
+  inboxForget: () => void
   lastReportAt: number
+  /**
+   * Where the last pointermove was on the screen. A pointermove at the same spot is not a person: Chromium fires one when the
+   * page reflows under a cursor that has not moved (new messages, a card appearing). Null until one is seen, and again
+   * after the page was hidden.
+   */
+  lastPointer: { x: number; y: number } | null
   client: SocketClient
 
   // socket-state.ts
@@ -128,7 +169,11 @@ export type SocketCtx = {
   upsertCard: (card: CardT) => void
   withSeq: (m: MessageT, frame: { relay?: { seq: number } }) => MessageT
   bumpSeq: (frame: { relay?: { seq: number } }) => void
-  bumpUnread: (threadId: string) => void
+  advanceSeq: (seq: number) => void
+  holdSeq: (open: boolean) => void
+  bumpUnread: (threadId: string, seq?: number) => void
+  noteUnreadSeq: (threadId: string, seq: number | undefined) => void
+  forgetUnreadSeqs: (threadId: string, upTo: number) => number
   refreshQueued: () => void
   markFailed: (clientMsgId: string, kind: 'retry' | 'final') => void
   clearFailed: (clientMsgId: string) => void
@@ -142,7 +187,13 @@ export type SocketCtx = {
   applyInboxPatch: (eventId: string, patch: InboxPatch) => void
   saveInboxQueue: () => void
   flushInbox: () => void
-  inboxSettled: (frameId: string, keep?: boolean) => boolean
+  inboxSettled: (frameId: string, outcome?: InboxOutcome) => boolean
+  inboxSocketGone: (sock: WebSocket | null) => void
+  inboxSocketClosed: (sock: WebSocket) => void
+  queueRead: (threadId: string, upTo: number, cleared: number, known: number | undefined) => void
+  flushReads: () => void
+  /** After a `ready` is applied: squares the read marks still waiting with the relay's counts, then sends them. */
+  readsOnReady: (frame: FrameOf<'ready'>) => void
   // socket-outbox-queue.ts
   loadOutbox: (deviceId?: string) => Promise<void>
   noticeRemoved: (n: number) => void
@@ -184,6 +235,7 @@ export type SocketCtx = {
   connect: () => void
   stopPing: () => void
   rejectAllPending: (err: Error) => void
+  socketGone: (sock: WebSocket | null) => void
   // socket-requests.ts
   requestHistory: (
     fields: Record<string, unknown>,
@@ -196,7 +248,20 @@ export type SocketCtx = {
   sendAndWait: (frame: Record<string, unknown>, timeoutMs?: number) => Promise<number | undefined>
   askRead: (
     frame: Record<string, unknown>,
-    answer: 'memory.listing' | 'memory.file' | 'memory.results' | 'speak.result' | 'fs.listing',
+    answer:
+      | 'memory.listing'
+      | 'memory.file'
+      | 'memory.results'
+      | 'memory.graph_result'
+      | 'speak.result'
+      | 'fs.listing'
+      | 'files.listing'
+      | 'files.file'
+      | 'bug.context_result'
+      | 'agents_md.file'
+      | 'files.put_result'
+      | 'files.sent_list'
+      | 'memory.folders_result',
     timeoutMs?: number,
   ) => Promise<Record<string, unknown>>
   // socket-upload.ts
@@ -205,7 +270,7 @@ export type SocketCtx = {
   onOnline: () => void
   onOffline: () => void
   onVisibility: () => void
-  onActivity: () => void
+  onActivity: (e?: Event) => void
 }
 
 /** The settings, the stores and the starting value of every variable. The parts then fill in their functions. */
@@ -250,8 +315,10 @@ export function createSocketCtx(opts: SocketClientOptions): SocketCtx {
     inboxInFlight: new Map(),
     mediaFetchIds: new Map(),
     lostIds: new Set(),
+    ackedRefs: new Map(),
     clockOffset: 0,
     resetGen: 0,
+    seqHold: { open: false, held: 0 },
     key: null,
     ws: null,
     ready: false,
@@ -259,6 +326,7 @@ export function createSocketCtx(opts: SocketClientOptions): SocketCtx {
     epoch: 0,
     started: false,
     attempt: 0,
+    restartUntil: 0,
     retryTimer: null,
     pingTimer: null,
     lastPong: 0,
@@ -267,6 +335,9 @@ export function createSocketCtx(opts: SocketClientOptions): SocketCtx {
     outbox: [],
     outboxOrder: 0,
     inboxQueue: new Map(),
+    inboxBefore: new Map(),
+    readQueue: new Map(),
+    unreadSeqs: new Map(),
     voiceQueue: [],
     flushing: false,
     flushAgain: false,
@@ -275,7 +346,10 @@ export function createSocketCtx(opts: SocketClientOptions): SocketCtx {
     saveTimer: null,
     probing: false,
     wakeTimer: null,
+    closedByHand: new WeakSet(),
+    inboxAnswerGraceMs: opts.inboxAnswerGraceMs ?? INBOX_ANSWER_GRACE_MS,
     lastReportAt: 0,
+    lastPointer: null,
   } as unknown as SocketCtx
   c.signedTs = () => new Date(c.now() + c.clockOffset).toISOString()
   c.settleConfig = (id, err) => {

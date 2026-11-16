@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 /// The optional guards (`talos-app install-guards`) reach every launch: the main session, workers and a hand-opened claude.
 @Suite("Guards settings")
@@ -9,7 +10,7 @@ struct GuardsSettingsTests {
 
   /// A throwaway Talos home; `installed` writes the file install-guards writes.
   func home(installed: String? = nil) throws -> String {
-    let dir = NSTemporaryDirectory() + "talos-guards-\(UUID().uuidString)"
+    let dir = TestTemp.base + "talos-guards-\(UUID().uuidString)"
     try FileManager.default.createDirectory(atPath: dir + "/guards", withIntermediateDirectories: true)
     if let installed { try Data(installed.utf8).write(to: URL(fileURLWithPath: dir + "/guards/settings.json")) }
     return dir
@@ -19,7 +20,7 @@ struct GuardsSettingsTests {
   func inputs(_ talosHome: String) -> WorkerSpec.Inputs {
     .init(
       threadId: "trip", claudePath: "/usr/local/bin/claude", baseEnv: ["PATH": "/usr/bin"], talosHome: talosHome,
-      agentDir: "/home/alex/agent", model: "inherit", effort: nil, permissionFlag: nil, sessionId: sid, resume: false,
+      agentDir: "/home/alex/agent", permissionHook: testHook, model: "inherit", effort: nil, permissionFlag: nil, sessionId: sid, resume: false,
       nonce: "n0nce-0123456789abcdef", preamble: nil)
   }
 
@@ -49,13 +50,22 @@ struct GuardsSettingsTests {
     #expect((obj["permissions"] as? [String: Any])?["deny"] != nil)
     let plainHome = try home()
     let plain = try WorkerSpec.build(inputs(plainHome))
-    // A plain worker (no guards installed) has no guard hooks and no deny rules but the Talos-home fence; the only hook is the permission relay's, which is
-    // always registered because the hook and the bridge check `permission_relay` themselves, on every request.
+    // A plain worker (no guards installed) has no guard hooks and no deny rules but the Talos-home fence and the workers-folder deny;
+    // the only hook is the permission relay's, which is always registered because the hook and the bridge check `permission_relay`
+    // themselves, on every request.
     let plainObj = try #require(try JSONSerialization.jsonObject(with: Data(plain.settingsJSON.utf8)) as? [String: Any])
     let plainHooks = try #require(plainObj["hooks"] as? [String: Any])
     #expect(Set(plainHooks.keys) == ["PermissionRequest"])
     #expect(plainHooks["PreToolUse"] == nil)
-    #expect(((plainObj["permissions"] as? [String: Any])?["deny"] as? [String]) == WorkerFence.denyRules(talosHome: plainHome))
+    // and the settings-file deny: no session edits the Claude Code settings of a folder a thread session works in, or the owner's
+    let home = NSHomeDirectory()
+    let scripts = WorkerFence.scripts(
+      files: WorkerSpec.hookSettingsFiles(agentDir: "/home/alex/agent", home: home, env: ["PATH": "/usr/bin"]), projectDir: "/home/alex/agent", home: home)
+    let settingsDeny = WorkerFence.settingsDeny(
+      projectFolders: ["/home/alex/agent"], configDirs: [home + "/.claude"], files: [home + "/.claude.json"] + scripts,
+      trees: ["/home/alex/agent/hooks", "/home/alex/agent/kit/hooks"], nested: ["/home/alex/agent"])
+    #expect(((plainObj["permissions"] as? [String: Any])?["deny"] as? [String]) == WorkerFence.denyRules(talosHome: plainHome) + WorkerFence.workerFilesDeny(talosHome: plainHome) + WorkerFence.extraDeny
+      + settingsDeny + WorkerFence.deniedTools)
     #expect(plain.settingsJSON.contains("TALOS_APP_PERM_HOOK_SOURCE=worker"))
   }
 

@@ -1,0 +1,21 @@
+{
+  "id": "hook-load-paths",
+  "title": "A thread folder's skill and command files were not checked, a linked .claude was followed, and indented YAML hid keys",
+  "base": "3c4d3509becb4059c72f55eb064054626b488600",
+  "buggy": "f37e129a310282203d422670632da4aee2e4fc78",
+  "fix": "4435b8a81351b77c375e5b3e18d3eae921ffaf62",
+  "expect": [
+    {
+      "file": [
+        "apps/desktop/Sources/TalosDesktopCore/WorkerHookFolder.swift",
+        "apps/desktop/Sources/TalosDesktopCore/WorkerFence.swift",
+        "apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift"
+      ],
+      "severity": "high",
+      "must": [
+        ["skill", "command", "subagent", "agents?/", "frontmatter", "SKILL\\.md", "link", "symlink", "YAML|indent"]
+      ],
+      "note": "The allow-list checks the folder's settings files, but Claude Code also loads hooks from skills, commands and subagents (frontmatter), follows a linked .claude, and indented YAML keys slip past a line scan."
+    }
+  ]
+}

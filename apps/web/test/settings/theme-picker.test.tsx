@@ -144,7 +144,7 @@ describe('theme picker', () => {
     expect(screen.getByRole('radio', { name: 'Talos' }).getAttribute('aria-checked')).toBe('true')
   })
 
-  it('a step-up refusal puts the previous theme back too', async () => {
+  it('a refusal from an older relay (its old step-up code) puts the previous theme back too', async () => {
     const client = mount()
     client.failNextPatchWith('stepup_required')
     await userEvent.click(screen.getByRole('radio', { name: 'Hearth' }))

@@ -3,6 +3,10 @@ import TalosDesktopCore
 
 /// What the supervisor remembers for `AgentRecovery`. Queue-confined with the rest of its state.
 struct RecoveryState {
+  /// Main's computer-use permission dialog: Escape per appearance and per hour (SupervisorComputerUse.swift).
+  var computerUse = ComputerUseDismiss()
+  /// Main's usage-limit screen: its appearances and the hourly phone line (SupervisorUsageLimit.swift).
+  var usageLimit = UsageLimitWatch()
   /// The control_id last acted on. A request with the same one is cleared and ignored.
   var lastHandledId: String?
   /// Set when an automatic restore starts, whatever came of it; reset by a healthy start. Keeps the automatic restore to one.
@@ -10,8 +14,27 @@ struct RecoveryState {
   var restoreInFlight = false
   /// What this supervisor has seen of the bridge in the current start, on the awake clock. See `AgentRecovery.BridgeWatch`.
   var bridge = AgentRecovery.BridgeWatch()
-  /// When (awake clock) a phone request was last acted on. The rate limit.
+  /// When (awake clock) an OWNER's request (a proof that verified) was last acted on. The owner's next request is held only to this one.
   var lastActedAt: Double?
+  /// When (awake clock) a request not the owner's (`restart_main`, or any request without a proof that verifies) was last acted on. An
+  /// agent's request is held to both stamps; the owner's never to this one, so the owner can always restart again at once after an agent did.
+  var lastAgentActedAt: Double?
+  /// The owner's restart proofs already decided on (`RestartProofCheck.usedKey`), newest 64: the authority. Seeded once from the file
+  /// (`restartProofsUsedPath`, at most its newest 64) at the first request; those seeded entries are the oldest and are evicted first, and
+  /// nothing the file holds later can evict a key this run spent. The file is asked too (`DialogProofsUsed.contains`).
+  var proofsUsed: [String] = []
+  /// The newest signed time (unix ms) of an owner's proof this app accepted: a proof signed at or before it is a replay. Kept beside the
+  /// used list too (`restartProofMarkPath`), and read back at launch no later than the launch itself.
+  var proofMarkMs: Double = 0
+  /// The two above were read from their files (once, at the first request).
+  var proofsSeeded = false
+
+  /// Awake seconds since the last request acted on that a request is held to (`AgentRecovery.requestMinGap`).
+  func sinceLastRequest(owner: Bool, awake: Double) -> Double? {
+    let mine = lastActedAt.map { awake - $0 }
+    guard !owner else { return mine }
+    return [mine, lastAgentActedAt.map { awake - $0 }].compactMap { $0 }.min()
+  }
   /// When this supervisor started (whole unix ms, the clock a request's `ts` is written on). See `AgentRecovery.decide`.
   var launchedAtMs: Double = 0
   /// Set for the cold start a recovery begins: if it stops at the dev-channel warning, the phone is told once. Cleared when it
@@ -19,6 +42,9 @@ struct RecoveryState {
   var postColdStart = false
   /// The crash-loop post goes out once per supervisor.
   var crashLoopPosted = false
+  /// `main-restart-check.json` (SupervisorRestartCheck.swift): what came of the newest request, the one still being followed, and
+  /// when the file was last written.
+  var restartCheck = RestartCheckState()
 }
 
 /// The Mac half of "Restart agent" on the phone, and the one automatic restore. The decisions are
@@ -53,19 +79,28 @@ extension Supervisor {
       recovery.restoredOnce = false
     }
 
-    switch AgentRecovery.decide(
+    let asker = file.request.map { requestAsker($0) } ?? .agent
+    let decision = AgentRecovery.decide(
       request: file, nowMs: options.wallClock(), lastHandledId: recovery.lastHandledId,
       crashLoopStopped: phase == .stopped(.crashLoop), bridgeDownFor: recovery.bridge.downFor(awakeNow: awake),
       restoredOnce: recovery.restoredOnce, ownerStopped: ownerStopped,
-      sinceLastRequest: recovery.lastActedAt.map { awake - $0 }, launchedAtMs: recovery.launchedAtMs)
-    {
+      sinceLastRequest: recovery.sinceLastRequest(owner: asker.isOwner, awake: awake), launchedAtMs: recovery.launchedAtMs)
+    // A proof that verified is spent the moment its request is decided, whatever the decision: one the owner was told was ignored must
+    // never restart Main later. Only an owner's proof that was recorded may skip the restart check.
+    var asOwner = false
+    if decision != .none, case .request = file { asOwner = consumeProof(asker) && asker.isOwner }
+    // the owner's phone in every way but its signed time: said in its own line, whatever comes of it
+    let clockLine: String? = { if case .clockOff(_, let why) = asker { return MainRestartCheck.clockPhoneLine(why) } else { return nil } }()
+    switch decision {
     case .none: break
     case .discard:
       if AgentRequestFile.clear(path: requestPath, ifStill: file) { audit("agent_request_ignored", [:]) }
     case .refuse(let why):
+      if case .request(let r) = file, case .badProof(let step) = asker { return refuseBadProof(r, step: step, file: file) }
       if case .request(let r) = file { recovery.lastHandledId = r.controlId }
       guard AgentRequestFile.clear(path: requestPath, ifStill: file) else { break }
       audit("agent_request_ignored", ["why": why.rawValue])
+      if case .request(let r) = file { requestRefused(r.controlId, reason: why.rawValue, lead: clockLine) }
       switch why {
       case .ownerStopped: emit(.recovered(.ignoredOwnerStopped))
       // One line per refused request. The menu holds one notice, so a burst only repeats it; but while the new start waits for the
@@ -73,15 +108,107 @@ extension Supervisor {
       case .tooSoon: if needsYou == nil { emit(.recovered(.ignoredTooSoon)) }
       }
     case .restart(let id):
+      guard case .request(let r) = file else { break }
+      if case .badProof(let step) = asker { return refuseBadProof(r, step: step, file: file) }
+      if asker.isOwner, !asOwner { audit("restart_proof_unrecorded", [:]) }
+      // A request the owner's proof does not cover (a session's `restart_main`, the phone's through a bridge older than the proof, a proof
+      // signed at a time this Mac does not take, or one that could not be recorded) is checked again here, now: the bridge's check was
+      // advice, seconds old, and the file is not the owner's word. A no restarts nothing and does NOT count as acted on, so the gap the
+      // owner's next phone request is held to is not spent by it (neither stamp moves).
+      if !asOwner, let why = restartCheckVerdict(now).reasons.first {
+        recovery.lastHandledId = id
+        guard AgentRequestFile.clear(path: requestPath, ifStill: file) else { break }
+        audit("agent_request_refused", ["why": why.rawValue, "proof": Self.proofWord(asker)])
+        // no proof and no thread: what an older bridge writes for the phone's own button, so the line says what to do instead
+        requestRefused(id, reason: why.rawValue, mayBeThePhone: r.proof == .none && r.byThread == nil, lead: clockLine)
+        break
+      }
       recovery.lastHandledId = id
-      recovery.lastActedAt = awake
+      if asOwner { recovery.lastActedAt = awake } else { recovery.lastAgentActedAt = awake }
       AgentRequestFile.clear(path: requestPath, ifStill: file)
-      audit("agent_request", ["action": "restart"])
+      audit("agent_request", ["action": "restart", "proof": asOwner ? "owner" : Self.proofWord(asker)])
+      requestActedOn(id, now: now)
+      if let clockLine {
+        postRequestLine(.restarting) { _ in clockLine }
+      } else if !asOwner {
+        announceAgentRestart(r)
+      }
       restartThen(.restartedOnRequest)
     case .restore(let why):
       recovery.restoredOnce = true
       startRestore(why)
     }
+  }
+
+  /// `$TALOS_APP_HOME/restart-proofs-used.json`: the owner's restart proofs already acted on (`DialogProofsUsed`'s shape and cap).
+  var restartProofsUsedPath: String { talosAppHome + "/restart-proofs-used.json" }
+
+  /// `restart-proof-mark.json` beside it: `{"v":1,"signed_ms":<the newest signed time accepted>}`.
+  var restartProofMarkPath: String { talosAppHome + "/restart-proof-mark.json" }
+
+  /// Who a request is from, by its proof alone (`AgentRecovery.asker`): devices.json for the key, the wall clock for the frame's time (the
+  /// clock the dialog proof is checked on), this app's launch, the replay mark, and the used list in memory and on disk.
+  func requestAsker(_ r: AgentRequest) -> AgentRecovery.Asker {
+    seedProofs()
+    let devices = talosAppHome + "/devices.json"
+    let used = recovery.proofsUsed
+    let path = restartProofsUsedPath
+    return AgentRecovery.asker(
+      r, nowMs: options.wallClock(), launchedAtMs: recovery.launchedAtMs, markMs: recovery.proofMarkMs,
+      pinnedKey: { DeviceKeys.pinnedKey($0, devicesPath: devices) }, isUsed: { DialogProofsUsed.contains($0, memory: used, path: path) })
+  }
+
+  /// The files seed this run once. The mark read back is capped at the launch: a file can only say what came before it, and a session
+  /// that writes a far-off mark must not shut the owner's phone out.
+  private func seedProofs() {
+    guard !recovery.proofsSeeded else { return }
+    recovery.proofsSeeded = true
+    // the newest 64 at most (the file read itself is capped at 64 KB); they are this list's oldest, so they go first
+    recovery.proofsUsed = Array(DialogProofsUsed.read(path: restartProofsUsedPath).suffix(DialogProofsUsed.keep))
+    if let n = RestartProofCheck.readMark(probe.readFile(restartProofMarkPath)) {
+      recovery.proofMarkMs = max(recovery.proofMarkMs, min(n, recovery.launchedAtMs))
+    }
+  }
+
+  /// Spends a proof that verified (the owner's, or the owner's with a signed time this Mac does not take): its key into the used list, and
+  /// an owner's signed time into the mark. True when the used list was written to disk.
+  @discardableResult
+  private func consumeProof(_ a: AgentRecovery.Asker) -> Bool {
+    let key: String
+    var signedMs: Double?
+    switch a {
+    case .owner(let k, let ms): (key, signedMs) = (k, ms)
+    case .clockOff(let k, _): key = k
+    case .agent, .badProof: return false
+    }
+    let home = talosAppHome
+    let rec = DialogProofsUsed.record(key, memory: recovery.proofsUsed, path: restartProofsUsedPath) { SafePath.isRealFolder(home) }
+    recovery.proofsUsed = rec.memory
+    if let ms = signedMs, ms > recovery.proofMarkMs {
+      recovery.proofMarkMs = ms
+      if SafePath.isRealFolder(home), (try? AtomicFile.write(RestartProofCheck.encodeMark(ms), to: restartProofMarkPath, mode: 0o600)) == nil {
+        audit("restart_proof_mark_write_failed", [:])
+      }
+    }
+    return rec.written
+  }
+
+  /// For the audit log: what proof a request that was not the owner's carried.
+  private static func proofWord(_ a: AgentRecovery.Asker) -> String {
+    switch a {
+    case .owner: return "unrecorded"
+    case .clockOff(_, let why): return why.rawValue
+    case .agent, .badProof: return "none"
+    }
+  }
+
+  /// A request whose proof claims the owner and does not verify: refused whatever the restart check says, audited with the step that
+  /// failed (never the proof itself), and the owner told in one fixed line (the refusal lines' own limit).
+  private func refuseBadProof(_ r: AgentRequest, step: RestartProofCheck.Step, file: AgentRequestFile) {
+    recovery.lastHandledId = r.controlId
+    guard AgentRequestFile.clear(path: requestPath, ifStill: file) else { return }
+    audit("restart_proof_bad", ["step": step.rawValue])
+    requestProofBad(r.controlId)
   }
 
   /// A `--resume` whose agent was gone before the host could read its pid (the CLI prints its resume error and exits at once)
@@ -176,27 +303,37 @@ extension Supervisor {
   }
 
   /// `talos-app post <default thread> <text>` (headless). `text` is built from the agent's name. Used by the crash-loop post too.
-  /// Whether the post was started (a `talos-app` and a thread were found); the answer arrives in the audit log (`post ok=`).
+  /// With no `talos-app`, no thread (a damaged `config.json` names none), or a post that failed, the Mac posts the line itself
+  /// (`postSystemRow`), so the owner is told whatever state `config.json` is in. That row is drawn as Talos's own notice, so
+  /// it carries nothing the agent chose: the line is built with no agent name (`config.json` is the agent's to write), and a
+  /// line with screen text in it (`asMac: false`) never goes that way. Whether a post was started; the answers arrive in the
+  /// audit log (`post ok=`, `system_row result=`).
   @discardableResult
-  func postToPhone(_ text: (String?) -> String) -> Bool {
+  /// `done` runs on the queue once the post has finished, whichever way (also at once when nothing was started).
+  func postToPhone(asMac: Bool = true, _ text: (String?) -> String, done: (@Sendable () -> Void)? = nil) -> Bool {
     let env = launchEnv()
     let found = resolveTalosApp(env: env)
-    guard let cmd = found.command else {
-      audit("post_skipped", ["why": found.why])
-      return false
-    }
     let app = CrashPost.readAppConfig(probe.readFile(talosAppHome + "/config.json"))
-    guard let thread = config.notifyThread ?? app.defaultThread else {
-      audit("post_skipped", ["why": "no default thread"])
-      return false
+    let line = text(app.agentName)
+    let macLine = asMac ? text(nil) : nil
+    guard let cmd = found.command, let thread = config.notifyThread ?? app.defaultThread else {
+      audit("post_skipped", ["why": found.command == nil ? found.why : "no default thread"])
+      defer { done?() }
+      guard let macLine else { return false }
+      return postSystemRow(macLine, thread: config.notifyThread ?? app.defaultThread, env: env)
     }
-    let text = text(app.agentName)
+    let text = line
     let probe = self.probe
     let queue = q
     let me = WeakRef(self)
     options.background {  // as the restore: not the shared dispatch pool
-      let ok = probe.post(command: cmd, thread: thread, text: text, env: env)
-      queue.sync { me.value?.audit("post", ["ok": ok ? "1" : "0"]) }
+      let outcome = probe.postOutcome(command: cmd, thread: thread, text: text, env: env)
+      queue.sync {
+        me.value?.audit("post", ["ok": outcome == .sent ? "1" : "0"])
+        // refused (a config.json the CLI can't load, say): the Mac's own row; a timeout may have been sent, so never twice
+        if outcome == .failed, let macLine { me.value?.postSystemRow(macLine, thread: thread, env: env) }
+        done?()
+      }
     }
     return true
   }

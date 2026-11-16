@@ -1,9 +1,9 @@
 // The thread settings sheet (docs/THREADS.md): create or edit one thread. Name, icon, color, "what goes here" (the
 // topic the agent routes by), notifications, default thread, archive. One owner-signed config.patch per Save.
+
 import { THREAD_COLORS, THREAD_TOPIC_MAX, type ThreadT } from '@talos-app/protocol'
 import { useId, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useTalos } from '../../../lib/client.ts'
 import { cn } from '../../../ui/cn.ts'
 import { IconCheck, IconSearch } from '../../../ui/icons.tsx'
 import {
@@ -19,10 +19,13 @@ import {
 import { ThreadIcon } from '../../../ui/ThreadIcon.tsx'
 import { ART_ICONS, ART_LABEL, INK, searchIcons, THREAD_COLOR } from '../../../ui/threadIcons.ts'
 import { newThread } from '../../agent-config/patch.ts'
+import { useAwaitingOwner } from '../../cards/useAwaitingOwner.ts'
 import { useMediaQuery } from '../../settings/useMedia.ts'
+import { Instructions } from '../../thread-sessions/Instructions.tsx'
 import { OwnSession } from '../../thread-sessions/OwnSession.tsx'
 import { NOTIFY_LABEL, setDescription, useDescription } from '../threadMeta.ts'
 import { useAgentName } from '../useThreads.ts'
+import { UnderPicker } from './UnderPicker.tsx'
 import { useThreadPatch } from './useThreadPatch.ts'
 
 const MAX_THREADS = 40
@@ -160,9 +163,7 @@ function EditorBody({
     if (!live) return
     await apply((latest) => latest.map((t) => (t.id === live.id ? { ...t, archived: !t.archived } : t)))
   }
-  const pendingCards = useTalos(
-    (s) => s.cards.filter((c) => c.thread_id === thread?.id && c.state === 'pending').length,
-  )
+  const pendingCards = useAwaitingOwner(thread?.id ?? '').length
   const activeCount = threads.filter((t) => !t.archived && t.id !== 'inbox').length
   const archiveBlocked = !live?.archived && (isDefault || activeCount <= 1)
 
@@ -367,8 +368,24 @@ function EditorBody({
         <ThreadSwitches thread={live} locked={!macOnline || busy} setRow={setRow} />
       )}
 
+      {/* Sub-threads: hidden unless this Mac takes them (subthreads/1); the Mac judges the rules again and its refusal shows */}
+      {!creating && live && (
+        <UnderPicker
+          thread={live}
+          threads={threads}
+          locked={!macOnline || busy}
+          save={
+            (parent) =>
+              parent
+                ? apply((latest) => latest.map((t) => (t.id === live.id ? { ...t, parent_id: parent } : t)))
+                : apply((latest) => latest, {}, { clearParent: new Set([live.id]) }) // sent as parent_id: null
+          }
+        />
+      )}
+
       {/* Option C (docs/OPTION-C.md 9.2): hidden unless the owner allowed thread sessions and this thread may have one */}
       {!creating && live && <OwnSession thread={live} />}
+      {!creating && live && <Instructions thread={live} />}
 
       {!macOnline && <p className="m-0 text-xs text-text-2">Changes need your Mac online.</p>}
       {full && <p className="m-0 text-xs text-text-2">You have the maximum of {MAX_THREADS} threads.</p>}

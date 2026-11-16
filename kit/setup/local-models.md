@@ -20,7 +20,7 @@ Apple Silicon (M1 or newer) is called out where a model needs it.
 | Kokoro-82M | neural text-to-speech | not measured | about 350 MB (325 MB model, 28 MB voices) | no | no |
 | macOS `say` | text-to-speech, last resort | negligible | none, ships with macOS | no | no |
 | bge-base / bge-small via fastembed + sqlite-vec | semantic memory search | not measured | about 210 MB / 67 MB model, shared venv about 160 MB | no | no |
-| bge-reranker-v2-m3 (int8 ONNX) | optional re-sort of search results (`recall.py --rerank`) | not measured | about 571 MB | no | no |
+| bge-reranker-v2-m3 (int8 ONNX) | optional re-sort of search results (`recall.py --rerank`) | about 1.7 GB of RAM, 15-40 s a query on 4 CPUs | about 571 MB | no | no |
 
 ## What you get with nothing installed
 
@@ -137,7 +137,8 @@ Ships with macOS; no setup. `TALOS_SAY_VOICE` picks a system voice.
 - **Install (opt-in):** the existing flag, not a new one: `./install.sh --with-memory-search [--embed-model small]`, or
   `bash scripts/memory/setup.sh`. Details, flags and removal: [`memory-search.md`](memory-search.md).
 - **Without it:** `scripts/recall.py` falls back to plain text search.
-- **Optional reranker:** `bash scripts/memory/setup.sh --rerank` (or `./install.sh --with-reranker`) downloads
+- **Optional reranker:** a new install from the root `./install.sh` downloads it with the search (skipped under 3 GiB of memory;
+  `--no-reranker` skips it). Otherwise `bash scripts/memory/setup.sh --rerank` (or `./install.sh --with-reranker`) downloads
   bge-reranker-v2-m3 as an int8 ONNX file (about 571 MB; the Hugging Face listing is the community export
   `onnx-community/bge-reranker-v2-m3-ONNX`, size checked 2026-10-28; read its model card for the licence). Then
   `python3 scripts/recall.py "what did we decide about X" --rerank` re-sorts the top 15 files by their best chunk. It costs

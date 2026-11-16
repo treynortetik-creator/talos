@@ -159,12 +159,13 @@ describe('the 64 KB frame cap', () => {
     expect(agentsSnapshotBytes(w)).toBeGreaterThan(AGENT_LIMITS.frameBytes)
   })
 
-  it('session.agents and ready.session_agents refuse an untrimmed snapshot; ModSyncRequest takes it (the bridge trims)', () => {
+  it('session.agents refuses an untrimmed snapshot and ready.session_agents drops it; ModSyncRequest takes it (the bridge trims)', () => {
     const w = worstCase()
     expect(CappedAgentsSnapshot.safeParse(w).success).toBe(false)
     const f = parseFrame({ ...env('session.agents'), agents: w })
     expect(f.ok).toBe(false)
-    expect(ReadyFrame.shape.session_agents.safeParse(w).success).toBe(false)
+    // inside `ready` it costs that field, never the whole frame (protocol audit O2)
+    expect(ReadyFrame.shape.session_agents.parse(w)).toBeUndefined()
     expect(ModSyncRequest.safeParse({ mod_key: 'k'.repeat(43), agents: w }).success).toBe(true)
     const t = trimAgentsSnapshot(w)
     expect(parseFrame({ ...env('session.agents'), agents: t.snapshot }).ok).toBe(true)

@@ -3,6 +3,7 @@
 export PYTHONDONTWRITEBYTECODE=1
 set -uo pipefail
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 SB="$(mktemp -d)" || exit 2
 case "$SB" in /*/*) ;; *) echo "suspicious temp dir '$SB'" >&2; exit 2 ;; esac
 trap 'rm -rf "$SB"' EXIT

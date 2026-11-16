@@ -60,7 +60,7 @@ struct SupervisorIntegrationTests {
     #expect(r.screenContains(DialogMatcher.Strings.devConfirm))
     #expect(r.phase() == .starting)
     #expect(r.config.session.confirmedAt == nil)
-    #expect(r.wait(5) { r.allEvents.contains(.openTerminal) })
+    #expect(!r.allEvents.contains(.openTerminal), "Main's warning has the Talos popup; no terminal opens beside it")
     #expect(!r.audit.contains(" auto_confirm "))
 
     r.humanEnter()
@@ -71,7 +71,7 @@ struct SupervisorIntegrationTests {
     #expect(s.id != nil && ResumeRewrite.isUUID(s.id ?? ""))
     // A first start with no session id passes --session-id <new uuid>.
     #expect(r.starts.count == 1)
-    #expect(r.starts.first?.contains("--session-id \(s.id ?? "-")") == true)
+    #expect(r.starts.first?.contains("--session-id=\(s.id ?? "-")") == true)
     #expect(r.wait(5) { r.audit.contains("human_confirm") })
   }
 
@@ -101,7 +101,7 @@ struct SupervisorIntegrationTests {
     #expect(t.cleanupWait <= 10)
     #expect(!ProcessInspect.alive(holder), "the dead child's group is gone, including its sleep")
     #expect(ProcessInspect.alive(lookalike), "a lookalike outside the group survives")
-    #expect(r.starts[1].contains("--resume \(id)"))
+    #expect(r.starts[1].contains("--resume=\(id)"))
     #expect(!r.starts[1].contains("--session-id"))
 
     #expect(r.wait(10) { isRunning(r.phase()) }, "auto-confirmed: \(r.phase())")
@@ -152,7 +152,7 @@ struct SupervisorIntegrationTests {
       r.wait(20) { r.sup.tickNow(); return r.sup.status.needsYou == .dialog("folder trust") },
       "needsYou \(String(describing: r.sup.status.needsYou)), audit: \(r.audit)")
     #expect(r.audit.contains("why=stall:folder trust"))
-    #expect(r.wait(5) { r.allEvents.filter { $0 == .openTerminal }.count == 2 }, "a terminal for each dialog")
+    #expect(r.wait(5) { r.allEvents.filter { $0 == .openTerminal }.count == 1 }, "a terminal for the trust dialog; Main's warning has the popup")
   }
 
   /// Same shape for a refused restart: the refusal is the question for the dev dialog, and the stall limit is already
@@ -210,19 +210,30 @@ struct SupervisorIntegrationTests {
     #expect(r.audit.components(separatedBy: " auto_confirm ").count - 1 == 1, "only the cold start's Enter: \(r.audit)")
   }
 
+  /// The restart's Enter did not take: the warning is offered to the owner (the popup, the card, one line to his phone), and from
+  /// then on it is his. It used to be stopped 15 s after the Enter (`noNotice`), while the phone said Main was waiting for him.
   @Test(arguments: bothHosts)
-  func noNoticeAfterTheEnterStopsAfterFifteenSeconds(kind: HostKind) throws {
+  func aRestartWhoseEnterDidNotTakeIsOfferedAndLeftForTheOwner(kind: HostKind) throws {
     // Start 1 crashes 6 s after its notice (the fake's default is 1 s), so a late poll still sees it running after the human Enter.
     let r = try Rig(kind, scenario: "no-notice.sh", env: ["FAKE_CRASH_AFTER": "6"])
     defer { r.teardown() }
     try coldStartConfirmed(r)
     #expect(r.wait(30) { r.starts.count >= 2 })
     #expect(r.wait(30) { r.sup.tickNow(); return r.autoConfirms >= 2 }, "the restart's Enter")
-    let sent = Date()
-    #expect(r.wait(25) { stopReason(r.phase()) == .noNotice }, "\(r.phase())")
-    #expect(Date().timeIntervalSince(sent) >= 13.5)
-    #expect(r.wait(5) { r.allEvents.contains(.confirmFailed) })
-    #expect(r.starts.count == 2, "no further restart")
+    #expect(r.waitForPopup() != nil, "the warning that came back is offered: \(r.audit)")
+    let pid = try #require(r.sup.status.childPid)
+    let told = { r.phonePosts.filter { $0.contains(NeedsYouPopupContent.devWaitingPhone) } }
+    #expect(r.wait(10) { told().count == 1 }, "the phone says Main is waiting: \(r.posts)")
+    // well past the notice wait (15 s) by the supervisor's clock, pass after pass
+    for _ in 0..<4 {
+      r.clock.advance(10)
+      for _ in 0..<5 { r.sup.tickNow() }
+    }
+    #expect(r.phase() == .starting && stopReason(r.phase()) == nil, "still waiting for him: \(r.phase()), audit: \(r.audit)")
+    #expect(!r.audit.contains("auto_confirm_no_notice") && !r.allEvents.contains(.confirmFailed), "audit: \(r.audit)")
+    #expect(ProcessInspect.alive(pid) && r.sup.status.childPid == pid, "Main is still there for his click")
+    #expect(r.mainPopup != nil && r.sup.status.needsYou == .restartNotConfirmed(.alreadyConfirmedThisStart), "\(String(describing: r.sup.status.needsYou))")
+    #expect(r.starts.count == 2 && r.autoConfirms == 2 && told().count == 1, "no restart, no second Enter, one line")
   }
 
   @Test(arguments: bothHosts)
@@ -241,7 +252,7 @@ struct SupervisorIntegrationTests {
     r.sup.tickNow()
     #expect(r.starts.count == 7, "cold start + 5 restarts + the restore's one restart: \(r.starts.count)")
     #expect(r.config.session.id == Rig.sessionId)
-    #expect(r.starts.allSatisfy { $0.contains("--resume \(Rig.sessionId)") })
+    #expect(r.starts.allSatisfy { $0.contains("--resume=\(Rig.sessionId)") })
     #expect(r.wait(5) { r.crashPosts.count == 1 })
   }
 
@@ -262,7 +273,7 @@ struct SupervisorIntegrationTests {
     #expect(s.id != Rig.sessionId)
     #expect(s.previousIds == [Rig.sessionId])
     #expect(s.confirmedAt == nil)
-    #expect(r.starts[1].contains("--session-id \(s.id ?? "-")"))
+    #expect(r.starts[1].contains("--session-id=\(s.id ?? "-")"))
   }
 
   @Test(arguments: bothHosts)

@@ -16,7 +16,7 @@ afterEach(async () => {
 const BEFORE_0730 = '2026-10-05T11:29:00Z'
 const textOf = (r: ReturnType<typeof rows>[number]) =>
   r.frame.type === 'reply' ? String(r.frame.message?.text ?? '') : ''
-const rows = (x: SchedHarness) =>
+const frames = (x: SchedHarness) =>
   x.relay.frames.filter(
     (r) =>
       r.direction === 'from_bridge' &&
@@ -24,6 +24,10 @@ const rows = (x: SchedHarness) =>
       r.frame.message?.author === 'system' &&
       String(r.frame.message?.text ?? '').includes("didn't finish"),
   )
+const idOf = (r: ReturnType<typeof frames>[number]) => (r.frame.type === 'reply' ? r.frame.message?.id : undefined)
+// One per notice. A frame whose ack came late is re-sent with the same id (the HTTP fallback, or the next outbox flush): the
+// relay dedupes it on id and the owner sees one row, but the relay's frame log keeps both copies.
+const rows = (x: SchedHarness) => frames(x).filter((r, i, all) => all.findIndex((o) => idOf(o) === idOf(r)) === i)
 
 const reconnect = async (x: SchedHarness) => {
   await x.advance(2_000) // past the first backoff step (1 s, +/-20%)
@@ -90,5 +94,29 @@ describe('a failure reported while the relay socket is down', () => {
     await sleep(500)
     expect(rows(h)).toHaveLength(1)
     expect(textOf(rows(h)[0] as ReturnType<typeof rows>[number])).toContain('it ran out of time')
+  })
+
+  test('a notice whose ack comes late is re-sent with the same id, and counted once', async () => {
+    h = await startSched({ now: BEFORE_0730, jobs: [draft()] })
+    await h.advance(90_000)
+    const n = await nextRun(h, 'daily-digest')
+    h.relay.dropBridge()
+    await waitFor(() => h.bridge.client?.connected === false, 10_000, 'the socket to drop')
+    await h.agent.start(n.meta.run_id as string) // the run above, with the agent silent from here on
+    await reconnect(h)
+    await h.advance(RUN_TIMEOUT_MS - 60_000)
+    const svc = h.bridge.ctx.schedules
+    await svc?.idle()
+    // What a loaded machine does: the clock steps past the 8 s ack wait before the relay's ack is read. Here the ack is lost.
+    h.relay.blackHole = true
+    h.clock.advance(70_000)
+    const tick = svc?.enqueue(() => svc.runnerTick())
+    await waitFor(() => frames(h).length > 0, 10_000, 'the time-out notice')
+    h.clock.advance(9_000)
+    await waitFor(() => frames(h).length > 1, 10_000, 'the re-sent notice')
+    h.relay.blackHole = false
+    await tick
+    expect(new Set(frames(h).map(idOf)).size).toBe(1)
+    expect(rows(h)).toHaveLength(1)
   })
 })

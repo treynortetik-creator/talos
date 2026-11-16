@@ -32,6 +32,7 @@ import { CARD_KIND_TABLE, CARD_KINDS, type JwkP256T } from './models.ts'
 import { signOwnerFrame, verifyOwnerFrame } from './owner-sig.ts'
 import {
   PERMISSION_NOTICE_MAX_CHARS,
+  PERMISSION_OTHER_CHANNEL_NOTE,
   type PermissionAllowView,
   permissionCardAllowsPrimary,
   visibleText,
@@ -127,6 +128,9 @@ export async function checkGrant(
 
 // ---- 3. act ----------------------------------------------------------------------------------------------------------
 
+/** The version of `shownHash` an Approve must be signed with (`ActBody`'s `shown_v`). */
+export const SHOWN_VERSION = '3'
+
 export const ActBody = z.discriminatedUnion('a', [
   z.strictObject({
     a: z.literal('reply'),
@@ -143,6 +147,11 @@ export const ActBody = z.discriminatedUnion('a', [
      * and refuses anything else, so the relay cannot have the phone show one thing and sign another.
      */
     shown: Sha256Ref,
+    /**
+     * Which `shownHash` the phone computed, itself, from what was on its screen. An older phone signed whatever hash the
+     * notification's data held, which a relay can choose, so an approval without this field is refused.
+     */
+    shown_v: z.literal(SHOWN_VERSION),
   }),
 ])
 export type ActBodyT = z.infer<typeof ActBody>
@@ -446,7 +455,7 @@ export function normalizeNoticeText(text: string): string {
   return text.replace(/\s+\n/g, '\n').trim()
 }
 
-/** Card kinds a notification may approve. Everything that leaves the app (email, message, deploy, publish, purchase) or
+/** Card kinds a notification may approve. Everything that leaves the app (email, message, deploy, push, publish, purchase) or
  *  changes the Mac's own settings (schedule, app_action) is open-in-the-app only, whatever risk the agent put on it. */
 export const NATIVE_APPROVABLE_KINDS: readonly string[] = CARD_KINDS.filter((k) => CARD_KIND_TABLE[k].nativeApprovable)
 
@@ -484,19 +493,26 @@ export function cardNotice(card: Omit<PermissionAllowView, 'state'>): { text: st
       ? // ...and only a call the notification can show whole: one short visible line. A longer one shows Open, which goes to the
         // full-screen approval sheet where the owner scrolls through every character.
         permissionCardAllowsPrimary({ ...card, state: 'pending' }) &&
+        // and nothing the app would add a note for (a part not shown, an older Claude Code): the notification has no room for
+        // the note, so such a card opens the app, where Allow is one tap beside the note
+        (card.warning === undefined || PERMISSION_OTHER_CHANNEL_NOTE.test(card.warning)) &&
         (card.body ?? '').length <= PERMISSION_NOTICE_MAX_CHARS &&
         !/[\n\u23CE]/.test(card.body ?? '')
       : card.payload === undefined)
   return { text: whole ? full : clipUtf8(full, budget), complete: whole }
 }
 
+/** The title of every notification whose seal the phone opened. The phone's extension sets it itself, whatever the alert said. */
+export const NOTICE_TITLE = 'Talos'
+
 /**
- * What the phone signs as `shown`: a hash of everything the notification displayed, the subtitle (the thread name, or
- * nothing) and the body. The subtitle's byte length goes first so no subtitle can run into the body.
- *   input = "talos-shown/v2\n" + utf8_length(subtitle) + "\n" + subtitle + "\n" + body
+ * What the phone signs as `shown`: a hash of everything the notification displayed, the title, the subtitle (the thread
+ * name, or nothing) and the body. Each byte length goes first so no part can run into the next. A phone that signs an
+ * older version of this hash is refused like any other mismatch.
+ *   input = "talos-shown/v3\n" + utf8_length(title) + "\n" + title + "\n" + utf8_length(subtitle) + "\n" + subtitle + "\n" + body
  */
-export function shownHash(displayed: string, subtitle = ''): string {
-  return `sha256:${sha256Hex(`talos-shown/v2\n${utf8(subtitle).length}\n${subtitle}\n${displayed}`)}`
+export function shownHash(displayed: string, subtitle = '', title = NOTICE_TITLE): string {
+  return `sha256:${sha256Hex(`talos-shown/v3\n${utf8(title).length}\n${title}\n${utf8(subtitle).length}\n${subtitle}\n${displayed}`)}`
 }
 
 /**

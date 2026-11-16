@@ -20,12 +20,22 @@ extension WorkerManager {
     for id in rt.keys.sorted() {
       guard let r = rt[id], !r.adoptPending, r.entry.state == "live" || r.entry.state == "busy", let s = settings.threads[id] else {
         rt[id]?.change = LaunchChange.Debounce(settle: options.launchChangeSettle)
+        rt[id]?.subRefusedSince = nil
         continue
       }
-      let wanted = LaunchChange.Signature(cwd: wantedFolder(s), model: s.model, effort: s.effort, mcpAllow: s.mcpAllow)
+      // a sub-thread the rules would not start is going down for good: no restart is looked at meanwhile (WorkerSubThreads.swift)
+      if checkRefusedSub(id, s) {
+        rt[id]?.change = LaunchChange.Debounce(settle: options.launchChangeSettle)
+        continue
+      }
+      // a folder whose setting cannot be read is not known: never compared, so a typo restarts nothing and loses no conversation
+      let wanted = LaunchChange.Signature(
+        cwd: s.unreadFolderField == nil ? wantedFolder(s) : nil, model: s.model, effort: s.effort, mcpAllow: s.mcpAllow)
       var debounce = r.change
       debounce.settle = options.launchChangeSettle
-      let fire = debounce.observe(LaunchChange.compare(launched: r.entry.launched, wanted: wanted), at: awake())
+      let change = LaunchChange.compare(
+        launched: r.entry.launched, wanted: wanted, unread: s.optsUnread, entryCwd: r.entry.session_id == nil ? nil : r.entry.cwd)
+      let fire = debounce.observe(change, at: awake())
       rt[id]?.change = debounce
       // Park after the turn, then start again: through `stopping`, and NOT with the owner's stop limit. A tap on Restart gives up on a turn
       // after 15 minutes; a saved setting does not, so "Saving restarts the session when its current turn ends" stays true.
@@ -57,13 +67,15 @@ extension WorkerManager {
 
   /// After a start: a new conversation in a new folder, and the servers on the thread's list that exist nowhere.
   func noteLaunch(_ id: String, missing: [String], refused: [String], ownFolder: [String: String]) {
+    rt[id]?.fenceKinds[\Runtime.ceilingNote] = nil  // this start ran: a refusal after it is a new one, and is told
+    rt[id]?.fenceKinds[\Runtime.hookNote] = nil
     for (name, scope) in ownFolder.sorted(by: { $0.key < $1.key }) { audit("thread-session-mcp: thread=\(id) server=\(name) scope=\(scope)") }
     if !refused.isEmpty {
       tell(id, slot: \.refusedNote, kind: "mcp refused: \(refused.sorted().joined(separator: ","))", LaunchChange.refusedServersLine(refused))
     }
     if let folder = rt[id]?.folderChangeTo {
       rt[id]?.folderChangeTo = nil
-      tell(id, slot: \.folderNote, kind: "folder: \(folder)", LaunchChange.folderLine(folder))
+      tell(id, slot: \.folderNote, kind: "folder: \(folder)", LaunchChange.folderLine())
     }
     if !missing.isEmpty {
       tell(

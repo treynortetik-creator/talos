@@ -2,23 +2,72 @@
 // that opens the session panel. Everything else the old header carried lives one tap away: other threads in the left
 // menu, status, usage and agents in the session panel, thread settings in the menu.
 import type { ThreadStatusT, ThreadT } from '@talos-app/protocol'
+import { useState } from 'react'
 import { useStore } from 'zustand'
 import { useTalos } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconSearch, IconThreads } from '../../ui/icons.tsx'
 import { StatusDot } from '../../ui/StatusDot.tsx'
+import { BugHeaderButton } from '../bugreport/BugButton.tsx'
+import { useAwaitingOwner } from '../cards/useAwaitingOwner.ts'
+import { FilesSheet } from '../files/FilesSheet.tsx'
+import { SENT_TEXT } from '../files/sentLogic.ts'
 import { usePalette } from '../palette/store.ts'
 import { PALETTE_TEXT } from '../palette/text.ts'
 import { chipParts, phaseOf, usageLabel } from '../session/logic.ts'
 import { useSessionSupported } from '../session/SessionTrigger.tsx'
 import { useSessionController } from '../session/store.ts'
 import { useThreadContext } from '../session/threadContext.ts'
+import { SessionPill } from '../thread-sessions/SessionStatus.tsx'
+import { rowShowsSession, useSessionWords } from '../thread-sessions/useSessionWords.ts'
 import { useNeedsYouCount } from '../threads/Nav.tsx'
 import { statusMark } from '../threads/StatusPill.tsx'
 import { usePhonePanel } from './phoneStore.ts'
 
 const R = 8
 const C = 2 * Math.PI * R
+
+const PAGE = 'M6 3h9l3 3v15H6z'
+function Glyph({ path, size = 20 }: { path: string; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden="true"
+    >
+      <path d={path} />
+    </svg>
+  )
+}
+/** A header button that opens a sheet (Files, Pages). */
+function HeaderIcon({
+  label,
+  testId,
+  path,
+  onClick,
+}: {
+  label: string
+  testId: string
+  path: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-haspopup="dialog"
+      data-testid={testId}
+      onClick={onClick}
+      className="grid size-11 shrink-0 place-items-center rounded-pill text-on-chrome hover:bg-chrome-hover"
+    >
+      <Glyph path={path} />
+    </button>
+  )
+}
 
 /** A 22 px ring filled to `pct` of context used. Never colour alone: the number sits beside it. */
 export function ContextRing({ pct, warn }: { pct: number | undefined; warn?: boolean }) {
@@ -69,6 +118,7 @@ export function PhoneHeader({
   statusLabel?: string | undefined
 }) {
   const set = usePhonePanel((s) => s.set)
+  const [libraryOpen, setLibraryOpen] = useState(false)
   const supported = useSessionSupported()
   const ctl = useSessionController()
   const sessionState = useStore(ctl.store, (s) => s.state)
@@ -78,6 +128,11 @@ export function PhoneHeader({
   const phase = phaseOf(sessionState, modOnline)
   const ctx = parts?.ctx
   const mark = statusMark(state)
+  // The thread's own session, when it has one (Option C): a word on a pill that opens what it is doing and why.
+  const sessionWords = useSessionWords(thread.id)
+  // only when it has something to say: a plain idle session keeps the agent's own status (on a call, queued...)
+  const session = rowShowsSession(sessionWords) ? sessionWords : null
+  const firstCard = useAwaitingOwner(thread.id).find((c) => c.kind === 'permission')
   // What the old tab strip and bottom bar showed: messages waiting in the other threads, and cards that need the owner.
   const unread = useTalos((st) => Object.entries(st.unread).reduce((n, [id, c]) => (id === thread.id ? n : n + c), 0))
   const needs = useNeedsYouCount()
@@ -110,18 +165,35 @@ export function PhoneHeader({
       </button>
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <h1 className="m-0 truncate font-display text-base font-semibold leading-tight">{thread.name}</h1>
-        <span
-          aria-live="polite"
-          data-testid="phone-status"
-          className={cn('inline-flex shrink-0 items-center', mark.tone)}
-        >
-          <StatusDot shape={mark.shape} size={8} className={state === 'needs_you' ? 'text-warn' : 'text-on-chrome-2'} />
-          <span className="sr-only">
-            {mark.word}
-            {statusLabel ? `, ${statusLabel}` : ''}
+        {session ? (
+          <SessionPill words={session} cardHref={firstCard ? `/card/${firstCard.id}` : undefined} onChrome />
+        ) : (
+          <span
+            aria-live="polite"
+            data-testid="phone-status"
+            className={cn('inline-flex shrink-0 items-center', mark.tone)}
+          >
+            <StatusDot
+              shape={mark.shape}
+              size={8}
+              className={state === 'needs_you' ? 'text-warn' : 'text-on-chrome-2'}
+            />
+            <span className="sr-only">
+              {mark.word}
+              {statusLabel ? `, ${statusLabel}` : ''}
+            </span>
           </span>
-        </span>
+        )}
       </div>
+      {/* the Library: the pages and files sent in Talos, one button (owner, 2026-11-15) */}
+      <BugHeaderButton onChrome />
+      <HeaderIcon
+        label={SENT_TEXT.title}
+        testId="phone-library-button"
+        path={PAGE}
+        onClick={() => setLibraryOpen(true)}
+      />
+      <FilesSheet threadId={thread.id} open={libraryOpen} onOpenChange={setLibraryOpen} />
       <button
         type="button"
         aria-label={PALETTE_TEXT.searchButton}

@@ -1,0 +1,18 @@
+{
+  "id": "heartbeat-sh-identity",
+  "title": "A heartbeat source's command was read from ps, which can show the bare shell (sh) before the exec",
+  "base": "8235d366e5b75b4d23d09309e1b4593579706a52",
+  "buggy": "27b0def8",
+  "fix": "26c55891",
+  "expect": [
+    {
+      "file": ["apps/bridge/src/heartbeat/spawn.ts", "apps/bridge/src/heartbeat/orphans.ts"],
+      "severity": "medium",
+      "must": [
+        ["ps\\b|command line|\\(sh\\)|fork|exec|placeholder|argv"],
+        ["identity|record|kill|orphan|reap|match|compare"]
+      ],
+      "note": "onStart records the command ps shows right after the spawn; between fork and exec that is the bare shell, (sh), so the stored identity is wrong and the orphan check compares against it."
+    }
+  ]
+}

@@ -223,12 +223,15 @@ def build(src, vendor):
             make_writable(tmp_top)
             shutil.rmtree(tmp_top)
             if have == sha:
+                make_read_only(final_top)  # sealed again: a run killed between its rename and its seal left it writable
                 print("plugin-release: %s is already built (same content), nothing to do" % final_top)
                 return version
             raise SystemExit("plugin-release: release %s already exists with different content. A release is immutable: "
                              "bump the kit's VERSION, or remove %s yourself." % (version, final_top))
-        make_read_only(tmp_top)
+        # rename first, then seal: on a stock macOS APFS volume rename(2) of a directory whose own mode is read-only fails
+        # with EACCES (it must rewrite the directory's '..'), so a release sealed before the move could never be put in place
         os.rename(tmp_top, final_top)
+        make_read_only(final_top)
     except BaseException:
         if os.path.exists(tmp_top):
             make_writable(tmp_top)

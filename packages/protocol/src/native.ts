@@ -4,8 +4,8 @@
 // the shell validates what it receives from the page. Shells cannot do passkeys in a web view; they sign in with the
 // one-time setup code (`POST /api/auth/enroll/session`, docs/SPEC.md 5.3).
 //
-//   web -> native   ready · notify · badge · open_external · haptic · threads · pair_status · companion_state · companion_reply · terminal_view · terminal_resume · terminal_leave · pick_folder
-//   native -> web   navigate · compose · voice_note (reserved) · enroll_code · companion_reply_request · notify_permission · terminal_sessions · terminal_resume_result · terminal_select · folder_picked
+//   web -> native   ready · notify · badge · open_external · haptic · threads · pair_status · companion_state · companion_reply · terminal_view · terminal_resume · terminal_leave · pick_folder · shell_pane · shell_pane_close · capture_ack
+//   native -> web   navigate · compose · voice_note (reserved) · enroll_code · companion_reply_request · notify_permission · terminal_sessions · terminal_resume_result · terminal_select · folder_picked · capture_drop
 import { z } from 'zod'
 import { normalizeEnrollCode } from './enroll.ts'
 import { ThreadId } from './ids.ts'
@@ -181,6 +181,34 @@ const PickPath = z.string().max(512).regex(PICK_PATH)
  */
 export const NativePickFolder = msg('pick_folder', { req: PickReq, start: PickPath.optional() })
 
+// ---- the owner's own shell in the Mac app's Terminal pane (docs/TERMINAL-PANE.md) ----
+/** The feature the Mac app lists in its user agent (`TalosFeatures/…,shell-pane`) when it lays a shell over the pane's slot. */
+export const SHELL_FEATURE_SHELL_PANE = 'shell-pane'
+/**
+ * Where the page has left room for a thread's Terminal pane, in page pixels from the top-left of the page, or null while the
+ * slot is not showing (another pane tab is in front, a dialog covers it, the column is collapsed): the shells keep running.
+ * The pane is a native view on this Mac running the owner's login shell. The page says where and for which thread, nothing
+ * else: no folder the shell must use, no command, no text. `cwd` is what the page believes the thread's folder is; a shell
+ * may check it against its own record but never starts a shell there on the page's word.
+ */
+export const NativeShellPane = msg('shell_pane', {
+  thread_id: ThreadId,
+  rect: z.strictObject({ x: TerminalCoord, y: TerminalCoord, width: TerminalCoord, height: TerminalCoord }).nullable(),
+  cwd: PickPath.optional(),
+})
+/** The owner closed the Terminal pane of this thread: its shells end. Opening the pane again starts a new shell. */
+export const NativeShellPaneClose = msg('shell_pane_close', { thread_id: ThreadId })
+
+/**
+ * The page's answer to `capture_drop`. ok: the image is in the composer as a pending attachment (it may still be uploading),
+ * not sent. Not ok: why, so the shell can tell the owner; the shell then discards the image.
+ */
+export const NativeCaptureAck = msg('capture_ack', {
+  req: PickReq,
+  ok: z.boolean(),
+  reason: z.enum(['not_signed_in', 'bad_image', 'no_thread']).optional(),
+})
+
 export const WEB_TO_NATIVE = {
   ready: NativeReady,
   notify: NativeNotify,
@@ -195,6 +223,9 @@ export const WEB_TO_NATIVE = {
   terminal_resume: NativeTerminalResume,
   terminal_leave: NativeTerminalLeave,
   pick_folder: NativePickFolder,
+  shell_pane: NativeShellPane,
+  shell_pane_close: NativeShellPaneClose,
+  capture_ack: NativeCaptureAck,
 } as const
 export const WebToNative = z.discriminatedUnion('type', [
   NativeReady,
@@ -210,21 +241,26 @@ export const WebToNative = z.discriminatedUnion('type', [
   NativeTerminalResume,
   NativeTerminalLeave,
   NativePickFolder,
+  NativeShellPane,
+  NativeShellPaneClose,
+  NativeCaptureAck,
 ])
 export type WebToNativeT = z.infer<typeof WebToNative>
 
 // ---- native -> web ----------------------------------------------------------------------------------------------
 
-/** Standard base64 whose decoded size is at most NATIVE_VOICE_NOTE_MAX_BYTES. */
-const Base64Bytes = z
-  .string()
-  .max(Math.ceil(NATIVE_VOICE_NOTE_MAX_BYTES / 3) * 4) // cheap length cap first: nothing below runs on a huge string
-  .regex(/^[A-Za-z0-9+/]*={0,2}$/)
-  .refine((s) => {
-    if (s.length % 4 !== 0) return false
-    const pad = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0
-    return (s.length / 4) * 3 - pad <= NATIVE_VOICE_NOTE_MAX_BYTES
-  }, 'voice note is over 25 MB or not base64')
+/** Standard base64 whose decoded size is at most `max` bytes. */
+const base64Bytes = (max: number, what: string) =>
+  z
+    .string()
+    .max(Math.ceil(max / 3) * 4) // cheap length cap first: nothing below runs on a huge string
+    .regex(/^[A-Za-z0-9+/]*={0,2}$/)
+    .refine((s) => {
+      if (s.length % 4 !== 0) return false
+      const pad = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0
+      return (s.length / 4) * 3 - pad <= max
+    }, `${what} is too big or not base64`)
+const Base64Bytes = base64Bytes(NATIVE_VOICE_NOTE_MAX_BYTES, 'voice note')
 
 export const NativeNavigate = msg('navigate', { path: AppPath })
 export const NativeCompose = msg('compose', { thread_id: ThreadId, text: z.string().min(1).max(32_000) })
@@ -340,6 +376,28 @@ export const NativeFolderPicked = msg('folder_picked', {
   why: z.enum(['not_now', 'bad_name']).optional(),
 })
 
+// ---- the screenshot hotkey (Mac app): a capture dropped into a thread's composer, never sent by itself ----
+/** The feature the web lists in its `ready` when it can take `capture_drop`; the shell sends one only to a page that lists it. */
+export const WEB_FEATURE_CAPTURE_DROP = 'capture-drop'
+/** A capture is a PNG of at most 8 MB, its long edge at most 2560 px: the shell scales it down to fit before sending. */
+export const NATIVE_CAPTURE_MAX_BYTES = 8 * 1024 * 1024
+export const NATIVE_CAPTURE_EDGE_MAX = 2560
+const CaptureEdge = z.number().int().min(1).max(NATIVE_CAPTURE_EDGE_MAX)
+/**
+ * The owner pressed the screenshot hotkey. The image goes into a thread's composer as a pending attachment, ready for a line
+ * of text; nothing is sent until the owner sends. `thread_id` is set only when the owner pinned a thread in the shell's
+ * settings; null lets the page choose (the thread last on screen, else the default one). No app name, window title or screen:
+ * the image is all there is. The page answers `capture_ack` with the same `req`.
+ */
+export const NativeCaptureDrop = msg('capture_drop', {
+  req: PickReq,
+  thread_id: ThreadId.nullable(),
+  mime: z.literal('image/png'),
+  data_b64: base64Bytes(NATIVE_CAPTURE_MAX_BYTES, 'capture'),
+  width: CaptureEdge,
+  height: CaptureEdge,
+  mode: z.enum(['full', 'window', 'region']),
+})
 export const NATIVE_TO_WEB = {
   navigate: NativeNavigate,
   compose: NativeCompose,
@@ -352,6 +410,7 @@ export const NATIVE_TO_WEB = {
   terminal_resume_result: NativeTerminalResumeResult,
   terminal_select: NativeTerminalSelect,
   folder_picked: NativeFolderPicked,
+  capture_drop: NativeCaptureDrop,
 } as const
 export const NativeToWeb = z.discriminatedUnion('type', [
   NativeNavigate,
@@ -365,6 +424,7 @@ export const NativeToWeb = z.discriminatedUnion('type', [
   NativeTerminalResumeResult,
   NativeTerminalSelect,
   NativeFolderPicked,
+  NativeCaptureDrop,
 ])
 export type NativeToWebT = z.infer<typeof NativeToWeb>
 

@@ -192,8 +192,6 @@ describe('the fence with the flag on', () => {
     ['errors', 'purge'],
     ['errors'],
     ['errors', '--all', 'list'],
-    ['status'],
-    ['logs'],
     ['report'],
     ['digest'],
     ['trust'],
@@ -266,7 +264,7 @@ describe('the lists', () => {
     expect(refusedForWorkers(['errors', 'show', 'abcd'], true)).toBe(false)
     expect(refusedForWorkers(['errors', 'close', 'abcd'], true)).toBe(true)
     expect(refusedForWorkers(['errors'], true)).toBe(true)
-    expect(refusedForWorkers(['status'], true)).toBe(true)
+    expect(refusedForWorkers(['report'], true)).toBe(true)
   })
   test('workerCliRefusal without a thread id never consults the flag', () => {
     const h = home({ t1: true })

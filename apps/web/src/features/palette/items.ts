@@ -1,6 +1,6 @@
 // What the palette lists. Pure: the Palette component feeds it the live threads, cards and commands.
 import type { CardT, InventoryCommandT } from '@talos-app/protocol'
-import { type ActionSpec, chordLabel, isActive, type KeyEntry } from '../../lib/keymap.ts'
+import { type ActionSpec, chordLabel, isActive, type KeyEntry, numberedThreads } from '../../lib/keymap.ts'
 import { PALETTE_TEXT } from './text.ts'
 
 export type PaletteRun =
@@ -35,6 +35,7 @@ const OFFERED = [
   'sidebar',
   'threadPrev',
   'threadNext',
+  'reportBug',
 ]
 
 export type ItemInput = {
@@ -96,13 +97,18 @@ export function buildItems(i: ItemInput): PaletteItem[] {
         ...(id === 'searchMessages' && q ? { hint: PALETTE_TEXT.searchHint } : {}),
       })
     }
-    const threads: PaletteItem[] = i.threads.map((t, n) => ({
-      id: `thread-${t.id}`,
-      label: t.name,
-      shortcut: n < 9 ? keys(byId.get(`thread${n + 1}`)) : '',
-      group: 'Threads',
-      run: { type: 'act', act: { kind: 'thread', index: n } },
-    }))
+    // numbered as the sidebar numbers them (the Inbox is listed, but has no number); opening goes by id
+    const numbered = numberedThreads(i.threads)
+    const threads: PaletteItem[] = i.threads.map((t) => {
+      const n = numbered.indexOf(t)
+      return {
+        id: `thread-${t.id}`,
+        label: t.name,
+        shortcut: n >= 0 && n < 9 ? keys(byId.get(`thread${n + 1}`)) : '',
+        group: 'Threads',
+        run: { type: 'act', act: { kind: 'nav', to: `/t/${t.id}` } },
+      }
+    })
     // A command is listed only for a query that starts with `/`: a plain word is a search, and Enter must never send a command.
     const cmds: PaletteItem[] =
       i.currentThreadId && q.startsWith('/')

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# post-merge (a pull): see live-guard.sh
+exec bash "$(dirname "$0")/live-guard.sh"

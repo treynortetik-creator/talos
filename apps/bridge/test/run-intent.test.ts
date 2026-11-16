@@ -14,6 +14,10 @@ import { bridgeFeatures } from '../src/handshake.ts'
 import { pgidOf } from '../src/hub/server.ts'
 import { nullLogger } from '../src/log.ts'
 import { advanceSteps, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+import { durableSqlite } from './sqlite-durable.ts'
+
+// this file damages history.sqlite on purpose and reopens it: SQLite syncs as the product runs (sqlite-test-seam.ts)
+durableSqlite()
 
 let h: Harness | undefined
 let b2: Bridge | undefined
@@ -249,7 +253,7 @@ describe('the bridge says it can take a Run', () => {
   })
 })
 
-describe('one block, one Run: kept by the Mac, keyed on the block', () => {
+describe('each tap, one Run: kept by the Mac, keyed on the tap', () => {
   const noted = (x: Harness) => runNotes(x).length
 
   test('a Run without the block it is for is refused, and the agent hears nothing', async () => {
@@ -282,47 +286,32 @@ describe('one block, one Run: kept by the Mac, keyed on the block', () => {
     expect(noted(hh())).toBe(0)
   })
 
-  test('the Run marks its block in the seen store before the agent hears of it', async () => {
+  test('the Run marks its tap (the message) in the seen store before the agent hears of it', async () => {
     await start()
-    const ref = blockRef(2)
-    const key = `run:${ref.message_id}:2`
+    const f = await runFrame(hh(), SCRIPT, { run_block: blockRef(2) })
     const seenAtEmit: boolean[] = []
     hh().bridge.setEmit(async (n) => {
-      seenAtEmit.push(hh().bridge.ctx.store.hasSeen(key))
+      seenAtEmit.push(hh().bridge.ctx.store.hasSeen(f.client_msg_id))
       hh().notes.push(n)
     })
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
+    hh().app.send(f)
     await hh().waitNotes(1)
     expect(seenAtEmit).toEqual([true])
   })
 
-  test('two identical posts are two blocks: each runs once, and a second tap on either is refused', async () => {
+  // owner, 2026-11-15 (audit 14): a fresh tap on the same block runs it again; a replay of one tap never does (below)
+  test('a fresh tap on a block that ran runs it again, on any device or screen', async () => {
     await start()
-    const a1 = blockRef(0)
-    const a2 = blockRef(0)
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: a1 }))
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: a1 }))
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: a2 }))
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: a2 }))
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: a1 }))
-    await afterQueue(hh())
+    const ref = blockRef()
+    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
+    await hh().waitNotes(1)
+    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
+    await hh().waitNotes(2)
     expect(noted(hh())).toBe(2)
-    expect(notices(hh())).toHaveLength(3)
-    for (const n of notices(hh())) expect(n).toMatch(/already tried/)
+    expect(notices(hh())).toHaveLength(0)
   })
 
-  test('two blocks in one message are two Runs; tapping the first again is refused', async () => {
-    await start()
-    const id = newId('m')
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: blockRef(0, id) }))
-    hh().app.send(await runFrame(hh(), 'echo second\n', { run_block: blockRef(1, id) }))
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: blockRef(0, id) }))
-    await afterQueue(hh())
-    expect(noted(hh())).toBe(2)
-    expect(notices(hh())).toHaveLength(1)
-  })
-
-  test('two devices tapping the same block are one Run', async () => {
+  test('two devices tapping the same block are two Runs (each its own signed tap)', async () => {
     await start()
     const second = new FakeApp({ relayWs: hh().relay.wsBase })
     await second.connect()
@@ -341,24 +330,8 @@ describe('one block, one Run: kept by the Mac, keyed on the block', () => {
       })) as never,
     )
     await afterQueue(hh())
-    expect(noted(hh())).toBe(1)
-    expect(notices(hh())[0]).toMatch(/already tried/)
+    expect(noted(hh())).toBe(2)
     await second.close()
-  })
-
-  test('a second tap is refused whatever the app shows: a deleted "may have run" row, a search context view, a reload', async () => {
-    await start()
-    const ref = blockRef()
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
-    await hh().waitNotes(1)
-    // the app deleted its row, or opened the message in a context view, or reloaded: it sends the same block again, as a new message
-    for (let i = 0; i < 3; i++) hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
-    await afterQueue(hh())
-    expect(noted(hh())).toBe(1)
-    expect(notices(hh())).toHaveLength(3)
-    expect(notices(hh())[0]).toBe(
-      'That Run was not run: that block was already tried. Ask your agent to post the script again to run it again.',
-    )
   })
 
   test('a Run that was refused does not use up its block', async () => {
@@ -494,17 +467,6 @@ describe('once only', () => {
     hh().relay.sendToBridge({ ...(await runFrame(hh())), client_msg_id: f.client_msg_id } as never)
     await sleep(400)
     expect(runNotes(hh())).toHaveLength(1)
-  })
-
-  test('two taps on one block are one Run: the second is refused, and the agent hears it once', async () => {
-    await start()
-    const ref = blockRef()
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
-    await settle(hh(), () => notices(hh()).length > 0)
-    await afterQueue(hh())
-    expect(runNotes(hh())).toHaveLength(1)
-    expect(notices(hh())).toHaveLength(1)
   })
 })
 
@@ -710,7 +672,7 @@ async function dedicatedTrip(workerLive: boolean) {
     })) as never,
   })
   if (!workerLive) return
-  await waitFor(() => existsSync(join(hh().home, 'hub.sock')))
+  await waitFor(() => existsSync(join(hh().home, 'run', 'hub.sock')))
   writeFileSync(
     join(hh().home, 'workers.json'),
     JSON.stringify({

@@ -3,12 +3,15 @@
 // Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks (session, pairing,
 // schema) are in hub-app-conn.ts and hub-app-frames.ts; some handlers here run their own device, seen-id, step-up
 // or card-state checks, so read both when auditing trust.
-import { type FrameOf, type MessageT, ownValue } from '@talos-app/protocol'
+import { type FrameOf, MAX_FRAME_BYTES, type MessageT, ownValue } from '@talos-app/protocol'
 import type { RateLimiter } from '../auth/limits.ts'
 import type { AppConn, HubDeps, Ref } from './hub.ts'
 import { CATCHUP_PAGE } from './hub-types.ts'
 import type { StoredFrame } from './store.ts'
 import { mkFrame } from './util.ts'
+
+/** Room kept in a catch-up batch for its own fields (type, id, ts, from/to seq, more). */
+const CATCHUP_BATCH_OVERHEAD = 2048
 
 /** What the history handlers use of Hub, and nothing else. Hub builds it in its constructor. */
 export type HistoryCtx = {
@@ -106,10 +109,15 @@ export const historyFrames = {
       respond({ has_more: true })
       return
     }
-    if (store.floor() === null) {
+    // The buffer cannot fill the page. A buffer the sweep never touched used to be taken as the whole history, but a relay may
+    // be younger than the conversation (a new, restored or replaced volume): a signed request is asked of the Mac while it is
+    // online, and it answers an empty page when it has nothing older (bug hunt R11). An unsigned one (an old app) is still
+    // answered from the buffer: the Mac would only tell it to update, with no rows.
+    // Offline, a signed one is told the Mac is away (it may hold more), never that the conversation starts here.
+    if (store.floor() === null && frame.device_id === undefined) {
       respond({})
       return
-    } // nothing was ever pruned: the buffer holds the whole history
+    }
     if (!this.bridgeOnline()) {
       respond({ unavailable: 'mac_offline' })
       return
@@ -142,7 +150,9 @@ export const historyFrames = {
   /** `catchup.request` and the catch-up after `hello`: what the app missed since `since`, as a reset, a summary and one batch. */
   sendCatchup(this: HistoryCtx, a: AppConn, since: number): void {
     const store = this.d.store
-    const floor = store.floor()
+    // The floor an app can see: a device that holds every app frame is never told to wipe because bridge-only frames after
+    // them were swept (bug hunt R9).
+    const floor = store.appFloor()
     if (floor !== null && since + 1 < floor) {
       this.sendApp(a, mkFrame(this.d.clock, 'catchup.reset', { min_seq: floor }))
       since = floor - 1
@@ -153,7 +163,16 @@ export const historyFrames = {
       since = min - 1
     }
     if (store.countAppEventsAfter(since) > CATCHUP_PAGE) historyFrames.sendCatchupSummary.call(this, a, since)
-    const frames = store.appEventsAfter(since, CATCHUP_PAGE)
+    // Cut by bytes as well as rows, so one batch never passes the frame cap (200 large messages could make ~50 MB; bug hunt
+    // R18). The first frame always goes: it fitted a frame when it was stored.
+    const frames: StoredFrame[] = []
+    let room = MAX_FRAME_BYTES - CATCHUP_BATCH_OVERHEAD
+    for (const f of store.appEventsAfter(since, CATCHUP_PAGE)) {
+      const size = Buffer.byteLength(JSON.stringify(f)) + 1
+      if (frames.length > 0 && size > room) break
+      frames.push(f)
+      room -= size
+    }
     if (frames.length === 0) return
     const last = (frames[frames.length - 1] as StoredFrame).relay.seq
     this.sendApp(
@@ -233,6 +252,7 @@ export const historyFrames = {
       seq,
       ...(meta.receipt ? { receipt: meta.receipt } : {}),
       ...(meta.transcript ? { transcript: meta.transcript } : {}),
+      ...(meta.undo ? { undo: meta.undo } : {}),
     }
   },
 }

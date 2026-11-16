@@ -52,7 +52,7 @@ describe('activity reports', () => {
     fakeWindow.dispatchEvent(new Event('keydown'))
     await waitFor(() => visibilityFrames().length === 1, 3000, 'first report')
     expect(visibilityFrames()[0]?.state).toBe('visible')
-    fakeWindow.dispatchEvent(new Event('pointermove')) // inside 15 s: throttled
+    fakeWindow.dispatchEvent(new Event('keydown')) // inside 15 s: throttled
     t += 14_000
     fakeWindow.dispatchEvent(new Event('touchstart'))
     await new Promise((r) => setTimeout(r, 100))
@@ -65,6 +65,46 @@ describe('activity reports', () => {
     fakeWindow.dispatchEvent(new Event('wheel'))
     await new Promise((r) => setTimeout(r, 100))
     expect(visibilityFrames()).toHaveLength(2)
+  })
+
+  // A pointermove where the pointer did not move is the page reflowing under a still cursor (Chromium fires one): counting it
+  // kept an owner who walked away "here", and the relay held the push.
+  const move = (x: number, y: number) => Object.assign(new Event('pointermove'), { screenX: x, screenY: y })
+
+  it('a pointermove counts only when the pointer moved on the screen; the first one only records', async () => {
+    await start()
+    t += 60_000
+    fakeWindow.dispatchEvent(move(100, 200)) // the first: where the cursor is, not a sign of anyone
+    await new Promise((r) => setTimeout(r, 100))
+    expect(visibilityFrames()).toHaveLength(0)
+    fakeWindow.dispatchEvent(move(100, 200)) // the page reflowed under the still cursor
+    fakeWindow.dispatchEvent(move(100, 200))
+    await new Promise((r) => setTimeout(r, 100))
+    expect(visibilityFrames()).toHaveLength(0)
+    fakeWindow.dispatchEvent(move(101, 200)) // a person moved it
+    await waitFor(() => visibilityFrames().length === 1, 3000, 'a real move')
+    t += 16_000
+    fakeWindow.dispatchEvent(new Event('keydown')) // keys, taps, touches and wheels count as before
+    await waitFor(() => visibilityFrames().length === 2, 3000, 'a key')
+  })
+
+  it('after the page was hidden and shown again, the first pointermove only records', async () => {
+    await start()
+    t += 60_000
+    fakeWindow.dispatchEvent(move(10, 10))
+    fakeWindow.dispatchEvent(move(20, 20))
+    await waitFor(() => visibilityFrames().length === 1, 3000, 'a real move')
+    visible = false
+    ;(g.document as EventTarget).dispatchEvent(new Event('visibilitychange'))
+    visible = true
+    ;(g.document as EventTarget).dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => visibilityFrames().length === 3, 3000, 'the hidden and visible frames')
+    t += 60_000
+    fakeWindow.dispatchEvent(move(500, 500)) // the cursor somewhere else when the page came back: only recorded
+    await new Promise((r) => setTimeout(r, 100))
+    expect(visibilityFrames()).toHaveLength(3)
+    fakeWindow.dispatchEvent(move(510, 500))
+    await waitFor(() => visibilityFrames().length === 4, 3000, 'a real move after coming back')
   })
 
   it('a scroll alone is not activity: the timeline scrolls itself on every new row', async () => {

@@ -45,7 +45,7 @@ async function hub(relayFeatures?: string[]) {
       dedicated: { enabled: true },
     })) as never,
   })
-  await waitFor(() => existsSync(join(h?.home as string, 'hub.sock')))
+  await waitFor(() => existsSync(join(h?.home as string, 'run', 'hub.sock')))
   return { hh: h, fakeHome }
 }
 
@@ -120,7 +120,7 @@ describe('a dedicated worker reports its own context', () => {
     expect(f.state.session_id).toBe(SESSION)
     expect(f.state.context).toEqual({ tokens: 41206, window: 200000, percent: 20.6 })
     expect(f.state.capabilities).toEqual([]) // no controls: the app greys them
-    expect(f.state.rate_limits).toEqual([]) // weekly usage is main's, account-wide
+    expect(f.state.rate_limits).toEqual([]) // weekly usage is account-wide: it rides on main's state (usage-pool.ts)
     expect(f.state.at).toBe('2026-11-08T10:00:00.000Z') // as fresh as the worker's last reply
     // the strict parser an app has accepts it
     expect(SessionState.safeParse(f.state).success).toBe(true)

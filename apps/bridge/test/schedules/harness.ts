@@ -3,7 +3,7 @@
 // and FakeApp at the far end and `FakeAgent` standing in for the Claude session. Chronos's own clock follows the
 // bridge's injected clock through `chronosNow`, so a 60 s loop, a midnight and a restart are real Chronos decisions.
 import { setDefaultTimeout } from 'bun:test'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type ChronosDraftT, newUlid } from '@talos-app/protocol'
 import { type FakeClock, fakeClock } from '@talos-app/testkit'
@@ -35,6 +35,56 @@ export type SchedHarness = Harness & {
   noteKinds(): string[]
   /** Notifications of one kind, in order. */
   notesOf(kind: string): Notification[]
+  /** The files the schedule service watches now (the driven watcher; empty with `scheduleWatch: 'real'` or `false`). */
+  watched(): string[]
+  /** Reports a change to every watched file, as fs.watch would, then waits for the refresh it starts. */
+  filesChanged(): Promise<void>
+}
+
+/**
+ * A new box with the starting config and jobs a test asked for. The same start (time, config, jobs) is built through real
+ * Chronos once per process and copied after that: the files are what Chronos wrote, byte for byte.
+ */
+const templates = new Map<string, ChronosBox>()
+function freshBox(
+  now: string,
+  o: { sessionRunner?: 'talos' | 'hook'; approvalRequired?: boolean; jobs?: ChronosDraftT[] },
+): ChronosBox {
+  const settings = { sessionRunner: o.sessionRunner ?? 'talos', approvalRequired: o.approvalRequired ?? true }
+  const key = JSON.stringify([now, settings, o.jobs ?? []])
+  // The new box first: making it is what sweeps the temp folders of the files before this one (testTempDir, when a run shares
+  // one process), the template's among them. Checked after that, a template that went with them is built again; checked
+  // before, it was still there and was gone by the copy (a new file's first box failed with ENOENT).
+  const box = new ChronosBox(now)
+  let template = templates.get(key)
+  if (!template || !existsSync(template.home)) {
+    template = new ChronosBox(now)
+    template.configure(settings)
+    for (const j of o.jobs ?? []) template.create(j)
+    templates.set(key, template)
+  }
+  return box.copyHomeFrom(template)
+}
+
+/**
+ * The schedule service's file watch, driven by the test: it records what is watched and reports a change only when the test
+ * says so. A real fs.watch answers in 0.1-15 s on a loaded Mac, or never, and every answer starts a refresh that runs real
+ * Chronos at a moment no test chose. One smoke test keeps the real watch (`scheduleWatch: 'real'`).
+ */
+function drivenWatch() {
+  const open = new Map<number, { path: string; onChange: () => void }>()
+  let n = 0
+  return {
+    watchFn: (path: string, onChange: () => void) => {
+      const id = n++
+      open.set(id, { path, onChange })
+      return { close: () => void open.delete(id) }
+    },
+    paths: () => [...open.values()].map((w) => w.path),
+    fire: () => {
+      for (const w of [...open.values()]) w.onChange()
+    },
+  }
 }
 
 export async function startSched(
@@ -59,18 +109,22 @@ export async function startSched(
     discoveryTimeoutMs?: number
     /** Chronos's clock when it should NOT follow the injected clock (the capture step pins it per step). */
     chronosNow?: () => string
-    /** fs.watch on Chronos's files; the capture step turns it off so its output is deterministic. */
-    scheduleWatch?: boolean
+    /**
+     * The service's file watch: driven by the test (default; see drivenWatch), `'real'` for a real fs.watch (the smoke test),
+     * or `false` for none (the capture step, so its output is deterministic).
+     */
+    scheduleWatch?: boolean | 'real'
+    /** Test seam: the service's watch, when a test wants its own (one that never fires, say). */
+    scheduleWatchFn?: (path: string, onChange: () => void) => { close(): void }
     relay?: Parameters<typeof startHarness>[0] extends infer O ? (O extends { relay?: infer R } ? R : never) : never
   } = {},
 ): Promise<SchedHarness> {
   const now = opts.now ?? MON_0700_EDT
   const clock = fakeClock(now)
-  const box = opts.box ?? new ChronosBox(now)
-  if (!opts.box) {
-    box.configure({ sessionRunner: opts.sessionRunner ?? 'talos', approvalRequired: opts.approvalRequired ?? true })
-    for (const j of opts.jobs ?? []) box.create(j)
-  }
+  const box = opts.box ?? freshBox(now, opts)
+  const driven = drivenWatch()
+  const watchFn =
+    opts.scheduleWatchFn ?? (opts.scheduleWatch === 'real' || opts.scheduleWatch === false ? undefined : driven.watchFn)
   const h = await startHarness({
     clock,
     ...(opts.home ? { home: opts.home } : {}),
@@ -81,6 +135,7 @@ export async function startSched(
     bridge: {
       chronosNow: opts.chronosNow ?? (() => new Date(clock.now()).toISOString()),
       ...(opts.scheduleWatch === false ? { scheduleWatch: false } : {}),
+      ...(watchFn ? { scheduleWatchFn: watchFn } : {}),
       instance: opts.instance ?? `bi_${newUlid().slice(-10)}`,
       ...(opts.headless ? { headless: true } : {}),
       ...(opts.heartbeat ? { heartbeat: opts.heartbeat } : {}),
@@ -135,6 +190,13 @@ export async function startSched(
         await svc.enqueue(() => svc.runnerTick())
         await svc.idle()
       }
+    },
+    watched: driven.paths,
+    async filesChanged() {
+      driven.fire()
+      // the service waits 300 ms (real time) after a change before it refreshes, so a burst of writes is one refresh
+      await sleep(350)
+      await h.bridge.ctx.schedules?.idle()
     },
     noteKinds: () => h.notes.map((n) => n.meta.kind ?? ''),
     notesOf: (kind: string) => h.notes.filter((n) => n.meta.kind === kind),

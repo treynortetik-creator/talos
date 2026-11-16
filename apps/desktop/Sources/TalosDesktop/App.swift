@@ -9,6 +9,11 @@ enum Entry {
     if CommandLine.arguments.contains("--selftest") {
       exit(SelfTest.run())
     }
+    // the read-only report of what an update would restart: before anything of the app starts (UpdateCheckCLI.swift)
+    if CommandLine.arguments.dropFirst().first == "--update-check" {
+      let rest = Array(CommandLine.arguments.dropFirst(2))
+      exit(MainActor.assumeIsolated { UpdateCheckCLI.run(rest) })
+    }
     TalosApp.main()
   }
 }
@@ -66,6 +71,8 @@ struct TalosApp: App {
         Text(model.statusLine)
       }
       if !model.liveNotice.isEmpty { Text(model.liveNotice) }
+      // a thread session's line, apart from Main's: it shows while that thread still waits or is still failed
+      if !model.threadNotice.isEmpty { Text(model.threadNotice) }
       Divider()
       Button("Show Talos") {
         if web.hasRelay {
@@ -240,6 +247,9 @@ struct SessionView: View {
       // The Blocked screen says who holds the channels once; the notice that repeats it is dropped.
       let notice = BlockedText.notice(model.liveNotice, whileBlocked: !blockers.isEmpty)
       if !notice.isEmpty { Text(notice).foregroundStyle(.orange) }
+      if !model.threadNotice.isEmpty {
+        Text(model.threadNotice).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+      }
       ForEach(Array(BlockedText.lines(blockers).enumerated()), id: \.offset) { _, line in
         Text(line).fixedSize(horizontal: false, vertical: true)
       }
@@ -248,7 +258,7 @@ struct SessionView: View {
         Button(BlockedText.startAnywayButton) { model.startAnyway() }
       }
       // Always there, not only after a start was blocked: first run has no blocked state to hang it on (audit D44).
-      Button(BlockedText.adoptButton) { model.findSessionToAdopt() }
+      Button(BlockedText.adoptButton) { model.findSessionToAdopt() }.disabled(model.adoptLooking)
       if model.failedStop {
         HStack {
           if !model.retryCannotWork { Button("Try again") { model.start() } }
@@ -320,6 +330,8 @@ extension SupervisorController {
   /// A notice disappears from the menu once it no longer describes the session: "press Enter" once nothing waits, a failure once
   /// a new start is under way (audit D41).
   var liveNotice: String {
+    // It stands for the whole run, whatever else was said since (a Stop clears `notice`; this must not go with it).
+    if status.configUnreadable { return SupervisorNotice.configUnreadable }
     let kind: SupervisorNotice.PhaseKind
     switch status.phase {
     case .running: kind = .running

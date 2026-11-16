@@ -48,7 +48,7 @@ afterEach(async () => {
 async function rig(over: Partial<AgentConfigT> = {}) {
   const fake: FakeApns = await startFakeApns(key.publicKey)
   cleanups.push(() => fake.close())
-  const clock = fakeClock('2026-10-31T15:00:00.000Z') // 08:00 in the UTC-7 zone; the default quiet window is not in force
+  const clock = fakeClock('2026-10-31T15:00:00.000Z') // 10:00 in the UTC-5 zone; the default quiet window is not in force
   const r: TestRelay = await startTestRelay({ clock, env: ENV, apnsAuthority: () => fake.url })
   cleanups.push(() => r.stop())
   const dev = await createDeviceKey()
@@ -96,7 +96,7 @@ describe('D24: an approval is not swallowed by a visible window', () => {
   })
 
   it('the quiet window, the master switch and a thread set to off still hold needs_you (quiet is owner call O7)', async () => {
-    const quiet = await rig({ quiet_window: { start: '07:00', end: '09:00' }, timezone: 'Etc/GMT+7' })
+    const quiet = await rig({ quiet_window: { start: '09:00', end: '11:00' }, timezone: 'Etc/GMT+5' })
     quiet.setVisible(true)
     await quiet.push.notify({ template: 'needs_you', thread_id: 'general', card_id: CARD })
     expect(quiet.fake.requests).toHaveLength(0)

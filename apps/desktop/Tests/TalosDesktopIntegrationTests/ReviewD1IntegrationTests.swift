@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// Regression tests for the dev-channel guard, through real tmux on the rig's private socket, real ptys and the
 /// fake-claude fixtures. Every signal goes to a pid or group this test started. A failure is a finding.
@@ -9,6 +10,7 @@ import TalosSupervisor
 /// LiveSystem with a few pids' snapshots replaced: stands in for pid reuse, which a test can't force.
 final class RecyclingProbe: SystemProbe, @unchecked Sendable {
   let base: LiveSystem
+  func send(_ request: URLRequest) -> PostOutcome { .failed }  // never the network
   private let lock = NSLock()
   private var fakes: [Int32: ProcessSnapshot] = [:]
   init(base: LiveSystem) { self.base = base }
@@ -89,7 +91,7 @@ struct ReviewD1TmuxTests {
     defer { r.teardown() }
     let h = TmuxPtyHost(
       commands: TmuxCommands(tmux: Rig.tmuxPath!, socket: r.socket, configPath: Rig.tmuxConf, session: name),
-      baseEnv: r.loginEnv, pollInterval: 0.2)
+      launchDir: r.launchDir, baseEnv: r.loginEnv, pollInterval: 0.2)
     let env = LoginShellEnv.build(shellEnv: r.loginEnv, overrides: r.config.env)
     var started = true
     do {
@@ -156,7 +158,7 @@ struct ReviewD1RollbackTests {
   /// Copy Terminal command is pasted into a shell. Metacharacters in any field must reach claude verbatim, and run
   /// nothing.
   @Test func renderedCommandRunsExactlyTheFieldsInZsh() throws {
-    let root = Rig.realPath(NSTemporaryDirectory()) + "/talos-rv61-\(UUID().uuidString.prefix(8))"
+    let root = Rig.realPath(TestTemp.base) + "/talos-rv61-\(UUID().uuidString.prefix(8))"
     let dir = root + "/agent dir 'q' $(x)"
     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: root) }
@@ -179,7 +181,7 @@ struct ReviewD1RollbackTests {
   /// Pasted into a shell a Claude session spawned (markers set), the rendered command must hand claude none of them,
   /// and still hand it the owner's own CLAUDE_EFFORT.
   @Test func renderedCommandRunsCleanInAShellHoldingSessionMarkers() throws {
-    let root = Rig.realPath(NSTemporaryDirectory()) + "/talos-mk-\(UUID().uuidString.prefix(8))"
+    let root = Rig.realPath(TestTemp.base) + "/talos-mk-\(UUID().uuidString.prefix(8))"
     try FileManager.default.createDirectory(atPath: root + "/bin", withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: root) }
     let prog = root + "/bin/claude"

@@ -73,6 +73,10 @@ function connectionJson(rt: HooksRuntime, c: ConnRow) {
     last_event_at: c.last_event_at ? rt.iso(c.last_event_at) : null,
     kept_24h: s.kept,
     received_24h: s.received,
+    // the identity only, never the rest of `extra` (learned ids stay on the relay)
+    ...(c.integration === 'slack'
+      ? { identity: c.extra.identity === 'bot' ? ('bot' as const) : ('owner' as const) }
+      : {}),
   }
 }
 
@@ -86,12 +90,33 @@ function resolveThread(rt: HooksRuntime, spec: SetupSpecT, requested: string | u
 
 type Split = { ok: true; extra: Record<string, string>; secrets: Record<string, string> } | { ok: false; error: string }
 
+/**
+ * Setup values a module takes that are not wizard fields (plain, never secret). Slack: whose Slack the connection listens
+ * to, the owner's or an agent's bot, chosen once when it is made; and the bot's user id, which overrides the one Slack
+ * would teach it (ingest `learn`). Only Slack takes them.
+ */
+const SETUP_EXTRA: Partial<Record<string, Record<string, { pattern: string; createOnly?: boolean }>>> = {
+  slack: {
+    identity: { pattern: '^(owner|bot)$', createOnly: true },
+    bot_user_id: { pattern: '^[UW][A-Z0-9]{2,20}$' },
+  },
+}
+
 /** Sorts submitted wizard fields into plain settings and secrets, checking each against the setup spec. */
-function splitFields(spec: SetupSpecT, fields: Record<string, string>): Split {
+function splitFields(spec: SetupSpecT, fields: Record<string, string>, create = false): Split {
   const extra: Record<string, string> = {}
   const secrets: Record<string, string> = {}
   const specs = new Map(spec.connect.flatMap((s) => (s.type === 'field' ? ([[s.key, s]] as const) : [])))
+  const plain = SETUP_EXTRA[spec.id] ?? {}
   for (const [k, v] of Object.entries(fields)) {
+    const p = Object.hasOwn(plain, k) ? plain[k] : undefined
+    if (p && !specs.has(k)) {
+      if (p.createOnly && !create) return { ok: false, error: `${k} is set when the connection is made` }
+      if (v === '') continue
+      if (!new RegExp(p.pattern).test(v)) return { ok: false, error: `${k} does not look right` }
+      extra[k] = v
+      continue
+    }
     const f = specs.get(k)
     if (!f) return { ok: false, error: `unknown field: ${k.slice(0, 40)}` }
     if (v === '') continue
@@ -163,7 +188,7 @@ export function apiRoutes(): Hono<AppEnv> {
     const known = defaultToggles(mod)
     for (const k of Object.keys(input.filters ?? {}))
       if (!(k in known)) return c.json({ error: `unknown filter: ${k.slice(0, 40)}` }, 400)
-    const split = splitFields(mod.setup, input.fields ?? {})
+    const split = splitFields(mod.setup, input.fields ?? {}, true)
     if (!split.ok) return c.json({ error: split.error }, 400)
     const made = insertConn(r, {
       integration: input.integration,
@@ -299,7 +324,23 @@ export function apiRoutes(): Hono<AppEnv> {
     for (const k of done.forgot) delete creds[k]
     if (done.forgot.length) extra[PROVISIONED] = [...new Set([...already, ...done.forgot])].join(',')
     saveCreds(r, conn.id, creds)
-    updateConn(r, conn.id, { extra, status: conn.status === 'paused' ? 'active' : conn.status, paused_reason: null })
+    // provisionOnce awaited: keep what the relay learned meanwhile (Slack's bot ids), then this save on top.
+    const latest = { ...(getConn(r, conn.id)?.extra ?? {}), ...extra }
+    // Slack: a new signing secret or bot id may be another app's bot. What was learned from events is learned again
+    // (an id set in this save stays); a stale id would refuse every event as other_bot.
+    if (
+      mod.setup.id === 'slack' &&
+      (split.extra.bot_user_id || (vf && split.secrets[vf] && split.secrets[vf] !== before))
+    ) {
+      delete latest.bot_app_id
+      if (!split.extra.bot_user_id) delete latest.bot_user_id
+      latest.bot_relearn_at = String(r.now()) // the owner side holds bots back again while it relearns (identity.ts)
+    }
+    updateConn(r, conn.id, {
+      extra: latest,
+      status: conn.status === 'paused' ? 'active' : conn.status,
+      paused_reason: null,
+    })
     if (!mod.poll) return c.json({ ok: true })
     pollSoon(r, conn.id)
     const out = await pollConnection(r, getConn(r, conn.id) as ConnRow)

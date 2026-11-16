@@ -17,7 +17,8 @@ public enum GuardsSettings {
     talosHome: String, read: (String) -> Data? = { FileManager.default.contents(atPath: $0) }
   ) -> Loaded {
     guard let data = read(path(talosHome: talosHome)) else { return .absent }
-    guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return .unreadable }
+    // read as Claude Code reads it for main (the last of two same-named keys wins): the worker gets the hooks and rules main has
+    guard let obj = SettingsJSON.object(data) else { return .unreadable }
     return .rules(hooks: obj["hooks"], permissions: obj["permissions"])
   }
 
@@ -47,5 +48,77 @@ public enum GuardsSettings {
       return (args, "guards installed (\(file)) but the launch args already include --settings: the guards are NOT active")
     }
     return (args + ["--settings", file], nil)
+  }
+
+  /// Main's own launch file when the guards are installed: the guards' settings with Claude Code's computer use denied added.
+  /// It sits beside the guards' file, so a `/` rule in it means what it meant there.
+  public static func mainLaunchPath(talosHome: String) -> String { talosHome + "/guards/main-launch.json" }
+
+  /// What every miss below ends with; the Supervisor tells the owner's phone once when a launch carries it (review R1-4).
+  public static let notDenied = "Claude Code's own computer use is NOT turned off for main"
+
+  /// The owner's phone line when Main started without the deny: once per Supervisor run.
+  public static let notDeniedPhoneLine =
+    "Talos couldn't add the rule that turns off Claude Code's own computer use to Main's start. If Claude Code asks for screen access, say no; Talos's screen tools work without it."
+
+  /// The deny as command-line permission rules: Claude Code adds `--disallowedTools` to every settings source (a tool denied at
+  /// any level stays denied), and `mcp__<server>` covers every tool of that server and takes them out of the agent's context.
+  public static var disallowedToolsArgs: [String] { ["--disallowedTools"] + WorkerMcp.alwaysDenied.map { "mcp__" + $0 } }
+
+  /// `settings` with every name in `WorkerMcp.alwaysDenied` in its `deniedMcpServers` (a union: what was there stays).
+  public static func denyingComputerUse(_ settings: [String: Any]) -> [String: Any] {
+    var obj = settings
+    var denied = (obj["deniedMcpServers"] as? [Any]) ?? []
+    for n in WorkerMcp.alwaysDenied where !denied.contains(where: { ($0 as? [String: Any])?["serverName"] as? String == n }) {
+      denied.append(["serverName": n])
+    }
+    obj["deniedMcpServers"] = denied
+    return obj
+  }
+
+  /// The main session's args: one `--settings` (Claude Code reads one) that turns Claude Code's own computer use off
+  /// (`WorkerMcp.alwaysDenied`; Talos's screen tools replace it) and carries the guards when installed. With the guards, their
+  /// settings plus the deny are written to `mainLaunchPath` and that file is passed; without, the deny is passed as JSON text.
+  ///
+  /// The flag goes FIRST, so the session flag stays last (the restart and adopt checks read it there) and nothing the owner put
+  /// at the end (a `--` and a prompt) can swallow it. When the owner's args already carry a `--settings`, theirs stays exactly
+  /// where and what it is (review R2-4: a copy would change what its relative paths mean and stop later edits reaching Main);
+  /// the deny goes in as `--disallowedTools` right before it, and the guards stay off for that launch, with a warning. When the
+  /// guards' file cannot be read or the merged one written, the guards' file goes in as before, so the guards are never dropped
+  /// for the deny's sake, and the warning ends with `notDenied` (the Supervisor tells the phone).
+  public static func applyingToMain(
+    to args: [String], talosHome: String, cwd: String? = nil,
+    read: (String) -> Data? = { FileManager.default.contents(atPath: $0) },
+    write: (Data, String) throws -> Void = { try AtomicFile.write($0, to: $1) }
+  ) -> (args: [String], warnings: [String]) {
+    let file = path(talosHome: talosHome)
+    let guards = read(file)
+    let launch = mainLaunchPath(talosHome: talosHome)
+    let encode = { (o: [String: Any]) in try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys, .withoutEscapingSlashes]) }
+    // only the owner's flags count: past the first `--` every word is the prompt (review R3-4)
+    let flags = args.prefix(while: { $0 != "--" })
+    if let i = flags.firstIndex(where: { $0 == "--settings" || $0.hasPrefix("--settings=") }) {
+      var w: [String] = []
+      if guards != nil { w.append("guards installed (\(file)) but the launch args already include --settings: the guards are NOT active") }
+      // right before their --settings, so the next word is an option and the rule list ends there
+      var out = args
+      out.insert(contentsOf: disallowedToolsArgs, at: i)
+      return (out, w)
+    }
+    var obj: [String: Any] = [:]
+    if let guards {
+      guard let o = SettingsJSON.object(guards) else {
+        return (["--settings", file] + args, ["the guards' file cannot be read: \(notDenied)"])
+      }
+      obj = o
+    }
+    guard let data = encode(denyingComputerUse(obj)) else {
+      return (guards == nil ? args : ["--settings", file] + args, ["the main settings could not be made: \(notDenied)"])
+    }
+    guard guards != nil else { return (["--settings", String(decoding: data, as: UTF8.self)] + args, []) }
+    do { try write(data, launch) } catch {
+      return (["--settings", file] + args, ["\(launch) could not be written (\(error)): \(notDenied)"])
+    }
+    return (["--settings", launch] + args, [])
   }
 }

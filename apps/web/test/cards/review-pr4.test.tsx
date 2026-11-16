@@ -37,17 +37,23 @@ describe('PR4 review: cards', () => {
     expect(kill === null || (kill as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('F2: a card that expires during the step-up is not sent', async () => {
-    const card = makeCard({ risk: 'high', expires_at: new Date(Date.now() + 1500).toISOString() })
+  it('F2: a card that expires before the tap lands is not sent', async () => {
+    const card = makeCard({ risk: 'high', expires_at: new Date(Date.now() + 60_000).toISOString() })
     const client = setup({ cards: [card] })
     const sent = vi.fn(async () => {})
     client.resolveCard = sent
-    client.stepup = () => new Promise((r) => setTimeout(() => r('st_test'), 2000))
     renderWith(<LiveCard id={card.id} />, client)
-    await userEvent.click(screen.getByRole('button', { name: /Send/ }))
-    await new Promise((r) => setTimeout(r, 2300))
+    const button = screen.getByRole('button', { name: /Send/ })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + 120_000)
+      button.click()
+      await new Promise((r) => setTimeout(r, 50))
+    } finally {
+      vi.useRealTimers()
+    }
     expect(sent).not.toHaveBeenCalled()
-  }, 10_000)
+  })
 
   it('F9: bidi controls in a destination are isolated or made visible', () => {
     const card = makeCard({ destination: [{ label: 'To', value: 'alice@example.com‮moc.elpmaxe@evil' }] })

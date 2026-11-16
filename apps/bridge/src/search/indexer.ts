@@ -12,6 +12,8 @@ import { ensureSchema, KV_DIRTY, KV_HWM, KV_WEEK } from './schema.ts'
 const KV_FILES_HWM = 'search_files_hwm'
 
 export const RECONCILE_BATCH = 500
+/** The pause between two reindex passes: longer than the bundled SQLite's busy handler sleeps between tries (100 ms at most). */
+export const REINDEX_YIELD_MS = 120
 
 export type IndexLog = { warn(msg: string, f?: Record<string, unknown>): void }
 const noLog: IndexLog = { warn() {} }
@@ -76,18 +78,25 @@ export class SearchIndexer {
 
   // ---- writes ----------------------------------------------------------------------------------------------------
 
-  /** Delete the rowid, then insert, in one transaction. Keeps the `files` column the file indexer filled. */
+  /**
+   * Delete the rowid, then insert, in one WRITE transaction (BEGIN IMMEDIATE). Keeps the `files` column the file indexer filled.
+   * Started as a read (a deferred transaction), its first write would get SQLITE_BUSY at once while another process held the
+   * lock, never waiting the busy timeout, and the failure would mark the index dirty (a rebuild from scratch) for nothing.
+   * Inside reconcile's own write transaction it is a savepoint, as before.
+   */
   upsert(ord: number, msg: MessageT, advance: boolean) {
     const c = columnsOf(msg)
-    this.db.transaction(() => {
-      const old = this.db.query('SELECT files FROM msg_fts WHERE rowid = ?').get(ord) as { files: string } | null
-      const files = old?.files ? this.keptFiles(ord, msg, old.files) : ''
-      this.db.query('DELETE FROM msg_fts WHERE rowid = ?').run(ord)
-      if (c.text || c.transcript || c.names || c.card || files)
-        this.db
-          .query('INSERT INTO msg_fts (rowid, text, transcript, names, files, card) VALUES (?, ?, ?, ?, ?, ?)')
-          .run(ord, c.text, c.transcript, c.names, files, c.card)
-    })()
+    this.db
+      .transaction(() => {
+        const old = this.db.query('SELECT files FROM msg_fts WHERE rowid = ?').get(ord) as { files: string } | null
+        const files = old?.files ? this.keptFiles(ord, msg, old.files) : ''
+        this.db.query('DELETE FROM msg_fts WHERE rowid = ?').run(ord)
+        if (c.text || c.transcript || c.names || c.card || files)
+          this.db
+            .query('INSERT INTO msg_fts (rowid, text, transcript, names, files, card) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(ord, c.text, c.transcript, c.names, files, c.card)
+      })
+      .immediate()
     if (advance) this.advanceTo(ord)
   }
 
@@ -234,10 +243,16 @@ export class SearchIndexer {
 
   /**
    * `talos-app search reindex`: marks the index dirty and runs the same 500-row passes the live bridge runs, with a pause
-   * between them, so a live write waits at most one short pass (never a long lock, never `database is locked`).
+   * between them, so a live write waits about one pass. The pause is longer than the busy handler of the SQLite bun bundles
+   * sleeps between two tries (it polls, backing off to 100 ms): one write waiting on this lock gets a try in every gap. A gap
+   * shorter than that (it was 2 ms) let a waiting write sleep through every one and fail at its busy timeout (seen on Linux,
+   * where each pass is slower: SQLITE_BUSY in the bridge's own write). What it does not cover: a single pass longer than the
+   * writer's 5 s busy timeout, which no pause can.
    * Returns the number of messages in the store.
    */
-  async rebuildAll(pause: () => Promise<void> = () => new Promise((r) => setTimeout(r, 2))): Promise<number> {
+  async rebuildAll(
+    pause: () => Promise<void> = () => new Promise((r) => setTimeout(r, REINDEX_YIELD_MS)),
+  ): Promise<number> {
     this.store.kvSet(KV_DIRTY, '1')
     while (this.reconcile()) await pause()
     // a rebuild another process started mid-way is finished by the same passes

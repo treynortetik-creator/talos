@@ -42,7 +42,8 @@
 #                         the agent's notes). Opt-in: without it, search is grep and the link graph. A stock Mac
 #                         has only Python 3.9: if no 3.10+ is found the install still succeeds and prints the one
 #                         command that fixes it (brew install uv) and how to add search afterwards.
-#   --embed-model M       base (default, about 210 MB) | small (about 67 MB); only with --with-memory-search
+#   --embed-model M       auto (default: small under 15 GiB of memory, base otherwise) | base (about 210 MB) |
+#                         small (about 67 MB); only with --with-memory-search
 #   --global-pointer      also add a small marked block to your GLOBAL ~/.claude/CLAUDE.md telling every Claude Code
 #                         session on this Mac where this agent's memory lives and how to search it. It edits a file
 #                         that applies to ALL your projects, so it is opt-in; ./uninstall.sh removes exactly that block.
@@ -54,6 +55,8 @@
 #                         bash scripts/voice/setup.sh --qwen. Needs Python 3.10+. Suggested, never required.
 #   --with-parakeet       also set up Parakeet TDT speech-to-text for scripts/stt.sh (Apple Silicon): bash scripts/voice/setup.sh --parakeet
 #   --with-diarize        also set up speaker-labelled transcription (scripts/stt-diarize/): bash scripts/voice/setup.sh --diarize
+#   --reranker-auto       the root installer's default: like --with-reranker, but skipped (one line) on a computer with
+#                         under 3 GiB of memory
 #   --with-reranker       also download the opt-in reranker model for `recall.py --rerank` (about 571 MB; implies
 #                         --with-memory-search's stack: run that first or together)
 #   --with-vault DIR      also create a private personal vault at DIR from optional/personal/: a second folder for
@@ -75,13 +78,14 @@ set -eu
 
 KIT="$(cd "$(dirname "$0")" && pwd)"
 # The Chronos commit this kit was tested with. Bump it deliberately.
-# 3cf20fc is Chronos main after v0.3.1: it carries the health fix for a missing jobs.json that the Talos app
-# needs (the old pin, ac21e92 = Chronos 0.2.2, reports a fresh install as unhealthy).
-CHRONOS_PINNED_REF="3cf20fc191d39f8247d4a740d6c663dc25136c2a"
+# 48846b3 is Chronos main after 0.5.1 with the Linux background timer (PR #10): on Linux its installer starts a systemd user
+# timer for the tick, so jobs that run by themselves (the kit's maintenance jobs) run there, as launchd runs them on a Mac.
+# Earlier pins: 3cf20fc (after 0.3.1, the health fix for a missing jobs.json), ac21e92 (0.2.2).
+CHRONOS_PINNED_REF="48846b3e2f3383385f47c46539c17bee5c351e7a"
 CHRONOS_DEFAULT_REPO="https://github.com/treynortetik-creator/chronos"
 
 AGENT_DIR="$HOME/talos-agent"; CHRONOS_PATH=""; CHRONOS_REPO="$CHRONOS_DEFAULT_REPO"; CHRONOS_REF="$CHRONOS_PINNED_REF"
-DO_CHRONOS=1; DO_JOBS=1; FULL_JOBS=0; REINSTALL=0; SET_WS=0; MEMSEARCH=0; EMBED=base; VAULT=""; VAULT_EXISTS=0; VOICE=0; GPOINTER=0; QWEN=0; PARAKEET=0; DIARIZE=0; RERANKER=0; NOTIFY=none; NOLOAD=0; SESSION_HOOK=1; PROTECTED_OK=0; SYNCED_OK=0; DRY=0; ADD_ONLY=0; PARENT_OK=0
+DO_CHRONOS=1; DO_JOBS=1; FULL_JOBS=0; REINSTALL=0; SET_WS=0; MEMSEARCH=0; EMBED=auto; VAULT=""; VAULT_EXISTS=0; VOICE=0; GPOINTER=0; QWEN=0; PARAKEET=0; DIARIZE=0; RERANKER=0; NOTIFY=none; NOLOAD=0; SESSION_HOOK=1; PROTECTED_OK=0; SYNCED_OK=0; DRY=0; ADD_ONLY=0; PARENT_OK=0
 
 usage() { awk 'NR>1 { if ($0 ~ /^#/) print; else exit }' "$0" | sed 's/^# \{0,1\}//'; }
 # A flag's value is never the next flag: `--with-vault --dry-run` must not make "--dry-run" a folder name.
@@ -105,6 +109,7 @@ while [ $# -gt 0 ]; do
     --with-parakeet) PARAKEET=1; shift ;;
     --with-diarize) DIARIZE=1; shift ;;
     --with-reranker) RERANKER=1; shift ;;
+    --reranker-auto) [ "$RERANKER" = 1 ] || RERANKER=auto; shift ;;
     --with-vault) val "$@"; VAULT="$2"; shift 2 ;;
     --embed-model) val "$@"; EMBED="$2"; shift 2 ;;
     --notify) val "$@"; NOTIFY="$2"; shift 2 ;;
@@ -134,7 +139,7 @@ case "$CHRONOS_REF" in
   *[!0-9a-f]*|"") echo "--chronos-ref must be the full 40-character lowercase commit sha (got '$CHRONOS_REF')" >&2; exit 2 ;;
 esac
 [ "${#CHRONOS_REF}" = 40 ] || { echo "--chronos-ref must be the full 40-character commit sha, not a short ref (got '$CHRONOS_REF')" >&2; exit 2; }
-case "$EMBED" in base|small) ;; *) echo "--embed-model must be base or small" >&2; exit 2 ;; esac
+case "$EMBED" in auto|base|small) ;; *) echo "--embed-model must be auto, base or small" >&2; exit 2 ;; esac
 [ "$DO_CHRONOS" = 1 ] || DO_JOBS=0
 
 say()  { printf '%s\n' "$*"; }
@@ -144,7 +149,8 @@ run()  { if [ "$DRY" = 1 ]; then plan "$*"; else "$@"; fi; }
 
 # ---------------------------------------------------------------- 1. preflight
 step "Checking this Mac"
-[ "$(uname -s)" = "Darwin" ] || { echo "Talos needs macOS (Chronos uses launchd). Use --no-chronos for a session-only agent on another system, at your own risk." >&2; [ "$DO_CHRONOS" = 0 ] || exit 1; }
+# TALOS_INSTALL_OS (tests only, as in the root install.sh) stands in for `uname -s`; the kit tests fake launchctl, so they run anywhere.
+[ "${TALOS_INSTALL_OS:-$(uname -s)}" = "Darwin" ] || { echo "Talos needs macOS (Chronos uses launchd). Use --no-chronos for a session-only agent on another system, at your own risk." >&2; [ "$DO_CHRONOS" = 0 ] || exit 1; }
 PY="$(command -v python3 || true)"
 [ -n "$PY" ] || { echo "python3 not found. Run: xcode-select --install  (accept the dialog; it can take 15-40 minutes and looks frozen), then re-run this." >&2; exit 1; }
 "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' || { echo "Python 3.9 or newer is required." >&2; exit 1; }
@@ -167,8 +173,14 @@ PARENT="$(cd "$(dirname "$AGENT_DIR")" 2>/dev/null && pwd)" || { echo "the paren
 fi
 AGENT_DIR="$PARENT/$(basename "$AGENT_DIR")"
 say "   $AGENT_DIR"
-case "$AGENT_DIR/" in "$KIT"/*) echo "refusing: the agent folder cannot be this kit's own folder or inside it." >&2; exit 1 ;; esac
-case "$KIT/" in "$AGENT_DIR"/*) echo "refusing: the agent folder cannot contain this kit." >&2; exit 1 ;; esac
+# as given and as the disk has it (links resolved): a path that reaches the kit through a link is refused too
+_phys() { local p="$1" rest="" base
+  while [ ! -d "$p" ]; do rest="/$(basename "$p")$rest"; p="$(dirname "$p")"; done
+  base="$(cd "$p" && pwd -P)" || base="$p"; [ "$base" = / ] && base=""; printf '%s%s' "$base" "$rest"; }
+for _k in "$KIT" "$(cd "$KIT" && pwd -P)"; do for _a in "$AGENT_DIR" "$(_phys "$AGENT_DIR")"; do
+  case "$_a/" in "$_k"/*) echo "refusing: the agent folder cannot be this kit's own folder or inside it." >&2; exit 1 ;; esac
+  case "$_k/" in "$_a"/*) echo "refusing: the agent folder cannot contain this kit." >&2; exit 1 ;; esac
+done; done
 case "$AGENT_DIR" in
   *CloudStorage*|*"Google Drive"*|*OneDrive*|*Dropbox*|*"Mobile Documents"*)
     if [ "$SYNCED_OK" != 1 ]; then
@@ -193,8 +205,16 @@ if [ "$ADD_ONLY" = 1 ]; then
   say "   adding to the existing Talos install (no copy)"
 elif [ -e "$AGENT_DIR" ]; then
   if [ -f "$AGENT_DIR/.talos-version" ]; then
-    echo "$AGENT_DIR already has a Talos install (see .talos-version). To take a newer kit version, run:" >&2
-    echo "    bash $KIT/scripts/upgrade.sh --into \"$AGENT_DIR\" --dry-run" >&2
+    echo "$AGENT_DIR already has a Talos install (see .talos-version). To take a newer kit version, run in Terminal:" >&2
+    if [ -L "$AGENT_DIR/hooks" ] || [ -L "$AGENT_DIR/scripts" ]; then
+      # the plugin layout (every install this script makes): upgrade.sh refuses it, the release updater is the way. Named by
+      # its path: no installer puts a `talos` command on PATH.
+      _kh="$("$PY" "$KIT/scripts/plugin-release.py" paths 2>/dev/null | sed -n 's/^vendor=//p')"
+      echo "    \"${_kh:-$HOME/.local/share/talos/kit}/current/talos-kit/bin/talos-update\" update --agent \"$AGENT_DIR\" --dry-run" >&2
+      echo "    (then the same without --dry-run)" >&2
+    else
+      echo "    bash \"$KIT/scripts/upgrade.sh\" --into \"$AGENT_DIR\" --dry-run" >&2
+    fi
     echo "To add Chronos or an opt-in extra to this agent instead, re-run with --add-to-existing." >&2
     exit 1
   fi
@@ -261,6 +281,9 @@ if [ "$ADD_ONLY" = 1 ]; then
 elif [ "$DRY" = 1 ]; then
   plan "copy the kit's data and docs into $AGENT_DIR (excluding .git and caches), build the Talos plugin release under $("$PY" "$KIT/scripts/plugin-release.py" paths | sed -n 's/^vendor=//p'), link hooks/ and scripts/ to it, write .claude/settings.json (marketplace + enabledPlugins), then render the default CLAUDE.md with scripts/render-default.py"
 else
+  # The release is built first: a kit that cannot be built (changed without a VERSION bump) is found out before anything is
+  # copied, so the agent folder is left as it was and a re-run does not loop on a partial copy.
+  "$PY" "$KIT/scripts/plugin-release.py" build --source "$KIT" || { echo "could not build the Talos plugin release; nothing was copied into $AGENT_DIR. If it says the release already exists with different content, the kit changed without a new VERSION: raise kit/VERSION, or build from the commit that release came from." >&2; exit 1; }
   # tar pipe: portable, preserves dotfiles and modes, and lets us exclude without rsync
   # The agent folder gets what cannot move: CLAUDE.md, the floor rules, memory/, wiki/, .learnings/, the templates and docs.
   # The Talos zone (hooks, scripts, skills, agents, bin, migrations) is NOT copied: it lives in a read-only release outside
@@ -272,7 +295,6 @@ else
     | ( cd "$AGENT_DIR" && tar -xf - )
   chmod +x "$AGENT_DIR"/install.sh "$AGENT_DIR"/uninstall.sh "$AGENT_DIR"/notify/*.sh 2>/dev/null || true
   mkdir -p "$AGENT_DIR/.claude" "$AGENT_DIR/memory" "$AGENT_DIR/memory/briefs"
-  "$PY" "$KIT/scripts/plugin-release.py" build --source "$KIT" || { echo "could not build the Talos plugin release; nothing else was changed in $AGENT_DIR except the copied files" >&2; exit 1; }
   KIT_HOME="$("$PY" "$KIT/scripts/plugin-release.py" paths | sed -n 's/^vendor=//p')"
   # `current` is shared: every agent linked to it follows it. A fresh install only activates it when there is none yet; it never
   # moves one that other agents use (that is an upgrade, done on purpose: plugin-release.py activate --version V).
@@ -309,6 +331,30 @@ else
     say "   rendered the default CLAUDE.md and the memory files (the setup interview is optional)"
   else
     say "   WARNING: could not render the default CLAUDE.md. The agent has only the placeholder. Retry: $PY $AGENT_DIR/scripts/render-default.py --into $AGENT_DIR"
+  fi
+fi
+
+# The `talos` command (talos update, rollback, restore: docs/SETUP.md "Upgrading"): a two-line wrapper in ~/.local/bin that runs
+# the active release's updater, so it follows `current` without being rewritten. Written only where ~/.local/bin exists or is
+# on PATH, and never over a `talos` that is not ours; otherwise the full path and the PATH line are printed instead.
+TALOS_MARK="# Written by the Talos kit installer: the kit's updater, from the active release."
+if [ "$DRY" != 1 ]; then
+  _kh="$("$PY" "$KIT/scripts/plugin-release.py" paths 2>/dev/null | sed -n 's/^vendor=//p')"
+  _upd="${_kh:-$HOME/.local/share/talos/kit}/current/talos-kit/bin/talos-update"
+  _bin="$HOME/.local/bin"
+  case ":$PATH:" in *":$_bin:"*) _onpath=1 ;; *) _onpath=0 ;; esac
+  if [ -d "$_bin" ] || [ "$_onpath" = 1 ]; then
+    if [ -e "$_bin/talos" ] && ! grep -qF "$TALOS_MARK" "$_bin/talos" 2>/dev/null; then
+      say "   $_bin/talos exists and is not the kit's; left alone. The kit's updater is: \"$_upd\""
+    else
+      mkdir -p "$_bin" && printf '#!/bin/sh\n%s\nexec "%s" "$@"\n' "$TALOS_MARK" "$_upd" > "$_bin/talos.tmp.$$" \
+        && chmod 755 "$_bin/talos.tmp.$$" && mv -f "$_bin/talos.tmp.$$" "$_bin/talos" \
+        && say "   wrote $_bin/talos (talos update, talos rollback, talos restore)$([ "$_onpath" = 1 ] || echo "; $_bin is not on your PATH yet: add  export PATH=\"\$HOME/.local/bin:\$PATH\"  to your shell profile")" \
+        || say "   WARNING: could not write $_bin/talos; the kit's updater is: \"$_upd\""
+    fi
+  else
+    say "   no ~/.local/bin, so no \`talos\` command was added. Run the kit's updater as \"$_upd\" (for example: \"$_upd\" update --dry-run),"
+    say "   or create it and put it on your PATH (mkdir -p ~/.local/bin; add  export PATH=\"\$HOME/.local/bin:\$PATH\"  to your shell profile) and run this installer with --add-to-existing."
   fi
 fi
 
@@ -459,11 +505,20 @@ fi
 # ---------------------------------------------------------------- 5. jobs and hook
 if [ "$DO_JOBS" = 1 ]; then
   step "Talos jobs"
-  if [ "$DRY" = 1 ]; then plan "register the Talos jobs from jobs/ (see scripts/talos-jobs.py list after) in Chronos, all disabled"
+  if [ "$DRY" = 1 ]; then plan "register the Talos jobs from jobs/ (see scripts/talos-jobs.py list after) in Chronos, and turn on the weekly wiki check and the weekly snapshot (plain commands, no Claude usage); the Claude jobs stay off"
   elif [ "$FULL_JOBS" = 1 ]; then
     say "   --full-access-jobs: the Claude jobs will run with permission prompts SKIPPED when you enable them."
-    "$PY" "$KIT/scripts/talos-jobs.py" register --agent-dir "$AGENT_DIR" --kit-dir "$KIT" --full-access
-  else "$PY" "$KIT/scripts/talos-jobs.py" register --agent-dir "$AGENT_DIR" --kit-dir "$KIT"; fi
+    _reg="$("$PY" "$KIT/scripts/talos-jobs.py" register --agent-dir "$AGENT_DIR" --kit-dir "$KIT" --full-access 2>&1)"; printf '%s\n' "$_reg"
+  else _reg="$("$PY" "$KIT/scripts/talos-jobs.py" register --agent-dir "$AGENT_DIR" --kit-dir "$KIT" 2>&1)"; printf '%s\n' "$_reg"; fi
+  # the zero-cost jobs (plain commands: no Claude, no plan usage) are on from the start, but ONLY when this run registered
+  # them: a job that was already there (an owner's, maybe off on purpose, maybe an old Claude version) is never turned on
+  JOBS_ON=""
+  if [ "$DRY" != 1 ]; then
+    for _j in talos-weekly-wiki-lint talos-weekly-snapshot; do
+      printf '%s\n' "$_reg" | grep -q "registered $_j (disabled)" || continue
+      "$PY" "$KIT/scripts/talos-jobs.py" enable "$_j" >/dev/null 2>&1 && { JOBS_ON="$JOBS_ON $_j"; say "   $_j: on (a plain command, no Claude usage)"; }
+    done
+  fi
 fi
 if [ "$DO_CHRONOS" = 1 ] && [ "$SESSION_HOOK" = 1 ]; then
   step "Chronos session hook"
@@ -493,6 +548,7 @@ if [ -n "$VAULT" ]; then
   else
     mkdir -p "$VAULT" && chmod 700 "$VAULT"
     ( cd "$KIT/optional/personal" && tar --exclude='.DS_Store' --exclude='_guard-terms.txt.example' -cf - . ) | ( cd "$VAULT" && tar -xf - )
+    chmod 700 "$VAULT" # again: GNU tar (Linux) sets the folder to the archive's own '.' mode while it extracts
     cp "$KIT/optional/personal/_guard-terms.txt.example" "$VAULT/_guard-terms.txt"
     printf 'Made by the Talos kit installer. Its presence tells a re-run that this folder is the vault, not somebody else'"'"'s.\n' > "$VAULT/.talos-vault"
     mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/talos"; chmod 700 "${XDG_CONFIG_HOME:-$HOME/.config}/talos"
@@ -519,6 +575,8 @@ if [ "$MEMSEARCH" = 1 ]; then
     bash "$KIT/scripts/memory/setup.sh" --agent-dir "$KIT" --as-agent-dir "$AGENT_DIR" --embed-model "$EMBED" --dry-run $([ "$DO_JOBS" = 1 ] || echo --no-job)
   else
     _mrc=0
+    # this agent is meant to have semantic search: talos-app doctor warns until it is set up (apps/bridge/src/doctor-memory.ts)
+    mkdir -p "$AGENT_DIR/.index" && : > "$AGENT_DIR/.index/.wanted"
     bash "$AGENT_DIR/scripts/memory/setup.sh" --agent-dir "$AGENT_DIR" --embed-model "$EMBED" $([ "$DO_JOBS" = 1 ] || echo --no-job) || _mrc=$?
     if [ "$_mrc" = 3 ]; then
       say "   Semantic search was NOT enabled: it needs Python 3.10+ and this Mac only has Apple's 3.9. The install itself is fine."
@@ -565,10 +623,26 @@ voice_extra() {   # $1 = label, $2 = setup.sh flag
 [ "$QWEN" = 1 ] && voice_extra "Qwen3-TTS voice cloning" --qwen
 [ "$PARAKEET" = 1 ] && voice_extra "Parakeet speech-to-text" --parakeet
 [ "$DIARIZE" = 1 ] && voice_extra "Speaker-labelled transcription" --diarize
-if [ "$RERANKER" = 1 ]; then
+if [ "$RERANKER" = auto ] && { [ "$MEMSEARCH" != 1 ] || { [ "$DRY" != 1 ] && [ "${_mrc:-1}" != 0 ]; }; }; then
+  # the default reranker only comes with a search that is set up; an explicit --with-reranker is never second-guessed
   step "Reranker model (recall.py --rerank)"
-  if [ "$DRY" = 1 ]; then bash "$KIT/scripts/memory/fetch-reranker.sh" --dry-run
-  else bash "$AGENT_DIR/scripts/memory/fetch-reranker.sh" || say "   the reranker model was not downloaded; search works without it. Retry: bash $AGENT_DIR/scripts/memory/fetch-reranker.sh"; fi
+  say "   reranker: skipped (semantic search is not set up). Add it later: bash $AGENT_DIR/scripts/memory/setup.sh --rerank"
+elif [ "$RERANKER" = 1 ] || [ "$RERANKER" = auto ]; then
+  step "Reranker model (recall.py --rerank)"
+  _rr_gate=(); [ "$RERANKER" = auto ] && _rr_gate=(--if-enough-memory)
+  if [ "$DRY" = 1 ]; then bash "$KIT/scripts/memory/fetch-reranker.sh" --dry-run ${_rr_gate[@]+"${_rr_gate[@]}"}
+  else
+    # the marker tells the doctor a model was meant to be here (it warns, with the retry command, while the files are missing)
+    mkdir -p "$AGENT_DIR/.index" && : > "$AGENT_DIR/.index/.rerank-wanted"
+    _rrc=0; bash "$AGENT_DIR/scripts/memory/fetch-reranker.sh" ${_rr_gate[@]+"${_rr_gate[@]}"} || _rrc=$?
+    if [ "$_rrc" = 0 ] && [ -x "${XDG_DATA_HOME:-$HOME/.local/share}/talos/venv/bin/python" ]; then
+      # time one rerank now, for the speed check that is coming (kept in .index/rerank-time.json)
+      "${XDG_DATA_HOME:-$HOME/.local/share}/talos/venv/bin/python" "$AGENT_DIR/scripts/memory/mem_rerank.py" --probe "$AGENT_DIR" --force 2>&1 | sed 's/^/   /' || true
+    fi
+    # the marker means "wanted and not there yet": gone once the model is downloaded (0) or skipped for memory (3)
+    if [ "$_rrc" = 0 ] || [ "$_rrc" = 3 ]; then rm -f "$AGENT_DIR/.index/.rerank-wanted"
+    elif [ "$_rrc" != 0 ]; then say "   the reranker model was not downloaded; search works without it. Retry: bash $AGENT_DIR/scripts/memory/fetch-reranker.sh"; fi
+  fi
 fi
 
 # ---------------------------------------------------------------- done
@@ -577,8 +651,10 @@ if [ "$DRY" = 1 ]; then say "Dry run: nothing was changed."; exit 0; fi
 say "Agent folder: $AGENT_DIR"
 if [ "$DO_CHRONOS" = 1 ]; then
   say "Chronos:      $CHRONOS_DIR   (config: $CFG)"
-  if [ "$MEMSEARCH" = 1 ] && [ "${_mrc:-1}" = 0 ] && [ "$DO_JOBS" = 1 ]; then say "Jobs:         disabled until setup is finished, except talos-memory-index (--with-memory-search turned it on). List them: python3 $AGENT_DIR/scripts/talos-jobs.py list"
-  else say "Jobs:         disabled until setup is finished. List them: python3 $AGENT_DIR/scripts/talos-jobs.py list"; fi
+  if [ "$DO_JOBS" = 1 ]; then
+    _on="${JOBS_ON:-}"; [ "$MEMSEARCH" = 1 ] && [ "${_mrc:-1}" = 0 ] && _on="$_on talos-memory-index"
+    say "Jobs:         the Claude jobs are off until setup is finished; on:${_on:- none} (plain commands, no Claude usage). List them: python3 $AGENT_DIR/scripts/talos-jobs.py list"
+  fi
 else
   say "Chronos:      skipped (--no-chronos). Your agent works; nothing runs on a schedule."
 fi

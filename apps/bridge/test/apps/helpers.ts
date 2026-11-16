@@ -2,8 +2,7 @@
 // server's output, an approved-catalog builder, and a terminal that answers from a script. Nothing here touches the
 // owner's Keychain, ~/.claude, or a real `claude`.
 import { type ChildProcess, spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -16,6 +15,7 @@ import { type KeychainRunner, ServerSecrets, serverIdOf } from '../../src/apps/k
 import { appPaths } from '../../src/apps/paths.ts'
 import { ensureAppDirs } from '../../src/apps/pending.ts'
 import type { McpStatusSource, RawContent, RawServer, ScanIO } from '../../src/apps/scan.ts'
+import { testTempDir } from '../temp-dirs.ts'
 
 export const PROBE_DIR = join(
   import.meta.dir,
@@ -30,7 +30,7 @@ export const PROBE_DIR = join(
 )
 export const PROBE = join(PROBE_DIR, 'server.mjs')
 
-export const tmp = (prefix = 'talos-apps-') => mkdtempSync(join(tmpdir(), prefix))
+export const tmp = (prefix = 'talos-apps-') => testTempDir(prefix)
 
 // ---- Keychain double -------------------------------------------------------------------------------------------------
 

@@ -34,7 +34,7 @@ describe('rich notifications: native wiring', () => {
     expect(read('scripts/check-generated.ts')).toMatch(/TalosPushExtension\/Info\.plist/)
   })
 
-  it('the extension and the key store never touch the network or print, and a failure delivers the push as Apple sent it', () => {
+  it('the extension and the key store never touch the network or print, and a failure delivers the plain push with no signing button', () => {
     const svc = read('ios/TalosPushExtension/NotificationService.swift')
     const keys = read('ios/TalosPushShared/NativeKeyStore.swift')
     for (const [name, src] of [
@@ -43,10 +43,13 @@ describe('rich notifications: native wiring', () => {
     ] as const) {
       expect(src, name).not.toMatch(/URLSession|URLRequest|print\(|NSLog|os_log|Logger\(/)
     }
-    expect(svc).toMatch(/serviceExtensionTimeWillExpire/)
-    expect(svc).toMatch(/\?\? request\.content/)
+    // a seal that did not open, and the time limit, both deliver the push stripped of the relay's button data (RichPushTests)
+    expect(svc).toMatch(/let plain = Self\.content\(RichPush\.deliver\(inbound, opened: nil\)/)
+    expect(svc).toMatch(/\?\? plain\)/)
+    expect(svc).toMatch(/serviceExtensionTimeWillExpire\(\) \{\s*if let handler, let plain \{ handler\(plain\) \}/)
+    expect(svc).not.toMatch(/handler\(original\)|\?\? request\.content/)
     // the sealed bytes are dropped from what stays on the phone
-    expect(svc).toMatch(/removeValue\(forKey: "enc"\)/)
+    expect(read('ios/TalosPushCore/Sources/TalosPushCore/RichPush.swift')).toMatch(/removeValue\(forKey: "enc"\)/)
     // the keys are device-bound and readable while locked, and live in the shared group only
     expect(keys).toMatch(/kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/)
     expect(keys).toMatch(/kSecAttrAccessGroup: group/)
@@ -65,6 +68,10 @@ describe('rich notifications: native wiring', () => {
     expect(code.match(/\buserText\b/g)).toHaveLength(2)
     // every notification the failure path shows takes its body from the fixed words it was called with
     expect(swiftBody(code, 'private static func fail')).toMatch(/content\.body = message\b/)
+    // an Approve is checked against what the notification on the screen displayed, not against its data alone
+    expect(code).toMatch(
+      /let content = response\.notification\.request\.content\s*let shown = RichPush\.Shown\(title: content\.title, subtitle: content\.subtitle, body: content\.body\)\s*guard let act = RichPush\.act\(for: action, shown: shown, userInfo: content\.userInfo/,
+    )
     // the delegate hands these two buttons to the quick-act path before it ever reaches the page
     const plugin = read('ios/App/App/Plugins/TalosPush.swift')
     expect(plugin).toMatch(

@@ -19,6 +19,7 @@ import {
   isFrameFor,
   NATIVE_ACT_FEATURE,
   NativeActWire,
+  NOTICE_TITLE,
   nativeReplyMessageId,
   openPush,
   permissionCardAllowsPrimary,
@@ -128,12 +129,24 @@ describe('native.act', () => {
     expect(r.ok).toBe(true)
     const ok = await act(
       s,
-      { a: 'approve', card_id: CARD, payload_hash: HASH, shown: SHOWN },
+      { a: 'approve', shown_v: '3', card_id: CARD, payload_hash: HASH, shown: SHOWN },
       new Date(NOW).toISOString(),
       '01JBF3V7Q8K2M4N6P8R0S2T4V8',
     )
     const r2 = await checkNativeAct(ok, s.device.publicJwk, NOW)
-    expect(r2.ok && r2.act).toEqual({ a: 'approve', card_id: CARD, payload_hash: HASH, shown: SHOWN })
+    expect(r2.ok && r2.act).toEqual({ a: 'approve', shown_v: '3', card_id: CARD, payload_hash: HASH, shown: SHOWN })
+  })
+
+  it('refuses an approve from an older phone, which signs the hash the notification data held instead of its own', async () => {
+    const s = await setup()
+    // The shown hash is right, so only the missing version says this phone did not hash its own screen.
+    const old = await act(
+      s,
+      { a: 'approve', card_id: CARD, payload_hash: HASH, shown: SHOWN } as never,
+      new Date(NOW).toISOString(),
+      '01JBF3V7Q8K2M4N6P8R0S2T4V8',
+    )
+    expect(await checkNativeAct(old, s.device.publicJwk, NOW)).toEqual({ ok: false, reason: 'bad_body' })
   })
 
   it('refuses an action signed by any key the device did not grant', async () => {
@@ -204,7 +217,7 @@ describe('native.act', () => {
 
   it('refuses an action the grant has no scope for', async () => {
     const s = await setup({ scopes: ['reply'] })
-    const f = await act(s, { a: 'approve', card_id: CARD, payload_hash: HASH, shown: SHOWN })
+    const f = await act(s, { a: 'approve', shown_v: '3', card_id: CARD, payload_hash: HASH, shown: SHOWN })
     expect(await checkNativeAct(f, s.device.publicJwk, NOW)).toEqual({ ok: false, reason: 'scope' })
   })
 
@@ -334,7 +347,7 @@ describe('what a card notification shows, and what Approve is bound to', () => {
     for (const v of variants) expect(shownHash(cardNotice(v).text)).not.toBe(h)
   })
   it('is never complete for a card that leaves the app, whatever risk the agent gave it', () => {
-    for (const kind of ['email', 'message', 'deploy', 'publish', 'purchase', 'schedule', 'app_action'] as const)
+    for (const kind of ['email', 'message', 'deploy', 'push', 'publish', 'purchase', 'schedule', 'app_action'] as const)
       expect(cardNotice({ ...base, kind }).complete, kind).toBe(false)
   })
   it('is never complete for a card that names a destination, whatever kind and risk the agent chose', () => {
@@ -375,10 +388,21 @@ describe('what a card notification shows, and what Approve is bound to', () => {
     const { state: _state, ...binding } = permCard()
     expect(cardNotice(binding).complete).toBe(true)
   })
-  const denyOnlyCases: Array<[string, () => ReturnType<typeof permCard>]> = [
+  it('is complete for a Bash card too: every permission card is risk low, so a tap approves', () => {
+    const c = permCard({
+      request: { request_id: 'abcde', tool_name: 'Bash', description: 'Run the tests', input_preview: 'pnpm test' },
+    })
+    expect(c.risk).toBe('low')
+    expect(cardNotice(c).complete).toBe(true)
+  })
+  it('is never complete for a repeated prompt (the one card with no Allow), so no Approve is offered', () => {
+    const c = permCard({ repeated: true })
+    expect(permissionCardAllowsPrimary(c)).toBe(false)
+    expect(cardNotice(c).complete).toBe(false)
+  })
+  const noteCases: Array<[string, () => ReturnType<typeof permCard>]> = [
     ['old client', () => permCard({ client_version: '2.1.233' })],
     ['no client version', () => permCard({ client_version: undefined })],
-    ['repeated prompt', () => permCard({ repeated: true })],
     [
       'hidden part',
       () =>
@@ -387,18 +411,29 @@ describe('what a card notification shows, and what Approve is bound to', () => {
         }),
     ],
   ]
-  it.each(denyOnlyCases)(
-    'is never complete for a deny-only permission card (%s), so no Approve is offered',
+  it.each(noteCases)(
+    'is not complete for a card with a note (%s): Allow is kept in the app, the notification opens it',
     (_n, mk) => {
       const c = mk()
-      expect(permissionCardAllowsPrimary(c)).toBe(false)
+      expect(c.warning).toBeDefined()
+      expect(permissionCardAllowsPrimary(c)).toBe(true)
       expect(cardNotice(c).complete).toBe(false)
     },
   )
+  it('stays complete with only the other-channel note', () => {
+    const c = permCard({ other_channels: ['discord'] })
+    expect(c.warning).toBe('discord can also approve this.')
+    expect(cardNotice(c).complete).toBe(true)
+  })
   it('makes invisible and direction-changing characters visible instead of hiding them', () => {
     const n = cardNotice({ ...base, body: 'safe\u202Egnp.exe\u200B' })
     expect(n.text).not.toMatch(/[\u202e\u200b]/)
     expect(n.text).toContain('[U+202E]')
+  })
+  it('covers the title the notification showed, so a different title is a different hash', () => {
+    const text = cardNotice(base).text
+    expect(shownHash(text, 'General', 'Approve: pay the invoice')).not.toBe(shownHash(text, 'General'))
+    expect(shownHash(text, 'General', NOTICE_TITLE)).toBe(shownHash(text, 'General'))
   })
   it('is exactly the text that ends up sealed, so what is hashed is what is shown', () => {
     const n = cardNotice(base)

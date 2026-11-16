@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
+import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { Button, Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from '../../ui/index.ts'
 import { Mascot } from '../../ui/Mascot.tsx'
 import { COPY, fill } from './constants.ts'
@@ -10,6 +11,7 @@ import { refusalWords, Ticks } from './shared.tsx'
 import { refreshSchedules } from './sync.ts'
 
 export function OfflineBanner({ asOf }: { asOf: string | null }) {
+  const host = useHost()
   return (
     <div
       role="status"
@@ -18,7 +20,10 @@ export function OfflineBanner({ asOf }: { asOf: string | null }) {
     >
       <Mascot state="worried" size={24} decorative animate={false} />
       <span className="flex-1">
-        {asOf ? fill(COPY.offline, { time: asOf }) : 'Your Mac is offline. Changes and Run now need your Mac.'}
+        {placeWords(
+          asOf ? fill(COPY.offline, { time: asOf }) : 'Your Mac is offline. Changes and Run now need your Mac.',
+          host,
+        )}
       </span>
     </div>
   )

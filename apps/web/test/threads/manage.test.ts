@@ -98,7 +98,22 @@ describe('reorder', () => {
   })
   it('wireThreads sends null for cleared icon/color/topic only to a threads/2 Mac', () => {
     const t = { id: 'a', name: 'A', order: 0, archived: false, color: 'red' } as ThreadT
-    expect(wireThreads([t], true)[0]).toMatchObject({ color: 'red', icon: null, topic: null })
-    expect(wireThreads([t], false)[0]).not.toHaveProperty('icon')
+    expect(wireThreads([t], true, { base: [] })[0]).toMatchObject({ color: 'red', icon: null, topic: null })
+    expect(wireThreads([t], false, { base: [] })[0]).not.toHaveProperty('icon')
+  })
+})
+
+describe('drag onto a row to nest (reorder.ts nestTarget)', () => {
+  const rects = [0, 50, 100, 150].map((top) => ({ top, height: 44 }))
+  it('the middle half of another row is "onto"; its top and bottom quarters stay "between"', async () => {
+    const { nestTarget } = await import('../../src/features/threads/manage/reorder.ts')
+    // row 0 (centre 22) dragged so its centre is at row 2's middle (100 + 22): onto row 2
+    expect(nestTarget(rects, 0, 100)).toBe(2)
+    // centre at row 2's top quarter (100 + 5) or bottom quarter (100 + 40): a reorder, not a nest
+    expect(nestTarget(rects, 0, 83)).toBeNull()
+    expect(nestTarget(rects, 0, 118)).toBeNull()
+    // over its own place: never onto itself
+    expect(nestTarget(rects, 1, 0)).toBeNull()
+    expect(nestTarget([], 0, 10)).toBeNull()
   })
 })

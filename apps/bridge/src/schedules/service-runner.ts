@@ -1,6 +1,6 @@
 // The session runner and its claims (docs/SCHEDULES.md S3.3): the tick, offers, heartbeat slots, orphans and time-outs.
 // Moved out of service.ts unchanged; each function runs with `this` set to the ScheduleService.
-import { heartbeatConfigFromMeta, newUlid, type SchedulerAdapter, safeLine } from '@talos-app/protocol'
+import { heartbeatConfigFromMeta, isWakeJobId, newUlid, type SchedulerAdapter, safeLine } from '@talos-app/protocol'
 import { postSystemNotice } from '../context.ts'
 import { coldAfterMs } from '../heartbeat/cold.ts'
 import { BUSY_SUMMARY } from '../heartbeat/run-parts.ts'
@@ -12,7 +12,7 @@ import { memoryForRun } from './job-memory-run.ts'
 import { readChronosLimits, runTimeoutMs } from './run-limits.ts'
 import type { ScheduleService } from './service.ts'
 import { excerptOf, failKeys } from './service-shared.ts'
-import type { Offer } from './sidecar.ts'
+import { MAX_SKIPS_PER_SLOT, type Offer } from './sidecar.ts'
 
 /** Asks Chronos which jobs a live session may take now (this also refreshes its session heartbeat), and offers them. */
 export async function runnerTick(this: ScheduleService): Promise<void> {
@@ -36,12 +36,17 @@ export async function runnerTick(this: ScheduleService): Promise<void> {
   for (const j of due) {
     if (!this.gate()) return
     const prev = this.sidecar.offerFor(j.id, j.ds)
-    if (prev && prev.instance === this.deps.instance) continue
+    // An offer this bridge already sent stands, unless the session gave it back with SKIP before claiming anything (the
+    // owner paused the job and resumed it, say): Chronos lists the job as due again, so it is offered again, a few times at most.
+    if (prev && prev.instance === this.deps.instance && (!prev.released || (prev.skips ?? 0) >= MAX_SKIPS_PER_SLOT))
+      continue
     const claimed = prev && this.sidecar.inflightOf(prev.run_id)
     if (claimed && !claimed.closed) continue
     await this.offer(j.id, j.ds, j.fire_at, j.window_ends, 'clock', false)
   }
   await this.expireRuns()
+  // wakes a crash, a missed window or the owner's own delete left behind
+  if (this.gate()) await this.wakeMe.sweep()
 }
 
 /**
@@ -60,6 +65,8 @@ export async function offer(
   | { ok: true; runId: string }
   | { ok: false; code: 'held' | 'schedule_invalid' | 'schedule_not_found'; testRequired?: string }
 > {
+  // A wake_me timer is never a schedule_run: the bridge delivers its note as the agent's own words (wake-me/service.ts).
+  if (isWakeJobId(id)) return this.wakeMe.onDue(id)
   const d = this.adapter
   const sp = await d.sessionPrompt(id)
   if (!sp.ok) {
@@ -89,6 +96,7 @@ export async function offer(
   const snap = this.lastGood ?? (await this.safeSnapshot())
   const job = snap.schedules.find((s) => s.id === id)
   const runId = `r_${newUlid()}`
+  const before = this.sidecar.offerFor(id, ds ?? '')
   const memory = memoryForRun(this.jobMemory, this.sidecar, id, sp.prompt)
   const o: Offer = {
     id,
@@ -102,6 +110,8 @@ export async function offer(
     ...(memory ? { memory_binding: memory.binding, memory_epoch: memory.epoch } : {}),
     instance: this.deps.instance,
     at: this.now(),
+    // a re-offer after a SKIP keeps the count of the offers before it
+    ...(trigger === 'clock' && before?.skips ? { skips: before.skips } : {}),
   }
   if (!this.sidecar.recordOffer(o)) return { ok: false, code: 'schedule_invalid' }
   const ts = this.iso()
@@ -154,6 +164,9 @@ export function startHeartbeat(
     instance: this.deps.instance,
     at: this.now(),
   }
+  // a new try after a claim that threw keeps the count of the tries before it
+  const before = a.trigger === 'clock' ? this.sidecar.offerFor(a.id, a.ds ?? '') : undefined
+  if (before?.skips) o.skips = before.skips
   if (!this.sidecar.recordOffer(o)) return { ok: false, code: 'schedule_invalid' }
   this.hbRunning.add(a.id)
   void this.heartbeatRun(a, runId)
@@ -169,14 +182,23 @@ export async function heartbeatRun(
 ): Promise<void> {
   const claimed = await this.enqueue(async () => {
     if (this.stopped) return null
-    const r = await this.adapter.claim(a.id, {
-      runId,
-      ds: a.trigger === 'run_now' ? null : a.ds,
-      fireAt: a.fireAt,
-      manual: a.trigger === 'run_now',
-      again: a.again,
-      bridgeInstance: this.deps.instance,
-    })
+    let r: Awaited<ReturnType<SchedulerAdapter['claim']>>
+    try {
+      r = await this.adapter.claim(a.id, {
+        runId,
+        ds: a.trigger === 'run_now' ? null : a.ds,
+        fireAt: a.fireAt,
+        manual: a.trigger === 'run_now',
+        again: a.again,
+        bridgeInstance: this.deps.instance,
+      })
+    } catch (e) {
+      // The scheduler did not answer (a timeout, a crash): nothing was claimed, so the slot is given back and a later tick
+      // tries it again while it is still due. When the tries run out the owner is told; it is never dropped in silence.
+      this.log('heartbeat claim failed', { job: a.id, error: (e as Error).message })
+      await this.heartbeatClaimFailed(a, runId)
+      return null
+    }
     if (!r.ok) {
       // Another run of this job still holds the claim (a wake the agent is working on): the sources did not run. Say so in the
       // run list, quietly: no row in the thread, no source read. Any other refusal means another runner has it or it is done.
@@ -279,6 +301,49 @@ export async function heartbeatRun(
       this.pendingAlerts.push({ kind: 'job_failed', key: `${a.id}:${claimed.ds}`.slice(0, 80) })
     await this.refresh()
   })
+}
+
+const CLAIM_FAILED_WHY = 'the scheduler did not answer'
+
+/**
+ * A heartbeat slot whose claim threw. The offer is released, so the runner tries the slot again on a later tick (at most
+ * MAX_SKIPS_PER_SLOT tries in all). A Run now has no later tick, so it is reported at once. When the tries are used up:
+ * one system row for the owner, a failed entry in the run list, and the failure alert, once per job and slot.
+ */
+export async function heartbeatClaimFailed(
+  this: ScheduleService,
+  a: Parameters<ScheduleService['startHeartbeat']>[0],
+  runId: string,
+): Promise<void> {
+  const released = this.sidecar.releaseOffer(runId, CLAIM_FAILED_WHY, this.now())
+  const tries = this.sidecar.offerByRun(runId)?.skips ?? 1
+  // A release that could not be saved leaves the offer standing (no retry will come), so that is reported as well.
+  if (released && a.trigger === 'clock' && tries < MAX_SKIPS_PER_SLOT) return
+  const ds = a.ds ?? this.iso().slice(0, 10)
+  const key = `hb-claim|${a.id}|${a.trigger === 'run_now' ? runId : ds}`
+  if (this.sidecar.wasNotified(key) || !this.sidecar.markNotified(key, this.now())) return
+  this.sidecar.setNote(
+    runId,
+    {
+      id: a.id,
+      ds,
+      status: 'failed',
+      trigger: a.trigger,
+      started_at: this.iso(),
+      finished_at: this.iso(),
+      summary: `Could not start: ${CLAIM_FAILED_WHY}`,
+    },
+    this.now(),
+  )
+  const name = this.lastGood?.schedules.find((s) => s.id === a.id)?.name ?? a.id
+  const count = tries > 1 ? ` (tried ${tries} times)` : ''
+  await postSystemNotice(
+    this.ctx,
+    `Scheduled job "${safeLine(name)}" could not start at its time: ${CLAIM_FAILED_WHY}${count}. Open Schedules.`,
+    { thread: this.threadOfJob(a.id) },
+  )
+  this.pendingAlerts.push({ kind: 'job_failed', key: `${a.id}:${ds}`.slice(0, 80) })
+  await this.refresh()
 }
 
 /** One plain line per job and slot when the job could not be read at its slot (it is tried again on the next tick). */

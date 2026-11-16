@@ -148,7 +148,7 @@ struct MacHomesDoorsGuiTests {
     #expect(!m.notice.contains("desktop.json") && m.notice.contains("Connection"))
   }
 
-  @Test func findARunningSessionWorksFromTheMenuBarAndFromTheChecklist() throws {
+  @Test func findARunningSessionWorksFromTheMenuBarAndFromTheChecklist() async throws {
     _ = NSApplication.shared
     let m = try scratchModel()
     defer { removeScratchConfig() }
@@ -160,8 +160,12 @@ struct MacHomesDoorsGuiTests {
       SettingsRouter.openAdopt(model: m, via: { o.ids.append($0) })
       #expect(SettingsNavigator.shared.selected == .session)
       #expect(o.ids == ["settings"])
-      #expect(!m.adoptNote.isEmpty, "the search ran and said what it found")
+      #expect(m.adoptNote == AdoptLookup.looking, "the search is under way, off the main thread, and the window says so")
     }
+    // the reads (the login shell, `claude`) come back on their own; then the note says what was found
+    let end = Date().addingTimeInterval(30)
+    while m.adoptLooking, Date() < end { try await Task.sleep(nanoseconds: 50_000_000) }
+    #expect(!m.adoptLooking && !m.adoptNote.isEmpty && m.adoptNote != AdoptLookup.looking, "\(m.adoptNote)")
     // and from the Session tab itself the button is still there: its label comes from the one constant
     let src = try String(contentsOfFile: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
       .deletingLastPathComponent().appendingPathComponent("Sources/TalosDesktop/App.swift").path, encoding: .utf8)
@@ -629,6 +633,7 @@ struct SetupGuiTests {
     #expect(before.env["FOO"] == "secret-value" && before.session.id == "11111111-2222-4333-8444-555555555555")
 
     #expect(m.editLaunchLine("claude --first --second") == .updated(claudePath: "auto", args: ["--first", "--second"]))
+    m.supervisor.drain()  // the save does not hold the main thread: the file has it once the supervisor's queue has run
     var d = try #require(disk())
     #expect(d.args == ["--first", "--second"])
     #expect(d.env == before.env && d.session == before.session, "environment values and ids untouched")

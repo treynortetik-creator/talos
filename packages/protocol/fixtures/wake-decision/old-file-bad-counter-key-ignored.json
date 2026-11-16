@@ -1,0 +1,21 @@
+{
+  "input": {
+    "wake": {
+      "v": 1,
+      "thread_id": "trip",
+      "message_ids": [],
+      "at": "2026-11-13T12:00:00.000Z",
+      "reason": "control",
+      "action": "park",
+      "counter": -3
+    },
+    "now": 1794571200000,
+    "recentTaken": [],
+    "threadIdle": true
+  },
+  "output": {
+    "take": true,
+    "counted": false,
+    "notice": "Talos parked this thread's session (a session control)."
+  }
+}

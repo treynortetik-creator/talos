@@ -1,14 +1,17 @@
 // The Copy button in every message's meta line, in a real browser (fake mode, VITE_FAKE=1): visible with no hover and no
 // long-press, 44 by 44 on touch, copies the text, and never sits over the text, a link, the Run button or Listen. The pixel
-// 375px shots are committed in test/threads/shots; other projects write shots only when $SHOT_DIR is set (as settings-home.spec.ts).
+// 375px shots replace the committed ones in test/threads/shots only with TALOS_SHOTS=1; otherwise they go to test-results, so an
+// ordinary run never rewrites tracked files. Other projects write shots only when $SHOT_DIR is set (as settings-home.spec.ts).
 import { expect, type Page, test } from '@playwright/test'
 
 const SHOT_DIR = process.env.SHOT_DIR
-/** Where a shot goes: the committed folder for pixel, $SHOT_DIR for anyone else, otherwise nowhere (no file). */
+const PIXEL_SHOTS = process.env.TALOS_SHOTS ? 'test/threads/shots' : 'test-results/shots/threads'
+/** Where a shot goes: the pixel folder above for pixel, $SHOT_DIR for anyone else, otherwise nowhere (no file). */
 const shotPath = (project: string, name: string) =>
-  project === 'pixel' ? `test/threads/shots/pixel-${name}.png` : SHOT_DIR ? `${SHOT_DIR}/${project}-${name}.png` : null
+  project === 'pixel' ? `${PIXEL_SHOTS}/pixel-${name}.png` : SHOT_DIR ? `${SHOT_DIR}/${project}-${name}.png` : null
 
-const LONG = Array.from({ length: 8 }, (_, i) => `echo "step ${i}"`).join('\n')
+// eight lines and one accented word: beyond plain ASCII, so Run asks twice (a plain script is one tap at any length)
+const LONG = [...Array.from({ length: 8 }, (_, i) => `echo "step ${i}"`), 'echo "café"'].join('\n')
 const agent = (id: string, text: string) => ({
   id: `m_01JBF3V7Q8K2M4N6P8R0S1T${id}`,
   thread_id: 'general',

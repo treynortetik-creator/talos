@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { useTalos } from '../../lib/client.ts'
+import { hostSteps, PAIR_WAYS, PC_PAIR, placeWords, useHost } from '../../lib/hostWords.ts'
 import { HttpError } from '../../lib/http.ts'
 import { inShell } from '../../lib/native/shell.ts'
 import { useStorage } from '../../lib/storageContext.tsx'
@@ -16,6 +17,7 @@ export function LoginPage() {
   const nav = useNavigate()
   const loc = useLocation()
   const agent = useTalos((s) => s.config?.agent.name) ?? 'Talos'
+  const host = useHost()
   const storage = useStorage()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -65,7 +67,7 @@ export function LoginPage() {
         e instanceof Error && e.name === 'NotAllowedError'
           ? 'Sign-in was cancelled.'
           : body?.error === 'device_proof_required' || body?.error === 'device_proof_invalid'
-            ? "This device couldn't prove its key. Run talos-app enroll on your Mac to set it up again."
+            ? hostSteps(host).loginProof
             : "Couldn't sign in with a passkey.",
       )
     } finally {
@@ -79,10 +81,18 @@ export function LoginPage() {
         <h1 className="m-0 font-display text-2xl font-semibold">{agent}</h1>
         {shell ? (
           <>
-            <p className="m-0 text-text-2">
-              This app signs in with a setup link from your Mac. Run <code>talos-app enroll</code> there, then paste the
-              link here.
-            </p>
+            {host === 'windows' ? (
+              <p className="m-0 text-text-2">This app signs in with a setup link from your PC. {PC_PAIR}</p>
+            ) : host === null ? (
+              <p className="m-0 text-text-2">
+                This app signs in with a setup link from your computer: {PAIR_WAYS}. Then paste the link here.
+              </p>
+            ) : (
+              <p className="m-0 text-text-2">
+                {placeWords('This app signs in with a setup link from your Mac. Run ', host)}
+                <code>talos-app enroll</code> there, then paste the link here.
+              </p>
+            )}
             <Link to="/enroll" className="w-full">
               <Button className="w-full" tabIndex={-1}>
                 Paste a setup link

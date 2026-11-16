@@ -174,7 +174,7 @@
         "v": 1,
         "propose": {
           "ok": false,
-          "error": "<227 chars>"
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -185,7 +185,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<227 chars>"
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -196,7 +196,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<227 chars>"
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -207,7 +207,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<227 chars>"
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -218,7 +218,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<227 chars>"
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -229,7 +229,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<227 chars>"
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -240,7 +240,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<227 chars>"
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -251,7 +251,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<227 chars>"
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -262,7 +262,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<227 chars>"
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -273,7 +273,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<227 chars>"
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -287,7 +287,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<227 chars>"
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -471,7 +471,7 @@
         "v": 1,
         "propose": {
           "ok": false,
-          "error": "<223 chars>"
+          "error": "<515 chars>"
         },
         "card": {
           "ok": false,
@@ -482,7 +482,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<223 chars>"
+          "error": "<515 chars>"
         },
         "card": {
           "ok": false,
@@ -493,7 +493,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<223 chars>"
+          "error": "<515 chars>"
         },
         "card": {
           "ok": false,
@@ -504,7 +504,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<223 chars>"
+          "error": "<515 chars>"
         },
         "card": {
           "ok": false,
@@ -515,7 +515,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<223 chars>"
+          "error": "<515 chars>"
         },
         "card": {
           "ok": false,
@@ -526,7 +526,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<223 chars>"
+          "error": "<515 chars>"
         },
         "card": {
           "ok": false,
@@ -537,7 +537,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<223 chars>"
+          "error": "<515 chars>"
         },
         "card": {
           "ok": false,
@@ -548,7 +548,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<223 chars>"
+          "error": "<515 chars>"
         },
         "card": {
           "ok": false,
@@ -559,7 +559,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<223 chars>"
+          "error": "<515 chars>"
         },
         "card": {
           "ok": false,
@@ -570,7 +570,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<223 chars>"
+          "error": "<515 chars>"
         },
         "card": {
           "ok": false,
@@ -584,7 +584,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<223 chars>"
+          "error": "<515 chars>"
         },
         "card": {
           "ok": false,
@@ -599,71 +599,61 @@
       {
         "v": "Atlas",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -672,8 +662,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -947,71 +936,61 @@
       {
         "v": "marin",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -1020,8 +999,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -1261,71 +1239,61 @@
       {
         "v": "calm",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -1334,8 +1302,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -1429,111 +1396,162 @@
       {
         "v": "calm",
         "propose": {
-          "ok": false,
-          "error": "agent.voice_persona can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "agent.voice_persona",
+              "old": "",
+              "new": "calm"
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "agent.voice_persona",
+              "old": "",
+              "new": "calm"
+            }
+          ],
+          "patch": {
+            "agent": {
+              "voice_persona": "calm"
+            }
+          }
         }
       },
       {
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "agent.voice_persona can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "agent.voice_persona: Invalid input: expected string, received number"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "agent.voice_persona is no longer a valid value."
         }
       },
       {
         "v": "x",
         "propose": {
-          "ok": false,
-          "error": "agent.voice_persona can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "agent.voice_persona",
+              "old": "",
+              "new": "x"
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "agent.voice_persona",
+              "old": "",
+              "new": "x"
+            }
+          ],
+          "patch": {
+            "agent": {
+              "voice_persona": "x"
+            }
+          }
         }
       },
       {
         "v": true,
         "propose": {
           "ok": false,
-          "error": "agent.voice_persona can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "agent.voice_persona: Invalid input: expected string, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "agent.voice_persona is no longer a valid value."
         }
       },
       {
         "v": false,
         "propose": {
           "ok": false,
-          "error": "agent.voice_persona can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "agent.voice_persona: Invalid input: expected string, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "agent.voice_persona is no longer a valid value."
         }
       },
       {
         "v": null,
         "propose": {
           "ok": false,
-          "error": "agent.voice_persona can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "agent.voice_persona: Invalid input: expected string, received null"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "agent.voice_persona is no longer a valid value."
         }
       },
       {
         "v": [],
         "propose": {
           "ok": false,
-          "error": "agent.voice_persona can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "agent.voice_persona: Invalid input: expected string, received array"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "agent.voice_persona is no longer a valid value."
         }
       },
       {
         "v": {},
         "propose": {
           "ok": false,
-          "error": "agent.voice_persona can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "agent.voice_persona: Invalid input: expected string, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "agent.voice_persona is no longer a valid value."
         }
       },
       {
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "agent.voice_persona can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "agent.voice_persona: Too big: expected string to have <=4000 characters"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "agent.voice_persona is no longer a valid value."
         }
       },
       {
         "v": "Not/AZone",
         "propose": {
-          "ok": false,
-          "error": "agent.voice_persona can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "agent.voice_persona",
+              "old": "",
+              "new": "Not/AZone"
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "agent.voice_persona",
+              "old": "",
+              "new": "Not/AZone"
+            }
+          ],
+          "patch": {
+            "agent": {
+              "voice_persona": "Not/AZone"
+            }
+          }
         }
       },
       {
@@ -1543,11 +1561,11 @@
         },
         "propose": {
           "ok": false,
-          "error": "agent.voice_persona can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "agent.voice_persona: Invalid input: expected string, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "agent.voice_persona is no longer a valid value."
         }
       }
     ]
@@ -1558,71 +1576,61 @@
       {
         "v": "Alex Example",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -1631,8 +1639,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -1952,71 +1959,61 @@
           }
         ],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -2025,8 +2022,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -2190,7 +2186,7 @@
         ],
         "propose": {
           "ok": false,
-          "error": "threads can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -2201,7 +2197,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "threads can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -2212,7 +2208,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "threads can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -2223,7 +2219,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "threads can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -2234,7 +2230,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "threads can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -2245,7 +2241,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "threads can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -2256,7 +2252,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "threads can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -2267,7 +2263,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "threads can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -2278,7 +2274,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "threads can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -2289,7 +2285,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "threads can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -2303,7 +2299,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "threads can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<519 chars>"
         },
         "card": {
           "ok": false,
@@ -2318,71 +2314,61 @@
       {
         "v": "general",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -2391,8 +2377,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -2487,110 +2472,119 @@
         "v": "general",
         "propose": {
           "ok": false,
-          "error": "default_thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "default_thread is already that value. Nothing to propose."
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "default_thread",
+              "old": "general",
+              "new": "general"
+            }
+          ],
+          "patch": {
+            "default_thread": "general"
+          }
         }
       },
       {
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "default_thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "default_thread: Invalid input: expected string, received number"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "default_thread is no longer a valid value."
         }
       },
       {
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "default_thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "default_thread: Unknown thread \"x\". Valid thread ids: general, inbox"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "Default thread: Unknown thread \"x\". Valid thread ids: general, inbox. Nothing was changed."
         }
       },
       {
         "v": true,
         "propose": {
           "ok": false,
-          "error": "default_thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "default_thread: Invalid input: expected string, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "default_thread is no longer a valid value."
         }
       },
       {
         "v": false,
         "propose": {
           "ok": false,
-          "error": "default_thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "default_thread: Invalid input: expected string, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "default_thread is no longer a valid value."
         }
       },
       {
         "v": null,
         "propose": {
           "ok": false,
-          "error": "default_thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "default_thread: Invalid input: expected string, received null"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "default_thread is no longer a valid value."
         }
       },
       {
         "v": [],
         "propose": {
           "ok": false,
-          "error": "default_thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "default_thread: Invalid input: expected string, received array"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "default_thread is no longer a valid value."
         }
       },
       {
         "v": {},
         "propose": {
           "ok": false,
-          "error": "default_thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "default_thread: Invalid input: expected string, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "default_thread is no longer a valid value."
         }
       },
       {
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "default_thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "default_thread: Invalid string: must match pattern /^[a-z][a-z0-9_]{0,31}$/"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "default_thread is no longer a valid value."
         }
       },
       {
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "default_thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "default_thread: Invalid string: must match pattern /^[a-z][a-z0-9_]{0,31}$/"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "default_thread is no longer a valid value."
         }
       },
       {
@@ -2600,11 +2594,11 @@
         },
         "propose": {
           "ok": false,
-          "error": "default_thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "default_thread: Invalid input: expected string, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "default_thread is no longer a valid value."
         }
       }
     ]
@@ -2615,71 +2609,61 @@
       {
         "v": "Europe/Paris",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -2688,8 +2672,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -2930,71 +2913,61 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -3003,8 +2976,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -3269,71 +3241,61 @@
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -3342,8 +3304,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -3437,111 +3398,156 @@
       {
         "v": false,
         "propose": {
-          "ok": false,
-          "error": "notifications.master can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "notifications.master",
+              "old": true,
+              "new": false
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "notifications.master",
+              "old": true,
+              "new": false
+            }
+          ],
+          "patch": {
+            "notifications": {
+              "master": false
+            }
+          }
         }
       },
       {
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "notifications.master can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "notifications.master: Invalid input: expected boolean, received number"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.master is no longer a valid value."
         }
       },
       {
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "notifications.master can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "notifications.master: Invalid input: expected boolean, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.master is no longer a valid value."
         }
       },
       {
         "v": true,
         "propose": {
           "ok": false,
-          "error": "notifications.master can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "notifications.master is already that value. Nothing to propose."
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "notifications.master",
+              "old": true,
+              "new": true
+            }
+          ],
+          "patch": {
+            "notifications": {
+              "master": true
+            }
+          }
         }
       },
       {
         "v": false,
         "propose": {
-          "ok": false,
-          "error": "notifications.master can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "notifications.master",
+              "old": true,
+              "new": false
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "notifications.master",
+              "old": true,
+              "new": false
+            }
+          ],
+          "patch": {
+            "notifications": {
+              "master": false
+            }
+          }
         }
       },
       {
         "v": null,
         "propose": {
           "ok": false,
-          "error": "notifications.master can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "notifications.master: Invalid input: expected boolean, received null"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.master is no longer a valid value."
         }
       },
       {
         "v": [],
         "propose": {
           "ok": false,
-          "error": "notifications.master can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "notifications.master: Invalid input: expected boolean, received array"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.master is no longer a valid value."
         }
       },
       {
         "v": {},
         "propose": {
           "ok": false,
-          "error": "notifications.master can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "notifications.master: Invalid input: expected boolean, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.master is no longer a valid value."
         }
       },
       {
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "notifications.master can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "notifications.master: Invalid input: expected boolean, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.master is no longer a valid value."
         }
       },
       {
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "notifications.master can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "notifications.master: Invalid input: expected boolean, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.master is no longer a valid value."
         }
       },
       {
@@ -3551,11 +3557,11 @@
         },
         "propose": {
           "ok": false,
-          "error": "notifications.master can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "notifications.master: Invalid input: expected boolean, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.master is no longer a valid value."
         }
       }
     ]
@@ -3566,71 +3572,61 @@
       {
         "v": "all",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -3639,8 +3635,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -3734,111 +3729,128 @@
       {
         "v": "all",
         "propose": {
-          "ok": false,
-          "error": "<205 chars>"
+          "ok": true,
+          "changes": [
+            {
+              "path": "notifications.show_thread_names",
+              "old": "fixed_only",
+              "new": "all"
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "notifications.show_thread_names",
+              "old": "fixed_only",
+              "new": "all"
+            }
+          ],
+          "patch": {
+            "notifications": {
+              "show_thread_names": "all"
+            }
+          }
         }
       },
       {
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<205 chars>"
+          "error": "notifications.show_thread_names: Invalid option: expected one of \"fixed_only\"|\"all\"|\"none\""
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.show_thread_names is no longer a valid value."
         }
       },
       {
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<205 chars>"
+          "error": "notifications.show_thread_names: Invalid option: expected one of \"fixed_only\"|\"all\"|\"none\""
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.show_thread_names is no longer a valid value."
         }
       },
       {
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<205 chars>"
+          "error": "notifications.show_thread_names: Invalid option: expected one of \"fixed_only\"|\"all\"|\"none\""
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.show_thread_names is no longer a valid value."
         }
       },
       {
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<205 chars>"
+          "error": "notifications.show_thread_names: Invalid option: expected one of \"fixed_only\"|\"all\"|\"none\""
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.show_thread_names is no longer a valid value."
         }
       },
       {
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<205 chars>"
+          "error": "notifications.show_thread_names: Invalid option: expected one of \"fixed_only\"|\"all\"|\"none\""
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.show_thread_names is no longer a valid value."
         }
       },
       {
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<205 chars>"
+          "error": "notifications.show_thread_names: Invalid option: expected one of \"fixed_only\"|\"all\"|\"none\""
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.show_thread_names is no longer a valid value."
         }
       },
       {
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<205 chars>"
+          "error": "notifications.show_thread_names: Invalid option: expected one of \"fixed_only\"|\"all\"|\"none\""
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.show_thread_names is no longer a valid value."
         }
       },
       {
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<205 chars>"
+          "error": "notifications.show_thread_names: Invalid option: expected one of \"fixed_only\"|\"all\"|\"none\""
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.show_thread_names is no longer a valid value."
         }
       },
       {
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<205 chars>"
+          "error": "notifications.show_thread_names: Invalid option: expected one of \"fixed_only\"|\"all\"|\"none\""
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.show_thread_names is no longer a valid value."
         }
       },
       {
@@ -3848,11 +3860,11 @@
         },
         "propose": {
           "ok": false,
-          "error": "<205 chars>"
+          "error": "notifications.show_thread_names: Invalid option: expected one of \"fixed_only\"|\"all\"|\"none\""
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "notifications.show_thread_names is no longer a valid value."
         }
       }
     ]
@@ -3863,71 +3875,61 @@
       {
         "v": "always",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -3936,8 +3938,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -4177,71 +4178,61 @@
       {
         "v": "2026-11-06T10:00:00.000Z",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -4250,8 +4241,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -4345,111 +4335,139 @@
       {
         "v": "2026-11-06T10:00:00.000Z",
         "propose": {
-          "ok": false,
-          "error": "<245 chars>"
+          "ok": true,
+          "changes": [
+            {
+              "path": "voice_notes.driving_until",
+              "old": null,
+              "new": "2026-11-06T10:00:00.000Z"
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "voice_notes.driving_until",
+              "old": null,
+              "new": "2026-11-06T10:00:00.000Z"
+            }
+          ],
+          "patch": {
+            "voice_notes": {
+              "driving_until": "2026-11-06T10:00:00.000Z"
+            }
+          }
         }
       },
       {
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<245 chars>"
+          "error": "voice_notes.driving_until: Invalid input: expected string, received number"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "voice_notes.driving_until is no longer a valid value."
         }
       },
       {
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<245 chars>"
+          "error": "voice_notes.driving_until: Invalid ISO datetime"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "voice_notes.driving_until is no longer a valid value."
         }
       },
       {
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<245 chars>"
+          "error": "voice_notes.driving_until: Invalid input: expected string, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "voice_notes.driving_until is no longer a valid value."
         }
       },
       {
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<245 chars>"
+          "error": "voice_notes.driving_until: Invalid input: expected string, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "voice_notes.driving_until is no longer a valid value."
         }
       },
       {
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<245 chars>"
+          "error": "voice_notes.driving_until is already that value. Nothing to propose."
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "voice_notes.driving_until",
+              "old": null,
+              "new": null
+            }
+          ],
+          "patch": {
+            "voice_notes": {
+              "driving_until": null
+            }
+          }
         }
       },
       {
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<245 chars>"
+          "error": "voice_notes.driving_until: Invalid input: expected string, received array"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "voice_notes.driving_until is no longer a valid value."
         }
       },
       {
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<245 chars>"
+          "error": "voice_notes.driving_until: Invalid input: expected string, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "voice_notes.driving_until is no longer a valid value."
         }
       },
       {
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<245 chars>"
+          "error": "voice_notes.driving_until: Invalid ISO datetime"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "voice_notes.driving_until is no longer a valid value."
         }
       },
       {
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<245 chars>"
+          "error": "voice_notes.driving_until: Invalid ISO datetime"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "voice_notes.driving_until is no longer a valid value."
         }
       },
       {
@@ -4459,11 +4477,11 @@
         },
         "propose": {
           "ok": false,
-          "error": "<245 chars>"
+          "error": "voice_notes.driving_until: Invalid input: expected string, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "voice_notes.driving_until is no longer a valid value."
         }
       }
     ]
@@ -4474,8 +4492,7 @@
       {
         "v": ["gmail"],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
@@ -4509,15 +4526,13 @@
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
@@ -4643,7 +4658,7 @@
         "v": ["gmail"],
         "propose": {
           "ok": false,
-          "error": "work.enabled can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<478 chars>"
         },
         "card": {
           "ok": false,
@@ -4654,7 +4669,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "work.enabled can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<478 chars>"
         },
         "card": {
           "ok": false,
@@ -4665,7 +4680,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "work.enabled can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<478 chars>"
         },
         "card": {
           "ok": false,
@@ -4676,7 +4691,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "work.enabled can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<478 chars>"
         },
         "card": {
           "ok": false,
@@ -4687,7 +4702,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "work.enabled can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<478 chars>"
         },
         "card": {
           "ok": false,
@@ -4698,7 +4713,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "work.enabled can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<478 chars>"
         },
         "card": {
           "ok": false,
@@ -4709,7 +4724,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "work.enabled can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<478 chars>"
         },
         "card": {
           "ok": false,
@@ -4720,7 +4735,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "work.enabled can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<478 chars>"
         },
         "card": {
           "ok": false,
@@ -4731,7 +4746,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "work.enabled can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<478 chars>"
         },
         "card": {
           "ok": false,
@@ -4742,7 +4757,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "work.enabled can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<478 chars>"
         },
         "card": {
           "ok": false,
@@ -4756,7 +4771,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "work.enabled can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<478 chars>"
         },
         "card": {
           "ok": false,
@@ -4771,71 +4786,61 @@
       {
         "v": "general",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -4844,8 +4849,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -4940,7 +4944,7 @@
         "v": "general",
         "propose": {
           "ok": false,
-          "error": "work.thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<477 chars>"
         },
         "card": {
           "ok": false,
@@ -4951,7 +4955,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "work.thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<477 chars>"
         },
         "card": {
           "ok": false,
@@ -4962,7 +4966,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "work.thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<477 chars>"
         },
         "card": {
           "ok": false,
@@ -4973,7 +4977,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "work.thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<477 chars>"
         },
         "card": {
           "ok": false,
@@ -4984,7 +4988,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "work.thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<477 chars>"
         },
         "card": {
           "ok": false,
@@ -4995,7 +4999,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "work.thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<477 chars>"
         },
         "card": {
           "ok": false,
@@ -5006,7 +5010,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "work.thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<477 chars>"
         },
         "card": {
           "ok": false,
@@ -5017,7 +5021,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "work.thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<477 chars>"
         },
         "card": {
           "ok": false,
@@ -5028,7 +5032,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "work.thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<477 chars>"
         },
         "card": {
           "ok": false,
@@ -5039,7 +5043,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "work.thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<477 chars>"
         },
         "card": {
           "ok": false,
@@ -5053,7 +5057,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "work.thread can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<477 chars>"
         },
         "card": {
           "ok": false,
@@ -5068,71 +5072,61 @@
       {
         "v": "Work",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -5141,8 +5135,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -5236,111 +5229,162 @@
       {
         "v": "Work",
         "propose": {
-          "ok": false,
-          "error": "work.label can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.label",
+              "old": "Work systems",
+              "new": "Work"
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.label",
+              "old": "Work systems",
+              "new": "Work"
+            }
+          ],
+          "patch": {
+            "work": {
+              "label": "Work"
+            }
+          }
         }
       },
       {
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "work.label can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.label: Invalid input: expected string, received number"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.label is no longer a valid value."
         }
       },
       {
         "v": "x",
         "propose": {
-          "ok": false,
-          "error": "work.label can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.label",
+              "old": "Work systems",
+              "new": "x"
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.label",
+              "old": "Work systems",
+              "new": "x"
+            }
+          ],
+          "patch": {
+            "work": {
+              "label": "x"
+            }
+          }
         }
       },
       {
         "v": true,
         "propose": {
           "ok": false,
-          "error": "work.label can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.label: Invalid input: expected string, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.label is no longer a valid value."
         }
       },
       {
         "v": false,
         "propose": {
           "ok": false,
-          "error": "work.label can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.label: Invalid input: expected string, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.label is no longer a valid value."
         }
       },
       {
         "v": null,
         "propose": {
           "ok": false,
-          "error": "work.label can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.label: Invalid input: expected string, received null"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.label is no longer a valid value."
         }
       },
       {
         "v": [],
         "propose": {
           "ok": false,
-          "error": "work.label can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.label: Invalid input: expected string, received array"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.label is no longer a valid value."
         }
       },
       {
         "v": {},
         "propose": {
           "ok": false,
-          "error": "work.label can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.label: Invalid input: expected string, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.label is no longer a valid value."
         }
       },
       {
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "work.label can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.label: Too big: expected string to have <=40 characters"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.label is no longer a valid value."
         }
       },
       {
         "v": "Not/AZone",
         "propose": {
-          "ok": false,
-          "error": "work.label can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.label",
+              "old": "Work systems",
+              "new": "Not/AZone"
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.label",
+              "old": "Work systems",
+              "new": "Not/AZone"
+            }
+          ],
+          "patch": {
+            "work": {
+              "label": "Not/AZone"
+            }
+          }
         }
       },
       {
@@ -5350,11 +5394,11 @@
         },
         "propose": {
           "ok": false,
-          "error": "work.label can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.label: Invalid input: expected string, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.label is no longer a valid value."
         }
       }
     ]
@@ -5365,71 +5409,61 @@
       {
         "v": "Ask first.",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -5438,8 +5472,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -5533,111 +5566,162 @@
       {
         "v": "Ask first.",
         "propose": {
-          "ok": false,
-          "error": "work.ask_note can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.ask_note",
+              "old": "Ask your IT team before connecting these.",
+              "new": "Ask first."
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.ask_note",
+              "old": "Ask your IT team before connecting these.",
+              "new": "Ask first."
+            }
+          ],
+          "patch": {
+            "work": {
+              "ask_note": "Ask first."
+            }
+          }
         }
       },
       {
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "work.ask_note can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.ask_note: Invalid input: expected string, received number"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.ask_note is no longer a valid value."
         }
       },
       {
         "v": "x",
         "propose": {
-          "ok": false,
-          "error": "work.ask_note can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.ask_note",
+              "old": "Ask your IT team before connecting these.",
+              "new": "x"
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.ask_note",
+              "old": "Ask your IT team before connecting these.",
+              "new": "x"
+            }
+          ],
+          "patch": {
+            "work": {
+              "ask_note": "x"
+            }
+          }
         }
       },
       {
         "v": true,
         "propose": {
           "ok": false,
-          "error": "work.ask_note can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.ask_note: Invalid input: expected string, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.ask_note is no longer a valid value."
         }
       },
       {
         "v": false,
         "propose": {
           "ok": false,
-          "error": "work.ask_note can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.ask_note: Invalid input: expected string, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.ask_note is no longer a valid value."
         }
       },
       {
         "v": null,
         "propose": {
           "ok": false,
-          "error": "work.ask_note can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.ask_note: Invalid input: expected string, received null"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.ask_note is no longer a valid value."
         }
       },
       {
         "v": [],
         "propose": {
           "ok": false,
-          "error": "work.ask_note can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.ask_note: Invalid input: expected string, received array"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.ask_note is no longer a valid value."
         }
       },
       {
         "v": {},
         "propose": {
           "ok": false,
-          "error": "work.ask_note can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.ask_note: Invalid input: expected string, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.ask_note is no longer a valid value."
         }
       },
       {
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "work.ask_note can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.ask_note: Too big: expected string to have <=120 characters"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.ask_note is no longer a valid value."
         }
       },
       {
         "v": "Not/AZone",
         "propose": {
-          "ok": false,
-          "error": "work.ask_note can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.ask_note",
+              "old": "Ask your IT team before connecting these.",
+              "new": "Not/AZone"
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "work.ask_note",
+              "old": "Ask your IT team before connecting these.",
+              "new": "Not/AZone"
+            }
+          ],
+          "patch": {
+            "work": {
+              "ask_note": "Not/AZone"
+            }
+          }
         }
       },
       {
@@ -5647,11 +5731,11 @@
         },
         "propose": {
           "ok": false,
-          "error": "work.ask_note can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "work.ask_note: Invalid input: expected string, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "work.ask_note is no longer a valid value."
         }
       }
     ]
@@ -5662,71 +5746,61 @@
       {
         "v": "buffer",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       },
       {
@@ -5735,8 +5809,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": true
+          "ok": true
         }
       }
     ],
@@ -5831,7 +5904,7 @@
         "v": "buffer",
         "propose": {
           "ok": false,
-          "error": "work.retention can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<480 chars>"
         },
         "card": {
           "ok": false,
@@ -5842,7 +5915,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "work.retention can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<480 chars>"
         },
         "card": {
           "ok": false,
@@ -5853,7 +5926,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "work.retention can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<480 chars>"
         },
         "card": {
           "ok": false,
@@ -5864,7 +5937,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "work.retention can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<480 chars>"
         },
         "card": {
           "ok": false,
@@ -5875,7 +5948,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "work.retention can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<480 chars>"
         },
         "card": {
           "ok": false,
@@ -5886,7 +5959,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "work.retention can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<480 chars>"
         },
         "card": {
           "ok": false,
@@ -5897,7 +5970,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "work.retention can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<480 chars>"
         },
         "card": {
           "ok": false,
@@ -5908,7 +5981,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "work.retention can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<480 chars>"
         },
         "card": {
           "ok": false,
@@ -5919,7 +5992,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "work.retention can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<480 chars>"
         },
         "card": {
           "ok": false,
@@ -5930,7 +6003,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "work.retention can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<480 chars>"
         },
         "card": {
           "ok": false,
@@ -5944,7 +6017,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "work.retention can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<480 chars>"
         },
         "card": {
           "ok": false,
@@ -5959,81 +6032,61 @@
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session"
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session"
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session"
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session"
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session"
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session"
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session"
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session"
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session"
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session"
+          "ok": true
         }
       },
       {
@@ -6042,9 +6095,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session"
+          "ok": true
         }
       }
     ],
@@ -6139,7 +6190,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "permission_relay can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<482 chars>"
         },
         "card": {
           "ok": false,
@@ -6150,7 +6201,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "permission_relay can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<482 chars>"
         },
         "card": {
           "ok": false,
@@ -6161,7 +6212,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "permission_relay can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<482 chars>"
         },
         "card": {
           "ok": false,
@@ -6172,7 +6223,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "permission_relay can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<482 chars>"
         },
         "card": {
           "ok": false,
@@ -6183,7 +6234,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "permission_relay can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<482 chars>"
         },
         "card": {
           "ok": false,
@@ -6194,7 +6245,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "permission_relay can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<482 chars>"
         },
         "card": {
           "ok": false,
@@ -6205,7 +6256,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "permission_relay can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<482 chars>"
         },
         "card": {
           "ok": false,
@@ -6216,7 +6267,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "permission_relay can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<482 chars>"
         },
         "card": {
           "ok": false,
@@ -6227,7 +6278,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "permission_relay can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<482 chars>"
         },
         "card": {
           "ok": false,
@@ -6238,7 +6289,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "permission_relay can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<482 chars>"
         },
         "card": {
           "ok": false,
@@ -6252,7 +6303,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "permission_relay can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<482 chars>"
         },
         "card": {
           "ok": false,
@@ -6267,71 +6318,61 @@
       {
         "v": ["default", "opus"],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -6340,8 +6381,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -6435,111 +6475,126 @@
       {
         "v": ["default", "opus"],
         "propose": {
-          "ok": false,
-          "error": "session_models can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "session_models",
+              "old": ["default", "opus", "sonnet", "haiku"],
+              "new": ["default", "opus"]
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "session_models",
+              "old": ["default", "opus", "sonnet", "haiku"],
+              "new": ["default", "opus"]
+            }
+          ],
+          "patch": {
+            "session_models": ["default", "opus"]
+          }
         }
       },
       {
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "session_models can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "session_models: Invalid input: expected array, received number"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "session_models is no longer a valid value."
         }
       },
       {
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "session_models can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "session_models: Invalid input: expected array, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "session_models is no longer a valid value."
         }
       },
       {
         "v": true,
         "propose": {
           "ok": false,
-          "error": "session_models can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "session_models: Invalid input: expected array, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "session_models is no longer a valid value."
         }
       },
       {
         "v": false,
         "propose": {
           "ok": false,
-          "error": "session_models can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "session_models: Invalid input: expected array, received boolean"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "session_models is no longer a valid value."
         }
       },
       {
         "v": null,
         "propose": {
           "ok": false,
-          "error": "session_models can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "session_models: Invalid input: expected array, received null"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "session_models is no longer a valid value."
         }
       },
       {
         "v": [],
         "propose": {
           "ok": false,
-          "error": "session_models can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "session_models: Too small: expected array to have >=1 items"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "session_models is no longer a valid value."
         }
       },
       {
         "v": {},
         "propose": {
           "ok": false,
-          "error": "session_models can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "session_models: Invalid input: expected array, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "session_models is no longer a valid value."
         }
       },
       {
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "session_models can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "session_models: Invalid input: expected array, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "session_models is no longer a valid value."
         }
       },
       {
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "session_models can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "session_models: Invalid input: expected array, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "session_models is no longer a valid value."
         }
       },
       {
@@ -6549,11 +6604,11 @@
         },
         "propose": {
           "ok": false,
-          "error": "session_models can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "session_models: Invalid input: expected array, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "session_models is no longer a valid value."
         }
       }
     ]
@@ -6564,71 +6619,61 @@
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -6637,8 +6682,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -6732,111 +6776,150 @@
       {
         "v": false,
         "propose": {
-          "ok": false,
-          "error": "memory_browser can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "memory_browser",
+              "old": true,
+              "new": false
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "memory_browser",
+              "old": true,
+              "new": false
+            }
+          ],
+          "patch": {
+            "memory_browser": false
+          }
         }
       },
       {
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "memory_browser can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "memory_browser: Invalid input: expected boolean, received number"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "memory_browser is no longer a valid value."
         }
       },
       {
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "memory_browser can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "memory_browser: Invalid input: expected boolean, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "memory_browser is no longer a valid value."
         }
       },
       {
         "v": true,
         "propose": {
           "ok": false,
-          "error": "memory_browser can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "memory_browser is already that value. Nothing to propose."
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "memory_browser",
+              "old": true,
+              "new": true
+            }
+          ],
+          "patch": {
+            "memory_browser": true
+          }
         }
       },
       {
         "v": false,
         "propose": {
-          "ok": false,
-          "error": "memory_browser can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "memory_browser",
+              "old": true,
+              "new": false
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "memory_browser",
+              "old": true,
+              "new": false
+            }
+          ],
+          "patch": {
+            "memory_browser": false
+          }
         }
       },
       {
         "v": null,
         "propose": {
           "ok": false,
-          "error": "memory_browser can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "memory_browser: Invalid input: expected boolean, received null"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "memory_browser is no longer a valid value."
         }
       },
       {
         "v": [],
         "propose": {
           "ok": false,
-          "error": "memory_browser can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "memory_browser: Invalid input: expected boolean, received array"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "memory_browser is no longer a valid value."
         }
       },
       {
         "v": {},
         "propose": {
           "ok": false,
-          "error": "memory_browser can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "memory_browser: Invalid input: expected boolean, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "memory_browser is no longer a valid value."
         }
       },
       {
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "memory_browser can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "memory_browser: Invalid input: expected boolean, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "memory_browser is no longer a valid value."
         }
       },
       {
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "memory_browser can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "memory_browser: Invalid input: expected boolean, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "memory_browser is no longer a valid value."
         }
       },
       {
@@ -6846,11 +6929,11 @@
         },
         "propose": {
           "ok": false,
-          "error": "memory_browser can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "memory_browser: Invalid input: expected boolean, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "memory_browser is no longer a valid value."
         }
       }
     ]
@@ -6863,71 +6946,61 @@
           "enabled": true
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -6936,8 +7009,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -6960,7 +7032,8 @@
               "weekly": 85,
               "park_all": 95,
               "off": false
-            }
+            },
+            "restart_on_update": true
           }
         }
       },
@@ -7018,7 +7091,8 @@
               "weekly": 85,
               "park_all": 95,
               "off": false
-            }
+            },
+            "restart_on_update": true
           }
         }
       },
@@ -7051,7 +7125,8 @@
               "weekly": 85,
               "park_all": 95,
               "off": false
-            }
+            },
+            "restart_on_update": true
           }
         }
       }
@@ -7063,110 +7138,138 @@
         },
         "propose": {
           "ok": false,
-          "error": "dedicated can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "dedicated: Invalid input: expected boolean, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "dedicated is no longer a valid value."
         }
       },
       {
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "dedicated can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "dedicated: Invalid input: expected boolean, received number"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "dedicated is no longer a valid value."
         }
       },
       {
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "dedicated can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "dedicated: Invalid input: expected boolean, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "dedicated is no longer a valid value."
         }
       },
       {
         "v": true,
         "propose": {
-          "ok": false,
-          "error": "dedicated can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "ok": true,
+          "changes": [
+            {
+              "path": "dedicated",
+              "old": false,
+              "new": true
+            }
+          ]
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "dedicated",
+              "old": false,
+              "new": true
+            }
+          ],
+          "patch": {
+            "dedicated": {
+              "enabled": true
+            }
+          }
         }
       },
       {
         "v": false,
         "propose": {
           "ok": false,
-          "error": "dedicated can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "dedicated is already that value. Nothing to propose."
         },
         "card": {
-          "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "ok": true,
+          "changes": [
+            {
+              "path": "dedicated",
+              "old": false,
+              "new": false
+            }
+          ],
+          "patch": {
+            "dedicated": {
+              "enabled": false
+            }
+          }
         }
       },
       {
         "v": null,
         "propose": {
           "ok": false,
-          "error": "dedicated can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "dedicated: Invalid input: expected boolean, received null"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "dedicated is no longer a valid value."
         }
       },
       {
         "v": [],
         "propose": {
           "ok": false,
-          "error": "dedicated can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "dedicated: Invalid input: expected boolean, received array"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "dedicated is no longer a valid value."
         }
       },
       {
         "v": {},
         "propose": {
           "ok": false,
-          "error": "dedicated can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "dedicated: Invalid input: expected boolean, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "dedicated is no longer a valid value."
         }
       },
       {
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "dedicated can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "dedicated: Invalid input: expected boolean, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "dedicated is no longer a valid value."
         }
       },
       {
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "dedicated can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "dedicated: Invalid input: expected boolean, received string"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "dedicated is no longer a valid value."
         }
       },
       {
@@ -7176,11 +7279,11 @@
         },
         "propose": {
           "ok": false,
-          "error": "dedicated can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "dedicated: Invalid input: expected boolean, received object"
         },
         "card": {
           "ok": false,
-          "error": "The card could not be read, or names a setting you may not change."
+          "error": "dedicated is no longer a valid value."
         }
       }
     ]
@@ -7191,71 +7294,61 @@
       {
         "v": "paper",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": 5,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": [],
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": {},
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "<5000 chars>",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "Not/AZone",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -7264,8 +7357,7 @@
           "end": "07:00"
         },
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
@@ -7488,10 +7580,7 @@
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session",
-          "turnsOnTrust": true
+          "ok": true
         }
       },
       {
@@ -7511,24 +7600,19 @@
       {
         "v": true,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false,
-          "stepupPurpose": "config:session",
-          "turnsOnTrust": true
+          "ok": true
         }
       },
       {
         "v": false,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
@@ -7661,7 +7745,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "trust_mode can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<476 chars>"
         },
         "card": {
           "ok": false,
@@ -7672,7 +7756,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "trust_mode can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<476 chars>"
         },
         "card": {
           "ok": false,
@@ -7683,7 +7767,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "trust_mode can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<476 chars>"
         },
         "card": {
           "ok": false,
@@ -7694,7 +7778,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "trust_mode can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<476 chars>"
         },
         "card": {
           "ok": false,
@@ -7705,7 +7789,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "trust_mode can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<476 chars>"
         },
         "card": {
           "ok": false,
@@ -7716,7 +7800,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "trust_mode can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<476 chars>"
         },
         "card": {
           "ok": false,
@@ -7727,7 +7811,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "trust_mode can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<476 chars>"
         },
         "card": {
           "ok": false,
@@ -7738,7 +7822,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "trust_mode can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<476 chars>"
         },
         "card": {
           "ok": false,
@@ -7749,7 +7833,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "trust_mode can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<476 chars>"
         },
         "card": {
           "ok": false,
@@ -7760,7 +7844,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "trust_mode can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<476 chars>"
         },
         "card": {
           "ok": false,
@@ -7774,7 +7858,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "trust_mode can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+          "error": "<476 chars>"
         },
         "card": {
           "ok": false,
@@ -7810,7 +7894,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<226 chars>"
+        "error": "<518 chars>"
       }
     ]
   },
@@ -7841,7 +7925,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<228 chars>"
+        "error": "<520 chars>"
       }
     ]
   },
@@ -7850,29 +7934,26 @@
       {
         "v": 1,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
     "agent": [
       {
         "ok": false,
-        "error": "<236 chars>"
+        "error": "<528 chars>"
       }
     ]
   },
@@ -7903,7 +7984,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "work.surprise can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+        "error": "<525 chars>"
       }
     ]
   },
@@ -7912,29 +7993,26 @@
       {
         "v": 1,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": "x",
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       },
       {
         "v": null,
         "r": {
-          "ok": true,
-          "touchesWorkEnabled": false
+          "ok": true
         }
       }
     ],
     "agent": [
       {
         "ok": false,
-        "error": "notifications.future can't be changed by you. The owner changes it in Settings. Allowed: agent.name, agent.voice, owner.display_name, timezone, quiet_window, voice_notes.reply_with_voice, theme."
+        "error": "<532 chars>"
       }
     ]
   },
@@ -7965,7 +8043,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<233 chars>"
+        "error": "<525 chars>"
       }
     ]
   },
@@ -7973,22 +8051,19 @@
     {
       "v": {},
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
       "v": null,
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
       "v": 5,
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
@@ -7996,8 +8071,7 @@
         "surprise": 1
       },
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     }
   ],
@@ -8005,22 +8079,19 @@
     {
       "v": {},
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
       "v": null,
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
       "v": 5,
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
@@ -8028,8 +8099,7 @@
         "surprise": 1
       },
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     }
   ],
@@ -8037,22 +8107,19 @@
     {
       "v": {},
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
       "v": null,
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
       "v": 5,
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
@@ -8060,8 +8127,7 @@
         "surprise": 1
       },
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     }
   ],
@@ -8069,8 +8135,7 @@
     {
       "v": {},
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
@@ -8101,22 +8166,19 @@
     {
       "v": {},
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
       "v": null,
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
       "v": 5,
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     },
     {
@@ -8124,8 +8186,7 @@
         "surprise": 1
       },
       "r": {
-        "ok": true,
-        "touchesWorkEnabled": false
+        "ok": true
       }
     }
   ],
@@ -8133,49 +8194,127 @@
     "agent_allowlist": [
       "agent.name",
       "agent.voice",
+      "agent.voice_persona",
       "owner.display_name",
+      "threads",
+      "default_thread",
       "timezone",
       "quiet_window",
+      "notifications.master",
+      "notifications.show_thread_names",
       "voice_notes.reply_with_voice",
+      "voice_notes.driving_until",
+      "work.label",
+      "work.ask_note",
+      "session_models",
+      "memory_browser",
+      "media_keep_days",
+      "always_allow",
+      "dev.thread_fence",
+      "dev.note_lookup",
+      "settings_lock",
+      "dedicated",
       "theme"
     ],
     "agent_refused": [
-      "agent.voice_persona",
-      "threads",
-      "default_thread",
-      "notifications",
-      "work",
+      "work.enabled",
+      "work.thread",
+      "work.retention",
       "permission_relay",
-      "session_models",
-      "memory_browser",
-      "dedicated",
-      "trust_mode"
+      "trust_mode",
+      "bug_webhook_url",
+      "threads.session_opts.ops_read"
     ],
     "card_lines": [
       "Agent name: Talos → Atlas",
       "Live-call voice: meridian → marin",
+      "Live-call persona: none → calm",
       "Your name: You → Alex Example",
+      "threads: undefined → [object Object],[object Object]",
+      "Default thread: general → general",
       "Timezone: UTC → Europe/Paris",
       "Quiet hours: off → 22:00 to 07:00",
+      "Notifications: on → off",
+      "Thread names in notifications: fixed threads only → all threads",
       "Voice-note replies: when I send a voice note → always",
+      "Driving mode until: off → 2026-11-06T10:00:00.000Z",
+      "Work section name: Work systems → Work",
+      "Work note: Ask your IT team before connecting these. → Ask first.",
+      "Model list: default, opus, sonnet, haiku → default, opus",
+      "Memory browser: on → off",
+      "Keep attachments: for good → for good",
+      "Always allowed: none → none",
+      "Thread fence: on → undefined",
+      "Notes that may matter: on → undefined",
+      "Lock Talos settings: off → undefined",
+      "Thread sessions: off → [object Object]",
       "Colour theme: talos → paper"
     ],
-    "read_default": ["Talos", "meridian", "You", "UTC", null, "when_voice", "talos"],
+    "read_default": [
+      "Talos",
+      "meridian",
+      "",
+      "You",
+      "__undefined__",
+      "general",
+      "UTC",
+      null,
+      true,
+      "fixed_only",
+      "when_voice",
+      null,
+      "Work systems",
+      "Ask your IT team before connecting these.",
+      ["default", "opus", "sonnet", "haiku"],
+      true,
+      null,
+      [],
+      true,
+      true,
+      false,
+      false,
+      "talos"
+    ],
     "patch_for_all": {
       "agent": {
         "name": "Atlas",
-        "voice": "marin"
+        "voice": "marin",
+        "voice_persona": "calm"
       },
       "owner": {
         "display_name": "Alex Example"
       },
+      "default_thread": "general",
       "timezone": "Europe/Paris",
       "quiet_window": {
         "start": "22:00",
         "end": "07:00"
       },
+      "notifications": {
+        "master": false,
+        "show_thread_names": "all"
+      },
       "voice_notes": {
-        "reply_with_voice": "always"
+        "reply_with_voice": "always",
+        "driving_until": "2026-11-06T10:00:00.000Z"
+      },
+      "work": {
+        "label": "Work",
+        "ask_note": "Ask first."
+      },
+      "session_models": ["default", "opus"],
+      "memory_browser": false,
+      "media_keep_days": "__undefined__",
+      "always_allow": [],
+      "dev": {
+        "thread_fence": "__undefined__",
+        "note_lookup": "__undefined__"
+      },
+      "settings_lock": "__undefined__",
+      "dedicated": {
+        "enabled": {
+          "enabled": true
+        }
       },
       "theme": "paper"
     }
@@ -8191,7 +8330,10 @@
     },
     "top_keys": [
       "agent",
+      "always_allow",
       "default_thread",
+      "dev",
+      "media_keep_days",
       "memory_browser",
       "notifications",
       "owner",
@@ -8199,6 +8341,7 @@
       "quiet_window",
       "rev",
       "session_models",
+      "settings_lock",
       "threads",
       "timezone",
       "version",

@@ -16,6 +16,7 @@
 		1CA998C627766237F2232BEB /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = FD127B870EFB46EFAC91834E /* CapApp-SPM */; };
 		1F5F0D3BAE328BCA1F73A160 /* MediaViewerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E74F8C3FCBA3B4AE97C68C2 /* MediaViewerController.swift */; };
 		26E51AC20D9FE4119F144870 /* public in Resources */ = {isa = PBXBuildFile; fileRef = 7E5BBB12596EE01767A6151A /* public */; };
+		2A1F63D5078FF9312A0D14CB /* ReconnectNoticeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B2CE5D71E93E7CD05D7A73 /* ReconnectNoticeTests.swift */; };
 		35BD895BE3DCF16E0C717AD5 /* CompiledRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F8675814FAF64984E33686 /* CompiledRelay.swift */; };
 		3ADAB4B2470A531DAC1D3760 /* TalosQuickAct.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E244550EE6C5966F3E211ED /* TalosQuickAct.swift */; };
 		3EF75B20CDF46D5CBCADEDF8 /* TalosCrashCore in Frameworks */ = {isa = PBXBuildFile; productRef = BDFEBBD3CD6557ACDCFA3CAE /* TalosCrashCore */; };
@@ -41,9 +42,11 @@
 		A9B0B4B2A529B7950FE5CDB3 /* TalosPush.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA566E4C10699729F30E7729 /* TalosPush.swift */; };
 		B222B4241F9CCC801BD09990 /* TalosCrash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48A879D7486EC440EB48D3F5 /* TalosCrash.swift */; };
 		C784E38E198F2E6658588FB4 /* NativeKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 076C04980F436BC6BD16B38C /* NativeKeyStore.swift */; };
+		CB6DB47DEDAC365A41D39101 /* TalosSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F35E443305EFA7993A07F2B0 /* TalosSnapshot.swift */; };
 		CF04BCB5897EE830F6D15FF6 /* NativeKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 912C05722891585DB67B1AB9 /* NativeKeyStoreTests.swift */; };
 		D0D35A9CB4F2631A49D259C1 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6795445F49DC0C5A08BCBDA /* NotificationService.swift */; };
 		D3595F6B764F0A8C5C5B394C /* TalosPushCore in Frameworks */ = {isa = PBXBuildFile; productRef = DD0D399B039396E58E56C071 /* TalosPushCore */; };
+		E393FD467E02DDB600817ABC /* WebViewLivenessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0287AD5FBA2FF6B3F8D3DB49 /* WebViewLivenessTests.swift */; };
 		E8E03F4FB1BE61A377693A7C /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9420949282AB92AA28A975D3 /* AppDelegate.swift */; };
 		FD0E375194DF369490D1A4BC /* TalosBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E59561450E59E8689D6B17B /* TalosBridgeViewController.swift */; };
 /* End PBXBuildFile section */
@@ -89,6 +92,7 @@
 
 /* Begin PBXFileReference section */
 		00974E067C806B76249CC31E /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		0287AD5FBA2FF6B3F8D3DB49 /* WebViewLivenessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewLivenessTests.swift; sourceTree = "<group>"; };
 		076C04980F436BC6BD16B38C /* NativeKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeKeyStore.swift; sourceTree = "<group>"; };
 		2AED4980BFD0B4C68EF89852 /* WebViewRevival.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewRevival.swift; sourceTree = "<group>"; };
 		2E59561450E59E8689D6B17B /* TalosBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosBridgeViewController.swift; sourceTree = "<group>"; };
@@ -122,7 +126,9 @@
 		D163170C704202077DDEE6E5 /* KeychainTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTokenStore.swift; sourceTree = "<group>"; };
 		D6795445F49DC0C5A08BCBDA /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		ED2016878D44EAA9692D059F /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		F0B2CE5D71E93E7CD05D7A73 /* ReconnectNoticeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectNoticeTests.swift; sourceTree = "<group>"; };
 		F13EA46D65C6DD380E027527 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		F35E443305EFA7993A07F2B0 /* TalosSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosSnapshot.swift; sourceTree = "<group>"; };
 		FA566E4C10699729F30E7729 /* TalosPush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosPush.swift; sourceTree = "<group>"; };
 		FF5234E389CA1D307F6DB335 /* ShareView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -219,6 +225,8 @@
 			isa = PBXGroup;
 			children = (
 				912C05722891585DB67B1AB9 /* NativeKeyStoreTests.swift */,
+				F0B2CE5D71E93E7CD05D7A73 /* ReconnectNoticeTests.swift */,
+				0287AD5FBA2FF6B3F8D3DB49 /* WebViewLivenessTests.swift */,
 				61283257BD694E29B791985C /* WebViewReplaceTests.swift */,
 				3C5D293CEE6CDA55F3D5EB46 /* WebViewRevivalTests.swift */,
 			);
@@ -234,6 +242,7 @@
 				FA566E4C10699729F30E7729 /* TalosPush.swift */,
 				9E244550EE6C5966F3E211ED /* TalosQuickAct.swift */,
 				5FDCDCD29A7C84F740D263FC /* TalosShare.swift */,
+				F35E443305EFA7993A07F2B0 /* TalosSnapshot.swift */,
 			);
 			path = Plugins;
 			sourceTree = "<group>";
@@ -475,6 +484,7 @@
 				A9B0B4B2A529B7950FE5CDB3 /* TalosPush.swift in Sources */,
 				3ADAB4B2470A531DAC1D3760 /* TalosQuickAct.swift in Sources */,
 				58D8EB777AABC0F494EE6FB0 /* TalosShare.swift in Sources */,
+				CB6DB47DEDAC365A41D39101 /* TalosSnapshot.swift in Sources */,
 				3F7B410C57B835DB46996D40 /* WebViewRevival.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -484,6 +494,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				CF04BCB5897EE830F6D15FF6 /* NativeKeyStoreTests.swift in Sources */,
+				2A1F63D5078FF9312A0D14CB /* ReconnectNoticeTests.swift in Sources */,
+				E393FD467E02DDB600817ABC /* WebViewLivenessTests.swift in Sources */,
 				4EA0C1D5E74EF8EE0C95C1A9 /* WebViewReplaceTests.swift in Sources */,
 				1409C9400F309E930AA1BD9F /* WebViewRevivalTests.swift in Sources */,
 			);

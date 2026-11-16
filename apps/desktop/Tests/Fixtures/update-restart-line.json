@@ -1,0 +1,92 @@
+{
+  "about": "Cases for the owner's line after restarts on update: the protocol's updateRestartLine (packages/protocol/src/wake-decision.ts) and the Mac's UpdateRestartLine.swift must both give `line` (null: nothing is said). Checked by apps/bridge/test/supervisor/swift-parity.test.ts and UpdateRestartLineTests.swift.",
+  "cases": [
+    {
+      "name": "nothing to say",
+      "restarted": [],
+      "waiting": [],
+      "failed": [],
+      "line": null
+    },
+    {
+      "name": "one restarted",
+      "restarted": ["Trip"],
+      "waiting": [],
+      "failed": [],
+      "line": "Updated or instructions changed: restarted Trip."
+    },
+    {
+      "name": "two restarted",
+      "restarted": ["Trip", "Garden"],
+      "waiting": [],
+      "failed": [],
+      "line": "Updated or instructions changed: restarted Trip, Garden."
+    },
+    {
+      "name": "one waiting",
+      "restarted": [],
+      "waiting": ["Trip"],
+      "failed": [],
+      "line": "Updated or instructions changed: Trip restarts when its turn ends."
+    },
+    {
+      "name": "two waiting",
+      "restarted": [],
+      "waiting": ["Trip", "Garden"],
+      "failed": [],
+      "line": "Updated or instructions changed: Trip, Garden restart when their turns end."
+    },
+    {
+      "name": "one failed",
+      "restarted": [],
+      "waiting": [],
+      "failed": ["Trip"],
+      "line": "Updated or instructions changed: Trip failed."
+    },
+    {
+      "name": "all three",
+      "restarted": ["A", "B"],
+      "waiting": ["C"],
+      "failed": ["D"],
+      "line": "Updated or instructions changed: restarted A, B; C restarts when its turn ends; D failed."
+    },
+    {
+      "name": "line breaks in a name are one space",
+      "restarted": ["Tr\nip", "Ga\r\n rden"],
+      "waiting": ["x y"],
+      "failed": [],
+      "line": "Updated or instructions changed: restarted Tr ip, Ga rden; x y restarts when its turn ends."
+    },
+    {
+      "name": "non-ASCII names",
+      "restarted": ["Reise 🙂"],
+      "waiting": [],
+      "failed": ["日本"],
+      "line": "Updated or instructions changed: restarted Reise 🙂; 日本 failed."
+    },
+    {
+      "name": "one not restarted",
+      "restarted": [],
+      "waiting": [],
+      "failed": [],
+      "notRestarted": ["Trip"],
+      "line": "Updated or instructions changed: Trip was not restarted (it did not start again)."
+    },
+    {
+      "name": "two not restarted",
+      "restarted": [],
+      "waiting": [],
+      "failed": [],
+      "notRestarted": ["Trip", "Garden"],
+      "line": "Updated or instructions changed: Trip, Garden were not restarted (they did not start again)."
+    },
+    {
+      "name": "all four",
+      "restarted": ["A", "B"],
+      "waiting": ["C"],
+      "failed": ["D"],
+      "notRestarted": ["E"],
+      "line": "Updated or instructions changed: restarted A, B; C restarts when its turn ends; D failed; E was not restarted (it did not start again)."
+    }
+  ]
+}

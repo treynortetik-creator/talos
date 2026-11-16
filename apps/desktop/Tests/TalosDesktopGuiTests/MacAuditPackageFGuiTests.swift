@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 @testable import TalosDesktop
+import TalosTestSupport
 
 /// Audit D46: a relay that is down at launch. A real WKWebView loads a loopback port nothing listens on, so WebKit itself
 /// reports the failure. Needs TALOS_GUI_TESTS=1.
@@ -84,7 +85,7 @@ struct MacAuditPackageFGuiTests {
     }
     defer { relay.stop() }
     let spy = Spy()
-    let dest = URL(fileURLWithPath: NSTemporaryDirectory() + "/talos-dl-\(UUID().uuidString.prefix(8)).zip")
+    let dest = URL(fileURLWithPath: TestTemp.base + "/talos-dl-\(UUID().uuidString.prefix(8)).zip")
     defer { try? FileManager.default.removeItem(at: dest) }
     let c = controller(relay, saveTo: dest, spy)
     #expect(await pumpUntil(3) { relay.saw("/") })
@@ -100,7 +101,7 @@ struct MacAuditPackageFGuiTests {
     }
     defer { relay.stop() }
     let spy = Spy()
-    let dest = URL(fileURLWithPath: NSTemporaryDirectory() + "/talos-dl-\(UUID().uuidString.prefix(8)).json")
+    let dest = URL(fileURLWithPath: TestTemp.base + "/talos-dl-\(UUID().uuidString.prefix(8)).json")
     defer { try? FileManager.default.removeItem(at: dest) }
     let c = controller(relay, saveTo: dest, spy)
     #expect(await pumpUntil(3) { relay.saw("/") })
@@ -189,7 +190,7 @@ struct MacAuditPackageFGuiTests {
     }
     defer { relay.stop() }
     let spy = Spy()
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory() + "/talos-dl-\(UUID().uuidString.prefix(8))")
+    let dir = URL(fileURLWithPath: TestTemp.base + "/talos-dl-\(UUID().uuidString.prefix(8))")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     let dest = dir.appendingPathComponent("pack.zip")
@@ -210,7 +211,7 @@ struct MacAuditPackageFGuiTests {
     }
     defer { relay.stop() }
     let spy = Spy()
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory() + "/talos-dl-\(UUID().uuidString.prefix(8))")
+    let dir = URL(fileURLWithPath: TestTemp.base + "/talos-dl-\(UUID().uuidString.prefix(8))")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     let dest = dir.appendingPathComponent("pack.zip")

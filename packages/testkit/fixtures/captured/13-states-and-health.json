@@ -487,7 +487,7 @@
             "thread_id": "general",
             "author": "system",
             "kind": "text",
-            "text": "Scheduled job \"Missed Job\" was missed: no session was running in its window. Open Schedules.",
+            "text": "Scheduled job \"Missed Job\" was missed: the session was asked to run it and never started it. Open Schedules.",
             "format": "plain",
             "attachments": [],
             "via": "app",

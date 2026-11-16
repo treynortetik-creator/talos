@@ -1,17 +1,21 @@
 // The checks behind `talos-app doctor` and `talos doctor`, as rows. Printing and the exit code stay with the caller.
 import { Database } from 'bun:sqlite'
 import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { bunDoctorRow } from './bun-floor.ts'
 import { type CliDeps, type CliIO, describeBridge, probeRelayAuth } from './cli-main.ts'
 import { checkCodex } from './codex.ts'
 import type { BridgeEnv } from './config.ts'
 import { paths } from './config.ts'
 import { parseConfig } from './config-file.ts'
 import { DeviceStore } from './devices.ts'
+import { memorySearchCheck } from './doctor-memory.ts'
 import { modDoctorChecks } from './doctor-mods.ts'
+import { wslDoctorChecks } from './doctor-wsl.ts'
 import { fileMode, readJsonFile } from './fsutil.ts'
 import { loadKeyFile } from './keys.ts'
 import { readMcpEntry } from './mcp-config.ts'
+import { say } from './owner-words.ts'
 import { askRuleFiles, askRulesIn, DEFAULT_ASK_RULES, normalizeRule, settingsPath } from './permission/ask-rules.ts'
 import { findOtherChannels } from './permission/doctor.ts'
 import { RelayHttp } from './relay-http.ts'
@@ -76,15 +80,6 @@ function ownerOnlyNote(missing: readonly string[]): string {
     : ''
 }
 
-function bunAtLeast(v: string, min: string): boolean {
-  const a = v.split('.').map(Number)
-  const b = min.split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
-    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0)
-  }
-  return true
-}
-
 /** Runs every check. Never throws for a failed check: that is a row with level FAIL. */
 export async function runDoctorChecks(
   env: BridgeEnv,
@@ -96,7 +91,8 @@ export async function runDoctorChecks(
   const doctorCommit = commitReport(runningBridge(bridgeLiveness(p.status, io.now(), deps.alive)), BRIDGE_COMMIT)
   const checks: Check[] = []
   const add = (level: Check['level'], name: string, detail: string) => checks.push({ level, name, detail })
-  add(bunAtLeast(Bun.version, '1.3.11') ? 'ok' : 'FAIL', 'bun version', `${Bun.version} (needs >= 1.3.11)`)
+  const bun = bunDoctorRow(Bun.version)
+  add(bun.level, 'bun version', bun.detail)
   try {
     const v = (
       JSON.parse(readFileSync(join(BRIDGE_DIR, 'node_modules/@modelcontextprotocol/sdk/package.json'), 'utf8')) as {
@@ -117,12 +113,20 @@ export async function runDoctorChecks(
       '.mcp.json entry',
       `no talos-app server in ${join(agentDir, '.mcp.json')} (run apps/bridge/scripts/install.sh)`,
     )
-  else
+  else {
+    const absolute = typeof entry.command === 'string' && isAbsolute(entry.command)
+    const here = entry.args?.includes(BRIDGE_DIR)
     add(
-      entry.command === 'bun' && entry.args?.includes(BRIDGE_DIR) ? 'ok' : 'warn',
+      absolute && here ? 'ok' : 'warn',
       '.mcp.json entry',
-      `command ${entry.command}, points at ${entry.args?.includes(BRIDGE_DIR) ? 'this checkout' : 'another path'}`,
+      `command ${entry.command}, points at ${here ? 'this checkout' : 'another path'}` +
+        (absolute
+          ? ''
+          : `. The command is not an absolute path, so Claude Code needs it on the PATH of the session, and Main can start without it (the bridge then never starts). Run talos-app install-mcp --agent-dir ${agentDir} to write the full path of bun.`),
     )
+  }
+  const memory = memorySearchCheck(agentDir)
+  if (memory) checks.push(memory)
   if (entry && !(typeof entry.env?.TALOS_AGENT_DIR === 'string' && entry.env.TALOS_AGENT_DIR !== ''))
     add(
       'warn',
@@ -144,6 +148,14 @@ export async function runDoctorChecks(
       add('FAIL', 'devices.json', 'cannot be read; nobody is trusted until it is fixed')
   }
   modeCheck('bridge.env', p.envFile, 0o600)
+  wslDoctorChecks(
+    add,
+    [
+      { name: 'Talos home', path: p.home },
+      { name: 'agent folder', path: agentDir },
+    ],
+    deps.wsl,
+  )
   const key = await loadKeyFile(p.bridgeKey).catch((e: Error) => {
     add('FAIL', 'bridge key', e.message)
     return undefined
@@ -162,7 +174,12 @@ export async function runDoctorChecks(
   add(
     hasFts5 ? 'ok' : 'warn',
     'search (FTS5)',
-    hasFts5 ? 'available' : "This Mac's SQLite has no FTS5; search and the memory browser are off",
+    hasFts5
+      ? 'available'
+      : say({
+          mac: "This Mac's SQLite has no FTS5; search and the memory browser are off",
+          linux: "This computer's SQLite has no FTS5; search and the memory browser are off",
+        }),
   )
   const cx = await checkCodex()
   add('ok', 'codex (optional)', cx.ok ? cx.version : `off: ${cx.message}`)
@@ -196,8 +213,18 @@ export async function runDoctorChecks(
     // D55: /healthz answers anybody. A signed read-only call proves the relay accepts THIS Mac's key.
     if (reachable) {
       const auth = await probeRelayAuth(env, io.now())
-      if (auth.ok) add('ok', 'relay accepts this Mac', 'a signed read-only call was accepted')
-      else add(auth.refused ? 'FAIL' : 'warn', 'relay accepts this Mac', auth.message)
+      if (auth.ok)
+        add(
+          'ok',
+          say({ mac: 'relay accepts this Mac', linux: 'relay accepts this computer' }),
+          'a signed read-only call was accepted',
+        )
+      else
+        add(
+          auth.refused ? 'FAIL' : 'warn',
+          say({ mac: 'relay accepts this Mac', linux: 'relay accepts this computer' }),
+          auth.message,
+        )
     }
   } else add('FAIL', 'relay URL', 'TALOS_APP_RELAY_URL is not set')
   const liveness = bridgeLiveness(p.status, io.now(), deps.alive)
@@ -210,13 +237,20 @@ export async function runDoctorChecks(
     add(
       'warn',
       'transcript saving',
-      "couldn't check whether transcripts are saved (this Mac doesn't show process environments)",
+      say({
+        mac: "couldn't check whether transcripts are saved (this Mac doesn't show process environments)",
+        linux: "couldn't check whether transcripts are saved (this computer doesn't show process environments)",
+      }),
     )
   else if (marker)
     add(
       'warn',
       'transcript saving',
-      'transcripts are not being saved: the running session inherited CLAUDE_CODE_CHILD_SESSION from another Claude session, so Claude Code turned saving off. Restart the session from the Mac app (Restart session).',
+      'transcripts are not being saved: the running session inherited CLAUDE_CODE_CHILD_SESSION from another Claude session, so Claude Code turned saving off. ' +
+        say({
+          mac: 'Restart the session from the Mac app (Restart session).',
+          linux: 'Restart Main from the phone (Restart agent).',
+        }),
     )
   // Claude Code sends prompts only to a server that declared the capability at start; a switch turned on later waits for a restart.
   if (

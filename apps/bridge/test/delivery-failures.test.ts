@@ -1,12 +1,19 @@
 // Delivery that fails halfway: an approval the agent could not be told about, a backlog with shared content in it, a queued
 // row that must reach the relay after a reconnect, and a socket that goes silent without closing.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { bindingFrom, newId, payloadHash } from '@talos-app/protocol'
+import { bindingFrom, type MessageT, newId, newUlid, payloadHash } from '@talos-app/protocol'
 import { fakeClock } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
+import { cardUpdateFrame, replyFrame } from '../src/frames-out.ts'
 import { nullLogger } from '../src/log.ts'
 import type { Notification } from '../src/notify.ts'
-import { ACK_WAIT_MS } from '../src/transport.ts'
+import {
+  ACK_WAIT_MS,
+  KEPT_CEILING_ATTEMPTS,
+  KEPT_CEILING_MS,
+  type LiveTransport,
+  OUTBOX_RETENTION_MS,
+} from '../src/transport.ts'
 import { advanceSteps, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
 
 let h: Harness
@@ -576,5 +583,188 @@ describe('rows still waiting for an ack', () => {
     clock.advance(ACK_WAIT_MS + 1)
     await pending
     h.relay.blackHole = false
+  })
+})
+
+describe('an outbox row the relay has not taken yet', () => {
+  const DAY = 24 * 3_600_000
+  const flush = () => (h.bridge.ctx.transport as LiveTransport).flushOutbox()
+  const agentReply = (thread_id: string, text: string): MessageT =>
+    ({
+      id: newId('m'),
+      thread_id,
+      author: 'agent',
+      kind: 'text',
+      text,
+      format: 'plain',
+      attachments: [],
+      via: 'app',
+      created_at: new Date().toISOString(),
+    }) as MessageT
+  /** A reply written while the relay was out of reach: in the Mac's history and in the outbox, `ageMs` old. */
+  function queuedReply(thread: string, text: string, ageMs: number) {
+    const m = agentReply(thread, text)
+    const frame = replyFrame(Date.now() - ageMs, m)
+    h.bridge.ctx.store.addMessage(m)
+    h.bridge.ctx.store.outboxAdd(frame.id, 'reply', JSON.stringify(frame), Date.now() - ageMs)
+    return { m, frame }
+  }
+
+  test('a reply that waited a month (the Mac asleep, the relay away) is still delivered, never dropped', async () => {
+    h = await startHarness()
+    const { m, frame } = queuedReply('general', 'The answer you asked for.', 30 * DAY)
+    const before = h.notes.length
+    flush()
+    const got = await h.relay.expectFrame('reply', (f) => f.id === frame.id, { direction: 'from_bridge' })
+    expect(got.message.text).toBe('The answer you asked for.')
+    await waitFor(() => h.bridge.ctx.store.outboxGet(frame.id) === undefined, 3000, 'acked and out of the outbox')
+    expect(h.bridge.ctx.store.getMessage(m.id)?.text).toBe('The answer you asked for.')
+    expect(JSON.stringify(h.notes.slice(before))).not.toContain('dropped')
+  })
+
+  test('a card.update that waited a month is still delivered, so the card in the app is not left on its old state', async () => {
+    h = await startHarness()
+    const card = await makeCard()
+    const frame = cardUpdateFrame(Date.now() - 30 * DAY, { card_id: card.id, state: 'expired', reason: 'expired' })
+    h.bridge.ctx.store.outboxAdd(frame.id, 'card.update', JSON.stringify(frame), Date.now() - 30 * DAY)
+    flush()
+    const got = await h.relay.expectFrame('card.update', (f) => f.id === frame.id, { direction: 'from_bridge' })
+    expect(got.state).toBe('expired')
+  })
+
+  test('a reply the relay refuses for good is taken out of the history, and its own thread says which one, to the owner and the agent', async () => {
+    h = await startHarness({
+      relay: {
+        rejectBridgeFrame: (f) =>
+          f.type === 'reply' && String((f.message as { text?: string }).text).startsWith('Refuse me')
+            ? { code: 'bad_frame', message: 'invalid reply frame' }
+            : undefined,
+      },
+    })
+    const { m, frame } = queuedReply('inbox', 'Refuse me: the quarterly numbers are in.', 60_000)
+    const before = h.notes.length
+    const mark = h.relay.frames.length
+    flush()
+    await waitFor(() => h.bridge.ctx.store.outboxGet(frame.id) === undefined, 3000, 'dropped from the outbox')
+    // the owner: a system row in the thread the reply was for, quoting it
+    const row = await h.relay.expectFrame('reply', (f) => f.message.author === 'system', {
+      direction: 'from_bridge',
+      since: mark,
+    })
+    expect(row.message.thread_id).toBe('inbox')
+    expect(row.message.text).toContain('Refuse me: the quarterly numbers are in.')
+    expect(row.message.text).toContain('refused by the relay')
+    // the agent: told in that thread, with the message named
+    await waitFor(() => h.notes.length > before, 3000, 'agent told')
+    const note = h.notes.slice(before).find((n) => n.content.includes('never reached the relay'))
+    expect(note?.meta.thread_id).toBe('inbox')
+    expect(note?.content).toContain(m.id)
+    expect(note?.content).toContain('Refuse me: the quarterly numbers are in.')
+    // and the Mac's history no longer says it was said
+    expect(h.bridge.ctx.store.getMessage(m.id)).toBeUndefined()
+  })
+
+  test("a refused notice of the bridge's own raises no further notice to the owner (no chain against a relay that refuses them all)", async () => {
+    h = await startHarness({
+      relay: { rejectBridgeFrame: (f) => (f.type === 'reply' ? { code: 'bad_frame', message: 'no' } : undefined) },
+    })
+    const m = { ...agentReply('general', 'A device was paired.'), author: 'system' } as MessageT
+    const frame = replyFrame(Date.now(), m)
+    h.bridge.ctx.store.outboxAdd(frame.id, 'reply', JSON.stringify(frame), Date.now())
+    const before = h.notes.length
+    const mark = h.relay.frames.length
+    flush()
+    await waitFor(() => h.notes.length > before, 3000, 'agent told')
+    await sleep(200)
+    const replies = h.relay.frames.slice(mark).filter((f) => f.direction === 'from_bridge' && f.raw.type === 'reply')
+    expect(replies).toHaveLength(1) // the resend itself; nothing posted after it
+    expect(h.bridge.ctx.store.outboxCount()).toBe(0)
+  })
+
+  test("a refused card.update names the card in the card's own thread", async () => {
+    h = await startHarness({
+      relay: {
+        rejectBridgeFrame: (f) => (f.type === 'card.update' ? { code: 'bad_frame', message: 'no' } : undefined),
+      },
+    })
+    const card = await makeCard({ thread_id: 'inbox', title: 'Send the weekly digest' })
+    const frame = cardUpdateFrame(Date.now(), { card_id: card.id, state: 'expired', reason: 'expired' })
+    h.bridge.ctx.store.outboxAdd(frame.id, 'card.update', JSON.stringify(frame), Date.now())
+    const before = h.notes.length
+    const mark = h.relay.frames.length
+    flush()
+    const row = await h.relay.expectFrame('reply', (f) => f.message.author === 'system', {
+      direction: 'from_bridge',
+      since: mark,
+    })
+    expect(row.message.thread_id).toBe('inbox')
+    expect(row.message.text).toContain('Send the weekly digest')
+    await waitFor(() => h.notes.slice(before).some((n) => n.content.includes(card.id)), 3000, 'agent told')
+    expect(h.notes.slice(before).find((n) => n.content.includes(card.id))?.meta.thread_id).toBe('inbox')
+  })
+
+  const setAttempts = (id: string, n: number) =>
+    h.bridge.ctx.store.db.query('UPDATE outbox SET attempts = ? WHERE id = ?').run(n, id)
+
+  test('a reply the relay has been offered again and again for over a month without an answer is given up on, by name', async () => {
+    h = await startHarness()
+    const stuck = queuedReply('inbox', 'Stuck: nobody ever acks this one.', KEPT_CEILING_MS + DAY)
+    setAttempts(stuck.frame.id, KEPT_CEILING_ATTEMPTS)
+    // as old, but hardly tried (the relay was away the whole time): still owed to the owner
+    const waiting = queuedReply('general', 'Waiting: the relay was simply away.', KEPT_CEILING_MS + DAY)
+    setAttempts(waiting.frame.id, KEPT_CEILING_ATTEMPTS - 1)
+    // tried many times but young (a flappy day): still owed
+    const young = queuedReply('general', 'Young: a bad afternoon.', DAY)
+    setAttempts(young.frame.id, KEPT_CEILING_ATTEMPTS * 10)
+    const before = h.notes.length
+    flush()
+    expect(h.bridge.ctx.store.outboxGet(stuck.frame.id)).toBeUndefined()
+    await h.relay.expectFrame('reply', (f) => f.id === waiting.frame.id, { direction: 'from_bridge' })
+    await h.relay.expectFrame('reply', (f) => f.id === young.frame.id, { direction: 'from_bridge' })
+    expect(h.relay.frames.some((f) => f.direction === 'from_bridge' && f.raw.id === stuck.frame.id)).toBe(false)
+    await waitFor(() => h.notes.slice(before).some((n) => n.content.includes(stuck.m.id)), 3000, 'agent told')
+    const note = h.notes.slice(before).find((n) => n.content.includes(stuck.m.id))
+    expect(note?.meta.thread_id).toBe('inbox')
+    expect(note?.content).toContain('Stuck: nobody ever acks this one.')
+    expect(h.bridge.ctx.store.getMessage(stuck.m.id)).toBeUndefined()
+  })
+
+  test("the bridge's own notices are not owed for ever: one a week old is dropped instead of arriving in a pile after a long outage", async () => {
+    h = await startHarness()
+    const notice = (text: string, ageMs: number) => {
+      const m = { ...agentReply('general', text), author: 'system' } as MessageT
+      const frame = replyFrame(Date.now() - ageMs, m)
+      h.bridge.ctx.store.addMessage(m)
+      h.bridge.ctx.store.outboxAdd(frame.id, 'reply', JSON.stringify(frame), Date.now() - ageMs)
+      return frame
+    }
+    const old = notice('A device was paired, long ago.', OUTBOX_RETENTION_MS + DAY)
+    const fresh = notice('A device was paired, today.', DAY)
+    const before = h.notes.length
+    const mark = h.relay.frames.length
+    flush()
+    await h.relay.expectFrame('reply', (f) => f.id === fresh.id, { direction: 'from_bridge' })
+    expect(h.bridge.ctx.store.outboxGet(old.id)).toBeUndefined()
+    await waitFor(() => h.notes.length > before, 3000, 'agent told')
+    await sleep(150)
+    const sentReplies = h.relay.frames
+      .slice(mark)
+      .filter((f) => f.direction === 'from_bridge' && f.raw.type === 'reply')
+    expect(sentReplies.map((f) => f.raw.id)).toEqual([fresh.id]) // the old one never sent, and no notice about it posted
+  })
+
+  test('other rows are kept for a week, not a day, and one given up on after that is still reported', async () => {
+    h = await startHarness()
+    expect(OUTBOX_RETENTION_MS).toBeGreaterThanOrEqual(7 * DAY)
+    const young = { v: 1, type: 'transcript', id: newUlid(), ts: new Date().toISOString() }
+    const old = { v: 1, type: 'transcript', id: newUlid(), ts: new Date().toISOString() }
+    h.bridge.ctx.store.outboxAdd(young.id, 'transcript', JSON.stringify(young), Date.now() - 3 * DAY)
+    h.bridge.ctx.store.outboxAdd(old.id, 'transcript', JSON.stringify(old), Date.now() - OUTBOX_RETENTION_MS - DAY)
+    const before = h.notes.length
+    flush()
+    expect(h.bridge.ctx.store.outboxGet(young.id)).toBeDefined()
+    expect(h.bridge.ctx.store.outboxGet(old.id)).toBeUndefined()
+    await waitFor(() => h.notes.length > before, 2000, 'agent told about the drop')
+    expect(JSON.stringify(h.notes.slice(before))).toContain('never reached the relay')
   })
 })

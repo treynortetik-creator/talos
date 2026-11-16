@@ -4,24 +4,35 @@
 // `hello` must also name a pid in the recorded worker pane's process group and the nonce the supervisor wrote.
 import { execFileSync } from 'node:child_process'
 import { timingSafeEqual } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, unlinkSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, unlinkSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
 import {
   type Frame,
   HUB_MAX_LINE_BYTES,
   HUB_RPC_MAX_TEXT,
+  type HubAskRuleT,
   type HubPermT,
+  type HubRuleTakeT,
   HubWorkerLine,
   MAX_FRAME_BYTES,
   parseFrame,
   supervisorFresh,
   threadSessionMode,
 } from '@talos-app/protocol'
-import type { BridgeContext } from '../context.ts'
+import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { workerScheduleTool } from '../schedules/worker-scope.ts'
 import { frameBytes } from '../transport.ts'
 import { readNonce, WorkersReader, writeReady } from '../worker/files.ts'
+import {
+  type CheckedFolder,
+  type ProjectCheck,
+  plainPath,
+  readProjectCheck,
+  sessionSettingsFolders,
+  sessionSettingsProblem,
+} from '../worker/project-settings.ts'
 import type { WorkerStore } from '../worker/store.ts'
+import { type FenceDeps, workerFrameProblem } from './worker-fence.ts'
 
 /** Frames a worker may hand the hub. */
 export const HUB_OUT_TYPES = new Set(['reply', 'card.create', 'card.update', 'status', 'receipt'])
@@ -42,6 +53,8 @@ export function pgidOf(pid: number): number | undefined {
     return undefined
   }
 }
+
+export { workerReplyProblem } from './worker-fence.ts'
 
 export type HubServerOptions = {
   store: WorkerStore
@@ -103,8 +116,15 @@ export class HubServer {
   async start(): Promise<void> {
     if (this.server) return
     const p = this.path
-    // the live bridge took over bridge.pid before this runs, so a socket file left here is a dead bridge's
-    if (existsSync(p) && lstatSync(p).isSocket()) unlinkSync(p)
+    // its own folder, 0700 and a real folder (not a link to somewhere else), so the socket never sits in the watched home
+    const dir = this.ctx.paths.hubDir
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    if (!lstatSync(dir).isDirectory()) throw new Error(`${dir} is not a folder`)
+    chmodSync(dir, 0o700)
+    // the live bridge took over bridge.pid before this runs, so a socket file left here, or where it used to be, is a dead
+    // bridge's (the old one in home would also keep home unwatchable on Linux)
+    for (const old of [p, this.ctx.paths.hubSockLegacy])
+      if (existsSync(old) && lstatSync(old).isSocket()) unlinkSync(old)
     const server = createServer((sock) => this.onConn(sock))
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
@@ -183,6 +203,7 @@ export class HubServer {
     if (!m.success) return c.thread ? undefined : this.refuse(c, 'bad_frame', 'not a hub line')
     const msg = m.data
     if (msg.t === 'perm') return this.onPerm(c, msg)
+    if (msg.t === 'ask_rule' || msg.t === 'rule_take') return this.onRule(c, msg)
     if (msg.t === 'hello') {
       if (c.thread) return // one hello per connection
       const why = this.checkHello(msg)
@@ -226,6 +247,48 @@ export class HubServer {
     const { ctx } = this
     const answer = (ok: boolean, text: string) =>
       this.write(c, { t: 'rpc_result', id: msg.id, ok, text: text.slice(0, HUB_RPC_MAX_TEXT) })
+    // Screen consent: the session hands over only the Mac's opaque id for an app it measured; the main bridge asks the Mac
+    // what that app is, so nothing the session sends can name the app on the owner's card.
+    if (msg.tool === 'screen_ask') {
+      const ask = typeof msg.args.ask === 'string' && /^[A-Za-z0-9_-]{22,64}$/.test(msg.args.ask) ? msg.args.ask : null
+      const hint = typeof msg.args.app === 'string' ? msg.args.app.slice(0, 80) : 'That app'
+      if (!ask) return answer(false, 'screen_ask needs the id the Mac gave. Nothing was asked.')
+      if (!ctx.screenConsent)
+        return answer(
+          false,
+          `${hint} isn't on this Mac's allowed list yet, and the main bridge can't ask the owner right now. Nothing was done.`,
+        )
+      try {
+        const r = await ctx.screenConsent.ask(ask, hint)
+        return answer(r.ok, r.text)
+      } catch (e) {
+        ctx.log.warn('hub: screen_ask failed', { error: (e as Error).message })
+        return answer(false, `The main bridge could not ask the owner: ${(e as Error).message}`.slice(0, 300))
+      }
+    }
+    // The settings cards: the thread is the one this connection proved, never one the request names. The proposal is judged as the
+    // thread's own (its fields only, the card in its thread), by the same service that judges main's.
+    if (msg.tool === 'config_propose') {
+      if (threadSessionMode(ctx.config.config, thread) !== 'dedicated')
+        return answer(
+          false,
+          `Thread "${thread}" no longer has its own session; the main session handles it now. Stop here.`,
+        )
+      if (!ctx.configProposals)
+        return answer(false, 'Settings proposals are not available on the main bridge right now.')
+      if (msg.args.thread_id !== thread)
+        return answer(
+          false,
+          `This session belongs to thread "${thread}" and can only propose into it. Nothing was proposed.`,
+        )
+      try {
+        const r = await ctx.configProposals.propose(msg.args, { scope: thread })
+        return answer(r.ok, r.text)
+      } catch (e) {
+        ctx.log.warn('hub: config_propose failed', { error: (e as Error).message })
+        return answer(false, `The main bridge could not run config_propose: ${(e as Error).message}`.slice(0, 300))
+      }
+    }
     // Switched back to shared since its hello: main owns its jobs again. Finishing a run the session already claimed still lands (like
     // a card.update): the run would otherwise sit open until it timed out, and the owner would be told the agent never reported.
     if (msg.tool !== 'schedule_run_done' && threadSessionMode(ctx.config.config, thread) !== 'dedicated')
@@ -268,19 +331,8 @@ export class HubServer {
     const ac = new AbortController()
     c.perm = ac
     if (this.ctx.mode !== 'live') return answer('none', 'not_live')
-    if (msg.thread_id !== undefined) {
-      const why =
-        msg.pid === undefined || msg.nonce === undefined
-          ? { code: 'not_owner', message: 'a thread session names its pid and nonce' }
-          : this.checkWorkerProof({ thread_id: msg.thread_id, pid: msg.pid, nonce: msg.nonce }, true)
-      if (why) {
-        this.ctx.log.security('hub: permission request refused', { code: why.code, thread: msg.thread_id })
-        return answer('none', why.code)
-      }
-    } else if (msg.nonce !== undefined) {
-      // a main-session hook has no nonce to show; one that sends one is not the shape of anything we ship
-      return answer('none', 'bad_frame')
-    }
+    const refused = this.proveAsker(msg, 'permission request')
+    if (refused) return answer('none', refused)
     const r = await this.ctx.permission.onHookRequest(
       {
         ...(msg.thread_id !== undefined ? { thread: msg.thread_id } : {}),
@@ -292,6 +344,100 @@ export class HubServer {
       ac.signal,
     )
     if (!ac.signal.aborted) answer(r.decision, r.reason)
+  }
+
+  /**
+   * WHO is asking, for a hook's one-shot request (`perm`, `ask_rule`, `rule_take`): with `thread_id` it must prove it is that
+   * thread's session exactly as `hello` does, and that session's project settings are checked again; without one it is the main
+   * session's, which shows no nonce. Returns the refusal code, or null.
+   */
+  private proveAsker(msg: { thread_id?: string; pid?: number; nonce?: string }, what: string): string | null {
+    if (msg.thread_id !== undefined) {
+      const why =
+        msg.pid === undefined || msg.nonce === undefined
+          ? { code: 'not_owner', message: 'a thread session names its pid and nonce' }
+          : this.checkWorkerProof({ thread_id: msg.thread_id, pid: msg.pid, nonce: msg.nonce }, true)
+      if (why) {
+        this.ctx.log.security(`hub: ${what} refused`, { code: why.code, thread: msg.thread_id })
+        return why.code
+      }
+      // the project settings the session loads, again at every request, from the folders its start recorded: a file changed
+      // mid-session gets no card (the prompt stays at the session's terminal, the safe side) and the owner a line. This stops only
+      // an honest hook (a hijacked one never asks): the start's check and the hook's clean environment are the controls. On
+      // Linux every start writes the record, so a session without one (started before it existed) is refused the same way; the
+      // Mac's supervisor does not write it yet, so there it is not judged.
+      const check = readProjectCheck(this.ctx.paths.home, msg.thread_id)
+      const settingsWhy = check
+        ? recheckSettings(check)
+        : process.platform === 'linux'
+          ? 'this session was started before its folder check existed (restart the thread to check its folder)'
+          : null
+      if (settingsWhy) {
+        this.ctx.log.security(`hub: ${what} refused`, { code: 'project_settings', thread: msg.thread_id })
+        this.tellProjectSettings(msg.thread_id, settingsWhy)
+        return 'project_settings'
+      }
+    } else if (msg.nonce !== undefined) {
+      // a main-session hook has no nonce to show; one that sends one is not the shape of anything we ship
+      return 'bad_frame'
+    }
+    return null
+  }
+
+  /**
+   * The kit's ask rules (kit/hooks/action-rules.py; action-rule-asks.ts). `ask_rule` waits for the owner's tap on the "Allow once"
+   * card (the card stays open if this connection closes); `rule_take` takes the one-use approval for exactly this call. Proof as
+   * for `perm`: the approval is bound to the session that asked. Every refusal is `none`, which leaves the action asking.
+   */
+  private async onRule(c: Conn, msg: HubAskRuleT | HubRuleTakeT) {
+    const answer = (decision: 'allow' | 'deny' | 'none', reason: string) => {
+      this.write(c, { t: 'rule_result', id: msg.id, decision, reason: reason.slice(0, 120) })
+      c.sock.end()
+    }
+    if (c.perm || c.thread) return // one request per connection, and a worker's own connection never carries one
+    const ac = new AbortController()
+    c.perm = ac
+    const asks = this.ctx.actionRuleAsks
+    if (this.ctx.mode !== 'live' || !asks) return answer('none', 'not_live')
+    const refused = this.proveAsker(msg, 'action rule request')
+    if (refused) return answer('none', refused)
+    const call = {
+      ...(msg.thread_id !== undefined ? { thread: msg.thread_id } : {}),
+      rule: msg.rule,
+      tool_name: msg.tool_name,
+      tool_input: msg.tool_input,
+      ...(msg.cwd !== undefined ? { cwd: msg.cwd } : {}),
+    }
+    if (msg.t === 'rule_take') {
+      const r = await asks.take(call)
+      return answer(r.decision, r.reason)
+    }
+    const r = await asks.ask(
+      {
+        ...call,
+        ...(msg.why !== undefined ? { why: msg.why } : {}),
+      },
+      ac.signal,
+      msg.wait_ms ?? 110_000,
+    )
+    if (!ac.signal.aborted) answer(r.decision, r.reason)
+  }
+
+  /** Per thread: the reason last told, and when lines were posted (one line per reason, at most 3 an hour). */
+  private readonly settingsTold = new Map<string, { why: string; at: number[] }>()
+
+  private tellProjectSettings(thread: string, why: string) {
+    const now = this.ctx.clock.now()
+    const told = this.settingsTold.get(thread) ?? { why: '', at: [] }
+    told.at = told.at.filter((t) => now - t < 3_600_000)
+    if (told.why === why || told.at.length >= 3) return
+    told.why = why
+    told.at.push(now)
+    this.settingsTold.set(thread, told)
+    const text = `This thread's session asked for a permission, and it was not sent to your phone: ${plainPath(why)}. Then restart the thread's session.`
+    void postSystemNotice(this.ctx, text, { thread: threadRef(this.ctx, thread) }).catch((e) =>
+      this.ctx.log.warn('hub: project settings notice not posted', { error: (e as Error).message }),
+    )
   }
 
   /** null when the hello is good, else why not. */
@@ -340,23 +486,9 @@ export class HubServer {
     const p = parseFrame(raw, { direction: 'bridge_to_relay' })
     if (!p.ok) return { ok: false, code: 'bad_frame', message: p.message }
     const f = p.frame
-    const own = this.frameThread(f)
-    if (own !== thread)
-      return { ok: false, code: 'not_owner', message: `this session can only post to thread ${thread}` }
-    // switched off since its hello: main answers this thread now. A card.update still lands: it reports work the owner
-    // already approved, on a card this worker raised (frameThread), and nothing else can close that card honestly.
-    if (f.type !== 'card.update' && threadSessionMode(ctx.config.config, thread) !== 'dedicated')
-      return { ok: false, code: 'worker_unavailable', message: `thread ${thread} no longer has its own session` }
-    if (f.type === 'reply' && f.message.author !== 'agent')
-      return { ok: false, code: 'bad_frame', message: 'only agent messages' }
-    if (f.type === 'card.create') {
-      if (f.card.kind === 'permission') return { ok: false, code: 'bad_frame', message: 'no permission cards' }
-      // only a card this worker's `card` tool minted: the ledger row must be in its thread and already raised by it, so
-      // re-announcing someone else's card id can never move that card or its answer
-      if (ctx.ledger.get(f.card.id)?.thread_id !== thread || this.o.store.cardRaiser(f.card.id) !== thread)
-        return { ok: false, code: 'not_owner', message: `card ${f.card.id} was not raised by this session` }
-      ctx.expiry?.sync()
-    }
+    const why = workerFrameProblem(f, thread, this.fenceDeps())
+    if (why) return { ok: false, ...why }
+    if (f.type === 'card.create') ctx.expiry?.sync()
     // A worker's final word on a card: the hub outlives the worker, so it settles the claim here, before the send waits for the
     // relay. A worker that dies between this and recording the result must not have its finished card failed by the sweep.
     if (f.type === 'card.update' && (f.state === 'done' || f.state === 'failed'))
@@ -374,24 +506,38 @@ export class HubServer {
     }
   }
 
-  private frameThread(f: Frame): string | undefined {
-    switch (f.type) {
-      case 'reply':
-        return f.message.thread_id
-      case 'card.create':
-        return f.card.thread_id
-      case 'card.update':
-        return this.o.store.cardRaiser(f.card_id) // only the worker that raised it, whatever thread the card is in
-      case 'status':
-        return f.thread_id
-      case 'receipt': {
-        const r = this.ctx.store.db.query('SELECT thread_id FROM messages WHERE id = ?').get(f.message_id) as {
-          thread_id: string
-        } | null
-        return r?.thread_id
-      }
-      default:
-        return undefined
+  private fenceDeps(): FenceDeps {
+    const { ctx } = this
+    return {
+      config: ctx.config.config,
+      cardRaiser: (id) => this.o.store.cardRaiser(id),
+      ledgerThread: (id) => ctx.ledger.get(id)?.thread_id,
+      messageThread: (id) =>
+        (ctx.store.db.query('SELECT thread_id FROM messages WHERE id = ?').get(id) as { thread_id: string } | null)
+          ?.thread_id,
     }
   }
+}
+
+/**
+ * The folders a start recorded, checked again, and the session's folder's repo roots found again: a `.git` pointer written
+ * after the start (a root the start never saw) is refused too, never only the folders the start knew.
+ */
+export function recheckSettings(check: ProjectCheck): string | null {
+  const own = check.folders[0] as CheckedFolder
+  // a session that loads only the user's settings (--setting-sources=user) loads none of its folders' files: what they say was
+  // told at its start, and nothing here walks a tree at a request. Any other (the agent folder's, or one started before the
+  // sources were recorded) is held to them.
+  if (check.sources === 'user') return null
+  // the agent folder's session loads them as Main does: its settings files again (a few small files), and its repo roots found
+  // again; the skills, commands and subagents under it are the hook's to read again (with its own cache)
+  const now = sessionSettingsFolders(own.folder, own.agent_folder ? own.folder : '/nonexistent-agent-folder')
+  if ('problem' in now) return now.problem
+  // compared as the strings the start recorded: a start records real paths (workers-wiring.ts), so a folder that resolves
+  // anywhere else now (a link swapped in since) reads as new, never as the same one
+  const known = new Set(check.folders.map((f) => f.folder))
+  const added = now.folders.filter((f) => !known.has(f.folder))
+  if (added.length > 0)
+    return `the session's folder now loads settings from ${added[0]?.folder} as well, which its start did not check (a .git written since): remove it or move this thread's folder`
+  return sessionSettingsProblem(check.folders)
 }

@@ -4,7 +4,7 @@
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PsInfo } from '../lifecycle.ts'
-import { killGroup, processInfo } from './spawn.ts'
+import { isPlaceholder, killGroup, processInfo } from './spawn.ts'
 import { loadStore, type Running, saveStore } from './store.ts'
 
 /** Every job's store: live and shadow. */
@@ -43,10 +43,31 @@ async function judge(
   if (r.bridge_pid !== undefined && r.bridge_pid !== process.pid && bridgeAlive(r.bridge_pid)) return 'keep'
   // A group id cannot be handed out again while its group still has a member. So if the leader is gone and the group is alive, it
   // is the recorded one; if the leader is there, it must be the process that was recorded (same command, same start time).
-  const leader = await info(r.pgid)
+  let leader = await info(r.pgid)
+  // "(sh)": the process is between fork and exec, so its command cannot be read yet: ask again briefly, and never kill on it
+  for (let i = 0; i < PLACEHOLDER_TRIES && typeof leader !== 'string' && isPlaceholder(leader.command); i++) {
+    await new Promise((res) => setTimeout(res, PLACEHOLDER_WAIT_MS))
+    leader = await info(r.pgid)
+  }
   if (leader === 'unknown') return 'keep' // ps did not answer: no proof either way, the next start looks again
   if (leader === 'gone') return 'kill'
-  return leader.command === r.command && (r.lstart === undefined || leader.lstart === r.lstart) ? 'kill' : 'clear'
+  if (isPlaceholder(leader.command)) return 'keep' // still not confirmed: the next start looks again
+  return sameProcess(r, leader) ? 'kill' : 'clear'
+}
+
+const PLACEHOLDER_TRIES = 5
+const PLACEHOLDER_WAIT_MS = 100
+
+/**
+ * Is the live leader the process that was recorded? The start time, when recorded, must be the same (with the pid, that is
+ * the identity). The command is recorded as spawned (argv); ps prints the command line, which for a script is its interpreter
+ * and then the script (`/bin/sh /path/rec.sh`), so the recorded argv must be the line or its end. A record from before the argv
+ * change holds ps's own line, which matches itself.
+ */
+export function sameProcess(r: Pick<Running, 'command' | 'lstart'>, leader: PsInfo): boolean {
+  if (r.lstart !== undefined && leader.lstart !== r.lstart) return false
+  if (leader.command === r.command) return true
+  return r.lstart !== undefined && r.command.length > 0 && leader.command.endsWith(` ${r.command}`)
 }
 
 /**

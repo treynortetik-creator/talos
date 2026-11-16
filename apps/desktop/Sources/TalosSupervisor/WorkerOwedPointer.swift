@@ -16,13 +16,34 @@ import TalosDesktopCore
 /// The box tells the truth about the Enter: our own line, exactly and at normal intensity, in the box is ours (never an owner's draft,
 /// whether or not the flag survived); anything more than it is the owner's. An Enter is sent ONLY onto that: on one capture, with its
 /// colours, taken right before the send, the box holds exactly our line (`boxHoldsOnlyOurLine`; a read that fails sends nothing). An
-/// empty box that the screen has had the chance to fill means the text is gone, and the whole line is typed again; the box decides
-/// that, not whether a draft hold was running or an earlier look was taken (only `unseenSince` says the screen may not have caught
-/// up yet), so a frame caught mid-redraw cannot turn the Enter into a keystroke on nothing (Claude drops it, the pointer is marked
+/// empty box after our line was SEEN in it means the owner cleared it, and the whole line is typed again; a line typed and, `screenLag`
+/// later, never seen in the box went somewhere else (a menu that kept the focus with an empty box drawn under it, or keys lost) and is
+/// never typed a second time on top: it is held and the thread told once (`WorkerNotice.unseenKind`). The box decides, not whether a
+/// draft hold was running or an earlier look was taken (only `unseenSince` says the screen may not have caught up yet), so a frame caught mid-redraw cannot turn the Enter into a keystroke on nothing (Claude drops it, the pointer is marked
 /// done, and the message goes to main). A line past its deadline is taken out of the box with
 /// Backspace, once per tick and at most three times, and only when the box holds exactly that line AND no tmux client is attached
 /// (nobody can type into a pane without one, so a Backspace can only delete our own characters). Text that may be the owner's, or any
 /// line while a client is attached, is never cleared, and the thread is told (`leftoverLine`).
+///
+/// Copy mode: a pane the owner scrolled back takes every key as a command of the mode, not as typing. Letters would run whatever
+/// they are bound to, an Enter would only leave the mode (and the line would be counted as delivered), a Backspace would move the
+/// mode's cursor (and be counted as a round of clearing). So nothing is typed, entered or cleared unless tmux says the pane is in no
+/// mode: it is asked at the start of a tick (`inCopyMode`; an answer that cannot be read is not "no mode"), and every send is itself
+/// conditional on the mode inside ONE tmux invocation (`sendUnlessInMode`), so a scroll between a check and a send has nowhere to
+/// land. What is owed stays owed and goes in once the mode is left, if it is still wanted: a pointer the mode held back has its claim
+/// deadline checked from then on like one read back from the file (`deadlined`), so a line for a message main already has is dropped
+/// (or taken out of the box), never typed late. The hold is not silent: once the pointer is past its deadline, or after
+/// `draftNoticeAfter`, the thread gets one line per hold and shows as Needs you (`noteCopyModeHold`). The bridge's port has the
+/// first rule (apps/bridge/src/supervisor/owed-pointer.ts).
+
+/// An Enter check under way (`scheduleEnterCheck`): the classes read so far and the pointer's deadline, to hold it by if flagged.
+struct EnterCheckReads {
+  var pre: EnterDetection.Class
+  var after: EnterDetection.Class
+  var later: EnterDetection.Class? = nil
+  var latest: EnterDetection.Class? = nil
+  var until: Double?
+}
 
 /// The part of a worker's runtime that is only about the owed pointer. Reset whenever nothing is owed (`Runtime.pendingPointer`).
 struct OwedState {
@@ -33,16 +54,19 @@ struct OwedState {
   /// A start for a restored pointer on a sleeping worker has been asked for.
   var revived = false
   /// When our line was typed (awake clock), until a look at the box has shown text in it: the screen may not have caught up yet, so
-  /// an empty box is not "gone" (the line would be typed twice, read as the owner's draft and held). nil: seen, or typed by an earlier
-  /// copy of the app, whose first look at the box counts as the screen having caught up.
+  /// an empty box is not "gone" (the line would be typed twice, read as the owner's draft and held), and past `screenLag` the line is
+  /// held as never seen, not typed again. nil: seen, or typed by an earlier copy of the app, whose first look at the box counts as the
+  /// screen having caught up.
   var unseenSince: Double?
-  /// The line was typed again because `screenLag` passed without the box showing it: once per unseen episode, since the keys may
-  /// only have been buffered (both copies would land) and a second retype would add a third. Cleared when text is seen.
-  var retyped = false
+  /// Held back by copy mode at some point: its deadline counts from then on as a restored pointer's does, so it is never typed late.
+  var deadlined = false
   /// Past its deadline, and the box holds something that may include our line: held, not cleared.
   var leftover = false
   /// Backspace rounds sent to clear our own line; three that did not clear it leave it alone.
   var clears = 0
+  /// Its Enter went and may have answered a prompt that opened as it went (`EnterDetection`): held, never entered again, dropped at its
+  /// claim deadline with no second line.
+  var enterUncertain = false
 }
 
 extension WorkerManager.Runtime {
@@ -52,8 +76,16 @@ extension WorkerManager.Runtime {
     var e = entry
     e.pointer_owed_until = pendingPointer ? owed.until.map(ISOTime.string) : nil
     e.enter_owed = pendingPointer && enterOwed ? true : nil
+    e.enter_uncertain = pendingPointer && owed.enterUncertain ? true : nil
     if !WorkerManager.offerStates.contains(entry.state) { e.dialog = nil }  // no pane, no dialog on it
     e.last_active_at = savedActivity
+    if entry.state != "stopping" { e.stopping_since = nil }
+    // only while there is a pane: a dialog is a screen, and a parked session has none
+    e.needs_you =
+      WorkerManager.offerStates.contains(entry.state)
+      ? needsYouPrompt.flatMap { p in
+        needsYouAt.map { .init(kind: p, since: $0, resets_at: p == UsageLimitScreen.kind ? needsYouResetsAt : nil) }
+      } : nil
     return e
   }
 
@@ -65,6 +97,15 @@ extension WorkerManager.Runtime {
     guard pendingPointer else {
       owed = OwedState(until: until)
       pendingPointer = true
+      return
+    }
+    // a new message after an Enter that may have answered a prompt: a fresh pointer, typed and entered as any is. One flagged Enter never
+    // holds the messages after it. A pointer kept across a relaunch (no wake) keeps its hold. The hold's notice slot clears silently, so a
+    // later flag gets its own line (the Linux supervisor's `owe`).
+    if owed.enterUncertain, wakeAt != nil {
+      owed = OwedState(until: until)
+      enterOwed = false
+      enterHold.reset()
       return
     }
     if wakeAt != nil, until > (owed.until ?? 0) {
@@ -79,8 +120,10 @@ extension WorkerManager.Runtime {
     pendingPointer = true
     enterOwed = entry.enter_owed == true
     owed = OwedState(until: ISOTime.parse(s) ?? 0, restored: true)  // a time we cannot read is a deadline long past
+    owed.enterUncertain = entry.enter_uncertain == true  // still held: never entered again after a relaunch either
     entry.pointer_owed_until = nil
     entry.enter_owed = nil
+    entry.enter_uncertain = nil
   }
 }
 
@@ -92,6 +135,7 @@ extension WorkerManager {
     for (id, r) in rt where r.owed.restored && !r.adoptPending && !Self.hasPane.contains(r.entry.state) {
       let state = r.entry.state
       guard t <= (r.owed.until ?? 0), let s = settings.threads[id], state != "failed" else { dropOwed(id); continue }
+      if r.owed.enterUncertain { continue }  // held: nothing will be typed, so nothing is started for it; dropped at its deadline
       // still restored after the start: the deadline is checked again when the line is about to be typed
       if state == "off" || state == "parked", !r.owed.revived {
         rt[id]?.owed.revived = true
@@ -104,18 +148,26 @@ extension WorkerManager {
   /// not at the end of the tick (the start, the hold and the cap come first), when it changed.
   func oweFromWake(_ id: String, cold: Bool, now t: Double, wakeAt: Double?) {
     let before = rt[id]?.persisted.pointer_owed_until
+    let wasHeld = rt[id]?.pendingPointer == true && rt[id]?.owed.enterUncertain == true
     rt[id]?.owePointer(cold: cold, now: t, wakeAt: wakeAt)
+    // a fresh pointer after a held one: its line's record goes too, so a later flag is said again
+    if wasHeld, rt[id]?.owed.enterUncertain != true {
+      forgetNoticeRecord(id, kind: WorkerNotice.enterUncertainKind)
+      rt[id]?.enterCheckToken &+= 1  // a check still under way for the old Enter holds nothing now
+      dirty = true
+    }
     if rt[id]?.persisted.pointer_owed_until != before { writeFile() }
   }
 
   private static let hasPane: Set<String> = ["starting", "live", "busy"]
 
   /// How long after typing (awake clock) an empty box is still read as a screen that has not caught up. Claude draws a typed line
-  /// within a frame; past this the keys were dropped, or are only buffered, and the line is typed again, once (`OwedState.retyped`).
+  /// within a frame; past this the line went somewhere else, or is only buffered: it is held as never seen, never typed again.
   static let screenLag: Double = 5
   private static let looksAfterTyping = 10
 
   func dropOwed(_ id: String) {
+    rt[id]?.enterHold.reset()
     rt[id]?.pendingPointer = false
     rt[id]?.enterOwed = false
     rt[id]?.owed = OwedState()
@@ -127,9 +179,31 @@ extension WorkerManager {
   /// when the tick is used up (the caller does no idle check). `rows` is the screen, `scr` what it shows by words.
   func typeOwedPointer(_ id: String, rows: [String], screen scr: DialogMatcher.Screen, now t: Double) -> Bool {
     guard let r = rt[id] else { return false }
+    // an Enter that may have answered a prompt: never a second one. Held, and at the claim deadline dropped the held way (the thread was
+    // told once when it was flagged)
+    let heldLate = r.owed.enterUncertain && t > (r.owed.until ?? 0)
+    if r.owed.enterUncertain {
+      noteHeldPointer(id, .enterUncertain)
+      // the one line, until it went (a post that failed is tried again on a later tick; one that went is never sent twice)
+      sendNotice(id, \.enterHold, kind: WorkerNotice.enterUncertainKind, text: WorkerNotice.enterUncertainLine())
+      // before its deadline: held. After it: settled as a late pointer is (below, `settleLate`: our own line taken out of the box, or
+      // left and said), never entered
+      if !heldLate { return true }
+    }
     // the typing guard, like the screen: unread is not "nobody is typing"
     let clients = run(tmux(id).listClientsActivity())
     guard clients.ok, let activity = TmuxCommands.parseClientActivity(clients.out) else { return true }
+    // in copy mode nothing sent is typing; a mode that cannot be read is not "no mode". Nothing is settled or dropped either: the
+    // pointer waits, its deadline now counts, and the thread is told once (a mode that cannot be read says nothing).
+    let mode = inCopyMode(id)
+    guard mode == false else {
+      if mode == true {
+        rt[id]?.owed.deadlined = true
+        noteCopyModeHold(id, held: true, late: t > (r.owed.until ?? 0))
+      }
+      return true
+    }
+    noteCopyModeHold(id, held: false)
     let box = PointerTyper.inputBox(rows: rows) != nil
     // Text in the box (at normal intensity: a dim placeholder or suggestion is not text). Our own line, exactly, is ours whether or
     // not the flag says so (the app can go between the text and its flag), and is never an owner's draft. Anything else is the
@@ -138,34 +212,42 @@ extension WorkerManager {
     let ours = typed && PointerTyper.boxText(rows: rows) == PointerTyper.text
     let draft = typed && !ours
     let shape = scr == .none ? guardShape(rows) : scr
-    // The box is on the screen and holds nothing: the text we typed is gone, because the owner held us off and then cleared it, or
-    // because the owner cleared it while the app was away (then Enter would go into an empty box and the message would be lost).
-    // Not whenever the box reads empty, though: right after we typed, it may only be a screen that has not caught up with the text, so
-    // the box must have shown text since (`unseenSince` nil), or `screenLag` have passed without it, and then once (`retyped`: the
-    // keys may only be buffered, and each further copy would land too).
+    // The box is on the screen and holds nothing after our text was SEEN in it (`unseenSince` nil): the owner held us off and cleared it,
+    // or cleared it while the app was away (an Enter would go into an empty box and the message would be lost), so it is typed again.
     let unseen = r.owed.unseenSince
-    let lagged = unseen.map { awake() - $0 > Self.screenLag } ?? false
-    if r.enterOwed, box, !typed, unseen == nil || (lagged && !r.owed.retyped) {
-      rt[id]?.enterOwed = false
-      if unseen != nil { rt[id]?.owed.retyped = true }
-    }
-    if typed {
-      rt[id]?.owed.unseenSince = nil
-      rt[id]?.owed.retyped = false
-    }
+    if r.enterOwed, box, !typed, unseen == nil { rt[id]?.enterOwed = false }
+    if typed { rt[id]?.owed.unseenSince = nil }
+    // Typed, and `screenLag` later still never seen in the box: it went somewhere else (a menu that kept the focus with an empty box drawn
+    // under it, or keys lost). Never typed a second time on top: held, and the thread is told once (the Linux typer's Fable R5-1).
+    let neverSeen = r.enterOwed && !typed && (unseen.map { awake() - $0 > Self.screenLag } ?? false)
     if ours { rt[id]?.enterOwed = true }
-    // a pointer from an earlier copy of the app is never typed past its deadline, however long it was held back since
-    if r.owed.restored, t > (r.owed.until ?? 0) {
+    // a pointer from an earlier copy of the app, or one copy mode held back, is never typed past its deadline, however long it was
+    // held back since
+    if r.owed.restored || r.owed.deadlined || heldLate, t > (r.owed.until ?? 0) {
       let mayAct = PointerTyper.mayType(screen: shape, lastClientActivity: nil, now: t, draftPresent: false, boxVisible: box)
       return settleLate(id, r, ours: ours, draft: draft, box: box, mayAct: mayAct, attached: !activity.isEmpty)
     }
-    noteHeldPointer(id, draft ? .draft : box ? .none : .noBox)  // an owed Enter with no box on the pane is held too
+    // an owed Enter with no box on the pane is held too; a key the guard refused holds it as `refused`, a line typed and never seen as
+    // `unseen` (each said, never silent)
+    var hold: PointerHold = neverSeen ? .unseen : draft ? .draft : box ? .none : .noBox
+    defer { noteHeldPointer(id, hold) }
+    if neverSeen {
+      // past the claim deadline the hub has given the message to main: dropped, and said now if the hold's wait has not said it yet
+      // (the Linux typer's drop of an unseen pointer). Nothing is in the box to take out.
+      guard t > (r.owed.until ?? 0) else { return true }
+      sendNotice(id, \.unseenHold.notice, kind: WorkerNotice.unseenKind, text: WorkerNotice.unseenLine())
+      hold = .none
+      dropOwed(id)
+      return false
+    }
     guard PointerTyper.mayType(screen: shape, lastClientActivity: activity.max(), now: t, draftPresent: draft, boxVisible: box) else {
       return false
     }
     var justTyped = false
     if rt[id]?.enterOwed != true {
-      guard run(tmux(id).sendLiteral(PointerTyper.text)).ok else { return true }
+      let typedLine = sendUnlessInMode(tmux(id).sendLiteralUnlessInMode(PointerTyper.text), id: id, intent: .box(.empty))
+      if typedLine == .refused { hold = .refused }
+      guard typedLine == .sent else { return true }
       rt[id]?.enterOwed = true
       rt[id]?.owed.unseenSince = awake()
       justTyped = true
@@ -174,12 +256,25 @@ extension WorkerManager {
     // Right after our own typing the screen may not show the text yet, so it is looked for a moment (Claude draws a typed line within a
     // frame: ten looks with nine 30 ms pauses, about 0.27 s, are plenty); if it still is not there the Enter waits for a later tick, and the empty box is not read as
     // "gone" until the line has been seen (`unseenSince`). Never an Enter on a look that does not show exactly our line.
-    guard boxHoldsOnlyOurLine(id, looks: justTyped ? Self.looksAfterTyping : 1), run(tmux(id).sendEnter()).ok else { return true }
+    guard boxHoldsOnlyOurLine(id, looks: justTyped ? Self.looksAfterTyping : 1) else { return true }
+    // The looks took time, and the owner may have scrolled back meanwhile: an Enter then would leave the mode and count as delivered,
+    // so the Enter is sent only if the pane is in no mode, in the same tmux invocation. One whose send timed out may have landed:
+    // counted as sent, never followed by a second copy of the line.
+    let (enter, seen) = sendUnlessInModeReading(tmux(id).sendEnterUnlessInMode(), id: id, intent: .box(.ours))
+    if enter == .refused { hold = .refused }
+    guard enter == .sent || enter == .timedOut else { return true }
+    // the guard read the pane right before the Enter, but a select can open in the moment between (docs/SECURITY.md): the pane is read
+    // again (`scheduleEnterCheck`). Flagged: the pointer is owed again, held, and never entered a second time. Only an Enter known to be
+    // sent: one whose send timed out may not have gone, and is counted as sent as before (never a second). The later reads are
+    // scheduled on this queue, never slept for: a sleep here would hold every thread's tick
+    if enter == .sent { scheduleEnterCheck(id, pre: seen, until: r.owed.until) }
     rt[id]?.enterOwed = false
     rt[id]?.pendingPointer = false
-    noteHeldPointer(id, .none)
-    rt[id]?.lastActive = t
-    rt[id]?.entry.last_turn_at = ISOTime.string(t)
+    hold = .none
+    rt[id]?.markActive(wall: t, awake: awake())  // a pointer is activity
+    rt[id]?.entry.turn_started_at = ISOTime.string(t)  // `last_turn_at` moves when this turn ends (`noteTurnEnded`)
+    let typedInto = rt[id]?.entry.session_id
+    rt[id]?.entry.turn_session = typedInto  // this conversation has had a turn (`Entry.hadTurn`)
     dirty = true
     emit(.pointer(thread: id))
     return true
@@ -235,6 +330,74 @@ extension WorkerManager {
     guard boxHoldsOnlyOurLine(id) else { return false }
     let clients = run(tmux(id).listClientsActivity())
     guard clients.ok, TmuxCommands.parseClientActivity(clients.out)?.isEmpty == true else { return false }
-    return run(tmux(id).sendBackspaces(PointerTyper.text.count)).ok
+    // a Backspace in copy mode clears nothing, and must not count as a round: sent only if the pane is in no mode, in one invocation
+    return sendUnlessInMode(tmux(id).sendBackspacesUnlessInMode(PointerTyper.text.count), id: id, intent: .box(.ours)) == .sent
+  }
+
+  /// What became of a send that is conditional on the pane's mode (`TmuxCommands.unlessInMode`). `refused`: the key guard sent nothing.
+  enum ModeSend: Equatable { case sent, heldByMode, failed, timedOut, refused }
+
+  /// Runs one `…UnlessInMode` invocation, through the key guard (`sendKey`: the live screen must be what `intent` says). `.sent` only
+  /// when tmux ran it and said the keys went; an answer that is neither that nor "in a mode" is a failure, never a send.
+  func sendUnlessInMode(_ argv: [String], id: String, intent: KeyGuard.Intent) -> ModeSend {
+    sendUnlessInModeReading(argv, id: id, intent: intent).sent
+  }
+
+  /// `sendUnlessInMode`, with the rows the key guard read right before the send (`sendKeyReading`).
+  func sendUnlessInModeReading(_ argv: [String], id: String, intent: KeyGuard.Intent) -> (sent: ModeSend, seen: [String]?) {
+    let (r, seen) = sendKeyReading(id, argv, intent)
+    guard let r else { return (.refused, seen) }
+    if r.timedOut { return (.timedOut, seen) }
+    guard r.ok, let sent = TmuxCommands.parseModeSend(r.out) else { return (.failed, seen) }
+    return (sent ? .sent : .heldByMode, seen)
+  }
+
+  /// After a pointer's Enter went: the pane is read at once, then `EnterDetection.laterDelay` on and, only when that read still shows our
+  /// line, once more at `EnterDetection.slowDelay` (a slow redraw), each read put in one class with the guard's read before the key
+  /// (`pre`). The later reads run on this manager's queue when they are due (`queue.asyncAfter`), never as a sleep inside the tick.
+  func scheduleEnterCheck(_ id: String, pre: [String]?, until: Double?) {
+    let token = (rt[id]?.enterCheckToken ?? 0) &+ 1
+    rt[id]?.enterCheckToken = token
+    let check = EnterCheckReads(pre: EnterDetection.classify(pre), after: EnterDetection.classify(paneRows(id)), until: until)
+    queue.asyncAfter(deadline: .now() + EnterDetection.laterDelay) { [weak self] in self?.enterCheckDue(id, token, check) }
+  }
+
+  /// A scheduled read of the Enter check. Nothing when the app stopped or a newer Enter's check took over.
+  func enterCheckDue(_ id: String, _ token: Int, _ c: EnterCheckReads) {
+    guard !stopped, rt[id]?.enterCheckToken == token else { return }
+    var c = c
+    let read = EnterDetection.classify(paneRows(id))
+    if c.later == nil {
+      c.later = read
+      // still our line: one more read at the slow-redraw mark before it counts
+      if read == .boxOurs {
+        let wait = EnterDetection.slowDelay - EnterDetection.laterDelay
+        queue.asyncAfter(deadline: .now() + wait) { [weak self] in self?.enterCheckDue(id, token, c) }
+        return
+      }
+    } else {
+      c.latest = read
+    }
+    guard let later = c.later, let why = EnterDetection.judge(pre: c.pre, after: c.after, later: later, latest: c.latest) else { return }
+    audit(
+      "\(EnterDetection.auditEvent) thread=\(id) pre=\(c.pre.rawValue) after=\(c.after.rawValue) later=\(later.rawValue) "
+        + "latest=\(c.latest?.rawValue ?? "not_taken") why=\(why.rawValue)")
+    // the pointer stays owed and is held, never entered again; unless a newer message came meanwhile, which is a fresh pointer of its own
+    if rt[id]?.pendingPointer != true {
+      rt[id]?.pendingPointer = true
+      rt[id]?.enterOwed = false
+      rt[id]?.owed = OwedState(until: c.until)
+      rt[id]?.owed.enterUncertain = true
+      noteHeldPointer(id, .enterUncertain)
+    }
+    sendNotice(id, \.enterHold, kind: WorkerNotice.enterUncertainKind, text: WorkerNotice.enterUncertainLine())
+    dirty = true
+  }
+
+  /// Whether the pane is in a tmux mode (copy mode, after the owner scrolled back): nil when that cannot be read, whether tmux failed,
+  /// timed out or answered with something that is neither 0 nor 1. Callers send keys only on `false`.
+  func inCopyMode(_ id: String) -> Bool? {
+    let r = run(tmux(id).paneInMode())
+    return r.ok ? TmuxCommands.parseInMode(r.out) : nil
   }
 }

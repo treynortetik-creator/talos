@@ -4,10 +4,11 @@
 // Lines a script prints that start with "skip" (sub-checks it left out) are echoed too, so they are never silent: each one is
 // matched against KNOWN_SKIPS in kit-run.ts and printed with its reason, or marked UNLISTED when nobody wrote a reason down.
 // A script that hangs is killed together with everything it started (see kit-run.ts) and fails with the output it had printed.
-import { execFileSync } from 'node:child_process'
-import { readdirSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { classifySkips, failureReport, runScript } from './kit-run.ts'
 import { ROOT } from './size-report.ts'
 
@@ -29,7 +30,15 @@ function scriptEnv(home: string, tmp: string): Record<string, string> {
     if (v === undefined || k.startsWith('XDG_') || k.startsWith('TALOS_TEST_') || k.startsWith('GIT_')) continue
     env[k] = v
   }
-  return { ...env, HOME: home, TMPDIR: tmp, PYTHONDONTWRITEBYTECODE: '1' }
+  // test-default-agent.sh runs self-test.sh, which runs most of these scripts again. This file runs each one already, so the
+  // second run is left out, except in the full CI run (`ci-local.sh --full` sets TALOS_KIT_FULL_SELF_TEST=1), which keeps one
+  // run of them inside a rendered agent folder.
+  const suites = { TALOS_SELF_TEST_SUITES: process.env.TALOS_KIT_FULL_SELF_TEST === '1' ? 'run' : 'skip' }
+  // the machine's time factor is the one TALOS_TEST_ value the scripts read (a speed budget scales with it, as every test's does)
+  const factor = process.env.TALOS_TEST_TIME_FACTOR
+    ? { TALOS_TEST_TIME_FACTOR: process.env.TALOS_TEST_TIME_FACTOR }
+    : {}
+  return { ...env, ...suites, ...factor, HOME: home, TMPDIR: tmp, PYTHONDONTWRITEBYTECODE: '1' }
 }
 
 function skipReason(name: string, platform: NodeJS.Platform): string | undefined {
@@ -49,6 +58,69 @@ describe('kit test scripts', () => {
 
   it('SLOW_MS names only scripts that exist', () => {
     for (const name of Object.keys(SLOW_MS)) expect(scripts).toContain(name)
+  })
+
+  it('self-test.sh inside test-default-agent.sh leaves out the suites this file runs on their own, unless it is the full run', () => {
+    // Both branches are set here, whatever the run around this test set: a --full CI run exports TALOS_KIT_FULL_SELF_TEST=1.
+    try {
+      for (const outside of [undefined, '0', 'yes']) {
+        if (outside === undefined) vi.stubEnv('TALOS_KIT_FULL_SELF_TEST', undefined)
+        else vi.stubEnv('TALOS_KIT_FULL_SELF_TEST', outside)
+        expect(scriptEnv('/h', '/t').TALOS_SELF_TEST_SUITES, String(outside)).toBe('skip')
+      }
+      vi.stubEnv('TALOS_KIT_FULL_SELF_TEST', '1')
+      // 'run', not unset: a skip exported in the environment must not reach the one full run
+      vi.stubEnv('TALOS_SELF_TEST_SUITES', 'skip')
+      expect(scriptEnv('/h', '/t').TALOS_SELF_TEST_SUITES).toBe('run')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it("upgrade.sh's gate always runs self-test.sh with its suites, whatever the environment says", () => {
+    const gate = readFileSync(join(KIT_SCRIPTS, 'upgrade.sh'), 'utf8')
+      .split('\n')
+      .filter((l) => l.includes('bash scripts/self-test.sh') && !/^\s*(red|echo|printf|#)/.test(l)) // runs, not advice text
+    expect(gate.length).toBeGreaterThan(0)
+    for (const l of gate) expect(l).toContain('TALOS_SELF_TEST_SUITES=run ')
+  })
+
+  it('self-test.sh runs every kit suite through suite(), and each one is a script this file runs', () => {
+    const text = readFileSync(join(KIT_SCRIPTS, 'self-test.sh'), 'utf8')
+    expect(text).not.toMatch(/bash "\$KIT\/scripts\/test-/)
+    const named = [...text.matchAll(/suite "\$KIT\/scripts\/(test-[a-z-]+\.sh)"/g)].map((m) => m[1])
+    expect(named.length).toBeGreaterThan(5)
+    for (const n of named) expect(scripts).toContain(n)
+    expect(text).toContain('suite "$KIT/scripts/test-$_n.sh"') // the loop over the 1.2 feature suites
+  })
+
+  it('suite() runs the script and reports it, or with TALOS_SELF_TEST_SUITES=skip runs nothing and says it skipped', () => {
+    const text = readFileSync(join(KIT_SCRIPTS, 'self-test.sh'), 'utf8')
+    const fn = /^suite\(\) \{[\s\S]*?^\}$/m.exec(text)?.[0] as string
+    expect(fn).toBeTruthy()
+    const d = mkdtempSync(join(tmpdir(), 'kst-'))
+    try {
+      const stub = join(d, 'test-x.sh')
+      writeFileSync(stub, `echo ran >> "${d}/ran"\nexit 0\n`)
+      chmodSync(stub, 0o755)
+      const call = (env: Record<string, string>) =>
+        spawnSync(
+          'bash',
+          ['-c', `ok() { echo "PASS $1"; }\nbad() { echo "FAIL $1"; }\n${fn}\nsuite "${stub}" good worse`],
+          {
+            encoding: 'utf8',
+            env: { PATH: process.env.PATH as string, ...env },
+          },
+        ).stdout
+      expect(call({ TALOS_SELF_TEST_SUITES: 'skip' })).toMatch(/^PASS skipped.*test-x\.sh/)
+      expect(existsSync(join(d, 'ran'))).toBe(false)
+      expect(call({})).toBe('PASS good\n')
+      expect(existsSync(join(d, 'ran'))).toBe(true)
+      writeFileSync(stub, 'exit 1\n')
+      expect(call({})).toBe('FAIL worse\n')
+    } finally {
+      rmSync(d, { recursive: true, force: true })
+    }
   })
 
   it('hands each script a temp HOME, a TMPDIR and no XDG_* variable', () => {

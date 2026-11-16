@@ -2,26 +2,27 @@
 // queue + head re-resolve end to end with a local "origin", a fake `gh` that records the statuses it is asked to post,
 // and a job name that does not exist (so the run is quick and posts pending + failure).
 import { type ChildProcess, execFileSync, spawn, spawnSync } from 'node:child_process'
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanEnv } from './ci-test-env'
+import { processStartTime } from '../apps/bridge/src/proc-identity.ts'
+import { ciLocalSource, cleanEnv, copyCiLocalParts } from './ci-test-env'
+import { fakeTool } from './fake-tool'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
 // The machine running the tests may be busy: the load guard is off unless a test turns it on.
-const base = { CI_MAX_LOAD: '0', CI_POLL: '0.05', CI_LOCK_TIMEOUT: '20', TALOS_CI_NESTED: '0' }
+// CI_SLOTS and CI_MAX_SUITES 3: these tests fill three slots (the cap of 2 has its own test), whatever the run around them says
+const base = {
+  CI_MAX_LOAD: '0',
+  CI_POLL: '0.05',
+  CI_LOCK_TIMEOUT: '20',
+  TALOS_CI_NESTED: '0',
+  CI_SLOTS: '3',
+  CI_MAX_SUITES: '3',
+}
 // These tests start real shells, and the check job runs them beside two other CI runs. What they prove is the order of
 // events, so no test depends on how fast the machine is: a slow run takes longer, a stuck one still fails at `until`.
 const WAIT_MS = 30_000
@@ -74,6 +75,15 @@ afterAll(() => {
 const what = (lock: string) => readFileSync(join(lock, 'what'), 'utf8').trim()
 
 describe('ci-local.sh slots', () => {
+  it('CI_MAX_SUITES caps the slots, whatever CI_SLOTS asks: 2 by default (Lemnos), a per-machine setting', () => {
+    const slots = (env: Record<string, string>) => sh('echo "slots=$CI_SLOTS"', env).out.trim()
+    expect(slots({ CI_SLOTS: '3', CI_MAX_SUITES: '' })).toBe('slots=2')
+    expect(slots({ CI_SLOTS: '', CI_MAX_SUITES: '' })).toBe('slots=2') // ci-local's own default of 3, capped
+    expect(slots({ CI_SLOTS: '6', CI_MAX_SUITES: 'two' })).toBe('slots=2') // not a number: the default, never no cap
+    expect(slots({ CI_SLOTS: '3', CI_MAX_SUITES: '3' })).toBe('slots=3')
+    expect(slots({ CI_SLOTS: '1', CI_MAX_SUITES: '' })).toBe('slots=1')
+  })
+
   it('fills CI_SLOTS slots, then waits; a slot whose run died is taken over', async () => {
     const L = join(scratch(), 'locks')
     const holders = [1, 2, 3].map((i) => bgSh(`ci_acquire_slot "${L}" h${i} && echo "got slot $CI_SLOT"; sleep 60`))
@@ -100,10 +110,12 @@ describe('ci-local.sh slots', () => {
       expect(sh(`ci_lock_try "${L}" dead`).code).toBe(0) // that shell exits: the owner is dead
       // A winner stays alive until every other racer has given up. The rule is one LIVE holder: once a winner exits, its lock
       // may rightly be taken over again, and a racer started late under load used to do that and fail this test.
+      // Each racer tries ten times as they start one after another. Trying for a second each instead cost ~50 CPU-seconds a
+      // run and caught a takeover without its claim less often (3 runs of 9 against 8 of 10; a missed owner re-check 3 of 3
+      // and 4 of 4).
       const racers = Array.from({ length: 10 }, (_, i) =>
         bgSh(
-          `end=$(( $(date +%s) + 1 ))
-           while [ "$(date +%s)" -le "$end" ]; do
+          `for try in 1 2 3 4 5 6 7 8 9 10; do
              if ci_lock_try "${L}" r${i}; then echo WON; until [ -f "${T}/stop" ]; do sleep 0.02; done; exit 0; fi
            done`,
         ),
@@ -175,6 +187,56 @@ describe('ci-local.sh slots', () => {
     expect(r.out).toContain('RELEASED')
   })
 
+  // WSL's ps prints a start time that drifts by seconds for one live process (one process read 200 times: two start times 17 s
+  // apart), so a live owner looked like a reused pid and lost its lock. On Linux the start time comes from /proc instead.
+  it.runIf(process.platform === 'linux')(
+    'a ps whose start time drifts never makes a live owner look gone',
+    async () => {
+      const L = join(scratch(), 'slot-1')
+      const holder = bgSh(`ci_lock_try "${L}" holder && echo HELD; sleep 60`)
+      await until('the holder', () => holder.out().includes('HELD'))
+      const drifting = `ps() { echo "Mon Jan  1 00:00:$(( RANDOM % 60 )) 2001"; }`
+      expect(sh(`${drifting}\nci_lock_try "${L}" waiter && echo STOLE || echo WAITED`, noGrace).out).toContain('WAITED')
+      expect(what(L)).toBe('holder')
+    },
+  )
+
+  it.runIf(process.platform === 'linux')(
+    'a live owner an older script recorded with ps text keeps its lock',
+    async () => {
+      const L = join(scratch(), 'slot-1')
+      const holder = bgSh(`ci_lock_try "${L}" holder && echo HELD; sleep 60`)
+      await until('the holder', () => holder.out().includes('HELD'))
+      // rewrite the owner's start time as the older script wrote it: ps text, which a /proc token cannot prove wrong
+      const owner = readFileSync(join(L, 'owner'), 'utf8').split('\n')
+      writeFileSync(join(L, 'owner'), [owner[0], 'Mon Jan  1 00:00:00 2001', owner[2]].join('\n'))
+      expect(sh(`ci_lock_try "${L}" waiter && echo STOLE || echo WAITED`, noGrace).out).toContain('WAITED')
+    },
+  )
+
+  it.runIf(process.platform === 'linux')(
+    'a live group an older script recorded with ps text is never signalled',
+    async () => {
+      const d = scratch()
+      const leader = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' }) // its own group: pgid = its pid
+      try {
+        await until('the leader', () => leader.pid !== undefined)
+        writeFileSync(join(d, 'groups'), `${leader.pid} Mon Jan  1 00:00:00 2001\n`)
+        sh(`ci_stop_groups "${join(d, 'groups')}"`)
+        // a signalled leader is a zombie until this process reaps it, so ask the kernel for its state, not kill -0
+        const stat = readFileSync(`/proc/${leader.pid}/stat`, 'utf8')
+        expect(stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3)).toBe('S')
+      } finally {
+        leader.kill('SIGKILL')
+      }
+    },
+  )
+
+  it.runIf(process.platform === 'linux')('the start time is the token the bridge reads (proc-identity.ts)', () => {
+    const pid = process.pid
+    expect(sh(`ci_proc_start ${pid}`).out.trim()).toBe(processStartTime(pid))
+  })
+
   it('a waiter that saw a dead owner cannot take the lock once someone else has it', async () => {
     const T = scratch()
     const L = join(T, 'slot-1')
@@ -201,7 +263,9 @@ describe('ci-local.sh slots', () => {
   it('a reused pid is not a live owner (the start time must match)', () => {
     const L = join(scratch(), 'slot-1')
     mkdirSync(L)
-    writeFileSync(join(L, 'owner'), `${process.pid}\nMon Jan  1 00:00:00 2001\nold`)
+    // a start time of the kind this platform records (a /proc token on Linux, ps text elsewhere) that no live process has
+    const other = process.platform === 'linux' ? 'linux:000000000000:1' : 'Mon Jan  1 00:00:00 2001'
+    writeFileSync(join(L, 'owner'), `${process.pid}\n${other}\nold`)
     const r = sh(`ci_lock_try "${L}" new && echo GOT`)
     expect(r.out).toContain('GOT')
     expect(what(L)).toBe('new')
@@ -299,18 +363,13 @@ describe('ci-local.sh queued runs', () => {
     git(T, 'clone', '-q', origin, clone)
     mkdirSync(join(clone, 'scripts'))
     writeFileSync(join(clone, 'scripts', 'ci-local.sh'), readFileSync(script))
+    copyCiLocalParts(join(clone, 'scripts')) // the parts ci-local.sh sources in place
     const bin = join(T, 'bin')
     mkdirSync(bin)
-    writeFileSync(
-      join(bin, 'gh'),
-      '#!/bin/sh\ncase "$1" in repo) echo owner/repo ;; api) echo "$*" >> "$GH_LOG" ;; esac\n',
-    )
-    chmodSync(join(bin, 'gh'), 0o755)
-    writeFileSync(join(bin, 'swift'), '#!/bin/sh\nexit 0\n') // only so job_desktop gets past "is swift installed"
-    chmodSync(join(bin, 'swift'), 0o755)
+    fakeTool(bin, 'gh', '#!/bin/sh\ncase "$1" in repo) echo owner/repo ;; api) echo "$*" >> "$GH_LOG" ;; esac\n')
+    fakeTool(bin, 'swift', '#!/bin/sh\nexit 0\n') // only so job_desktop gets past "is swift installed"
     // job_desktop fails without a usable tmux (the machine's own is not the test's business): a stand-in at a path of ours
-    writeFileSync(join(bin, 'tmux'), "#!/bin/sh\necho 'tmux 3.5'\n")
-    chmodSync(join(bin, 'tmux'), 0o755)
+    fakeTool(bin, 'tmux', "#!/bin/sh\necho 'tmux 3.5'\n")
     const home = join(T, 'home')
     mkdirSync(home)
     const env = {
@@ -483,11 +542,11 @@ describe('ci-local.sh queued runs', () => {
       `cache=${join(cache, 'swiftpm')}`,
       'tmp=there',
     ])
-    const text = readFileSync(script, 'utf8')
+    const text = ciLocalSource() // ci-local.sh and the parts it sources
     // no other step reaches them: exactly one command names the scratch, and it is the one under the mutex
     expect(text.match(/TALOS_SWIFT_SCRATCH=/g)).toHaveLength(1)
     expect(text).toMatch(
-      /TALOS_SWIFT_SCRATCH="\$CACHE\/desktop-build" \\\n\s+run "\$log" ci_mutex "\$LOCKS" desktop bash /,
+      /TALOS_SWIFT_SCRATCH="\$CACHE\/desktop-build" \\\n\s+run "\$log" ci_mutex "\$LOCKS" desktop ci_pty_during "\$RESULTS\/desktop\.ptypeak" bash /,
     )
   })
 

@@ -117,11 +117,17 @@ export class MediaStore {
     return join(this.p.media, `${mediaId}${ext}`)
   }
 
-  /** Downloads an owner attachment and checks size and sha256 against the signed AttachmentRef. */
-  async download(ref: AttachmentRefT): Promise<Downloaded> {
+  /** The bytes of an owner attachment, checked for size and sha256 against the signed AttachmentRef; nothing is written. */
+  async fetchVerified(ref: AttachmentRefT): Promise<Uint8Array> {
     const bytes = await this.http.getMedia(ref.media_id, Math.min(ref.size, MAX_FILE_BYTES))
     if (bytes.length !== ref.size) throw new MediaError(`size mismatch for ${ref.media_id}`)
     if (sha256Hex(bytes) !== ref.sha256) throw new MediaError(`sha256 mismatch for ${ref.media_id}`)
+    return bytes
+  }
+
+  /** Downloads an owner attachment and checks size and sha256 against the signed AttachmentRef. */
+  async download(ref: AttachmentRefT): Promise<Downloaded> {
+    const bytes = await this.fetchVerified(ref)
     const nameExt = extname(ref.name).toLowerCase()
     const ext = EXT_BY_MIME[ref.mime] ?? (/^\.[a-z0-9]{1,5}$/.test(nameExt) ? nameExt : '')
     const path = this.localPath(ref.media_id, ext)
@@ -158,7 +164,7 @@ export class MediaStore {
    */
   checkUploadable(
     path: string,
-    opts: { worker?: boolean; leadCwd?: string; thread?: string } = {},
+    opts: { worker?: boolean; leadCwd?: string; leadParentCwd?: string; thread?: string } = {},
   ): { realPath: string; size: number } {
     if (!isAbsolute(path)) throw new MediaError(`not an absolute path: ${path}`)
     if (!existsSync(path)) throw new MediaError(`no such file: ${path}`)
@@ -181,7 +187,7 @@ export class MediaStore {
       if (realPath === home || realPath.startsWith(home + sep))
         throw new MediaError(`a thread session cannot send a file from the Talos folder: ${basename(path)}`)
       // a lead: nothing inside the protected roots its marker lists
-      const why = leadAttachRefusal(opts.leadCwd, realPath)
+      const why = leadAttachRefusal(opts.leadCwd, realPath, opts.leadParentCwd)
       if (why) throw new MediaError(`${why}: ${basename(path)}`)
     }
     return { realPath, size: st.size }
@@ -190,9 +196,17 @@ export class MediaStore {
   /** Uploads a local file and returns its AttachmentRef. */
   async upload(
     path: string,
-    opts: { role?: 'attachment' | 'voice_reply'; name?: string; mime?: string; kind?: AttachmentRefT['kind'] } = {},
+    opts: {
+      role?: 'attachment' | 'voice_reply'
+      name?: string
+      mime?: string
+      kind?: AttachmentRefT['kind']
+      /** Who is sending (what `checkUploadable` takes). The path is resolved and judged again here, by these same rules, and
+       * the file is read from that resolution: a name re-pointed since the caller's own check gets no weaker a look. */
+      sender?: { worker?: boolean; leadCwd?: string; leadParentCwd?: string; thread?: string }
+    } = {},
   ): Promise<AttachmentRefT> {
-    const { realPath } = this.checkUploadable(path)
+    const { realPath } = this.checkUploadable(path, opts.sender)
     // Read through ONE handle opened with no link followed, not by name: a folder swapped for a link to the bridge home
     // after the check above would otherwise send a protected file (keys, ledger) off the Mac. The handle is fstat'ed
     // again because the check above was on a name. O_NONBLOCK: a named pipe must not hang the bridge.
@@ -277,6 +291,21 @@ export class MediaStore {
     })().finally(() => this.rehydrating.delete(mediaId))
     this.rehydrating.set(mediaId, p)
     return p
+  }
+
+  /** When the owner's retention setting removed this download from the Mac (media-retention.ts), else undefined. */
+  removedInfo(mediaId: string): { at: number; after_days: number } | undefined {
+    if (!/^md_[0-9A-HJKMNP-TV-Z]{26}$/.test(mediaId)) return undefined
+    const raw = readRegularFile(join(this.p.media, `${mediaId}.json`), 64 * 1024)
+    if (!raw) return undefined
+    try {
+      const r = (JSON.parse(raw.toString('utf8')) as { removed?: { at?: unknown; after_days?: unknown } }).removed
+      return r && typeof r.at === 'number' && typeof r.after_days === 'number'
+        ? { at: r.at, after_days: r.after_days }
+        : undefined
+    } catch {
+      return undefined
+    }
   }
 
   private async rehydrateNow(mediaId: string): Promise<boolean> {

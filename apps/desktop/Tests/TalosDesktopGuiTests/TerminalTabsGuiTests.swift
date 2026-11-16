@@ -5,6 +5,7 @@ import TalosDesktopCore
 import TalosSupervisor
 import WebKit
 @testable import TalosDesktop
+import TalosTestSupport
 
 /// The Terminal screen's tabs in the Talos window: the embedded terminal follows the session the page names, on a private tmux
 /// server (the shim `ReviewD2TerminalTests` uses), and the list and Resume reach the page. `-L talos` and the owner's workers
@@ -483,7 +484,7 @@ struct TerminalTabsGuiTests {
   }
 
   @Test func theDiagnosticLogsOneLineOnlyWhenTheStateChangesAndNeverAThreadNameOrId() throws {
-    let logFile = NSTemporaryDirectory() + "talos-desktop-log-\(UUID().uuidString.prefix(8)).log"
+    let logFile = TestTemp.base + "talos-desktop-log-\(UUID().uuidString.prefix(8)).log"
     DesktopLog.pathOverride = logFile
     DesktopLog.resetForTest()
     defer { DesktopLog.pathOverride = nil; try? FileManager.default.removeItem(atPath: logFile) }

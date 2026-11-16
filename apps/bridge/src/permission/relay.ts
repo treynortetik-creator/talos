@@ -1,9 +1,10 @@
 // Permission prompts on the phone (docs/CLAUDE-CODE.md C3.2-C3.5). Claude Code relays a tool approval prompt to this
 // bridge; the bridge turns it into a `kind:'permission'` card and answers with a verdict ONLY after an owner-signed
-// `card.resolve` passes the SPEC 4.5 ledger checks and the card itself still shows the whole call.
+// `card.resolve` passes the SPEC 4.5 ledger checks. A tap approves (the owner's rule, 2026-11-13): no step-up; a part of
+// the call that is not shown, or an older Claude Code, is a note on the card, not a refusal.
 //
-// Fail closed everywhere: an unreadable request, a failed card send, a restart, a stale or unsigned frame, a closed or
-// repeated id, a hidden part or an old Claude Code all end with NO verdict, so the prompt stays open at the Mac. The only
+// Fail closed where no answer can be delivered: an unreadable request, a failed card send, a restart, a stale or unsigned
+// frame, a closed or repeated id all end with NO verdict, so the prompt stays open at the Mac. The only
 // message this module ever sends to Claude Code with `allow` is the one at the end of `onResolved`, and only on the path
 // where permissionVerdictFor() said so.
 import {
@@ -13,14 +14,18 @@ import {
   newId,
   OpenPermissionIds,
   PERMISSION_MIN_CLIENT_VERSION,
+  PERMISSION_OTHER_CHANNEL_NOTE,
+  PERMISSION_REPEAT_WARNING,
   PermissionRequestParams,
   type PermissionVerdictT,
   permissionCardAllowsPrimary,
+  permissionHiddenReasons,
   permissionVerdictFor,
 } from '@talos-app/protocol'
 import type { LedgerRow } from '../cards-ledger.ts'
 import type { BridgeContext } from '../context.ts'
 import { cardCreateFrame, cardUpdateFrame } from '../frames-out.ts'
+import { say } from '../owner-words.ts'
 import { assertFrameFits } from '../transport.ts'
 import { type Explainer, type ExplainRequest, explainRequestOf, explainToCard } from './explainer.ts'
 import { renderHookCall } from './hook-render.ts'
@@ -112,7 +117,13 @@ export class PermissionRelay {
     const { explainer, ctx } = this
     if (!explainer) return
     void (async () => {
-      const explain = await explainToCard(explainer, req)
+      // The reason (a fixed set), the tool and the length only: never the call. An MCP tool's name carries a server name
+      // the owner chose, so it is logged as `mcp`; a stop (the bridge shutting down) is not a failure worth a line.
+      const explain = await explainToCard(explainer, req, (reason) => {
+        if (reason === 'closed') return
+        const tool = req.tool.startsWith('mcp__') ? 'mcp' : req.tool.slice(0, 40)
+        ctx.log.warn('card explanation failed', { reason, tool, input_chars: req.input.length })
+      })
       if (!this.pending.has(cardId) || ctx.ledger.get(cardId)?.state !== 'pending') return
       await ctx.transport.sendDurable(cardUpdateFrame(ctx.clock.now(), { card_id: cardId, state: 'pending', explain }))
     })().catch((e) => ctx.log.warn('card explanation not sent', { error: (e as Error).message }))
@@ -160,7 +171,7 @@ export class PermissionRelay {
    * "declared at start" does not matter. A worker session, which never declares the relay, is covered by this.
    */
   get hookEnabled(): boolean {
-    return this.ctx.mode === 'live' && this.configured
+    return this.ctx.mode === 'live' && !this.ctx.superseded && this.configured
   }
 
   /** The owner turned the relay on after this session started: it cannot work until the session restarts. */
@@ -170,7 +181,7 @@ export class PermissionRelay {
 
   /** The relay works only for a live bridge that declared it at start AND whose owner still has it on. */
   get enabled(): boolean {
-    return this.ctx.mode === 'live' && this.configured && this.declaredAtStart !== false
+    return this.ctx.mode === 'live' && !this.ctx.superseded && this.configured && this.declaredAtStart !== false
   }
 
   /** The owner turned the relay off: every open permission card closes and can send nothing. Cheap; safe to call often. */
@@ -233,8 +244,14 @@ export class PermissionRelay {
       }
       ctx.expiry?.sync()
       this.explainCard(card.id, explainRequestOf(request.tool_name, request.input_preview, request.description))
-      // only a relay card that exists AND offers Allow can stand in for a hook's: a deny-only card leaves the owner no way to approve
-      if (permissionCardAllowsPrimary(card)) this.noteRelayRequest(request.tool_name, request.input_preview)
+      // only a relay card that offers Allow AND shows the whole call can stand in for a hook's: the hook renders the call whole
+      // from the raw input, so where Claude Code's preview is cut or masked, the hook's card is the one that shows all of it
+      if (
+        permissionCardAllowsPrimary(card) &&
+        (card.warning === undefined || PERMISSION_OTHER_CHANNEL_NOTE.test(card.warning)) &&
+        permissionHiddenReasons(request).length === 0
+      )
+        this.noteRelayRequest(request.tool_name, request.input_preview)
     } catch (e) {
       if (requestId && !cardId) this.ids.close(requestId)
       ctx.log.warn('permission_request not turned into a card', { error: (e as Error).message })
@@ -249,6 +266,24 @@ export class PermissionRelay {
     const row = this.ctx.ledger.get(cardId)
     if (row?.binding.kind !== 'permission') return { handled: false }
     const p = this.pending.get(cardId)
+    // a repeated id: its id was closed when it came again (an answer could reach the wrong prompt), but the prompt itself is
+    // still open at the Mac. Say that, not "already answered or closed"; the card stays as it is
+    // Allow or Deny alike sends nothing (either answer could reach the wrong prompt); Deny still clears the card from the phone
+    if (p?.card.warning === PERMISSION_REPEAT_WARNING) {
+      if (action === 'kill' && row.state === 'pending') this.closeCard(row, 'permission_repeat')
+      return {
+        handled: true,
+        ok: false,
+        code: 'permission_hidden',
+        reason:
+          action === 'kill'
+            ? say({
+                mac: "Cleared from here. Nothing was sent: Claude Code's prompt is still open at the Mac.",
+                linux: "Cleared from here. Nothing was sent: Claude Code's prompt is still open at your computer.",
+              })
+            : PERMISSION_REPEAT_WARNING,
+      }
+    }
     // relay switched off (config): open cards can no longer send anything (CC-C1-REVIEW F5)
     if (!(p?.hook ? this.hookEnabled : this.enabled) || !p || !this.ids.isOpen(p.requestId)) {
       if (row.state === 'pending') this.closeCard(row, 'permission_closed')
@@ -256,15 +291,19 @@ export class PermissionRelay {
         handled: true,
         ok: false,
         code: 'permission_closed',
-        reason: 'The prompt is closed; answer it at the Mac.',
+        reason: 'That prompt was already answered or closed.',
       }
     }
+    // the one card Allow is refused on: a repeated id (an answer could reach the wrong prompt); everything else is a note
     if (action === 'primary' && !permissionCardAllowsPrimary(p.card))
       return {
         handled: true,
         ok: false,
         code: 'permission_hidden',
-        reason: 'Part of this call is hidden; answer it at the Mac.',
+        reason:
+          p.card.warning === PERMISSION_REPEAT_WARNING
+            ? PERMISSION_REPEAT_WARNING
+            : "This card can't approve the call.",
       }
     return { handled: true, ok: true }
   }
@@ -277,7 +316,16 @@ export class PermissionRelay {
   async onResolved(row: LedgerRow, action: 'primary' | 'kill' | 'revise'): Promise<ResolveOutcome> {
     const { ctx } = this
     const p = this.pending.get(row.id)
+    // what the owner reads when the verdict did not get through: what happened, never "answer it at the Mac"
+    const WHY: Record<string, string> = {
+      permission_closed: 'Not sent: that prompt was already answered or closed.',
+      relay_off: 'Not sent: permission prompts are switched off in Talos.',
+      no_channel: 'Not sent: Claude Code is not connected to Talos right now (the session may have ended).',
+      send_failed: 'Not sent: Claude Code did not take the answer (it may have answered or closed the prompt).',
+      permission_hidden: `Not sent: ${PERMISSION_REPEAT_WARNING}`,
+    }
     const fail = (reason: string, code: ErrorCodeT): ResolveOutcome => {
+      const text = WHY[reason] ?? 'Not sent to Claude Code.'
       ctx.ledger.finish(row.id, false)
       ctx.transport
         .sendDurable(
@@ -285,15 +333,11 @@ export class PermissionRelay {
             card_id: row.id,
             state: 'failed',
             reason,
-            result: {
-              ok: false,
-              text: 'Not sent to Claude Code. Answer at the Mac.',
-              at: new Date(ctx.clock.now()).toISOString(),
-            },
+            result: { ok: false, text, at: new Date(ctx.clock.now()).toISOString() },
           }),
         )
         .catch((e) => ctx.log.warn('card.update not sent', { error: (e as Error).message }))
-      return { ok: false, code, reason: 'Not sent to Claude Code. Answer at the Mac.' }
+      return { ok: false, code, reason: text }
     }
     if (!p) return fail('permission_closed', 'permission_closed')
     if (!(p.hook ? this.hookEnabled : this.enabled)) {
@@ -313,12 +357,19 @@ export class PermissionRelay {
       if (!waiter?.({ decision: v.verdict.behavior, reason: 'owner' })) return fail('send_failed', 'internal')
     } else {
       if (!this.sender) return fail('no_channel', 'permission_closed')
-      try {
-        await this.sender(v.verdict)
-      } catch (e) {
-        ctx.log.warn('permission verdict not sent', { error: (e as Error).message })
-        return fail('send_failed', 'internal')
+      // a send that fails is tried again twice (a moment's hiccup on the channel), then said as failed, with why
+      let sent = false
+      for (let attempt = 0; attempt < 3 && !sent; attempt++) {
+        try {
+          if (attempt > 0) await new Promise((r) => setTimeout(r, 250 * attempt))
+          if (!this.sender) return fail('no_channel', 'permission_closed')
+          await this.sender(v.verdict)
+          sent = true
+        } catch (e) {
+          ctx.log.warn('permission verdict not sent', { error: (e as Error).message, attempt })
+        }
       }
+      if (!sent) return fail('send_failed', 'internal')
     }
     if (v.verdict.behavior !== 'allow') return { ok: true } // a deny has no result to report: the inbound pipeline closes it `done`, like any killed card
     ctx.ledger.finish(row.id, true)
@@ -428,7 +479,7 @@ export class PermissionRelay {
 
   /**
    * A PermissionRequest hook reports a prompt Claude Code is showing at the Mac. Turns it into the same permission card the
-   * relay raises (same composer, same ledger checks, same step-up for a risky tool) and resolves with the owner's answer.
+   * relay raises (same composer, same ledger checks, no step-up) and resolves with the owner's answer.
    * `allow` or `deny` only ever come from an owner-signed card.resolve; a closed hook, a timeout, a switched-off relay, a
    * refused or hidden call, a failed send and a restart are all `none`, so the prompt stays at the Mac. Never throws.
    * Every request gets its own card and its own answer: one Allow releases exactly one hook.

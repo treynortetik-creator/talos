@@ -13,7 +13,7 @@ relay can't forge or alter an edit. There are no extra approval steps.
 | Phone Threads tab | **+** and **Edit** in the header. Edit mode has the same list plus Move up / Move down arrows.                                                                                                                             |
 | Phone menu        | The same row of three buttons; each thread in the list has its own **···**.                                                                                                                                                |
 | Inside a thread   | **···** in the header opens that thread's settings sheet (it also has "Search this thread").                                                                                                                               |
-| Settings > Agent  | The older full editor (name, live-call context, archive, arrows) stays.                                                                                                                                                    |
+| Settings > Agent  | A short note and a **Manage threads** link that opens the same editor (`/threads?manage=1`).                                                                                                                               |
 
 The settings sheet holds: name, color, icon (searchable), "What goes here" (the topic), notifications, Default thread,
 Archive / Restore. Notifications apply at once; everything else applies on Save. The default thread can't be archived
@@ -27,7 +27,7 @@ The phone list and the sidebar show the same order. Agent-made threads carry a s
 
 A save counts only when the Mac applied it. The relay acks a `config.patch` when it stores it; the bridge then answers
 with `config.sync{applied: <patch id>}` (saved) or `error{ref: <patch id>}` (refused: `config_conflict`, `bad_frame`).
-The app waits for that answer (20 s, then "your Mac hasn't confirmed this yet"). A refusal shows in the sheet or the
+The app waits for that answer (20 s, then "Your Mac hasn't confirmed this change yet. It applies when your Mac picks it up."). A refusal shows in the sheet or the
 list, which snaps back; on `config_conflict` the bridge also re-sends the current config so the app is up to date.
 Reorders made while a save is in flight are coalesced into one more save.
 
@@ -73,7 +73,69 @@ next Save.
 ## The agent
 
 - `list_threads` returns each thread's `topic`; the instructions say to route by name or topic.
-- `create_thread` takes an optional `topic`.
+- `create_thread` takes an optional `topic`. It and `archive_thread` are wrappers over `config_propose` (`threads.<id>` and `threads.<id>.archived`, docs/bridge.md): the owner approves a card first, and the agent can also rename, retopic, re-icon, change the alert level or switch the own session of a thread the same way (old and new on the card, a way back in the result).
 - After a `config.patch` that adds, renames, archives or restores a thread, changes a topic, or moves the default, the
   agent gets one `system` channel notice listing the changes (names and topics JSON-quoted) and "call list_threads".
   Reorders, colors, icons and notification changes don't notify it.
+
+## Sub-threads
+
+A thread may sit under one other thread (`Thread.parent_id`), one level deep. The rules are in
+`packages/protocol/src/sub-threads.ts`; the bridge applies them to every config write (the app's `config.patch`, the agent's
+cards and the bridge's own tools).
+
+- **Supervisor support first.** No thread gets a parent, and no sub-thread is changed, until the supervisor (the Mac app,
+  or the Linux supervisor since P3d5) reports `supervisor.subthreads_supported` in `workers.json` with a fresh heartbeat;
+  only then does the bridge list `subthreads/1` in `hello.client.features`. Both start a sub-thread's session by the same
+  rules (the Mac's `SubThreads.swift`; Linux's `worker-subthreads.ts` is its port). Taking a thread out from under its parent, archiving a sub-thread, and narrowing a parent's
+  MCP list are always allowed.
+- **Inheritance.** A sub-thread uses its parent's folder, model, effort and MCP list unless it sets its own
+  (`effectiveSessionOpts`). Its own MCP list is cut to the parent's. Mac-only options (`ops_read`, the park timer) are never
+  inherited. A sub-thread whose parent is missing or archived inherits nothing and, without a list of its own, gets no MCP
+  servers.
+- **Folders.** A sub-thread's folder is strictly inside its parent's; one with its own session needs its own folder. The Mac
+  app re-checks the resolved paths before every start. One exception, only when the supervisor says
+  `supervisor.subthreads_own_folder` in workers.json (the Mac app does; Linux does not yet, and stays on the inside-only rule):
+  a sub-thread with its own session may keep an existing folder outside its parent's, written as an absolute path with no
+  `.` or `..`. It is used as it is and never made, so a missing one is refused. The parent's own folder (equal) is still
+  refused, and so is a path under the parent that a link leads out of. Saving it shows one line, `thread "<id>" keeps its own
+  folder, so it does not get "<parent>"'s instructions; the parent's privacy rules still apply` (`subThreadWarnings`), also under Under in the thread's settings.
+  The parent's privacy rules still apply to it: the Mac adds the deny rules from the parent's folder chain (parent first) to the
+  child's own, and the bridge's attach check reads the `.talos-lead` markers at or above both folders, so any refusal refuses.
+  A sub-thread without its own session still runs in its parent's lane and keeps the inside rule.
+- **Instructions.** A sub-thread's session reads its parent's AGENTS.md as well as its own. Claude Code loads AGENTS.md
+  where it loads CLAUDE.md, from the session's folder and every folder above it, and thread sessions run with
+  `instructionFiles: claude-md-and-agents-md` (`withInstructionFiles`, `InstructionFiles.swift`). Verified on 2026-11-11
+  with Claude Code 2.1.3xx: a session in `parent/child` got both folders' AGENTS.md, with and without a CLAUDE.md in the
+  child; in the default mode, with a CLAUDE.md there, it got neither. So no launch step adds the parent's file. A sub-thread with its own folder outside its parent's is read from its own folder and the folders above it, which
+  do not include its parent's folder, so it does not get the parent's instructions (`instructionFolders`, `WorkerInstructions.folders`). Each
+  thread's AGENTS.md is edited in its settings, under Instructions (`docs/SECURITY.md`).
+- **The Mac decides the folder.** If a sub-thread's own folder can't be read (a hand edit, a newer value), the Mac app
+  refuses to start it rather than use the parent's folder. The bridge and the app read such a folder as unset, so
+  `effectiveSessionOpts` may show the parent's folder; the Mac's decision is the one that counts.
+- **Who answers.** An owner message (or file, or voice note) in a sub-thread goes to the sub-thread's own lead when it has one,
+  else to its parent's lead when the parent has one, else to the main session (`leadThreadFor`). A parent lead that is not
+  reachable falls back to main as usual, with the notice in the sub-thread. A sub-thread's scheduled jobs run in its own
+  session only; without one, main runs them. A message waiting for the parent's lead goes to main at once if the sub-thread
+  gets a lead of its own, loses its parent or is archived.
+- **Where a lead may post and read.** A parent's lead may answer in the sub-threads it answers (`reply`, `attach`, `card`,
+  `set_status`; `leadPostThreads`) and read every sub-thread under it (`read_thread`; `leadReadThreads`). Its other
+  thread-locked tools (settings and schedule proposals, hand-offs) stay on its own thread. A sub-thread with its own lead is
+  that lead's alone, and that lead posts and reads only there. The hub applies the same list to every frame a lead sends.
+  A reply the hub refuses (the sub-thread got a lead of its own between the tool's check and the send) is taken out of the
+  Mac's history again, so `read_thread` and "stopped before it answered" never count it; one the outbox kept stays.
+- **In the app.** Every thread list draws a sub-thread right under its parent (the keyboard's thread numbers follow that
+  order). The sidebar and the phone menu draw it as an accordion: the chevron on a parent opens and closes its sub-threads,
+  the choice is remembered on that device (`talos-subthreads-open` in localStorage), a parent stays open while one of its
+  sub-threads is on screen, and a closed parent's count includes its sub-threads' unread replies. A list with no sub-threads
+  looks as it did before. A sub-thread whose parent is not on the list (archived, or a hand edit) is drawn at the top level.
+- **Archiving.** The agent can't post into an archived thread: `reply`, `attach` and `app_show` refuse it and name the
+  default thread to post to instead (an archived thread is in no list and no badge, so a row there would never be
+  seen); `read_thread` still works. A parent can't be archived while a live sub-thread depends on it: archive them together. The agent's
+  `archive_thread` proposes the parent and its sub-threads on one card; a sub-thread the owner made can only be archived by
+  the owner.
+
+### Known gaps
+
+- A sub-thread's own folder or parent that the app can't read (a hand edit) reads as unset, so the app may show the parent's
+  folder or the thread at the top level. The Mac app's reading is the one that counts.

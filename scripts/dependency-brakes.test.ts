@@ -1,7 +1,7 @@
 // The two brakes on the supply chain, checked where they live: a day's wait before pnpm picks a new package version, and a
 // known-vulnerability audit of the production dependencies in every place checks run (the cloud workflow and ci-local.sh).
 // The plain `pnpm audit` is not used: it also reports dev-only tools that never ship, and would fail on those.
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -35,9 +35,16 @@ describe('dependency brakes', () => {
   })
 
   it('ci-local.sh runs the same audit in its check job, as a warning', () => {
-    const sh = read('scripts/ci-local.sh')
-    const job = sh.slice(sh.indexOf('job_check() {'), sh.indexOf('claude_at()'))
+    // the check job is in scripts/ci-local/jobs-check.sh, which ci-local.sh sources in place
+    const parts = [
+      'scripts/ci-local.sh',
+      ...readdirSync(join(root, 'scripts/ci-local'))
+        .filter((f) => f.endsWith('.sh'))
+        .map((f) => `scripts/ci-local/${f}`),
+    ]
+    const check = read('scripts/ci-local/jobs-check.sh')
+    const job = check.slice(check.indexOf('suites_then_audit() {'))
     expect(job).toMatch(/warn_step check "\$log" "[^"]+" pnpm audit --prod --audit-level high\n/)
-    expect(sh).not.toMatch(/pnpm audit(?! --prod --audit-level high)/)
+    for (const p of parts) expect(read(p), p).not.toMatch(/pnpm audit(?! --prod --audit-level high)/)
   })
 })

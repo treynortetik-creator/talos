@@ -48,6 +48,23 @@ describe('push logic', () => {
       expect(n.options.data.navigate, template).toBe(built.notification.navigate)
     }
   })
+  it('sent_always_allowed (a send made without a card) opens its thread, like settings_changed, in fixed words', () => {
+    const cfg = {
+      agent: { name: 'Talos' },
+      notifications: { show_thread_names: 'all' as const },
+      threads: [{ id: 'errands', name: 'Errands', kind: 'fixed' as const }],
+    }
+    for (const template of ['sent_always_allowed', 'settings_changed'] as const) {
+      const parsed = parsePush(JSON.parse(JSON.stringify(buildPushPayload({ template, thread_id: 'errands' }, cfg))))
+      expect(parsed, template).not.toBeNull()
+      const n = notificationFromPayload(parsed as NonNullable<typeof parsed>)
+      expect(n.options.data.navigate, template).toBe('/t/errands')
+      expect(safeNavigateTarget(n.options.data.navigate, 'https://app.example.com'), template).toBe('/t/errands')
+    }
+    const built = buildPushPayload({ template: 'sent_always_allowed', thread_id: 'errands' }, cfg)
+    expect(built.notification.body).toBe('Talos sent something you always allow')
+  })
+
   it('notification clicks only open in-scope paths', () => {
     const o = 'https://app.example.com'
     expect(safeNavigateTarget('/card/c_1', o)).toBe('/card/c_1')

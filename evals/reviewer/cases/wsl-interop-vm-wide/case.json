@@ -1,0 +1,19 @@
+{
+  "id": "wsl-interop-vm-wide",
+  "title": "Each Talos boot took out WSL's .exe interop entry, which is one for the whole VM, so the owner's other distros lost it",
+  "base": "2ec20a2180a20a0d7f86fe1e6480b35623347c25",
+  "buggy": "691284c5",
+  "fix": "6ba94215",
+  "expect": [
+    {
+      "file": ["apps/windows/distro/talos-wsl.sh"],
+      "severity": "high",
+      "must": [
+        ["binfmt|WSLInterop"],
+        ["whole VM|VM-wide|entire VM|(every|other|all)( \\w+)? distr|global|system-wide|not per-distro|shared"],
+        ["unregist|remov|tak\\w+ (it )?out|-1|delet|clear|disabl|los[et]|break|broke"]
+      ],
+      "note": "isolate-mounts writes -1 to /proc/sys/fs/binfmt_misc/WSLInterop*: binfmt_misc is one table for the whole WSL VM, so each Talos boot unregistered .exe interop (code ., explorer.exe) in the owner's other distros too."
+    }
+  ]
+}

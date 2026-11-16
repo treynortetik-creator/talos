@@ -70,8 +70,11 @@ describe('D15 working row', () => {
     act(() => client.session.patch({ busy: true, turn_id: 'turn_1' }))
     const row = await screen.findByTestId('working-row')
     await userEvent.click(await within(row).findByRole('button', { name: 'Stop' }))
-    const sent = client.session.controls.at(-1)
-    expect(sent).toMatchObject({ thread_id: 'general', action: 'stop', turn_id: 'turn_1' })
+    // the click starts the send; the control reaches the session only after the owner frame is built and signed (async), so
+    // wait for it rather than read it at once (a loaded machine read it before it arrived)
+    await waitFor(() =>
+      expect(client.session.controls.at(-1)).toMatchObject({ thread_id: 'general', action: 'stop', turn_id: 'turn_1' }),
+    )
   })
 
   it('has no Stop without the stop capability or a turn id, but still shows the row', async () => {

@@ -36,6 +36,7 @@ const BRIDGE_DIR = resolve(dirname(import.meta.path), '..', '..')
  * home folder that is the user-scope folder, which would put the gate (and its machine path) on every Claude Code session.
  */
 export function homeAsAgentDir(env: BridgeEnv, dir: string): boolean {
+  // for folders only: a file's real path goes through realFileSync (real-file.ts), as realpath can name a hard-linked file by another of its names
   const real = (p: string) => {
     try {
       return realpathSync(p)
@@ -46,10 +47,10 @@ export function homeAsAgentDir(env: BridgeEnv, dir: string): boolean {
   return real(dir) === real(env.userHome)
 }
 
-async function loadSecrets(deps: AppsCliDeps): Promise<ServerSecrets> {
+async function loadSecrets(env: BridgeEnv, deps: AppsCliDeps): Promise<ServerSecrets> {
   if (deps.secrets) return deps.secrets
   const k = await import('./keychain.ts')
-  return new k.ServerSecrets(k.securityRunner())
+  return new k.ServerSecrets(k.defaultKeychainRunner(env.home))
 }
 
 function pickServer(cat: AppCatalogT, name: string) {
@@ -84,7 +85,7 @@ export async function cmdApps(env: BridgeEnv, argv: string[], io: CliIO, deps: A
         io.err('talos-app: the agent folder is your home folder; run this from the agent folder or pass --agent-dir')
         return 1
       }
-      const secrets = await loadSecrets(deps)
+      const secrets = await loadSecrets(env, deps)
       let source = deps.source
       if (!source) {
         const { resolveClaude, sdkStatusSource } = await import('./sdk-source.ts')
@@ -219,7 +220,7 @@ export async function cmdApps(env: BridgeEnv, argv: string[], io: CliIO, deps: A
       }
       const server = pickServer(c.catalog, name)
       const id = serverIdOf(server.server, server.source)
-      const secrets = await loadSecrets(deps)
+      const secrets = await loadSecrets(env, deps)
       if (sub === 'logout') {
         await secrets.logout(id)
         io.out(
@@ -263,7 +264,8 @@ export async function cmdApps(env: BridgeEnv, argv: string[], io: CliIO, deps: A
       io.out(
         'usage: talos-app apps scan [--check] [--agent-dir <dir>] [--exclude-plugin <name>] | list | revoke <server|key-prefix> | login <server> | logout <server> | strict on|off',
       )
-      return sub === undefined || sub === 'help' ? 0 : 2
+      // a group typed without its subcommand is a usage error, as every other group is; `help` asks for the usage
+      return sub === 'help' || sub === '--help' || sub === '-h' ? 0 : 2
   }
 }
 

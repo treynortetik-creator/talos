@@ -8,6 +8,7 @@
 // what a card SAYS. They are read like untrusted text: a regular file, no link followed (the folders too), a size cap, strict
 // fields, and a time check.
 import { lstatSync, mkdirSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import {
   buildDialogProof,
@@ -31,6 +32,7 @@ import {
   type DialogKindT,
   DialogResult,
   type DialogResultT,
+  type DialogWhere,
   dialogAnswerText,
   dialogFallbackLine,
   dialogFileFresh,
@@ -51,6 +53,7 @@ import { type BridgeContext, postSystemNotice, threadRef } from './context.ts'
 import { emitEvent } from './events.ts'
 import { cardCreateFrame, cardUpdateFrame } from './frames-out.ts'
 import { removeFile, writeFileAtomic } from './fsutil.ts'
+import { say } from './owner-words.ts'
 import { readRegularFile } from './safe-open.ts'
 import { assertFrameFits } from './transport.ts'
 import { WorkersReader } from './worker/files.ts'
@@ -62,7 +65,13 @@ type Of<T extends Frame['type']> = Extract<Frame, { type: T }>
 const WATCH_MS = 1000
 /** Records of finished dialogs are kept this long, so a dialog id seen again is never carded twice. */
 const KEEP_MS = 2 * 24 * 3600_000
-const NOT_HANDED_OVER = "Couldn't hand your answer to the Mac. Nothing was pressed."
+const NOT_HANDED_OVER = () =>
+  say({
+    mac: "Couldn't hand your answer to the Mac. Nothing was pressed.",
+    linux: "Couldn't hand your answer to your computer. Nothing was pressed.",
+  })
+/** Who pressed the dialog's key, as the card says it. */
+const PRESSED_BY = () => say({ mac: 'this Mac', linux: 'this computer' })
 const KEY = 'dlg:'
 
 type Phase = 'waiting' | 'answering' | 'done' | 'closed' | 'expired'
@@ -91,6 +100,15 @@ export type DialogPrecheck =
   | { handled: true; ok: true; choice: number | null; by: string }
 
 /** Main's answer has a file of its own: a worker on the default thread uses `dialog-answer.json` in the same folder. */
+/**
+ * Where a thread's session waits: the bridge runs on the machine its supervisor does, so a Mac is the Mac app's Terminals and
+ * anything else is the Linux supervisor's tmux (the same machine name and attach command its own lines give).
+ */
+const dialogWhere = (thread: string): DialogWhere =>
+  process.platform === 'darwin'
+    ? { kind: 'mac' }
+    : { kind: 'linux', machine: hostname(), attach: `talos-app supervise attach ${thread}` }
+
 const answerFile = (kind: DialogKindT): string =>
   kind === 'dev_channels' ? WORKER_FILES.mainDialogAnswer : WORKER_FILES.dialogAnswer
 
@@ -245,7 +263,7 @@ export class DialogCards {
     // in the same turn.)
     const row = this.ctx.ledger.get(rec.card_id)
     if (row && row.state !== 'pending') {
-      if (row.state === 'resolved') this.fail(row, NOT_HANDED_OVER)
+      if (row.state === 'resolved') this.fail(row, NOT_HANDED_OVER())
       this.save(id, { ...rec, phase: row.state === 'resolved' ? 'done' : 'closed' })
       return
     }
@@ -309,7 +327,10 @@ export class DialogCards {
       throw e
     }
     ctx.expiry?.sync()
-    this.writeCardFile(thread, d.id, card.id)
+    // Only while the card still waits: the dialog may have gone, been answered or expired while the create was in flight, and
+    // the file already says so. Writing "waiting" over that would show the Mac a card that is gone.
+    if (this.rec(d.id)?.phase === 'waiting' && ctx.ledger.get(card.id)?.state === 'pending')
+      this.writeCardFile(thread, d.id, card.id)
     emitEvent(ctx.log, DIALOG_CARD_POSTED_EVENT, { dialog_kind: d.kind, thread_id: thread, card_id: card.id })
     this.watch(true)
   }
@@ -394,7 +415,7 @@ export class DialogCards {
     const d = dialogOf(row.binding)
     const found = d ? this.rec(d.dialog_id) : undefined
     if (!d || !found) {
-      this.fail(row, NOT_HANDED_OVER)
+      this.fail(row, NOT_HANDED_OVER())
       return
     }
     const proof = buildDialogProof(raw, row.binding)
@@ -445,7 +466,7 @@ export class DialogCards {
     } catch (e) {
       ctx.log.warn('dialog answer not written', { thread: d.thread, error: (e as Error).message })
       this.save(d.dialog_id, { ...(this.rec(d.dialog_id) ?? found), phase: 'done' })
-      this.fail(row, NOT_HANDED_OVER)
+      this.fail(row, NOT_HANDED_OVER())
       return
     }
     this.writeCardFile(d.thread, d.dialog_id, row.id, { status: 'answered', by: answer?.by, label })
@@ -507,7 +528,7 @@ export class DialogCards {
         ts: new Date(ctx.clock.now()).toISOString(),
       },
       ctx.clock.now(),
-      { by: 'this Mac' },
+      { by: PRESSED_BY() },
     )
     if (!out.ok || !ctx.ledger.finish(row.id, true)) {
       this.close(id, rec)
@@ -527,7 +548,7 @@ export class DialogCards {
     this.save(id, { ...rec, phase: 'done' })
     this.writeCardFile(rec.thread, id, row.id, {
       status: 'answered',
-      by: 'this Mac',
+      by: PRESSED_BY(),
       ...(rec.mac.label ? { label: rec.mac.label } : {}),
     })
   }
@@ -622,7 +643,7 @@ export class DialogCards {
     this.writeCardFile(rec.thread, id, rec.card_id, { status: 'expired' })
     if (!still) return
     try {
-      await postSystemNotice(ctx, dialogFallbackLine(rec.kind, threadRef(ctx, rec.thread).name), {
+      await postSystemNotice(ctx, dialogFallbackLine(rec.kind, dialogWhere(rec.thread)), {
         thread: threadRef(ctx, rec.thread),
       })
     } catch (e) {

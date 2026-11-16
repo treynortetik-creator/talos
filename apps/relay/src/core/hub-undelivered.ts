@@ -5,6 +5,7 @@
 import { type MessageT, NATIVE_ACT_TYPE, nativeReplyMessageId, newId } from '@talos-app/protocol'
 import type { RichPushInput } from '../services.ts'
 import type { DEFAULT_AGENT_CONFIG } from './default-config.ts'
+import { BridgeFeatures, problemHeld } from './features.ts'
 import type { Hub, HubDeps } from './hub.ts'
 import type { StoredFrame } from './store.ts'
 import { DAY_MS, mkFrame } from './util.ts'
@@ -23,6 +24,12 @@ export type UndeliveredCtx = {
   decisionCard(type: string, f: Record<string, unknown>): string | undefined
   cardDecidedOnMac(type: string, f: Record<string, unknown>): boolean
 }
+
+/** Days a bug report has been held for a newer Mac before the owner's thread gets its one line. */
+export const HELD_PROBLEM_LINE_DAYS = 5
+export const HELD_PROBLEMS_TEXT =
+  'Bug reports are waiting for a newer Talos on your computer. Update Talos there and they will arrive.'
+const HELD_PROBLEMS_KEY = 'held_problems_told'
 
 export const undeliveredFrames = {
   /** The card an owner frame decides (a `card.resolve`, or an Approve tapped on a notification), if it decides one. */
@@ -96,10 +103,43 @@ export const undeliveredFrames = {
   },
 
   /**
-   * D38, day 6. One push per episode: from the first sweep that finds an owner frame six days old and still waiting for the
+   * Bug reports held for a newer Mac (features.ts problemHeld): from the day the oldest one is HELD_PROBLEM_LINE_DAYS old, ONE plain
+   * line in the owner's default thread, until none is held, then again only for a new episode. The line is a system
+   * `message.stored` the relay sends the apps itself, so it shows whatever the Mac understands (an older Mac is the reason).
+   */
+  warnHeldProblems(this: UndeliveredCtx): void {
+    const store = this.d.store
+    const features = new BridgeFeatures(store) // what the last hello said, as the hub keeps it (features.ts)
+    const held = store.waitingProblems().find((p) => problemHeld(p.frame, (f) => features.has(f)))
+    if (!held) {
+      if (store.getState(HELD_PROBLEMS_KEY) !== null) store.setState(HELD_PROBLEMS_KEY, '')
+      return
+    }
+    if (store.getState(HELD_PROBLEMS_KEY) === '1') return
+    if (this.d.clock.now() - held.created_at < HELD_PROBLEM_LINE_DAYS * DAY_MS) return
+    const message: MessageT = {
+      id: newId('m'),
+      thread_id: this.cfg().default_thread,
+      author: 'system',
+      kind: 'text',
+      text: HELD_PROBLEMS_TEXT,
+      format: 'plain',
+      attachments: [],
+      via: 'app',
+      created_at: new Date(this.d.clock.now()).toISOString(),
+    }
+    // stored first (an app that is away gets it on catch-up), then marked told: a store that fails is tried at the next sweep
+    const stored = this.stampForApps(mkFrame(this.d.clock, 'message.stored', { client_msg_id: message.id, message }))
+    store.setState(HELD_PROBLEMS_KEY, '1')
+    this.fanOut(stored)
+  },
+
+  /**
+   * D38, day 6 (and first, the held bug reports' day-5 line). One push per episode: from the first sweep that finds an owner frame six days old and still waiting for the
    * Mac, until none is waiting. The "already warned" flag lives in the store, so a relay restart repeats nothing.
    */
   warnDeadMac(this: UndeliveredCtx): void {
+    undeliveredFrames.warnHeldProblems.call(this)
     const store = this.d.store
     const oldest = store.oldestUndeliveredOwner(this.bridgeIsTwoStage(), (type, body) =>
       this.cardDecidedOnMac(type, body as Record<string, unknown>),

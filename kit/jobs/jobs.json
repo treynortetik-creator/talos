@@ -27,7 +27,9 @@
   {
     "id": "talos-weekly-wiki-lint",
     "name": "Talos Weekly Wiki Check",
-    "description": "Runs the wiki linter and reports what is broken. Read-only: it fixes nothing.",
+    "description": "Runs the wiki linter, the config lint and the deep-dive selector and reports what needs attention. A plain command (scripts/weekly-wiki-check.sh): no Claude, no plan usage. Read-only: it fixes nothing.",
+    "kind": "command",
+    "command": "bash {{TALOS_HOME}}/scripts/weekly-wiki-check.sh",
     "time": "08:17",
     "days": "mon",
     "catchup_min": 480,
@@ -35,25 +37,15 @@
     "in_session": false,
     "notify": "always",
     "once": null,
-    "restricted": true,
-    "allowed_tools": [
-      "Read(/{{TALOS_HOME}}/**)",
-      "Grep(/{{TALOS_HOME}}/**)",
-      "Glob(/{{TALOS_HOME}}/**)",
-      "Bash(date)",
-      "Bash(bash {{TALOS_HOME}}/scripts/memory/refresh-index.sh)",
-      "Bash(python3 {{TALOS_HOME}}/scripts/wiki-lint.py wiki --extra-dir memory)",
-      "Bash(python3 {{TALOS_HOME}}/scripts/deep-dive-select.py wiki)",
-      "Bash(bash {{TALOS_HOME}}/scripts/claude-md-lint.sh)"
-    ],
     "created": "2026-10-01T00:00:00",
-    "updated": "2026-10-01T00:00:00",
-    "model": "sonnet"
+    "updated": "2026-10-01T00:00:00"
   },
   {
     "id": "talos-weekly-snapshot",
     "name": "Talos Weekly Snapshot",
-    "description": "Commits memory, wiki and learnings to the agent's local git repo (named paths only). Local undo history, not an offsite backup.",
+    "description": "Commits memory, wiki and learnings to the agent's local git repo (named paths only). A plain command (scripts/weekly-snapshot.sh): no Claude, no plan usage. Local undo history, not an offsite backup.",
+    "kind": "command",
+    "command": "bash {{TALOS_HOME}}/scripts/weekly-snapshot.sh",
     "time": "16:11",
     "days": "fri",
     "catchup_min": 720,
@@ -61,16 +53,8 @@
     "in_session": false,
     "notify": "failure",
     "once": null,
-    "restricted": true,
-    "allowed_tools": [
-      "Read(/{{TALOS_HOME}}/**)",
-      "Grep(/{{TALOS_HOME}}/**)",
-      "Glob(/{{TALOS_HOME}}/**)",
-      "Bash(bash {{TALOS_HOME}}/scripts/weekly-snapshot.sh)"
-    ],
     "created": "2026-10-01T00:00:00",
-    "updated": "2026-10-01T00:00:00",
-    "model": "sonnet"
+    "updated": "2026-10-01T00:00:00"
   },
   {
     "id": "talos-memory-index",

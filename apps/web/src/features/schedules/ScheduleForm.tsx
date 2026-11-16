@@ -4,6 +4,7 @@ import { EDIT_LIMITS, runsInSession, ScheduleChange, type ScheduleDetailT, type 
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
+import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconBack } from '../../ui/icons.tsx'
 import { Button, Input, Textarea } from '../../ui/index.ts'
@@ -56,11 +57,20 @@ export function ScheduleForm(p: Props) {
   const defaultThread = useTalos((s) => s.config?.default_thread ?? 'general')
   const snap = useTalos((s) => s.schedules.snapshot)
   const macOnline = useTalos((s) => s.presence.bridge_online)
+  // Off a Mac there is no background timer yet: a job runs in a Talos thread or not at all (the bridge refuses the rest)
+  const host = useHost()
+  const offMac = host === 'windows' || host === 'linux'
   // the form starts from the revision it was opened on and never silently re-bases
   const [original] = useState(() =>
     p.mode === 'edit' ? formFromSchedule(p.schedule, p.detail.prompt) : blankForm(null),
   )
-  const [f, setF] = useState<FormState>(original)
+  // a job made to run in the background (or with only listed tools, which also runs by itself), opened off a Mac: its only
+  // choices are a Talos thread and full permissions, shown as a change to save
+  const [f, setF] = useState<FormState>(() =>
+    offMac && (original.runner !== 'session' || original.permissions === 'restricted')
+      ? { ...original, runner: 'session', permissions: 'full' }
+      : original,
+  )
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -80,8 +90,11 @@ export function ScheduleForm(p: Props) {
     if (f.name.trim() === '') errs.name = 'Give the job a name.'
     if (f.prompt.trim() === '') errs.prompt = 'Say what the job should do.'
     if (overCap) errs.prompt = 'That is longer than 16 KiB.'
+    // like the tools list, only a catch-up the owner touched is checked: a job written by hand with less than 15 can still
+    // be renamed without having to change it
     const n = Number(f.catchup)
-    if (!Number.isInteger(n) || n < 15 || n > 1440) errs.catchup = 'Between 15 and 1440 minutes.'
+    if ((p.mode === 'create' || f.catchup !== original.catchup) && (!Number.isInteger(n) || n < 15 || n > 1440))
+      errs.catchup = 'Between 15 and 1440 minutes.'
     // only a list the owner touched is checked: a job already on the Mac keeps its tools through a rename
     if (f.permissions === 'restricted' && (p.mode === 'create' || f.allowedTools !== original.allowedTools)) {
       const lines = f.allowedTools
@@ -332,11 +345,12 @@ export function ScheduleForm(p: Props) {
             <fieldset className="m-0 space-y-2 border-0 p-0">
               <legend className={cn(CAPS, 'mb-1 text-text-2')}>Runs in</legend>
               <div className="flex flex-col gap-2">
-                {(
-                  [
-                    ['session', 'In my live session'],
-                    ['headless', 'In the background (no session needed)'],
-                  ] as const
+                {(offMac
+                  ? ([['session', 'In a Talos thread']] as const)
+                  : ([
+                      ['session', 'In my live session'],
+                      ['headless', 'In the background (no session needed)'],
+                    ] as const)
                 ).map(([id, label]) => (
                   <label key={id} className="flex min-h-11 items-center gap-2 text-md">
                     <input type="radio" name="runner" checked={f.runner === id} onChange={() => up('runner', id)} />
@@ -344,7 +358,13 @@ export function ScheduleForm(p: Props) {
                   </label>
                 ))}
               </div>
-              {f.runner === 'headless' ? (
+              {offMac ? (
+                <p className="m-0 text-sm text-text-2" data-testid="no-background-note">
+                  {host === 'windows'
+                    ? "Jobs that run by themselves in the background need a timer that isn't on a Windows PC yet."
+                    : "Jobs that run by themselves in the background need a timer that isn't on this computer yet."}
+                </p>
+              ) : f.runner === 'headless' ? (
                 <p className="m-0 text-sm text-text-2" data-testid="background-note">
                   Runs without your session, with no one watching. macOS can block background runs after Claude Code
                   updates.
@@ -355,11 +375,13 @@ export function ScheduleForm(p: Props) {
             <fieldset className="m-0 space-y-2 border-0 p-0">
               <legend className={cn(CAPS, 'mb-1 text-text-2')}>Permissions</legend>
               <div className="flex flex-col gap-2">
-                {(
-                  [
-                    ['full', 'Full permissions'],
-                    ['restricted', 'Only the tools I list'],
-                  ] as const
+                {(offMac
+                  ? // a restricted job runs by itself, which needs the timer a Mac has (the runner line says why)
+                    ([['full', 'Full permissions']] as const)
+                  : ([
+                      ['full', 'Full permissions'],
+                      ['restricted', 'Only the tools I list'],
+                    ] as const)
                 ).map(([id, label]) => (
                   <label key={id} className="flex min-h-11 items-center gap-2 text-md">
                     <input
@@ -375,7 +397,10 @@ export function ScheduleForm(p: Props) {
               {f.permissions === 'restricted' ? (
                 <Field
                   label="Allowed tools"
-                  hint="One per line, like Read or Grep. The job can use exactly these. A tool like Bash or Edit can change things on your Mac."
+                  hint={placeWords(
+                    'One per line, like Read or Grep. The job can use exactly these. A tool like Bash or Edit can change things on your Mac.',
+                    host,
+                  )}
                   error={errors.tools}
                 >
                   {(a) => (
@@ -389,7 +414,7 @@ export function ScheduleForm(p: Props) {
                 </Field>
               ) : (
                 <p className="m-0 text-sm text-text-2">
-                  Runs unattended with full permissions: it can do anything you can on this Mac.
+                  {placeWords('Runs unattended with full permissions: it can do anything you can on this Mac.', host)}
                 </p>
               )}
             </fieldset>

@@ -183,7 +183,7 @@ struct ResumeWordingIntegrationTests {
     #expect(r.wait(40) { stopReason(r.phase()) == .resumeMissing(id) }, "\(r.phase()) \(r.audit)")
     usleep(3_000_000)  // the restart backoff (0.3 to 0.5 s) plus the slowed display-message (2 s): a retry would show by now
     #expect(r.starts.count == 2, "never restarted again: \(r.starts)")
-    #expect(r.starts[1].hasSuffix("--resume \(id)"), "\(r.starts)")
+    #expect(r.starts[1].hasSuffix("--resume=\(id)"), "\(r.starts)")
     // the second start is the supervisor's own restart (its `start` line never comes: no pid was read)
     #expect(r.audit.contains(" restart attempt=0 kind=supervisorRestart"), "\(r.audit)")
     #expect(r.allEvents.filter { $0 == .resumeFailed(sessionId: id) }.count == 1)

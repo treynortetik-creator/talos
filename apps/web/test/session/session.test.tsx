@@ -12,13 +12,17 @@ import {
   isModOnline,
   MOD_FRESH_MS,
   resetWords,
+  USAGE_AGE_AFTER_MS,
+  USAGE_DIM_AFTER_MS,
+  usageAge,
   usedPct,
   WARN_USED_PCT,
 } from '../../src/features/session/logic.ts'
 import { SessionPanel } from '../../src/features/session/SessionPanel.tsx'
 import { SessionChip, SessionTrigger } from '../../src/features/session/SessionTrigger.tsx'
 import { createSessionController, outcomeFromResult } from '../../src/features/session/store.ts'
-import { ClientProvider } from '../../src/lib/client.ts'
+import { DROPPED_MAYBE_CHANGED, OFFLINE_NOT_CHANGED } from '../../src/features/threads/manage/useThreadPatch.ts'
+import { ClientProvider, NoAnswerError, NotSentError } from '../../src/lib/client.ts'
 import type { FakeClientOptions } from '../../src/lib/fakeClient.ts'
 import { createMemoryStorage } from '../../src/lib/storage.ts'
 import { StorageProvider } from '../../src/lib/storageContext.tsx'
@@ -219,6 +223,24 @@ describe('mod offline and absent', () => {
     client.session.pushStale(120_000)
     await waitFor(() => expect(screen.queryByTestId('session-controls')).toBeNull(), { timeout: 8000 })
     expect(screen.getByTestId('mod-offline')).toBeInTheDocument()
+  })
+})
+
+describe('a control the connection stopped says so in the one sentence (settings/offline.ts rule)', () => {
+  // The fake's send is replaced before the panel is built, so the controller sends through the refusing one.
+  const refusing = (err: Error) => (client: ReturnType<typeof setup>) => {
+    client.sendOwnerFrame = vi.fn().mockRejectedValue(err) as never
+    return <SessionPanel threadId="general" />
+  }
+  it('not sent (offline): "Not changed…", not the raw "You\'re offline."', async () => {
+    mount({}, refusing(new NotSentError('internal', "You're offline.")))
+    await userEvent.click(await screen.findByRole('button', { name: 'Compact' }))
+    await waitFor(() => expect(screen.getByTestId('session-outcome')).toHaveTextContent(OFFLINE_NOT_CHANGED))
+  })
+  it('its answer lost to a dropped connection: "may not have changed", not "Connection lost"', async () => {
+    mount({}, refusing(new NoAnswerError('internal', 'Connection lost')))
+    await userEvent.click(await screen.findByRole('button', { name: 'Compact' }))
+    await waitFor(() => expect(screen.getByTestId('session-outcome')).toHaveTextContent(DROPPED_MAYBE_CHANGED))
   })
 })
 
@@ -503,3 +525,58 @@ describe('filter', () => {
 })
 
 vi.setConfig({ testTimeout: 15000 })
+
+// The weekly figure is the newest reading of any session on the Mac, with the time it was taken (`as_of`). An old one says so.
+describe('how old the weekly reading is', () => {
+  const NOW = Date.parse('2026-11-12T18:00:00.000Z')
+  const st = (ageMin: number | undefined) =>
+    ({
+      rate_limits: [
+        {
+          kind: 'seven_day',
+          percent: 35,
+          ...(ageMin === undefined ? {} : { as_of: new Date(NOW - ageMin * 60_000).toISOString() }),
+        },
+      ],
+    }) as SessionStateT
+  it('at 0 minutes nothing is said; at 3 "as of 3 min ago"; at 20 that, dimmed', () => {
+    expect(usageAge(st(0), 'seven_day', NOW)).toEqual({ dim: false })
+    expect(usageAge(st(3), 'seven_day', NOW)).toEqual({ words: 'as of 3 min ago', dim: false })
+    expect(usageAge(st(20), 'seven_day', NOW)).toEqual({ words: 'as of 20 min ago', dim: true })
+  })
+  it('the edges: two minutes is fresh, fifteen is not yet dim; hours and days read as such', () => {
+    expect(USAGE_AGE_AFTER_MS).toBe(120_000)
+    expect(USAGE_DIM_AFTER_MS).toBe(900_000)
+    expect(usageAge(st(2), 'seven_day', NOW)).toEqual({ dim: false })
+    expect(usageAge(st(15), 'seven_day', NOW)).toEqual({ words: 'as of 15 min ago', dim: false })
+    expect(usageAge(st(185), 'seven_day', NOW)).toEqual({ words: 'as of 3 h ago', dim: true })
+    expect(usageAge(st(3 * 1440), 'seven_day', NOW)).toEqual({ words: 'as of 3 d ago', dim: true })
+  })
+  it('no as_of (an older Mac), a junk one, or one ahead of this clock: nothing said, nothing dimmed', () => {
+    expect(usageAge(st(undefined), 'seven_day', NOW)).toEqual({ dim: false })
+    expect(usageAge(undefined, 'seven_day', NOW)).toEqual({ dim: false })
+    expect(usageAge(st(-5), 'seven_day', NOW)).toEqual({ dim: false })
+    const junk = { rate_limits: [{ kind: 'seven_day', percent: 1, as_of: 'soon' }] } as SessionStateT
+    expect(usageAge(junk, 'seven_day', NOW)).toEqual({ dim: false })
+  })
+
+  it('the panel says it beside the weekly figure, and dims the meter past 15 minutes', async () => {
+    const client = mount()
+    const asOf = (min: number) => new Date(Date.now() - min * 60_000).toISOString()
+    const week = (min: number) => ({ kind: 'seven_day', percent: 35, resets_at: asOf(-3 * 1440), as_of: asOf(min) })
+    client.session.patch({ rate_limits: [week(0)] })
+    await waitFor(() => expect(screen.getByTestId('meter-week')).toHaveTextContent('35% used'))
+    expect(screen.getByTestId('meter-week').textContent).not.toMatch(/as of/)
+    expect(screen.getByTestId('meter-week').getAttribute('data-stale')).toBeNull()
+    client.session.patch({ rate_limits: [week(3)] })
+    await waitFor(() => expect(screen.getByTestId('meter-week')).toHaveTextContent('35% used, as of 3 min ago'))
+    expect(screen.getByTestId('meter-week').getAttribute('data-stale')).toBeNull()
+    // the screen reader hears it too
+    expect(within(screen.getByTestId('meter-week')).getByRole('progressbar').getAttribute('aria-valuetext')).toBe(
+      '35% used, as of 3 min ago',
+    )
+    client.session.patch({ rate_limits: [week(20)] })
+    await waitFor(() => expect(screen.getByTestId('meter-week')).toHaveTextContent('as of 20 min ago'))
+    expect(screen.getByTestId('meter-week').getAttribute('data-stale')).toBe('true')
+  })
+})

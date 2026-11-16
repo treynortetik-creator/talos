@@ -9,7 +9,21 @@ import Foundation
 /// settings), but even there the session markers in `sessionMarkers` are refused.
 public enum ClaudeEnvScrub {
   /// Names that are never inherited, whatever the pattern says.
-  public static let alwaysDrop: Set<String> = ["CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "TMUX", "TMUX_PANE"]
+  public static let alwaysDrop: Set<String> = [
+    "CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "TMUX", "TMUX_PANE",
+    // A thread session's identity. `install.sh` run from one left these in the app's environment, the app passed them to Main, and Main's
+    // bridge refused to be the live one (2026-11-09). A worker gets its own from `WorkerSpec`, after the scrub.
+    "TALOS_APP_WORKER_THREAD", "TALOS_SESSION_ROLE", "TALOS_APP_WORKER_NONCE",
+  ]
+
+  /// What makes a shell run something before its command (R1-5): bash reads SHELLOPTS and BASHOPTS from its environment, so
+  /// `xtrace` with a PS4 holding `$(...)` runs a program at every command it traces, and ENV, BASH_ENV and an exported function
+  /// (`BASH_FUNC_name%%`) run code at its start. Claude Code runs every Bash command, and every hook's command, through a shell with
+  /// its own environment, so none of these ever reaches it: not inherited, and not settable from `desktop.json` either.
+  /// And what loads a library into a program it starts (LD_*, DYLD_*, GCONV_PATH) or wraps every command in one
+  /// (CLAUDE_CODE_SHELL_PREFIX).
+  public static let shellStartup: Set<String> = ["SHELLOPTS", "BASHOPTS", "PS4", "ENV", "BASH_ENV", "GCONV_PATH", "CLAUDE_CODE_SHELL_PREFIX"]
+  public static let shellStartupPrefixes = ["BASH_FUNC_", "LD_", "DYLD_"]
 
   /// Settings an owner puts in a shell profile on purpose (the app itself sets none of them: it sets only
   /// TALOS_APP_BRIDGE and MCP_PROTOCOL_NEGOTIATION). Everything else under CLAUDE_CODE_ comes from a running session.
@@ -30,18 +44,22 @@ public enum ClaudeEnvScrub {
 
   /// True for a variable the agent must not inherit from the process that launched the app.
   public static func isInherited(_ name: String) -> Bool {
-    if alwaysDrop.contains(name) || sessionMarkers.contains(name) { return true }
+    if alwaysDrop.contains(name) || sessionMarkers.contains(name) || isShellStartup(name) { return true }
     guard name.hasPrefix("CLAUDE_CODE_") else { return false }
     return !keep.contains(name) && !keepPrefixes.contains { name.hasPrefix($0) }
   }
 
   /// What identifies one running session or terminal, so no source may set it, `desktop.json` included. CLAUDE_EFFORT is
   /// in `alwaysDrop` (an inherited copy goes) but is also a setting an owner can choose, so it is not here.
-  static let neverSettable: Set<String> = alwaysDrop.subtracting(["CLAUDE_EFFORT"])
+  static let neverSettable: Set<String> = alwaysDrop.subtracting(["CLAUDE_EFFORT"]).union(shellStartup)
 
   /// True for a variable no source may set, `desktop.json` included.
   public static func isSessionMarker(_ name: String) -> Bool {
-    neverSettable.contains(name) || sessionMarkers.contains(name)
+    neverSettable.contains(name) || sessionMarkers.contains(name) || isShellStartup(name)
+  }
+
+  public static func isShellStartup(_ name: String) -> Bool {
+    shellStartup.contains(name) || shellStartupPrefixes.contains { name.hasPrefix($0) }
   }
 
   /// Names `env -u` clears in a pasted Terminal command: the markers a Claude-spawned shell holds, not the terminal's
@@ -51,15 +69,4 @@ public enum ClaudeEnvScrub {
   }
 
   public static func scrub(_ env: [String: String]) -> [String: String] { env.filter { !isInherited($0.key) } }
-
-  /// Names to unset from `tmux show-environment` output (`NAME=value`, or `-NAME` for one already removed). An
-  /// existing tmux server may have been started by a polluted process; `-e` on a new pane cannot remove those.
-  public static func inheritedNames(inShowEnvironment out: String) -> [String] {
-    out.split(separator: "\n").compactMap { line in
-      var s = Substring(line)
-      if s.hasPrefix("-") { s = s.dropFirst() }
-      let name = String(s.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
-      return !name.isEmpty && isInherited(name) ? name : nil
-    }
-  }
 }

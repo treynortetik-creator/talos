@@ -1,0 +1,197 @@
+[
+  {
+    "label": "full name",
+    "text": "What did Ada Quillen say about the renewal?",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "full name, lowercase",
+    "text": "ping ada quillen about the check-in",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "surname possessive, unique",
+    "text": "Quillen's calendar is full this week",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "surname after an opener",
+    "text": "Ask Lindqvist when the deck is due",
+    "expect": ["wiki/people/grace-lindqvist.md"]
+  },
+  {
+    "label": "surname held by two people",
+    "text": "Okafor sent the data over",
+    "expect": []
+  },
+  {
+    "label": "full name of one of two",
+    "text": "Ben Okafor sent the data over",
+    "expect": ["wiki/people/ben-okafor.md"]
+  },
+  {
+    "label": "two people sharing a surname, both named",
+    "text": "Ben Okafor and Carla Okafor met",
+    "expect": ["wiki/people/ben-okafor.md", "wiki/people/carla-okafor.md"]
+  },
+  {
+    "label": "alias, capitalised",
+    "text": "Addie called about the launch",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "alias, lowercase",
+    "text": "addie called about the launch",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "alias, two letters",
+    "text": "QF launches Monday",
+    "expect": ["wiki/projects/quasarfin.md"]
+  },
+  {
+    "label": "project mid-sentence",
+    "text": "How is Quasarfin doing lately?",
+    "expect": ["wiki/projects/quasarfin.md"]
+  },
+  {
+    "label": "project, lowercase coined name",
+    "text": "quasarfin needs a new owner this week",
+    "expect": ["wiki/projects/quasarfin.md"]
+  },
+  {
+    "label": "entity head before a dash",
+    "text": "Did the Acme renewal come up again?",
+    "expect": ["wiki/orgs/acme-vendor.md"]
+  },
+  {
+    "label": "ordinary word as sentence opener",
+    "text": "Atlas is behind schedule",
+    "expect": []
+  },
+  {
+    "label": "ordinary word mid-sentence",
+    "text": "How is Atlas doing today?",
+    "expect": ["wiki/projects/atlas.md"]
+  },
+  {
+    "label": "one-word title that is also a first name",
+    "text": "Mina said hi",
+    "expect": []
+  },
+  {
+    "label": "full name beside that first name",
+    "text": "Mina Falkner said hi",
+    "expect": ["wiki/people/mina-falkner.md"]
+  },
+  {
+    "label": "a first name alone, no note by that name",
+    "text": "Ask Ada about it",
+    "expect": []
+  },
+  {
+    "label": "confidential note",
+    "text": "Zed Hidden wrote it",
+    "expect": []
+  },
+  {
+    "label": "superseded note",
+    "text": "Olaf Obsolete wrote it",
+    "expect": []
+  },
+  {
+    "label": "archived note",
+    "text": "Oldco Vendor wrote it",
+    "expect": []
+  },
+  {
+    "label": "note outside wiki (a private vault)",
+    "text": "Vera Vaultman filed it",
+    "expect": []
+  },
+  {
+    "label": "the owner's own name",
+    "text": "Riley Quinn needs the update",
+    "expect": []
+  },
+  {
+    "label": "outsider with a famous name",
+    "text": "Thomas Edison invented the bulb",
+    "expect": []
+  },
+  {
+    "label": "name in a code span",
+    "text": "run `Ada Quillen` through the script",
+    "expect": []
+  },
+  {
+    "label": "name in a fenced block",
+    "text": "look at this\n```\nGrace Lindqvist\n```\nplease",
+    "expect": []
+  },
+  {
+    "label": "name in a URL",
+    "text": "see https://example.com/Ada-Quillen for details",
+    "expect": []
+  },
+  {
+    "label": "name only in a pasted path",
+    "text": "read wiki/people/grace-lindqvist.md and summarize",
+    "expect": []
+  },
+  {
+    "label": "name in an email address",
+    "text": "mail Dev.Marsholt@example.com today",
+    "expect": []
+  },
+  {
+    "label": "file name that looks like a name",
+    "text": "Quasarfin.md has the dates",
+    "expect": []
+  },
+  {
+    "label": "hyphen between the words",
+    "text": "Ada-Quillen shipped it",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "hyphen then a line break",
+    "text": "Ada-\nQuillen shipped it",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "more than three names: the first three by rank",
+    "text": "Ada Quillen, Ben Okafor, Dev Marsholt, Grace Lindqvist and Quasarfin",
+    "expect": ["wiki/people/ada-quillen.md", "wiki/people/ben-okafor.md", "wiki/people/dev-marsholt.md"]
+  },
+  {
+    "label": "a longer span first, then the single word",
+    "text": "Quasarfin and Grace Lindqvist are late",
+    "expect": ["wiki/people/grace-lindqvist.md", "wiki/projects/quasarfin.md"]
+  },
+  {
+    "label": "emoji and accents",
+    "text": "🔥 Grace Lindqvist — café über",
+    "expect": ["wiki/people/grace-lindqvist.md"]
+  },
+  {
+    "label": "curly apostrophe possessive",
+    "text": "Ada Quillen’s notes are ready",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "generic capitalised words",
+    "text": "Please Review The Quarterly Budget Today",
+    "expect": []
+  },
+  {
+    "label": "made-up near miss",
+    "text": "Ada Quillan and Dev Marshall",
+    "expect": []
+  },
+  {
+    "label": "empty text",
+    "text": "",
+    "expect": []
+  }
+]

@@ -103,6 +103,13 @@ describe('uploadFailureNote', () => {
     expect(uploadFailureNote(new TalosClientError('too_large'))).toBe(TOO_BIG)
     expect(uploadFailureNote(new HttpError(413))).toBe(TOO_BIG)
     expect(uploadFailureNote(new HttpError(429))).toMatch(/limit/i)
+    // the relay's two limits are told apart (bug hunt R14)
+    expect(uploadFailureNote(new HttpError(429, undefined, { error: 'rate_limited' }))).toBe(
+      "Couldn't upload: hourly upload limit reached, try again in a while",
+    )
+    expect(uploadFailureNote(new HttpError(429, undefined, { error: 'daily_limit' }))).toBe(
+      "Couldn't upload: daily upload limit reached",
+    )
     expect(uploadFailureNote(new HttpError(500, undefined, { error: 'no_space_left_on_device' }))).toBe(
       "Couldn't upload: the Mac is out of disk space",
     )

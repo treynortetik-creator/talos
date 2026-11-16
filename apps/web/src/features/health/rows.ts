@@ -1,8 +1,9 @@
 // The pure part of Settings -> Health (docs/V2-FEATURES.md V2.5): GET /api/status in, rows / notes / banner out. Times are
 // read against the status' own `at`, never the browser's clock, so a row never disagrees with the server that wrote it.
 // (The V2.5 "External check" row is dropped: the hourly external check is not built, owner 2026-10-29.)
-import { DISK_LOW_BYTES, DISK_RECOVERED_BYTES, type HealthStatusT } from '@talos-app/protocol'
-import { clockTime, relativeTime } from '../../lib/format.ts'
+import { DISK_LOW_BYTES, DISK_RECOVERED_BYTES, type HealthStatusT, type Host } from '@talos-app/protocol'
+import { relativeTime, timeLabel } from '../../lib/format.ts'
+import { computerLabel, hostSteps, placeWords } from '../../lib/hostWords.ts'
 
 export type Tone = 'ok' | 'warn' | 'bad' | 'idle'
 export type HealthRow = {
@@ -27,7 +28,27 @@ export function formatFree(bytes: number): string {
   return `${Math.floor(bytes / 1024 ** 2)} MB`
 }
 
-export function healthRows(s: HealthStatusT, extra: { scheduler: { state: string | null } | undefined }): HealthRow[] {
+export function healthRows(
+  s: HealthStatusT,
+  extra: { scheduler: { state: string | null } | undefined; host?: Host | null },
+): HealthRow[] {
+  // the Mac's words (the default) or another host's (lib/hostWords.ts)
+  const host = extra.host === undefined ? 'mac' : extra.host
+  return host === 'mac'
+    ? macHealthRows(s, extra)
+    : macHealthRows(s, extra).map((r) => ({
+        ...r,
+        label:
+          r.id === 'bridge'
+            ? `Talos on your ${host === 'windows' ? 'PC' : 'computer'}`
+            : r.id === 'disk'
+              ? `${computerLabel(host)} disk`
+              : r.label,
+        detail: placeWords(r.detail, host),
+      }))
+}
+
+function macHealthRows(s: HealthStatusT, extra: { scheduler: { state: string | null } | undefined }): HealthRow[] {
   const now = Date.parse(s.at)
   const rows: HealthRow[] = []
 
@@ -37,7 +58,8 @@ export function healthRows(s: HealthStatusT, extra: { scheduler: { state: string
     id: 'relay',
     label: 'Relay',
     tone: full ? 'bad' : 'ok',
-    detail: `${full ? 'Relay storage is nearly full · ' : ''}up since ${clockTime(s.relay.up_since)} · v${s.relay.version}`,
+    // timeLabel names the day for a time before today: "up since 2:02 PM" today, "up since Sep 29, 2:02 PM" a month ago
+    detail: `${full ? 'Relay storage is nearly full · ' : ''}up since ${timeLabel(s.relay.up_since, now)} · v${s.relay.version}`,
   })
 
   // Mac bridge
@@ -50,7 +72,7 @@ export function healthRows(s: HealthStatusT, extra: { scheduler: { state: string
       id: 'bridge',
       label: 'Mac bridge',
       tone: red ? 'bad' : 'warn',
-      detail: since ? `offline since ${clockTime(since)}` : 'offline',
+      detail: since ? `offline since ${timeLabel(since, now)}` : 'offline',
     })
   }
 
@@ -116,15 +138,20 @@ export function healthRows(s: HealthStatusT, extra: { scheduler: { state: string
 }
 
 /** The two things the Mac's beat can say that are not a problem with a row. */
-export function healthNotes(s: HealthStatusT): string[] {
+export function healthNotes(s: HealthStatusT, host: Host | null = 'mac'): string[] {
   const out: string[] = []
-  if (s.beat?.tts === false) out.push('Voice replies need a TTS command on your Mac')
-  if (s.beat?.sqlite?.fts5 === false) out.push("Search is off: this Mac's SQLite has no FTS5")
+  if (s.beat?.tts === false)
+    out.push(
+      host === 'windows'
+        ? "Spoken replies aren't set up on a Windows PC yet." // Titan: no voice command on the PC (a gap)
+        : placeWords('Voice replies need a TTS command on your Mac', host),
+    )
+  if (s.beat?.sqlite?.fts5 === false) out.push(placeWords("Search is off: this Mac's SQLite has no FTS5", host))
   return out
 }
 
-/** The four ways the Mac can be a problem. One banner per state, wherever it shows (Home banners, the thread screens). */
-export type MacState = 'dropped' | 'asleep' | 'key_refused' | 'mod_quiet'
+/** The ways the Mac can be a problem. One banner per state, wherever it shows (Home banners, the thread screens). */
+export type MacState = 'dropped' | 'asleep' | 'key_refused' | 'mod_quiet' | 'superseded'
 export type MacMessage = {
   kind: MacState /** What happened, in plain words. */
   cause: string /** What to do about it. */
@@ -143,7 +170,30 @@ const lastSeenNote = (lastSeen: string | null | undefined, nowMs: number) => {
 /** The one place the Mac-problem wording lives. Each state says what happened and what to do, with no jargon. */
 export function macMessage(
   kind: MacState,
-  ctx: { lastSeen?: string | null; nowMs?: number; bufferDays?: number | undefined } = {},
+  ctx: { lastSeen?: string | null; nowMs?: number; bufferDays?: number | undefined; host?: Host | null } = {},
+): MacMessage {
+  // the Mac's words (the default); another host gets the place words, and its own steps where a command is named
+  const host = ctx.host === undefined ? 'mac' : ctx.host
+  const m = macWords(kind, ctx)
+  if (host === 'mac') return m
+  const steps = hostSteps(host)
+  const days = ctx.bufferDays === undefined ? '7 days' : ctx.bufferDays === 1 ? '1 day' : `${ctx.bufferDays} days`
+  const next =
+    kind === 'asleep'
+      ? steps.asleep(days)
+      : kind === 'key_refused'
+        ? steps.keyFix
+        : kind === 'superseded'
+          ? steps.superseded
+          : kind === 'mod_quiet'
+            ? steps.modQuiet
+            : placeWords(m.next, host)
+  return { kind, cause: placeWords(m.cause, host), next }
+}
+
+function macWords(
+  kind: MacState,
+  ctx: { lastSeen?: string | null; nowMs?: number; bufferDays?: number | undefined },
 ): MacMessage {
   const days = ctx.bufferDays === undefined ? '7 days' : ctx.bufferDays === 1 ? '1 day' : `${ctx.bufferDays} days`
   const seen = lastSeenNote(ctx.lastSeen, ctx.nowMs ?? Date.now())
@@ -158,29 +208,41 @@ export function macMessage(
       return {
         kind,
         cause: `Your Mac is offline${seen}. It is probably asleep, or the Claude session on it has stopped.`,
-        next: `Wake the Mac and check that Claude is still running in its terminal. Your messages wait on the server for up to ${days}.`,
+        next: hostSteps('mac').asleep(days),
       }
     case 'key_refused':
       return {
         kind,
         cause: "Your Mac is offline: the server turned away its key, so it can't connect.",
-        next: 'On the Mac, run talos-app doctor. It prints the key line your server needs: paste it into your server settings and deploy again. The setup guide has the steps.',
+        next: hostSteps('mac').keyFix,
+      }
+    case 'superseded':
+      return {
+        kind,
+        cause: `Bridge superseded${seen}: another bridge connected with the same key and took its place, and that one has gone too.`,
+        next: hostSteps('mac').superseded,
       }
     case 'mod_quiet':
       return {
         kind,
         cause: 'Your mod stopped reporting.',
-        next: 'Check that Claude is still running on your Mac with the Talos mod loaded.',
+        next: hostSteps('mac').modQuiet,
       }
   }
 }
 
 /**
- * Offline from the live presence frame (no status needed): just dropped, or gone long enough to be asleep / stopped. Null
- * while the Mac is online.
+ * Offline from the live presence frame (no status needed): replaced by another bridge, just dropped, or gone long enough to be
+ * asleep / stopped. Null while the Mac is online.
  */
-export function presenceMacState(online: boolean, lastSeen: string | null, nowMs: number): 'dropped' | 'asleep' | null {
+export function presenceMacState(
+  online: boolean,
+  lastSeen: string | null,
+  nowMs: number,
+  superseded = false,
+): 'dropped' | 'asleep' | 'superseded' | null {
   if (online) return null
+  if (superseded) return 'superseded'
   const seen = lastSeen ? Date.parse(lastSeen) : Number.NaN
   return Number.isFinite(seen) && nowMs - seen <= MAC_GONE_MS ? 'dropped' : 'asleep'
 }
@@ -201,14 +263,16 @@ export function bannerFor(
   s: HealthStatusT,
   inQuietWindow: boolean,
   nowMs: number = Date.parse(s.at),
+  host: Host | null = 'mac',
 ): HealthBannerInfo | null {
   const pick = (kind: HealthBannerInfo['kind'], state: MacState): HealthBannerInfo => {
-    const m = macMessage(state, { lastSeen: s.bridge.last_seen, nowMs, bufferDays: s.limits?.buffer_days })
+    const m = macMessage(state, { lastSeen: s.bridge.last_seen, nowMs, bufferDays: s.limits?.buffer_days, host })
     return { kind, text: m.cause, next: m.next }
   }
   if (!s.bridge.online && s.bridge.auth_refused_at) return pick('key_refused', 'key_refused')
   if (s.mac_problems.includes('mod_quiet')) return pick('mod_quiet', 'mod_quiet')
-  if (s.mac_problems.includes('bridge_offline') && !inQuietWindow) return pick('bridge_offline', 'asleep')
+  if (s.mac_problems.includes('bridge_offline') && !inQuietWindow)
+    return pick('bridge_offline', s.bridge.superseded ? 'superseded' : 'asleep')
   return null
 }
 

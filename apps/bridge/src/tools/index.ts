@@ -1,7 +1,7 @@
-import { threadSessionMode } from '@talos-app/protocol'
+import { leadPostThreads, leadReadThreads, threadSessionMode } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
 import { fail, type Tool, type ToolResult } from './common.ts'
-import { AGENT_TOOL_GROUPS, type AgentToolGroup } from './define.ts'
+import { AGENT_TOOL_GROUPS, type AgentToolGroup, READ_THREAD_TOOLS, SUB_THREAD_POST_TOOLS } from './define.ts'
 import { workerStoreOf } from './read-inbound.ts'
 import { AGENT_TOOLS, HEADLESS_BRIDGE_TOOLS, TOOL_RECORDS, tableProblems, WORKER_THREAD_LOCKED_TOOLS } from './table.ts'
 
@@ -48,8 +48,13 @@ export function toolsFor(env: {
 }
 
 const LOCKED = new Set<string>(WORKER_THREAD_LOCKED_TOOLS)
+const READERS = new Set<string>(READ_THREAD_TOOLS)
+const SUB_POSTERS = new Set<string>(SUB_THREAD_POST_TOOLS)
 
-/** A worker may only touch its own thread: the error names that thread and no other. */
+/**
+ * A worker may only touch its own thread, plus, as a parent's lead, the sub-threads it answers (posting) or every
+ * sub-thread under it (reading). The error names the threads it may use and no other.
+ */
 function workerRefusal(ctx: BridgeContext, name: string, args: Record<string, unknown>): ToolResult | undefined {
   const own = ctx.worker?.thread
   if (!own) return undefined
@@ -57,9 +62,19 @@ function workerRefusal(ctx: BridgeContext, name: string, args: Record<string, un
   if (LOCKED.has(name) && threadSessionMode(ctx.config.config, own) !== 'dedicated')
     return fail(`Thread "${own}" no longer has its own session; the main session answers it now. Stop here.`)
   const asked = typeof args.thread_id === 'string' ? args.thread_id : args.chat_id
-  if (LOCKED.has(name) && asked !== undefined && asked !== own)
-    return fail(`This session belongs to thread "${own}" and can only post there. Valid thread ids: ${own}`)
-  if (LOCKED.has(name) && asked === undefined) return fail(`thread_id is required. Valid thread ids: ${own}`)
+  const reads = READERS.has(name)
+  const valid = reads
+    ? leadReadThreads(ctx.config.config, own)
+    : SUB_POSTERS.has(name)
+      ? leadPostThreads(ctx.config.config, own)
+      : [own]
+  const subs = valid.length > 1 ? ` and in its sub-threads (${reads ? 'to read' : 'to answer the owner'})` : ''
+  if (LOCKED.has(name) && asked !== undefined && !valid.includes(String(asked)))
+    return fail(
+      `This session belongs to thread "${own}" and can only post there${subs}. Valid thread ids: ${valid.join(', ')}`,
+    )
+  if (LOCKED.has(name) && asked === undefined)
+    return fail(`thread_id is required. Valid thread ids: ${valid.join(', ')}`)
   // cards: only what this session raised, checked before anything touches the shared ledger
   const raised = (id: unknown) =>
     typeof id !== 'string' || !ctx.ledger.get(id) || workerStoreOf(ctx).cardRaiser(id) === own
@@ -78,11 +93,14 @@ export async function callTool(ctx: BridgeContext, name: string, args: Record<st
   if (ctx.worker) {
     const refused = workerRefusal(ctx, name, args)
     if (refused) return refused
-  } else if (ctx.mode === 'headless' && (tool.liveOnly || !HEADLESS_OK.has(name))) {
+  } else if ((ctx.mode === 'headless' || ctx.superseded) && (tool.liveOnly || !HEADLESS_OK.has(name))) {
     return fail(
-      `${name} needs a live session (TALOS_APP_BRIDGE=1); in headless mode use reply, attach, card or list_threads`,
+      `${name} needs a live session (TALOS_APP_BRIDGE=1); in headless mode (or while another bridge owns the key) use reply, attach, card or list_threads`,
     )
   }
+  // After the fence, and never able to fail the call: Main calling a tool is Main reading (status.json's unseen_oldest_at).
+  // Some contexts (tests' fakes) carry no tracker.
+  if (!ctx.worker) ctx.seen?.toolCalled()
   try {
     return await tool.handler(ctx, args)
   } catch (e) {

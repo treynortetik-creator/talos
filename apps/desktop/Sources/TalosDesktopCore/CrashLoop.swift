@@ -1,6 +1,7 @@
 import Foundation
 
-/// Crash-loop cap (4.3 step 5): 5 restarts in 15 min, or 3 auto-confirms in 60 min → stop.
+/// Crash-loop cap (4.3 step 5): 5 restarts in 15 min → stop. 3 auto-confirms in 60 min → the next warning waits for the owner
+/// (the restart still happens; the cap only ends the pressing).
 public struct CrashLoop: Equatable, Sendable {
   public var restarts: [Double] = []
   public var autoConfirms: [Double] = []

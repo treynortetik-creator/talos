@@ -16,13 +16,22 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 AGENT_DIR="$(python3 "$HERE/_agent_root.py" "$0" 2>/dev/null)" || AGENT_DIR="$(cd "$HERE/.." && pwd)"   # the agent folder, not the plugin release
 cd "$AGENT_DIR" || { echo "snapshot: cannot enter $AGENT_DIR"; exit 1; }
+# where the wiki is: wiki/ unless .talos-version has a layout line (a layout-1 agent needs no resolver, and so no python3, for this);
+# with one, the one resolver answers (layout 2: memory/wiki/) and a refusal stops this script with its message
+WIKI_REL=wiki
+if grep -qi '^[[:space:]]*layout' "$PWD/.talos-version" 2>/dev/null; then
+  [ -f "$HERE/_talos_layout.py" ] || { echo "$PWD/.talos-version has a layout line but $HERE/_talos_layout.py is missing: refusing to guess where the wiki is"; exit 1; }
+  _w="$(python3 "$HERE/_talos_layout.py" "$PWD" wiki)" || exit 1
+  WIKI_REL="${_w#"$PWD"/}"
+fi
+WIKI_TOP="${WIKI_REL%%/*}"      # the folder git sees: "wiki", or "memory" (which holds it) on layout 2
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "snapshot: this folder is not a git repository; nothing done (no git init here)"; exit 0; }
 # the repository must BE this folder: a parent repository would be committing someone else's files
 [ "$(cd "$(git rev-parse --show-toplevel)" && pwd -P)" = "$(pwd -P)" ] || { echo "snapshot: the git repository is not this agent folder ($(git rev-parse --show-toplevel)); refusing"; exit 1; }
 
 PATHS=""
-for p in memory wiki .learnings; do [ -d "$p" ] && [ ! -L "$p" ] && PATHS="$PATHS $p"; done
+for p in memory $([ "$WIKI_TOP" = memory ] || echo "$WIKI_TOP") .learnings; do [ -d "$p" ] && [ ! -L "$p" ] && PATHS="$PATHS $p"; done
 [ -n "$PATHS" ] || { echo "snapshot: none of memory, wiki, .learnings exists; nothing to do"; exit 0; }
 
 # Only paths git actually reports a change in: `git add -- <an existing but empty folder>` fails with "pathspec did not match",

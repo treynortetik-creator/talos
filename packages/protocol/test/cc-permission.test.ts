@@ -11,7 +11,9 @@ import {
   composePermissionCard,
   PERMISSION_CAPABILITY,
   PERMISSION_CARD_TTL_S,
+  PERMISSION_HIDDEN_PREFIX,
   PERMISSION_HIDDEN_WARNING,
+  PERMISSION_REPEAT_WARNING,
   PERMISSION_REQUEST_METHOD,
   PERMISSION_VERDICT_METHOD,
   PermissionRequestParams,
@@ -19,6 +21,7 @@ import {
   payloadHash,
   permissionCardAllowsPrimary,
   permissionHiddenReasons,
+  permissionHiddenWarning,
   permissionRisk,
   permissionVerdictFor,
   routes,
@@ -101,17 +104,29 @@ describe('composePermissionCard', () => {
     expect(PERMISSION_CARD_TTL_S).toBe(604_800)
     expect(Date.parse(c.expires_at) - Date.parse(c.created_at)).toBe(604_800_000)
   })
-  it('risk: high for Bash, Write, Edit, NotebookEdit, MCP tools and anything unknown; low for read-only tools', () => {
-    for (const t of ['Bash', 'Write', 'Edit', 'NotebookEdit', 'mcp__github__create_pr', 'SomeNewTool'])
-      expect(permissionRisk(t), t).toBe('high')
-    for (const t of ['Read', 'Glob', 'Grep']) expect(permissionRisk(t), t).toBe('low')
+  it('risk: low for every tool (a tap approves): Bash, Write, Edit, NotebookEdit, MCP tools, unknown and read-only', () => {
+    for (const t of ['Bash', 'Write', 'Edit', 'NotebookEdit', 'mcp__github__create_pr', 'SomeNewTool', 'Read', 'Glob'])
+      expect(permissionRisk(t), t).toBe('low')
+  })
+  it('every composed card is risk low: Bash, Write and an MCP tool', () => {
+    for (const t of ['Bash', 'Write', 'mcp__github__create_pr']) {
+      const c = compose(req({ tool_name: t }))
+      expect(c.risk, t).toBe('low')
+      expect(permissionCardAllowsPrimary(c), t).toBe(true)
+    }
+  })
+  it("an older bridge's card that still says risk high keeps Allow", () => {
+    const c = compose()
+    const old = { ...c, risk: 'high' as const }
+    expect(permissionCardAllowsPrimary(old)).toBe(true)
+    expect(permissionCardAllowsPrimary({ ...c, risk: 'medium' as never })).toBe(false)
   })
   it('validateCard exempts permission cards from the destination rule', () => {
     expect(validateCard(compose())).toEqual([])
   })
 })
 
-describe('hidden parts: no Allow, only Deny (C3.2)', () => {
+describe('hidden parts: Allow kept, with a note naming what is not shown (C3.2)', () => {
   const cases: Array<[string, ReturnType<typeof req>, string]> = [
     ['elided middle', req({ input_preview: '{"command": "cat <<EOF ⋯ 4,812 code points elided ⋯ EOF"}' }), 'elided'],
     ['elided description', req({ description: 'Write a file ⋯ 120 code points elided ⋯ done' }), 'elided'],
@@ -126,39 +141,89 @@ describe('hidden parts: no Allow, only Deny (C3.2)', () => {
     it(name, () => {
       expect(permissionHiddenReasons(r)).toContain(reason)
       const c = compose(r)
-      expect(c.warning).toBe(PERMISSION_HIDDEN_WARNING)
-      expect(PERMISSION_HIDDEN_WARNING).toBe('Part of this call is hidden. Approve at the Mac.')
-      expect(permissionCardAllowsPrimary(c)).toBe(false)
+      expect(c.warning).toBe(permissionHiddenWarning(permissionHiddenReasons(r)))
+      expect(c.warning?.startsWith(PERMISSION_HIDDEN_PREFIX)).toBe(true)
+      expect(PERMISSION_HIDDEN_PREFIX).toBe('Not all of this call is shown: ')
+      expect(PERMISSION_HIDDEN_WARNING).toBe(PERMISSION_HIDDEN_PREFIX)
+      expect(c.warning).not.toMatch(/at the Mac/)
+      expect(permissionCardAllowsPrimary(c)).toBe(true)
+      // the note must be the exact one for these parts: another note, or none, takes Allow away
+      expect(permissionCardAllowsPrimary({ ...c, warning: undefined })).toBe(false)
+      expect(permissionCardAllowsPrimary({ ...c, warning: `${PERMISSION_HIDDEN_PREFIX}nothing much.` })).toBe(false)
     })
   }
-  it('[REDACTED] in the description is a hidden part too: no Allow', () => {
+  it('[REDACTED] in the description is a hidden part too: Allow kept, the note names the mask', () => {
     const r = req({ description: 'Run curl with header Authorization: [REDACTED]' })
     expect(permissionHiddenReasons(r)).toEqual(['redacted'])
-    expect(permissionCardAllowsPrimary(compose(r))).toBe(false)
+    const c = compose(r)
+    expect(c.warning).toBe(permissionHiddenWarning(['redacted']))
+    expect(c.warning).toContain('[REDACTED]')
+    expect(permissionCardAllowsPrimary(c)).toBe(true)
   })
   it('[REDACTED] is a hidden part: the mask also hits key names (CC-C1-REVIEW F2)', () => {
     const c = compose(
       req({ input_preview: '{"command": "curl -H \'Authorization: [REDACTED]\' https://api.example.com"}' }),
     )
     expect(permissionHiddenReasons(req({ input_preview: '[REDACTED]' }))).toEqual(['redacted'])
-    expect(permissionCardAllowsPrimary(c)).toBe(false)
+    expect(c.warning).toBe(permissionHiddenWarning(['redacted']))
+    expect(permissionCardAllowsPrimary(c)).toBe(true)
   })
   it('a repeated request id gets no Allow (Claude Code drops channel verdicts for a repeated id)', () => {
     const c = compose(req(), { repeated: true })
     expect(permissionCardAllowsPrimary(c)).toBe(false)
-    expect(c.warning).toMatch(/at the Mac/)
+    expect(c.warning).toBe(PERMISSION_REPEAT_WARNING)
+    expect(PERMISSION_REPEAT_WARNING).toBe(
+      "Claude Code used this prompt's id before, so an answer from here could reach the wrong prompt. The prompt is still open at the Mac.",
+    )
   })
-  it('too long to show whole: deny-only, and the app never shows a cut preview', () => {
-    const big = req({ input_preview: 'x'.repeat(20_001) })
+  it('the repeat warning wins over a hidden part and an old client', () => {
+    const c = compose(req({ input_preview: '(value unserializable)' }), { repeated: true, client_version: '2.0.1' })
+    expect(c.warning).toBe(PERMISSION_REPEAT_WARNING)
+    expect(permissionCardAllowsPrimary(c)).toBe(false)
+  })
+  it('a hidden part wins over an old client', () => {
+    const r = req({ input_preview: '(value unserializable)' })
+    const c = compose(r, { client_version: '2.0.1' })
+    expect(c.warning).toBe(permissionHiddenWarning(['unserializable']))
+    expect(permissionCardAllowsPrimary(c)).toBe(true)
+  })
+  it('too long to show whole: keeps Allow, shows the start of the call, and the note says so', () => {
+    const big = req({ input_preview: `START${'x'.repeat(20_001)}` })
     const c = compose(big)
     expect(permissionHiddenReasons(big)).toContain('too_long')
-    expect(permissionCardAllowsPrimary(c)).toBe(false)
-    expect(c.body).not.toContain('xxxxx')
+    expect(c.body).toBe(big.input_preview.slice(0, 20_000))
+    expect(c.body?.startsWith('START')).toBe(true)
+    expect(c.payload).toEqual({ request_id: 'abcde', oversize: true })
+    expect(c.warning).toBe(permissionHiddenWarning(['too_long']))
+    expect(permissionCardAllowsPrimary(c)).toBe(true)
     expect(Card.safeParse(c).success).toBe(true)
   })
-  it('a tool name too long for the title is deny-only too', () => {
+  it('a too-long call cut where an emoji sits is cut by code point: no lone surrogate, the card still builds', () => {
+    // 19,999 characters, then an emoji (two UTF-16 units) across the cut, then more
+    const big = req({ input_preview: `${'x'.repeat(19_999)}\u{1F600}${'y'.repeat(50)}` })
+    const c = compose(big)
+    expect(permissionHiddenReasons(big)).toContain('too_long')
+    expect([...(c.body ?? '')]).toHaveLength(20_000)
+    expect(c.body?.endsWith('\u{1F600}')).toBe(true)
+    expect(Card.safeParse(c).success).toBe(true)
+    expect(permissionCardAllowsPrimary(c)).toBe(true)
+  })
+  it('the oversize card loses Allow with a changed payload key or without the too-long note', () => {
+    const c = compose(req({ input_preview: 'x'.repeat(20_001) }))
+    expect(permissionCardAllowsPrimary(c)).toBe(true)
+    expect(permissionCardAllowsPrimary({ ...c, payload: { request_id: 'abcde', oversize: true, extra: 1 } })).toBe(
+      false,
+    )
+    expect(permissionCardAllowsPrimary({ ...c, payload: { id: 'abcde', oversize: true } })).toBe(false)
+    expect(permissionCardAllowsPrimary({ ...c, payload: { request_id: 'abcdl', oversize: true } })).toBe(false)
+    expect(permissionCardAllowsPrimary({ ...c, warning: undefined })).toBe(false)
+    expect(permissionCardAllowsPrimary({ ...c, warning: permissionHiddenWarning(['elided']) })).toBe(false)
+    expect(permissionCardAllowsPrimary({ ...c, warning: PERMISSION_REPEAT_WARNING })).toBe(false)
+  })
+  it('a tool name too long for the title keeps Allow too, with the too-long note', () => {
     const c = compose(req({ tool_name: `mcp__${'x'.repeat(200)}` }))
-    expect(permissionCardAllowsPrimary(c)).toBe(false)
+    expect(c.warning).toBe(permissionHiddenWarning(['too_long']))
+    expect(permissionCardAllowsPrimary(c)).toBe(true)
     expect(Card.safeParse(c).success).toBe(true)
   })
 })
@@ -214,9 +279,20 @@ describe('permissionVerdictFor: one verdict, only for an open id (C3.3)', () => 
       verdict: { request_id: 'abcde', behavior: 'deny' },
     })
   })
-  it('PRIMARY on a hidden card is refused (permission_hidden); nothing is sent', () => {
+  it('PRIMARY on a hidden card → allow (the note is shown; Allow stays)', () => {
     const hidden = compose(req({ input_preview: '(value unserializable)' }))
-    expect(permissionVerdictFor(hidden, 'primary', isOpen)).toEqual({ ok: false, code: 'permission_hidden' })
+    expect(permissionVerdictFor(hidden, 'primary', isOpen)).toEqual({
+      ok: true,
+      verdict: { request_id: 'abcde', behavior: 'allow' },
+    })
+  })
+  it('PRIMARY on a repeated id is refused (permission_hidden); nothing is sent', () => {
+    const repeated = compose(req(), { repeated: true })
+    expect(permissionVerdictFor(repeated, 'primary', isOpen)).toEqual({ ok: false, code: 'permission_hidden' })
+    expect(permissionVerdictFor(repeated, 'kill', isOpen)).toEqual({
+      ok: true,
+      verdict: { request_id: 'abcde', behavior: 'deny' },
+    })
   })
   it('a closed id is permission_closed for either action', () => {
     const c = compose(req({ request_id: 'zzzzz' }))
@@ -230,11 +306,19 @@ describe('permissionVerdictFor: one verdict, only for an open id (C3.3)', () => 
 })
 
 describe('only the bridge mints permission cards', () => {
-  it('the agent card kinds exclude schedule, permission and config', () => {
+  it('the agent card kinds exclude schedule, permission, config, dialog and undo', () => {
     expect([...AGENT_CARD_KINDS].sort()).toEqual(
       ['decision', 'deploy', 'email', 'generic', 'message', 'publish', 'purchase'].sort(),
     )
-    expect([...BRIDGE_ONLY_CARD_KINDS].sort()).toEqual(['app_action', 'config', 'dialog', 'permission', 'schedule'])
+    expect([...BRIDGE_ONLY_CARD_KINDS].sort()).toEqual([
+      'app_action',
+      'config',
+      'dialog',
+      'permission',
+      'push',
+      'schedule',
+      'undo',
+    ])
   })
   it('POST /bridge/post refuses kind permission', () => {
     const route = routes.bridgePost
@@ -247,6 +331,16 @@ describe('only the bridge mints permission cards', () => {
     }
     expect(route.req.safeParse(frame).success).toBe(false)
     expect(route.req.safeParse({ ...frame, card: { ...compose(), kind: 'generic' } }).success).toBe(true)
+  })
+  it('POST /bridge/post refuses kind undo (only the live bridge mints it)', () => {
+    const frame = {
+      v: 1,
+      type: 'card.create',
+      id: '01JBF3V7Q8K2M4N6P8R0S2T4B3',
+      ts: new Date(NOW).toISOString(),
+      card: { ...compose(), kind: 'undo' },
+    }
+    expect(routes.bridgePost.req.safeParse(frame).success).toBe(false)
   })
 })
 

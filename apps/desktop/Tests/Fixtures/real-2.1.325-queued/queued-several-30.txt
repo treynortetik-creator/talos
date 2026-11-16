@@ -1,0 +1,40 @@
+⏺ Got it. Sleep's still
+  running, no "done" yet.
+
+✻ Cogitated for 3s · done 7:40
+  PM
+
+❯ second queued note
+
+⏺ Noted. Still waiting on the
+  damn sleep.
+
+✻ Cogitated for 2s · done 7:40
+  PM
+
+❯ Write a 1500-word story
+  about a lighthouse keeper,
+  as plain prose. Use no
+  tools.
+
+❯ first queued note
+
+❯ second queued note
+
+❯ Write a 1500-word story
+  about a lighthouse keeper,
+  as plain prose. Use no
+  tools.
+  ctrl+x ctrl+s to send now
+
+✢ Pondering… (thinking)
+  ⎿  Tip: Use Plan Mode to
+     prepare for a complex
+     request before making
+     changes. Press shift+tab
+     twice to enable.
+
+──────────────────────────────
+❯ Press up to edit queued mes…
+──────────────────────────────
+  ⏸ manual mode on · esc to…

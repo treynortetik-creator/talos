@@ -1,7 +1,7 @@
 // The live side of MCP apps: `app.request` handling, the pending-request lifecycle, results coming back from the hooks,
 // card outcomes, views and their revocation (MCP-APPS-SPEC M4, M5.2 to M5.6). One instance per live bridge.
 // Nothing here logs arguments, message text or results (M4.8).
-import { type FSWatcher, readFileSync, statSync, watch } from 'node:fs'
+import { type FSWatcher, readFileSync, statSync } from 'node:fs'
 import {
   type AppErrorCodeT,
   type AppPendingRequestT,
@@ -24,7 +24,9 @@ import type { LedgerRow } from '../cards-ledger.ts'
 import { iso } from '../clock.ts'
 import { type BridgeContext, postSystemNotice, threadRef, touchThread } from '../context.ts'
 import { appResponseFrame, appUpdateFrame, cardUpdateFrame, replyFrame } from '../frames-out.ts'
+import { quietWatch } from '../fs-watch.ts'
 import { appCardActionLine, appMessageNotification, appToolCallNotification } from '../notify.ts'
+import { appsFix, say } from '../owner-words.ts'
 import { type CaptureT, deleteCapture, pruneCaptures, readCapture } from './captures.ts'
 import { type AppCardPayloadT, cardPayloadOf, prettyArgs, sendAppCard } from './cards.ts'
 import {
@@ -164,7 +166,7 @@ export class AppService {
     if (this.deps.watch === false) return
     for (const dir of [this.paths.claimed, this.paths.captures, this.paths.dir]) {
       try {
-        this.watchers.push(watch(dir, { persistent: false }, () => this.poke()))
+        this.watchers.push(quietWatch(dir, () => this.poke()))
       } catch {
         // the periodic tick still runs
       }
@@ -254,14 +256,23 @@ export class AppService {
       const server = cat ? findServer(cat, v.server, v.source) : undefined
       const res = server?.resources.find((r) => r.uri === v.resource_uri)
       if (res?.state !== 'approved' || res.approval_key !== v.approval_key)
-        await this.revokeView(v, 'This app was changed or removed. Run talos-app apps scan on the Mac.')
+        await this.revokeView(v, `This app was changed or removed. ${appsFix()}`)
     }
   }
 
   private async handleOff(): Promise<void> {
-    for (const v of this.store.activeViews()) await this.revokeView(v, 'Apps are turned off on this Mac.')
+    for (const v of this.store.activeViews())
+      await this.revokeView(
+        v,
+        say({ mac: 'Apps are turned off on this Mac.', linux: 'Apps are turned off on this computer.' }),
+      )
     for (const r of listPending(this.paths, this.ctx.clock.now()).requests) {
-      if (r.state !== 'expired') await this.tombstone(r, 'view_closed', 'Apps are turned off on this Mac.')
+      if (r.state !== 'expired')
+        await this.tombstone(
+          r,
+          'view_closed',
+          say({ mac: 'Apps are turned off on this Mac.', linux: 'Apps are turned off on this computer.' }),
+        )
     }
   }
 
@@ -340,7 +351,12 @@ export class AppService {
     const { ctx } = this
     const now = ctx.clock.now()
     if (!this.enabled()) {
-      this.failed(f.view_id, f.request_id, 'view_closed', 'Apps are turned off on this Mac.')
+      this.failed(
+        f.view_id,
+        f.request_id,
+        'view_closed',
+        say({ mac: 'Apps are turned off on this Mac.', linux: 'Apps are turned off on this computer.' }),
+      )
       if (!this.offHandled) {
         this.offHandled = true
         await this.handleOff()
@@ -699,7 +715,7 @@ export class AppService {
           view,
           `auth:${view.server}`,
           24 * 3600_000,
-          `${this.labelOf(view)}: app-only buttons need sign-in. Run talos-app apps login <server> on the Mac.`,
+          `${this.labelOf(view)}: app-only buttons need sign-in. ${appsFix('login <server>')}`,
         )
         await finish({ ok: false, code: 'direct_auth', message: 'Sign-in needed.' })
         return { ok: false, text: 'direct_auth' }
@@ -761,7 +777,7 @@ export class AppService {
     await this.revokeServer(view.server, view.source, 'This app changed how it labels its tools.')
     await postSystemNotice(
       this.ctx,
-      `${label} changed how it labels its tools. Run talos-app apps scan on the Mac to re-approve.`,
+      `${label} changed how it labels its tools. ${appsFix('scan', ' to re-approve.')}`,
       { thread: threadRef(this.ctx, view.thread_id) },
     )
   }
@@ -798,12 +814,29 @@ export class AppService {
       // Apps were switched off before this tap was processed (the 5 s sweep may not have run): nothing may run, and the
       // card says why, in the true words.
       const pend = readPending(this.paths, requestId)
-      if (pend && pend.state !== 'expired') void this.tombstone(pend, 'view_closed', 'Apps are turned off on this Mac.')
+      if (pend && pend.state !== 'expired')
+        void this.tombstone(
+          pend,
+          'view_closed',
+          say({ mac: 'Apps are turned off on this Mac.', linux: 'Apps are turned off on this computer.' }),
+        )
       else {
         this.store.updateRequest(requestId, { state: 'expired', resolved_at: iso(this.ctx.clock.now()) })
-        if (view) this.failed(view.view_id, requestId, 'view_closed', 'Apps are turned off on this Mac.')
+        if (view)
+          this.failed(
+            view.view_id,
+            requestId,
+            'view_closed',
+            say({ mac: 'Apps are turned off on this Mac.', linux: 'Apps are turned off on this computer.' }),
+          )
       }
-      this.endUnrun(row, 'Nothing ran: Apps are turned off on this Mac.')
+      this.endUnrun(
+        row,
+        say({
+          mac: 'Nothing ran: Apps are turned off on this Mac.',
+          linux: 'Nothing ran: Apps are turned off on this computer.',
+        }),
+      )
       return { notifyAgent: false }
     }
     if (p.executor === 'agent') {
@@ -864,12 +897,19 @@ export class AppService {
       const off = !this.enabled()
       outcome = {
         ok: false,
-        text: off ? 'Apps are turned off on this Mac.' : 'This app changed before the request could run.',
+        text: off
+          ? say({ mac: 'Apps are turned off on this Mac.', linux: 'Apps are turned off on this computer.' })
+          : 'This app changed before the request could run.',
         ran: false, // the checks refused it before any call was made
       }
       if (view)
         off
-          ? this.failed(view.view_id, p.request_id, 'view_closed', 'Apps are turned off on this Mac.')
+          ? this.failed(
+              view.view_id,
+              p.request_id,
+              'view_closed',
+              say({ mac: 'Apps are turned off on this Mac.', linux: 'Apps are turned off on this computer.' }),
+            )
           : this.failed(view.view_id, p.request_id, 'approval_changed', 'This app changed since it was approved.')
     } else {
       outcome = await this.runDirect({
@@ -1006,7 +1046,10 @@ export class AppService {
   // ---- tools (app_show, app_result, list_apps) ---------------------------------------------------------------------
 
   private requireOn(): void {
-    if (!this.enabled()) throw new AppToolError('Apps are turned off on this Mac.')
+    if (!this.enabled())
+      throw new AppToolError(
+        say({ mac: 'Apps are turned off on this Mac.', linux: 'Apps are turned off on this computer.' }),
+      )
   }
 
   async show(a: { threadId: string; captureId: string; caption?: string | undefined }): Promise<string> {
@@ -1027,10 +1070,10 @@ export class AppService {
     const live = this.liveVersion()
     if (live && cat.claude_code_version && live !== cat.claude_code_version)
       throw new AppToolError(
-        `The apps were scanned with Claude Code ${cat.claude_code_version} and this session runs ${live}. Run talos-app apps scan on the Mac.`,
+        `The apps were scanned with Claude Code ${cat.claude_code_version} and this session runs ${live}. ${appsFix()}`,
       )
     if (!readPinnedHtml(this.paths, resource.html_sha256))
-      throw new AppToolError('The approved app file is missing. Run talos-app apps scan on the Mac.')
+      throw new AppToolError(`The approved app file is missing. ${appsFix()}`)
     if ((jcsBytes(cap.tool_input) ?? Number.MAX_SAFE_INTEGER) > 16 * 1024)
       throw new AppToolError('The tool input is too large for an app view.')
     if (resource.owner.show === 'ask') {
@@ -1071,7 +1114,10 @@ export class AppService {
     let text = 'Not shown'
     let ran: boolean | undefined
     if (action === 'primary' && !this.enabled()) {
-      text = 'Nothing ran: Apps are turned off on this Mac.'
+      text = say({
+        mac: 'Nothing ran: Apps are turned off on this Mac.',
+        linux: 'Nothing ran: Apps are turned off on this computer.',
+      })
       ran = false
     } else if (action === 'primary') {
       try {
@@ -1123,7 +1169,7 @@ export class AppService {
   ): Promise<string> {
     const { ctx } = this
     const html = readPinnedHtml(this.paths, resource.html_sha256)
-    if (!html) throw new AppToolError('The approved app file is missing. Run talos-app apps scan on the Mac.')
+    if (!html) throw new AppToolError(`The approved app file is missing. ${appsFix()}`)
     const now = ctx.clock.now()
     const packed = await packResult(ctx, cap.result as McpCallToolResultT)
     if ('error' in packed)
@@ -1213,7 +1259,11 @@ export class AppService {
     this.requireOn()
     const cat = this.catalog()
     if (!cat || cat.servers.length === 0)
-      return 'No apps are approved. The owner approves them with talos-app apps scan on the Mac.'
+      return say({
+        mac: 'No apps are approved. The owner approves them with talos-app apps scan on the Mac.',
+        linux: 'No apps are approved. The owner approves them with talos-app apps scan on this computer.',
+        windows: "No apps are approved, and MCP apps can't be set up on a Windows PC yet.",
+      })
     const lines: string[] = []
     const live = this.liveVersion()
     if (live && cat.claude_code_version && live !== cat.claude_code_version)

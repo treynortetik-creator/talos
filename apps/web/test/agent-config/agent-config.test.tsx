@@ -32,7 +32,7 @@ describe('buildAgentPatch', () => {
     const d = { ...draftFromConfig(c), agentName: 'Atlas', timezone: 'Europe/Paris' }
     const patch = buildAgentPatch(c, d)
     expect(patch).toEqual({ agent: { name: 'Atlas' }, timezone: 'Europe/Paris' })
-    expect(checkConfigPatch(patch)).toEqual({ ok: true, touchesWorkEnabled: false })
+    expect(checkConfigPatch(patch)).toEqual({ ok: true })
   })
 
   it('never emits threads, quiet hours, voice-note replies or the work thread: they have their own homes', () => {

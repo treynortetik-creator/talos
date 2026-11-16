@@ -3,7 +3,9 @@
 // (no inherited secrets), and a hard cap on what it may print. Never throws: every way it can go wrong is a plain result.
 import { spawn } from 'node:child_process'
 import { HEARTBEAT_SOURCE_MAX_BYTES } from '@talos-app/protocol'
-import { type PsInfo, parsePsLine } from '../lifecycle.ts'
+import { stillRunning, waitChild } from '../child-wait.ts'
+import { type PsInfo, parsePsLine, withStableStart } from '../lifecycle.ts'
+import { endLeftovers, recordSpawn } from './leftovers.ts'
 
 /** Not a secret, and enough for a source to find its own tools and its own credential files. Nothing else is inherited. */
 const BASE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin'
@@ -25,10 +27,16 @@ export type SpawnOptions = {
   timeoutMs: number
   signal?: AbortSignal | undefined
   maxBytes?: number
-  /** The process started: its group id, the command line and the start time the system shows for it. Not called when that cannot be read. */
+  /**
+   * The process started: its group id, the command it was started with (`argv` as spawned: what ps shows can be the forked
+   * shell, "(sh)", before the exec) and the start time the system shows for it. Not called when the start time cannot be read.
+   */
   onStart?: (p: { pgid: number; command: string; lstart: string }) => void
-  /** The source is over and its group is gone (or was signalled). Called once, only after `onStart`. */
+  /** The source is over: it exited (its leftovers are looked at just after, see leftovers.ts), or its group was signalled. Once,
+   * after `onStart`. */
   onEnd?: () => void
+  /** One line about what was left behind after the source exited ("no leftovers", "leftovers ended"). */
+  log?: (line: string) => void
 }
 
 /**
@@ -69,7 +77,8 @@ export async function processInfo(pid: number, o: { timeoutMs?: number } = {}): 
     if (r.code !== 0 && r.code !== 1) return 'unknown'
     const line = r.code === 0 ? r.text.replace(/\n$/, '').slice(0, 8192) : ''
     if (line.trim() === '') return 'gone'
-    const info = parsePsLine(line)
+    const info = withStableStart(pid, parsePsLine(line))
+    if (!info) return 'unknown' // Linux: ps saw it, /proc could not say when it started
     return { lstart: info.lstart, command: info.command.slice(0, 2000) }
   } catch {
     return 'unknown'
@@ -95,6 +104,12 @@ export function killGroup(pid: number | undefined, leaderGone = false) {
     }
   }
 }
+
+/** The identity a source is recorded under: its argv as spawned, joined the way ps prints a command line. */
+export const commandOf = (argv: readonly string[]) => argv.join(' ').slice(0, 2000)
+
+/** ps's stand-in for a process it cannot read the arguments of yet (between fork and exec): "(sh)", "(bash)". */
+export const isPlaceholder = (command: string) => /^\(.*\)$/.test(command.trim())
 
 /** A bookkeeping callback must never break the run it watches. */
 const tell = (f: (() => void) | undefined) => {
@@ -122,6 +137,8 @@ export function runSource(o: SpawnOptions): Promise<SpawnResult> {
     } catch (e) {
       return resolve({ ok: false, reason: 'spawn', message: `could not start it: ${(e as Error).message}` })
     }
+    // Its group and session (read back while it lives, else as it was made: recordSpawn); never awaited on the start or result path.
+    const spawned = recordSpawn(child.pid, { alive: () => stillRunning(child) })
     const out: Buffer[] = []
     let bytes = 0
     let stderr = ''
@@ -138,14 +155,17 @@ export function runSource(o: SpawnOptions): Promise<SpawnResult> {
     }
     const stop = (r: Extract<SpawnResult, { ok: false }>) => {
       if (settled) return
-      killGroup(child.pid)
+      if (stillRunning(child)) killGroup(child.pid) // never once it has exited: its number may be someone else's by then
       child.stdout?.destroy()
       child.stderr?.destroy()
       done(r) // the caller never waits for a pipe a grandchild may hold open
     }
     const onAbort = () => stop({ ok: false, reason: 'aborted', message: 'stopped' })
     o.signal?.addEventListener('abort', onAbort, { once: true })
-    child.on('error', (e) => done({ ok: false, reason: 'spawn', message: `could not start it: ${e.message}` }))
+    let spawnError = ''
+    child.on('error', (e) => {
+      spawnError ||= e.message
+    })
     child.stdout?.on('data', (d: Buffer) => {
       bytes += d.length
       if (bytes > max) return stop({ ok: false, reason: 'too_big', message: `printed more than ${max} bytes` })
@@ -154,11 +174,18 @@ export function runSource(o: SpawnOptions): Promise<SpawnResult> {
     child.stderr?.on('data', (d: Buffer) => {
       if (stderr.length < STDERR_KEEP) stderr += d.toString('utf8').slice(0, STDERR_KEEP - stderr.length)
     })
-    child.on('close', (code) => {
-      // A source that exits cleanly can leave a child running (a backgrounded helper with its pipes closed). The group goes
-      // with it. A process that left the group on purpose (setsid) is out of reach: a known limit, see docs/HEARTBEAT.md.
-      if (!settled) killGroup(child.pid, true)
-      done({ ok: true, stdout: Buffer.concat(out).toString('utf8'), stderr, code: code ?? -1 })
+    // Its own timer (below) is the deadline. A source that exits is over once the short grace for its output has passed, even
+    // while a child of its own still holds the pipes. That child goes with the group afterwards, but only through
+    // endLeftovers: the leader is reaped by now, so the group is signalled only while it has members of the source's session.
+    // See docs/HEARTBEAT.md.
+    void waitChild(child, { deadlineMs: Number.POSITIVE_INFINITY }).then((end) => {
+      if (end.how === 'error') return done({ ok: false, reason: 'spawn', message: `could not start it: ${spawnError}` })
+      const r = { ok: true as const, stdout: Buffer.concat(out).toString('utf8'), stderr, code: end.code ?? -1 }
+      child.stdout?.destroy()
+      child.stderr?.destroy()
+      done(r) // nothing when a stop already answered
+      // After the answer, never holding it up: bounded (ps 5 s, a short grace), logged, never throws. Also after a stop.
+      void spawned.then((rec) => endLeftovers(rec, o.log ? { log: o.log } : {}))
     })
     // a source that never reads its stdin must not crash the bridge with EPIPE
     child.stdin?.on('error', () => {})
@@ -170,14 +197,15 @@ export function runSource(o: SpawnOptions): Promise<SpawnResult> {
         if (settled) return
         if (typeof info !== 'string') {
           started = true
-          tell(() => o.onStart?.({ pgid: child.pid as number, ...info }))
+          tell(() => o.onStart?.({ pgid: child.pid as number, command: commandOf(o.argv), lstart: info.lstart }))
         }
       }
       // The source's own time starts here, once it has its input: the bookkeeping above is ours and is not charged to it.
-      timer = setTimeout(
-        () => stop({ ok: false, reason: 'timeout', message: `no answer within ${Math.round(o.timeoutMs / 1000)} s` }),
-        o.timeoutMs,
-      )
+      timer = setTimeout(() => {
+        // A source that has exited is not a timeout: the wait for its output (bounded) settles it.
+        if (stillRunning(child))
+          stop({ ok: false, reason: 'timeout', message: `no answer within ${Math.round(o.timeoutMs / 1000)} s` })
+      }, o.timeoutMs)
       child.stdin?.end(o.stdin)
     }
     void begin()

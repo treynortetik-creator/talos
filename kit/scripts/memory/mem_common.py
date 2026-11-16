@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus  # noqa: E402
 
 ROOT = corpus.ROOT
+is_index_excluded = corpus.is_index_excluded    # one rule for the indexer and for recall.py (preimage copies stay out)
 INDEX_DIR = os.path.join(ROOT, ".index")
 DB_PATH = os.path.join(INDEX_DIR, "memory.db")
 LOCK_DIR = os.path.join(INDEX_DIR, ".mem_index.lock.d")

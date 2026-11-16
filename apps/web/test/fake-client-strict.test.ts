@@ -1,4 +1,4 @@
-import { bindingFrom, type CardT, editedHash, payloadHash } from '@talos-app/protocol'
+import { bindingFrom, type CardT, editedHash, payloadHash, verifyOwnerFrame } from '@talos-app/protocol'
 import { describe, expect, it } from 'vitest'
 import { TalosClientError } from '../src/lib/client.ts'
 import { createFakeClient } from '../src/lib/fakeClient.ts'
@@ -57,20 +57,25 @@ describe('fake client is as strict as the spec (WP7 tests must not pass vacuousl
     },
   )
 
-  it('a high-risk primary needs a step-up token minted for exactly that card, once', async () => {
+  it('a high-risk primary goes through on the signed tap alone (no passkey, owner ruling 2026-11-14)', async () => {
     const { c, card, hash } = setup({ risk: 'high' })
-    await rejects(c.resolveCard(card.id, { action: 'primary', payloadHash: hash }), 'stepup_required')
-    await rejects(
-      c.resolveCard(card.id, { action: 'primary', payloadHash: hash, stepupToken: 'st_made_up' }),
-      'stepup_invalid',
-    )
-    await rejects(
-      c.resolveCard(card.id, { action: 'primary', payloadHash: hash, stepupToken: await c.stepup('config:work') }),
-      'stepup_invalid',
-    )
-    const token = await c.stepup(`card:${card.id}`)
-    await c.resolveCard(card.id, { action: 'primary', payloadHash: hash, stepupToken: token })
+    await c.resolveCard(card.id, { action: 'primary', payloadHash: hash })
     expect(c.store.getState().cards[0]?.state).toBe('done')
+    expect(c.sent.at(-1)).not.toHaveProperty('stepup_token')
+  })
+
+  it('always: true rides inside the signed card.resolve, and is left out when not asked for', async () => {
+    const { c, card, hash } = setup({ risk: 'high' })
+    await c.resolveCard(card.id, { action: 'primary', payloadHash: hash, always: true })
+    const frame = c.sent.at(-1) as Record<string, unknown>
+    expect(frame).toMatchObject({ type: 'card.resolve', action: 'primary', always: true })
+    expect(await verifyOwnerFrame(frame, await c.publicJwk())).toBe(true)
+    // the signature covers it: the same frame without it no longer verifies
+    const { always: _a, ...stripped } = frame
+    expect(await verifyOwnerFrame(stripped, await c.publicJwk())).toBe(false)
+    const other = setup({})
+    await other.c.resolveCard(other.card.id, { action: 'primary', payloadHash: other.hash })
+    expect(other.c.sent.at(-1)).not.toHaveProperty('always')
   })
 
   it('kill and revise never need a step-up', async () => {
@@ -122,21 +127,19 @@ describe('fake client is as strict as the spec (WP7 tests must not pass vacuousl
     expect((c.sent.at(-1) as { edited_hash: string }).edited_hash).toBe(editedHash(binding, edited))
   })
 
-  it('patchConfig: allowlist, work.enabled step-up, config_conflict simulation, and a good patch', async () => {
+  it('patchConfig: allowlist, no step-up anywhere, config_conflict simulation, and a good patch', async () => {
     const c = createFakeClient()
     await rejects(c.patchConfig({ trust_mode: 'yes' }), 'config_field_forbidden')
-    await rejects(c.patchConfig({ trust_mode: true }), 'stepup_required')
-    await rejects(c.patchConfig({ trust_mode: true }, { stepupToken: await c.stepup('config:work') }), 'stepup_invalid')
-    await c.patchConfig({ trust_mode: true }, { stepupToken: await c.stepup('config:session') })
+    await c.patchConfig({ trust_mode: true })
     expect(c.store.getState().config?.trust_mode).toBe(true)
-    // on already: turning it on again still asks (the relay's copy can be stale); off never does
-    await rejects(c.patchConfig({ trust_mode: true }), 'stepup_required')
     await c.patchConfig({ trust_mode: false })
     expect('trust_mode' in (c.store.getState().config ?? {})).toBe(false)
     await rejects(c.patchConfig({ rev: 9 }), 'config_field_forbidden')
-    await rejects(c.patchConfig({ work: { enabled: ['slack'] } }), 'stepup_required')
-    await c.patchConfig({ work: { enabled: ['slack'] } }, { stepupToken: await c.stepup('config:work') })
+    await c.patchConfig({ work: { enabled: ['slack'] } })
     expect(c.store.getState().config?.work.enabled).toEqual(['slack'])
+    await c.patchConfig({ always_allow: [{ kind: 'email', destination: null }] })
+    expect(c.store.getState().config?.always_allow).toEqual([{ kind: 'email', destination: null }])
+    expect(c.sent.every((f) => !('stepup_token' in f))).toBe(true)
     c.failNextPatchWith('config_conflict')
     await rejects(c.patchConfig({ timezone: 'UTC' }), 'config_conflict')
     const rev = c.store.getState().config?.rev

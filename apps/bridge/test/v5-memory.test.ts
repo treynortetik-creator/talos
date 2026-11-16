@@ -20,7 +20,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MAX_FRAME_BYTES, MEMORY_FRAME_SLACK, MEMORY_LINKS_MAX_BYTES, newUlid, parseFrame } from '@talos-app/protocol'
-import { fakeClock, mkFrame } from '@talos-app/testkit'
+import { fakeClock, mkFrame, t } from '@talos-app/testkit'
 import { ConfigFile } from '../src/config-file.ts'
 import { nullLogger } from '../src/log.ts'
 import { cmdMemory } from '../src/memory/cli.ts'
@@ -113,7 +113,7 @@ async function call(x: Harness, type: Q, fields: Record<string, unknown>) {
         ((r.raw.type === RESP[type] && r.raw.request_id === f.request_id) ||
           (r.raw.type === 'error' && r.raw.ref === f.id)),
     )
-  await waitFor(() => find() !== undefined, 5000, `answer to ${type}`)
+  await waitFor(() => find() !== undefined, t(5000), `answer to ${type}`)
   return (find() as { raw: Record<string, any> }).raw
 }
 const tree = (x: Harness, path = '', root: string | null = 'notes', cursor: string | null = null) =>
@@ -154,7 +154,7 @@ describe('off', () => {
     // the bridge's config poll picks up the CLI's write
     await waitFor(
       () => x.bridge.ctx.config.reloadIfChanged() || x.bridge.ctx.config.config.memory_browser,
-      5000,
+      t(5000),
       'config reload',
     )
     expect(x.bridge.ctx.config.config.memory_browser).toBe(true)
@@ -234,7 +234,7 @@ describe('hidden paths', () => {
       x.app.send(f)
       await waitFor(
         () => x.app.rec.frames.some((r) => r.direction === 'in' && r.raw.type === 'error' && r.raw.ref === f.id),
-        5000,
+        t(5000),
         bad,
       )
       const err = x.app.rec.frames.find((r) => r.direction === 'in' && r.raw.type === 'error' && r.raw.ref === f.id)
@@ -413,86 +413,90 @@ describe('links', () => {
     expect(by('Person number 699 with a longer label')?.path).toBe('people/foo.md')
   })
 
-  test('a 512 KiB note with 128 KiB of backticks, then plain text, costs a small multiple of hashing its bytes and grows with its size', async () => {
-    const agent = tmp('talos-mem-ticks-')
-    const make = (size: number) =>
-      `[[Overview]] ${'`'.repeat(size / 4)} [[Overview]]\n${`${'plain words '.repeat(10)}"`.repeat(Math.ceil(size / 121))}`.slice(
-        0,
-        size,
-      )
-    const size = 512 * 1024 - 64
-    const small = size / 8
-    // A quote every 121 characters grows the note by a byte each when it is written as JSON, so the first chunk does not
-    // fit as it stands and the cutter has to look for the cut (plain text would fit at once and never exercise it).
-    const body = make(size)
-    put(join(agent, 'notes'), 'ticks.md', body)
-    put(join(agent, 'notes'), 'small.md', make(small))
-    put(join(agent, 'notes'), 'Overview.md', '# Overview\n')
-    const x = await start(agent, {}, { include: ['**/*.md'], exclude: [] })
-    // The link scan and the chunk cut run on the bridge's one thread, so a read that costs a lot is a read that stalls
-    // every other thread. No millisecond limit anywhere: the figures are taken in this run and compared with each other, so a
-    // busy machine moves them together, and a pair that misses is measured once more.
-    //  1. Against a reference that is outside the read path: SHA-256 of the same bytes (one pass over the input, native).
-    //     Both CPU time and elapsed time are held to it, so a read that burns CPU and one that only waits both fail.
-    //  2. Against the same note at an eighth of the size: eight times the input may cost about eight times as much, not
-    //     sixty-four (a scan or cut that grows with the square of the input). CPU time and elapsed time both.
-    // A cut that walks down a byte at a time, a link scan that rescans the backticks, or a sleep all fail one of them.
-    const sample = async (path: string, tries: number) => {
-      let cpu = Number.POSITIVE_INFINITY
-      let wall = Number.POSITIVE_INFINITY
-      for (let i = 0; i < tries; i++) {
-        const c = process.cpuUsage()
-        const t = performance.now()
-        await read(x, path)
-        wall = Math.min(wall, performance.now() - t)
-        const d = process.cpuUsage(c)
-        cpu = Math.min(cpu, (d.user + d.system) / 1000)
+  test(
+    'a 512 KiB note with 128 KiB of backticks, then plain text, costs a small multiple of hashing its bytes and grows with its size',
+    async () => {
+      const agent = tmp('talos-mem-ticks-')
+      const make = (size: number) =>
+        `[[Overview]] ${'`'.repeat(size / 4)} [[Overview]]\n${`${'plain words '.repeat(10)}"`.repeat(Math.ceil(size / 121))}`.slice(
+          0,
+          size,
+        )
+      const size = 512 * 1024 - 64
+      const small = size / 8
+      // A quote every 121 characters grows the note by a byte each when it is written as JSON, so the first chunk does not
+      // fit as it stands and the cutter has to look for the cut (plain text would fit at once and never exercise it).
+      const body = make(size)
+      put(join(agent, 'notes'), 'ticks.md', body)
+      put(join(agent, 'notes'), 'small.md', make(small))
+      put(join(agent, 'notes'), 'Overview.md', '# Overview\n')
+      const x = await start(agent, {}, { include: ['**/*.md'], exclude: [] })
+      // The link scan and the chunk cut run on the bridge's one thread, so a read that costs a lot is a read that stalls
+      // every other thread. No millisecond limit anywhere: the figures are taken in this run and compared with each other, so a
+      // busy machine moves them together, and a pair that misses is measured once more.
+      //  1. Against a reference that is outside the read path: SHA-256 of the same bytes (one pass over the input, native).
+      //     Both CPU time and elapsed time are held to it, so a read that burns CPU and one that only waits both fail.
+      //  2. Against the same note at an eighth of the size: eight times the input may cost about eight times as much, not
+      //     sixty-four (a scan or cut that grows with the square of the input). CPU time and elapsed time both.
+      // A cut that walks down a byte at a time, a link scan that rescans the backticks, or a sleep all fail one of them.
+      const sample = async (path: string, tries: number) => {
+        let cpu = Number.POSITIVE_INFINITY
+        let wall = Number.POSITIVE_INFINITY
+        for (let i = 0; i < tries; i++) {
+          const c = process.cpuUsage()
+          const t = performance.now()
+          await read(x, path)
+          wall = Math.min(wall, performance.now() - t)
+          const d = process.cpuUsage(c)
+          cpu = Math.min(cpu, (d.user + d.system) / 1000)
+        }
+        return { cpu, wall }
       }
-      return { cpu, wall }
-    }
-    const hashRef = (bytes: Buffer) => {
-      let cpu = Number.POSITIVE_INFINITY
-      let wall = Number.POSITIVE_INFINITY
-      for (let i = 0; i < 5; i++) {
-        const c = process.cpuUsage()
-        const t = performance.now()
-        createHash('sha256').update(bytes).digest('hex')
-        wall = Math.min(wall, performance.now() - t)
-        const d = process.cpuUsage(c)
-        cpu = Math.min(cpu, (d.user + d.system) / 1000)
+      const hashRef = (bytes: Buffer) => {
+        let cpu = Number.POSITIVE_INFINITY
+        let wall = Number.POSITIVE_INFINITY
+        for (let i = 0; i < 5; i++) {
+          const c = process.cpuUsage()
+          const t = performance.now()
+          createHash('sha256').update(bytes).digest('hex')
+          wall = Math.min(wall, performance.now() - t)
+          const d = process.cpuUsage(c)
+          cpu = Math.min(cpu, (d.user + d.system) / 1000)
+        }
+        return { cpu: Math.max(cpu, 0.05), wall: Math.max(wall, 0.05) }
       }
-      return { cpu: Math.max(cpu, 0.05), wall: Math.max(wall, 0.05) }
-    }
-    const ONE_PASS_MULTIPLE = 800 // a read does a link scan, a cut and a hash of the whole note: measured near 150 here
-    const GROWTH_SLACK = 4 // eight times the input may cost up to 8 x 4 times
-    const attempt = async () => {
-      const ref = hashRef(Buffer.from(body))
-      const big = await sample('ticks.md', 5)
-      const little = await sample('small.md', 5)
-      const floor = 0.2 // below this a ratio is noise, not a growth rate
-      const grew = {
-        cpu: big.cpu / Math.max(little.cpu, floor),
-        wall: big.wall / Math.max(little.wall, floor),
+      const ONE_PASS_MULTIPLE = 800 // a read does a link scan, a cut and a hash of the whole note: measured near 150 here
+      const GROWTH_SLACK = 4 // eight times the input may cost up to 8 x 4 times
+      const attempt = async () => {
+        const ref = hashRef(Buffer.from(body))
+        const big = await sample('ticks.md', 5)
+        const little = await sample('small.md', 5)
+        const floor = 0.2 // below this a ratio is noise, not a growth rate
+        const grew = {
+          cpu: big.cpu / Math.max(little.cpu, floor),
+          wall: big.wall / Math.max(little.wall, floor),
+        }
+        const why = `read ${big.cpu.toFixed(1)}/${big.wall.toFixed(1)} ms cpu/wall, hash ${ref.cpu.toFixed(2)}/${ref.wall.toFixed(2)}, 1/8 size ${little.cpu.toFixed(1)}/${little.wall.toFixed(1)}`
+        return {
+          ok:
+            big.cpu <= ref.cpu * ONE_PASS_MULTIPLE &&
+            big.wall <= ref.wall * ONE_PASS_MULTIPLE &&
+            grew.cpu <= 8 * GROWTH_SLACK &&
+            grew.wall <= 8 * GROWTH_SLACK,
+          why,
+        }
       }
-      const why = `read ${big.cpu.toFixed(1)}/${big.wall.toFixed(1)} ms cpu/wall, hash ${ref.cpu.toFixed(2)}/${ref.wall.toFixed(2)}, 1/8 size ${little.cpu.toFixed(1)}/${little.wall.toFixed(1)}`
-      return {
-        ok:
-          big.cpu <= ref.cpu * ONE_PASS_MULTIPLE &&
-          big.wall <= ref.wall * ONE_PASS_MULTIPLE &&
-          grew.cpu <= 8 * GROWTH_SLACK &&
-          grew.wall <= 8 * GROWTH_SLACK,
-        why,
-      }
-    }
-    const first = await attempt()
-    const verdict = first.ok ? first : await attempt()
-    expect(verdict.ok, verdict.why).toBe(true)
-    // and the work is done: the frame is valid and the one link in the note is found
-    const r = await read(x, 'ticks.md')
-    expect(r.type).toBe('memory.file')
-    expect(parseFrame(r).ok).toBe(true)
-    expect(r.links).toEqual([{ text: 'Overview', root_id: 'notes', path: 'Overview.md' }])
-  }, 60_000)
+      const first = await attempt()
+      const verdict = first.ok ? first : await attempt()
+      expect(verdict.ok, verdict.why).toBe(true)
+      // and the work is done: the frame is valid and the one link in the note is found
+      const r = await read(x, 'ticks.md')
+      expect(r.type).toBe('memory.file')
+      expect(parseFrame(r).ok).toBe(true)
+      expect(r.links).toEqual([{ text: 'Overview', root_id: 'notes', path: 'Overview.md' }])
+    },
+    t(60_000),
+  )
 
   test('[[name]] falls through to another root', async () => {
     const agent = tmp('talos-mem-roots-')
@@ -542,22 +546,106 @@ describe('search and freshness', () => {
     expect((await search(x, 'overview')).hits[0].title).toBe('Project Overview')
   })
 
-  test('a new file becomes searchable by itself while the watch is on (no rescan is asked for)', async () => {
-    // docs/V2-FEATURES.md promises "a new file is searchable within 3 s". The wait below is a hang cap, so the promise is held
-    // here: the watcher waits this long after the last change before it rescans, and the rescan itself is quick.
-    expect(WATCH_DEBOUNCE_MS).toBeLessThan(3000)
+  test(
+    'a new file becomes searchable by itself while the watch is on (no rescan is asked for)',
+    async () => {
+      // docs/V2-FEATURES.md promises "a new file is searchable within 3 s": the watcher waits this long after the last change
+      // before it rescans. The wait runs on a fake clock here, so only the OS's own file event is waited for in real time.
+      expect(WATCH_DEBOUNCE_MS).toBeLessThan(3000)
+      const agent = makeAgent()
+      const home = tempHome()
+      cleanup.push(home)
+      writeFileSync(join(home, 'memory.json'), JSON.stringify(memJson(agent)))
+      const clock = fakeClock()
+      const svc = new MemoryBrowser({ home, clock, log: nullLogger, switchOn: () => true })
+      try {
+        await svc.idle()
+        const q = (s: string) =>
+          svc.search({
+            ...mkFrame('memory.search'),
+            request_id: newUlid(),
+            q: s,
+            root_ids: [],
+            cursor: null,
+            limit: 10,
+          } as any)
+        // The watch has started when the OS reports a first change: macOS can miss a write made just as a watch opens (2 in 60
+        // here), so a canary is written until one is seen. Only then is the file this test is about written, once.
+        clock.advance(WATCH_DEBOUNCE_MS) // the catch-up pass the service runs once the watch is open
+        await svc.idle()
+        const idle = clock.pending // the 5-minute poll
+        let live = false
+        for (let i = 0; i < 20 && !live; i++) {
+          put(join(agent, 'notes'), 'canary.md', `# Canary ${i}\n`)
+          live = await waitFor(() => clock.pending > idle, 1000, 'the watch to report a change').then(
+            () => true,
+            () => false,
+          )
+        }
+        expect(live).toBe(true)
+        clock.advance(WATCH_DEBOUNCE_MS)
+        await svc.idle()
+        expect((await q('zebrafish')).hits).toEqual([])
+        const before = clock.pending
+        // the watcher reports it (a hang cap only: how fast the OS is, is not claimed). A busy fseventsd can drop or delay one
+        // write's event (CI Mac, 2026-11-16: no event in 30 s, twice), so the same file is written again, as the canary is.
+        let seen = false
+        for (let i = 0; i < 5 && !seen; i++) {
+          put(join(agent, 'notes'), 'fresh.md', `# Fresh\nzebrafish migration\n${'\n'.repeat(i)}`)
+          seen = await waitFor(() => clock.pending > before, 10_000, 'the watch to report the new file').then(
+            () => true,
+            () => false,
+          )
+        }
+        expect(seen).toBe(true)
+        clock.advance(WATCH_DEBOUNCE_MS)
+        await svc.idle()
+        expect((await q('zebrafish')).hits.length).toBe(1) // found in WATCH_DEBOUNCE_MS, long before the 5-minute poll
+      } finally {
+        svc.stop()
+      }
+    },
+    t(90_000), // five writes of 10 s at most, after the canary's
+  )
+
+  test('a write the watch misses as it opens is found by the catch-up pass, not left to the 5-minute poll', async () => {
+    // macOS's fs.watch can miss a change made just as the watch opens (and a change between the first walk and the watch
+    // opening is never reported). The watch here reports nothing at all, so only the catch-up pass can find the file.
     const agent = makeAgent()
-    const x = await start(agent)
-    put(join(agent, 'notes'), 'fresh.md', '# Fresh\nzebrafish migration\n')
-    // Waits on the watcher's real effect. The cap only ends a hang on a busy machine; how fast it is is not claimed.
-    const t0 = Date.now()
-    let found = false
-    while (!found && Date.now() - t0 < 25_000) {
-      found = (await search(x, 'zebrafish')).hits.length === 1
-      if (!found) await new Promise((r) => setTimeout(r, 150))
+    const home = tempHome()
+    cleanup.push(home)
+    writeFileSync(join(home, 'memory.json'), JSON.stringify(memJson(agent)))
+    const clock = fakeClock()
+    let opened = 0
+    const deaf = (() => {
+      opened++
+      return { on: () => {}, close: () => {} }
+    }) as unknown as typeof import('node:fs').watch
+    const svc = new MemoryBrowser({ home, clock, log: nullLogger, switchOn: () => true, watchFn: deaf })
+    try {
+      const q = async (s: string) =>
+        (
+          await svc.search({
+            ...mkFrame('memory.search'),
+            request_id: newUlid(),
+            q: s,
+            root_ids: [],
+            cursor: null,
+            limit: 10,
+          } as any)
+        ).hits
+      expect(await q('zebrafish')).toEqual([]) // the first walk and the watch are done
+      expect(opened).toBeGreaterThan(0)
+      put(join(agent, 'notes'), 'fresh.md', '# Fresh\nzebrafish migration\n') // in the window: no event comes
+      await svc.idle()
+      expect(await q('zebrafish')).toEqual([])
+      clock.advance(WATCH_DEBOUNCE_MS)
+      await svc.idle()
+      expect((await q('zebrafish')).length).toBe(1) // within the 3 s promise, without the poll
+    } finally {
+      svc.stop()
     }
-    expect(found).toBe(true)
-  }, 30_000)
+  })
 
   test('with the watch off, a new file shows up on the 5-minute poll', async () => {
     const agent = makeAgent()

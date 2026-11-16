@@ -23,9 +23,36 @@ import atlas as ATLAS  # noqa: E402
 import atlas_proof as PROOF  # noqa: E402
 
 COMMITTED = os.environ.get('TALOS_ATLAS_DIR') or CA.DEFAULT     # the override is only for proving the tests go red against a broken build
-# sha256 over every pose of the 8 web clips and 3 stills as they were on origin/main 7fd8106 (the web assets must not change)
-WEB_POSES_SHA = '842b3ea2cb829189a620891ff65c9e664ef3c6ef0b1bbd8493731c1390ca0225'
+# sha256 over every pose of the 8 web clips and 3 stills as they were on origin/main 7fd8106 (the web assets must not change), with
+# every float rounded to 9 places first (`stable`): the C maths library differs between macOS and Linux in the last digits
+WEB_POSES_SHA = 'c10e3968ef7984da04ac25642ff0b0033ce8134585cb221d4e2729ea2232c652'
 WEB_CLIPS = ['idle', 'working', 'talking', 'thinking', 'beaming', 'worried', 'wave', 'rounds']
+
+# keyline_px (a distance transform per cell) is most of a check without the palette scan, and nearly every case checks the same
+# committed cells again. It depends only on the cell's pixels, so it is kept per cell content: a mutated cell is measured afresh.
+_keyline_px, _keylines = CA.keyline_px, {}
+
+
+def _keyline_px_once(c):
+    c = np.ascontiguousarray(c)
+    k = (c.shape, c.dtype.str, hashlib.blake2b(c, digest_size=16).digest())
+    if k not in _keylines:
+        _keylines[k] = _keyline_px(c)
+    return _keylines[k]
+
+
+CA.keyline_px = _keyline_px_once
+
+
+def stable(x, places=9):
+    """`x` with every float rounded to `places` (and -0.0 made 0.0), so its repr is the same on every platform's maths library"""
+    if isinstance(x, float):
+        return round(x, places) + 0.0
+    if isinstance(x, dict):
+        return {k: stable(v, places) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return type(x)(stable(v, places) for v in x)
+    return x
 
 
 def fails(root, skip=('palette',)):
@@ -682,11 +709,11 @@ class WebClipsUntouched(unittest.TestCase):
             self.assertEqual(list(m.CLIPS), WEB_CLIPS)
             h = hashlib.sha256()
             for k, (n, loop, fn, extra) in m.CLIPS.items():
-                h.update(repr((k, n, loop, extra)).encode())
+                h.update(repr(stable((k, n, loop, extra))).encode())
                 for i in range(n):
-                    h.update(repr(fn(i, n)).encode())
+                    h.update(repr(stable(fn(i, n))).encode())
             for k, fn in m.STILLS.items():
-                h.update(repr(fn(0)).encode())
+                h.update(repr(stable(fn(0))).encode())
             self.assertEqual(h.hexdigest(), WEB_POSES_SHA)
             d = self.load(True)
             self.assertEqual(list(d.CLIPS)[:8], WEB_CLIPS)

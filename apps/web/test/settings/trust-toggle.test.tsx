@@ -1,12 +1,12 @@
-// Trust mode as a Settings toggle (docs/SECURITY.md "Trust mode"): off is free, on asks for the passkey once, a refusal
-// shows its reason and the switch goes back, and an older relay's "not a setting I know" reads as that, not as a crash.
-// Against the in-memory fake client, which refuses what the relay refuses (no token for trust on = stepup_required).
+// Trust mode as a Settings toggle (docs/SECURITY.md "Trust mode"): on and off are ordinary owner-signed patches with no
+// passkey (owner ruling 2026-11-14), a refusal shows its reason and the switch goes back, and an older relay's "not a setting
+// I know" reads as that, not as a crash. Against the in-memory fake client.
 
+import { verifyOwnerFrame } from '@talos-app/protocol'
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { TrustModeSwitch } from '../../src/features/settings/TrustModeSwitch.tsx'
 import { TalosClientError } from '../../src/lib/client.ts'
-import { PasskeyUnavailableError } from '../../src/lib/passkeyGate.ts'
 import { renderWith, setup } from '../cards/helpers.tsx'
 
 afterEach(cleanup)
@@ -15,47 +15,35 @@ const withConfig = (client: ReturnType<typeof setup>, over: Record<string, unkno
 const sw = () => screen.getByRole('switch', { name: /Trust mode/ })
 
 describe('Settings: trust mode switch', () => {
-  it('says what it changes in one line and starts Off on a config that has no trust_mode', () => {
+  it('says what it changes in one line, never mentions a passkey or Face ID, and starts Off on a config without trust_mode', () => {
     renderWith(<TrustModeSwitch />, setup(), '/settings/account')
     expect(sw().getAttribute('aria-checked')).toBe('false')
-    expect(screen.getByTestId('trust-mode-state').textContent).toMatch(/without a card or a passkey/)
-    expect(screen.getByTestId('trust-mode-state').textContent).toMatch(/send as you, spend money or delete for good/)
-    expect(screen.getByTestId('trust-mode-state').textContent).toMatch(/Turning it on asks for your passkey/)
+    const text = screen.getByTestId('trust-mode-state').textContent
+    expect(text).toMatch(/without a card/)
+    expect(text).toMatch(/send as you, spend money or delete for good/)
+    expect(text).not.toMatch(/passkey|face id/i)
   })
 
-  it('on: taps the passkey once for config:session, then the config says on', async () => {
+  it('on: one signed config.patch, no passkey, then the config says on', async () => {
     const client = setup()
-    const tap = vi.spyOn(client, 'stepup')
     renderWith(<TrustModeSwitch />, client, '/settings/account')
     fireEvent.click(sw())
     await waitFor(() => expect(client.store.getState().config?.trust_mode).toBe(true))
-    expect(tap).toHaveBeenCalledTimes(1)
-    expect(tap).toHaveBeenCalledWith('config:session')
+    const frame = client.sent.at(-1) as Record<string, unknown>
+    expect(frame).toMatchObject({ type: 'config.patch', patch: { trust_mode: true } })
+    expect(frame).not.toHaveProperty('stepup_token')
+    expect(await verifyOwnerFrame(frame, await client.publicJwk())).toBe(true)
     expect(sw().getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByTestId('trust-mode-state').textContent).not.toMatch(/passkey|face id/i)
   })
 
-  it('off: no passkey tap at all, and the key leaves the config', async () => {
+  it('off: the key leaves the config', async () => {
     const client = setup()
     withConfig(client, { trust_mode: true })
-    const tap = vi.spyOn(client, 'stepup')
     renderWith(<TrustModeSwitch />, client, '/settings/account')
     expect(sw().getAttribute('aria-checked')).toBe('true')
     fireEvent.click(sw())
     await waitFor(() => expect('trust_mode' in (client.store.getState().config ?? {})).toBe(false))
-    expect(tap).not.toHaveBeenCalled()
-    expect(sw().getAttribute('aria-checked')).toBe('false')
-  })
-
-  it('a cancelled or unavailable passkey leaves it Off, says why, and sends no patch', async () => {
-    const client = setup()
-    client.stepup = async () => {
-      throw new PasskeyUnavailableError('mac_app')
-    }
-    const patch = vi.spyOn(client, 'patchConfig')
-    renderWith(<TrustModeSwitch />, client, '/settings/account')
-    fireEvent.click(sw())
-    expect((await screen.findByRole('alert')).textContent).toMatch(/Approve on your phone or in a browser/)
-    expect(patch).not.toHaveBeenCalled()
     expect(sw().getAttribute('aria-checked')).toBe('false')
   })
 

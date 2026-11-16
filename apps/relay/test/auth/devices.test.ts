@@ -51,10 +51,9 @@ describe('devices', () => {
     const cookieA = h.login('cred-1', a.id)
     const cookieB = h.login('cred-1', b.id)
     const sessA = h.state.core.lookupSession(cookieA.split('=')[1] as string)
-    // without step-up: refused
-    expect((await h.post(`/api/devices/${b.id}/revoke`, {}, cookieA)).status).toBe(403)
-    const token = h.state.core.mintStepup(sessA?.id as string, 'device:revoke')
-    expect((await h.post(`/api/devices/${b.id}/revoke`, { stepup_token: token }, cookieA)).status).toBe(204)
+    // no passkey step-up (2026-11-14): a signed-in session revokes (the app shows its confirm sheet first)
+    expect(sessA).toBeDefined()
+    expect((await h.post(`/api/devices/${b.id}/revoke`, {}, cookieA)).status).toBe(204)
     expect(h.state.core.device(b.id)).toMatchObject({ revoked: true, pinned: false })
     expect((await h.app.request('/probe/session', { headers: { Cookie: cookieB } })).status).toBe(401)
     expect((await h.app.request('/probe/session', { headers: { Cookie: cookieA } })).status).toBe(200)
@@ -63,28 +62,18 @@ describe('devices', () => {
     expect(frames[0]).toMatchObject({ device_id: b.id })
   })
 
-  it('trust mode (the Mac says so in the synced config): revoke needs the session, not a passkey tap; off, it still does', async () => {
+  it('revoke needs a signed-in session and no passkey tap, trust mode or not (2026-11-14); the bridge is still told', async () => {
     const h = await makeHarness()
     const a = await enrolled(h, 'cred-1')
     const b = await enrolled(h, 'cred-1')
-    const c = await enrolled(h, 'cred-1')
+    await enrolled(h, 'cred-1')
     const cookieA = h.login('cred-1', a.id)
-    const base = loadExampleConfig('default')
-    // a config that says nothing, and one that says false: both keep the passkey step
-    h.fake.setAgentConfig(base)
-    expect((await h.post(`/api/devices/${b.id}/revoke`, {}, cookieA)).status).toBe(403)
-    h.fake.setAgentConfig({ ...base, trust_mode: false })
-    expect((await h.post(`/api/devices/${b.id}/revoke`, {}, cookieA)).status).toBe(403)
-    expect(h.state.core.device(b.id)).toMatchObject({ revoked: false })
-    h.fake.setAgentConfig({ ...base, trust_mode: true })
-    // no session at all is still refused: only the passkey step is relaxed
+    h.fake.setAgentConfig({ ...loadExampleConfig('default'), trust_mode: false })
+    // no session at all is still refused
     expect((await h.post(`/api/devices/${b.id}/revoke`, {})).status).toBe(401)
     expect((await h.post(`/api/devices/${b.id}/revoke`, {}, cookieA)).status).toBe(204)
     expect(h.state.core.device(b.id)).toMatchObject({ revoked: true, pinned: false })
-    // a wrong-purpose token is not what lets it through, and the bridge is still told
     expect(h.fake.bus.toBridgeLog.filter((s) => s.frame.type === 'device.revoked')).toHaveLength(1)
-    h.fake.setAgentConfig(null)
-    expect((await h.post(`/api/devices/${c.id}/revoke`, {}, cookieA)).status).toBe(403)
   })
 
   it('the passkey is deleted only when no pinned device still uses it', async () => {
@@ -112,10 +101,10 @@ describe('devices', () => {
     const h = await makeHarness()
     const cookie = await h.loginPinned()
     const sess = h.state.core.lookupSession(cookie.split('=')[1] as string)
-    const t1 = h.state.core.mintStepup(sess?.id as string, 'device:revoke')
-    expect((await h.post('/api/devices/d_aaaaaaaaaaaaaaaaaaaa/revoke', { stepup_token: t1 }, cookie)).status).toBe(404)
-    const t2 = h.state.core.mintStepup(sess?.id as string, 'device:revoke')
-    expect((await h.post('/api/devices/nope/revoke', { stepup_token: t2 }, cookie)).status).toBe(404)
+    expect(sess).toBeDefined()
+    expect((await h.post('/api/devices/d_aaaaaaaaaaaaaaaaaaaa/revoke', {}, cookie)).status).toBe(404)
+    // an older app still sends a stepup_token: accepted and ignored
+    expect((await h.post('/api/devices/nope/revoke', { stepup_token: 'old' }, cookie)).status).toBe(404)
   })
 
   it('POST /bridge/devices/:id/revoke (the Mac CLI path) revokes and tells the apps', async () => {

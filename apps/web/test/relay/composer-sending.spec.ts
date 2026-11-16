@@ -46,7 +46,8 @@ test('"Send as a text file" uploads the paste to the real media route and clears
   await page.getByTestId('send-as-file').click()
   await expect(page.getByTestId('chip').filter({ hasText: 'message.txt' })).toBeVisible()
   await expect(page.getByTestId('chip')).toHaveAttribute('data-state', 'ready')
-  expect(await box(page).inputValue()).toBe('')
+  // a retrying check: the box clears in a render after the chip is ready, and a one-shot read could come first
+  await expect(box(page)).toHaveValue('')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await waitUntil(() => frameOfType(harness, 'message').length === 1, 'message with the file')
   const atts = frameOfType(harness, 'message')[0]?.raw.attachments as Array<{ name: string; size: number }>

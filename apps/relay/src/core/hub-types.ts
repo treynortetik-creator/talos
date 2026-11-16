@@ -37,6 +37,7 @@ export const CONSUMABLE = new Set<string>([
   'session.control',
   'thread.session.control',
   'agent.recover',
+  'undo.request',
 ])
 
 /** What an UNPINNED app socket may receive and send: enough to finish pairing and nothing of the owner's data. */
@@ -76,12 +77,18 @@ export type AppConn = {
   /** The session's device is not pinned (yet): it gets an empty `ready` and may only finish pairing. */
   limited: boolean
   helloSeq: number
+  /** The hello listed WIDE_FEATURES_FEATURE: this app reads up to FEATURES_MAX features, so it gets the bridge's whole list. */
+  wideFeatures: boolean
 }
 export type BridgeConn = {
   id: string
   conn: Conn
   ip: string
   authed: boolean
+  /** The relay closed this socket before it signed in. Nothing it sends afterwards is read (see `refuseBridge`). */
+  refused: boolean
+  /** The socket has closed (either side). A hello whose signature check finishes after this is dropped: no ghost bridge. */
+  closed: boolean
   keyId: string
   lastInbound: number
   handshake: unknown

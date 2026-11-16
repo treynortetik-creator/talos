@@ -1,0 +1,20 @@
+{
+  "id": "undo-env-loss",
+  "title": "Undo could offer to delete a file that was there before the turn, like an .env git ignores",
+  "base": "cbd41d125220658cf8b3a8adfa4073b148fbf410",
+  "buggy": "135f9a7fc95aad1ca264911aedf48b2adfd23be1",
+  "fix": "341a40e57890ffb8f3895707a7e59c5cbcf735c8",
+  "expect": [
+    {
+      "file": [
+        "apps/bridge/src/undo/restore.ts",
+        "apps/bridge/src/undo/points.ts",
+        "apps/bridge/src/undo/snapshot.ts",
+        "apps/bridge/src/undo/card.ts"
+      ],
+      "severity": "high",
+      "must": [["ignored|\\.env|gitignore|untracked"], ["delet|remov|lost|loss"]],
+      "note": "Files git ignored when the point was taken are not in the point, so an ignored file that existed before (an .env) counts as new and is offered for deletion: approving the card deletes it."
+    }
+  ]
+}

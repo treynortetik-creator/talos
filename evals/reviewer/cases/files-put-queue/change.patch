@@ -1,0 +1,1159 @@
+diff --git a/apps/bridge/src/bridge-options.ts b/apps/bridge/src/bridge-options.ts
+index 387935f0..a0547858 100644
+--- a/apps/bridge/src/bridge-options.ts
++++ b/apps/bridge/src/bridge-options.ts
+@@ -34,6 +34,8 @@ export type BridgeOptions = {
+   files?: Partial<import('./files/service.ts').FilesDeps>
+   /** The AGENTS.md editor's deps over the live ones (tests: a thread's own folder without a config and agent folder). */
+   agentsMd?: Partial<import('./files/agents-md.ts').AgentsMdDeps>
++  /** The upload service's deps over the live ones (tests: a fake fetch of the media). */
++  filesPut?: Partial<import('./files/put.ts').FilesPutDeps>
+   /** Test seam (O6): the relay-silence watch's tick, threshold and fetch. Production passes nothing. */
+   relaySilence?: { tickMs?: number; silenceMs?: number; fetchFn?: typeof fetch }
+   /** Test seam: how long discovery waits for `chronos api version` (ms). */
+diff --git a/apps/bridge/src/bridge.ts b/apps/bridge/src/bridge.ts
+index 614f81c3..34438191 100644
+--- a/apps/bridge/src/bridge.ts
++++ b/apps/bridge/src/bridge.ts
+@@ -30,6 +30,7 @@ import { DeviceStore } from './devices.ts'
+ import { DialogCards } from './dialog-card.ts'
+ import { Enrollment } from './enrollment.ts'
+ import { AgentsMdService } from './files/agents-md.ts'
++import { FilesPutService } from './files/put.ts'
+ import { FilesService } from './files/service.ts'
+ import { agentsMdDeps, filesDeps } from './files/wiring.ts'
+ import { FolderService, folderDeps } from './folders/service.ts'
+@@ -341,6 +342,14 @@ export class Bridge {
+         ...agentsMdDeps({ talosHome: env.home, config: () => this.ctx.config.config, files }),
+         ...(opts.agentsMd ?? {}),
+       })
++      // uploads into a thread's folder, inside the same fence; the media is fetched and checked, never kept here
++      const media = this.ctx.media
++      this.ctx.filesPut = new FilesPutService({
++        fencedDir: (id, dir) => files.fencedDir(id, dir),
++        fetch: (ref) => media.fetchVerified(ref),
++        now: () => this.clock.now(),
++        ...(opts.filesPut ?? {}),
++      })
+     }
+     // the bug reporter's read: versions, filed errors and the cleaned log tail, for the owner's signed device only
+     if (live && !worker)
+diff --git a/apps/bridge/src/context.ts b/apps/bridge/src/context.ts
+index e5ec2034..3e047fa6 100644
+--- a/apps/bridge/src/context.ts
++++ b/apps/bridge/src/context.ts
+@@ -251,6 +251,8 @@ export type BridgeContext = {
+   files?: FilesServiceSeam
+   /** The thread's AGENTS.md in its settings (src/files/agents-md.ts; live main bridge only); absent = `agents_md.*` answers a fixed error. */
+   agentsMd?: import('./files/agents-md.ts').AgentsMdService
++  /** Uploads into a thread's folder (src/files/put.ts; live main bridge only); absent = `files.put` answers a fixed error. */
++  filesPut?: import('./files/put.ts').FilesPutService
+   /** The bug reporter's read of versions, filed errors and the cleaned log tail (live main bridge only); absent = `bug.context` answers a fixed error. */
+   bugContext?: BugContextSeam
+   /** MCP apps (docs/APPS.md): present on a live bridge; it answers app requests with a fixed refusal while the feature is off. */
+diff --git a/apps/bridge/src/files/put.ts b/apps/bridge/src/files/put.ts
+new file mode 100644
+index 00000000..6763f9c4
+--- /dev/null
++++ b/apps/bridge/src/files/put.ts
+@@ -0,0 +1,136 @@
++// Upload into a thread's folder (frames-files-put.ts): the owner's signed device names a folder inside the thread's folder,
++// a file name and the media it uploaded; the Mac fetches that media (size and sha256 checked against the signed ref) and
++// creates the file. The write fence:
++// - the folder goes through the Files pane's fence (FilesService.fencedDir): inside the thread's folder by its real path,
++//   not hidden, refused or lead-protected, a plain folder;
++// - the name is one plain name (no separator, control character or broken text, at most 255 bytes), never hidden, never an
++//   instruction file Claude Code reads (AGENTS.md, CLAUDE.md: those are edited in thread settings) or `.claude`;
++// - the file is created, never opened: exclusive, with no link followed anywhere in its path (safe-open.ts), so nothing that
++//   is there is ever overwritten or reached through a link. A taken name becomes "name (2).ext", up to FILES_PUT_CLASH_MAX;
++// - at most FILES_PUT_MAX_BYTES a file and FILES_PUT_DAY_BYTES a device a UTC day; two at once. Nothing is ever deleted.
++// A dropped file is content the agent will read: the same exposure as an attachment in a message.
++import { closeSync, constants, fchmodSync, fsyncSync, rmSync, writeSync } from 'node:fs'
++import { extname, join } from 'node:path'
++import {
++  type AttachmentRefT,
++  FILES_NAME_MAX,
++  FILES_PUT_CLASH_MAX,
++  FILES_PUT_DAY_BYTES,
++  FILES_PUT_MAX_BYTES,
++  FILES_PUT_REFUSED_NAMES,
++  FILES_PUT_WORDING,
++  FILES_WORDING,
++  type FrameOf,
++  filesNameHidden,
++} from '@talos-app/protocol'
++import { openResolvedNoFollow } from '../safe-open.ts'
++import { ReadError } from '../v2-seams.ts'
++
++type Envelope = 'v' | 'id' | 'ts' | 'type' | 'relay' | 'request_id'
++export type FilesPutResultBody = Omit<FrameOf<'files.put_result'>, Envelope>
++
++export type FilesPutDeps = {
++  /** The Files pane's fence for a folder to put a file in (FilesService.fencedDir). */
++  fencedDir(threadId: string, dir: string): Promise<{ dir: string; allows(name: string): boolean }>
++  /** The media's bytes, size and sha256 checked against the ref; throws when they cannot be fetched or do not match. */
++  fetch(ref: AttachmentRefT): Promise<Uint8Array>
++  now?: () => number
++  /** A device's bytes a UTC day (default FILES_PUT_DAY_BYTES); tests use a small one. */
++  dayBytes?: number
++}
++
++/** Uploads worked on at once (each holds up to 50 MB); more are told the folder is busy. */
++const MAX_AT_ONCE = 2
++// biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters is the point
++const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
++const code = (e: unknown) => (e as { code?: string } | null)?.code
++
++/** One plain name a file may take here, or null: never hidden, never an instruction file, nothing that is not a name. */
++export function plainUploadName(name: unknown): string | null {
++  if (typeof name !== 'string' || name === '' || name === '.' || name === '..') return null
++  if (name.includes('/') || name.includes('\\') || CONTROL.test(name) || name.includes('�')) return null
++  if (Buffer.byteLength(name) > FILES_NAME_MAX || name !== name.trim()) return null
++  if (filesNameHidden(name) || filesNameHidden(name.toLowerCase())) return null
++  return name
++}
++
++const isInstructions = (name: string) => FILES_PUT_REFUSED_NAMES.includes(name.toLowerCase())
++
++/** "plan.md", "plan (2).md", ...: the n-th name to try (n = 1 is the name itself). */
++export function clashName(name: string, n: number): string {
++  if (n === 1) return name
++  const ext = extname(name)
++  const base = ext && ext !== name ? name.slice(0, -ext.length) : name
++  return `${base} (${n})${ext === name ? '' : ext}`
++}
++
++export class FilesPutService {
++  readonly available = true
++  private busy = 0
++  private readonly spent = new Map<string, { day: string; bytes: number }>()
++
++  constructor(private readonly d: FilesPutDeps) {}
++
++  async put(
++    f: Pick<FrameOf<'files.put'>, 'thread_id' | 'dir' | 'name' | 'media'> & { device_id: string },
++  ): Promise<FilesPutResultBody> {
++    const name = plainUploadName(f.name)
++    if (!name) throw new ReadError('bad_frame', FILES_PUT_WORDING.badName)
++    if (isInstructions(name)) throw new ReadError('bad_frame', FILES_PUT_WORDING.instructions)
++    if (f.media.size > FILES_PUT_MAX_BYTES) throw new ReadError('too_large', FILES_PUT_WORDING.tooLarge)
++    const day = new Date((this.d.now ?? Date.now)()).toISOString().slice(0, 10)
++    const had = this.spent.get(f.device_id)
++    const used = had?.day === day ? had.bytes : 0
++    if (used + f.media.size > (this.d.dayBytes ?? FILES_PUT_DAY_BYTES)) throw new ReadError('rate_limited', FILES_PUT_WORDING.budget)
++    if (this.busy >= MAX_AT_ONCE) throw new ReadError('internal', FILES_WORDING.slow)
++    this.busy++
++    try {
++      const target = await this.d.fencedDir(f.thread_id, f.dir).catch(() => {
++        throw new ReadError('bad_frame', FILES_PUT_WORDING.folder)
++      })
++      if (!target.allows(name)) throw new ReadError('bad_frame', FILES_PUT_WORDING.badName)
++      let bytes: Uint8Array
++      try {
++        bytes = await this.d.fetch(f.media)
++      } catch {
++        throw new ReadError('internal', FILES_PUT_WORDING.download)
++      }
++      const got = createExclusive(target.dir, name, bytes, target.allows)
++      // counted once it is there: a refusal or a failed fetch costs nothing
++      const now = this.spent.get(f.device_id)
++      this.spent.set(f.device_id, { day, bytes: (now?.day === day ? now.bytes : 0) + bytes.length })
++      return { thread_id: f.thread_id, dir: f.dir, name: got, size: bytes.length }
++    } finally {
++      this.busy--
++    }
++  }
++}
++
++/** Creates `name` (or the first free "name (n).ext") in `dir` and writes `bytes` to it. Never opens a file that is there. */
++function createExclusive(dir: string, name: string, bytes: Uint8Array, allows: (name: string) => boolean): string {
++  for (let n = 1; n <= FILES_PUT_CLASH_MAX; n++) {
++    const candidate = clashName(name, n)
++    if (Buffer.byteLength(candidate) > FILES_NAME_MAX || isInstructions(candidate) || !allows(candidate)) break
++    const path = join(dir, candidate)
++    let fd: number
++    try {
++      // read-write, not write-only: the handle check reads where it points (/dev/fd/N), which a write-only handle may not
++      fd = openResolvedNoFollow(path, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL)
++    } catch (e) {
++      if (code(e) === 'EEXIST') continue // taken (on a disk that ignores case, in any case): the next name
++      throw new ReadError('internal', FILES_PUT_WORDING.failed)
++    }
++    try {
++      fchmodSync(fd, 0o644)
++      for (let off = 0; off < bytes.length; ) off += writeSync(fd, bytes, off, bytes.length - off)
++      fsyncSync(fd)
++    } catch {
++      closeSync(fd)
++      rmSync(path, { force: true }) // the file this call created, half written
++      throw new ReadError('internal', FILES_PUT_WORDING.failed)
++    }
++    closeSync(fd)
++    return candidate
++  }
++  throw new ReadError('bad_frame', FILES_PUT_WORDING.clash)
++}
+diff --git a/apps/bridge/src/files/service.ts b/apps/bridge/src/files/service.ts
+index f697e924..cb99ab70 100644
+--- a/apps/bridge/src/files/service.ts
++++ b/apps/bridge/src/files/service.ts
+@@ -289,6 +289,34 @@ export class FilesService {
+     return { root, path }
+   }
+ 
++  /**
++   * A folder inside the thread's folder for an upload (src/files/put.ts), fenced as a listing of it is: its real path (a plain
++   * folder), and whether a name in it is one the fence lets through (not hidden, refused or lead-protected). Opens nothing.
++   */
++  async fencedDir(threadId: string, path: string): Promise<{ dir: string; allows(name: string): boolean }> {
++    const root = await this.rootOf(threadId)
++    const { real } = await this.resolve(root, path)
++    try {
++      if (!(await fsp.lstat(real)).isDirectory()) this.refuse()
++    } catch (e) {
++      if (e instanceof ReadError) throw e
++      this.refuse()
++    }
++    const lead = await this.leadRoots(real)
++    return {
++      dir: real,
++      allows: (name) => {
++        if (name.includes('/') || hiddenName(name)) return false
++        try {
++          this.inside(root, join(real, name), lead)
++          return true
++        } catch {
++          return false
++        }
++      },
++    }
++  }
++
+   /** The real path of `path` inside the thread's folder, or a refusal. */
+   private async resolve(root: string, path: unknown): Promise<{ parts: string[]; real: string }> {
+     if (typeof path !== 'string' || CONTROL.test(path) || path.includes('�')) return this.refuse()
+diff --git a/apps/bridge/src/frames-out.ts b/apps/bridge/src/frames-out.ts
+index db73523d..a86b5b9e 100644
+--- a/apps/bridge/src/frames-out.ts
++++ b/apps/bridge/src/frames-out.ts
+@@ -196,6 +196,7 @@ type ReadAnswer =
+   | 'files.file'
+   | 'bug.context_result'
+   | 'agents_md.file'
++  | 'files.put_result'
+ export const readAnswerFrame = <T extends ReadAnswer>(
+   now: number,
+   type: T,
+diff --git a/apps/bridge/src/handshake.ts b/apps/bridge/src/handshake.ts
+index 9f1eaeae..11537aec 100644
+--- a/apps/bridge/src/handshake.ts
++++ b/apps/bridge/src/handshake.ts
+@@ -3,6 +3,7 @@ import {
+   AGENTS_MD_FEATURE,
+   DRIVING_FEATURE,
+   FILES_FEATURE,
++  FILES_PUT_FEATURE,
+   FOLDERS_FEATURE,
+   type Frame,
+   HEALTH_FEATURE,
+@@ -41,6 +42,8 @@ export function bridgeFeatures(svc: {
+   files?: { available: boolean } | undefined
+   /** The thread's AGENTS.md in its settings (src/files/agents-md.ts): present beside the Files pane, on a live main bridge. */
+   agentsMd?: { available: boolean } | undefined
++  /** Uploads into a thread's folder (src/files/put.ts): beside the Files pane, on a live main bridge. */
++  filesPut?: { available: boolean } | undefined
+   /** Problem reports (docs/ERRORS.md): present on a live bridge, which is the one that files them. */
+   problems?: unknown
+   /** Sub-threads: advertised only while the Mac app reports it checks a sub-thread's folder (workers.json). */
+@@ -66,6 +69,7 @@ export function bridgeFeatures(svc: {
+     ...(svc.folders?.available ? [FOLDERS_FEATURE] : []),
+     ...(svc.files?.available ? [FILES_FEATURE] : []),
+     ...(svc.agentsMd?.available ? [AGENTS_MD_FEATURE] : []),
++    ...(svc.filesPut?.available ? [FILES_PUT_FEATURE] : []),
+     ...(svc.config?.subthreadsSupported?.() ? [SUBTHREADS_FEATURE] : []),
+   ]
+ }
+diff --git a/apps/bridge/src/inbound-reads.ts b/apps/bridge/src/inbound-reads.ts
+index 6f72f4f8..8c2a5bc5 100644
+--- a/apps/bridge/src/inbound-reads.ts
++++ b/apps/bridge/src/inbound-reads.ts
+@@ -5,6 +5,7 @@ import {
+   AGENTS_MD_WORDING,
+   APP_REQUEST_MAX_AGE_MS,
+   type ErrorCodeT,
++  FILES_PUT_WORDING,
+   FILES_WORDING,
+   FOLDER_WORDING,
+   type Frame,
+@@ -233,6 +234,13 @@ export const readsFrames = {
+           out = readAnswerFrame(now(), 'agents_md.file', f.request_id, body)
+           break
+         }
++        case 'files.put': {
++          // an upload into the thread's folder (src/files/put.ts): created, never over a file that is there
++          const fp = ctx.filesPut
++          if (!fp?.available) return fail('internal', FILES_PUT_WORDING.notReady)
++          out = readAnswerFrame(now(), 'files.put_result', f.request_id, await fp.put(f))
++          break
++        }
+         case 'bug.context': {
+           // versions, filed errors and the cleaned log tail for the bug reporter (src/bug-context/service.ts)
+           const bc = ctx.bugContext
+diff --git a/apps/bridge/src/media.ts b/apps/bridge/src/media.ts
+index 9ca3e8db..0d021ea5 100644
+--- a/apps/bridge/src/media.ts
++++ b/apps/bridge/src/media.ts
+@@ -117,11 +117,17 @@ export class MediaStore {
+     return join(this.p.media, `${mediaId}${ext}`)
+   }
+ 
+-  /** Downloads an owner attachment and checks size and sha256 against the signed AttachmentRef. */
+-  async download(ref: AttachmentRefT): Promise<Downloaded> {
++  /** The bytes of an owner attachment, checked for size and sha256 against the signed AttachmentRef; nothing is written. */
++  async fetchVerified(ref: AttachmentRefT): Promise<Uint8Array> {
+     const bytes = await this.http.getMedia(ref.media_id, Math.min(ref.size, MAX_FILE_BYTES))
+     if (bytes.length !== ref.size) throw new MediaError(`size mismatch for ${ref.media_id}`)
+     if (sha256Hex(bytes) !== ref.sha256) throw new MediaError(`sha256 mismatch for ${ref.media_id}`)
++    return bytes
++  }
++
++  /** Downloads an owner attachment and checks size and sha256 against the signed AttachmentRef. */
++  async download(ref: AttachmentRefT): Promise<Downloaded> {
++    const bytes = await this.fetchVerified(ref)
+     const nameExt = extname(ref.name).toLowerCase()
+     const ext = EXT_BY_MIME[ref.mime] ?? (/^\.[a-z0-9]{1,5}$/.test(nameExt) ? nameExt : '')
+     const path = this.localPath(ref.media_id, ext)
+diff --git a/apps/bridge/test/files-put-bridge.test.ts b/apps/bridge/test/files-put-bridge.test.ts
+new file mode 100644
+index 00000000..c27ebf43
+--- /dev/null
++++ b/apps/bridge/test/files-put-bridge.test.ts
+@@ -0,0 +1,76 @@
++// Upload into a thread's folder through the real Bridge: a signed `files.put` from a (fake) app over the (fake) relay reaches
++// the service, the file is created in the thread's folder and `files.put_result` comes back for the same request_id. A refusal
++// is the Mac's sentence; the same signed put sent again is refused and puts nothing more.
++import { afterEach, describe, expect, test } from 'bun:test'
++import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
++import { join } from 'node:path'
++import { FILES_PUT_FEATURE, FILES_PUT_WORDING, newUlid, sha256Hex } from '@talos-app/protocol'
++import { mkFrame } from '@talos-app/testkit'
++import { bridgeFeatures } from '../src/handshake.ts'
++import { type Harness, startHarness, waitFor } from './helpers.ts'
++
++let h: Harness | undefined
++afterEach(async () => {
++  await h?.stop()
++  h = undefined
++})
++
++const BODY = Buffer.from('# Packing\n- boots\n')
++const fresh = () => {
++  const folder = join(realpathSync(mkdtempSync(join(realpathSync('/tmp'), 'talos-files-put-bridge-'))), 'trip')
++  mkdirSync(join(folder, 'docs'), { recursive: true })
++  return folder
++}
++async function start(folder: string) {
++  h = await startHarness({
++    bridge: {
++      files: { rootFor: (id) => (id === 'general' ? folder : null) },
++      filesPut: { fetch: async () => BODY },
++    },
++  })
++  return h
++}
++const media = {
++  media_id: 'md_01JBF3V7Q8K2M4N6P8R0S2T4AB',
++  name: 'packing.md',
++  mime: 'text/markdown',
++  size: BODY.length,
++  sha256: sha256Hex(BODY),
++  kind: 'file',
++  role: 'attachment',
++}
++const putFrame = (x: Harness, name: string) =>
++  x.app.sign({ ...mkFrame('files.put'), request_id: newUlid(), thread_id: 'general', dir: 'docs', name, media })
++const inbound = (x: Harness, pick: (r: Record<string, unknown>) => boolean) =>
++  waitFor(() => x.app.rec.frames.some((r) => r.direction === 'in' && pick(r.raw)), 5000, 'answer').then(
++    () => x.app.rec.frames.find((r) => r.direction === 'in' && pick(r.raw))?.raw as Record<string, unknown>,
++  )
++
++describe('files.put through the real Bridge', () => {
++  test('the Mac says it takes uploads, puts the file in the folder, and answers the same request', async () => {
++    const folder = fresh()
++    const x = await start(folder)
++    expect(bridgeFeatures(x.bridge.ctx)).toContain(FILES_PUT_FEATURE)
++    const f = await putFrame(x, 'packing.md')
++    x.app.send(f)
++    const r = await inbound(x, (raw) => raw.type === 'files.put_result' && raw.request_id === f.request_id)
++    expect(r).toMatchObject({ thread_id: 'general', dir: 'docs', name: 'packing.md', size: BODY.length })
++    expect(readFileSync(join(folder, 'docs', 'packing.md'))).toEqual(BODY)
++  })
++
++  test('an instruction file is refused in words; the same signed put sent twice puts one file', async () => {
++    const folder = fresh()
++    const x = await start(folder)
++    const bad = await putFrame(x, 'AGENTS.md')
++    x.app.send(bad)
++    const e = await inbound(x, (raw) => raw.type === 'error' && raw.ref === bad.id)
++    expect(e.message).toBe(FILES_PUT_WORDING.instructions)
++    const f = await putFrame(x, 'packing.md')
++    x.app.send(f)
++    await inbound(x, (raw) => raw.type === 'files.put_result' && raw.request_id === f.request_id)
++    x.app.send(f)
++    const again = await inbound(x, (raw) => raw.type === 'error' && raw.ref === f.id)
++    expect(again.message).toBe('That request was already used.')
++    expect(readdirSync(join(folder, 'docs'))).toEqual(['packing.md'])
++  })
++})
+diff --git a/apps/bridge/test/files-put.test.ts b/apps/bridge/test/files-put.test.ts
+new file mode 100644
+index 00000000..3d0f4512
+--- /dev/null
++++ b/apps/bridge/test/files-put.test.ts
+@@ -0,0 +1,213 @@
++// Upload into a thread's folder (src/files/put.ts): the write side of the Files pane's fence. A file is created, never
++// opened: nothing that is there is overwritten or reached through a link, a taken name becomes "name (2).ext", hidden names
++// and instruction files are refused, the folder is fenced as a listing of it is, and a device has a daily byte budget.
++// Every case runs in a temp folder with made-up files and a fake media fetch.
++import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
++import {
++  chmodSync,
++  existsSync,
++  mkdirSync,
++  mkdtempSync,
++  readdirSync,
++  readFileSync,
++  realpathSync,
++  renameSync,
++  rmSync,
++  statSync,
++  symlinkSync,
++  writeFileSync,
++} from 'node:fs'
++import { join } from 'node:path'
++import { FILES_PUT_DAY_BYTES, FILES_PUT_MAX_BYTES, FILES_PUT_WORDING, sha256Hex } from '@talos-app/protocol'
++import { clashName, FilesPutService, plainUploadName } from '../src/files/put.ts'
++import { FilesService } from '../src/files/service.ts'
++import { openSeam } from '../src/safe-open.ts'
++import { ReadError } from '../src/v2-seams.ts'
++
++/** /tmp, not TMPDIR: a CI run's TMPDIR sits under a hidden folder, which the fence refuses by design. */
++const base = () => realpathSync('/tmp')
++const T = 'trip'
++const DEVICE = 'd_k3j2h4g5f6d7s2a7q2w3'
++
++let top: string
++let root: string
++let outside: string
++let home: string
++let now: number
++let fetched: number
++let svc: FilesPutService
++
++const ref = (bytes: Uint8Array, over: Record<string, unknown> = {}) =>
++  ({
++    media_id: 'md_01JBF3V7Q8K2M4N6P8R0S2T4AB',
++    name: 'upload.bin',
++    mime: 'application/octet-stream',
++    size: bytes.length,
++    sha256: sha256Hex(bytes),
++    kind: 'file',
++    role: 'attachment',
++    ...over,
++  }) as never
++const make = (fetch?: (r: { size: number }) => Promise<Uint8Array>) => {
++  const files = new FilesService({
++    rootFor: (id) => (id === T ? root : null),
++    refused: [home],
++    media: { uploadBytes: async () => ({}) as never },
++  })
++  return new FilesPutService({
++    fencedDir: (id, dir) => files.fencedDir(id, dir),
++    fetch:
++      fetch ??
++      (async (r) => {
++        fetched++
++        return body.subarray(0, r.size)
++      }),
++    now: () => now,
++  })
++}
++let body = Buffer.from('hello from the phone\n')
++const put = (name: string, dir = '', bytes: Uint8Array = body, device = DEVICE) =>
++  svc.put({ thread_id: T, dir, name, media: ref(bytes), device_id: device })
++const fail = async (p: Promise<unknown>) => {
++  const e = await p.then(
++    () => null,
++    (x: unknown) => x,
++  )
++  expect(e).toBeInstanceOf(ReadError)
++  return e as ReadError
++}
++
++beforeEach(() => {
++  top = realpathSync(mkdtempSync(join(base(), 'talos-files-put-')))
++  root = join(top, 'trip')
++  outside = join(top, 'outside')
++  home = join(root, 'talos-home') // the bridge's own home, if it ever sits inside a thread's folder
++  for (const d of [root, outside, home, join(root, 'docs')]) mkdirSync(d, { recursive: true })
++  writeFileSync(join(outside, 'secret.txt'), 'SECRET\n')
++  now = Date.parse('2026-11-11T12:00:00Z')
++  fetched = 0
++  body = Buffer.from('hello from the phone\n')
++  svc = make()
++})
++afterEach(() => {
++  openSeam.beforeOpen = undefined
++  rmSync(top, { recursive: true, force: true })
++})
++
++describe('putting a file in the folder', () => {
++  test('in the folder or a folder in it: the bytes fetched, under the name asked, readable by the owner', async () => {
++    expect(await put('notes.md')).toEqual({ thread_id: T, dir: '', name: 'notes.md', size: body.length })
++    expect(await put('plan.md', 'docs')).toMatchObject({ dir: 'docs', name: 'plan.md' })
++    expect(readFileSync(join(root, 'docs', 'plan.md'), 'utf8')).toBe('hello from the phone\n')
++    expect(statSync(join(root, 'notes.md')).mode & 0o777).toBe(0o644)
++  })
++
++  test('a taken name is never overwritten: it becomes "name (2).ext", then (3)', async () => {
++    writeFileSync(join(root, 'plan.md'), 'MINE\n')
++    expect((await put('plan.md')).name).toBe('plan (2).md')
++    expect((await put('plan.md')).name).toBe('plan (3).md')
++    expect(readFileSync(join(root, 'plan.md'), 'utf8')).toBe('MINE\n')
++    expect(clashName('archive.tar.gz', 2)).toBe('archive.tar (2).gz')
++    expect(clashName('README', 2)).toBe('README (2)')
++  })
++
++  test('a link where the file would go is not followed: the file it points at is untouched, the upload takes the next name', async () => {
++    symlinkSync(join(outside, 'secret.txt'), join(root, 'x.md'))
++    expect((await put('x.md')).name).toBe('x (2).md')
++    expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('SECRET\n')
++  })
++})
++
++describe('the name', () => {
++  test('hidden names, instruction files, separators and anything that is not a plain name are refused', async () => {
++    for (const n of ['.env', '.git', 'node_modules', 'NODE_MODULES', '.claude', 'a/b', '../x', '..', '.', ' x', 'x ', 'a\nb']) {
++      const e = await fail(put(n))
++      expect(e.message, n).toBe(FILES_PUT_WORDING.badName)
++    }
++    for (const n of ['AGENTS.md', 'agents.MD', 'CLAUDE.md', 'claude.local.md']) {
++      expect((await fail(put(n))).message, n).toBe(FILES_PUT_WORDING.instructions)
++    }
++    expect(plainUploadName('é'.repeat(128))).toBeNull() // 256 bytes
++    expect(plainUploadName('plan.md')).toBe('plan.md')
++    expect(readdirSync(root).sort()).toEqual(['docs', 'talos-home'])
++    expect(fetched).toBe(0) // refused before anything is fetched
++  })
++})
++
++describe('the folder', () => {
++  test('a hidden, missing, outside, refused or lead-protected folder, or a file, is refused, and nothing is written', async () => {
++    mkdirSync(join(root, '.git'))
++    symlinkSync(outside, join(root, 'out'))
++    writeFileSync(join(root, 'file.txt'), 'x')
++    mkdirSync(join(root, 'lead', 'private'), { recursive: true })
++    writeFileSync(join(root, 'lead', '.talos-lead'), JSON.stringify({ protect: [join(root, 'lead', 'private')] }))
++    for (const dir of ['.git', 'nope', 'out', 'talos-home', 'file.txt', 'lead/private', '/etc', '../outside']) {
++      expect((await fail(put('a.md', dir))).message, dir).toBe(FILES_PUT_WORDING.folder)
++    }
++    expect(readdirSync(outside)).toEqual(['secret.txt'])
++    expect(existsSync(join(root, '.git', 'a.md'))).toBe(false)
++    expect(fetched).toBe(0)
++  })
++
++  test('a name in an allowed folder that a lead marker protects is refused, and so is the next clash name it would take', async () => {
++    writeFileSync(join(root, '.talos-lead'), JSON.stringify({ protect: [join(root, 'docs', 'keys.txt')] }))
++    expect((await fail(put('keys.txt', 'docs'))).message).toBe(FILES_PUT_WORDING.badName)
++    expect(existsSync(join(root, 'docs', 'keys.txt'))).toBe(false)
++    expect((await put('plan.md', 'docs')).name).toBe('plan.md')
++  })
++
++  test('a folder swapped for a link between the fence and the create is not followed: nothing lands outside', async () => {
++    openSeam.beforeOpen = (p) => {
++      if (!p.endsWith('/docs/a.md')) return
++      renameSync(join(root, 'docs'), join(root, 'docs-moved'))
++      symlinkSync(outside, join(root, 'docs'))
++    }
++    expect((await fail(put('a.md', 'docs'))).message).toBe(FILES_PUT_WORDING.failed)
++    expect(readdirSync(outside)).toEqual(['secret.txt'])
++  })
++})
++
++describe('limits and failures', () => {
++  test('over 50 MB is refused before the fetch; a fetch that fails or does not match writes nothing', async () => {
++    const e = await fail(
++      svc.put({ thread_id: T, dir: '', name: 'big.bin', media: ref(body, { size: FILES_PUT_MAX_BYTES + 1 }), device_id: DEVICE }),
++    )
++    expect(e.message).toBe(FILES_PUT_WORDING.tooLarge)
++    expect(fetched).toBe(0)
++    svc = make(async () => {
++      throw new Error('sha256 mismatch')
++    })
++    expect((await fail(put('a.md'))).message).toBe(FILES_PUT_WORDING.download)
++    expect(readdirSync(root).sort()).toEqual(['docs', 'talos-home'])
++  })
++
++  test('a device has a daily byte budget; another device has its own, and the next UTC day starts again', async () => {
++    const files = new FilesService({ rootFor: () => root, refused: [home], media: { uploadBytes: async () => ({}) as never } })
++    svc = new FilesPutService({
++      fencedDir: (id, dir) => files.fencedDir(id, dir),
++      fetch: async (r) => new Uint8Array(r.size),
++      now: () => now,
++      dayBytes: 100,
++    })
++    const media = ref(new Uint8Array(60))
++    await svc.put({ thread_id: T, dir: '', name: 'one.bin', media, device_id: DEVICE })
++    const e = await fail(svc.put({ thread_id: T, dir: '', name: 'two.bin', media, device_id: DEVICE }))
++    expect(e.code).toBe('rate_limited')
++    expect(e.message).toBe(FILES_PUT_WORDING.budget)
++    expect(existsSync(join(root, 'two.bin'))).toBe(false)
++    await svc.put({ thread_id: T, dir: '', name: 'other.bin', media, device_id: 'd_a1b2c3d4e5f6g7h8i9j0' })
++    now += 24 * 3600_000
++    await svc.put({ thread_id: T, dir: '', name: 'two.bin', media, device_id: DEVICE })
++    expect(FILES_PUT_DAY_BYTES).toBe(1024 * 1024 * 1024)
++  })
++
++  test('a folder that cannot be written leaves nothing behind', async () => {
++    chmodSync(join(root, 'docs'), 0o500)
++    try {
++      expect((await fail(put('a.md', 'docs'))).message).toBe(FILES_PUT_WORDING.failed)
++    } finally {
++      chmodSync(join(root, 'docs'), 0o700)
++    }
++    expect(readdirSync(join(root, 'docs'))).toEqual([])
++  })
++})
+diff --git a/apps/relay/src/core/hub-app-frames.ts b/apps/relay/src/core/hub-app-frames.ts
+index f6c17fae..31451a2b 100644
+--- a/apps/relay/src/core/hub-app-frames.ts
++++ b/apps/relay/src/core/hub-app-frames.ts
+@@ -145,6 +145,8 @@ export const appFrames = {
+       // the thread's AGENTS.md (frames-agents-md.ts): the save too goes to the Mac and back, never stored or replayed
+       case 'agents_md.read':
+       case 'agents_md.write':
++      // an upload into a thread's folder (frames-files-put.ts): the file itself went up the media path already
++      case 'files.put':
+         if (!this.ownerDeviceOk(a, frame.device_id, frame.id)) return
+         return this.ephemeral.onRequest(a.id, frame, raw)
+       // MCP Apps (spec M3.4): signed, never stored or replayed, answered to this socket only
+diff --git a/apps/relay/src/core/hub-bridge-frames.ts b/apps/relay/src/core/hub-bridge-frames.ts
+index bf1bcd55..2f0a46ef 100644
+--- a/apps/relay/src/core/hub-bridge-frames.ts
++++ b/apps/relay/src/core/hub-bridge-frames.ts
+@@ -109,6 +109,7 @@ export const bridgeFrames = {
+       case 'files.file':
+       case 'bug.context_result':
+       case 'agents_md.file':
++      case 'files.put_result':
+         return this.ephemeral.onResponse(frame, raw)
+       case 'health.beat':
+         // WP-V1 (core/health.ts) reads it through a bridge handler; the relay keeps the last one (V2.3, rule 1)
+diff --git a/apps/relay/src/core/hub.ts b/apps/relay/src/core/hub.ts
+index 06ee81f0..ac2531c3 100644
+--- a/apps/relay/src/core/hub.ts
++++ b/apps/relay/src/core/hub.ts
+@@ -166,7 +166,11 @@ export class Hub implements Bus {
+             ? 'speak'
+             : t === 'fs.list'
+               ? 'folders'
+-              : t === 'files.list' || t === 'files.read' || t === 'agents_md.read' || t === 'agents_md.write'
++              : t === 'files.list' ||
++                t === 'files.read' ||
++                t === 'agents_md.read' ||
++                t === 'agents_md.write' ||
++                t === 'files.put'
+                 ? 'files'
+                 : t === 'bug.context'
+                   ? 'bug_context'
+diff --git a/apps/relay/test/core/files-put-relay.test.ts b/apps/relay/test/core/files-put-relay.test.ts
+new file mode 100644
+index 00000000..857b83a9
+--- /dev/null
++++ b/apps/relay/test/core/files-put-relay.test.ts
+@@ -0,0 +1,68 @@
++// Upload into a thread's folder through the real relay: a signed `files.put` goes to the Mac and its answer reaches the
++// asking socket only; the relay keeps none of it (a device that connects later, or the Mac reconnecting, is handed nothing).
++import { newUlid } from '@talos-app/protocol'
++import { mkFrame, sleep } from '@talos-app/testkit'
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { startTestRelay, type TestRelay } from './harness.ts'
++import { kit } from './helpers.ts'
++
++vi.setConfig({ testTimeout: 30_000 })
++
++let relay: TestRelay | null = null
++afterEach(async () => {
++  await relay?.stop()
++  relay = null
++})
++
++const media = {
++  media_id: 'md_01JBF3V7Q8K2M4N6P8R0S2T4AB',
++  name: 'zq-put-marker-52.md',
++  mime: 'text/markdown',
++  size: 7,
++  sha256: 'c'.repeat(64),
++  kind: 'file',
++  role: 'attachment',
++}
++
++describe('files.put through the real relay', () => {
++  it('goes to the Mac, its answer reaches the asker only, and nothing of it is kept or replayed', async () => {
++    relay = await startTestRelay()
++    const k = kit(relay)
++    const app = await k.connectedApp()
++    const other = await k.connectedApp()
++    const pinned = { [app.device.deviceId]: app.device.publicJwk }
++    const bridge = await k.bridge({ pinnedDevices: pinned, autoReply: false }).connect()
++    const put = await app.sign({
++      ...mkFrame('files.put'),
++      request_id: newUlid(),
++      thread_id: 'general',
++      dir: '',
++      name: 'zq-put-marker-52.md',
++      media,
++    })
++    app.send(put)
++    await bridge.expectFrame('files.put', (x) => x.id === put.id, { direction: 'in' })
++    bridge.send({
++      ...mkFrame('files.put_result'),
++      request_id: put.request_id,
++      thread_id: 'general',
++      dir: '',
++      name: 'zq-put-marker-52.md',
++      size: 7,
++    })
++    await app.expectFrame('files.put_result', (x) => x.request_id === put.request_id, { direction: 'in' })
++    await sleep(200)
++    const seen = (frames: Array<{ raw: unknown }>) => JSON.stringify(frames.map((f) => f.raw))
++    expect(seen(other.rec.frames)).not.toContain('zq-put-marker-52')
++    const later = await k.connectedApp()
++    await bridge.close()
++    const again = await k.bridge({ pinnedDevices: pinned, autoReply: false }).connect()
++    await sleep(300)
++    expect(seen(later.rec.frames)).not.toContain('zq-put-marker-52')
++    expect(again.rec.frames.some((f) => f.raw.type === 'files.put')).toBe(false)
++    await app.close()
++    await other.close()
++    await later.close()
++    await again.close()
++  })
++})
+diff --git a/apps/relay/test/core/hub-entry-points.test.ts b/apps/relay/test/core/hub-entry-points.test.ts
+index 9402734d..9d45e763 100644
+--- a/apps/relay/test/core/hub-entry-points.test.ts
++++ b/apps/relay/test/core/hub-entry-points.test.ts
+@@ -161,6 +161,7 @@ describe('hub entry points, app socket', () => {
+         'card.resolve',
+         'config.patch',
+         'files.list',
++        'files.put',
+         'files.read',
+         'fs.list',
+         'heartbeat.test',
+diff --git a/apps/web/src/features/files/useFilesBrowser.ts b/apps/web/src/features/files/useFilesBrowser.ts
+index f3f13e62..f88f7fbb 100644
+--- a/apps/web/src/features/files/useFilesBrowser.ts
++++ b/apps/web/src/features/files/useFilesBrowser.ts
+@@ -164,6 +164,9 @@ export function useFilesBrowser(threadId: string) {
+     viewing,
+     more,
+     retry: () => void load(''),
++    /** Lists a folder again (after an upload into it). */
++    reload: (path: string) => void load(path),
++    threadId,
+     clearView: () => {
+       want.current = null
+       setViewing(null)
+diff --git a/apps/web/src/lib/fakeClient.ts b/apps/web/src/lib/fakeClient.ts
+index 91ff0ed2..e91f4b19 100644
+--- a/apps/web/src/lib/fakeClient.ts
++++ b/apps/web/src/lib/fakeClient.ts
+@@ -137,6 +137,7 @@ export function seedState(): ClientState {
+         'folders/1',
+         'files/1',
+         'agents-md/1',
++        'files-put/1',
+         'run/1',
+       ],
+       features_at: '2026-10-28T15:00:00.000Z',
+diff --git a/apps/web/src/lib/fakeV2.ts b/apps/web/src/lib/fakeV2.ts
+index 6710778a..e94b56d9 100644
+--- a/apps/web/src/lib/fakeV2.ts
++++ b/apps/web/src/lib/fakeV2.ts
+@@ -1,5 +1,7 @@
+ // In-memory SearchClient + MemoryClient for fakeClient (VITE_FAKE=1 and the web tests). Generic content only.
+ import {
++  FILES_PUT_REFUSED_NAMES,
++  FILES_PUT_WORDING,
+   FILES_WORDING,
+   filesNameHidden,
+   foldForSearch,
+@@ -313,7 +315,7 @@ export type FakeFiles = FilesClient & {
+   /** Adds or replaces one file. */
+   setFile(path: string, body: FakeFilesTree['files'][string]): void
+   /** Every call, in order, for tests. */
+-  readonly calls: Array<{ op: 'list' | 'read'; threadId: string; path: string; offset?: number }>
++  readonly calls: Array<{ op: 'list' | 'read' | 'put'; threadId: string; path: string; offset?: number }>
+ }
+ 
+ /**
+@@ -394,5 +396,22 @@ export function createFakeFiles(deps: { macOnline: () => boolean; chunk?: number
+       const next = offset + chunk < body.length ? offset + chunk : null
+       return { ...base, kind: 'text', size: new Blob([body]).size, text, offset, nextOffset: next }
+     },
++    // the Mac's rules in small: a folder it lists, one plain name that is not hidden or an instruction file, never over a file
++    async put(threadId, dir, name, media) {
++      calls.push({ op: 'put', threadId, path: dir === '' ? name : `${dir}/${name}` })
++      gate()
++      if (!shown(dir) || (dir !== '' && !Object.keys(files).some((p) => p.startsWith(`${dir}/`))))
++        throw new TalosClientError('bad_frame', FILES_PUT_WORDING.folder)
++      if (name.includes('/') || filesNameHidden(name)) throw new TalosClientError('bad_frame', FILES_PUT_WORDING.badName)
++      if (FILES_PUT_REFUSED_NAMES.includes(name.toLowerCase()))
++        throw new TalosClientError('bad_frame', FILES_PUT_WORDING.instructions)
++      const at = (n: string) => (dir === '' ? n : `${dir}/${n}`)
++      const dot = name.lastIndexOf('.')
++      const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
++      let got = name
++      for (let n = 2; files[at(got)] !== undefined; n++) got = `${base} (${n})${ext}`
++      files[at(got)] = media.mime.startsWith('text/') ? '' : { binary: true }
++      return { name: got, size: media.size }
++    },
+   }
+ }
+diff --git a/apps/web/src/lib/socket-ctx.ts b/apps/web/src/lib/socket-ctx.ts
+index 8357d1c7..f55d9765 100644
+--- a/apps/web/src/lib/socket-ctx.ts
++++ b/apps/web/src/lib/socket-ctx.ts
+@@ -237,7 +237,8 @@ export type SocketCtx = {
+       | 'files.listing'
+       | 'files.file'
+       | 'bug.context_result'
+-      | 'agents_md.file',
++      | 'agents_md.file'
++      | 'files.put_result',
+     timeoutMs?: number,
+   ) => Promise<Record<string, unknown>>
+   // socket-upload.ts
+diff --git a/apps/web/src/lib/socket-requests.ts b/apps/web/src/lib/socket-requests.ts
+index 56cf221a..368a4365 100644
+--- a/apps/web/src/lib/socket-requests.ts
++++ b/apps/web/src/lib/socket-requests.ts
+@@ -150,7 +150,8 @@ export function createSocketRequests(c: SocketCtx) {
+       | 'files.listing'
+       | 'files.file'
+       | 'bug.context_result'
+-      | 'agents_md.file',
++      | 'agents_md.file'
++      | 'files.put_result',
+     timeoutMs = 20_000,
+   ): Promise<Record<string, unknown>> {
+     if (!c.canSend()) throw new TalosClientError('mac_offline', "You're offline.")
+diff --git a/apps/web/src/lib/socketFiles.ts b/apps/web/src/lib/socketFiles.ts
+index e83db2dc..f4fe896a 100644
+--- a/apps/web/src/lib/socketFiles.ts
++++ b/apps/web/src/lib/socketFiles.ts
+@@ -10,7 +10,10 @@ import type { FilesClient, FilesFile, FilesListing } from './v2Client.ts'
+ 
+ export type SocketFilesDeps = {
+   /** Signs and sends `frame`, resolves with the answer that carries its `request_id`. */
+-  ask(frame: Record<string, unknown>, answer: 'files.listing' | 'files.file'): Promise<Record<string, unknown>>
++  ask(
++    frame: Record<string, unknown>,
++    answer: 'files.listing' | 'files.file' | 'files.put_result',
++  ): Promise<Record<string, unknown>>
+ }
+ 
+ // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters is the point
+@@ -78,5 +81,21 @@ export function createSocketFiles(d: SocketFilesDeps): FilesClient {
+       )
+       return toFilesFile(f, threadId, path)
+     },
++    async put(threadId, dir, name, media) {
++      const f = await d.ask(
++        {
++          type: 'files.put',
++          request_id: newUlid(),
++          thread_id: threadId,
++          dir,
++          name,
++          media: { ...media, role: 'attachment' },
++        },
++        'files.put_result',
++      )
++      // the answer must be for the folder asked, under one plain name
++      if (f.thread_id !== threadId || f.dir !== dir || !isName(f.name)) refuse()
++      return { name: f.name as string, size: count(f.size) }
++    },
+   }
+ }
+diff --git a/apps/web/src/lib/v2Client.ts b/apps/web/src/lib/v2Client.ts
+index 5925d536..ce8cb14b 100644
+--- a/apps/web/src/lib/v2Client.ts
++++ b/apps/web/src/lib/v2Client.ts
+@@ -143,6 +143,11 @@ export interface FilesClient {
+   list(threadId: string, path: string): Promise<FilesListing>
+   /** `files.read` -> `files.file`, from `offset` (0 = start). */
+   read(threadId: string, path: string, offset: number): Promise<FilesFile>
++  /**
++   * `files.put` -> `files.put_result`: puts uploaded media in the folder `dir` of the thread's folder under `name`. Resolves
++   * with the name it got (another when that was taken). Absent on a client that cannot ask the Mac to.
++   */
++  put?(threadId: string, dir: string, name: string, media: AttachmentRefT): Promise<{ name: string; size: number }>
+ }
+ 
+ /** The thread's AGENTS.md as the Mac has it (`agents_md.file`). */
+diff --git a/packages/protocol/fixtures/frames/files.put.json b/packages/protocol/fixtures/frames/files.put.json
+new file mode 100644
+index 00000000..44b1af6a
+--- /dev/null
++++ b/packages/protocol/fixtures/frames/files.put.json
+@@ -0,0 +1,21 @@
++{
++  "v": 1,
++  "type": "files.put",
++  "id": "01JBF3V7Q8K2M4N6P8R0S2T455",
++  "ts": "2026-10-28T15:32:10.120Z",
++  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T456",
++  "thread_id": "general",
++  "dir": "docs",
++  "name": "plan.md",
++  "media": {
++    "media_id": "md_01JBF3V7Q8K2M4N6P8R0S2T4AB",
++    "name": "plan.md",
++    "mime": "text/markdown",
++    "size": 7,
++    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
++    "kind": "file",
++    "role": "attachment"
++  },
++  "device_id": "d_rjxnk4xufxem5xago5zd",
++  "osig": "Pi-4AzBWTnfylOm_P99GDTJfNPrEdVpjNwCAb7e_ya4qtwelbZk58axTr6sL342FAiGryhDDrf1AJHv5eSM1cQ"
++}
+diff --git a/packages/protocol/fixtures/frames/files.put_result.json b/packages/protocol/fixtures/frames/files.put_result.json
+new file mode 100644
+index 00000000..9fad6633
+--- /dev/null
++++ b/packages/protocol/fixtures/frames/files.put_result.json
+@@ -0,0 +1,11 @@
++{
++  "v": 1,
++  "type": "files.put_result",
++  "id": "01JBF3V7Q8K2M4N6P8R0S2T457",
++  "ts": "2026-10-28T15:32:10.120Z",
++  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T456",
++  "thread_id": "general",
++  "dir": "docs",
++  "name": "plan (2).md",
++  "size": 7
++}
+diff --git a/packages/protocol/scripts/fixtures-reads.ts b/packages/protocol/scripts/fixtures-reads.ts
+index e1f0bd84..bb4be645 100644
+--- a/packages/protocol/scripts/fixtures-reads.ts
++++ b/packages/protocol/scripts/fixtures-reads.ts
+@@ -139,5 +139,31 @@ export function readFixtures({ env, ulid, msgId, mdId, owner, SHA }: FixtureHelp
+     text: '# Trip\n\nKeep the packing list in packing.md.\n',
+     saved: true,
+   }
++  // an upload into a thread's folder: the file went up the media path, then the Mac is asked to put it in a folder
++  signed['files.put'] = {
++    ...env('files.put', 165),
++    request_id: ulid(166),
++    thread_id: 'general',
++    dir: 'docs',
++    name: 'plan.md',
++    media: {
++      media_id: 'md_01JBF3V7Q8K2M4N6P8R0S2T4AB',
++      name: 'plan.md',
++      mime: 'text/markdown',
++      size: 7,
++      sha256: 'c'.repeat(64),
++      kind: 'file',
++      role: 'attachment',
++    },
++    ...owner,
++  }
++  unsigned['files.put_result'] = {
++    ...env('files.put_result', 167),
++    request_id: ulid(166),
++    thread_id: 'general',
++    dir: 'docs',
++    name: 'plan (2).md',
++    size: 7,
++  }
+   return { unsigned, signed }
+ }
+diff --git a/packages/protocol/src/frames-files-put.ts b/packages/protocol/src/frames-files-put.ts
+new file mode 100644
+index 00000000..769075f4
+--- /dev/null
++++ b/packages/protocol/src/frames-files-put.ts
+@@ -0,0 +1,58 @@
++// Upload into a thread's folder from the Files pane (or the phone's Files sheet): the app uploads the file through the
++// ordinary media path (POST /api/media, sha256 checked), then a signed `files.put` names the folder inside the thread's
++// folder and the file's name. The Mac downloads the media, checks its size and sha256, and creates the file there: never
++// over an existing one (a taken name becomes "name (2).ext"), never a hidden name or an instruction file, inside the same
++// fence the pane reads with. Split out of frames.ts, which re-exports the frames. Like the reads, it is never stored by the
++// relay: it goes to the Mac and the answer comes back to the asking socket only.
++import { z } from 'zod'
++import { frame, ownerFrame } from './frame-base.ts'
++import { FILES_NAME_MAX, FilesPath } from './files.ts'
++import { ThreadId, Ulid } from './ids.ts'
++import { OwnerAttachmentRef } from './models.ts'
++
++/** The Mac takes uploads into a thread's folder (a live main bridge). */
++export const FILES_PUT_FEATURE = 'files-put/1'
++/** The largest file one upload may put in a folder (the media path's own cap). */
++export const FILES_PUT_MAX_BYTES = 50 * 1024 * 1024
++/** The most bytes one device may put into thread folders in one UTC day. */
++export const FILES_PUT_DAY_BYTES = 1024 * 1024 * 1024
++/** How many "name (n).ext" a clash tries before it gives up. */
++export const FILES_PUT_CLASH_MAX = 99
++
++/**
++ * Names an upload never takes, in any letter case: the instruction files Claude Code reads (edited from thread settings,
++ * not dropped in) and Claude's own folder.
++ */
++export const FILES_PUT_REFUSED_NAMES: readonly string[] = ['agents.md', 'claude.md', 'claude.local.md', '.claude']
++
++/** What the Mac says, in one place. */
++export const FILES_PUT_WORDING = {
++  notReady: 'Your Mac is not ready to take files.',
++  badName: "That name can't be used for a file here. Rename it and try again.",
++  instructions: 'Instruction files are edited in thread settings, not uploaded.',
++  folder: "That isn't a folder Talos can put files in.",
++  tooLarge: 'That file is too large to put in the folder (50 MB at most).',
++  budget: "You've put a lot into this Mac's folders today. Try again tomorrow.",
++  clash: 'There are already too many files with that name here.',
++  download: "Your Mac couldn't fetch that file. Try again.",
++  failed: "Your Mac couldn't save that file.",
++} as const
++
++export const FilesPutFrame = ownerFrame('files.put', {
++  request_id: Ulid,
++  thread_id: ThreadId,
++  /** The folder inside the thread's folder ('' = the folder itself), as the pane lists it. */
++  dir: FilesPath,
++  /** The file's name in that folder: one plain name. */
++  name: z.string().min(1).max(FILES_NAME_MAX),
++  media: OwnerAttachmentRef,
++})
++
++/** The file as created: `name` is the one it got (another than asked when that was taken). */
++export const FilesPutResultFrame = frame('files.put_result', {
++  request_id: Ulid,
++  thread_id: ThreadId,
++  dir: FilesPath,
++  name: z.string().min(1).max(FILES_NAME_MAX),
++  size: z.number().int().min(0),
++})
+diff --git a/packages/protocol/src/frames.ts b/packages/protocol/src/frames.ts
+index f264556b..085c636e 100644
+--- a/packages/protocol/src/frames.ts
++++ b/packages/protocol/src/frames.ts
+@@ -8,6 +8,7 @@ import { FILES_KINDS, FILES_LIST_MAX, FilesEntry, FilesPath } from './files.ts'
+ import { FOLDER_LIST_MAX, FOLDER_PATH_MAX, FsEntry, FsListPath } from './folders.ts'
+ import { frame, Osig, ownerFrame } from './frame-base.ts'
+ import { AgentsMdFileFrame, AgentsMdReadFrame, AgentsMdWriteFrame } from './frames-agents-md.ts'
++import { FilesPutFrame, FilesPutResultFrame } from './frames-files-put.ts'
+ import { CardCreateFrame, CardResolveFrame, CardUpdateFrame } from './frames-cards.ts'
+ import { MAX_QUERY_CHARS, MAX_QUERY_TERMS } from './fts-query.ts'
+ import { HealthBeat } from './health.ts'
+@@ -76,6 +77,7 @@ import { MAX_THREAD_SESSION_STATES, ThreadSessionStateItem, WorkersStatus } from
+ // The envelope builders are in frame-base.ts and the card frames in frames-cards.ts; both are part of this module's exports.
+ export { Osig, RelayMeta } from './frame-base.ts'
+ export { AgentsMdFileFrame, AgentsMdReadFrame, AgentsMdWriteFrame, CardCreateFrame, CardResolveFrame, CardUpdateFrame }
++export { FilesPutFrame, FilesPutResultFrame }
+ 
+ // ---- connection ------------------------------------------------------------------------------------------------
+ 
+@@ -950,7 +952,8 @@ export const APP_BRIDGE_FRAME_TYPES = ['app.response', 'app.update'] as const
+ 
+ /**
+  * The signed request frames (app -> relay -> bridge), each answered on the bridge's readQueue and never stored by the relay.
+- * All read, except `agents_md.write`, which saves the thread's AGENTS.md (frames-agents-md.ts).
++ * All read, except `agents_md.write`, which saves the thread's AGENTS.md (frames-agents-md.ts), and `files.put`, which puts an
++ * uploaded file in a thread's folder (frames-files-put.ts).
+  */
+ export const V2_READ_OWNER_FRAME_TYPES = [
+   'search.query',
+@@ -964,6 +967,7 @@ export const V2_READ_OWNER_FRAME_TYPES = [
+   'bug.context',
+   'agents_md.read',
+   'agents_md.write',
++  'files.put',
+ ] as const
+ /** The bridge -> relay -> app answers, routed to the asking socket only. */
+ export const V2_READ_RESPONSE_FRAME_TYPES = [
+@@ -977,6 +981,7 @@ export const V2_READ_RESPONSE_FRAME_TYPES = [
+   'files.file',
+   'bug.context_result',
+   'agents_md.file',
++  'files.put_result',
+ ] as const
+ /** Which answer each signed read expects (core/ephemeral.ts drops any other type for that request_id). */
+ export const V2_READ_RESPONSE_FOR = {
+@@ -991,6 +996,7 @@ export const V2_READ_RESPONSE_FOR = {
+   'bug.context': 'bug.context_result',
+   'agents_md.read': 'agents_md.file',
+   'agents_md.write': 'agents_md.file',
++  'files.put': 'files.put_result',
+ } as const satisfies Record<(typeof V2_READ_OWNER_FRAME_TYPES)[number], (typeof V2_READ_RESPONSE_FRAME_TYPES)[number]>
+ 
+ // ---- registry ---------------------------------------------------------------------------------------------------
+@@ -1085,6 +1091,8 @@ export const frameSchemas = {
+   'agents_md.read': AgentsMdReadFrame,
+   'agents_md.write': AgentsMdWriteFrame,
+   'agents_md.file': AgentsMdFileFrame,
++  'files.put': FilesPutFrame,
++  'files.put_result': FilesPutResultFrame,
+   'share.item': ShareItemFrame,
+   'problem.item': ProblemItemFrame,
+   'native.act': NativeActWire,
+diff --git a/packages/protocol/src/index.ts b/packages/protocol/src/index.ts
+index af3d70bc..36abe34b 100644
+--- a/packages/protocol/src/index.ts
++++ b/packages/protocol/src/index.ts
+@@ -31,6 +31,14 @@ export {
+   AGENTS_MD_MAX_BYTES,
+   AGENTS_MD_WORDING,
+ } from './frames-agents-md.ts'
++export {
++  FILES_PUT_CLASH_MAX,
++  FILES_PUT_DAY_BYTES,
++  FILES_PUT_FEATURE,
++  FILES_PUT_MAX_BYTES,
++  FILES_PUT_REFUSED_NAMES,
++  FILES_PUT_WORDING,
++} from './frames-files-put.ts'
+ export * from './fts-query.ts'
+ export * from './hash.ts'
+ export * from './health.ts'
+diff --git a/packages/testkit/src/fake-bridge.ts b/packages/testkit/src/fake-bridge.ts
+index 3cc10abb..224024a5 100644
+--- a/packages/testkit/src/fake-bridge.ts
++++ b/packages/testkit/src/fake-bridge.ts
+@@ -144,6 +144,8 @@ const EMPTY_READ: Record<FakeReadType, (f: Record<string, unknown>) => Record<st
+   'bug.context': () => ({ bridge_version: '0.0.0', claude_code: null, recent_errors: [], logs: '' }),
+   // a thread with no AGENTS.md yet; a save answers the text it was given
+   'agents_md.read': (f) => ({ thread_id: f.thread_id, exists: false, sha: null }),
++  // the file goes in under the name asked
++  'files.put': (f) => ({ thread_id: f.thread_id, dir: f.dir, name: f.name, size: (f.media as { size?: number }).size ?? 0 }),
+   'agents_md.write': (f) => ({
+     thread_id: f.thread_id,
+     exists: true,
+diff --git a/packages/testkit/src/fake-relay.ts b/packages/testkit/src/fake-relay.ts
+index 7188f6ba..6a21553b 100644
+--- a/packages/testkit/src/fake-relay.ts
++++ b/packages/testkit/src/fake-relay.ts
+@@ -484,7 +484,8 @@ export class FakeRelay {
+       case 'files.listing':
+       case 'files.file':
+       case 'bug.context_result':
+-      case 'agents_md.file': {
++      case 'agents_md.file':
++      case 'files.put_result': {
+         const p = this.readReqs.get(frame.request_id)
+         if (!p || p.want !== frame.type) return // unknown, expired or the wrong answer type: dropped
+         this.readReqs.delete(frame.request_id)

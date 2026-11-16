@@ -3,6 +3,13 @@
 # search path, so add it (XCTest is unavailable under CLT; every test here uses swift-testing).
 # Extra args go to `swift test`. Env: TALOS_SWIFTPM_CACHE, TALOS_SWIFT_SCRATCH (CI uses both).
 set -euo pipefail
+# Every swift test of the app holds the machine's desktop mutex (scripts/heavy-lock.sh desktop, the one CI's desktop job holds): two
+# Swift suites at once exhaust the ptys (kern.tty.ptmx_max; one test process peaked at 437 of 511) and tmux then fails to fork, so
+# tests report start_failed. Inside its holder (ci.sh, gui-tests.sh under it) or a CI job (TALOS_CI_SLOT_RUN=1) it passes through.
+HEAVY_LOCK="$(dirname "$0")/../../../scripts/heavy-lock.sh"
+if [ -f "$HEAVY_LOCK" ] && [ "${TALOS_CI_SLOT_RUN:-}" != 1 ] && ! bash "$HEAVY_LOCK" held desktop; then
+  exec bash "$HEAVY_LOCK" desktop "desktop test.sh" -- bash "$0" "$@"
+fi
 cd "$(dirname "$0")/.."
 command -v swift >/dev/null || { echo "test.sh: swift is not installed" >&2; exit 127; }
 

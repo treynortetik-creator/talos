@@ -5,6 +5,7 @@
 export PYTHONDONTWRITEBYTECODE=1
 set -u
 KIT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 T="$(mktemp -d)" || exit 2
 case "$T" in /*/*) ;; *) echo "suspicious temp dir: $T" >&2; exit 2;; esac
 trap 'rm -rf "$T"' EXIT

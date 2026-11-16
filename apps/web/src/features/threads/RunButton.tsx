@@ -2,13 +2,13 @@
 // and the script in one fence) and the Mac decides whether it counts (docs/SECURITY.md, "Run button"). Here:
 //   - no button on a Mac that does not list `run/1`, on a block with hidden characters, one that never closes, one that is
 //     not drawn as its source, or one over the length limit;
-//   - one tap only for a script of printable ASCII, at most 6 lines and 300 characters; anything else asks a second time.
-//     That rule is on the bytes alone (protocol `isOneTapRunScript`): nothing here looks at the screen;
+//   - one tap for a script of printable ASCII, any length up to the cap; a script with look-alike or other non-ASCII
+//     characters asks a second time. That rule is on the bytes alone (protocol `isOneTapRunScript`): nothing here looks at
+//     the screen;
 //   - one tap, one message, and after a tap this screen shows what that tap did (sending, queued, sent, failed) from its own
-//     state alone, and no Run. Nothing is kept past the screen: after a reload, or on a context view of the same message,
-//     the block shows Run again. That is fine, because the Mac is the guard: it allows each block one Run while its message
-//     is under a week old (the frame names the block by the message id and the block's place in that message), and answers
-//     a second tap, or a block over a week old, with a plain line.
+//     state alone. Once that tap is no longer waiting to send, Run again offers a fresh tap (a new signed message, so a new
+//     Run: owner, 2026-11-15). The Mac runs each tap once (a replay is consumed by its message id) and refuses a block over a
+//     week old with a plain line.
 import { RUN_FEATURE, threadSessionMode } from '@talos-app/protocol'
 import { type RefObject, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -63,6 +63,9 @@ export function useRunSlots(box: RefObject<HTMLElement | null>, html: string, te
   return slots.map((s) => createPortal(<RunControl block={s.block} index={s.index} run={run as RunContext} />, s.el))
 }
 
+/** How long Run again takes no tap after the tap before it went: longer than a double click. */
+export const RUN_AGAIN_SETTLE_MS = 1000
+
 function RunControl({ block, index, run }: { block: RunBlock; index: number; run: RunContext }) {
   const client = useTalosClient()
   const feature = useFeature(RUN_FEATURE)
@@ -82,6 +85,16 @@ function RunControl({ block, index, run }: { block: RunBlock; index: number; run
   const [error, setError] = useState(false)
   const inFlight = useRef(false)
   const cancelRef = useRef<HTMLButtonElement>(null)
+  // Run again takes the place where Run was: for a moment it takes no tap, so the second click of a double click lands on
+  // nothing instead of running the script twice (no prompt: it is simply not ready for that moment)
+  // which tap has settled: Run again for a newer tap is not ready from its very first render
+  const [settledFor, setSettledFor] = useState<string | null>(null)
+  useEffect(() => {
+    if (sentId === null) return
+    const t = setTimeout(() => setSettledFor(sentId), RUN_AGAIN_SETTLE_MS)
+    return () => clearTimeout(t)
+  }, [sentId])
+  const settled = sentId === null || settledFor === sentId
 
   // The question opens with Cancel in focus: a key held down on the first tap must not carry through the second.
   useEffect(() => {
@@ -135,14 +148,16 @@ function RunControl({ block, index, run }: { block: RunBlock; index: number; run
     else if (queued || result === 'queued') status = 'Queued. It sends when you are back online.'
     else status = 'Sent to your Mac. The thread below says whether it ran or was refused.'
   }
-  const showButton = !busy && !asked && sentId === null
+  // A fresh tap once this one has left (or failed); never while it still waits to send, so two Runs never pile up offline.
+  const waiting = sentId !== null && !failed && (queued || result === 'held_unpinned')
+  const showButton = !busy && !asked && !waiting
 
   return (
     <div data-testid="run-control" className="mb-2 flex flex-col gap-1">
       {!block.oneTap && (
         <p data-testid="run-note" className="m-0 text-xs text-text-2">
-          This script is longer than 6 lines or 300 characters, or has characters beyond plain ASCII (look-alike
-          letters, special spaces, accents), so Run asks twice.
+          This script has characters beyond plain ASCII (look-alike letters, special spaces, accents), so Run asks
+          twice.
         </p>
       )}
       {status && (
@@ -184,9 +199,10 @@ function RunControl({ block, index, run }: { block: RunBlock; index: number; run
             type="button"
             data-testid="run-button"
             className={BUTTON}
+            disabled={!settled}
             onClick={() => (block.oneTap ? void send() : setAsked(true))}
           >
-            {error ? 'Try again' : 'Run'}
+            {error ? 'Try again' : sentId !== null ? 'Run again' : 'Run'}
           </button>
           {error && (
             <span role="alert" className="text-sm text-danger">

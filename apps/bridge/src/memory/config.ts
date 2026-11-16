@@ -110,6 +110,7 @@ export function parseMemoryConfig(raw: unknown, home: string): ParseResult {
   return { ok: true, config: { version: 1, enabled: o.enabled, agent_dir: agentReal, roots, max_file_kb: kb } }
 }
 
+// for folders only: a file's real path goes through realFileSync (real-file.ts), as realpath can name a hard-linked file by another of its names
 function safeReal(p: string): string {
   try {
     return realpathSync(p)

@@ -5,6 +5,7 @@ import {
   dedicatedSettings,
   type ErrorCodeT,
   type FrameOf,
+  type Host,
   newUlid,
   THREAD_SESSIONS_FEATURE,
   type ThreadSessionActionT,
@@ -16,6 +17,7 @@ import { useEffect, useMemo } from 'react'
 import { type StoreApi, useStore } from 'zustand'
 import { createStore } from 'zustand/vanilla'
 import { type TalosClient, TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
+import { hostSteps, placeWords } from '../../lib/hostWords.ts'
 
 export type ControlOutcome = { ok: boolean; text: string; code?: ErrorCodeT }
 type State = {
@@ -27,7 +29,8 @@ type State = {
 export type ThreadSessionsController = {
   readonly store: StoreApi<State>
   start(): () => void
-  control(threadId: string, action: ThreadSessionActionT): Promise<ControlOutcome>
+  /** `wakeId` only with `cancel_wake`: the pending wake_me timer to remove. */
+  control(threadId: string, action: ThreadSessionActionT, wakeId?: string): Promise<ControlOutcome>
 }
 
 const RESULT_WAIT_MS = 30_000
@@ -68,7 +71,7 @@ export function createThreadSessionsController(client: TalosClient): ThreadSessi
         }
       }
     },
-    async control(threadId, action) {
+    async control(threadId, action, wakeId) {
       const send = client.sendOwnerFrame
       if (!send) return { ok: false, text: 'This build cannot send that.' }
       const id = newUlid()
@@ -76,7 +79,13 @@ export function createThreadSessionsController(client: TalosClient): ThreadSessi
       store.setState((s) => ({ pending: { ...s.pending, [id]: action }, last: undefined }))
       const t = setTimeout(() => settle(id, { ok: false, text: 'The Mac did not answer' }), RESULT_WAIT_MS)
       try {
-        await send.call(client, { type: 'thread.session.control', control_id: id, thread_id: threadId, action })
+        await send.call(client, {
+          type: 'thread.session.control',
+          control_id: id,
+          thread_id: threadId,
+          action,
+          ...(wakeId !== undefined ? { wake_id: wakeId } : {}),
+        })
       } catch (e) {
         settle(id, {
           ok: false,
@@ -156,22 +165,29 @@ export const WORKER_STATE_TEXT: Record<WorkerStatusItemT['state'], string> = {
 }
 
 export const WORKER_ERROR_TEXT: Record<string, string> = {
-  needs_mac:
-    'It stopped at a question only the Mac can answer. Open Talos Terminal on the Mac, pick this thread under Thread sessions, and answer it there. Then press Restart here to start it again',
+  needs_mac: hostSteps('mac').answerThere,
   resume_missing: "Its conversation can't be resumed. Start fresh to begin a new one",
   crash_loop: 'It kept crashing, so it was stopped',
   start_failed: "It didn't start",
   folder_claimed: 'Another thread session works in that folder',
-  unknown: "It stopped for a reason this version doesn't know. Open Talos Terminal on the Mac to see what happened",
+  unknown: hostSteps('mac').lookThere,
   mode_escalation_denied:
     'It was not started: it would have more access than the main session. Narrow its settings, then press Restart',
 }
 
-export function workerLine(w: WorkerStatusItemT | undefined): string {
+/** A failed worker's reason for the host it is shown on: the Mac's words above, or that host's own (lib/hostWords.ts). */
+export function workerErrorText(code: string | undefined, host: Host | null): string | undefined {
+  if (code === 'needs_mac') return hostSteps(host).answerThere
+  if (code === 'unknown') return hostSteps(host).lookThere
+  const t = WORKER_ERROR_TEXT[code ?? '']
+  return t === undefined ? undefined : placeWords(t, host)
+}
+
+export function workerLine(w: WorkerStatusItemT | undefined, host: Host | null = 'mac'): string {
   if (!w) return 'Starts with the next message.'
   const when = (iso: string | undefined) =>
     iso ? new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : ''
-  if (w.state === 'failed') return WORKER_ERROR_TEXT[w.error ?? ''] ?? WORKER_STATE_TEXT.failed
+  if (w.state === 'failed') return workerErrorText(w.error, host) ?? WORKER_STATE_TEXT.failed
   if (w.state === 'parked') return w.parked_at ? `Parked ${when(w.parked_at)}` : 'Parked'
   return WORKER_STATE_TEXT[w.state]
 }

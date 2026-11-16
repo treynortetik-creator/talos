@@ -20,13 +20,24 @@ export function waitScale(): number {
   return Number.isFinite(n) && n >= 1 ? n : 3
 }
 
+/**
+ * Resolves once `cond` returns true. A `cond` that throws counts as "not yet" and is asked again (a log or a file read before the
+ * fake has written it, an `expect` on a list still filling), so a throw never fails the wait early. When the time is up, the
+ * error the last try threw is what the wait rejects with, so an assertion keeps its own message; a last try that simply returned
+ * false gives "timed out waiting for <what>".
+ */
 export function waitFor(cond: () => boolean, timeoutMs = 3000, what = 'condition'): Promise<void> {
   const budget = timeoutMs * waitScale()
   return new Promise((resolve, reject) => {
     const start = Date.now()
     const tick = () => {
-      if (cond()) return resolve()
-      if (Date.now() - start > budget) return reject(new Error(`timed out waiting for ${what}`))
+      let last: { error: unknown } | undefined
+      try {
+        if (cond()) return resolve()
+      } catch (error) {
+        last = { error }
+      }
+      if (Date.now() - start > budget) return reject(last ? last.error : new Error(`timed out waiting for ${what}`))
       setTimeout(tick, 5)
     }
     tick()

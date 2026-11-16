@@ -16,6 +16,7 @@
 export PYTHONDONTWRITEBYTECODE=1
 set -u
 KIT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 T="$(mktemp -d)" || { echo "mktemp -d failed; refusing to run" >&2; exit 2; }
 # Without this guard an empty $T turns every path below into a filesystem-root write
 # ("/empty", "/install"). Found by adversarial review 2026-08-26.
@@ -24,6 +25,12 @@ trap 'rm -rf "$T"' EXIT
 pass=0; fail=0
 ok()  { printf '  \033[32mPASS\033[0m  %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; fail=$((fail+1)); }
+# suite <script> <pass text> <fail text>: run one of the kit's own test suites. TALOS_SELF_TEST_SUITES=skip leaves them out, for a
+# caller that runs every scripts/test-*.sh on its own already (the repo's kit-tests.test.ts), so they do not run twice.
+suite() {
+  if [ "${TALOS_SELF_TEST_SUITES:-run}" = skip ]; then ok "skipped, run on its own by the caller: $(basename "$1")"; return 0; fi
+  bash "$1" >/dev/null 2>&1 && ok "$2" || bad "$3"
+}
 
 echo "Talos kit self-test"
 echo "  (this tests the KIT's own machinery. The setup gate for YOUR install is: bash scripts/verify-install.sh)"
@@ -65,7 +72,7 @@ for f in START-HERE.md BOOTSTRAP.md SETUP-INTERVIEW.md HOMEWORK.md SEED-WIKI.md 
          scripts/stt-diarize/diar.py scripts/stt-diarize/merge_speakers.py \
          setup/local-models.md setup/dream-cycle.md setup/quiet-checkins.md \
          .claude/skills/talos-interview/SKILL.md scripts/onboarding-state.py scripts/test-onboarding.sh .claude/skills/talos-hands-free/SKILL.md .claude/skills/talos-go-public/SKILL.md \
-         scripts/test-action-rules.sh scripts/test-memory-reflex.sh scripts/test-bsd-sed-guard.sh \
+         scripts/_test-env.sh scripts/test-hub-fence.sh scripts/test-action-rules.sh scripts/test-memory-reflex.sh scripts/test-bsd-sed-guard.sh \
          scripts/test-dream.sh scripts/test-watcher.sh scripts/test-gopublic.sh scripts/test-localmodels.sh scripts/test-settings-merge.sh; do
   [ -e "$KIT/$f" ] || missing="$missing $f"
 done
@@ -355,26 +362,26 @@ python3 "$KIT/scripts/seed-quotecheck.py" "$Q/wiki" "$Q/.empty" >/dev/null 2>&1
 # Every scheduling bug the reference implementation hit looked fine on the page and failed only when
 # something ran. test-jobs.sh registers the real jobs into a fake Chronos config, edits, enables and
 # removes them, and proves the validator rejects bad ones. It never runs claude or touches launchd.
-bash "$KIT/scripts/test-jobs.sh" >/dev/null 2>&1 \
-  && ok "Chronos jobs: templates validate, register/enable/unregister behave, user data survives" \
-  || bad "the Chronos job suite fails -- run scripts/test-jobs.sh to see which check"
+suite "$KIT/scripts/test-jobs.sh" \
+  "Chronos jobs: templates validate, register/enable/unregister behave, user data survives" \
+  "the Chronos job suite fails -- run scripts/test-jobs.sh to see which check"
 
 # --- The installer, dry-run and for real, in a fake HOME with a launchctl tripwire -----
 # The suite needs the fake-Chronos fixture, which is deliberately NOT copied into an agent folder (it is
 # a test double, not something an agent uses). In an installed folder, run this from the kit clone.
 if [ -d "$KIT/scripts/fixtures/fake-chronos" ]; then
-  bash "$KIT/scripts/test-install.sh" >/dev/null 2>&1 \
-    && ok "install.sh / uninstall.sh pass in a fake HOME (dry-run, refusals, pinning, jobs, uninstall)" \
-    || bad "the installer suite fails -- run scripts/test-install.sh to see which check"
+  suite "$KIT/scripts/test-install.sh" \
+    "install.sh / uninstall.sh pass in a fake HOME (dry-run, refusals, pinning, jobs, uninstall)" \
+    "the installer suite fails -- run scripts/test-install.sh to see which check"
 else
   ok "installer suite skipped: this folder is an install (no scripts/fixtures); run it from the kit clone"
 fi
 
 # Memory search: lexical arm, corpus rules, every fallback banner, session-start refresh. The real
 # semantic stack (a venv and a model download) is opt-in: TALOS_TEST_SEMANTIC=1 bash scripts/test-recall.sh
-bash "$KIT/scripts/test-recall.sh" >/dev/null 2>&1 \
-  && ok "memory search: lexical arm, exclusions, JSON/batch, every fallback banner, detached refresh (no venv needed)" \
-  || bad "the memory search suite fails -- run scripts/test-recall.sh to see which check"
+suite "$KIT/scripts/test-recall.sh" \
+  "memory search: lexical arm, exclusions, JSON/batch, every fallback banner, detached refresh (no venv needed)" \
+  "the memory search suite fails -- run scripts/test-recall.sh to see which check"
 
 # Every shipped prompt and guard must keep the rule that matters most for a headless run. If one is ever
 # edited out, a job will start background work, the process will exit under it, and the job will silently
@@ -567,14 +574,14 @@ PY
 [ "$_skillchk" = OK ] && ok "shipped skills use the talos- prefix with valid frontmatter; shipped agents hold no write tool and never pin Haiku" || bad "skill/agent check: ${_skillchk#ERR }"
 
 # ---------- the optional helpers: state-sweep, voice, md2html ----------
-bash "$KIT/scripts/test-extras.sh" >/dev/null 2>&1 \
-  && ok "helpers: state-sweep, tts/stt wrappers, voice setup, md2html (fake say/ffmpeg/whisper on PATH)" \
-  || bad "the helper suite fails -- run scripts/test-extras.sh to see which check"
+suite "$KIT/scripts/test-extras.sh" \
+  "helpers: state-sweep, tts/stt wrappers, voice setup, md2html (fake say/ffmpeg/whisper on PATH)" \
+  "the helper suite fails -- run scripts/test-extras.sh to see which check"
 
 # ---------- the enforcement hooks behave (claim gate, append-only guard, agent log, statusline, channel debt) ----------
-bash "$KIT/scripts/test-hooks.sh" >/dev/null 2>&1 \
-  && ok "enforcement hooks: claim gate, append-only guard, sub-agent log, statusline, channel debt (and every one fails open)" \
-  || bad "the hook suite fails -- run scripts/test-hooks.sh to see which check"
+suite "$KIT/scripts/test-hooks.sh" \
+  "enforcement hooks: claim gate, append-only guard, sub-agent log, statusline, channel debt (and every one fails open)" \
+  "the hook suite fails -- run scripts/test-hooks.sh to see which check"
 
 # ---------- the 1.2 features: each has its own suite ----------
 for _t in "action-rules:the never/ask action table (starter rules, your own file, approvals, fail-open live / closed unattended)" \
@@ -585,15 +592,16 @@ for _t in "action-rules:the never/ask action table (starter rules, your own file
           "gopublic:the go-public gate (account check, scan, never pushes in check mode)" \
           "localmodels:the suggested local models degrade gracefully and install only on request" \
           "settings-merge:merging new hook registrations into an existing settings.json" \
-          "permission-relay:the PermissionRequest hook (a decision only on the hub's exact answer; no output on every failure)"; do
+          "permission-relay:the PermissionRequest hook (a decision only on the hub's exact answer; no output on every failure)" \
+          "hub-fence:no kit test can reach a live bridge, even run from inside a thread session"; do
   _n="${_t%%:*}"; _d="${_t#*:}"
-  bash "$KIT/scripts/test-$_n.sh" >/dev/null 2>&1 && ok "$_d" || bad "scripts/test-$_n.sh fails -- run it to see which check"
+  suite "$KIT/scripts/test-$_n.sh" "$_d" "scripts/test-$_n.sh fails -- run it to see which check"
 done
 
 # ---------- notifications: talos.sh posts through talos-app ----------
-bash "$KIT/scripts/test-notify.sh" >/dev/null 2>&1 \
-  && ok "talos.sh posts through talos-app, names a file's path, warns past the word cap and fails when the post fails" \
-  || bad "the notify suite fails -- run scripts/test-notify.sh to see which check"
+suite "$KIT/scripts/test-notify.sh" \
+  "talos.sh posts through talos-app, names a file's path, warns past the word cap and fails when the post fails" \
+  "the notify suite fails -- run scripts/test-notify.sh to see which check"
 
 # ---------- the kit itself carries no secret, personal address, home path or long id ----------
 # In an INSTALLED agent folder (install.sh writes .talos-version) the scan would read the user's own notes and the
@@ -601,9 +609,9 @@ bash "$KIT/scripts/test-notify.sh" >/dev/null 2>&1 \
 if [ -f "$KIT/.talos-version" ]; then
   ok "privacy scan of the kit: skipped in an installed agent folder (it checks the kit repo; run it from the clone)"
 else
-bash "$KIT/scripts/test-privacy.sh" >/dev/null 2>&1 \
-  && ok "privacy scan: no credentials, personal emails, home-folder paths or long ids in the kit" \
-  || bad "the privacy scan found something -- run scripts/test-privacy.sh"
+suite "$KIT/scripts/test-privacy.sh" \
+  "privacy scan: no credentials, personal emails, home-folder paths or long ids in the kit" \
+  "the privacy scan found something -- run scripts/test-privacy.sh"
 fi
 mkdir -p "$T/priv/scripts"; cp "$KIT/scripts/test-privacy.sh" "$T/priv/scripts/"
 printf 'key = sk-%s\n' "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" > "$T/priv/notes.md"
@@ -626,9 +634,9 @@ printf '%s' "$_stout" | grep -q 'STALE.*job-inbox.py' \
   || bad "a registration for a missing hooks/job-inbox.py was not flagged STALE"
 
 # ---------- pre-tool guard: the corpus IS the spec ----------
-bash "$KIT/scripts/test-pre-tool-guard.sh" >/dev/null 2>&1 \
-  && ok "pre-tool guard corpus passes (every allow/deny verdict as specified)" \
-  || bad "pre-tool guard corpus FAILED -- run scripts/test-pre-tool-guard.sh to see which verdicts"
+suite "$KIT/scripts/test-pre-tool-guard.sh" \
+  "pre-tool guard corpus passes (every allow/deny verdict as specified)" \
+  "pre-tool guard corpus FAILED -- run scripts/test-pre-tool-guard.sh to see which verdicts"
 
 # ---------- commit-overdue nudge: silent when fresh, fires when memory/wiki sat dirty past an 8-day-old commit, silent once committed ----------
 # The config says "commit memory/wiki about once a week"; nothing fires weekly. The nudge keys on the age

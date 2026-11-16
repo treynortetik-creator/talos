@@ -92,32 +92,26 @@ describe('the plain-bytes rule', () => {
   })
 })
 
-describe('one tap or two: plain, at most 6 lines and 300 characters', () => {
+describe('one tap or two: any plain script is one tap, whatever its length (owner, 2026-11-15)', () => {
   const lines = (n: number) => 'echo a\n'.repeat(n) // n lines, each ending in a line break
   const chars = (n: number) => `${'a'.repeat(n - 1)}\n` // one line of exactly n characters, line break included
 
-  it('6 lines is one tap, 7 is two; a trailing line break is not a line', () => {
+  it('length and line count no longer ask twice', () => {
     expect(isOneTapRunScript(lines(1))).toBe(true)
-    expect(isOneTapRunScript(lines(6))).toBe(true)
-    expect(isOneTapRunScript(lines(7))).toBe(false)
-    expect(isOneTapRunScript('echo a\necho b')).toBe(true) // two lines, no final break
-    expect(isOneTapRunScript(`${'echo a\n'.repeat(6)}\n`)).toBe(false) // a blank line after six is a seventh
+    expect(isOneTapRunScript(lines(7))).toBe(true)
+    expect(isOneTapRunScript(lines(200))).toBe(true)
+    expect(isOneTapRunScript(chars(301))).toBe(true)
+    expect(isOneTapRunScript(chars(RUN_SCRIPT_MAX_CHARS))).toBe(true)
   })
 
-  it('300 characters is one tap, 301 is two', () => {
-    expect(chars(300).length).toBe(300)
-    expect(isOneTapRunScript(chars(300))).toBe(true)
-    expect(isOneTapRunScript(chars(301))).toBe(false)
-  })
-
-  it('short and plain is not enough if it is not plain ASCII', () => {
+  it('a character that is not plain ASCII still asks twice', () => {
     expect(isOneTapRunScript('echo caf\u00e9\n')).toBe(false)
     expect(isOneTapRunScript('echo\u00a0hi\n')).toBe(false)
   })
 
   it('a script over the limit for any Run has no message at all', () => {
     expect(runText(`${'a'.repeat(RUN_SCRIPT_MAX_CHARS)}\n`, 'sh')).toBeNull()
-    expect(runText(chars(301), 'sh')).not.toBeNull() // longer than one tap, still a Run
+    expect(runText(chars(301), 'sh')).not.toBeNull() // long, still a Run
   })
 })
 

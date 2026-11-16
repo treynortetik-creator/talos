@@ -2,9 +2,11 @@
 // key. A binding that verifies still is not enough: the owner answers y/N at the Mac, with a four-word fingerprint, and
 // only `y` pins the device.
 import { type Frame, fingerprintWords, sanitizeExternal, verifyEnrollment } from '@talos-app/protocol'
+import { agentNeverSetUp } from './agent-setup-state.ts'
 import { type BridgeContext, postSystemNotice } from './context.ts'
 import { CONFIRM_WAIT_MS, EnrollFiles, PENDING_KEEP_MS } from './enroll-files.ts'
 import { devicePinnedFrame } from './frames-out.ts'
+import { agentDirFromEnv } from './last-good.ts'
 
 type Enrolled = Extract<Frame, { type: 'device.enrolled' }>
 type Revoked = Extract<Frame, { type: 'device.revoked' }>
@@ -29,7 +31,11 @@ export function cleanDeviceName(name: string): string {
 export class Enrollment {
   readonly files: EnrollFiles
 
-  constructor(private readonly ctx: BridgeContext) {
+  constructor(
+    private readonly ctx: BridgeContext,
+    /** The agent folder (TALOS_AGENT_DIR); a test passes its own. */
+    private readonly agentDir: () => string | undefined = () => agentDirFromEnv(process.env),
+  ) {
     this.files = new EnrollFiles(ctx.paths.enrollPending)
   }
 
@@ -37,9 +43,10 @@ export class Enrollment {
     deviceId: string,
     ok: boolean,
     reason?: 'declined' | 'bad_binding' | 'code_unknown' | 'revoked',
+    first?: boolean,
   ) {
     try {
-      await this.ctx.transport.sendDurable(devicePinnedFrame(this.ctx.clock.now(), deviceId, ok, reason))
+      await this.ctx.transport.sendDurable(devicePinnedFrame(this.ctx.clock.now(), deviceId, ok, reason, first))
     } catch (e) {
       this.ctx.log.warn('device.pinned not sent', { error: (e as Error).message })
     }
@@ -111,6 +118,9 @@ export class Enrollment {
       }
       if (answer?.yes) {
         const at = new Date(now).toISOString()
+        // `first`: no device was ever pinned here (revoked ones still count) and the agent was never set up, so the app
+        // starts the setup interview itself. A reinstalled bridge over a set-up agent, or a revoke-all, never gets it.
+        const firstEver = ctx.devices.list().length === 0 && !ctx.devices.isCorrupt()
         const r = ctx.devices.pin({ id: confirm.device_id, name: confirm.name, pubkey_jwk: confirm.pubkey_jwk }, at)
         this.files.removeAll(codeId)
         if (!r.ok) {
@@ -118,7 +128,7 @@ export class Enrollment {
           await this.pinned(confirm.device_id, false, r.reason === 'corrupt' ? 'declined' : 'revoked')
           continue
         }
-        await this.pinned(confirm.device_id, true)
+        await this.pinned(confirm.device_id, true, undefined, firstEver && agentNeverSetUp(this.agentDir()))
         await postSystemNotice(
           ctx,
           `New device pinned (${fingerprintWords(confirm.device_id).join(' ')}), device-supplied name (untrusted text): "${cleanDeviceName(confirm.name)}", ${at.slice(0, 16).replace('T', ' ')} UTC.`,

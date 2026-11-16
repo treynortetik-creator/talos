@@ -1,11 +1,18 @@
 import { z } from 'zod'
 import { AppErrorCode } from './app-host.ts'
 import { APP_MESSAGE_TEXT_MAX, APP_TOOL_INPUT_MAX, APP_TOOL_RESULT_MAX, jcsAtMost, McpCallToolResult } from './apps.ts'
+import { BUG_REPORT_LIMITS } from './bug-report.ts'
 import { AgentConfig } from './config.ts'
-import { ErrorCode, MAX_FRAME_BYTES, MAX_FRAME_BYTES_UNAUTH } from './errors.ts'
+import { MAX_FRAME_BYTES, MAX_FRAME_BYTES_UNAUTH, WireErrorCode } from './errors.ts'
+import { FILES_KINDS, FILES_LIST_MAX, FilesEntry, FilesPath } from './files.ts'
 import { FOLDER_LIST_MAX, FOLDER_PATH_MAX, FsEntry, FsListPath } from './folders.ts'
 import { frame, Osig, ownerFrame } from './frame-base.ts'
+import { AgentsMdFileFrame, AgentsMdReadFrame, AgentsMdWriteFrame } from './frames-agents-md.ts'
 import { CardCreateFrame, CardResolveFrame, CardUpdateFrame } from './frames-cards.ts'
+import { FilesPutFrame, FilesPutResultFrame } from './frames-files-put.ts'
+import { FilesSentFrame, FilesSentListFrame } from './frames-files-sent.ts'
+import { MemoryGraphFrame, MemoryGraphResultFrame } from './frames-memory-graph.ts'
+import { MemoryFoldersFrame, MemoryFoldersResultFrame, MemoryRootsSetFrame } from './frames-memory-roots.ts'
 import { MAX_QUERY_CHARS, MAX_QUERY_TERMS } from './fts-query.ts'
 import { HealthBeat } from './health.ts'
 import {
@@ -29,6 +36,7 @@ import { MemoryEntry, MemoryHit, MemoryLink, MemoryRootInfo, MemoryTreePath, Mes
 import {
   AttachmentRef,
   Card,
+  FeatureList,
   InboxItem,
   JwkP256,
   Message,
@@ -64,15 +72,32 @@ import {
   SpawnKind,
 } from './session.ts'
 import { CappedAgentsSnapshot } from './session-agents.ts'
-import { PHONE_PATCH_ENTRIES, SESSION_STEPUP_TOP_FIELDS } from './settings-table.ts'
+import { PHONE_PATCH_ENTRIES } from './settings-table.ts'
 import { ShareContent } from './share.ts'
-import { StepupAssertion } from './stepup.ts'
 import { MAX_THREAD_SESSION_STATES, ThreadSessionStateItem, WorkersStatus } from './thread-sessions.ts'
+import {
+  UNDO_BRIDGE_FRAME_TYPES,
+  UNDO_OWNER_FRAME_TYPES,
+  UndoMark,
+  UndoRequestFrame,
+  UndoRequestResultFrame,
+} from './undo.ts'
 
 // Sha256Ref lives in ids.ts (exported; SCHEDULES S2.1) so schedules.ts can use it without an import cycle.
 // The envelope builders are in frame-base.ts and the card frames in frames-cards.ts; both are part of this module's exports.
 export { Osig, RelayMeta } from './frame-base.ts'
-export { CardCreateFrame, CardResolveFrame, CardUpdateFrame }
+export {
+  AgentsMdFileFrame,
+  AgentsMdReadFrame,
+  AgentsMdWriteFrame,
+  CardCreateFrame,
+  CardResolveFrame,
+  CardUpdateFrame,
+  FilesPutFrame,
+  FilesPutResultFrame,
+  FilesSentFrame,
+  FilesSentListFrame,
+}
 
 // ---- connection ------------------------------------------------------------------------------------------------
 
@@ -83,6 +108,9 @@ export const ChallengeFrame = frame('challenge', {
   protocol: z.literal(1),
 })
 
+/** `ready.features`: this relay understands a `standby` hello and refuses it while another bridge is connected. */
+export const BRIDGE_STANDBY_FEATURE = 'bridge-standby/1'
+
 export const HelloBridgeFrame = frame('hello', {
   role: z.literal('bridge'),
   key_id: z.string().regex(/^[0-9a-f]{16}$/),
@@ -91,9 +119,15 @@ export const HelloBridgeFrame = frame('hello', {
     name: z.string().max(60),
     version: z.string().max(40),
     /** Optional capabilities, e.g. 'schedules/1' (docs/SCHEDULES.md S1.5). The relay echoes them in `presence`. */
-    features: z.array(z.string().max(40)).max(20).optional(),
+    features: FeatureList.optional(),
   }),
   agent_config_rev: z.number().int().nonnegative(),
+  /**
+   * A bridge that was replaced by a newer one (close 4409) asks to come back without replacing anyone: while another bridge
+   * holds the slot the relay closes this socket with 4409 again; when the slot is free it is an ordinary hello. Sent only to
+   * a relay that listed `BRIDGE_STANDBY_FEATURE`; an older relay would ignore it and replace the live bridge.
+   */
+  standby: z.boolean().optional(),
 })
 
 export const HelloAppFrame = frame('hello', {
@@ -101,15 +135,21 @@ export const HelloAppFrame = frame('hello', {
   device_id: DeviceId,
   last_seq: z.number().int().nonnegative(), // 0 = fresh
   visible: z.boolean(),
-  client: z.object({ version: z.string().max(40), standalone: z.boolean(), platform: z.string().max(40) }),
+  client: z.object({
+    version: z.string().max(40),
+    standalone: z.boolean(),
+    platform: z.string().max(40),
+    /** What this app reads, e.g. `WIDE_FEATURES_FEATURE`. An older relay drops the key (the object is not strict). */
+    features: FeatureList.optional(),
+  }),
 })
 
 /**
  * An array where one item this build cannot read is dropped and the rest survive. A new card or message kind must never
  * be the reason a whole `ready` or history page is lost (an older app meets the next kind exactly like this).
  */
-function tolerantArray<T extends z.ZodType>(item: T) {
-  return z.array(z.unknown()).transform((xs) =>
+function tolerantArray<T extends z.ZodType>(item: T, max?: number) {
+  return (max === undefined ? z.array(z.unknown()) : z.array(z.unknown()).max(max)).transform((xs) =>
     xs.flatMap((x) => {
       const r = item.safeParse(x)
       return r.success ? [r.data as z.output<T>] : []
@@ -124,7 +164,10 @@ export const ReadyFrame = frame('ready', {
   presence: Presence,
   // app only
   agent_config: AgentConfig.optional(),
-  threads: z.array(Thread).optional(),
+  // Audit O2: an element this build cannot read (a newer thread kind or notify mode, a newer status state, a key a newer
+  // Mac added to the session state) costs that element or field, never the whole frame: a `ready` that does not parse
+  // never arrives, and the app would sit on "connecting". The app notes what was left out (unknownOfReady).
+  threads: tolerantArray(Thread).optional(),
   open_cards: tolerantArray(Card).optional(),
   unread: z.record(ThreadId, z.number().int().nonnegative()).optional(),
   /**
@@ -138,19 +181,19 @@ export const ReadyFrame = frame('ready', {
    * newest first, for 7 days after. A device that was away when the live receipt went out learns here.
    */
   not_delivered: z.array(MsgId).max(200).optional().catch(undefined),
-  statuses: z.array(ThreadStatus).optional(),
+  statuses: tolerantArray(ThreadStatus).optional(),
   /** What the RELAY supports (e.g. 'schedules/1'). The bridge mints no schedule card until this lists it (S1.5). */
-  features: z.array(z.string().max(40)).max(20).optional(),
+  features: FeatureList.optional(),
   // app only, docs/CLAUDE-CODE.md C2.5: the last session.state / session.inventory / session.list the relay saw
-  session_state: SessionState.optional(),
-  session_inventory: SessionInventory.optional(),
-  session_list: z.array(SessionListItem).max(200).optional(),
+  session_state: SessionState.optional().catch(undefined),
+  session_inventory: SessionInventory.optional().catch(undefined),
+  session_list: tolerantArray(SessionListItem, 200).optional().catch(undefined),
   // app only, docs/OPTION-C.md 9: the last workers.status the relay saw
   workers_status: WorkersStatus.optional().catch(undefined), // never the reason a whole `ready` is dropped
   /** app only, docs/OPTION-C.md 9.3: each thread session's last session.state (main's stays in session_state). */
   thread_session_states: z.array(ThreadSessionStateItem).max(MAX_THREAD_SESSION_STATES).optional().catch(undefined),
   /** docs/SUBAGENTS.md: the last session.agents snapshot, kept in relay memory only. */
-  session_agents: CappedAgentsSnapshot.optional(),
+  session_agents: CappedAgentsSnapshot.optional().catch(undefined),
 })
 
 export const PingFrame = frame('ping', { nonce: z.string().max(64) })
@@ -176,7 +219,7 @@ export const ReplayRequestFrame = frame('replay.request', { ids: z.array(Ulid).m
 
 export const ErrorFrame = frame('error', {
   ref: Ulid.optional(),
-  code: ErrorCode,
+  code: WireErrorCode,
   message: z.string().max(500), // safe, no secrets
   /** Per-field errors so a form can show each under its field (docs/SCHEDULES.md S2.2). */
   fields: z
@@ -227,16 +270,38 @@ export const ReplyFrame = frame('reply', {
   speak: z.string().max(600).optional(),
   voice_delegation_id: z.string().optional(),
   silent: z.boolean().optional(),
+  /**
+   * The notice of a setting the agent changed that decides which alerts reach the owner: the relay pushes it as `settings_changed`,
+   * through the quiet window, the master switch and thread alerts. An older relay ignores the field and pushes a plain reply.
+   */
+  settings_changed: z.literal(true).optional(),
+  /**
+   * The line for a send made without a card because the owner always allows its kind (always-allow.ts): the relay pushes it as
+   * `sent_always_allowed`, through the quiet window, the master switch and thread alerts, so such a send is never unseen.
+   */
+  sent_always_allowed: z.literal(true).optional(),
 })
 
 /**
- * `not_delivered` (D38): the relay dropped the message at the end of its buffer window and the Mac never took it. It is
- * relay-sent only; the bridge reports `delivered` and `seen`.
+ * `not_delivered` (D38): the relay dropped the message at the end of its buffer window and the Mac never took it, or the
+ * Mac refused it. It is relay-sent only; the bridge reports `delivered` and `seen`.
  */
 export const ReceiptFrame = frame('receipt', {
   message_id: MsgId,
   state: z.enum(['delivered', 'seen', 'not_delivered']),
+  /** The message's undo point, on a `delivered` from a bridge that can undo, to a relay with undo/1 (undo.ts). */
+  undo: UndoMark,
 })
+
+/**
+ * The line put in the thread when the Mac refuses an owner message the relay had already taken (an unknown thread, a
+ * phone clock too far off). The relay stores it for every device; the sender's app adds it too, for a relay that does not.
+ */
+export function refusedMessageNote(code: string, message: string, voiceNote = false): string {
+  return `Your Mac did not take a ${voiceNote ? 'voice note' : 'message'} (${code}): ${message}`
+}
+/** That line's row id, made from the id of the Mac's `error` frame, so the relay's row and the app's own are one row. */
+export const refusedMessageNoteId = (errorFrameId: string): string => `m_${errorFrameId}`
 
 /** `ThreadStatus` fields sit directly on the frame. */
 export const StatusFrame = frame('status', ThreadStatus.shape)
@@ -294,7 +359,7 @@ export const ConfigSyncFrame = frame('config.sync', {
 export const ConfigPatchFrame = ownerFrame('config.patch', {
   base_rev: z.number().int().nonnegative(),
   patch: z.record(z.string(), z.unknown()), // RFC 7386 JSON merge patch
-  stepup_token: z.string().max(200).optional(),
+  stepup_token: z.string().max(200).optional(), // old apps only (the passkey step-up, removed 2026-11-14): stripped, never read
 })
 
 /**
@@ -302,9 +367,6 @@ export const ConfigPatchFrame = ownerFrame('config.patch', {
  * settings table (`settings-table.ts`), where each setting says whether the phone may change it.
  */
 export const CONFIG_PATCH_ALLOWLIST: readonly string[] = PHONE_PATCH_ENTRIES
-
-/** Top-level config fields whose change needs step-up `config:session` (they decide who can approve tool calls). */
-export const CONFIG_SESSION_STEPUP_FIELDS: readonly string[] = SESSION_STEPUP_TOP_FIELDS
 
 // ---- catch-up and history ---------------------------------------------------------------------------------------
 
@@ -424,6 +486,11 @@ export const DevicePinnedFrame = frame('device.pinned', {
   device_id: DeviceId,
   ok: z.boolean(),
   reason: z.enum(['declined', 'bad_binding', 'code_unknown', 'revoked']).optional(),
+  /**
+   * The agent's first device ever, and the agent has never been set up (apps/bridge/src/agent-setup-state.ts): the app
+   * offers the setup interview by itself. Absent from an older bridge; an older app ignores it.
+   */
+  first: z.literal(true).optional(),
 })
 export const DeviceRevokedFrame = frame('device.revoked', { device_id: DeviceId })
 
@@ -535,7 +602,7 @@ export const SessionControlFrame = ownerFrame('session.control', {
   command: CommandName.optional(), // builtin name, only with action 'command'
   source: z.literal('builtin').optional(), // required with action 'command': controls are keyed on (source, name)
   args: z.string().max(MAX_CONTROL_ARGS).optional(),
-  stepup: StepupAssertion.optional(),
+  stepup: z.unknown().optional(), // old apps only (the passkey step-up, removed 2026-11-14): accepted, never read
   agent_id: z.string().min(1).max(80).optional(), // required for agent_stop: the row the phone showed (SUBAGENTS.md)
 }).superRefine((f, ctx) => {
   if ((f.action === 'agent_stop') !== (f.agent_id !== undefined))
@@ -556,7 +623,7 @@ export const SessionControlFrame = ownerFrame('session.control', {
 export const SessionControlResultFrame = frame('session.control.result', {
   control_id: Ulid,
   ok: z.boolean(),
-  code: ErrorCode.optional(),
+  code: WireErrorCode.optional(),
   text: z.string().max(4000), // plain
   at: IsoTs,
 })
@@ -578,12 +645,14 @@ export const SessionSpawnFrame = ownerFrame('session.spawn', {
 // `session.control.result` under the same `control_id`. The relay only passes it through. `workers.status` follows
 // `session.state`: not durable, the relay keeps the last one for `ready`.
 
-export const ThreadSessionAction = z.enum(['park', 'resume', 'restart', 'fresh'])
+/** `cancel_wake` removes one pending `wake_me` timer (`wake_id`) of that thread's session, or of main when `thread_id` is main's. */
+export const ThreadSessionAction = z.enum(['park', 'resume', 'restart', 'fresh', 'cancel_wake'])
 export type ThreadSessionActionT = z.infer<typeof ThreadSessionAction>
 export const ThreadSessionControlFrame = ownerFrame('thread.session.control', {
   control_id: Ulid,
   thread_id: ThreadId,
   action: ThreadSessionAction,
+  wake_id: z.string().max(64).optional(), // cancel_wake only; the bridge checks the id and that the wake is that lane's
 })
 export const WorkersStatusFrame = frame('workers.status', { status: WorkersStatus })
 export const THREAD_SESSION_OWNER_FRAME_TYPES = ['thread.session.control'] as const
@@ -614,19 +683,53 @@ export const AgentRecoverFrame = ownerFrame('agent.recover', {
 export const AgentRecoverResultFrame = frame('agent.recover.result', {
   control_id: Ulid,
   ok: z.boolean(),
-  code: ErrorCode.optional(),
+  code: WireErrorCode.optional(),
   text: z.string().max(4000), // plain
   at: IsoTs,
 })
 export const AGENT_RECOVER_OWNER_FRAME_TYPES = ['agent.recover'] as const
 export const AGENT_RECOVER_BRIDGE_FRAME_TYPES = ['agent.recover.result'] as const
-/** The file the bridge writes under $TALOS_APP_HOME for the Mac app (agent-request.json). */
-export const AgentRequestFile = z.strictObject({
-  v: z.literal(1),
-  control_id: Ulid,
-  action: AgentRecoverAction,
-  ts: z.number().int().nonnegative(), // unix ms
+/** The request file's name under $TALOS_APP_HOME. Its status twin, MAIN_RESTART_CHECK_FILE, is in main-restart.ts. */
+export const AGENT_REQUEST_FILE = 'agent-request.json'
+/** `proof.signed_b64url`'s cap, in base64url characters: a real `agent.recover` signs about 170 bytes, so this is room, not a limit. */
+export const AGENT_REQUEST_SIGNED_MAX = 1024
+/**
+ * The owner's own signature on the phone's `agent.recover`, as the bridge checked it (inbound.ts), for the Mac app to check again itself:
+ * `signed_b64url` is base64url of the exact UTF-8 bytes whose SHA-256 the signature commits to (`ownerSignedString` of the raw frame), so
+ * the Mac hashes those bytes and never rebuilds them. The Mac also reads the frame back out of them (type, action, control_id, device_id,
+ * ts) and compares. It stops a forged owner request from anything without a paired phone's key; it is not a wall: devices.json is
+ * writable by anything running as the owner.
+ */
+export const AgentRequestProof = z.strictObject({
+  device_id: DeviceId,
+  osig: Osig,
+  signed_b64url: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]+$/)
+    .max(AGENT_REQUEST_SIGNED_MAX),
 })
+export type AgentRequestProofT = z.infer<typeof AgentRequestProof>
+/**
+ * The file the bridge writes under $TALOS_APP_HOME for the Mac app (agent-request.json). The Mac app restarts as the owner asked only for a
+ * request whose `proof` it verifies itself; any other request (none, a bad one, a session's `restart_main`) is an agent's and gets its
+ * restart check first. Nothing else in the file says who asked.
+ */
+export const AgentRequestFile = z
+  .strictObject({
+    v: z.literal(1),
+    control_id: Ulid,
+    action: AgentRecoverAction,
+    ts: z.number().int().nonnegative(), // unix ms
+    /** The phone's request: the owner's signature (above). None for `restart_main`. */
+    proof: AgentRequestProof.optional(),
+    /** restart_main from a thread's lead: that thread. None for Main's own session and for the phone. */
+    by_thread: ThreadId.optional(),
+    /** restart_main's `why`, plain text (agentRequestWhy), at most MAIN_RESTART_WHY_MAX. Text a session chose: the Mac never posts it as its own row. */
+    why: z.string().min(1).max(80).optional(),
+    /** A file from a bridge older than `proof` says `asked_by`. Read and dropped: it never proved anything. */
+    asked_by: z.unknown().optional(),
+  })
+  .transform(({ asked_by: _legacy, ...rest }) => rest)
 
 /** The two signed session frames (app -> relay -> bridge). */
 export const SESSION_OWNER_FRAME_TYPES = ['session.control', 'session.spawn'] as const
@@ -771,6 +874,72 @@ export const FsListingFrame = frame('fs.listing', {
   more: z.number().int().min(0),
 })
 
+/**
+ * The Files pane (src/files.ts): what is inside `path`, a path INSIDE the thread's folder ('' = the folder itself). The Mac
+ * picks the folder from the thread, never from the app. Answered by `files.listing` under the same `request_id`; a refusal
+ * is the one fixed `error{ref}`.
+ */
+export const FilesListFrame = ownerFrame('files.list', {
+  request_id: Ulid,
+  thread_id: ThreadId,
+  path: FilesPath,
+})
+/** `entries`: folders first, then files, by name; at most FILES_LIST_MAX, `more` counts the rest. `root` is the folder, for display. */
+export const FilesListingFrame = frame('files.listing', {
+  request_id: Ulid,
+  thread_id: ThreadId,
+  root: z.string().max(4096),
+  path: FilesPath,
+  entries: z.array(FilesEntry).max(FILES_LIST_MAX),
+  more: z.number().int().min(0),
+  /** A very large folder: only part of it was looked at, and `more` does not count the rest. */
+  partial: z.boolean().optional(),
+})
+/** One file of the thread's folder, from `offset` (UTF-8 bytes; 0 = start). Answered by `files.file`. */
+export const FilesReadFrame = ownerFrame('files.read', {
+  request_id: Ulid,
+  thread_id: ThreadId,
+  path: FilesPath,
+  offset: z.number().int().min(0),
+})
+/**
+ * `kind` text: `text` from `offset`, cut on a code-point boundary, `next_offset` null at the end (or at FILES_TEXT_MAX, with
+ * `truncated`). image: `media`, the file uploaded as an attachment. binary: neither (`message` says why). `kind` is an open
+ * string: a kind the app does not know shows as binary.
+ */
+export const FilesFileFrame = frame('files.file', {
+  request_id: Ulid,
+  thread_id: ThreadId,
+  path: FilesPath,
+  kind: z.union([z.enum(FILES_KINDS), z.string().min(1).max(20)]),
+  size: z.number().int().min(0),
+  mtime: IsoTs,
+  text: z.string().optional(),
+  offset: z.number().int().min(0).optional(),
+  next_offset: z.number().int().min(0).nullable().optional(),
+  truncated: z.boolean(),
+  media: AttachmentRef.optional(),
+  message: z.string().max(300).optional(),
+})
+
+/**
+ * The bug reporter asks the Mac for what only the Mac knows: its own versions, the recent errors it has filed, and the tail of
+ * its log, already cleaned by the same redaction `talos-app report` uses. A signed owner read, answered by `bug.context_result`
+ * under the same `request_id`. Nothing is stored; the text comes back cleaned or not at all.
+ */
+export const BugContextFrame = ownerFrame('bug.context', {
+  request_id: Ulid,
+  lines: z.number().int().min(1).max(BUG_REPORT_LIMITS.logLines),
+})
+export const BugContextResultFrame = frame('bug.context_result', {
+  request_id: Ulid,
+  bridge_version: z.string().max(40),
+  /** Null when Claude Code has not reported its version to the bridge. */
+  claude_code: z.string().max(40).nullable(),
+  recent_errors: z.array(z.string().max(BUG_REPORT_LIMITS.errorChars)).max(BUG_REPORT_LIMITS.errors),
+  logs: z.string().max(BUG_REPORT_LIMITS.logChars),
+})
+
 export const MemoryResultsFrame = frame('memory.results', {
   request_id: Ulid,
   hits: z.array(MemoryHit).max(50),
@@ -857,23 +1026,46 @@ export const AppUpdateFrame = frame('app.update', {
 export const APP_OWNER_FRAME_TYPES = ['app.request'] as const
 export const APP_BRIDGE_FRAME_TYPES = ['app.response', 'app.update'] as const
 
-/** The six signed read frames (app -> relay -> bridge), each answered on the bridge's readQueue. */
+/**
+ * The signed request frames (app -> relay -> bridge), each answered on the bridge's readQueue and never stored by the relay.
+ * All read, except `agents_md.write`, which saves the thread's AGENTS.md (frames-agents-md.ts), and `files.put`, which puts an
+ * uploaded file in a thread's folder (frames-files-put.ts). `files.sent` lists the files sent in Talos (frames-files-sent.ts).
+ * `memory.roots_set` saves which folders Notes shows (frames-memory-roots.ts).
+ */
 export const V2_READ_OWNER_FRAME_TYPES = [
   'search.query',
   'memory.tree',
   'memory.read',
   'memory.search',
+  'memory.graph',
   'speak.request',
   'fs.list',
+  'files.list',
+  'files.read',
+  'bug.context',
+  'agents_md.read',
+  'agents_md.write',
+  'files.put',
+  'files.sent',
+  'memory.folders',
+  'memory.roots_set',
 ] as const
-/** The six bridge -> relay -> app answers, routed to the asking socket only. */
+/** The bridge -> relay -> app answers, routed to the asking socket only. */
 export const V2_READ_RESPONSE_FRAME_TYPES = [
   'search.results',
   'memory.listing',
   'memory.file',
   'memory.results',
+  'memory.graph_result',
   'speak.result',
   'fs.listing',
+  'files.listing',
+  'files.file',
+  'bug.context_result',
+  'agents_md.file',
+  'files.put_result',
+  'files.sent_list',
+  'memory.folders_result',
 ] as const
 /** Which answer each signed read expects (core/ephemeral.ts drops any other type for that request_id). */
 export const V2_READ_RESPONSE_FOR = {
@@ -881,8 +1073,18 @@ export const V2_READ_RESPONSE_FOR = {
   'memory.tree': 'memory.listing',
   'memory.read': 'memory.file',
   'memory.search': 'memory.results',
+  'memory.graph': 'memory.graph_result',
   'speak.request': 'speak.result',
   'fs.list': 'fs.listing',
+  'files.list': 'files.listing',
+  'files.read': 'files.file',
+  'bug.context': 'bug.context_result',
+  'agents_md.read': 'agents_md.file',
+  'agents_md.write': 'agents_md.file',
+  'files.put': 'files.put_result',
+  'files.sent': 'files.sent_list',
+  'memory.folders': 'memory.folders_result',
+  'memory.roots_set': 'memory.folders_result',
 } as const satisfies Record<(typeof V2_READ_OWNER_FRAME_TYPES)[number], (typeof V2_READ_RESPONSE_FRAME_TYPES)[number]>
 
 // ---- registry ---------------------------------------------------------------------------------------------------
@@ -953,6 +1155,8 @@ export const frameSchemas = {
   'thread.session.control': ThreadSessionControlFrame,
   'agent.recover': AgentRecoverFrame,
   'agent.recover.result': AgentRecoverResultFrame,
+  'undo.request': UndoRequestFrame,
+  'undo.request.result': UndoRequestResultFrame,
   'workers.status': WorkersStatusFrame,
   'session.agents': SessionAgentsFrame,
   'health.beat': HealthBeatFrame,
@@ -964,10 +1168,28 @@ export const frameSchemas = {
   'memory.file': MemoryFileFrame,
   'memory.search': MemorySearchFrame,
   'memory.results': MemoryResultsFrame,
+  'memory.graph': MemoryGraphFrame,
+  'memory.graph_result': MemoryGraphResultFrame,
   'speak.request': SpeakRequestFrame,
   'speak.result': SpeakResultFrame,
   'fs.list': FsListFrame,
   'fs.listing': FsListingFrame,
+  'files.list': FilesListFrame,
+  'files.listing': FilesListingFrame,
+  'files.read': FilesReadFrame,
+  'files.file': FilesFileFrame,
+  'bug.context': BugContextFrame,
+  'bug.context_result': BugContextResultFrame,
+  'agents_md.read': AgentsMdReadFrame,
+  'agents_md.write': AgentsMdWriteFrame,
+  'agents_md.file': AgentsMdFileFrame,
+  'files.put': FilesPutFrame,
+  'files.put_result': FilesPutResultFrame,
+  'files.sent': FilesSentFrame,
+  'memory.folders': MemoryFoldersFrame,
+  'memory.roots_set': MemoryRootsSetFrame,
+  'memory.folders_result': MemoryFoldersResultFrame,
+  'files.sent_list': FilesSentListFrame,
   'share.item': ShareItemFrame,
   'problem.item': ProblemItemFrame,
   'native.act': NativeActWire,
@@ -993,6 +1215,7 @@ export const OWNER_FRAME_TYPES = [
   ...SESSION_OWNER_FRAME_TYPES,
   ...THREAD_SESSION_OWNER_FRAME_TYPES,
   ...AGENT_RECOVER_OWNER_FRAME_TYPES,
+  ...UNDO_OWNER_FRAME_TYPES,
   ...V2_READ_OWNER_FRAME_TYPES,
   ...APP_OWNER_FRAME_TYPES,
 ] as const satisfies readonly FrameType[]
@@ -1067,6 +1290,7 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     ...SESSION_OWNER_FRAME_TYPES,
     ...THREAD_SESSION_OWNER_FRAME_TYPES,
     ...AGENT_RECOVER_OWNER_FRAME_TYPES,
+    ...UNDO_OWNER_FRAME_TYPES,
     ...V2_READ_OWNER_FRAME_TYPES,
     ...APP_OWNER_FRAME_TYPES,
   ],
@@ -1101,6 +1325,7 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     ...SESSION_BRIDGE_FRAME_TYPES,
     ...THREAD_SESSION_BRIDGE_FRAME_TYPES,
     ...AGENT_RECOVER_BRIDGE_FRAME_TYPES,
+    ...UNDO_BRIDGE_FRAME_TYPES,
     ...V2_READ_RESPONSE_FRAME_TYPES,
     ...APP_BRIDGE_FRAME_TYPES,
   ],
@@ -1127,6 +1352,7 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     ...SESSION_BRIDGE_FRAME_TYPES,
     ...THREAD_SESSION_BRIDGE_FRAME_TYPES,
     ...AGENT_RECOVER_BRIDGE_FRAME_TYPES,
+    ...UNDO_BRIDGE_FRAME_TYPES,
     ...V2_READ_RESPONSE_FRAME_TYPES,
     ...APP_BRIDGE_FRAME_TYPES,
     'health.beat',
@@ -1153,6 +1379,7 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     ...SESSION_OWNER_FRAME_TYPES,
     ...THREAD_SESSION_OWNER_FRAME_TYPES,
     ...AGENT_RECOVER_OWNER_FRAME_TYPES,
+    ...UNDO_OWNER_FRAME_TYPES,
     ...V2_READ_OWNER_FRAME_TYPES,
     ...APP_OWNER_FRAME_TYPES,
     'share.item',

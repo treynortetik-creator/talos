@@ -17,8 +17,8 @@ import os
 import sys
 
 from PIL import Image, ImageDraw, ImageFont
+import label_font
 
-FONT = '/System/Library/Fonts/Supplemental/Arial.ttf'
 FPS = 25
 ORDER = ['idle', 'running-right', 'running-left', 'waving', 'jumping', 'failed', 'waiting', 'running', 'review', 'talking', 'statue', 'landed']
 NOTE = {'idle': 'Ready (blinks every ~12 s)', 'running-right': 'Rounds, walking right', 'running-left': 'Rounds, walking left',
@@ -46,7 +46,7 @@ def mini(m, at, k):
 
 def label(img, text, size=15):
     d = ImageDraw.Draw(img)
-    f = ImageFont.truetype(FONT, size)
+    f = label_font.font(size)
     w = d.textlength(text, font=f)
     d.rectangle((0, 0, w + 12, size + 8), fill=(0, 0, 0))
     d.text((6, 3), text, font=f, fill=(255, 255, 255))
@@ -75,7 +75,7 @@ def cmd_sheet(d, out, photo):
             sheet.alpha_composite(cellimg(m, at, name, col), (x, y + 22))
             label(sheet, '', 1)
             lab = Image.new('RGBA', (w, 20), (0, 0, 0, 255))
-            ImageDraw.Draw(lab).text((4, 2), '%s #%d on %s' % (name, col, bname), font=ImageFont.truetype(FONT, 13), fill=(255, 255, 255))
+            ImageDraw.Draw(lab).text((4, 2), '%s #%d on %s' % (name, col, bname), font=label_font.font(13), fill=(255, 255, 255))
             sheet.alpha_composite(lab, (x, y))
         panels.append(sheet)
     # mini row
@@ -114,7 +114,7 @@ def real_sheet(d, scale, bgname, bg):
     ms = m['atlases']['mini']['cell'][sc][0]
     pad = 8
     lab_h = 16
-    font = ImageFont.truetype(FONT, 11 if scale == 2 else 9)
+    font = label_font.font(11 if scale == 2 else 9)
     tiles = []
     for name in ORDER:
         c = m['clips'][name]
@@ -211,7 +211,7 @@ def cmd_frames(d, out, photo):
             fr.alpha_composite(ms_img, (900, 380))
             label(fr, '%s: %s   (frame col %d)' % (name, NOTE[name], col), 22)
             lab = Image.new('RGBA', (300, 28), (0, 0, 0, 255))
-            ImageDraw.Draw(lab).text((6, 4), 'Mini (tondo) for this state', font=ImageFont.truetype(FONT, 16), fill=(255, 255, 255))
+            ImageDraw.Draw(lab).text((6, 4), 'Mini (tondo) for this state', font=label_font.font(16), fill=(255, 255, 255))
             fr.alpha_composite(lab, (900, 346))
             put(fr)
     print('frames', n, out)

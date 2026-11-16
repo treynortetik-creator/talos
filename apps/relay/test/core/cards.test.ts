@@ -98,7 +98,7 @@ describe('card checks', () => {
     await bridge.expectFrame('card.resolve', (f) => f.id === ok.id, { direction: 'in' })
   })
 
-  it('a high-risk primary resolve without a step-up token is stepup_required; kill needs none', async () => {
+  it('a high-risk primary resolve needs no step-up token (2026-11-14): the signed tap reaches the Mac; kill too', async () => {
     const { app, bridge } = await setup()
     const card = bridge.createCard({
       thread_id: 'general',
@@ -110,44 +110,22 @@ describe('card checks', () => {
     await app.expectFrame('card.create', (f) => f.card.id === card.id)
     const hash = payloadHash(bindingFrom(card))
     const primary = await app.resolveCard(card, 'primary', hash)
-    expect((await app.expectFrame('error', (f) => f.ref === primary.id)).code).toBe('stepup_required')
-    const kill = await app.resolveCard(card, 'kill', hash)
-    await bridge.expectFrame('card.resolve', (f) => f.id === kill.id, { direction: 'in' })
+    await bridge.expectFrame('card.resolve', (f) => f.id === primary.id, { direction: 'in' })
   })
 
-  it('trust mode: config.patch for work integrations and the permission relay skips the passkey step; off, it is asked', async () => {
+  it('work integrations, the permission relay and trust mode on/off are plain signed patches, trust mode or not (2026-11-14)', async () => {
     const { app, bridge } = await setup()
-    const cfg = { ...(app.rec.of('ready', 'in')[0]?.agent_config as object) } as Record<string, unknown>
-    // trust mode off (as synced): both ask for a step-up
-    const work = await app.sendConfigPatch(0, { work: { enabled: ['github'] } })
-    expect((await app.expectFrame('error', (f) => f.ref === work.id)).code).toBe('stepup_required')
-    const retention = await app.sendConfigPatch(0, { work: { retention: 'buffer' } })
-    expect((await app.expectFrame('error', (f) => f.ref === retention.id)).code).toBe('stepup_required')
-    const label = await app.sendConfigPatch(0, { work: { label: 'Office tools' } })
-    await bridge.expectFrame('config.patch', (f) => f.id === label.id, { direction: 'in' }) // wording needs no tap
-    const relayPatch = await app.sendConfigPatch(0, { permission_relay: true })
-    expect((await app.expectFrame('error', (f) => f.ref === relayPatch.id)).code).toBe('stepup_required')
-    // the Mac switches trust mode on
-    bridge.send({ type: 'config.sync', config: { ...cfg, rev: 1, trust_mode: true }, rev: 1 })
-    await app.expectFrame('config.sync', (f) => f.rev === 1)
-    const w2 = await app.sendConfigPatch(1, { work: { enabled: ['github'] } })
-    await bridge.expectFrame('config.patch', (f) => f.id === w2.id, { direction: 'in' })
-    const r2 = await app.sendConfigPatch(1, { permission_relay: true })
-    await bridge.expectFrame('config.patch', (f) => f.id === r2.id, { direction: 'in' })
-    // turning trust mode ON is never skipped, even while the relay believes it is already on: its copy of the Mac's
-    // config can be stale, and a patch queued for a Mac that has since turned it off would otherwise switch it on untapped
-    const t = await app.sendConfigPatch(1, { trust_mode: true })
-    expect((await app.expectFrame('error', (f) => f.ref === t.id)).code).toBe('stepup_required')
-    const mixed = await app.sendConfigPatch(1, { trust_mode: true, permission_relay: true })
-    expect((await app.expectFrame('error', (f) => f.ref === mixed.id)).code).toBe('stepup_required')
-    // off is free
-    const t2 = await app.sendConfigPatch(1, { trust_mode: false })
-    await bridge.expectFrame('config.patch', (f) => f.id === t2.id, { direction: 'in' })
-    // and the Mac switching it off brings the step-up back
-    bridge.send({ type: 'config.sync', config: { ...cfg, rev: 2 }, rev: 2 })
-    await app.expectFrame('config.sync', (f) => f.rev === 2)
-    const w3 = await app.sendConfigPatch(2, { work: { enabled: ['github'] } })
-    expect((await app.expectFrame('error', (f) => f.ref === w3.id)).code).toBe('stepup_required')
+    for (const patch of [
+      { work: { enabled: ['github'] } },
+      { work: { retention: 'buffer' } },
+      { permission_relay: true },
+      { trust_mode: true },
+      { trust_mode: true, permission_relay: true },
+      { trust_mode: false },
+    ]) {
+      const f = await app.sendConfigPatch(0, patch)
+      await bridge.expectFrame('config.patch', (x) => x.id === f.id, { direction: 'in' })
+    }
   })
 
   it('edits: an allowed edit with the right edited_hash is forwarded; a forbidden or mis-hashed one is refused', async () => {

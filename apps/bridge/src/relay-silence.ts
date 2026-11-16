@@ -9,14 +9,21 @@
 import type { Clock } from './clock.ts'
 import { isLoopbackUrl } from './config.ts'
 import type { Logger } from './log.ts'
+import { say } from './owner-words.ts'
 
 export const SILENCE_MS = 10 * 60_000
 export const TICK_MS = 30_000
 export const NTFY_TIMEOUT_MS = 5_000
 
-export const ALERT_TEXT =
-  'This Mac has had no connection to the relay for 10 minutes. Messages from your phone will not reach it until it reconnects.'
-export const BACK_TEXT = 'This Mac is connected to the relay again.'
+export const ALERT_TEXT = say({
+  mac: 'This Mac has had no connection to the relay for 10 minutes. Messages from your phone will not reach it until it reconnects.',
+  linux:
+    'This computer has had no connection to the relay for 10 minutes. Messages from your phone will not reach it until it reconnects.',
+})
+export const BACK_TEXT = say({
+  mac: 'This Mac is connected to the relay again.',
+  linux: 'This computer is connected to the relay again.',
+})
 
 export type RelaySilenceOptions = {
   /** TALOS_APP_ALERT_NTFY_URL; undefined or empty = inert. */

@@ -32,6 +32,20 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     /// Native launch spinner (audit D49): shown from launch until the first page finishes, so the owner never sees a
     /// blank view while the relay answers.
     private let launchSpinner = UIActivityIndicatorView(style: .large)
+    /// "Reconnecting…" over the web view while the page is being brought back (its web process died, froze or came back
+    /// empty), so the owner never looks at a bare black view with nothing to tap. Up while either flag below is set.
+    private let reconnectNotice = ReconnectNoticeView()
+    /// A resume check has been waiting on the page for longer than `WebViewRevival.noticeDelay`.
+    private var revivalWaiting = false
+    /// A load that brings a lost page back is running: from the load to the next page that finishes (relay or offline).
+    private var recovering = false
+    /// Set by the scene before the view loads when this controller replaces one whose web process was stuck: the notice is up
+    /// from the first frame until the first page finishes.
+    var startsReconnecting = false
+    /// True once any page (relay or offline) has finished in this web view.
+    private var hasShownAPage = false
+    /// The launch watchdog was running when the app left the screen (see `pauseLaunchWatchdog`).
+    private var watchdogPaused = false
 
     deinit { stopWatching() }
 
@@ -62,7 +76,32 @@ final class TalosBridgeViewController: CAPBridgeViewController {
             launchSpinner.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: 120),
         ])
         launchSpinner.startAnimating()
+        reconnectNotice.frame = view.bounds
+        reconnectNotice.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        reconnectNotice.isHidden = true
+        view.addSubview(reconnectNotice)
+        if startsReconnecting {
+            recovering = true
+            updateReconnectNotice()
+        }
     }
+
+    /// Shows or hides the notice from the two flags. VoiceOver is told when it appears.
+    private func updateReconnectNotice() {
+        let show = revivalWaiting || recovering
+        guard show == reconnectNotice.isHidden else { return }
+        reconnectNotice.isHidden = !show
+        if show {
+            view.bringSubviewToFront(reconnectNotice)
+            reconnectNotice.start()
+            UIAccessibility.post(notification: .announcement, argument: ReconnectNoticeView.text)
+        } else {
+            reconnectNotice.stop()
+        }
+    }
+
+    /// For tests: whether the notice is on screen.
+    var isShowingReconnectNotice: Bool { !reconnectNotice.isHidden }
 
     /// ` TalosIOS/<marketing version>+<build number>`, appended to the web view's user agent (audit D62), the way the Mac app
     /// appends `TalosDesktop/<version>`. The page reads it for "Copy diagnostics". Anything outside `[A-Za-z0-9.-]` is
@@ -97,6 +136,7 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(TalosSharePlugin())
         bridge?.registerPluginInstance(TalosPushPlugin())
         bridge?.registerPluginInstance(TalosCrashPlugin())
+        bridge?.registerPluginInstance(TalosSnapshotPlugin())
         // The stock Keyboard plugin (resize: native) shrinks the web view to what the keyboard leaves. If a hide
         // notification ever arrives with the frame left short (upstream #12, #23), put it back to the window. Never
         // reproduced here; this only restores a frame that is already wrong. Done before the origin guard.
@@ -131,8 +171,12 @@ final class TalosBridgeViewController: CAPBridgeViewController {
             inner: handler, guardian: guardian,
             openInSafari: { [weak self] url in self?.openInSafari(url) },
             showMedia: { [weak self] url in self?.showMedia(url, guardian: guardian) },
-            pageDidReset: { TalosAudioPlugin.resetSession() },
+            pageDidReset: {
+                TalosAudioPlugin.resetSession()
+                TalosPushCenter.shared.pageLeft()
+            },
             retry: { [weak self] in self?.retryIfNeeded(tapped: true) },
+            processDied: { [weak self] in self?.webProcessDied() },
             didCommit: { [weak self] in self?.pageDidCommit() },
             didFinish: { [weak self] in self?.pageDidFinish() }
         )
@@ -153,7 +197,14 @@ final class TalosBridgeViewController: CAPBridgeViewController {
                 WebViewRevival.ping(webView, timeout: timeout, done)
             },
             hop: { DispatchQueue.main.async(execute: $0) },
-            reload: { [weak self] in self?.loadRelay(keepingRoute: true) },
+            after: { delay, run in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: run) },
+            waiting: { [weak self] waiting in
+                guard let self else { return }
+                // Before the first page of this web view the launch spinner is already up: a slow first answer is a launch.
+                self.revivalWaiting = waiting && self.hasShownAPage
+                self.updateReconnectNotice()
+            },
+            reload: { [weak self] in self?.loadRelay(keepingRoute: true, recovering: true) },
             rebuild: { [weak self] in self?.rebuildWebView() })
         startRetryTriggers()
         startLaunchWatchdog()
@@ -171,7 +222,8 @@ final class TalosBridgeViewController: CAPBridgeViewController {
 
     /// Loads the start URL (the one Capacitor loaded at launch) and starts the launch watchdog again. `keepingRoute`: a page
     /// that is on a relay page (not /media/) is loaded where it was, so a process that died does not take the owner back to the start.
-    private func loadRelay(keepingRoute: Bool = false) {
+    /// `recovering`: the page was lost (not the owner's own retry), so "Reconnecting…" covers the view until a page finishes.
+    private func loadRelay(keepingRoute: Bool = false, recovering: Bool = false) {
         guard let relayURL, let webView else { return }
         var target = relayURL
         if keepingRoute, let current = webView.url, guardian?.isRelayURL(current) == true, !BridgeGuard.isMediaPath(current) {
@@ -181,8 +233,20 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         relayPageCommitted = false
         showingFallback = false
         launchSpinner.startAnimating()
+        if recovering {
+            self.recovering = true
+            updateReconnectNotice()
+        }
         webView.load(URLRequest(url: target))
         startLaunchWatchdog()
+    }
+
+    /// The web process died (WebKit said so). Capacitor's own answer is a bare `reload()`: nothing watches it, no spinner shows,
+    /// and with no URL left it does nothing, so a relay that is slow to answer left an empty view for as long as it took. The
+    /// page is loaded through `loadRelay` instead (it replaces that reload): the notice is up, and the launch watchdog falls to
+    /// the offline page, with its "Try again", if the relay does not answer.
+    private func webProcessDied() {
+        loadRelay(keepingRoute: true, recovering: true)
     }
 
     /// The web process does not answer, so a load would queue behind it: put a new controller (a new web view and web process)
@@ -214,14 +278,18 @@ final class TalosBridgeViewController: CAPBridgeViewController {
             MainActor.assumeIsolated {
                 // The offline page or a blank view is retried first. The page is checked either way: a stuck web process cannot
                 // hide behind a load that is running or the offline page.
+                self?.resumeLaunchWatchdog()
                 self?.retryIfNeeded()
                 self?.revival?.appDidForeground()
             }
         }
-        // Leaving the front voids a check that is still waiting for an answer.
-        leavingObservers = [UIApplication.willResignActiveNotification, UIApplication.didEnterBackgroundNotification].map {
-            NotificationCenter.default.addObserver(forName: $0, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.revival?.cancel() }
+        // Leaving the front voids a check that is still waiting for an answer. In the background the launch watchdog stops too.
+        leavingObservers = [UIApplication.willResignActiveNotification, UIApplication.didEnterBackgroundNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.revival?.cancel()
+                    if name == UIApplication.didEnterBackgroundNotification { self?.pauseLaunchWatchdog() }
+                }
             }
         }
         let monitor = NWPathMonitor()
@@ -237,6 +305,13 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     /// or blank view for as long as the relay stalls.
     private func startLaunchWatchdog() {
         launchWatchdog?.invalidate()
+        launchWatchdog = nil
+        // A load that starts while the app is off screen (a web process that died there) is watched from the return to the front.
+        if UIApplication.shared.applicationState == .background {
+            watchdogPaused = true
+            return
+        }
+        watchdogPaused = false
         launchStarted = Date()
         launchWatchdog = Timer.scheduledTimer(
             withTimeInterval: BridgeGuard.launchLimit(relayPageCommitted: relayPageCommitted), repeats: false
@@ -252,6 +327,23 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         }
     }
 
+    /// The app left the screen: the watchdog stops. Its timer would keep counting through a suspension and fire on the way back,
+    /// before the load had its time (review R1-8).
+    private func pauseLaunchWatchdog() {
+        guard let timer = launchWatchdog, timer.isValid else { return }
+        timer.invalidate()
+        launchWatchdog = nil
+        watchdogPaused = true
+    }
+
+    /// Back in front: a load that was being watched and is still unfinished gets the full limit again.
+    private func resumeLaunchWatchdog() {
+        let restart = BridgeGuard.shouldRestartWatchdogOnReturn(
+            wasWatching: watchdogPaused, relayPageFinished: relayPageFinished, showingFallback: showingFallback)
+        watchdogPaused = false
+        if restart { startLaunchWatchdog() }
+    }
+
     /// The relay answered and its HTML is arriving: the load is progressing, so the 12 s stall limit no longer applies.
     /// Restart the watchdog once with the longer committed limit.
     fileprivate func pageDidCommit() {
@@ -263,6 +355,10 @@ final class TalosBridgeViewController: CAPBridgeViewController {
 
     fileprivate func pageDidFinish() {
         launchSpinner.stopAnimating()
+        // A page is on screen again, the relay's or the offline page (which has its own "Try again").
+        hasShownAPage = true
+        recovering = false
+        updateReconnectNotice()
         guard let guardian, let url = webView?.url else { return }
         if guardian.isRelayURL(url) {
             relayPageFinished = true
@@ -284,7 +380,14 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         let viewer = MediaViewerController(
             url: url, dataStore: webView.configuration.websiteDataStore, guardian: guardian
         ) { [weak self] external in self?.openInSafari(external) }
-        topPresenter().present(UINavigationController(rootViewController: viewer), animated: true)
+        let nav = UINavigationController(rootViewController: viewer)
+        // Over full screen, not the default card: a card closes on a swipe down, which fought every scroll of a long page
+        // (the owner, 2026-11-14). The X in the bar is the only way out; a swipe down only scrolls. Not .fullScreen: that
+        // takes this web view out of the window while the viewer is up (a live call would end, a stuck-page rebuild would
+        // find no window scene). The viewer's root is opaque, so nothing shows through.
+        nav.modalPresentationStyle = .overFullScreen
+        nav.modalPresentationCapturesStatusBarAppearance = true
+        topPresenter().present(nav, animated: true)
     }
 
     /// Fetches one relay /media/ file with the web view's own cookies, writes it to a temp file with a safe name, and opens the
@@ -330,6 +433,47 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
         topPresenter().present(SFSafariViewController(url: url), animated: true)
     }
+}
+
+/// The "Reconnecting…" cover: the brand background (so nothing black shows through), a spinner and one line of text.
+final class ReconnectNoticeView: UIView {
+    static let text = "Reconnecting…"
+    private let spinner = UIActivityIndicatorView(style: .large)
+    private let label = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        let ink = UIColor(red: 0xF3 / 255, green: 0xE6 / 255, blue: 0xCF / 255, alpha: 1)
+        backgroundColor = UIColor(red: 0x14 / 255, green: 0x11 / 255, blue: 0x10 / 255, alpha: 1)
+        spinner.color = ink
+        label.text = Self.text
+        label.textColor = ink
+        label.font = .preferredFont(forTextStyle: .body)
+        label.adjustsFontForContentSizeCategory = true
+        label.textAlignment = .center
+        label.numberOfLines = 0
+        let stack = UIStackView(arrangedSubviews: [spinner, label])
+        stack.axis = .vertical
+        stack.alignment = .center
+        stack.spacing = 16
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
+        ])
+        isAccessibilityElement = true
+        accessibilityLabel = Self.text
+        accessibilityTraits = .updatesFrequently
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not built from a storyboard") }
+
+    func start() { spinner.startAnimating() }
+    func stop() { spinner.stopAnimating() }
 }
 
 /// Receives `talosShareMedia {path, name, mime}` from the page. Same gate as plugin calls (top frame, relay origin, a page outside
@@ -447,6 +591,7 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
     private let showMedia: (URL) -> Void
     private let pageDidReset: () -> Void
     private let retry: () -> Void
+    private let processDied: () -> Void
     private let didCommit: () -> Void
     private let didFinish: () -> Void
 
@@ -455,6 +600,7 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
         openInSafari: @escaping (URL) -> Void, showMedia: @escaping (URL) -> Void,
         pageDidReset: @escaping () -> Void = {},
         retry: @escaping () -> Void = {},
+        processDied: @escaping () -> Void = {},
         didCommit: @escaping () -> Void = {},
         didFinish: @escaping () -> Void = {}
     ) {
@@ -464,6 +610,7 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
         self.showMedia = showMedia
         self.pageDidReset = pageDidReset
         self.retry = retry
+        self.processDied = processDied
         self.didCommit = didCommit
         self.didFinish = didFinish
     }
@@ -533,6 +680,22 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
         ui.webView?(webView, decidePolicyFor: navigationAction, decisionHandler: decisionHandler)
     }
 
+    /// A relay page that answers with a server error is a failed load, not a loaded page: it is cancelled, WebKit reports the
+    /// load as failed and Capacitor shows the offline page, so the retries (tap, network return, foreground) apply. If that
+    /// ever does not happen, the launch watchdog still falls to the offline page, since no relay page finished.
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+    ) {
+        if navigationResponse.isForMainFrame, let url = navigationResponse.response.url, guardian.isRelayURL(url),
+           BridgeGuard.isFailedPageLoad(statusCode: (navigationResponse.response as? HTTPURLResponse)?.statusCode) {
+            return decisionHandler(.cancel)
+        }
+        (inner as? WKNavigationDelegate)?.webView?(webView, decidePolicyFor: navigationResponse, decisionHandler: decisionHandler)
+            ?? decisionHandler(.allow)
+    }
+
     // MARK: The page went away: a new document committed (reload, navigation) or the web process died. Whatever audio it
     // had asked for is over, so the session is released (TalosAudio idle).
 
@@ -549,7 +712,9 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         pageDidReset()
+        // Capacitor resets its bridge and calls reload(); the shell's own watched load follows and replaces that reload.
         (inner as? WKNavigationDelegate)?.webViewWebContentProcessDidTerminate?(webView)
+        processDied()
     }
 
     // MARK: Popups

@@ -98,7 +98,7 @@ async function hub(opts: { clock?: ReturnType<typeof fakeClock>; home?: string; 
     ...(opts.home ? { home: opts.home } : {}),
     config: (opts.trust ? (c: never) => ({ ...dedicatedConfig(c), trust_mode: true }) : dedicatedConfig) as never,
   })
-  await waitFor(() => existsSync(join(h?.home as string, 'hub.sock')))
+  await waitFor(() => existsSync(join(h?.home as string, 'run', 'hub.sock')))
   return h
 }
 
@@ -122,7 +122,7 @@ async function startWorker(home: string, relayUrl: string, connect = true) {
 /** The real worker-side hub client, used the way any process in the pane group with the nonce could use it. */
 async function rawClient(home: string, threadId = 'trip') {
   const c = new HubClient({
-    sockPath: join(home, 'hub.sock'),
+    sockPath: join(home, 'run', 'hub.sock'),
     threadId,
     nonce: NONCE,
     log: nullLogger,
@@ -401,7 +401,7 @@ async function rawLines(home: string, lines: string[], ms = 800): Promise<{ got:
     const got: string[] = []
     let buf = ''
     let closed = false
-    const s = createConnection(join(home, 'hub.sock'))
+    const s = createConnection(join(home, 'run', 'hub.sock'))
     s.setEncoding('utf8')
     s.on('connect', () => {
       for (const l of lines) s.write(l)
@@ -441,7 +441,7 @@ describe('PR65 review: hub socket', () => {
   test('holds: the socket file is 0600; an out before hello is refused and closed', async () => {
     const hh = await hub()
     const { statSync } = await import('node:fs')
-    expect(statSync(join(hh.home, 'hub.sock')).mode & 0o777).toBe(0o600)
+    expect(statSync(join(hh.home, 'run', 'hub.sock')).mode & 0o777).toBe(0o600)
     const frame = { ...mkFrame('status'), thread_id: 'trip', state: 'working', since: new Date().toISOString() }
     const r = await rawLines(hh.home, [`${JSON.stringify({ t: 'out', frame })}\n`])
     expect(r.got.map((l) => JSON.parse(l))).toEqual([expect.objectContaining({ t: 'refused', code: 'unauthorized' })])

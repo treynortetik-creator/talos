@@ -156,7 +156,7 @@ struct LeadFenceLaunchTests {
     usleep(1_000_000)
     #expect(log.all.count == 1, "\(log.all)")
     let text = log.all.first?.text ?? ""
-    #expect(text.contains("local-db") && text.contains("claude mcp add -s local local-db") && text.contains("approve it once in Claude Code"), "\(text)")
+    #expect(text.contains("local-db") && text.contains("claude mcp add -s local local-db") && text.contains("does not count"), "\(text)")
     #expect(!FileManager.default.fileExists(atPath: r.talosHome + "/workers/trip/mcp/mcp.json") || r.starts.isEmpty)
   }
 
@@ -238,7 +238,7 @@ struct LeadFenceLaunchTests {
     #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
     let deny = ((r.settingsOnDisk["permissions"] as? [String: Any])?["deny"] as? [String]) ?? []
     #expect(deny.contains("Bash(rm:*)") && deny.contains("Bash(claude plugin:*)"))
-    #expect(deny.contains("Read(/\(r.agentDir)/.env)") && !deny.contains("Read(./.env)"), "anchored at the agent folder, not at the worker's")
+    #expect(deny.contains("Read(/\(r.agentDir)/**/.env)") && !deny.contains("Read(./.env)"), "anchored at the agent folder, not at the worker's")
     for rule in WorkerFence.denyRules(talosHome: r.talosHome) { #expect(deny.contains(rule), "\(rule)") }
   }
 }
@@ -294,7 +294,7 @@ struct LeadFenceChangeTests {
     #expect(now != old && r.entry("trip")?.previous_ids == [old])
     #expect(r.argv(2).contains("--session-id") && !r.argv(2).contains("--resume"))
     #expect(r.entry("trip")?.cwd == r.home + "/proj-b")
-    #expect(r.wait(5) { log.all.contains { $0.text == LaunchChange.folderLine(r.home + "/proj-b") } }, "\(log.all)")
+    #expect(r.wait(5) { log.all.contains { $0.text == "Started a new conversation in this thread's new folder." } }, "\(log.all)")
     usleep(1_500_000)
     #expect(log.all.filter { $0.text.hasPrefix("Started a new conversation") }.count == 1, "\(log.all)")
   }

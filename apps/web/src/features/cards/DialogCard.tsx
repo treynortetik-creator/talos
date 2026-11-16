@@ -1,11 +1,12 @@
 // The needs-you card for a Claude Code dialog in a thread session (docs/OPTION-C.md "Needs-you prompts"). The card mirrors the
-// dialog: one real button per option, in the order the screen shows them, and a tap is the whole approval (no Face ID). The Mac
+// dialog: one real button per option, in the order the screen shows them, and a tap is the whole approval. The Mac
 // presses the key. This file draws every state of the card (waiting, pressing, answered, nothing pressed, closed, expired).
 // The folder, the server and every label come from a repository, so they are plain text with hidden characters shown
 // (`dialogVisibleText`: the marker brackets are marked too, so a label cannot print a marker of its own), never markdown and
 // never HTML. The bridge writes its sentences with the same function, so they arrive already marked.
 import {
   type CardT,
+  cardExpiryMs,
   DIALOG_FOOTNOTE,
   DIALOG_NOTHING_PRESSED_TITLE,
   DIALOG_PRESSING_TEXT,
@@ -13,6 +14,7 @@ import {
   dialogVisibleText,
 } from '@talos-app/protocol'
 import type { ReactNode, Ref } from 'react'
+import { hostSteps, useHost } from '../../lib/hostWords.ts'
 import { cn } from '../../ui/cn.ts'
 import { Button } from '../../ui/index.ts'
 import { isExpiredNow } from './logic.ts'
@@ -36,8 +38,6 @@ export type DialogCardProps = {
   /** The index of the pressed option, or null for the login card's one button. */
   onChoose: (choice: number | null) => void
 }
-
-const EXPIRED_TEXT = 'Expired. Nobody answered in time; the session is still waiting at the Mac.'
 
 type Phase = 'waiting' | 'pressing' | 'answered' | 'nothing' | 'failed' | 'closed' | 'expired'
 
@@ -65,6 +65,7 @@ export function DialogCard({
   decided,
   onChoose,
 }: DialogCardProps) {
+  const host = useHost()
   const d = dialogOf(card)
   const phase = phaseOf(card, isExpiredNow(card, now), decided)
   const shell = (children: ReactNode, tone = 'border-warn') => (
@@ -99,7 +100,7 @@ export function DialogCard({
         <h3 id={titleId} className="mt-1 text-lg font-medium text-text">
           {revealHidden(card.title)}
         </h3>
-        <p className="mt-2 text-sm text-text-2">This prompt can't be shown here. Answer it at the Mac.</p>
+        <p className="mt-2 text-sm text-text-2">{hostSteps(host).dialogHere}</p>
       </>,
     )
 
@@ -109,7 +110,7 @@ export function DialogCard({
   const by = card.resolution?.by
   const when = formatClock(card.result?.at ?? card.resolution?.at ?? '', timeZone)
   // what the card says under the title once it is no longer waiting
-  const resultText = phase === 'expired' ? EXPIRED_TEXT : (result ?? '')
+  const resultText = phase === 'expired' ? hostSteps(host).dialogExpired : (result ?? '')
 
   return shell(
     <>
@@ -186,7 +187,7 @@ export function DialogCard({
             {DIALOG_FOOTNOTE}
           </p>
           <p className="mt-1 font-mono text-xs text-text-2" data-testid="card-expiry">
-            Expires {formatClock(card.expires_at, timeZone)} if nobody answers
+            Expires {formatClock(new Date(cardExpiryMs(card)).toISOString(), timeZone)} if nobody answers
           </p>
         </>
       ) : null}

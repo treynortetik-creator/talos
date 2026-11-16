@@ -7,7 +7,9 @@ import {
   BRIDGE_TOOLS,
   CONFIG_BRIDGE_TOOLS,
   MOD_BRIDGE_TOOLS,
+  PAGE_BRIDGE_TOOLS,
   SCHEDULE_BRIDGE_TOOLS,
+  SCREEN_BRIDGE_TOOLS,
 } from '../../src/tools/table.ts'
 import { draft, longTimeouts, type SchedHarness, sleep, startSched } from './harness.ts'
 
@@ -64,7 +66,11 @@ describe('registration', () => {
       ...SCHEDULE_BRIDGE_TOOLS,
       ...CONFIG_BRIDGE_TOOLS,
       ...ATTACHMENT_BRIDGE_TOOLS,
+      ...PAGE_BRIDGE_TOOLS,
       'handoff',
+      'thread_session',
+      'restart_main',
+      ...SCREEN_BRIDGE_TOOLS,
     ])
       expect(names).toContain(t)
     expect(names.length).toBe(
@@ -73,7 +79,9 @@ describe('registration', () => {
         SCHEDULE_BRIDGE_TOOLS.length +
         CONFIG_BRIDGE_TOOLS.length +
         ATTACHMENT_BRIDGE_TOOLS.length +
-        1, // handoff
+        PAGE_BRIDGE_TOOLS.length +
+        3 + // handoff, thread_session, restart_main
+        SCREEN_BRIDGE_TOOLS.length,
     )
   })
 

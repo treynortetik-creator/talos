@@ -2,11 +2,21 @@
 // running it, with a fake `gh`, `caffeinate`, `sysctl` and tools on the PATH and a fake ci-local.sh that writes down how it was
 // called. The workflows are plain text, so what is checked is what they say: their triggers, their token, their pins.
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { RUNNER_VARS } from './ci-test-env'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -62,6 +72,16 @@ const prEnv = {
   PR_HEAD_REPO: 'owner/talos-app',
 }
 
+describe('a test never inherits the outer run', () => {
+  // The suites run inside a ci-runner.yml job, so every variable that workflow sets is in their environment; a copy of
+  // ci-runner.sh or ci-local.sh under test that read one (CI_PLAN_SHA, say) would test or post for the real commit.
+  itRunnerYml('cleanEnv drops every variable ci-runner.yml sets', () => {
+    const set = [...new Set([...runnerYml.matchAll(/^ +([A-Z][A-Z0-9_]*):/gm)].map((m) => m[1]))]
+    expect(set.length).toBeGreaterThan(10)
+    expect(set.filter((k) => !(RUNNER_VARS as readonly string[]).includes(k))).toEqual([])
+  })
+})
+
 describe('ci-runner.sh guard: only same-repo PRs and plain refs', () => {
   it('lets a same-repo PR and a plain dispatch through', () => {
     expect(run('guard', prEnv).code).toBe(0)
@@ -108,6 +128,27 @@ describe('ci-runner.sh guard: only same-repo PRs and plain refs', () => {
       const r = run('guard', { GITHUB_EVENT_NAME: 'workflow_dispatch', INPUT_REF: ref })
       expect(r.code, JSON.stringify(ref)).toBe(1)
     }
+  })
+})
+
+describe('ci-runner.sh guard: the nightly schedule tests main, as a full sha', () => {
+  const nightly = {
+    GITHUB_EVENT_NAME: 'schedule',
+    GITHUB_REPOSITORY: 'owner/talos-app',
+    GITHUB_REF: 'refs/heads/main',
+    GITHUB_SHA: SHA,
+  }
+  it('lets the schedule on main through', () => {
+    expect(run('guard', nightly).code).toBe(0)
+  })
+  it('refuses another ref, a short or odd sha, and no repository', () => {
+    expect(run('guard', { ...nightly, GITHUB_REF: 'refs/heads/feat/x' }).code).toBe(1)
+    expect(run('guard', { ...nightly, GITHUB_SHA: SHA.slice(0, 7) }).code).toBe(1)
+    expect(run('guard', { ...nightly, GITHUB_SHA: `${SHA.slice(1)};` }).code).toBe(1)
+    expect(run('guard', { ...nightly, GITHUB_REPOSITORY: '' }).code).toBe(1)
+  })
+  it('refuses an event it does not know', () => {
+    expect(run('guard', { ...nightly, GITHUB_EVENT_NAME: 'workflow_run' }).code).toBe(1)
   })
 })
 
@@ -172,17 +213,22 @@ describe('ci-runner.sh guard: the optional job list of a dispatch', () => {
 })
 
 describe('ci-runner.sh tools: use what the runner has where the version matches the pin', () => {
+  // The fake tools are shell functions, not files: macOS checks every newly written executable the first time it runs (0.4 to
+  // 1.7 s each here, far more under load), and a fresh fake bin per call made this block time out under the full suite. A
+  // function shadows a command of the same name on PATH, as a fake bin first on PATH did.
   const tool = (v: string) => `echo "${v}"`
+  // A missing tool is a stub that cannot run: it shadows any copy in /usr/bin (a Linux package manager puts node, bun and pnpm there)
+  const missing = 'return 127'
   const have = (node: string | null, bun: string | null, pnpm: string | null) =>
-    bin({
-      ...(node ? { node: tool(`v${node}`) } : {}),
-      ...(bun ? { bun: tool(bun) } : {}),
-      ...(pnpm ? { pnpm: tool(pnpm) } : {}),
-    })
-  // The runner's own PATH has no node, bun or pnpm: only the fake bin has them, so a missing one is really missing.
-  const needs = (b: string) => {
-    const r = spawnSync('bash', ['-c', `. "${script}"; ci_tools "${root}"`], {
-      env: { PATH: `${b}:/usr/bin:/bin` },
+    [
+      `node() { ${node ? tool(`v${node}`) : missing}; }`,
+      `bun() { ${bun ? tool(bun) : missing}; }`,
+      `pnpm() { ${pnpm ? tool(pnpm) : missing}; }`,
+    ].join('\n')
+  // The functions alone decide which tool is there and at which version.
+  const needs = (fakes: string) => {
+    const r = spawnSync('bash', ['-c', `${fakes}\n. "${script}"; ci_tools "${root}"`], {
+      env: { PATH: '/usr/bin:/bin' },
       encoding: 'utf8',
     })
     return Object.fromEntries(
@@ -225,6 +271,48 @@ describe('ci-runner.sh tools: use what the runner has where the version matches 
     expect(needs(have(nodeOk, `${pins.bun}0`, pins.pnpm))).toMatchObject({ need_node: 'false', need_bun: 'true' })
     expect(needs(have(nodeOk, pins.bun, `${pins.pnpm}1`))).toMatchObject({ need_pnpm: 'true', need_bun: 'false' })
     expect(needs(have(null, null, null))).toMatchObject({ need_node: 'true', need_bun: 'true', need_pnpm: 'true' })
+  })
+
+  // The jobs run a copy of the pinned bun kept in the cache, never ~/.bun/bin/bun, which an upgrade replaces in place mid-run.
+  const fakeBun = (v: string) => bin({ bun: `[ "$1" = --version ] && echo ${v}` })
+  const pinned = (cache: string, b: string) => sh(`ci_bun_pinned "${cache}"`, {}, b)
+
+  it("copies PATH's bun into the cache when it is the pin, and keeps running that copy after PATH's bun changes", () => {
+    const cache = scratch()
+    const first = pinned(cache, fakeBun(pins.bun))
+    expect(first.code, first.err).toBe(0)
+    const dir = join(cache, 'bun-bin', pins.bun)
+    expect(first.out.trim()).toBe(dir)
+    expect(execFileSync(join(dir, 'bun'), ['--version'], { encoding: 'utf8' }).trim()).toBe(pins.bun)
+    expect(execFileSync(join(dir, 'bunx'), ['--version'], { encoding: 'utf8' }).trim()).toBe(pins.bun)
+    const later = pinned(cache, fakeBun('9.9.9')) // the machine's bun was upgraded mid-run
+    expect(later.code, later.err).toBe(0)
+    expect(later.out.trim()).toBe(dir)
+    expect(execFileSync(join(dir, 'bun'), ['--version'], { encoding: 'utf8' }).trim()).toBe(pins.bun)
+  })
+
+  it('refuses when PATH has another bun and the cache has no copy of the pin', () => {
+    const cache = scratch()
+    const r = pinned(cache, fakeBun('9.9.9'))
+    expect(r.code).toBe(1)
+    expect(r.err).toContain(`bun 9.9.9`)
+    expect(r.err).toContain(`not the pinned ${pins.bun}`)
+    expect(existsSync(join(cache, 'bun-bin', pins.bun, 'bun'))).toBe(false)
+  })
+
+  it("tools: a bun at another version needs setup-bun unless the cache already has the pin's copy; the matching one skips it", () => {
+    const cache = scratch()
+    const tools = (b: string) =>
+      Object.fromEntries(
+        sh(`ci_tools "${root}"`, { TALOS_CI_CACHE: cache, HOME: cache }, b)
+          .out.trim()
+          .split('\n')
+          .map((l) => l.split('=')),
+      )
+    expect(tools(fakeBun('9.9.9')).need_bun).toBe('true')
+    expect(tools(fakeBun(pins.bun)).need_bun).toBe('false')
+    expect(pinned(cache, fakeBun(pins.bun)).code).toBe(0)
+    expect(tools(fakeBun('9.9.9')).need_bun).toBe('false')
   })
 })
 
@@ -321,16 +409,19 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
     const real = git(clone, 'rev-parse', 'HEAD')
     const copy = join(clone, 'scripts/ci-runner.sh')
     writeFileSync(copy, readFileSync(script, 'utf8'))
+    mkdirSync(join(clone, '.github/workflows'), { recursive: true }) // the bun pin is read from ci.yml
+    writeFileSync(join(clone, '.github/workflows/ci.yml'), ciYml)
     const fakeLocal = join(T, 'fake-ci-local.sh')
     writeFileSync(
       fakeLocal,
       `#!/bin/bash
-{ echo "args: $*"; for v in CI_REPO CI_STATUS_WHERE CI_WT_BASE TALOS_CI_CACHE CI_STATUS_URL TALOS_CI_FORCE_DESKTOP TALOS_CI_FORCE_MOBILE; do echo "$v=\${!v}"; done; } > "$CALLS"\n`,
+{ echo "args: $*"; echo "bun: $(bun --version) ($(command -v bun))"; for v in CI_REPO CI_STATUS_WHERE CI_WT_BASE TALOS_CI_CACHE CI_STATUS_URL TALOS_CI_FORCE_DESKTOP TALOS_CI_FORCE_MOBILE TALOS_FUZZ_MS CI_NIGHTLY; do echo "$v=\${!v}"; done; } > "$CALLS"\n`,
     )
     // `gh` answers the one question a run asks (is the PR still open); never the real GitHub.
     const b = bin({
       caffeinate: 'echo "caffeinate $*" >> "$CALLS.caff"; exit 0',
       gh: 's=open; [ -n "$GH_PR_STATE" ] && s=$GH_PR_STATE; echo $s',
+      bun: `echo ${/bun-version: ([\d.]+)/.exec(ciYml)?.[1]}`, // the pinned bun, as the workflow's tools step leaves it
     })
     return { T, clone, copy, fakeLocal, b, real, calls: join(T, 'calls') }
   }
@@ -363,6 +454,23 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
     expect(c).toContain(`TALOS_CI_CACHE=${h}/.cache/talos-ci`)
     expect(c).toContain(`CI_WT_BASE=${h}/.cache/talos-ci/wt`)
     expect(c).toContain('CI_STATUS_URL=https://example.test/run/1')
+    // ci-local.sh runs the cache's copy of the pinned bun, first on PATH, and the step's log says which
+    const pin = /bun-version: ([\d.]+)/.exec(ciYml)?.[1] as string
+    expect(c).toContain(`bun: ${pin} (${h}/.cache/talos-ci/bun-bin/${pin}/bun)`)
+    expect(r.out).toContain(`ci-runner: bun: ${pin} (${h}/.cache/talos-ci/bun-bin/${pin}/bun)`)
+  })
+
+  it('refuses to start ci-local.sh when the bun on PATH is not the pin and the cache has no copy of it', () => {
+    const s = setup()
+    const r = run(
+      'run',
+      { ...prEnv, PR_HEAD_SHA: s.real, GH_TOKEN: 't', HOME: home(), CALLS: s.calls, CI_LOCAL_SCRIPT: s.fakeLocal },
+      `${bin({ bun: 'echo 9.9.9' })}:${s.b}`,
+      s.copy,
+    )
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('bun 9.9.9')
+    expect(existsSync(s.calls)).toBe(false)
   })
 
   it('a dispatch run calls it with --ref', () => {
@@ -383,6 +491,32 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
     )
     expect(r.code).toBe(0)
     expect(readFileSync(s.calls, 'utf8')).toContain('args: --ref feat/x --full')
+  })
+
+  it('the nightly run tests the sha main had when it started, with --full, so nothing is skipped', () => {
+    const s = setup()
+    const r = run(
+      'run',
+      {
+        GITHUB_EVENT_NAME: 'schedule',
+        GITHUB_REPOSITORY: 'owner/talos-app',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_SHA: s.real,
+        INPUT_JOBS: 'desktop', // a dispatch input never narrows the nightly
+        GH_TOKEN: 't',
+        HOME: home(),
+        CALLS: s.calls,
+        CI_LOCAL_SCRIPT: s.fakeLocal,
+      },
+      s.b,
+      s.copy,
+    )
+    expect(r.code, r.err).toBe(0)
+    expect(readFileSync(s.calls, 'utf8')).toContain(`args: --ref ${s.real} --full\n`)
+    // the long security fuzz (apps/bridge/test/review-memory-recheck.test.ts): 60 s nightly instead of 8 s
+    expect(readFileSync(s.calls, 'utf8')).toContain('TALOS_FUZZ_MS=60000\n')
+    // and it posts under nightly-ci/ only: ci-local.sh (and its fallback) get CI_NIGHTLY=1
+    expect(readFileSync(s.calls, 'utf8')).toContain('CI_NIGHTLY=1\n')
   })
 
   it('a push run tests the pushed sha, not the branch name, and posts under the same repo and run link', () => {
@@ -436,6 +570,8 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
       const c = readFileSync(s.calls, 'utf8')
       expect(c, e.GITHUB_EVENT_NAME).toContain('TALOS_CI_FORCE_DESKTOP=\n')
       expect(c, e.GITHUB_EVENT_NAME).toContain('TALOS_CI_FORCE_MOBILE=\n')
+      expect(c, e.GITHUB_EVENT_NAME).toContain('TALOS_FUZZ_MS=\n') // only the nightly runs the long fuzz
+      expect(c, e.GITHUB_EVENT_NAME).toContain('CI_NIGHTLY=\n') // only the nightly posts under nightly-ci/
     }
   })
 
@@ -457,7 +593,7 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
       s.copy,
     )
     expect(r.code).toBe(1)
-    expect(r.err).toContain("a push to 'refs/heads/feat/x', only refs/heads/main is tested on push") // the push rule, not the unknown-event fallback
+    expect(r.err).toContain("a push to 'refs/heads/feat/x', only refs/heads/main is tested on push or schedule") // the push rule, not the unknown-event fallback
     expect(existsSync(s.calls)).toBe(false)
   })
 
@@ -646,12 +782,16 @@ ${readFails ? 'exit 1' : `printf '%b' '${rows}'`}`,
         `local-ci/image\tpending\thttps://example.test/actions/runs/8`, // a newer run's
         'local-ci/desktop\tpending\t', // the Mac's own run (no link)
         `ci/other\tpending\t${url}`, // not a local-ci context
+        `report-ci/fast\tpending\t${url}`, // ours, pending: closed too (it is ours, though outside the verdict)
+        `ci-part/bridge-shard-2\tpending\t${url}`, // ours, a part of check posted from another machine: closed too
       ].join('\\n')}\\n`,
     )
     const r = run('sweep', envFor(g.T), g.b)
     expect(r.code).toBe(0)
     const posts = g.posts()
-    expect(posts).toHaveLength(2)
+    expect(posts).toHaveLength(4)
+    expect(posts.join('\n')).toMatch(/context=report-ci\/fast/)
+    expect(posts.join('\n')).toMatch(/context=ci-part\/bridge-shard-2/)
     expect(posts.join('\n')).toMatch(/context=local-ci\/check/)
     expect(posts.join('\n')).toMatch(/context=local-ci\/mod/)
     expect(
@@ -662,7 +802,25 @@ ${readFails ? 'exit 1' : `printf '%b' '${rows}'`}`,
           p.includes(`repos/owner/talos-app/statuses/${SHA}`),
       ),
     ).toBe(true)
-    expect(r.out).toContain('closed 2 status(es)')
+    expect(r.out).toContain('closed 4 status(es)')
+  })
+
+  // A job cancelled (job.status, which the workflow passes as CI_JOB_STATUS) was not tested: its pending closes as an error that
+  // says "not tested:", which no verdict reads as red or green, and never as a success. Any other end (it died) keeps the plain error.
+  it('a cancelled job closes its pending as a "not tested:" error, never a success; a job that died keeps the plain error', () => {
+    for (const [status, state, words] of [
+      ['cancelled', 'error', 'not tested: run cancelled before this job reported (on ci-runner); re-run'],
+      ['failure', 'error', 'run on ci-runner ended before this job reported'],
+      ['', 'error', 'run on ci-runner ended before this job reported'],
+    ] as const) {
+      const g = fakeGh(`local-ci/check\tpending\t${url}\n`)
+      const r = run('sweep', { ...envFor(g.T), CI_JOB_STATUS: status }, g.b)
+      expect(r.code, status).toBe(0)
+      const posts = g.posts()
+      expect(posts, status).toHaveLength(1)
+      expect(posts[0], status).toContain(`state=${state} `)
+      expect(posts[0], status).toContain(`description=${words}`)
+    }
   })
 
   it('closes a pending local-ci status that sits past the first 30 statuses of the commit', () => {
@@ -680,6 +838,7 @@ case "$*" in *--paginate*per_page=100*) head -n 1000 "${T}/rows" ;; *) head -n 3
     const r = run('sweep', envFor(T), b)
     expect(r.code).toBe(0)
     expect(r.out).toContain('closed 1 status(es)')
+    expect(readFileSync(join(T, 'posts'), 'utf8')).toMatch(/context=local-ci\/check/)
   })
 
   it('when the statuses cannot be read it says so and changes nothing', () => {
@@ -714,12 +873,212 @@ case "$*" in *--paginate*per_page=100*) head -n 1000 "${T}/rows" ;; *) head -n 3
     expect(g.posts()).toEqual([])
   })
 
+  // The race seen on Titan (0d3b391, run 43422866981): image passed and posted success at 12:10:35; the sweep a second later
+  // read the combined status (commits/<sha>/status), which still showed this run's pending, and wrote error over the green.
+  // A fake gh that answers the two reads apart: the combined one stale, the newest-first list (commits/<sha>/statuses) fresh.
+  const raceGh = (combined: string[], list: string[]) => {
+    const T = scratch()
+    writeFileSync(join(T, 'combined'), `${combined.join('\n')}\n`)
+    writeFileSync(join(T, 'list'), `${list.join('\n')}\n`)
+    const b = bin({
+      gh: `if [ "$1 $2" = "api -X" ]; then echo "$*" >> "${T}/posts"; exit 0; fi
+case "$*" in *"/statuses?"*) cat "${T}/list" ;; *"/status?"*) cat "${T}/combined" ;; *) exit 1 ;; esac`,
+    })
+    return {
+      b,
+      T,
+      posts: () => (existsSync(join(T, 'posts')) ? readFileSync(join(T, 'posts'), 'utf8').trim().split('\n') : []),
+    }
+  }
+
+  it('a status this run reported (written down by ci_post_status) is never closed, even when the combined read is stale', () => {
+    const g = raceGh([`local-ci/image\tpending\t${url}`], [`local-ci/image\tpending\t${url}`]) // both reads stale
+    const e = envFor(g.T)
+    writeFileSync(`${e.CI_SHA_FILE}.reported`, `${SHA}\tlocal-ci/image\t${url}\n`)
+    const r = run('sweep', e, g.b)
+    expect(r.code).toBe(0)
+    expect(g.posts()).toEqual([])
+    expect(r.out).toContain('closed 0 status(es)')
+  })
+
+  it("another run's answer written down (a dead run settled by the reap, another link) does not hide this run's pending", () => {
+    const g = raceGh([`local-ci/image\tpending\t${url}`], [`local-ci/image\tpending\t${url}`])
+    const e = envFor(g.T)
+    writeFileSync(
+      `${e.CI_SHA_FILE}.reported`,
+      [`${SHA}\tlocal-ci/image\thttps://example.test/actions/runs/6`, `${'b'.repeat(40)}\tlocal-ci/image\t${url}`].join(
+        '\n',
+      ) + '\n',
+    )
+    const r = run('sweep', e, g.b)
+    expect(g.posts()).toHaveLength(1)
+    expect(r.out).toContain('closed 1 status(es)')
+  })
+
+  it('a pending the combined read still shows is not closed when the newest-first list already has its answer', () => {
+    const g = raceGh(
+      [`local-ci/image\tpending\t${url}`, `local-ci/check\tpending\t${url}`],
+      [
+        `local-ci/image\tsuccess\t${url}`, // newest first: the answer, posted a second before the sweep
+        `local-ci/check\tpending\t${url}`, // truly left pending: closed
+        `local-ci/image\tpending\t${url}`,
+      ],
+    )
+    const r = run('sweep', envFor(g.T), g.b)
+    expect(r.code).toBe(0)
+    const posts = g.posts()
+    expect(posts).toHaveLength(1)
+    expect(posts[0]).toMatch(/context=local-ci\/check/)
+    expect(r.out).toContain('closed 1 status(es)')
+  })
+
+  it("a pending whose newest row in the list is another run's (a newer link) is left alone", () => {
+    const g = raceGh(
+      [`local-ci/image\tpending\t${url}`],
+      [`local-ci/image\tpending\thttps://example.test/actions/runs/8`, `local-ci/image\tpending\t${url}`],
+    )
+    const r = run('sweep', envFor(g.T), g.b)
+    expect(g.posts()).toEqual([])
+    expect(r.out).toContain('closed 0 status(es)')
+  })
+
+  it('when the list cannot be read it falls back to the combined read, as before', () => {
+    const T = scratch()
+    const b = bin({
+      gh: `if [ "$1 $2" = "api -X" ]; then echo "$*" >> "${T}/posts"; exit 0; fi
+case "$*" in *"/statuses?"*) exit 1 ;; *) printf 'local-ci/check\\tpending\\t${url}\\n' ;; esac`,
+    })
+    const r = run('sweep', envFor(T), b)
+    expect(r.code).toBe(0)
+    expect(r.out).toContain('closed 1 status(es)')
+  })
+
   const jq = spawnSync('jq', ['--version']).status === 0
   it.skipIf(!jq)('the gh --jq expression yields the three columns the sweep reads', () => {
-    const expr = /--jq '([^']+)'/.exec(readFileSync(script, 'utf8'))?.[1] as string
+    const text = readFileSync(script, 'utf8')
+    const sweep = text.slice(text.indexOf('ci_sweep() {'), text.indexOf('\n}\n', text.indexOf('ci_sweep() {')))
+    const expr = /--jq '([^']+)'/.exec(sweep)?.[1] as string
     const json = JSON.stringify({ statuses: [{ context: 'local-ci/check', state: 'pending', target_url: url, id: 1 }] })
     const out = spawnSync('jq', ['-r', expr], { input: json, encoding: 'utf8' }).stdout
     expect(out).toBe(`local-ci/check\tpending\t${url}\n`)
+  })
+})
+
+// Hestia's gate can stop its runner while a job runs (docs/CI-MACHINES.md, "Only while the builder is idle"): that job's own
+// sweep never runs, and its report-ci/linux stays pending. The next Hestia run's sweep closes those: on this commit and the last
+// 20 of main, a pending report-ci/linux whose link is another run of this workflow that has finished. Never a running one.
+describe("ci-runner.sh sweep on Hestia: an earlier, finished Hestia run's pending report-ci/linux is closed", () => {
+  const RUN = (id: number) => `https://github.com/owner/talos-app/actions/runs/${id}/attempts/1#hestia`
+  const B = 'b'.repeat(40)
+  const C = 'c'.repeat(40)
+  const D = 'd'.repeat(40)
+  const world = (statuses: Record<string, string[]>, runs: Record<number, string>) => {
+    const T = scratch()
+    for (const [sha, rows] of Object.entries(statuses)) writeFileSync(join(T, `rows-${sha}`), `${rows.join('\n')}\n`)
+    for (const [id, row] of Object.entries(runs)) writeFileSync(join(T, `run-${id}`), `${row}\n`)
+    const b = bin({
+      gh: `if [ "$1 $2" = "api -X" ]; then echo "$*" >> "${T}/posts"; exit 0; fi
+echo "$*" >> "${T}/reads"
+all="$*"
+case "$all" in
+  *"/commits?sha=main"*) printf '%s\\n' ${[SHA, B, C, D].join(' ')} ;;
+  *"/commits/"*"/status"*) s="\${all#*commits/}"; s="\${s%%/*}"; cat "${T}/rows-$s" 2>/dev/null ;;
+  *"/actions/runs/"*) i="\${all#*actions/runs/}"; i="\${i%% *}"; cat "${T}/run-$i" 2>/dev/null || exit 1 ;;
+esac`,
+    })
+    writeFileSync(join(T, 'sha'), `${SHA}\n`)
+    return {
+      b,
+      env: (extra: Record<string, string> = {}) => ({
+        GITHUB_REPOSITORY: 'owner/talos-app',
+        CI_STATUS_URL: RUN(9),
+        CI_SHA_FILE: join(T, 'sha'),
+        GITHUB_RUN_ID: '9',
+        CI_RUN_JOBS: 'linux',
+        CI_STATUS_WHERE: 'hestia',
+        ...extra,
+      }),
+      posts: () => (existsSync(join(T, 'posts')) ? readFileSync(join(T, 'posts'), 'utf8').trim().split('\n') : []),
+      reads: () => (existsSync(join(T, 'reads')) ? readFileSync(join(T, 'reads'), 'utf8') : ''),
+    }
+  }
+  const WF = '.github/workflows/ci-runner.yml'
+
+  it('closes the finished ones, under their own link; leaves a running one, another workflow, an unreadable run, and anything else', () => {
+    const w = world(
+      {
+        [SHA]: [`report-ci/linux\tpending\t${RUN(9)}`], // this run's own: closed by the usual sweep, once
+        [B]: [`report-ci/linux\tpending\t${RUN(5)}`, `local-ci/check\tpending\t${RUN(5)}`], // run 5 finished: linux closed, local-ci never
+        [C]: [`report-ci/linux\tpending\t${RUN(6)}`], // run 6 still running: left
+        [D]: [
+          `report-ci/linux\tpending\thttps://github.com/owner/talos-app/actions/runs/4/attempts/1#hestia`, // another workflow
+          'report-ci/linux\tpending\thttps://elsewhere.test/x', // not a run link
+        ],
+      },
+      { 5: `completed\t${WF}`, 6: `in_progress\t${WF}`, 4: 'completed\t.github/workflows/other.yml' },
+    )
+    const r = run('sweep', w.env(), w.b)
+    expect(r.code, r.err).toBe(0)
+    const posts = w.posts()
+    expect(posts).toHaveLength(2)
+    expect(posts.filter((p) => p.includes(`statuses/${SHA} `))).toHaveLength(1)
+    const stale = posts.find((p) => p.includes(`statuses/${B} `)) as string
+    expect(stale).toContain('context=report-ci/linux')
+    expect(stale).toContain('state=error')
+    expect(stale).toContain(`target_url=${RUN(5)}`)
+    expect(stale).toContain('earlier Hestia run 5')
+    expect(r.out).toContain('closed 1 report-ci/linux status(es) left pending by earlier Hestia runs')
+    // a run whose state cannot be read is left alone too
+    const u = world({ [SHA]: [], [B]: [`report-ci/linux\tpending\t${RUN(3)}`] }, {})
+    expect(run('sweep', u.env(), u.b).code).toBe(0)
+    expect(u.posts()).toEqual([])
+  })
+
+  it('only on Hestia: Lemnos and the part machines do not look at other commits', () => {
+    const w = world({ [B]: [`report-ci/linux\tpending\t${RUN(5)}`] }, { 5: `completed\t${WF}` })
+    const r = run('sweep', w.env({ CI_RUN_JOBS: '', CI_STATUS_WHERE: 'ci-runner' }), w.b)
+    expect(r.code).toBe(0)
+    expect(w.posts()).toEqual([])
+    expect(w.reads()).not.toContain('commits?sha=main')
+  })
+})
+
+describe("ci-runner.sh logs: a red run uploads its own commit's logs, not the whole cache", () => {
+  const setup = (sha: string | null) => {
+    const T = scratch()
+    const logs = join(T, 'cache/logs')
+    mkdirSync(logs, { recursive: true })
+    for (const f of ['aaaaaaa-check.log', 'aaaaaaa-setup.log', 'aaaaaaa-check.log.step_vitest', 'bbbbbbb-check.log'])
+      writeFileSync(join(logs, f), f)
+    writeFileSync(join(logs, 'timings.tsv'), 'row\n')
+    if (sha !== null) writeFileSync(join(T, 'sha'), `${sha}\n`)
+    const out = join(T, 'out')
+    return { out, e: { HOME: T, TALOS_CI_CACHE: join(T, 'cache'), CI_SHA_FILE: join(T, 'sha'), CI_LOGS_OUT: out } }
+  }
+  const files = (d: string) => (existsSync(d) ? readdirSync(d).sort() : [])
+
+  it("copies only this sha's <short>-*.log and <short>-*.log.* files, and timings.tsv", () => {
+    const { out, e } = setup(SHA)
+    const r = run('logs', e)
+    expect(r.code, r.err).toBe(0)
+    expect(files(out)).toEqual([
+      'aaaaaaa-check.log',
+      'aaaaaaa-check.log.step_vitest',
+      'aaaaaaa-setup.log',
+      'timings.tsv',
+    ])
+  })
+
+  it('a run that never reached a commit copies only timings.tsv', () => {
+    const { out, e } = setup(null)
+    expect(run('logs', e).code).toBe(0)
+    expect(files(out)).toEqual(['timings.tsv'])
+  })
+
+  it('a sha file that holds anything but a commit sha copies no logs', () => {
+    const { out, e } = setup('*')
+    expect(run('logs', e).code).toBe(1)
+    expect(files(out)).toEqual(['timings.tsv'])
   })
 })
 
@@ -742,6 +1101,62 @@ describe('ci-runner.sh verdict: the last verdict on main, and why newer commits 
       expect(classify([...allPassed.slice(0, 5), ok('mobile').concat(', with warnings (see its log)')])[0]).toBe(
         'green',
       )
+    })
+    it('a job skipped because none of its inputs changed since it last passed is no failure, and not a pass: listed apart', () => {
+      const rows = allPassed.map((l) =>
+        l.startsWith('local-ci/mobile\t')
+          ? 'local-ci/mobile\tsuccess\tskipped: no mobile inputs changed since abc1234'
+          : l,
+      )
+      const r = classify(rows)
+      expect(r[0]).toBe('green')
+      expect(r[1]).toContain('skipped, no affected files: mobile')
+      // check is never skipped that way, so a check that says so is no verdict
+      const check = allPassed.map((l) =>
+        l.startsWith('local-ci/check\t')
+          ? 'local-ci/check\tsuccess\tskipped: no check inputs changed since abc1234'
+          : l,
+      )
+      expect(classify(check)[0]).toBe('skipped')
+      // only those words, with a commit: anything else after "skipped" is no verdict
+      for (const why of [
+        'skipped: no mobile inputs changed',
+        'skipped: no mobile inputs changed since',
+        'skipped: no inputs',
+        'skipped: no browser inputs changed since abc1234', // another job's words
+        'skipped: no mobile inputs changed since zzz1234', // not a sha
+      ]) {
+        const odd = allPassed.map((l) => (l.startsWith('local-ci/mobile\t') ? `local-ci/mobile\tsuccess\t${why}` : l))
+        expect(classify(odd)[0], why).toBe('skipped')
+      }
+    })
+    it('a cancelled run\'s "not tested:" error is no verdict, never red or green; a real failure beside it is still red', () => {
+      const cancelled = six.map(
+        (c) => `local-ci/${c}\terror\tnot tested: run cancelled before this job reported (on ci-runner); re-run`,
+      )
+      expect(classify(cancelled)[0]).not.toMatch(/^(red|green)$/)
+      const half = allPassed.map((l, i) => (i < 3 ? l : (cancelled[i] as string)))
+      expect(classify(half)[0]).not.toMatch(/^(red|green)$/)
+      const red = [`local-ci/check\tfailure\tfailed on ci-runner`, ...cancelled.slice(1)]
+      expect(classify(red)[0]).toBe('red')
+    })
+    it('report-ci/fast is not one of the six: its failure or its pending never changes the verdict', () => {
+      for (const row of [
+        'report-ci/fast\tfailure\tfailed on ci-runner',
+        'report-ci/fast\tpending\trunning',
+        // an older ci-local.sh closing a newer run's fast lane posts it under local-ci/: not one of the six either
+        'local-ci/fast\terror\trun ended before this job reported',
+      ])
+        expect(classify([row, ...allPassed])[0], row).toBe('green')
+    })
+
+    it('"passed on retry" in the description is green, and the verdict names the jobs that had a flake', () => {
+      const retried = allPassed.map((l) =>
+        l.startsWith('local-ci/check\t') ? `${l}, passed on retry (2 flaky tests, see flakes.tsv)` : l,
+      )
+      const r = classify(retried)
+      expect(r[0]).toBe('green')
+      expect(r[1]).toContain('passed on retry: check')
     })
     it('a missing context is never green: a stubbed job or a shortened JOBS list leaves one out', () => {
       for (const gone of six) {
@@ -1095,16 +1510,24 @@ describe('the workflows', () => {
   })
 
   itRunnerYml(
-    'ci-runner.yml triggers: dispatch with a ref, the four PR events, and a push to main only, nothing else',
+    'ci-runner.yml triggers: dispatch with a ref, the four PR events, a push to main and two schedules (the nightly, the hostile one), nothing else',
     () => {
       const on = block(runnerYml, 'on')
       expect(on).toMatch(/workflow_dispatch:\s+inputs:\s+ref:/)
       expect(on).toMatch(/jobs:\s+description:/) // optional: one job for a quick look; it reaches the script as INPUT_JOBS, env only
       expect(runnerYml).toMatch(/INPUT_JOBS: \$\{\{ inputs\.jobs \}\}/)
       expect(on).toMatch(/pull_request:\s+types: \[opened, synchronize, reopened, ready_for_review\]/)
-      expect(on).toMatch(/\n {2}push:\n {4}branches: \[main\]\s*$/)
-      expect(on).not.toMatch(/pull_request_target|schedule:|workflow_run|tags:|branches-ignore|paths/)
-      expect([...on.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1])).toEqual(['workflow_dispatch', 'pull_request', 'push'])
+      expect(on).toMatch(/\n {2}push:\n {4}branches: \[main\]\n/)
+      expect(on).toMatch(/\n {2}schedule:\n {4}- cron: "17 9 \* \* \*"/) // once a day, 09:17 UTC
+      expect(on).toMatch(/\n {4}- cron: "43 11 \* \* \*"/) // the hostile nightly (scripts/ci-hostile.test.ts)
+      expect(on.match(/- cron:/g)).toHaveLength(2)
+      expect(on).not.toMatch(/pull_request_target|workflow_run|tags:|branches-ignore|paths/)
+      expect([...on.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1])).toEqual([
+        'workflow_dispatch',
+        'pull_request',
+        'push',
+        'schedule',
+      ])
     },
   )
 
@@ -1135,6 +1558,12 @@ describe('the workflows', () => {
       expect(cancel('push')).toBe(false)
       expect(cancel('pull_request')).toBe(true)
       expect(cancel('workflow_dispatch')).toBe(true)
+      // The nightly has its own group and is never cancelled: it can't replace a pending push run, and no push replaces it.
+      const nightly = { event: { schedule: '17 9 * * *' } }
+      expect(group('schedule', nightly)).toBe('ci-runner-nightly')
+      expect(group('schedule', nightly)).not.toBe(gPush)
+      expect(group('schedule', nightly)).not.toBe(group('workflow_dispatch', {}, { ref: 'main', jobs: '' }))
+      expect(cancel('schedule')).toBe(false)
       expect(c).not.toMatch(/cancel-in-progress: true/)
     },
   )
@@ -1164,7 +1593,9 @@ describe('the workflows', () => {
   itRunnerYml('one run per PR: a new push cancels the old one', () => {
     const c = block(runnerYml, 'concurrency')
     expect(c).toMatch(/group: ci-runner-.*github\.event\.pull_request\.number/)
-    expect(c).toMatch(/cancel-in-progress: \$\{\{ github\.event_name != 'push' \}\}/)
+    expect(c).toMatch(
+      /cancel-in-progress: \$\{\{ github\.event_name != 'push' && github\.event_name != 'schedule' && !inputs\.hostile \}\}/,
+    )
   })
 
   itRunnerYml(
@@ -1175,27 +1606,506 @@ describe('the workflows', () => {
     },
   )
 
-  itRunnerYml('the token can post statuses and read contents, nothing wider, and nothing else is a secret', () => {
+  // the jobs of the split (docs/CI-MACHINES.md), parsed with Bun's YAML in a child: [name, its object]
+  const jobs = (): Record<string, Record<string, unknown>> =>
+    JSON.parse(
+      execFileSync(
+        'bun',
+        [
+          '-e',
+          'console.log(JSON.stringify(Bun.YAML.parse(await Bun.file(process.argv[1]).text()).jobs))',
+          runnerYmlPath,
+        ],
+        {
+          encoding: 'utf8',
+        },
+      ),
+    )
+
+  itRunnerYml('each job gets only the permissions it needs, and GITHUB_TOKEN is the only secret', () => {
     expect(runnerYml).toMatch(/^permissions: \{\}$/m)
-    const job = block(runnerYml, 'jobs')
-    const perms = /\n {4}permissions:\n((?: {6}.+\n)+)/.exec(job)?.[1] as string
-    const granted = perms
-      .split('\n')
-      .filter(Boolean)
-      .map((l) => l.trim().replace(/\s+#.*$/, ''))
-    expect(granted.sort()).toEqual(['contents: read', 'statuses: write'])
+    const want: Record<string, Record<string, string>> = {
+      plan: { contents: 'read' },
+      ci: { statuses: 'write', contents: 'read', actions: 'read' }, // actions: read for the parts of check run elsewhere
+      delphi: { statuses: 'write', contents: 'read' },
+      cyclops: { statuses: 'write', contents: 'read' },
+      hestia: { statuses: 'write', contents: 'read', actions: 'read' }, // actions: read for the earlier Hestia runs' state (sweep)
+      titan: { statuses: 'write', contents: 'read' },
+      'browser-e2e': { statuses: 'write', contents: 'read' }, // it never waits for Lemnos: no actions: read
+      'check-titan': { statuses: 'write', contents: 'read' }, // nor does check's part
+      close: { actions: 'write' }, // cancel the run; it checks nothing out, so no code under test meets this token
+      green: { contents: 'write', statuses: 'read', actions: 'read' }, // push refs/heads/green; actions: read for the run behind each status
+      inbox: { contents: 'read', issues: 'write' }, // the lead's inbox issue; it runs only lead-inbox.sh flush, on main's code
+    }
+    const j = jobs()
+    expect(Object.keys(j).sort()).toEqual(Object.keys(want).sort())
+    for (const [name, perms] of Object.entries(want)) expect(j[name]?.permissions, name).toEqual(perms)
+    const close = JSON.stringify(j.close)
+    expect(close).not.toContain('actions/checkout')
+    expect(close).not.toContain('scripts/')
     const secrets = [...runnerYml.matchAll(/secrets\.(\w+)/g)].map((m) => m[1])
     expect(secrets.length).toBeGreaterThan(0)
     expect(new Set(secrets)).toEqual(new Set(['GITHUB_TOKEN']))
     expect(runnerYml).not.toMatch(/GH_TOKEN: \$\{\{ (?!secrets\.GITHUB_TOKEN)/)
   })
 
-  itRunnerYml('only the two steps that talk to GitHub get the token', () => {
-    const withToken = runnerYml.split('\n      - ').filter((s) => s.includes('GH_TOKEN'))
-    expect(withToken).toHaveLength(2)
-    expect(withToken[0]).toContain('scripts/ci-runner.sh run')
-    expect(withToken[1]).toContain('sweep')
+  itRunnerYml(
+    'only the steps that talk to GitHub get the token: superseded, dispatch-wait, run, fallback, alert, sweep, close, green and inbox',
+    () => {
+      const withToken = runnerYml.split('\n      - ').filter((s) => s.includes('GH_TOKEN'))
+      // run and sweep in ci and in each of the six remote jobs, ci's superseded, dispatch-wait, fallback, alert, e2e-shadow,
+      // check-shadow and both pairs, close, green, and inbox
+      expect(withToken).toHaveLength(25)
+      for (const step of withToken)
+        expect(step).toMatch(
+          /scripts\/ci-pair\.sh part|ci-runner\.sh e2e-shadow|ci-runner\.sh check-shadow|scripts\/ci-runner\.sh run|ci-runner\.sh superseded|ci-runner\.sh dispatch-wait|ci-runner\.sh fallback|ci-runner\.sh alert|ci-runner\.sh sweep|ci-runner\.sh green|lead-inbox\.sh flush|Cancel the run/,
+        )
+    },
+  )
+
+  itRunnerYml(
+    "the inbox job: after ci on Lemnos's runner, main's own code, only lead-inbox.sh flush; alone holds issues: write",
+    () => {
+      const j = jobs()
+      const inbox = j.inbox as { needs?: string[]; if?: string; 'runs-on'?: string[]; steps: Record<string, unknown>[] }
+      expect(inbox.needs).toEqual(['ci'])
+      expect(inbox.if).toContain('always()')
+      expect(inbox.if).toContain("github.event_name != 'pull_request'") // a PR writes no alert, and runs nothing here
+      expect(inbox['runs-on']).toEqual(j.ci?.['runs-on']) // the same machine: the same ~/.cache/talos-ci/alerts
+      const checkout = inbox.steps.find((s) => String(s.uses ?? '').startsWith('actions/checkout@')) as {
+        with?: Record<string, unknown>
+      }
+      expect(checkout?.with?.ref).toBe('main') // never a dispatched branch's code
+      expect(checkout?.with?.['persist-credentials']).toBe(false) // the token is never left in the shared .git/config
+      const runs = inbox.steps.filter((s) => s.run).map((s) => s.run)
+      expect(runs).toEqual(['bash scripts/lead-inbox.sh flush'])
+      for (const [name, job] of Object.entries(j))
+        if (name !== 'inbox') expect((job.permissions as Record<string, string>)?.issues, name).toBeUndefined()
+      expect(j.close?.needs).toContain('inbox') // close never cancels the run under a flush
+      // ci-runner.sh posts nothing itself any more: the job that runs code under test holds no issue token
+      expect(readFileSync(join(here, 'ci-runner/alert.sh'), 'utf8')).not.toContain('lead-inbox')
+      expect(readFileSync(join(here, 'ci-runner.sh'), 'utf8')).not.toContain('ci_alert_inbox')
+    },
+  )
+
+  itRunnerYml('with every repository variable unset only plan, ci and close run: the remote jobs are skipped', () => {
+    const j = jobs()
+    for (const m of ['delphi', 'cyclops', 'hestia']) {
+      expect(j[m]?.needs, m).toBe('plan')
+      expect(String(j[m]?.if), m).toMatch(new RegExp(`^needs\\.plan\\.outputs\\.${m} != ''`))
+    }
+    // Titan: image; its browser-e2e part only with CI_TITAN_BROWSER e2e-shadow or e2e
+    expect(j.titan?.needs).toBe('plan')
+    expect(String(j.titan?.if)).toMatch(/^needs\.plan\.outputs\.titan != '' && /)
+    expect(j['browser-e2e']?.needs).toBe('plan')
+    expect(String(j['browser-e2e']?.if)).toMatch(/^needs\.plan\.outputs\.browser_e2e != '' && /)
+    expect(j['check-titan']?.needs).toBe('plan')
+    expect(String(j['check-titan']?.if)).toMatch(/^needs\.plan\.outputs\.check_titan != '' && /)
+    // and plan's outputs come only from those variables (ci-runner-machines.test.ts: all off gives empty lists)
+    expect(JSON.stringify((j.plan as { env: unknown }).env)).toMatch(
+      /vars\.CI_DELPHI.*vars\.CI_CYCLOPS.*vars\.CI_HESTIA.*vars\.CI_TITAN_IMAGE.*vars\.CI_TITAN_BROWSER.*vars\.CI_BROWSER_E2E_WAIT.*vars\.CI_TITAN_CHECK.*vars\.CI_CHECK_WAIT/,
+    )
+    // Lemnos is told the planned commit and the parts to fold in. Only with a part elsewhere do its statuses link to the attempt
+    // and read the attempt's answers; with every switch off its link is the run's, as before, and nothing extra is read.
+    const ciEnv = (j.ci as { env: Record<string, string> }).env
+    expect(ciEnv.CI_PLAN_SHA).toBe('${{ needs.plan.outputs.sha }}')
+    expect(ciEnv.CI_REMOTE_PARTS).toBe('${{ needs.plan.outputs.remote_parts }}')
+    // and the jobs another machine runs (image on Titan), with what to take over if it does not answer
+    expect(ciEnv.CI_REMOTE_JOBS).toBe('${{ needs.plan.outputs.remote_jobs }}')
+    expect(ciEnv.CI_FALLBACK).toBe('${{ needs.plan.outputs.fallback }}')
+    // (e2e: the part is folded, so browser reads this attempt's answers; e2e-shadow folds nothing: links as off)
+    const parts =
+      "(needs.plan.outputs.delphi != '' || needs.plan.outputs.cyclops != '' || needs.plan.outputs.remote_jobs != '' || needs.plan.outputs.browser_e2e == 'ci-part' || needs.plan.outputs.check_titan == 'ci-part')"
+    expect(ciEnv.CI_ATTEMPT_URL.startsWith(`\${{ ${parts} && format(`)).toBe(true)
+    expect(
+      ciEnv.CI_ATTEMPT_URL.endsWith(
+        "/attempts/{3}#', github.server_url, github.repository, github.run_id, github.run_attempt) || '' }}",
+      ),
+    ).toBe(true)
+    expect(ciEnv.CI_STATUS_URL.startsWith(`\${{ ${parts} && format(`)).toBe(true)
+    expect(
+      ciEnv.CI_STATUS_URL.endsWith(
+        "|| format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}",
+      ),
+    ).toBe(true)
+    // close runs only when a remote job was planned, and never after a cancel
+    const closeIf = String((j.close as { if: string }).if)
+    expect(closeIf).toContain('!cancelled()')
+    expect(closeIf).toContain(
+      "needs.plan.outputs.delphi != '' || needs.plan.outputs.cyclops != '' || needs.plan.outputs.hestia != '' || needs.plan.outputs.titan != '' || needs.plan.outputs.browser_e2e != '' || needs.plan.outputs.check_titan != ''",
+    )
+    // a base older than plan plans nothing (and so the bootstrap PR still runs)
+    const planStep = (j.plan as { steps: { id?: string; run: string }[] }).steps.find((st) => st.id === 'plan')
+      ?.run as string
+    expect(planStep).toContain("grep -q '^  plan) ci_plan' scripts/ci-runner.sh")
   })
+
+  itRunnerYml(
+    'a plan that failed never leaves a commit without a verdict: ci then runs as today; the remote jobs and close do not',
+    () => {
+      const j = jobs()
+      const fork =
+        "github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft)"
+      // ci: whatever plan's result (success, failure), unless the run is cancelled, and never for a fork or a draft
+      expect(String((j.ci as { if: string }).if)).toBe(`\${{ !cancelled() && (${fork}) }}`)
+      // with no plan outputs its split inputs are empty: today's run (no --sha, the event's own commit)
+      expect((j.ci as { env: Record<string, string> }).env.CI_PLAN_SHA).toBe('${{ needs.plan.outputs.sha }}')
+      // the remote jobs and close keep the implicit success(): they need a plan that worked
+      for (const m of ['delphi', 'cyclops', 'hestia', 'titan', 'browser-e2e', 'check-titan'])
+        expect(String((j[m] as { if: string }).if), m).not.toContain('cancelled()')
+      expect(String((j.close as { if: string }).if)).toContain("needs.plan.result == 'success'")
+    },
+  )
+
+  itRunnerYml(
+    'the delphi job sets CI_OWNER_MACHINE itself and runs the preflight before anything else of the run',
+    () => {
+      const j = jobs()
+      const delphi = j.delphi as { env: Record<string, unknown>; steps: { name?: string; run?: string }[] }
+      expect(String(delphi.env.CI_OWNER_MACHINE)).toBe('1')
+      const names = delphi.steps.map((st) => st.name ?? st.run ?? '')
+      const pre = names.findIndex((n) => /Preflight/.test(n))
+      expect(pre).toBeGreaterThan(0)
+      expect(pre).toBeLessThan(names.findIndex((n) => /Guard/.test(n)))
+      expect(delphi.steps[pre]?.run).toBe('bash scripts/ci-runner.sh preflight')
+      // every remote job refuses a fork in its first step and keeps the fork-and-draft if
+      for (const m of ['delphi', 'cyclops', 'hestia', 'titan', 'browser-e2e', 'check-titan']) {
+        const job = j[m] as { if: string; steps: { name?: string }[] }
+        expect(job.steps[0]?.name, m).toBe('Refuse a fork before fetching anything of it')
+        expect(job.if, m).toContain(
+          'github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft',
+        )
+      }
+      expect((j.hestia as Record<string, unknown>)['continue-on-error']).toBe(true)
+    },
+  )
+
+  itRunnerYml(
+    "shard tools: plan reads each part machine's advertised tools and hands every machine that deals shards the same list",
+    () => {
+      const j = jobs()
+      const plan = j.plan as { env: Record<string, string>; outputs: Record<string, string> }
+      expect(plan.env.CI_TOOLS_DELPHI).toBe('${{ vars.CI_TOOLS_DELPHI }}')
+      expect(plan.env.CI_TOOLS_CYCLOPS).toBe('${{ vars.CI_TOOLS_CYCLOPS }}')
+      expect(plan.outputs.shard_tools).toBe('${{ steps.plan.outputs.shard_tools }}')
+      for (const m of ['ci', 'delphi', 'cyclops'])
+        expect((j[m] as { env: Record<string, string> }).env.CI_SHARD_TOOLS, m).toBe(
+          '${{ needs.plan.outputs.shard_tools }}',
+        )
+    },
+  )
+
+  itRunnerYml(
+    "titan (phase B): image on Titan's runner, gating or shadow as plan says; Lemnos takes it over if it does not answer",
+    () => {
+      const j = jobs()
+      const titan = j.titan as {
+        'runs-on': string[]
+        env: Record<string, string>
+        'continue-on-error': boolean
+        steps: { name?: string; run?: string }[]
+      }
+      expect(titan['runs-on']).toEqual(['self-hosted', 'Linux', 'talos-ci-linux'])
+      expect(titan.env.CI_STATUS_WHERE).toBe('titan')
+      expect(titan.env.CI_RUN_JOBS).toBe('${{ needs.plan.outputs.titan }}')
+      expect(titan.env.CI_RUN_PREFIX).toBe('${{ needs.plan.outputs.titan_prefix }}')
+      expect(titan.env.CI_PLAN_SHA).toBe('${{ needs.plan.outputs.sha }}')
+      // its statuses link to this attempt and name the job: the attempt filter and the two-answers reads know them
+      expect(titan.env.CI_ATTEMPT_URL).toBe(
+        '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}#',
+      )
+      expect(titan.env.CI_STATUS_URL).toBe(`${titan.env.CI_ATTEMPT_URL}titan`)
+      expect(titan['continue-on-error']).toBe(true) // the verdict is read from statuses; Lemnos's fallback covers a dead Titan
+      expect(titan.steps.some((st) => st.run === 'exec bash scripts/ci-runner.sh run')).toBe(true)
+      expect(titan.steps.some((st) => /ci-runner\.sh sweep/.test(st.run ?? ''))).toBe(true)
+      // plan hands the outputs on
+      const planOut = (j.plan as { outputs: Record<string, string> }).outputs
+      for (const o of [
+        'titan',
+        'titan_prefix',
+        'remote_jobs',
+        'fallback',
+        'browser_e2e',
+        'e2e_wait',
+        'check_titan',
+        'check_wait',
+      ])
+        expect(planOut[o], o).toBe(`\${{ steps.plan.outputs.${o} }}`)
+      // Lemnos's fallback: after its own run, green or red, only when plan handed something to another machine
+      const ci = j.ci as { steps: { name?: string; run?: string; if?: string }[] }
+      const runAt = ci.steps.findIndex((st) => st.run === 'exec bash scripts/ci-runner.sh run')
+      // exec: a cancel signals only the step's own process, which must become the fallback's ci-local.sh
+      const fb = ci.steps.findIndex((st) => st.run === 'exec bash scripts/ci-runner.sh fallback')
+      expect(fb).toBe(runAt + 1)
+      // (and never for a dispatch closed as superseded: ci-dispatch-guard.test.ts)
+      expect(ci.steps[fb]?.if).toBe(
+        "${{ !cancelled() && needs.plan.outputs.fallback != '' && steps.dispatch.outputs.superseded != 'true' }}",
+      )
+      // the ci job's limit leaves room for both steps
+      const mins = (st: unknown) => Number((st as { 'timeout-minutes': number })['timeout-minutes'])
+      expect(mins(j.ci)).toBeGreaterThan(mins(ci.steps[runAt]) + mins(ci.steps[fb]))
+    },
+  )
+
+  type Step = {
+    name?: string
+    run?: string
+    if?: string
+    env?: Record<string, string>
+    uses?: string
+    with?: Record<string, unknown>
+  }
+  type Job = { name?: string; env?: Record<string, string>; steps: Step[]; strategy?: unknown; uses?: string }
+  // The name the jobs API lists for a job: its `name:`, else its key. A matrix job or a called workflow's job would be listed
+  // as "<name> (<values>)" or "<caller> / <job>", which no plain string in this file can name: so neither is allowed for these.
+  const apiName = (key: string, job: Job) => {
+    expect(job.strategy, key).toBeUndefined()
+    expect(job.uses, key).toBeUndefined()
+    expect(String(job.name ?? key), key).not.toContain('${{')
+    return job.name ?? key
+  }
+
+  itRunnerYml(
+    "phase C revised: CI_BROWSER_E2E_PART is the browser-e2e job's name exactly as the jobs API lists it, and its link ends in it",
+    () => {
+      const j = jobs() as unknown as Record<string, Job>
+      // the part's job: the one job that runs browser-e2e, found by what it runs, not by its name
+      const parts = Object.entries(j).filter(([, job]) => job.env?.CI_RUN_JOBS === 'browser-e2e')
+      expect(parts).toHaveLength(1)
+      const [partKey, part] = parts[0] as [string, Job]
+      const partName = apiName(partKey, part)
+      expect(partName).toMatch(/^[a-z0-9-]+$/) // what ci-local.sh accepts as CI_BROWSER_E2E_PART
+      // Lemnos's ci is the only place CI_BROWSER_E2E_PART is set, to that name, in e2e mode only
+      const text = JSON.stringify(jobs())
+      expect(text.match(/CI_BROWSER_E2E_PART/g)).toHaveLength(1)
+      expect((j.ci as Job).env?.CI_BROWSER_E2E_PART).toBe(
+        `\${{ needs.plan.outputs.browser_e2e == 'ci-part' && '${partName}' || '' }}`,
+      )
+      // ci-local.sh reads a refusal of the part under "<attempt link><its machine>": the part's own link
+      expect(part.env?.CI_STATUS_URL).toBe(`${part.env?.CI_ATTEMPT_URL}${partName}`)
+      expect(part.env?.CI_ATTEMPT_URL).toBe((j.titan as Job).env?.CI_ATTEMPT_URL)
+      // ci's pair names the part's job as the API lists it; the part never waits for Lemnos (Titan has one runner)
+      const ciPair = (j.ci as Job).steps.find((st) => st.run === 'bash scripts/ci-pair.sh part') as Step
+      expect(ciPair.env?.CI_PART_JOB).toBe(partName)
+      expect(JSON.stringify(part)).not.toContain('ci-pair.sh')
+      // close waits for the part while it works, and cancels it queued (its jobs filter names it)
+      expect(JSON.stringify(j.close)).toContain(`.name == \\"${partName}\\"`)
+    },
+  )
+
+  itRunnerYml(
+    "phase C revised, the browser-e2e job: Titan's runner, plan's prefix, never after a failed setup, its logs for the shadow step",
+    () => {
+      const j = jobs() as unknown as Record<string, Job & { 'runs-on': string[]; 'continue-on-error': boolean }>
+      const part = j['browser-e2e'] as Job & { 'runs-on': string[]; 'continue-on-error': boolean; if: string }
+      expect(part['runs-on']).toEqual(j.titan?.['runs-on'])
+      expect(part['continue-on-error']).toBe(true)
+      expect(part.env?.CI_RUN_PREFIX).toBe('${{ needs.plan.outputs.browser_e2e }}')
+      expect(part.env?.CI_STATUS_WHERE).toBe('titan')
+      expect(part.env?.CI_PART_E2E_WORKERS).toBe("${{ vars.CI_PART_E2E_WORKERS || '8' }}")
+      expect(part.if).toMatch(/^needs\.plan\.outputs\.browser_e2e != '' && /)
+      const runs = part.steps.map((st) => st.run ?? st.uses ?? '')
+      const run = runs.indexOf('exec bash scripts/ci-runner.sh run')
+      expect(run).toBeGreaterThan(0)
+      // the run keeps the default success(): never after a failed setup step
+      expect(part.steps[run]?.if).toBeUndefined()
+      // the failed run's logs are uploaded under the name ci's shadow step reads
+      const upload = part.steps.findIndex((st) => String(st.uses).startsWith('actions/upload-artifact@'))
+      expect(upload).toBeGreaterThan(run)
+      expect(part.steps[upload]?.with?.name).toBe('ci-logs-browser-e2e-${{ github.run_attempt }}')
+      expect(readFileSync(join(here, 'ci-runner/e2e-shadow.sh'), 'utf8')).toContain('-n "ci-logs-browser-e2e-$n"')
+      const mins = (x: unknown) => Number((x as { 'timeout-minutes': number })['timeout-minutes'])
+      expect(mins(part)).toBeGreaterThan(mins(part.steps[run]))
+      // Lemnos's ci: the shadow comparison in e2e-shadow, the pair whenever the part runs; neither after a cancel
+      const ci = j.ci as Job
+      const shadow = ci.steps.find((st) => st.run === 'bash scripts/ci-runner.sh e2e-shadow') as Step
+      expect(shadow.if).toBe(
+        "${{ !cancelled() && needs.plan.outputs.browser_e2e == 'report-ci' && steps.dispatch.outputs.superseded != 'true' }}",
+      )
+      expect((shadow as { 'continue-on-error'?: boolean })['continue-on-error']).toBe(true)
+      // the shadow step names the part's job and run step as the API lists them (when Titan's run began, for its wait)
+      expect(shadow.env?.CI_PART_JOB).toBe('browser-e2e')
+      expect(shadow.env?.CI_PART_RUN_STEP).toBe(part.steps[run]?.name)
+      const ciPair = ci.steps.find((st) => st.run === 'bash scripts/ci-pair.sh part') as Step
+      expect(mins(ciPair)).toBeGreaterThan(mins(part)) // it outlasts the part's whole job
+      // only in e2e (the fold: plan says ci-part only with a positive CI_BROWSER_E2E_WAIT), never in e2e-shadow, where the part
+      // is report-only (run 43549764317: Titan's infra red failed Lemnos's job); and the script checks CI_BROWSER_E2E_PART,
+      // which the job sets in e2e only, and it must not override it
+      expect(ciPair.if).toBe(
+        "${{ !cancelled() && needs.plan.outputs.browser_e2e == 'ci-part' && steps.dispatch.outputs.superseded != 'true' }}",
+      )
+      expect(ciPair.env?.CI_BROWSER_E2E_PART).toBeUndefined()
+      expect((ciPair as { 'continue-on-error'?: boolean })['continue-on-error']).toBeUndefined()
+      // nothing else of the shadow path can fail or hold Lemnos's job: the comparison never fails it and is bounded
+      expect(mins(shadow)).toBeGreaterThan(0)
+      expect(mins(shadow)).toBeLessThanOrEqual(40)
+      const shadowSteps = ci.steps.filter((st) => /browser_e2e == 'report-ci'|browser_e2e != ''/.test(String(st.if)))
+      expect(shadowSteps).toEqual([shadow])
+      // the ci job's limit covers every step that can run in it: a dispatch's wait, the run, the fallback, the shadow, the pair
+      const all = ci.steps.reduce((n, st) => n + (mins(st) || 0), 0)
+      expect(mins(ci)).toBeGreaterThanOrEqual(all)
+      expect(ci.env?.CI_BROWSER_E2E_WAIT).toBe('${{ needs.plan.outputs.e2e_wait }}')
+      expect(ci.env?.CI_BROWSER_E2E_SHADOW).toBe("${{ needs.plan.outputs.browser_e2e == 'report-ci' && '1' || '' }}")
+      // and nothing of step 6's whole browser on Titan is left
+      expect(JSON.stringify(jobs())).not.toMatch(
+        /CI_BROWSER_MAC_PART|browser-mac|titan_browser|remote_deadline|ci-browser-mac/,
+      )
+    },
+  )
+
+  itRunnerYml(
+    "check on Titan: CI_CHECK_PART is check-titan's name exactly as the jobs API lists it, and its link ends in it",
+    () => {
+      const j = jobs() as unknown as Record<
+        string,
+        Job & { 'runs-on'?: string[]; 'continue-on-error'?: boolean; if?: string }
+      >
+      const parts = Object.entries(j).filter(([, job]) => job.env?.CI_RUN_JOBS === 'check')
+      expect(parts).toHaveLength(1)
+      const [partKey, part] = parts[0] as [string, Job & { 'runs-on'?: string[]; 'continue-on-error'?: boolean }]
+      const partName = apiName(partKey, part)
+      expect(partName).toBe('check-titan')
+      expect(JSON.stringify(jobs()).match(/CI_CHECK_PART\b/g)).toHaveLength(1)
+      expect((j.ci as Job).env?.CI_CHECK_PART).toBe(
+        `\${{ needs.plan.outputs.check_titan == 'ci-part' && '${partName}' || '' }}`,
+      )
+      expect((j.ci as Job).env?.CI_CHECK_WAIT).toBe('${{ needs.plan.outputs.check_wait }}')
+      expect(part.env?.CI_STATUS_URL).toBe(`${part.env?.CI_ATTEMPT_URL}${partName}`)
+      expect(part.env?.CI_ATTEMPT_URL).toBe((j.titan as Job).env?.CI_ATTEMPT_URL)
+      expect(part.env?.CI_RUN_PREFIX).toBe('${{ needs.plan.outputs.check_titan }}')
+      expect(part.env?.CI_STATUS_WHERE).toBe('titan')
+      expect(String(part.env?.CI_WORKERS)).toBe('6')
+      expect(part['runs-on']).toEqual(j.titan?.['runs-on'])
+      expect(part['continue-on-error']).toBe(true)
+      const runs = part.steps.map((st) => st.run ?? st.uses ?? '')
+      const run = runs.indexOf('exec bash scripts/ci-runner.sh run')
+      expect(run).toBeGreaterThan(0)
+      expect(part.steps[run]?.if).toBeUndefined() // never after a failed setup step
+      // its per-test results are uploaded on every run, under the name the shadow step reads (its full logs on red only)
+      const logs = part.steps.findIndex((st) => st.run === 'bash scripts/ci-runner.sh logs')
+      expect(logs).toBeGreaterThan(run)
+      expect(part.steps[logs]?.if).toBe("always() && hashFiles('scripts/ci-runner.sh') != ''")
+      const upload = part.steps.findIndex((st) => String(st.uses).startsWith('actions/upload-artifact@'))
+      expect(upload).toBeGreaterThan(logs)
+      expect(part.steps[upload]?.if).toBe('always()')
+      expect(part.steps[upload]?.with?.name).toBe('ci-tests-check-titan-${{ github.run_attempt }}')
+      expect(readFileSync(join(here, 'ci-runner/check-shadow.sh'), 'utf8')).toContain('-n "ci-tests-check-titan-$n"')
+      expect(JSON.stringify(part)).not.toContain('ci-pair.sh')
+      expect(JSON.stringify(j.close)).toContain(`.name == \\"${partName}\\"`)
+      const mins = (x: unknown) => Number((x as { 'timeout-minutes': number })['timeout-minutes'])
+      expect(mins(part)).toBeGreaterThan(mins(part.steps[run]))
+      // Lemnos: the shadow comparison in shadow only (never fails the job, bounded); the pair in on only
+      const ci = j.ci as Job
+      const shadow = ci.steps.find((st) => st.run === 'bash scripts/ci-runner.sh check-shadow') as Step
+      expect(shadow.if).toBe(
+        "${{ !cancelled() && needs.plan.outputs.check_titan == 'report-ci' && steps.dispatch.outputs.superseded != 'true' }}",
+      )
+      expect((shadow as { 'continue-on-error'?: boolean })['continue-on-error']).toBe(true)
+      expect(mins(shadow)).toBeGreaterThan(0)
+      expect(mins(shadow)).toBeLessThanOrEqual(40)
+      expect(shadow.env?.CI_PART_JOB).toBe(partName)
+      expect(shadow.env?.CI_PART_RUN_STEP).toBe(part.steps[run]?.name)
+      const pairs = ci.steps.filter(
+        (st) => st.run === 'bash scripts/ci-pair.sh part' && st.env?.CI_PART_JOB === partName,
+      )
+      expect(pairs).toHaveLength(1)
+      const pair = pairs[0] as Step
+      expect(pair.if).toBe(
+        "${{ !cancelled() && needs.plan.outputs.check_titan == 'ci-part' && steps.dispatch.outputs.superseded != 'true' }}",
+      )
+      expect((pair as { 'continue-on-error'?: boolean })['continue-on-error']).toBeUndefined()
+      expect(mins(pair)).toBeGreaterThan(mins(part))
+      expect(ci.steps.filter((st) => /check_titan/.test(String(st.if)))).toEqual([shadow, pair])
+      const all = ci.steps.reduce((n, st) => n + (mins(st) || 0), 0)
+      expect(mins(ci)).toBeGreaterThanOrEqual(all)
+    },
+  )
+
+  itRunnerYml(
+    'check on Titan, dispatch-only test hooks: a forced refusal for check-titan alone, and a wait for that dispatch alone',
+    () => {
+      const wf = JSON.parse(
+        execFileSync(
+          'bun',
+          ['-e', 'console.log(JSON.stringify(Bun.YAML.parse(await Bun.file(process.argv[1]).text())))', runnerYmlPath],
+          { encoding: 'utf8' },
+        ),
+      ) as {
+        on: { workflow_dispatch: { inputs: Record<string, { type?: string; default?: unknown }> } }
+      }
+      const inputs = wf.on.workflow_dispatch.inputs
+      expect(inputs.check_part_refuse?.type).toBe('boolean')
+      expect(inputs.check_part_refuse?.default).toBe(false)
+      expect(inputs.check_wait_s?.default).toBe('')
+      const j = jobs() as unknown as Record<string, Job>
+      // the refusal: only on check-titan, only for a dispatch that asked; never from a push, a PR or a variable
+      expect((j['check-titan'] as Job).env?.CI_CHECK_PART_REFUSE).toBe(
+        "${{ github.event_name == 'workflow_dispatch' && inputs.check_part_refuse && '1' || '' }}",
+      )
+      expect(JSON.stringify(jobs()).match(/CI_CHECK_PART_REFUSE/g)).toHaveLength(1)
+      expect(runnerYml.match(/inputs\.check_part_refuse/g)).toHaveLength(1)
+      expect(runnerYml).not.toMatch(/vars\.CI_CHECK_PART_REFUSE/)
+      // the wait: plan's CI_CHECK_WAIT is the dispatch's input only for a dispatch that gave one, else the variable
+      expect((j.plan as Job).env?.CI_CHECK_WAIT).toBe(
+        "${{ github.event_name == 'workflow_dispatch' && inputs.check_wait_s != '' && inputs.check_wait_s || vars.CI_CHECK_WAIT }}",
+      )
+      expect(runnerYml.match(/inputs\.check_wait_s/g)).toHaveLength(2)
+      // Lemnos reads the wait from plan (which checks it), never from the input itself
+      expect((j.ci as Job).env?.CI_CHECK_WAIT).toBe('${{ needs.plan.outputs.check_wait }}')
+    },
+  )
+
+  const hasJq = spawnSync('jq', ['--version']).status === 0
+  ;(hasRunnerYml && hasJq ? it : it.skip)(
+    'close: cancels the run when Lemnos is done and a remote job is still queued; waits for one working; never fails',
+    () => {
+      const j = jobs()
+      const step = (j.close as { steps: { run: string }[] }).steps[0]?.run as string
+      const T = scratch()
+      // A fake gh that runs the step's own --jq over a jobs JSON: the name filter is the real one
+      const b = bin({
+        gh: `if [ "$1 $2" = "api -X" ]; then echo "$*" >> "${T}/posts"; [ -f "${T}/postfail" ] && exit 1; exit 0; fi
+n=$(cat "${T}/n" 2>/dev/null || echo 0); echo $((n + 1)) > "${T}/n"
+[ -f "${T}/fail" ] && exit 1
+f="${T}/jobs.$n.json"; [ -f "$f" ] || f="${T}/jobs.json"
+q=""; while [ $# -gt 0 ]; do [ "$1" = --jq ] && q="$2"; shift; done
+jq -r "$q" "$f"`,
+      })
+      const runs = (list: [string, string][]) =>
+        JSON.stringify({ jobs: list.map(([name, status]) => ({ name, status })) })
+      const close = (files: Record<string, string>, flags: string[] = []) => {
+        for (const f of ['n', 'posts', 'fail', 'postfail', 'jobs.json', 'jobs.0.json'])
+          rmSync(join(T, f), { force: true })
+        for (const [f, text] of Object.entries(files)) writeFileSync(join(T, f), text)
+        for (const f of flags) writeFileSync(join(T, f), '')
+        const r = spawnSync('bash', ['-eo', 'pipefail', '-c', step], {
+          encoding: 'utf8',
+          env: env({ REPO: 'owner/talos-app', RUN_ID: '9', CLOSE_POLL: '0', GH_TOKEN: 't' }, b),
+        })
+        const posts = existsSync(join(T, 'posts')) ? readFileSync(join(T, 'posts'), 'utf8') : ''
+        return { code: r.status, out: r.stdout + r.stderr, posts }
+      }
+      // plan, ci and close themselves are never waited for or counted
+      const lemnos: [string, string][] = [
+        ['plan', 'completed'],
+        ['local-ci on ci-runner', 'in_progress'],
+        ['close', 'in_progress'],
+      ]
+      expect(close({ 'jobs.json': runs([...lemnos, ['delphi', 'completed'], ['hestia', 'completed']]) }).posts).toBe('')
+      for (const st of ['queued', 'waiting', 'pending', 'requested']) {
+        const q = close({ 'jobs.json': runs([...lemnos, ['delphi', st], ['cyclops', 'completed']]) })
+        expect(q.code, st).toBe(0)
+        expect(q.posts, st).toContain('repos/owner/talos-app/actions/runs/9/cancel')
+      }
+      // one working: wait, then decide on what it became
+      expect(
+        close({ 'jobs.0.json': runs([['hestia', 'in_progress']]), 'jobs.json': runs([['hestia', 'completed']]) }).posts,
+      ).toBe('')
+      // the jobs cannot be read, or the cancel fails: close does not fail
+      expect(close({ 'jobs.json': runs([]) }, ['fail']).code).toBe(0)
+      expect(close({ 'jobs.json': runs([['titan', 'queued']]) }, ['postfail']).code).toBe(0)
+    },
+  )
 
   itRunnerYml('runs on the self-hosted runner only, and a fork is refused twice over', () => {
     expect(runnerYml).toMatch(/runs-on: \[self-hosted, macOS, ARM64, talos-ci\]/)
@@ -1235,8 +2145,23 @@ describe('the workflows', () => {
       expect(sha, action).not.toBeNull()
       expect(sha?.[2], action).toBe(major(ciYml))
     }
-    expect(/bun-version: ([\d.]+)/.exec(runnerYml)?.[1]).toBe(/bun-version: ([\d.]+)/.exec(ciYml)?.[1])
     expect(runnerYml).toMatch(/node-version-file: \.nvmrc/)
+  })
+
+  it("every setup-bun step in every workflow pins the one Bun version ci-runner.sh reads (ci.yml's first bun-version)", () => {
+    const pin = sh('ci_pin_bun').out.trim()
+    expect(pin).toMatch(/^\d+\.\d+\.\d+$/)
+    const dir = join(root, '.github/workflows')
+    let steps = 0
+    for (const f of readdirSync(dir).filter((n) => /\.ya?ml$/.test(n))) {
+      for (const step of readFileSync(join(dir, f), 'utf8')
+        .split(/\n\s*- /)
+        .filter((s) => s.includes('oven-sh/setup-bun'))) {
+        steps++
+        expect(/bun-version: (\S+)/.exec(step)?.[1], `${f}: ${step}`).toBe(pin)
+      }
+    }
+    expect(steps).toBeGreaterThanOrEqual(hasRunnerYml ? 10 : 3) // ci-runner.yml 7, ci.yml 2, web-bundle.yml 1
   })
 
   itRunnerYml('every setup step is conditional on the runner lacking the pinned version', () => {
@@ -1253,7 +2178,7 @@ describe('the workflows', () => {
 
   itRunnerYml('every action is pinned to a full commit sha, never a tag that can move; none is left on a tag', () => {
     const uses = [...runnerYml.matchAll(/^\s*(?:- )?uses: (\S+)/gm)].map((m) => m[1] as string)
-    expect(uses.length).toBe(5)
+    expect(uses.length).toBeGreaterThanOrEqual(5) // checkout and the tools in each job that runs code, the log upload
     for (const u of uses) expect(u, u).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/)
   })
 
@@ -1308,9 +2233,262 @@ describe('the workflows', () => {
     },
   )
 
+  itRunnerYml('a red run uploads the folder ci-runner.sh logs fills, not the whole log cache, kept a day', () => {
+    const steps = runnerYml.split('\n      - ')
+    const gather = steps.find((s) => s.includes('ci-runner.sh logs')) as string
+    const upload = steps.find((s) => s.includes('upload-artifact') && s.includes('name: ci-logs')) as string
+    expect(gather).toMatch(/if: always\(\)/)
+    expect(gather).toMatch(/CI_LOGS_OUT: \$\{\{ runner\.temp \}\}\/ci-logs/)
+    expect(gather).toMatch(/CI_JOB_STATUS: \$\{\{ job\.status \}\}/)
+    expect(upload).toMatch(/if: always\(\) && steps\.logs\.outputs\.full == 'true'/)
+    expect(upload).toMatch(/path: \$\{\{ runner\.temp \}\}\/ci-logs\n/)
+    expect(upload).not.toContain('.cache/talos-ci')
+    expect(upload).toMatch(/retention-days: 1\n/)
+    expect(steps.indexOf(gather)).toBeLessThan(steps.indexOf(upload))
+  })
+
   itRunnerYml('the cleanup step runs after a cancel, and reaps before it sweeps', () => {
     const step = runnerYml.split('\n      - ').find((s) => s.includes('Leave nothing behind')) as string
     expect(step).toMatch(/if: always\(\)/)
     expect(step.indexOf('ci-local.sh --reap')).toBeLessThan(step.indexOf('ci-runner.sh sweep'))
+  })
+})
+
+describe('ci_post_status writes down each context it answered, so the sweep after it never overwrites that answer', () => {
+  const locks = join(here, 'ci-local', 'locks.sh')
+  const post = (state: string, shaFile: string | undefined, ghExit = 0) => {
+    const b = bin({ gh: `exit ${ghExit}` })
+    const r = spawnSync(
+      'bash',
+      ['-c', `. "${locks}"\nci_post_status owner/talos-app ${SHA} image "${state}" words https://example.test/r/7`],
+      { env: env(shaFile ? { CI_SHA_FILE: shaFile } : {}, b), encoding: 'utf8' },
+    )
+    return r.status
+  }
+
+  it('a final post (success, failure, error) is written down; a pending is not', () => {
+    const T = scratch()
+    const f = join(T, 'ci-sha')
+    post('pending', f)
+    expect(existsSync(`${f}.reported`)).toBe(false)
+    post('success', f)
+    expect(readFileSync(`${f}.reported`, 'utf8')).toBe(`${SHA}\tlocal-ci/image\thttps://example.test/r/7\n`)
+  })
+
+  it('a post GitHub refused is not written down (its pending is still the sweep’s to close)', () => {
+    const T = scratch()
+    const f = join(T, 'ci-sha')
+    expect(post('success', f, 1)).not.toBe(0)
+    expect(existsSync(`${f}.reported`)).toBe(false)
+  })
+
+  it('with no CI_SHA_FILE (a hand run on a Mac) nothing is written anywhere', () => {
+    expect(post('success', undefined)).toBe(0)
+  })
+})
+
+// The nightly's own contexts (2026-11-14: the nightly of 87169cd9 set its local-ci/* back to pending over a push run's green
+// verdict, and main read as untested for two hours): ci-runner.sh exports CI_NIGHTLY=1 on a schedule run, and both ci_ns (here
+// and in scripts/ci-local/locks.sh) put every context under nightly-ci/.
+describe('the nightly posts under nightly-ci/ only', () => {
+  const locks = join(here, 'ci-local', 'locks.sh')
+  const ctxs = [
+    'local-ci/check',
+    'ci-part/check',
+    'ci-part/browser-e2e',
+    'report-ci/fast',
+    'report-ci/linux',
+    'other/x',
+  ]
+  const map = (file: string, nightly: string) =>
+    spawnSync('bash', ['-c', `. "${file}"\nfor c in ${ctxs.join(' ')}; do ci_ns "$c"; done`], {
+      env: env({ CI_NIGHTLY: nightly }),
+      encoding: 'utf8',
+    }).stdout.trim()
+
+  it('ci_ns: the same mapping in ci-runner.sh and locks.sh; off outside the nightly', () => {
+    const want =
+      'nightly-ci/check nightly-ci/part-check nightly-ci/part-browser-e2e nightly-ci/report-fast nightly-ci/report-linux other/x'
+    expect(map(script, '1').split('\n').join(' ')).toBe(want)
+    expect(map(locks, '1').split('\n').join(' ')).toBe(want)
+    expect(map(script, '').split('\n').join(' ')).toBe(ctxs.join(' '))
+    expect(map(locks, '').split('\n').join(' ')).toBe(ctxs.join(' '))
+  })
+
+  it('a schedule run sets CI_NIGHTLY; a push, PR or dispatch does not', () => {
+    for (const [ev, want] of [
+      ['schedule', '1'],
+      ['push', ''],
+      ['pull_request', ''],
+      ['workflow_dispatch', ''],
+    ])
+      expect(sh('printf %s "${CI_NIGHTLY:-}"', { GITHUB_EVENT_NAME: ev as string }).out, ev).toBe(want)
+  })
+
+  it('ci_post_status under CI_NIGHTLY posts nightly-ci/<job>, nightly-ci/part-<part> and nightly-ci/report-fast', () => {
+    const T = scratch()
+    const b = bin({ gh: `echo "$*" >> "${T}/posts"` })
+    for (const [prefix, job] of [
+      ['', 'image'],
+      ['ci-part', 'check'],
+      ['', 'fast'],
+    ])
+      spawnSync('bash', ['-c', `. "${locks}"\nci_post_status owner/talos-app ${SHA} ${job} success words`], {
+        env: env({ CI_NIGHTLY: '1', CI_STATUS_PREFIX: prefix as string }, b),
+        encoding: 'utf8',
+      })
+    const posts = readFileSync(join(T, 'posts'), 'utf8')
+    expect(posts.match(/context=\S+/g)).toEqual([
+      'context=nightly-ci/image',
+      'context=nightly-ci/part-check',
+      'context=nightly-ci/report-fast',
+    ])
+  })
+
+  it("the verdict (ci_classify) and gate-push's red_verdict never read nightly-ci/*: a red nightly leaves a green push verdict green", () => {
+    const six = ['check', 'mod', 'browser', 'image', 'desktop', 'mobile']
+    const rows = [
+      ...six.map((c) => `nightly-ci/${c}\tfailure\tfailed on ci-runner`),
+      'nightly-ci/report-linux\tfailure\tfailed on hestia',
+      ...six.map((c) => `local-ci/${c}\tsuccess\tpassed on ci-runner in 40s`),
+    ]
+    expect(sh(`ci_classify <<'X'\n${rows.join('\n')}\nX`).out.split('\t')[0]).toBe('green')
+    // only the nightly's statuses: no verdict at all, never red
+    expect(sh(`ci_classify <<'X'\n${rows.slice(0, 7).join('\n')}\nX`).out.split('\t')[0]).toBe('none')
+    const gp = readFileSync(join(here, 'gate-push.sh'), 'utf8')
+    expect(gp).toContain(`ci="$(grep -E '^(local-ci|report-ci)/' <<<"$rows")"`) // red_verdict reads these two only
+  })
+
+  it('the sweep closes a pending nightly-ci/* the run left, under its own link', () => {
+    const T = scratch()
+    writeFileSync(join(T, 'sha'), `${SHA}\n`)
+    const b = bin({
+      gh: `case "$*" in *"-X POST"*) echo "$*" >> "${T}/posts" ;; *"/status?"*) printf 'nightly-ci/check\\tpending\\thttps://r/1\\nlocal-ci/check\\tsuccess\\thttps://r/0\\n' ;; *) printf 'nightly-ci/check\\tpending\\thttps://r/1\\n' ;; esac`,
+    })
+    const r = run('sweep', { CI_SHA_FILE: join(T, 'sha'), CI_STATUS_URL: 'https://r/1', GITHUB_REPOSITORY: 'o/r' }, b)
+    expect(r.code, r.err).toBe(0)
+    const posts = readFileSync(join(T, 'posts'), 'utf8')
+    expect(posts).toContain('context=nightly-ci/check')
+    expect(posts).not.toContain('context=local-ci/check')
+  })
+})
+
+describe('ci-runner.sh logs: the per-test files on every run, the full logs only on red or not tested', () => {
+  const setup = (status: string, red = false) => {
+    const T = scratch()
+    const logs = join(T, 'cache/logs')
+    mkdirSync(logs, { recursive: true })
+    for (const f of ['aaaaaaa-check.log', 'aaaaaaa-check-tests.tsv', 'bbbbbbb-check-tests.tsv'])
+      writeFileSync(join(logs, f), f === 'aaaaaaa-check.log' ? 'x\nlock wait 12s for suites\ny\n' : f)
+    writeFileSync(join(T, 'sha'), `${SHA}\n`)
+    if (red) writeFileSync(join(T, 'sha.red'), 'local-ci/check\terror\n')
+    const e = {
+      HOME: T,
+      TALOS_CI_CACHE: join(T, 'cache'),
+      CI_SHA_FILE: join(T, 'sha'),
+      CI_LOGS_OUT: join(T, 'out'),
+      CI_TESTS_OUT: join(T, 'tests'),
+      CI_JOB_STATUS: status,
+      GITHUB_OUTPUT: join(T, 'gh-out'),
+    }
+    const r = run('logs', e)
+    const ls = (d: string) => (existsSync(join(T, d)) ? readdirSync(join(T, d)).sort() : [])
+    return { r, out: ls('out'), tests: ls('tests'), gh: readFileSync(join(T, 'gh-out'), 'utf8'), T }
+  }
+
+  it('a green run: its per-test file and lock-wait lines, no full logs (full=false)', () => {
+    const s = setup('success')
+    expect(s.r.code, s.r.err).toBe(0)
+    expect(s.tests).toEqual(['aaaaaaa-check-lock-wait.txt', 'aaaaaaa-check-tests.tsv'])
+    expect(readFileSync(join(s.T, 'tests/aaaaaaa-check-lock-wait.txt'), 'utf8')).toBe('lock wait 12s for suites\n')
+    expect(s.out).toEqual([])
+    expect(s.gh).toBe('full=false\n')
+  })
+
+  it('a red job, or a job that posted a failure or a "not tested" error, uploads its full logs too (full=true)', () => {
+    for (const s of [setup('failure'), setup('cancelled'), setup('success', true)]) {
+      expect(s.r.code, s.r.err).toBe(0)
+      expect(s.out).toEqual(['aaaaaaa-check-tests.tsv', 'aaaaaaa-check.log'])
+      expect(s.tests).toContain('aaaaaaa-check-tests.tsv')
+      expect(s.gh).toBe('full=true\n')
+    }
+  })
+
+  it('ci_post_status writes a failure or an error down for the logs step; a success or a pending is not', () => {
+    const T = scratch()
+    const f = join(T, 'ci-sha')
+    const b = bin({ gh: 'exit 0' })
+    for (const st of ['pending', 'success', 'failure', 'error'])
+      spawnSync('bash', ['-c', `. "${join(here, 'ci-local/locks.sh')}"\nci_post_status o/r ${SHA} check ${st} words`], {
+        env: env({ CI_SHA_FILE: f }, b),
+      })
+    expect(readFileSync(`${f}.red`, 'utf8')).toBe('local-ci/check\tfailure\nlocal-ci/check\terror\n')
+  })
+})
+
+describe('artifact uploads: small, kept a day, never a red job', () => {
+  const wf = (
+    f: string,
+  ): Record<string, { if?: string; permissions?: Record<string, string>; steps: Record<string, unknown>[] }> =>
+    JSON.parse(
+      execFileSync(
+        'bun',
+        ['-e', 'console.log(JSON.stringify(Bun.YAML.parse(await Bun.file(process.argv[1]).text()).jobs))', f],
+        {
+          encoding: 'utf8',
+        },
+      ),
+    )
+  const uploads = (jobs: ReturnType<typeof wf>) =>
+    Object.entries(jobs).flatMap(([job, j]) =>
+      j.steps.filter((s) => String(s.uses).startsWith('actions/upload-artifact@')).map((s) => ({ job, s })),
+    )
+
+  it('every upload-artifact step of every workflow is continue-on-error and kept one day', () => {
+    const dir = join(root, '.github/workflows')
+    let n = 0
+    for (const f of readdirSync(dir).filter((x) => /\.ya?ml$/.test(x)))
+      for (const { job, s } of uploads(wf(join(dir, f)))) {
+        n++
+        expect(s['continue-on-error'], `${f} ${job}`).toBe(true)
+        expect((s.with as Record<string, unknown>)['retention-days'], `${f} ${job}`).toBe(1)
+      }
+    expect(n).toBeGreaterThanOrEqual(hasRunnerYml ? 12 : 1)
+  })
+
+  itRunnerYml('ci-runner.yml: full logs only when the logs step says full; the per-test results on every run', () => {
+    const jobs = wf(runnerYmlPath)
+    for (const { job, s } of uploads(jobs)) {
+      const name = String((s.with as Record<string, unknown>).name)
+      if (name.startsWith('ci-logs')) expect(s.if, job).toBe("always() && steps.logs.outputs.full == 'true'")
+      else {
+        expect(name, job).toMatch(/^ci-tests/)
+        expect(s.if, job).toBe('always()')
+      }
+    }
+    for (const job of ['ci', 'delphi', 'cyclops', 'check-titan'])
+      expect(
+        uploads({ [job]: jobs[job] as never }).map((u) => String((u.s.with as Record<string, unknown>).name)),
+        job,
+      ).toEqual([expect.stringMatching(/^ci-tests/), expect.stringMatching(/^ci-logs/)])
+    // check-shadow reads Titan's per-test file from the artifact check-titan uploads on every run
+    const ct = uploads({ c: jobs['check-titan'] as never })[0]?.s.with as Record<string, unknown>
+    expect(ct.name).toBe('ci-tests-check-titan-${{ github.run_attempt }}')
+    expect(readFileSync(join(here, 'ci-runner/check-shadow.sh'), 'utf8')).toContain('-n "ci-tests-check-titan-$n"')
+  })
+
+  it('web-bundle.yml: only build uploads, for a successful production deploy; publish deletes the artifact once released', () => {
+    const jobs = wf(join(root, '.github/workflows/web-bundle.yml'))
+    expect(uploads(jobs).map((u) => u.job)).toEqual(['build'])
+    expect(jobs.build?.if).toBe(
+      "github.event.deployment_status.state == 'success' && github.event.deployment.environment == 'talos-app / production'",
+    )
+    const pub = jobs.publish as { steps: Record<string, unknown>[]; permissions?: Record<string, string> }
+    expect(pub.permissions?.actions).toBe('write')
+    expect(JSON.stringify(pub.steps)).not.toMatch(/checkout|pnpm|bun /) // no repository code where the write token is
+    const del = pub.steps.findIndex((s) => String(s.run).includes('-X DELETE "repos/$GH_REPO/actions/artifacts/$id"'))
+    const rel = pub.steps.findIndex((s) => String(s.run).includes('gh release create'))
+    expect(del).toBeGreaterThan(rel)
+    expect(pub.steps[del]?.if).toBeUndefined() // only after a successful publish: a failed one can still be re-run
   })
 })

@@ -906,13 +906,49 @@ export type CaptureResult = {
   counts: Record<string, { steps: number; frames: number; notifications: number; tool_calls: number }>
 }
 
-export async function capture(only?: string): Promise<CaptureResult> {
+/** The scenario names, in capture order. */
+export const FLOW_NAMES: readonly string[] = FLOWS.map((f) => f.name)
+
+/** What index.json says about one scenario file. */
+function countsOf(out: Scenario): CaptureResult['counts'][string] {
+  return {
+    steps: out.steps.length,
+    frames: out.steps.reduce((n, s) => n + s.received_by_bridge.length + s.sent_by_bridge.length, 0),
+    notifications: out.steps.reduce((n, s) => n + s.channel_notifications.length, 0),
+    tool_calls: out.steps.reduce((n, s) => n + s.agent_tool_calls.length, 0),
+  }
+}
+
+/** index.json for a full set of scenario files (`<name>.json` -> text), in FLOWS order. */
+export function indexOf(scenarioFiles: Record<string, string>, chronosVersion: string): string {
+  const index = {
+    about:
+      'Captured by `bun run capture:schedules` (apps/bridge/scripts/capture-schedules.ts): the REAL bridge against the REAL vendored Chronos CLI. Ids, timestamps, signatures and the machine name are normalized; card hashes are recomputed. Do not edit by hand: re-run the capture.',
+    chronos: chronosVersion,
+    scheduler_tz: 'America/New_York',
+    scheduler_clock_start: T0,
+    bridge_hello_features: ['schedules/1'],
+    scenarios: FLOW_NAMES.filter((n) => `${n}.json` in scenarioFiles).map((n) => ({
+      file: `${n}.json`,
+      ...countsOf(JSON.parse(scenarioFiles[`${n}.json`] as string) as Scenario),
+    })),
+  }
+  return `${JSON.stringify(index, null, 2)}\n`
+}
+
+/**
+ * Runs the scenarios: all of them, those whose name starts with `only`, or the named ones. index.json is written only when
+ * every scenario ran (it describes them all); a part of the capture is checked against its own files.
+ */
+export async function capture(only?: string | readonly string[]): Promise<CaptureResult> {
   const files: Record<string, string> = {}
   const counts: CaptureResult['counts'] = {}
   const problems: string[] = []
   let chronosVersion = ''
+  const wanted = (name: string) =>
+    only === undefined ? true : typeof only === 'string' ? name.startsWith(only) : only.includes(name)
   for (const flow of FLOWS) {
-    if (only && !flow.name.startsWith(only)) continue
+    if (!wanted(flow.name)) continue
     let recorder: Recorder | undefined
     const holder: { r?: Recorder } = {}
     const h = await startSched({
@@ -934,47 +970,40 @@ export async function capture(only?: string): Promise<CaptureResult> {
       norm.fixCards(out as unknown as Json)
       restamp(out)
       files[`${flow.name}.json`] = `${JSON.stringify(out, null, 2)}\n`
-      counts[flow.name] = {
-        steps: out.steps.length,
-        frames: out.steps.reduce((n, s) => n + s.received_by_bridge.length + s.sent_by_bridge.length, 0),
-        notifications: out.steps.reduce((n, s) => n + s.channel_notifications.length, 0),
-        tool_calls: out.steps.reduce((n, s) => n + s.agent_tool_calls.length, 0),
-      }
+      counts[flow.name] = countsOf(out)
     } finally {
       await h.stop()
       h.box.dispose()
     }
   }
   if (problems.length) throw new Error(`capture failed its own checks:\n- ${problems.join('\n- ')}`)
-  const index = {
-    about:
-      'Captured by `bun run capture:schedules` (apps/bridge/scripts/capture-schedules.ts): the REAL bridge against the REAL vendored Chronos CLI. Ids, timestamps, signatures and the machine name are normalized; card hashes are recomputed. Do not edit by hand: re-run the capture.',
-    chronos: chronosVersion,
-    scheduler_tz: 'America/New_York',
-    scheduler_clock_start: T0,
-    bridge_hello_features: ['schedules/1'],
-    scenarios: Object.entries(counts).map(([name, c]) => ({ file: `${name}.json`, ...c })),
-  }
-  files['index.json'] = `${JSON.stringify(index, null, 2)}\n`
+  if (only === undefined) files['index.json'] = indexOf(files, chronosVersion)
   return { files, counts }
 }
 
 /** Compares the capture with the committed files. Returns the names that differ (missing, changed or stale). */
-export function diffAgainstDisk(files: Record<string, string>, dir = CAPTURE_DIR): string[] {
+export function diffAgainstDisk(
+  files: Record<string, string>,
+  dir = CAPTURE_DIR,
+  o: { part?: boolean } = {},
+): string[] {
   const diff: string[] = []
   for (const [name, text] of Object.entries(files)) {
     const p = join(dir, name)
     if (!existsSync(p)) diff.push(`${name} (missing)`)
     else if (readFileSync(p, 'utf8') !== text) diff.push(`${name} (differs)`)
   }
-  if (existsSync(dir))
+  // a part of the capture says nothing about the files it did not make
+  if (!o.part && existsSync(dir))
     for (const name of readdirSync(dir)) if (name.endsWith('.json') && !(name in files)) diff.push(`${name} (stale)`)
   return diff
 }
 
-export function writeCapture(files: Record<string, string>, dir = CAPTURE_DIR) {
+export function writeCapture(files: Record<string, string>, dir = CAPTURE_DIR, o: { part?: boolean } = {}) {
   mkdirSync(dir, { recursive: true })
-  if (existsSync(dir)) for (const name of readdirSync(dir)) if (name.endsWith('.json')) rmSync(join(dir, name))
+  // a whole capture replaces every file; a part (--only) replaces only its own
+  if (!o.part && existsSync(dir))
+    for (const name of readdirSync(dir)) if (name.endsWith('.json')) rmSync(join(dir, name))
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text)
 }
 
@@ -985,9 +1014,10 @@ if (import.meta.main) {
   }
   const check = process.argv.includes('--check')
   const outDir = arg('--out') // for debugging a difference: write somewhere else
-  const { files, counts } = await capture(arg('--only'))
+  const only = arg('--only')
+  const { files, counts } = await capture(only)
   if (check) {
-    const diff = diffAgainstDisk(files)
+    const diff = diffAgainstDisk(files, CAPTURE_DIR, { part: only !== undefined })
     if (diff.length) {
       console.error(`capture:schedules --check: the committed captures are out of date:\n- ${diff.join('\n- ')}`)
       console.error('Re-run `bun run capture:schedules` and commit packages/testkit/fixtures/captured/.')
@@ -995,7 +1025,7 @@ if (import.meta.main) {
     }
     console.log(`capture:schedules --check: ${Object.keys(files).length} files match.`)
   } else {
-    writeCapture(files, outDir ?? CAPTURE_DIR)
+    writeCapture(files, outDir ?? CAPTURE_DIR, { part: only !== undefined })
     for (const [name, c] of Object.entries(counts))
       console.log(
         `${name}.json: ${c.steps} steps, ${c.frames} frames, ${c.notifications} notifications, ${c.tool_calls} tool calls`,

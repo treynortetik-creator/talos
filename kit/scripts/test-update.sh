@@ -22,6 +22,7 @@ unset PYTHONDONTWRITEBYTECODE      # run the way an owner's machine does: a stra
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KIT="${TALOS_TEST_KIT:-$(cd "$HERE/.." && pwd)}"
+. "$HERE/_test-env.sh"
 FX="$HERE/fixtures"
 D="20261105"      # the day part of the test migrations' ids (<day><4 digits>); written in two pieces so no long bare number sits in this file
 PASS=0; FAIL=0
@@ -37,6 +38,7 @@ trap 'for p in $BG_PIDS; do kill "$p" 2>/dev/null; done; chmod -R u+w "$SB" 2>/d
 command -v ssh-keygen >/dev/null 2>&1 || { echo "  skip test-update.sh: ssh-keygen is not installed (macOS and OpenSSH ship it)"; exit 0; }
 REALHOME="$HOME"
 export HOME="$SB/h"; mkdir -p "$HOME"
+talos_test_sandbox "$SB"
 unset CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT CHRONOS_RUN TALOS_UNATTENDED TALOS_APP_HOME TALOS_KIT_HOME XDG_STATE_HOME XDG_DATA_HOME CLAUDECODE
 export XDG_CONFIG_HOME="$HOME/.config" TALOS_VENDOR_DIR="$HOME/.local/share/talos" TALOS_APP_HOME="$HOME/app"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
@@ -65,7 +67,9 @@ PY
 sha(){ shasum -a 256 "$1" | cut -d' ' -f1; }
 marker(){ sed -n "s/^$1=//p" "$A/.talos-version" | head -1; }
 cur(){ readlink "$V/current"; }
-runtty(){ python3 "$FX/tty-run.py" --timeout 90 "$@"; }
+# Generous: on a loaded machine an update can take minutes, and a timeout here reads as the command failing (exit 124), which a
+# test that drops a setup step's output then mistakes for the behaviour it checks.
+runtty(){ python3 "$FX/tty-run.py" --timeout "${TALOS_TEST_TTY_TIMEOUT:-300}" "$@"; }
 upd(){ runtty -- "$(BIN)" update --agent "$A" --source "$SRC" "$@"; }
 alive(){ kill -0 "$1" 2>/dev/null; }
 fast_ps(){ ps -p "$1" -o pid= 2>/dev/null | tr -d ' '; }
@@ -100,7 +104,20 @@ json.dump(s, open(p, "w"), indent=4)      # not the kit's own rendering: any rew
 PY
 ( umask 077; : > "$V/.lock" )      # the lock file an update creates: part of the pristine world, so hashes compare like with like
 cp -pR "$HOME" "$HOME_PRISTINE"
-reset_world(){ chmod -R u+w "$HOME" 2>/dev/null; rm -rf "$HOME"; cp -pR "$HOME_PRISTINE" "$HOME"; : > "$TALOS_TEST_LOG"; rm -f "$TALOS_TEST_HOLD"; }
+# A fresh HOME from the pristine copy. The old one must be gone first: if anything is left (a file a process from the last
+# case wrote back meanwhile), `cp -pR pristine HOME` copies the pristine home INTO it as a subfolder, and every agent path is
+# missing (seen on a stock Mac, R2-3). So: removed, retried, checked; then the pristine CONTENTS are copied into a new HOME.
+reset_world(){
+  local i
+  for i in 1 2 3 4 5; do
+    chmod -R u+w "$HOME" 2>/dev/null; rm -rf "$HOME" 2>/dev/null
+    [ -e "$HOME" ] || break
+    sleep 0.2
+  done
+  [ -e "$HOME" ] && { echo "reset_world: $HOME could not be removed" >&2; ls -laR "$HOME" 2>&1 | head -20 >&2; exit 2; }
+  mkdir -p "$HOME" && cp -pR "$HOME_PRISTINE"/. "$HOME"/ || { echo "reset_world: copying the pristine home failed" >&2; exit 2; }
+  : > "$TALOS_TEST_LOG"; rm -f "$TALOS_TEST_HOLD"
+}
 SET0="$A/.claude/settings.json"
 NEWMIG="${D}0002-second"
 
@@ -379,13 +396,38 @@ out="$(runtty -- "$(BIN)" rollback --agent "$A" 2>&1)"; rc=$?
 lap "before section 8"
 # ================================================================ 8. who may run it, hostile archives
 reset_world; W8="$(hash_any "$V" "$A/.claude/settings.json" "$A/hooks" "$A/scripts" "$A/.talos-version")"
-for verb in "update --source $SRC" "update --dry-run --source $SRC" "rollback" "restore CLAUDE.md"; do
-  out="$("$(BIN)" $verb --agent "$A" </dev/null 2>&1)"; rc=$?
-  { [ "$rc" = 2 ] && <<<"$out" grep -qi 'only runs in Terminal'; } && ok "'${verb%% --source*}' without a terminal is refused (exit 2): an agent's Bash tool has none" || no "'$verb' ran without a terminal (rc=$rc)" "$out"
+# owner ruling 2026-11-14: update, rollback and restore run for the agent too (no terminal, inside Claude Code); trust-key
+# (adding a signer) stays the owner's at a terminal (its own checks below)
+# (the installed kit: this suite's TALOS_VENDOR_DIR points at the default place, so drop it as the agent's own env has none)
+# the account's home (the passwd entry the updater reads, never $HOME) is this suite's HOME: only a test can say so, by running the
+# real updater with pwd.getpwuid answering it (acct)
+acct(){ python3 - "${ACCT:-$HOME}" "$(dirname "$(BIN)")/../scripts/talos-update.py" "$@" <<'PY'
+import os, pwd, runpy, sys
+home, script = sys.argv[1], sys.argv[2]
+class P: pw_dir = home
+pwd.getpwuid = lambda uid: P
+sys.argv = [script] + sys.argv[3:]
+runpy.run_path(script, run_name="__main__")
+PY
+}
+out="$(env -u TALOS_VENDOR_DIR CLAUDECODE=1 V="$V" bash -c "$(declare -f acct BIN); acct update --dry-run --source \"$SRC\" --agent \"$A\"" </dev/null 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && ! <<<"$out" grep -qi 'only runs in Terminal'; } && ok "'update --dry-run' runs with no terminal, inside a Claude Code session (the agent's Bash tool)" || no "'update --dry-run' was refused without a terminal (rc=$rc)" "$(tail -c 600 <<<"$out")"
+[ "$(hash_any "$V" "$A/.claude/settings.json" "$A/hooks" "$A/scripts" "$A/.talos-version")" = "$W8" ] && [ ! -e "$TALOS_APP_HOME/agent-request.json" ] && ok "a dry run changed nothing and wrote no restart request"
+# Fable R1-1: off a terminal the kit folder can't be chosen: a hostile vendor with its own signer, named by --vendor, by
+# TALOS_KIT_HOME or by a moved XDG_DATA_HOME, is refused before anything is read from it, and nothing changes
+EV="$SB/evil-vendor"; mkdir -p "$EV/releases"; printf 'evil\n' > "$EV/trusted_signers"
+# Lemnos's review: HOME itself, moved by the session, is refused too (the account's home is what counts)
+mkdir -p "$SB/evil-home"
+out="$(env -u TALOS_VENDOR_DIR CLAUDECODE=1 V="$V" ACCT="$HOME" HOME="$SB/evil-home" bash -c "$(declare -f acct BIN); acct update --source \"$SRC\" --agent \"$A\"" </dev/null 2>&1)"; rc=$?
+{ [ "$rc" = 2 ] && <<<"$out" grep -qi 'needs you at a terminal' && <<<"$out" grep -q 'HOME'; } && ok "off a terminal, a HOME moved away from the account's home is refused (exit 2)" || no "a moved HOME off a terminal was not refused (rc=$rc)" "$out"
+for how in "--vendor $EV" "env:TALOS_KIT_HOME=$EV" "env:XDG_DATA_HOME=$SB/evil-xdg"; do
+  case "$how" in
+    env:*) kv="${how#env:}"; out="$(env -u TALOS_VENDOR_DIR "$kv" "$(BIN)" update --source "$SRC" --agent "$A" </dev/null 2>&1)"; rc=$? ;;
+    *) out="$(env -u TALOS_VENDOR_DIR "$(BIN)" update $how --source "$SRC" --agent "$A" </dev/null 2>&1)"; rc=$? ;;
+  esac
+  { [ "$rc" = 2 ] && <<<"$out" grep -qi 'needs you at a terminal'; } && ok "R1-1: off a terminal, a kit folder chosen by ${how%%=*} is refused (exit 2)" || no "R1-1: ${how%%=*} off a terminal was not refused (rc=$rc)" "$out"
 done
-out="$(CLAUDECODE=1 runtty -- "$(BIN)" update --agent "$A" --source "$SRC" 2>&1)"; rc=$?
-{ [ "$rc" = 2 ] && <<<"$out" grep -qi 'claude code'; } && ok "even with a (faked) terminal, a process inside a Claude Code session (CLAUDECODE set) is refused" || no "update ran inside a Claude Code session (rc=$rc)" "$out"
-[ "$(hash_any "$V" "$A/.claude/settings.json" "$A/hooks" "$A/scripts" "$A/.talos-version")" = "$W8" ] && [ ! -e "$TALOS_APP_HOME/agent-request.json" ] && ok "none of those refusals changed anything or wrote a restart request" || no "a refused run changed something"
+[ "$(hash_any "$V" "$A/.claude/settings.json" "$A/hooks" "$A/scripts" "$A/.talos-version")" = "$W8" ] && ok "R1-1: none of those refusals changed the agent folder or the kit" || no "R1-1: a refused hostile vendor changed something" || no "the dry run changed something"
 python3 - "$SRC" "$SB" "$K" <<'PY'
 import io, json, os, subprocess, sys, tarfile
 src, sb, keys = sys.argv[1:4]
@@ -605,7 +647,7 @@ reset_world; out="$(upd --relay-version oldrelay 2>&1)"; rc=$?
 reset_world; for v in 1.3.1-a 1.3.2-b 1.3.3-c 1.3.4-d; do SRCR="$SB/srcr"; publish "$v" key1 "$SRCR" >/dev/null; runtty -- "$(BIN)" update --agent "$A" --source "$SRCR" >/dev/null 2>&1; done
 n="$(ls "$V/releases" | wc -l | tr -d ' ')"
 { [ "$n" = 3 ] && [ "$(cur)" = "releases/1.3.4-d" ] && [ -d "$V/releases/1.3.3-c" ]; } && ok "after four updates exactly the newest three releases remain (current and the previous among them)" || no "retention: $n releases" "$(ls "$V/releases")"
-find "$V/releases" -maxdepth 1 -mindepth 1 ! -perm -u+w >/dev/null 2>&1 && ok "releases stay read-only" || no "a release is writable"
+[ -z "$(find "$V/releases" -maxdepth 1 -mindepth 1 -perm -u+w 2>/dev/null)" ] && ok "releases stay read-only" || no "a release is writable" "$(find "$V/releases" -maxdepth 1 -mindepth 1 -perm -u+w)"
 
 # ================================================================ 13. the Opus review
 lap "before section 13"
@@ -673,7 +715,7 @@ out="$(runtty --send n -- "$(BIN)" trust-key "$KF" 2>&1)"; rc=$?; { [ "$rc" = 1 
 for bad in "$K/key2" "$A/CLAUDE.md"; do out="$(runtty --send y -- "$(BIN)" trust-key "$bad" 2>&1)"; rc=$?; { [ "$rc" != 0 ] && [ ! -e "$V/trusted_signers" ]; } && ok "R1-9: trust-key refuses ${bad##*/} (a private key or not a key)" || no "R1-9: trust-key accepted ${bad##*/}" "$out"; done
 cat "$K/key1.pub" "$K/key2.pub" > "$SB/two.pub"; out="$(runtty --send y -- "$(BIN)" trust-key "$SB/two.pub" 2>&1)"; rc=$?; { [ "$rc" != 0 ] && [ ! -e "$V/trusted_signers" ]; } && ok "R1-9: a file with two keys is refused (one key, one decision)" || no "R1-9: two keys accepted" "$out"
 out="$(runtty --send y -- "$(BIN)" trust-key "$KF" 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && grep -q 'namespaces="talos-kit-release"' "$V/trusted_signers" && [ "$(stat -f %Lp "$V/trusted_signers" 2>/dev/null || stat -c %a "$V/trusted_signers")" = 600 ]; } && ok "R1-9: answered y, trust-key records the key in VENDOR/trusted_signers (mode 600), outside the immutable release" || no "R1-9: trust-key y (rc=$rc)" "$out"
+{ [ "$rc" = 0 ] && grep -q 'namespaces="talos-kit-release"' "$V/trusted_signers" && [ "$(stat -c %a "$V/trusted_signers" 2>/dev/null || stat -f %Lp "$V/trusted_signers")" = 600 ]; } && ok "R1-9: answered y, trust-key records the key in VENDOR/trusted_signers (mode 600), outside the immutable release" || no "R1-9: trust-key y (rc=$rc)" "$out"
 out="$(runtty -- "$(BIN)" update --agent "$A" --source "$SRC13" 2>&1)"; rc=$?; { [ "$rc" = 0 ] && [ "$(cur)" = "releases/1.6.2-k2" ]; } && ok "R1-9: after trust-key, the key2 release installs: the first key needs no reinstall" || no "R1-9: trusted key2 release did not install (rc=$rc)" "$out"
 [ -z "$(find "$V/releases" -name trusted_signers)" ] && ok "R1-9: no release was modified to add the key" || no "R1-9: a release holds trusted_signers"
 
@@ -757,9 +799,11 @@ reset_world; runtty --send y -- "$(BIN)" trust-key "$K/key2.pub" >/dev/null 2>&1
 <<<"$n" grep -q 'SHA256:' && ok "R2-2: the notice is one line and carries the key fingerprint" || no "R2-2: notice has no fingerprint" "$n"
 
 # R2-3: if undoing a failed catch-up fails, it is HALF, never "as it was"
-reset_world; B="$HOME/agentB"; bash "$SB/kit1/install.sh" --agent-dir "$B" --no-chronos >/dev/null 2>&1; SRC14="$SB/src14b"
+reset_world; B="$HOME/agentB"; outB="$(bash "$SB/kit1/install.sh" --agent-dir "$B" --no-chronos 2>&1)"; rcB=$?; SRC14="$SB/src14b"
 publish "1.6.4-bd" key1 "$SRC14" --migration "${D}0070:one:baddownb" --migration "${D}0071:two:failupb" >/dev/null
-runtty -- "$(BIN)" update --agent "$A" --source "$SRC14" >/dev/null 2>&1; : > "$TALOS_TEST_LOG"
+outA="$(runtty -- "$(BIN)" update --agent "$A" --source "$SRC14" 2>&1)"; rcA=$?; : > "$TALOS_TEST_LOG"
+# the setup itself, checked: B installed and A on 1.6.4-bd, so B's update is the catch-up this test is about
+{ [ "$rcB" = 0 ] && [ "$rcA" = 0 ] && [ "$(cur)" = "releases/1.6.4-bd" ]; } || no "R2-3 setup: B's install (rc=$rcB) or A's update (rc=$rcA, current $(cur)) did not finish" "$(printf '%s\n== A\n%s\n== A folder\n%s\n== HOME\n%s' "$(tail -8 <<<"$outB")" "$(tail -15 <<<"$outA")" "$(ls -la "$A" 2>&1 | head -25)" "$(ls -la "$HOME" 2>&1 | head -15)")"
 out="$(runtty -- "$(BIN)" update --agent "$B" --source "$SRC14" 2>&1)"; rc=$?
 { [ "$rc" = 4 ] && <<<"$out" grep -qi 'undoing it failed' && ! <<<"$out" grep -q 'as it was'; } && ok "R2-3: a catch-up whose undo fails exits 4 (HALF) and does not claim the folder is as it was" || no "R2-3: failed undo reported as success (rc=$rc)" "$out"
 

@@ -1,6 +1,7 @@
 // Thread list, agent status, presence, read marks and the agent config the Mac pushes.
 // Handlers of the frame switch in socketClient.ts, which dispatches to them. Each reads the closure through ctx.
-import type { FrameOf, ThreadT } from '@talos-app/protocol'
+import { type FrameOf, hostOf, ownValue, type ThreadT } from '@talos-app/protocol'
+import { rememberHost } from './hostWords.ts'
 import type { FrameContext } from './socket-frames-context.ts'
 
 export function onStatus(ctx: FrameContext, frame: FrameOf<'status'>): void {
@@ -21,6 +22,7 @@ export function onStatus(ctx: FrameContext, frame: FrameOf<'status'>): void {
 
 export function onPresence(ctx: FrameContext, frame: FrameOf<'presence'>): void {
   const { set } = ctx
+  rememberHost(hostOf(frame.features)) // the words before sign-in and while offline (lib/hostWords.ts)
   set(() => ({
     // the bridge's features ride every presence (S1.5): dropping them here hid Schedules behind "Update Talos"
     presence: {
@@ -29,6 +31,8 @@ export function onPresence(ctx: FrameContext, frame: FrameOf<'presence'>): void 
       queue_depth: frame.queue_depth,
       ...(frame.features ? { features: frame.features } : {}),
       ...(frame.features_at ? { features_at: frame.features_at } : {}),
+      ...(frame.superseded ? { superseded: true } : {}),
+      ...(frame.main ? { main: frame.main } : {}), // Main's state on the agent's computer: the sign-in banner
     },
   }))
   return
@@ -58,7 +62,21 @@ export function onThreadArchive(ctx: FrameContext, frame: FrameOf<'thread.archiv
 
 export function onThreadRead(ctx: FrameContext, frame: FrameOf<'thread.read'>): void {
   const { set } = ctx
-  set((s) => ({ unread: { ...s.unread, [frame.thread_id]: 0 } }))
+  // Another device read this thread up to `up_to_seq`. The relay counts the rows above its mark, so a row this device
+  // got after that point is still unread: only what is at or below the mark comes off. The count never goes up here (a
+  // row counted by `ready.unread` and never seen by seq is taken as read), and the mark only rises, as on the relay.
+  const above = ctx.forgetUnreadSeqs(frame.thread_id, frame.up_to_seq)
+  set((s) => ({
+    unread: { ...s.unread, [frame.thread_id]: Math.min(ownValue(s.unread, frame.thread_id) ?? 0, above) },
+    ...(s.readUpto
+      ? {
+          readUpto: {
+            ...s.readUpto,
+            [frame.thread_id]: Math.max(ownValue(s.readUpto, frame.thread_id) ?? 0, frame.up_to_seq),
+          },
+        }
+      : {}),
+  }))
   return
 }
 

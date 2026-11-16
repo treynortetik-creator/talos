@@ -154,7 +154,9 @@ describe('lead init: the light profile is the default', () => {
     s.init('--agent-dir', s.agentDir, '--mcp', 'github,playwright')
     expect(s.trip()?.session_opts?.mcp_allow).toEqual(['github', 'playwright'])
     expect(s.settings()).toEqual(plain)
-    expect(s.out()).toMatch(/Mac app applies it when the session starts/)
+    expect(s.out()).toMatch(
+      /the session starts with it, and one already running restarts with it after its current turn/,
+    )
     expect(s.out()).not.toMatch(/Until the Mac app/)
   })
   test('the browser and screen tools can never be picked, and a connector is refused with the reason', () => {

@@ -4,6 +4,7 @@ import Testing
 import SwiftTerm
 import TalosDesktopCore
 @testable import TalosDesktop
+import TalosTestSupport
 
 /// The agent terminal inside the main window. No window, no supervisor and no tmux server of ours: the view is handed the
 /// facts and a command to run, and is never put in a window. Needs TALOS_GUI_TESTS=1.
@@ -31,7 +32,7 @@ struct EmbeddedTerminalGuiTests {
   }
 
   func scratch() -> String {
-    let d = (NSTemporaryDirectory() as NSString).appendingPathComponent("talos-emb-\(UUID().uuidString.prefix(8))")
+    let d = (TestTemp.base as NSString).appendingPathComponent("talos-emb-\(UUID().uuidString.prefix(8))")
     try? FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true)
     return d
   }

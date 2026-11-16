@@ -26,7 +26,17 @@ export type Offer = {
   memory_binding?: string
   memory_epoch?: string
   at: number
+  /**
+   * Set when the session answered this offer with SKIP before any claim was made (the job was paused, on hold, not due):
+   * the offer no longer stands, so the runner may offer the job again if Chronos lists it as due. Absent in a sidecar an
+   * older bridge wrote, which reads as "still offered", the old behaviour.
+   */
+  released?: { at: number; why: string }
+  /** How many offers of this job and slot have ended in SKIP so far, this one included. Caps the re-offers. */
+  skips?: number
 }
+/** After this many SKIPs of one job and slot the runner stops offering it: a job that always skips must not ask once a minute. */
+export const MAX_SKIPS_PER_SLOT = 3
 export type Inflight = {
   id: string
   ds: string
@@ -238,6 +248,26 @@ export class Sidecar {
       if (before) this.data.offers[key] = before
       else delete this.data.offers[key]
     })
+  }
+
+  /**
+   * The session answered the offer of `runId` with SKIP and nothing was claimed: mark it released, with the reason. False
+   * when there is no such offer or the save was refused (the offer then still stands, as before this existed).
+   */
+  releaseOffer(runId: string, why: string, now: number): boolean {
+    if (!this.canWrite()) return false
+    const entry = Object.entries(this.data.offers).find(([, o]) => o.run_id === runId)
+    if (!entry) return false
+    const [key, before] = entry
+    if (before.released) return true
+    this.data.offers[key] = { ...before, released: { at: now, why }, skips: (before.skips ?? 0) + 1 }
+    return this.commit(() => {
+      this.data.offers[key] = before
+    })
+  }
+  /** Every offer made for a job on one day (`day` is YYYY-MM-DD; a slot key like 2026-10-05T0945 belongs to its date). */
+  offersOfDay(id: string, day: string): Offer[] {
+    return Object.values(this.data.offers).filter((o) => o.id === id && o.ds.slice(0, 10) === day)
   }
 
   /** The id of the job a run belongs to: from its in-flight entry, else its offer. */

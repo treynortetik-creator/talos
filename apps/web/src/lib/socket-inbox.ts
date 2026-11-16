@@ -1,12 +1,14 @@
-// The inbox change queue: Done/Snooze changes kept until the relay acks them, and sent again on each `ready`.
+// What the owner did that the relay must hear even when the socket was down at the time. The inbox change queue:
+// Done/Snooze changes kept until the relay acks them, sent again on each `ready`, and taken back off the row when the
+// relay refuses one. And the read marks: a thread read while the socket could not carry it, sent at the next `ready`.
 
-import { type InboxItemT, newUlid } from '@talos-app/protocol'
+import { type FrameOf, type InboxItemT, newUlid, ownValue } from '@talos-app/protocol'
 import { INBOX_QUEUE } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
-import type { InboxPatch } from './socket-types.ts'
+import type { InboxOutcome, InboxPatch } from './socket-types.ts'
 
 export function createSocketInbox(c: SocketCtx) {
-  const { inboxInFlight, now, set, storage } = c
+  const { inboxInFlight, now, set, storage, store } = c
 
   function applyInboxPatch(eventId: string, patch: InboxPatch) {
     set((st) => ({
@@ -25,14 +27,19 @@ export function createSocketInbox(c: SocketCtx) {
   function saveInboxQueue() {
     void storage.put('cache', INBOX_QUEUE, [...c.inboxQueue]).catch(() => {})
   }
-  /** Sends every queued inbox change; an entry leaves the queue when the relay acks it or answers with any error but `internal`. */
+  /**
+   * Sends every queued inbox change that is not on the wire; an entry leaves the queue when the relay acks it or answers
+   * with any error but `internal`. A change sent on a socket that was let go of counts as on the wire until that socket
+   * has closed (or its grace is over): the answer may still be on its way there, and a second send would race it.
+   */
   function flushInbox() {
-    if (!c.canSend()) return
+    if (!c.canSend() || !c.ws) return
+    const sock = c.ws
     for (const [eventId, patch] of c.inboxQueue) {
       if ([...inboxInFlight.values()].some((f) => f.patch === patch)) continue // already on the wire
       const id = newUlid()
-      inboxInFlight.set(id, { eventId, patch })
-      c.ws?.send(
+      inboxInFlight.set(id, { eventId, patch, sock })
+      sock.send(
         JSON.stringify({
           v: 1,
           type: 'inbox.update',
@@ -45,21 +52,161 @@ export function createSocketInbox(c: SocketCtx) {
       )
     }
   }
-  /** `keep`: the relay could not save it (worth another try); the change stays queued and goes out at the next flush. */
-  function inboxSettled(frameId: string, keep = false): boolean {
+  /**
+   * Puts a row back to what it held before a change the relay refused. Only while the row still shows that change: one
+   * that another device (or the Mac) has moved on since is left alone. After a reload the earlier state is not known,
+   * and the row then waits for the next inbox load to correct it.
+   */
+  function takeBack(eventId: string, patch: InboxPatch) {
+    const before = c.inboxBefore.get(eventId)
+    if (!before) return
+    set((st) => ({
+      inbox: st.inbox.map((i): InboxItemT => {
+        if (i.id !== eventId) return i
+        if (patch.state && i.state !== patch.state) return i
+        if (patch.snoozeUntil && i.snooze_until !== patch.snoozeUntil) return i
+        const { snooze_until: _was, ...rest } = i
+        return { ...rest, state: before.state, ...(before.snooze_until ? { snooze_until: before.snooze_until } : {}) }
+      }),
+    }))
+  }
+  /**
+   * The relay answered a queued change. `retry`: it could not save it (worth another try), so the change stays queued
+   * and goes out at the next flush. `refused`: it will never apply, so it leaves the queue and the row goes back.
+   */
+  function inboxSettled(frameId: string, outcome: InboxOutcome = 'acked'): boolean {
     const f = inboxInFlight.get(frameId)
     if (!f) return false
     inboxInFlight.delete(frameId)
+    if (outcome === 'retry') {
+      // Came on a socket let go of: the current one skipped it while it was on the wire there, so it goes out now. On the
+      // current socket it waits for the next connection, not a resend loop.
+      if (f.sock !== c.ws) flushInbox()
+      return true
+    }
     // Only the change that was sent leaves the queue: a newer one for the same item stays.
-    if (!keep && c.inboxQueue.get(f.eventId) === f.patch) {
+    const newest = c.inboxQueue.get(f.eventId) === f.patch
+    if (newest) {
       c.inboxQueue.delete(f.eventId)
       saveInboxQueue()
+      if (outcome === 'refused') takeBack(f.eventId, f.patch)
+      c.inboxBefore.delete(f.eventId)
+    } else if (outcome === 'acked') {
+      // A newer change waits on top of this one. The relay now holds this one, so that is what a refusal goes back to.
+      const before = c.inboxBefore.get(f.eventId)
+      if (before)
+        c.inboxBefore.set(f.eventId, {
+          state: f.patch.state ?? before.state,
+          ...(f.patch.snoozeUntil
+            ? { snooze_until: f.patch.snoozeUntil }
+            : before.snooze_until
+              ? { snooze_until: before.snooze_until }
+              : {}),
+        })
     }
     return true
+  }
+
+  /** Changes sent on `sock` will not be answered now: they go out again on the current socket. */
+  function releaseSocket(sock: WebSocket | null) {
+    const timer = graceTimers.get(sock)
+    if (timer) clearTimeout(timer)
+    graceTimers.delete(sock)
+    let released = false
+    for (const [id, f] of inboxInFlight)
+      if (f.sock === sock) {
+        inboxInFlight.delete(id)
+        released = true
+      }
+    if (released) flushInbox()
+  }
+  /**
+   * `sock` is no longer the current socket. What was sent on it stays on the wire until it closes: frames the relay sent
+   * before its close still arrive, an answer among them. A socket that never reports its close is given up after a
+   * grace.
+   */
+  function inboxSocketGone(sock: WebSocket | null) {
+    if (graceTimers.has(sock) || ![...inboxInFlight.values()].some((f) => f.sock === sock)) return
+    graceTimers.set(
+      sock,
+      setTimeout(() => releaseSocket(sock), c.inboxAnswerGraceMs),
+    )
+  }
+  const graceTimers = new Map<WebSocket | null, ReturnType<typeof setTimeout>>()
+  function inboxForget() {
+    for (const t of graceTimers.values()) clearTimeout(t)
+    graceTimers.clear()
+    inboxInFlight.clear()
+  }
+
+  // ---- read marks ----------------------------------------------------------------------------------------------
+  /**
+   * Sends every waiting read mark. The relay does not answer one, and refuses an unpinned device's frames, so a mark
+   * waits here until the Mac has pinned this device: sent before that it would be lost with nothing to say so.
+   */
+  function flushReads() {
+    if (!c.canSend() || !store.getState().devicePinned) return
+    for (const [threadId, q] of c.readQueue) c.send({ type: 'thread.read', thread_id: threadId, up_to_seq: q.upTo })
+    c.readQueue.clear()
+  }
+  /**
+   * The owner read `threadId` up to `upTo`, which cleared `cleared` unread here. `known` is the relay's mark for the
+   * thread as this device last knew it, before this read (absent with an older relay). Goes out now, or at the next
+   * `ready`.
+   */
+  function queueRead(threadId: string, upTo: number, cleared: number, known: number | undefined) {
+    const q = c.readQueue.get(threadId)
+    c.readQueue.set(threadId, {
+      upTo: Math.max(q?.upTo ?? 0, upTo),
+      cleared: (q?.cleared ?? 0) + Math.max(0, cleared),
+      // the first read's: later ones saw this device's own, raised, mark
+      ...(q ? (q.known !== undefined ? { known: q.known } : {}) : known !== undefined ? { known } : {}),
+    })
+    flushReads()
+  }
+  /**
+   * The `ready` just applied gave the relay's counts and marks, from before it heard the marks still waiting here.
+   *
+   * A waiting mark is sent only when the relay's mark for the thread is exactly where this device last knew it: then
+   * nobody else has spoken, the relay's count still holds the rows the owner read here, so those come off (what is
+   * left arrived meanwhile) and the mark goes out. When the relay's mark has moved at all, another device spoke after
+   * this one knew it, and the waiting mark is dropped with the relay's count and mark left as `ready` gave them:
+   *  - at or past this mark: it read as far or further, nothing to add;
+   *  - anywhere else (below what was known, or between that and this mark): a mark-unread puts the relay's mark just
+   *    under the thread's newest row, which can be either side of what this device knew. Sending the read then would
+   *    raise the mark and clear the unread the owner asked for on the other device. A partial read from another device
+   *    looks the same and is treated the same; the cost is that the rows read here show as unread until the thread is
+   *    opened again, and the relay's count, which other devices share, is never made wrong.
+   * An older relay sends no marks: the mark is sent, as it always was when online.
+   */
+  function readsOnReady(frame: FrameOf<'ready'>) {
+    // An unpinned device gets the handshake part of `ready` only (no counts, no marks): nothing to square yet.
+    if (!store.getState().devicePinned) return
+    for (const [threadId, q] of [...c.readQueue]) {
+      const held = frame.read_upto ? (ownValue(frame.read_upto, threadId) ?? 0) : undefined
+      if (held !== undefined && held !== (q.known ?? 0)) {
+        c.readQueue.delete(threadId)
+        continue
+      }
+      const theirs = frame.unread ? (ownValue(frame.unread, threadId) ?? 0) : undefined
+      set((s) => ({
+        ...(theirs !== undefined ? { unread: { ...s.unread, [threadId]: Math.max(0, theirs - q.cleared) } } : {}),
+        ...(s.readUpto
+          ? { readUpto: { ...s.readUpto, [threadId]: Math.max(ownValue(s.readUpto, threadId) ?? 0, q.upTo) } }
+          : {}),
+      }))
+    }
+    flushReads()
   }
 
   c.applyInboxPatch = applyInboxPatch
   c.flushInbox = flushInbox
   c.inboxSettled = inboxSettled
+  c.inboxSocketGone = inboxSocketGone
+  c.inboxSocketClosed = releaseSocket
+  c.inboxForget = inboxForget
   c.saveInboxQueue = saveInboxQueue
+  c.queueRead = queueRead
+  c.flushReads = flushReads
+  c.readsOnReady = readsOnReady
 }

@@ -5,6 +5,7 @@ import { isQuiet } from '@talos-app/protocol'
 import { useEffect, useLayoutEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { useTalos } from '../../lib/client.ts'
+import { useHost } from '../../lib/hostWords.ts'
 import { useFeature } from '../../lib/v2Client.ts'
 import { bannerFor, type HealthBannerInfo } from './rows.ts'
 import { fetchStatus } from './useHealthStatus.ts'
@@ -22,6 +23,7 @@ export function MacMessageText({ cause, next }: { cause: string; next: string })
 export function HealthBanner({ onShowing }: { onShowing?: (kind: HealthBannerInfo['kind'] | null) => void }) {
   const on = useFeature('health/1') === 'on'
   const config = useTalos((s) => s.config)
+  const host = useHost()
   const [info, setInfo] = useState<HealthBannerInfo | null>(null)
 
   useEffect(() => {
@@ -31,7 +33,7 @@ export function HealthBanner({ onShowing }: { onShowing?: (kind: HealthBannerInf
       fetchStatus().then(
         (s) => {
           const quiet = config ? isQuiet(new Date(), config.quiet_window, config.timezone) : false
-          if (alive) setInfo(bannerFor(s, quiet))
+          if (alive) setInfo(bannerFor(s, quiet, undefined, host))
         },
         () => {
           if (alive) setInfo(null)
@@ -43,7 +45,7 @@ export function HealthBanner({ onShowing }: { onShowing?: (kind: HealthBannerInf
       alive = false
       clearInterval(t)
     }
-  }, [on, config])
+  }, [on, config, host])
 
   const kind = info?.kind ?? null
   // layout effect: the presence banner steps aside before the screen paints, so there is never a frame with both

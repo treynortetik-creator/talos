@@ -4,14 +4,16 @@
 import {
   dateOfRunKey,
   type HealthIssueT,
+  runsInSession,
   type SchedulerHealthT,
   type ScheduleSnapshotT,
   type ScheduleT,
   safeLine,
 } from '@talos-app/protocol'
-import { postSystemNotice } from '../context.ts'
+import { defaultThreadRef, postSystemNotice } from '../context.ts'
 import { scheduleStatusFrame } from '../frames-out.ts'
 import { scheduleHeldNotification } from '../notify.ts'
+import { say } from '../owner-words.ts'
 import { type AdapterError, healthState, issueFor } from './chronos-adapter.ts'
 import { hostLabel, localZone } from './discovery.ts'
 import { syncBackgroundMemory } from './job-memory-background.ts'
@@ -49,7 +51,11 @@ export function degraded(this: ScheduleService, err: AdapterError): ScheduleSnap
   const fix =
     code === 'adapter_timeout'
       ? "The scheduler's files may be in a protected or cloud-synced folder that isn't available."
-      : "Fix jobs.json at the Mac or restore it from the scheduler's history."
+      : say({
+          mac: "Fix jobs.json at the Mac or restore it from the scheduler's history.",
+          linux: "Fix jobs.json on this computer or restore it from the scheduler's history.",
+          windows: 'On the PC, run Talos Setup again; it repairs the scheduler.',
+        })
   const issue: HealthIssueT = { ...issueFor(code, at, null, text), fix }
   const issues = [issue, ...(base?.health.issues ?? []).filter((i) => i.code !== code)].slice(0, 10)
   const health: SchedulerHealthT = {
@@ -186,16 +192,67 @@ export function markAll(this: ScheduleService, keys: string[]): boolean {
 
 export async function reportFailure(this: ScheduleService, s: ScheduleT, status: string, ds: string, keys: string[]) {
   if (!this.markAll(keys)) return
-  await this.postFailure(s.id, s.name, status)
+  await this.postFailure(s.id, s.name, status, ds)
   this.pendingAlerts.push({ kind: 'job_failed', key: `${s.id}:${ds}`.slice(0, 80) })
 }
 
+/** How long a "paused because its thread is archived" mark may sit before it is renewed, so the sidecar's 8-day prune never drops it. */
+const ARCHIVED_MARK_RENEW_MS = 24 * 3600_000
+
+/**
+ * A background job (one that does not run in the session) whose result thread is archived has nowhere the owner would
+ * look: pause it and say so in the default thread. Once per job and thread: if the owner resumes it as it is, that is
+ * their call, and its results go to the default thread (headlessJobThread). A session job needs none of this: its offer
+ * already goes to the default thread (threadOfJob) and the agent answers there.
+ */
+export async function pauseJobsOfArchivedThreads(this: ScheduleService, snap: ScheduleSnapshotT) {
+  if (!this.managed(snap)) return // a registry Talos only lists is never paused by Talos (S3.7)
+  for (const s of snap.schedules) {
+    const t = this.sidecar.threadOf(s.id)
+    const thread = t ? this.ctx.config.thread(t) : undefined
+    if (!thread?.archived || runsInSession(s)) continue
+    const key = `archived-thread|${s.id}|${thread.id}`
+    const at = this.sidecar.all.notified[key]
+    if (at !== undefined) {
+      if (this.now() - at > ARCHIVED_MARK_RENEW_MS) this.sidecar.markNotified(key, this.now())
+      continue
+    }
+    if (s.paused || !s.enabled) continue // nothing will run; if it is turned back on later it is handled then
+    if (!this.sidecar.markNotified(key, this.now())) continue
+    const fallback = defaultThreadRef(this.ctx)
+    const job = `Scheduled job "${safeLine(s.name)}" posts its results to "${safeLine(thread.name)}", which is archived`
+    let text: string
+    try {
+      await this.adapter.setPaused({ id: s.id }, true)
+      text = `${job}, so it is paused. Unarchive the thread or give the job another thread in Schedules, then resume it. If you resume it as it is, its results go to "${safeLine(fallback.name)}".`
+    } catch (e) {
+      this.log('job of an archived thread could not be paused', { job: s.id, error: (e as Error).message })
+      text = `${job}, and it could not be paused. Until you unarchive the thread or give the job another thread in Schedules, its results go to "${safeLine(fallback.name)}".`
+    }
+    await postSystemNotice(this.ctx, text, { thread: fallback })
+    this.chronos()?.invalidate()
+  }
+}
+
+/**
+ * Why a job was missed, from what this bridge did with it that day. "No session was running" is said only when the job was
+ * never offered; an offer the session answered with SKIP, or never started, is said as that.
+ */
+export function missedWhy(this: ScheduleService, jobId: string, day: string | undefined): string {
+  const offers = day ? this.sidecar.offersOfDay(jobId, day).filter((o) => o.trigger === 'clock') : []
+  const last = offers.sort((a, b) => a.at - b.at)[offers.length - 1]
+  if (!last) return FAILURE_WORDS.missed as string
+  if (last.released)
+    return `it was skipped at its time (${safeLine(last.released.why)}) and did not come due again in its window`
+  return 'the session was asked to run it and never started it'
+}
+
 /** A `system` row in the job's own thread (pin-notice path). */
-export async function postFailure(this: ScheduleService, jobId: string, name: string, status: string) {
+export async function postFailure(this: ScheduleService, jobId: string, name: string, status: string, ds?: string) {
   const why = FAILURE_WORDS[status] ?? status
   const text =
     status === 'missed'
-      ? `Scheduled job "${safeLine(name)}" was missed: no session was running in its window. Open Schedules.`
+      ? `Scheduled job "${safeLine(name)}" was missed: ${this.missedWhy(jobId, ds)}. Open Schedules.`
       : `Scheduled job "${safeLine(name)}" didn't finish: ${why}. Open Schedules.`
   await postSystemNotice(this.ctx, text, { thread: this.threadOfJob(jobId) })
 }

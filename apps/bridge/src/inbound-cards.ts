@@ -1,6 +1,7 @@
 // Card decisions: taps from the app, taps from a notification, and what happens when the agent is not told.
 // Handlers of the Inbound class (inbound.ts), which forwards to them. Dispatch and the first trust checks are in inbound.ts;
 // some handlers here run their own seen-id, age or card-state checks, so read both when auditing trust.
+
 import { join } from 'node:path'
 import {
   cardNotice,
@@ -11,6 +12,8 @@ import {
   noticeSubtitle,
   shownHash,
 } from '@talos-app/protocol'
+import { isRuleAskCard } from './action-rule-asks.ts'
+import { addFromOwnerTap } from './always-allow.ts'
 import type { LedgerRow, ResolutionRecord } from './cards-ledger.ts'
 import { localClock } from './clock-meta.ts'
 import { postSystemNotice, threadRef } from './context.ts'
@@ -19,6 +22,8 @@ import { writeJsonAtomic } from './fsutil.ts'
 import type { Inbound } from './inbound.ts'
 import { CLOCK_OFF_MESSAGE, type Item, type Of, oneLine } from './inbound-shared.ts'
 import { cardActionNotification } from './notify.ts'
+import { say } from './owner-words.ts'
+import { isScreenAllowCard } from './screen-consent.ts'
 
 export const cardsFrames = {
   /**
@@ -26,8 +31,8 @@ export const cardsFrames = {
    * that: the chain is checked again here against the device key THIS Mac pinned (device key -> grant -> action key), then
    * the action becomes the same message or card resolution an app frame would have been, through the same handlers, so
    * every later rule (seen ids, known thread, card state, payload hash, permission cards) applies unchanged. One rule is
-   * added: a high-risk card is never approved this way, whatever the relay says (it needs the passkey step-up a
-   * notification cannot give).
+   * added: a high-risk card is never approved this way, whatever the relay says (it is approved in the app, never from the
+   * lock screen; no passkey since 2026-11-14).
    */
   async onNativeAct(this: Inbound, it: Item, f: Of<'native.act'>) {
     const { ctx } = this
@@ -39,7 +44,7 @@ export const cardsFrames = {
     if (!pub)
       return deny(
         'device_not_pinned',
-        'This phone is not trusted by your Mac.',
+        say({ mac: 'This phone is not trusted by your Mac.', linux: 'This phone is not trusted by your computer.' }),
         ctx.devices.isRevoked(f.device_id) ? 'device_revoked' : 'device_not_pinned',
       )
     // Judged at the moment the relay took the tap, not at this Mac's wake-up: a Mac that slept for an hour still takes
@@ -62,14 +67,17 @@ export const cardsFrames = {
     const owner = { v: 1 as const, id: f.id, ts: f.ts, device_id: f.device_id, osig: check.grant.osig, relay: f.relay }
     it.owner = { ok: true, deviceId: f.device_id }
     if (act.a === 'reply') {
-      return this.onMessage(it, {
-        ...owner,
-        type: 'message',
-        thread_id: act.thread_id,
-        client_msg_id: nativeReplyMessageId(f.id),
-        text: act.text,
-        attachments: [],
-      } as Of<'message'>)
+      // it waits for its undo point on its session's lane, not on the serial queue (inbound-lanes.ts)
+      return this.queueOnLane(it, act.thread_id, () =>
+        this.onMessage(it, {
+          ...owner,
+          type: 'message',
+          thread_id: act.thread_id,
+          client_msg_id: nativeReplyMessageId(f.id),
+          text: act.text,
+          attachments: [],
+        } as Of<'message'>),
+      )
     }
     // Twelve hours, on THIS Mac's clock, from when the phone signed the tap. The relay's stamp is unsigned and cannot stretch
     // it. Past it the card stays pending (the refusal tells the relay to put it back) and the owner gets the failed-tap push.
@@ -77,7 +85,7 @@ export const cardsFrames = {
       return deny('stale', 'That Approve waited too long. Open the card in the app.', 'approve_too_old')
     const row = ctx.ledger.get(act.card_id)
     if (row?.binding.risk === 'high')
-      return deny('stepup_required', 'This card needs your passkey. Open it in the app to approve.', 'high_risk')
+      return deny('open_in_app', 'This card is approved in the app, not from a notification.', 'high_risk')
     // Approvals bind what was shown. The words the notification displayed are rebuilt here from THIS Mac's copy of the
     // card; the phone signed a hash of what it displayed. A relay that sealed other words, or a card that cannot be shown
     // whole in a notification, is refused. (A card the ledger does not know falls through to the normal resolve refusal.)
@@ -172,6 +180,17 @@ export const cardsFrames = {
       this.closeDecided(f.card_id, nowMs, out.resolution) // a refused or failed send is already `failed`: this skips it
       return this.done(it)
     }
+    if (row.actor === 'bridge' && isRuleAskCard(row.binding)) {
+      // An "Allow once" card for one of the kit's ask rules (action-rule-asks.ts): the BRIDGE holds the approval it makes, and only
+      // from here, after the owner's signature and the ledger checks. "Always allow" rides only in a signed card.resolve.
+      this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
+      const always = f.always === true && f.action === 'primary' && it.frame.type === 'card.resolve'
+      await (ctx.actionRuleAsks?.onResolved(row, f.action, always) ?? Promise.resolve()).catch((e) =>
+        ctx.log.warn('action rule card not applied', { card: f.card_id, error: (e as Error).message }),
+      )
+      this.closeDecided(f.card_id, nowMs, out.resolution)
+      return this.done(it)
+    }
     let payloadPath: string | undefined
     if (f.action === 'primary') {
       payloadPath = join(ctx.paths.approved, `${f.card_id}.json`)
@@ -188,12 +207,30 @@ export const cardsFrames = {
         return this.done(it)
       }
       appExtra = r.extra
+    } else if (row.actor === 'bridge' && isScreenAllowCard(row.binding)) {
+      // A screen consent card (screen-consent.ts): the Mac allows the app only from the owner's own signed tap, so the frame
+      // goes over as received. The agent is never told; it was answered at once and tries again.
+      this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
+      await (ctx.screenConsent?.onResolved(row, f.action, it.raw) ?? Promise.resolve()).catch((e) =>
+        ctx.log.warn('screen consent card not applied', { card: f.card_id, error: (e as Error).message }),
+      )
+      this.closeDecided(f.card_id, nowMs, out.resolution)
+      return this.done(it)
     } else if (row.binding.kind === 'config' && row.actor === 'bridge') {
       // A settings card (O1): the BRIDGE applies what the owner approved, after checking the allowlist again
       // 'resolved' goes out FIRST: a refusal inside apply() sends 'failed' with no await in front of it, and every app keeps
       // the last frame it saw, so 'resolved' after 'failed' would hide the refusal and leave "Working on it" for good.
       this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
       ctx.configProposals?.onCardResolved(row, f.action, out.approved, f.card_id, f.note)
+      this.closeDecided(f.card_id, nowMs, out.resolution)
+      return this.done(it)
+    } else if (row.binding.kind === 'undo' && row.actor === 'bridge') {
+      // An undo card: the BRIDGE restores what the owner approved (undo/card.ts). Awaited, so whatever this session is sent
+      // next finds the files already back.
+      this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
+      await (ctx.undoCards?.onResolved(row, f.action, out.approved, f.card_id) ?? Promise.resolve()).catch((e) =>
+        ctx.log.warn('undo card apply failed', { card: f.card_id, error: (e as Error).message }),
+      )
       this.closeDecided(f.card_id, nowMs, out.resolution)
       return this.done(it)
     } else if (row.actor === 'bridge') {
@@ -203,6 +240,12 @@ export const cardsFrames = {
       this.closeDecided(f.card_id, nowMs, out.resolution)
       return this.done(it)
     }
+    // "Always allow <kind>" (always-allow.ts): only the owner's own signed tap in the app (never a notification's Approve), on the
+    // primary button of one of the agent's own cards of a send kind, after the signature and the ledger checks above
+    if (f.always === true && f.action === 'primary' && it.frame.type === 'card.resolve' && row.actor === 'agent')
+      await addFromOwnerTap(ctx, row.binding.kind, row.thread_id).catch((e) =>
+        ctx.log.warn('always allow not recorded', { card: f.card_id, error: (e as Error).message }),
+      )
     // ONE attempt to tell the agent, never repeated. The `telling` marker was written with `resolved`; it is cleared when the
     // write returns, either way. A marker found at startup means the process died mid-write (see `sweepInterrupted`).
     // 'resolved' goes out before the write: a card ended while the write is pending sends 'failed', and every app keeps the

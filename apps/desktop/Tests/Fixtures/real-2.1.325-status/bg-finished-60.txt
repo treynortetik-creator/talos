@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.325
+▝▜██████▀  Fable 5.2 · Claude Max  
+ ▝▝   ▝▝   /…xxxxxxxxxxxxxxxxxxxxxxx
+
+
+❯ Run the shell command: sleep 20, in the background. Then
+  reply ok and stop.
+
+  Ran 1 shell command
+
+⏺ ok
+
+✻ Cogitated for 5s · done 8:26 PM
+
+⏺ Background command "Sleep for 20 seconds" completed (exit
+code 0)
+
+⏺ Sleep finished, exit 0.
+
+✻ Worked for 2s · done 8:26 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts

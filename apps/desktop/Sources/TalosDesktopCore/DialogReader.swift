@@ -46,6 +46,8 @@ public enum DialogReader {
     case .loginExpired: return Dialog(kind: .login, subject: nil, options: [], cursor: nil)
     case .trust: return readSelect(.trust, rows, escapedRows)
     case .mcpConsent: return readSelect(.mcpConsent, rows, escapedRows)
+    // never offered for a tap: computer use (Enter opens System Settings) and the usage-limit screen (an option spends usage credits)
+    case .computerUsePermissions, .usageLimit: return nil
     default: return nil
     }
   }

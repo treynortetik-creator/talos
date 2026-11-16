@@ -1,12 +1,13 @@
 // `talos-app memory init|on|off|show|reindex` (docs/V2-FEATURES.md V5.1). Mac only: the app can switch the browser off,
 // never on. Nothing here writes under the agent dir; the files written are memory.json and config.json in the app home.
-import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { MemoryRootId } from '@talos-app/protocol'
 import { realClock } from '../clock.ts'
 import { type BridgeEnv, paths } from '../config.ts'
 import { ConfigFile } from '../config-file.ts'
 import { nullLogger } from '../log.ts'
+import { say } from '../owner-words.ts'
 import {
   DEFAULT_INCLUDE,
   DEFAULT_MAX_FILE_KB,
@@ -29,12 +30,15 @@ export type MemoryIO = {
   serviceOptions?: Partial<MemoryServiceOptions>
 }
 
-export const MEMORY_USAGE = 'usage: talos-app memory init [--agent-dir <dir>] | on | off | show | reindex'
+export const MEMORY_USAGE = 'usage: talos-app memory init [--defaults] [--agent-dir <dir>] | on | off | show | reindex'
+
+/** What `memory init --defaults` shares, in this order, when the agent folder has it: no questions asked. */
+export const DEFAULT_MEMORY_ROOTS = ['memory', 'wiki'] as const
 
 const yes = (a: string) => /^\s*y(es)?\s*$/i.test(a)
 
 /** Visible markdown/text files under one folder, and what the denylist and private markers hid. */
-function survey(agentDir: string, rel: string, exclude: string[] = []) {
+export function survey(agentDir: string, rel: string, exclude: string[] = []) {
   const cfg: MemoryConfig = {
     version: 1,
     enabled: true,
@@ -78,7 +82,7 @@ function hiddenIn(dir: string): { hidden: number; privateDirs: string[] } {
   return { hidden, privateDirs }
 }
 
-function subdirs(agentDir: string, rel: string): string[] {
+export function subdirs(agentDir: string, rel: string): string[] {
   try {
     return readdirSync(join(agentDir, rel), { withFileTypes: true })
       .filter((e) => e.isDirectory() && !segmentDenied(e.name))
@@ -89,7 +93,7 @@ function subdirs(agentDir: string, rel: string): string[] {
   }
 }
 
-function slug(name: string, taken: Set<string>): string {
+export function slug(name: string, taken: Set<string>): string {
   let s = name
     .toLowerCase()
     .replace(/[^a-z0-9_]+/g, '_')
@@ -124,7 +128,8 @@ function setSwitch(home: string, on: boolean, io: MemoryIO): boolean {
 }
 
 async function init(env: BridgeEnv, args: string[], io: MemoryIO): Promise<number> {
-  if (!io.prompt) {
+  const defaults = args.includes('--defaults')
+  if (!defaults && !io.prompt) {
     io.err('talos-app memory init asks questions; run it in a terminal.')
     return 2
   }
@@ -148,6 +153,9 @@ async function init(env: BridgeEnv, args: string[], io: MemoryIO): Promise<numbe
     io.err(check.message)
     return 1
   }
+  if (defaults) return initDefaults(env, agentDir, io)
+  const prompt = io.prompt
+  if (!prompt) return 2 // refused above already: only --defaults gets here without a terminal
   const tops = subdirs(agentDir, '')
   if (tops.length === 0) {
     io.err(`${agentDir} has no folders to share`)
@@ -158,14 +166,14 @@ async function init(env: BridgeEnv, args: string[], io: MemoryIO): Promise<numbe
   const taken = new Set<string>()
   for (const name of tops) {
     const s = survey(agentDir, name)
-    const a = await io.prompt(`  ${name}  (${s.files.length} notes)  Share it? [y/N] `)
+    const a = await prompt(`  ${name}  (${s.files.length} notes)  Share it? [y/N] `)
     if (!yes(a)) continue
     const subs = subdirs(agentDir, name)
     let exclude: string[] = []
     if (subs.length) {
       io.out(`  Subfolders of ${name}:`)
       for (const sub of subs) io.out(`    ${sub}  (${survey(agentDir, `${name}/${sub}`).files.length} notes)`)
-      const ex = await io.prompt('  Exclude any? (comma-separated, Enter for none) ')
+      const ex = await prompt('  Exclude any? (comma-separated, Enter for none) ')
       exclude = ex
         .split(',')
         .map((x) => x.trim().replace(/^\/+|\/+$/g, ''))
@@ -193,7 +201,7 @@ async function init(env: BridgeEnv, args: string[], io: MemoryIO): Promise<numbe
     for (const p of s.privateDirs)
       io.out(`    hidden: ${p === '.' ? r.path : `${r.path}/${p}`} has a ${PRIVATE_MARKER} marker`)
   }
-  const ok = await io.prompt('Write it and turn the memory browser on? [y/N] ')
+  const ok = await prompt('Write it and turn the memory browser on? [y/N] ')
   if (!yes(ok)) {
     io.out('Nothing written.')
     return 0
@@ -201,6 +209,53 @@ async function init(env: BridgeEnv, args: string[], io: MemoryIO): Promise<numbe
   writeMemoryConfig(env.home, parsed.config)
   if (!setSwitch(env.home, true, io)) io.out('memory.json is written; turn it on after `talos-app init`.')
   io.out(`Written ${memoryJsonPath(env.home)}. The browser is on. Check what is shared: talos-app memory show`)
+  return 0
+}
+
+/**
+ * `memory init --defaults`, for the installers: no questions. A memory.json that is already there (the owner's own
+ * choices, or an earlier run) is left exactly as it is. Otherwise the agent folder's memory/ and wiki/ are shared, each
+ * only if it is a real folder there, with the same denylist and private markers as an interactive init, and the
+ * browser is switched on when the app's config exists.
+ */
+function initDefaults(env: BridgeEnv, agentDir: string, io: MemoryIO): number {
+  const existing = loadMemoryConfig(env.home)
+  if (existing.ok) {
+    io.out('The memory browser is already set up; nothing changed. See it: talos-app memory show')
+    return 0
+  }
+  if (!('missing' in existing && existing.missing)) {
+    // the owner's file, even a broken one, is never replaced by defaults
+    io.err(`${memoryJsonPath(env.home)} is there but not usable (${existing.message}); nothing changed`)
+    return 1
+  }
+  const taken = new Set<string>()
+  const roots: MemoryRootCfg[] = []
+  for (const name of DEFAULT_MEMORY_ROOTS) {
+    try {
+      if (!lstatSync(join(agentDir, name)).isDirectory()) continue
+    } catch {
+      continue
+    }
+    roots.push({ id: slug(name, taken), label: name, path: name, include: DEFAULT_INCLUDE, exclude: [] })
+  }
+  if (roots.length === 0) {
+    io.err(`${agentDir} has no ${DEFAULT_MEMORY_ROOTS.join(' or ')} folder; nothing written`)
+    return 1
+  }
+  const parsed = parseMemoryConfig(
+    { version: 1, enabled: true, agent_dir: agentDir, roots, max_file_kb: DEFAULT_MAX_FILE_KB },
+    env.home,
+  )
+  if (!parsed.ok) {
+    io.err(parsed.message)
+    return 1
+  }
+  writeMemoryConfig(env.home, parsed.config)
+  const on = setSwitch(env.home, true, io)
+  io.out(
+    `Written ${memoryJsonPath(env.home)}: ${roots.map((r) => r.path).join(' and ')} shared with the app${on ? ', and the browser is on' : '; the browser turns on after `talos-app init`'}.`,
+  )
   return 0
 }
 
@@ -282,7 +337,12 @@ export async function cmdMemory(env: BridgeEnv, args: string[], io: MemoryIO): P
         ...io.serviceOptions,
       })
       if (!svc.available) {
-        io.err("This Mac's SQLite has no FTS5; the memory browser is unavailable.")
+        io.err(
+          say({
+            mac: "This Mac's SQLite has no FTS5; the memory browser is unavailable.",
+            linux: "This computer's SQLite has no FTS5; the memory browser is unavailable.",
+          }),
+        )
         return 1
       }
       try {

@@ -1,20 +1,21 @@
 // The Run button, decided on the Mac. A tap is a signed `message` with `intent: 'run'` and `run_block`, the block it is for. The
-// Mac accepts it only when every check below holds, and then (and only then) marks the block run and sets `run="tap"` on
+// Mac accepts it only when every check below holds, and then (and only then) marks the tap seen and sets `run="tap"` on
 // the note; the agent trusts that flag and nothing the text says. The Mac does not check that the script came from the
 // agent: the owner's tap is what approves it. The answer to a refusal is a plain line in the thread for the owner to read;
-// the app does not read it. ("Already tried", not "already ran": a hand-over that failed after the mark reached the agent as nothing.)
+// the app does not read it. Each tap runs once (a replay of it, under any frame id, is consumed before this, by its message id);
+// a fresh tap on the same block is a new Run.
 import {
   type Frame,
   parseRun,
   RUN_BLOCK_MAX_AGE_MS,
   RUN_MAX_AGE_MS,
   type RunBlockRefT,
-  runBlockKey,
   runBlockMadeAt,
   threadSessionMode,
 } from '@talos-app/protocol'
 import type { BridgeContext } from './context.ts'
 import { signedBeforeReset } from './history-recover.ts'
+import { say } from './owner-words.ts'
 
 type MessageFrame = Extract<Frame, { type: 'message' }>
 
@@ -44,13 +45,14 @@ export function runCheck(ctx: BridgeContext, f: MessageFrame): { line: string } 
     return no('it was signed more than a day ago')
   // A history kept aside forgot what it had handed over, so a Run signed before then could run twice.
   if (signedBeforeReset(ctx.store, f.ts) || (f.original_ts && signedBeforeReset(ctx.store, f.original_ts)))
-    return no('the Mac’s history was reset after you tapped it')
-  // The block's own age, from its message id, on this Mac's clock, with no margin: the limit (7 days) sits a day inside the
-  // 8 days the Mac remembers which blocks ran, so a block that is allowed here is always still remembered. A refusal marks nothing.
+    return no(
+      say({
+        mac: 'the Mac’s history was reset after you tapped it',
+        linux: 'this computer’s history was reset after you tapped it',
+      }),
+    )
+  // The block's own age, from its message id, on this Mac's clock, with no margin. A refusal marks nothing.
   const made = runBlockMadeAt(f.run_block)
   if (made === null || ctx.clock.now() - made > RUN_BLOCK_MAX_AGE_MS) return { line: OLD_BLOCK }
-  // One block, one Run, whichever device or screen taps it. A post of the same script by the agent is a new block.
-  if (ctx.store.hasSeen(runBlockKey(f.run_block)))
-    return no('that block was already tried', 'Ask your agent to post the script again to run it again.')
   return { block: f.run_block }
 }

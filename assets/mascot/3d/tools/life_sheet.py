@@ -12,9 +12,9 @@ import os
 import sys
 
 from PIL import Image, ImageDraw, ImageFont
+import label_font
 
 GROUND = (0x14, 0x11, 0x10, 255)
-FONT = '/System/Library/Fonts/Supplemental/Arial.ttf'
 CLIPS = ['sit', 'nap', 'stretch', 'scratch', 'stumble', 'tinker', 'sleep', 'wake', 'wake-low']
 
 
@@ -34,8 +34,8 @@ def tiles(frames, m, clip, scale):
 
 def sheet(rows, mag, label_h=34):
     """rows: [(title, [(col, ms, img)])] -> one image; every tile magnified `mag` times"""
-    font = ImageFont.truetype(FONT, 15)
-    small = ImageFont.truetype(FONT, 12)
+    font = label_font.font(15)
+    small = label_font.font(12)
     cw = max(i.width for _, ts in rows for _, _, i in ts) * mag + 8
     ch = max(i.height for _, ts in rows for _, _, i in ts) * mag + label_h
     per = max(len(ts) for _, ts in rows)

@@ -1,7 +1,17 @@
 // In-memory SearchClient + MemoryClient for fakeClient (VITE_FAKE=1 and the web tests). Generic content only.
-import { foldForSearch, type MemoryEntryT, type MessageT, ownValue, type SearchHitT } from '@talos-app/protocol'
+import {
+  FILES_PUT_REFUSED_NAMES,
+  FILES_PUT_WORDING,
+  FILES_WORDING,
+  filesNameHidden,
+  foldForSearch,
+  type MemoryEntryT,
+  type MessageT,
+  ownValue,
+  type SearchHitT,
+} from '@talos-app/protocol'
 import { TalosClientError } from './client.ts'
-import type { FolderClient, MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
+import type { FilesClient, FilesListing, FolderClient, MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
 
 /** Marks (start, end) in `text` for each folded term, mapped back to original string offsets. */
 function marksFor(text: string, terms: string[]): Array<[number, number]> {
@@ -114,6 +124,29 @@ export function createFakeMemory(deps: { macOnline: () => boolean }): MemoryClie
   }
   const titleOf = (body: string) => /^#\s+(.+)$/m.exec(body)?.[1] ?? ''
   return {
+    async graph() {
+      gate()
+      const paths = Object.keys(TREE).sort()
+      const stemOf = (p: string) =>
+        p
+          .replace(/\.[^.]+$/, '')
+          .split('/')
+          .pop() as string
+      const edges: Array<[number, number]> = []
+      for (const [i, p] of paths.entries())
+        for (const m of (TREE[p] ?? '').matchAll(/\[\[([^\]|]+)/g)) {
+          const j = paths.findIndex((q) => stemOf(q) === m[1])
+          if (j >= 0 && j !== i && !edges.some(([a, b]) => (a === i && b === j) || (a === j && b === i)))
+            edges.push([i, j])
+        }
+      return {
+        roots: [{ id: 'notes', label: 'Notes' }],
+        nodes: paths.map((p) => ({ root: 0, path: p, title: titleOf(TREE[p] ?? '') || stemOf(p) })),
+        edges,
+        total: paths.length,
+        truncated: false,
+      }
+    },
     async tree(rootId, path) {
       gate()
       if (rootId === null) {
@@ -286,6 +319,123 @@ export function createFakeFolders(deps: { macOnline: () => boolean }, seed: Fake
         entries: shown,
         more: more[path] ?? 0,
       }
+    },
+  }
+}
+
+/** A fake Mac's thread folder for the Files pane: one folder per thread (else `root`), and its files by relative path. */
+export type FakeFilesTree = {
+  root: string
+  /** Threads whose folder is another one (a thread with its own session and folder). */
+  roots?: Record<string, string>
+  /** Relative path -> its text, or an image / a file that is not text. Folders come from the paths. */
+  files: Record<string, string | { image: true } | { binary: true }>
+}
+
+export type FakeFiles = FilesClient & {
+  /** The next call rejects with the Mac's refusal sentence (or this text), then behaves again. */
+  failNextWith(message: string): void
+  /** Adds or replaces one file. */
+  setFile(path: string, body: FakeFilesTree['files'][string]): void
+  /** Every call, in order, for tests. */
+  readonly calls: Array<{ op: 'list' | 'read' | 'put'; threadId: string; path: string; offset?: number }>
+}
+
+/**
+ * The Files pane's Mac as a fake: lists and reads what `seed.files` holds, never a hidden name (the real Mac's rule), refuses
+ * anything else with the Mac's sentence, cuts text in chunks of `chunk` characters, and rejects with the Mac away.
+ */
+export function createFakeFiles(deps: { macOnline: () => boolean; chunk?: number }, seed: FakeFilesTree): FakeFiles {
+  const files: FakeFilesTree['files'] = { ...seed.files }
+  const calls: FakeFiles['calls'] = []
+  let failNext: string | null = null
+  const shown = (path: string) => !path.split('/').some(filesNameHidden)
+  const gate = () => {
+    if (!deps.macOnline()) throw new TalosClientError('mac_offline')
+    if (failNext !== null) {
+      const message = failNext
+      failNext = null
+      throw new TalosClientError('bad_frame', message)
+    }
+  }
+  const refuse = (): never => {
+    throw new TalosClientError('bad_frame', FILES_WORDING.refused)
+  }
+  return {
+    calls,
+    failNextWith(message) {
+      failNext = message
+    },
+    setFile(path, body) {
+      files[path] = body
+    },
+    async list(threadId, path) {
+      calls.push({ op: 'list', threadId, path })
+      gate()
+      if (!shown(path)) refuse()
+      const prefix = path === '' ? '' : `${path}/`
+      const dirs = new Set<string>()
+      const out: FilesListing['entries'] = []
+      for (const [p, body] of Object.entries(files)) {
+        if (!p.startsWith(prefix) || !shown(p)) continue
+        const rest = p.slice(prefix.length).split('/')
+        if (rest.length > 1) dirs.add(rest[0] as string)
+        else
+          out.push({
+            name: rest[0] as string,
+            kind: 'file',
+            size: typeof body === 'string' ? new Blob([body]).size : 2048,
+          })
+      }
+      if (path !== '' && dirs.size === 0 && out.length === 0) refuse()
+      const byName = (a: { name: string }, b: { name: string }) =>
+        a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+      const entries = [...[...dirs].map((name) => ({ name, kind: 'dir' as const })).sort(byName), ...out.sort(byName)]
+      return { threadId, root: seed.roots?.[threadId] ?? seed.root, path, entries, more: 0 }
+    },
+    async read(threadId, path, offset) {
+      calls.push({ op: 'read', threadId, path, offset })
+      gate()
+      const body = files[path]
+      if (body === undefined || !shown(path)) return refuse()
+      const base = { threadId, path, mtime: '2026-11-10T09:00:00.000Z', truncated: false }
+      if (typeof body !== 'string') {
+        if ('binary' in body)
+          return { ...base, kind: 'binary', size: 4096, nextOffset: null, message: FILES_WORDING.binary }
+        const name = path.split('/').pop() ?? 'image.png'
+        const media = {
+          media_id: `md_files_${name.replace(/\W/g, '_')}`,
+          kind: 'image',
+          role: 'attachment',
+          mime: 'image/png',
+          name,
+          size: 2048,
+          sha256: '0'.repeat(64),
+        }
+        return { ...base, kind: 'image', size: 2048, nextOffset: null, media: media as never }
+      }
+      const chunk = deps.chunk ?? 100_000
+      const text = body.slice(offset, offset + chunk)
+      const next = offset + chunk < body.length ? offset + chunk : null
+      return { ...base, kind: 'text', size: new Blob([body]).size, text, offset, nextOffset: next }
+    },
+    // the Mac's rules in small: a folder it lists, one plain name that is not hidden or an instruction file, never over a file
+    async put(threadId, dir, name, media) {
+      calls.push({ op: 'put', threadId, path: dir === '' ? name : `${dir}/${name}` })
+      gate()
+      if (!shown(dir) || (dir !== '' && !Object.keys(files).some((p) => p.startsWith(`${dir}/`))))
+        throw new TalosClientError('bad_frame', FILES_PUT_WORDING.folder)
+      if (name.includes('/') || filesNameHidden(name))
+        throw new TalosClientError('bad_frame', FILES_PUT_WORDING.badName)
+      if (FILES_PUT_REFUSED_NAMES.includes(name.toLowerCase()))
+        throw new TalosClientError('bad_frame', FILES_PUT_WORDING.instructions)
+      const at = (n: string) => (dir === '' ? n : `${dir}/${n}`)
+      const dot = name.lastIndexOf('.')
+      const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
+      let got = name
+      for (let n = 2; files[at(got)] !== undefined; n++) got = `${base} (${n})${ext}`
+      files[at(got)] = media.mime.startsWith('text/') ? '' : { binary: true }
+      return { name: got, size: media.size }
     },
   }
 }

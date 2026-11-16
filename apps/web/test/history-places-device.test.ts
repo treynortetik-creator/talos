@@ -72,6 +72,21 @@ describe('history on a device that has never caught up', () => {
     expect(hellos().at(-1)?.raw.last_seq).toBe(1000)
   })
 
+  it('the newest page asked for while catch-up pages are still coming does not jump the pages not fetched yet', async () => {
+    const reply = (seq: number) => ({
+      ...mkFrame('reply', { message: { ...msg(seq), seq: undefined } }),
+      relay: { seq, received_at: new Date().toISOString() },
+    })
+    relay.sendToApps(mkFrame('catchup.batch', { from_seq: 1, to_seq: 200, frames: [reply(200)], more: true }))
+    await waitFor(() => client.store.getState().lastSeq === 200, 2000, 'page one')
+    const p = client.loadHistory('general')
+    await answer([msg(448), msg(449), msg(450)])
+    await p
+    expect(client.store.getState().lastSeq).toBe(200)
+    relay.sendToApps(mkFrame('catchup.batch', { from_seq: 201, to_seq: 450, frames: [reply(450)], more: false }))
+    await waitFor(() => client.store.getState().lastSeq === 450, 2000, 'last page')
+  })
+
   it('an older page (before_seq) does not move it', async () => {
     const p = client.loadHistory('general', 500)
     await answer([msg(498), msg(499)])

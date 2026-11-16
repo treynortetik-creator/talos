@@ -86,6 +86,8 @@ final class HotkeyController: ObservableObject {
     switch HotKeys.shared.register(s) {
     case .ok:
       spec = s
+      // an agent never presses Talos's own hotkey through the screen tools
+      ScreenHelperHost.talosHotkeys.value = [ScreenKeyGuard.combo(carbonKey: s.keyCode, carbonModifiers: s.modifiers)]
       message = "Active: \(s.display)"
       persist?(s.text)
       return true

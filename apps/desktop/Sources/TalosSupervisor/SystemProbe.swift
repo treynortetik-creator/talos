@@ -23,11 +23,30 @@ public protocol SystemProbe: AnyObject, Sendable {
   func post(command: [String], thread: String, text: String, env: [String: String]) -> Bool
   /// `post`, with the timeout told apart. The default reads a refusal as `failed` (a probe that can't tell never says `unknown`).
   func postOutcome(command: [String], thread: String, text: String, env: [String: String]) -> PostOutcome
+  /// The Mac's own signed system row (`SystemPost`): one HTTPS request to the relay. Blocking; whether it was taken (2xx). No
+  /// default: a test probe must say what it does, so no test reaches a network.
+  func send(_ request: URLRequest) -> PostOutcome
+  /// `talos-app guards refresh` (GuardsRefresh), blocking, bounded by `GuardsRefresh.timeout`. The default runs `command`.
+  func guardsRefresh(command: [String], env: [String: String]) -> RunResult
 }
 
 extension SystemProbe {
+  public func guardsRefresh(command: [String], env: [String: String]) -> RunResult {
+    ProcessRunner.run(command + GuardsRefresh.args, env: env, timeout: GuardsRefresh.timeout)
+  }
+
   public func postOutcome(command: [String], thread: String, text: String, env: [String: String]) -> PostOutcome {
     post(command: command, thread: thread, text: text, env: env) ? .sent : .failed
+  }
+}
+
+/// The answer of one `send`, written by URLSession's queue and read after the wait.
+private final class OutcomeBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var v = PostOutcome.failed
+  var value: PostOutcome {
+    get { lock.withLock { v } }
+    set { lock.withLock { v = newValue } }
   }
 }
 
@@ -85,6 +104,28 @@ public final class LiveSystem: SystemProbe, @unchecked Sendable {
   public func postOutcome(command: [String], thread: String, text: String, env: [String: String]) -> PostOutcome {
     let r = ProcessRunner.run(command + ["post", thread, text], env: env, timeout: 60)
     return r.timedOut ? .unknown : (r.ok ? .sent : .failed)
+  }
+
+  public func send(_ request: URLRequest) -> PostOutcome {
+    let done = DispatchSemaphore(value: 0)
+    let result = OutcomeBox()
+    let session = URLSession(configuration: .ephemeral)
+    defer { session.finishTasksAndInvalidate() }
+    let task = session.dataTask(with: request) { _, response, error in
+      if let code = (response as? HTTPURLResponse)?.statusCode {
+        result.value = (200..<300).contains(code) ? .sent : .failed
+      } else if (error as? URLError)?.code == .timedOut {
+        result.value = .unknown
+      }
+      done.signal()
+    }
+    task.resume()
+    // a hard deadline: the request's own timeout is per read, so a relay that trickles bytes could hold this thread for good
+    guard done.wait(timeout: .now() + 45) == .success else {
+      task.cancel()
+      return .unknown
+    }
+    return result.value
   }
 }
 

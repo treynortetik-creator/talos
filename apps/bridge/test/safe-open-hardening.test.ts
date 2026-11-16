@@ -4,27 +4,32 @@
 import { Database } from 'bun:sqlite'
 import { afterEach, describe, expect, test } from 'bun:test'
 import {
+  appendFileSync,
   closeSync,
+  constants,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { newUlid } from '@talos-app/protocol'
-import { fakeClock, mkFrame } from '@talos-app/testkit'
+import { fakeClock, mkFrame, waitScale } from '@talos-app/testkit'
 import { normaliseToolResponse } from '../src/apps/captures.ts'
 import { nullLogger } from '../src/log.ts'
 import { MediaError, MediaStore } from '../src/media.ts'
 import { memoryIndexPath } from '../src/memory/config.ts'
 import { MemoryScope } from '../src/memory/scope.ts'
 import { MemoryBrowser } from '../src/memory/service.ts'
-import { openResolvedNoFollow, openSeam } from '../src/safe-open.ts'
+import { openResolvedNoFollow, openSeam, strayLog } from '../src/safe-open.ts'
 import { FileIndexer } from '../src/search/files.ts'
 
 const SECRET = 'zzSECRETzz'
@@ -219,6 +224,19 @@ describe('the search attachment reader', () => {
     expect(idx.read(ID)).toBeNull()
   })
 
+  test('a hard link whose in-folder name is removed after the open is refused: the outside name keeps the handle linked', () => {
+    const { base, dir, idx, sidecar } = media()
+    put(join(base, 'outside.txt'), `${SECRET}\n`)
+    linkSync(join(base, 'outside.txt'), join(dir, `${ID}.txt`))
+    sidecar(join(dir, `${ID}.txt`))
+    openSeam.afterOpen = (p) => {
+      if (!p.endsWith('.txt')) return // the sidecar is opened first
+      openSeam.afterOpen = undefined
+      unlinkSync(join(dir, `${ID}.txt`)) // now only the outside name is left, so the handle's link count reads 1
+    }
+    expect(idx.read(ID)).toBeNull()
+  })
+
   test('a named pipe is refused without waiting for a writer (a blocked open would freeze the whole bridge)', async () => {
     const { dir, sidecar } = media()
     const fifo = join(dir, `${ID}.txt`)
@@ -227,12 +245,13 @@ describe('the search attachment reader', () => {
     const script = `import { FileIndexer } from ${JSON.stringify(join(import.meta.dir, '../src/search/files.ts'))}
 console.log(String(new FileIndexer(null, ${JSON.stringify(dir)}).read(${JSON.stringify(ID)})))`
     const p = Bun.spawn([process.execPath, '-e', script], { stdout: 'pipe', stderr: 'ignore' })
-    const timer = setTimeout(() => p.kill(9), 4000)
+    // a blocked open never ends, so this only has to outlast a slow start of a fresh bun on a loaded machine
+    const timer = setTimeout(() => p.kill(9), Math.min(4000 * waitScale(), 25_000))
     const code = await p.exited
     clearTimeout(timer)
     expect(code).toBe(0) // killed = 137: the open blocked
     expect((await new Response(p.stdout).text()).trim()).toBe('null')
-  }, 10_000)
+  }, 30_000)
 
   test('a swapped folder at the open is refused (shared helper)', () => {
     const base = mk()
@@ -295,5 +314,93 @@ describe('the search index', () => {
     expect((await q(SECRET)).hits).toEqual([])
     expect((await q('real')).hits.length).toBe(1)
     svc.stop()
+  })
+})
+
+// Review of 1502cd06 (Cyclops, Fable): an exclusive create on Linux goes through a handle on its folder, and what it made in
+// the wrong place is taken out only through that handle, never by a path walk (lstat then unlink by path is two walks, and a
+// folder swapped between them made the bridge delete a same-named file elsewhere). Linux only: macOS refuses these opens
+// with O_NOFOLLOW_ANY before any of it runs.
+describe.if(process.platform === 'linux')('an exclusive create on Linux (review of 1502cd06)', () => {
+  const CREATE = constants.O_RDWR | constants.O_CREAT | constants.O_EXCL
+  let warned: string[] = []
+  const realWarn = strayLog.warn
+  afterEach(() => {
+    strayLog.warn = realWarn
+  })
+  const setup = () => {
+    warned = []
+    strayLog.warn = (m) => warned.push(m)
+    const top = mk()
+    mkdirSync(join(top, 'root', 'docs'), { recursive: true })
+    mkdirSync(join(top, 'outside'))
+    return { top, docs: join(top, 'root', 'docs'), outside: join(top, 'outside') }
+  }
+
+  test('a folder swapped for a link before the create makes nothing outside, not even for a moment', () => {
+    const { docs, outside } = setup()
+    let seenOutside = false
+    openSeam.beforeOpen = (p) => {
+      if (p !== join(docs, 'a.md')) return
+      renameSync(docs, `${docs}-moved`)
+      symlinkSync(outside, docs)
+    }
+    openSeam.afterOpen = () => {
+      seenOutside ||= existsSync(join(outside, 'a.md'))
+    }
+    expect(() => openResolvedNoFollow(join(docs, 'a.md'), CREATE)).toThrow()
+    expect(seenOutside).toBe(false)
+    expect(existsSync(join(outside, 'a.md'))).toBe(false)
+    expect(warned).toEqual([])
+  })
+
+  test('the checked folder moved away after its check: the file made in it is taken out of it, and a same-named file at the old path is left alone', () => {
+    const { top, docs } = setup()
+    const away = join(top, 'away')
+    openSeam.afterOpen = (p) => {
+      if (p !== join(docs, 'a.md')) return
+      // after the create, before its check: the folder goes, and someone's own file of that name takes its place
+      renameSync(docs, away)
+      mkdirSync(docs)
+      writeFileSync(join(docs, 'a.md'), 'their data\n')
+    }
+    expect(() => openResolvedNoFollow(join(docs, 'a.md'), CREATE)).toThrow('not at the resolved path')
+    expect(existsSync(join(away, 'a.md'))).toBe(false) // ours, taken out through the folder handle
+    expect(readFileSync(join(docs, 'a.md'), 'utf8')).toBe('their data\n') // never touched
+    expect(warned).toEqual([])
+  })
+
+  test('a file that is no longer empty is not taken out, and the bridge says where it was left', () => {
+    const { top, docs } = setup()
+    const away = join(top, 'away')
+    openSeam.afterOpen = (p) => {
+      if (p !== join(docs, 'a.md')) return
+      appendFileSync(join(docs, 'a.md'), 'written meanwhile\n')
+      renameSync(docs, away)
+    }
+    expect(() => openResolvedNoFollow(join(docs, 'a.md'), CREATE)).toThrow()
+    expect(readFileSync(join(away, 'a.md'), 'utf8')).toBe('written meanwhile\n')
+    expect(warned).toEqual([
+      `talos: a file this bridge created (empty when made) was not where it was asked for, and is left at ${JSON.stringify(join(away, 'a.md'))}`,
+    ])
+  })
+
+  test('an open that does not create never removes anything, whatever its check finds', () => {
+    const { top, docs } = setup()
+    writeFileSync(join(docs, 'b.md'), '')
+    const away = join(top, 'away')
+    openSeam.afterOpen = (p) => {
+      if (p === join(docs, 'b.md')) renameSync(docs, away)
+    }
+    expect(() => openResolvedNoFollow(join(docs, 'b.md'), constants.O_RDONLY)).toThrow()
+    expect(existsSync(join(away, 'b.md'))).toBe(true)
+    expect(warned).toEqual([])
+  })
+
+  test('an exclusive create where nothing moved works as before, in the folder asked for', () => {
+    const { docs } = setup()
+    const fd = openResolvedNoFollow(join(docs, 'c.md'), CREATE)
+    closeSync(fd)
+    expect(existsSync(join(docs, 'c.md'))).toBe(true)
   })
 })

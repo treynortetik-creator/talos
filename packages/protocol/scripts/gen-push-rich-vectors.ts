@@ -6,6 +6,7 @@ import {
   cardNotice,
   createDeviceKey,
   createPhoneKeys,
+  NOTICE_TITLE,
   richContentFor,
   sealPush,
   shownHash,
@@ -98,8 +99,16 @@ const out = {
     envelope: approve,
     notice: notice.text,
     subtitle: 'General',
-    shown: shownHash(notice.text, 'General'),
+    title: NOTICE_TITLE,
+    shown: shownHash(notice.text, 'General', NOTICE_TITLE),
     payload_hash: `sha256:${'a'.repeat(64)}`,
+  },
+  // Lengths are UTF-8 bytes on both sides: a thread name and a body that are not ASCII.
+  shown_wide: {
+    title: NOTICE_TITLE,
+    subtitle: 'Café ✓ 🚀',
+    body: 'Déjà vu — 3 drafts',
+    shown: shownHash('Déjà vu — 3 drafts', 'Café ✓ 🚀'),
   },
   act: { id: ACT_ID, ts: tapped, wire: replyAct },
 }

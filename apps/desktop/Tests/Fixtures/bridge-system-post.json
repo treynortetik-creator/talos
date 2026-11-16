@@ -1,0 +1,16 @@
+{
+  "note": "RFC 8032 TEST 1 key (public test vector). Regenerate only from packages/protocol (bridge-system-post-fixture.test.ts checks it).",
+  "key_file": {
+    "v": 1,
+    "pkcs8": "MC4CAQAwBQYDK2VwBCIEIJ1hsZ3v_VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g",
+    "public": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+    "key_id": "21fe31dfa154a261"
+  },
+  "method": "POST",
+  "path": "/bridge/post",
+  "ts": 1794304800,
+  "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+  "body": "{\"v\":1,\"id\":\"01JC0000000000000000000000\",\"ts\":\"2026-11-10T10:00:00.000Z\",\"type\":\"reply\",\"message\":{\"id\":\"m_01JC0000000000000000000001\",\"thread_id\":\"inbox\",\"author\":\"system\",\"kind\":\"text\",\"text\":\"Main keeps crashing\",\"format\":\"plain\",\"attachments\":[],\"via\":\"headless\",\"created_at\":\"2026-11-10T10:00:00.000Z\"}}",
+  "signing_string": "talos-bridge-http/v1\nPOST\n/bridge/post\n1794304800\nAAAAAAAAAAAAAAAAAAAAAA\n80c21b3051046460e6f6c98728c35ab2be30b64fe0af04799466a804f2598fb4",
+  "authorization": "TalosBridge key_id=21fe31dfa154a261,ts=1794304800,nonce=AAAAAAAAAAAAAAAAAAAAAA,sig=M82jKeTHw0jsfTZnEKNlwpHsgGdFbAlLIBHBqQv9BlCEAEP5IgV3vnvWsOfuIFR1HqbOeBA7F8dvF6pHZ4l3CA"
+}

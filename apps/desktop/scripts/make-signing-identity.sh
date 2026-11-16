@@ -27,7 +27,14 @@ hashes() { security find-certificate -a -c "$NAME" -Z "$KC" 2>/dev/null | awk -v
   '/^SHA-1 hash:/{h=$3} /"labl"<blob>=/{l=$0; sub(/.*"labl"<blob>="/,"",l); sub(/"$/,"",l); if (l==n) print h}'; }
 exists() { [ -n "$(hashes)" ]; }
 # "Usable" = listed by find-identity -v (certificate + key + trusted for code signing), not merely present.
-usable() { local h; for h in $(hashes); do security find-identity -v -p codesigning "$KC" 2>/dev/null | grep -qF "$h" && return 0; done; return 1; }
+# The list is read whole, then matched: `security ... | grep -q` under pipefail fails when grep stops early and security dies
+# writing the rest (SIGPIPE), which would read as "not usable".
+usable() {
+  local h ids
+  ids="$(security find-identity -v -p codesigning "$KC" 2>/dev/null || true)"
+  for h in $(hashes); do case "$ids" in *"$h"*) return 0 ;; esac; done
+  return 1
+}
 trust_step() { # trust_step <cert.pem>
   echo "macOS will ask for your password once to trust this certificate for code signing."
   security add-trusted-cert -r trustRoot -p codeSign -k "$KC" "$1"

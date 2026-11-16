@@ -15,6 +15,7 @@
 export PYTHONDONTWRITEBYTECODE=1
 set -uo pipefail
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 CORPUS="$KIT/../packages/protocol/fixtures/address-corpus.json"
 [ -f "$CORPUS" ] || CORPUS=""
 PASS=0; FAIL=0

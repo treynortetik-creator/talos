@@ -1,4 +1,4 @@
-// All auth state and rules, with no HTTP in it: sessions, enrollment codes, passkey credentials, step-up tokens, the
+// All auth state and rules, with no HTTP in it: sessions, enrollment codes, passkey credentials, the
 // device registry and bridge keys. Everything lives in the `auth_*` tables (migrations/auth/0001_init.sql).
 import { createHash } from 'node:crypto'
 import type { JwkP256T } from '@talos-app/protocol'
@@ -12,7 +12,6 @@ import {
   ENROLL_FAILURE_LIMIT,
   ENROLL_FAILURE_WINDOW_MS,
   newToken,
-  STEPUP_TTL_MS,
   sessionIdleMs,
   sessionTtlMs,
   sha256,
@@ -105,7 +104,6 @@ export class AuthCore {
   purge(): void {
     const now = this.now()
     this.db.prepare('delete from auth_challenges where expires_at <= ?').run(now)
-    this.db.prepare('delete from auth_stepup where expires_at <= ?').run(now)
     this.db.prepare('delete from auth_bridge_nonces where expires_at <= ?').run(now)
     this.db.prepare('delete from auth_enroll_codes where expires_at <= ?').run(now - 24 * 3600_000)
     this.endSessions('expires_at <= ? or last_seen_at <= ?', [now, now - this.idleMs], 'expired')
@@ -316,7 +314,7 @@ export class AuthCore {
     return token
   }
 
-  /** Valid, unexpired, not idle for 14 days. Slides the 30-day expiry forward. */
+  /** Valid, unexpired, not idle past SESSION_IDLE_DAYS. Slides the SESSION_TTL_DAYS expiry forward. */
   lookupSession(token: string | null): SessionRow | null {
     if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null
     const id = sha256(token)
@@ -403,7 +401,7 @@ export class AuthCore {
   // ---- WebAuthn challenges ---------------------------------------------------------------------------------------
 
   putChallenge(
-    kind: 'reg' | 'login' | 'stepup' | 'device',
+    kind: 'reg' | 'login' | 'device',
     challenge: string,
     sessionId?: string,
     purpose?: string,
@@ -417,38 +415,12 @@ export class AuthCore {
   }
 
   /** Single use: true only for the first call with a live challenge of this kind (and session and purpose, if given). */
-  consumeChallenge(
-    kind: 'reg' | 'login' | 'stepup' | 'device',
-    challenge: string,
-    sessionId?: string,
-    purpose?: string,
-  ): boolean {
+  consumeChallenge(kind: 'reg' | 'login' | 'device', challenge: string, sessionId?: string, purpose?: string): boolean {
     const r = this.db
       .prepare(
         "delete from auth_challenges where challenge = ? and kind = ? and expires_at > ? and coalesce(session_id, '') = ? and coalesce(purpose, '') = ?",
       )
       .run(challenge, kind, this.now(), sessionId ?? '', purpose ?? '')
-    return r.changes === 1
-  }
-
-  // ---- step-up tokens --------------------------------------------------------------------------------------------
-
-  mintStepup(sessionId: string, purpose: string): string {
-    const token = newToken(32)
-    this.db
-      .prepare('insert into auth_stepup (token_hash, session_id, purpose, expires_at) values (?, ?, ?, ?)')
-      .run(sha256(token), sessionId, purpose, this.now() + STEPUP_TTL_MS)
-    return token
-  }
-
-  /** Burns the token. True only if unexpired, unused, bound to this session and minted for exactly this purpose. */
-  consumeStepup(token: string, purpose: string, sessionId: string | null): boolean {
-    if (!sessionId || !token) return false
-    const r = this.db
-      .prepare(
-        'update auth_stepup set used_at = ? where token_hash = ? and used_at is null and expires_at > ? and session_id = ? and purpose = ?',
-      )
-      .run(this.now(), sha256(token), this.now(), sessionId, purpose)
     return r.changes === 1
   }
 

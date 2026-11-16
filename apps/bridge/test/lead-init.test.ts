@@ -22,6 +22,7 @@ import defaultConfig from '../../../examples/config.default.json' with { type: '
 import { paths } from '../src/config.ts'
 import { cmdLead } from '../src/lead/cli.ts'
 import { LEAD_BOARD_MAX, LEAD_BRIEF_MAX } from '../src/lead/settings.ts'
+import { onRequestCommand } from '../src/on-request-cli.ts'
 import { COMMANDS, terminalOnly } from '../src/talos.ts'
 
 const made: string[] = []
@@ -339,9 +340,10 @@ describe('lead init', () => {
     expect(s.run(['init', def, '--folder', join(s.base, 'd'), '--agent-dir', s.agentDir])).toBe(1)
   })
 
-  test('it is an owner-terminal command: refused when stdin or stdout is not a terminal', () => {
-    expect(terminalOnly(['lead', 'init', 'trip'])).toBe('lead init')
-    expect(COMMANDS.find((c) => c.name === 'lead init')?.agent_may_run).toBe(false)
+  test('not terminal-only any more: the agent runs it when the owner asked (on-request-cli.test.ts)', () => {
+    expect(terminalOnly(['lead', 'init', 'trip'])).toBeUndefined()
+    expect(onRequestCommand(['lead', 'init', 'trip'])).toBe('lead init')
+    expect(COMMANDS.find((c) => c.name === 'lead init')?.who).toBeUndefined()
     expect(terminalOnly(['lead', 'check', 'x'])).toBeUndefined()
   })
 })

@@ -9,6 +9,7 @@ describe('card kind labels', () => {
       ['email', { icon: '✉', label: 'Email' }],
       ['message', { icon: '💬', label: 'Message' }],
       ['deploy', { icon: '🚀', label: 'Deploy' }],
+      ['push', { icon: '⬆', label: 'Push' }],
       ['publish', { icon: '📣', label: 'Publish' }],
       ['purchase', { icon: '💳', label: 'Purchase' }],
       ['decision', { icon: '⚖', label: 'Decision' }],
@@ -18,6 +19,7 @@ describe('card kind labels', () => {
       ['app_action', { icon: '◇', label: 'App request' }],
       ['config', { icon: '⚙', label: 'Setting' }],
       ['dialog', { icon: '⌨', label: 'Needs you' }],
+      ['undo', { icon: '↶', label: 'Undo' }],
     ])
     expect(Object.keys(KIND_LABEL)).toEqual([...Card.shape.kind.options])
   })

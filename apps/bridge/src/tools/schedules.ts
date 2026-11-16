@@ -1,5 +1,7 @@
 // The four Schedules tools (docs/SCHEDULES.md S6.1). `schedules_list` works headless (read-only). The others are live only.
 // The agent never writes the registry: `schedule_propose` mints a card the owner approves, and the BRIDGE applies it.
+
+import { say } from '../owner-words.ts'
 import { NOTEPAD_INPUT_MAX_CHARS } from '../schedules/job-memory-run.ts'
 import { fail, needStr, ok, str, type Tool, ToolError } from './common.ts'
 import { OWN_THREAD, type ToolRecord, WORKER_NO_THREAD } from './define.ts'
@@ -8,13 +10,13 @@ type Ctx = Parameters<Tool['handler']>[0]
 
 /**
  * A thread's own session (worker mode) has no Schedules service of its own: main's bridge runs the tool for it over the hub
- * socket, scoped to the thread the hub proved. Main's tools do not pass through here.
+ * socket, scoped to the thread the hub proved. Main's tools do not pass through here. `config_propose` takes the same road.
  */
-async function viaMain(ctx: Ctx, tool: string, args: Record<string, unknown>) {
+export async function viaMain(ctx: Ctx, tool: string, args: Record<string, unknown>) {
   const hub = ctx.worker?.hub
   if (!hub)
     return fail(
-      'This thread session is not connected to the main bridge, so it cannot reach the schedules. Nothing was done.',
+      'This thread session is not connected to the main bridge, so it cannot reach the schedules or the settings cards. Nothing was done.',
     )
   const r = await hub.rpc(tool, args)
   return r.ok ? ok(r.text) : fail(r.text)
@@ -35,8 +37,10 @@ export const schedulesList: ToolRecord = {
   ...WORKER_NO_THREAD,
   instructions: null,
   told: [],
-  description:
-    "List the scheduled jobs on this Mac as a plain-text table (id, name, when, next run, today, last result, runner, permissions, state), then any scheduler health issues. Pass `id` for one job in full: its prompt, standing rules and last 10 runs. Read-only. In a thread session: only that thread's jobs.",
+  // read when asked, so the computer in force says it (Fable)
+  get description() {
+    return `List the scheduled jobs on ${say({ mac: 'this Mac', linux: 'this computer' })} as a plain-text table (id, name, when, next run, today, last result, runner, permissions, state), then any scheduler health issues. Pass \`id\` for one job in full: its prompt, standing rules and last 10 runs. Read-only. In a thread session: only that thread's jobs.`
+  },
   inputSchema: {
     type: 'object',
     properties: { id: { type: 'string', description: 'One job id, for its full prompt and recent runs.' } },

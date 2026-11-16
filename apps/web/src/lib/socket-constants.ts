@@ -22,10 +22,17 @@ export const DEDUPE_WINDOW_MS = 7 * 24 * 3600_000
 export const SNAPSHOT = 'snapshot'
 export const APP_REQUEST_SETTLE_MS = 5_000
 export const INBOX_QUEUE = 'inbox-queue'
+/** How long a socket that was let go of may still deliver the answer to an inbox change sent on it. */
+export const INBOX_ANSWER_GRACE_MS = 2000
 export const HISTORY_PAGE = 50
+/** How many acked messages the client remembers by frame id, to place a later refusal by the Mac on its row. */
+export const ACKED_REFS_MAX = 200
 export const REQUEST_TIMEOUT_MS = 12_000
 /** The most the relay's `ready.ts` may move the clock we sign with (an hour: a phone further off than that is wrong, not skewed). */
 export const MAX_CLOCK_OFFSET_MS = 3600_000
+/** How many unread rows are remembered by seq per thread, and for how many threads (socket-state.ts `noteUnreadSeq`). */
+export const UNREAD_SEQS_PER_THREAD = 500
+export const UNREAD_SEQ_THREADS = 500
 /** The relay's upload cap (core/index.ts): bigger files are refused before they are read into memory. */
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 /** The protocol's cap on one message's text (`frames.ts` message.text, `models.ts` Message.text). */
@@ -47,7 +54,7 @@ export const TERMINAL_UPLOAD = new Set([400, 413, 415])
  * Every try starts with a live, confirmed socket, so a failure is the upload path itself (the relay answered the socket and
  * refused the upload, a daily upload limit, a recording that cannot be read), not a lost connection: a dropped socket
  * does not count, and a new connection starts the count again. Nothing the relay sends says how long such a refusal lasts
- * (its 429 has no Retry-After), so this is a judgement: one failure may be a blip, a second one a coincidence, a third
+ * (its 429 now carries Retry-After, which this count does not read), so this is a judgement: one failure may be a blip, a second one a coincidence, a third
  * is a pattern. With the default 10 s between tries that is about 20 s of waiting before the text behind it is released.
  */
 export const VOICE_UPLOAD_TRIES = 3

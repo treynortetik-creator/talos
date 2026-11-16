@@ -32,6 +32,7 @@ export async function openThreadSettings(page: Page) {
     return
   }
   await page.getByTestId('thread-settings-trigger').click()
+  await page.getByTestId('thread-settings-open').click()
 }
 
 /** The thread's "what goes here" text. It is no longer a line under the header: it is read in the thread's settings. */

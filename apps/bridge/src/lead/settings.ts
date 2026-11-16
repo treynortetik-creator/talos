@@ -4,9 +4,10 @@
 // servers, switches the claude.ai connectors off and registers the two hooks. It has no sandbox: it stops accidents, not a determined
 // process. SANDBOX (opt-in) adds Claude Code's OS sandbox, locked (no way out for a command, no start without it), which
 // turns the same rules into kernel-enforced limits for Bash and every child process. Which MCP servers a lead may use is the
-// thread's one allow list (`session_opts.mcp_allow`), which the Mac app applies when it starts the session (a strict MCP
-// config); nothing here is written from it. See src/lead/fence.ts for the roots.
+// thread's one allow list (`session_opts.mcp_allow`), which the supervisor applies when it starts the session (a strict MCP
+// config), restarting a running one after its turn when the list changes; nothing here is written from it. See src/lead/fence.ts for the roots.
 import { isAbsolute } from 'node:path'
+import { isMcpConnector, MCP_CONNECTOR_DENY, MCP_NEVER_OPEN, mcpToolPrefix, WORKER_MCP_APP } from '@talos-app/protocol'
 import { defaultLeadRoots } from './fence.ts'
 
 export const LEAD_BRIEF_MAX = 6144
@@ -14,17 +15,17 @@ export const LEAD_BOARD_MAX = 4096
 
 export type LeadProfile = 'light' | 'sandbox'
 
-/** MCP servers no allow list can open: they drive the owner's browser and screen. */
-export const LEAD_NEVER_MCP = ['claude-in-chrome', 'computer-use'] as const
+/** MCP servers no allow list can open: they drive the owner's browser and screen (one source: packages/protocol worker-mcp.ts). */
+export const LEAD_NEVER_MCP = MCP_NEVER_OPEN
 
 /** The servers the first version of the allow list denied by name in the lead's settings, before the Mac app applied the list. Only `stopgapMcpDenies` reads this. */
 const STOPGAP_DEFAULT_DISABLED_MCP = [...LEAD_NEVER_MCP, 'Claude_Browser', 'playwright', 'puppeteer'] as const
 
 /** The one server a lead always keeps. */
-const LEAD_KEPT_MCP = 'talos-app'
+const LEAD_KEPT_MCP = WORKER_MCP_APP
 
 /** A claude.ai account connector, as Claude Code names it (`claude.ai Gmail`). A lead's settings turn them all off. */
-export const isClaudeAiConnector = (name: string) => /^claude\.ai /i.test(name)
+export const isClaudeAiConnector = isMcpConnector
 
 /** Tools a lead never gets in the sandbox profile: they run outside the sandbox, or reach other sessions. A lead talks to main through the talos-app hand-off tool. */
 export const LEAD_DENIED_TOOLS = [
@@ -112,12 +113,8 @@ const abs = (p: string) => `/${p}`
 const uniq = <T>(...lists: Array<readonly T[] | undefined>) => [...new Set(lists.flatMap((l) => l ?? []))]
 
 /** The prefix Claude Code gives a server's tools: anything outside letters, digits, `_` and `-` becomes `_`; a plugin's server is `plugin_<plugin>_<server>`. */
-function mcpPrefix(name: string): string {
-  return (name.startsWith('plugin:') ? `plugin_${name.slice('plugin:'.length)}` : name).replace(/[^a-zA-Z0-9_-]/g, '_')
-}
-
 /** `mcp__<server>__*` for each server named. */
-const mcpDenyRules = (names: readonly string[]): string[] => uniq(names.map((n) => `mcp__${mcpPrefix(n)}__*`))
+const mcpDenyRules = (names: readonly string[]): string[] => uniq(names.map((n) => `mcp__${mcpToolPrefix(n)}__*`))
 
 /** The cache folders a sandboxed lead uses instead of the shared ones, which are outside the sandbox's writable area. */
 const CACHE_ENV = {
@@ -147,7 +144,7 @@ export function stopgapMcpDenies(ownerMcp: { disabled: readonly string[]; userSc
   )
   const keep = new Set(mcpDenyRules(LEAD_NEVER_MCP))
   return {
-    rules: uniq(mcpDenyRules(disabled), ['mcp__claude_ai_*', 'mcp__plugin_*']).filter((r) => !keep.has(r)),
+    rules: uniq(mcpDenyRules(disabled), [MCP_CONNECTOR_DENY, 'mcp__plugin_*']).filter((r) => !keep.has(r)),
     disabled,
   }
 }

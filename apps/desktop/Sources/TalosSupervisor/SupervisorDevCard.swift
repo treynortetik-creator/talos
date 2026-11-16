@@ -10,15 +10,17 @@ import TalosDesktopCore
 /// `dialog-answer.json` in `workers/<default thread>/`, checked against devices.json and against this file's own record of the offer
 /// (`DialogProofCheck`), then a fresh look at the screen before the key. A click on the popup is the same press.
 ///
-/// The tap or click on "I am using this for local development" IS the owner's confirm: it stores the launch fingerprint (and its seal) like his own
-/// Enter in the pane does not (`recordStartConfirmed(ownerConfirmed:)`). "Exit" presses Exit and stores nothing. Neither is ever pressed twice.
+/// A click on the Mac popup's "I am using this for local development" IS the owner's confirm: it stores the launch fingerprint and its seal
+/// (`recordStartConfirmed(ownerConfirmed:)`). A tap on the card starts this launch only, like an Enter in the pane: its answer file is checked
+/// against devices.json, which a program running as the owner can write, so it never seals. "Exit" presses Exit and stores nothing. Neither
+/// is ever pressed twice.
 struct DevCard {
   /// The offer while the warning is on screen and was refused; nil when none (or it is over).
   var offer: DialogOffer?
   /// Looks in a row without the warning on screen; two end the offer (one blank frame between redraws does not).
   var misses = 0
   var controlsSeen: [String] = []
-  /// "dialog id | signature" of every proof that checked out: one signed tap is used once.
+  /// Every proof that checked out (`DialogProofsUsed.key`): one signed tap is used once. Kept on disk too.
   var proofsUsed: [String] = []
   /// The dialog id a key was sent for: no second key for it, whatever arrives.
   var pressedFor: String?
@@ -82,15 +84,14 @@ extension Supervisor {
     postDevWaitingToPhone(launch: &l)
   }
 
-  /// Ends the offer once the warning is off the screen (two reads in a row; a screen that could not be read says nothing) or the notice
-  /// shows the channels are live.
+  /// Ends the offer once the warning is off the screen (two reads in a row; a screen that could not be read says nothing) or the start is answered.
   func syncDevCard(onScreen: Bool, unread: Bool, launch l: inout Launch) {
     // the owner's Exit is an intended stop only while that start is still waiting at the warning
-    if l.noticeSeen || phase == .running { l.devCard.ownerExit = false }
+    if l.dialogAnswered || phase == .running { l.devCard.ownerExit = false }
     guard l.devCard.offer != nil, !unread else { return }
-    l.devCard.misses = (onScreen && !l.noticeSeen) ? 0 : l.devCard.misses + 1
+    l.devCard.misses = (onScreen && !l.dialogAnswered) ? 0 : l.devCard.misses + 1
     // the guard confirmed (its own Enter) while the card stood: the question is answered
-    if l.devCard.misses >= 2 || l.noticeSeen || l.confirmsSent > l.devCard.confirmsAtOffer {
+    if l.devCard.misses >= 2 || l.dialogAnswered || l.confirmsSent > l.devCard.confirmsAtOffer {
       l.devCard.offer = nil
       l.devCard.misses = 0
       l.devCard.pressedFor = nil
@@ -117,20 +118,23 @@ extension Supervisor {
     let resultPath = dir + "/" + DialogResult.fileName
     if l.devCard.controlsSeen.contains(a.controlId) || DialogResult.controlId(path: resultPath) == a.controlId { return }
     l.devCard.controlsSeen = Array((l.devCard.controlsSeen + [a.controlId]).suffix(64))
-    let o = takeDev(offer, a, thread: thread, launch: &l)
+    let o = takeDev(offer, a, thread: thread, usedPath: dir + "/" + DialogProofsUsed.mainFileName, launch: &l)
     let data = DialogResult.encode(
       dialogId: a.dialogId, controlId: a.controlId, outcome: o.outcome, choice: o.choice, label: o.label, reason: o.reason,
       at: options.wallClock() / 1000)
     try? AtomicFile.write(data, to: resultPath, mode: 0o600)
   }
 
-  private func takeDev(_ offer: DialogOffer, _ a: DialogAnswerRequest, thread: String, launch l: inout Launch) -> WorkerManager.AnswerOutcome {
+  private func takeDev(
+    _ offer: DialogOffer, _ a: DialogAnswerRequest, thread: String, usedPath: String, launch l: inout Launch
+  ) -> WorkerManager.AnswerOutcome {
     let nowMs = options.wallClock()
     guard !a.isStale(nowMs: nowMs) else { return .nothing(.unverified) }
     guard ExactText.equal(a.dialogId, offer.id) else { return .nothing(.unverified) }
     guard let expires = ISOTime.parse(offer.expires_at), nowMs / 1000 < expires else { return .nothing() }
-    let used = a.dialogId + "|" + a.proof.osig
-    guard !l.devCard.proofsUsed.contains(used) else { return .nothing(.alreadyAnswered) }
+    // known by what was signed, not by how the signature is spelled; on disk too (DialogProofsUsed)
+    let used = DialogProofsUsed.key(dialogId: a.dialogId, proof: a.proof)
+    guard !DialogProofsUsed.contains(used, memory: l.devCard.proofsUsed, path: usedPath) else { return .nothing(.alreadyAnswered) }
     let pane = DialogProofCheck.Pane(
       thread: thread, dialogId: offer.id, kind: .devChannels, subject: offer.subject, options: offer.options, launchChanged: offer.launch_changed)
     // a key already sent for this sighting, by a tap or by the guard's own Enter, is the one key
@@ -143,24 +147,35 @@ extension Supervisor {
     switch verdict {
     case .no(let why, _): return .nothing(why)
     case .ok(let choice, let label, _):
-      l.devCard.proofsUsed = Array((l.devCard.proofsUsed + [used]).suffix(64))
+      // on disk before the key: a tap that could not be recorded as used presses nothing
+      let home = talosAppHome
+      let rec = DialogProofsUsed.record(used, memory: l.devCard.proofsUsed, path: usedPath) {
+        SafePath.isRealFolder(home + "/workers") && SafePath.isRealFolder(home + "/workers/" + thread)
+      }
+      l.devCard.proofsUsed = rec.memory
+      guard rec.written else { return .nothing(nil) }
       guard let choice, let label else { return .nothing(.unverified) }  // the open action belongs to the login card
-      return pressDevChoice(choice, label, offer, via: "card", launch: &l)
+      return pressDevChoice(choice, label, offer, via: "card", seals: false, launch: &l)
     }
   }
 
   /// The warning on screen now, if it is still the offered one: the whole warning (one title, one channels line), the same channels, a
   /// highlighted row we know.
   private func offeredWarning(_ offer: DialogOffer) -> DialogMatcher.DevChannels? {
-    guard let rows = host.visibleRows(), case .devChannels(let d) = DialogMatcher.classify(rows), d.titleCount == 1, d.channelLineCount == 1,
+    guard let rows = host.visibleRows(), !DialogMatcher.takesNoKeys(rows), case .devChannels(let d) = DialogMatcher.classify(rows), d.titleCount == 1,
+      d.channelLineCount == 1,
       ExactText.equal(devSubject(d), offer.subject), let hl = d.highlighted, Self.devCardOptions.contains(hl)
     else { return nil }
     return d
   }
 
   /// At most one arrow (the row is the other one), then the Enter; every step on a fresh read of the screen, and the Enter only on the signed
-  /// choice's own row. A key whose send timed out counts as sent. Nothing is typed while an attached client may be typing.
-  func pressDevChoice(_ choice: Int, _ chosen: String, _ offer: DialogOffer, via: String, launch l: inout Launch) -> WorkerManager.AnswerOutcome {
+  /// choice's own row. A key whose send timed out counts as sent. Nothing is typed while an attached client may be typing. `seals` is true
+  /// only for a click on the Mac popup: the phone's answer file is checked against devices.json, which a program running as the owner can
+  /// write too, so it starts this launch once (like an Enter in the pane) and never seals it.
+  func pressDevChoice(
+    _ choice: Int, _ chosen: String, _ offer: DialogOffer, via: String, seals: Bool, launch l: inout Launch
+  ) -> WorkerManager.AnswerOutcome {
     guard offer.options.indices.contains(choice), ExactText.equal(offer.options[choice], chosen),
       Self.devCardOptions.contains(where: { ExactText.equal($0, chosen) })
     else { return .nothing() }
@@ -171,17 +186,17 @@ extension Supervisor {
       if ExactText.equal(here, chosen) {
         // the last look, straight before the key
         guard let last = offeredWarning(offer), ExactText.equal(last.highlighted ?? "", chosen) else { return .nothing() }
-        if host.sendDialogKey(.enter) == .failed {
+        if sendKey(.devWarning(highlighted: chosen, channels: last.channels ?? []), { $0.sendDialogKey(.enter) }).notSent {
           audit("dev_card_send_failed", ["session": l.sessionId, "pid": "\(l.childPid)"])
           return .nothing()
         }
         l.devCard.pressedFor = offer.id
         l.devCard.ownerExit = !confirmsIt
         l.confirmSentAt = clock.now()  // the notice wait counts from the key; the guard never auto-presses behind it
-        // the tap on "I am using this for local development" is the owner's confirm; Exit confirms nothing
+        // "I am using this for local development" confirms this start; only the Mac popup's click seals it. Exit confirms nothing
         if confirmsIt {
           l.devCard.confirmed = true
-          recordStartConfirmed(l, ownerConfirmed: true)
+          recordStartConfirmed(l, ownerConfirmed: seals)
         }
         audit("dev_card_answered", ["session": l.sessionId, "choice": "\(choice)", "dialog": offer.id, "via": via])
         emit(.devCardAnswered(dialogId: offer.id, choice: choice))
@@ -189,7 +204,7 @@ extension Supervisor {
       }
       guard step == 0 else { return .nothing() }
       let key: DialogKey = ExactText.equal(here, Self.devCardOptions[0]) ? .down : .up  // the two rows: from the first Down, from the other Up
-      if host.sendDialogKey(key) == .failed { return .nothing() }
+      if sendKey(.devWarning(highlighted: here, channels: d.channels ?? []), { $0.sendDialogKey(key) }).notSent { return .nothing() }
       let until = options.awake() + WorkerManager.echoWait
       var moved = false
       repeat {

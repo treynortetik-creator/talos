@@ -388,6 +388,23 @@ const SANITIZE: Config = {
   RETURN_DOM_FRAGMENT: false,
 }
 
+/** A document view (a .md attachment) may show images that are siblings of it: bare file name -> the `/media/...` URL of that attachment. */
+export type MdImages = ReadonlyMap<string, string>
+// Set only for the duration of one synchronous `renderMarkdown(source, { images })` call.
+let activeImages: MdImages | null = null
+
+/** The sibling URL a relative image `src` names: a bare file name (optionally `./name`), never a path, a scheme or `..`. */
+export function resolveSiblingImage(images: MdImages, src: string): string | undefined {
+  let name = src.startsWith('./') ? src.slice(2) : src
+  try {
+    name = decodeURIComponent(name)
+  } catch {
+    return undefined
+  }
+  if (!name || /[/\\:?#]/.test(name) || name === '..' || name === '.') return undefined
+  return images.get(name)
+}
+
 let hooked = false
 function hookOnce() {
   if (hooked) return
@@ -398,6 +415,11 @@ function hookOnce() {
     if (node.nodeType !== 1 || (node as Element).tagName !== 'IMG') return
     const img = node as Element
     const src = img.getAttribute('src') ?? ''
+    const sibling = activeImages ? resolveSiblingImage(activeImages, src) : undefined
+    if (sibling) {
+      img.setAttribute('src', sibling)
+      return
+    }
     const alt = (img.getAttribute('alt') ?? '').replace(/\s+/g, ' ').trim()
     const text = `Image: ${alt ? (alt.length > 60 ? `${alt.slice(0, 59)}…` : alt) : 'open'}`
     // An image inside a link (a badge): the link keeps its real destination and just gets the label.
@@ -415,6 +437,15 @@ function hookOnce() {
   DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     // `href` is only a link on <a>. MathML elements take one too, and a formula must never become a link.
     if (node.tagName !== 'A' && node.hasAttribute('href')) node.removeAttribute('href')
+    // An image that got this far is a sibling attachment; anything else is dropped.
+    if (node.tagName === 'IMG') {
+      const src = node.getAttribute('src') ?? ''
+      if (!activeImages || ![...activeImages.values()].includes(src)) {
+        node.remove()
+        return
+      }
+      node.setAttribute('loading', 'lazy')
+    }
     // `style` is for MathML only; on anything else it goes. MathML nodes get their lengths and style checked.
     if (MATHML_SET.has(node.localName)) cleanMathNode(node)
     else if (node.hasAttribute('style')) node.removeAttribute('style')
@@ -436,9 +467,27 @@ export function sanitizeMarkdownHtml(html: string): string {
   return String(DOMPurify.sanitize(html, SANITIZE))
 }
 
-/** Renders markdown to sanitized HTML. Safe to hand to `dangerouslySetInnerHTML`. */
-export function renderMarkdown(source: string): string {
-  return sanitizeMarkdownHtml(md.render(source))
+/** Document mode: the same allow-list plus `img` with a `src` that is exactly one of the sibling URLs (checked again in the hook). */
+const SANITIZE_DOC: Config = {
+  ...SANITIZE,
+  ALLOWED_TAGS: [...(SANITIZE.ALLOWED_TAGS as string[]), 'img'],
+  ALLOWED_ATTR: [...(SANITIZE.ALLOWED_ATTR as string[]), 'src', 'alt', 'loading'],
+  ALLOWED_URI_REGEXP: /^(?:https?:|mailto:|\/media\/[\w-]+\?c=2$)/i,
+}
+
+/**
+ * Renders markdown to sanitized HTML. Safe to hand to `dangerouslySetInnerHTML`. With `images` (a .md attachment's sibling
+ * attachments) a relative image shows that attachment; every other image stays a link chip.
+ */
+export function renderMarkdown(source: string, opts?: { images?: MdImages }): string {
+  if (!opts?.images) return sanitizeMarkdownHtml(md.render(source))
+  hookOnce()
+  activeImages = opts.images
+  try {
+    return String(DOMPurify.sanitize(md.render(source), SANITIZE_DOC))
+  } finally {
+    activeImages = null
+  }
 }
 
 /** The block tokens of a message, from the same parser that draws it (the Run button reads its code blocks from here). */

@@ -2,7 +2,21 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "DOCKERFILE",
-    "dockerfilePath": "apps/relay/Dockerfile"
+    "dockerfilePath": "apps/relay/Dockerfile",
+    "watchPatterns": [
+      "/apps/relay/**",
+      "/apps/web/**",
+      "/packages/**",
+      "/package.json",
+      "/pnpm-lock.yaml",
+      "/pnpm-workspace.yaml",
+      "/tsconfig.base.json",
+      "/apps/bridge/package.json",
+      "/e2e/package.json",
+      "/scripts/version.mjs",
+      "/railway.json",
+      "/.dockerignore"
+    ]
   },
   "deploy": {
     "numReplicas": 1,

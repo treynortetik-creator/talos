@@ -3,15 +3,13 @@ import type { RouteRes } from '@talos-app/protocol'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
-import { onIphone } from '../../lib/confirmLabel.ts'
 import { deleteDeviceKey } from '../../lib/deviceKey.ts'
 import { createHttp, HttpError } from '../../lib/http.ts'
 import { detectShell } from '../../lib/native/detect.ts'
 import { type MacNotifyPermission, useMacNotifyPermission } from '../../lib/native/notifyPermission.ts'
 import { isNativeShell } from '../../lib/native.ts'
-import { passkeyErrorCopy } from '../../lib/passkeyGate.ts'
+import { onIphone } from '../../lib/onIphone.ts'
 import { getPlatform } from '../../lib/platform.ts'
-import { withStepup } from '../../lib/stepup.ts'
 import { useStorage } from '../../lib/storageContext.tsx'
 import { setTextSize, setTheme, type TextSize, type ThemeChoice, useTextSize, useTheme } from '../../lib/theme.ts'
 import { Button, Dialog, DialogContent, DialogDescription, DialogTitle, Input, Switch } from '../../ui/index.ts'
@@ -22,7 +20,9 @@ import { disablePush, enablePush, resubscribeOnOpen, sendTestPush, usePushState 
 import { friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
 import { NOTIFY_LABEL } from '../threads/threadMeta.ts'
 import { useAgentName } from '../threads/useThreads.ts'
+import { AlwaysAllowedSection } from './AlwaysAllowedSection.tsx'
 import { DeviceRow } from './DeviceRow.tsx'
+import { SettingsLockSwitch } from './SettingsLockSwitch.tsx'
 import { ThemePicker } from './ThemePicker.tsx'
 import { TrustModeSwitch } from './TrustModeSwitch.tsx'
 
@@ -30,7 +30,7 @@ const http = createHttp()
 const FAKE = import.meta.env.VITE_FAKE === '1'
 type Device = RouteRes<'devicesList'>[number]
 
-export type SectionProps = { readOnly: boolean }
+export type SectionProps = { readOnly: boolean; readOnlyWhy?: 'mac' | 'reconnecting' }
 
 const H = ({ children }: { children: React.ReactNode }) => (
   <h2 className="m-0 mb-3 font-display text-xl font-semibold">{children}</h2>
@@ -58,7 +58,6 @@ export function AccountSection(_p: SectionProps) {
   // did), revoking the row that holds this browser's own key still confirms and signs this browser out. The "This device"
   // marker keeps using the relay's answer alone.
   const localId = useTalos((s) => s.deviceId)
-  const config = useTalos((s) => s.config)
   const selfId = myId ?? localId
   const storage = useStorage()
   const [devices, setDevices] = useState<Device[] | null>(null)
@@ -66,7 +65,7 @@ export function AccountSection(_p: SectionProps) {
   // The one confirmation open at a time: revoking THIS device, or signing out of every device.
   const [confirm, setConfirm] = useState<
     | { kind: 'revoke-self'; device: Device }
-    | { kind: 'revoke-shared'; device: Device }
+    | { kind: 'revoke-other'; device: Device }
     | { kind: 'sign-out-all' }
     | { kind: 'sign-out-here' }
     | null
@@ -107,11 +106,10 @@ export function AccountSection(_p: SectionProps) {
     setConfirm(null)
     setSharedNotice(false)
     try {
-      await withStepup(client, config, 'device:revoke', (token) =>
-        http.json('POST', `/api/devices/${d.id}/revoke`, token ? { stepup_token: token } : {}),
-      )
-    } catch (e) {
-      setErr(passkeyErrorCopy(e) ?? "Couldn't revoke that device.")
+      // nothing else to confirm (owner ruling 2026-11-14): the sheet above is the check for this device or a shared one
+      await http.json('POST', `/api/devices/${d.id}/revoke`, {})
+    } catch {
+      setErr("Couldn't revoke that device.")
       return
     }
     // Revoking this very device ends its session at the relay: leave, and drop the key the relay will never accept again.
@@ -173,9 +171,7 @@ export function AccountSection(_p: SectionProps) {
                   opener.current = e.currentTarget
                   return d.id === selfId
                     ? setConfirm({ kind: 'revoke-self', device: d })
-                    : d.shared_passkey
-                      ? setConfirm({ kind: 'revoke-shared', device: d })
-                      : void revoke(d)
+                    : setConfirm({ kind: 'revoke-other', device: d }) // a revoke can't be undone: always the sheet
                 }}
               />
             </li>
@@ -193,6 +189,8 @@ export function AccountSection(_p: SectionProps) {
         <h3 className="m-0 mb-1 text-base font-medium">Trust mode</h3>
         <TrustModeSwitch />
       </div>
+      <SettingsLockSwitch />
+      <AlwaysAllowedSection />
       <div className="flex flex-wrap gap-2">
         <Button
           variant="outline"
@@ -216,15 +214,21 @@ export function AccountSection(_p: SectionProps) {
           <DialogTitle className="text-lg font-medium text-text">
             {confirm?.kind === 'revoke-self'
               ? 'Revoke this device?'
-              : confirm?.kind === 'revoke-shared'
+              : confirm?.kind === 'revoke-other'
                 ? `Revoke ${confirm.device.name}?`
                 : confirm?.kind === 'sign-out-here'
                   ? 'Sign out of this device?'
                   : 'Sign out everywhere?'}
           </DialogTitle>
           <DialogDescription id="acct-confirm-desc" className="mt-2 space-y-2 text-sm text-text-2">
-            {confirm?.kind === 'revoke-shared' ? (
-              <span className="block">{SHARED_PASSKEY_BEFORE}</span>
+            {confirm?.kind === 'revoke-other' ? (
+              <>
+                <span className="block">It is signed out and stops getting notifications.</span>
+                {confirm.device.shared_passkey && <span className="block">{SHARED_PASSKEY_BEFORE}</span>}
+                <span className="block">
+                  To use it again, run <code>talos-app enroll</code> on your Mac and open the new link on it.
+                </span>
+              </>
             ) : confirm?.kind === 'revoke-self' ? (
               <>
                 <span className="block">You are on this device right now. Revoking it signs you out here.</span>
@@ -260,7 +264,7 @@ export function AccountSection(_p: SectionProps) {
             <Button
               variant="danger"
               onClick={() => {
-                if (confirm?.kind === 'revoke-self' || confirm?.kind === 'revoke-shared') void revoke(confirm.device)
+                if (confirm?.kind === 'revoke-self' || confirm?.kind === 'revoke-other') void revoke(confirm.device)
                 else if (confirm?.kind === 'sign-out-here') void signOut('/api/auth/logout')
                 else void signOut('/api/auth/logout-all')
               }}
@@ -269,7 +273,9 @@ export function AccountSection(_p: SectionProps) {
                 ? 'Sign out everywhere'
                 : confirm?.kind === 'sign-out-here'
                   ? 'Sign out'
-                  : 'Revoke this device'}
+                  : confirm?.kind === 'revoke-other'
+                    ? `Revoke ${confirm.device.name}`
+                    : 'Revoke this device'}
             </Button>
           </div>
         </DialogContent>
@@ -279,6 +285,8 @@ export function AccountSection(_p: SectionProps) {
 }
 
 // ---- Notifications ------------------------------------------------------------------------------------------------
+type NoteAt = 'master' | 'quiet' | 'names' | 'push'
+
 export function NotificationsSection({ readOnly }: SectionProps) {
   const client = useTalosClient()
   const config = useTalos((s) => s.config)
@@ -289,20 +297,28 @@ export function NotificationsSection({ readOnly }: SectionProps) {
   const inShell = isNativeShell()
   const onMac = detectShell() === 'desktop'
   const macPermission = useMacNotifyPermission()
-  const [note, setNote] = useState<string | null>(null)
+  // A note is shown under the control it is about: a section-wide note at the bottom was off-screen on a phone, so a refused
+  // switch looked like a tap that did nothing.
+  const [note, setNote] = useState<{ at: NoteAt; text: string } | null>(null)
   useEffect(() => {
     void resubscribeOnOpen()
   }, [])
-  const patch = async (p: Record<string, unknown>) => {
+  const patch = async (p: Record<string, unknown>, at: NoteAt) => {
     setNote(null)
     try {
       await client.patchConfig(p)
       return true
     } catch (e) {
-      setNote(friendlyPatchError(e))
+      setNote({ at, text: friendlyPatchError(e) })
       return false
     }
   }
+  const noteFor = (at: NoteAt) =>
+    note?.at === at ? (
+      <p role="status" data-testid="notifications-note" className="m-0 text-sm text-text-2">
+        {note.text}
+      </p>
+    ) : null
   return (
     <section aria-labelledby="notif" className="flex flex-col gap-3">
       <H>
@@ -327,10 +343,12 @@ export function NotificationsSection({ readOnly }: SectionProps) {
           id="master"
           checked={config?.notifications.master ?? true}
           disabled={readOnly || !config}
-          onCheckedChange={(v) => void patch({ notifications: { master: v } })}
+          onCheckedChange={(v) => void patch({ notifications: { master: v } }, 'master')}
         />
       </Row>
-      <QuietWindow readOnly={readOnly} onPatch={patch} />
+      {noteFor('master')}
+      <QuietWindow readOnly={readOnly} onPatch={(p) => patch(p, 'quiet')} />
+      {noteFor('quiet')}
       <div>
         <h3 className="m-0 mb-1 text-base font-medium">Per thread</h3>
         <p className="m-0 mb-2 text-sm text-text-2">Set in each thread's settings. Tap a thread to change it there.</p>
@@ -362,7 +380,7 @@ export function NotificationsSection({ readOnly }: SectionProps) {
           id="names"
           value={config?.notifications.show_thread_names ?? 'fixed_only'}
           disabled={readOnly || !config}
-          onChange={(e) => void patch({ notifications: { show_thread_names: e.target.value } })}
+          onChange={(e) => void patch({ notifications: { show_thread_names: e.target.value } }, 'names')}
           className="min-h-11 rounded-button border border-line bg-surface px-2"
         >
           <option value="fixed_only">Main threads</option>
@@ -370,6 +388,7 @@ export function NotificationsSection({ readOnly }: SectionProps) {
           <option value="none">Never</option>
         </select>
       </Row>
+      {noteFor('names')}
       <p className="m-0 text-xs text-text-2">
         This changes browser notifications. iPhone notifications always show General and Inbox by name and call every
         other thread &ldquo;a thread&rdquo;, whatever it is set to.
@@ -402,11 +421,12 @@ export function NotificationsSection({ readOnly }: SectionProps) {
               <Button
                 variant="outline"
                 onClick={async () =>
-                  setNote(
-                    (await sendTestPush())
+                  setNote({
+                    at: 'push',
+                    text: (await sendTestPush())
                       ? 'Test sent. A test ignores the switch and thread rules above, so it can arrive while real notifications are off.'
                       : "Couldn't send the test.",
-                  )
+                  })
                 }
               >
                 Send a test notification
@@ -417,12 +437,8 @@ export function NotificationsSection({ readOnly }: SectionProps) {
             </div>
           )}
           {push.message && <p className="m-0 text-sm text-text-2">{push.message}</p>}
+          {noteFor('push')}
         </div>
-      )}
-      {note && (
-        <p role="status" className="m-0 text-sm text-text-2">
-          {note}
-        </p>
       )}
     </section>
   )
@@ -466,21 +482,20 @@ function QuietWindow({
     inFlight.current = key
     const mine = ++latest.current
     chain.current = chain.current.then(async () => {
-      const ok = await onPatch({ quiet_window: next })
+      await onPatch({ quiet_window: next })
       if (inFlight.current === key) inFlight.current = ''
       // saved: follow the config again. Refused: go back to the saved times, never keep showing the unsaved ones.
       // Only if the boxes still show what was sent: a time typed since the save began stays, and is saved when left.
       if (mine === latest.current)
         setTimes((cur) => (cur && (cur.start !== next.start || cur.end !== next.end) ? cur : null))
-      if (!ok) setIssue('Not saved. Check the times against what your Mac has.')
+      // refused: the note under quiet hours says why (one message, from the section's patch)
     })
   }
   const leave = () => times && commit(times)
   const turn = async (on: boolean) => {
     setIssue(null)
     setTimes(null)
-    const ok = await onPatch({ quiet_window: on ? { start, end } : null })
-    if (!ok) setIssue('Not saved.')
+    await onPatch({ quiet_window: on ? { start, end } : null }) // refused: the note under quiet hours says why
   }
   return (
     <div className="flex flex-col gap-2" data-testid="quiet-window">

@@ -1,16 +1,30 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import type { ComponentProps } from 'react'
 import { cn } from './cn.ts'
+import { OVERLAY_LAYER } from './layers.ts'
 
 export const Dialog = DialogPrimitive.Root
 
-export function DialogContent({ className, children, ...props }: ComponentProps<typeof DialogPrimitive.Content>) {
+export function DialogContent({
+  className,
+  overlayClassName,
+  overlayProps,
+  children,
+  ...props
+}: ComponentProps<typeof DialogPrimitive.Content> & {
+  overlayClassName?: string
+  overlayProps?: ComponentProps<typeof DialogPrimitive.Overlay>
+}) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 bg-black/50" />
+      <DialogPrimitive.Overlay
+        {...overlayProps}
+        className={cn('fixed inset-0 bg-black/50', OVERLAY_LAYER, overlayClassName)}
+      />
       <DialogPrimitive.Content
         className={cn(
           'fixed top-1/2 left-1/2 w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 rounded-card border border-line bg-surface p-6 text-text focus-visible:outline-2 focus-visible:outline-focus',
+          OVERLAY_LAYER,
           className,
         )}
         {...props}

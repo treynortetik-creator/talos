@@ -457,11 +457,16 @@ describe('5. the client address', () => {
   it('pickClientIp applies it to every source, and ignores a duplicated X-Real-IP', () => {
     expect(pickClientIp({ realIp: '2001:db8:1:2::9', remote: '10.0.0.1', hops: 1 })).toBe('2001:db8:1:2::')
     expect(pickClientIp({ remote: '::ffff:203.0.113.9', hops: 0 })).toBe('203.0.113.9')
-    expect(pickClientIp({ xff: '2001:db8:1:2::5, 84.17.44.225', remote: '10.0.0.1', hops: 2 })).toBe('2001:db8:1:2::')
+    expect(pickClientIp({ xff: '2001:db8:1:2::5, 198.51.100.25', remote: '10.0.0.1', hops: 2 })).toBe('2001:db8:1:2::')
     // two copies joined by the HTTP stack (a client copy and the edge's) are not one address: fall back to X-Forwarded-For
     expect(
-      pickClientIp({ realIp: '9.9.9.9, 37.166.86.65', xff: '37.166.86.65, 84.17.44.225', remote: '10.0.0.1', hops: 1 }),
-    ).toBe('84.17.44.225')
+      pickClientIp({
+        realIp: '9.9.9.9, 203.0.113.65',
+        xff: '203.0.113.65, 198.51.100.25',
+        remote: '10.0.0.1',
+        hops: 1,
+      }),
+    ).toBe('198.51.100.25')
   })
 
   it('a host rotating through its /64 spends one sign-in budget, through the real route', async () => {

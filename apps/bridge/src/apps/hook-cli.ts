@@ -1,7 +1,7 @@
 // `talos-app hook <event>`: the process Claude Code runs around catalogued tool calls (MCP-APPS-SPEC M5.2). Loaded on its
 // own from cli.ts (no relay, sqlite or MCP SDK), because it sits in the path of a tool call. Always exits 0: the gate
 // speaks through its JSON (`deny`), and a hook that crashed would only be a different way to fail.
-import { defaultHome } from '../config.ts'
+import { defaultHome, flag } from '../config.ts'
 import { HOOK_STDIN_MAX, parseHookArgv, runHook } from './hooks.ts'
 import { appPaths } from './paths.ts'
 import { appsSwitch } from './switch.ts'
@@ -16,7 +16,8 @@ export type HookIO = {
 export async function mainHook(argv: string[], io: HookIO): Promise<number> {
   const event = parseHookArgv(['hook', ...argv])
   if (!event) return 0
-  const live = io.env.TALOS_APP_BRIDGE === '1'
+  // the hook's own environment only, never bridge.env (a legacy exception in flags.json): a scheduled job is never live
+  const live = flag('TALOS_APP_BRIDGE', [io.env])
   if (!live) return 0 // scheduled `claude -p` jobs are untouched, without even reading stdin
   let stdin = ''
   try {

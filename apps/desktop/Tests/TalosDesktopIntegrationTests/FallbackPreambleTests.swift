@@ -3,6 +3,7 @@ import Testing
 import TalosDesktopCore
 
 @testable import TalosSupervisor
+import TalosTestSupport
 
 /// The worker preamble the app writes when a thread has no `WORKER.md`. No tmux, no process: `preamble` only reads a file.
 @Suite("Fallback worker preamble")
@@ -17,7 +18,7 @@ struct FallbackPreambleTests {
   }
 
   private func fallback(_ id: String = "trip") throws -> String {
-    let dir = (NSTemporaryDirectory() as NSString).appendingPathComponent("talos-pre-\(UUID().uuidString.prefix(8))")
+    let dir = (TestTemp.base as NSString).appendingPathComponent("talos-preamble-\(UUID().uuidString.prefix(8))")
     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: dir) }
     let o = WorkerManager.Options(

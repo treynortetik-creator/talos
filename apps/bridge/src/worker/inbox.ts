@@ -6,7 +6,8 @@
 // Nothing here follows a link. The root and the thread folder are looked at with lstat before anything is read or written,
 // and looked at AGAIN (device and inode) right before each write, rename and unlink, so a folder swapped for a link or for
 // another folder after the first look is refused. The source is opened by a handle that refuses a link in any component.
-// Folders are 0700 and files 0600. A thread's folder is removed when the thread is archived or deleted.
+// Folders are 0700 and files 0600. A thread's folder is removed when the thread is archived or deleted, if Talos made it:
+// each folder it makes holds a marker file, and a folder without one is never removed (the root may be shared).
 import {
   chmodSync,
   closeSync,
@@ -20,13 +21,14 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
-  rmSync,
+  rmdirSync,
   unlinkSync,
   writeSync,
 } from 'node:fs'
-import { basename, join, sep } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { ThreadId } from '@talos-app/protocol'
 import type { Notification } from '../notify.ts'
+import { realFileSync } from '../real-file.ts'
 import { openResolvedNoFollow } from '../safe-open.ts'
 
 /** A copy older than this is removed (the routing rows that name it are pruned after the same time). */
@@ -39,6 +41,14 @@ const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/
 const FILE_KEY = /^file_path(_\d+)?$/
 /** The line `moreFiles` (notify.ts) adds when a message carries more than ten files. */
 const MORE_FILES = /\((\d+) more files? beyond file_path_10: [^)]*\)/
+
+/**
+ * The file Talos leaves in a thread folder it made itself. Only a folder that holds it (as a plain file) is ever removed
+ * with its thread: the root may be a folder the owner shares with other things (`TALOS_INBOX_ROOT`).
+ */
+export const INBOX_MARKER = '.talos-inbox-folder'
+const MARKER_TEXT =
+  'Talos made this folder for the files of one thread. It deletes the folder when the thread is archived or deleted.\n'
 
 export class InboxError extends Error {}
 
@@ -60,6 +70,81 @@ const identity = (path: string): string => {
   return `${st.dev}:${st.ino}`
 }
 
+/** A new 0600 file. Throws when something is already there (a link included: it is never written through). */
+function writeNew(path: string, text: string): void {
+  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+  try {
+    writeSync(fd, text)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** In the root: says the one-time adoption of older folders is done (or was never needed: Talos made the root itself). */
+const ADOPTED_FLAG = '.talos-inbox-adopted'
+
+/**
+ * Builds before the marker made thread folders without one, so nothing would ever prune or remove them. Once, and only
+ * when `root` is the default root (`~/.talos-inbox`, which is Talos's alone), every thread-id-shaped real folder there
+ * gets the marker. A root the owner chose with `TALOS_INBOX_ROOT` may be shared, so nothing in it is ever adopted. A flag
+ * file in the root makes it once: a folder that appears there later was not made by an old Talos.
+ */
+export function adoptLegacyInboxes(root: string, defaultRoot: string): void {
+  if (resolve(root) !== resolve(defaultRoot)) return
+  const flag = join(root, ADOPTED_FLAG)
+  let names: string[]
+  try {
+    const st = lstatSync(root)
+    if (st.isSymbolicLink() || !st.isDirectory()) return
+    names = readdirSync(root)
+  } catch {
+    return // no root yet: the bridge will make it, flag included
+  }
+  if (names.includes(ADOPTED_FLAG)) return
+  for (const t of names) {
+    if (!ThreadId.safeParse(t).success) continue
+    const dir = join(root, t)
+    try {
+      const st = lstatSync(dir)
+      if (st.isSymbolicLink() || !st.isDirectory() || isOurs(dir)) continue
+      writeNew(join(dir, INBOX_MARKER), MARKER_TEXT)
+    } catch {
+      // something else is at the marker's name, or the folder went away: not adopted
+    }
+  }
+  try {
+    writeNew(flag, 'Folders made by earlier Talos builds were marked here once.\n')
+  } catch {
+    // it is tried again next time; marking a marked folder is a no-op
+  }
+}
+
+/**
+ * Leaves the marker in a thread folder this call has just made. A folder that was already there never gets one: Talos
+ * did not make it, so Talos will not remove it. If the marker cannot be written the new, empty folder is taken away again.
+ */
+function markAsOurs(dir: string): void {
+  try {
+    writeNew(join(dir, INBOX_MARKER), MARKER_TEXT)
+  } catch {
+    try {
+      rmdirSync(dir)
+    } catch {
+      // something is in it already: leave it
+    }
+    throw new InboxError(`cannot set up ${dir}`)
+  }
+}
+
+/** True when `dir` holds the marker as a plain file. A link there does not count. */
+function isOurs(dir: string): boolean {
+  try {
+    return lstatSync(join(dir, INBOX_MARKER)).isFile()
+  } catch {
+    return false
+  }
+}
+
 /**
  * The folder `<root>/<thread>`, made if `create` (both 0700; an existing root looser than that is tightened). The root and the
  * thread folder must be real folders: a link there (made by anything running as this user) would send a copy somewhere else,
@@ -78,6 +163,14 @@ function openFolder(root: string, thread: string, create: boolean): Folder | und
     if (!st) {
       if (!create) return undefined
       mkdirSync(dir, { mode: 0o700 })
+      if (dir !== root) markAsOurs(dir)
+      else {
+        try {
+          writeNew(join(root, ADOPTED_FLAG), 'Talos made this folder: there are no older folders to mark.\n')
+        } catch {
+          // the copy does not depend on it
+        }
+      }
     } else if (st.isSymbolicLink() || !st.isDirectory()) throw new InboxError(`${dir} is a link or not a folder`)
     else if (create && (st.mode & 0o077) !== 0) chmodSync(dir, 0o700) // just looked at with lstat: a real folder
   }
@@ -98,7 +191,8 @@ export function copyToInbox(o: { root: string; mediaDir: string; thread: string;
   let real: string
   let mediaReal: string
   try {
-    real = realpathSync(o.source)
+    // walked, never another hard link's name: that name is what the copy in the inbox is called (real-file.ts)
+    real = realFileSync(o.source)
     mediaReal = realpathSync(o.mediaDir)
   } catch {
     throw new InboxError(`cannot find ${basename(o.source)}`)
@@ -191,7 +285,8 @@ export function pruneInbox(
   let names: string[]
   try {
     folder = openFolder(root, thread, false)
-    if (!folder) return
+    // only a folder Talos made is pruned: the root may be shared, and anything else in it is not ours to delete
+    if (!folder || !isOurs(folder.path)) return
     names = readdirSync(folder.path)
   } catch {
     return
@@ -201,6 +296,7 @@ export function pruneInbox(
     const path = join(folder.path, name)
     try {
       const st = lstatSync(path)
+      if (name === INBOX_MARKER && st.isFile()) continue // the marker stays for as long as the folder does
       if (st.isSymbolicLink() || !st.isFile()) {
         folder.recheck('unlink')
         unlinkSync(path) // nothing of ours is a link or a folder: a link goes, its target is left alone
@@ -225,7 +321,7 @@ export function pruneInbox(
   }
 }
 
-/** `pruneInbox` for every thread folder under the root. */
+/** `pruneInbox` for every thread folder under the root that Talos made. */
 export function pruneInboxes(root: string, now: number, limits?: { maxAgeMs: number; maxBytes: number }): void {
   let threads: string[]
   try {
@@ -236,25 +332,52 @@ export function pruneInboxes(root: string, now: number, limits?: { maxAgeMs: num
   for (const t of threads) if (ThreadId.safeParse(t).success) pruneInbox(root, t, now, limits)
 }
 
-/** Removes a thread's whole inbox folder. A link there is removed itself and its target is left alone. */
+/**
+ * Removes a thread's inbox folder, if Talos made it (it holds the marker). Anything else under the root is left exactly as
+ * it is: a folder with no marker, a link, a file. Inside the folder only plain files and links are removed (a link itself,
+ * never its target); a folder someone put there is not entered, and while one is there the inbox folder and its marker stay.
+ */
 export function removeInbox(root: string, thread: string): void {
-  if (!ThreadId.safeParse(thread).success) return
+  let folder: Folder | undefined
   try {
-    if (lstatSync(root).isSymbolicLink()) return
+    folder = openFolder(root, thread, false)
+  } catch {
+    return // not a thread id, or a link or a file where a folder would be: not ours
+  }
+  if (!folder || !isOurs(folder.path)) return
+  let names: string[]
+  try {
+    names = readdirSync(folder.path)
   } catch {
     return
   }
-  const path = join(root, thread)
+  let left = 0
+  for (const name of names) {
+    if (name === INBOX_MARKER) continue
+    const path = join(folder.path, name)
+    try {
+      if (lstatSync(path).isDirectory()) {
+        left++
+        continue
+      }
+      folder.recheck('unlink')
+      unlinkSync(path)
+    } catch (e) {
+      if (e instanceof InboxError) return // the folder is not the one we looked at: stop
+      left++
+    }
+  }
+  if (left) return
   try {
-    const st = lstatSync(path)
-    if (st.isSymbolicLink()) unlinkSync(path)
-    else if (st.isDirectory()) rmSync(path, { recursive: true, force: true })
+    folder.recheck('unlink')
+    unlinkSync(join(folder.path, INBOX_MARKER))
+    rmdirSync(folder.path)
   } catch {
-    // not there, or not ours to remove
+    // something arrived in it meanwhile, or it is no longer ours to remove
   }
 }
 
-/** Removes the inbox of every thread that is not in `live` (archived, deleted, or never a thread of this config). */
+/** Removes the inbox Talos made for every thread that is not in `live` (archived, deleted, or never a thread of this config). */
 export function removeGoneInboxes(root: string, live: Iterable<string>): void {
   const keep = new Set(live)
   let names: string[]

@@ -138,6 +138,8 @@ export function startReadSync(
     if (s.readySeq !== prevReady) {
       prevReady = s.readySeq
       if (s.readySeq !== undefined) reconcile(s)
+      // the service worker sets the icon from each push while the page sleeps: after a fresh snapshot, set it again
+      lastBadge = -1
     }
     // Only signed out clears. While the session is still loading, or the socket has not yet answered with the relay's
     // snapshot, the card list is empty rather than known: leave the icon alone, so opening the app never wipes a right number.
@@ -156,11 +158,20 @@ export function startReadSync(
     }
   }
 
+  // Coming back to the front, send the number again whatever it was: a push may have set the icon meanwhile (the iPhone twin,
+  // features/native/badge.ts, does the same).
+  const onVisible = () => {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+    lastBadge = -1
+    sync()
+  }
   sync()
   const offStore = client.store.subscribe(sync)
   const offSession = useSession.subscribe(sync)
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
   return () => {
     offStore()
     offSession()
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
   }
 }

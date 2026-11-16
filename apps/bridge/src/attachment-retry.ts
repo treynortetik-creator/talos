@@ -5,6 +5,7 @@ import { type AttachmentRefT, threadSessionMode } from '@talos-app/protocol'
 import { type BridgeContext, postSystemNotice, threadRef } from './context.ts'
 import { MediaError } from './media.ts'
 import { shownName } from './notify.ts'
+import { say } from './owner-words.ts'
 import { RelayHttpError } from './relay-http.ts'
 
 const PREFIX = 'attachment_retry:'
@@ -61,8 +62,15 @@ export function attachmentDropNote(
   const again = retryable ? 'Your agent can try again, or you can send it again.' : 'Send it again.'
   const text =
     source === 'token'
-      ? 'A shared file could not be downloaded to your Mac and was dropped. Share it again if you still need it.'
-      : `${named ? `The file "${name}"` : 'A shared file'} could not be downloaded to your Mac, so your agent did not get it. ${again}`
+      ? say({
+          mac: 'A shared file could not be downloaded to your Mac and was dropped. Share it again if you still need it.',
+          linux:
+            'A shared file could not be downloaded to your computer and was dropped. Share it again if you still need it.',
+        })
+      : say({
+          mac: `${named ? `The file "${name}"` : 'A shared file'} could not be downloaded to your Mac, so your agent did not get it. ${again}`,
+          linux: `${named ? `The file "${name}"` : 'A shared file'} could not be downloaded to your computer, so your agent did not get it. ${again}`,
+        })
   void postSystemNotice(
     ctx,
     text,

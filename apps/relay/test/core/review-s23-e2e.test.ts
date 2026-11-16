@@ -145,7 +145,7 @@ describe('S2+S3 merged: the web client, the real relay, the captured bridge', ()
     expect(pickBanner(snap)?.code).toBe('no_session')
   })
 
-  it('patch -> captured card (high risk) -> card.resolve with step-up -> done + status that asks for exactly one re-fetch', async () => {
+  it('patch -> captured card (high risk) -> card.resolve (no step-up) -> done + status that asks for exactly one re-fetch', async () => {
     const { relay: r, bridge, client } = await world()
     // prime the slice with the list the update was drawn against
     const list = scenario('02-list-three-jobs')[0] as Step
@@ -190,23 +190,14 @@ describe('S2+S3 merged: the web client, the real relay, the captured bridge', ()
     expect(card.risk).toBe('high')
     expect(payloadHash(bindingFrom(card))).toBe(card.payload_hash) // not "altered" after the relay round trip
 
-    // no step-up: the relay refuses
-    await expect(
-      client.resolveCard(card.id, { action: 'primary', payloadHash: card.payload_hash }),
-    ).rejects.toMatchObject({
-      code: 'stepup_required',
-    })
+    // no step-up (2026-11-14): the owner's signed tap is the approval, high risk or not
     const statuses: Array<Record<string, any>> = []
     client.onFrame('schedule.status', (f) => statuses.push(f as never))
     const b2 = bridge.got.length
-    await client.resolveCard(card.id, {
-      action: 'primary',
-      payloadHash: card.payload_hash,
-      stepupToken: await r.mintStepup(`card:${card.id}`),
-    })
+    await client.resolveCard(card.id, { action: 'primary', payloadHash: card.payload_hash })
     const resolve = await bridge.next('card.resolve', b2)
     expect(resolve.payload_hash).toBe(card.payload_hash)
-    expect(resolve.stepup_token).toBeUndefined() // stripped by the relay
+    expect(resolve.stepup_token).toBeUndefined()
     for (const out of approve.sent_by_bridge) {
       const f = { ...out }
       delete f.id

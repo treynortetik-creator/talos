@@ -72,7 +72,7 @@ describe('Thread icon, color, topic', () => {
       { ...base, color: 'orange' },
     ]
     const patch = { threads, default_thread: 'trip' }
-    expect(checkConfigPatch(patch)).toEqual({ ok: true, touchesWorkEnabled: false })
+    expect(checkConfigPatch(patch)).toEqual({ ok: true })
     const next = AgentConfig.parse({ ...(applyMergePatch(cfg, patch) as object), rev: cfg.rev + 1 })
     expect(validateAgentConfig(next)).toEqual([])
     expect(next.threads.map((t) => [t.id, t.color])).toEqual([

@@ -5,13 +5,14 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CLAIM_DEADLINE_MS, DedicatedConfig, newUlid, WakeFile } from '@talos-app/protocol'
+import { CLAIM_DEADLINE_MS, DedicatedConfig, newUlid, WAKE_NOTICE, WakeFile, wakeLimitText } from '@talos-app/protocol'
 import { fakeClock } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
 import { loadEnv } from '../src/config.ts'
 import { cardUpdateFrame } from '../src/frames-out.ts'
 import { pgidOf } from '../src/hub/server.ts'
 import { nullLogger } from '../src/log.ts'
+import { readStatusFile } from '../src/status-file.ts'
 import { WORKER_BRIDGE_TOOLS } from '../src/tools/table.ts'
 import { advanceSteps, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
 
@@ -37,7 +38,7 @@ const thread = (id: string, name: string, extra: Record<string, unknown> = {}) =
   ...extra,
 })
 
-type Entry = { state: string; pane_pid?: number; error?: unknown }
+type Entry = { state: string; pane_pid?: number; error?: unknown; extra?: Record<string, unknown> }
 function writeWorkers(home: string, now: number, threads: Record<string, Entry>, opts: { stale?: boolean } = {}) {
   const at = new Date(opts.stale ? now - 60_000 : now).toISOString()
   const t: Record<string, unknown> = {}
@@ -49,6 +50,7 @@ function writeWorkers(home: string, now: number, threads: Record<string, Entry>,
       pane_pid: e.pane_pid ?? 0,
       cwd: home,
       error: e.error ?? null,
+      ...e.extra,
     }
   writeFileSync(
     join(home, 'workers.json'),
@@ -86,7 +88,7 @@ async function hub(opts: { clock?: ReturnType<typeof fakeClock> } = {}) {
       dedicated: { enabled: true },
     })) as never,
   })
-  await waitFor(() => existsSync(join(h?.home as string, 'hub.sock')))
+  await waitFor(() => existsSync(join(h?.home as string, 'run', 'hub.sock')))
   return h
 }
 
@@ -126,7 +128,7 @@ describe('OC1: worker mode is fail-closed', () => {
     expect(code).not.toBe(0)
     expect(await new Response(proc.stderr).text()).toContain('never the live bridge')
     expect(existsSync(join(home, 'bridge.pid'))).toBe(false)
-    expect(existsSync(join(home, 'hub.sock'))).toBe(false)
+    expect(existsSync(join(home, 'run', 'hub.sock'))).toBe(false)
   })
 
   test('a bad thread id refuses too', async () => {
@@ -205,6 +207,82 @@ describe('OC1: the hub socket', () => {
     expect((await hh.bridge.hub?.onOut('trip', { type: 'config.sync', id: 'x' }))?.ok).toBe(false)
   })
 
+  test('a worker reply is a plain agent message: rows only the bridge mints are refused by the hub', async () => {
+    const hh = await hub()
+    const reply = (extra: Record<string, unknown>) => ({
+      v: 1,
+      type: 'reply',
+      id: newUlid(),
+      ts: new Date().toISOString(),
+      message: {
+        id: `m_${newUlid()}`,
+        thread_id: 'trip',
+        author: 'agent',
+        kind: 'text',
+        text: 'hello',
+        format: 'plain',
+        attachments: [],
+        via: 'headless', // a thread session is never the live bridge
+        created_at: new Date().toISOString(),
+        ...extra,
+      },
+    })
+    // what `reply` and `attach` build still goes through
+    expect(await hh.bridge.hub?.onOut('trip', reply({}))).toMatchObject({ ok: true })
+    expect(await hh.bridge.hub?.onOut('trip', reply({ kind: 'file' }))).toMatchObject({ ok: true })
+    // an app view row, a card row, a call record and an event row are the bridge's own
+    for (const kind of ['app', 'card', 'call_record', 'voice_turn', 'event', 'voice_note'])
+      expect(await hh.bridge.hub?.onOut('trip', reply({ kind })), kind).toMatchObject({ ok: false, code: 'bad_frame' })
+    // and so are the labels the app draws as Talos, a heartbeat, a share or an app echo
+    for (const extra of [
+      { handoff: { label: 'Talos (the bridge)', type: 'TASK' } },
+      { heartbeat: true },
+      { share_content: { url: 'https://example.com/' } },
+      { share_label: 'iPhone' },
+      { app_view_id: `v_${newUlid()}` },
+      { card_id: `c_${newUlid()}` },
+      { call: { voice_session_id: `vs_${newUlid()}`, duration_s: 1, delegations: 0 } },
+    ])
+      expect(await hh.bridge.hub?.onOut('trip', reply(extra)), JSON.stringify(extra)).toMatchObject({ ok: false })
+    // an allow-list: fields no list named before are refused too (an unknown key never parses this far), and only via
+    // headless; each refusal is the allow-list's, not a parse failure
+    for (const [extra, why] of [
+      [{ seq: 7 }, /cannot carry "seq"/],
+      [{ edited_at: new Date().toISOString() }, /cannot carry "edited_at"/],
+      [{ via: 'app' }, /headless/],
+    ] as const)
+      expect(await hh.bridge.hub?.onOut('trip', reply(extra)), JSON.stringify(extra)).toMatchObject({
+        ok: false,
+        message: expect.stringMatching(why),
+      })
+    // publish_page's row: a text message carrying exactly { page_id, title, version }; never a link, never on a file row
+    const page = { page_id: `pg_${newUlid()}`, title: 'Rota', version: 'a'.repeat(64) }
+    expect(await hh.bridge.hub?.onOut('trip', reply({ page }))).toMatchObject({ ok: true })
+    for (const extra of [{ page: { ...page, owner_url: 'https://evil.example.com/' } }, { kind: 'file', page }]) {
+      const r = await hh.bridge.hub?.onOut('trip', reply(extra))
+      // refused, or (a page the frame schema could not read) carried as absent, never through with a link
+      if (r?.ok) expect(JSON.stringify(hh.relay.frames.at(-1)?.frame)).not.toContain('evil.example.com')
+      else expect(r).toMatchObject({ ok: false })
+    }
+    // a reply_to, and a file with no caption (what `attach` sends, and the driving voice follow-up), still go through
+    expect(await hh.bridge.hub?.onOut('trip', reply({ reply_to: `m_${newUlid()}` }))).toMatchObject({ ok: true })
+    const ref = {
+      media_id: `md_${newUlid()}`,
+      kind: 'voice_note',
+      role: 'voice_reply',
+      mime: 'audio/mp4',
+      name: 'reply.m4a',
+      size: 10,
+      sha256: '0'.repeat(64),
+    }
+    expect(
+      await hh.bridge.hub?.onOut(
+        'trip',
+        reply({ kind: 'file', text: undefined, attachments: [ref], reply_to: `m_${newUlid()}` }),
+      ),
+    ).toMatchObject({ ok: true })
+  })
+
   test('hub down: the reply goes over HTTP and reaches the relay', async () => {
     const hh = await hub()
     await hh.bridge.hub?.close() // the hub socket is gone
@@ -214,6 +292,52 @@ describe('OC1: the hub socket', () => {
     await hh.relay.expectFrame('reply', (f) => f.message.text === 'Sent while the hub was down.', {
       direction: 'from_bridge',
     })
+  })
+
+  test("hub down: the HTTP fallback runs the hub's checks, so another thread or a bridge-only field is refused (#22)", async () => {
+    const hh = await hub()
+    await hh.bridge.hub?.close()
+    const w = await startWorker(hh.home, hh.relay.httpUrl, false)
+    // the tool itself, posting where this session does not own
+    const other = await w.callTool('reply', { thread_id: 'general', text: 'not mine' })
+    expect(other.isError).toBe(true)
+    // a frame the tools never build, sent straight through the transport the tools use
+    const bad = {
+      v: 1,
+      type: 'reply',
+      id: newUlid(),
+      ts: new Date().toISOString(),
+      message: {
+        id: `m_${newUlid()}`,
+        thread_id: 'trip',
+        author: 'agent',
+        kind: 'text',
+        text: 'looks like a share',
+        format: 'plain',
+        attachments: [],
+        via: 'headless',
+        share_label: 'iPhone',
+        created_at: new Date().toISOString(),
+      },
+    }
+    await expect(w.ctx.transport.sendDurable(bad as never)).rejects.toThrow(/cannot carry "share_label"/)
+    // and a well-formed reply for a thread this session does not own, past the tool lock
+    const plain = { ...bad.message, share_label: undefined }
+    const elsewhere = { ...bad, id: newUlid(), message: { ...plain, id: `m_${newUlid()}`, thread_id: 'general' } }
+    await expect(w.ctx.transport.sendDurable(elsewhere as never)).rejects.toThrow(/can only post to thread trip/)
+    // a legitimate reply still goes out over HTTP
+    const fine = { ...bad, id: newUlid(), message: { ...plain, id: `m_${newUlid()}`, text: 'fine one' } }
+    await w.ctx.transport.sendDurable(fine as never)
+    await hh.relay.expectFrame('reply', (f) => f.message.text === 'fine one', { direction: 'from_bridge' })
+    await sleep(100)
+    expect(
+      hh.relay.frames.some(
+        (f) =>
+          f.direction === 'from_bridge' &&
+          f.raw.type === 'reply' &&
+          /not mine|looks like a share/.test(JSON.stringify(f.raw)),
+      ),
+    ).toBe(false)
   })
 })
 
@@ -283,9 +407,14 @@ describe('OC1: routing and read_inbound', () => {
     const sent = await hh.app.sendMessage('trip', 'Book it')
     await waitTicking(clock, () => existsSync(join(hh.home, 'workers', 'trip', 'wake')))
     expect(hh.notes).toHaveLength(0)
+    // the worker's to read: main's status.json does not count it as unseen by main
+    const status = () => readStatusFile(join(hh.home, 'status.json'))
+    expect(status()?.unseen_oldest_at).toBeNull()
     await advanceSteps(clock, CLAIM_DEADLINE_MS + 1_000, 10_000)
     await hh.waitNotes(1)
     expect(hh.notes[0]?.meta).toMatchObject({ routed: 'fallback', message_id: sent.client_msg_id })
+    // ...until it falls back: then it is main's, and a main that never reads it is told apart
+    await waitFor(() => status()?.unseen_oldest_at != null, 3000, 'unseen after the fallback')
     const w = await startWorker(hh.home, hh.relay.httpUrl, false)
     const r = JSON.parse((await w.callTool('read_inbound', {})).content[0]?.text ?? '{}')
     expect(r.messages).toHaveLength(0)
@@ -515,6 +644,47 @@ describe('OC1: thread.session.control and workers.status', () => {
     expect(no).toMatchObject({ ok: false, code: 'worker_unavailable' })
   })
 
+  test('a second restart from the phone inside the reader’s gap is refused up front (rate_limited), never "Restarting…"', async () => {
+    const hh = await hub()
+    writeWorkers(hh.home, Date.now(), { trip: { state: 'live', pane_pid: myPgid() } })
+    const result = async (action: 'restart' | 'fresh') => {
+      const f = await hh.app.sendThreadSessionControl('trip', action)
+      return hh.relay.expectFrame('session.control.result', (x) => x.control_id === f.control_id, {
+        direction: 'from_bridge',
+      })
+    }
+    expect((await result('restart')).ok).toBe(true)
+    const first = readFileSync(join(hh.home, 'workers', 'trip', 'wake'), 'utf8')
+    const again = await result('restart')
+    expect(again).toMatchObject({ ok: false, code: 'rate_limited' })
+    expect(JSON.stringify(again)).toContain(wakeLimitText('restart'))
+    expect(JSON.stringify(again)).not.toContain('Restarting')
+    // the first wake still waits; nothing written over it
+    expect(readFileSync(join(hh.home, 'workers', 'trip', 'wake'), 'utf8')).toBe(first)
+  })
+
+  test('a fresh start from the phone while the session is in a turn is refused up front in the reader’s words, no wake', async () => {
+    const hh = await hub()
+    const wake = join(hh.home, 'workers', 'trip', 'wake')
+    const result = async () => {
+      const f = await hh.app.sendThreadSessionControl('trip', 'fresh')
+      return hh.relay.expectFrame('session.control.result', (x) => x.control_id === f.control_id, {
+        direction: 'from_bridge',
+      })
+    }
+    writeWorkers(hh.home, Date.now(), { trip: { state: 'busy', pane_pid: myPgid() } })
+    const no = await result()
+    expect(no).toMatchObject({ ok: false, code: 'worker_unavailable', text: WAKE_NOTICE.busy })
+    expect(existsSync(wake)).toBe(false)
+    // between turns it goes through as before
+    writeWorkers(hh.home, Date.now(), { trip: { state: 'live', pane_pid: myPgid() } })
+    expect(await result()).toMatchObject({
+      ok: true,
+      text: 'Starting a fresh conversation for this thread. The old one is kept on the Mac.',
+    })
+    expect(WakeFile.parse(JSON.parse(readFileSync(wake, 'utf8'))).action).toBe('fresh')
+  })
+
   test('workers.status goes out with the dedicated threads and their state', async () => {
     const hh = await hub()
     writeWorkers(hh.home, Date.now(), { trip: { state: 'live', pane_pid: myPgid() }, garden: { state: 'parked' } })
@@ -527,6 +697,109 @@ describe('OC1: thread.session.control and workers.status', () => {
       ['trip', 'live'],
       ['garden', 'parked'],
     ])
+  })
+})
+
+describe('OC1: workers.status carries the status line', () => {
+  test('waiting on the owner, a turn running, why it stopped, recent crash restarts; the failure detail stays here', async () => {
+    const hh = await hub()
+    const now = Date.now()
+    const ago = (m: number) => new Date(now - m * 60_000).toISOString()
+    writeWorkers(hh.home, now, {
+      trip: {
+        state: 'live',
+        pane_pid: myPgid(),
+        extra: {
+          started_at: ago(90),
+          turn_started_at: ago(25),
+          needs_you: { kind: 'usage limit', since: ago(10), resets_at: '2026-11-14T00:00:00.000Z' },
+          restarts: [ago(200), ago(40), ago(5)],
+        },
+      },
+      garden: {
+        state: 'failed',
+        error: { code: 'start_failed', detail: 'exited at once in /Users/alex/secret', at: ago(3) },
+        extra: { stopped_why: 'crash' },
+      },
+    })
+    hh.bridge.optionCTick()
+    const f = await hh.relay.expectFrame('workers.status', (x) => x.status.threads.length === 2, {
+      direction: 'from_bridge',
+    })
+    const [trip, garden] = f.status.threads
+    expect(trip).toMatchObject({
+      thread_id: 'trip',
+      started_at: ago(90),
+      turn_started_at: ago(25),
+      restarts_1h: 2,
+      needs_you: { kind: 'usage limit', since: ago(10), resets_at: '2026-11-14T00:00:00.000Z' },
+    })
+    expect(trip?.needs_you?.step).toContain('Esc')
+    expect(garden).toMatchObject({
+      thread_id: 'garden',
+      state: 'failed',
+      error: 'start_failed',
+      error_at: ago(3),
+      stopped_why: 'crash',
+    })
+    expect(JSON.stringify(f.status)).not.toContain('secret') // the failure's detail never leaves the Mac
+  })
+
+  test('a known needs_you kind goes as it is; any other (a screen title, which can name a file) reads "a prompt"', async () => {
+    const hh = await hub()
+    const now = Date.now()
+    const since = new Date(now - 60_000).toISOString()
+    writeWorkers(hh.home, now, {
+      trip: { state: 'live', pane_pid: myPgid(), extra: { needs_you: { kind: 'trust this folder', since } } },
+      garden: {
+        state: 'live',
+        pane_pid: myPgid(),
+        extra: { needs_you: { kind: 'Replace /Users/alex/notes.md?', since } },
+      },
+    })
+    hh.bridge.optionCTick()
+    const f = await hh.relay.expectFrame('workers.status', (x) => x.status.threads.length === 2, {
+      direction: 'from_bridge',
+    })
+    expect(f.status.threads[0]?.needs_you).toEqual({ kind: 'trust this folder', since })
+    expect(f.status.threads[1]?.needs_you).toEqual({ kind: 'a prompt', since })
+    expect(JSON.stringify(f.status)).not.toContain('notes.md')
+  })
+})
+
+describe("OC1: workers.status carries Main's own wait", () => {
+  const writeCheck = (home: string, atMs: number, needs_you?: unknown) =>
+    writeFileSync(
+      join(home, 'main-restart-check.json'),
+      JSON.stringify({
+        v: 1,
+        at: new Date(atMs).toISOString(),
+        will_return: false,
+        reasons: [],
+        ...(needs_you ? { needs_you } : {}),
+      }),
+    )
+
+  test('a fresh main-restart-check.json with needs_you: main_needs_you, known kinds only; stale or none: nothing', async () => {
+    const hh = await hub()
+    const now = Date.now()
+    const since = new Date(now - 15 * 60_000).toISOString()
+    writeWorkers(hh.home, now, { trip: { state: 'parked' } })
+    writeCheck(hh.home, now, { kind: 'bypass permissions', since })
+    hh.bridge.optionCTick()
+    const f = await hh.relay.expectFrame('workers.status', (x) => x.status.main_needs_you !== undefined, {
+      direction: 'from_bridge',
+    })
+    expect(f.status.main_needs_you).toEqual({ kind: 'bypass permissions', since })
+    writeCheck(hh.home, now, { kind: 'Replace /Users/alex/notes.md?', since })
+    expect(hh.bridge.router?.status(null, { state: 'unknown' } as never, now).main_needs_you).toEqual({
+      kind: 'a prompt',
+      since,
+    })
+    writeCheck(hh.home, now - 10 * 60_000, { kind: 'sign in', since }) // the app stopped writing: an old wait is not now
+    expect(hh.bridge.router?.status(null, { state: 'unknown' } as never, now).main_needs_you).toBeUndefined()
+    writeCheck(hh.home, now)
+    expect(hh.bridge.router?.status(null, { state: 'unknown' } as never, now).main_needs_you).toBeUndefined()
   })
 })
 

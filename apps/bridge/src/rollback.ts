@@ -13,7 +13,9 @@ import { existsSync, realpathSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { type BridgeEnv, loadEnv, paths } from './config.ts'
+import { IN_PROGRESS } from './git-in-progress.ts'
 import { readGoodStarts } from './good-starts.ts'
+import { say } from './owner-words.ts'
 import { type Run, runCommand } from './run-command.ts'
 import { REPO_DIR } from './version.ts'
 
@@ -26,6 +28,7 @@ export type RollbackIo = {
   prompt(question: string): Promise<string>
 }
 
+// for folders only: a file's real path goes through realFileSync (real-file.ts), as realpath can name a hard-linked file by another of its names
 /** A symlinked folder (/var -> /private/var) must compare equal to the path git prints. */
 function realpathOr(p: string): string {
   try {
@@ -36,17 +39,6 @@ function realpathOr(p: string): string {
 }
 
 const short = (sha: string) => sha.slice(0, 7)
-
-/** What git can be in the middle of: moving HEAD now would leave that half done, or rewrite a branch when it is continued. */
-const IN_PROGRESS: Array<[string, string]> = [
-  ['rebase-merge', 'a rebase'],
-  ['rebase-apply', 'a rebase or a patch apply'],
-  ['MERGE_HEAD', 'a merge'],
-  ['CHERRY_PICK_HEAD', 'a cherry-pick'],
-  ['REVERT_HEAD', 'a revert'],
-  ['sequencer', 'a cherry-pick or revert sequence'],
-  ['BISECT_LOG', 'a bisect'],
-]
 
 export type LostFields = { ok: true; lost: string[] } | { ok: false; why: string; ran: boolean }
 
@@ -212,7 +204,12 @@ export async function cmdRollback(
   io.out(
     '  3. HEAD is detached here. A commit made now belongs to no branch; to keep work from this version, run git switch -c <new-branch-name> first.',
   )
-  io.out('  4. The relay, the Mac app and the iPhone app were not changed.')
+  io.out(
+    say({
+      mac: '  4. The relay, the Mac app and the iPhone app were not changed.',
+      linux: '  4. The relay and the iPhone app were not changed.',
+    }),
+  )
   return 0
 }
 

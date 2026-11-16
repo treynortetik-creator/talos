@@ -11,7 +11,7 @@ extension WorkerManager: NeedsYouPopupSource {}
 
 extension WorkerManager {
   /// The dialogs a popup may show: ones THIS process has seen on the screen hold still (`sinceAwake`), never a record read back from
-  /// workers.json; not past `expires_at`; not pressed or opened (by a card or a click). A result that pressed nothing (a forged answer, a
+  /// workers.json; not past `expires_at`; not pressed or opened (by a card or a click); not one the screen was seen to change under. A result that pressed nothing (a forged answer, a
   /// phone that is not paired) closes nothing: the popup is then the way to answer.
   public func popupOffers() -> [NeedsYouPopupItem] {
     let t = now()
@@ -23,7 +23,7 @@ extension WorkerManager {
     var out: [NeedsYouPopupItem] = []
     for id in rt.keys.sorted() {
       guard let r = rt[id], let d = r.entry.dialog, r.offer.sinceAwake != nil, Self.offerStates.contains(r.entry.state), d.isValid,
-        !r.offer.pressed(d.id)
+        !r.offer.pressed(d.id), !r.offer.disturbed  // the screen changed under it: a click could only say so; a new sighting follows
       else { continue }
       out.append(NeedsYouPopupItem(thread: id, threadName: threadName(id), dialog: d))
     }
@@ -50,6 +50,8 @@ extension WorkerManager {
     if r.offer.pressed(offer.id) {
       return .nothing(.alreadyAnswered(by: DialogCardAck.answered(path: dir(id) + "/" + DialogCardAck.fileName, dialogId: offer.id)))
     }
+    // the screen was seen to change under this offer: what is there now may be another dialog that reads the same (a new id follows)
+    guard !r.offer.disturbed else { return .nothing(.screenChanged) }
     switch action {
     case .choose(let choice, let label):
       guard offer.kind != .login else { return .nothing(.notOffered) }  // a login dialog has nothing to choose

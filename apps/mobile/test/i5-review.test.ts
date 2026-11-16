@@ -18,8 +18,8 @@ describe('I5-L5 git never holds the APNs key', () => {
 })
 
 describe('I5-L6 CI runs the new Swift tests', () => {
-  it('L6 scripts/ci-local.sh runs TalosPushCore in the loop that runs swift test on the other Swift packages', () => {
-    const ci = readFileSync(new URL('scripts/ci-local.sh', `file://${REPO}`), 'utf8')
+  it('L6 the CI desktop job (scripts/ci-local/jobs-swift.sh) runs TalosPushCore in the loop that runs swift test on the other Swift packages', () => {
+    const ci = readFileSync(new URL('scripts/ci-local/jobs-swift.sh', `file://${REPO}`), 'utf8')
     expect(ci).toMatch(/for pkg in [^;\n]*\bTalosPushCore\b[^;\n]*; do\n[^\n]*swift test /)
   })
 })

@@ -43,7 +43,12 @@ function handEdited(home: string) {
   const gone = join(home, 'gone-project')
   return (c: Cfg): Cfg => ({
     ...c,
-    dedicated: { enabled: true, max_live: 3, governor: { five_hour: 80, weekly: 85, park_all: 95, off: false } },
+    dedicated: {
+      enabled: true,
+      max_live: 3,
+      governor: { five_hour: 80, weekly: 85, park_all: 95, off: false },
+      restart_on_update: true,
+    },
     threads: [
       ...c.threads.map((t) => (t.id === 'general' ? { ...t, session: 'dedicated' as const } : t)),
       thread('old', { archived: true, session: 'dedicated' }),

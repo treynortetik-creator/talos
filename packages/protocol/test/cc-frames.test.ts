@@ -32,9 +32,6 @@ import {
   SESSION_OWNER_FRAME_TYPES,
   SessionControlFrame,
   SessionSpawnFrame,
-  StepupAssertion,
-  StepupPurpose,
-  stepupChallenge,
   verifyBinding,
   verifyEnrollment,
 } from '../src/index.ts'
@@ -180,12 +177,8 @@ describe('session frames (C2.5)', () => {
   })
 })
 
-describe('step-up verified by the bridge (C3.6)', () => {
-  it('purposes gain session:control, permission:allow and config:session', () => {
-    for (const p of ['session:control', 'permission:allow', 'config:session'])
-      expect(StepupPurpose.safeParse(p).success, p).toBe(true)
-  })
-  it('card.resolve may carry a raw WebAuthn assertion that is signed (not stripped)', () => {
+describe("no step-up (owner ruling 2026-11-14): an old app's assertion is accepted and never read", () => {
+  it('card.resolve from an older app may still carry `stepup`; it parses, and nothing in the protocol checks it', () => {
     const base = fixtures['card.resolve'] as Record<string, unknown>
     const stepup = {
       credential_id: 'Y3JlZA',
@@ -194,15 +187,8 @@ describe('step-up verified by the bridge (C3.6)', () => {
       signature: 'c2ln',
     }
     expect(CardResolveFrame.safeParse({ ...base, stepup }).success).toBe(true)
-    expect(StepupAssertion.safeParse({ ...stepup, extra: 1 }).success).toBe(false)
-    expect(StepupAssertion.safeParse({ ...stepup, signature: 'not base64url!' }).success).toBe(false)
-  })
-  it('the challenge is sha256(payload_hash + "\\n" + frame id), base64url', async () => {
-    const h = `sha256:${'a'.repeat(64)}`
-    const c = stepupChallenge(h, '01JBF3V7Q8K2M4N6P8R0S2T4C3')
-    expect(c).toMatch(/^[A-Za-z0-9_-]{43}$/)
-    expect(stepupChallenge(h, '01JBF3V7Q8K2M4N6P8R0S2T4C4')).not.toBe(c)
-    expect(stepupChallenge(`sha256:${'b'.repeat(64)}`, '01JBF3V7Q8K2M4N6P8R0S2T4C3')).not.toBe(c)
+    expect(CardResolveFrame.safeParse({ ...base, always: true }).success).toBe(true)
+    expect(CardResolveFrame.safeParse({ ...base, always: false }).success).toBe(false)
   })
 })
 
@@ -257,11 +243,11 @@ describe('config fields (C3.6, C4.4)', () => {
     expect(AgentConfig.safeParse({ ...base, session_models: Array(13).fill('opus') }).success).toBe(false)
     expect(AgentConfig.safeParse({ ...base, session_models: ['opus[1m]', 'claude-sonnet-5-5'] }).success).toBe(true)
   })
-  it('both fields are on the config.patch allowlist; a relay change needs step-up config:session', () => {
+  it('both fields are on the config.patch allowlist; neither asks for a passkey (2026-11-14)', () => {
     for (const f of ['permission_relay', 'session_models'])
       expect(CONFIG_PATCH_ALLOWLIST as readonly string[], f).toContain(f)
-    expect(checkConfigPatch({ permission_relay: true })).toMatchObject({ ok: true, stepupPurpose: 'config:session' })
-    expect(checkConfigPatch({ session_models: ['opus'] })).not.toHaveProperty('stepupPurpose')
+    expect(checkConfigPatch({ permission_relay: true })).toEqual({ ok: true })
+    expect(checkConfigPatch({ session_models: ['opus'] })).toEqual({ ok: true })
   })
   it('permission_stepup and sessions_view are gone: a patch naming them is refused (config_field_forbidden path)', () => {
     for (const f of ['permission_stepup', 'sessions_view']) {

@@ -160,8 +160,23 @@ def extract_quotes(text):
     return out
 
 
+def default_wiki_dir():
+    """"wiki" (the old default, relative to the working directory) for a layout-1 agent; the wiki folder of a layout-2 agent."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from _agent_root import agent_root
+        from _talos_layout import layout, paths
+    except ImportError:
+        return "wiki"
+    try:
+        agent = agent_root(__file__)
+    except SystemExit:
+        return "wiki"
+    return paths(agent)["wiki"] if layout(agent) == 2 else "wiki"
+
+
 def main(argv):
-    wiki_dir = argv[1] if len(argv) > 1 else "wiki"
+    wiki_dir = argv[1] if len(argv) > 1 else default_wiki_dir()
     staging_dir = argv[2] if len(argv) > 2 else ".seed-staging"
 
     if not os.path.isdir(wiki_dir):

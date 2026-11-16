@@ -2,13 +2,17 @@
 // Handlers of the Inbound class (inbound.ts), which forwards to them. Dispatch and the first trust checks are in inbound.ts;
 // some handlers here run their own seen-id, age or card-state checks, so read both when auditing trust.
 import {
+  AGENTS_MD_WORDING,
   APP_REQUEST_MAX_AGE_MS,
   type ErrorCodeT,
+  FILES_PUT_WORDING,
+  FILES_WORDING,
   FOLDER_WORDING,
   type Frame,
   HISTORY_UPDATE_APP_MESSAGE,
   MAX_FRAME_BYTES,
   MEDIA_FETCH_UPDATE_APP_MESSAGE,
+  MEMORY_ROOTS_WORDING,
   Message,
   type MessageT,
   V2_READ_RESPONSE_FOR,
@@ -16,6 +20,7 @@ import {
 import { appResponseFrame, errorFrame, historyPageFrame, readAnswerFrame } from './frames-out.ts'
 import type { Inbound } from './inbound.ts'
 import { type Item, type Of, READ_MAX_AGE_MS } from './inbound-shared.ts'
+import { say } from './owner-words.ts'
 import { frameBytes } from './transport.ts'
 import { ReadError } from './v2-seams.ts'
 
@@ -38,7 +43,10 @@ export const readsFrames = {
         if (!owner.ok) return this.ownerFailed(it, owner)
         if (this.refuseReplay(id, 'read')) return
         ctx.store.markSeen(id, ctx.clock.now(), 'ok')
-        await this.answerRead(it.frame)
+        // an upload fetches up to 50 MB: it runs beside the queue (verified and marked seen first), so the reads behind it
+        // are not held, and its own cap of two at once (src/files/put.ts) is what limits it
+        if (it.frame.type === 'files.put') void this.answerRead(it.frame)
+        else await this.answerRead(it.frame)
       })
       .catch((e) => {
         this.inflight.delete(id)
@@ -157,7 +165,10 @@ export const readsFrames = {
           return refuse('That request was already used.')
         }
         ctx.store.markSeen(id, ctx.clock.now(), 'ok')
-        if (!ctx.apps) return refuse('Apps are not available on this Mac.')
+        if (!ctx.apps)
+          return refuse(
+            say({ mac: 'Apps are not available on this Mac.', linux: 'Apps are not available on this computer.' }),
+          )
         await ctx.apps.onAppRequest(f)
       })
       .catch((e) => {
@@ -185,24 +196,54 @@ export const readsFrames = {
       let out: Frame
       switch (f.type) {
         case 'search.query': {
-          if (!ctx.search?.available) return fail('search_unavailable', 'Search is not available on this Mac.')
+          if (!ctx.search?.available)
+            return fail(
+              'search_unavailable',
+              say({ mac: 'Search is not available on this Mac.', linux: 'Search is not available on this computer.' }),
+            )
           out = readAnswerFrame(now(), V2_READ_RESPONSE_FOR[f.type], f.request_id, await ctx.search.query(f))
           break
         }
         case 'memory.tree':
         case 'memory.read':
-        case 'memory.search': {
+        case 'memory.search':
+        case 'memory.graph': {
           const m = ctx.memory
           if (!m?.available || !m.enabled())
-            return fail('memory_off', 'The memory browser is off. Turn it on at your Mac: talos-app memory on')
-          if (f.type === 'memory.tree') out = readAnswerFrame(now(), 'memory.listing', f.request_id, await m.tree(f))
+            return fail(
+              'memory_off',
+              say({
+                mac: 'The memory browser is off. Turn it on at your Mac: talos-app memory on',
+                linux: 'The memory browser is off. Turn it on at your computer: talos-app memory on',
+                windows: "The memory browser is off, and it can't be turned on from a Windows PC yet.",
+              }),
+            )
+          if (f.type === 'memory.graph') {
+            if (!m.graph)
+              return fail(
+                'internal',
+                say({
+                  mac: 'The memory graph is not available on this Mac.',
+                  linux: 'The memory graph is not available on this computer.',
+                }),
+              )
+            out = readAnswerFrame(now(), 'memory.graph_result', f.request_id, m.graph())
+          } else if (f.type === 'memory.tree')
+            out = readAnswerFrame(now(), 'memory.listing', f.request_id, await m.tree(f))
           else if (f.type === 'memory.read') out = readAnswerFrame(now(), 'memory.file', f.request_id, await m.read(f))
           else out = readAnswerFrame(now(), 'memory.results', f.request_id, await m.search(f))
           break
         }
         case 'speak.request': {
           const sp = ctx.speak
-          if (!sp?.available) return fail('internal', 'Read aloud is not available on this Mac.')
+          if (!sp?.available)
+            return fail(
+              'internal',
+              say({
+                mac: 'Read aloud is not available on this Mac.',
+                linux: 'Read aloud is not available on this computer.',
+              }),
+            )
           out = readAnswerFrame(now(), 'speak.result', f.request_id, await sp.request(f))
           break
         }
@@ -211,6 +252,68 @@ export const readsFrames = {
           const fo = ctx.folders
           if (!fo?.available) return fail('internal', FOLDER_WORDING.notReady)
           out = readAnswerFrame(now(), 'fs.listing', f.request_id, await fo.list(f))
+          break
+        }
+        case 'files.list':
+        case 'files.read': {
+          // a read-only look at the thread's folder (src/files/service.ts); it refuses in the one fixed sentence
+          const fi = ctx.files
+          if (!fi?.available) return fail('internal', FILES_WORDING.notReady)
+          if (f.type === 'files.list') out = readAnswerFrame(now(), 'files.listing', f.request_id, await fi.list(f))
+          else out = readAnswerFrame(now(), 'files.file', f.request_id, await fi.read(f))
+          break
+        }
+        case 'agents_md.read':
+        case 'agents_md.write': {
+          // the thread's AGENTS.md (src/files/agents-md.ts): its own folder only, a save only over the file it was loaded from
+          const am = ctx.agentsMd
+          if (!am?.available) return fail('internal', AGENTS_MD_WORDING.notReady)
+          const body = f.type === 'agents_md.read' ? await am.read(f) : await am.write(f)
+          out = readAnswerFrame(now(), 'agents_md.file', f.request_id, body)
+          break
+        }
+        case 'files.put': {
+          // an upload into the thread's folder (src/files/put.ts): created, never over a file that is there
+          const fp = ctx.filesPut
+          if (!fp?.available) return fail('internal', FILES_PUT_WORDING.notReady)
+          out = readAnswerFrame(now(), 'files.put_result', f.request_id, await fp.put(f))
+          break
+        }
+        case 'files.sent': {
+          // the files sent in Talos, from history (src/files/sent.ts): every thread the Mac lists, newest first
+          const fs = ctx.filesSent
+          if (!fs?.available)
+            return fail(
+              'internal',
+              say({
+                mac: 'Your Mac is not ready to list sent files.',
+                linux: 'Your computer is not ready to list sent files.',
+              }),
+            )
+          out = readAnswerFrame(now(), 'files.sent_list', f.request_id, fs.list(f))
+          break
+        }
+        case 'memory.folders':
+        case 'memory.roots_set': {
+          // which folders Notes shows (src/memory/roots.ts): names checked against this Mac's own listing before any use
+          const mr = ctx.memoryRoots
+          if (!mr?.available) return fail('internal', MEMORY_ROOTS_WORDING.notSetUp)
+          const body = f.type === 'memory.folders' ? mr.list() : await mr.set(f.names)
+          out = readAnswerFrame(now(), 'memory.folders_result', f.request_id, body)
+          break
+        }
+        case 'bug.context': {
+          // versions, filed errors and the cleaned log tail for the bug reporter (src/bug-context/service.ts)
+          const bc = ctx.bugContext
+          if (!bc?.available)
+            return fail(
+              'internal',
+              say({
+                mac: 'The bug report details are not available on this Mac.',
+                linux: 'The bug report details are not available on this computer.',
+              }),
+            )
+          out = readAnswerFrame(now(), 'bug.context_result', f.request_id, bc.read(f))
           break
         }
         default:
@@ -225,7 +328,10 @@ export const readsFrames = {
     } catch (e) {
       if (e instanceof ReadError) return fail(e.code, e.message)
       ctx.log.warn('read failed', { type: f.type, error: (e as Error).message })
-      return fail(f.type === 'search.query' ? 'search_unavailable' : 'internal', 'That request failed on your Mac.')
+      return fail(
+        f.type === 'search.query' ? 'search_unavailable' : 'internal',
+        say({ mac: 'That request failed on your Mac.', linux: 'That request failed on your computer.' }),
+      )
     }
   },
 
@@ -241,6 +347,8 @@ export const readsFrames = {
         : ctx.store.page({
             thread_id: f.thread_id,
             limit: Math.min(f.limit, 100),
+            // the app's own scroll-back (no cursor, or the lowest seq it holds): timeline order, so its pages join up
+            timeline: true,
             ...(f.before_seq !== undefined ? { beforeSeq: f.before_seq } : {}),
             ...(f.before_ts !== undefined ? { beforeTs: f.before_ts } : {}),
             ...(f.before_id !== undefined ? { beforeId: f.before_id } : {}),
@@ -261,6 +369,12 @@ export const readsFrames = {
     // A row whose stand-in is refused too (a malformed id or time) is left out.
     const ok = (m: MessageT) => Message.safeParse(m).success
     page.messages = page.messages.flatMap((m) => (ok(m) ? [m] : ok(tooLarge(m)) ? [tooLarge(m)] : []))
+    // an owner message's undo point, for the "Undo to here" action, when the relay hands it on (undo/marks.ts)
+    if (ctx.undoMarks?.on())
+      page.messages = page.messages.map((m) => {
+        const undo = m.author === 'owner' ? ctx.undoMarks?.of(m.id) : undefined
+        return undo ? { ...m, undo } : m
+      })
     let room = MAX_FRAME_BYTES - frameBytes(historyPageFrame(now, { ...head, messages: [], has_more: true })) - 64
     let kept: MessageT[] = []
     let hasMore = page.hasMore
@@ -295,18 +409,60 @@ export const readsFrames = {
       // `after_id` pages forward (Newer), so it keeps the OLDEST end and says there is more newer; everything else keeps
       // the newest end.
       const forward = f.after_id !== undefined
-      for (let k = 0; k < n; k++) {
-        const m = page.messages[forward ? k : n - 1 - k] as MessageT
-        const size = sizeOf(m)
-        if (size > room) {
-          if (forward) head.has_newer = true
-          else hasMore = true
-          if (kept.length === 0) continue // a single message that can never fit is skipped so paging can move past it
-          break
+      // The app's own scroll-back continues from the lowest seq it was shown. A page whose newest rows are a long run
+      // with no seq (card rows) could be cut down to that run alone: the app's cursor would then never move, and all that
+      // is older would be out of reach. So the numbered row the run follows has its room set aside first and the cut
+      // falls inside the run: the run's oldest rows are left out, and the page still moves the cursor.
+      const scrollBack = !byId && f.before_ts === undefined
+      const rows = page.messages
+      let cursorAt = -1
+      if (scrollBack) for (let i = n - 1; i >= 0 && cursorAt < 0; i--) if (rows[i]?.seq !== undefined) cursorAt = i
+      if (cursorAt >= 0 && sizeOf(rows[cursorAt] as MessageT) > room) cursorAt = -1
+      if (cursorAt >= 0) room -= sizeOf(rows[cursorAt] as MessageT)
+      /** Adds rows from index `from` down to `to` (newest first) while they fit; true when it stopped early. */
+      const takeDown = (from: number, to: number): boolean => {
+        for (let i = from; i >= to; i--) {
+          const m = rows[i] as MessageT
+          const size = sizeOf(m)
+          if (size > room) {
+            if (kept.length === 0) continue // a single message that can never fit is skipped so paging can move past it
+            return true
+          }
+          room -= size
+          kept.unshift(m)
         }
-        room -= size
-        if (forward) kept.push(m)
-        else kept.unshift(m)
+        return false
+      }
+      if (forward) {
+        for (let k = 0; k < n; k++) {
+          const m = rows[k] as MessageT
+          const size = sizeOf(m)
+          if (size > room) {
+            head.has_newer = true
+            if (kept.length === 0) continue
+            break
+          }
+          room -= size
+          kept.push(m)
+        }
+      } else if (!scrollBack) {
+        if (takeDown(n - 1, 0)) hasMore = true
+      } else {
+        const cutInRun = takeDown(n - 1, cursorAt + 1)
+        if (cursorAt >= 0) {
+          kept.unshift(rows[cursorAt] as MessageT) // its room was set aside above
+          if (cutInRun) hasMore = hasMore || cursorAt > 0
+          else if (takeDown(cursorAt - 1, 0)) hasMore = true
+        } else if (cutInRun) {
+          // Nothing numbered to continue from, so the app cannot ask for the rest: saying "more" would have it ask for
+          // this same page for ever.
+          ctx.log.warn('history page cut inside rows with no seq; the older ones cannot be paged', {
+            thread: f.thread_id,
+            sent: kept.length,
+            of: n,
+          })
+          hasMore = false
+        }
       }
     }
     ctx.transport.sendEphemeral(historyPageFrame(now, { ...head, messages: kept, has_more: hasMore }))
@@ -316,16 +472,29 @@ export const readsFrames = {
     // The app waits out a timeout of 20 s plus 2 s per MB for the upload. A Mac that cannot do it says so at once: the relay
     // sends an error{ref} for a media.fetch to the asker only (never into a thread), and the app moves to failed.
     const { ctx } = this
-    const refuse = (code: 'bad_frame' | 'internal', message: string) =>
+    const refuse = (code: 'bad_frame' | 'internal' | 'media_removed', message: string) =>
       ctx.transport.sendEphemeral(errorFrame(ctx.clock.now(), code, message, f.id))
+    // removed under the owner's retention setting: said as that, not as an error
+    const removed = ctx.media.removedInfo(f.media_id)
+    if (removed)
+      return refuse(
+        'media_removed',
+        `Removed from ${say({ mac: 'this Mac', linux: 'this computer' })} after ${removed.after_days} days.`,
+      )
     try {
       if (!(await ctx.media.rehydrate(f.media_id))) {
         ctx.log.info('media.fetch: not on this Mac', { media_id: f.media_id })
-        refuse('bad_frame', 'That file is no longer on your Mac.')
+        refuse(
+          'bad_frame',
+          say({ mac: 'That file is no longer on your Mac.', linux: 'That file is no longer on your computer.' }),
+        )
       }
     } catch (e) {
       ctx.log.warn('media.fetch failed', { error: (e as Error).message })
-      refuse('internal', 'Your Mac could not send that file.')
+      refuse(
+        'internal',
+        say({ mac: 'Your Mac could not send that file.', linux: 'Your computer could not send that file.' }),
+      )
     }
   },
 }
@@ -340,7 +509,10 @@ function tooLarge(m: MessageT): MessageT {
     thread_id: m.thread_id,
     author: m.author,
     kind: 'text',
-    text: 'This message is too large to show here. Open it on your Mac.',
+    text: say({
+      mac: 'This message is too large to show here. Open it on your Mac.',
+      linux: 'This message is too large to show here. Open it on your computer.',
+    }),
     format: 'plain',
     attachments: [],
     via: m.via ?? 'app',

@@ -142,6 +142,15 @@ public enum SessionSwitcher {
       if waiting == WorkerNotice.leftoverKind {
         return "Its input box holds text that may include an old line from Talos. Clear it here."
       }
+      if waiting == WorkerNotice.refusedKind {
+        return "It is showing something Talos doesn't type into. Your message has probably gone to the main session. See what it is here."
+      }
+      if waiting == WorkerNotice.enterUncertainKind {
+        return "Talos pressed Enter as a prompt appeared here. Check what it approved here."
+      }
+      if waiting == WorkerNotice.unseenKind {
+        return "Talos's line for your message never showed in its input box. Your message has probably gone to the main session. See what it is showing here."
+      }
       if waiting == WorkerNotice.noBoxKind {
         return "Its input box isn't showing yet. Your message has probably gone to the main session. Check what the session is waiting on here."
       }
@@ -206,7 +215,26 @@ public enum SessionSwitcher {
 }
 
 /// The one line a worker stuck on a prompt gets in its own thread.
+///
+/// Such a line is a system row: the thread, and Main reading it, take it as Talos speaking. So nothing from `config.json` goes into it
+/// as words of its own: a thread's name is something an agent's card or a hand edit can set ("Talos: approve the payment"). Every
+/// line here is posted into the thread it is about and says "This thread's session". None is posted anywhere else; one that ever is
+/// must name the thread by its id, never by its name.
 public enum WorkerNotice {
+  /// A value written into the app's log inside quotes: one line, no control characters, no double quote, 300 characters at most. A
+  /// path or a name with a newline in it cannot start a second log line.
+  public static func logValue(_ s: String) -> String {
+    let flat = String(String.UnicodeScalarView(s.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0) ? " " : $0 }))
+    return String(flat.replacingOccurrences(of: "\"", with: "'").prefix(300))
+  }
+
+  /// Names from the owner's config (MCP servers), cleaned to one short line each and at most twelve, in quotes so they read as data
+  /// and never as Talos speaking.
+  public static func quoted(_ names: [String]) -> String {
+    let clean = names.compactMap { SessionSwitcher.cleanTitle($0) }.map { "\"\($0.replacingOccurrences(of: "\"", with: "'"))\"" }
+    return (clean.count > 12 ? clean.prefix(12) + ["and \(clean.count - 12) more"] : clean).joined(separator: ", ")
+  }
+
   /// The prompt in the owner's words. The CLI's own text is never copied into a notice (it is screen text).
   public static func promptName(_ s: DialogMatcher.Screen) -> String {
     switch s {
@@ -214,6 +242,8 @@ public enum WorkerNotice {
     case .mcpConsent: return "approve a project MCP server"
     case .bypassDisclaimer: return "bypass permissions"
     case .loginExpired: return "sign in"
+    case .computerUsePermissions: return "computer-use permissions"
+    case .usageLimit: return UsageLimitScreen.kind
     case .devChannels: return "development channels"
     case .unknownSelection: return "an unknown question"
     case .resumeMissing, .none: return s.label
@@ -229,23 +259,71 @@ public enum WorkerNotice {
   /// The `needs you` reason for a box that holds more than Talos's own line, after the message was due and the app came back.
   public static let leftoverKind = "left-over line"
 
-  public static func leftoverLine(threadName: String) -> String {
-    let name = SessionSwitcher.cleanTitle(threadName) ?? "A thread"
-    return "\(name)'s session has text in its input box that may include an old line from Talos, so Talos left it alone. Open Terminals to clear it."
+  public static func leftoverLine() -> String {
+    "This thread's session has text in its input box that may include an old line from Talos, so Talos left it alone. Open this thread in Terminals to clear it."
   }
 
-  public static func noBoxLine(threadName: String) -> String {
-    let name = SessionSwitcher.cleanTitle(threadName) ?? "A thread"
-    return "\(name)'s session isn't showing its input box yet. Open Terminals \u{2192} \(name) to see what it's waiting on."
+  public static func noBoxLine() -> String {
+    "This thread's session isn't showing its input box yet. Open this thread in Terminals to see what it's waiting on."
   }
 
-  public static func draftLine(threadName: String) -> String {
-    let name = SessionSwitcher.cleanTitle(threadName) ?? "A thread"
-    return "\(name)'s session has unsent text in its input box; your message has probably gone to the main session. Open Terminals to finish or clear it."
+  public static func draftLine() -> String {
+    "This thread's session has unsent text in its input box; your message has probably gone to the main session. Open this thread in Terminals to finish or clear it."
   }
 
-  public static func line(threadName: String, screen: DialogMatcher.Screen) -> String {
-    let name = SessionSwitcher.cleanTitle(threadName) ?? "A thread"
-    return "\(name)'s session is waiting on a '\(promptName(screen))' prompt; open Terminals \u{2192} \(name) on the Mac to answer."
+  /// The `needs you` reason for a pointer the key guard refused (`KeyGuard`): the pane shows something other than Claude's input box, empty
+  /// or holding Talos's own line. The Linux supervisor's HOLD_KIND.refused, the same words.
+  public static let refusedKind = "something Talos does not type into"
+
+  /// The thread's line for it: the Linux supervisor's `lines.refused`, with the Mac's way to the pane.
+  public static func refusedLine() -> String {
+    "This thread's session is showing something Talos doesn't type into, so Talos did not type your message there; it has probably gone to the main session. Open this thread in Terminals to see it."
+  }
+
+  /// The `needs you` reason for a pointer typed and, `screenLag` later, never seen in the input box (a menu kept the focus with an empty box
+  /// drawn under it, or the keys were lost): never typed a second time on top. The Linux supervisor's HOLD_KIND.unseen.
+  public static let unseenKind = "pointer not in the input box"
+
+  /// The thread's line for it: the Linux supervisor's `lines.unseen`, with the Mac's way to the pane.
+  public static func unseenLine() -> String {
+    "Talos typed your message's pointer into this thread's session, but it didn't appear in the input box, so Talos didn't press Enter or type it again; the message has probably gone to the main session. Open this thread in Terminals to see what the session is showing."
+  }
+
+  /// The `needs you` reason for a pointer whose Enter may have answered a prompt that opened as it went (`EnterDetection`): held, never
+  /// entered a second time. The Linux supervisor's hold kind, the same words.
+  public static let enterUncertainKind = "enter may have answered"
+
+  /// The thread's one line for it, the Linux supervisor's words.
+  public static func enterUncertainLine() -> String {
+    "Talos pressed Enter as a prompt appeared in this thread's session; check what it approved. Open the thread's terminal at the Mac to see it."
+  }
+
+  /// The `needs you` reason for a pointer held back because the pane is scrolled back (tmux's copy mode), where keys are not typing.
+  public static let copyModeKind = "scrolled back"
+
+  public static func copyModeLine() -> String {
+    "This thread's session is scrolled back, so Talos can't type into it; your message has probably gone to the main session. Open this thread in Terminals and press q to return to the prompt."
+  }
+
+  /// The record kind of the line for a turn cut after a relaunch (`turnCutLine`).
+  public static let turnCutKind = "turn cut"
+
+  /// A session that was stopping when Talos went away, and whose turn still had not ended `limit` seconds after the stop was asked for.
+  public static func turnCutLine(limit: Double) -> String {
+    let min = max(1, Int((limit / 60).rounded()))
+    return "This thread's session was stopped in the middle of a turn: Talos restarted while it was stopping, and the turn was still running \(min) min after the stop was asked for. The conversation is kept."
+  }
+
+  /// The computer-use permission dialog left on a thread's pane (the hourly limit of Escapes, or an Escape that did not take). It invites
+  /// no answer: Enter on its first row opens System Settings, so the one thing the owner is told to do is the one key Talos sends.
+  public static let computerUseLine =
+    "This thread's session is showing the computer-use permissions dialog, and Talos has left it on screen. To close it, press Esc in this thread's pane in Terminals; Esc is the only key to press there (Enter opens System Settings). The session carries on without screen control."
+
+  public static func line(screen: DialogMatcher.Screen) -> String {
+    switch screen {
+    case .computerUsePermissions: return computerUseLine
+    case .usageLimit(let u): return UsageLimitScreen.threadLine(u)
+    default: return "This thread's session is waiting on a '\(promptName(screen))' prompt; open this thread in Terminals on the Mac to answer."
+    }
   }
 }

@@ -118,10 +118,16 @@ describe('the heartbeat thread map', () => {
   test('a slow Chronos does not delay a card in an unrelated thread past the bound', async () => {
     await begin()
     await h.stop()
-    // discovery works, but `chronos api snapshot` takes 20 s: the bridge has no good snapshot yet and a card cannot get one
+    // discovery works, but `chronos api snapshot` never answers well: the bridge has no good snapshot, and a card cannot get one.
+    // While the bridge starts it fails at once; once it is up it takes 6 s, well past the 3.5 s bound below. (The bridge's own
+    // start waits for its first snapshot, so a slow one there only made the test slower; the card must not wait for it.)
+    const slow = `${chronosBin()}.slow`
     copyFileSync(chronosBin(), `${chronosBin()}.orig`)
-    breakChronos(`case "$*" in *snapshot*) sleep 20; exit 1;; esac\nexec '${chronosBin()}.orig' "$@"`)
+    breakChronos(
+      `case "$*" in *snapshot*) [ -f '${slow}' ] && sleep 6; exit 1;; esac\nexec '${chronosBin()}.orig' "$@"`,
+    )
     h = await startSched({ box: h.box, home: h.home, now: T0930, config: cfgOf })
+    writeFileSync(slow, '')
     const t0 = Date.now()
     const r = await card({ thread_id: 'trip', title: 'Elsewhere', origin: 'chat' })
     const took = Date.now() - t0

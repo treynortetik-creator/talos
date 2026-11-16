@@ -103,6 +103,11 @@ export const SessionState = z.strictObject({
         kind: z.string().max(24),
         percent: z.number().min(0).max(100).optional(),
         resets_at: IsoTs.optional(),
+        /**
+         * When the session that gave this reading last heard it from Claude Code (the Mac's clock). Sent only to a relay that
+         * lists USAGE_AS_OF_FEATURE: an app built before it reads this object strictly and refuses the whole state.
+         */
+        as_of: IsoTs.optional(),
       }),
     )
     .max(6)
@@ -111,6 +116,13 @@ export const SessionState = z.strictObject({
   at: IsoTs,
 })
 export type SessionStateT = z.infer<typeof SessionState>
+export type RateLimitT = SessionStateT['rate_limits'][number]
+
+/**
+ * Relay feature (`ready.features`): this relay and the app it serves read `rate_limits[].as_of`. Without it the bridge leaves
+ * the field out, so an older relay or app still parses the state.
+ */
+export const USAGE_AS_OF_FEATURE = 'usage-as-of/1'
 
 /** The state as the bridge publishes it in `session.state`: capabilities limited to SESSION_CAPABILITIES_V1. */
 export function wireSessionState(state: SessionStateT): SessionStateT {

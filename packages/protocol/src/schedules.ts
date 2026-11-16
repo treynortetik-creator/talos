@@ -43,6 +43,8 @@ export const DETAIL_PROMPT_MAX_BYTES = 64 * 1024 // a detail, then truncated
 export const GUARD_MAX_BYTES = 16 * 1024
 export const REPORT_MAX_BYTES = 4 * 1024
 export const MAX_SCHEDULES_PER_SNAPSHOT = 200
+/** How long the app waits for the Mac's answer to a schedules frame. The bridge's whole discovery fits well inside it. */
+export const SCHEDULES_ANSWER_MS = 20_000
 
 /** = Chronos ID_RE. */
 export const ScheduleId = z.string().regex(/^[a-z0-9-]{2,40}$/)
@@ -358,6 +360,8 @@ export const HealthCode = z.enum([
   'legacy_both_runner',
   'held_jobs',
   'truncated',
+  // off a Mac (no background timer there yet): jobs that run by themselves in the background, which never run there
+  'cannot_run_here',
 ])
 export const HealthIssue = z.strictObject({
   code: HealthCode,
@@ -444,8 +448,33 @@ export const ScheduleChange = z.discriminatedUnion('op', [
   // accept changes made outside the app (S8.2)
   z.strictObject({ op: z.literal('adopt'), id: ScheduleId, content_hash: Sha256Ref }),
 ])
+/** A card's `preview.when_text`, in characters. Every app that ever shipped refuses a longer one, so it stays. */
+export const PREVIEW_WHEN_MAX = 120
+/**
+ * A scheduler's own when-words cut to fit a card: a list of fire times (the documented 12 run far past the card's limit)
+ * keeps as many times as fit, then "and N more"; anything else that is too long ends in an ellipsis. Never longer than `max`.
+ */
+export function shortWhenText(s: string, max: number = PREVIEW_WHEN_MAX): string {
+  if (s.length <= max) return s
+  const at = s.indexOf(' at ')
+  if (at >= 0) {
+    const head = s.slice(0, at + 4)
+    const times = s
+      .slice(at + 4)
+      .split(/, | and /)
+      .filter(Boolean)
+    for (let keep = times.length - 1; keep >= 1; keep--) {
+      const t = `${head}${times.slice(0, keep).join(', ')} and ${times.length - keep} more`
+      if (t.length <= max) return t
+    }
+  }
+  return `${[...s]
+    .slice(0, max - 1)
+    .join('')
+    .slice(0, max - 1)}…`
+}
 export const SchedulePreview = z.strictObject({
-  when_text: z.string().max(120),
+  when_text: z.string().max(PREVIEW_WHEN_MAX),
   next_runs: z.array(IsoTs).max(3),
   tz: IanaZone,
 })

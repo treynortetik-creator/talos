@@ -6,6 +6,7 @@ import { armCard } from './features/cards/arm.tsx'
 import { getDrive } from './features/drive/instance.ts'
 import { attachShell } from './features/native/attach.ts'
 import { startNativeBadge } from './features/native/badge.ts'
+import { setFakePages } from './features/pages/pagesData.ts'
 import { installProblems } from './features/problems/controller.ts'
 import { startReadSync } from './features/pwa/readSync.ts'
 import { audioDock } from './features/threads/audioDock.ts'
@@ -31,13 +32,22 @@ applyTheme()
 
 // CC-C3: `?fake_mod=offline|absent` starts the fake Claude Code session without a live mod (screenshots, e2e).
 // Agents panel: `?fake_agents=demo|empty` makes the fake mod send a scripted roster or an empty snapshot.
-function fakeMod(): { mod?: 'offline' | 'absent'; agents?: 'demo' | 'empty' } {
+// `?fake_host=windows|linux|none` plays an agent on that computer (a Mac by default): the app's words follow it.
+function fakeMod(): {
+  mod?: 'offline' | 'absent'
+  agents?: 'demo' | 'empty'
+  host?: 'windows' | 'linux' | 'none'
+  macOffline?: boolean
+} {
   const q = new URLSearchParams(location.search)
   const m = q.get('fake_mod')
   const a = q.get('fake_agents')
+  const h = q.get('fake_host')
   return {
     ...(m === 'offline' || m === 'absent' ? { mod: m } : {}),
     ...(a === 'demo' || a === 'empty' ? { agents: a } : {}),
+    ...(h === 'windows' || h === 'linux' || h === 'none' ? { host: h } : {}),
+    ...(q.get('fake_offline') === '1' ? { macOffline: true } : {}),
   }
 }
 
@@ -59,6 +69,7 @@ if (import.meta.env.VITE_FAKE === '1') {
   ;(window as unknown as { __talos: unknown }).__talos = client
   ;(window as unknown as { __talosSession: unknown }).__talosSession = useSession // so a spec can say what /api/me said
   ;(window as unknown as { __talosDock: unknown }).__talosDock = audioDock // so a spec can raise the now-playing pill
+  ;(window as unknown as { __talosPages: unknown }).__talosPages = setFakePages // the made-up relay's org pages
 }
 
 if (shell) attachShell(shell, client)
@@ -67,7 +78,7 @@ if (shell) attachShell(shell, client)
 installProblems({ storage, client })
 
 // iPhone app: a tap on a notification (or its Open / Approve button) opens the path the relay put in it. Approve opens
-// the card armed (in memory, not in the URL): a high-risk card starts its normal flow and asks for Face ID first; nothing approves by itself.
+// the card armed (in memory, not in the URL): its button gets focus and waits for a tap in the app; nothing approves by itself.
 startNativeBadge(client)
 // Read state follows the notifications: a read thread or a decided card leaves the tray, and the web app badge follows the open cards.
 startReadSync(client)

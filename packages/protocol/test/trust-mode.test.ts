@@ -38,11 +38,9 @@ describe('who writes trust_mode', () => {
     expect(AGENT_CONFIG_ALLOWLIST as readonly string[]).not.toContain('trust_mode')
     expect(AGENT_CONFIG_REFUSED as readonly string[]).toContain('trust_mode')
   })
-  it('turning it on from the app needs the session step-up; off does not', () => {
-    const on = checkConfigPatch({ trust_mode: true })
-    expect(on).toMatchObject({ ok: true, stepupPurpose: 'config:session', turnsOnTrust: true })
-    const off = checkConfigPatch({ trust_mode: false })
-    expect(off).toEqual({ ok: true, touchesWorkEnabled: false })
+  it('turning it on or off from the app is a plain signed patch (no passkey since 2026-11-14)', () => {
+    expect(checkConfigPatch({ trust_mode: true })).toEqual({ ok: true })
+    expect(checkConfigPatch({ trust_mode: false })).toEqual({ ok: true })
   })
   it('an agent proposal for it is refused, by name', () => {
     for (const value of [true, false]) {

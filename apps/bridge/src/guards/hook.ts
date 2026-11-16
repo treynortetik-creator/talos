@@ -14,7 +14,11 @@ const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) =
 
 /** The rules, only if the file is byte for byte what install wrote and has every field. Throws otherwise. */
 export function loadGuardConfig(path: string, sha: string | undefined): GuardConfig {
-  const raw = readFileSync(path)
+  return parseGuardConfig(readFileSync(path), sha)
+}
+
+/** `loadGuardConfig` on bytes already read (the refresh reads them through a no-follow open). Throws the same way. */
+export function parseGuardConfig(raw: Buffer, sha: string | undefined): GuardConfig {
   if (!sha || createHash('sha256').update(raw).digest('hex') !== sha)
     throw new Error('guards.json does not match install')
   const c = JSON.parse(raw.toString('utf8')) as GuardConfig
@@ -34,13 +38,14 @@ export async function mainGuardHook(args: string[]): Promise<number> {
     const at = args.indexOf('--config')
     const sat = args.indexOf('--sha')
     const cfg = loadGuardConfig(args[at + 1] as string, sat < 0 ? undefined : args[sat + 1])
-    const call = JSON.parse(await Bun.stdin.text()) as { tool_name?: unknown; tool_input?: unknown }
+    const call = JSON.parse(await Bun.stdin.text()) as { tool_name?: unknown; tool_input?: unknown; cwd?: unknown }
     if (typeof call.tool_name !== 'string') throw new Error('no tool_name')
-    const d = guardDecision({ tool_name: call.tool_name, tool_input: call.tool_input }, cfg)
+    const cwd = typeof call.cwd === 'string' ? call.cwd : undefined
+    const d = guardDecision({ tool_name: call.tool_name, tool_input: call.tool_input, ...(cwd ? { cwd } : {}) }, cfg)
     if (d) process.stdout.write(`${answer(d.deny)}\n`)
   } catch {
     process.stdout.write(
-      `${answer('Talos guard could not read this call or its rules (or the rules changed since install), so it is blocked. Tell the owner; they run `talos-app install-guards` again.')}\n`,
+      `${answer('Talos guard could not read this call or its rules, or the rules changed since this session started (a new release refreshes them at the next start of Main), so it is blocked. A restart of this session picks up the current rules; if it is still blocked after one, tell the owner (they run `talos-app install-guards` again).')}\n`,
     )
   }
   return 0

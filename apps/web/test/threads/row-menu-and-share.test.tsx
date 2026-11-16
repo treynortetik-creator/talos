@@ -122,10 +122,11 @@ describe('thread row menu', () => {
     fireEvent.click(await screen.findByTestId('row-mute'))
     await waitFor(() => expect(client.patchConfig).toHaveBeenCalledTimes(1))
     const sent = (client.patchConfig as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      threads: Array<{ id: string; notify: string }>
+      threads: Array<{ id: string; notify?: string }>
     }
     expect(sent.threads.find((t) => t.id === 'plans')?.notify).toBe('off')
-    expect(sent.threads.find((t) => t.id === 'ideas')?.notify).toBe('all')
+    // another thread goes as its id and place only: the Mac keeps its own setting (protocol audit O4)
+    expect(sent.threads.find((t) => t.id === 'ideas')).not.toHaveProperty('notify')
   })
 
   it('Archive follows the editor: allowed on a plain thread, refused on the default and on the system thread', async () => {
@@ -350,6 +351,22 @@ describe('review findings', () => {
     fireEvent.click(await screen.findByTestId('row-read'))
     expect((await screen.findByTestId('row-menu-note')).textContent).toMatch(/relay/)
     expect(screen.getByTestId('row-menu')).toBeTruthy()
+  })
+
+  it('Mark all read ignores an archived thread: it is off when only that one has unread, and never marks it', () => {
+    const client = listClient({ unread: { ideas: 3 } })
+    client.store.setState((s) => ({
+      ...s,
+      threads: s.threads.map((t) => (t.id === 'ideas' ? { ...t, archived: true } : t)),
+    }))
+    mountList(client)
+    expect(screen.getByTestId('mark-all-read').hasAttribute('disabled')).toBe(true)
+    cleanup()
+    client.store.setState((s) => ({ ...s, unread: { ideas: 3, plans: 1 } }))
+    mountList(client)
+    fireEvent.click(screen.getByTestId('mark-all-read'))
+    expect(client.markThreadRead).toHaveBeenCalledTimes(1)
+    expect(client.markThreadRead).toHaveBeenCalledWith('plans', 77, { needConnection: true })
   })
 
   it('offline, Mark all read says so in the header', async () => {

@@ -15,8 +15,11 @@ public struct RunResult: Equatable, Sendable {
 }
 
 public enum ProcessRunner {
+  /// `started` gets the child's pid once it runs and `exited` is called when it has gone, so a watcher can tell which child a caller
+  /// waits on (WorkerTickWatch.swift).
   public static func run(
-    _ argv: [String], env: [String: String]? = nil, cwd: String? = nil, timeout: Double = 10
+    _ argv: [String], env: [String: String]? = nil, cwd: String? = nil, timeout: Double = 10,
+    started: ((Int32) -> Void)? = nil, exited: (@Sendable () -> Void)? = nil
   ) -> RunResult {
     guard let exe = argv.first else { return RunResult(status: 127, stdout: Data(), stderr: Data(), timedOut: false) }
     let p = Process()
@@ -31,12 +34,16 @@ public enum ProcessRunner {
     p.standardError = errPipe
 
     let done = DispatchSemaphore(value: 0)
-    p.terminationHandler = { _ in done.signal() }
+    p.terminationHandler = { _ in
+      exited?()
+      done.signal()
+    }
     do {
       try p.run()
     } catch {
       return RunResult(status: 127, stdout: Data(), stderr: Data("\(error)".utf8), timedOut: false)
     }
+    started?(p.processIdentifier)
 
     let box = OutputBox()
     let readers = DispatchGroup()

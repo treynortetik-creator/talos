@@ -615,7 +615,8 @@ describe('the size report script', () => {
     expect(out.stdout).toContain(
       `Production TypeScript functions over 300 lines: ${Object.keys(b.functionsOverLimit).length}`,
     )
-    expect(out.stdout).toMatch(/^core\s+\d+\s+[\d,]+$/m)
+    // the file count is written with a thousands comma too, from 1,000 files
+    expect(out.stdout).toMatch(/^core\s+[\d,]+\s+[\d,]+$/m)
   })
 
   it('prints growth of a listed giant and stale entries, and exits 0 (a quiet-looking test warning is not the only place)', () => {

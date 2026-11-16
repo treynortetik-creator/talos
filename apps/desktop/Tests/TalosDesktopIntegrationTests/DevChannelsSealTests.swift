@@ -5,7 +5,7 @@ import TalosSupervisor
 
 /// The seal on the confirmed launch (Part 2 of the dev-channels card): the guard trusts `confirmed_launch` only while its MAC verifies under a
 /// key that is not in desktop.json. Anything else (a fingerprint an agent wrote, a MAC that does not verify, a key that is gone, a Keychain that
-/// cannot be read) is a changed launch: the warning goes to the card, and the owner's one tap seals it again. The default suite uses the in-memory store.
+/// cannot be read) is a changed launch: the warning goes to the popup, and the owner's one click seals it again. The default suite uses the in-memory store.
 private func edit(_ r: Rig, _ change: (inout DesktopConfig) -> Void) throws {
   var c = try #require(try ConfigFile.load(r.configPath))
   change(&c)
@@ -70,8 +70,8 @@ struct DevChannelsSealTests {
     r.expectHeldAtNeedsYou("launchChanged")
   }
 
-  /// No key (a new Mac, a deleted item): fail closed; the owner's tap makes a key, seals, and the next start is automatic.
-  @Test func aMissingKeyFailsClosedAndTheTapMakesANewOne() throws {
+  /// No key (a new Mac, a deleted item): fail closed; the owner's click makes a key, seals, and the next start is automatic.
+  @Test func aMissingKeyFailsClosedAndTheClickMakesANewOne() throws {
     let keys = KeyLog()
     defer { keys.remove() }
     let r = try Rig(.direct, scenario: "dev-dialog-keys.sh", env: ["FAKE_DLG_KEYLOG": keys.path])
@@ -83,7 +83,7 @@ struct DevChannelsSealTests {
     let o = try #require(r.waitForOffer(), "audit: \(r.audit)")
     #expect(o.launch_changed == [], "the launch is the same; what is missing is the key: 'not confirmed on this Mac yet'")
     #expect(r.audit.contains("reason=launchChanged"), "audit: \(r.audit)")
-    try r.tap(o, owner: owner, choice: 0, control: "ctl_1")
+    #expect(r.clickPopup(o, choice: 0) == .pressed(choice: 0, label: o.options[0]), "audit: \(r.audit)")
     #expect(r.wait(10) { r.sup.tickNow(); return isRunning(r.phase()) }, "\(r.phase()), audit: \(r.audit)")
     #expect(r.trust.hasKey, "the owner's confirm made the key")
     let c = r.config
@@ -94,7 +94,7 @@ struct DevChannelsSealTests {
     #expect(keys.presses == ["ENTER", "ENTER"], "\(keys.keys)")
   }
 
-  /// A Keychain that cannot be read: the same, and a tap while it cannot be used stores the fingerprint unsealed, so the next start asks again.
+  /// A Keychain that cannot be read: the same, and a click while it cannot be used stores the fingerprint unsealed, so the next start asks again.
   @Test func aKeychainThatCannotBeReadFailsClosedAndAsksAgainNextStart() throws {
     let keys = KeyLog()
     defer { keys.remove() }
@@ -105,9 +105,9 @@ struct DevChannelsSealTests {
     try r.pairPhone(owner)
     r.start()
     let o = try #require(r.waitForOffer(), "audit: \(r.audit)")
-    try r.tap(o, owner: owner, choice: 0, control: "ctl_1")
+    #expect(r.clickPopup(o, choice: 0) == .pressed(choice: 0, label: o.options[0]), "audit: \(r.audit)")
     #expect(r.wait(10) { r.sup.tickNow(); return isRunning(r.phase()) }, "\(r.phase()), audit: \(r.audit)")
-    #expect(keys.presses == ["ENTER"], "the owner's tap still answers the dialog")
+    #expect(keys.presses == ["ENTER"], "the owner's click still answers the dialog")
     #expect(r.audit.contains("launch_seal_unavailable"), "audit: \(r.audit)")
     #expect(r.config.confirmedLaunchMac == nil)
     r.sup.restartCold()
@@ -115,7 +115,7 @@ struct DevChannelsSealTests {
     #expect(r.autoConfirms == 0)
   }
 
-  /// The update that brings the seal: a plain fingerprint (nothing proves who wrote it) is cleared once, the first start asks, the tap seals.
+  /// The update that brings the seal: a plain fingerprint (nothing proves who wrote it) is cleared once, the first start asks, the click seals.
   @Test func theUpdateThatBringsTheSealAsksOnceThenNeverAgain() throws {
     let r = try Rig(.direct, scenario: "dev-dialog-keys.sh", launchConfirmed: false)
     defer { r.teardown() }
@@ -132,7 +132,7 @@ struct DevChannelsSealTests {
     r.start()
     let o = try #require(r.waitForOffer(), "audit: \(r.audit)")
     #expect(o.launch_changed == [], "it says 'not confirmed on this Mac yet', not 'changed'")
-    try r.tap(o, owner: owner, choice: 0, control: "ctl_1")
+    #expect(r.clickPopup(o, choice: 0) == .pressed(choice: 0, label: o.options[0]), "audit: \(r.audit)")
     #expect(r.wait(10) { r.sup.tickNow(); return isRunning(r.phase()) && r.config.confirmedLaunchMac != nil }, "\(r.phase())")
     // an app relaunch on the same Mac: sealed, so the migration does not run again
     let ran = r.audit.components(separatedBy: "launch_trust_migrated").count

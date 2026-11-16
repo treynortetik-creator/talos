@@ -26,6 +26,27 @@
 # Inside a run the install and build happen once, then mod, image and the Swift jobs go beside check, and browser after it.
 # Exit 0 only if all passed.
 set -uo pipefail
+# Every file a job makes is changed only by its owner, whatever the runner's default: talos-ci's systemd user manager gave
+# its runner 0002, so the jobs' temp folders were group-writable and every rooted-kit check (rightly) refused them: 36 tests
+# red on Titan that pass everywhere else (the first check-titan shadow run, 58caeb6).
+umask 022
+
+# The parts of this script live in scripts/ci-local/ beside it and are sourced below (the jobs' before any wait). All of them are checked here,
+# first: a copy of ci-local.sh without them stops before it does anything (it never half-runs).
+CI_LOCAL_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci-local"
+for _ci_part in locks machine jobs-check jobs-mod-browser jobs-image jobs-swift; do
+  [ -r "$CI_LOCAL_LIB/$_ci_part.sh" ] || { echo "ci-local: $CI_LOCAL_LIB/$_ci_part.sh is missing: ci-local.sh needs the scripts/ci-local/ folder beside it" >&2; exit 64; }
+  # a part that does not parse would stop the run half-way through, where it is sourced: stop here instead
+  bash -n "$CI_LOCAL_LIB/$_ci_part.sh" || { echo "ci-local: $CI_LOCAL_LIB/$_ci_part.sh does not parse" >&2; exit 64; }
+done
+
+# git never waits for a person: no terminal prompt, no credential manager window, no ssh passphrase question (Titan's runner
+# hung 4 h 23 m in a fetch that asked for a credential nobody was there to give). Exported, so every git below and in the jobs
+# gets it; a network call also has stdin from /dev/null and a time limit (ci_git_net).
+export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never
+# ssh in batch mode, unless the owner chose an ssh command of their own (GIT_SSH_COMMAND, GIT_SSH, core.sshCommand)
+[ -n "${GIT_SSH_COMMAND:-}${GIT_SSH:-}" ] || [ -n "$(git config --get core.sshCommand 2>/dev/null)" ] ||
+  export GIT_SSH_COMMAND="ssh -o BatchMode=yes"
 
 # ---------- locks ----------
 # A lock is a directory made with mkdir (the atomic step) holding `owner`: pid, process start time, nonce. Release renames
@@ -41,6 +62,11 @@ set -uo pipefail
 # mistake. The first owner of a lock is written with `ln`, which refuses to replace one, so a creator that stalled past
 # CI_LOCK_GRACE loses to the waiter that took over, instead of overwriting it.
 CI_SLOTS="${CI_SLOTS:-3}" CI_MAX_LOAD="${CI_MAX_LOAD:-14}"
+# The most full suites (runs) at once on this machine, whatever CI_SLOTS asks: a per-machine setting (the runner's .env), 2 by
+# default. Three at once on Lemnos took 3400-4000 s a run against 1000-2000 s (2026-11-13). Not a whole number >= 1: the default.
+CI_MAX_SUITES="${CI_MAX_SUITES:-2}"
+case "$CI_MAX_SUITES" in '' | *[!0-9]* | 0) CI_MAX_SUITES=2 ;; esac
+case "$CI_SLOTS" in '' | *[!0-9]*) ;; *) [ "$CI_SLOTS" -le "$CI_MAX_SUITES" ] || CI_SLOTS="$CI_MAX_SUITES" ;; esac
 # The Playwright port of slot N is base + step * (N - 1) (ci_slot_env; TALOS_CI_PW_PORT moves the base). apps/web/playwright.config.ts
 # reads these three lines (apps/web/test/helpers/pw-port.ts) and refuses those ports outside a slot run, so a run by hand cannot
 # take a port a slot is about to bind. PORT_SLOTS is the most slots the runners are sized for ("Sizing" in docs/CI-LOCAL.md).
@@ -57,470 +83,20 @@ CI_LOCK_GRACE="${CI_LOCK_GRACE:-30}" # seconds a lock may exist without an owner
 CI_NONCE="$$-$RANDOM$RANDOM-$(date +%s)"
 CI_HELD="" CI_SLOT="" CI_MARKER=""
 
-# Pinned to C locale and UTC: the same process must print the same start time whoever asks, whatever their TZ or LANG.
-ci_proc_start() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'; }
-CI_ME="$$
-$(ci_proc_start $$)
-$CI_NONCE" # once per process: a ps that fails later must not make a run stop recognising its own lock
-ci_me() { printf '%s' "$CI_ME"; }
-ci_owner() { cat "$1/owner" 2>/dev/null; }
-ci_owner_key() { printf '%s' "$1" | cksum | tr -c '0-9\n' - | head -1; }
-ci_stat() { stat -c '%i %Y' "$1" 2>/dev/null || stat -f '%i %m' "$1" 2>/dev/null; } # inode mtime (GNU, then BSD)
-ci_owner_alive() { # ci_owner_alive <owner text>
-  local pid start now
-  pid="$(printf '%s\n' "$1" | sed -n 1p)" start="$(printf '%s\n' "$1" | sed -n 2p)"
-  case "$pid" in '' | *[!0-9]*) return 1 ;; esac
-  kill -0 "$pid" 2>/dev/null || return 1
-  [ -n "$start" ] || return 0
-  now="$(ci_proc_start "$pid")"
-  # The pid exists. If ps printed nothing, ps failed (one failed fork on a loaded box): that is not evidence the owner is
-  # gone, so it counts as alive. Only a start time that is different says the pid was reused.
-  [ -z "$now" ] || [ "$now" = "$start" ]
-}
-# A job must not outlive its run. Each run keeps a record, $CI_RUNS/<nonce>: its job process groups, its worktree, its container.
-# Whoever finds the run gone uses it: the run's own watchdog, and any waiter about to take a lock from it, so a dead run's step
-# can never share a slot, a port or a mutex with the next one. A cancelled run does the same for itself.
-ci_group_alive() { kill -0 -- "-$1" 2>/dev/null; }
-ci_stop_groups() { # ci_stop_groups <file of "pgid start" lines>: INT first (Playwright tears its web server down on INT only)
-  local f="$1" g start now live sig tries
-  [ -f "$f" ] || return 0
-  for sig in INT TERM KILL; do
-    live=""
-    while read -r g start; do
-      [ -n "$g" ] || continue
-      # A leader with another start time means that pid was reused, so that group is no longer ours. A leader that is gone
-      # with its group still there is ours: a pid can't be reused while a group carries its number.
-      now="$(ci_proc_start "$g")"
-      [ -z "$now" ] || [ -z "$start" ] || [ "$now" = "$start" ] || continue
-      ci_group_alive "$g" || continue
-      kill "-$sig" -- "-$g" 2>/dev/null
-      live="$live $g"
-    done < "$f"
-    [ -n "$live" ] || return 0
-    tries=20
-    [ "$sig" = INT ] && tries=40
-    while [ "$tries" -gt 0 ]; do
-      for g in $live; do ci_group_alive "$g" && break; g=""; done
-      [ -n "$g" ] || return 0
-      sleep 0.1
-      tries=$((tries - 1))
-    done
-  done
-}
-ci_kill_inside() { # ci_kill_inside <dir>: anything still working inside a run's scratch worktree: a detached server, say. The
-  # worktree is unique to the run, so this can't reach another run, or a test's fake run, the way a kill by port could.
-  local d p
-  # An empty path would `cd` to the current directory, and "/" is every process that was started from /: neither is a run's
-  # worktree, so neither may ever be a target (a failed mktemp once wrote an empty worktree path into the record).
-  [ -n "$1" ] || return 0
-  d="$(cd "$1" 2>/dev/null && pwd -P)" || return 0
-  case "$d" in '' | /) return 0 ;; esac
-  lsof -d cwd -Fpn 2>/dev/null | awk -v d="$d" '/^p/ { p = substr($0, 2) }
-    /^n/ { n = substr($0, 2); if (n == d || index(n, d "/") == 1) print p }' | while read -r p; do
-    [ "$p" = "$$" ] || kill -KILL "$p" 2>/dev/null
-  done
-}
-ci_post_status() { # ci_post_status <slug> <sha> <job> <state> <description> [url]
-  local url=()
-  [ -z "${6:-}" ] || url=(-f "target_url=$6")
-  gh api -X POST "repos/$1/statuses/$2" -f state="$4" -f context="local-ci/$3" -f description="$5" ${url[@]+"${url[@]}"} >/dev/null 2>&1
-}
-ci_still_ours() { # ci_still_ours <slug> <sha> <job> <url>: 0 if the newest local-ci/<job> status of that commit is still the pending
-  # one this run posted (same link). Anything else means someone answered since (the other machine, a newer run): not ours to
-  # overwrite with an error. If GitHub can't say, 0: closing a status that might be ours is the safer mistake than leaving it pending.
-  local rows ctx state turl
-  rows="$(gh api "repos/$1/commits/$2/status?per_page=100" --jq '.statuses[] | [.context, .state, (.target_url // "")] | @tsv' 2>/dev/null)" || return 0
-  [ -n "$rows" ] || return 0
-  while IFS=$'\t' read -r ctx state turl; do
-    [ "$ctx" = "local-ci/$3" ] || continue
-    [ "$state" = pending ] && [ "$turl" = "$4" ]
-    return
-  done <<ROWS
-$rows
-ROWS
-  return 0
-}
-ci_settle_run() { # ci_settle_run <record dir>: a run that ends owes GitHub an answer for every pending status it posted, so a
-  # cancel, a crash or a kill never leaves one pending for good. Jobs it already reported (marker in reported/) are left alone.
-  # The record's `posted` file is moved aside first: the run's own cleanup and its watchdog may both come here, and only one posts.
-  local rec="$1" mine slug where url sha job pids=""
-  [ -f "$rec/posted" ] || return 0
-  mine="$rec/posted.$$"
-  mv "$rec/posted" "$mine" 2>/dev/null || return 0
-  IFS=$'\t' read -r slug where url < "$mine"
-  while IFS=$'\t' read -r sha job; do
-    [ -n "$sha" ] && [ -n "$job" ] || continue
-    [ ! -e "$rec/reported/$job" ] || continue
-    {
-      ci_still_ours "$slug" "$sha" "$job" "$url" || exit 0
-      ci_post_status "$slug" "$sha" "$job" error "run on $where ended before this job reported (cancelled or interrupted); re-run" "$url"
-    } &
-    pids="$pids $!"
-  done < <(tail -n +2 "$mine")
-  [ -z "$pids" ] || wait $pids
-  rm -f "$mine"
-}
-ci_end_run() { # ci_end_run <record dir> [locks dir]: stop everything a run left, then the record goes, so finding no record means
-  # nothing left. With a locks dir, the run's locks go too, just before the record: only for a run that is gone or is ending (a
-  # waiter taking one lock from a dead run must not release the lock it is taking over, so it passes none).
-  local rec="$1" wt
-  [ -d "$rec" ] || return 0
-  ci_settle_run "$rec" # first, in parallel and quick: a runner gives a cancelled job only seconds
-  ci_stop_groups "$rec/groups"
-  [ ! -f "$rec/worktree" ] || ci_kill_inside "$(cat "$rec/worktree")"
-  [ ! -s "$rec/container" ] || docker rm -f "$(cat "$rec/container")" >/dev/null 2>&1
-  [ ! -s "$rec/image" ] || docker image rm -f "$(cat "$rec/image")" >/dev/null 2>&1
-  # A colima start that was cut off leaves the VM half up, and the next `colima start` or `docker info` fails on it. The marker
-  # is there only while a start is running (docker_up), and a start only happens when Docker was down, so nothing else uses it.
-  [ ! -e "$rec/colima-start" ] || colima stop --force >/dev/null 2>&1
-  if [ ! -e "$rec/keep" ]; then
-    wt="$(cat "$rec/worktree" 2>/dev/null)"
-    case "$wt" in */talos-ci-*) rm -rf "${wt:?}" ;; esac
-    [ -s "$rec/repo" ] && git -C "$(cat "$rec/repo")" worktree prune >/dev/null 2>&1
-  fi
-  # The slot's temp dir goes whether or not the worktree is kept, and before the slot is released (below): holding the slot is
-  # what makes the directory ours to empty.
-  # chmod first: a test that leaves a read-only folder behind (a real kit release is read-only by design) must not jam every
-  # later run on this slot.
-  [ ! -s "$rec/tmp" ] || case "$(cat "$rec/tmp")" in */talos-ci-s[0-9]*) chmod -R u+w "$(cat "$rec/tmp")" 2>/dev/null; rm -rf "$(cat "$rec/tmp")" ;; esac
-  [ -z "${2:-}" ] || [ ! -s "$rec/owner" ] || ci_release_owned "$2" "$(cat "$rec/owner")"
-  rm -rf "$rec"
-}
-ci_release_owned() { # ci_release_owned <locks dir> <owner text>: let go of every lock that owner holds, including the ones its job
-  # subshells took (a mutex is taken inside a job, so the run's own list of locks never saw it). Owner text is the run's
-  # identity, which a subshell shares; only call it for yourself, or for an owner you know is dead.
-  local l gone
-  for l in "$1"/*; do
-    [ -d "$l" ] && [ "$(ci_owner "$l")" = "$2" ] || continue
-    gone="$l.gone.$CI_NONCE.$RANDOM"
-    mv "$l" "$gone" 2>/dev/null && rm -rf "$gone"
-  done
-  return 0
-}
-ci_reap_dead_runs() { # ci_reap_dead_runs <runs dir> <locks dir>: every run whose process is gone gets stopped, settled and cleaned up
-  local rec owner
-  for rec in "$1"/*; do
-    [ -f "$rec/owner" ] || continue
-    owner="$(cat "$rec/owner")"
-    ci_owner_alive "$owner" && continue
-    ci_end_run "$rec" "$2"
-  done
-  return 0
-}
-ci_reap_run() { # ci_reap_run <owner text of a dead run>
-  local nonce
-  nonce="$(printf '%s\n' "$1" | sed -n 3p)"
-  [ -n "${CI_RUNS:-}" ] && [ -n "$nonce" ] && ci_end_run "$CI_RUNS/$nonce"
-  return 0
-}
+. "$CI_LOCAL_LIB/locks.sh"
 
-ci_write_owner() { # ci_write_owner <lock> <what>: replace a dead owner; only the holder of the takeover claim may call this
-  ci_me > "$1.owner.$CI_NONCE" && mv -f "$1.owner.$CI_NONCE" "$1/owner" 2>/dev/null || return 1
-  printf '%s\n' "$2" > "$1/what" 2>/dev/null
-  return 0
-}
-
-ci_new_owner() { # ci_new_owner <lock> <what>: be the first owner; fails if there already is one
-  local t="$1.owner.$CI_NONCE" rc=1
-  ci_me > "$t" && ln "$t" "$1/owner" 2>/dev/null && rc=0
-  rm -f "$t"
-  [ "$rc" = 0 ] && printf '%s\n' "$2" > "$1/what" 2>/dev/null
-  return $rc
-}
-
-ci_claim_marker() { # ci_claim_marker <marker path>: make the takeover claim; 0 = ours, and nobody else can have it while we live
-  local m="$1" n=0 st who
-  # A claim the old script made is a plain directory, and its holder may be mid-write. Past the grace period it is dead.
-  if [ -d "$m" ] && [ ! -L "$m" ]; then
-    st="$(ci_stat "$m")" && [ $(($(date +%s) - ${st#* })) -lt "$CI_LOCK_GRACE" ] && return 1
-  fi
-  while :; do
-    if ln -s "$(ci_me)" "$m.$n" 2>/dev/null; then CI_MARKER="$m.$n"; return 0; fi
-    who="$(readlink "$m.$n" 2>/dev/null)" || return 1 # the lock is gone, or it was never a claim: the caller tries again
-    ci_owner_alive "$who" && return 1                 # someone is on it: leave it to them, however long they take
-    n=$((n + 1))                                      # that claimer died; it can't write any more, so the next claim is free
-  done
-}
-
-ci_lock_takeover() { # ci_lock_takeover <lock> <owner seen> <key> <what>: take over a dead owner's lock; 0 = ours now
-  local lock="$1" seen="$2" key="$3" ino rc=1
-  ci_claim_marker "$lock/takeover-$key" || return 1 # another waiter is on this takeover, or the lock is gone
-  if [ "$(ci_owner "$lock")" = "$seen" ]; then       # else released and retaken since we looked: a live lock, not ours
-    ino=""
-    [ -z "$seen" ] && { ino="${key#none-}" && ino="${ino%%-*}"; } # ownerless: must still be the same directory
-    if [ -z "$ino" ] || [ "$(ci_stat "$lock" | cut -d' ' -f1)" = "$ino" ]; then
-      echo "ci-local: took over $(basename "$lock") from a run that is gone (pid $(printf '%s\n' "$seen" | sed -n 1p))" >&2
-      [ -z "$seen" ] || ci_reap_run "$seen" # first: nothing of the dead run may still be running when this lock changes hands
-      # The claim goes whatever happens next, so a failed write (disk full) never leaves the lock stuck.
-      if [ -z "$seen" ]; then
-        ci_new_owner "$lock" "$4" # its creator may still wake up: first writer wins, and neither can overwrite the other
-      else
-        ci_write_owner "$lock" "$4"
-      fi && [ "$(ci_owner "$lock")" = "$(ci_me)" ] && rc=0
-    fi
-  fi
-  ci_drop_marker
-  return $rc
-}
-
-ci_drop_marker() { [ -n "$CI_MARKER" ] && rm -f "$CI_MARKER" 2>/dev/null; CI_MARKER=""; return 0; }
-
-ci_lock_try() { # ci_lock_try <lock> <what>: take the lock now if it is free or its owner is dead; 0 = we hold it
-  local lock="$1" what="${2:-}" seen key st
-  if mkdir "$lock" 2>/dev/null; then
-    if ! ci_new_owner "$lock" "$what"; then
-      # Either a waiter took this lock over while we stalled (it is theirs: hands off), or the write failed (disk full): rmdir
-      # only removes a lock that is still empty.
-      rmdir "$lock" 2>/dev/null
-      return 1
-    fi
-  else
-    seen="$(ci_owner "$lock")"
-    if [ -n "$seen" ]; then
-      ci_owner_alive "$seen" && return 1
-      key="$(ci_owner_key "$seen")"
-    else
-      st="$(ci_stat "$lock")" || return 1 # released meanwhile: the caller tries again
-      [ $(($(date +%s) - ${st#* })) -ge "$CI_LOCK_GRACE" ] || return 1
-      key="none-${st% *}-${st#* }"
-    fi
-    ci_lock_takeover "$lock" "$seen" "$key" "$what" || return 1
-  fi
-  CI_HELD="$CI_HELD$lock"$'\n'
-}
-
-ci_lock_release() { # ci_lock_release <lock>: a no-op unless we still own it
-  local gone="${1:?}.gone.$CI_NONCE.$RANDOM"
-  [ "$(ci_owner "$1")" = "$(ci_me)" ] && mv "$1" "$gone" 2>/dev/null && rm -rf "$gone"
-  return 0
-}
-
-ci_release_all() {
-  local l
-  ci_drop_marker # a takeover killed part way: its claim must not outlive us
-  while IFS= read -r l; do [ -n "$l" ] && ci_lock_release "$l"; done <<EOF
-$CI_HELD
-EOF
-  CI_HELD=""
-}
-
-ci_load5() { # the 5-minute load average, empty if unknown
-  if [ -r /proc/loadavg ]; then
-    cut -d' ' -f2 /proc/loadavg
-  elif sysctl -n vm.loadavg >/dev/null 2>&1; then
-    sysctl -n vm.loadavg | tr -d '{}' | awk '{ print $2 }'
-  else
-    uptime 2>/dev/null | sed 's/.*load average[s]*: *//' | tr -d ',' | awk '{ print $2 }'
-  fi
-}
-
-ci_load_high() { # 0 when a new run should wait for the machine to calm down
-  # A run started by a job of another run (the desktop review tests) already lives inside that run's slot.
-  [ "${TALOS_CI_NESTED:-0}" = 1 ] && return 1
-  case "$CI_MAX_LOAD" in '' | 0) return 1 ;; esac
-  local l
-  l="$(ci_load5)"
-  [ -n "$l" ] && awk -v l="$l" -v m="$CI_MAX_LOAD" 'BEGIN { exit !(l + 0 > m + 0) }'
-}
-
-ci_legacy_busy() { # 0 while a run of the old single-lock script (main) is in flight: it uses <cache>/lock and slot 1's port
-  local l="$1/lock" pid st
-  [ -d "$l" ] || return 1
-  pid="$(cat "$l/pid" 2>/dev/null)"
-  case "$pid" in
-    '') st="$(ci_stat "$l")" || return 1; [ $(($(date +%s) - ${st#* })) -lt "$CI_LOCK_GRACE" ] ;; # mid-create
-    *[!0-9]*) return 1 ;;
-    *) kill -0 "$pid" 2>/dev/null ;;
-  esac
-}
-
-ci_acquire_slot() { # ci_acquire_slot <locks dir> <what>: wait for a calm machine and a free slot; sets CI_SLOT
-  local dir="${1:?}" what="$2" deadline state said="" n busy
-  deadline=$(($(date +%s) + CI_LOCK_TIMEOUT))
-  mkdir -p "$dir"
-  while :; do
-    rm -rf "$dir"/*.gone.* 2>/dev/null # renamed away by a release that was killed before it deleted them
-    if ci_legacy_busy "$(dirname "$dir")"; then
-      state="legacy"
-      [ "$state" = "$said" ] || echo "ci-local: waiting for a run of the old single-lock script ($(cat "$(dirname "$dir")/lock/what" 2>/dev/null))"
-    elif ci_load_high; then
-      state="load"
-      [ "$state" = "$said" ] || echo "ci-local: waiting: 5-min load average $(ci_load5) is above CI_MAX_LOAD=$CI_MAX_LOAD"
-    else
-      n=1 busy=""
-      while [ "$n" -le "$CI_SLOTS" ]; do
-        if ci_lock_try "$dir/slot-$n" "$what"; then CI_SLOT=$n; return 0; fi
-        busy="$busy${busy:+, }slot-$n: $(cat "$dir/slot-$n/what" 2>/dev/null)"
-        n=$((n + 1))
-      done
-      state="slots"
-      [ "$state" = "$said" ] || echo "ci-local: waiting for a free slot ($busy)"
-    fi
-    said="$state"
-    [ "$(date +%s)" -lt "$deadline" ] || { echo "ci-local: lock timeout (${CI_LOCK_TIMEOUT}s waiting for a slot)" >&2; return 1; }
-    sleep "$CI_POLL"
-  done
-}
-
-ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-wide mutex, for a resource a slot can't own
-  local lock="$1/mutex-$2" name="$2" deadline said=0 rc
-  shift 2
-  mkdir -p "$(dirname "$lock")"
-  deadline=$(($(date +%s) + CI_LOCK_TIMEOUT))
-  until ci_lock_try "$lock" "slot ${CI_SLOT:-?}"; do
-    [ "$said" = 1 ] || { echo "ci-local: waiting for the $name mutex ($(cat "$lock/what" 2>/dev/null))"; said=1; }
-    [ "$(date +%s)" -lt "$deadline" ] || { echo "ci-local: timed out waiting for the $name mutex" >&2; return 1; }
-    sleep "$CI_POLL"
-  done
-  "$@"
-  rc=$?
-  ci_lock_release "$lock"
-  return $rc
-}
-
-ci_wake_epoch() { # when the Mac last woke from sleep, in epoch seconds; fails if it can't say
-  local o sec
-  o="$(sysctl -n kern.waketime 2>/dev/null)" || return 1
-  sec="$(printf '%s\n' "$o" | sed -n 's/^[^0-9]*[{ ] sec = \([0-9][0-9]*\),.*/\1/p' | head -1)"
-  [ -n "$sec" ] || return 1
-  printf '%s\n' "$sec"
-}
-ci_slept_since() { # ci_slept_since <epoch>: 0 if the Mac woke from sleep after that moment. A pass from a run it slept through is
-  # weaker: a test that waits for something NOT to happen passes across a suspend, and a timeout measured on the wall clock means
-  # nothing. Where the wake time can't be read on a Mac, that counts as slept. report() warns on this unless CI_SLEEP_GUARD=1.
-  local w
-  if w="$(ci_wake_epoch)"; then [ "$w" -gt "$1" ]; else [ "$(uname -s)" = Darwin ]; fi
-}
-
-ci_slot_env() { # ci_slot_env <n>: slot n's own ports and temp dir; every fixed port the jobs bind comes from here
-  SLOT_PW_PORT=$((${TALOS_CI_PW_PORT:-$CI_PW_PORT_BASE} + ($1 - 1) * CI_PW_PORT_STEP)) # apps/web Playwright webServer (vite preview), PR #49
-  SLOT_IMAGE_PORT_BASE=$((${TALOS_CI_IMAGE_PORT:-18080} + ($1 - 1) * 100)) # image test: host port is base + 0..99
-  SLOT_TMP="${CI_TMP_BASE:-${TMPDIR:-/tmp}}/talos-ci-s$1"
-}
-
-# Workers for the e2e suite (e2e/playwright.config.ts: each test starts its own relay on its own port inside its worker, and the
-# relay's auth state is per process, so workers share nothing; the config's default of 1 is for a plain `pnpm test:e2e`). A
-# worker is a relay, a bridge and a Chromium: about 3 cores and 6 GB. 3 on a 10-core Mac, which also runs builders and
-# a second run beside this one (measured alone there: 1 worker 500 s, 3: 248 s, 5: 187 s). More on a big machine, never more
-# than 8 (5 on 18 cores and 128 GB). E2E_WORKERS in the environment wins.
-ci_e2e_workers() { # ci_e2e_workers <cores> <memory in GB>
-  local by_cpu=$(($1 * 3 / 10)) by_mem=$(($2 / 6)) w
-  w=$((by_cpu < by_mem ? by_cpu : by_mem))
-  [ "$w" -ge 1 ] || w=1
-  [ "$w" -le 8 ] || w=8
-  echo "$w"
-}
-ci_mem_gb() { # whole GB of RAM, empty when it can't be read
-  local b k
-  if b="$(sysctl -n hw.memsize 2>/dev/null)" && [ -n "$b" ]; then echo $((b / 1073741824))
-  elif k="$(sed -n 's/^MemTotal: *\([0-9]*\) kB.*/\1/p' /proc/meminfo 2>/dev/null)" && [ -n "$k" ]; then echo $((k / 1048576)); fi
-}
-# A simulator for the app's tests, by id (a name can match one iOS runtime, xcodebuild look on another). Booted first; no iPhone: empty.
-# The name may hold parentheses ("iPhone SE (3rd generation)"), so the line is read from the end: the last two groups are the id and the state.
-ci_ios_sim_dest() {
-  [ -z "${TALOS_IOS_SIM:-}" ] || { echo "platform=iOS Simulator,name=$TALOS_IOS_SIM"; return 0; } # a name set by hand wins
-  local id; id="$(ci_with_limit "$CI_SIMCTL_LIMIT" xcrun simctl list devices available 2>/dev/null | sed -nE 's/^ +iPhone.* \(([0-9A-F-]{36})\) \((Booted|Shutdown)\).*/\2 \1/p' | sort -s -k1,1 | head -1 | cut -d' ' -f2)"; [ -z "$id" ] || echo "platform=iOS Simulator,id=$id"
-}
-# ci_with_limit <seconds> <command...>: the command's own exit code; 142 (SIGALRM) when it ran past the limit and was stopped. A
-# command, not a shell function (perl execs it). A stopped test run must not hold the machine-wide suites mutex for ever.
-ci_with_limit() {
-  local secs="$1" rc; shift
-  perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$secs" "$@"
-  rc=$?
-  [ "$rc" != 142 ] || echo "ci-local: stopped after ${secs}s, the time limit (CI_XCODE_TEST_LIMIT for the boot wait and the tests, CI_SIMCTL_LIMIT for the other simulator calls): $*"
-  return $rc
-}
-# ci_ios_test <log> <simulator id or name> <xcodebuild args...>: `xcodebuild ... test` on that simulator, into the log. The simulator
-# is booted first and waited for (`simctl bootstatus -b` returns once SpringBoard is up), because xcodebuild launches the app as
-# soon as it has booted the device itself, and on a loaded Mac that is too early: 'Busy ("Application failed preflight checks")'
-# (ca6ca1c, 2026-11-02: the device cold-booted 17 s before the launch; nothing else was using it). If that exact message still
-# comes, the device is made ready again and the run made once more; no other failure is tried again. The device is shut down
-# (before the second run, and at the end) only when it was off when we started: another run's or the owner's booted simulator
-# is never shut down from here. Every simctl and xcodebuild call has a time limit, so a hung simulator holds the machine-wide
-# mutex for at most one limit per call: CI_XCODE_TEST_LIMIT (default 600 s, about eight times the longest whole mobile job seen)
-# for the wait and the tests, CI_SIMCTL_LIMIT (default 120 s) for the listing and the shutdowns. A cancel (INT, TERM or HUP) shuts
-# down a device that was off at the start too, with one more call on that limit; it is no part of the wait for the mutex.
-ci_ios_test() {
-  local log="$1" dev="$2" rc was=0 step; shift 2
-  step="$(mktemp)"
-  ci_ios_booted "$dev" && was=1
-  # A cancelled run (ci_stop_groups sends INT, then TERM) puts the device back like a finished one: a simulator this run booted
-  # would otherwise stay up for ever. Set once `was` is known, so a device that was already booted is never shut down. bash runs
-  # the trap when the call it is waiting for has ended.
-  trap 'ci_ios_cancelled "$log" "$dev" "$was" "$step" 130' INT
-  trap 'ci_ios_cancelled "$log" "$dev" "$was" "$step" 143' TERM
-  trap 'ci_ios_cancelled "$log" "$dev" "$was" "$step" 129' HUP
-  ci_ios_ready "$log" "$dev"
-  ci_ios_run "$log" "$step" "$@"; rc=$?
-  # the file, not a pipe from the log: under pipefail `tail | grep -q` ends the pipe early and reads as a failure on a long log
-  if [ "$rc" != 0 ] && grep -qF 'Busy ("Application failed preflight checks")' "$step"; then
-    echo "ci-local: the simulator said Busy (application failed preflight checks); trying the tests once more" | tee -a "$log"
-    [ "$was" = 1 ] || ci_ios_off "$log" "$dev"
-    ci_ios_ready "$log" "$dev"
-    ci_ios_run "$log" "$step" "$@"; rc=$?
-  fi
-  rm -f "$step"
-  [ "$was" = 1 ] || ci_ios_off "$log" "$dev"
-  trap - INT TERM HUP
-  return $rc
-}
-ci_ios_off() { ci_with_limit "$CI_SIMCTL_LIMIT" xcrun simctl shutdown "$2" >> "$1" 2>&1; } # ci_ios_off <log> <simulator id or name>
-ci_ios_cancelled() { # ci_ios_cancelled <log> <simulator> <was booted> <step file> <exit code>: the end of a cancelled ci_ios_test
-  trap '' INT TERM HUP # a second signal while the shutdown runs changes nothing
-  [ "$3" = 1 ] || ci_ios_off "$1" "$2"
-  rm -f "$4"
-  exit "$5"
-}
-# Is the simulator booted now? By id ("(ID)") or by its whole name ("iPhone 17" is not "iPhone 17 Pro"). A listing that fails or
-# runs out of time says yes: a device we cannot see is left running, never shut down.
-ci_ios_booted() {
-  local listing
-  listing="$(ci_with_limit "$CI_SIMCTL_LIMIT" xcrun simctl list devices 2>/dev/null)" || return 0
-  printf '%s\n' "$listing" | awk -v d="$1" '
-    { l = $0; sub(/^ +/, "", l) }
-    (index(l, d " (") == 1 || index(l, "(" d ")") > 0) && l ~ /\(Booted\)/ { f = 1 }
-    END { exit !f }'
-}
-ci_ios_ready() { # a device that will not come up is left for xcodebuild to say so
-  echo "+ xcrun simctl bootstatus $2 -b" >> "$1"
-  ci_with_limit "$CI_XCODE_TEST_LIMIT" xcrun simctl bootstatus "$2" -b >> "$1" 2>&1 || echo "ci-local: the simulator did not report booted (exit $?)" >> "$1"
-}
-ci_ios_run() { # ci_ios_run <log> <this run's own output file> <command...>: the output goes to both
-  local log="$1" out="$2" t rc; shift 2
-  echo "+ $*" >> "$log"
-  t=$(date +%s)
-  ci_with_limit "$CI_XCODE_TEST_LIMIT" "$@" > "$out" 2>&1
-  rc=$?
-  cat "$out" >> "$log"
-  echo "[step] $(($(date +%s) - t))s exit $rc: $*" >> "$log"
-  return $rc
-}
-# The desktop tests find tmux where Rig.tmuxPath looks (Rig.swift: these three paths, version 3.2 or newer, as TmuxPtyHost.isUsable
-# asks). Without one they do not fail: every tmux suite is switched off (`.enabled(if: Rig.hasTmux)`), about 130 tests, and the job
-# still ends green. So the desktop job checks first and fails when none is usable. CI_TMUX_PATHS is for the tests.
-ci_tmux_ok() {
-  local p v
-  for p in ${CI_TMUX_PATHS:-/opt/homebrew/bin/tmux /usr/local/bin/tmux /usr/bin/tmux}; do
-    [ -x "$p" ] || continue
-    v="$("$p" -V 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p' | head -1)"
-    [ -n "$v" ] || continue
-    set -- $v
-    if [ "$1" -gt 3 ] || { [ "$1" -eq 3 ] && [ "$2" -ge 2 ]; }; then return 0; fi
-  done
-  return 1
-}
-# What a status says it ran on. A machine that names itself (CI_STATUS_WHERE: the runner says ci-runner) says that; otherwise the
-# machine's own name, so the owner's hand runs on two Macs are told apart too. A name is clipped and stripped to plain characters
-# (it goes into a status description, 140 characters at most). "the owner's Mac" only when no name can be read.
-ci_where() {
-  local w="${CI_STATUS_WHERE:-}"
-  [ -n "$w" ] || w="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || true)"
-  w="$(printf '%s' "$w" | tr -c 'A-Za-z0-9._ -' '?' | cut -c1-40)"
-  [ -n "$w" ] && printf '%s' "$w" || printf '%s' "the owner's Mac"
-}
+. "$CI_LOCAL_LIB/machine.sh"
 
 # Sourced (the tests do this): stop here, with only the functions above defined.
 if (return 0 2>/dev/null); then return 0; fi
+
+# The jobs' parts are read now, before the slot and commit waits (an hour at most): a checkout pulled meanwhile (a hand run from
+# a builder's own tree) must not hand this run newer job code. They hold functions and fixed values only, so reading them
+# here, not where the jobs are started, changes nothing else.
+. "$CI_LOCAL_LIB/jobs-check.sh"
+. "$CI_LOCAL_LIB/jobs-mod-browser.sh"
+. "$CI_LOCAL_LIB/jobs-image.sh"
+. "$CI_LOCAL_LIB/jobs-swift.sh"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CACHE="${TALOS_CI_CACHE:-$HOME/.cache/talos-ci}"
@@ -533,29 +109,114 @@ mkdir -p "$CACHE/logs"
 # The scratch worktrees go under CI_WT_BASE when set (a runner whose $TMPDIR is wiped between jobs sets it to its cache).
 LOCKS="$CACHE/locks" CI_TMP_BASE="$CACHE/tmp" WT_BASE="${CI_WT_BASE:-${TMPDIR:-/tmp}}"
 CI_RUNS="$CACHE/runs"
-PR="" REF="" JOBS="check,mod,browser,image,desktop,mobile" JOBS_SET=0 FULL=0 LATEST=0 STATUS=1 KEEP=0 REAP=0
+PR="" REF="" JOBS="check,mod,browser,image,desktop,mobile" JOBS_SET=0 FULL=0 LATEST=0 STATUS=1 KEEP=0 REAP=0 PIN_SHA="" PREFLIGHT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --pr) PR="$2"; shift 2 ;;
     --ref) REF="$2"; shift 2 ;;
-    --jobs) JOBS="$2"; JOBS_SET=1; shift 2 ;;
+    --sha) PIN_SHA="$2"; shift 2
+      case "$PIN_SHA" in *[!0-9a-f]* | '') echo "ci-local: --sha takes a full commit sha" >&2; exit 64 ;; esac
+      [ "${#PIN_SHA}" = 40 ] || { echo "ci-local: --sha takes a full commit sha" >&2; exit 64; } ;;
+    --jobs) JOBS="$2"; JOBS_SET=1; shift 2
+      case ",$JOBS," in *,fast,*) echo "ci-local: fast is not a job: report-ci/fast comes with check" >&2; exit 64 ;; esac ;;
     --full) FULL=1; shift ;;
     --latest) LATEST=1; shift ;;
     --no-status) STATUS=0; shift ;;
     --keep) KEEP=1; shift ;;
     --reap) REAP=1; shift ;;
+    --preflight) PREFLIGHT=1; shift ;; # only the owner-machine check (ci-runner.sh preflight), then exit
     -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "ci-local: unknown argument $1" >&2; exit 64 ;;
   esac
 done
 case "$CI_SLOTS" in '' | *[!0-9]* | 0) echo "ci-local: CI_SLOTS must be a whole number >= 1" >&2; exit 64 ;; esac
+# Where the statuses go (ci_context). The part and report-only jobs never under local-ci/: a pass there would count in the verdict.
+case "${CI_STATUS_PREFIX:-local-ci}" in local-ci | ci-part | report-ci) ;;
+  *) echo "ci-local: CI_STATUS_PREFIX is local-ci, ci-part or report-ci, not '$CI_STATUS_PREFIX'" >&2; exit 64 ;; esac
+# CI_NIGHTLY=1 (the nightly, from ci-runner.sh): every context of this run is under nightly-ci/ (ci_ns), never local-ci/*
+case "${CI_NIGHTLY:-}" in '' | 1) ;; *) echo "ci-local: CI_NIGHTLY is 1 or empty, not '$CI_NIGHTLY'" >&2; exit 64 ;; esac
+# CI_HOSTILE=1 (the hostile nightly): under hostile-ci/ instead, with the conditions of scripts/ci-local/hostile.sh
+case "${CI_HOSTILE:-}" in '' | 1) ;; *) echo "ci-local: CI_HOSTILE is 1 or empty, not '$CI_HOSTILE'" >&2; exit 64 ;; esac
+# CI_REMOTE_JOBS: the jobs another machine of the run posts (phase B: image on Titan, docs/CI-MACHINES.md). They are left out
+# here: not run, nothing posted, so this run never answers a context the other machine owns. The rest is a default run: its
+# skips are planned as before (a --jobs list would turn them off). If that machine does not answer, ci-runner.sh fallback takes
+# the job over in a run of its own.
+for _j in $(printf '%s' "${CI_REMOTE_JOBS:-}" | tr ',' ' '); do
+  case "$_j" in check | mod | browser | image | desktop | mobile) ;;
+    *) echo "ci-local: CI_REMOTE_JOBS holds the six jobs only, not '$_j'" >&2; exit 64 ;; esac
+done
+# CI_FALLBACK_NOTES: why this run answers a job for another machine (ci-runner.sh fallback), "job=note;job=note" with notes like
+# "titan did not answer"; each one ends that job's final status as " (fallback: <note>)".
+if [ -n "${CI_FALLBACK_NOTES:-}" ] && ! printf '%s' "$CI_FALLBACK_NOTES" | grep -Eqx '[a-z0-9-]+=[a-z0-9 -]+(;[a-z0-9-]+=[a-z0-9 -]+)*'; then
+  echo "ci-local: CI_FALLBACK_NOTES is job=note pairs joined by ;, not '$CI_FALLBACK_NOTES'" >&2; exit 64
+fi
+# CI_SHARD_TOOLS: the tools of the machine that runs each bridge shard, from the plan ("tmux|": shard 1's machine has tmux), so
+# every machine deals the same piles (test-parallel.ts --pile-tools; docs/CI-MACHINES.md, "Tools a test file needs").
+case "${CI_SHARD_TOOLS:-}" in *[!a-z,\|]*) echo "ci-local: CI_SHARD_TOOLS is tool lists joined by |, not '$CI_SHARD_TOOLS'" >&2; exit 64 ;; esac
+# On the owner's own Mac (Delphi, CI_OWNER_MACHINE=1 in its runner's .env) the run refuses, before its slot and before any status,
+# unless the wall around the live Talos is there (docs/CI-MACHINES.md, "Delphi: never touch the live Talos"): the runner's user is
+# not an admin, cannot list the owner's home (CI_LIVE_HOME, default /Users/$CI_LIVE_OWNER) or the owner's tmux folder
+# (CI_LIVE_TMUX, default /private/tmp/tmux-<owner's uid>), has no claude or chronos on PATH, and is not inside tmux. A check
+# that the setup is right, not a second wall: the separate user is the wall.
+ci_owner_preflight() {
+  local owner="${CI_LIVE_OWNER:-}" home tmux
+  local uid rc
+  [ -n "$owner" ] || { echo "CI_LIVE_OWNER is not set, so the owner's folders cannot be checked"; return 1; }
+  uid="$(id -u "$owner" 2>/dev/null)" || { echo "there is no user $owner on this machine, so nothing could be checked"; return 1; }
+  home="${CI_LIVE_HOME:-/Users/$owner}"
+  [ -d "$home" ] || { echo "no home at $home for $owner, so nothing could be checked"; return 1; }
+  tmux="${CI_LIVE_TMUX:-/private/tmp/tmux-$uid}"
+  dseditgroup -o checkmember -m "$(id -un)" admin >/dev/null 2>&1
+  rc=$?
+  case "$rc" in
+    0) echo "this user is in the admin group"; return 1 ;;
+    67) ;; # not a member
+    *) echo "could not check admin membership (dseditgroup exit $rc)"; return 1 ;;
+  esac
+  if ls "$home" >/dev/null 2>&1; then echo "the owner's home ($home) can be listed"; return 1; fi
+  for f in "$home/.config/talos" "$home/Library/Application Support/Talos" "$home/.claude"; do
+    if ls "$f" >/dev/null 2>&1; then echo "the owner's $f can be read"; return 1; fi
+  done
+  if ls "$tmux" >/dev/null 2>&1; then echo "the owner's tmux folder ($tmux) can be listed"; return 1; fi
+  for f in claude chronos; do if command -v "$f" >/dev/null 2>&1; then echo "$f is on PATH ($(command -v "$f"))"; return 1; fi; done
+  if [ -n "${TMUX:-}" ]; then echo "TMUX is set: this run is inside a tmux session"; return 1; fi
+}
+if [ "${CI_OWNER_MACHINE:-0}" = 1 ]; then
+  _why="$(ci_owner_preflight)" || { echo "ci-local: refusing on the owner's machine: $_why" >&2; exit 1; }
+fi
+if [ "$PREFLIGHT" = 1 ]; then
+  if [ "${CI_OWNER_MACHINE:-0}" = 1 ]; then echo "ci-local: the owner's machine: the wall is there"; else echo "ci-local: not the owner's machine; nothing to check"; fi
+  exit 0
+fi
+case "$JOBS" in */*) echo "ci-local: a job name has no slash: '$JOBS'" >&2; exit 64 ;; esac
+case "${CI_PART_WAIT:-120}" in '' | *[!0-9]*) echo "ci-local: CI_PART_WAIT is whole seconds" >&2; exit 64 ;; esac
+case "${CI_PART_POLL:-30}" in '' | .* | *.*.* | *[!0-9.]*) echo "ci-local: CI_PART_POLL is seconds" >&2; exit 64 ;; esac
+# CI_REMOTE_PARTS: the parts of check another machine runs, "<part>:<machine> ..." (the plan's gating parts; a part in shadow is
+# not listed, so it runs here too). Machine names are the workflow job names, read from the jobs API.
+for _p in ${CI_REMOTE_PARTS:-}; do
+  case "${_p%%:*}:${_p#*:}" in
+    bridge-shard-1:* | bridge-shard-2:* | vitest:*) ;;
+    *) echo "ci-local: CI_REMOTE_PARTS: '$_p' is not <bridge-shard-1|bridge-shard-2|vitest>:<machine>" >&2; exit 64 ;;
+  esac
+  case "${_p#*:}" in '' | *[!a-z0-9-]* | "$_p") echo "ci-local: CI_REMOTE_PARTS: '$_p' names no machine" >&2; exit 64 ;; esac
+  case " ${_seen:-} " in *" ${_p%%:*} "*) echo "ci-local: CI_REMOTE_PARTS lists ${_p%%:*} twice" >&2; exit 64 ;; esac
+  _seen="${_seen:-} ${_p%%:*}"
+done
+if [ "${CI_STATUS_PREFIX:-local-ci}" = local-ci ]; then
+  for _j in $(printf '%s' "$JOBS" | tr ',' ' '); do
+    case "$_j" in bridge-shard-1 | bridge-shard-2 | vitest | linux | stock-mac | browser-e2e)
+      echo "ci-local: $_j cannot post under local-ci/: run it with CI_STATUS_PREFIX=ci-part (a part of check) or report-ci" >&2
+      exit 64 ;;
+    esac
+  done
+fi
 if [ "$REAP" = 1 ]; then ci_reap_dead_runs "$CI_RUNS" "$LOCKS"; echo "ci-local: nothing left by dead runs"; exit 0; fi
 
 resolve() { # the commit to test: what the PR's head (or the ref) points at now
   if [ -n "$PR" ]; then
     # Into a ref of our own, never FETCH_HEAD: runs in other slots fetch into this same checkout at the same time.
     local ref="refs/talos-ci/run-$CI_NONCE" sha
-    git fetch -q --no-write-fetch-head origin "+refs/pull/$PR/head:$ref" || return 1
+    ci_git_net fetch -q --no-write-fetch-head origin "+refs/pull/$PR/head:$ref" || return 1
     sha="$(git rev-parse --verify "$ref^{commit}")"
     git update-ref -d "$ref"
     [ -n "$sha" ] && echo "$sha"
@@ -566,19 +227,55 @@ resolve() { # the commit to test: what the PR's head (or the ref) points at now
 cant_resolve() { if [ -n "$PR" ]; then echo "ci-local: cannot fetch PR $PR" >&2; else echo "ci-local: unknown ref $REF" >&2; fi; }
 
 cd "$ROOT"
-git fetch -q origin || true
+ci_git_net fetch -q origin || true
 SHA="$(resolve)" || { cant_resolve; exit 1; }
+pinned() { # --sha: the plan fixed the commit for every machine; a PR or ref that points elsewhere now has a newer run of its own
+  local what="${REF:-HEAD}"
+  [ -z "$PIN_SHA" ] || [ "$1" = "$PIN_SHA" ] && return 0
+  [ -z "$PR" ] || what="PR $PR"
+  echo "ci-local: $what is now ${1:0:7}, not the planned ${PIN_SHA:0:7}; a newer run tests it. Nothing tested, nothing posted."
+  exit 0
+}
+pinned "$SHA"
 SLUG="${CI_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)}"
 [ -z "$SLUG" ] && STATUS=0
 WHERE="$(ci_where)" # what a status says it ran on: the machine's own name (CI_STATUS_WHERE overrides it)
 # These are for this script only. Left exported they reach every job: the test suites run ci-local.sh copies of their own (a fake
 # repo, a fake gh) and would post to the real repository's commit, write the real CI_SHA_FILE and say "ci-runner". Like TALOS_CI_CACHE
 # above they stay readable here and in the subshells, and no child process gets them.
-export -n CI_REPO CI_STATUS_WHERE CI_STATUS_URL CI_SHA_FILE CI_WT_BASE CI_SLEEP_GUARD TALOS_CI_FORCE_DESKTOP
+export -n CI_REPO CI_STATUS_WHERE CI_STATUS_URL CI_SHA_FILE CI_WT_BASE CI_SLEEP_GUARD TALOS_CI_FORCE_DESKTOP CI_ATTEMPT_URL CI_STATUS_PREFIX CI_REMOTE_JOBS CI_SHARD_TOOLS CI_FALLBACK_NOTES CI_BROWSER_E2E_PART CI_BROWSER_E2E_WAIT CI_PART_E2E_WORKERS CI_BROWSER_E2E_SHADOW CI_CHECK_PART CI_CHECK_WAIT CI_NIGHTLY CI_HOSTILE
+case "${CI_RUN_ID:-}" in *[!0-9]*) echo "ci-local: CI_RUN_ID is a run number, not '$CI_RUN_ID'" >&2; exit 64 ;; esac
+# CI_BROWSER_E2E_PART=<machine> (CI_TITAN_BROWSER=e2e, docs/CI-MACHINES.md, "The e2e packages on Titan"): every e2e package but
+# the web one runs on that machine as ci-part/browser-e2e, so this run's browser job runs protocol and web only and folds that
+# part in, the way check folds its parts: its green or red is browser's; no answer by CI_BROWSER_E2E_WAIT seconds after this
+# run's own suites end (or its job ended without one, or it refused) and those packages run here after all. The wait has no
+# default: without it, or without a way to read the part, every package runs here, as today. The attempt link must be one whole
+# attempt of this run ("<...>/runs/<CI_RUN_ID>/attempts/<n>#"): the part's rows are matched by prefix, and a shorter link would
+# take another attempt's green.
+case "${CI_BROWSER_E2E_PART:-}" in *[!a-z0-9-]*) echo "ci-local: CI_BROWSER_E2E_PART is a machine (its workflow job name), not '$CI_BROWSER_E2E_PART'" >&2; exit 64 ;; esac
+case "${CI_BROWSER_E2E_WAIT:-}" in *[!0-9]*) echo "ci-local: CI_BROWSER_E2E_WAIT is whole seconds" >&2; exit 64 ;; esac
+case "${CI_PART_E2E_WORKERS:-}" in *[!0-9]* | 0) echo "ci-local: CI_PART_E2E_WORKERS is a whole number >= 1" >&2; exit 64 ;; esac
+if [ -n "${CI_BROWSER_E2E_PART:-}" ] && { [ "$STATUS" != 1 ] || [ -z "${CI_RUN_ID:-}" ] || [ -z "${CI_BROWSER_E2E_WAIT:-}" ] ||
+  ! printf '%s' "${CI_ATTEMPT_URL:-}" | grep -Eqx "https?://[^[:space:]]+/runs/${CI_RUN_ID}/attempts/[0-9]+#"; }; then
+  echo "ci-local: CI_BROWSER_E2E_PART given, but no CI_BROWSER_E2E_WAIT or no way to read the part; browser runs every e2e package here"
+  CI_BROWSER_E2E_PART=""
+fi
+# CI_CHECK_PART=<machine> (CI_TITAN_CHECK=on, docs/CI-MACHINES.md, "check on Titan"): that machine runs check as ci-part/check;
+# this run's check runs the macOS-only tests and folds the part, taking check back (today's) when it gives no answer
+# CI_CHECK_WAIT seconds after the other jobs end (job_check). The same rules as the e2e part's: no wait, or no way to read
+# it, and check runs here as today.
+case "${CI_CHECK_PART:-}" in *[!a-z0-9-]*) echo "ci-local: CI_CHECK_PART is a machine (its workflow job name), not '$CI_CHECK_PART'" >&2; exit 64 ;; esac
+case "${CI_CHECK_WAIT:-}" in *[!0-9]*) echo "ci-local: CI_CHECK_WAIT is whole seconds" >&2; exit 64 ;; esac
+if [ -n "${CI_CHECK_PART:-}" ] && { [ "$STATUS" != 1 ] || [ -z "${CI_RUN_ID:-}" ] || [ -z "${CI_CHECK_WAIT:-}" ] ||
+  [ "${CI_STATUS_PREFIX:-local-ci}" != local-ci ] ||
+  ! printf '%s' "${CI_ATTEMPT_URL:-}" | grep -Eqx "https?://[^[:space:]]+/runs/${CI_RUN_ID}/attempts/[0-9]+#"; }; then
+  echo "ci-local: CI_CHECK_PART given, but no CI_CHECK_WAIT or no way to read the part; check runs here"
+  CI_CHECK_PART=""
+fi
 
 post() { # post <job> <state> <description>
   [ "$STATUS" = 1 ] || return 0
-  ci_post_status "$SLUG" "$SHA" "$1" "$2" "$3" "${CI_STATUS_URL:-}" || echo "ci-local: could not post status for $1 (continuing)" >&2
+  ci_post_status "$SLUG" "$SHA" "$1" "$2" "$3" "${CI_STATUS_URL:-}" || true # it says why on stderr
 }
 
 WT="" CONTAINER="" SLOT_TMP="" RUN_DIR="" WATCHDOG="" RESDIR=""
@@ -587,7 +284,7 @@ cleanup() {
   cd / # this shell's own working directory is the worktree
   # Stops every job that is still going and anything left in the worktree, answers any status still pending, removes the
   # worktree and temp dir (unless --keep), and deletes the record.
-  [ -z "$RUN_DIR" ] || ci_end_run "$RUN_DIR" "$LOCKS"
+  [ -z "$RUN_DIR" ] || ci_end_run "$RUN_DIR" "$LOCKS" own
   if [ -n "$WT" ] && [ "$KEEP" = 0 ]; then git -C "$ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || rm -rf "${WT:?}"; fi
   # With a record, ci_end_run removed the slot's temp dir before it let go of the slot. Doing it again here, after the slot is free,
   # could wipe the live temp dir of the next run that took the slot. Only a run that never made a record has it left.
@@ -598,7 +295,9 @@ cleanup() {
   ci_release_all
 }
 trap cleanup EXIT
-trap 'exit 130' INT TERM
+# INT or TERM is a stop from outside (a cancel, a job timeout, a stopped runner): the record says so, and what it never answered
+# is closed as an error that says "not tested:" (ci_settle_list), which no verdict reads as red or green. A run killed outright gets no trap, and its watchdog or the sweep closes it as error.
+trap '[ -z "$RUN_DIR" ] || { : > "$RUN_DIR/cancelled"; } 2>/dev/null; exit 130' INT TERM
 
 ci_reap_dead_runs "$CI_RUNS" "$LOCKS" # whatever a run killed outright left behind, before this one asks for a slot
 T_ASKED=$(date +%s)
@@ -606,8 +305,9 @@ ci_acquire_slot "$LOCKS" "${SHA:0:7}${PR:+ PR $PR}" || exit 1
 export TALOS_CI_NESTED=1
 
 # The run may have queued for a long time: test what the PR (or ref) points at now, and post statuses only for that.
-git fetch -q origin || true
+ci_git_net fetch -q origin || true
 NOW="$(resolve)" || { cant_resolve; exit 1; }
+pinned "$NOW"
 if [ "$NOW" != "$SHA" ]; then
   echo "ci-local: ${PR:+PR $PR }head moved while queued (${SHA:0:7} -> ${NOW:0:7}); testing ${NOW:0:7}"
   SHA="$NOW"
@@ -619,11 +319,13 @@ SHORT="${SHA:0:7}"
 # One run per commit at a time, whatever each one asked for. Two runs of one commit (queued for A, a push, queued for B) used to
 # test B together; the later result won on GitHub, so a failure could turn green with no retry anyone asked for, and both
 # truncated one log. A run that had to wait takes over the first one's result for each job it also ran, as long as both were
-# asked to run the same way: --latest, posting or not, a forced desktop job and GUI tests all change what a green means.
+# asked to run the same way: --latest, --full, posting or not, a forced desktop job and GUI tests all change what a green means,
+# and so does the status prefix: a report-ci or ci-part run's result is never a local-ci answer (it posted no local-ci status).
 # Every other job it tests itself, without touching what the first one posted. If the first died, there is nothing to reuse.
 # A run that finds no one ahead always tests fresh.
 ci_flag() { case "$(printf '%s' "${1:-0}" | tr '[:upper:]' '[:lower:]')" in 1 | true | yes | on) echo 1 ;; *) echo 0 ;; esac; }
-SETTINGS="$(ci_owner_key "$LATEST $STATUS $(ci_flag "${TALOS_CI_FORCE_DESKTOP:-0}") $(ci_flag "${TALOS_GUI_TESTS:-0}")")"
+# --full too: a check without it leaves out the kit suites inside a rendered agent folder (step_vitest), so it does not answer one.
+SETTINGS="$(ci_owner_key "$LATEST $STATUS $FULL $(ci_flag "${TALOS_CI_FORCE_DESKTOP:-0}") $(ci_flag "${TALOS_GUI_TESTS:-0}") ${CI_STATUS_PREFIX:-local-ci}${CI_NIGHTLY:+ nightly}${CI_HOSTILE:+ hostile}${CI_BROWSER_E2E_PART:+ e2e-part $CI_ATTEMPT_URL}${CI_CHECK_PART:+ check-part $CI_ATTEMPT_URL}")"
 SHALOCK="$LOCKS/sha-$SHA" RESDIR="$CACHE/results/$SHA-$SETTINGS"
 mkdir -p "$CACHE/results" && find "$CACHE/results" -mindepth 1 -maxdepth 1 -mtime +1 -exec rm -rf {} + 2>/dev/null
 WAITED=0 SHADEADLINE=$(($(date +%s) + CI_LOCK_TIMEOUT))
@@ -634,12 +336,20 @@ until ci_lock_try "$SHALOCK" "slot $CI_SLOT"; do
   sleep "$CI_POLL"
 done
 IFS=',' read -r -a WANT <<< "$JOBS"
+if [ -n "${CI_REMOTE_JOBS:-}" ]; then
+  _keep=()
+  for j in "${WANT[@]}"; do
+    case ",$CI_REMOTE_JOBS," in *",$j,"*) echo "ci-local: $j runs on another machine of this run (CI_REMOTE_JOBS); not run or posted here" ;; *) _keep+=("$j") ;; esac
+  done
+  [ ${#_keep[@]} -gt 0 ] || { echo "ci-local: every job of this run runs on another machine; nothing to do here"; exit 0; }
+  WANT=("${_keep[@]}")
+fi
 BAD_BEFORE=""
 if [ "$WAITED" = 1 ]; then
   LEFT=()
   for j in "${WANT[@]}"; do
     case "$(cat "$RESDIR/$j" 2>/dev/null)" in
-      '') LEFT+=("$j") ;;
+      '' | refused) LEFT+=("$j") ;; # not tested there (a refusal is no answer)
       skip) [ "$FULL" = 0 ] || LEFT+=("$j") ;; # --full skips nothing, so a skipped job is not an answer to it
       0) ;;
       *) case " $BAD_BEFORE " in *" $j "*) ;; *) BAD_BEFORE="${BAD_BEFORE:+$BAD_BEFORE }$j" ;; esac ;;
@@ -657,16 +367,17 @@ else
 fi
 mkdir -p "$RESDIR"
 
-# Jobs this commit cannot affect are not run. scripts/ci-affected.sh compares the commit with the last GREEN commit (not just its
-# parent: the inner commits of a push get no status) and names the jobs the difference can reach. The rest are answered at once as
-# success, "skipped: no affected files", which ci_classify (ci-runner.sh) reads as no failure and never as a pass. Only a run that
-# runs every job by default and posts its answers does this: --jobs names exactly what to run, --full runs all, and a run that
-# posts nothing has nowhere to say a job was skipped. A run with TALOS_GUI_TESTS or TALOS_CI_FORCE_DESKTOP set, and a rerun of a
-# commit that already has statuses, run every job. Anything unsure (no green base, GitHub unreadable, the script missing, an
-# unknown path) runs the job. SKIP_UNAFFECTED is the `why` that report() turns into that exact description.
-SKIP_UNAFFECTED="no affected files" SKIP_JOBS=()
+# A job none of whose inputs changed since that job last passed is not run. scripts/ci-affected.sh compares the commit, per job,
+# with the last commit where THAT job passed (not just its parent: the inner commits of a push get no status; and whatever main's
+# overall colour), and names the jobs the difference can reach. The rest are answered at once as success, "skipped: no <job>
+# inputs changed since <sha>", which ci_classify (ci-runner.sh) reads as no failure and never as a pass. Only a run that runs
+# every job by default and posts its answers does this: --jobs names exactly what to run, --full (every dispatch, and the
+# nightly) runs all, and a run that posts nothing has nowhere to say a job was skipped. A run with TALOS_GUI_TESTS or
+# TALOS_CI_FORCE_DESKTOP set, and a rerun of a commit that already has statuses, run every job. Anything unsure (no pass of that
+# job in reach, GitHub unreadable, the script missing, an unknown path) runs the job. SKIP_WHYS[i] is the `why` of SKIP_JOBS[i].
+SKIP_JOBS=() SKIP_WHYS=() KIT_SKIP=0 FAST_BASE=""
 plan_skips() {
-  local out affected j keep=() skip=() f
+  local out affected j b keep=() skip=() whys=() f attempt
   [ "$FULL" = 0 ] && [ "$JOBS_SET" = 0 ] && [ "$STATUS" = 1 ] && [ -f "$ROOT/scripts/ci-affected.sh" ] || return 0
   # The GUI desktop tests read apps/web (the companion harness and the theme tokens), so a run that asks for them, or forces
   # the desktop job, skips nothing.
@@ -674,22 +385,49 @@ plan_skips() {
   # Up to 30 sequential gh calls while this run holds a slot: a hung one is stopped after CI_PLAN_LIMIT (120 s) and every job runs.
   # Into a file, not a pipe: a gh left running by the stop would hold a pipe open, and the substitution would wait for it.
   f="$(mktemp)" || return 0
-  ci_with_limit "${CI_PLAN_LIMIT:-120}" bash "$ROOT/scripts/ci-affected.sh" plan "$SLUG" "$SHA" > "$f" 2>/dev/null || : > "$f"
+  # This attempt's own statuses are not an earlier run (ci-affected.sh, earlier_rows). CI_ATTEMPT_URL (not exported, see
+  # export -n) is set only with a part on Delphi or Cyclops, or image on Titan (on); another machine of the run (Hestia alone,
+  # a shadow Titan) also posts under the
+  # attempt's link, so on the runner the link is made from GitHub's run variables when it is not set. Lemnos's own statuses
+  # then link to the run itself, which never starts with an attempt's link, so with every switch off nothing changes.
+  attempt="${CI_ATTEMPT_URL:-}"
+  if [ -z "$attempt" ] && [ -n "${GITHUB_RUN_ID:-}" ] && [ -n "${GITHUB_RUN_ATTEMPT:-}" ]; then
+    attempt="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-$SLUG}/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT#"
+  fi
+  ci_with_limit "${CI_PLAN_LIMIT:-120}" env CI_ATTEMPT_URL="$attempt" bash "$ROOT/scripts/ci-affected.sh" plan "$SLUG" "$SHA" > "$f" 2>/dev/null || : > "$f"
   out="$(cat "$f")"
   rm -f "$f"
   affected="$(printf '%s\n' "$out" | sed -n 1p)"
   case " $affected " in *" check "*) ;; *) echo "ci-local: could not tell which jobs the change affects; running every job"; return 0 ;; esac
   echo "ci-local: $(printf '%s\n' "$out" | sed -n 2p)"
+  # The install and kit tests in the check job: left out only on an explicit skip, compared with check's own last pass.
+  FAST_BASE="$(printf '%s\n' "$out" | awk '$1 == "base" && $2 == "check" { print $3 }')" # report-ci/fast: --changed from here
+  if [ "$(printf '%s\n' "$out" | sed -n 3p)" = "kit-tests: skip" ]; then
+    KIT_SKIP=1
+    echo "ci-local: install and kit tests skipped: nothing they run changed"
+  fi
+  # A job skips only on its own "skip <job> <sha>" line: missing from line 1 without one, it runs.
   for j in "${WANT[@]}"; do
-    case " $affected " in *" $j "*) keep+=("$j") ;; *) skip+=("$j") ;; esac
+    b="$(printf '%s\n' "$out" | awk -v j="$j" '$1 == "skip" && $2 == j { print $3 }')"
+    case " $affected " in
+      *" $j "*) keep+=("$j") ;;
+      *) if [ -n "$b" ]; then skip+=("$j"); whys+=("no $j inputs changed since ${b:0:7}"); else keep+=("$j"); fi ;;
+    esac
   done
   [ ${#keep[@]} -gt 0 ] || return 0 # nothing left to run (the first run of this commit did it): leave the list alone
   WANT=("${keep[@]}")
   SKIP_JOBS=(${skip[@]+"${skip[@]}"})
+  SKIP_WHYS=(${whys[@]+"${whys[@]}"})
 }
 plan_skips
 
+# The fast lane (job_fast): a run that tests check and posts its answers also posts report-ci/fast, about 3 minutes in. Not check
+# as a part (ci-part/, report-ci/: Titan's check-titan): the run that owns check posts the fast lane, once.
+if [ "$STATUS" = 1 ] && [ "${CI_STATUS_PREFIX:-local-ci}" = local-ci ]; then for j in "${WANT[@]}"; do [ "$j" != check ] || { WANT+=(fast); break; }; done; fi # (wants is defined later)
+
 T_SLOT=$(date +%s)
+# the hostile nightly: its temp folder (CI_TMP_BASE) and the other conditions, said here and kept for the report
+if [ "${CI_HOSTILE:-}" = 1 ]; then . "$CI_LOCAL_LIB/hostile.sh" && ci_hostile_setup "$CACHE" "$SHORT" || exit 1; fi
 ci_slot_env "$CI_SLOT"
 { chmod -R u+w "${SLOT_TMP:?}" 2>/dev/null; rm -rf "${SLOT_TMP:?}"; } && mkdir -p "$SLOT_TMP" || exit 1 # anything here was left by a run that died in this slot
 export PW_PORT="$SLOT_PW_PORT" TMPDIR="$SLOT_TMP"
@@ -716,15 +454,55 @@ git worktree add -q --detach "$WT" "$SHA" || exit 1
 watch_run() {
   trap '' INT TERM HUP
   while kill -0 "$1" 2>/dev/null; do sleep 1; done
-  ci_end_run "$RUN_DIR" "$LOCKS"
+  ci_end_run "$RUN_DIR" "$LOCKS" own
 }
 set -m
 ( cd / && watch_run "$$" ) </dev/null >/dev/null 2>&1 &
 WATCHDOG=$!
 set +m
 
+# A shard part for a commit whose bridge runner has no --shard (older than the split): nothing to run here, nothing posted. The
+# machine that runs check runs every rest file itself then (CI-MACHINES.md, "A commit older than --shard").
+_keep=()
+for j in "${WANT[@]}"; do
+  case "$j" in
+    bridge-shard-*) if ! grep -q -- '--shard' "$WT/apps/bridge/scripts/test-parallel.ts" 2>/dev/null; then
+        echo "ci-local: $j: this commit's bridge runner has no --shard; nothing to run here"; continue
+      fi ;;
+  esac
+  _keep+=("$j")
+done
+[ ${#_keep[@]} -gt 0 ] || { echo "ci-local: nothing left to run"; exit 0; }
+WANT=("${_keep[@]}")
+# Never post pending over a final status of this attempt: a context another machine of it already answered is not run here.
+if [ "$STATUS" = 1 ] && [ -n "${CI_ATTEMPT_URL:-}" ]; then
+  _keep=()
+  for j in "${WANT[@]}"; do
+    # the rows first, then the filter: a filter that stops early must not fail a pipe and lose the answer
+    if _rows="$(ci_attempt_rows "$SLUG" "$SHA" "$(ci_context "$j")" "$CI_ATTEMPT_URL")"; then
+      _final="$(printf '%s\n' "$_rows" | ci_attempt_final)"
+    else _final=""; fi # unknown: run it
+    if [ -n "$_final" ]; then echo "ci-local: $j: answered in this attempt ($_final); not run here"; else _keep+=("$j"); fi
+  done
+  [ ${#_keep[@]} -gt 0 ] || { echo "ci-local: every job of this run was answered in this attempt; nothing to do"; exit 0; }
+  WANT=("${_keep[@]}")
+fi
 if [ "$STATUS" = 1 ]; then # written before the first post: whoever ends this run owes an answer for each of these
-  { printf '%s\t%s\t%s\n' "$SLUG" "$WHERE" "${CI_STATUS_URL:-}"; for j in "${WANT[@]}"; do printf '%s\t%s\n' "$SHA" "$j"; done; } > "$RUN_DIR/posted"
+  # The context goes in the record: a run that ends this one (the watchdog, the next run's reaper) has another prefix of its own.
+  # Readable by an older ci-local.sh too (runs of both share the cache): three header fields, and in `posted` only the bare job
+  # whose context is the one a bare name always meant (local-ci/<job>, report-ci/fast). Any other context (ci-part/<part>,
+  # report-ci/<job>) goes in `posted-contexts`, which an older ci-local.sh never opens: it reads every row of `posted` as a bare
+  # job and would close ci-part/vitest as local-ci/ci-part/vitest, an extra local-ci/* status that makes the verdict red. The
+  # attempt goes in a file of its own.
+  printf '%s\n' "${CI_ATTEMPT_URL:-}" > "$RUN_DIR/attempt"
+  _bare="" _own=""
+  for j in "${WANT[@]}"; do
+    _c="$(ci_context "$j")"
+    if [ "$_c" = "$(CI_STATUS_PREFIX='' CI_NIGHTLY='' CI_HOSTILE='' ci_context "$j")" ]; then _bare="$_bare$SHA"$'\t'"$j"$'\n'; else _own="$_own$SHA"$'\t'"$_c"$'\n'; fi
+  done
+  _head="$(printf '%s\t%s\t%s' "$SLUG" "$WHERE" "${CI_STATUS_URL:-}")"
+  [ -z "$_own" ] || printf '%s\n%s' "$_head" "$_own" > "$RUN_DIR/posted-contexts"
+  [ -z "$_bare" ] || printf '%s\n%s' "$_head" "$_bare" > "$RUN_DIR/posted"
 fi
 for j in "${WANT[@]}"; do post "$j" pending "running on $WHERE"; done
 
@@ -770,12 +548,26 @@ wants() { # wants <job...>: 0 if this run has any of them
 # Once per run, before the jobs: they all use one node_modules and one apps/web/dist + apps/relay/dist, and two jobs must
 # not install or build into them at the same time. So the browser job's suites are told not to build (SKIP_BUILD,
 # E2E_SKIP_BUILD; the bundles are the ones `pnpm build` made, byte for byte).
+# A rerun of the same commit (a dispatch, a hand run) writes the same log names. The earlier log is moved to logs/prev/ first,
+# as <short>-<job>.<when it was moved>.log, so it is not lost; the latest keeps its name, which is what everything else reads.
+# logs/prev/ is outside the <short>-*.log names, so a red run's upload carries only the latest.
+keep_prev_log() { # keep_prev_log <log>
+  [ -s "$1" ] || return 0
+  local base dest n=0
+  base="$(basename "$1" .log).$(date +%Y%m%dT%H%M%S)"
+  mkdir -p "$CACHE/logs/prev"
+  dest="$CACHE/logs/prev/$base.log"
+  while [ -e "$dest" ]; do n=$((n + 1)); dest="$CACHE/logs/prev/$base-$n.log"; done
+  mv "$1" "$dest"
+}
 SETUP_LOG="$CACHE/logs/$SHORT-setup.log" SETUP_FAILED=""
 setup_run() {
+  keep_prev_log "$SETUP_LOG"
   : > "$SETUP_LOG"
-  wants check browser mobile || return 0
-  run "$SETUP_LOG" pnpm install --frozen-lockfile || { SETUP_FAILED="pnpm install"; return 1; }
-  run "$SETUP_LOG" pnpm build || SETUP_FAILED="pnpm build"
+  wants check browser browser-e2e mobile bridge-shard-1 bridge-shard-2 vitest linux || return 0
+  # the commit's own install and build scripts: code under test, so never the token this shell posts statuses with
+  run "$SETUP_LOG" env -u GH_TOKEN -u GITHUB_TOKEN pnpm install --frozen-lockfile || { SETUP_FAILED="pnpm install"; return 1; }
+  run "$SETUP_LOG" env -u GH_TOKEN -u GITHUB_TOKEN pnpm build || SETUP_FAILED="pnpm build"
 }
 setup_ok() { # a job's first step: a failed install or build fails every job that needed it, with the reason in its log
   [ -n "$SETUP_FAILED" ] || return 0
@@ -783,10 +575,14 @@ setup_ok() { # a job's first step: a failed install or build fails every job tha
   return 1
 }
 
+# JOB_WAITED: the seconds the job calling it spent here, waiting (run_job keeps it apart from the job's own steps).
+JOB_WAITED=0
 wait_for_job() { # wait_for_job <job> [marker]: until that job of this run has finished or left <marker>; at once if it isn't in the run
   wants "$1" || return 0
+  local t=$(date +%s)
   until [ -f "$RESULTS/$1" ] || { [ -n "${2:-}" ] && [ -f "$RESULTS/$2" ]; } ||
     ! kill -0 "$(cat "$RESULTS/$1.group" 2>/dev/null)" 2>/dev/null; do sleep 1; done
+  JOB_WAITED=$((JOB_WAITED + $(date +%s) - t))
 }
 
 job_tmp() { # job_tmp <name>: a temp dir of the job's own inside the slot's, removed with it
@@ -802,274 +598,111 @@ CI_WORKERS="${CI_WORKERS:-$((CI_CPUS * 2 / 5 > 2 ? CI_CPUS * 2 / 5 : 2))}"
 CI_SCHED_JOBS="${CI_SCHED_JOBS:-$((CI_CPUS / 3 > 2 ? CI_CPUS / 3 : 2))}"
 CI_MEM_GB="$(ci_mem_gb)" # unreadable: 0, which ci_e2e_workers turns into 1 worker, never a guess upward
 
-step_vitest() { pnpm test --maxWorkers="$CI_WORKERS"; }
-# The two halves of the bridge suite (test-parallel.ts). A commit forked before that runner existed has only the plain one, so
-# the first half does nothing and the second runs all of it.
-BUN_RUNNER=apps/bridge/scripts/test-parallel.ts SLOW_PREFIX=test/schedules/
-step_bun_schedules() { [ ! -f "$BUN_RUNNER" ] || bun run "$BUN_RUNNER" --jobs "$CI_SCHED_JOBS" --only "$SLOW_PREFIX"; }
-step_bun_rest() {
-  if [ -f "$BUN_RUNNER" ]; then bun run "$BUN_RUNNER" --jobs "$CI_WORKERS" --skip "$SLOW_PREFIX"; else pnpm test:bun; fi
-}
-step_contract() { pnpm --filter @talos-app/bridge test:contract; }
-step_capture() { bun run apps/bridge/scripts/capture-schedules.ts --check; }
-
-# One thing at a time where a test waits on real time. The contract suite and the schedules tests give a real bridge and the real
-# Chronos CLI 3 seconds to answer, and every way of running them beside anything else failed on some run (docs/CI-LOCAL.md has
-# the list). So each group, and each Swift job, holds the `suites` mutex: one at a time on this Mac, across all runs.
-quiet_suites() {
-  run "$1" step_contract && run "$1" step_bun_schedules
-  local rc=$?
-  : > "$RESULTS/quiet-done"
-  return $rc
-}
-loud_suites() { together "$1" step_bun_rest step_vitest step_capture; }
-
-job_check() {
-  local log="$1"
-  setup_ok "$log" &&
-  job_tmp check &&
-  warn_step check "$log" "personal data found (a warning by default)" pnpm check:personal &&
-  run "$log" pnpm typecheck &&
-  run "$log" pnpm typecheck:mod &&
-  run "$log" pnpm lint &&
-  run "$log" pnpm notices:check &&
-  suites_then_audit "$log"
-}
-
-# The suites decide the job. The audit always runs after them and only warns: an advisory, or the registry being down, says
-# nothing about this commit's code, and a red test must not hide an advisory. It looks at high and critical advisories only.
-suites_then_audit() {
-  local log="$1" rc=0
-  { run "$log" ci_mutex "$LOCKS" suites quiet_suites "$log" &&
-    run "$log" ci_mutex "$LOCKS" suites loud_suites "$log"; } || rc=1
-  warn_step check "$log" "a high or critical advisory, or the registry did not answer" pnpm audit --prod --audit-level high
-  return "$rc"
-}
-
-claude_at() { # claude_at <version> <args...>: the local CLI when it is that version, else a throwaway npm copy
-  local v="$1"; shift
-  local home; home="$(mktemp -d)"
-  if [ "$v" != latest ] && [ "$(claude --version 2>/dev/null | cut -d' ' -f1)" = "$v" ]; then
-    HOME="$home" claude "$@"
-  else
-    # npm cache per slot: two `npm exec` installs into one cache's _npx folder at once can clobber each other
-    HOME="$home" npm_config_cache="$CACHE/npm-s$CI_SLOT" npm exec --yes --package="@anthropic-ai/claude-code@$v" -- claude "$@"
-  fi
-}
-
-job_mod() {
-  local log="$1" v
-  v="$(tr -d '[:space:]' < plugins/talos-app-mod/CLAUDE_CODE_VERSION)"
-  run "$log" claude_at "$v" plugin validate plugins/talos-app-mod &&
-  run "$log" claude_at "$v" plugin test plugins/talos-app-mod || return 1
-  if [ "$LATEST" = 1 ]; then
-    { run "$log" claude_at latest plugin validate plugins/talos-app-mod && run "$log" claude_at latest plugin test plugins/talos-app-mod; } \
-      || echo "(advisory) latest CLI failed; not counted" >> "$log"
-  fi
-}
-
-# The browser job's microphone check (scripts/mic-preflight.mjs): Chromium's getUserMedia sometimes never answers on the CI Mac (a stuck
-# audio device), and then the voice specs time out one by one, 20 of them. Stuck, or the check not running at all, fails the job
-# with one plain line in the log and in the status (RESULTS/browser.why, read by report), after the tests have run. Never green.
-mic_preflight() { # mic_preflight <log>
-  local log="$1" out rc line
-  echo "+ node scripts/mic-preflight.mjs" >> "$log"
-  out="$(node scripts/mic-preflight.mjs 2>>"$log")"; rc=$? # stderr (a Node warning) goes to the log, not into the answer
-  printf '%s\n' "$out" >> "$log"
-  out="$(printf '%s\n' "$out" | tail -1)"
-  [ "$rc" = 0 ] && [ "$out" = ok ] && return 0
-  if [ "$rc" = 3 ]; then
-    line="the runner's microphone is blocked (getUserMedia never answers): check the Mac's microphone permission, then rerun"
-  else
-    line="the microphone preflight could not run (exit $rc: $(printf '%s' "$out" | head -1 | cut -c1-60)); see the log"
-  fi
-  echo "ci-local: $line" >> "$log"
-  printf '%s\n' "$line" > "$RESULTS/browser.why"
-  return 1
-}
-
-job_browser() {
-  local log="$1" mic=0
-  # PW_PORT is this slot's own web preview port (exported above), so neither a builder's ad-hoc Playwright run on the
-  # default 4173 nor a run in another slot can collide with it. The e2e suite and the relay specs pick free ports.
-  # After the check job, not beside it: the e2e suite has the same 3-second waits on real processes, and the web specs want the
-  # CPU. That costs the most time of anything in this script, and every overlap tried failed on some run (docs/CI-LOCAL.md).
-  # E2E_SKIP_BUILD and SKIP_BUILD: setup already built what they serve. The e2e config reads E2E_WORKERS.
-  setup_ok "$log" &&
-  job_tmp browser &&
-  wait_for_job check &&
-  run "$log" ci_mutex "$LOCKS" playwright-install pnpm exec playwright install chromium webkit && # one shared browser cache
-  { mic_preflight "$log" || mic=1; true; } &&
-  export SKIP_BUILD=1 E2E_SKIP_BUILD=1 E2E_WORKERS="${E2E_WORKERS:-$(ci_e2e_workers "$CI_CPUS" "${CI_MEM_GB:-0}")}" &&
-  {
-    # One failing part never hides the next: the protocol browser suite, then every e2e package (--no-bail, so a web
-    # failure does not stop the relay or e2e package after it). The job fails if any part did.
-    local other=0 e2e=0
-    run "$log" pnpm test:browser || other=1
-    run "$log" pnpm -r --workspace-concurrency=1 --no-bail --if-present test:e2e || e2e=1
-    if [ "$mic" = 1 ]; then
-      # A stuck microphone fails the job with the plain line (browser.why) while the other tests still run. The web voice
-      # specs always fail then, so only the protocol browser suite, which never opens the microphone, counts as "other":
-      # a failure there is named, since it can't be the audio.
-      [ "$other" = 1 ] && printf '%s\n' "$(head -1 "$RESULTS/browser.why" | cut -c1-90); other tests failed too, see the log" > "$RESULTS/browser.why"
-      return 1
-    fi
-    [ "$other$e2e" = 00 ]
-  }
-}
-
-docker_up() {
-  docker info >/dev/null 2>&1 && return 0
-  if command -v colima >/dev/null 2>&1; then
-    # The marker stays only if this is cut off part way (a cancelled run): ci_end_run then stops the half-started VM.
-    [ -z "$RUN_DIR" ] || : > "$RUN_DIR/colima-start"
-    # The runner kills every process that carries its job's RUNNER_TRACKING_ID when the job ends (its log: "Terminate orphan
-    # process ... (colima)"). The VM's daemon must outlive this run: Docker is the owner's too. So it starts without the id.
-    env -u RUNNER_TRACKING_ID colima start >/dev/null 2>&1
-    [ -z "$RUN_DIR" ] || rm -f "$RUN_DIR/colima-start"
-  fi
-  for i in $(seq 1 30); do docker info >/dev/null 2>&1 && return 0; sleep 2; done
-  return 1
-}
-
-job_image() {
-  local log="$1" key port image="talos-relay:ci-$SHORT-s$CI_SLOT"
-  printf '%s\n' "$image" > "$RUN_DIR/image" # so a cancel during the build or the run can remove it
-  ci_mutex "$LOCKS" docker docker_up >> "$log" 2>&1 || { echo "docker is not running (colima start failed)" >> "$log"; return 1; }
-  # From the commit, not the worktree: the other jobs are writing into the worktree while this one sends it to Docker.
-  run "$log" bash -c 'set -o pipefail; git archive "$1" | docker build -f apps/relay/Dockerfile -t "$2" -' _ "$SHA" "$image" || return 1
-  key="$(openssl rand -base64 32)"
-  port=$((SLOT_IMAGE_PORT_BASE + RANDOM % 100))
-  run "$log" docker run -d --name "$CONTAINER" -p "$port:8080" \
-    -e NODE_ENV=production -e PUBLIC_ORIGIN=https://relay.example.com -e RP_ID=relay.example.com \
-    -e DATA_KEY="$key" -e VAPID_PUBLIC_KEY=pub -e VAPID_PRIVATE_KEY=priv -e VAPID_SUBJECT=mailto:owner@example.com \
-    "$image" || return 1
-  for i in $(seq 1 30); do curl -fsS "localhost:$port/healthz" >/dev/null 2>&1 && break; sleep 1; done
-  local ok=0
-  run "$log" curl -fsS "localhost:$port/healthz" &&
-  curl -fsS "localhost:$port/" | grep -q '<div id="root">' &&
-  [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Test-Session: none' "localhost:$port/api/me")" = 401 ] &&
-  docker exec "$CONTAINER" sh -c 'grep -q "^Uid:\s*10001" /proc/1/status' || ok=1
-  docker logs "$CONTAINER" >> "$log" 2>&1
-  docker rm -f "$CONTAINER" >/dev/null 2>&1
-  docker image rm "$image" >/dev/null 2>&1
-  return $ok
-}
-
-# The Mac app (apps/desktop, SwiftPM + Command Line Tools, no Xcode). On a machine without Swift it skips with a clear
-# message and counts as passed: a Linux box or a fresh checkout without the toolchain must not block the JS jobs.
-SKIPPED=() SKIP_WHY="swift is not installed"
-job_desktop() {
-  local log="$1"
-  if ! command -v swift >/dev/null 2>&1; then
-    echo "SKIPPED: swift is not installed on this machine, so the desktop app was not built or tested" | tee -a "$log"
-    SKIPPED+=(desktop)
-    return 0
-  fi
-  # Path gating (fails closed): only the gate's explicit exit 1 skips. Exit 0, an error (2), a failed merge-base or a
-  # missing gate script all run the job. TALOS_CI_FORCE_DESKTOP=1|true|yes|on forces a run (kept for
-  # apps/desktop/scripts/review-d0-test.sh and the ci-local tests, which use it as their control; ci-local.sh does not export it).
-  local base rc=2 force="${TALOS_CI_FORCE_DESKTOP:-0}"
-  base="$(git merge-base origin/main "$SHA" 2>/dev/null)" || base=""
-  # A commit already on origin/main is its own merge-base: the diff is empty, so "no changes" would be a lie about code nobody
-  # tested. The gate cannot decide there, so the job runs (a push to main, a dispatch of a main commit, a hand run).
-  [ "$base" != "$SHA" ] || { base=""; echo "desktop gate: $SHORT is already on origin/main, nothing to diff against; running the job" >> "$log"; }
-  # The gate runs from OUR copy ($ROOT, the checkout running ci-local), never from the PR's tree: a PR forked before the
-  # gate existed has none, and a PR must not be able to edit its own gate. It diffs in the cwd, which is the worktree.
-  if [ -n "$base" ]; then bash "$ROOT/scripts/ci-desktop-gate.sh" "$base" "$SHA"; rc=$?; fi
-  case "$(printf '%s' "$force" | tr '[:upper:]' '[:lower:]')" in 1|true|yes|on) rc=0 ;; esac
-  if [ "$rc" = 1 ]; then
-    echo "skipped (no desktop changes)" | tee -a "$log"
-    SKIPPED+=(desktop); SKIP_WHY="no desktop changes"
-    return 0
-  fi
-  if [ ! -f apps/desktop/scripts/ci.sh ]; then   # a commit forked before the desktop app existed
-    echo "skipped (commit has no desktop app)" | tee -a "$log"
-    SKIPPED+=(desktop); SKIP_WHY="commit has no desktop app"
-    return 0
-  fi
-  [ "$rc" = 0 ] || echo "desktop gate could not decide (exit $rc); running the desktop job" >> "$log"
-  if ! ci_tmux_ok; then
-    echo "FAILED: no usable tmux (3.2 or newer) at /opt/homebrew/bin, /usr/local/bin or /usr/bin on this machine. The desktop tests would skip every tmux suite (about 130 tests: tmux hosting, the worker manager, the OC3 reviews) and still end green. Install tmux (brew install tmux) and re-run." | tee -a "$log"
-    return 1
-  fi
-  mkdir -p "$CACHE/swiftpm"
-  # Window-opening integration tests run only when the architect sets TALOS_GUI_TESTS=1 in a logged-in session; it is
-  # passed through, never set here (Chronos and headless runs must not open windows).
-  # TALOS_SIGN_ID=- : CI apps are always ad-hoc signed, so CI never touches the login keychain or the owner's identity key.
-  # The shared SwiftPM scratch (incremental builds), the GUI session and the review tests' keychains are one per Mac,
-  # so the desktop job holds a mutex: one desktop build at a time, whatever the slots.
-  TALOS_SIGN_ID=- TALOS_GUI_TESTS="${TALOS_GUI_TESTS:-0}" TALOS_SWIFTPM_CACHE="$CACHE/swiftpm" TALOS_SWIFT_SCRATCH="$CACHE/desktop-build" \
-    run "$log" ci_mutex "$LOCKS" desktop bash apps/desktop/scripts/ci.sh "$WT/.desktop-out"
-}
-
-# The iPhone shell (apps/mobile; IOS-SPEC section 7). Runs only when the diff touches apps/mobile, the native bridge
-# schema, the TypeScript half of the push seal (the Swift tests read its vectors) or this script (fails closed: an unknown merge-base runs it, and so does a commit already on origin/main). Needs Swift; builds for the simulator when Xcode is
-# present, unsigned, with DerivedData in the scratch worktree (deleted with it).
-ci_xcode_ok() { local t; for t in ${CI_XCODE_TOOLS:-xcodegen xcodebuild}; do command -v "$t" >/dev/null 2>&1 || return 1; done; }
-job_mobile() {
-  local log="$1" base
-  if ! command -v swift >/dev/null 2>&1; then
-    echo "SKIPPED: swift is not installed on this machine" | tee -a "$log"
-    SKIPPED+=(mobile); SKIP_WHY="swift is not installed"
-    return 0
-  fi
-  base="$(git merge-base origin/main "$SHA" 2>/dev/null)" || base=""
-  # A commit already on origin/main is its own merge-base: an empty diff is not "no mobile changes", so the job runs.
-  [ "$base" != "$SHA" ] || base=""
-  if [ -n "$base" ] && git diff --quiet --no-renames "$base" "$SHA" -- \
-      apps/mobile/ packages/protocol/src/native.ts scripts/native-fixtures.ts scripts/ci-local.sh \
-      packages/protocol/src/push-rich.ts packages/protocol/src/push.ts packages/protocol/fixtures/push-rich; then
-    echo "skipped (no mobile changes)" | tee -a "$log"
-    SKIPPED+=(mobile); SKIP_WHY="no mobile changes"
-    return 0
-  fi
-  [ -d apps/mobile/ios/App ] || { echo "skipped (commit has no iPhone shell)" | tee -a "$log"; SKIPPED+=(mobile); SKIP_WHY="commit has no iPhone shell"; return 0; }
-  setup_ok "$log" &&
-  run "$log" pnpm --filter @talos-app/mobile typecheck &&
-  run "$log" pnpm --filter @talos-app/mobile test || return 1
-  mkdir -p "$CACHE/swiftpm"
-  local pkg
-  for pkg in BridgeGuard TalosAudioCore TalosCrashCore TalosPushCore; do
-    run "$log" bash -c "cd apps/mobile/ios/$pkg && swift test --cache-path '$CACHE/swiftpm'" || return 1
-  done
-  run "$log" env TALOS_SWIFTPM_CACHE="$CACHE/swiftpm" bash apps/mobile/ios/TalosShareCore/test.sh || return 1
-  if ci_xcode_ok; then
-    # A dummy relay: the generated capacitor.config.json is gitignored and only has to exist for the build.
-    TALOS_RELAY_URL=https://relay.example.com run "$log" pnpm --filter @talos-app/mobile cap:sync &&
-    run "$log" pnpm --filter @talos-app/mobile check:generated &&
-    run "$log" git diff --exit-code -- apps/mobile/ios ':!apps/mobile/ios/App/CapApp-SPM/Package.swift' &&
-    run "$log" xcodebuild -project apps/mobile/ios/App/App.xcodeproj -scheme App \
-      -destination 'generic/platform=iOS Simulator' -derivedDataPath "$WT/.dd" CODE_SIGNING_ALLOWED=NO build || return 1
-    # The tests that run inside the app (AppTests: the real Keychain, sign-out). They need a simulator; none is a failure.
-    local dest; dest="$(ci_ios_sim_dest)"
-    [ -n "$dest" ] || { echo "FAILED: no iPhone simulator is installed, so the app's own tests (AppTests) did not run. Install one in Xcode or set TALOS_IOS_SIM." | tee -a "$log"; return 1; }
-    ci_ios_test "$log" "${dest##*=}" xcodebuild -project apps/mobile/ios/App/App.xcodeproj -scheme App -destination "$dest" -derivedDataPath "$WT/.dd" test || return 1
-  else
-    # Never a pass: the generated-project check and the simulator build are the point of this job. On a Mac it is a failure
-    # (the runner lacks a tool); elsewhere the job is recorded as skipped, which no verdict counts as passed.
-    if [ "$(uname -s)" = Darwin ]; then
-      echo "FAILED: xcodegen or xcodebuild is not on PATH, so the generated project and the simulator build were not checked. Install xcodegen (brew install xcodegen) and Xcode, and re-run." | tee -a "$log"
-      return 1
-    fi
-    echo "skipped (xcodegen or xcodebuild is not installed; the generated-project check and the simulator build did not run)" | tee -a "$log"
-    SKIPPED+=(mobile); SKIP_WHY="xcodegen or xcodebuild is not installed"
-  fi
-}
-
 cd "$WT"
+ci_bun_version() { bun --version 2>/dev/null | tr -d ' \r\n' | grep . || echo none; }
+RUN_BUN="$(ci_bun_version)" # for timings.tsv: the bun this run started with
 echo "ci-local: $SHORT ${PR:+(PR $PR) }slot $CI_SLOT/$CI_SLOTS, jobs: $JOBS"
 setup_run
 T_SETUP=$(date +%s)
 
 RESULTS="$RUN_DIR/results"
 mkdir -p "$RESULTS"
+# check's parts on other machines: their answers can only be read with this attempt's link and a token, so without them every
+# part runs here, as today
+parts_poll() { # each part's state, from its ci-part/ statuses of this attempt and its machine's job
+  local p m st rows jobs all ok=1
+  jobs="$(gh api --paginate "repos/$SLUG/actions/runs/${CI_RUN_ID:-0}/jobs?per_page=100" --jq '.jobs[] | [.name, .status] | @tsv' 2>/dev/null)"
+  all="$(ci_statuses "$SLUG" "$SHA")" || ok="" # one read for every part: polling must not spend the rate limit per part
+  while read -r p m; do
+    [ -n "$p" ] || continue
+    rows="$(printf '%s\n' "$all" | ci_attempt_filter "$(ci_ns "ci-part/$p")" "$CI_ATTEMPT_URL")"
+    if [ -z "$ok" ]; then st=gone # unreadable: take it here
+    elif [ -n "$(printf '%s\n' "$rows" | ci_attempt_red)" ]; then st=fail
+    elif printf '%s\n' "$rows" | awk -F'\t' '$1 == "success" { f = 1 } END { exit !f }'; then st=pass
+    # its machine refused the part (a tool its pile needs is missing there: error under its own link): taken here at once,
+    # whatever its job's state, and never a red or a pass (docs/CI-MACHINES.md, "Tools a test file needs")
+    elif printf '%s\n' "$all" | ci_attempt_filter "$(ci_ns "ci-part/$p")" "$CI_ATTEMPT_URL" "$CI_ATTEMPT_URL$m" |
+      awk -F'\t' '$1 == "error" { f = 1 } END { exit !f }'; then st=gone
+    else
+      case "$(printf '%s\n' "$jobs" | awk -F'\t' -v m="$m" '$1 == m { print $2; exit }')" in
+        in_progress) st=working ;;
+        *) st=gone ;; # queued, waiting, completed without an answer, or unreadable: nobody is working on it
+      esac
+    fi
+    printf '%s\n' "$st" > "$RESULTS/part-state-$p.new" && mv -f "$RESULTS/part-state-$p.new" "$RESULTS/part-state-$p"
+  done < "$RESULTS/parts-wanted"
+}
+if [ -n "${CI_REMOTE_PARTS:-}" ] && wants check; then
+  if [ "${CI_STATUS_PREFIX:-local-ci}" != local-ci ]; then
+    echo "ci-local: check runs as a part here (${CI_STATUS_PREFIX}/): it has no parts of its own; CI_REMOTE_PARTS ignored"
+  elif [ "$STATUS" = 1 ] && [ -n "${CI_ATTEMPT_URL:-}" ]; then
+    for _p in $CI_REMOTE_PARTS; do printf '%s %s\n' "${_p%%:*}" "${_p#*:}"; done > "$RESULTS/parts-wanted"
+    parts_poll
+  else
+    echo "ci-local: CI_REMOTE_PARTS given, but this run cannot read their statuses; check runs every part here"
+  fi
+fi
+# The e2e part (CI_BROWSER_E2E_PART): its state in $RESULTS/e2e-part-state for the browser job, which has no token to read it
+# (job_browser's browser_e2e_fold). pass or fail: its answer. working: its job is queued or running. gone: its job ended (or is
+# not in the run) without an answer, or its machine refused it (an error under its own link). unread: GitHub could not be
+# read. The job takes the packages back on gone at once, and on anything but pass or fail when its wait is over.
+# The check part (CI_CHECK_PART) the same way, into $RESULTS/check-part-state, read from the start (job_check folds it).
+e2e_part_poll() { fold_poll "$(ci_ns ci-part/browser-e2e)" "$CI_BROWSER_E2E_PART" e2e-part-state E2E_GONE; }
+check_part_poll() { fold_poll "$(ci_ns ci-part/check)" "$CI_CHECK_PART" check-part-state CHECK_GONE; }
+fold_poll() { # fold_poll <part context> <machine> <state file> <its "gone" counter>
+  local c="$1" m="$2" all rows jobs st n="${!4}"
+  if ! all="$(ci_statuses "$SLUG" "$SHA")"; then st=unread
+  else
+    rows="$(printf '%s\n' "$all" | ci_attempt_filter "$c" "$CI_ATTEMPT_URL")"
+    if [ -n "$(printf '%s\n' "$rows" | ci_attempt_red)" ]; then st=fail
+    # a success that says "skipped" (no inputs changed there) ran nothing: no answer for this run
+    elif printf '%s\n' "$rows" | awk -F'\t' '$1 == "success" && index($2, "skipped") != 1 { f = 1 } END { exit !f }'; then st=pass
+    # refused on its machine: an error ("not tested: ...") under the part's own link of this attempt
+    elif printf '%s\n' "$all" | awk -F'\t' -v c="$c" -v l="$CI_ATTEMPT_URL$m" \
+      '$1 == c && $2 == "error" && $3 == l { f = 1 } END { exit !f }'; then st=gone
+    elif ! jobs="$(gh api --paginate "repos/$SLUG/actions/runs/$CI_RUN_ID/jobs?per_page=100" --jq '.jobs[] | [.name, .status] | @tsv' 2>/dev/null)"; then st=unread
+    else
+      case "$(printf '%s\n' "$jobs" | awk -F'\t' -v m="$m" '$1 == m { print $2; exit }')" in
+        in_progress | queued | waiting | pending | requested) st=working ;;
+        *) st=gone ;;
+      esac
+      # gone from the job list (its job ended, or its name is not there) must be seen twice in a row: a list read a moment early
+      # must not take the packages back on one look
+      if [ "$st" = gone ]; then n=$((n + 1)); [ "$n" -ge 2 ] || st=working; else n=0; fi
+    fi
+  fi
+  [ "$st" != unread ] || n=0 # "twice in a row" means two readable looks with nothing between
+  printf -v "$4" '%s' "$n"
+  printf '%s\n' "$st" > "$RESULTS/$3.new" && mv -f "$RESULTS/$3.new" "$RESULTS/$3"
+}
+E2E_POLLED=0 E2E_GONE=0 CHECK_POLLED=0 CHECK_GONE=0
+noted() { # noted <job> <text>: the status text cut to 140 characters, ending with why this run answers it (CI_FALLBACK_NOTES)
+  local n
+  n="$(printf '%s' "${CI_FALLBACK_NOTES:-}" | tr ';' '\n' | awk -F= -v j="$1" '$1 == j { print " (fallback: " $2 ")"; exit }')"
+  printf '%s%s' "$(printf '%s' "$2" | cut -c1-$((140 - ${#n})))" "$n"
+}
 run_job() { # run_job <job>: one job start to finish; leaves "<exit code> <seconds> <why it skipped>" in $RESULTS/<job>
   local j="$1" log="$CACHE/logs/$SHORT-$j.log" start rc=1 why=""
+  keep_prev_log "$log"
   : > "$log"
-  start=$(date +%s)
+  echo "bun: $(ci_bun_version) ($(command -v bun 2>/dev/null || echo not on PATH))" >> "$log" # the bun this job runs
+  # Where this job's test runners write each test that failed once and passed when run again ("<test>\t<file>"); report() reads it.
+  export CI_FLAKE_FILE="$RESULTS/$j.flaky"
+  : > "$CI_FLAKE_FILE"
+  # check's per-test file (scripts/ci-test-results.ts): Vitest's and the bun runner's reports, gathered after the suites. Only
+  # check's: the jobs after it in the same group must not inherit them.
+  if [ "$j" = check ]; then
+    # the root its files are named from: the worktree (a Vitest run inside a package, the contract suite, has its own root)
+    export CI_TEST_RESULTS_DIR="$RESULTS/check-tests" TALOS_TEST_JUNIT_DIR="$RESULTS/check-tests/bun" \
+      CI_TEST_RESULTS_ROOT="$(cd "$WT" && pwd -P)" # physical, as Vitest's module ids are: a symlinked path would give ../.. names
+    rm -rf "$CI_TEST_RESULTS_DIR" && mkdir -p "$CI_TEST_RESULTS_DIR"
+  else
+    unset CI_TEST_RESULTS_DIR TALOS_TEST_JUNIT_DIR CI_TEST_RESULTS_ROOT
+  fi
+  start=$(date +%s) JOB_WAITED=0
   if declare -F "job_$j" >/dev/null; then "job_$j" "$log"; rc=$?; fi
   [[ " ${SKIPPED[*]:-} " == *" $j "* ]] && why="$SKIP_WHY"
+  echo "$JOB_WAITED" > "$RESULTS/$j.waited" # before the result: report reads both once the result is there
   printf '%s %s %s\n' "$rc" "$(($(date +%s) - start))" "$why" > "$RESULTS/$j.part"
   mv -f "$RESULTS/$j.part" "$RESULTS/$j"
 }
@@ -1081,6 +714,7 @@ start_jobs() { # start_jobs <job...>: these jobs, one after another, as one back
     # Only this shell posts statuses. A job (install scripts, test code, a browser) gets no way to: a pass it could post by hand
     # for any commit of the repository would be a pass nobody tested.
     unset GH_TOKEN GITHUB_TOKEN
+    [ "${CI_HOSTILE:-}" != 1 ] || ci_hostile_env # the hostile nightly's clock shift and time zone, for the jobs only
     for j in "$@"; do
       case "$j" in
         desktop | mobile) # a build wants every core: after this run's quiet suites, and never beside anyone's
@@ -1095,7 +729,15 @@ start_jobs() { # start_jobs <job...>: these jobs, one after another, as one back
   for j in "$@"; do echo "$!" > "$RESULTS/$j.group"; done
 }
 report() { # report <job> <exit code> <seconds> <why it skipped>
-  local j="$1" rc="$2" secs="$3" why="${4:-}" log="$CACHE/logs/$SHORT-$1.log" slept=0 woke warned=""
+  local j="$1" rc="$2" secs="$3" why="${4:-}" log="$CACHE/logs/$SHORT-$1.log" slept=0 woke warned="" retried="" n=0 t f rows red answered=0 parts="" _p _m
+  # Its own steps against its wall time: a job that waited for another (browser for check) says so, and timings.tsv keeps both.
+  local waited steps took
+  waited="$(cat "$RESULTS/$j.waited" 2>/dev/null)"
+  case "$waited" in '' | *[!0-9]*) waited=0 ;; esac
+  steps=$((secs > waited ? secs - waited : 0))
+  took="${secs}s"
+  [ "$waited" = 0 ] || took="${secs}s: ${steps}s of its own steps, ${waited}s waiting for another job"
+  [ -n "$why" ] || JOB_TIMES="${JOB_TIMES:+$JOB_TIMES,}$j=$secs/$steps"
   # A job that "passed" while the Mac slept gets a warning: see ci_slept_since. CI_SLEEP_GUARD=1 makes it a failure instead.
   # Skips don't depend on the Mac being awake.
   if [ "$rc" = 0 ] && [ -z "$why" ] && ci_slept_since "$T_SLOT"; then
@@ -1105,28 +747,115 @@ report() { # report <job> <exit code> <seconds> <why it skipped>
       *) echo "warning: $woke" | tee -a "$log" >> "$RESULTS/$j.warn" ;;
     esac
   fi
+  # Right before the final post, the attempt's other answers (two answers for one context): another machine's red of this attempt
+  # makes this one red with the first red's words; a pass after another pass of it posts nothing more (the first green stands).
+  if [ "$STATUS" = 1 ] && [ -n "${CI_ATTEMPT_URL:-}" ] && [ -z "$why" ]; then
+    if ! rows="$(ci_attempt_rows "$SLUG" "$SHA" "$(ci_context "$j")" "$CI_ATTEMPT_URL")"; then
+      # another machine's red could be there, unseen: never post a green over it
+      [ "$rc" != 0 ] || echo "could not read this attempt's statuses; re-run" > "$RESULTS/$j.why" # keep a failure's own why
+      rc=1
+    fi
+    red="$(printf '%s\n' "$rows" | ci_attempt_red)"
+    if [ -n "$red" ]; then
+      rc=1 && printf '%s\n' "$red" > "$RESULTS/$j.why" && echo "  ! $j: this attempt already has a red for it: $red"
+    elif [ "$rc" = 0 ] && [ -n "$(printf '%s\n' "$rows" | ci_attempt_final)" ] &&
+      ! ci_still_ours "$SLUG" "$SHA" "$(ci_context "$j")" "${CI_STATUS_URL:-}"; then
+      answered=1 # another machine's final is the newest status: it stands. (If this run's pending is newer, this run answers.)
+    fi
+  fi
+  # check's parts: right before check is posted, each part's statuses once more: a part red on its machine in this attempt fails
+  # check, even if it also ran here and passed
+  if [ "$j" = check ] && [ -f "$RESULTS/parts-wanted" ] && [ -z "$why" ]; then
+    _ok=1 && _all="$(ci_statuses "$SLUG" "$SHA")" || _ok="" # one read for every part
+    while read -r _p _m; do
+      if [ -z "$_ok" ]; then
+        [ "$rc" != 0 ] || { rc=1; echo "could not read the parts' statuses; re-run" > "$RESULTS/check.why"; }
+        continue
+      fi
+      red="$(printf '%s\n' "$_all" | ci_attempt_filter "$(ci_ns "ci-part/$_p")" "$CI_ATTEMPT_URL" | ci_attempt_red)"
+      [ -z "$red" ] || [ "$rc" != 0 ] || { rc=1; printf '%s failed on %s; see its run\n' "$(part_label "$_p" | sed 's/^shard/bridge shard/')" "$_m" > "$RESULTS/check.why"; }
+    done < "$RESULTS/parts-wanted"
+    [ ! -s "$RESULTS/check.where" ] || parts=" ($(head -1 "$RESULTS/check.where"))"
+  fi
+  # "not tested: ..." (nottested): posted as `error`, which no verdict reads as red or green
+  local nottested=""
+  # check with its part on Titan (CI_CHECK_PART): as browser with its e2e part, below
+  if [ "$j" = check ] && [ -n "${CI_CHECK_PART:-}" ] && [ -z "$why" ]; then
+    [ ! -s "$RESULTS/check.where" ] || parts=" ($(head -1 "$RESULTS/check.where"))"
+    if _all="$(ci_statuses "$SLUG" "$SHA")"; then
+      red="$(printf '%s\n' "$_all" | ci_attempt_filter "$(ci_ns ci-part/check)" "$CI_ATTEMPT_URL" | ci_attempt_red)"
+      [ -z "$red" ] || [ "$rc" != 0 ] || { rc=1; echo "check failed on $CI_CHECK_PART; see its run" > "$RESULTS/check.why"; }
+    elif [ "$rc" = 0 ]; then
+      rc=1; nottested="not tested: check part status unreadable on GitHub; re-run"
+    fi
+  fi
+  # browser with its e2e part (CI_BROWSER_E2E_PART): the job folded the part's answer or took the packages back (browser.where
+  # says which). Right before the post, the part's statuses once more, as check reads its parts: a red of this attempt on the
+  # part's machine fails browser even when the packages also ran here and passed.
+  if [ "$j" = browser ] && [ -n "${CI_BROWSER_E2E_PART:-}" ] && [ -z "$why" ]; then
+    [ ! -s "$RESULTS/browser.where" ] || parts=" ($(head -1 "$RESULTS/browser.where"))"
+    if _all="$(ci_statuses "$SLUG" "$SHA")"; then
+      red="$(printf '%s\n' "$_all" | ci_attempt_filter "$(ci_ns ci-part/browser-e2e)" "$CI_ATTEMPT_URL" | ci_attempt_red)"
+      [ -z "$red" ] || [ "$rc" != 0 ] || { rc=1; echo "the browser-e2e part failed on $CI_BROWSER_E2E_PART; see its run" > "$RESULTS/browser.why"; }
+    elif [ "$rc" = 0 ]; then
+      rc=1; nottested="not tested: browser-e2e part status unreadable on GitHub; re-run"
+    fi
+  fi
   # For a run of this commit waiting behind this one. A skip is stored as "skip", not 0: it is a pass for a run that may skip, and
   # no answer at all for a --full run, which skips nothing (see the wait above).
-  if [ "$rc" = 0 ] && [ -n "$why" ]; then echo skip > "$RESDIR/$j"; else printf '%s\n' "$rc" > "$RESDIR/$j"; fi
+  # a refusal (a tool missing here) or a "not tested" is no answer for a run waiting behind this one: it tests the job itself
+  if [ -s "$RESULTS/$j.refused" ] || [ -n "$nottested" ]; then echo refused > "$RESDIR/$j"
+  elif [ "$rc" = 0 ] && [ -n "$why" ]; then echo skip > "$RESDIR/$j"; else printf '%s\n' "$rc" > "$RESDIR/$j"; fi
+  # A test that failed once and passed when run again: green, but said so in the status, the run's output and the job's log, and
+  # kept in logs/flakes.tsv (date, sha, job, test, file). Logged even when the job failed for another reason.
+  # The log and output lines come after the result (below), so a red job's printed tail still shows why it failed.
+  if [ -s "$RESULTS/$j.flaky" ]; then
+    while IFS=$'\t' read -r t f; do
+      [ -n "$t" ] || continue
+      n=$((n + 1))
+      printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$SHA" "$j" "$t" "$f" >> "$CACHE/logs/flakes.tsv"
+    done < "$RESULTS/$j.flaky"
+    [ "$n" = 0 ] || retried=", passed on retry ($n flaky test$([ "$n" = 1 ] || echo s), see flakes.tsv)"
+  fi
   if [ "$slept" = 1 ]; then
-    echo "  ✗ $j (${secs}s): the Mac slept during the run; not trusted, re-run"; post "$j" error "the Mac slept during the run; result not trusted, re-run"
+    echo "  ✗ $j ($took): the Mac slept during the run; not trusted, re-run"; post "$j" error "the Mac slept during the run; result not trusted, re-run"
     FAILED+=("$j")
+  elif [ -n "$nottested" ]; then
+    echo "  ✗ $j ($took): $nottested"; post "$j" error "$nottested"
+    FAILED+=("$j")
+  elif [ -s "$RESULTS/$j.refused" ]; then
+    # a part this machine cannot run (a tool missing): error, never a red; the machine that runs check takes it over
+    # not a failure (the run ends green if nothing else failed), but loud: a ::warning:: line in the job's GitHub log
+    echo "  ! $j refused: $(head -1 "$RESULTS/$j.refused")"; post "$j" error "$(head -1 "$RESULTS/$j.refused" | cut -c1-140)"
+    echo "::warning::ci-local: $(head -1 "$RESULTS/$j.refused")"
+    REFUSED+=("$j")
   elif [ "$rc" != 0 ]; then
-    echo "  ✗ $j (${secs}s), log: $log"; tail -25 "$log" | sed 's/^/    /'
-    if [ -s "$RESULTS/$j.why" ]; then post "$j" failure "$(head -1 "$RESULTS/$j.why" | cut -c1-140)"
-    else post "$j" failure "failed on $WHERE; see ~/.cache/talos-ci/logs/$SHORT-$j.log"; fi
+    echo "  ✗ $j ($took), log: $log"; tail -25 "$log" | sed 's/^/    /'
+    if [ -s "$RESULTS/$j.why" ]; then post "$j" failure "$(noted "$j" "$(head -1 "$RESULTS/$j.why")")"
+    else post "$j" failure "$(noted "$j" "failed on $WHERE; see ~/.cache/talos-ci/logs/$SHORT-$j.log")"; fi
     FAILED+=("$j")
   elif [ -n "$why" ]; then
     echo "  - $j skipped: $why (${secs}s)"
-    if [ "$why" = "$SKIP_UNAFFECTED" ]; then post "$j" success "skipped: $why"; else post "$j" success "skipped ($why)"; fi
+    case "$why" in
+      "no $j inputs changed since "?*) post "$j" success "skipped: $why" ;; # the words ci_classify reads as "not affected"
+      *) post "$j" success "skipped ($why)" ;;
+    esac
   else
     if [ -s "$RESULTS/$j.warn" ]; then warned=", with warnings (see its log)"; sed 's/^/  ! /' "$RESULTS/$j.warn"; fi
-    echo "  ✓ $j (${secs}s)"; post "$j" success "passed on $WHERE in ${secs}s$warned"
+    if [ "$answered" = 1 ]; then echo "  ✓ $j ($took): answered first elsewhere in this attempt; nothing posted"
+    else echo "  ✓ $j ($took)"; post "$j" success "$(noted "$j" "passed on $WHERE in ${secs}s$parts$retried$warned")"; fi
+  fi
+  if [ "$n" -gt 0 ]; then
+    while IFS=$'\t' read -r t f; do
+      [ -n "$t" ] || continue
+      echo "passed on retry: $t ($f)" >> "$log"
+      echo "  ! $j: passed on retry: $t ($f)"
+    done < "$RESULTS/$j.flaky"
   fi
   mkdir -p "$RUN_DIR/reported" && : > "$RUN_DIR/reported/$j" # answered: a later cancel has nothing to settle for this job
 }
 
-for j in ${SKIP_JOBS[@]+"${SKIP_JOBS[@]}"}; do report "$j" 0 0 "$SKIP_UNAFFECTED"; done
+for i in ${SKIP_JOBS[@]+"${!SKIP_JOBS[@]}"}; do report "${SKIP_JOBS[$i]}" 0 0 "${SKIP_WHYS[$i]}"; done
 
 # Every job at once (the browser job waits for check, see job_browser), except the two Swift jobs: they share a SwiftPM cache and a
 # build of them wants every core, so the iPhone shell waits for the Mac app.
@@ -1143,7 +872,8 @@ done
 [ ${#SWIFT[@]} -eq 0 ] || start_jobs "${SWIFT[@]}"
 
 # Results as they come. A job that died without leaving one (killed from outside) is a failure, never a pass.
-FAILED=() WAITING="$UNIQUE"
+# While check runs with parts on other machines, this shell (it has the token; the jobs don't) keeps their states up to date.
+FAILED=() REFUSED=() WAITING="$UNIQUE" PART_POLLED=0 JOB_TIMES=""
 while [ -n "${WAITING// /}" ]; do
   STILL=""
   for j in $WAITING; do
@@ -1160,12 +890,35 @@ while [ -n "${WAITING// /}" ]; do
     fi
   done
   WAITING="$STILL"
+  _poll="${CI_PART_POLL:-30}" _poll="${_poll%.*}" # every CI_PART_POLL seconds (30), whole seconds: this loop ticks once a second
+  if [ -f "$RESULTS/parts-wanted" ] && [ ! -f "$RESULTS/check" ] && [ $(($(date +%s) - PART_POLLED)) -ge "${_poll:-0}" ]; then
+    parts_poll; PART_POLLED=$(date +%s)
+  fi
+  # the e2e part's state for the browser job, from when that job asks for it (its web suites are over) until it ends; before
+  # then nobody reads it, and reading it then would spend the rate limit for nothing
+  if [ -n "${CI_BROWSER_E2E_PART:-}" ] && [ -f "$RESULTS/e2e-part-asked" ] && [ ! -f "$RESULTS/browser" ] &&
+    [[ " $WAITING " == *" browser "* ]] && [ $(($(date +%s) - E2E_POLLED)) -ge "${_poll:-0}" ]; then
+    e2e_part_poll; E2E_POLLED=$(date +%s)
+  fi
+  if [ -n "${CI_CHECK_PART:-}" ] && [ ! -f "$RESULTS/check" ] && [[ " $WAITING " == *" check "* ]] &&
+    [ $(($(date +%s) - CHECK_POLLED)) -ge "${_poll:-0}" ]; then
+    check_part_poll; CHECK_POLLED=$(date +%s)
+  fi
   [ -z "${WAITING// /}" ] || sleep 1
 done
 
 T_DONE=$(date +%s)
 echo "ci-local: timing: waited $((T_SLOT - T_ASKED))s, setup $((T_SETUP - T_SLOT))s, jobs $((T_DONE - T_SETUP))s"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$SHORT" "$CI_SLOT" "$JOBS" \
-  "$((T_SLOT - T_ASKED))" "$((T_SETUP - T_SLOT))" "$((T_DONE - T_SETUP))" "${#FAILED[@]}" >> "$CACHE/logs/timings.tsv"
-[ ${#FAILED[@]} -eq 0 ] && [ -z "$BAD_BEFORE" ] && { echo "ci-local: all green ($SHORT)"; exit 0; }
+# timings.tsv: date, sha, slot, jobs, waited, setup, jobs' wall time, failures, then each job that ran as <job>=<wall>/<own steps>
+# seconds (its wall time less the time it waited for another job: browser's wall includes the whole of check), then the desktop
+# job's pty use, pty=<peak /dev/ttys*>/<kern.tty.ptmx_max>, or - when it did not run (appended: older rows have nine columns),
+# then the bun the run started with, bun=<version> (bun=none without one; appended: older rows have ten columns).
+_pty="$(cat "$RESULTS/desktop.pty" 2>/dev/null)"
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$SHORT" "$CI_SLOT" "$JOBS" \
+  "$((T_SLOT - T_ASKED))" "$((T_SETUP - T_SLOT))" "$((T_DONE - T_SETUP))" "${#FAILED[@]}" "$JOB_TIMES" "${_pty:--}" "bun=$RUN_BUN" \
+  >> "$CACHE/logs/timings.tsv"
+if [ ${#FAILED[@]} -eq 0 ] && [ -z "$BAD_BEFORE" ]; then
+  [ ${#REFUSED[@]} -eq 0 ] || { echo "ci-local: nothing failed; refused, not tested here (see each one's line above): ${REFUSED[*]} ($SHORT)"; exit 0; }
+  echo "ci-local: all green ($SHORT)"; exit 0
+fi
 echo "ci-local: FAILED: ${BAD_BEFORE:+$BAD_BEFORE }${FAILED[*]:-} ($SHORT)"; exit 1

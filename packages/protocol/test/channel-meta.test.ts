@@ -30,7 +30,8 @@ describe('ChannelMeta', () => {
     for (const trust of CHANNEL_TRUSTS) expect(ChannelMeta.safeParse({ ...ok, trust }).success, trust).toBe(true)
     expect(ChannelMeta.safeParse({ ...ok, kind: 'telepathy' }).success).toBe(false)
     expect(ChannelMeta.safeParse({ ...ok, trust: 'admin' }).success).toBe(false)
-    expect(CHANNEL_KINDS).toHaveLength(15) // 10 of spec 4.3 + schedule_run, schedule_held, spawn_request, share (V2 V1.3)
+    // 10 of spec 4.3 + schedule_run, schedule_held, spawn_request, share (V2 V1.3), handoff, wake (wake_me)
+    expect(CHANNEL_KINDS).toHaveLength(16)
   })
   it('rejects hyphenated keys, non-string values and chat_id != thread_id', () => {
     expect(ChannelMeta.safeParse({ ...ok, 'thread-id': 'x' }).success).toBe(false)

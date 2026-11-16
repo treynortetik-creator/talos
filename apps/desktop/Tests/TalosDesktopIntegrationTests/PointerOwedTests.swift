@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 @testable import TalosSupervisor
+import TalosTestSupport
 
 /// An owed pointer survives the app going away (docs/OPTION-C.md). What is owed is the pointer line (a wake was taken, the line is
 /// not typed yet) and its Enter (the text is in Claude's input box and the Enter failed). Both are in `workers.json`, so a Quit, a
@@ -16,15 +17,38 @@ import TalosDesktopCore
 /// worker. Real private tmux; never `-L talos`.
 private let scenario = "review-worker.sh"
 
-/// The wall clock of the second copy of the app, set ahead to play "the claim deadline has passed".
-private final class OwedClock: @unchecked Sendable {
+/// The wall clock of the second copy of the app, set ahead to play "the claim deadline has passed". `reading` pins what it says at
+/// the moment it is made (it runs on with the wall clock from there), so a deadline counted from a known wake time is decided by
+/// the test's numbers and not by how long the machine took to get here. `jump` moves it on while the copy runs.
+final class OwedClock: @unchecked Sendable {
   private let l = NSLock()
   private var offset: Double
   init(ahead: Double = 0) { offset = ahead }
+  init(reading t: Double) { offset = t - Date().timeIntervalSince1970 }
   var now: Double { l.withLock { Date().timeIntervalSince1970 + offset } }
+  func jump(_ s: Double) { l.withLock { offset += s } }
 }
 
 extension WorkerRig {
+  /// The waits for a start in these tests are upper bounds, not what they are about: a start under a loaded machine (the whole
+  /// suite beside it) can take longer than the rig's 8 s ready timeout, which then fails the start for no reason of the test's.
+  static let owedReadyTimeout = 60.0
+
+  /// `n` whole ticks of the installed manager have run since this was called. `tickOnce` runs on the manager's own serial queue, so
+  /// when it returns, a tick the timer had started has ended too. "Nothing more is typed" is then checked after the manager has had
+  /// its chances to type, not after a length of time that a busy machine can make too short.
+  func ticksPass(_ n: Int = 3) {
+    for _ in 0..<n { mgr.tickOnce() }
+  }
+
+  /// The supervisor's `heartbeat_at` as the file has it now.
+  var heartbeatOnDisk: String? {
+    guard let d = FileManager.default.contents(atPath: talosHome + "/workers.json"),
+      let root = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+    else { return nil }
+    return (root["supervisor"] as? [String: Any])?["heartbeat_at"] as? String
+  }
+
   /// What `workers.json` says about the owed pointer, read as plain JSON: the keys are what the file holds, not what a type calls them.
   func owed(_ id: String = "trip") -> (until: String?, enter: Bool?) {
     guard let d = FileManager.default.contents(atPath: talosHome + "/workers.json"),
@@ -68,23 +92,28 @@ extension WorkerRig {
     try JSONSerialization.data(withJSONObject: root).write(to: url)
   }
 
-  /// The app goes away. `quit` lets one heartbeat go by first; `crash` never has one.
-  func appGone(_ how: String) {
-    if how == "quit" { usleep(700_000) }
+  /// The app goes away. `quit` lets one heartbeat go by first (seen on disk, not waited for by the clock); `crash` never has one.
+  func appGone(_ how: String, sourceLocation: SourceLocation = #_sourceLocation) {
+    if how == "quit" {
+      let before = heartbeatOnDisk
+      let w = waitUntil(timeout: 15, observe: { heartbeatOnDisk }) { $0 != nil && $0 != before }
+      #expect(w.ok, "no heartbeat reached workers.json before the quit (was \(String(describing: before))): \(w)", sourceLocation: sourceLocation)
+    }
     mgr.detach()
   }
 
   /// The first copy of the app: `crash` has no heartbeat, so the file is only ever written when something changed.
   func firstCopy(_ how: String, tmux: String? = nil) -> WorkerManager {
-    let m = manager(tmux: tmux)
+    let m = manager(tmux: tmux, readyTimeout: Self.owedReadyTimeout)
     if how == "crash" { m.tune { $0.heartbeat = 3600 } }
     return m
   }
 
-  /// The copy that comes back: it adopts what the file says, on a wall clock that may be ahead.
-  func comeBack(ahead: Double = 0, tmux: String? = nil) -> WorkerManager {
-    let c = OwedClock(ahead: ahead)
-    let m = manager(tmux: tmux, now: { c.now })
+  /// The copy that comes back: it adopts what the file says, on a wall clock that may be ahead (`ahead`), or that reads a given time
+  /// as it starts (`clock`).
+  func comeBack(ahead: Double = 0, clock: OwedClock? = nil, tmux: String? = nil) -> WorkerManager {
+    let c = clock ?? OwedClock(ahead: ahead)
+    let m = manager(tmux: tmux, readyTimeout: Self.owedReadyTimeout, now: { c.now })
     firstTick(m)
     m.startTicking()
     return m
@@ -127,7 +156,7 @@ struct PointerOwedTests {
     FileManager.default.createFile(atPath: gate, contents: nil)
     #expect(r.wait(10) { r.typedLines.count == 1 }, "the owed pointer was lost: \(r.typedLines) \(r.why("trip"))")
     #expect(r.typedLines.first == line, "\(r.typedLines)")
-    usleep(800_000)
+    r.ticksPass()
     #expect(r.typedLines.count == 1, "typed more than once: \(r.typedLines)")
     #expect(r.wait(5) { r.owed().until == nil && r.owed().enter == nil }, "still owed on disk: \(r.owed())")
     #expect(r.starts.count == 1, "no second run")
@@ -146,7 +175,7 @@ struct PointerOwedTests {
     FileManager.default.createFile(atPath: gate, contents: nil)
     #expect(r.wait(10) { r.up("trip") && r.screen().contains("auto mode") }, "the box never came: \(r.why("trip"))")
     #expect(r.wait(5) { r.owed().until == nil }, "the dropped pointer is still owed on disk: \(r.owed())")
-    usleep(1_500_000)
+    r.ticksPass()
     #expect(r.typedLines.isEmpty, "typed after the deadline: \(r.typedLines)")
     #expect(!r.screen().contains(PointerTyper.text))
   }
@@ -157,10 +186,11 @@ struct PointerOwedTests {
     let (r, gate) = try gated("noBox")
     defer { r.teardown() }
     r.firstCopy("crash").startTicking()
-    try r.wake("trip")  // a cold start: the thread had no worker
+    let at = Date().timeIntervalSince1970
+    try r.wake("trip", at: at)  // a cold start: the thread had no worker
     #expect(owedAndOnDisk(r, phase: "noBox"))
     r.appGone("crash")
-    _ = r.comeBack(ahead: 100)
+    _ = r.comeBack(clock: OwedClock(reading: at + 100))  // 100 s after the hub wrote the wake, however long the start above took
     FileManager.default.createFile(atPath: gate, contents: nil)
     #expect(r.wait(10) { r.typedLines.count == 1 }, "a cold start's pointer is wanted until 120 s: \(r.typedLines)")
   }
@@ -180,7 +210,7 @@ struct PointerOwedTests {
     _ = r.comeBack(ahead: 100)
     #expect(r.wait(10) { r.owed().until == nil }, "a warm worker's pointer outlived 90 s: \(r.owed())")
     r.ownerBackspaces("half a thought".count)
-    usleep(1_200_000)
+    r.ticksPass()
     #expect(r.typedLines.count == 1, "a pointer was typed for a message main has: \(r.typedLines)")
   }
 
@@ -199,7 +229,7 @@ struct PointerOwedTests {
       #expect(r.wait(10) { r.typedLines.count == 1 }, "the owed pointer started its worker: \(r.why("trip"))")
       #expect(r.typedLines.first == line)
     } else {
-      usleep(1_500_000)
+      r.ticksPass()
       #expect(r.starts.isEmpty, "a worker was started for a message main has")
       #expect(r.typedLines.isEmpty)
       #expect(r.wait(5) { r.owed().until == nil })
@@ -215,7 +245,7 @@ struct PointerOwedTests {
      "threads":{"trip":{"state":"parked","tmux":"t-trip","cwd":"\(r.agentDir)"}}}
     """.write(toFile: r.talosHome + "/workers.json", atomically: true, encoding: .utf8)
     _ = r.comeBack()
-    usleep(1_500_000)
+    r.ticksPass()
     #expect(r.starts.isEmpty)
     #expect(r.typedLines.isEmpty)
     #expect(r.state("trip") == "parked")
@@ -254,7 +284,7 @@ struct PointerOwedTests {
     _ = r.comeBack()
     #expect(r.wait(10) { r.typedLines.count == 1 }, "the Enter never went in: \(r.typedLines) \(r.why("trip"))")
     #expect(r.typedLines.first == line, "the text was typed again, or went in with something else: \(r.typedLines)")
-    usleep(800_000)
+    r.ticksPass()
     #expect(r.typedLines.count == 1)
     #expect(r.wait(5) { r.owed().until == nil && r.owed().enter == nil }, "\(r.owed())")
   }
@@ -275,7 +305,7 @@ struct PointerOwedTests {
     _ = r.comeBack(ahead: 400)
     #expect(r.wait(10) { !r.screen().contains(PointerTyper.text) }, "our text is still in the box:\n\(r.screen())")
     #expect(r.wait(5) { r.owed().until == nil && r.owed().enter == nil }, "\(r.owed())")
-    usleep(800_000)
+    r.ticksPass()
     #expect(r.typedLines.isEmpty, "the line went in after the deadline: \(r.typedLines)")
     // the stuck-draft bug: with our text read as the owner's, every later pointer would be held. A new message goes in at once.
     try r.wake("trip")
@@ -303,8 +333,8 @@ struct PointerOwedTests {
     m.tune { $0.draftNoticeAfter = 0.5 }
     #expect(r.wait(10) { m.needsYou()["trip"] == WorkerNotice.draftKind }, "\(m.needsYou())")
     #expect(r.wait(5) { log.all.count == 1 }, "\(log.all)")
-    #expect(log.all.first?.text == WorkerNotice.draftLine(threadName: "trip"))
-    usleep(800_000)
+    #expect(log.all.first?.text == WorkerNotice.draftLine())
+    r.ticksPass()
     #expect(r.typedLines.isEmpty, "Enter went in on the owner's text: \(r.typedLines)")
     #expect(r.screen().contains("\(PointerTyper.text) and my own notes"), "the box was touched:\n\(r.screen())")
     // the owner clears the box: the message is still wanted, so the line is typed again and sent
@@ -333,15 +363,15 @@ struct PointerOwedTests {
     m.tune { $0.draftNoticeAfter = 0.5 }
     #expect(r.wait(10) { m.needsYou()["trip"] == WorkerNotice.leftoverKind }, "\(m.needsYou())")
     #expect(r.wait(5) { log.all.count == 1 }, "\(log.all)")
-    #expect(log.all.first?.text == WorkerNotice.leftoverLine(threadName: "trip"))
-    usleep(800_000)
+    #expect(log.all.first?.text == WorkerNotice.leftoverLine())
+    r.ticksPass()
     #expect(r.typedLines.isEmpty)
     #expect(r.screen().contains("\(PointerTyper.text) and my own notes"), "the owner's text was touched:\n\(r.screen())")
     // the owner clears it themselves: nothing is owed any more, and nothing is typed
     r.ownerBackspaces(PointerTyper.text.count + " and my own notes".count)
     #expect(r.wait(10) { r.owed().until == nil && r.owed().enter == nil }, "\(r.owed())")
     #expect(r.wait(5) { m.needsYou().isEmpty })
-    usleep(500_000)
+    r.ticksPass()
     #expect(r.typedLines.isEmpty, "\(r.typedLines)")
   }
 
@@ -368,8 +398,8 @@ struct PointerOwedTests {
     m.tune { $0.draftNoticeAfter = 0.5 }
     #expect(r.wait(10) { m.needsYou()["trip"] == WorkerNotice.leftoverKind }, "\(m.needsYou())")
     #expect(r.wait(5) { log.all.count == 1 }, "\(log.all)")
-    #expect(log.all.first?.text == WorkerNotice.leftoverLine(threadName: "trip"))
-    usleep(1_500_000)
+    #expect(log.all.first?.text == WorkerNotice.leftoverLine())
+    r.ticksPass()
     #expect(r.screen().contains(PointerTyper.text), "text was cleared with a client attached:\n\(r.screen())")
     #expect(r.typedLines.isEmpty)
     client.terminate()
@@ -430,7 +460,7 @@ struct PointerOwedTests {
     _ = r.comeBack()
     #expect(r.wait(10) { r.typedLines.count == 1 }, "Enter alone went into a box that only showed a dim suggestion: \(r.typedLines) \(r.why("trip"))")
     #expect(r.typedLines.first == line, "\(r.typedLines)")
-    usleep(800_000)
+    r.ticksPass()
     #expect(r.typedLines.count == 1, "typed more than once: \(r.typedLines)")
     #expect(r.wait(5) { r.owed().until == nil && r.owed().enter == nil }, "still owed on disk: \(r.owed())")
   }
@@ -440,14 +470,17 @@ struct PointerOwedTests {
     let (r, gate) = try gated("noBox")
     defer { r.teardown() }
     r.firstCopy("crash").startTicking()
-    try r.wake("trip", at: Date().timeIntervalSince1970 - 300)
+    // a minute old when it is taken, well inside the cold deadline (a wake older than that starts nothing: WorkerPointerDeadlineTests)
+    let at = Date().timeIntervalSince1970 - 60
+    try r.wake("trip", at: at)
     #expect(owedAndOnDisk(r, phase: "noBox"))
     r.appGone("crash")
-    _ = r.comeBack()
+    // 150 s after the hub wrote it: past its 120 s, while a deadline counted from the take (a minute later) would still be ahead
+    _ = r.comeBack(clock: OwedClock(reading: at + 150))
     FileManager.default.createFile(atPath: gate, contents: nil)
     #expect(r.wait(10) { r.up("trip") && r.screen().contains("auto mode") })
     #expect(r.wait(5) { r.owed().until == nil }, "\(r.owed())")
-    usleep(1_200_000)
+    r.ticksPass()
     #expect(r.typedLines.isEmpty, "typed for a message the hub gave to main long ago: \(r.typedLines)")
   }
 
@@ -458,18 +491,20 @@ struct PointerOwedTests {
     let gate = r.root + "/gate"
     r.env["FAKE_RV_ECHO_BOX"] = "1"
     r.env["FAKE_RV_READY_FILE"] = gate
-    let until = ISOTime.string(Date().timeIntervalSince1970 + 3)
+    let until = ISOTime.string(Date().timeIntervalSince1970 + 60)
     try """
     {"v":1,"supervisor":{"pid":1,"heartbeat_at":"2026-10-30T00:00:00.000Z","workers_supported":true,"main_pane_pid":0},
      "threads":{"trip":{"state":"parked","tmux":"t-trip","cwd":"\(r.agentDir)","pointer_owed_until":"\(until)"}}}
     """.write(toFile: r.talosHome + "/workers.json", atomically: true, encoding: .utf8)
-    _ = r.comeBack()
+    let clock = OwedClock()
+    _ = r.comeBack(clock: clock)
     #expect(r.wait(5) { r.state("trip") == "starting" }, "the owed pointer started its worker: \(r.why("trip"))")
-    sleep(4)  // past the deadline, with the start still waiting
+    clock.jump(120)  // past the deadline, with the start still waiting
+    r.ticksPass()
     FileManager.default.createFile(atPath: gate, contents: nil)
     #expect(r.wait(10) { r.up("trip") && r.screen().contains("auto mode") }, "\(r.why("trip"))")
     #expect(r.wait(5) { r.owed().until == nil }, "\(r.owed())")
-    usleep(1_200_000)
+    r.ticksPass()
     #expect(r.typedLines.isEmpty, "typed by a start that ended after the deadline: \(r.typedLines)")
   }
 
@@ -531,7 +566,7 @@ struct PointerOwedTests {
     _ = r.comeBack()
     #expect(r.wait(10) { r.typedLines.count == 1 }, "read as the owner's draft, or typed again: \(r.typedLines)")
     #expect(r.typedLines.first == line, "\(r.typedLines)")
-    usleep(800_000)
+    r.ticksPass()
     #expect(r.typedLines.count == 1)
   }
 

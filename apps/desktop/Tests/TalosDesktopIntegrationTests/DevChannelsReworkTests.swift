@@ -103,7 +103,7 @@ struct DevChannelsReworkTests {
     #expect(r.phase() != .stopped(.user))
   }
 
-  /// A tap on the card is not also a pane Enter: no `human_confirm`, no humanConfirmed event, one seal.
+  /// A tap on the card is not also a pane Enter: no `human_confirm`, no humanConfirmed event, and no seal (only the Mac popup's click seals).
   @Test func aCardPressIsNotAlsoAHumanConfirm() throws {
     let keys = KeyLog()
     defer { keys.remove() }
@@ -114,7 +114,8 @@ struct DevChannelsReworkTests {
     r.start()
     let o = try #require(r.waitForOffer(), "audit: \(r.audit)")
     try r.tap(o, owner: owner, choice: 0, control: "ctl_1")
-    #expect(r.wait(10) { r.sup.tickNow(); return isRunning(r.phase()) && r.config.confirmedLaunchMac != nil }, "\(r.phase())")
+    #expect(r.wait(10) { r.sup.tickNow(); return isRunning(r.phase()) }, "\(r.phase())")
+    #expect(r.config.confirmedLaunchMac == nil)
     for _ in 0..<5 {
       usleep(150_000)
       r.sup.tickNow()

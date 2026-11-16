@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import type { JwkP256T } from '@talos-app/protocol'
 import { newId, newUlid, verifyOwnerFrame } from '@talos-app/protocol'
 import type { Harness } from './harness.ts'
@@ -19,12 +19,12 @@ export async function openSignedIn(
   return dev
 }
 
-export async function waitUntil(cond: () => boolean, what = 'condition', ms = 8000) {
-  const start = Date.now()
-  while (!cond()) {
-    if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`)
-    await new Promise((r) => setTimeout(r, 25))
-  }
+/**
+ * Waits for `cond` for as long as the test may run, with no limit of its own: the fixed 8 s it had ran out on a loaded
+ * machine before WebKit's socket was up, and the spec failed on time, not on the app. A caller can still pass `ms`.
+ */
+export async function waitUntil(cond: () => boolean, what = 'condition', ms?: number) {
+  await expect.poll(cond, { message: `timed out waiting for ${what}`, timeout: ms ?? 0, intervals: [25] }).toBe(true)
 }
 
 export type ReplyOpts = { thread?: string; text?: string; format?: 'markdown' | 'plain'; attachments?: unknown[] }

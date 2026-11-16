@@ -1,0 +1,1676 @@
+diff --git a/.env.example b/.env.example
+index ab968e8a..9fe9a8a8 100644
+--- a/.env.example
++++ b/.env.example
+@@ -99,6 +99,10 @@ ALERT_NTFY_TOKEN=
+ # (whsec_ plus base64). The webhook also needs bug_webhook_url in config.json, set at the Mac. Blank = no webhook.
+ BUG_REPORTS_MAX_MB=500
+ BUG_WEBHOOK_SECRET=
++# Org pages (docs/ORG-PAGES-SPEC.md): the most disk every kept page version may use together (megabytes), and the most pages
++# the relay keeps. Past either a publish is refused (507 pages_full).
++PAGES_MAX_MB=500
++PAGES_MAX=500
+ # Minutes without a sync before the Talos mod counts as quiet.
+ MOD_QUIET_MIN=10
+ # Minimum minutes between two "Mac session stopped" pushes (a laptop that sleeps is normal).
+diff --git a/apps/relay/migrations/core/0016_pages.sql b/apps/relay/migrations/core/0016_pages.sql
+new file mode 100644
+index 00000000..007220fb
+--- /dev/null
++++ b/apps/relay/migrations/core/0016_pages.sql
+@@ -0,0 +1,27 @@
++-- Org pages (docs/ORG-PAGES-SPEC.md). A page is a thread's published HTML; its versions are named by the SHA-256 of their
++-- bytes and kept as encrypted files under DATA_DIR/pages/<page_id>/<hash>.bin (10 at most per page, the oldest dropped). A
++-- share (who, and until when) is stored; nobody but the owner's devices can open a page before viewer sign-in (phase 3).
++create table core_pages (
++  page_id text primary key,             -- pg_<ULID>, minted at the first publish
++  title text not null,
++  thread_id text not null,              -- the thread that published it: only it may add versions
++  created_at integer not null,          -- ms, the relay's clock
++  updated_at integer not null,
++  current_hash text not null
++);
++create index core_pages_updated on core_pages (updated_at);
++create table core_page_versions (
++  page_id text not null references core_pages (page_id) on delete cascade,
++  hash text not null,                   -- sha256 hex of the bytes
++  bytes integer not null,
++  created_at integer not null,
++  primary key (page_id, hash)
++);
++create table core_page_shares (
++  page_id text primary key references core_pages (page_id) on delete cascade,
++  scope text not null,                  -- people | org
++  emails text not null,                 -- JSON array (people); [] for org
++  shared_at integer not null,
++  expires_at integer                    -- null = until the owner unshares
++);
++create index core_page_shares_expires on core_page_shares (expires_at);
+diff --git a/apps/relay/playwright.config.ts b/apps/relay/playwright.config.ts
+index 4a3a8374..987a1bfc 100644
+--- a/apps/relay/playwright.config.ts
++++ b/apps/relay/playwright.config.ts
+@@ -24,5 +24,7 @@ export default defineConfig({
+         launchOptions: { ...(executablePath ? { executablePath } : {}), args: ciChromiumArgs },
+       },
+     },
++    // The sandbox specs run in WebKit too (Safari is the iPhone's engine); the rest are Chromium-only (CDP authenticator).
++    { name: 'webkit', testMatch: ['**/pages-sandbox.spec.ts'], use: { ...devices['Desktop Safari'] } },
+   ],
+ })
+diff --git a/apps/relay/src/core/body-guard.ts b/apps/relay/src/core/body-guard.ts
+index 98c56a7d..ee7843c8 100644
+--- a/apps/relay/src/core/body-guard.ts
++++ b/apps/relay/src/core/body-guard.ts
+@@ -227,7 +227,7 @@ export const DEFAULT_BODY_CAP = 64 * 1024
+ 
+ /**
+  * Routes that carry big bodies and cap them themselves, with their own limit and an identity check in the right order:
+- * media upload (/api/media, /bridge/media), share (/api/share, and /share-target which reads nothing), the Mac's frame post (/bridge/post, 256 KiB) and
++ * media upload (/api/media, /bridge/media), an org page (/bridge/pages, 10 MiB), share (/api/share, and /share-target which reads nothing), the Mac's frame post (/bridge/post, 256 KiB) and
+  * the hook receiver (/hook, 1 MB, read by hand). Everything else gets `DEFAULT_BODY_CAP`.
+  */
+ export function ownsItsBodyCap(pathname: string, method: string): boolean {
+@@ -235,6 +235,7 @@ export function ownsItsBodyCap(pathname: string, method: string): boolean {
+   if (pathname === '/api/dictate') return true
+   if (pathname === '/api/bug-reports') return true
+   if (pathname.startsWith('/bridge/media/')) return true
++  if (pathname === '/bridge/pages') return true
+   if (pathname === '/api/share' && method === 'POST') return true
+   // The share-target POST never reads its body: it answers 303 to the page that explains the share was lost. A capped
+   // 413 here would show the owner bare JSON instead of that page.
+diff --git a/apps/relay/src/core/index.ts b/apps/relay/src/core/index.ts
+index a51dc3bd..6b182f7d 100644
+--- a/apps/relay/src/core/index.ts
++++ b/apps/relay/src/core/index.ts
+@@ -26,6 +26,7 @@ import {
+   NativeGrant,
+   NativeGrantRevoke,
+   type NativeGrantT,
++  PAGE_CSP,
+   PushSubscriptionJson,
+   parseFrame,
+   routes as protocolRoutes,
+@@ -71,8 +72,6 @@ export const routes = new Hono<AppEnv>()
+ const MIB = 1024 * 1024
+ const asBody = (b: Uint8Array): BodyInit => b as unknown as BodyInit
+ const MEDIA_CSP = "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'"
+-const PAGE_CSP =
+-  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:"
+ /** An MCP app page is at most this big (spec M3.5). */
+ const APP_PAGE_MAX_BYTES = 8 * MIB
+ /** Spec M3.5, byte for byte. */
+@@ -634,7 +633,7 @@ routes.get('/media/:id/app', requireSession, (c) => {
+ 
+ type Authed = { keyId: string; body: Uint8Array }
+ 
+-async function bridgeAuth(c: Context<AppEnv>, maxBytes: number): Promise<Authed | Response> {
++export async function bridgeAuth(c: Context<AppEnv>, maxBytes: number): Promise<Authed | Response> {
+   // Header first: a caller who names no trusted key, or a stale time, is turned away before one body byte is read.
+   const pre = preflightBridgeHttp(c)
+   if (!pre.ok) return c.json({ error: 'unauthorized' }, 401)
+diff --git a/apps/relay/src/core/pages-store.ts b/apps/relay/src/core/pages-store.ts
+new file mode 100644
+index 00000000..07b80af8
+--- /dev/null
++++ b/apps/relay/src/core/pages-store.ts
+@@ -0,0 +1,211 @@
++// Org pages' store (docs/ORG-PAGES-SPEC.md): versions named by the SHA-256 of their bytes, kept as encrypted files
++// (DATA_DIR/pages/<page_id>/<hash>.bin), 10 to a page, with the page, version and share rows. No routes here (core/pages.ts),
++// so the runtime's sweeper can use it without importing the HTTP layer.
++import { createHash } from 'node:crypto'
++import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
++import { join } from 'node:path'
++import {
++  newId,
++  PAGE_LIMITS,
++  PageId,
++  type PageInfoT,
++  type PagePublishQueryT,
++  type PageShareT,
++} from '@talos-app/protocol'
++import type Database from 'better-sqlite3'
++import type { Clock, CryptoService } from '../services.ts'
++
++// ---- storage ----------------------------------------------------------------------------------------------------------
++
++export type Deps = { db: Database.Database; crypto: CryptoService; clock: Clock; dataDir: string }
++export type Caps = { maxBytes: number; maxPages: number }
++
++const rootOf = (dataDir: string) => join(dataDir, 'pages')
++const dirOf = (dataDir: string, id: string) => join(rootOf(dataDir), id)
++const fileOf = (dataDir: string, id: string, hash: string) => join(dirOf(dataDir, id), `${hash}.bin`)
++const aad = (id: string, hash: string) => `page:${id}:${hash}`
++
++type PageRow = {
++  page_id: string
++  title: string
++  thread_id: string
++  created_at: number
++  updated_at: number
++  current_hash: string
++}
++type VersionRow = { hash: string; bytes: number; created_at: number }
++type ShareRow = { scope: 'people' | 'org'; emails: string; shared_at: number; expires_at: number | null }
++
++const iso = (ms: number) => new Date(ms).toISOString()
++export const pageRow = (db: Database.Database, id: string) =>
++  db.prepare('select * from core_pages where page_id = ?').get(id) as PageRow | undefined
++/** Newest first. */
++const versionRows = (db: Database.Database, id: string) =>
++  db
++    .prepare(
++      'select hash, bytes, created_at from core_page_versions where page_id = ? order by created_at desc, rowid desc',
++    )
++    .all(id) as VersionRow[]
++
++/** Bytes every kept version uses (as published; the encrypted files are a few bytes more). */
++export function pagesBytes(d: Pick<Deps, 'db'>): number {
++  return (d.db.prepare('select coalesce(sum(bytes), 0) as n from core_page_versions').get() as { n: number }).n
++}
++
++function pageCount(db: Database.Database): number {
++  return (db.prepare('select count(*) as n from core_pages').get() as { n: number }).n
++}
++
++function shareOf(db: Database.Database, id: string): PageShareT | null {
++  const s = db.prepare('select * from core_page_shares where page_id = ?').get(id) as ShareRow | undefined
++  if (!s) return null
++  return {
++    scope: s.scope,
++    emails: JSON.parse(s.emails) as string[],
++    shared_at: iso(s.shared_at),
++    expires_at: s.expires_at === null ? null : iso(s.expires_at),
++  }
++}
++
++export function pageInfo(db: Database.Database, id: string): PageInfoT | null {
++  const p = pageRow(db, id)
++  if (!p) return null
++  return {
++    id: p.page_id,
++    title: p.title,
++    thread_id: p.thread_id,
++    created_at: iso(p.created_at),
++    updated_at: iso(p.updated_at),
++    current: p.current_hash,
++    versions: versionRows(db, id).map((v) => ({ hash: v.hash, bytes: v.bytes, at: iso(v.created_at) })),
++    share: shareOf(db, id),
++  }
++}
++
++function writeAtomic(path: string, bytes: Uint8Array): void {
++  const tmp = `${path}.tmp`
++  writeFileSync(tmp, bytes, { mode: 0o600 })
++  renameSync(tmp, path)
++}
++
++export type Published =
++  | { kind: 'ok'; status: 200 | 201; page_id: string; version: string; unchanged: boolean }
++  | { kind: 'not_found' }
++  | { kind: 'full' }
++
++/**
++ * One publish. A new page, or (with `page_id`) a version of a page THIS thread published; the same bytes as a kept version add
++ * nothing (that version becomes current again). The file is written first, then the rows in one transaction; a failed
++ * transaction removes the file again. Past the caps (counted after the oldest version a full page drops) nothing is written.
++ */
++export function publishPage(d: Deps, q: PagePublishQueryT, html: Uint8Array, caps: Caps): Published {
++  const hash = createHash('sha256').update(html).digest('hex')
++  const now = d.clock.now()
++  if (q.page_id !== undefined) {
++    const p = pageRow(d.db, q.page_id)
++    // another thread's page and no page at all look the same
++    if (!p || p.thread_id !== q.thread_id) return { kind: 'not_found' }
++    const kept = versionRows(d.db, p.page_id)
++    if (kept.some((v) => v.hash === hash)) {
++      d.db
++        .prepare('update core_pages set current_hash = ?, title = ?, updated_at = ? where page_id = ?')
++        .run(hash, q.title, now, p.page_id)
++      return { kind: 'ok', status: 200, page_id: p.page_id, version: hash, unchanged: true }
++    }
++    // the version a full page drops to make room: the oldest one that is not current
++    const drop =
++      kept.length >= PAGE_LIMITS.versionsPerPage
++        ? [...kept].reverse().find((v) => v.hash !== p.current_hash)
++        : undefined
++    if (pagesBytes(d) - (drop?.bytes ?? 0) + html.length > caps.maxBytes) return { kind: 'full' }
++    mkdirSync(dirOf(d.dataDir, p.page_id), { recursive: true, mode: 0o700 })
++    const path = fileOf(d.dataDir, p.page_id, hash)
++    writeAtomic(path, d.crypto.encrypt(html, aad(p.page_id, hash)))
++    try {
++      d.db.transaction(() => {
++        d.db
++          .prepare('insert into core_page_versions (page_id, hash, bytes, created_at) values (?, ?, ?, ?)')
++          .run(p.page_id, hash, html.length, now)
++        d.db
++          .prepare('update core_pages set current_hash = ?, title = ?, updated_at = ? where page_id = ?')
++          .run(hash, q.title, now, p.page_id)
++        if (drop)
++          d.db.prepare('delete from core_page_versions where page_id = ? and hash = ?').run(p.page_id, drop.hash)
++      })()
++    } catch (e) {
++      rmSync(path, { force: true })
++      throw e
++    }
++    if (drop) rmSync(fileOf(d.dataDir, p.page_id, drop.hash), { force: true })
++    return { kind: 'ok', status: 201, page_id: p.page_id, version: hash, unchanged: false }
++  }
++  if (pageCount(d.db) >= caps.maxPages || pagesBytes(d) + html.length > caps.maxBytes) return { kind: 'full' }
++  const id = newId('pg')
++  mkdirSync(dirOf(d.dataDir, id), { recursive: true, mode: 0o700 })
++  const path = fileOf(d.dataDir, id, hash)
++  writeAtomic(path, d.crypto.encrypt(html, aad(id, hash)))
++  try {
++    d.db.transaction(() => {
++      d.db
++        .prepare(
++          'insert into core_pages (page_id, title, thread_id, created_at, updated_at, current_hash) values (?, ?, ?, ?, ?, ?)',
++        )
++        .run(id, q.title, q.thread_id, now, now, hash)
++      d.db
++        .prepare('insert into core_page_versions (page_id, hash, bytes, created_at) values (?, ?, ?, ?)')
++        .run(id, hash, html.length, now)
++    })()
++  } catch (e) {
++    rmSync(dirOf(d.dataDir, id), { recursive: true, force: true })
++    throw e
++  }
++  return { kind: 'ok', status: 201, page_id: id, version: hash, unchanged: false }
++}
++
++/** The bytes of a kept version of a page, or null (no such page, no such version, or its file is gone). */
++export function readVersion(d: Deps, id: string, hash: string): Uint8Array | null {
++  const kept = d.db.prepare('select 1 from core_page_versions where page_id = ? and hash = ?').get(id, hash)
++  if (!kept) return null
++  try {
++    return d.crypto.decrypt(readFileSync(fileOf(d.dataDir, id, hash)), aad(id, hash))
++  } catch {
++    return null
++  }
++}
++
++export function deletePage(d: Deps, id: string): void {
++  d.db.prepare('delete from core_pages where page_id = ?').run(id) // versions and share go with it (on delete cascade)
++  rmSync(dirOf(d.dataDir, id), { recursive: true, force: true })
++}
++
++/**
++ * Ends every share past its end (the page stays), and removes files no row names: a page folder with no page, a version file
++ * with no version, a temp file left by a crash. Returns how many shares ended and how many files went.
++ */
++export function sweepPages(d: Pick<Deps, 'db' | 'clock' | 'dataDir'>): { sharesEnded: number; orphans: number } {
++  const ended = d.db
++    .prepare('delete from core_page_shares where expires_at is not null and expires_at <= ?')
++    .run(d.clock.now()).changes
++  let orphans = 0
++  const root = rootOf(d.dataDir)
++  if (existsSync(root)) {
++    for (const id of readdirSync(root)) {
++      const dir = join(root, id)
++      // a stray file beside the page folders (a crash's temp file, say) goes too, and never stops the sweep
++      if (!statSync(dir).isDirectory()) {
++        rmSync(dir, { force: true })
++        orphans++
++        continue
++      }
++      const known = PageId.safeParse(id).success && pageRow(d.db, id) !== undefined
++      const keep = new Set(known ? versionRows(d.db, id).map((v) => `${v.hash}.bin`) : [])
++      for (const f of readdirSync(dir)) {
++        if (keep.has(f)) continue
++        rmSync(join(dir, f), { force: true })
++        orphans++
++      }
++      if (!known) rmSync(dir, { recursive: true, force: true })
++    }
++  }
++  return { sharesEnded: ended, orphans }
++}
+diff --git a/apps/relay/src/core/pages.ts b/apps/relay/src/core/pages.ts
+new file mode 100644
+index 00000000..aceffa5d
+--- /dev/null
++++ b/apps/relay/src/core/pages.ts
+@@ -0,0 +1,262 @@
++// Org pages, phase 1 (docs/ORG-PAGES-SPEC.md, "Owner decisions" last): the routes. The bridge publishes a thread's HTML,
++// signed with its key; the store (core/pages-store.ts) keeps it versioned past the 7-day media buffer, under the relay-wide
++// caps (PAGES_MAX_MB, PAGES_MAX: 507 pages_full). The page is served to the owner's own logged-in devices only, under the
++// page policy every agent page runs in (PAGE_CSP: sandboxed, opaque origin, no network). A share (scope, who, until when) is
++// stored and ended by the sweeper, but no one else can open a page before viewer sign-in (phase 3). The agent never shares:
++// share, unshare, restore and delete are owner frames signed by the device key, fresh and single use, as bug reports are.
++import {
++  APNS_REGISTRATION_SKEW_MS,
++  appCsp,
++  PAGE_CSP,
++  PAGE_LIMITS,
++  PAGE_SANDBOX_ATTR,
++  PAGES_FULL,
++  PageHash,
++  PageId,
++  type PageInfoT,
++  PageOwnerAction,
++  type PageOwnerActionT,
++  PagePublishQuery,
++  ThreadId,
++  verifyOwnerFrame,
++} from '@talos-app/protocol'
++import type { Context } from 'hono'
++import { Hono } from 'hono'
++import { getSession, requireCsrf, requireSession } from '../auth/contract.ts'
++import type { AppEnv } from '../services.ts'
++import { bodyTimeout, idleBodyTimeout, lateRequest, limitBody, readBodyWithDeadline } from './body-guard.ts'
++import { bridgeAuth } from './index.ts'
++import { type Deps, deletePage, pageInfo, pageRow, pagesBytes, publishPage, readVersion } from './pages-store.ts'
++
++const DAY_MS = 86_400_000
++/** An owner action is a small signed object; anything bigger is not one. */
++const ACTION_MAX_BYTES = 64 * 1024
++/** Every /p response that is not the page itself (401, 404) is never rendered as a page. */
++const ERROR_CSP = "sandbox; default-src 'none'"
++
++// ---- routes -----------------------------------------------------------------------------------------------------------
++
++export const pageRoutes = new Hono<AppEnv>()
++
++const deps = (c: Context<AppEnv>): Deps => {
++  const s = c.get('services')
++  return { db: s.db, crypto: s.crypto, clock: s.clock, dataDir: s.env.DATA_DIR }
++}
++/** Missing, malformed, another thread's or not kept: one answer, so none can be told from the others. */
++const notFound = (c: Context<AppEnv>) => c.json({ error: 'not_found' }, 404, { 'Cache-Control': 'no-store' })
++
++pageRoutes.use('/p/*', async (c, next) => {
++  await next()
++  if (!c.res.headers.has('Content-Security-Policy')) c.res.headers.set('Content-Security-Policy', ERROR_CSP)
++})
++
++// The bridge publishes (create, or a new version). The query is part of the signed path, so the thread and title are the Mac's.
++// /bridge/* reads the whole body before it can verify the signature: a fixed deadline, never an idle one (the bridge's own
++// upload deadline for 10 MiB is 15 s + 2 s per MB).
++const publishBodyGuard = [limitBody(() => PAGE_LIMITS.versionBytes), bodyTimeout(40_000)] as const
++
++pageRoutes.post('/bridge/pages', ...publishBodyGuard, async (c) => {
++  const auth = await bridgeAuth(c, PAGE_LIMITS.versionBytes)
++  if (auth instanceof Response) return auth
++  // the deadline passed while the body was read or the signature checked: the bridge was told 408, so nothing is stored
++  if (lateRequest(c)) return c.json({ error: 'request_timeout' }, 408)
++  const url = new URL(c.req.url)
++  const parsed = PagePublishQuery.safeParse(Object.fromEntries(url.searchParams))
++  if (!parsed.success || url.searchParams.getAll('title').length !== 1) return c.json({ error: 'bad_request' }, 400)
++  const html = auth.body
++  if (html.length === 0) return c.json({ error: 'bad_html' }, 400)
++  try {
++    new TextDecoder('utf-8', { fatal: true }).decode(html)
++  } catch {
++    return c.json({ error: 'bad_html' }, 400)
++  }
++  const env = c.get('services').env
++  const out = publishPage(deps(c), parsed.data, html, {
++    maxBytes: env.PAGES_MAX_MB * 1024 * 1024,
++    maxPages: env.PAGES_MAX,
++  })
++  if (out.kind === 'not_found') return notFound(c)
++  if (out.kind === 'full') return c.json(PAGES_FULL, 507)
++  return c.json(
++    {
++      page_id: out.page_id,
++      version: out.version,
++      unchanged: out.unchanged,
++      owner_url: `${env.PUBLIC_ORIGIN}/p/${out.page_id}`,
++    },
++    out.status,
++  )
++})
++
++pageRoutes.get('/api/pages', requireSession, (c) => {
++  const s = c.get('services')
++  // ?thread=<id>: one thread's pages only (a thread's Pages pane); none = every page
++  const thread = c.req.query('thread')
++  if (thread !== undefined && !ThreadId.safeParse(thread).success) return c.json({ error: 'bad_request' }, 400)
++  const ids = (
++    thread === undefined
++      ? s.db.prepare('select page_id from core_pages order by updated_at desc, page_id desc').all()
++      : s.db
++          .prepare('select page_id from core_pages where thread_id = ? order by updated_at desc, page_id desc')
++          .all(thread)
++  ) as { page_id: string }[]
++  return c.json({
++    pages: ids.map((r) => pageInfo(s.db, r.page_id)).filter((p): p is PageInfoT => p !== null),
++    used_bytes: pagesBytes(s),
++    max_bytes: s.env.PAGES_MAX_MB * 1024 * 1024,
++    max_pages: s.env.PAGES_MAX,
++  })
++})
++
++pageRoutes.get('/api/pages/:id', requireSession, (c) => {
++  const id = c.req.param('id')
++  const info = PageId.safeParse(id).success ? pageInfo(c.get('services').db, id) : null
++  return info ? c.json(info) : notFound(c)
++})
++
++type ActionType = PageOwnerActionT['type']
++
++/**
++ * A device-signed owner change, checked as the bug-report route checks its report: the session's own pinned, un-revoked
++ * device signed it, it is fresh, it names the page in the path and an action this route takes, and its nonce is used once.
++ */
++async function ownerAction(c: Context<AppEnv>, want: ActionType): Promise<PageOwnerActionT | Response> {
++  const services = c.get('services')
++  const read = await readBodyWithDeadline(c, ACTION_MAX_BYTES)
++  if (lateRequest(c) || (!read.ok && read.why === 'timeout')) return c.json({ error: 'request_timeout' }, 408)
++  if (!read.ok) return c.json({ error: 'too_large' }, 413)
++  let raw: unknown
++  try {
++    raw = JSON.parse(new TextDecoder().decode(read.body))
++  } catch {
++    return c.json({ error: 'bad_request' }, 400)
++  }
++  const parsed = PageOwnerAction.safeParse(raw)
++  if (!parsed.success || parsed.data.type !== want || parsed.data.page_id !== c.req.param('id'))
++    return c.json({ error: 'bad_request' }, 400)
++  const a = parsed.data
++  const session = getSession(c)
++  if (!session?.deviceId || session.deviceId !== a.device_id) return c.json({ error: 'wrong_device' }, 403)
++  const row = services.db
++    .prepare('select pubkey_jwk from auth_devices where id = ? and pinned = 1 and revoked = 0')
++    .get(a.device_id) as { pubkey_jwk: string } | undefined
++  let jwk: unknown = null
++  try {
++    jwk = row ? JSON.parse(row.pubkey_jwk) : null
++  } catch {
++    jwk = null
++  }
++  if (!row || jwk === null || typeof jwk !== 'object') return c.json({ error: 'bad_signature' }, 401)
++  if (!(await verifyOwnerFrame(raw as Record<string, unknown>, jwk as never)))
++    return c.json({ error: 'bad_signature' }, 401)
++  const now = services.clock.now()
++  if (Math.abs(Date.parse(a.ts) - now) > APNS_REGISTRATION_SKEW_MS) return c.json({ error: 'stale' }, 400)
++  if (!pageRow(services.db, a.page_id)) return notFound(c)
++  const burned = services.db.transaction(() => {
++    services.db.prepare('delete from core_push_nonces where expires_at <= ?').run(now)
++    return services.db
++      .prepare('insert or ignore into core_push_nonces (nonce_key, expires_at) values (?, ?)')
++      .run(`page:${a.device_id}:${a.nonce}`, now + 2 * APNS_REGISTRATION_SKEW_MS).changes
++  })()
++  if (burned === 0) return c.json({ error: 'replay' }, 409)
++  return a
++}
++
++const actionGuard = [
++  limitBody(() => ACTION_MAX_BYTES),
++  idleBodyTimeout(undefined, undefined, { stopWhenBodyIn: true }),
++  requireSession,
++  requireCsrf,
++] as const
++
++pageRoutes.post('/api/pages/:id/share', ...actionGuard, async (c) => {
++  const a = await ownerAction(c, 'page.share')
++  if (a instanceof Response) return a
++  if (a.type !== 'page.share') return c.json({ error: 'bad_request' }, 400)
++  const s = c.get('services')
++  const now = s.clock.now()
++  const expires =
++    a.expires_at === undefined
++      ? now + PAGE_LIMITS.shareDefaultDays * DAY_MS
++      : a.expires_at === null
++        ? null
++        : Date.parse(a.expires_at)
++  if (expires !== null && expires <= now) return c.json({ error: 'bad_request' }, 400)
++  s.db
++    .prepare(
++      'insert into core_page_shares (page_id, scope, emails, shared_at, expires_at) values (?, ?, ?, ?, ?) on conflict (page_id) do update set scope = excluded.scope, emails = excluded.emails, shared_at = excluded.shared_at, expires_at = excluded.expires_at',
++    )
++    .run(a.page_id, a.scope, JSON.stringify(a.scope === 'org' ? [] : a.emails), now, expires)
++  return c.json(pageInfo(s.db, a.page_id))
++})
++
++pageRoutes.post('/api/pages/:id/unshare', ...actionGuard, async (c) => {
++  const a = await ownerAction(c, 'page.unshare')
++  if (a instanceof Response) return a
++  const s = c.get('services')
++  s.db.prepare('delete from core_page_shares where page_id = ?').run(a.page_id)
++  return c.json(pageInfo(s.db, a.page_id))
++})
++
++pageRoutes.post('/api/pages/:id/current', ...actionGuard, async (c) => {
++  const a = await ownerAction(c, 'page.current')
++  if (a instanceof Response) return a
++  if (a.type !== 'page.current') return c.json({ error: 'bad_request' }, 400)
++  const s = c.get('services')
++  const kept = s.db.prepare('select 1 from core_page_versions where page_id = ? and hash = ?').get(a.page_id, a.hash)
++  if (!kept) return notFound(c)
++  s.db
++    .prepare('update core_pages set current_hash = ?, updated_at = ? where page_id = ?')
++    .run(a.hash, s.clock.now(), a.page_id)
++  return c.json(pageInfo(s.db, a.page_id))
++})
++
++pageRoutes.delete('/api/pages/:id', ...actionGuard, async (c) => {
++  const a = await ownerAction(c, 'page.delete')
++  if (a instanceof Response) return a
++  deletePage(deps(c), a.page_id)
++  return c.body(null, 204)
++})
++
++const escapeHtml = (t: string) =>
++  t.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch] as string)
++
++// The page's link: a small trusted page under the app's own policy that frames the page. Its `frame-src 'self'` is what
++// stops the page from navigating itself to another site (PAGE_CSP cannot); it holds no script and no owner data. Phase 1:
++// the owner's session only (the viewer shell, its banner and sign-in are phase 3).
++pageRoutes.get('/p/:id', requireSession, (c) => {
++  const id = c.req.param('id')
++  const p = PageId.safeParse(id).success ? pageRow(c.get('services').db, id) : undefined
++  if (!p) return notFound(c)
++  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><title>${escapeHtml(p.title)}</title></head><body style="margin:0"><iframe src="/p/${id}/frame" sandbox="${PAGE_SANDBOX_ATTR}" referrerpolicy="no-referrer" title="${escapeHtml(p.title)}" style="position:fixed;inset:0;width:100%;height:100%;border:0"></iframe></body></html>`
++  return c.body(html, 200, {
++    'Content-Type': 'text/html; charset=utf-8',
++    'Content-Security-Policy': appCsp(c.get('services').env.PUBLIC_ORIGIN),
++    'Cache-Control': 'private, no-store',
++  })
++})
++
++// The page bytes, under the page policy: sandboxed, opaque origin, no network. The current version, or ?v=<a kept hash>.
++pageRoutes.get('/p/:id/frame', requireSession, (c) => {
++  const id = c.req.param('id')
++  const d = deps(c)
++  // only ever inside a frame (the link's wrapper, the app's SandboxedFrame): at the top it could navigate itself anywhere
++  if (c.req.header('sec-fetch-dest') === 'document') return notFound(c)
++  if (!PageId.safeParse(id).success) return notFound(c)
++  const p = pageRow(d.db, id)
++  const v = c.req.query('v')
++  const hash = v === undefined ? p?.current_hash : PageHash.safeParse(v).success ? v : undefined
++  const bytes = p && hash ? readVersion(d, id, hash) : null
++  if (!bytes) return notFound(c)
++  return new Response(new Uint8Array(bytes), {
++    status: 200,
++    headers: {
++      'Content-Type': 'text/html; charset=utf-8',
++      'Content-Security-Policy': PAGE_CSP,
++      'X-Content-Type-Options': 'nosniff',
++      'Referrer-Policy': 'no-referrer',
++      'Cross-Origin-Resource-Policy': 'same-origin',
++      'Cache-Control': 'private, no-store',
++    },
++  })
++})
+diff --git a/apps/relay/src/core/runtime.ts b/apps/relay/src/core/runtime.ts
+index f5b8759c..16b37a60 100644
+--- a/apps/relay/src/core/runtime.ts
++++ b/apps/relay/src/core/runtime.ts
+@@ -14,6 +14,7 @@ import { HealthWatch } from './health.ts'
+ import { Hub } from './hub.ts'
+ import { createLogger } from './log.ts'
+ import { FileMediaStore } from './media.ts'
++import { pagesBytes, sweepPages } from './pages-store.ts'
+ import { CorePush, createWebPushTransport, NoopTransport } from './push.ts'
+ import { type ApnsSender, apnsConfigFromEnv, createApnsSender } from './push-apns.ts'
+ import { QuietSummary } from './quiet-summary.ts'
+@@ -139,7 +140,11 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
+     bus: hub,
+     push,
+     config: () => hub.agentConfig(),
+-    storageBytes: () => store.totalMediaBytes() + fileSize(join(env.DATA_DIR, 'relay.sqlite')) + bugReportBytes({ db }),
++    storageBytes: () =>
++      store.totalMediaBytes() +
++      fileSize(join(env.DATA_DIR, 'relay.sqlite')) +
++      bugReportBytes({ db }) +
++      pagesBytes({ db }),
+   })
+ 
+   // Never-miss timers (owner calls O2, O7). They use the injected clock and are stopped by `stop()` below, so nothing
+@@ -171,7 +176,7 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
+   }
+   let lastCapWarn = 0
+   const volumeBytes = () =>
+-    store.totalMediaBytes() + fileSize(join(env.DATA_DIR, 'relay.sqlite')) + bugReportBytes({ db })
++    store.totalMediaBytes() + fileSize(join(env.DATA_DIR, 'relay.sqlite')) + bugReportBytes({ db }) + pagesBytes({ db })
+   const runSweep = () => {
+     try {
+       hub.sweep()
+@@ -182,6 +187,13 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
+       } catch (e) {
+         log.error({ err: e instanceof Error ? e.name : 'error' }, 'bug report retention sweep failed')
+       }
++      // org pages: shares past their end, and files no row names; its own guard like the reports'
++      try {
++        const swept = sweepPages({ db, clock, dataDir: env.DATA_DIR })
++        if (swept.sharesEnded + swept.orphans > 0) log.info(swept, 'org page sweep')
++      } catch (e) {
++        log.error({ err: e instanceof Error ? e.name : 'error' }, 'org page sweep failed')
++      }
+       const bytes = volumeBytes()
+       if (bytes > env.VOLUME_SOFT_CAP_MB * 1024 * 1024 && clock.now() - lastCapWarn > 86_400_000) {
+         lastCapWarn = clock.now()
+diff --git a/apps/relay/src/env.ts b/apps/relay/src/env.ts
+index 6b135eb8..e680b370 100644
+--- a/apps/relay/src/env.ts
++++ b/apps/relay/src/env.ts
+@@ -100,6 +100,10 @@ const base = z.object({
+   ALERT_NTFY_TOKEN: z.string().min(1).optional(),
+   /** Megabytes all kept bug reports may use together; a new report past it is refused (507). Reports also expire after 90 days. */
+   BUG_REPORTS_MAX_MB: int(500, 1, 100_000),
++  /** Megabytes every kept org-page version may use together; a publish past it is refused (507 pages_full). */
++  PAGES_MAX_MB: int(500, 1, 100_000),
++  /** Org pages the relay keeps at most; a new page past it is refused (507 pages_full). Versions of a kept page still go in. */
++  PAGES_MAX: int(500, 1, 100_000),
+   /**
+    * Signs the bug-report webhook (Standard Webhooks): `whsec_` plus base64. The webhook is off unless this is set AND the
+    * owner put a URL in config.json (`bug_webhook_url`, set at the Mac). Without it no report is ever sent anywhere.
+diff --git a/apps/relay/src/route-table.ts b/apps/relay/src/route-table.ts
+index 979bc121..a2503d55 100644
+--- a/apps/relay/src/route-table.ts
++++ b/apps/relay/src/route-table.ts
+@@ -1,4 +1,4 @@
+-// Default-deny for the guarded URL spaces. Every route a module registers under /api, /bridge, /hook, /media or /.well-known
++// Default-deny for the guarded URL spaces. Every route a module registers under /api, /bridge, /hook, /media, /p (org pages) or /.well-known
+ // must appear in the protocol's route table (`packages/protocol/src/http.ts`, spec 3.8) with the same method and path.
+ // `buildApp` runs this at boot, so a route added without a table entry (and therefore without a declared auth mode)
+ // stops the relay from starting instead of shipping open.
+@@ -6,7 +6,7 @@ import { ROUTE_LIST } from '@talos-app/protocol'
+ import type { Hono } from 'hono'
+ import type { AppEnv } from './services.ts'
+ 
+-const GUARDED = /^\/(api|bridge|hook|media|\.well-known)(\/|$)/
++const GUARDED = /^\/(api|bridge|hook|media|p|\.well-known)(\/|$)/
+ const norm = (p: string) => p.replace(/:[A-Za-z_]+/g, ':p')
+ 
+ /** Guarded routes the app registers that the route table does not list, as "METHOD /path". Empty = default-deny holds. */
+diff --git a/apps/relay/src/v2/index.ts b/apps/relay/src/v2/index.ts
+index bc0c1dc9..c84d6716 100644
+--- a/apps/relay/src/v2/index.ts
++++ b/apps/relay/src/v2/index.ts
+@@ -5,6 +5,7 @@
+ import { Hono } from 'hono'
+ import { requireCsrf, requireSession } from '../auth/contract.ts'
+ import { bugReportRoutes } from '../core/bug-reports.ts'
++import { pageRoutes } from '../core/pages.ts'
+ import { problemRoutes } from '../core/problems.ts'
+ import { runtimeOf } from '../core/runtime.ts'
+ import { shareRoutes } from '../core/share.ts'
+@@ -34,3 +35,6 @@ routes.route('/', problemRoutes)
+ 
+ // In-app bug reports: core/bug-reports.ts
+ routes.route('/', bugReportRoutes)
++
++// Org pages, phase 1 (docs/ORG-PAGES-SPEC.md): core/pages.ts
++routes.route('/', pageRoutes)
+diff --git a/apps/relay/test/core/pages-sandbox.spec.ts b/apps/relay/test/core/pages-sandbox.spec.ts
+new file mode 100644
+index 00000000..02c4650e
+--- /dev/null
++++ b/apps/relay/test/core/pages-sandbox.spec.ts
+@@ -0,0 +1,129 @@
++// Org pages, phase 1 (docs/ORG-PAGES-SPEC.md, "Tests"): a published page, shown in its frame the way the app shows it
++// (sandbox = PAGE_SANDBOX_ATTR, under PAGE_CSP), runs its own script, but every way out fails: fetch, a form, a popup and top
++// navigation, and it cannot read the Talos cookie. Run in Chromium and WebKit (playwright.config.ts).
++import { expect, test } from '@playwright/test'
++import { PAGE_SANDBOX_ATTR } from '@talos-app/protocol'
++import { startTestRelay, type TestRelay } from './harness.ts'
++import { bridgeFetch } from './helpers.ts'
++
++let relay: TestRelay
++
++test.beforeAll(async () => {
++  relay = await startTestRelay()
++})
++test.afterAll(async () => {
++  await relay.stop()
++})
++
++const TRAP = '/api/pages?escaped=1'
++
++async function publish(html: string): Promise<string> {
++  const res = await bridgeFetch(
++    relay,
++    'POST',
++    `/bridge/pages?thread_id=trip&title=${encodeURIComponent('Sandbox check')}`,
++    new TextEncoder().encode(html),
++    { 'content-type': 'text/html; charset=utf-8' },
++  )
++  expect(res.status).toBe(201)
++  return ((await res.json()) as { page_id: string }).page_id
++}
++
++test.describe('an org page in its frame', () => {
++  test.beforeEach(async ({ context }) => {
++    await context.setExtraHTTPHeaders({ 'X-Test-Session': 'none' })
++    await context.addCookies([{ name: 'talos_s', value: 'top-secret-session', url: relay.httpBase }])
++  })
++
++  test('runs its own script, but fetch, a form, a popup and top navigation all fail, and the cookie is unreadable', async ({
++    page,
++    context,
++  }) => {
++    const script = `
++      const out = {}
++      try { out.cookie = 'read:' + document.cookie } catch (e) { out.cookie = e.name }
++      try { const w = window.open('${TRAP}&via=popup'); out.popup = w ? 'opened' : 'blocked' } catch (e) { out.popup = e.name }
++      try {
++        const f = document.createElement('form')
++        f.action = '${TRAP}&via=form'
++        f.method = 'post'
++        document.body.append(f)
++        f.submit()
++        out.form = 'tried'
++      } catch (e) { out.form = e.name }
++      try { top.location.href = '${TRAP}&via=top'; out.top = 'tried' } catch (e) { out.top = e.name }
++      fetch('${TRAP}&via=fetch')
++        .then((r) => { out.fetch = 'status:' + r.status })
++        .catch((e) => { out.fetch = e.name })
++        .finally(() => { document.title = JSON.stringify(out) })`
++    const id = await publish(`<!doctype html><title>start</title><body><script>${script}</script></body>`)
++    // what reached the relay, and every window that opened
++    const escaped: string[] = []
++    page.on('request', (r) => {
++      if (r.url().includes('escaped=1')) escaped.push(r.url())
++    })
++    const popups: string[] = []
++    context.on('page', (p) => popups.push(p.url()))
++    // the host: a page of the relay's own origin framing the page as the app does
++    const host = `${relay.httpBase}/host-${id}`
++    await page.route(host, (route) =>
++      route.fulfill({
++        contentType: 'text/html',
++        body: `<!doctype html><title>host</title><iframe sandbox="${PAGE_SANDBOX_ATTR}" referrerpolicy="no-referrer" src="/p/${id}/frame"></iframe>`,
++      }),
++    )
++    await page.goto(host)
++    const frame = () => page.frames().find((f) => f.url().includes(`/p/${id}/frame`))
++    await expect.poll(async () => (await frame()?.title()) ?? '', { timeout: 15_000 }).toContain('{')
++    const out = JSON.parse((await frame()?.title()) ?? '{}') as Record<string, string>
++    // it ran (the title is its own), in an opaque origin
++    expect(out.cookie).toBe('SecurityError')
++    // no connect-src: the request never leaves the page
++    expect(out.fetch).not.toMatch(/^status:/)
++    // a moment for anything that was going to happen anyway
++    await page.waitForTimeout(1_500)
++    expect(escaped).toEqual([])
++    expect(popups).toEqual([])
++    expect(page.url()).toBe(host)
++    expect(frame()?.url()).toContain(`/p/${id}/frame`)
++  })
++
++  test('opened by its link, a page that navigates itself to another site stays put (the wrapper’s frame-src)', async ({
++    page,
++  }) => {
++    const id = await publish(
++      `<!doctype html><title>start</title><script>
++        setTimeout(() => { location.href = 'http://escape.invalid/?d=' + encodeURIComponent('typed') }, 50)
++        setTimeout(() => { document.title = 'still-here' }, 300)
++      </script>`,
++    )
++    const out: string[] = []
++    page.on('request', (r) => {
++      if (r.url().includes('escape.invalid')) out.push(r.url())
++    })
++    await page.goto(`${relay.httpBase}/p/${id}`)
++    await page.waitForTimeout(1_500)
++    const frame = page.frames().find((f) => f.url().includes(`/p/${id}/frame`))
++    expect(out).toEqual([])
++    expect(page.url()).toBe(`${relay.httpBase}/p/${id}`)
++    // the frame never left (or was stopped before it did): no outside page ever loaded in it
++    expect(page.frames().some((f) => f.url().includes('escape.invalid'))).toBe(false)
++    expect(frame === undefined || !frame.url().includes('escape.invalid')).toBe(true)
++  })
++
++  test('the frame opened top-level is refused: it only ever runs inside a frame', async ({ page }) => {
++    const id = await publish('<!doctype html><title>bare</title><p>x</p>')
++    const res = await page.goto(`${relay.httpBase}/p/${id}/frame`)
++    expect(res?.status()).toBe(404)
++    expect(await page.title()).not.toBe('bare')
++  })
++
++  test('the frame response says the page policy, private, never cached', async ({ request }) => {
++    const id = await publish('<!doctype html><p>x</p>')
++    const res = await request.get(`${relay.httpBase}/p/${id}/frame`, { headers: { 'X-Test-Session': 'none' } })
++    expect(res.status()).toBe(200)
++    expect(res.headers()['content-security-policy']).toMatch(/^sandbox allow-scripts; default-src 'none';/)
++    expect(res.headers()['content-security-policy']).not.toMatch(/connect-src/)
++    expect(res.headers()['cache-control']).toBe('private, no-store')
++  })
++})
+diff --git a/apps/relay/test/core/pages.test.ts b/apps/relay/test/core/pages.test.ts
+new file mode 100644
+index 00000000..f96193a2
+--- /dev/null
++++ b/apps/relay/test/core/pages.test.ts
+@@ -0,0 +1,416 @@
++// Org pages, phase 1, against the REAL relay (docs/ORG-PAGES-SPEC.md): only the bridge's signature publishes; versions are
++// named by their bytes and capped at 10; the store's caps answer 507 pages_full; the frame carries the exact page policy and
++// is the owner's alone; a page that is missing, malformed or not this thread's looks exactly the same; the owner's changes
++// are device-signed; the sweeper ends shares past their end.
++import { existsSync, readdirSync, readFileSync } from 'node:fs'
++import { join } from 'node:path'
++import {
++  appCsp,
++  createDeviceKey,
++  type DeviceKey,
++  generateBridgeKey,
++  newUlid,
++  PAGE_CSP,
++  PAGE_LIMITS,
++  PAGE_SANDBOX_ATTR,
++  PAGES_FULL,
++  type PageInfoT,
++  type PageListT,
++  signOwnerFrame,
++} from '@talos-app/protocol'
++import { fakeClock } from '@talos-app/testkit'
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { sweepPages } from '../../src/core/pages-store.ts'
++import { ORIGIN, startTestRelay, type TestRelay } from './harness.ts'
++import { bridgeFetch } from './helpers.ts'
++
++vi.setConfig({ testTimeout: 30_000 })
++
++let relay: TestRelay | null = null
++afterEach(async () => {
++  await relay?.stop()
++  relay = null
++})
++
++const THREAD = 'trip'
++const html = (n: number | string) => `<!doctype html><title>t</title><p>version ${n}</p>`
++
++async function world(opts: Parameters<typeof startTestRelay>[0] = {}) {
++  const r = await startTestRelay(opts)
++  relay = r
++  const dev = await createDeviceKey()
++  r.relay.services.db
++    .prepare(
++      'insert into auth_devices (id, name, pubkey_jwk, binding, pinned, revoked, created_at) values (?, ?, ?, ?, 1, 0, ?)',
++    )
++    .run(dev.deviceId, 'phone', JSON.stringify(dev.publicJwk), 'b', Date.now())
++  return { r, dev }
++}
++
++const sha = async (s: string | Uint8Array) =>
++  Buffer.from(
++    await crypto.subtle.digest('SHA-256', typeof s === 'string' ? new TextEncoder().encode(s) : (s as BufferSource)),
++  ).toString('hex')
++
++async function publish(
++  r: TestRelay,
++  body: string | Uint8Array,
++  q: { thread_id?: string; title?: string; page_id?: string } = {},
++) {
++  const qs = new URLSearchParams({ thread_id: q.thread_id ?? THREAD, title: q.title ?? 'Rota', ...q })
++  if (q.page_id === undefined) qs.delete('page_id')
++  const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body
++  return bridgeFetch(r, 'POST', `/bridge/pages?${qs}`, bytes, {
++    'content-type': 'text/html; charset=utf-8',
++    'x-talos-sha256': await sha(bytes),
++  })
++}
++
++const owner = (dev: DeviceKey) => ({
++  'X-Test-Session': dev.deviceId,
++  Origin: ORIGIN,
++  'X-Talos-CSRF': '1',
++  'content-type': 'application/json',
++})
++const get = (r: TestRelay, path: string, h: Record<string, string> = {}) =>
++  fetch(`${r.httpBase}${path}`, { headers: h, redirect: 'manual' })
++
++async function act(
++  r: TestRelay,
++  dev: DeviceKey,
++  pageId: string,
++  type: 'page.share' | 'page.unshare' | 'page.current' | 'page.delete',
++  over: Record<string, unknown> = {},
++  signer: DeviceKey = dev,
++) {
++  const frame = await signOwnerFrame(
++    {
++      v: 1,
++      type,
++      device_id: dev.deviceId,
++      page_id: pageId,
++      ts: new Date(r.relay.services.clock.now()).toISOString(),
++      nonce: newUlid().toLowerCase(),
++      ...over,
++    },
++    signer.privateKey,
++  )
++  const path = { 'page.share': 'share', 'page.unshare': 'unshare', 'page.current': 'current', 'page.delete': '' }[type]
++  return fetch(`${r.httpBase}/api/pages/${pageId}${path ? `/${path}` : ''}`, {
++    method: type === 'page.delete' ? 'DELETE' : 'POST',
++    headers: owner(dev),
++    body: JSON.stringify(frame),
++  })
++}
++
++const pageRows = (r: TestRelay) =>
++  (r.relay.services.db.prepare('select count(*) n from core_pages').get() as { n: number }).n
++const versionRows = (r: TestRelay, id: string) =>
++  r.relay.services.db.prepare('select hash from core_page_versions where page_id = ? order by created_at').all(id) as {
++    hash: string
++  }[]
++
++describe('publishing (the bridge, signed)', () => {
++  it('a signed publish makes a page (201): pg_ id, its version, the owner link; stored encrypted', async () => {
++    const { r } = await world()
++    const res = await publish(r, html(1))
++    expect(res.status).toBe(201)
++    const out = (await res.json()) as { page_id: string; version: string; unchanged: boolean; owner_url: string }
++    expect(out.page_id).toMatch(/^pg_[0-9A-HJKMNP-TV-Z]{26}$/)
++    expect(out.version).toBe(await sha(html(1)))
++    expect(out.unchanged).toBe(false)
++    expect(out.owner_url).toBe(`${ORIGIN}/p/${out.page_id}`)
++    const dir = join(r.dir, 'pages', out.page_id)
++    const files = readdirSync(dir)
++    expect(files).toEqual([`${out.version}.bin`])
++    expect(readFileSync(join(dir, files[0] as string)).includes(Buffer.from('version 1'))).toBe(false)
++  })
++  it('unsigned, or signed by another key, is refused (401) and stores nothing', async () => {
++    const { r } = await world()
++    const plain = await fetch(`${r.httpBase}/bridge/pages?thread_id=${THREAD}&title=x`, {
++      method: 'POST',
++      headers: { 'content-type': 'text/html' },
++      body: html(1),
++    })
++    expect(plain.status).toBe(401)
++    const forged = await bridgeFetch(
++      { httpBase: r.httpBase, bridgeKey: await generateBridgeKey() },
++      'POST',
++      `/bridge/pages?thread_id=${THREAD}&title=x`,
++      html(1),
++    )
++    expect(forged.status).toBe(401)
++    expect(pageRows(r)).toBe(0)
++  })
++  it('the same bytes twice are one version (200, unchanged)', async () => {
++    const { r } = await world()
++    const first = (await (await publish(r, html(1))).json()) as { page_id: string }
++    const again = await publish(r, html(1), { page_id: first.page_id })
++    expect(again.status).toBe(200)
++    expect(((await again.json()) as { unchanged: boolean }).unchanged).toBe(true)
++    expect(versionRows(r, first.page_id)).toHaveLength(1)
++  })
++  it('the 11th version drops the oldest; the current one is never dropped', async () => {
++    const { r } = await world()
++    const { page_id } = (await (await publish(r, html(0))).json()) as { page_id: string }
++    for (let i = 1; i <= PAGE_LIMITS.versionsPerPage; i++)
++      expect((await publish(r, html(i), { page_id })).status).toBe(201)
++    const kept = versionRows(r, page_id).map((v) => v.hash)
++    expect(kept).toHaveLength(PAGE_LIMITS.versionsPerPage)
++    expect(kept).not.toContain(await sha(html(0)))
++    expect(kept.at(-1)).toBe(await sha(html(PAGE_LIMITS.versionsPerPage)))
++    expect(readdirSync(join(r.dir, 'pages', page_id))).toHaveLength(PAGE_LIMITS.versionsPerPage)
++  })
++  it('a page_id this thread did not publish, or that does not exist, is not_found (404), identical either way', async () => {
++    const { r } = await world()
++    const { page_id } = (await (await publish(r, html(1))).json()) as { page_id: string }
++    const other = await publish(r, html(2), { page_id, thread_id: 'work' })
++    const missing = await publish(r, html(2), { page_id: `pg_${newUlid()}` })
++    expect(other.status).toBe(404)
++    expect(missing.status).toBe(404)
++    expect(await other.text()).toBe(await missing.text())
++    expect(versionRows(r, page_id)).toHaveLength(1)
++  })
++  it('bad query, non-UTF-8 or empty HTML (400), a version over 10 MiB (413)', async () => {
++    const { r } = await world()
++    expect((await publish(r, html(1), { thread_id: 'Not A Thread' })).status).toBe(400)
++    expect((await publish(r, html(1), { title: 'two\nlines' })).status).toBe(400)
++    expect((await publish(r, html(1), { title: 'x'.repeat(PAGE_LIMITS.titleChars + 1) })).status).toBe(400)
++    const bad = await publish(r, Uint8Array.from([0x3c, 0x70, 0x3e, 0xff, 0xfe]))
++    expect(bad.status).toBe(400)
++    expect(((await bad.json()) as { error: string }).error).toBe('bad_html')
++    expect((await publish(r, '')).status).toBe(400)
++    const big = new Uint8Array(PAGE_LIMITS.versionBytes + 1).fill(0x61)
++    expect((await publish(r, big)).status).toBe(413)
++    expect(pageRows(r)).toBe(0)
++  })
++  it('507 pages_full past the relay-wide bytes cap and past the page count, with its own message', async () => {
++    const { r } = await world({ env: { PAGES_MAX_MB: '1', PAGES_MAX: '2' } })
++    const half = 'a'.repeat(600 * 1024)
++    expect((await publish(r, `${half}1`)).status).toBe(201)
++    const full = await publish(r, `${half}2`)
++    expect(full.status).toBe(507)
++    expect(await full.json()).toEqual(PAGES_FULL)
++    expect((await publish(r, html(1))).status).toBe(201)
++    const count = await publish(r, html(2))
++    expect(count.status).toBe(507)
++    expect(await count.json()).toEqual(PAGES_FULL)
++    expect(pageRows(r)).toBe(2)
++  })
++})
++
++describe('the frame (the owner’s devices only in phase 1)', () => {
++  it('serves the current version under exactly the page policy, private and never cached', async () => {
++    const { r, dev } = await world()
++    const { page_id } = (await (await publish(r, html(1))).json()) as { page_id: string }
++    await publish(r, html(2), { page_id })
++    const res = await get(r, `/p/${page_id}/frame`, owner(dev))
++    expect(res.status).toBe(200)
++    expect(res.headers.get('content-security-policy')).toBe(PAGE_CSP)
++    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8')
++    expect(res.headers.get('cache-control')).toBe('private, no-store')
++    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
++    expect(res.headers.get('referrer-policy')).toBe('no-referrer')
++    expect(await res.text()).toBe(html(2))
++    // a kept older version, by its hash
++    const old = await get(r, `/p/${page_id}/frame?v=${await sha(html(1))}`, owner(dev))
++    expect(old.status).toBe(200)
++    expect(old.headers.get('content-security-policy')).toBe(PAGE_CSP)
++    expect(await old.text()).toBe(html(1))
++  })
++  it('anyone without the owner’s session gets 401; the link and the frame alike', async () => {
++    const { r } = await world()
++    const { page_id } = (await (await publish(r, html(1))).json()) as { page_id: string }
++    expect((await get(r, `/p/${page_id}/frame`)).status).toBe(401)
++    expect((await get(r, `/p/${page_id}`)).status).toBe(401)
++  })
++  it('missing, malformed, a hash it does not keep: identical 404s', async () => {
++    const { r, dev } = await world()
++    const { page_id } = (await (await publish(r, html(1))).json()) as { page_id: string }
++    const answers = await Promise.all(
++      [
++        `/p/pg_${newUlid()}/frame`,
++        '/p/nope/frame',
++        `/p/${page_id}/frame?v=${'0'.repeat(64)}`,
++        `/p/${page_id}/frame?v=x`,
++      ].map(async (p) => {
++        const res = await get(r, p, owner(dev))
++        return [res.status, await res.text(), res.headers.get('cache-control')]
++      }),
++    )
++    for (const a of answers) expect(a).toEqual(answers[0])
++    expect(answers[0]?.[0]).toBe(404)
++  })
++  it('the link is a small wrapper under the app policy that frames the page (its frame-src stops self-navigation)', async () => {
++    const { r, dev } = await world()
++    const { page_id } = (await (await publish(r, html(1), { title: 'Rota <&> "x"' })).json()) as { page_id: string }
++    const res = await get(r, `/p/${page_id}`, owner(dev))
++    expect(res.status).toBe(200)
++    const csp = res.headers.get('content-security-policy') ?? ''
++    expect(csp).toBe(appCsp(ORIGIN))
++    expect(csp).toContain("frame-src 'self'")
++    expect(csp).toContain("frame-ancestors 'none'")
++    expect(res.headers.get('cache-control')).toBe('private, no-store')
++    const body = await res.text()
++    expect(body).toContain(
++      `<iframe src="/p/${page_id}/frame" sandbox="${PAGE_SANDBOX_ATTR}" referrerpolicy="no-referrer"`,
++    )
++    expect(body).toContain('<title>Rota &lt;&amp;&gt; &quot;x&quot;</title>')
++    expect(body).not.toContain('<script')
++    expect(body).not.toContain('version 1') // the page's bytes are never in the wrapper
++  })
++  it('the frame is never served as a top-level page (Sec-Fetch-Dest: document), only inside a frame', async () => {
++    const { r, dev } = await world()
++    const { page_id } = (await (await publish(r, html(1))).json()) as { page_id: string }
++    expect((await get(r, `/p/${page_id}/frame`, { ...owner(dev), 'Sec-Fetch-Dest': 'document' })).status).toBe(404)
++    expect((await get(r, `/p/${page_id}/frame`, { ...owner(dev), 'Sec-Fetch-Dest': 'iframe' })).status).toBe(200)
++  })
++})
++
++describe('the owner’s list and changes (device-signed)', () => {
++  it('lists every page with its versions, its share and how full the store is', async () => {
++    const { r, dev } = await world()
++    const a = (await (await publish(r, html(1), { title: 'A' })).json()) as { page_id: string }
++    // a new version carries its title too: the page is named as last published
++    await publish(r, html(2), { page_id: a.page_id, title: 'A' })
++    const list = (await (await get(r, '/api/pages', owner(dev))).json()) as PageListT
++    expect(list.pages).toHaveLength(1)
++    expect(list.pages[0]?.versions.map((v) => v.hash)).toEqual([await sha(html(2)), await sha(html(1))])
++    expect(list.pages[0]?.current).toBe(await sha(html(2)))
++    expect(list.pages[0]?.share).toBeNull()
++    expect(list.used_bytes).toBe(html(1).length + html(2).length)
++    expect(list.max_pages).toBe(PAGE_LIMITS.pages)
++    const one = (await (await get(r, `/api/pages/${a.page_id}`, owner(dev))).json()) as PageInfoT
++    expect(one.title).toBe('A')
++  })
++  it('?thread= lists one thread’s pages only; a malformed thread is 400', async () => {
++    const { r, dev } = await world()
++    await publish(r, html(1), { title: 'Trip' })
++    await publish(r, html(2), { title: 'Work', thread_id: 'work' })
++    const trip = (await (await get(r, `/api/pages?thread=${THREAD}`, owner(dev))).json()) as PageListT
++    expect(trip.pages.map((p) => p.title)).toEqual(['Trip'])
++    const all = (await (await get(r, '/api/pages', owner(dev))).json()) as PageListT
++    expect(all.pages.map((p) => p.title)).toEqual(['Work', 'Trip'])
++    expect((await get(r, '/api/pages?thread=Not%20A%20Thread', owner(dev))).status).toBe(400)
++  })
++  it('share: stored, 30 days by default; again with a later end extends it; null is until unshared; unshare ends it', async () => {
++    const { r, dev } = await world()
++    const { page_id } = (await (await publish(r, html(1))).json()) as { page_id: string }
++    const now = r.relay.services.clock.now()
++    const shared = (await (
++      await act(r, dev, page_id, 'page.share', { scope: 'people', emails: ['ann@example.com'] })
++    ).json()) as PageInfoT
++    expect(shared.share?.scope).toBe('people')
++    expect(Date.parse(shared.share?.expires_at as string) - now).toBeGreaterThanOrEqual(30 * 86_400_000 - 5_000)
++    const later = new Date(now + 60 * 86_400_000).toISOString()
++    const extended = (await (
++      await act(r, dev, page_id, 'page.share', { scope: 'org', emails: [], expires_at: later })
++    ).json()) as PageInfoT
++    expect(extended.share).toMatchObject({ scope: 'org', expires_at: later })
++    const forever = (await (
++      await act(r, dev, page_id, 'page.share', { scope: 'org', emails: [], expires_at: null })
++    ).json()) as PageInfoT
++    expect(forever.share?.expires_at).toBeNull()
++    const off = (await (await act(r, dev, page_id, 'page.unshare')).json()) as PageInfoT
++    expect(off.share).toBeNull()
++  })
++  it('a change signed by another key (401), for another device (403), replayed (409) or for another page (400) does nothing', async () => {
++    const { r, dev } = await world()
++    const { page_id } = (await (await publish(r, html(1))).json()) as { page_id: string }
++    const stranger = await createDeviceKey()
++    expect((await act(r, dev, page_id, 'page.unshare', {}, stranger)).status).toBe(401)
++    const wrong = await signOwnerFrame(
++      {
++        v: 1,
++        type: 'page.unshare',
++        device_id: stranger.deviceId,
++        page_id,
++        ts: new Date().toISOString(),
++        nonce: newUlid().toLowerCase(),
++      },
++      stranger.privateKey,
++    )
++    expect(
++      (
++        await fetch(`${r.httpBase}/api/pages/${page_id}/unshare`, {
++          method: 'POST',
++          headers: owner(dev),
++          body: JSON.stringify(wrong),
++        })
++      ).status,
++    ).toBe(403)
++    const frame = await signOwnerFrame(
++      {
++        v: 1,
++        type: 'page.share',
++        device_id: dev.deviceId,
++        page_id,
++        ts: new Date().toISOString(),
++        nonce: newUlid().toLowerCase(),
++        scope: 'org',
++        emails: [],
++      },
++      dev.privateKey,
++    )
++    const send = () =>
++      fetch(`${r.httpBase}/api/pages/${page_id}/share`, {
++        method: 'POST',
++        headers: owner(dev),
++        body: JSON.stringify(frame),
++      })
++    expect((await send()).status).toBe(200)
++    expect((await send()).status).toBe(409)
++    // a frame for one page posted at another page's path
++    const { page_id: other } = (await (await publish(r, html(2))).json()) as { page_id: string }
++    expect(
++      (
++        await fetch(`${r.httpBase}/api/pages/${other}/unshare`, {
++          method: 'POST',
++          headers: owner(dev),
++          body: JSON.stringify(
++            await signOwnerFrame({ ...wrong, device_id: dev.deviceId, nonce: newUlid().toLowerCase() }, dev.privateKey),
++          ),
++        })
++      ).status,
++    ).toBe(400)
++  })
++  it('current restores a kept version; delete removes the page, its versions and its files', async () => {
++    const { r, dev } = await world()
++    const { page_id } = (await (await publish(r, html(1))).json()) as { page_id: string }
++    await publish(r, html(2), { page_id })
++    const back = (await (await act(r, dev, page_id, 'page.current', { hash: await sha(html(1)) })).json()) as PageInfoT
++    expect(back.current).toBe(await sha(html(1)))
++    expect(await (await get(r, `/p/${page_id}/frame`, owner(dev))).text()).toBe(html(1))
++    expect((await act(r, dev, page_id, 'page.current', { hash: '0'.repeat(64) })).status).toBe(404)
++    expect((await act(r, dev, page_id, 'page.delete')).status).toBe(204)
++    expect(pageRows(r)).toBe(0)
++    expect(versionRows(r, page_id)).toHaveLength(0)
++    expect(existsSync(join(r.dir, 'pages', page_id))).toBe(false)
++    expect((await get(r, `/p/${page_id}/frame`, owner(dev))).status).toBe(404)
++  })
++})
++
++describe('the sweeper', () => {
++  it('ends a share past its end and keeps the page; an orphan file (no row) goes', async () => {
++    const clock = fakeClock('2026-11-11T12:00:00.000Z')
++    const { r, dev } = await world({ clock })
++    const { page_id } = (await (await publish(r, html(1))).json()) as { page_id: string }
++    await act(r, dev, page_id, 'page.share', { scope: 'org', emails: [] })
++    const deps = { db: r.relay.services.db, clock, dataDir: r.dir }
++    clock.set(clock.now() + 29 * 86_400_000)
++    expect(sweepPages(deps)).toEqual({ sharesEnded: 0, orphans: 0 })
++    clock.set(clock.now() + 2 * 86_400_000)
++    const orphanDir = join(r.dir, 'pages', `pg_${newUlid()}`)
++    const { mkdirSync, writeFileSync } = await import('node:fs')
++    mkdirSync(orphanDir)
++    writeFileSync(join(orphanDir, `${'1'.repeat(64)}.bin`), 'x')
++    // a stray file beside the page folders goes too, and does not stop the sweep
++    writeFileSync(join(r.dir, 'pages', 'stray.tmp'), 'x')
++    expect(sweepPages(deps)).toEqual({ sharesEnded: 1, orphans: 2 })
++    expect(existsSync(join(r.dir, 'pages', 'stray.tmp'))).toBe(false)
++    expect(existsSync(orphanDir)).toBe(false)
++    const page = (await (await get(r, `/api/pages/${page_id}`, owner(dev))).json()) as PageInfoT
++    expect(page.share).toBeNull()
++    expect(page.versions).toHaveLength(1)
++  })
++})
+diff --git a/packages/protocol/src/csp.ts b/packages/protocol/src/csp.ts
+index 90931e47..39ac5fc1 100644
+--- a/packages/protocol/src/csp.ts
++++ b/packages/protocol/src/csp.ts
+@@ -22,3 +22,15 @@ export function appCsp(origin: string): string {
+     "object-src 'none'",
+   ].join('; ')
+ }
++
++/**
++ * The policy agent-made HTML is served with (an attachment page, /media/:id/page, and an org page's frame, /p/:id/frame): a
++ * sandboxed, opaque origin that runs only its own inline script and style, shows only `data:`/`blob:` images, media and fonts,
++ * and has no `connect-src`, so no fetch, XHR or WebSocket; no forms, popups, downloads or top navigation (the sandbox allows
++ * none of them). The page can read nothing but its own bytes.
++ */
++export const PAGE_CSP =
++  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:"
++
++/** The `sandbox` attribute of the frame that shows such a page: script only, never `allow-same-origin` (the web lint refuses it). */
++export const PAGE_SANDBOX_ATTR = 'allow-scripts'
+diff --git a/packages/protocol/src/http.ts b/packages/protocol/src/http.ts
+index 2c70ae6e..0c294b14 100644
+--- a/packages/protocol/src/http.ts
++++ b/packages/protocol/src/http.ts
+@@ -13,6 +13,7 @@ import {
+ import { HealthStatus } from './health.ts'
+ import { ConnId, DeviceId, HttpsUrl, IntegrationId, IsoTs, MediaId, ThreadId, VoiceId } from './ids.ts'
+ import { AttachmentRef, Device, InboxItem, isAgentCardKind, isAppMessage, JwkP256 } from './models.ts'
++import { PageInfo, PageList, PageOwnerAction, PagePublished } from './org-pages.ts'
+ import { Problem } from './problems.ts'
+ import { ApnsRegistration, ApnsStatus } from './push.ts'
+ import { NativeActWire, NativeGrant, NativeGrantRevoke } from './push-rich.ts'
+@@ -36,7 +37,7 @@ export type RouteAuth =
+   // docs/IOS-PUSH.md "Message text and quick actions": no cookie; the signature chain device key -> grant -> action key
+   // is the credential, checked by the relay and again by the Mac. One route.
+   | 'native-act'
+-export type RouteOwner = 'WP-N0' | 'WP1' | 'WP2' | 'WP3' | 'WP4' | 'WP8' | 'WP-V1' | 'WP-V4'
++export type RouteOwner = 'WP-N0' | 'WP1' | 'WP2' | 'WP3' | 'WP4' | 'WP8' | 'WP-V1' | 'WP-V4' | 'ORG-PAGES'
+ 
+ // ---- shared pieces ----------------------------------------------------------------------------------------------
+ 
+@@ -785,6 +786,89 @@ export const routes = {
+     owner: 'WP-V4',
+     note: 'the service worker normally answers; if a POST reaches the relay -> 303 /share?retry=1',
+   },
++  // ---- org pages, phase 1 (docs/ORG-PAGES-SPEC.md): the owner's devices only; no viewer route until phase 3 ----
++  bridgePagePublish: {
++    id: 'bridgePagePublish',
++    method: 'POST',
++    path: '/bridge/pages',
++    auth: 'bridge-sig',
++    owner: 'ORG-PAGES',
++    res: PagePublished,
++    note: 'raw HTML (UTF-8, 10 MiB) + X-Talos-Sha256; query thread_id, title, page_id? (signed with the request). 201 a new page or version, 200 the same bytes (unchanged); 404 not_found for a page_id this thread did not publish; 400 bad_request | bad_html; 413 too_large; 507 pages_full past PAGES_MAX_MB / PAGES_MAX',
++  },
++  pagesList: {
++    id: 'pagesList',
++    method: 'GET',
++    path: '/api/pages',
++    auth: 'session',
++    owner: 'ORG-PAGES',
++    res: PageList,
++    note: "every page, newest change first, with its versions, its stored share and how full the store is; ?thread=<id> one thread's pages only (400 bad_request for a malformed id)",
++  },
++  pageGet: {
++    id: 'pageGet',
++    method: 'GET',
++    path: '/api/pages/:id',
++    auth: 'session',
++    owner: 'ORG-PAGES',
++    res: PageInfo,
++    note: '404 not_found (missing and malformed look the same)',
++  },
++  pageShare: {
++    id: 'pageShare',
++    method: 'POST',
++    path: '/api/pages/:id/share',
++    auth: 'session',
++    owner: 'ORG-PAGES',
++    req: PageOwnerAction,
++    res: PageInfo,
++    note: "page.share, signed by the session's pinned device (osig, fresh ts, single-use nonce); session + CSRF. Makes or replaces the share (extend = share again); expires_at left out = 30 days, null = until unshared. Stored only: nobody else can open a page before phase 3. 400 bad_request | stale, 401 bad_signature, 403 wrong_device, 404 not_found, 409 replay",
++  },
++  pageUnshare: {
++    id: 'pageUnshare',
++    method: 'POST',
++    path: '/api/pages/:id/unshare',
++    auth: 'session',
++    owner: 'ORG-PAGES',
++    req: PageOwnerAction,
++    res: PageInfo,
++    note: 'page.unshare, signed as page.share is; ends the share at once',
++  },
++  pageCurrent: {
++    id: 'pageCurrent',
++    method: 'POST',
++    path: '/api/pages/:id/current',
++    auth: 'session',
++    owner: 'ORG-PAGES',
++    req: PageOwnerAction,
++    res: PageInfo,
++    note: 'page.current {hash}, signed as page.share is: restores a kept version as the current one; 404 not_found for a hash this page does not keep',
++  },
++  pageDelete: {
++    id: 'pageDelete',
++    method: 'DELETE',
++    path: '/api/pages/:id',
++    auth: 'session',
++    owner: 'ORG-PAGES',
++    req: PageOwnerAction,
++    note: 'page.delete, signed as page.share is: the page, every version and its share go; 204',
++  },
++  pageOpen: {
++    id: 'pageOpen',
++    method: 'GET',
++    path: '/p/:id',
++    auth: 'session',
++    owner: 'ORG-PAGES',
++    note: "the page's link. Phase 1: 302 to /p/:id/frame for the owner's session (the viewer shell and sign-in come in phase 3); 404 otherwise",
++  },
++  pageFrame: {
++    id: 'pageFrame',
++    method: 'GET',
++    path: '/p/:id/frame',
++    auth: 'session',
++    owner: 'ORG-PAGES',
++    note: 'the current version (or ?v=<hash>, one the page keeps) as text/html under PAGE_CSP, Cache-Control private, no-store; 404 not_found for missing, malformed or not kept, all identical',
++  },
+   aasa: {
+     id: 'aasa',
+     method: 'GET',
+diff --git a/packages/protocol/src/ids.ts b/packages/protocol/src/ids.ts
+index 726c97f5..fe06ce74 100644
+--- a/packages/protocol/src/ids.ts
++++ b/packages/protocol/src/ids.ts
+@@ -34,6 +34,8 @@ export const VoiceId = z.string().regex(new RegExp(`^v_${ULID_BODY}$`))
+ export const ViewId = z.string().regex(new RegExp(`^av_${ULID_BODY}$`))
+ /** MCP Apps: one signed request from a view (`tools/call`, `ui/message`). */
+ export const AppRequestId = z.string().regex(new RegExp(`^ar_${ULID_BODY}$`))
++/** An org page (docs/ORG-PAGES-SPEC.md): `pg_` + a ULID, minted by the relay at the first publish. */
++export const PageId = z.string().regex(new RegExp(`^pg_${ULID_BODY}$`))
+ /** = Claude Code's tool_use_id. Validated before it touches any file name. */
+ export const CaptureId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/)
+ /**
+@@ -100,7 +102,7 @@ export const PageCursor = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/)
+ export type ThreadIdT = z.infer<typeof ThreadId>
+ export type IntegrationIdT = z.infer<typeof IntegrationId>
+ 
+-export type IdPrefix = 'm' | 'c' | 'e' | 'md' | 'v' | 'sh' | 'd'
++export type IdPrefix = 'm' | 'c' | 'e' | 'md' | 'v' | 'sh' | 'd' | 'pg'
+ 
+ /** A bare ULID, used for frame ids. */
+ export function newUlid(): string {
+diff --git a/packages/protocol/src/index.ts b/packages/protocol/src/index.ts
+index 7ac03a07..aa8ceb2d 100644
+--- a/packages/protocol/src/index.ts
++++ b/packages/protocol/src/index.ts
+@@ -39,6 +39,7 @@ export * from './memory-links.ts'
+ export * from './models.ts'
+ export * from './native.ts'
+ export * from './newer-peer.ts'
++export * from './org-pages.ts'
+ export * from './original-ts.ts'
+ export * from './owner-sig.ts'
+ export * from './patches.ts'
+diff --git a/packages/protocol/src/models.ts b/packages/protocol/src/models.ts
+index d975bb04..5147b5a7 100644
+--- a/packages/protocol/src/models.ts
++++ b/packages/protocol/src/models.ts
+@@ -15,6 +15,7 @@ import {
+   VoiceId,
+ } from './ids.ts'
+ import { MessageRef } from './memory.ts'
++import { PageRef } from './org-pages.ts'
+ import { PermissionExplain } from './permission-explain.ts'
+ import { ShareContent } from './share.ts'
+ import { ThreadSessionMode, ThreadSessionOpts } from './thread-sessions.ts'
+@@ -149,6 +150,12 @@ export const Message = z.object({
+   app: AppView.optional().catch(undefined),
+   /** The view an echo row (author `app`, kind `text`) belongs to. */
+   app_view_id: ViewId.optional(),
++  /**
++   * An org page publish_page put in the thread (docs/ORG-PAGES-SPEC.md): the row is an ordinary agent text message, and
++   * an app that knows pages shows it as a page card. A value that fails to parse reads as absent, so the row stays its
++   * text, and an older app that does not know the field shows the text too.
++   */
++  page: PageRef.optional().catch(undefined),
+   /**
+    * A hand-off between Talos sessions (system rows the live bridge writes). The label ("Talos → Trip lead: TASK") is data
+    * here, not part of `text`, so the body cannot imitate it. An unreadable value reads as absent.
+diff --git a/packages/protocol/src/org-pages.ts b/packages/protocol/src/org-pages.ts
+new file mode 100644
+index 00000000..9163732b
+--- /dev/null
++++ b/packages/protocol/src/org-pages.ts
+@@ -0,0 +1,158 @@
++// Org pages, phase 1 (docs/ORG-PAGES-SPEC.md, and its "Owner decisions"): an agent publishes an HTML page from a thread; the
++// relay keeps it, versioned, past the 7-day media buffer, and serves it to the owner's own logged-in devices in the sandbox
++// every agent page runs in. A share (scope and expiry) is stored, but no one else can open a page until viewer sign-in lands
++// (phase 3). The agent publishes and updates; it never shares: share, unshare, restore and delete are owner frames, signed by
++// the device key.
++import { z } from 'zod'
++import { DeviceId, IsoTs, PageId, ThreadId } from './ids.ts'
++
++const KIB = 1024
++const MIB = KIB * KIB
++
++/** One list of every cap, so the bridge, the relay and the app read the same numbers. */
++export const PAGE_LIMITS = {
++  /** One version's HTML (UTF-8). */
++  versionBytes: 10 * MIB,
++  /** Versions kept per page: the 11th drops the oldest (never the current one). */
++  versionsPerPage: 10,
++  titleChars: 200,
++  /** Default relay-wide caps (env PAGES_MAX_MB / PAGES_MAX, clamped); past either a publish is refused with 507 pages_full. */
++  totalMb: 500,
++  pages: 500,
++  /** A share ends this many days after it was made, unless the owner gave another end (or none). */
++  shareDefaultDays: 30,
++  /** People a share may name. */
++  shareEmails: 200,
++} as const
++
++/** A version is named by the SHA-256 of its bytes: immutable, and the same bytes twice are one version. */
++export const PageHash = z.string().regex(/^[0-9a-f]{64}$/)
++
++export const PageTitle = z
++  .string()
++  .min(1)
++  .max(PAGE_LIMITS.titleChars)
++  // one line of visible text: no control characters
++  .refine((t) => ![...t].some((ch) => (ch.codePointAt(0) as number) < 0x20 || ch === '\u007f'), 'one line, no controls')
++
++// ---- publish (the bridge, signed with its key) ---------------------------------------------------------------------------
++
++/**
++ * `POST /bridge/pages?thread_id=&title=[&page_id=]`, the body the page's HTML bytes (`text/html; charset=utf-8`). The query is
++ * signed with the request (the bridge signature covers the path and query), so the relay stores only what the Mac asked for.
++ * With `page_id`, a new version of that page, and only a page the same thread published (any other is `not_found`).
++ */
++export const PagePublishQuery = z.strictObject({
++  thread_id: ThreadId,
++  title: PageTitle,
++  page_id: PageId.optional(),
++})
++export type PagePublishQueryT = z.infer<typeof PagePublishQuery>
++
++export const PagePublished = z.strictObject({
++  page_id: PageId,
++  /** The version now current (its hash). */
++  version: PageHash,
++  /** The bytes were already a version of this page: nothing was added (an older one became current again). */
++  unchanged: z.boolean(),
++  /** Where the owner opens it (signed in): the page's link, the same one a share will use. */
++  owner_url: z.string().url(),
++})
++export type PagePublishedT = z.infer<typeof PagePublished>
++
++/**
++ * What a thread's message carries about a page publish_page put there (`Message.page`): which page and version. No link: the
++ * app builds `/p/<page_id>` itself, so a message can never point the owner's Open somewhere else (a thread session may mint
++ * this field). Nothing that changes later (versions, share) is in it either: the app reads those from GET /api/pages/:id
++ * when it shows the card, so a thread's history never holds a stale share.
++ */
++export const PageRef = z.strictObject({
++  page_id: PageId,
++  title: PageTitle,
++  version: PageHash,
++})
++export type PageRefT = z.infer<typeof PageRef>
++
++// ---- the share (stored in phase 1, served from phase 3) ------------------------------------------------------------------
++
++export const PageShareScope = z.enum(['people', 'org'])
++
++export const PageShare = z.strictObject({
++  scope: PageShareScope,
++  /** `people`: who; `org`: empty (everyone at the company, behind the org sign-in). */
++  emails: z.array(z.email().max(254)).max(PAGE_LIMITS.shareEmails),
++  shared_at: IsoTs,
++  /** When the share ends; null = until the owner unshares. The sweeper ends it then. */
++  expires_at: IsoTs.nullable(),
++})
++export type PageShareT = z.infer<typeof PageShare>
++
++// ---- what the owner's devices read --------------------------------------------------------------------------------------
++
++export const PageVersion = z.strictObject({ hash: PageHash, bytes: z.number().int().nonnegative(), at: IsoTs })
++
++export const PageInfo = z.strictObject({
++  id: PageId,
++  title: PageTitle,
++  thread_id: ThreadId,
++  created_at: IsoTs,
++  updated_at: IsoTs,
++  current: PageHash,
++  /** Newest first. */
++  versions: z.array(PageVersion).max(PAGE_LIMITS.versionsPerPage),
++  share: PageShare.nullable(),
++})
++export type PageInfoT = z.infer<typeof PageInfo>
++
++/** `GET /api/pages`: every page (newest change first) and how full the store is. */
++export const PageList = z.strictObject({
++  pages: z.array(PageInfo),
++  used_bytes: z.number().int().nonnegative(),
++  max_bytes: z.number().int().positive(),
++  max_pages: z.number().int().positive(),
++})
++export type PageListT = z.infer<typeof PageList>
++
++// ---- owner changes (device-signed) ---------------------------------------------------------------------------------------
++
++const signed = {
++  v: z.literal(1),
++  device_id: DeviceId,
++  page_id: PageId,
++  ts: IsoTs,
++  nonce: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
++  osig: z.string().length(86),
++}
++
++/**
++ * The owner's changes to a page, each an owner frame signed by the device key (`signOwnerFrame`), fresh, single use, and for
++ * the page in the path. `page.share` makes or replaces the share: to extend one, share again with a later (or no) end;
++ * `expires_at` left out = PAGE_LIMITS.shareDefaultDays from now.
++ */
++export const PageOwnerAction = z.discriminatedUnion('type', [
++  z.strictObject({
++    ...signed,
++    type: z.literal('page.share'),
++    scope: PageShareScope,
++    emails: z.array(z.email().max(254)).max(PAGE_LIMITS.shareEmails),
++    expires_at: IsoTs.nullable().optional(),
++  }),
++  z.strictObject({ ...signed, type: z.literal('page.unshare') }),
++  z.strictObject({ ...signed, type: z.literal('page.current'), hash: PageHash }),
++  z.strictObject({ ...signed, type: z.literal('page.delete') }),
++])
++export type PageOwnerActionT = z.infer<typeof PageOwnerAction>
++
++/** The route each action is posted to, under `/api/pages/:id` (DELETE for `page.delete`). */
++export const PAGE_ACTION_PATH = {
++  'page.share': 'share',
++  'page.unshare': 'unshare',
++  'page.current': 'current',
++  'page.delete': '',
++} as const
++
++/** 507 past the relay's page caps: its own code, never the Mac's `storage_full`. */
++export const PAGES_FULL = {
++  error: 'pages_full',
++  message: 'The relay has no room for more pages. Delete some old pages, then publish again.',
++} as const
+diff --git a/packages/protocol/test/http.test.ts b/packages/protocol/test/http.test.ts
+index 1a92642e..01fd6947 100644
+--- a/packages/protocol/test/http.test.ts
++++ b/packages/protocol/test/http.test.ts
+@@ -68,6 +68,16 @@ const SPEC_ROUTES = [
+   'POST /api/health/test',
+   'POST /api/problems',
+   'POST /api/bug-reports',
++  // org pages, phase 1 (docs/ORG-PAGES-SPEC.md): the owner's devices only until viewer sign-in (phase 3)
++  'POST /bridge/pages',
++  'GET /api/pages',
++  'GET /api/pages/:id',
++  'POST /api/pages/:id/share',
++  'POST /api/pages/:id/unshare',
++  'POST /api/pages/:id/current',
++  'DELETE /api/pages/:id',
++  'GET /p/:id',
++  'GET /p/:id/frame',
+   'GET /api/share/tokens',
+   'POST /api/share/tokens',
+   'DELETE /api/share/tokens/:id',
+diff --git a/packages/protocol/test/org-pages.test.ts b/packages/protocol/test/org-pages.test.ts
+new file mode 100644
+index 00000000..57c32c1f
+--- /dev/null
++++ b/packages/protocol/test/org-pages.test.ts
+@@ -0,0 +1,41 @@
++// Org pages' protocol (docs/ORG-PAGES-SPEC.md): the page a message carries degrades to plain text when it cannot be read.
++import { describe, expect, it } from 'vitest'
++import { Message, newId, PAGE_CSP, PAGE_SANDBOX_ATTR, PageRef } from '../src/index.ts'
++
++const row = (page: unknown) => ({
++  id: newId('m'),
++  thread_id: 'general',
++  author: 'agent',
++  kind: 'text',
++  text: 'Published a page: “Rota”.',
++  created_at: '2026-11-11T12:00:00.000Z',
++  page,
++})
++const ref = {
++  page_id: 'pg_01JBF3V7Q8K2M4N6P8R0S2T4V9',
++  title: 'Rota',
++  version: 'a'.repeat(64),
++}
++
++describe('Message.page', () => {
++  it('a readable page rides on an ordinary text message', () => {
++    expect(Message.parse(row(ref)).page).toEqual(ref)
++  })
++  it('one that cannot be read reads as absent: the message stays, as its text', () => {
++    for (const bad of [{ ...ref, version: 'x' }, { ...ref, extra: 1 }, 'pg_x', { ...ref, title: 'a\nb' }]) {
++      const m = Message.parse(row(bad))
++      expect(m.page).toBeUndefined()
++      expect(m.text).toBe('Published a page: “Rota”.')
++    }
++    // no link rides on the message: the app builds /p/<page_id> itself
++    expect(PageRef.safeParse({ ...ref, owner_url: 'https://evil.example.com/' }).success).toBe(false)
++  })
++})
++
++describe('the page policy, shared by the relay and the frame', () => {
++  it('runs script only, in an opaque origin, with no network', () => {
++    expect(PAGE_SANDBOX_ATTR).toBe('allow-scripts')
++    expect(PAGE_CSP.startsWith('sandbox allow-scripts;')).toBe(true)
++    expect(PAGE_CSP).not.toMatch(/allow-same-origin|connect-src|allow-forms|allow-popups|allow-top-navigation/)
++  })
++})

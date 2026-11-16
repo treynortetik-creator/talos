@@ -3,8 +3,9 @@ import TalosDesktopCore
 
 /// The agent lives in tmux (DESKTOP-SPEC D15, 4.6): server `-L <socket>` with our own config, one session per host.
 /// Quitting, crashing or reinstalling the app leaves the pane running; a new host re-attaches with `attachIfRunning()`.
-/// tmux runs the claude argv directly (`new-session … -- <argv>`, no shell), so the pane pid is claude, its own process
-/// group and session leader.
+/// tmux runs `/usr/bin/env -i /bin/sh <launch file>` (`LaunchFile`), and the file `exec`s claude, so the pane pid is claude,
+/// its own process group and session leader. The launch's environment is only in that file: never in a tmux argv, and never
+/// in the server's or the session's environment, which tmux would hand to other panes.
 public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
   public let kind = HostKind.tmux
   private let baseCommands: TmuxCommands
@@ -18,15 +19,22 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
   private var _childPid: Int32?
   private var reported = true
   private var _onExit: (@Sendable (ExitInfo) -> Void)?
-  /// Environment for tmux itself. TMUX/TMUX_TMPDIR are removed so every call finds the same socket.
-  private var tmuxEnv: [String: String]
+  /// Environment for tmux itself, never a launch's: a server takes its global environment from the client that starts it, so
+  /// only the plain basics (`LaunchFile.serverBasics`). TMUX/TMUX_TMPDIR are not among them, so every call finds the same socket.
+  private let tmuxEnv: [String: String]
   private var lastRows: [String] = []
+  /// Where each launch's file is written (`LaunchFile`): a 0700 folder under the Talos home.
+  let launchDir: String
 
-  public init(commands: TmuxCommands, baseEnv: [String: String] = ProcessInfo.processInfo.environment, pollInterval: Double = 1) {
+  public init(
+    commands: TmuxCommands, launchDir: String, baseEnv: [String: String] = ProcessInfo.processInfo.environment,
+    pollInterval: Double = 1
+  ) {
     self.baseCommands = commands
+    self.launchDir = launchDir
     self.pollInterval = pollInterval
     self.q = DispatchQueue(label: "talos.tmux.\(commands.session)")
-    self.tmuxEnv = Self.clean(baseEnv)
+    self.tmuxEnv = LaunchFile.serverBasics(Self.clean(baseEnv))
   }
 
   static func clean(_ env: [String: String]) -> [String: String] {
@@ -81,9 +89,7 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
   }
 
   @discardableResult
-  func tmux(_ argv: [String], env: [String: String]? = nil) -> RunResult {
-    ProcessRunner.run(argv, env: env ?? tmuxEnv, timeout: 10)
-  }
+  func tmux(_ argv: [String]) -> RunResult { ProcessRunner.run(argv, env: tmuxEnv, timeout: 10) }
 
   public func sessionExists() -> Bool { baseCommands.hasValidSessionName && tmux(baseCommands.hasSession()).ok }
 
@@ -124,22 +130,45 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
       if let s = paneState(), !s.dead { throw PtyHostError.alreadyRunning }
       return try respawn(executable: executable, args: args, env: env, cwd: cwd)
     }
-    // The server (if this starts it) gets exactly the agent's environment, as `env -i <vars> tmux …`.
-    let serverEnv = Self.clean(env)
-    scrubInheritedEnvironment()  // a server that already runs may have been started by a polluted process
     lock.withLock { paneId = nil }
-    let create = baseCommands.newSession(argv: [executable] + args, env: serverEnv, cwd: cwd)
-    var r = tmux(create, env: serverEnv)
-    // A server that was shutting down (the last session had just been killed) creates nothing; ask again (bounded).
-    for _ in 0..<3 where TmuxCommands.saysServerWentAway(status: r.status, stderr: r.err, timedOut: r.timedOut) {
-      r = tmux(create, env: serverEnv)
+    try launching(executable, args, env) { file in
+      let create = baseCommands.newSession(argv: LaunchFile.tmuxArgv(file), cwd: cwd)
+      var r = tmux(create)
+      // A server that was shutting down (the last session had just been killed) creates nothing; ask again (bounded).
+      for _ in 0..<3 where TmuxCommands.saysServerWentAway(status: r.status, stderr: r.err, timedOut: r.timedOut) {
+        r = tmux(create)
+      }
+      guard r.ok else { throw PtyHostError.startFailed(r.err.trimmingCharacters(in: .whitespacesAndNewlines)) }
+      let id = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard TmuxCommands.isPaneId(id) else { throw PtyHostError.startFailed("tmux printed no pane id") }
+      setPane(id)
+      try adoptPane()
     }
-    guard r.ok else { throw PtyHostError.startFailed(r.err.trimmingCharacters(in: .whitespacesAndNewlines)) }
-    tmuxEnv = serverEnv
-    let id = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard TmuxCommands.isPaneId(id) else { throw PtyHostError.startFailed("tmux printed no pane id") }
-    setPane(id)
-    try adoptPane()
+  }
+
+  /// Writes this launch's file and runs `body` with its path. The file removes itself once the pane's shell reads it. When
+  /// `body` throws it is removed here: tmux never ran it, the pane died at once, or the pane could not be read, and then a
+  /// shell that has not read it yet fails rather than leave an agent running that nobody supervises.
+  private func launching(_ executable: String, _ args: [String], _ env: [String: String], _ body: (String) throws -> Void) throws {
+    let script: String
+    do {
+      script = try LaunchFile.script(argv: [executable] + args, env: Self.clean(env))
+    } catch {
+      throw PtyHostError.startFailed("\(error)")
+    }
+    let path = LaunchFile.newPath(in: launchDir, session: baseCommands.session)
+    do {
+      try LaunchFile.create(at: path, script: script)  // checks the folder is ours before anything in it is touched
+      LaunchFile.removeStale(in: launchDir, session: baseCommands.session, except: path)
+    } catch {
+      throw PtyHostError.startFailed("\(error)")
+    }
+    do {
+      try body(path)
+    } catch {
+      unlink(path)
+      throw error
+    }
   }
 
   public func restart(executable: String, args: [String], env: [String: String], cwd: String) throws {
@@ -148,36 +177,27 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
     try respawn(executable: executable, args: args, env: env, cwd: cwd)
   }
 
-  /// Removes inherited Claude Code markers from the running server's global and session environment (`-e` cannot).
-  func scrubInheritedEnvironment() {
-    for global in [true, false] {
-      let r = tmux(baseCommands.showEnvironment(global: global))
-      guard r.ok else { continue }  // no server or no session yet: nothing inherited to remove
-      for name in ClaudeEnvScrub.inheritedNames(inShowEnvironment: r.out) {
-        tmux(baseCommands.removeEnvironment(name, global: global))
-      }
-    }
-  }
-
   private func respawn(executable: String, args: [String], env: [String: String], cwd: String) throws {
-    scrubInheritedEnvironment()
     loadPane()
-    if paneState() == nil {
-      // Our pane is gone but the session lives on (someone else's pane in it): a new window, never their pane.
-      let r = tmux(baseCommands.newWindow(argv: [executable] + args, env: Self.clean(env), cwd: cwd))
-      let id = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard r.ok, TmuxCommands.isPaneId(id) else {
-        throw PtyHostError.startFailed(r.err.trimmingCharacters(in: .whitespacesAndNewlines))
+    let paneGone = paneState() == nil
+    try launching(executable, args, env) { file in
+      if paneGone {
+        // Our pane is gone but the session lives on (someone else's pane in it): a new window, never their pane.
+        let r = tmux(baseCommands.newWindow(argv: LaunchFile.tmuxArgv(file), cwd: cwd))
+        let id = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard r.ok, TmuxCommands.isPaneId(id) else {
+          throw PtyHostError.startFailed(r.err.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        setPane(id)
+        return try adoptPane()
       }
-      setPane(id)
-      return try adoptPane()
+      // A fresh screen and history: a notice or dialog from the previous run must never be read as this run's. The second
+      // clear is part of the respawn command itself (see `respawnPane`), never a later call.
+      tmux(commands.clearHistory())
+      let r = tmux(commands.respawnPane(argv: LaunchFile.tmuxArgv(file), cwd: cwd))
+      guard r.ok else { throw PtyHostError.startFailed(r.err.trimmingCharacters(in: .whitespacesAndNewlines)) }
+      try adoptPane()
     }
-    // A fresh screen and history: a notice or dialog from the previous run must never be read as this run's. The second
-    // clear is part of the respawn command itself (see `respawnPane`), never a later call.
-    tmux(commands.clearHistory())
-    let r = tmux(commands.respawnPane(argv: [executable] + args, env: Self.clean(env), cwd: cwd))
-    guard r.ok else { throw PtyHostError.startFailed(r.err.trimmingCharacters(in: .whitespacesAndNewlines)) }
-    try adoptPane()
   }
 
   private func adoptPane() throws {
@@ -297,6 +317,14 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
   public func sendDialogKey(_ key: DialogKey) -> SendOutcome {
     guard lock.withLock({ paneId }) != nil else { return .failed }
     let r = tmux(commands.sendDialogKey(key))
+    if r.timedOut { return .unknown }
+    return r.ok ? .sent : .failed
+  }
+
+  @discardableResult
+  public func sendEscape() -> SendOutcome {
+    guard lock.withLock({ paneId }) != nil else { return .failed }
+    let r = tmux(commands.sendEscape())
     if r.timedOut { return .unknown }
     return r.ok ? .sent : .failed
   }

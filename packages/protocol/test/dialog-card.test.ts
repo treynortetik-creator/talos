@@ -206,12 +206,17 @@ describe('the dialog card', () => {
     expect(dialogBody('login', 'Wo‮rk')).toBe("Wo⟦U+202E⟧rk's session needs you to sign in to Claude on the Mac.")
   })
 
-  it('has the Mac thread line as its expiry fallback', () => {
-    expect(dialogFallbackLine('trust', 'Work')).toBe(
-      "Work's session is waiting on a 'trust this folder' prompt; open Terminals → Work on the Mac to answer.",
+  it('its expiry fallback is a line in the thread: "This thread\'s session", never the thread\'s name, and where to answer', () => {
+    const mac = { kind: 'mac' } as const
+    const linux = { kind: 'linux', machine: 'devbox', attach: 'talos-app supervise attach work' } as const
+    expect(dialogFallbackLine('trust', mac)).toBe(
+      "This thread's session is waiting on a 'trust this folder' prompt; open this thread in Terminals on the Mac to answer.",
     )
-    expect(dialogFallbackLine('mcp_consent', 'Work')).toContain("'approve a project MCP server'")
-    expect(dialogFallbackLine('login', 'Work')).toContain("'sign in'")
+    expect(dialogFallbackLine('trust', linux)).toBe(
+      "This thread's session is waiting on a 'trust this folder' prompt; attach on devbox to answer: talos-app supervise attach work",
+    )
+    expect(dialogFallbackLine('mcp_consent', mac)).toContain("'approve a project MCP server'")
+    expect(dialogFallbackLine('login', linux)).toContain("'sign in'")
   })
 })
 
@@ -638,8 +643,8 @@ describe('the dev_channels dialog card', () => {
   })
 
   it('the Mac fallback line says "sign in", never "log in"', () => {
-    expect(dialogFallbackLine('login', 'Work')).toContain("'sign in'")
-    expect(dialogFallbackLine('dev_channels', 'Work')).toContain("'allow the development channel'")
+    expect(dialogFallbackLine('login', { kind: 'mac' })).toContain("'sign in'")
+    expect(dialogFallbackLine('dev_channels', { kind: 'mac' })).toContain("'allow the development channel'")
   })
 
   it('answers with the label as the screen showed it', () => {

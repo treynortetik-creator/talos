@@ -1,8 +1,10 @@
 import { deflateSync } from 'node:zlib'
 import { expect, type Page, test } from '@playwright/test'
 
-// Fake mode (VITE_FAKE=1). Screenshots land in test/threads/shots/<project>-viewer-*.png for the PR.
-const shot = (name: string, project: string) => `test/threads/shots/${project}-viewer-${name}.png`
+// Fake mode (VITE_FAKE=1). Screenshots land in test-results/shots/threads/<project>-viewer-*.png; with TALOS_SHOTS=1 they replace
+// the committed ones in test/threads/shots, so an ordinary run never rewrites tracked files.
+const SHOTS = process.env.TALOS_SHOTS ? 'test/threads/shots' : 'test-results/shots/threads'
+const shot = (name: string, project: string) => `${SHOTS}/${project}-viewer-${name}.png`
 
 function crc32(buf: Buffer) {
   let c = ~0

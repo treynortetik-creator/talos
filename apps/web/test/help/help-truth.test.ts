@@ -9,7 +9,7 @@
 //  - A shortcut must be wired: the handler it names has to be passed in, or the menu action has to do something.
 //  - Every sentence in a note, a limit or a key's text needs an entry in CLAIMS with its evidence, and no entry may be stale.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, posix, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
@@ -27,7 +27,17 @@ import { HELP_PATH } from '../../src/features/help/path.ts'
 import { WRITES_SYNCED_CONFIG } from '../../src/features/settings/SettingsScreen.tsx'
 import { chordLabel, DEFAULT_KEYMAP } from '../../src/lib/keymap.ts'
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
+// POSIX separators throughout, so the paths this test compares are the same on Windows (where readFileSync takes them too)
+const { join } = posix
+const ROOT = join(
+  dirname(fileURLToPath(import.meta.url))
+    .split(sep)
+    .join('/'),
+  '..',
+  '..',
+  '..',
+  '..',
+)
 const WEB = join(ROOT, 'apps/web/src')
 const MAC = join(ROOT, 'apps/desktop/Sources')
 
@@ -812,7 +822,16 @@ describe('Help text hygiene', () => {
   })
 
   it('covers every part the plan lists, with the fixes it names', () => {
-    expect(HELP_SECTIONS.map((s) => s.id)).toEqual(['which', 'where', 'setup', 'fix', 'keys', 'limits', 'about'])
+    expect(HELP_SECTIONS.map((s) => s.id)).toEqual([
+      'which',
+      'where',
+      'setup',
+      'fix',
+      'keys',
+      'limits',
+      'report-bug',
+      'about',
+    ])
     const fix = blocks().find((b) => b.kind === 'fix')
     expect(fix && fix.kind === 'fix' ? fix.rows.map((r) => r.id) : []).toEqual([
       'no-notifications',

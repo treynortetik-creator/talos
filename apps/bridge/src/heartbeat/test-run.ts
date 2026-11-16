@@ -14,6 +14,7 @@ import {
   parseHeartbeatTestResult,
 } from '@talos-app/protocol'
 import { errorFrame, heartbeatTestResultFrame, scheduleAckFrame } from '../frames-out.ts'
+import { say } from '../owner-words.ts'
 import type { SrcOut } from './run-parts.ts'
 import type { HeartbeatRunner } from './runner.ts'
 import { recordPass } from './tested.ts'
@@ -165,7 +166,10 @@ export class HeartbeatTester {
           d.log('heartbeat test pass not saved', { error: (e as Error).message })
           result = {
             ...result,
-            error: 'The test passed, but this Mac could not save it. Check the disk, then test again.',
+            error: say({
+              mac: 'The test passed, but this Mac could not save it. Check the disk, then test again.',
+              linux: 'The test passed, but this computer could not save it. Check the disk, then test again.',
+            }),
           }
         }
       }

@@ -22,7 +22,16 @@ import type {
 import { createContext, createElement, type ReactNode, useContext } from 'react'
 import { type StoreApi, useStore } from 'zustand'
 import { initialSchedulesSlice, type SchedulesClient, type SchedulesSlice } from './schedulesClient.ts'
-import type { FolderClient, MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
+import type {
+  AgentsMdClient,
+  BugReportClient,
+  FilesClient,
+  FolderClient,
+  MemoryClient,
+  MemoryFoldersClient,
+  SearchClient,
+  SpeakClient,
+} from './v2Client.ts'
 
 /** Rejections the relay or the Mac would send as `error{code}`; clients and the fake throw this. */
 /** `onProgress` gets 0..1 as bytes go out; `signal` cancels the upload. Both optional. */
@@ -75,6 +84,12 @@ export type ClientState = {
   unread: Record<string, number>
   /** The relay's read mark per thread (`ready.read_upto`, then what this device marked). Absent from an older relay. */
   readUpto?: Record<string, number>
+  /**
+   * The relay's clock minus this device's, in ms, as learned from the last `ready` (0 or absent: the same, or not known
+   * yet). Card expiry times are the relay's and the Mac's, so anything that asks "has this card run out" adds this to
+   * the device clock first.
+   */
+  clockOffset?: number
   statuses: Record<string, ThreadStatusT>
   cards: CardT[]
   inbox: InboxItemT[]
@@ -104,8 +119,11 @@ export type CardResolveInput = {
   note?: string
   /** Which button of a dialog card, as its index in the card's options. */
   choice?: number
-  /** From `stepup()` for risk:'high' cards. */
-  stepupToken?: string
+  /**
+   * "Always allow <kind>" (always-allow.ts): only with action 'primary' on a card of a SEND_KINDS kind, and only when the
+   * bridge says ALWAYS_ALLOW_FEATURE. Goes inside the signed frame.
+   */
+  always?: true
 }
 
 export type VoiceAskArgs = {
@@ -148,7 +166,7 @@ export interface TalosClient {
     attachments?: AttachmentRefT[]
     replyTo?: string
     intent?: 'what_did_i_miss' | 'run'
-    /** With `intent: 'run'`: the block the tap is for (protocol `RunBlockRef`). The Mac allows each block one Run. */
+    /** With `intent: 'run'`: the block the tap is for (protocol `RunBlockRef`). The Mac runs each tap once (by its message id). */
     runBlock?: { message_id: string; index: number }
   }): Promise<SendResult>
   sendVoiceNote(args: { threadId: string; attachment: AttachmentRefT }): Promise<SendResult>
@@ -160,10 +178,10 @@ export interface TalosClient {
    */
   onFrame<T extends FrameType>(type: T, listener: (frame: FrameOf<T>) => void): () => void
   readonly api: TalosApi
-  /** Rejects with `TalosClientError` (`card_hash_mismatch`, `stepup_required`, `card_expired`, ...). */
+  /** Rejects with `TalosClientError` (`card_hash_mismatch`, `card_expired`, `open_in_app`, ...). */
   resolveCard(cardId: string, input: CardResolveInput): Promise<void>
   /** RFC 7386 merge patch against the current config rev. Rejects with `config_conflict` / `config_field_forbidden`. */
-  patchConfig(patch: Record<string, unknown>, opts?: { stepupToken?: string }): Promise<void>
+  patchConfig(patch: Record<string, unknown>): Promise<void>
   updateInbox(eventId: string, patch: { state?: InboxItemT['state']; snoozeUntil?: string }): Promise<void>
   /**
    * Marks a thread read through the relay. With `needConnection` it does nothing and returns false when it could not be sent
@@ -187,8 +205,6 @@ export interface TalosClient {
   ): Promise<{ hasMore: boolean; unavailable?: 'mac_offline'; stale?: true }>
   /** Uploads bytes to POST /api/media. `sha256` is the lowercase hex digest the bridge will verify. */
   uploadMedia(blob: Blob, meta: UploadMeta): Promise<AttachmentRefT>
-  /** Passkey step-up; resolves a single-use token for `card:<id>`, `config:work` or `device:revoke`. */
-  stepup(purpose: string): Promise<string>
   /** Signs a RAW object with the device key (adds device_id and osig). Pass every field, empty arrays included. */
   signOwnerFrame<T extends Record<string, unknown>>(frame: T): Promise<T & { device_id: string; osig: string }>
   /** Schedules (docs/SCHEDULES.md S5): the Schedules tab's calls to the Mac. */
@@ -200,6 +216,14 @@ export interface TalosClient {
   readonly speak?: SpeakClient
   /** The folder picker: folder names on the Mac. Absent on a client that cannot ask the Mac. */
   readonly folders?: FolderClient
+  /** The Files pane: a read-only look at a thread's folder on the Mac. Absent on a client that cannot ask the Mac. */
+  readonly files?: FilesClient
+  /** The thread's AGENTS.md in its settings, on the Mac. Absent on a client that cannot ask the Mac. */
+  readonly agentsMd?: AgentsMdClient
+  /** Which folders Memory's Notes show, picked in Settings. Absent on a client that cannot ask the Mac. */
+  readonly memoryFolders?: MemoryFoldersClient
+  /** The bug reporter (Mac's versions and logs, and the signed post to the relay). Absent in a fake that does not model it. */
+  readonly bugs?: BugReportClient
   /**
    * CC-C3: signs and sends a raw owner frame (`session.control`) and resolves on the relay's ack; rejects with
    * `TalosClientError`. Optional so older clients keep compiling; the answer arrives as `session.control.result`.

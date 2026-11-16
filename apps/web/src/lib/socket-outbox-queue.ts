@@ -2,7 +2,7 @@
 // dropping an acked entry, the per-message lock, and the written mark.
 import { type AttachmentRefT, type MessageT, newId } from '@talos-app/protocol'
 import { TalosClientError } from './client.ts'
-import { INBOX_QUEUE } from './socket-constants.ts'
+import { ACKED_REFS_MAX, INBOX_QUEUE } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 import type { InboxPatch, OutboxEntry, OutboxKind, PendingVoice } from './socket-types.ts'
 import { signedFor } from './unsent.ts'
@@ -125,6 +125,15 @@ export function createOutboxQueue(c: SocketCtx) {
   async function onAcked(frameId: string) {
     if (c.inboxSettled(frameId)) return
     const e = c.outbox.find((x) => x.id === frameId)
+    // Before the storage write below: the Mac's refusal can be the very next frame, and must find the row.
+    if (e && (e.kind === 'message' || e.kind === 'voice_note')) {
+      c.ackedRefs.set(frameId, { clientMsgId: e.clientMsgId, threadId: e.threadId, voiceNote: e.kind === 'voice_note' })
+      // Oldest out first. Past this, or after a reload, the relay's own stored row is what tells the owner.
+      for (const k of c.ackedRefs.keys()) {
+        if (c.ackedRefs.size <= ACKED_REFS_MAX) break
+        c.ackedRefs.delete(k)
+      }
+    }
     await dropFromOutbox(frameId)
     if (e) writtenOn.delete(e.clientMsgId)
     if (e && e.kind !== 'voice.ask') c.patchMessage(e.clientMsgId, (m) => (m.receipt ? m : { ...m, receipt: 'sent' }))

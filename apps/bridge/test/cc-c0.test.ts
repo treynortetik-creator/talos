@@ -79,11 +79,14 @@ describe('permission_stepup and sessions_view were removed (2026-11)', () => {
       expect(f.config.rev).toBe(0)
     }
   })
-  test('an old config.json that still has the keys loads, and the keys are not written back', () => {
+  test('an old config.json that still has the keys loads without them, and a save strips them (retired, rule 1 does not cover them)', () => {
     const f = file()
     expect(f.config).not.toHaveProperty('permission_stepup')
     expect(f.applyPatch(0, { agent: { name: 'Zed' } })).toMatchObject({ ok: true })
     expect(f.config).not.toHaveProperty('sessions_view')
+    const disk = JSON.parse(readFileSync((f as unknown as { path: string }).path, 'utf8'))
+    expect(disk).not.toHaveProperty('permission_stepup')
+    expect(disk).not.toHaveProperty('sessions_view')
   })
   test('other session fields still apply', () => {
     const f = file()
@@ -112,9 +115,10 @@ describe('the Telegram mirror setting was removed (2026-11)', () => {
     expect(f.config).not.toHaveProperty('mirror')
     for (const t of f.config.threads) expect(t).not.toHaveProperty('mirror')
   })
-  test('nothing writes them back: after a patch the file on disk has neither', () => {
+  test('nothing writes them back: after a patch the file on disk has neither, and the old chat id is gone', () => {
     const { p, f } = oldFile()
     expect(f.applyPatch(0, { agent: { name: 'Zed' } })).toMatchObject({ ok: true })
+    expect(f.config).not.toHaveProperty('mirror')
     const disk = JSON.parse(readFileSync(p, 'utf8'))
     expect(disk).not.toHaveProperty('mirror')
     for (const t of disk.threads) expect(t).not.toHaveProperty('mirror')

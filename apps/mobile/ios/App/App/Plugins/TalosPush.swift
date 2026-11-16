@@ -15,7 +15,8 @@ final class TalosPushCenter: NSObject, UNUserNotificationCenterDelegate {
     static let shared = TalosPushCenter()
     /// Set by the plugin once the page can hear it.
     var deliver: (([String: Any]) -> Bool)?
-    /// The thread the page is showing right now (or nil), set by the page through `setViewing`.
+    /// The thread the page is showing right now (or nil), set by the page through `setViewing`. Cleared when the page can no
+    /// longer be showing it (`pageLeft`), so a stale one never silences a push.
     var viewingThread: String?
     private var waiting: [String: Any]?
     /// The last tap that went through to a page, and when. The page never says it acted on it, so a page that is replaced
@@ -23,6 +24,22 @@ final class TalosPushCenter: NSObject, UNUserNotificationCenterDelegate {
     private var delivered: (event: [String: Any], at: Date)?
     /// The clock, so a test can say how long ago the tap went through.
     var now: () -> Date = Date.init
+    private var backgroundObserver: NSObjectProtocol?
+
+    override init() {
+        super.init()
+        // In the background the owner is not looking at any thread. The page names its thread again when it shows one.
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.pageLeft() }
+    }
+
+    deinit { backgroundObserver.map(NotificationCenter.default.removeObserver) }
+
+    /// The page is out of sight, or a new document (or none) replaced it: no thread is on screen until the page says so again.
+    func pageLeft() {
+        viewingThread = nil
+    }
 
     /// Capacitor would take the delegate when its bridge is built (after launch) unless `ios.handleApplicationNotifications`
     /// is false in capacitor.config.ts; with it off, this stays the delegate and taps reach `didReceive` (review R2). The
@@ -224,8 +241,12 @@ public class TalosPushPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func setViewing(_ call: CAPPluginCall) {
         guard TalosPluginGate.allows(bridge) else { return call.reject("not allowed from this page") }
-        TalosPushCenter.shared.viewingThread = call.getString("thread")
-        call.resolve()
+        let thread = call.getString("thread")
+        // On the main queue, where the notification checks and `pageLeft` read and write it.
+        DispatchQueue.main.async {
+            TalosPushCenter.shared.viewingThread = thread
+            call.resolve()
+        }
     }
 
     /// The thread (or card) was read: take its notifications off the lock screen and out of Notification Center. Matches on

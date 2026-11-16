@@ -1,0 +1,859 @@
+diff --git a/apps/windows/TalosWin.ps1 b/apps/windows/TalosWin.ps1
+index 85472667..fc98ff0a 100644
+--- a/apps/windows/TalosWin.ps1
++++ b/apps/windows/TalosWin.ps1
+@@ -72,18 +72,32 @@ function Get-TalosFinalPath([string]$Path) {
+ 
+ <#
+   A file for root inside the distro, with nothing in between that the talos user (or anyone) could swap (R1-2): its bytes
+-  (LF line ends) as base64, and their SHA-256. install.ps1 hands both to a root shell as arguments; root decodes, checks the
+-  hash and installs it root-owned. No file is left where another user could write first.
++  (LF line ends), gzipped, as base64, and the SHA-256 of the bytes themselves. install.ps1 hands both to a root shell as
++  arguments; root decodes, unzips, checks the hash and installs it root-owned. No file is left where another user could
++  write first. Gzipped so the scripts fit on one Windows command line (32767 characters): talos-wsl.sh is 27 KB.
+ #>
+ function ConvertTo-TalosRootPayload([string]$Text) {
+   $bytes = (New-Object Text.UTF8Encoding $false).GetBytes(($Text -replace "`r`n", "`n"))
+   $sha = [Security.Cryptography.SHA256]::Create()
+   try { $hash = -join ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) } finally { $sha.Dispose() }
+-  New-Object PSObject -Property @{ Base64 = [Convert]::ToBase64String($bytes); Sha256 = $hash }
++  $out = New-Object IO.MemoryStream
++  $gz = New-Object IO.Compression.GZipStream($out, [IO.Compression.CompressionMode]::Compress)
++  $gz.Write($bytes, 0, $bytes.Length)
++  $gz.Close()
++  New-Object PSObject -Property @{ Base64 = [Convert]::ToBase64String($out.ToArray()); Sha256 = $hash }
++}
++# the bytes back from a payload, as root's side reads them (for the tests)
++function ConvertFrom-TalosRootPayload([string]$Base64) {
++  $in = New-Object IO.MemoryStream(, [Convert]::FromBase64String($Base64))
++  $gz = New-Object IO.Compression.GZipStream($in, [IO.Compression.CompressionMode]::Decompress)
++  $out = New-Object IO.MemoryStream
++  $gz.CopyTo($out)
++  $gz.Close()
++  , $out.ToArray()
+ }
+ # root's side of it: $1 the base64, $2 where it goes, $3 the hash. No quote marks at all: Windows PowerShell 5.1 drops them
+ # from native arguments. The paths it is given have no spaces.
+-$script:RootInstallSh = 'mkdir -p ${2%/*} && printf %s $1 | base64 -d > $2.tmp && [ $(sha256sum < $2.tmp | cut -c1-64) = $3 ] && install -m 755 -o root -g root $2.tmp $2; r=$?; rm -f $2.tmp; exit $r'
++$script:RootInstallSh = 'mkdir -p ${2%/*} && printf %s $1 | base64 -d | gzip -dc > $2.tmp && [ $(sha256sum < $2.tmp | cut -c1-64) = $3 ] && install -m 755 -o root -g root $2.tmp $2; r=$?; rm -f $2.tmp; exit $r'
+ 
+ # a git URL without its login (R1-5): https://user:token@host/x.git is https://host/x.git; nothing these scripts print, or
+ # hand to the distro, carries a secret
+diff --git a/apps/windows/distro/setup-user.sh b/apps/windows/distro/setup-user.sh
+index 7d1f3dfc..a12040ea 100644
+--- a/apps/windows/distro/setup-user.sh
++++ b/apps/windows/distro/setup-user.sh
+@@ -100,8 +100,29 @@ for f in "$HOME/.profile" "$HOME/.bashrc"; do
+ done
+ # Claude Code for Linux: the pinned release binary, checked, then its own `install` (the launcher in ~/.local/bin; what
+ # Anthropic's install.sh does after its download, without running that script). Signing in is the owner's, once: install.ps1
+-# says how at the end. A newer claude already there is kept; it updates itself.
+-if ! command -v claude >/dev/null; then
++# says how at the end. It does not update itself (R3-8): an update would replace the checked binary with one nobody
++# checked, so the auto-updater is off, in the login environment the supervisor's sessions start from and in Claude Code's
++# own settings. A newer version comes with a new pin here, and this script run again.
++for f in "$HOME/.profile" "$HOME/.bashrc"; do
++  grep -q 'talos: claude updates' "$f" 2>/dev/null ||
++    run sh -c "printf '%s\n' '# talos: claude updates come with a new pin (apps/windows/distro/setup-user.sh)' 'export DISABLE_AUTOUPDATER=1' >> '$f'"
++done
++export DISABLE_AUTOUPDATER=1
++if [ "$DRY" = 1 ]; then echo "would turn off Claude Code's auto-updater in ~/.claude/settings.json"; else
++  mkdir -p "$HOME/.claude"
++  python3 - "$HOME/.claude/settings.json" <<'PY'
++import json, os, sys
++p = sys.argv[1]
++s = json.load(open(p)) if os.path.exists(p) else {}
++env = s.setdefault('env', {})
++if env.get('DISABLE_AUTOUPDATER') != '1' or s.get('autoUpdates') is not False:
++    env['DISABLE_AUTOUPDATER'] = '1'
++    s['autoUpdates'] = False
++    open(p + '.tmp', 'w').write(json.dumps(s, indent=2) + '\n')
++    os.replace(p + '.tmp', p)
++PY
++fi
++if [ "$(claude --version 2>/dev/null | cut -d' ' -f1)" != "$CLAUDE_VERSION" ]; then
+   d="$(mktemp -d)"
+   run fetch_pinned "https://downloads.claude.ai/claude-code-releases/$CLAUDE_VERSION/linux-x64/claude" "$CLAUDE_SHA256" "$d/claude"
+   run chmod 755 "$d/claude"
+diff --git a/apps/windows/distro/talos-wsl.sh b/apps/windows/distro/talos-wsl.sh
+index 38c0f690..ec9e7930 100644
+--- a/apps/windows/distro/talos-wsl.sh
++++ b/apps/windows/distro/talos-wsl.sh
+@@ -12,6 +12,8 @@
+ #   talos-wsl.sh folder-add [--read-only] 'C:\Some\Folder'   one Windows folder at /mnt/win/<name> (prints that path last)
+ #   talos-wsl.sh folder-remove /mnt/win/<name>
+ #   talos-wsl.sh folder-list                  /mnt/win/<name><TAB>C:\Some\Folder, one a line
++#   talos-wsl.sh hold                         what the keep-alive runs: sleeps while isolated, exits 1 saying why when not
++#   talos-wsl.sh units                        what root-setup writes to /etc (the boot unit, the user manager gate, logins)
+ #
+ # No Windows folder is shared by default (owner, 2026-11-11): interop off means a Linux process cannot start a Windows one,
+ # automount off means C: is not under /mnt; only the folders the owner adds, one by one, are mounted.
+@@ -78,12 +80,43 @@ wsl_conf() {
+ # (Wsl/Service/CreateInstance/E_UNEXPECTED) until `wsl --shutdown`. It ends by checking `isolation` against /proc/mounts as
+ # it is then, so the boot unit fails, and what needs it does not start, if anything is left.
+ WSLG_MOUNTS='$2 ~ /^\/mnt\/wslg(\/|$)/ || $2 == "/tmp/.X11-unix" { print $2 }'
++# wsl.conf's [interop] section says enabled=false (any case, any spaces)
++interop_off_in_conf() {
++  [ -f "$R/etc/wsl.conf" ] || return 1
++  awk '
++    /^[[:space:]]*\[/ { s = tolower($0); gsub(/[[:space:]]/, "", s); sect = s; next }
++    sect == "[interop]" { l = tolower($0); gsub(/[[:space:]]/, "", l); if (l == "enabled=false") off = 1; if (l == "enabled=true") off = 0 }
++    END { exit !off }' "$R/etc/wsl.conf"
++}
++# wsl.conf is older than this start of the distro, so what it says is what WSL applied. The start is the distro's own PID 1
++# (the VM's boot time plus PID 1's start), not /proc/uptime, which is the shared VM's (found live: every wsl.conf looked
++# newer than "the start"). TALOS_WSL_STARTED (epoch seconds) stands in for it in tests.
++distro_started() {
++  if [ -n "${TALOS_WSL_STARTED:-}" ]; then
++    echo "$TALOS_WSL_STARTED"
++    return
++  fi
++  local btime ticks hz
++  btime="$(awk '$1 == "btime" { print $2 }' /proc/stat)"
++  ticks="$(awk '{ sub(/^.*\) /, ""); print $20 }' /proc/1/stat)"
++  hz="$(getconf CLK_TCK)"
++  echo $((btime + ticks / hz))
++}
++interop_conf_applied() {
++  [ "$(stat -c %Y "$R/etc/wsl.conf")" -le "$(distro_started)" ]
++}
+ mounted_at() { awk -v m="$1" '$2 == m { found = 1 } END { exit !found }' "$R/proc/mounts"; }
+ # the source and type of the mount on top at /mnt/wsl (the last line for it), e.g. "talos-private tmpfs"
+ wsl_top() { awk '$2 == "/mnt/wsl" { top = $1 " " $3 } END { print top }' "$R/proc/mounts"; }
+ 
+ isolate_mounts() {
+-  local m dns i
++  local m dns i e
++  # WSL's binfmt entry for Windows programs: with interop off in wsl.conf nothing serves it (found live: every .exe, and
++  # /init with WSL_INTEROP set, failed), but it was seen registered once after an install all the same. It is taken out, so
++  # its being there is a sign, and `isolation` refuses when it is.
++  for e in "$R"/proc/sys/fs/binfmt_misc/WSLInterop*; do
++    [ -e "$e" ] && { echo -1 >"$e" || die "could not unregister $(basename "$e")"; }
++  done
+   # parents first: /mnt/wslg before /mnt/wslg/distro
+   for m in $(awk "$WSLG_MOUNTS" "$R/proc/mounts" | sort -u); do
+     $MOUNT --make-rprivate "$R$m" || die "could not make $m private; nothing was unmounted (an unmount would reach other distros)"
+@@ -116,9 +149,15 @@ isolate_mounts() {
+ # The boot unit runs it, and so does every start of a user manager, the supervisor's included (root-setup).
+ isolation() {
+   local bad=0 drives wslg extra mode
+-  # any WSLInterop entry, WSLInterop-late (the name WSL uses under systemd on some versions) included
+-  if compgen -G "$R/proc/sys/fs/binfmt_misc/WSLInterop*" >/dev/null; then
+-    echo "talos-wsl: interop is on (Linux processes can start Windows programs)" >&2
++  # Interop: what decides it is wsl.conf, which WSL reads when the distro starts ([interop] enabled=false: WSL then serves
++  # no Windows program; found live, every .exe, and /init with WSL_INTEROP set, failed). WSL's binfmt entry for .exe files
++  # is no sign either way: WSL registers it at start even with interop off, sometimes after the boot unit has taken it out
++  # (found live), so it counts only where wsl.conf leaves interop on. wsl.conf is root's; the agent cannot change it.
++  if ! interop_off_in_conf; then
++    echo "talos-wsl: interop is on (Linux processes can start Windows programs): $R/etc/wsl.conf does not turn it off" >&2
++    bad=1
++  elif ! interop_conf_applied; then
++    echo "talos-wsl: interop may be on (Linux processes can start Windows programs): wsl.conf changed after the distro started, and counts only from its next start" >&2
+     bad=1
+   fi
+   mode="$("$WSLINFO" --networking-mode 2>/dev/null | tr -d '\r' || true)"
+@@ -147,14 +186,71 @@ isolation() {
+     echo "talos-wsl: /mnt/wsl is the one every distro shares, not Talos's private one" >&2
+     bad=1
+   else
+-    extra="$(find "$R/mnt/wsl" -mindepth 1 -maxdepth 1 ! -name resolv.conf 2>/dev/null | head -3 | tr '\n' ' ')"
++    # from /: find fails when it cannot get back to a working directory the caller cannot read (found live: as talos from
++    # root's home, `isolation` ended with no word)
++    extra="$(cd / && find "$R/mnt/wsl" -mindepth 1 -maxdepth 1 ! -name resolv.conf 2>/dev/null | head -3 | tr '\n' ' ')"
+     if [ -n "$extra" ]; then
+       echo "talos-wsl: the private /mnt/wsl holds more than WSL's DNS lines: $extra" >&2
+       bad=1
+     fi
+   fi
++  # a share of Talos's own files still mounted (one in use when protect-add took it out of fstab: R3-1)
++  local p
++  p="$(mounted_protected)"
++  if [ -n "$p" ]; then
++    echo "talos-wsl: a share of Talos's own files is still mounted: $p; restart the distro (wsl --terminate <distro>)" >&2
++    bad=1
++  fi
+   [ "$bad" = 0 ] || exit 1
+-  echo "isolated: interop off, no Windows drive, no WSLg, a private /mnt/wsl, NAT networking"
++  # Not "isolated" from everything (R3-3): WSL 2 runs every distro in one network namespace, so a service on 127.0.0.1 in the
++  # owner's other distros (Docker, a database, a dev server) is reachable from this one, and the other way round.
++  echo "isolated from Windows: interop off, no Windows drive, no WSLg, a private /mnt/wsl, NAT networking" \
++    "(localhost is still shared with this PC's other WSL distros)"
++}
++
++# The mounted shares (/mnt/win/<name>) that are, hold or sit inside a protected folder, as "<at> (<folder>)". /proc/mounts
++# writes the source's backslashes and spaces as \134 and \040.
++mounted_protected() {
++  local f src at low p
++  f="$(protected_file)"
++  [ -f "$f" ] && [ -f "$R/proc/mounts" ] || return 0
++  awk '$2 ~ /^\/mnt\/win\// { print $1 "\t" $2 }' "$R/proc/mounts" | while IFS=$'\t' read -r src at; do
++    src="$(printf '%s' "$src" | sed 's/\\134/\\/g; s/\\040/ /g; s/\\011/\t/g; s|/|\\|g')"
++    low="$(lower "$src")"
++    while IFS= read -r p; do
++      if [ -n "$p" ] && overlaps "$low" "$p"; then
++        printf '%s (%s) ' "$at" "$src"
++        break
++      fi
++    done <"$f"
++  done
++  # a share that is not protected must not end the caller (set -e): found live, an ordinary share made `isolation` exit 1
++  # with no word
++  return 0
++}
++
++# What the keep-alive runs (R3-2): the distro is held only while it is cut off from Windows. A broken isolation ends it at
++# once, saying why; keepalive.ps1 logs that and tells the owner.
++hold() {
++  (isolation) >/dev/null 2>&1 || {
++    (isolation) 2>&1 | sed 's/^/refused: /' >&2
++    exit 1
++  }
++  exec sleep infinity
++}
++
++# Logins (R3-2): a `wsl -d <distro>` shell as talos while isolation is broken is refused, saying why; root's still works,
++# to look into it. Cron and at are masked (root-setup), so nothing else runs as talos outside the gated user manager.
++login_gate() {
++  cat <<'EOF'
++# written by Talos (apps/windows/distro/talos-wsl.sh): no login as talos while the distro is not cut off from Windows
++if [ "$(id -u)" != 0 ] && ! /opt/talos-wsl/talos-wsl.sh isolation >/dev/null 2>&1; then
++  echo "This Talos distro is not cut off from Windows right now, so it does not let you in:" >&2
++  /opt/talos-wsl/talos-wsl.sh isolation 2>&1 | sed 's/^talos-wsl: /  /' >&2
++  echo "Restart it from Windows (wsl --terminate <distro>), or as root: journalctl -u talos-isolate" >&2
++  exit 1
++fi
++EOF
+ }
+ 
+ # After what WSL itself sets up at boot: tmpfiles recreates /tmp/.X11-unix, then WSL's generated wslg.service binds WSLg
+@@ -258,10 +354,12 @@ refuse_protected() {
+ }
+ 
+ # A protected folder is also taken out of any share already there (R2-5): an install over an older one, where the clone
+-# was shared before protection existed, leaves no share of it behind.
++# was shared before protection existed, leaves no share of it behind. A share in use cannot be unmounted (R3-1): its fstab
++# line goes all the same, so it is not mounted again, it is said to be still mounted, and the exit is 3, "restart the
++# distro": install.ps1 restarts it next, and until then `isolation` refuses (a protected share still mounted).
+ protect_add() {
+   [ $# -eq 1 ] || die "usage: protect-add 'C:\\Folder'"
+-  local win low f at src
++  local win low f at src rc=0
+   win="$(normalize "$1")"
+   low="$(lower "$win")"
+   f="$(protected_file)"
+@@ -273,12 +371,18 @@ protect_add() {
+     printf '%s\n' "$low" >>"$f"
+     echo "protected: $win"
+   fi
+-  folder_list | while IFS=$'\t' read -r at src; do
+-    if overlaps "$low" "$(lower "$src")"; then
++  while IFS=$'\t' read -r at src; do
++    overlaps "$low" "$(lower "$src")" || continue
++    if unshare_at "$at"; then
++      drop_line "$at"
+       echo "it was shared at $at; no longer"
+-      folder_remove "$at" >/dev/null
++    else
++      drop_line "$at"
++      echo "it was shared at $at and is in use, so it stays mounted until the distro restarts; it is not shared again after"
++      rc=3
+     fi
+-  done
++  done < <(folder_list)
++  return "$rc"
+ }
+ 
+ # the fstab source: forward slashes, spaces and tabs escaped as fstab wants
+@@ -303,6 +407,38 @@ folder_name() {
+ fstab_file() { printf '%s' "$R/etc/fstab"; }
+ mode_word() { if [ "$1" = ro ]; then echo read-only; else echo read-write; fi; }
+ 
++# A share that holds, or sits inside, one already shared in the other mode is refused, naming it (R3-4): a read-write share
++# of a parent makes a read-only child writable through it, and a read-only share inside a read-write one is writable anyway.
++refuse_mixed_overlap() {
++  local low mode="$2" at src opts
++  low="$(lower "$1")"
++  while IFS=$'\t' read -r at src opts; do
++    [ "${opts%%,*}" = "$mode" ] && continue
++    overlaps "$low" "$(lower "$src")" || continue
++    if [ "$mode" = rw ]; then
++      die "not shared: $src is shared read-only at $at, and a read-write share here would make it writable; share this read-only too, or remove that one first"
++    else
++      die "not shared read-only: $src is shared read-write at $at, so this would be writable through it anyway; share it read-write, or make that one read-only first"
++    fi
++  done < <(awk '$3 == "drvfs" && $2 ~ /^\/mnt\/win\// { print $2 "\t" $1 "\t" $4 }' "$(fstab_file)" | while IFS=$'\t' read -r at src opts; do
++    printf '%s\t%s\t%s\n' "$at" "$(windows_path "$src")" "$opts"
++  done)
++}
++
++# Unmounted (not lazily: a share in use is not left writable behind its own removal), or already not mounted. A share whose
++# folder was deleted on Windows fails to mount at boot (nofail), so "not mounted" is not an error.
++unshare_at() {
++  $UMOUNT "$R$1" 2>/dev/null && return 0
++  [ -f "$R/proc/mounts" ] && ! mounted_at "$1"
++}
++drop_line() {
++  local f
++  f="$(fstab_file)"
++  awk -v m="$1" '!($3 == "drvfs" && $2 == m)' "$f" >"$f.talos-tmp"
++  mv "$f.talos-tmp" "$f"
++  rmdir "$R$1" 2>/dev/null || true
++}
++
+ # change_mode <win> <at> <old opts> <new mode>: a share already there, mounted again read-only or read-write, and its fstab
+ # line to match. The unmount is not lazy: a folder the thread has a file open in is refused, not left writable behind a
+ # read-only mount point. Nothing changes unless the new mount is up.
+@@ -310,10 +446,13 @@ change_mode() {
+   local win="$1" at="$2" old="$3" mode="$4" new f
+   new="$mode,${old#*,}"
+   f="$(fstab_file)"
+-  $UMOUNT "$R$at" || die "$win is in use in the distro, so it stays $(mode_word "${old%%,*}"); close what uses it and try again"
++  $UMOUNT "$R$at" ||
++    die "could not unmount $win (a file in it may be open in the distro), so it stays $(mode_word "${old%%,*}"); close what uses it and try again"
+   if ! $MOUNT -t drvfs -o "$new" "$win" "$R$at"; then
+-    $MOUNT -t drvfs -o "$old" "$win" "$R$at" || true
+-    die "could not mount $win $(mode_word "$mode"); it stays $(mode_word "${old%%,*}")"
++    # the old mode back; if that fails too, say so (R3-6): it is not mounted now, and fstab still has the old line
++    $MOUNT -t drvfs -o "$old" "$win" "$R$at" ||
++      die "could not mount $win $(mode_word "$mode"), nor $(mode_word "${old%%,*}") again: it is not mounted now; fstab still shares it $(mode_word "${old%%,*}"), so it comes back so when the distro restarts"
++    die "could not mount $win $(mode_word "$mode"); it is mounted $(mode_word "${old%%,*}") again, as before"
+   fi
+   TALOS_AT="$at" TALOS_NEW="$new" awk 'BEGIN { OFS = " " } $3 == "drvfs" && $2 == ENVIRON["TALOS_AT"] { $4 = ENVIRON["TALOS_NEW"] } { print }' "$f" >"$f.talos-tmp"
+   mv "$f.talos-tmp" "$f"
+@@ -350,6 +489,7 @@ folder_add() {
+     change_mode "$win" "$at" "$opts" "$mode"
+     return
+   fi
++  refuse_mixed_overlap "$win" "$mode"
+   base="$(folder_name "$win")"
+   name="$base"
+   i=2
+@@ -385,10 +525,11 @@ folder_remove() {
+   f="$(fstab_file)"
+   [ -f "$f" ] && awk -v m="$at" '$3 == "drvfs" && $2 == m { found = 1 } END { exit !found }' "$f" ||
+     die "no Windows folder is shared at $at"
+-  $UMOUNT "$R$at" 2>/dev/null || true
+-  awk -v m="$at" '!($3 == "drvfs" && $2 == m)' "$f" >"$f.talos-tmp"
+-  mv "$f.talos-tmp" "$f"
+-  rmdir "$R$at" 2>/dev/null || true
++  # a share that cannot be unmounted stays shared, fstab line and all, and says so (R3-1): never "no longer shared" while it
++  # is still live and writable
++  unshare_at "$at" ||
++    die "$at is in use in the distro (a file in it may be open), so it stays shared; close what uses it and try again, or restart the distro"
++  drop_line "$at"
+   echo "no longer shared: $at"
+ }
+ 
+@@ -437,6 +578,15 @@ root_setup() {
+   put_unit isolate_unit /etc/systemd/system/talos-isolate.service
+   # talos's own user manager only (uid 1000): root's logins never depend on it
+   put_unit user_gate "/etc/systemd/system/user@$(id -u "$USER_NAME").service.d/talos-isolation.conf"
++  put_unit login_gate /etc/profile.d/00-talos-isolation.sh
++  # nothing runs as talos outside its gated user manager (R3-2): cron and at would start talos's jobs whatever isolation says
++  if [ -d /run/systemd/system ]; then
++    systemctl disable --now -q cron.service atd.service 2>/dev/null || true
++    systemctl mask -q cron.service atd.service
++  else
++    ln -sf /dev/null /etc/systemd/system/cron.service
++    ln -sf /dev/null /etc/systemd/system/atd.service
++  fi
+   # The unit is enabled whenever systemd runs (Ubuntu 24.04's own image already has it on), but started, and linger turned on
+   # (which starts talos's user manager, which needs the unit), only once the new wsl.conf has taken effect: before the
+   # restart C: is still mounted, and the unit's own check would rightly fail (found live on Titan). The test for "after the
+@@ -449,7 +599,13 @@ root_setup() {
+   fi
+   if [ -d /run/systemd/system ] && (isolation) >/dev/null 2>&1; then
+     systemctl start talos-isolate.service
+-    loginctl enable-linger "$USER_NAME"
++    # logind can still be starting right after the restart (R3-9): a few tries, then the linger file itself is the proof
++    local i
++    for i in 1 2 3 4 5; do
++      loginctl enable-linger "$USER_NAME" 2>/dev/null && [ -e "/var/lib/systemd/linger/$USER_NAME" ] && break
++      sleep 1
++    done
++    [ -e "/var/lib/systemd/linger/$USER_NAME" ] || die "linger did not turn on for $USER_NAME, so Talos would stop with the last window"
+   else
+     echo "the isolation unit runs, and linger is turned on, after the restart"
+   fi
+@@ -470,6 +626,9 @@ units)
+   isolate_unit
+   echo '----'
+   user_gate
++  echo '----'
++  login_gate
+   ;;
++hold) hold ;;
+ *) die "usage: talos-wsl.sh wsl-conf | root-setup | isolate-mounts | isolation | protect-add 'C:\\Folder' | folder-add [--read-only] 'C:\\Folder' | folder-remove /mnt/win/<name> | folder-list" ;;
+ esac
+diff --git a/apps/windows/install.ps1 b/apps/windows/install.ps1
+index 93147190..e63c176c 100644
+--- a/apps/windows/install.ps1
++++ b/apps/windows/install.ps1
+@@ -46,7 +46,8 @@ function WslOut([string[]]$a) {
+   $ErrorActionPreference = 'Continue'
+   ((& $WslExe @a 2>&1 | ForEach-Object { "$_" }) -join "`n") -replace "`0", ''
+ }
+-function Wsl([string[]]$a) {
++# $okCodes: exits that are not a failure for this call (protect-add's 3, "restart the distro", which comes next anyway)
++function Wsl([string[]]$a, [int[]]$okCodes = @(0)) {
+   if ($DryRun) {
+     # the program and its first argument, no more (R1-5)
+     $i = [Array]::IndexOf($a, '--exec')
+@@ -55,7 +56,7 @@ function Wsl([string[]]$a) {
+     return
+   }
+   & $WslExe @a
+-  if ($LASTEXITCODE -ne 0) { Fail "$script:step failed (wsl exit $LASTEXITCODE)" }
++  if ($okCodes -notcontains $LASTEXITCODE) { Fail "$script:step failed (wsl exit $LASTEXITCODE)" }
+ }
+ # a file for root, handed over as an argument with its hash, never through a folder another user can write (R1-2)
+ function PutRoot([string]$file, [string]$linuxPath) {
+@@ -125,11 +126,13 @@ PutRoot (Join-Path $here 'distro\setup-user.sh') '/opt/talos-wsl/setup-user.sh'
+ Wsl @('-d', $Distro, '-u', 'root', '--exec', '/opt/talos-wsl/talos-wsl.sh', 'wsl-conf')
+ Wsl @('-d', $Distro, '-u', 'root', '--exec', '/opt/talos-wsl/talos-wsl.sh', 'root-setup')
+ # Talos's own files on this side are never shared into the distro (R1-1): this clone (the scripts the logon task and these
+-# installers come from) and %LOCALAPPDATA%\Talos (the copies the task runs, the distro's disk)
+-Wsl @('-d', $Distro, '-u', 'root', '--exec', '/opt/talos-wsl/talos-wsl.sh', 'protect-add', $repo)
++# installers come from) and %LOCALAPPDATA%\Talos (the copies the task runs, the distro's disk). An older share of one that is
++# in use stays mounted until a restart (protect-add exits 3); the restart is the next step, and `isolation` after it refuses
++# if one is still there (R3-1).
++Wsl @('-d', $Distro, '-u', 'root', '--exec', '/opt/talos-wsl/talos-wsl.sh', 'protect-add', $repo) @(0, 3)
+ if (-not $DryRun) { New-Item -ItemType Directory -Force -Path $talosHome | Out-Null }
+ $talosHomeReal = if ($DryRun -and -not (Test-Path $talosHome)) { $talosHome } else { Get-TalosFinalPath $talosHome }
+-Wsl @('-d', $Distro, '-u', 'root', '--exec', '/opt/talos-wsl/talos-wsl.sh', 'protect-add', $talosHomeReal)
++Wsl @('-d', $Distro, '-u', 'root', '--exec', '/opt/talos-wsl/talos-wsl.sh', 'protect-add', $talosHomeReal) @(0, 3)
+ Say 'restarting the distro so wsl.conf takes effect (systemd, no interop, no automount, no WSLg)'
+ Wsl @('--terminate', $Distro)
+ Wsl @('-d', $Distro, '-u', 'root', '--exec', '/opt/talos-wsl/talos-wsl.sh', 'root-setup')
+@@ -184,6 +187,13 @@ if ($DryRun) {
+   if ($LASTEXITCODE -ne 0) { Fail "could not reset the files in $binDir to the folder's ACL (icacls exit $LASTEXITCODE)" }
+   $stray = Get-ChildItem -LiteralPath $binDir -Recurse -Force | Where-Object { @((Get-Acl -LiteralPath $_.FullName).Access | Where-Object { -not $_.IsInherited }).Count -gt 0 }
+   if ($stray) { Fail "$($stray[0].FullName) still has its own ACL entries" }
++  # the folder itself (R3-10): nothing inherited from above, and no one but you and SYSTEM on it
++  $acl = Get-Acl -LiteralPath $binDir
++  $who = @($acl.Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } | Sort-Object -Unique)
++  $extra = @($who | Where-Object { $_ -ne $me -and $_ -ne 'S-1-5-18' })
++  if (-not $acl.AreAccessRulesProtected -or $extra.Count -gt 0 -or @($acl.Access | Where-Object { $_.IsInherited }).Count -gt 0) {
++    Fail "$binDir is open to more than you and SYSTEM ($($extra -join ', ')); nothing was registered"
++  }
+ }
+ if ($NoKeepAlive) {
+   Say 'no keep-alive (-NoKeepAlive): the distro stops when no window holds it, and Talos with it'
+diff --git a/apps/windows/keepalive.ps1 b/apps/windows/keepalive.ps1
+index 3db279ee..b790ce10 100644
+--- a/apps/windows/keepalive.ps1
++++ b/apps/windows/keepalive.ps1
+@@ -3,6 +3,9 @@
+   Keeps the Talos WSL distro running (docs/WINDOWS-PLAN.md section 8). WSL stops a distro once no Windows process holds it,
+   its systemd services and Talos with it; this holds it with one idle process and starts it again if WSL stops it anyway.
+   install.ps1 runs it at logon, hidden, as a task of yours. One copy runs per distro: a second one exits at once.
++
++  It holds the distro only while the distro is cut off from Windows (`talos-wsl.sh hold`, R3-2): when it is not, the hold
++  ends at once and says why, and this logs that and tells you with a Windows notification, once until it holds again (R3-7).
+ #>
+ [CmdletBinding()]
+ param([string]$Distro = 'talos')
+@@ -10,6 +13,7 @@ $ErrorActionPreference = 'Continue'
+ $dir = Join-Path $env:LOCALAPPDATA 'Talos'
+ New-Item -ItemType Directory -Force -Path $dir | Out-Null
+ $log = Join-Path $dir "keepalive-$Distro.log"
++$wsl = Join-Path $env:SystemRoot 'System32\wsl.exe' # by its full path (R1-11): never a wsl.exe found first on PATH
+ 
+ function Log([string]$m) {
+   # a small log: the last 200 lines
+@@ -19,22 +23,50 @@ function Log([string]$m) {
+   Set-Content -Path $log -Value ($old + $line) -Encoding UTF8
+ }
+ 
++# A Windows notification, with Windows PowerShell's own app id (no module, no install); a failure to show one is logged.
++function Notify([string]$title, [string]$text) {
++  try {
++    $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
++    $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
++    $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
++    $t = $xml.GetElementsByTagName('text')
++    $null = $t.Item(0).AppendChild($xml.CreateTextNode($title))
++    $null = $t.Item(1).AppendChild($xml.CreateTextNode($text))
++    $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
++    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($xml))
++  } catch {
++    Log "could not show a notification: $($_.Exception.Message)"
++  }
++}
++
+ $created = $false
+ $mutex = New-Object Threading.Mutex($true, "Local\TalosKeepAlive-$Distro", [ref]$created)
+ if (-not $created) { exit 0 }
+ Log "keep-alive started for $Distro"
+ $wait = 5
++$told = $false
+ try {
+   while ($true) {
+     $start = Get-Date
+-    # by its full path (R1-11): never a wsl.exe found first on PATH
+-    & (Join-Path $env:SystemRoot 'System32\wsl.exe') -d $Distro --exec /bin/sleep infinity
++    $said = New-Object Collections.Generic.List[string]
++    # root: the check reads what only the distro's own setup decides; the hold itself is one idle `sleep`
++    & $wsl -d $Distro -u root --exec /opt/talos-wsl/talos-wsl.sh hold 2>&1 | ForEach-Object { $said.Add(("$_" -replace "`0", '')) }
++    $code = $LASTEXITCODE
+     $ran = [int]((Get-Date) - $start).TotalSeconds
+-    Log "the $Distro distro let go after ${ran}s (exit $LASTEXITCODE); starting it again in ${wait}s"
++    $refused = @($said | Where-Object { $_ -match '^refused: ' } | ForEach-Object { $_ -replace '^refused: (talos-wsl: )?', '' })
++    if ($refused.Count -gt 0) {
++      Log "the $Distro distro is not cut off from Windows, so it is not held (Talos does not run): $($refused -join '; ')"
++      if (-not $told) {
++        Notify 'Talos is stopped' "Its WSL distro ($Distro) is not cut off from Windows: $($refused[0]). Restart it: wsl --terminate $Distro"
++        $told = $true
++      }
++    } else {
++      Log "the $Distro distro let go after ${ran}s (exit $code); starting it again in ${wait}s"
++    }
+     Start-Sleep -Seconds $wait
+     # a distro that will not stay up is not hammered, but Talos is never down long for it (R1-15): at most 30 s between
+-    # tries, back to 5 s once it holds
+-    if ($ran -lt 60) { $wait = [Math]::Min($wait * 2, 30) } else { $wait = 5 }
++    # tries, back to 5 s once it holds; a hold that lasted is also the end of a refusal, so the next one is told again
++    if ($ran -lt 60) { $wait = [Math]::Min($wait * 2, 30) } else { $wait = 5; $told = $false }
+   }
+ } finally {
+   $mutex.ReleaseMutex()
+diff --git a/apps/windows/tests/TalosWin.Tests.ps1 b/apps/windows/tests/TalosWin.Tests.ps1
+index 02b39f57..f1ab3dc9 100644
+--- a/apps/windows/tests/TalosWin.Tests.ps1
++++ b/apps/windows/tests/TalosWin.Tests.ps1
+@@ -50,7 +50,7 @@ Describe "root's side of the handover, run in a distro (R2-8)" {
+ Describe 'the file handed to root (R1-2)' {
+   It 'is the LF bytes of the file, and the hash is theirs' {
+     $p = ConvertTo-TalosRootPayload "#!/bin/sh`r`necho hi`r`n"
+-    $bytes = [Convert]::FromBase64String($p.Base64)
++    $bytes = ConvertFrom-TalosRootPayload $p.Base64
+     [Text.Encoding]::UTF8.GetString($bytes) | Should Be "#!/bin/sh`necho hi`n"
+     # checked against Windows' own hashing of the same bytes, not the function's
+     $f = Join-Path $env:TEMP "talos-pester-$PID.bin"
+diff --git a/docs/WINDOWS-PLAN.md b/docs/WINDOWS-PLAN.md
+index 4a702372..eea503e0 100644
+--- a/docs/WINDOWS-PLAN.md
++++ b/docs/WINDOWS-PLAN.md
+@@ -251,6 +251,64 @@ first install on a clean Windows VM; (4) the tray piece; later, the Bun hook.
+   - every file in `bin` inherits only the folder's ACL
+   - a new distro starts afterwards
+ 
++**Fable's round 3 on 953a5d13, and what changed** (R2-1 to R2-9 verified fixed):
++
++- **R3-1, a remove that could not unmount.** `folder-remove` now refuses a share it cannot unmount, keeps its fstab line and
++  says so; one not mounted at all (its folder deleted on Windows) is still removed. `protect-add` over a share in use drops
++  its line, says it stays mounted until the distro restarts, and exits 3; install.ps1 restarts the distro next, and until
++  then `isolation` refuses while any mounted share is, holds or sits inside a protected folder.
++- **R3-2, beyond the supervisor's user manager.** cron and atd are masked. A login as talos (`wsl -d <distro>`) runs a
++  root-owned profile check and is refused, saying why, while isolation is broken; root's still works. The keep-alive holds
++  the distro through `talos-wsl.sh hold`, which ends at once, saying why, when isolation is broken.
++- **R3-3, other distros' localhost.** WSL 2 runs every distro in one network namespace, so a service on 127.0.0.1 in the
++  owner's other distros is reachable from the Talos distro, and the other way round (measured: an HTTP server bound to
++  127.0.0.1 in Ubuntu answered `curl` run as talos, HTTP 200). `isolation` no longer claims more: it says the distro is cut
++  off from Windows, and that localhost is still shared with the other distros. An nftables rule is not added yet. In a
++  shared namespace a rule matches by uid, and talos is uid 1000, which is also the owner's own user in a default Ubuntu
++  distro, so a rule for talos would hit the owner. The follow-up: give talos a uid of its own, then drop loopback
++  connections from it to any port but its own (open test items, below).
++- **R3-4, mixed modes.** A share that holds, or sits inside, one already shared in the other mode is refused, naming it.
++- **R3-6.** A failed mode change says what happened: "could not unmount" (in use), or, if the old mode does not mount again
++  either, that it is not mounted now and comes back in the old mode at the next restart.
++- **R3-7.** The keep-alive logs a refused hold with the reason and shows a Windows notification, once until it holds again.
++- **R3-8.** Claude Code's auto-updater is off (in the login environment and in its settings): an update would replace the
++  checked binary. A newer version comes with a new pin and setup-user.sh run again; a pinned version differing from the
++  installed one is reinstalled.
++- **R3-9.** Linger is retried for 5 s after the restart, and the linger file itself is the proof; without it the install fails.
++- **R3-10.** install.ps1 checks the `bin` folder's own ACL: protected from inheritance, and no one on it but the owner and
++  SYSTEM.
++- **Found on this round's live runs, fixed here:**
++  - talos-wsl.sh grew past one Windows command line as a base64 argument; the handover is now gzipped (13 KB), with the
++    SHA-256 still of the bytes themselves.
++  - An ordinary share next to the protected list made `isolation` exit 1 with no word (a `set -e` status); it refused
++    every login. So did running it as talos from a folder talos cannot read (`find` could not get back to it).
++  - "Distro start" for the wsl.conf check is the distro's own PID 1, not `/proc/uptime`, which is WSL's shared VM's.
++  - WSL registers its binfmt entry for .exe files when the distro starts even with interop off, sometimes after the boot unit
++    has run. With interop off nothing serves it: a Windows .exe in a share, run directly or through `/init` with
++    `WSL_INTEROP` set, failed every time. So the entry is no sign either way, and the check that stopped Talos over it was
++    wrong. Interop is now what the root-owned wsl.conf says, as applied at the distro's start (a wsl.conf changed since the
++    start counts as "may be on"). isolate-mounts still takes the entry out.
++  - WSL's own per-session interop sockets (`/run/WSL/*_interop`) are there and world-writable; nothing answers on them with
++    interop off (the `/init` runs above used them).
++- **Reviewer's live checks, run on Titan:** (1) after isolate-mounts in the Talos distro, Ubuntu still had its own
++  `/mnt/wslg`, `/tmp/.X11-unix` and `/mnt/wsl`; (2) as talos, a Windows .exe in a share failed, run directly and through
++  `/init`; no `WSL_INTEROP` in talos's environment (the sockets above exist); (3) `apt upgrade` (76 packages) and a
++  `systemd-binfmt` restart did not bring interop back; (4) after six `wsl -d` sessions, isolation still passed and the only
++  `/run/user` mounts were logind's own (`/run/user/0`, `/run/user/1000`), no WSLg bind.
++
++**Live checklist for a change to apps/windows** (R3-5; the tests use stand-ins for mount, umount and wslinfo, so these run on
++a real PC, a throwaway distro, `-Distro talos-e2e`, removed after):
++
++1. Install from scratch: it ends with "Talos is set up" and the supervisor running; `isolation` passes.
++2. Restart the distro (`wsl --terminate`): the isolation unit is active, talos's user manager and the supervisor come up.
++3. Another distro (Ubuntu) still has its own `/mnt/wsl`, `/mnt/wslg` and `/tmp/.X11-unix`; a brand-new distro starts.
++4. Break isolation (`mount -t tmpfs x /mnt/c` as root): restarting `user@1000` fails and says why, a `wsl -d` login as
++   talos is refused, `hold` exits 1, and the keep-alive logs it and notifies; unmount and all come back.
++5. A share: read-write, then `-ReadOnly`, then back; with a file held open in it, the mode change and `-Remove` are refused.
++6. A Windows .exe in a share does not run as talos, directly or through `/init`.
++7. Run the install again over the same distro: nothing breaks, and an older share of the clone is taken out.
++8. `uninstall.ps1` removes the task and stops the distro; `wsl --unregister` it, and empty `%LOCALAPPDATA%\Talos`.
++
+ **What the live runs on Titan found** (a throwaway distro, removed after; each is handled in the code and, where it can be,
+ tested in `scripts/windows-distro.test.ts`):
+ 
+@@ -283,5 +341,8 @@ tested in `scripts/windows-distro.test.ts`):
+ 2. **A managed-WSL policy** (Intune or Group Policy: WSL disabled, or limited to approved distros, or with custom kernel or
+    networking settings): what `install.ps1` says when the policy blocks it, and whether an allowed setup still isolates.
+ 3. **An ARM64 PC**: refused today; supporting it means linux-arm64 pins.
++4. **The other distros' localhost (R3-3 follow-up)**: talos on a uid of its own (not 1000), then an nftables rule in the
++   shared namespace that drops loopback connections from that uid to any port it does not own; test that the owner's own
++   distros keep their localhost, and that Talos's own connections still work.
+ 
+ **Step 2: the tray** (keep-alive and status only): after step 1 is reviewed.
+diff --git a/scripts/windows-distro.test.ts b/scripts/windows-distro.test.ts
+index 0f865db3..438b2d28 100644
+--- a/scripts/windows-distro.test.ts
++++ b/scripts/windows-distro.test.ts
+@@ -28,6 +28,8 @@ const FAKE_MOUNT = [
+   'printf "mount %s\\n" "$*" >> "$FAKE_ROOT/.calls"',
+   '[ -z "$MOUNT_FAILS" ] || exit 1',
+   'case "$1" in --make-*) [ -z "$PRIVATE_FAILS" ] || exit 1; exit 0 ;; esac',
++  // MOUNT_FAIL_RO: only a read-only mount fails (so putting the read-write one back works)
++  'case "$4" in ro,*) [ -z "$MOUNT_FAIL_RO" ] || exit 1 ;; esac',
+   // mount -t tmpfs -o OPTS SOURCE TARGET: listed, as the kernel would
+   'if [ "$2" = tmpfs ] && [ -f "$FAKE_ROOT/proc/mounts" ]; then',
+   '  printf "%s %s tmpfs rw 0 0\\n" "$5" "${6#"$FAKE_ROOT"}" >> "$FAKE_ROOT/proc/mounts"',
+@@ -59,6 +61,8 @@ function runWith(env: Record<string, string>, ...args: string[]) {
+       TALOS_WSL_UMOUNT: join(bin, 'fake-umount'),
+       TALOS_WSL_WSLINFO: join(bin, 'fake-wslinfo'),
+       FAKE_ROOT: root,
++      // the distro "started" after any wsl.conf a test writes, so what it says counts as applied
++      TALOS_WSL_STARTED: String(Math.floor(Date.now() / 1000) + 3600),
+       ...env,
+     },
+     encoding: 'utf8',
+@@ -121,6 +125,8 @@ describe('isolation from Windows (R1-3, R2-1, R2-2, R2-4, R2-9: interop, drives,
+     rmSync(join(root, 'proc'), { recursive: true, force: true })
+     rmSync(join(root, 'mnt'), { recursive: true, force: true })
+     mkdirSync(join(root, 'proc', 'sys', 'fs', 'binfmt_misc'), { recursive: true })
++    // interop: wsl.conf leaves it on (and WSL's entry is there); otherwise wsl.conf turns it off, as `wsl-conf` writes it
++    writeFileSync(join(root, 'etc', 'wsl.conf'), o.interop ? '[boot]\nsystemd=true\n' : '[interop]\nenabled = False\n')
+     if (o.interop) writeFileSync(join(root, 'proc', 'sys', 'fs', 'binfmt_misc', 'WSLInterop'), 'enabled\n')
+     writeFileSync(join(root, 'proc', 'mounts'), ROOTFS + (o.wsl ?? PRIVATE_WSL) + (o.mounts ?? ''))
+     mkdirSync(join(root, 'mnt', 'wsl'), { recursive: true })
+@@ -128,7 +134,13 @@ describe('isolation from Windows (R1-3, R2-1, R2-2, R2-4, R2-9: interop, drives,
+   }
+ 
+   it('passes with all of them off (an empty /mnt/c folder is not a mount; a share at /mnt/win is fine)', () => {
+-    proc({ mounts: 'C:/Users/alex/Projects/atlas /mnt/win/atlas 9p rw,aname=drvfs 0 0\n' })
++    // with protected folders on record and ordinary shares mounted (found live: that made it exit 1 with no word)
++    run('protect-add', 'C:\\Users\\alex\\Projects\\talos-app')
++    proc({
++      mounts:
++        'C:\\134Users\\134alex\\134Projects\\134atlas /mnt/win/atlas 9p rw,aname=drvfs 0 0\n' +
++        'C:\\134Users\\134alex\\134Projects\\134notes /mnt/win/notes 9p rw,aname=drvfs 0 0\n',
++    })
+     mkdirSync(join(root, 'mnt', 'c'), { recursive: true })
+     const r = run('isolation')
+     expect(r.err).toBe('')
+@@ -143,9 +155,6 @@ describe('isolation from Windows (R1-3, R2-1, R2-2, R2-4, R2-9: interop, drives,
+       expect(r.err, says).toContain(says)
+     }
+     fails({ interop: true }, 'interop')
+-    proc()
+-    writeFileSync(join(root, 'proc', 'sys', 'fs', 'binfmt_misc', 'WSLInterop-late'), 'enabled\n')
+-    expect(run('isolation').err).toContain('interop is on')
+     fails({ mounts: 'C:\\134 /mnt/c 9p rw,noatime,aname=drvfs 0 0\n' }, '/mnt/c')
+     fails({ mounts: 'none /mnt/wslg tmpfs rw 0 0\n' }, 'WSLg')
+     fails({ mounts: 'none /mnt/wslg/run/user/1000 tmpfs rw 0 0\n' }, 'WSLg')
+@@ -157,6 +166,52 @@ describe('isolation from Windows (R1-3, R2-1, R2-2, R2-4, R2-9: interop, drives,
+     fails({}, 'cannot tell', { NETMODE: '' })
+   })
+ 
++  it("interop is what wsl.conf says, as WSL applied it at the distro's start; WSL's binfmt entry is no sign", () => {
++    // WSL registers its .exe entry at start even with interop off (found live): with wsl.conf turning it off, it passes
++    proc()
++    writeFileSync(join(root, 'proc', 'sys', 'fs', 'binfmt_misc', 'WSLInterop'), 'enabled\n')
++    writeFileSync(join(root, 'proc', 'sys', 'fs', 'binfmt_misc', 'WSLInterop-late'), 'enabled\n')
++    expect(run('isolation').code).toBe(0)
++    // a wsl.conf that says enabled=true last, or has no [interop] off at all, is interop on
++    writeFileSync(join(root, 'etc', 'wsl.conf'), '[interop]\nenabled=false\n[interop]\nenabled=true\n')
++    expect(run('isolation').err).toContain('interop is on')
++    writeFileSync(join(root, 'etc', 'wsl.conf'), '[automount]\nenabled=false\n')
++    expect(run('isolation').err).toContain('does not turn it off')
++    // turned off, but after this start of the distro: not applied yet
++    writeFileSync(join(root, 'etc', 'wsl.conf'), '[interop]\nenabled=false\n')
++    expect(runWith({ TALOS_WSL_STARTED: '1000' }, 'isolation').err).toContain('counts only from its next start')
++  })
++
++  it("passes from a working directory the caller cannot read (found live: as talos from root's home it ended silently)", () => {
++    proc()
++    const dark = join(root, 'dark')
++    mkdirSync(dark)
++    // in it, then shut to everyone: as talos in root's home (0700)
++    const r = spawnSync(
++      'bash',
++      ['-c', 'cd "$1" && chmod 0 . && bash "$2" isolation; s=$?; chmod 755 "$1"; exit $s', 'x', dark, SCRIPT],
++      {
++        env: {
++          PATH: process.env.PATH ?? '/usr/bin:/bin',
++          TALOS_WSL_ROOT: root,
++          TALOS_WSL_WSLINFO: join(bin, 'fake-wslinfo'),
++          TALOS_WSL_STARTED: String(Math.floor(Date.now() / 1000) + 3600),
++        },
++        encoding: 'utf8',
++      },
++    )
++    expect(r.stderr).toBe('')
++    expect(r.status).toBe(0)
++  })
++
++  it("isolate-mounts takes WSL's interop entry out, so a return of it is a sign", () => {
++    proc({ wsl: SHARED_WSL, mounts: WSLG })
++    writeFileSync(join(root, 'proc', 'sys', 'fs', 'binfmt_misc', 'WSLInterop'), 'enabled\n')
++    expect(run('isolate-mounts').code).toBe(0)
++    // the kernel unregisters an entry written -1; the scratch file only records the write
++    expect(readFileSync(join(root, 'proc', 'sys', 'fs', 'binfmt_misc', 'WSLInterop'), 'utf8')).toBe('-1\n')
++  })
++
+   it('takes only /proc/mounts as proof of the private /mnt/wsl, never a file in it (R2-4)', () => {
+     // the mark file of the round 1 version, in the shared /mnt/wsl: not proof
+     proc({ wsl: SHARED_WSL, wslFile: '.talos-private' })
+@@ -202,7 +257,7 @@ describe('isolation from Windows (R1-3, R2-1, R2-2, R2-4, R2-9: interop, drives,
+     // what is mounted now, as the check after it read it: no WSLg, the private /mnt/wsl on top
+     expect(mounts()).not.toMatch(/wslg|X11/)
+     expect(mounts().trim().split('\n').at(-1)).toMatch(/^talos-private \/mnt\/wsl tmpfs /)
+-    expect(lastLine(r.out)).toMatch(/^isolated: /)
++    expect(lastLine(r.out)).toMatch(/^isolated from Windows: /)
+     expect(readFileSync(join(root, 'mnt', 'wsl', 'resolv.conf'), 'utf8')).toBe(
+       'nameserver 10.255.255.254\nsearch lan\n',
+     )
+@@ -240,6 +295,24 @@ describe('isolation from Windows (R1-3, R2-1, R2-2, R2-4, R2-9: interop, drives,
+     expect(gate).toMatch(/^After=talos-isolate\.service$/m)
+     expect(gate).toMatch(/^ExecStartPre=\+\/opt\/talos-wsl\/talos-wsl\.sh isolation$/m)
+   })
++
++  it('logins as talos are refused while isolation is broken; root still gets in (R3-2)', () => {
++    const login = run('units').out.split('----\n')[2] ?? ''
++    expect(login).toContain('if [ "$(id -u)" != 0 ] && ! /opt/talos-wsl/talos-wsl.sh isolation')
++    expect(login).toMatch(/\n {2}exit 1\n/)
++  })
++
++  it('hold, what the keep-alive runs, ends at once and says why when isolation is broken (R3-2, R3-7)', () => {
++    proc({ interop: true })
++    const r = run('hold')
++    expect(r.code).toBe(1)
++    expect(r.err).toContain('refused: talos-wsl: interop is on')
++  })
++
++  it('says what it is not cut off from: the localhost of the other WSL distros (R3-3)', () => {
++    proc()
++    expect(run('isolation').out).toContain("localhost is still shared with this PC's other WSL distros")
++  })
+ })
+ 
+ describe('a Windows folder for a thread', () => {
+@@ -391,18 +464,92 @@ describe('a Windows folder for a thread', () => {
+       run('folder-add', W)
+       const r = runWith({ UMOUNT_FAILS: '1' }, 'folder-add', '--read-only', W)
+       expect(r.code).toBe(1)
+-      expect(r.err).toContain('is in use in the distro, so it stays read-write')
++      expect(r.err).toContain('could not unmount')
++      expect(r.err).toContain('so it stays read-write')
+       expect(fstabLines()).toEqual([`C:/Users/alex/Projects/atlas /mnt/win/atlas drvfs ${opts} 0 0`])
+     })
+     it('a new mode that does not mount puts the old one back and says so', () => {
+       run('folder-add', W)
+       rmSync(join(root, '.calls'))
+-      const r = runWith({ MOUNT_FAILS: '1' }, 'folder-add', '--read-only', W)
++      const r = runWith({ MOUNT_FAIL_RO: '1' }, 'folder-add', '--read-only', W)
+       expect(r.code).toBe(1)
+-      expect(r.err).toContain('it stays read-write')
++      expect(r.err).toContain('it is mounted read-write again, as before')
+       expect(calls().at(-1)).toBe(`mount -t drvfs -o ${opts} ${W} ${root}/mnt/win/atlas`)
+       expect(fstabLines()[0]).toContain(` drvfs ${opts} `)
+     })
++    it('when the old mode does not mount again either, it says it is not mounted now, not that it stays (R3-6)', () => {
++      run('folder-add', W)
++      const r = runWith({ MOUNT_FAILS: '1' }, 'folder-add', '--read-only', W)
++      expect(r.code).toBe(1)
++      expect(r.err).toContain('it is not mounted now; fstab still shares it read-write')
++      expect(r.err).not.toContain('again, as before')
++      expect(fstabLines()[0]).toContain(` drvfs ${opts} `)
++    })
++  })
++
++  describe('a share of a parent or child in the other mode (R3-4)', () => {
++    it('a read-write share holding a read-only one is refused, naming it', () => {
++      run('folder-add', '--read-only', 'C:\\Users\\alex\\Projects\\atlas\\docs')
++      const r = run('folder-add', 'C:\\Users\\alex\\Projects\\atlas')
++      expect(r.code).toBe(1)
++      expect(r.err).toContain('C:\\Users\\alex\\Projects\\atlas\\docs is shared read-only at /mnt/win/docs')
++      expect(fstabLines()).toHaveLength(1)
++    })
++    it('a read-write share inside a read-only one is refused too', () => {
++      run('folder-add', '--read-only', 'C:\\Users\\alex\\Projects\\atlas')
++      expect(run('folder-add', 'C:\\Users\\alex\\Projects\\atlas\\docs').code).toBe(1)
++    })
++    it('a read-only share inside a read-write one is refused: it would be writable through the parent', () => {
++      run('folder-add', 'C:\\Users\\alex\\Projects\\atlas')
++      const r = run('folder-add', '--read-only', 'C:\\Users\\alex\\Projects\\atlas\\docs')
++      expect(r.code).toBe(1)
++      expect(r.err).toContain('is shared read-write at /mnt/win/atlas')
++    })
++    it('the same mode overlapping is fine, and so is a sibling in the other mode', () => {
++      run('folder-add', 'C:\\Users\\alex\\Projects\\atlas')
++      expect(run('folder-add', 'C:\\Users\\alex\\Projects\\atlas\\docs').code).toBe(0)
++      expect(run('folder-add', '--read-only', 'C:\\Users\\alex\\Projects\\atlas-notes').code).toBe(0)
++    })
++  })
++
++  describe('a share that cannot be unmounted (R3-1)', () => {
++    it('folder-remove refuses, says so, and keeps its fstab line: never "no longer shared" while it is live', () => {
++      run('folder-add', 'C:\\Users\\alex\\Projects\\atlas')
++      const r = runWith({ UMOUNT_FAILS: '1' }, 'folder-remove', '/mnt/win/atlas')
++      expect(r.code).toBe(1)
++      expect(r.err).toContain('is in use in the distro')
++      expect(r.out).not.toContain('no longer shared')
++      expect(fstabLines()).toHaveLength(1)
++    })
++    it('one that is not mounted at all (its folder deleted on Windows) is removed', () => {
++      run('folder-add', 'C:\\Users\\alex\\Projects\\atlas')
++      mkdirSync(join(root, 'proc'), { recursive: true })
++      writeFileSync(join(root, 'proc', 'mounts'), '/dev/sdc / ext4 rw 0 0\n')
++      const r = runWith({ UMOUNT_FAILS: '1' }, 'folder-remove', '/mnt/win/atlas')
++      expect(r.code).toBe(0)
++      expect(fstabLines()).toEqual([])
++    })
++    it('protect-add over a share in use takes its line out, says it stays mounted until a restart, and exits 3', () => {
++      run('folder-add', 'C:\\Users\\alex\\Projects\\talos-app\\docs')
++      const r = runWith({ UMOUNT_FAILS: '1' }, 'protect-add', 'C:\\Users\\alex\\Projects\\talos-app')
++      expect(r.code).toBe(3)
++      expect(r.out).toContain('stays mounted until the distro restarts')
++      expect(r.out).not.toContain('; no longer')
++      expect(fstabLines()).toEqual([])
++    })
++    it('isolation refuses while a share of a protected folder is still mounted', () => {
++      run('protect-add', 'C:\\Users\\alex\\Projects\\talos-app')
++      mkdirSync(join(root, 'proc', 'sys', 'fs', 'binfmt_misc'), { recursive: true })
++      mkdirSync(join(root, 'mnt', 'wsl'), { recursive: true })
++      writeFileSync(
++        join(root, 'proc', 'mounts'),
++        '/dev/sdc / ext4 rw 0 0\ntalos-private /mnt/wsl tmpfs rw 0 0\n' +
++          'C:\\134Users\\134alex\\134Projects\\134talos-app\\134docs /mnt/win/docs 9p rw,aname=drvfs 0 0\n',
++      )
++      const r = run('isolation')
++      expect(r.code).toBe(1)
++      expect(r.err).toContain("a share of Talos's own files is still mounted: /mnt/win/docs")
++    })
+   })
+ 
+   it('leaves every other fstab line alone, and remove unmounts and takes out only its own', () => {
+@@ -431,6 +578,9 @@ describe('setup-user.sh: what it downloads (R1-6)', () => {
+     expect(sh).not.toMatch(/SHASUMS|^\s*(run )?npm /m)
+     // Claude Code's own install step is told the pinned version, not left to pick "latest" (R2-6)
+     expect(sh).toMatch(/"\$d\/claude" install "\$CLAUDE_VERSION"/)
++    // and it stays that version (R3-8): the auto-updater is off for sessions and in Claude Code's own settings
++    expect(sh).toContain("'export DISABLE_AUTOUPDATER=1'")
++    expect(sh).toContain("env['DISABLE_AUTOUPDATER'] = '1'")
+     // every curl is the one inside fetch_pinned
+     expect(sh.match(/\bcurl /g)).toHaveLength(1)
+   })

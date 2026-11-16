@@ -13,10 +13,15 @@ export class ReadError extends Error {
   }
 }
 
-type Body<T extends 'search.results' | 'memory.listing' | 'memory.file' | 'memory.results' | 'speak.result'> = Omit<
-  FrameOf<T>,
-  'v' | 'id' | 'ts' | 'type' | 'relay' | 'request_id'
->
+type Body<
+  T extends
+    | 'search.results'
+    | 'memory.listing'
+    | 'memory.file'
+    | 'memory.results'
+    | 'memory.graph_result'
+    | 'speak.result',
+> = Omit<FrameOf<T>, 'v' | 'id' | 'ts' | 'type' | 'relay' | 'request_id'>
 
 /** The answer the read-aloud service builds; inbound adds the envelope and `request_id`. */
 export type SpeakBody = Body<'speak.result'>
@@ -45,6 +50,8 @@ export interface MemoryService {
   tree(f: FrameOf<'memory.tree'>): Promise<Body<'memory.listing'>>
   read(f: FrameOf<'memory.read'>): Promise<Body<'memory.file'>>
   search(f: FrameOf<'memory.search'>): Promise<Body<'memory.results'>>
+  /** Every visible note and the links between them, for the 3D graph (memory/graph.ts). */
+  graph?(): Body<'memory.graph_result'>
   /**
    * Re-checks the notes an owner message refers to (V5.2): meta `memory_root`, `memory_path` (absolute), and
    * `memory_changed` when the sha differs; a ref no longer allowed is dropped with a note.
@@ -64,6 +71,24 @@ export interface FolderServiceSeam {
   list(f: Pick<FrameOf<'fs.list'>, 'path' | 'hidden'>): Promise<FolderBody>
 }
 export type FolderBody = Omit<FrameOf<'fs.listing'>, 'v' | 'id' | 'ts' | 'type' | 'relay' | 'request_id'>
+
+/** The Files pane (src/files/**): a read-only look at one thread's folder, for the signed device only. */
+export interface FilesServiceSeam {
+  readonly available: boolean
+  list(
+    f: Pick<FrameOf<'files.list'>, 'thread_id' | 'path'>,
+  ): Promise<Omit<FrameOf<'files.listing'>, 'v' | 'id' | 'ts' | 'type' | 'relay' | 'request_id'>>
+  read(
+    f: Pick<FrameOf<'files.read'>, 'thread_id' | 'path' | 'offset'>,
+  ): Promise<Omit<FrameOf<'files.file'>, 'v' | 'id' | 'ts' | 'type' | 'relay' | 'request_id'>>
+}
+
+/** The bug reporter's read (src/bug-context/**): the Mac's versions, filed errors and cleaned log tail, for the signed device only. */
+export interface BugContextSeam {
+  readonly available: boolean
+  read(f: Pick<FrameOf<'bug.context'>, 'lines'>): BugContextBody
+}
+export type BugContextBody = Omit<FrameOf<'bug.context_result'>, 'v' | 'id' | 'ts' | 'type' | 'relay' | 'request_id'>
 
 /** WP-V1 (src/health/**): advertises `health/1` and sends `health.beat`. */
 export interface HealthService {

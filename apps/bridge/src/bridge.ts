@@ -1,14 +1,17 @@
 // Assembles the bridge: live (socket + inbound pipeline + timers) or headless (signed HTTP only).
 
 import { randomBytes } from 'node:crypto'
-import { type FSWatcher, watch } from 'node:fs'
+import { existsSync, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
-import { AGENTS_FEATURE, drivingActive, newUlid } from '@talos-app/protocol'
-import { ServerSecrets, securityRunner } from './apps/keychain.ts'
+import { join } from 'node:path'
+import { AGENTS_FEATURE, drivingActive, neutralizeControlTags, newUlid, supervisorFresh } from '@talos-app/protocol'
+import { ActionRuleAsks } from './action-rule-asks.ts'
+import { defaultKeychainRunner, ServerSecrets } from './apps/keychain.ts'
 import { AppService } from './apps/service.ts'
 import { pruneAttachmentRetries } from './attachment-retry.ts'
 import { backfillCardRows, tellOwnerHistoryKeptAside } from './bridge-housekeeping.ts'
 import type { BridgeOptions } from './bridge-options.ts'
+import { BugContextService } from './bug-context/service.ts'
 import { CardExpiry } from './card-expiry.ts'
 import { CardLedger } from './cards-ledger.ts'
 import { sessionMarkerInherited } from './claude-env.ts'
@@ -27,8 +30,11 @@ import {
 import { DeviceStore } from './devices.ts'
 import { DialogCards } from './dialog-card.ts'
 import { Enrollment } from './enrollment.ts'
+import { filesSentFor } from './files/sent.ts'
+import { installFiles } from './files/wiring.ts'
 import { FolderService, folderDeps } from './folders/service.ts'
 import { configSyncFrame, sessionAgentsFrame, sessionInventoryFrame, sessionStateFrame } from './frames-out.ts'
+import { quietWatch } from './fs-watch.ts'
 import { ensureDir, mtimeMs } from './fsutil.ts'
 import { bridgeFeatures } from './handshake.ts'
 import { HealthMonitor } from './health/monitor.ts'
@@ -39,19 +45,25 @@ import { HubServer } from './hub/server.ts'
 import { Inbound } from './inbound.ts'
 import { INSTRUCTIONS as INSTRUCTIONS_TEXT } from './instructions.ts'
 import { commitRotation, type KeyMaterial, loadBridgeKey, loadKeyFile } from './keys.ts'
+import { agentDirFromEnv } from './last-good.ts'
 import { createLogger, type Logger } from './log.ts'
 import { MediaStore } from './media.ts'
+import { MediaRetention } from './media-retention.ts'
 import { installMemory } from './memory/install.ts'
+import { memoryRootsFor } from './memory/roots.ts'
 import { fileKeyStore, ModLink } from './mod/link.ts'
 import { type Notification, systemNotification, withDrivingMeta } from './notify.ts'
 import { tellAgentOfDrop } from './outbox-drop.ts'
 import { PermissionRelay, type VerdictSender } from './permission/relay.ts'
 import { ProblemService } from './problems/service.ts'
 import { RelayClient } from './relay-client.ts'
+import { relayFeaturesMemo } from './relay-features-memo.ts'
 import { RelayHttp } from './relay-http.ts'
 import { RelaySilence } from './relay-silence.ts'
 import { ThreadRouter } from './router/router.ts'
+import { UsagePool } from './router/usage-pool.ts'
 import { ScheduleService } from './schedules/service.ts'
+import { ScreenConsent } from './screen-consent.ts'
 import { createSearchService, type SearchServiceHandle } from './search/install.ts'
 import { SessionControls } from './session/controls.ts'
 import { SpeakService } from './speak/service.ts'
@@ -60,10 +72,12 @@ import { callTool, toolsFor } from './tools/index.ts'
 import { workerStoreOf } from './tools/read-inbound.ts'
 import { HttpTransport, LiveTransport } from './transport.ts'
 import { Tripwire } from './tripwire.ts'
-import { noteTrustFlip } from './trust.ts'
+import { noteFenceFlip, noteLockFlip, noteOutsideText, noteTrustFlip } from './trust.ts'
 import { pruneTtsFiles } from './tts.ts'
+import { wireUndo } from './undo/wire.ts'
 import { BRIDGE_CLIENT_NAME, BRIDGE_COMMIT, BRIDGE_VERSION } from './version.ts'
-import { liveThreadIds, pruneInboxes, removeGoneInboxes } from './worker/inbox.ts'
+import { WorkersReader } from './worker/files.ts'
+import { adoptLegacyInboxes, liveThreadIds, pruneInboxes, removeGoneInboxes } from './worker/inbox.ts'
 import { WorkerStore } from './worker/store.ts'
 import { WorkerTransport } from './worker/transport.ts'
 
@@ -74,6 +88,9 @@ export {
   TRUST_INSTRUCTIONS,
   WORKER_INSTRUCTIONS,
 } from './instructions.ts'
+
+import { governorState } from './router/governor.ts'
+
 export type { BridgeOptions }
 // scripts/size-budget.test.ts looks for this exact line; the text itself lives in instructions.ts.
 export const INSTRUCTIONS = INSTRUCTIONS_TEXT
@@ -83,6 +100,32 @@ const PRUNE_EVERY_MS = 6 * 3600_000
 export const POLL_MS = 10_000
 export const RELAY_RESTART_NOTICE =
   'Tool prompts as cards turns on after you restart the session. Choose Restart session in the Talos menu bar, or quit and restart Claude Code in your terminal.'
+
+/**
+ * Every notification the agent gets: outside text in a thread cancels the owner's earlier ask there (trust.ts ownerAskedIn),
+ * and driving mode (docs/V2-FEATURES.md V4.1.4) stamps owner-trust notes so they say the owner is listening.
+ */
+const toAgent =
+  (
+    d: Parameters<typeof noteOutsideText>[0],
+    config: { readonly config: Parameters<typeof drivingActive>[0] },
+    send: (n: Notification) => Promise<void>,
+  ) =>
+  (n: Notification): Promise<void> => {
+    noteOutsideText(d, n)
+    return send(withDrivingMeta(n, drivingActive(config.config, d.clock.now())))
+  }
+
+/**
+ * The status.json fields the update queues read: the governor (the Linux restart-on-update queue holds unless it is ok or off) and
+ * the owner's newest message time (the Mac app's updater postpones on a change). See status-file.ts.
+ */
+function queueSignals(ctx: BridgeContext): {
+  governor: ReturnType<typeof governorState>
+  last_owner_at: string | null
+} {
+  return { governor: governorState(ctx), last_owner_at: ctx.store.kvGet('last_owner_ts') ?? null }
+}
 
 export class Bridge {
   readonly ctx: BridgeContext
@@ -104,6 +147,8 @@ export class Bridge {
   /** Test seam: how many file-watch events each watched folder has delivered. */
   readonly watchHits: Record<string, number> = {}
   private health: HealthMonitor | undefined
+  /** The owner's attachment retention (media-retention.ts): the live main bridge only. */
+  private mediaRetention: MediaRetention | undefined
   /** O6: posts to ntfy after 10 awake minutes without the relay; inert without TALOS_APP_ALERT_NTFY_URL. */
   private silence: RelaySilence | undefined
   /** D47: status.json for the menu bar. Live bridge only; a worker or headless process never has one. */
@@ -111,10 +156,15 @@ export class Bridge {
   private emitFn: (n: Notification) => Promise<void> = async () => {}
   /** The relay's last `ready` listed `agents/1` (docs/SUBAGENTS.md): an older relay answers `session.agents` bad_frame. */
   private relayAgents = false
+  /** The readings in the last main state sent to the app (so a poll sends it again only when they change). */
+  private usageSentKey = ''
   private stopped = false
   private closed = false
+  /** Another bridge took over this key (4409) and this one has not rejoined (`pauseSuperseded`, `rejoin`). */
+  private superseded = false
   /** D39: the unanswered-message report ran for this process (`ready` repeats on every reconnect). */
   private configRecovered = false
+  private undoRecovered = false
   private unansweredChecked = false
   private relayRestartTold = false
   private healthyStartNoted = false
@@ -127,6 +177,14 @@ export class Bridge {
   readonly hub: HubServer | undefined
   /** Option C, worker mode only: the connection to main's hub. */
   readonly hubClient: HubClient | undefined
+
+  /** The card services only a live main-session bridge runs: settings proposals, dialogs, screen consent, action-rule asks. */
+  private startMainCards(): void {
+    this.ctx.configProposals = new ConfigProposals(this.ctx)
+    this.ctx.dialogs = new DialogCards(this.ctx)
+    this.ctx.screenConsent = new ScreenConsent(this.ctx)
+    this.ctx.actionRuleAsks = new ActionRuleAsks(this.ctx)
+  }
 
   private constructor(opts: BridgeOptions, keyRef: KeyMaterial | undefined) {
     const { env } = opts
@@ -154,25 +212,58 @@ export class Bridge {
       return this.keyRef
     }
     const http = new RelayHttp(env.relayUrl ?? '', getKey, opts.fetchFn)
-    const config = new ConfigFile(p.configJson, { log: this.log })
+    const macWorkers = new WorkersReader(p.home)
+    const macFlag = (key: 'subthreads_supported' | 'subthreads_own_folder') => {
+      const f = macWorkers.read()
+      return supervisorFresh(f, this.clock.now()) && f?.supervisor[key] === true
+    }
+    const config = new ConfigFile(p.configJson, {
+      log: this.log,
+      // a Mac app that quit leaves its last workers.json behind: support counts only while its heartbeat is fresh
+      subthreadsSupported: () => macFlag('subthreads_supported'),
+      subthreadsOwnFolder: () => macFlag('subthreads_own_folder'),
+    })
     config.load()
     // only the live main bridge may move a damaged history aside; any other process leaves the file to it
     const store =
       live && !worker ? openHistoryOrKeepAside(p.historyDb, this.log, this.clock.now()).store : openHistory(p.historyDb)
     const devices = new DeviceStore(p.devicesJson)
-
     let transport: LiveTransport | HttpTransport | WorkerTransport
     let client: RelayClient | undefined
     let hubClient: HubClient | undefined
     if (worker) {
       hubClient = new HubClient({
         sockPath: p.hubSock,
+        legacySockPath: p.hubSockLegacy,
         threadId: worker,
         nonce: env.workerNonce ?? '',
         log: this.log,
       })
       const ws = new WorkerStore(store.db)
-      transport = new WorkerTransport(worker, hubClient, new HttpTransport(http), ws, this.log, () => this.clock.now())
+      transport = new WorkerTransport(
+        worker,
+        hubClient,
+        new HttpTransport(http),
+        ws,
+        this.log,
+        () => this.clock.now(),
+        // the hub's own checks, run here before the HTTP fallback (the context exists once the bridge is built)
+        () => {
+          if (!this.ctx) return undefined
+          this.ctx.config.refresh() // one stat: a thread switched off since the tool call began is seen
+          return {
+            config: this.ctx.config.config,
+            cardRaiser: (id) => ws.cardRaiser(id),
+            ledgerThread: (id) => this.ctx.ledger.get(id)?.thread_id,
+            messageThread: (id) =>
+              (
+                store.db.query('SELECT thread_id FROM messages WHERE id = ?').get(id) as {
+                  thread_id: string
+                } | null
+              )?.thread_id,
+          }
+        },
+      )
     } else if (live) {
       // the socket's events call back into this object, which does not exist yet: they only run after start()
       const wire = {
@@ -186,6 +277,8 @@ export class Bridge {
       transport = new HttpTransport(http)
     }
 
+    // every session's plan-usage reading; main's state goes to the app with the newest per kind (router/usage-pool.ts)
+    const usage = live ? new UsagePool(this.log) : undefined
     const modLink = new ModLink({
       clock: this.clock,
       log: this.log,
@@ -193,7 +286,12 @@ export class Bridge {
       ...(live ? { keys: fileKeyStore(p.modKey) } : {}),
       sink: {
         state: (state) => {
-          if (live) transport.sendEphemeral(sessionStateFrame(this.clock.now(), state))
+          if (!live) return
+          const now = this.clock.now()
+          // an offline state (the mod lapsed) goes as it is: no readings, just who and when
+          const out = usage && modLink.liveState() ? usage.forApp(state, now) : state
+          this.usageSentKey = JSON.stringify(out.rate_limits)
+          transport.sendEphemeral(sessionStateFrame(now, out))
         },
         inventory: (inventory) => {
           if (live) transport.sendEphemeral(sessionInventoryFrame(this.clock.now(), inventory))
@@ -219,8 +317,8 @@ export class Bridge {
       transport,
       seen: new SeenTracker(live && !worker ? { store, clock: this.clock } : undefined),
       mod: modLink,
-      // driving mode (docs/V2-FEATURES.md V4.1.4): owner-trust notifications say the owner is listening
-      emit: (n) => this.emitFn(withDrivingMeta(n, drivingActive(config.config, this.clock.now()))),
+      ...(usage ? { usage } : {}),
+      emit: toAgent({ store, clock: this.clock }, config, (n) => this.emitFn(n)),
       permission: undefined as unknown as PermissionRelay,
       session: undefined as unknown as SessionControls,
       ...(worker ? { worker: { thread: worker, ...(hubClient ? { hub: hubClient } : {}) } } : {}),
@@ -239,15 +337,19 @@ export class Bridge {
         unreachable: (thread) => router.leadUnreachable(thread),
         deliver: () => router.deliverHandoffs(),
       }
-      this.ctx.emit = (n) => router.route(withDrivingMeta(n, drivingActive(config.config, this.clock.now())))
+      this.ctx.emit = toAgent({ store, clock: this.clock }, config, (n) => router.route(n))
+      wireUndo(this.ctx, opts.undo)
       this.hub = new HubServer(this.ctx, { store: router.store })
     }
     // search (docs/V2-FEATURES.md V3): the FTS5 probe decides whether `search/1` is advertised; only the live bridge reconciles
     this.ctx.search = createSearchService(store, { live, log: this.log, mediaDir: p.media })
+    // the Files sheet's list (src/files/sent.ts): the files sent in Talos, from the same history
+    this.ctx.filesSent = filesSentFor(this.ctx, store)
     this.ctx.schedules = new ScheduleService(this.ctx, {
       connected: () => client?.connected ?? false,
       instance,
       watch: opts.scheduleWatch ?? true,
+      ...(opts.scheduleWatchFn ? { watchFn: opts.scheduleWatchFn } : {}),
       ...(opts.chronosNow
         ? { chronosNow: opts.chronosNow }
         : env.chronosNow
@@ -261,21 +363,38 @@ export class Bridge {
       // WP-V1: the health beat (docs/V2-FEATURES.md V2.2); advertised as health/1 once it exists
       this.health = new HealthMonitor(this.ctx, { connected: () => client?.connected ?? false })
       this.ctx.health = this.health
+      if (!worker) this.mediaRetention = new MediaRetention(this.ctx, p.media)
     }
     this.ctx.permission = new PermissionRelay(this.ctx)
     // O1: only a live main-session bridge can mint a settings card (a worker or a headless process has no relay socket to ask)
-    if (live && !worker) this.ctx.configProposals = new ConfigProposals(this.ctx)
-    if (live && !worker) this.ctx.dialogs = new DialogCards(this.ctx)
+    if (live && !worker) this.startMainCards()
     this.ctx.session = new SessionControls(this.ctx)
     // MCP apps: only a live bridge answers app requests; the service does nothing until TALOS_APP_APPS=1
-    if (live)
-      this.ctx.apps = new AppService(this.ctx, { secrets: new ServerSecrets(securityRunner()), ...(opts.apps ?? {}) })
+    if (live) {
+      // a Keychain write that does not hold is an `error` line, which files a problem report
+      const keychain = defaultKeychainRunner(env.home, undefined, undefined, {
+        onProblem: (m, f) => this.ctx.log.error(m, f),
+      })
+      this.ctx.apps = new AppService(this.ctx, { secrets: new ServerSecrets(keychain), ...(opts.apps ?? {}) })
+    }
     // WP-V5: the memory browser (only a live bridge answers the app; headless processes would just hold a second index)
     if (live) this.stopMemory = installMemory(this.ctx)
+    if (live && !worker) this.ctx.memoryRoots = memoryRootsFor(this.ctx, opts.undo?.agentDir) // Settings > Memory folders
     // the play button on agent messages: reads a stored message aloud with the owner's own TTS command
     if (live) this.ctx.speak = new SpeakService(this.ctx, opts.speak)
     // the folder picker: folder names under home for the owner's signed device (never in a thread session's process)
     if (live && !worker) this.ctx.folders = new FolderService(folderDeps(env.home, process.env, opts.folders))
+    // the Files pane, the AGENTS.md editor and uploads, for the owner's signed device (never in a thread session's process)
+    if (live && !worker) installFiles(this.ctx, { talosHome: env.home, now: () => this.clock.now() }, opts)
+    // the bug reporter's read: versions, filed errors and the cleaned log tail, for the owner's signed device only
+    if (live && !worker)
+      this.ctx.bugContext = new BugContextService({
+        home: p.home,
+        userHome: homedir(),
+        logFile: p.log,
+        bridgeVersion: BRIDGE_VERSION,
+        claudeCodeVersion: () => this.claudeCodeVersion(),
+      })
     // Problem reports: the live main bridge files them, and sees its own `error` log lines (never a worker or a headless run)
     if (live && !worker) {
       this.ctx.problems = new ProblemService({
@@ -303,7 +422,7 @@ export class Bridge {
           }),
       })
     }
-    this.enrollment = new Enrollment(this.ctx)
+    this.enrollment = new Enrollment(this.ctx, () => opts.undo?.agentDir ?? agentDirFromEnv(process.env))
     this.expiry = new CardExpiry(this.ctx)
     if (live) {
       this.ctx.expiry = this.expiry
@@ -319,6 +438,8 @@ export class Bridge {
         log: this.log,
         ...(opts.random ? { random: opts.random } : {}),
         onKeyFallback: (i) => this.onKeyFallback(i),
+        // the relay's last ready.features, so a restart's first hello is already the whole list (relay-features-memo.ts)
+        featuresMemo: relayFeaturesMemo(this.paths.relayFeatures, env.relayUrl as string, this.log),
         events: {
           onReady: (ready) => this.onReady(ready),
           onFrame: (raw, frame) => {
@@ -330,9 +451,7 @@ export class Bridge {
             this.log.info('relay socket closed', { code, authed })
             this.statusWriter?.poke()
           },
-          onSuperseded: () => {
-            this.goHeadless().catch((e) => this.log.error('going headless failed', { error: (e as Error).message }))
-          },
+          onSuperseded: () => this.pauseSuperseded(),
         },
       })
       this.client = client
@@ -358,10 +477,13 @@ export class Bridge {
             last_close_code: client?.lastCloseCode ?? null,
           },
           queue_depth: this.ctx.store.outboxCount(),
+          unseen_oldest_at: this.ctx.seen.oldestUnseenAt(),
           permission_relay: this.ctx.permission.configured,
           permission_relay_declared: this.ctx.permission.declared ?? this.ctx.permission.configured,
+          ...queueSignals(this.ctx),
         }),
       })
+      this.ctx.seen.onChange = () => this.statusWriter?.poke() // unseen_oldest_at
     }
   }
 
@@ -385,8 +507,13 @@ export class Bridge {
     return toolsFor(this.ctx.env)
   }
 
+  /**
+   * The one way a notification reaches the agent's channel. Its content is text from many hands (the owner's message, a voice
+   * transcript, a card title, a hand-off, a revise note): a forged `<channel … trust="owner">` or other control tag in it is
+   * neutralised here, so only Claude Code's own wrapper is a real tag, whatever path the text came by.
+   */
   setEmit(fn: (n: Notification) => Promise<void>) {
-    this.emitFn = fn
+    this.emitFn = (n) => fn({ content: neutralizeControlTags(n.content), meta: n.meta })
   }
 
   /** Wires the relay's verdicts to the MCP connection (server.ts). */
@@ -396,7 +523,12 @@ export class Bridge {
 
   /** Claude Code's version from the MCP handshake; the permission card shows Allow only from the floor version up. */
   setClientVersion(fn: () => string | undefined) {
+    this.clientVersion = fn
     this.ctx.permission.setClientVersion(fn)
+  }
+  private clientVersion: () => string | undefined = () => undefined
+  private claudeCodeVersion(): string | undefined {
+    return this.clientVersion()
   }
 
   /** Whether server.ts declares `claude/channel/permission` (read once at start; changing it needs a restart). */
@@ -410,8 +542,17 @@ export class Bridge {
     this.statusWriter?.poke()
   }
 
-  callTool(name: string, args: Record<string, unknown>) {
-    return callTool(this.ctx, name, args)
+  /**
+   * Every tool result reaches an agent (or the `talos-app` CLI that feeds one), and many carry stored text someone else wrote:
+   * schedule prompts and run summaries, thread topics, app labels, error messages. A control tag in any of them is neutralised
+   * here, once, like the channel notifications in setEmit.
+   */
+  async callTool(name: string, args: Record<string, unknown>) {
+    const r = await callTool(this.ctx, name, args)
+    return {
+      ...r,
+      content: r.content.map((c) => (c.type === 'text' ? { ...c, text: neutralizeControlTags(c.text) } : c)),
+    }
   }
 
   // ---- live ------------------------------------------------------------------------------------------------------
@@ -441,7 +582,7 @@ export class Bridge {
     for (const dir of [this.paths.home, this.paths.enrollPending]) {
       try {
         this.watchers.push(
-          watch(dir, { persistent: false }, () => {
+          quietWatch(dir, () => {
             this.watchHits[dir] = (this.watchHits[dir] ?? 0) + 1
             this.pokePoll()
           }),
@@ -492,6 +633,7 @@ export class Bridge {
     const { ctx } = this
     // a `ready` that lands after supersede/stop (headless transport, closed store) has nothing to flush
     if (ctx.mode !== 'live' || this.stopped || this.closed) return
+    if (this.superseded) this.rejoin()
     ctx.store.kvSet('last_connect_at', new Date(this.clock.now()).toISOString())
     this.statusWriter?.poke()
     ctx.config.reloadIfChanged()
@@ -501,6 +643,8 @@ export class Bridge {
     this.noteTrust()
     this.expiry.sync()
     this.router?.setRelayFeatures(ready?.features ?? [])
+    ctx.usage?.setRelayFeatures(ready?.features ?? [])
+    this.usageSentKey = '' // the relay may read `as_of` now (or no longer): main's state goes again at the next poll
     this.router?.resendStatus()
     this.inbound?.onReady()
     // D39: once per process. `ready` fires on every reconnect, and a plain socket drop is not a session that died.
@@ -517,11 +661,26 @@ export class Bridge {
     ctx.schedules?.onReady(ready?.features ?? [])
     ctx.configProposals?.setRelayFeatures(ready?.features ?? [])
     ctx.dialogs?.setRelayFeatures(ready?.features ?? [])
+    ctx.screenConsent?.setRelayFeatures(ready?.features ?? [])
+    ctx.undoCards?.setRelayFeatures(ready?.features ?? [])
+    ctx.undoMarks?.setRelayFeatures(ready?.features ?? [])
+    if (!this.undoRecovered && ctx.undoCards) {
+      this.undoRecovered = true // once per process, like the settings cards below
+      void ctx.undoCards
+        .recover()
+        .catch((e) => this.log.warn('undo card recovery failed', { error: (e as Error).message }))
+    }
     if (!this.configRecovered && ctx.configProposals) {
       this.configRecovered = true // once per process, like the unanswered report
       void ctx.configProposals
         .recover()
         .catch((e) => this.log.warn('config card recovery failed', { error: (e as Error).message }))
+      void ctx.screenConsent
+        ?.recover()
+        .catch((e) => this.log.warn('screen consent card recovery failed', { error: (e as Error).message }))
+      void ctx.actionRuleAsks
+        ?.recover()
+        .catch((e) => this.log.warn('action rule card recovery failed', { error: (e as Error).message }))
     }
     // docs/SUBAGENTS.md 5.3: agents frames only to a relay that passes them on; a fresh one gets the held snapshot now
     this.relayAgents = (ready?.features ?? []).includes(AGENTS_FEATURE)
@@ -562,6 +721,8 @@ export class Bridge {
       this.ctx.store.pruneSeen(this.lastPrune)
       pruneAttachmentRetries(this.ctx, this.lastPrune)
       this.router?.store.prune(this.lastPrune)
+      // folders an earlier build made carry no marker: mark them once, and only in the default root (never a shared one)
+      adoptLegacyInboxes(this.paths.inbox, join(this.ctx.env.userHome, '.talos-inbox'))
       pruneInboxes(this.paths.inbox, this.lastPrune)
       removeGoneInboxes(this.paths.inbox, liveThreadIds(this.ctx.config.config))
       const n = this.ctx.store.pruneOld(this.lastPrune, { historyDays: this.ctx.env.historyDays })
@@ -580,6 +741,8 @@ export class Bridge {
   /** A trust mode flip is said out loud in the thread, whether it happened while the bridge ran or while it was down. */
   private noteTrust() {
     void noteTrustFlip(this.ctx).catch((e) => this.log.warn('trust note failed', { error: (e as Error).message }))
+    void noteLockFlip(this.ctx).catch((e) => this.log.warn('lock note failed', { error: (e as Error).message }))
+    void noteFenceFlip(this.ctx).catch((e) => this.log.warn('fence note failed', { error: (e as Error).message }))
   }
 
   private pokePoll() {
@@ -594,6 +757,12 @@ export class Bridge {
     try {
       if (this.ctx.config.reloadIfChanged() && this.client?.connected) this.syncConfig()
       this.noteTrust()
+      // its own try: a store error here must never skip the rest of the poll
+      try {
+        this.mediaRetention?.tick()
+      } catch (e) {
+        this.log.warn('media retention tick failed', { error: (e as Error).message })
+      }
       this.ctx.permission.reconcile()
       this.tellRelayNeedsRestart()
       // A row the relay never acked stays queued; on a link that stayed up nothing else would send it again.
@@ -636,6 +805,16 @@ export class Bridge {
       },
       (state) => this.ctx.transport.sendEphemeral(sessionStateFrame(now, state)),
     )
+    // a thread session's newer usage reading changes what main's state says: send it now, not at the mod's next change
+    const main = this.ctx.mod.liveState()
+    if (main && this.ctx.usage) {
+      const out = this.ctx.usage.forApp(main, now)
+      const key = JSON.stringify(out.rate_limits)
+      if (key !== this.usageSentKey) {
+        this.usageSentKey = key
+        this.ctx.transport.sendEphemeral(sessionStateFrame(now, out))
+      }
+    }
   }
 
   /** Worker mode: connect to main's hub (server.ts calls this once MCP is initialized). */
@@ -655,32 +834,61 @@ export class Bridge {
     await this.client?.restartNow()
   }
 
-  /** 4409: a newer bridge took over. Never reconnect; behave like a headless process for the rest of this run. */
-  private async goHeadless() {
+  /**
+   * 4409: a newer bridge took over. This process stays whole, like a live bridge whose socket dropped (replies and cards still go
+   * over signed HTTP), and its socket asks back in on the backoff as a standby (relay-client.ts). What it must not do while
+   * another bridge owns the key is paused here and restored by `rejoin`.
+   */
+  private pauseSuperseded() {
+    if (this.superseded) return
+    this.superseded = true
     const { ctx } = this
+    ctx.superseded = true
     this.log.warn('superseded', {})
-    // D47: one last `superseded` snapshot, then no more writes (a newer bridge owns the file now)
+    // D47: one last `superseded` snapshot, then no more writes (a newer bridge may own the file now)
     this.statusWriter?.supersede()
     this.silence?.stop() // superseded on purpose: this bridge is no longer supposed to hold the relay socket
-    this.stopTimers(false)
     // the newer bridge files problems now; this one must not write into the same folder
     this.ctx.problems?.stop()
     this.tripwire?.stop()
     this.log.setErrorTap?.(null)
-    ctx.mode = 'headless'
     ctx.permission.closeAll()
-    // a superseded bridge is no longer the hub: workers reconnect to the new live bridge
-    await this.hub?.close().catch(() => {})
-    this.router?.close()
-    ctx.transport = new HttpTransport(ctx.http)
-    delete ctx.expiry
-    await ctx
+    void ctx
       .emit(
         systemNotification({
           thread: defaultThreadRef(ctx),
-          text: 'Another bridge connected with this key. This session no longer receives app messages; replies still work.',
+          text: 'Another bridge connected with this key. This session receives no app messages until that bridge is gone and this one reconnects; replies still work.',
           ts: new Date(this.clock.now()).toISOString(),
           id: 'superseded',
+        }),
+      )
+      .catch(() => {})
+  }
+
+  /** The socket took the empty slot again: what `pauseSuperseded` stopped starts again, and the agent hears it. */
+  private rejoin() {
+    this.superseded = false
+    const { ctx } = this
+    ctx.superseded = false
+    this.log.info('rejoined after being superseded', {})
+    // a bridge in the same home took the hub socket file away while this one was paused: listen on a fresh one
+    if (this.hub && !existsSync(this.hub.path))
+      void this.hub
+        .close()
+        .then(() => this.hub?.start())
+        .catch((e) => this.log.warn('hub socket not restarted', { error: (e as Error).message }))
+    this.statusWriter?.resume()
+    this.silence?.start()
+    ctx.problems?.start()
+    this.tripwire?.start()
+    if (ctx.problems) this.log.setErrorTap?.(ctx.problems.tap)
+    void ctx
+      .emit(
+        systemNotification({
+          thread: defaultThreadRef(ctx),
+          text: 'This session is connected to the app again; app messages reach it once more.',
+          ts: new Date(this.clock.now()).toISOString(),
+          id: 'superseded-over',
         }),
       )
       .catch(() => {})

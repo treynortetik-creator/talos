@@ -25,13 +25,17 @@ let package = Package(
       name: "TalosDesktop",
       dependencies: ["TalosDesktopCore", "TalosSupervisor", .product(name: "SwiftTerm", package: "SwiftTerm")]
     ),
-    .testTarget(name: "TalosDesktopCoreTests", dependencies: ["TalosDesktopCore"]),
+    // Shared by the test targets only: where tests make temp files (`TestTemp`).
+    .target(name: "TalosTestSupport", path: "Tests/TalosTestSupport"),
+    .testTarget(name: "TalosDesktopCoreTests", dependencies: ["TalosDesktopCore", "TalosTestSupport"]),
     // A real WKWebView (no window is shown). Runs only with TALOS_GUI_TESTS=1 (DESKTOP-SPEC 7.2).
-    .testTarget(name: "TalosDesktopGuiTests", dependencies: ["TalosDesktop", "TalosDesktopCore"]),
+    .testTarget(name: "TalosDesktopGuiTests", dependencies: ["TalosDesktop", "TalosDesktopCore", "TalosTestSupport"]),
     // Real tmux (private socket), real pty and the fake-claude fixtures. No windows.
     .testTarget(
       name: "TalosDesktopIntegrationTests",
-      dependencies: ["TalosDesktopCore", "TalosSupervisor", .product(name: "SwiftTerm", package: "SwiftTerm")]
+      dependencies: [
+        "TalosDesktopCore", "TalosSupervisor", "TalosTestSupport", .product(name: "SwiftTerm", package: "SwiftTerm"),
+      ]
     ),
   ]
 )

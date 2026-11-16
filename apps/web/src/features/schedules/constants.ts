@@ -2,6 +2,8 @@
 // changes to point at its own scheduler.
 export const CHRONOS_INSTALL_URL = 'https://github.com/treynortetik-creator/chronos'
 export const CHRONOS_INSTALL_CMD = `git clone ${CHRONOS_INSTALL_URL} ~/chronos && ~/chronos/install.sh`
+/** Linux (Hestia): the same clone, installed from inside it. */
+export const CHRONOS_LINUX_INSTALL_CMD = `git clone ${CHRONOS_INSTALL_URL} && cd chronos && ./install.sh`
 export const CHRONOS_UPDATE_CMD = 'git pull && ./install.sh'
 
 /** The create form's prompt cap (S2.4). */

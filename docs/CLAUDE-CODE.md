@@ -311,6 +311,12 @@ MCP health is honest: a server with tools in `$.tool.list()` is `connected`; any
 
 ### C3.6 Step-up for approvals (the `permission_stepup` setting was removed, 2026-11-01)
 
+- **No step-up on a permission card, whatever the tool (owner, 2026-11-13).** `permissionRisk()` is always `low`, so the relay
+  asks for no token, the app no Face ID, and the iPhone notification offers Approve (when its text is the whole call). A card
+  that does not show all of its call (`⋯`, a cut `…`, `[REDACTED]`, too long, a Claude Code older than 2.1.234) keeps Allow with
+  a note saying what is not shown. A repeated request id is the one refusal. "Answer it at the Mac" is gone: a closed prompt
+  says "already answered or closed", and a failed send says why, after two retries.
+
 - The optional setting `permission_stepup: 'off'|'high'` is **gone** (owner call O3, SETTINGS-MAP). Nothing ever read it:
   the bridge refused every change to it and no verifier shipped. iPhone Approve already asks for device authentication.
   An old `config.json` that still has the key loads fine (unknown keys are stripped); a `config.patch` that names it is
@@ -340,14 +346,207 @@ own session (a thread session is not a channel). Claude Code does run `Permissio
 
 - **The hook** is `kit/hooks/permission-relay.py`, registered on `PermissionRequest` (every tool, `timeout: 3600`) by the kit's
   settings template, so `settings-merge.py` adds it to an older agent folder. A thread session gets the same hook in its own
-  `--settings` file (`WorkerSpec.withPermissionHook`, the agent folder's script by absolute path, marked
-  `TALOS_APP_PERM_HOOK_SOURCE=worker`); in a thread session the agent folder's copy stays silent, so one prompt raises one card.
+  `--settings` file (`WorkerSpec.withPermissionHook`, marked `TALOS_APP_PERM_HOOK_SOURCE=worker`). Its source is never a path guessed inside the agent folder, whose layout
+  varies (an older one keeps its hooks in `scripts/claude-code/hooks/`), and never the checkout: a thread working in the checkout
+  under acceptEdits edits its files without a prompt, so a hook read from there could be made to answer its own prompts (R1-1).
+  - **Linux** (worker-hook.ts): the active SEALED kit release (`$TALOS_KIT_HOME`, else `$TALOS_VENDOR_DIR/kit`, else
+    `~/.local/share/talos/kit`: `current` -> `releases/<version>/talos-kit/hooks/permission-relay.py`). Before every start the
+    release must be one of `releases/`, read-only through and through, owned by this account, outside the starting thread's folder
+    and the agent folder, and match the content hash its `.talos-release` records (checked once per supervisor run for the files
+    as they stand: an edit, even resealed, is checked again). No release, or one that fails, refuses the start with the one command
+    that installs a sealed release from the checkout's kit: `python3 <checkout>/kit/scripts/plugin-release.py build --source
+    <checkout>/kit --activate`.
+  - **Mac** (WorkerHook.swift, WorkerHookSource.swift): the app bundle's own sealed copy and nothing else
+    (`Contents/Resources/talos-hooks/permission-relay.py` and the helper beside it, put there read-only by `build-app.sh` before
+    the bundle is signed). Before every start the hook must really be inside the app bundle, a plain file (no link), with no
+    write bit, owned by this account or root, in an app that is not inside the starting thread's folder or the agent folder; the
+    bundle's code signature must hold and the bundle on disk must be the app that is running (by its code directory hash, so a
+    bundle edited and then signed again does not pass; asked once per run of the app, and the answer kept); and the files must be
+    the ones that check saw, with the same bytes. An app without the hook, or one that fails, refuses the start with that reason
+    (`build-app.sh` fails first: the app's `--selftest` makes the same check). Each file is opened once, never through a link,
+    and what it is and its bytes are asked of that one open file, so the file checked is the file read. The folder they are in
+    must be a real folder of this account or root that no other account can write (its owner's own write bit stays, unlike a
+    Linux release's folders: the bundle is replaced whole on an update). `build-app.sh` takes the two files from the checked-out
+    commit (`git cat-file blob HEAD:kit/hooks/...`), never the working tree, and fails when the working tree's copy differs: an
+    edit a thread session left in `kit/hooks` is not sealed into the app. The signature check is kept for the run of the app, so
+    an app replaced on disk while it runs refuses every start until it is quit and reopened (`install.sh` quits it first).
+  - **Mac only, the command and the interpreter** (WorkerHook.swift, WorkerHookPython.swift; review of 2026-11-11). A thread
+    folder's `.claude/settings*.json` can set any variable for the session's hooks (`env`), and Apple's `/usr/bin/python3` is not
+    an interpreter but the `xcrun` launcher, which runs whatever `DEVELOPER_DIR` names. So:
+    - the command runs the interpreter under `/usr/bin/env -i` with only: `HOME`, the Talos home and the thread id (all three
+      written into the command as text at the start, not read from the session), `PATH=/usr/bin:/bin`, `LANG`, the marker, and
+      eight values passed through from the session because the hook reads them (the thread's nonce, the kill switch and its
+      wait, `CLAUDE_PID`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_PROJECT_DIR`, `XDG_STATE_HOME`, `CHRONOS_CONFIG`). No
+      `DEVELOPER_DIR`, `DYLD_*` or `PYTHON*` reaches it. The interpreter runs `-I -S` (the hook is standard library only);
+    - python3 is never `/usr/bin/python3` or a copy of that launcher. When it is the PATH's only python3, the developer tools'
+      real interpreter is named by its own path (the tools `xcode-select` has chosen, then the Command Line Tools, then Xcode),
+      read from the disk and held to every rule; with no developer tools the start is refused;
+    - python3 is never inside ANY thread's folder (every thread in the agent config and every session the app has made, not
+      only the one starting: thread B edits its own folder without a prompt), and never inside the owner's home at all (every
+      thread folder is in the home; pyenv's or a venv's python3 there is passed over for the next PATH entry). It must be a
+      Mach-O program that not every account can write. All of it is looked at again at every start.
+    - Claude Code runs the command with `/bin/sh` in the session's environment, so that shell imports the session's functions
+      and options before `env -i` runs. It therefore does nothing but assign the copy's path and call `exec` (a special builtin,
+      found before any function): the test that the copy is there and the run itself are made by a second `/bin/sh` that
+      `env -i` starts clean. An imported function named `[` or `exec` changes nothing.
+    - What a command line cannot cover is not loaded at all. A thread session outside the agent folder starts with
+      `--setting-sources user`: the folder's `.claude/settings.json` and `.claude/settings.local.json`, its git roots' (the nearest
+      folder with a `.git`, and the canonical root a worktree's `.git` file leads to), and its project skills, commands,
+      subagents and CLAUDE.md files are not read (Claude Code 2.1.322 holds all of them to the project source; read from its
+      binary). Only the owner's own settings (`~/.claude`), the session's `--settings` and managed settings load. A session in
+      the agent folder loads the kit's files there, as main does. Never wider than main: when main's own `--setting-sources`
+      leaves out `user`, a thread-folder start is refused, and an agent-folder one gets main's sources.
+      The instruction files it no longer loads are handed over as text instead (WorkerInstructions.swift; a real session on
+      2026-11-12 got none of them under `user` alone), the set and order of the Linux twin: the folders from the home folder down
+      to the thread folder, git root or not (the home at its real path; outside the home, the folder alone), and in each, in
+      Claude Code's own order (measured on 2.1.322), CLAUDE.md, .claude/CLAUDE.md, .claude/rules/**/*.md (by path, 64 files and
+      4 folders down at most), CLAUDE.local.md, AGENTS.md and .claude/AGENTS.md (the AGENTS.md ones when the instruction-files
+      mode is `claude-md-and-agents-md`, always as Talos sets it). A linked `.claude` or `.claude/rules` folder is not followed; a
+      file that is itself a link is read only when it leads inside its own folder; never a name with a control character, `<` or
+      `>`; never anything inside the owner's config folder (~/.claude or CLAUDE_CONFIG_DIR, which Claude Code loads as his own
+      memory already), nor a file the `claudeMdExcludes` of his user settings or of the folder chain names (globs over the absolute
+      path); a rule for some files only (`paths:` in its frontmatter), or one whose frontmatter cannot be read for certain, is not
+      read (as on Linux). What is passed over is listed, escaped, in a "not read" line and told to the thread in the start's
+      warning line. The
+      caps count the text as decoded, the nearest folder's files take the budget first (the output stays furthest up first),
+      and the whole `--append-system-prompt` stays under 300 KB. The folder chain's own `permissions.deny` and `ask` rules (its
+      project and local settings, home down), which the session no longer loads either, are carried into its `--settings`,
+      each made absolute where it was defined. They go after the thread's preamble in its
+      `--append-system-prompt`. A first line says they are the project instruction files from the thread's folders, come after
+      Talos's own rules and change nothing about approvals, and that an `@path` import in them is not followed; each file sits
+      between `<<<TALOS-FILE <token> <path>>>` and `<<<TALOS-END <token>>>`, the token drawn per start (a copy of it in a file is
+      taken out), the path NFC with control and direction characters and `<` `>` escaped. Opened with O_NOFOLLOW at every level, regular
+      files only; 64 KB a file and 256 KB in all, with a note where cut or left out. Every thread session starts with
+      `--system-prompt-snapshot=off` (validate holds it): with the default, the first appended prompt is replayed at every
+      `--resume`, so an edited AGENTS.md would never arrive. Test: ClaudeInstructionsProbeTests runs the real `claude` (haiku,
+      plugins and hooks off, no tools, no MCP; opt-in with TALOS_REAL_CLAUDE_PROBE=1): without the text the model names no
+      codeword, with it all three, and after an edit and a `--resume` the new one; with the snapshot on (the control) the old one.
+    - The ALLOW-lists stay as defence in depth (a deny-list kept missing one: `CLAUDE_CODE_SHELL_PREFIX` wraps every hook and
+      Bash command in a script of the folder's choosing): in `env`, only Claude Code's own tunables (`WorkerHookFolder.allowedEnv`),
+      each a plain value; outside the agent folder, only `$schema`, `env`, `permissions`, `model`, `includeCoAuthoredBy`,
+      `alwaysThinkingEnabled`, `outputStyle`, `claudeMdExcludes` and `skillOverrides` (`cleanupPeriodDays` went: it deletes
+      transcripts), with `permissions` holding only `deny`, `ask` and `defaultMode`. Outside the agent folder a file with more
+      is a WARNING: the start goes ahead (the file is ignored) and the thread gets one line naming the file and the key when it
+      is a plain name; the audit has `worker_folder_settings_ignored`. The agent folder's files carry the kit's hooks and status
+      line by design, so only their `env` is held to the list, and there a breach still refuses the start.
+    - In the agent folder these refuse the start (the thread's line names the file; at most one new reason a minute; the audit has
+      every one); in a thread folder, where none of it loads, each is a warning in the same line as the settings (Hestia's F2), in the
+      folder, every folder above it up to its git root, and each git root: `.claude`, anything under it (`.claude/worktrees`
+      is not walked), `.mcp.json` or `.env` that is a link (everything is opened from the folder down with O_NOFOLLOW, one level
+      at a time); a subagent (`.claude/agents/**/*.md`), skill (`.claude/skills/**/SKILL.md`) or command
+      (`.claude/commands/**/*.md`) whose frontmatter has `hooks`, `allowed-tools` (or `allowedTools`), `mcpServers` or
+      `permissionMode`, or that cannot be read for certain (FrontmatterScan.swift: a YAML key scan that reads uniform
+      indentation, flow mappings, quotes and block scalars, and refuses anchors, tags, tabs in indentation, line separators and
+      anything else it cannot be sure of; the kit hook has the same reader, and both suites run kit/scripts/frontmatter-cases.json);
+      a `.git` that is a link, or a git pointer not followed the way Claude Code follows it (the whole trimmed text after
+      `gitdir:`, resolved by its text, each step where its text says with no link on the way; a control character or a
+      non-ASCII space in it refuses). A start before the agent config has been read once is refused.
+    - Every session's settings deny Edit, Write, MultiEdit and NotebookEdit of `<f>/.claude`, `<f>/.claude/**`, `<f>/.mcp.json`
+      and `<f>/.env*` for its own folder, each folder above it up to its git root, its git roots, the agent folder and every
+      other thread's folder; and of the settings, `agents/**`, `skills/**` and `commands/**` of `~/.claude` and
+      `CLAUDE_CONFIG_DIR`, their `.claude.json`, CLAUDE.md, `plugins/**`, `hooks/**`, `rules/**` and `output-styles/**`, and
+      `~/.claude.json` (the owner's user-scope MCP servers); every `.claude` at any depth under the agent folder (a nested one
+      loads when the session reads a file beside it); and the scripts the agent folder's and the owner's settings run (each
+      hook's and the status line's command, split into words as a shell would, with `$HOME`, `${HOME}`, `~` and
+      `$CLAUDE_PROJECT_DIR` (bare, braced, quoted, with a `:-` default) filled in, relative paths and bare script names taken from
+      the agent folder, and a word with any other `$` left in it skipped) and the agent folder's `hooks/**` and `kit/hooks/**`: a PreToolUse hook
+      can answer "allow", so a thread that edits one could approve its own calls and main's. Every thread session's settings also carry
+      `disableAutoMode: "disable"`, `disableSkillShellExecution: true` and deny `EnterWorktree`.
+    - SHELLOPTS, BASHOPTS, PS4, ENV, BASH_ENV, GCONV_PATH, CLAUDE_CODE_SHELL_PREFIX and every `BASH_FUNC_*`, `LD_*` and `DYLD_*`
+      are stripped from every session's environment, main's
+      included, and `desktop.json` cannot set them (`ClaudeEnvScrub.shellStartup`): xtrace with a PS4 holding `$(...)` would run
+      a program at every traced command. Whether `claude` loads a `.env` from its folder: checked against 2.1.322 without a
+      session (ClaudeDotEnvProbeTests: a sparse 320 MB `.env` makes Bun, the control, hold it in memory; `claude --help` does
+      not), so it does not at start; a session's later reads are not covered, and `.env*` is fenced from edits either way.
+      The lists are one: the app's and the hook script's are held equal by swift-parity.test.ts.
+      For an agent-folder session the hook runs the same checks again at every prompt (a hooked subagent added mid-session is
+      seen) and a hit keeps the prompt at the terminal; for a thread folder each finding is one stderr warning and the prompt
+      goes on. The walk is kept between prompts in `$TALOS_APP_HOME/workers/_hook/folder-check-*.json`, keyed on the folders'
+      `.claude`, `.git`, `.mcp.json`, `.env` and settings files and the entries of their agents, commands and skills folders, and
+      walked again when that changes or after 60 s (the boot clock). This stops only an
+      honest hook: if the session's shell was already steered, the check never runs, so the start-time refusal and the deny
+      rules are what hold. The Mac's command names the session's folder
+      (`TALOS_APP_HOOK_CHECK_DIR`, and `TALOS_APP_HOOK_CHECK_HOOKS=0` for the agent folder); on a hit the bridge is never
+      asked, nothing is printed (so Claude Code's own prompt stays at the terminal, never an allow) and one line goes to
+      stderr. Linux's command does not name the folder, so the shared hook reads nothing there. The hook runs with the
+      session's HOME when it is a folder that exists, else this account's own (Apple's tools stall for seconds on a missing
+      one). The developer tools' interpreter is run where it is installed, never copied (it finds its framework beside
+      itself), and the hook stays Python 3.9.
+
+  At every start the hook and its helper are copied into `$TALOS_APP_HOME/workers/_hook/` (0600: the fenced, owner-only home;
+  `workers/` and `_hook` each made one level at a time and refused when either is a link, so nothing is made through one, R1-9),
+  and the command runs that copy with the python3 the session's PATH names outside the thread's folder and the agent folder (a
+  link on PATH that leads inside either is passed over too, R1-7), resolved at the start and written in by absolute path,
+  isolated (`python3 -I`; on the Mac `-I -S` in an emptied environment, above). A hook that cannot run, or no python3, refuses the start before it takes a slot (`worker_hook_missing`
+  in the audit, and a line in the thread), never a silent fallback to the terminal. On both, python3 is the real interpreter
+  file: a version manager's shim (a `#!` script, or a link to `mise`) is passed over, since it reads its choice from the folder
+  it runs in, and the copy is made only of the bytes the check verified. In a thread session the agent folder's copy stays silent, so one prompt
+  raises one card.
+
   Verified against Claude Code 2.1.318 (hooks reference, and real runs): stdin carries `session_id`, `cwd`, `permission_mode`,
   `tool_name`, `tool_input` and `permission_suggestions`, with no `tool_use_id`; stdout is `{"hookSpecificOutput":
   {"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}` (or `deny` with a `message`); an exit-2 or a failing hook
   leaves the prompt as it is. Interactive sessions set `CLAUDE_CODE_SESSION_ATTENDED=1`, `claude -p` sets `0` and the hook stays
   silent there, so an unattended ask is still refused (C3.1).
-- **The road** is the hub socket (`$TALOS_APP_HOME/hub.sock`, 0600 in the 0700 data folder): one `perm` line (`HubPerm`: tool name,
+
+  **What the session's own environment can reach (Linux; the Mac's twin is being built).** Claude Code runs a hook's command as
+  `/bin/sh -c <command>` with the session's environment (seen in real runs: bash in POSIX mode), and a thread with acceptEdits
+  can write its folder's `.claude/settings.json`, whose `env` Claude Code applies to that environment. So:
+  - The command's first shell does only an assignment and `exec /usr/bin/env -i …` (a special builtin: an imported function
+    named `exec` or `[` does not replace it in POSIX mode). `env -i` starts a second, clean `/bin/sh` with PATH=/usr/bin:/bin,
+    LANG, HOME, TALOS_APP_HOME, the thread and the folder the hook reads again (TALOS_APP_HOOK_CHECK_DIR) fixed by the supervisor,
+    plus only the eight names in HOOK_PASS_ENV (worker-spec.ts), each of which can at worst stop that thread's own relay. That
+    shell tests for the copy and starts python3 `-I -S`. The command is the Mac's word for word but its locale (swift-parity).
+  - No command string can stop what runs in the first shell, or what steers Claude Code itself: the loader (`LD_PRELOAD`,
+    `LD_AUDIT`, `DYLD_*`), xtrace with a PS4 that expands a command, `GCONV_PATH` with a charset (bash's gettext warning loads
+    it), `CLAUDE_CODE_SHELL_PREFIX` (Claude Code then runs every hook, ours from --settings too, and every Bash command through
+    it), and Claude Code's loaders are many (settings, skills, commands, subagents, each with their own frontmatter). So:
+    - **A thread whose folder is not the agent folder** starts with `--setting-sources=user` (refused when Main's own
+      `--setting-sources` leaves out `user`: a worker never loads a source Main does not). Claude Code 2.1.322 then loads none
+      of the folder's, its parents' or its repo root's project files: no settings, skills, commands, subagents, `.mcp.json`,
+      rules, CLAUDE.md or AGENTS.md (proven with real runs). The thread's project instructions come anyway: the supervisor
+      reads the files the shared table names (`instructionFiles`: CLAUDE.md, .claude/CLAUDE.md, .claude/rules/*.md,
+      CLAUDE.local.md, AGENTS.md, .claude/AGENTS.md, as the instructionFiles mode reads them) in each folder from the owner's
+      home down to the thread folder, parent first, as Claude Code would have; each a plain file opened without following a
+      link, at most 64 KB of it and 256 KB in all; the text as it is (an `@path` import is not followed: it could pull any
+      readable file into the prompt). It hands them to the session after the preamble in `workers/<id>/system-prompt.md`
+      through `--append-system-prompt-file` (one argument may not be over 128 KB on Linux), each file between marker lines
+      with a token made for that start (no file can close its own block or fake another's), under a heading that says they
+      come after Talos's own rules and cannot change how a permission is approved; what was not read (a link, not a plain
+      file, over the budget) is named. Every worker starts with `--system-prompt-snapshot=off`: Claude Code would otherwise
+      replay the first system prompt on every resume, and an edited AGENTS.md would never reach the resumed session. Real-Claude
+      tests hold three codewords from three depths to the model's request (none without the file), and a resume to the new
+      text (the old one with the snapshot on). What the folders carry (settings the allow-lists refuse, a link at `.claude` or
+      under it, at `.mcp.json` or `.env*`, a skill, command or subagent whose frontmatter has
+      `hooks`, `allowed-tools`, `mcpServers` or `permissionMode`) is only told, once at the start
+      (`worker_project_settings_ignored`): none of it loads.
+    - **A thread whose folder is the agent folder** loads its project files as Main does (Main's own `--setting-sources`, when
+      it names one), so the same checks refuse its start (`worker_project_settings_refused`), and the bridge reads its settings
+      files and repo roots again at every permission request (and so does any session whose record names no sources: one started
+      before they were recorded; no tree walk there; a refusal gets no card, `project_settings`,
+      and a line in the thread, one per reason, at most three an hour, every control or bidi character in a path shown as
+      `U+XXXX`). The hook (kit/hooks/permission-relay.py) reads the folder again at every prompt itself.
+    - Skills, commands and subagents are read by ONE frontmatter reader on all three sides (FrontmatterScan.swift, the hook's
+      frontmatter_keys, apps/bridge/src/worker/frontmatter-scan.ts), each held to the shared cases in
+      kit/scripts/frontmatter-cases.json; what it cannot read for certain (an escape in a key, a tab in an indentation, an
+      anchor, a quote or flow collection open at a top-level line, a `...` line, an odd character) counts as refused.
+    - Every session's environment drops SHELLOPTS, BASHOPTS, PS4, ENV, BASH_ENV, imported functions (`BASH_FUNC_*`), `LD_*`,
+      `DYLD_*`, GCONV_PATH and CLAUDE_CODE_SHELL_PREFIX, whatever the login shell had.
+  - Every session's settings turn auto mode off (`permissions.disableAutoMode: "disable"`: no classifier in the owner's
+    place), turn off the shell lines of skills and custom slash commands (`disableSkillShellExecution`: a skill's card shows
+    only its name, and its `!` lines would run under its own allowed tools), and deny `EnterWorktree` (it would move the
+    session to a folder the start never checked).
+  - Every session's settings deny Edit, Write, MultiEdit and NotebookEdit of: each fenced folder's (its own, the folders up to
+    its repo roots and the roots, the agent folder's, every other configured thread's) whole `.claude`, `.mcp.json` and `.env*`
+    files; the scripts the agent folder's own settings run (each hook command's and the status line's, written
+    `$CLAUDE_PROJECT_DIR/...` in its forms or by absolute path), its `hooks/**` and `kit/hooks/**` (a PreToolUse hook can
+    answer "allow"), and every `.claude` folder below it (`**/.claude/**`: Claude Code picks up a nested one's skills); in `~/.claude` and Main's config folder, `settings.json`, `settings.local.json`, `skills/**`, `commands/**`,
+    `agents/**`, `plugins/**`, `hooks/**`, `CLAUDE.md`, `rules/**`, `output-styles/**`, `workflows/**` and `routines/**`; and
+    `~/.claude.json` and Main's own (user-scope MCP servers). That is a layer, not the boundary: a Bash write is no file tool,
+    and under acceptEdits it goes to an owner card, so it holds only while the hook answering that card is the real one.
+  - The python3 fence covers every configured dedicated thread's folder, read from config.json again at each start (the last
+    good list kept while it cannot be read; a start is refused until one read succeeds), in the start and in the preflight.
+- **The road** is the hub socket (`$TALOS_APP_HOME/run/hub.sock`, 0600 in its own 0700 folder in the 0700 data folder): one `perm` line (`HubPerm`: tool name,
   the exact tool input, the Claude Code pid and cwd, and for a thread session its id and nonce), one `perm_result` line back
   (`allow`, `deny` or `none`). Before it sends anything the hook checks that the socket's peer is the live bridge (peer pid from
   `LOCAL_PEERPID`/`SO_PEERCRED` equals the pid in `bridge.pid`), so a stand-in listener never sees the call and cannot hand back an
@@ -638,13 +837,14 @@ or start any of them today.
   `desktop.json` nor "whatever the argv passed" ever counts: the launch command is in `desktop.json`, which an agent may be able
   to write); Main's launch is the one the owner last confirmed (the fingerprint of folder, program, flags without the resume id and
   env equals `confirmed_launch` in `desktop.json`, stored when a start last got through the warning; none stored counts as
-  changed, so the first start after set-up, a new program, a new flag or a new env var waits for the owner, whose Enter, or whose tap
+  changed, so the first start after set-up, a new program, a new flag or a new env var waits for the owner, whose click
   on the Mac's Needs-you popup (kind `dev_channels`: "Allow Talos's development channel?", the screen's two buttons; the bridge is Main's own
   child, so while Main sits on this warning no bridge runs and posts no card: the Mac posts one plain line to the default thread instead,
   once per start, for a start the phone or a recovery began and for a crash restart (not when the owner starts Main at the Mac); a bridge that does run reads `supervisor.main_dialog` in `workers.json` and posts the card), stores the new one; `confirmed_launch` sits in
   `desktop.json` with an HMAC (`confirmed_launch_mac`) under a 32-byte key in the Keychain (`LaunchTrust`), and a missing key, a missing or
-  wrong MAC or an unreadable Keychain count as changed, so an edit of the file alone cannot confirm a launch. Only a real click on the popup's button (or a verified card tap) seals;
-  an Enter in the pane lets that one start through and stores nothing. The fingerprint is SHA-256 over a length-prefixed encoding. This stops
+  wrong MAC or an unreadable Keychain count as changed, so an edit of the file alone cannot confirm a launch. Only a real click on the popup's button seals;
+  an Enter in the pane or a verified card tap lets that one start through and stores nothing (the card's answer file is checked
+  against `devices.json`, which an agent running as the owner can write). The fingerprint is SHA-256 over a length-prefixed encoding. This stops
   accidental and casual auto-accepts, not an agent running as the owner with tmux access, which can press Enter on Main's dialog itself
   (agent guards do not block tmux); the floor under that is still the constant-channel check above); an ordinary cold start or
   restart with the same launch is automatic; it is within 60 s (awake clock) of this start's spawn; it is the first
@@ -710,9 +910,9 @@ or start any of them today.
 
 > Threads are topics. Reply in the thread a message came from. For work you start yourself, pick the thread whose name
 > matches the topic (`list_threads`); if a project or recurring topic has none and will produce more than one message
-> this week, `create_thread` with a short noun name, then post there. Don't create a thread for a one-off answer. When a
-> topic is finished, post a one-line wrap-up and `archive_thread` (agent threads only). Hook events stay in `inbox`
-> unless the owner routed them.
+> this week, `create_thread` with a short noun name, then post there once the owner has approved the card. Don't create a
+> thread for a one-off answer. When a topic is finished, post a one-line wrap-up and `archive_thread` (agent threads only);
+> the owner approves the card. Hook events stay in `inbox` unless the owner routed them.
 
 ### C7.3 UI gaps (WP-C4)
 

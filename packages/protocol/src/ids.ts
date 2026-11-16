@@ -34,6 +34,8 @@ export const VoiceId = z.string().regex(new RegExp(`^v_${ULID_BODY}$`))
 export const ViewId = z.string().regex(new RegExp(`^av_${ULID_BODY}$`))
 /** MCP Apps: one signed request from a view (`tools/call`, `ui/message`). */
 export const AppRequestId = z.string().regex(new RegExp(`^ar_${ULID_BODY}$`))
+/** An org page (docs/ORG-PAGES-SPEC.md): `pg_` + a ULID, minted by the relay at the first publish. */
+export const PageId = z.string().regex(new RegExp(`^pg_${ULID_BODY}$`))
 /** = Claude Code's tool_use_id. Validated before it touches any file name. */
 export const CaptureId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/)
 /**
@@ -100,7 +102,7 @@ export const PageCursor = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/)
 export type ThreadIdT = z.infer<typeof ThreadId>
 export type IntegrationIdT = z.infer<typeof IntegrationId>
 
-export type IdPrefix = 'm' | 'c' | 'e' | 'md' | 'v' | 'sh' | 'd'
+export type IdPrefix = 'm' | 'c' | 'e' | 'md' | 'v' | 'sh' | 'd' | 'pg'
 
 /** A bare ULID, used for frame ids. */
 export function newUlid(): string {

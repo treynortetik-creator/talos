@@ -93,12 +93,14 @@ export async function handleShareTarget(
       return typeof v === 'string' && v.trim() ? v : undefined
     }
     const files: SharedFile[] = []
+    let leftOut = 0 // past the limit: not kept, but the share page says how many
     for (const v of form.getAll('files')) {
       if (typeof v === 'string' || v.size === 0) continue
-      files.push({ name: v.name || 'shared file', type: v.type, size: v.size, blob: v })
-      if (files.length >= SHARE_LIMITS.files) break
+      if (files.length >= SHARE_LIMITS.files) leftOut++
+      else files.push({ name: v.name || 'shared file', type: v.type, size: v.size, blob: v })
     }
     const m: SharedMaterial = { files }
+    if (leftOut > 0) m.leftOut = leftOut
     const title = str('title')
     const text = str('text')
     const url = str('url')

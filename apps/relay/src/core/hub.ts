@@ -9,6 +9,7 @@
 //   hub-ready.ts          the `ready` frame
 //   hub-helpers.ts        pure helpers
 import {
+  FILES_PUT_ANSWER_MS,
   type Frame,
   type FrameOf,
   type FrameType,
@@ -16,7 +17,6 @@ import {
   isQuiet,
   type MessageT,
   newUlid,
-  PROBLEMS_FEATURE,
   type PresenceT,
   type ThreadT,
   V2_READ_OWNER_FRAME_TYPES,
@@ -27,11 +27,13 @@ import { sessionActive, sessionEndReason, sessionPinned } from '../auth/contract
 import { RateLimiter } from '../auth/limits.ts'
 import type { AppFrameContext, BridgeFrameContext, Bus, RichPushInput } from '../services.ts'
 import { AppRouter } from './apps.ts'
+import { BridgeAlarms } from './bridge-alarms.ts'
+import { markNeedsYouOwed, needsYouRefused } from './card-reminder.ts'
 import { DEFAULT_AGENT_CONFIG } from './default-config.ts'
 import { EphemeralRouter } from './ephemeral.ts'
-import { BridgeFeatures } from './features.ts'
+import { BridgeFeatures, bridgeMainPresence, isBridgeSuperseded, problemHeld, setBridgeSuperseded } from './features.ts'
 import { fitDigest } from './fit.ts'
-import { type AppConnCtx, appConnFrames } from './hub-app-conn.ts'
+import { type AppConnCtx, appConnFrames, appWidthOf } from './hub-app-conn.ts'
 import { type AppFramesCtx, appFrames } from './hub-app-frames.ts'
 import { type BridgeConnCtx, bridgeConnFrames } from './hub-bridge-conn.ts'
 import { type BridgeFramesCtx, bridgeFrames } from './hub-bridge-frames.ts'
@@ -39,7 +41,7 @@ import type { CardsCtx } from './hub-cards.ts'
 import { cardsFrames } from './hub-cards.ts'
 import type { ChatCtx } from './hub-chat.ts'
 import type { ConfigCtx } from './hub-config.ts'
-import { countsUnread, errName, threadOf } from './hub-helpers.ts'
+import { countsUnread, errName, runHooks, threadOf } from './hub-helpers.ts'
 import type { HistoryCtx } from './hub-history.ts'
 import { historyFrames } from './hub-history.ts'
 import { type ReadyCtx, readyFrames } from './hub-ready.ts'
@@ -77,6 +79,7 @@ export { FrameRejected } from './hub-types.ts'
 
 export class Hub implements Bus {
   private apps = new Map<string, AppConn>()
+  appWidth = () => appWidthOf(this.apps) // for /api/status (health.ts)
   private bridge: BridgeConn | null = null
   private appHandlers = new Map<string, AppHandler[]>()
   private bridgeHandlers = new Map<string, BridgeHandler[]>()
@@ -93,8 +96,7 @@ export class Hub implements Bus {
   private status: StatusTimers
   private cardTimers = new Map<string, unknown>()
   private timers = new Set<unknown>()
-  private supersedes: number[] = []
-  private lastSupersedeAlarm = 0
+  private alarms: BridgeAlarms
   private stoppedTimer: unknown = null
   private stoppedNotified = false
   private pingTimer: unknown = null
@@ -123,6 +125,11 @@ export class Hub implements Bus {
   /** When this hub started; a bridge cannot have been gone longer than this process has been up (see presence()). */
   private readonly upSince: number
   constructor(private d: HubDeps) {
+    this.alarms = new BridgeAlarms({
+      clock: d.clock,
+      notify: (intent) => this.notify(intent),
+      timezone: () => this.agentConfig()?.timezone,
+    })
     this.upSince = d.clock.now()
     this.config = d.store.getConfig()
     this.bridgeFeatures = new BridgeFeatures(d.store)
@@ -150,11 +157,21 @@ export class Hub implements Bus {
       sendToApp,
       appError,
     })
+    // each signed read's rate bucket (auth/limits.ts); an upload also waits longer: the Mac fetches up to 50 MB first
+    const bucket: Partial<Record<string, string>> = {
+      'search.query': 'search',
+      'files.sent': 'search', // a query over the Mac's history, like search
+      'speak.request': 'speak',
+      'fs.list': 'folders',
+    }
+    for (const t of ['files.list', 'files.read', 'agents_md.read', 'agents_md.write', 'files.put']) bucket[t] = 'files'
+    bucket['bug.context'] = 'bug_context'
     for (const t of V2_READ_OWNER_FRAME_TYPES)
       this.ephemeral.register(
         t,
         V2_READ_RESPONSE_FOR[t],
-        t === 'search.query' ? 'search' : t === 'speak.request' ? 'speak' : t === 'fs.list' ? 'folders' : 'memory',
+        bucket[t] ?? 'memory',
+        t === 'files.put' ? FILES_PUT_ANSWER_MS : undefined,
       )
     this.appRouter = new AppRouter({
       clock: d.clock,
@@ -169,6 +186,7 @@ export class Hub implements Bus {
       store: d.store,
       clock: d.clock,
       log: d.log,
+      holdPollMs: d.env.SCHEDULE_ALERT_HOLD_POLL_S * 1000,
       bridgeOnline: () => this.bridgeOnline(),
       bridgeHas: (feature) => this.bridgeFeatures.has(feature),
       socketLive: (id) => Boolean(this.apps.get(id)?.authed),
@@ -227,8 +245,8 @@ export class Hub implements Bus {
     this.configCtx = {
       d,
       ownerDeviceOk: (a, deviceId, frameId) => this.ownerDeviceOk(a, deviceId, frameId),
-      acceptOwner: (a, frame, raw, threadId, extraKeys, alsoWrite) =>
-        this.acceptOwner(a, frame, raw, threadId, extraKeys, alsoWrite),
+      acceptOwner: (a, frame, raw, threadId, extraKeys, alsoWrite, audience) =>
+        this.acceptOwner(a, frame, raw, threadId, extraKeys, alsoWrite, audience),
       appError: (a, code, message, ref) => this.appError(a, code, message, ref),
       sendApp: (a, frame) => this.sendApp(a, frame),
       agentConfig: () => this.agentConfig(),
@@ -318,7 +336,10 @@ export class Hub implements Bus {
         this.stoppedTimer = null
       },
       armSessionStopped: () => this.armSessionStopped(),
-      noteSupersede: () => this.noteSupersede(),
+      bridgeGone: () => runHooks(this.bridgeGoneHooks, this.d.log, 'bridge-gone hook failed'),
+      noteSupersede: (by) => this.alarms.noteSupersede(by),
+      noteStandby: (standby) => this.alarms.noteStandby(standby),
+      setSuperseded: (on) => setBridgeSuperseded(this.d.store, on),
       sendBridge: (frame) => this.sendBridge(frame),
       ready: (forApp) => this.ready(forApp),
       broadcastPresence: () => this.broadcastPresence(),
@@ -385,14 +406,21 @@ export class Hub implements Bus {
     this.pingTimer = null
     if (this.resendTimer) this.d.clock.clearTimeout(this.resendTimer)
     this.resendTimer = null
-    for (const a of this.apps.values()) a.conn.close(1001)
-    this.bridge?.conn.close(1001)
+    for (const a of this.apps.values()) a.conn.close(WS_CLOSE.RESTARTING, 'restarting') // a deploy: come straight back
+    this.bridge?.conn.close(WS_CLOSE.RESTARTING, 'restarting')
   }
 
-  /** Fire-and-forget push: a decrypt or SQLite error in the push path must never become an unhandled rejection. */
+  /**
+   * Fire-and-forget push: a decrypt or SQLite error in the push path must never become an unhandled rejection. A card's
+   * "Needs you" push that every service refused is recorded as owed, and the card reminder's tick tries it again.
+   */
   private notify(intent: Parameters<HubDeps['push']['notify']>[0], rich?: RichPushInput): void {
+    const cardId = intent.template === 'needs_you' ? intent.card_id : undefined
     this.d.push
       .notify(intent, rich ? { rich } : undefined)
+      .then((res) => {
+        if (cardId && needsYouRefused(res)) markNeedsYouOwed(this.d.store, cardId, this.d.clock.now())
+      })
       .catch((e) => this.d.log.error({ err: errName(e), template: intent.template }, 'push failed'))
   }
 
@@ -515,19 +543,21 @@ export class Hub implements Bus {
   private fanOut(frame: Record<string, unknown>, onlyDeviceId?: string, except?: string): void {
     const text = JSON.stringify(frame)
     const type = String(frame.type)
+    let wide: string | undefined // the whole bridge features list, for an app that reads it (features.ts widen)
     for (const a of this.apps.values()) {
       if (!a.authed || a.id === except) continue
       if (onlyDeviceId && a.deviceId !== onlyDeviceId) continue
       this.refreshPairing(a)
       if (a.limited && !PAIRING_OUT.has(type)) continue
-      a.conn.send(text)
+      if (a.wideFeatures && wide === undefined) wide = this.bridgeFeatures.widenText(frame, text)
+      a.conn.send(a.wideFeatures ? (wide as string) : text)
     }
   }
 
   private sendApp(a: AppConn, frame: Record<string, unknown>): void {
     const full = this.complete(frame)
     if (a.limited && !PAIRING_OUT.has(String(full.type))) return
-    a.conn.send(JSON.stringify(full))
+    a.conn.send(JSON.stringify(a.wideFeatures ? this.bridgeFeatures.widen(full) : full))
   }
 
   /**
@@ -584,7 +614,7 @@ export class Hub implements Bus {
   /** Sends a stored frame to the bridge; a hook.event that waited more than 15 minutes goes out as `backlog`. */
   private deliverStored(stamped: StoredFrame): void {
     // An older Mac drops a frame type it does not know and would answer nothing: keep problem reports until it says it can file them.
-    if (stamped.type === 'problem.item' && !this.bridgeFeatures.has(PROBLEMS_FEATURE)) return
+    if (problemHeld(stamped, (f) => this.bridgeFeatures.has(f))) return
     let out = stamped
     if (stamped.type === 'hook.event' && stamped.delivery !== 'backlog') {
       const age = this.d.clock.now() - Date.parse(stamped.relay.received_at)
@@ -639,6 +669,8 @@ export class Hub implements Bus {
       last_seen: last ? new Date(last).toISOString() : null,
       queue_depth: this.d.store.outboxDepth(),
       ...this.bridgeFeatures.presence(),
+      ...(isBridgeSuperseded(this.d.store) ? { superseded: true } : {}),
+      ...(this.bridgeOnline() ? bridgeMainPresence(this.d.store) : {}), // Main's state: only from a live bridge
     }
   }
 
@@ -653,6 +685,10 @@ export class Hub implements Bus {
   }
 
   private readyExtras: Array<() => Record<string, unknown>> = []
+  private bridgeGoneHooks: Array<() => void> = []
+  onBridgeGone(fn: () => void): void {
+    this.bridgeGoneHooks.push(fn)
+  }
   /** A module adds fields to the app's `ready` (the session module keeps the last session.state for it). */
   readyExtra(fn: () => Record<string, unknown>): void {
     this.readyExtras.push(fn)
@@ -722,12 +758,14 @@ export class Hub implements Bus {
     threadId: string | null,
     extraKeys: string[] = [],
     alsoWrite?: () => void,
+    /** `bridge`: kept for the Mac only, never replayed to a device (a patch that carries the bug webhook address). */
+    audience: 'both' | 'bridge' = 'both',
   ): StoredFrame | null {
     const { stepup_token: _drop, ...clean } = raw
     let stamped: StoredFrame
     try {
       stamped = this.d.store.db.transaction((): StoredFrame => {
-        const s = this.d.store.appendEvent({ frame: clean, audience: 'both', threadId: threadId ?? undefined })
+        const s = this.d.store.appendEvent({ frame: clean, audience, threadId: threadId ?? undefined })
         this.d.store.remember(`of:${frame.id}`, s.relay.seq)
         for (const k of extraKeys) this.d.store.remember(k, s.relay.seq)
         alsoWrite?.()
@@ -808,16 +846,6 @@ export class Hub implements Bus {
       } catch (e) {
         this.d.log.error({ err: errName(e), type: frame.type }, 'bridge frame handler failed')
       }
-    }
-  }
-
-  private noteSupersede(): void {
-    const now = this.d.clock.now()
-    this.supersedes = this.supersedes.filter((t) => now - t < 3_600_000)
-    this.supersedes.push(now)
-    if (this.supersedes.length >= 3 && now - this.lastSupersedeAlarm > 3_600_000) {
-      this.lastSupersedeAlarm = now
-      this.notify({ template: 'bridge_key' })
     }
   }
 
@@ -910,7 +938,7 @@ export class Hub implements Bus {
     // Reports and warnings are courtesies: whatever they hit, the retention below still runs.
     try {
       this.reportUndelivered()
-      this.warnDeadMac()
+      this.warnDeadMac() // and the held bug reports' day-5 line (hub-undelivered.ts warnHeldProblems)
     } catch (e) {
       this.d.log.warn({ err: errName(e) }, 'dead-mac report failed')
     }
@@ -920,6 +948,7 @@ export class Hub implements Bus {
       decisionCard: (type, body) => this.decisionCard(type, body as Record<string, unknown>),
     })
     this.d.media.removeFiles(res.mediaIds)
+    if (res.problemsDropped) this.d.log.warn({ problems: res.problemsDropped }, 'bug reports dropped past the backstop')
     if (res.events > 0 || res.mediaIds.length > 0) {
       this.d.log.info({ events: res.events, media: res.mediaIds.length }, 'retention sweep')
     }

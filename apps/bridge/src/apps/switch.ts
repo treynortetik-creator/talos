@@ -3,16 +3,15 @@
 // without a restart for a bridge started with `TALOS_APP_APPS=1` in its shell. Absent from both, `fallback` decides.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseEnvFile } from '../config.ts'
+import { flag, parseEnvFile } from '../config.ts'
 
+// A legacy exception in flags.json: bridge.env before the process environment, the reverse of loadEnv.
 export function appsSwitch(home: string, env: Record<string, string | undefined>, fallback = false): boolean {
+  let file: Record<string, string> | undefined
   try {
-    const v = parseEnvFile(readFileSync(join(home, 'bridge.env'), 'utf8')).TALOS_APP_APPS
-    if (v !== undefined && v !== '') return v === '1'
+    file = parseEnvFile(readFileSync(join(home, 'bridge.env'), 'utf8'))
   } catch {
     // no file: the process environment decides
   }
-  const e = env.TALOS_APP_APPS
-  if (e !== undefined && e !== '') return e === '1'
-  return fallback
+  return flag('TALOS_APP_APPS', [file, env], fallback)
 }

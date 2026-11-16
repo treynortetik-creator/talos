@@ -1,11 +1,11 @@
 // Phone controls added with trust mode: the permission-relay switch (Health) and the work wording and retention (Work
-// systems). Against the in-memory fake client, which refuses what the real client refuses: a patch that needs a passkey tap
-// is turned away without a token, unless the synced config says trust mode is on.
+// systems). Against the in-memory fake client. None of them asks for a passkey (owner ruling 2026-11-14), trust mode or not.
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HealthScreen } from '../../src/features/health/HealthScreen.tsx'
 import { PermissionRelaySwitch } from '../../src/features/health/PermissionRelaySwitch.tsx'
 import { WorkWording } from '../../src/features/integrations/WorkWording.tsx'
+import { NOT_CONNECTED_LINE } from '../../src/features/settings/offline.ts'
 import { renderWith, setup } from '../cards/helpers.tsx'
 import { statusOf } from '../health/status.ts'
 
@@ -24,11 +24,10 @@ const withConfig = (client: ReturnType<typeof setup>, over: Record<string, unkno
   client.store.setState((s) => (s.config ? { ...s, config: { ...s.config, ...over } } : s))
 
 describe('Health: the permission relay switch', () => {
-  it('shows the saved state, and a change taps the passkey once, then saves', async () => {
+  it('shows the saved state, and a change saves as one signed patch with no passkey', async () => {
     stubStatus()
     const client = setup()
     withConfig(client, { permission_relay: false })
-    const tap = vi.spyOn(client, 'stepup')
     renderWith(<HealthScreen />, client, '/settings/health')
     const row = screen.getByTestId('permission-relay-state')
     expect(row.textContent).toMatch(/approval cards: Off/)
@@ -36,8 +35,8 @@ describe('Health: the permission relay switch', () => {
     expect(sw.getAttribute('aria-checked')).toBe('false')
     fireEvent.click(sw)
     await waitFor(() => expect(client.store.getState().config?.permission_relay).toBe(true))
-    expect(tap).toHaveBeenCalledTimes(1)
-    expect(tap).toHaveBeenCalledWith('config:session')
+    expect(client.sent.at(-1)).toMatchObject({ type: 'config.patch', patch: { permission_relay: true } })
+    expect(client.sent.at(-1)).not.toHaveProperty('stepup_token')
     expect((await screen.findByRole('status')).textContent).toMatch(/Restart the agent/)
     expect(within(screen.getByTestId('permission-relay-state')).getByRole('switch').getAttribute('aria-checked')).toBe(
       'true',
@@ -120,15 +119,13 @@ describe('Health: the permission relay switch', () => {
     expect(screen.getByTestId('permission-relay-state').textContent).not.toMatch(/after restart/)
   })
 
-  it('trust mode: no tap, and it saves', async () => {
+  it('trust mode: the same, it saves', async () => {
     stubStatus()
     const client = setup()
     withConfig(client, { permission_relay: false, trust_mode: true })
-    const tap = vi.spyOn(client, 'stepup')
     renderWith(<HealthScreen />, client, '/settings/health')
     fireEvent.click(within(screen.getByTestId('permission-relay-state')).getByRole('switch'))
     await waitFor(() => expect(client.store.getState().config?.permission_relay).toBe(true))
-    expect(tap).not.toHaveBeenCalled()
   })
 
   it('a refused change shows the reason and the switch goes back', async () => {
@@ -146,29 +143,59 @@ describe('Health: the permission relay switch', () => {
     )
   })
 
-  it('with the Mac offline the switch is disabled and says why', async () => {
+  it('with the Mac offline (this device connected) the switch is disabled and says the Mac is offline', async () => {
     stubStatus()
     const client = setup({ macOffline: true })
+    withConfig(client, { permission_relay: true })
+    renderWith(<HealthScreen />, client, '/settings/health')
+    const row = screen.getByTestId('permission-relay-state')
+    expect(within(row).getByRole('switch').hasAttribute('disabled')).toBe(true)
+    expect(row.textContent).toMatch(/is offline, so this can’t change now/)
+  })
+
+  it('with this device not connected the switch is disabled and says so, never that the Mac is offline', async () => {
+    stubStatus()
+    const client = setup({ macOffline: true }) // the last word about the Mac, from before the drop: not current
     withConfig(client, { permission_relay: true })
     client.store.setState({ connection: 'offline' } as never)
     renderWith(<HealthScreen />, client, '/settings/health')
     const row = screen.getByTestId('permission-relay-state')
     expect(within(row).getByRole('switch').hasAttribute('disabled')).toBe(true)
-    expect(row.textContent).toMatch(/not connected/)
+    expect(row.textContent).toContain(NOT_CONNECTED_LINE)
+    expect(row.textContent).not.toMatch(/is offline/)
+  })
+})
+
+describe('Health: this device not connected', () => {
+  it('the header never says the Mac is offline from a stale presence, and says its status is from before', async () => {
+    stubStatus()
+    const client = setup({ macOffline: true }) // last heard: Mac offline, then this device lost its connection
+    client.store.setState({ connection: 'offline' } as never)
+    renderWith(<HealthScreen />, client, '/settings/health')
+    const mac = await screen.findByTestId('mac-status')
+    expect(mac.textContent).toContain('not known until connected')
+    expect(mac.textContent).not.toMatch(/Mac (online|offline)/)
+    expect(screen.getByTestId('health-not-connected').textContent).toContain(NOT_CONNECTED_LINE)
+  })
+
+  it('connected, the header says what the Mac is, and the line is gone', async () => {
+    stubStatus()
+    const client = setup({ macOffline: true })
+    renderWith(<HealthScreen />, client, '/settings/health')
+    expect((await screen.findByTestId('mac-status')).textContent).toContain('Mac offline')
+    expect(screen.queryByTestId('health-not-connected')).toBeNull()
   })
 })
 
 describe('Work systems: wording and retention', () => {
-  it('saves the wording with no passkey tap and shows it', async () => {
+  it('saves the wording and shows it', async () => {
     const client = setup()
-    const tap = vi.spyOn(client, 'stepup')
     renderWith(<WorkWording readOnly={false} />, client, '/settings/integrations')
     const save = screen.getByRole('button', { name: 'Save wording' })
     expect(save.hasAttribute('disabled')).toBe(true) // nothing changed yet
     fireEvent.change(screen.getByLabelText('What to call work systems'), { target: { value: 'Office tools' } })
     fireEvent.click(save)
     await waitFor(() => expect(client.store.getState().config?.work.label).toBe('Office tools'))
-    expect(tap).not.toHaveBeenCalled()
     expect((await screen.findByRole('status')).textContent).toBe('Saved.')
   })
 
@@ -182,22 +209,13 @@ describe('Work systems: wording and retention', () => {
     expect(patch).not.toHaveBeenCalled()
   })
 
-  it('retention taps the passkey once; with trust mode it does not', async () => {
+  it('retention saves at once as one signed patch, with no passkey', async () => {
     const client = setup()
-    const tap = vi.spyOn(client, 'stepup')
     renderWith(<WorkWording readOnly={false} />, client, '/settings/integrations')
     fireEvent.change(screen.getByLabelText('Events from work systems'), { target: { value: 'buffer' } })
     await waitFor(() => expect(client.store.getState().config?.work.retention).toBe('buffer'))
-    expect(tap).toHaveBeenCalledWith('config:work')
-    cleanup()
-
-    const trusted = setup()
-    withConfig(trusted, { trust_mode: true })
-    const tap2 = vi.spyOn(trusted, 'stepup')
-    renderWith(<WorkWording readOnly={false} />, trusted, '/settings/integrations')
-    fireEvent.change(screen.getByLabelText('Events from work systems'), { target: { value: 'buffer' } })
-    await waitFor(() => expect(trusted.store.getState().config?.work.retention).toBe('buffer'))
-    expect(tap2).not.toHaveBeenCalled()
+    expect(client.sent.at(-1)).toMatchObject({ type: 'config.patch', patch: { work: { retention: 'buffer' } } })
+    expect(client.sent.at(-1)).not.toHaveProperty('stepup_token')
   })
 
   it('read-only (Mac offline): every control is disabled', () => {

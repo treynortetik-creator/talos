@@ -59,11 +59,23 @@ def relpath_in_root(path):
         return None
 
 
+def wiki_rels():
+    """The agent's wiki folder, relative to the agent: wiki, or memory/wiki on layout 2. When the layout line cannot be read
+    the guard neither guesses nor fails on every write: it judges BOTH candidates and lets everything else through."""
+    try:
+        return (os.path.relpath(C.wiki_dir(C.ROOT), C.ROOT).replace(os.sep, "/"),)
+    except SystemExit:
+        return ("wiki", "memory/wiki")
+
+
 def in_scope(rel):
-    if not re.match(r"^wiki/.+\.md$", rel):
-        return False
-    base = os.path.basename(rel)[:-3]
-    return not (base.startswith("_") or base in SKIP_NAMES or rel.startswith("wiki/examples/"))
+    for wiki_rel in wiki_rels():
+        if not re.match(r"^%s/.+\.md$" % re.escape(wiki_rel), rel):
+            continue
+        base = os.path.basename(rel)[:-3]
+        if not (base.startswith("_") or base in SKIP_NAMES or rel.startswith(wiki_rel + "/examples/")):
+            return True
+    return False
 
 
 def load_lint():

@@ -1,7 +1,6 @@
 // The client methods that start, stop and re-enroll it.
 import { type ClientState, NoAnswerError, TalosClientError } from './client.ts'
 import { deleteDeviceKey, loadDeviceKey } from './deviceKey.ts'
-import { prewarmPasskeyGate } from './passkeyGate.ts'
 import { ACTIVITY_EVENTS, SNAPSHOT } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 import { pickSnapshot } from './socket-state.ts'
@@ -51,7 +50,6 @@ export function createClientSession(
       }
       if (!isOnline()) setMeta({ networkOffline: true })
       c.connect()
-      prewarmPasskeyGate() // so the first Approve tap does not wait on the AASA lookup before the passkey prompt
     },
     async ensureDevice(opts) {
       if (opts?.replace) {
@@ -82,6 +80,7 @@ export function createClientSession(
       if (pinned) {
         void c.flushOutbox()
         c.flushMediaFetches()
+        c.flushReads()
       }
     },
 
@@ -94,7 +93,11 @@ export function createClientSession(
         try {
           c.ws.close()
         } catch {}
+        // Let go of before its close event: that handler ignores a socket that is no longer the current one, so what
+        // it would have done (stop the ping, fail the requests still waiting on this socket) is done here.
+        const gone = c.ws
         c.ws = null
+        c.socketGone(gone)
       }
       c.connect()
     },
@@ -117,6 +120,11 @@ export function createClientSession(
       c.voiceRetryTimer = null
       uploadFailures.clear()
       writtenOn.clear()
+      // Ends with the session: a read mark or an undo note from before a sign-out is not carried into the next one.
+      c.readQueue.clear()
+      c.unreadSeqs.clear()
+      c.inboxBefore.clear()
+      c.inboxForget()
       c.rejectAllPending(new NoAnswerError('internal', 'Closed'))
       for (const id of [...configWaiters.keys()]) settleConfig(id, new TalosClientError('internal', 'Closed'))
       if (typeof window !== 'undefined') {

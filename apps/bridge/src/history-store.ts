@@ -4,6 +4,8 @@ import { Database } from 'bun:sqlite'
 import type { MessageT } from '@talos-app/protocol'
 import { installSearchIndex } from './search/install.ts'
 import { isShareOnly } from './share-only.ts'
+import { applyDurableSync } from './sqlite-sync.ts'
+import { applySqliteTestSeam } from './sqlite-test-seam.ts'
 
 // Must outlast the inbound ts window (8 d back, 2 min future skew, see inbound.ts) or a pruned id can be replayed.
 /** Bounded growth: delivered history and finished cards age out; pending cards and the unsent outbox are never cut early. */
@@ -27,8 +29,12 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id, ord);
 CREATE INDEX IF NOT EXISTS messages_seq ON messages(thread_id, seq);
+-- timelinePage: the rows the relay never numbered (card rows, a reply still waiting for its ack), a small share of a thread
+CREATE INDEX IF NOT EXISTS messages_noseq ON messages(thread_id, ord) WHERE seq IS NULL;
 -- previousOwnerAt: the owner's last row in a thread before a time
 CREATE INDEX IF NOT EXISTS messages_author_time ON messages(thread_id, author, created_at);
+-- files.sent (files/sent.ts): every thread's messages newest first, read in index order, never sorted per page
+CREATE INDEX IF NOT EXISTS messages_time ON messages(created_at, id);
 CREATE TABLE IF NOT EXISTS seen_ids (id TEXT PRIMARY KEY, at INTEGER NOT NULL, outcome TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cards (
   id TEXT PRIMARY KEY,
@@ -96,6 +102,18 @@ export type HistoryQuery = {
   beforeSeq?: number
   beforeTs?: string
   beforeId?: string
+  /**
+   * Page in timeline order (see `timelinePage`) when there is no cursor at all: the app's first page, which its next
+   * request continues with `beforeSeq`. Without it a cursorless page is the newest by arrival, as the agent's tools read.
+   */
+  timeline?: boolean
+}
+
+/** A stored row as a message. The seq column wins: `setSeq` updates it without rewriting the JSON. */
+function rowMessage(r: { json: string; seq: number | null }): MessageT {
+  const m = JSON.parse(r.json) as MessageT
+  if (r.seq !== null) m.seq = r.seq
+  return m
 }
 
 export class HistoryStore {
@@ -105,6 +123,8 @@ export class HistoryStore {
   constructor(path: string) {
     this.db = new Database(path, { create: true })
     this.db.exec('PRAGMA journal_mode = WAL')
+    applyDurableSync(this.db) // the product's syncing (sqlite-sync.ts), before the test seam can lower it
+    applySqliteTestSeam(this.db) // nothing outside the bridge's tests (sqlite-test-seam.ts)
     this.db.exec('PRAGMA busy_timeout = 5000')
     this.db.exec(SCHEMA)
     // outbox rows from before the attempt counter existed
@@ -172,8 +192,8 @@ export class HistoryStore {
     this.db.query('DELETE FROM seen_ids WHERE at < ?').run(now - SEEN_RETENTION_MS)
   }
 
-  /** Drops old messages and finished cards (never pending ones). The outbox is not cut here: `flushOutbox` gives up on
-   * rows after 24 h and tells the agent. Returns the row counts. */
+  /** Drops old messages and finished cards (never pending ones). The outbox is not cut here: `flushOutbox` decides what
+   * is given up on (transport.ts) and tells the agent. Returns the row counts. */
   pruneOld(now: number, opts: { historyDays?: number } = {}): { messages: number; cards: number } {
     const iso = (ms: number) => new Date(now - ms).toISOString()
     const del = (sql: string, ...a: Array<string | number>) => this.db.query(sql).run(...a).changes
@@ -238,20 +258,28 @@ export class HistoryStore {
    * ownerAskedIn (share-only.ts).
    */
   previousOwnerAt(threadId: string, before: string, exceptId?: string): string | undefined {
-    const rows = this.db
-      .query(
-        "SELECT created_at, json FROM messages WHERE thread_id = ? AND author = 'owner' AND created_at < ? AND id != ? ORDER BY created_at DESC",
-      )
-      .iterate(threadId, before, exceptId ?? '') as IterableIterator<{ created_at: string; json: string }>
-    for (const r of rows) {
-      try {
-        if (isShareOnly(JSON.parse(r.json) as MessageT)) continue
-      } catch {
-        continue // a row that does not parse is not evidence of the owner's words
+    // a statement of its own, finalized: the early return would leave a cached query() mid-step, and its next use throws
+    // "bad parameter or other API misuse" (Bun 1.3.11, macOS system SQLite)
+    const stmt = this.db.prepare(
+      "SELECT created_at, json FROM messages WHERE thread_id = ? AND author = 'owner' AND created_at < ? AND id != ? ORDER BY created_at DESC",
+    )
+    try {
+      const rows = stmt.iterate(threadId, before, exceptId ?? '') as IterableIterator<{
+        created_at: string
+        json: string
+      }>
+      for (const r of rows) {
+        try {
+          if (isShareOnly(JSON.parse(r.json) as MessageT)) continue
+        } catch {
+          continue // a row that does not parse is not evidence of the owner's words
+        }
+        return r.created_at
       }
-      return r.created_at
+      return undefined
+    } finally {
+      stmt.finalize()
     }
-    return undefined
   }
 
   /** The owner's rows (any thread) created at or after `iso`, newest first, at most `limit`. */
@@ -262,8 +290,89 @@ export class HistoryStore {
     return rows.map((r) => JSON.parse(r.json) as MessageT)
   }
 
+  /**
+   * The app's scroll-back: the newest `limit` rows of a thread in timeline order, below `beforeSeq` when given.
+   *
+   * The app has one cursor, the lowest seq it holds. Arrival order on the Mac (`ord`) is not seq order (a reply is stored
+   * before the relay numbers it, so a message that arrives later can carry the lower seq), and some rows never get a
+   * seq (card rows). So every row is given a place by seq: a numbered row at its own seq, an un-numbered one right
+   * after the numbered row it arrived behind (seq 0, before everything, when there is none). Rows that share a place
+   * form a group, and a page never ends inside a group: a group that does not fit whole is left for the next page, or,
+   * when it is all the page would hold, sent whole even if that is more than `limit`. The lowest seq in a page then
+   * says exactly what is still to come, and walking the pages shows every row once.
+   */
+  private timelinePage(q: HistoryQuery): { messages: MessageT[]; hasMore: boolean } {
+    type Row = { ord: number; seq: number | null; json: string; place: number }
+    const numbered = (
+      q.beforeSeq !== undefined
+        ? this.db
+            // messages_seq(thread_id, seq) serves this scan with no sort
+            .query(
+              'SELECT ord, seq, json FROM messages WHERE thread_id = ? AND seq IS NOT NULL AND seq < ? ORDER BY seq DESC, ord DESC LIMIT ?',
+            )
+            .all(q.thread_id, q.beforeSeq, q.limit + 1)
+        : this.db
+            .query(
+              'SELECT ord, seq, json FROM messages WHERE thread_id = ? AND seq IS NOT NULL ORDER BY seq DESC, ord DESC LIMIT ?',
+            )
+            .all(q.thread_id, q.limit + 1)
+    ) as Array<{ ord: number; seq: number; json: string }>
+    // Rows below the last numbered row fetched cannot be in this page; its own group is kept so the cut can see it.
+    const floor = numbered.length > q.limit ? (numbered[numbered.length - 1] as { seq: number }).seq : 0
+    const unnumbered = (
+      this.db
+        .query(
+          `SELECT m.ord AS ord, m.json AS json, COALESCE((SELECT p.seq FROM messages p WHERE p.thread_id = m.thread_id
+             AND p.ord < m.ord AND p.seq IS NOT NULL ORDER BY p.ord DESC LIMIT 1), 0) AS place
+           FROM messages m WHERE m.thread_id = ? AND m.seq IS NULL`,
+        )
+        .all(q.thread_id) as Array<{ ord: number; json: string; place: number }>
+    ).filter((r) => r.place >= floor && (q.beforeSeq === undefined || r.place < q.beforeSeq))
+    // newest first: by place, and inside a group by arrival
+    const rows: Row[] = [
+      ...numbered.map((r) => ({ ...r, place: r.seq })),
+      ...unnumbered.map((r) => ({ ...r, seq: null })),
+    ].sort((a, b) => b.place - a.place || b.ord - a.ord)
+    let take = Math.min(q.limit, rows.length)
+    const placeAt = (i: number) => rows[i]?.place
+    if (take < rows.length && placeAt(take) === placeAt(take - 1)) {
+      // the cut falls inside a group: leave the group for the next page, unless it is all there is to send
+      const split = placeAt(take) as number
+      let start = take
+      while (start > 0 && placeAt(start - 1) === split) start--
+      if (start > 0) take = start
+      else {
+        // The whole group. The fetch above stopped at the limit, so read the group itself: its numbered row(s) and
+        // every un-numbered row placed with them.
+        const head = this.db
+          .query('SELECT ord, seq, json FROM messages WHERE thread_id = ? AND seq = ? ORDER BY ord DESC')
+          .all(q.thread_id, split) as Array<{ ord: number; seq: number; json: string }>
+        const group: Row[] = [
+          ...head.map((r) => ({ ...r, place: r.seq })),
+          ...unnumbered.filter((r) => r.place === split).map((r) => ({ ...r, seq: null })),
+        ].sort((a, b) => b.ord - a.ord)
+        const older =
+          split > 0 &&
+          this.db.query('SELECT 1 FROM messages WHERE thread_id = ? AND seq < ? LIMIT 1').get(q.thread_id, split) !==
+            null
+        // un-numbered rows from before the first numbered one sit at place 0, below every group
+        const oldest =
+          split > 0 &&
+          this.db
+            .query(
+              'SELECT 1 FROM messages m WHERE m.thread_id = ? AND m.seq IS NULL AND NOT EXISTS (SELECT 1 FROM messages p WHERE p.thread_id = m.thread_id AND p.ord < m.ord AND p.seq IS NOT NULL) LIMIT 1',
+            )
+            .get(q.thread_id) !== null
+        return { messages: group.reverse().map(rowMessage), hasMore: older || oldest }
+      }
+    }
+    return { messages: rows.slice(0, take).reverse().map(rowMessage), hasMore: take < rows.length }
+  }
+
   /** Newest `limit` messages matching the filter, oldest first, and whether older ones remain. */
   page(q: HistoryQuery): { messages: MessageT[]; hasMore: boolean } {
+    if (q.beforeTs === undefined && q.beforeId === undefined && (q.beforeSeq !== undefined || q.timeline))
+      return this.timelinePage(q)
     const where = ['thread_id = ?']
     const args: Array<string | number> = [q.thread_id]
     if (q.beforeSeq !== undefined) {
@@ -285,15 +394,7 @@ export class HistoryStore {
       .query(`SELECT json, seq FROM messages WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT ?`)
       .all(...args, q.limit + 1) as Array<{ json: string; seq: number | null }>
     const hasMore = rows.length > q.limit
-    const messages = rows
-      .slice(0, q.limit)
-      .reverse()
-      .map((r) => {
-        const m = JSON.parse(r.json) as MessageT
-        if (r.seq !== null) m.seq = r.seq
-        return m
-      })
-    return { messages, hasMore }
+    return { messages: rows.slice(0, q.limit).reverse().map(rowMessage), hasMore }
   }
 
   // ---- outbox ------------------------------------------------------------------------------------------------

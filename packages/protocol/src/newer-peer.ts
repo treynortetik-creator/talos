@@ -3,6 +3,7 @@
 // "update me". This tells them apart without reading the frame's content. Every side that drops a frame uses it, so the
 // web, the Mac's bridge and the tests agree on what "newer" means.
 import type { z } from 'zod'
+import { ErrorCode } from './errors.ts'
 import { type Direction, frameSchemas, isFrameFor } from './frames.ts'
 import { PROTOCOL_VERSION } from './version.ts'
 
@@ -84,6 +85,21 @@ function onlyNewerFaults(issues: readonly z.core.$ZodIssue[], raw: unknown): boo
       return false
     })
   )
+}
+
+/** The frame types whose `code` is a WireErrorCode: an unlisted code parses, as 'internal' (protocol audit O5). */
+const CODE_FRAME_TYPES: ReadonlySet<string> = new Set(['error', 'session.control.result', 'agent.recover.result'])
+
+/**
+ * A frame that DID parse but carried an error code this build does not list. Since O5 it is delivered (the code reads as
+ * 'internal', the words are kept), and it is still a sign the peer is newer, so a caller notes it as it notes a newer shape:
+ * `newer_shape` for such a frame, `broken` (nothing to note) for anything else. Reads only `type` and `code`.
+ */
+export function newerInParsed(raw: unknown): Unparsed {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { kind: 'broken' }
+  const { type, code } = raw as { type?: unknown; code?: unknown }
+  if (typeof type !== 'string' || !CODE_FRAME_TYPES.has(type) || typeof code !== 'string') return { kind: 'broken' }
+  return ErrorCode.safeParse(code).success ? { kind: 'broken' } : { kind: 'newer_shape', type }
 }
 
 /** Why a raw frame from `direction`'s sender did not parse (call it only after `parseFrame` said no). */

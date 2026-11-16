@@ -98,6 +98,8 @@ for (const [n, who] of [
     await r.getByTestId('msg-actions').click()
     await expect(page.getByTestId('msg-copy')).toBeVisible()
     await expect(page.getByTestId('msg-reply')).toBeVisible()
+    // the menu is announced by name, not as a bare "dialog"
+    await expect(page.getByRole('dialog', { name: 'Message actions' })).toBeVisible()
   })
 }
 

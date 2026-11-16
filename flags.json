@@ -1,0 +1,175 @@
+{
+  "$comment": [
+    "Kill switches: every on/off switch in the bridge, relay and Mac app. scripts/flags.test.ts checks this file against the code.",
+    "A new switch: values 0|1, unset = off = today's behaviour, read in one place (bridge: flag() in apps/bridge/src/config.ts;",
+    "relay: flag01 in apps/relay/src/env.ts; Mac: one ProcessInfo environment read compared to \"1\"), and a test of its off path with",
+    "flag:<NAME> in its title. Bridge names are TALOS_APP_<NAME>. Give removeBy a date when the switch is temporary.",
+    "legacy: switches older than this file, kept as they are (their real default, their own precedence); the text says why."
+  ],
+  "flags": [
+    {
+      "name": "TALOS_APP_BRIDGE",
+      "surface": "bridge",
+      "default": "off",
+      "key": "live",
+      "readers": ["apps/bridge/src/config.ts", "apps/bridge/src/apps/hook-cli.ts"],
+      "legacy": "older than flags.json. hook-cli reads the hook's own environment only, never bridge.env: a scheduled claude -p job must never be taken for the live bridge",
+      "owner": "bridge",
+      "added": "2026-11-12",
+      "removeBy": null
+    },
+    {
+      "name": "TALOS_APP_APPS",
+      "surface": "bridge",
+      "default": "off",
+      "key": "apps",
+      "readers": ["apps/bridge/src/config.ts", "apps/bridge/src/apps/switch.ts"],
+      "legacy": "older than flags.json. switch.ts puts bridge.env before the process environment (the reverse of loadEnv), so writing off in the file turns apps off in a running bridge started with TALOS_APP_APPS=1",
+      "owner": "bridge",
+      "added": "2026-11-12",
+      "removeBy": null
+    },
+    {
+      "name": "TALOS_APP_SCHEDULER",
+      "surface": "bridge",
+      "default": "auto",
+      "key": "scheduler",
+      "readers": ["apps/bridge/src/config.ts"],
+      "legacy": "older than flags.json; three values (auto, chronos, off), not 0|1",
+      "owner": "bridge",
+      "added": "2026-11-12",
+      "removeBy": null
+    },
+    {
+      "name": "TALOS_APP_CHRONOS_AUTODISCOVER",
+      "surface": "bridge",
+      "default": "on",
+      "readers": ["apps/bridge/src/config.ts"],
+      "legacy": "older than flags.json; on unless off. Test runs turn it off (apps/bridge/test/preload.ts) so a test bridge never finds the owner's real Chronos",
+      "owner": "bridge",
+      "added": "2026-11-12",
+      "removeBy": null
+    },
+    {
+      "name": "TALOS_MEMORY_REFLEX_OFF",
+      "surface": "bridge",
+      "default": "on",
+      "readers": ["apps/bridge/src/memory/reflex.ts"],
+      "legacy": "the kit hook's own switch (kit/hooks/memory-reflex.py), older than this file: 1 turns off the note pointers in read_inbound as it turns off the hook, so one switch stops both; dev.note_lookup is the app's",
+      "owner": "bridge",
+      "added": "2026-11-15",
+      "removeBy": null
+    },
+    {
+      "name": "TALOS_APP_MEMORY_WATCH",
+      "surface": "bridge",
+      "default": "on",
+      "readers": ["apps/bridge/src/memory/install.ts"],
+      "legacy": "older than flags.json; on unless 0, read from the process environment",
+      "owner": "bridge",
+      "added": "2026-11-12",
+      "removeBy": null
+    },
+    {
+      "name": "TALOS_EXPLAINER",
+      "surface": "bridge",
+      "default": "on",
+      "readers": ["apps/bridge/src/config.ts", "apps/bridge/src/permission/explainer.ts"],
+      "legacy": "older than flags.json; on when a claude is on PATH, off for off, 0, false or no",
+      "owner": "bridge",
+      "added": "2026-11-12",
+      "removeBy": null
+    },
+    {
+      "name": "BRIDGE_PUBKEY_FORCE",
+      "surface": "relay",
+      "default": "off",
+      "readers": ["apps/relay/src/env.ts", "apps/relay/src/auth/core.ts", "apps/relay/src/auth/index.ts"],
+      "legacy": "older than flags.json (a recovery switch)",
+      "owner": "relay",
+      "added": "2026-11-12",
+      "removeBy": null
+    },
+    {
+      "name": "DEVICE_PROOF_REQUIRED",
+      "surface": "relay",
+      "default": "off",
+      "unset": "0",
+      "readers": ["apps/relay/src/env.ts", "apps/relay/src/auth/index.ts"],
+      "legacy": "older than flags.json; a raw '0'|'1' string, not flag01",
+      "owner": "relay",
+      "added": "2026-11-12",
+      "removeBy": null
+    },
+    {
+      "name": "WORK_INTEGRATIONS",
+      "surface": "relay",
+      "default": "allow",
+      "readers": ["apps/relay/src/env.ts", "apps/relay/src/hooks/ingest.ts"],
+      "legacy": "older than flags.json; allow|off, where off is the hard kill for every work integration",
+      "owner": "relay",
+      "added": "2026-11-12",
+      "removeBy": null
+    },
+    {
+      "name": "SHARE_ENABLED",
+      "surface": "relay",
+      "default": "on",
+      "readers": ["apps/relay/src/env.ts", "apps/relay/src/core/share.ts"],
+      "legacy": "older than flags.json; on unless 0 (0 = every /api/share* route answers 404)",
+      "owner": "relay",
+      "added": "2026-11-12",
+      "removeBy": null
+    },
+    {
+      "name": "TALOS_SELFTEST_FORCE_FAIL",
+      "surface": "mac",
+      "default": "off",
+      "readers": ["apps/desktop/Sources/TalosDesktop/SelfTest.swift"],
+      "legacy": "older than flags.json; makes the self-test fail on purpose, for testing it",
+      "owner": "desktop",
+      "added": "2026-11-12",
+      "removeBy": null
+    },
+    {
+      "name": "BUG_INBOX_NO_SCREENSHOT",
+      "surface": "relay",
+      "default": "off",
+      "readers": ["apps/relay/src/env.ts", "apps/relay/src/core/bug-inbox.ts"],
+      "test": "flag:BUG_INBOX_NO_SCREENSHOT",
+      "owner": "relay",
+      "added": "2026-11-14",
+      "removeBy": null
+    },
+    {
+      "name": "BUG_INBOX_NO_LOGS",
+      "surface": "relay",
+      "default": "off",
+      "readers": ["apps/relay/src/env.ts", "apps/relay/src/core/bug-inbox.ts"],
+      "test": "flag:BUG_INBOX_NO_LOGS",
+      "owner": "relay",
+      "added": "2026-11-14",
+      "removeBy": null
+    },
+    {
+      "name": "BUG_INBOX_NO_MESSAGES",
+      "surface": "relay",
+      "default": "off",
+      "readers": ["apps/relay/src/env.ts", "apps/relay/src/core/bug-inbox.ts"],
+      "test": "flag:BUG_INBOX_NO_MESSAGES",
+      "owner": "relay",
+      "added": "2026-11-14",
+      "removeBy": null
+    },
+    {
+      "name": "BUG_INBOX_NO_THREAD",
+      "surface": "relay",
+      "default": "off",
+      "readers": ["apps/relay/src/env.ts", "apps/relay/src/core/bug-inbox.ts"],
+      "test": "flag:BUG_INBOX_NO_THREAD",
+      "owner": "relay",
+      "added": "2026-11-14",
+      "removeBy": null
+    }
+  ]
+}

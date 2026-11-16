@@ -177,10 +177,10 @@ if [ "$MODE" = rollback ]; then
   hdr "ROLLBACK"
   echo "  from: $B"
   echo "  into: $DST"
-  n_restored=0; n_removed=0
+  n_restored=0; n_removed=0; n_failed=0
   while IFS='	' read -r verb rel; do
     case "$verb" in
-      UPDATED) [ -f "$B/tree/$rel" ] && { mkdir -p "$DST/$(dirname "$rel")"; cp -p "$B/tree/$rel" "$DST/$rel" && n_restored=$((n_restored+1)); } ;;
+      UPDATED) [ -f "$B/tree/$rel" ] && { mkdir -p "$DST/$(dirname "$rel")"; if cp -p "$B/tree/$rel" "$DST/$rel"; then n_restored=$((n_restored+1)); else n_failed=$((n_failed+1)); fi; } ;;
       NEW)     [ -f "$DST/$rel" ] && { rm -f "$DST/$rel" && n_removed=$((n_removed+1)); } ;;
     esac
   done < "$R"
@@ -188,6 +188,17 @@ if [ "$MODE" = rollback ]; then
   if [ -f "$B/tree/.talos-version" ]; then cp -p "$B/tree/.talos-version" "$DST/.talos-version"
   else rm -f "$DST/.talos-version"; fi
   grn "restored $n_restored file(s), removed $n_removed file(s) the upgrade had added"
+  [ "$n_failed" = 0 ] || red "  $n_failed file(s) could NOT be put back (the copy failed): they are in $B/tree; copy them by hand"
+  # ./install.sh --apply marks a carry under way with .talos-carry, naming its backup; rolling back from THAT backup, with
+  # every file put back, ends the carry, so the note goes too. Another backup, a failed restore or a link: the note stays.
+  if [ -f "$DST/.talos-carry" ] && [ ! -L "$DST/.talos-carry" ] && [ "$n_failed" = 0 ]; then
+    _cb="$(sed -n 's/^backup=//p' "$DST/.talos-carry" | tail -1)"
+    if [ -n "$_cb" ] && [ "$(cd "$_cb" 2>/dev/null && pwd)" = "$B" ]; then
+      rm -f "$DST/.talos-carry" && echo "removed .talos-carry, the installer's note that a carry was under way: this rollback ends it"
+    elif [ -z "$_cb" ]; then echo "kept .talos-carry: it names no backup (the carry stopped before its upgrade), so this rollback is not its"
+    else echo "kept .talos-carry: it names another backup ($_cb), so the installer's carry is not this one"; fi
+  elif [ -f "$DST/.talos-carry" ] && [ "$n_failed" != 0 ]; then echo "kept .talos-carry: not every file was put back, so the carry is not over"
+  fi
   echo "Your data was never touched by the upgrade, so there is nothing to restore there."
   echo "The full pre-upgrade copy is still at $B/tree -- delete it when you are satisfied."
   exit 0
@@ -366,7 +377,24 @@ fi
 
 # --- protected files that differ from the kit's copy: the merge list -------------------
 hdr "PROTECTED -- yours, kept as they are"
-echo "  $n_prot files matched .upgradeignore. These are never written. Of them, the ones"
+# What it covers in this folder, by name: the owner's own areas the boundary keeps (each one only when its line is in
+# .upgradeignore and it is there), so "is my memory/ protected?" has an answer on the page. Files of her own that the kit
+# does not ship (memory/ notes, most of wiki/) are not in the count below: they are never even compared.
+_areas=""
+# memory/, .learnings/ and personal/ are wholly hers (counted); wiki/ and .claude/ also hold files the kit ships and updates
+# (wiki/README.md, its agents and talos-* skills), so they are named as hers in part, not counted.
+for _a in "CLAUDE.md:CLAUDE.md:" "memory/:/memory/:n" "wiki/:wiki/:your notes" ".learnings/:.learnings/:n" ".env:.env:" \
+  ".claude/:.claude/:your settings" "personal/:personal/:n"; do
+  _name="${_a%%:*}"; _rest="${_a#*:}"; _pat="${_rest%%:*}"; _what="${_rest#*:}"
+  grep -qxF -- "$_pat" "$SRC/.upgradeignore" 2>/dev/null || continue
+  [ -e "$DST/${_name%/}" ] || [ -L "$DST/${_name%/}" ] || continue
+  if [ -L "$DST/${_name%/}" ]; then _areas="$_areas, $_name (a link)"
+  elif [ "$_what" = n ]; then _areas="$_areas, $_name ($(find "$DST/${_name%/}" -type f 2>/dev/null | wc -l | tr -d ' ') files)"
+  elif [ -n "$_what" ]; then _areas="$_areas, $_name ($_what)"
+  else _areas="$_areas, $_name"; fi
+done
+[ -n "$_areas" ] && echo "  covers, in your folder: ${_areas#, }"
+echo "  $n_prot files of the kit's own matched .upgradeignore. These are never written. Of them, the ones"
 echo "  where the kit's own copy has changed are worth a look by hand:"
 _merge=0
 while IFS='	' read -r kind rel why; do
@@ -420,10 +448,15 @@ if missing:
     for k in missing:
         ev, script = k.split(":", 1)
         print("    - %s on %s%s" % (script, ev, (" (matcher %s)" % t[k][0]) if t[k][0] else ""))
-    print("  Your file is PROTECTED on purpose (it holds your permission grants), so this")
-    print("  script will not edit it. MERGE the hooks block from")
-    print("    %s" % tmpl_p)
-    print("  into %s by hand, keeping your permissions. Then re-run verify-install.sh." % live_p)
+    if os.environ.get("TALOS_HOOKS_MERGE_NEXT") == "1":
+        # ./install.sh runs kit/scripts/settings-merge.py right after this (with a backup): nothing to do by hand
+        print("  Your file is PROTECTED on purpose (it holds your permission grants); the installer's")
+        print("  next step (settings-merge.py, with a backup first) adds these entries and keeps your permissions.")
+    else:
+        print("  Your file is PROTECTED on purpose (it holds your permission grants), so this")
+        print("  script will not edit it. MERGE the hooks block from")
+        print("    %s" % tmpl_p)
+        print("  into %s by hand, keeping your permissions. Then re-run verify-install.sh." % live_p)
 else:
     print("  every hook the new kit registers is already registered in your settings.json")
 # matcher drift: registered, but on a narrower event set than the kit now ships
@@ -480,10 +513,13 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 # not in the backup, and .git/ is protected -- so the post-write check would compare the two,
 # find five modified files, and report the script's own snapshot as a boundary violation.
 # It did exactly that on 2026-09-04. Snapshot, then copy, and the two agree by construction.
+# No automatic gc with it: a commit can start `git gc --auto` in the background, which packs and deletes loose objects in
+# .git/objects after the backup copied them, and the check below then reports them as protected files DELETED (CI, 2026-11-11).
+_nogc=(-c gc.auto=0 -c gc.autoDetach=false -c maintenance.auto=false)
 if git -C "$DST" rev-parse --git-dir >/dev/null 2>&1; then
   if [ -n "$(git -C "$DST" status --porcelain 2>/dev/null)" ]; then
-    git -C "$DST" add -- memory wiki .learnings .claude CLAUDE.md hooks scripts templates >/dev/null 2>&1
-    git -C "$DST" -c user.email=talos@local -c user.name=talos commit -qm "pre-upgrade snapshot ($OLD_VERSION -> $NEW_VERSION)" >/dev/null 2>&1 \
+    git -C "$DST" "${_nogc[@]}" add -- memory wiki .learnings .claude CLAUDE.md hooks scripts templates >/dev/null 2>&1
+    git -C "$DST" "${_nogc[@]}" -c user.email=talos@local -c user.name=talos commit -qm "pre-upgrade snapshot ($OLD_VERSION -> $NEW_VERSION)" >/dev/null 2>&1 \
       && echo "  git: committed a pre-upgrade snapshot"
   else
     echo "  git: working tree already clean ($(git -C "$DST" rev-parse --short HEAD 2>/dev/null))"
@@ -598,7 +634,7 @@ echo "  stamped .talos-version: $OLD_VERSION -> $NEW_VERSION"
 # ---------------------------------------------------------------------------
 if [ "$RUN_GATE" = 1 ]; then
   hdr "GATE -- scripts/self-test.sh in the upgraded folder"
-  _st="$(cd "$DST" && TALOS_PLACEHOLDER_SRC="$SRC/CLAUDE.md" bash scripts/self-test.sh 2>&1)"
+  _st="$(cd "$DST" && TALOS_SELF_TEST_SUITES=run TALOS_PLACEHOLDER_SRC="$SRC/CLAUDE.md" bash scripts/self-test.sh 2>&1)"
   _rc=$?
   printf '%s\n' "$_st" | grep -E 'FAIL|ALL .* CHECKS PASSED|passed,' | sed 's/^/  /'
   if [ "$_rc" -ne 0 ]; then

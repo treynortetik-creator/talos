@@ -46,7 +46,7 @@ export function createOutboxSend(c: SocketCtx) {
       c.addSystemRow(
         err.written
           ? 'A Run waited more than a day and its delivery was never confirmed, so it may already have run. Check before you ask for it again.'
-          : 'A Run waited more than a day and was not sent. If you still want it, ask your agent to post the script again.',
+          : 'A Run waited more than a day and was not sent. If you still want it, tap Run again.',
         `run_stale_${e.clientMsgId}`,
         e.threadId,
       )

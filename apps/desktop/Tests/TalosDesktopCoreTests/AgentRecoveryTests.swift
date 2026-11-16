@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 private let now: Double = 1_800_000_000_000  // an injected "now", unix ms
 
@@ -220,7 +221,7 @@ struct AgentRequestFileTests {
   // reading the real path
 
   private func inTempDir(_ body: (String) throws -> Void) throws {
-    let dir = NSTemporaryDirectory() + "agent-request-\(UUID().uuidString.prefix(8))"
+    let dir = TestTemp.base + "agent-request-\(UUID().uuidString.prefix(8))"
     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: dir) }
     try body(dir)
@@ -414,5 +415,22 @@ struct RestoreResultTests {
   ])
   func anythingElseIsNotQuoted(_ out: String) {
     #expect(R.parse(out) == .unknown, "\(out)")
+  }
+}
+
+@Suite("The request file: nothing but a proof says who asked")
+struct AgentRequestAskedByTests {
+  private func parse(_ extra: String) -> AgentRequest? {
+    AgentRequest.parse(Data(#"{"v":1,"control_id":"c1","action":"restart","ts":1800000000000\#(extra)}"#.utf8))
+  }
+
+  /// An older bridge's `asked_by`, whatever it says, is not read: with no proof, every one of these is an agent's request.
+  @Test func anOldAskedByIsNotReadAndNoProofIsNoneWhateverItSays() {
+    #expect(parse("")?.proof == AgentRequest.Proof.none)
+    for v in [#""owner""#, #""agent""#, #""Owner""#, "null", "1", "true", #"["owner"]"#] {
+      let r = parse(#","asked_by":\#(v)"#)
+      #expect(r != nil && r?.proof == AgentRequest.Proof.none, "\(v)")
+      #expect(r.map { AgentRecovery.asker($0, nowMs: 0, pinnedKey: { _ in nil }, isUsed: { _ in false }) } == .agent, "\(v)")
+    }
   }
 }

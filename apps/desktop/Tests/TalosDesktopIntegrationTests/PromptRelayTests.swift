@@ -1,7 +1,8 @@
 import Foundation
 import Testing
 import TalosDesktopCore
-import TalosSupervisor
+@testable import TalosSupervisor
+import TalosTestSupport
 
 /// The awake clock of a manager under test: real time, plus a jump a test adds on every read (`perCall`), so a tick can be made to
 /// see "the screen has held still for the settle time" at one exact read, without waiting for it.
@@ -32,6 +33,24 @@ extension WorkerRig {
     let rows = TmuxCommands.parseCapture(tmuxCmd(["capture-pane", "-p", "-J", "-t", "=t-\(id):"]).out)
     return PromptDetector.detect(rows).map { "prompt: \($0.hash)" }
   }
+
+  /// Waits until the pointer's Enter on `id` has gone AND its Enter check has taken every read (`scheduleEnterCheck`: one right after
+  /// the Enter, one `EnterDetection.laterDelay` on and, when that one still shows the line, one more at `EnterDetection.slowDelay`).
+  /// A prompt drawn before the last of those reads is one the Enter may have answered, and the app rightly says so; a test about a
+  /// prompt that comes later must draw it after. The fake `claude` logging the line only says the key arrived, not that the check is done.
+  /// The check's reads are timers on the manager's own serial queue, so two hops queued there, each due after any read the one before
+  /// it could have been waiting on (and so behind it), run only once every read has run. No product state is touched.
+  func enterCheckDone(_ id: String, timeout: Double = 10) -> Bool {
+    guard wait(timeout, { allEvents.contains(.pointer(thread: id)) }) else { return false }  // the tick that sent the Enter has run
+    let q = mgr.queue
+    let done = DispatchSemaphore(value: 0)
+    q.async {  // behind the tick that sent the Enter and scheduled the check
+      q.asyncAfter(deadline: .now() + EnterDetection.slowDelay) {  // behind the read due laterDelay after the Enter
+        q.asyncAfter(deadline: .now() + EnterDetection.slowDelay) { done.signal() }  // behind a slow read that read scheduled
+      }
+    }
+    return done.wait(timeout: .now() + timeout) == .success
+  }
 }
 
 /// Terminal prompts nobody named reach the owner ("terminal prompts must relay to Talos"): a tool permission, the agent's own
@@ -42,7 +61,7 @@ struct WorkerPromptRelayTests {
   static let named = """
     {"default_thread":"general","dedicated":{"enabled":true,"max_live":3},"threads":[{"id":"general","kind":"fixed"},{"id":"trip","name":"OC Test","kind":"fixed","session":"dedicated"}]}
     """
-  static let bashLine = "OC Test's session is waiting on a 'Bash command' prompt, \"Do you want to proceed?\"; open Terminals \u{2192} OC Test on the Mac to answer."
+  static let bashLine = "This thread's session is waiting on a 'Bash command' prompt; open this thread in Terminals on the Mac to answer."
 
   private func rig(_ extra: [String: String]) throws -> (WorkerRig, NoticeLog) {
     let r = try WorkerRig(scenario: "worker-real.sh", extraEnv: extra)
@@ -54,7 +73,7 @@ struct WorkerPromptRelayTests {
 
   /// A permission prompt comes up on a live worker: flagged, one line into ITS thread (not the default one), nothing typed.
   @Test func aToolPermissionPromptOnALiveWorkerNotifiesItsOwnThreadOnce() throws {
-    let trigger = NSTemporaryDirectory() + "prm-\(UUID().uuidString.prefix(6))"
+    let trigger = TestTemp.base + "prm-\(UUID().uuidString.prefix(6))"
     let (r, log) = try rig(["FAKE_REAL_START": "empty", "FAKE_REAL_SWITCH": trigger, "FAKE_REAL_THEN": "bash-permission"])
     defer {
       r.teardown()
@@ -64,6 +83,10 @@ struct WorkerPromptRelayTests {
     try r.wake("trip")
     #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
     #expect(r.wait(5) { r.typedLines.count == 1 })
+    // the wake's pointer is entered and its Enter check done before the prompt comes: a prompt drawn while the check still reads the
+    // pane is one that Enter may have answered, a notice of its own kind that this test is not about (it lost that race under load)
+    #expect(r.enterCheckDone("trip"), "\(r.allEvents)")
+    #expect(log.all.isEmpty, "a notice before the prompt: \(log.all)")
     FileManager.default.createFile(atPath: trigger, contents: nil)
     #expect(r.wait(10) { r.mgr.needsYou()["trip"] == "Bash command" }, "\(r.mgr.needsYou())")
     #expect(r.wait(5) { log.all.count == 1 })
@@ -89,13 +112,13 @@ struct WorkerPromptRelayTests {
     usleep(3_500_000)  // past the ready timeout
     #expect(r.state("trip") == "starting", "\(r.why("trip"))")
     #expect(log.all.count == 1)
-    #expect(log.all.first?.text == "OC Test's session is waiting on a 'question' prompt, \"Which color do you prefer?\"; open Terminals \u{2192} OC Test on the Mac to answer.")
+    #expect(log.all.first?.text == "This thread's session is waiting on a 'question' prompt; open this thread in Terminals on the Mac to answer.")
     #expect(r.typedLines.isEmpty, "\(r.typedLines)")
   }
 
   /// The pointer waits behind a prompt that appeared while a message was pending, and is typed once the prompt is gone.
   @Test func theAnsweredPromptClearsTheFlagAndTheWorkerTakesItsPointer() throws {
-    let go = NSTemporaryDirectory() + "prm-\(UUID().uuidString.prefix(6))"
+    let go = TestTemp.base + "prm-\(UUID().uuidString.prefix(6))"
     let (r, log) = try rig(["FAKE_REAL_START": "screen:bash-permission", "FAKE_REAL_SWITCH": go, "FAKE_REAL_THEN": "empty-input"])
     defer {
       r.teardown()
@@ -195,7 +218,7 @@ struct WorkerPromptRelayTests {
     #expect(r.wait(5) { log.all.count == 1 })
     usleep(2_500_000)
     #expect(log.all.count == 1, "\(log.all)")
-    #expect(log.all.first?.text == "OC Test's session is waiting on a 'trust this folder' prompt; open Terminals \u{2192} OC Test on the Mac to answer.")
+    #expect(log.all.first?.text == "This thread's session is waiting on a 'trust this folder' prompt; open this thread in Terminals on the Mac to answer.")
     #expect(r.allEvents.filter { if case .needsYou = $0 { return true } else { return false } }.count == 1)
   }
 }
@@ -226,7 +249,7 @@ struct MainPromptRelayTests {
     #expect(r.wait(15) { r.sup.tickNow(); return r.phonePosts.count == 1 }, "posts \(r.phonePosts) audit \(r.audit)")
     #expect(
       r.phonePosts.first
-        == "post general Testagent is waiting on a 'Bash command' prompt, \"Do you want to proceed?\"; open Terminal on the Mac to answer.")
+        == "post general Testagent is waiting on a 'Bash command' prompt; open Terminal on the Mac to answer.")
     for _ in 0..<15 {
       usleep(200_000)
       r.sup.tickNow()
@@ -243,7 +266,7 @@ struct MainPromptRelayTests {
     defer { r.teardown() }
     r.humanEnter()
     #expect(r.wait(15) { r.sup.tickNow(); return r.phonePosts.count == 1 }, "posts \(r.phonePosts) audit \(r.audit)")
-    #expect(r.phonePosts.first?.contains("waiting on a 'question' prompt, \"Which color do you prefer?\"") == true)
+    #expect(r.phonePosts.first?.contains("waiting on a 'question' prompt; open") == true)
   }
 
   /// The app relaunched with the prompt still open: one notice, not two.

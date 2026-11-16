@@ -4,6 +4,7 @@
 import { DRIVING_DEFAULT_MS, DRIVING_REEXTEND_MS, drivingActive } from '@talos-app/protocol'
 import { useCallback, useEffect, useState } from 'react'
 import { type TalosClient, TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
+import { connectionRefusal } from '../threads/manage/useThreadPatch.ts'
 import { getDrive } from './instance.ts'
 
 export const DRIVING_FAILED = "Couldn't change driving mode. Try again."
@@ -22,7 +23,8 @@ export async function setDriving(
     await client.patchConfig(patch)
     return { ok: true }
   } catch (e) {
-    if (!(e instanceof TalosClientError) || e.code !== 'config_conflict') return { ok: false, message: DRIVING_FAILED }
+    if (!(e instanceof TalosClientError) || e.code !== 'config_conflict')
+      return { ok: false, message: connectionRefusal(e) ?? DRIVING_FAILED }
   }
   await waitForNewRev(client, opts.retryDelayMs ?? 600)
   // An auto-extend must never bring back driving that another device just turned off.
@@ -33,8 +35,8 @@ export async function setDriving(
   try {
     await client.patchConfig(patch)
     return { ok: true }
-  } catch {
-    return { ok: false, message: DRIVING_FAILED }
+  } catch (e) {
+    return { ok: false, message: connectionRefusal(e) ?? DRIVING_FAILED }
   }
 }
 

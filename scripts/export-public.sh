@@ -13,18 +13,21 @@
 # Exit codes: 0 ok, 1 the written tree failed its own check or a copy failed, 2 bad usage or a refused target.
 set -euo pipefail
 
-# Kept out of the public tree: the private build spec and its follow-up list, the CI audit, the manual smoke journals, the
-# maintainer-only review scripts, a maintainer's private denylist, and the self-hosted runner workflow (a public repository must
-# not hand pull requests to a self-hosted runner).
+# Kept out of the public tree: the private build spec and its follow-up list, the CI audit, the internal audits
+# (docs/audits/), the manual smoke journals, the maintainer-only review scripts, a maintainer's private denylist, the
+# self-hosted runner workflow (a public repository must not hand pull requests to a self-hosted runner) and the plan for the
+# maintainer's CI machines.
 EXCLUDE=(
   "docs/SPEC.md"
   "docs/CI-AUDIT-2026-10-31.md"
   "docs/FOLLOWUPS.md"
+  "docs/audits/"
   "scripts/smoke/"
   "apps/desktop/scripts/review-d0-test.sh"
   "apps/desktop/scripts/review-d0-recheck-test.sh"
   "scripts/personal-denylist.txt"
   ".github/workflows/ci-runner.yml"
+  "docs/CI-MACHINES.md"
   "kit/SOURCE"
   "scripts/kit-source.test.ts"
 )
@@ -53,6 +56,16 @@ if [ "$ALLOW_DIRTY" != 1 ] && [ -n "$(git -C "$SRC" status --porcelain --untrack
   die "tracked files have uncommitted changes, so the export would not match any commit. Commit them, or pass --allow-dirty."
 fi
 
+# Judged before anything is made: the target as the disk will have it (the nearest part that exists, links resolved, and
+# the rest as given), so a refused target leaves no new folder behind.
+case "$TARGET" in /*) ;; *) TARGET="$PWD/$TARGET" ;; esac
+_p="$TARGET"; _rest=""
+while [ ! -d "$_p" ]; do _rest="/$(basename "$_p")$_rest"; _p="$(dirname "$_p")"; done
+_base="$(cd "$_p" && pwd -P)"; [ "$_base" = / ] && _base=""
+# mkdir would resolve a . or .. in a part that does not exist yet, after this check: refused
+case "$_rest/" in */../*|*/./*) die "$TARGET has a . or .. in a part that does not exist yet; give a plain path" ;; esac
+SRC_PHYS="$(cd "$SRC" && pwd -P)"
+case "$_base$_rest/" in "$SRC"/*|"$SRC_PHYS"/*) die "the target must be outside the source repository" ;; esac
 if [ -e "$TARGET" ]; then
   [ -d "$TARGET" ] || die "$TARGET exists and is not a folder"
   [ -z "$(ls -A "$TARGET")" ] || die "$TARGET is not empty; refusing to mix an export into existing files"
@@ -60,7 +73,7 @@ else
   mkdir -p "$TARGET"
 fi
 TARGET="$(cd "$TARGET" && pwd -P)"
-case "$TARGET/" in "$SRC"/*) die "the target must be outside the source repository" ;; esac
+case "$TARGET/" in "$SRC"/*|"$SRC_PHYS"/*) die "the target must be outside the source repository" ;; esac
 
 excluded() { # $1 = repo-relative path
   local e

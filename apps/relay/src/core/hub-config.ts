@@ -2,8 +2,8 @@
 // Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks (session, pairing,
 // schema) are in hub-app-conn.ts and hub-app-frames.ts; some handlers here run their own device, seen-id, step-up
 // or card-state checks, so read both when auditing trust.
-import { checkConfigPatch, type FrameOf, RECOVER_NEEDS_MAC_TEXT, trustOn } from '@talos-app/protocol'
-import { consumeStepupToken } from '../auth/contract.ts'
+import { BUG_WEBHOOK_URL_RULE, checkConfigPatch, type FrameOf, RECOVER_NEEDS_MAC_TEXT } from '@talos-app/protocol'
+import { checkWebhookUrl } from './bug-reports.ts'
 import type { AppConn, Hub, HubDeps } from './hub.ts'
 import type { StoredFrame } from './store.ts'
 import { mkFrame } from './util.ts'
@@ -19,6 +19,7 @@ export type ConfigCtx = {
     threadId: string | null,
     extraKeys?: string[],
     alsoWrite?: () => void,
+    audience?: 'both' | 'bridge',
   ): StoredFrame | null
   appError(a: AppConn, code: string, message: string, ref?: unknown): void
   sendApp(a: AppConn, frame: Record<string, unknown>): void
@@ -31,7 +32,7 @@ export type ConfigCtx = {
 }
 
 export const configFrames = {
-  /** The `config.patch` frame: device check, duplicate check, field check, then the step-up the field needs. The `case` of that name in Hub.onAppFrameBuiltin. */
+  /** The `config.patch` frame: device check, duplicate check, field check. The `case` of that name in Hub.onAppFrameBuiltin. */
   async onConfigPatch(
     this: ConfigCtx,
     a: AppConn,
@@ -44,36 +45,16 @@ export const configFrames = {
     if (dup !== undefined) return this.sendApp(a, mkFrame(this.d.clock, 'ack', { ref: frame.id, seq: dup }))
     const check = checkConfigPatch(frame.patch)
     if (!check.ok) return this.appError(a, 'config_field_forbidden', `field not allowed: ${check.path}`, frame.id)
-    // Trust mode (the Mac's config, as last synced): the passkey step is skipped for these two. An app that sent a
-    // token anyway has it ignored, unused. An older relay never sees the field and keeps asking.
-    const trust = trustOn(this.agentConfig())
-    if (check.touchesWorkEnabled && !trust) {
-      if (typeof frame.stepup_token !== 'string')
-        return this.appError(a, 'stepup_required', 'step-up required to change work integrations', frame.id)
-      const ok = await consumeStepupToken({ token: frame.stepup_token, purpose: 'config:work', session: a.session })
-      if (!ok) return this.appError(a, 'stepup_invalid', 'step-up token is invalid', frame.id)
-    }
-    // permission_relay decides who can approve tool calls (docs/CLAUDE-CODE.md C3.6). Turning trust mode ON asks the same
-    // passkey step, and trust mode never skips it: the relay's copy of the Mac's config can be stale (a patch queued for a
-    // Mac that has since turned trust off must not switch it on untapped). Turning it off needs none.
-    if (check.stepupPurpose === 'config:session' && (check.turnsOnTrust || !trust)) {
-      if (typeof frame.stepup_token !== 'string')
-        return this.appError(
-          a,
-          'stepup_required',
-          check.turnsOnTrust
-            ? 'step-up required to turn on trust mode'
-            : 'step-up required to change permission settings',
-          frame.id,
-        )
-      const ok = await consumeStepupToken({
-        token: frame.stepup_token,
-        purpose: 'config:session',
-        session: a.session,
-      })
-      if (!ok) return this.appError(a, 'stepup_invalid', 'step-up token is invalid', frame.id)
-    }
-    this.acceptOwner(a, frame, raw, null)
+    // where bug reports are sent: an address the webhook would refuse is refused here, in the same words, before it is saved
+    const hook = (frame.patch as { bug_webhook_url?: unknown }).bug_webhook_url
+    if (typeof hook === 'string' && !checkWebhookUrl(hook, this.d.env.NODE_ENV === 'test'))
+      return this.appError(a, 'config_field_forbidden', BUG_WEBHOOK_URL_RULE, frame.id)
+    // No passkey step-up for any setting (owner ruling 2026-11-14): the owner's signature on the frame is the approval. An old
+    // app's `stepup_token` is never read or forwarded.
+    // A patch that carries the bug webhook address is kept for the Mac only: catch-up would otherwise hand the address (and
+    // the token in its path) back to every device for BUFFER_DAYS. Devices learn the change from the Mac's config.sync,
+    // which shows only the host.
+    this.acceptOwner(a, frame, raw, null, [], undefined, check.setsBugWebhook ? 'bridge' : 'both')
     return
   },
 
@@ -111,6 +92,39 @@ export const configFrames = {
       if (e instanceof Refused) {
         return this.sendApp(a, mkFrame(this.d.clock, 'ack', { ref: frame.id }))
       }
+      return this.appError(a, 'internal', 'The relay could not save that. Nothing was sent; try again.', frame.id)
+    }
+    this.sendApp(a, mkFrame(this.d.clock, 'ack', { ref: frame.id }))
+  },
+
+  /**
+   * The `undo.request` frame ("Undo to here"): queued once for the Mac, which checks the owner's signature and answers
+   * with an undo card or why not (`undo.request.result`, session/index.ts). Nothing is restored before the owner
+   * approves that card. Like agent.recover: only the owner's own device, never a repeat, never queued for a Mac that is away.
+   */
+  async onUndoRequest(
+    this: ConfigCtx,
+    a: AppConn,
+    frame: FrameOf<'undo.request'>,
+    raw: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.ownerDeviceOk(a, frame.device_id, frame.id)) return
+    const store = this.d.store
+    const seenKey = `ur:${frame.id}`
+    if (store.seen(seenKey) !== undefined) return this.sendApp(a, mkFrame(this.d.clock, 'ack', { ref: frame.id }))
+    if (!this.bridgeOnline()) return this.appError(a, 'mac_offline', 'your Mac is offline', frame.id)
+    class Refused extends Error {}
+    try {
+      await this.toBridge(raw, {
+        durable: true,
+        ttl_s: 300,
+        alsoWrite: () => {
+          if (store.seen(seenKey) !== undefined) throw new Refused('duplicate')
+          store.rememberSeen(seenKey)
+        },
+      })
+    } catch (e) {
+      if (e instanceof Refused) return this.sendApp(a, mkFrame(this.d.clock, 'ack', { ref: frame.id }))
       return this.appError(a, 'internal', 'The relay could not save that. Nothing was sent; try again.', frame.id)
     }
     this.sendApp(a, mkFrame(this.d.clock, 'ack', { ref: frame.id }))

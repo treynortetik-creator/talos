@@ -9,8 +9,10 @@
 # Usage: scripts/test-install.sh        (TALOS_TEST_CHRONOS=/path/to/chronos to also run the real Chronos)
 # Do not litter a Chronos checkout (or this kit) with __pycache__ when the suites run python.
 export PYTHONDONTWRITEBYTECODE=1
+export TALOS_INSTALL_OS=Darwin # the launchctl shim stands in for launchd, so the Chronos steps run on any system
 set -uo pipefail
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
@@ -18,6 +20,7 @@ no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '  
 SB="$(mktemp -d)" || exit 2
 case "$SB" in /*/*) ;; *) echo "suspicious temp dir '$SB'" >&2; exit 2 ;; esac
 trap 'chmod -R u+w "$SB" 2>/dev/null; rm -rf "$SB"' EXIT   # kit releases are read-only by design
+HOME="$SB/home" talos_test_sandbox "$SB"
 REALHOME="$HOME"
 fresh_home(){ # $1 = name; sets up an empty fake HOME and a launchctl tripwire
   export HOME="$SB/$1"; chmod -R u+w "$HOME" 2>/dev/null; rm -rf "$HOME"; mkdir -p "$HOME/bin" "$HOME/Library/LaunchAgents"
@@ -62,13 +65,13 @@ miss=""; for f in BOOTSTRAP.md START-HERE.md CLAUDE.md hooks/session-start.py ho
 python3 -m json.tool "$A/.claude/settings.json" >/dev/null 2>&1 && ok ".claude/settings.json is valid JSON" || no ".claude/settings.json is not valid JSON"
 grep -q "^version=$(tr -d ' \t\r\n' < "$KIT/VERSION")\$" "$A/.talos-version" && grep -q '^kind=git-checkout$' "$A/.talos-version" && ok ".talos-version records the version" || no ".talos-version wrong: $(cat "$A/.talos-version" 2>/dev/null | tr '\n' ' ')"
 grep -q "workspace $A noload=1" "$HOME/.chronos/fake-install.log" 2>/dev/null && ok "Chronos's installer was run with the agent folder as workspace and --no-load" || no "Chronos installer args wrong: $(cat "$HOME/.chronos/fake-install.log" 2>/dev/null)"
-n=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(1 for j in d if j["id"].startswith("talos-") and not j["enabled"]))' "$HOME/.config/chronos/jobs.json" 2>/dev/null)
-[ "$n" = 10 ] && ok "ten Talos jobs are registered, all disabled" || no "jobs registered: $n (want 10 disabled)"
+n=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); on=sorted(j["id"] for j in d if j["enabled"]); print("%d %s" % (sum(1 for j in d if j["id"].startswith("talos-")), ",".join(on)))' "$HOME/.config/chronos/jobs.json" 2>/dev/null)
+[ "$n" = "10 talos-weekly-snapshot,talos-weekly-wiki-lint" ] && ok "ten Talos jobs are registered: the weekly wiki check and snapshot on (plain commands, no Claude usage), every other one off" || no "jobs registered/enabled wrong: $n (want 10, on: snapshot and wiki-lint)"
 grep -q "$A" "$HOME/.config/chronos/jobs/talos-morning-brief/prompt.md" && ok "the job prompt names this agent folder" || no "job prompt does not name the agent folder"
 python3 - "$HOME/.config/chronos/jobs.json" "$A" <<'PY' && ok "a default install registers the Claude jobs RESTRICTED (tool list, agent folder filled in, no bare Bash)" || no "default install did not register restricted jobs"
 import json,sys
 d={j["id"]:j for j in json.load(open(sys.argv[1]))}
-for i in ("talos-morning-brief","talos-weekly-wiki-lint","talos-weekly-snapshot","talos-state-sweep"):
+for i in ("talos-morning-brief","talos-state-sweep"):
     assert d[i]["restricted"] is True and "Bash" not in d[i]["allowed_tools"] and not any("{{" in t for t in d[i]["allowed_tools"]), i
     assert any(sys.argv[2] in t for t in d[i]["allowed_tools"] if t.startswith("Bash(")), i
 PY
@@ -113,7 +116,7 @@ printf '{"workspace": "%s", "jobs_file": "~/.config/chronos/jobs.json", "jobs_di
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --no-load 2>&1)"; rc=$?
 n=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j["id"].startswith("talos-")))' "$HOME/.config/chronos/jobs.json")
 r=$(python3 -c 'import json,sys; print(sum(1 for j in json.load(open(sys.argv[1])) if j.get("restricted") is True))' "$HOME/.config/chronos/jobs.json")
-{ [ "$rc" = 0 ] && [ "$r" = 0 ] && [ "$n" = 5 ] && ! grep -q 'install.sh --workspace' "$HOME/.chronos/fake-install.log" 2>/dev/null \
+{ [ "$rc" = 0 ] && [ "$r" = 0 ] && [ "$n" = 7 ] && ! grep -q 'install.sh --workspace' "$HOME/.chronos/fake-install.log" 2>/dev/null \
   && <<<"$out" grep -q 'not running its installer again' && <<<"$out" grep -q 'SKIPPED talos-morning-brief' && <<<"$out" grep -q "$OLDRT"; } \
   && ok "an existing Chronos config + an OLDER runtime under launchd: Chronos's installer is not re-run, and the restricted jobs are skipped (read from the runtime launchd runs, not the 0.2.2 clone), with the runtime named" \
   || no "install trusted the clone's version or registered restricted jobs on an old runtime (rc=$rc jobs=$n restricted=$r)" "$(printf '%s' "$out" | tail -8)"
@@ -124,12 +127,12 @@ out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" -
 python3 - "$HOME/.config/chronos/jobs.json" <<'PY' && [ "$rc" = 0 ] && <<<"$out" grep -q 'permission prompts SKIPPED' && ok "--full-access-jobs records restricted:false with no tool list, and the installer says prompts are skipped" || no "--full-access-jobs wrong (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
 import json,sys
 d={j["id"]:j for j in json.load(open(sys.argv[1]))}
-assert all(d[i]["restricted"] is False and "allowed_tools" not in d[i] for i in ("talos-morning-brief","talos-weekly-wiki-lint","talos-weekly-snapshot","talos-state-sweep"))
+assert all(d[i]["restricted"] is False and "allowed_tools" not in d[i] for i in ("talos-morning-brief","talos-state-sweep"))
 PY
 
-# ---- 3. second install is refused, with the upgrade hint
+# ---- 3. second install is refused, with the upgrade hint for its layout (the plugin layout: talos update, not upgrade.sh)
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load 2>&1)"; rc=$?
-{ [ "$rc" != 0 ] && <<<"$out" grep -q 'upgrade.sh'; } && ok "re-running install on an installed folder is refused and points at upgrade.sh" || no "second install was not refused (rc=$rc)"
+{ [ "$rc" != 0 ] && <<<"$out" grep -q 'bin/talos-update" update --agent' && ! <<<"$out" grep -q 'upgrade.sh'; } && ok "re-running install on an installed folder is refused and points at the release's talos-update" || no "second install was not refused with the talos-update hint (rc=$rc)"
 
 # ---- 3b. --add-to-existing: Chronos and the jobs are added to an agent that exists, and nothing in the folder is overwritten
 fresh_home h3b2; A="$HOME/agent"
@@ -149,6 +152,11 @@ sum_after="$(cat "$A/CLAUDE.md" "$A/memory/mine.md" "$A/.talos-version" | shasum
 [ "$sum_before" = "$sum_after" ] && ok "CLAUDE.md, memory/ and .talos-version are byte-identical after --add-to-existing" || no "--add-to-existing changed the owner's files"
 out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --add-to-existing 2>&1)"; rc=$?
 { [ "$rc" = 0 ] && <<<"$out" grep -q 'kept existing talos-morning-brief'; } && ok "running --add-to-existing twice keeps the jobs it registered (no duplicate, no overwrite)" || no "second --add-to-existing misbehaved (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+# an owner who switched the zero-cost jobs off keeps them off: a re-run only turns on a job THIS run registered
+python3 "$A/scripts/talos-jobs.py" disable talos-weekly-wiki-lint >/dev/null 2>&1; python3 "$A/scripts/talos-jobs.py" disable talos-weekly-snapshot >/dev/null 2>&1
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --add-to-existing 2>&1)"; rc=$?
+on=$(python3 -c 'import json,sys; print(",".join(sorted(j["id"] for j in json.load(open(sys.argv[1])) if j["enabled"])))' "$HOME/.config/chronos/jobs.json")
+{ [ "$rc" = 0 ] && [ -z "$on" ] && ! <<<"$out" grep -q ': on (a plain command'; } && ok "a re-run never turns on a job the owner already had (both weekly jobs stay off)" || no "a re-run turned jobs on: $on (rc=$rc)" "$(printf '%s' "$out" | tail -4)"
 fresh_home h3b3; mkdir -p "$HOME/plain"; echo x > "$HOME/plain/a.txt"
 bash "$KIT/install.sh" --agent-dir "$HOME/plain" --chronos-path "$STUB" --no-load --add-to-existing >/dev/null 2>&1; rc=$?
 { [ "$rc" != 0 ] && [ ! -e "$CHRONOS_CONFIG" ] && [ ! -e "$HOME/plain/.talos-version" ]; } && ok "--add-to-existing refuses a folder that is not a Talos agent, and writes nothing" || no "--add-to-existing touched a plain folder (rc=$rc)"
@@ -277,7 +285,7 @@ fresh_home h4d; mkdir -p "$HOME/.config/chronos" "$HOME/other-ws"
 printf '{\n "workspace": "%s",\n "jobs_file": "~/.config/chronos/jobs.json",\n "jobs_dir": "~/.config/chronos/jobs",\n "notify": ""\n}\n' "$HOME/other-ws" > "$CHRONOS_CONFIG"
 echo "[]" > "$HOME/.config/chronos/jobs.json"; chmod 600 "$CHRONOS_CONFIG"
 out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --no-load --set-chronos-workspace 2>&1)"; rc=$?
-mode="$(stat -f %Lp "$CHRONOS_CONFIG" 2>/dev/null || stat -c %a "$CHRONOS_CONFIG")"
+mode="$(stat -c %a "$CHRONOS_CONFIG" 2>/dev/null || stat -f %Lp "$CHRONOS_CONFIG")"
 python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["workspace"]==sys.argv[2] else 1)' "$CHRONOS_CONFIG" "$HOME/agent" \
   && [ "$mode" = 600 ] && [ "$rc" = 0 ] && ok "--set-chronos-workspace repoints it atomically and keeps the file mode" || no "--set-chronos-workspace failed (rc=$rc mode=$mode)"
 
@@ -288,11 +296,24 @@ out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" -
   && [ ! -e "$HOME/agent" ] && [ ! -e "$HOME/.local" ] && [ ! -e "$HOME/.config" ]; } \
   && ok "--with-memory-search --dry-run prints the venv, pinned packages, model, index and job, and creates nothing" || no "memory-search dry-run wrong (rc=$rc)" "$(printf '%s' "$out" | tail -8)"
 bash "$KIT/install.sh" --agent-dir "$HOME/agent" --with-memory-search --embed-model huge --dry-run >/dev/null 2>&1 && no "accepted --embed-model huge" || ok "rejects an unknown --embed-model"
+# --reranker-auto (the root installer's default): the reranker step, skipped with one line under 3 GiB; --with-reranker beats it
 fresh_home h6c
-out="$(PATH="$HOME/bin:/usr/bin:/bin" bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --no-load --with-memory-search 2>&1)"; rc=$?
-{ [ "$rc" = 0 ] && <<<"$out" grep -q 'NONE FOUND' && <<<"$out" grep -q 'NOT enabled' && [ -e "$HOME/agent/BOOTSTRAP.md" ] && [ ! -e "$HOME/.local/share/talos/venv" ] \
-  && <<<"$out" grep -q 'brew install uv && bash .*scripts/memory/setup.sh' && <<<"$out" grep -q 'astral.sh/uv/install.sh'; } \
-  && ok "with no Python 3.10+ (and no uv) the install still succeeds, says so, and builds no venv" || no "no-python fallback wrong (rc=$rc)" "$(printf '%s' "$out" | tail -6)"
+out="$(TALOS_MEM_BYTES=$((8*1024*1024*1024)) bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos --with-memory-search --reranker-auto --dry-run 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && <<<"$out" grep -q 'Reranker model' && <<<"$out" grep -q 'Dry run: nothing was downloaded' && [ ! -e "$HOME/agent" ] && [ ! -e "$HOME/.local" ]; }   && ok "--reranker-auto --dry-run shows the reranker step and creates nothing" || no "reranker-auto dry-run wrong (rc=$rc)" "$(printf '%s' "$out" | tail -6)"
+out="$(TALOS_MEM_BYTES=$((2*1024*1024*1024)) bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos --with-memory-search --reranker-auto --dry-run 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && <<<"$out" grep -q 'would be skipped' && ! <<<"$out" grep -q 'Dry run: nothing was downloaded'; }   && ok "--reranker-auto --dry-run on 2 GiB says the reranker would be skipped" || no "reranker-auto 2 GiB dry-run wrong (rc=$rc)" "$(printf '%s' "$out" | tail -6)"
+out="$(TALOS_MEM_BYTES=$((2*1024*1024*1024)) bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos --with-memory-search --reranker-auto --with-reranker --dry-run 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && <<<"$out" grep -q 'Dry run: nothing was downloaded' && ! <<<"$out" grep -q 'would be skipped'; }   && ok "--with-reranker --reranker-auto together behave as --with-reranker (explicit wins)" || no "explicit did not win (rc=$rc)" "$(printf '%s' "$out" | tail -6)"
+# A system python3 of 3.10+ in /usr/bin (most Linux) cannot be hidden from the installer, so the fallback cannot be reached there
+if /usr/bin/python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+  echo "skip no-python fallback: /usr/bin/python3 is 3.10 or newer"
+else
+  fresh_home h6c
+  out="$(PATH="$HOME/bin:/usr/bin:/bin" bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-path "$STUB" --no-load --with-memory-search 2>&1)"; rc=$?
+  { [ "$rc" = 0 ] && <<<"$out" grep -q 'NONE FOUND' && <<<"$out" grep -q 'NOT enabled' && [ -e "$HOME/agent/BOOTSTRAP.md" ] && [ ! -e "$HOME/.local/share/talos/venv" ] \
+    && <<<"$out" grep -q 'brew install uv && bash .*scripts/memory/setup.sh' && <<<"$out" grep -q 'astral.sh/uv/install.sh'; } \
+    && ok "with no Python 3.10+ (and no uv) the install still succeeds, says so, and builds no venv" || no "no-python fallback wrong (rc=$rc)" "$(printf '%s' "$out" | tail -6)"
+fi
 
 # ---- 6c2. Python discovery sees a newer python3.14 (Homebrew's current default) and a plain python3 that is 3.10+
 fresh_home h6c2; mkdir -p "$HOME/pybin"
@@ -301,7 +322,15 @@ _py10=""; for _c in python3.14 python3.13 python3.12 python3.11 python3.10 pytho
   _p="$(command -v "$_c" 2>/dev/null || true)"; [ -n "$_p" ] || continue
   "$_p" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null && { _py10="$_p"; break; }
 done
-if [ -n "$_py10" ]; then
+# The check needs python3.14 to be the ONLY 3.10+ on its PATH, and that PATH keeps /usr/bin and /bin for the tools setup.sh
+# runs. A system whose /usr/bin already has a 3.10+ (most Linux) would rightly be found first, so it proves nothing there.
+_sys10=""; for _p in /usr/bin/python3* /bin/python3*; do
+  case "$_p" in *-config) continue ;; esac
+  [ -x "$_p" ] && "$_p" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null && { _sys10="$_p"; break; }
+done
+if [ -n "$_sys10" ]; then
+  echo "  skip setup.sh python3.14 discovery ($_sys10 is already a Python 3.10+, so python3.14 cannot be the only one on PATH)"
+elif [ -n "$_py10" ]; then
   printf '#!/bin/bash\nexec %s "$@"\n' "$_py10" > "$HOME/pybin/python3.14"; chmod +x "$HOME/pybin/python3.14"
   out="$(PATH="$HOME/pybin:/usr/bin:/bin" bash "$KIT/scripts/memory/setup.sh" --dry-run 2>&1)"
   <<<"$out" grep -q "python:  *$HOME/pybin/python3.14" && ok "setup.sh finds a python3.14 when it is the only 3.10+ on PATH" || no "python3.14 not found" "$(printf '%s' "$out" | grep python:)"
@@ -317,7 +346,7 @@ out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos --with-vaul
 { [ "$rc" = 0 ] && [ -f "$HOME/private-vault/CLAUDE.md" ] && [ -f "$HOME/private-vault/_guard-terms.txt" ] && [ ! -e "$HOME/private-vault/_guard-terms.txt.example" ] \
   && [ "$(cat "$XDG_CONFIG_HOME/talos/vault-dir")" = "$HOME/private-vault" ] && <<<"$out" grep -q '## Personal vault'; } \
   && ok "--with-vault copies the vault template, records its path, and prints the block to add to CLAUDE.md" || no "vault install wrong (rc=$rc)" "$(printf '%s' "$out" | tail -5)"
-mode="$(stat -f %Lp "$HOME/private-vault" 2>/dev/null || stat -c %a "$HOME/private-vault")"; [ "$mode" = 700 ] && ok "the vault folder is mode 700" || no "vault mode is $mode"
+mode="$(stat -c %a "$HOME/private-vault" 2>/dev/null || stat -f %Lp "$HOME/private-vault")"; [ "$mode" = 700 ] && ok "the vault folder is mode 700" || no "vault mode is $mode"
 grep -v '^#' "$HOME/private-vault/_guard-terms.txt" | grep -q '[a-z]' && no "the shipped guard-terms file contains terms" || ok "the vault's guard-terms file ships with comments only, no terms"
 fresh_home h6e
 bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos --with-vault "$HOME/agent/vault" >/dev/null 2>&1 && no "vault allowed inside the agent folder" || ok "--with-vault inside the agent folder is refused"
@@ -373,7 +402,10 @@ uout="$(bash "$A/uninstall.sh" 2>&1)"
 
 # ---- 7b. uninstall deletes ONLY the names the kit writes in ~/.config/talos; everything else survives (K0, R1-2)
 # pty(): run a command on a real pseudo-terminal and type $1 after a second. macOS `script -q /dev/null CMD...`.
-pty(){ local typed="$1"; shift; (sleep 1; printf '%s\n' "$typed"; sleep 2) | perl -e 'alarm 60; exec @ARGV' script -q /dev/null "$@"; }
+# script(1) differs: BSD takes `script -q FILE cmd...`, util-linux (Linux) takes `script -q -c "cmd" FILE`.
+pty(){ local typed="$1"; shift; local run=(script -q /dev/null "$@")
+  if script -V 2>/dev/null | grep -q util-linux; then run=(script -q -e -c "$(printf '%q ' "$@")" /dev/null); fi
+  (sleep 1; printf '%s\n' "$typed"; sleep 2) | perl -e 'alarm 60; exec @ARGV' "${run[@]}"; }
 plant(){ # the user's own entries, which the kit never wrote
   T="$XDG_CONFIG_HOME/talos"
   mkdir -p "$T/app" "$T/secrets" "$T/browser/profile/Default" "$T/voice" "$T/mystery-dir"
@@ -424,9 +456,11 @@ bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load >/dev/n
 plant
 yes purge-app | bash "$A/uninstall.sh" --purge-app --yes >/dev/null 2>&1; rc=$?
 { [ "$rc" != 0 ] && [ -f "$XDG_CONFIG_HOME/talos/app/state.json" ] && [ -f "$XDG_CONFIG_HOME/talos/agent-dir" ]; } && ok "--purge-app with the right word piped in (no terminal) is refused and removes nothing" || no "--purge-app accepted piped input (rc=$rc)"
-grep -v 'needs a real terminal' "$A/uninstall.sh" > "$SB/unguarded.sh"
-{ ! cmp -s "$A/uninstall.sh" "$SB/unguarded.sh"; } || no "mutation harness is broken: the guard line was not found"
-yes purge-app | bash "$SB/unguarded.sh" --purge-app --yes --agent-dir "$A" >/dev/null 2>&1
+# beside the real one, so its scripts/ are found: an uninstall whose steps fail removes nothing, which would hide the purge
+grep -v 'needs a real terminal' "$A/uninstall.sh" > "$A/unguarded-uninstall.sh"
+{ ! cmp -s "$A/uninstall.sh" "$A/unguarded-uninstall.sh"; } || no "mutation harness is broken: the guard line was not found"
+yes purge-app | bash "$A/unguarded-uninstall.sh" --purge-app --yes --agent-dir "$A" >/dev/null 2>&1
+rm -f "$A/unguarded-uninstall.sh"
 [ ! -e "$XDG_CONFIG_HOME/talos/app" ] && ok "[mutation] with the guard line removed the piped word purges the app, so the test above really proves the guard" || no "[mutation] the guard test cannot fail: piped input did not purge even without the guard"
 
 # ---- 7c. the Chronos pin is a full 40-hex commit, and the verify refuses anything shorter (R1-7, R1-8)

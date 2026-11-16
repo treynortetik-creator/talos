@@ -71,23 +71,14 @@ test('Kill names its target and sends the app-computed hash', async ({ page }) =
   expect(last.payload_hash).toBe(payloadHash(bindingFrom({ ...live, state: 'pending' })))
 })
 
-test('a high-risk primary triggers the step-up mock before anything is sent', async ({ page }) => {
+test('a high-risk primary is sent on the tap alone, with no passkey step', async ({ page }) => {
   await open(page, '/cards', { seed: 'full' })
-  await page.evaluate(() => {
-    const c = window.__talos
-    const orig = c.stepup.bind(c)
-    c.stepup = async (purpose: string) => {
-      window.__order.push(`stepup:${purpose}:sent=${c.sent.length}`)
-      return orig(purpose)
-    }
-  })
   const article = card(page, IDS.fixtureHigh)
   await article.getByRole('button', { name: /Publish/ }).click()
   await expect(article.getByTestId('collapse-line')).toHaveText(/^✓ Published/)
-  const order = await page.evaluate(() => window.__order)
-  expect(order).toEqual([`stepup:card:${IDS.fixtureHigh}:sent=0`])
   const frames = await sentFrames(page)
   expect(frames.at(-1)?.type).toBe('card.resolve')
+  expect(frames.at(-1)).not.toHaveProperty('stepup_token')
 })
 
 test('card.resolve carries the hash the app computed from the render', async ({ page }) => {

@@ -61,7 +61,11 @@ try:        # REPO is the agent folder (the wiki), not the release this file may
 except ImportError:        # a lone copy with no helper beside it: the old rule
     REPO = os.path.normpath(os.path.join(HERE, ".."))
 REPO = os.path.realpath(REPO)        # the hooks key their state folder on the resolved path (macOS: /var is /private/var)
-WIKI = os.path.join(REPO, "wiki")
+try:        # where the wiki is: wiki/, or memory/wiki/ on a layout-2 agent (one resolver, scripts/_talos_layout.py)
+    from _talos_layout import paths as _layout_paths
+    WIKI = _layout_paths(REPO)["wiki"]
+except ImportError:        # a lone copy with no helper beside it: the old rule
+    WIKI = os.path.join(REPO, "wiki")
 
 
 def state_dir():

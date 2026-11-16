@@ -167,21 +167,22 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await expect(row(page, 5).getByTestId('run-blocked')).toHaveCount(0)
     })
 
-    test('a long script wraps whole, never scrolls sideways, and asks twice', async ({ page }, info) => {
+    test('a long plain script wraps whole, never scrolls sideways, and runs on one tap', async ({ page }, info) => {
       await open(page)
       const r = row(page, 4)
       await r.scrollIntoViewIfNeeded()
       const pre = r.locator('pre')
       await expect(pre).toHaveClass(/run-block/)
-      await expect(r.getByTestId('run-note')).toContainText('longer than 6 lines')
+      await expect(r.getByTestId('run-note')).toHaveCount(0) // plain ASCII: one tap, whatever its length
       const fits = await pre.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)
       expect(fits).toBe(true)
       expect(await noHorizontalScroll(page)).toBe(true)
+      await r.screenshot({ path: info.outputPath(`run-long-${colorScheme}.png`) })
       const sentBefore = await page.evaluate(() => window.__talos.sent.length)
       await r.getByTestId('run-button').click()
-      await expect(r.getByTestId('run-confirm')).toBeVisible()
-      expect(await page.evaluate(() => window.__talos.sent.length)).toBe(sentBefore)
-      await r.screenshot({ path: info.outputPath(`run-long-${colorScheme}.png`) })
+      await expect.poll(() => page.evaluate(() => window.__talos.sent.length)).toBe(sentBefore + 1)
+      // once it has gone, Run again offers a fresh tap
+      await expect(r.getByTestId('run-button')).toHaveText('Run again')
     })
 
     test('the second confirm puts Cancel where Run was and Yes beside it, never under it', async ({ page }) => {

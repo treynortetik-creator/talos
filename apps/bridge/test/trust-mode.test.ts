@@ -301,35 +301,34 @@ describe('a spoken question counts as the owner asking, in trust mode only', () 
     expect(n?.content).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT/)
     const r = await propose(h)
     expect(r.isError, text(r)).toBeFalsy()
-    expect(text(r)).toMatch(/applied directly/)
+    expect(text(r)).toMatch(/applied: the owner asked/)
     expect(h.bridge.ctx.config.config.agent.name).toBe('Atlas')
     expect(onDisk(h).agent.name).toBe('Atlas')
     expect(cardsOnWire(h).filter((c) => c.kind === 'config')).toHaveLength(0)
   })
 
-  test('off: the voice note stays owner_voice and the same proposal is refused (no typed words, no proposal)', async () => {
+  test('off: the voice note stays owner_voice and the same proposal is only a card (no typed words, nothing changed)', async () => {
     h = await startHarness({ relay: RELAY })
     await ask(h)
     expect(h.notes.find((x) => x.meta.kind === 'voice_delegation')?.meta.trust).toBe('owner_voice')
     const r = await propose(h)
-    expect(r.isError).toBe(true)
-    expect(text(r)).toMatch(/owner has not asked/)
+    expect(text(r)).toMatch(/card c_\S+ pending/)
     expect(h.bridge.ctx.config.config.agent.name).not.toBe('Atlas')
   })
 
-  test('on: nothing was said, so the proposal is refused and nothing is written', async () => {
+  test('on: nothing was said, so the proposal is only a card and nothing is written', async () => {
     h = await startHarness({ relay: RELAY, config: ON })
     const r = await propose(h)
-    expect(r.isError).toBe(true)
-    expect(text(r)).toMatch(/owner has not asked/)
+    expect(text(r)).toMatch(/card c_\S+ pending/)
     expect(onDisk(h).agent.name).toBe('Talos')
   })
 
-  test('on: a call from a long time ago no longer vouches (the half hour is real)', async () => {
+  test('on: a call from longer ago than the window no longer vouches (only a card)', async () => {
     h = await startHarness({ relay: RELAY, config: ON })
     h.bridge.ctx.store.kvSet('voice_ask_at:general', String(Date.now() - OWNER_SPOKE_MS - 60_000))
     const r = await propose(h)
-    expect(r.isError).toBe(true)
+    expect(text(r)).toMatch(/card c_\S+ pending/)
+    expect(onDisk(h).agent.name).toBe('Talos')
   })
 
   test('on: typed words in another thread do not vouch for this thread', async () => {
@@ -341,30 +340,54 @@ describe('a spoken question counts as the owner asking, in trust mode only', () 
       'owner row',
     )
     const r = await propose(h)
-    expect(r.isError).toBe(true)
+    expect(text(r)).toMatch(/card c_\S+ pending/)
+    expect(onDisk(h).agent.name).toBe('Talos')
   })
 })
 
 describe('the twenty-thread limit', () => {
-  const make = async (x: Harness, n: number) => {
-    const out: string[] = []
-    for (let i = 0; i < n; i++) out.push(text(await x.bridge.callTool('create_thread', { name: `Topic ${i}` })))
-    return out
+  // create_thread is a card now (docs/bridge.md); in trust mode, after the owner asked, a new thread is made at once
+  const agentThreads = (n: number) => (c: { threads: unknown[] }) => ({
+    ...c,
+    threads: [
+      ...c.threads,
+      ...Array.from({ length: n }, (_, i) => ({
+        id: `t${i}`,
+        name: `T${i}`,
+        kind: 'agent',
+        order: 5 + i,
+        notify: 'all',
+        voice_context: 'recent',
+        archived: false,
+        created_at: '2026-10-28T00:00:00.000Z',
+      })),
+    ],
+  })
+  const ownerAsked = async (x: Harness) => {
+    await x.app.sendMessage('general', 'make me some threads')
+    await waitFor(
+      () => x.bridge.ctx.store.ownerRowsSince(new Date(Date.now() - 60_000).toISOString(), 50).length >= 1,
+      4000,
+      'owner row',
+    )
   }
 
-  test('off: the 21st agent thread is refused, as before', async () => {
-    h = await startHarness()
-    const r = await make(h, 21)
-    expect(r.slice(0, 20).every((t) => /created thread/.test(t))).toBe(true)
-    expect(r[20]).toMatch(/at most 20 agent threads/)
+  test('off: the 21st agent thread is proposed with a warning (Pantheon 2026-11-15: a warning, not a refusal)', async () => {
+    h = await startHarness({ relay: RELAY, config: agentThreads(20) as never })
+    const r = await h.bridge.callTool('create_thread', { name: 'One too many' })
+    expect(r.isError).toBeFalsy()
+    expect(text(r)).toMatch(/Warning: this makes 21 active agent threads, more than 20/)
   })
 
   test('on: the 21st is made, and the schema limit of 40 threads still stops the agent with a plain message', async () => {
-    h = await startHarness({ config: ON })
+    h = await startHarness({ relay: RELAY, config: ((c: { threads: unknown[] }) => ON(agentThreads(20)(c))) as never })
+    await ownerAsked(h)
     const before = h.bridge.ctx.config.config.threads.length
-    const r = await make(h, 40 - before + 1)
-    expect(r.slice(0, 40 - before).every((t) => /created thread/.test(t))).toBe(true)
+    const out: string[] = []
+    for (let i = 0; i < 40 - before + 1; i++)
+      out.push(text(await h.bridge.callTool('create_thread', { name: `Topic ${i}` })))
+    expect(out.slice(0, 40 - before).every((t) => /created thread/.test(t))).toBe(true)
     expect(h.bridge.ctx.config.config.threads.length).toBe(40)
-    expect(r.at(-1)).toMatch(/at most 40 threads in all/)
+    expect(out.at(-1)).toMatch(/at most 40 threads in all/)
   })
 })

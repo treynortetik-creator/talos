@@ -312,13 +312,13 @@ describe('mute end shows time and zone', () => {
     const c = create(
       meta({
         mutes: [
-          { source: 'gh-main', key: 'pr:acme/widgets#7', until: '2026-10-12T18:30:00-07:00' },
+          { source: 'gh-main', key: 'pr:acme/widgets#7', until: '2026-10-12T18:30:00-05:00' },
           { source: 'inbox', until: '2026-10-08T00:00:00.000Z' },
         ],
       }),
     )
     expect(block(c)).toContain(
-      'Muted: gh-main pr:acme/widgets#7 until 2026-10-12T18:30:00-07:00; inbox (whole source) until 2026-10-08T00:00:00.000Z',
+      'Muted: gh-main pr:acme/widgets#7 until 2026-10-12T18:30:00-05:00; inbox (whole source) until 2026-10-08T00:00:00.000Z',
     )
   })
 })

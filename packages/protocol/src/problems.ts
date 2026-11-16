@@ -7,9 +7,12 @@ import { z } from 'zod'
 import { sha256Hex } from './hash.ts'
 import { IsoTs, Ulid } from './ids.ts'
 import { AttachmentRef } from './models.ts'
+import { redact } from './redact.ts'
 import { sanitizeExternal } from './untrusted.ts'
 
 export const PROBLEMS_FEATURE = 'problems/1'
+/** A bridge hello lists this when it files a report from another install (`source: 'install'`); the relay holds those until then. */
+export const PROBLEMS_INSTALL_FEATURE = 'problems-install/1'
 
 const KIB = 1024
 const MIB = KIB * KIB
@@ -38,9 +41,21 @@ export const PROBLEM_LIMITS = {
   perProcessWindowMs: 60 * 60_000,
   /** Notices to the Inbox thread: first sighting only, this many per hour; dropped counts post once a day. */
   noticesPerHour: 5,
+  /** A report from another install (`attached`): what its person typed, its error lines, its log and messages. */
+  typedChars: 4000,
+  errors: 50,
+  errorChars: 400,
+  logChars: 60 * KIB,
+  attachedMessages: 5,
+  attachedMessageChars: 4000,
+  /** All of `attached` as JSON, so the frame stays well under MAX_FRAME_BYTES (256 KiB) whatever the escaping. */
+  attachedBytes: 160 * KIB,
 } as const
 
-export const ProblemSource = z.enum(['web', 'ios', 'relay', 'bridge'])
+/** `install`: a bug report from someone else's Talos, received by this relay's bug inbox (`install` names which). */
+export const ProblemSource = z.enum(['web', 'ios', 'relay', 'bridge', 'mac', 'install'])
+/** The name the owner gave another install in the relay's BUG_INBOX_SECRETS: proven by the signature, never by the body. */
+export const InstallName = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/)
 export const ProblemKind = z.enum(['auto', 'owner'])
 export const ProblemDevice = z.enum(['browser', 'mac_app', 'iphone_app', 'relay', 'bridge'])
 
@@ -65,6 +80,35 @@ export const ProblemVersions = z
     shell: Short.optional(),
   })
   .strict()
+
+/** Bytes of `v` as UTF-8 JSON: what it costs in a frame. */
+const jsonBytes = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length
+
+/**
+ * What a report from another install carries beyond the fields every problem has: what its person typed, in full, and the
+ * parts of the report they left ticked and this relay's switches let through. Every string is scrubbed again on the Mac.
+ */
+export const ProblemAttached = z
+  .object({
+    what_went_wrong: z.string().max(PROBLEM_LIMITS.typedChars),
+    expected: z.string().max(PROBLEM_LIMITS.typedChars).optional(),
+    errors: z.array(z.string().max(PROBLEM_LIMITS.errorChars)).max(PROBLEM_LIMITS.errors),
+    logs: z.string().max(PROBLEM_LIMITS.logChars).optional(),
+    messages: z
+      .array(
+        z
+          .object({ role: z.enum(['you', 'agent']), text: z.string().max(PROBLEM_LIMITS.attachedMessageChars) })
+          .strict(),
+      )
+      .max(PROBLEM_LIMITS.attachedMessages)
+      .optional(),
+    thread_id: z.string().max(80).optional(),
+    screen: z.string().max(80).optional(),
+    claude_code: Short.optional(),
+  })
+  .strict()
+  .refine((a) => jsonBytes(a) <= PROBLEM_LIMITS.attachedBytes, 'attached too large')
+export type ProblemAttachedT = z.infer<typeof ProblemAttached>
 
 /** The strict report. A key that is not listed here (for instance `text`) is refused, not ignored. */
 export const Problem = z
@@ -91,8 +135,18 @@ export const Problem = z
     screenshot: AttachmentRef.optional(),
     /** Something was cut to fit a cap. */
     truncated: z.boolean(),
+    /** Which other install sent it: only with `source: 'install'`. */
+    install: InstallName.optional(),
+    /** Only with `source: 'install'`. */
+    attached: ProblemAttached.optional(),
   })
   .strict()
+  .refine((p) => (p.source === 'install') === (p.install !== undefined), {
+    message: 'install names the install of a source install report, and only that',
+  })
+  .refine((p) => p.attached === undefined || p.source === 'install', {
+    message: 'attached belongs to a report from another install',
+  })
   .refine((p) => p.kind === 'owner' || (p.steps === undefined && p.screenshot === undefined), {
     message: 'steps and a screenshot belong to an owner report',
   })
@@ -113,10 +167,13 @@ export type ProblemFrameT = z.infer<typeof ProblemFrame>
  */
 export class RollingLimit {
   private at: number[] = []
-  constructor(
-    private limit: number = PROBLEM_LIMITS.perSession,
-    private windowMs: number = PROBLEM_LIMITS.perProcessWindowMs,
-  ) {}
+  // plain fields, not parameter properties: Node's type stripping runs this file as is (scripts/gen-fixtures.ts)
+  private limit: number
+  private windowMs: number
+  constructor(limit: number = PROBLEM_LIMITS.perSession, windowMs: number = PROBLEM_LIMITS.perProcessWindowMs) {
+    this.limit = limit
+    this.windowMs = windowMs
+  }
 
   /** Checks and counts in one step. A clock that went backwards drops the future stamps rather than blocking for hours. */
   take(now: number): boolean {
@@ -270,6 +327,44 @@ export function scrubProblem(p: ProblemT): ProblemT {
     truncated,
   }
   if (p.steps !== undefined) out.steps = scrubOwnerText(p.steps, PROBLEM_LIMITS.stepsChars)
+  if (p.attached !== undefined) {
+    const a = scrubAttached(p.attached)
+    out.attached = a
+    // the log or the messages dropped to fit the frame: say something was cut
+    if ((p.attached.logs !== undefined && a.logs === undefined) || (p.attached.messages && !a.messages))
+      out.truncated = true
+  }
+  return out
+}
+
+/**
+ * Another install's report, scrubbed as the owner's own words are (secrets and injection out, sentences kept) for what its
+ * person typed and the messages they chose to send, and as error text for the rest. Lists are cut to their caps.
+ */
+export function scrubAttached(a: ProblemAttachedT): ProblemAttachedT {
+  const L = PROBLEM_LIMITS
+  // `talos-app report`'s redaction first (named secrets, key pairs), then the owner-text scrub, which also cuts to the cap
+  const own = (t: string, max: number) => scrubOwnerText(redact(t.slice(0, readLimit(max))), max)
+  const out: ProblemAttachedT = {
+    what_went_wrong: own(a.what_went_wrong, L.typedChars),
+    ...(a.expected !== undefined ? { expected: own(a.expected, L.typedChars) } : {}),
+    errors: a.errors.slice(0, L.errors).map((e) => scrubProblemText(redact(e), L.errorChars)),
+    ...(a.logs !== undefined ? { logs: own(a.logs, L.logChars) } : {}),
+    ...(a.messages !== undefined
+      ? {
+          messages: a.messages
+            .slice(0, L.attachedMessages)
+            .map((m) => ({ role: m.role, text: own(m.text, L.attachedMessageChars) })),
+        }
+      : {}),
+    ...(a.thread_id !== undefined ? { thread_id: scrubProblemText(a.thread_id, 80) } : {}),
+    ...(a.screen !== undefined ? { screen: scrubProblemText(a.screen, 80) } : {}),
+    ...(a.claude_code !== undefined ? { claude_code: scrubProblemText(a.claude_code, 40) } : {}),
+  }
+  // a scrub never lengthens past a cap, but JSON escaping and wide characters can still pass the frame budget: the log goes
+  // first, then the messages
+  if (jsonBytes(out) > L.attachedBytes) delete out.logs
+  if (jsonBytes(out) > L.attachedBytes) delete out.messages
   return out
 }
 

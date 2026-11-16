@@ -73,6 +73,36 @@ def find_agent_root(env=None, here=None, cwd=None):
     return _agent_above(os.getcwd() if cwd is None else cwd)
 
 
+def wiki_dir(project_dir):
+    """The agent's wiki folder: <agent>/wiki, or <agent>/memory/wiki when .talos-version has the line `layout=2`. Strict, never a
+    guess: a UTF-8 BOM at the start is ignored; any line that starts with "layout" and then (after optional spaces) `=` or `:` is
+    a layout line, there may be at most one, and it must be exactly `layout`, optional spaces, `=`, optional spaces, `1` or `2`
+    (so `Layout=2`, `layout: 2`, `layout=zz` and a second line are all refused with SystemExit "unknown layout ...").
+    A private copy of scripts/_talos_layout.py (hooks stay standalone, like _agent_root.py); scripts/test-layout.sh checks that
+    every copy gives the same answer."""
+    import re
+    agent = os.path.abspath(project_dir)
+    path = os.path.join(agent, ".talos-version")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read(65536)
+    except OSError:
+        text = ""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    found = [ln.strip() for ln in text.splitlines() if re.match(r"layout\s*[=:]", ln.strip(), re.I)]
+    if len(found) > 1:
+        raise SystemExit("unknown layout: more than one layout line in %s; refusing to guess where the wiki is." % path)
+    if found:
+        m = re.fullmatch(r"layout\s*=\s*([12])", found[0])
+        if not m:
+            raise SystemExit("unknown layout %r in %s (expected exactly layout=1 or layout=2); refusing to guess where the wiki is."
+                             % (found[0], path))
+        if m.group(1) == "2":
+            return os.path.join(agent, "memory", "wiki")
+    return os.path.join(agent, "wiki")
+
+
 # The hooks Claude Code reads an exit code of 2 from as "block this": the PreToolUse guards, and the PreCompact guard. Only these
 # fail closed (exit 2) when the agent folder cannot be found. For every other hook exit 2 means something else: a Stop hook that
 # exits 2 tells Claude Code "do not stop, keep going", so an unattended job with a bad CLAUDE_PROJECT_DIR would loop on it.

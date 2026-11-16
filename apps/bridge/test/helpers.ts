@@ -1,8 +1,7 @@
 // Test harness: a real Bridge (live mode) wired to the testkit's FakeRelay, with notifications captured in memory.
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { JwkP256T } from '@talos-app/protocol'
+import { type CardT, CONFIG_PROPOSE_FEATURE, type JwkP256T } from '@talos-app/protocol'
 import {
   FakeApp,
   FakeRelay,
@@ -17,11 +16,13 @@ import type { Clock } from '../src/clock.ts'
 import { loadEnv } from '../src/config.ts'
 import { nullLogger } from '../src/log.ts'
 import type { Notification } from '../src/notify.ts'
+import { testTempDir } from './temp-dirs.ts'
 
 export const fixture = (name: string) => join(import.meta.dir, 'fixtures', name)
 
+/** A throw-away bridge home, removed once the test file that made it has finished (temp-dirs.ts). */
 export function tempHome(prefix = 'talos-bridge-test-'): string {
-  return mkdtempSync(join(tmpdir(), prefix))
+  return testTempDir(prefix)
 }
 
 export type Harness = {
@@ -202,4 +203,30 @@ export async function advanceSteps(
 export async function stopRelay(relay: FakeRelay): Promise<void> {
   ;(relay as unknown as { server?: { closeAllConnections?: () => void } }).server?.closeAllConnections?.()
   await relay.stop()
+}
+
+/** A relay that knows settings cards (`config-propose/1`): `create_thread` and `archive_thread` draw one, so a test that calls them needs it. */
+export const CARD_RELAY = { relayFeatures: ['schedules/1', CONFIG_PROPOSE_FEATURE] }
+
+/**
+ * `create_thread` and `archive_thread` show the owner a settings card (docs/bridge.md). A test that wants the change made
+ * takes the newest such card the bridge sent and taps Apply on it, then waits for the card to finish.
+ */
+export async function approveLatestConfigCard(h: Harness): Promise<void> {
+  await waitFor(
+    () =>
+      h.relay.frames.some(
+        (r) => r.direction === 'from_bridge' && r.raw.type === 'card.create' && (r.raw.card as CardT).kind === 'config',
+      ),
+    4000,
+    'a settings card',
+  )
+  const cards = h.relay.frames.filter(
+    (r) => r.direction === 'from_bridge' && r.raw.type === 'card.create' && (r.raw.card as CardT).kind === 'config',
+  )
+  const card = cards[cards.length - 1]?.raw.card as CardT
+  await h.app.resolveCard(card, 'primary', card.payload_hash)
+  await h.relay.expectFrame('card.update', (f) => f.card_id === card.id && f.state === 'done', {
+    direction: 'from_bridge',
+  })
 }

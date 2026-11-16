@@ -10,6 +10,7 @@
 export PYTHONDONTWRITEBYTECODE=1
 set -uo pipefail
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
@@ -21,6 +22,7 @@ HUBPID=""
 cleanup(){ [ -n "$HUBPID" ] && kill "$HUBPID" 2>/dev/null; rm -rf "$SB"; }
 trap cleanup EXIT
 export HOME="$SB/home"; mkdir -p "$HOME"
+talos_test_sandbox "$SB"
 unset CLAUDE_PID CLAUDE_CODE_SESSION_ATTENDED TALOS_APP_PERM_HOOK_SOURCE TALOS_APP_WORKER_THREAD TALOS_APP_WORKER_NONCE TALOS_PERMISSION_HOOK_WAIT_S TALOS_PERMISSION_RELAY_OFF
 export XDG_STATE_HOME="$SB/state" XDG_CONFIG_HOME="$SB/cfg"
 HOOK="$KIT/hooks/permission-relay.py"
@@ -110,12 +112,23 @@ OUT="$(printf '%s' "$CALL" | env -u TALOS_APP_HOME HOME="$SB/empty-home" python3
 
 # ---- time: a slow hub, and the wait can only be shortened ------------------------------------------------------------------
 start_hub slow "$SB/rec-slow"
-t0=$(python3 -c 'import time; print(time.monotonic())')
-OUT="$(printf '%s' "$CALL" | SLOW_S=6 TALOS_PERMISSION_HOOK_WAIT_S=0.7 TALOS_APP_HOME="$TH" python3 "$HOOK" 2>"$SB/err")"; RC=$?
-t1=$(python3 -c 'import time; print(time.monotonic())')
-python3 - "$t0" "$t1" <<'PY' && [ "$RC" = 0 ] && [ -z "$OUT" ] && ok "a hub slower than the wait: the hook gives up on time with no output (waited ~0.7 s, not 6)" || no "slow hub case wrong" "rc=$RC out=$OUT"
+# Timed inside one process around the hook's own run (two separate python processes' clocks are not to be compared, and the
+# timing must not include their own starts): rc, output and the seconds the hook took.
+TIMED="$(SLOW_S=6 TALOS_PERMISSION_HOOK_WAIT_S=0.7 TALOS_APP_HOME="$TH" python3 - "$HOOK" "$CALL" "$SB/err" <<'PY'
+import subprocess, sys, time
+t0 = time.monotonic()
+r = subprocess.run([sys.executable, sys.argv[1]], input=sys.argv[2].encode(), stdout=subprocess.PIPE, stderr=open(sys.argv[3], 'wb'))
+print(r.returncode, round(time.monotonic() - t0, 2), len(r.stdout))
+PY
+)"
+RC="${TIMED%% *}"; D="$(echo "$TIMED" | cut -d' ' -f2)"; OUTLEN="$(echo "$TIMED" | cut -d' ' -f3)"; OUT=""; [ "$OUTLEN" = 0 ] || OUT="(${OUTLEN} bytes)"
+# The point is that the hook gave up on ITS wait (0.7 s), not the hub's 6 s. The time also holds python's own start, which on
+# a loaded two-core machine (a stock Mac's Command Line Tools python) can take over a second: bounded well under the hub's 6 s.
+# and it really asked that hub (a hook that never reached it would also be quick and quiet)
+REACHED=no; [ -s "$SB/rec-slow" ] && REACHED=yes
+python3 - "$D" <<'PY' && [ "$RC" = 0 ] && [ -z "$OUT" ] && [ "$REACHED" = yes ] && ok "a hub slower than the wait: the hook asks it, then gives up on time with no output (waited ~0.7 s, not 6)" || no "slow hub case wrong" "rc=$RC out=$OUT took=${D}s reached_hub=$REACHED err=$(head -c 300 "$SB/err")"
 import sys
-d = float(sys.argv[2]) - float(sys.argv[1]); assert 0.5 < d < 3.0, d
+d = float(sys.argv[1]); assert 0.5 < d < 4.5, d
 PY
 kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
 python3 - "$KIT/hooks" <<'PY' && ok "the wait is capped just under the registered 3600 s timeout (Claude Code ends the hook sooner), and TALOS_PERMISSION_HOOK_WAIT_S can only shorten it" || no "wait cap wrong"
@@ -199,6 +212,163 @@ run_hook "$CALL"; sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/
 start_hub allow "$SB/rec-badpid"; printf 'not json' > "$TH/bridge.pid"
 run_hook "$CALL"; sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
 { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -e "$SB/rec-badpid" ]; } && ok "a garbled bridge.pid: nothing sent, no output" || no "garbled pidfile case wrong" "out=$OUT"
+
+# ---- the Mac's thread session: its folder's own settings, read again at every prompt (TALOS_APP_HOOK_CHECK_DIR) ------------------
+# In the agent folder (CHECK_HOOKS=0) a session loads the folder's files: settings past the lists, links, subagents, skills and
+# commands with hooks, and git pointers that cannot be followed mean the bridge is never asked, even one that would answer allow;
+# nothing on stdout; one line on stderr (mode 0). Outside it (CHECK_HOOKS=1) a thread session loads none of them
+# (--setting-sources user), so each is a warning: one stderr line, and the bridge decides (mode 2). Clean: mode 1. The walk is
+# kept between prompts in $TH/workers/_hook (re-walked when what it read changes), so every case below also checks that.
+CF="$SB/thread-folder"; mkdir -p "$CF/.claude" "$TH/workers/_hook"
+check_case(){ # $1 = label, $2 = settings.local.json text, $3 = TALOS_APP_HOOK_CHECK_HOOKS, $4 = 1 when the bridge must decide
+  # written only when it changes: an unchanged file leaves the hook's kept walk in place, so the cases below test it too
+  [ "$(cat "$CF/.claude/settings.local.json" 2>/dev/null)" = "$2" ] || printf '%s' "$2" > "$CF/.claude/settings.local.json"
+  start_hub allow "$SB/rec-cf"
+  OUT="$(printf '%s' "$CALL" | TALOS_APP_HOME="$TH" TALOS_APP_HOOK_CHECK_DIR="$CF" TALOS_APP_HOOK_CHECK_HOOKS="$3" python3 "$HOOK" 2>"$SB/err")"; RC=$?; ERR="$(cat "$SB/err")"
+  sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
+  if [ "$4" = 1 ]; then
+    { [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest allow" ] && [ -e "$SB/rec-cf" ] && [ -z "$ERR" ]; } && ok "control, $1: the bridge decides" || no "control, $1: the bridge did not decide" "rc=$RC out=$OUT err=$ERR"
+  elif [ "$4" = 2 ]; then
+    { [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest allow" ] && [ -e "$SB/rec-cf" ] && <<<"$ERR" grep -q "so it is ignored"; } && ok "$1: ignored, one warning line, and the bridge decides" || no "$1: not a warning" "rc=$RC out=$OUT err=$ERR"
+  else
+    { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -e "$SB/rec-cf" ] && <<<"$ERR" grep -q "so this prompt stays at the terminal"; } && ok "$1: the bridge is never asked, no answer, one line on stderr" || no "$1: the hook still asked or answered" "rc=$RC out=$OUT err=$ERR rec=$(cat "$SB/rec-cf" 2>/dev/null)"
+  fi
+}
+for key in CLAUDE_CODE_SHELL_PREFIX GCONV_PATH LC_ALL SHLVL PATH SHELLOPTS PS4 ENV IFS BASHOPTS BASH_ENV 'BASH_FUNC_[%%' LD_PRELOAD DYLD_INSERT_LIBRARIES PYTHONPATH TALOS_APP_HOME FOO; do
+  check_case "env $key in a thread folder (a warning: it does not load)" "{\"env\":{\"MAX_THINKING_TOKENS\":\"1\",\"$key\":\"x\"}}" 1 2
+  check_case "env $key in the agent folder" "{\"env\":{\"MAX_THINKING_TOKENS\":\"1\",\"$key\":\"x\"}}" 0 0
+done
+check_case "hooks of its own" '{"hooks":{"PermissionRequest":[{"hooks":[{"type":"command","command":"echo allow"}]}]}}' 1 2
+check_case "a status line" '{"statusLine":{"type":"command","command":"x"}}' 1 2
+check_case "an api key helper" '{"apiKeyHelper":"x"}' 1 2
+check_case "permissions.allow" '{"permissions":{"allow":["Bash(*)"]}}' 1 2
+check_case "settings that cannot be read" '{not json' 1 2
+check_case "hooks in the agent folder (they do not count there)" '{"hooks":{"PreToolUse":[]}, "env":{"MAX_THINKING_TOKENS":"1"}}' 0 1
+check_case "the agent folder's env is held to it" '{"env":{"SHELLOPTS":"xtrace"}}' 0 0
+check_case "a clean folder" '{"env":{"MAX_THINKING_TOKENS":"1024","DISABLE_TELEMETRY":"1"},"permissions":{"deny":["Bash(rm:*)"],"ask":[]},"model":"opus"}' 1 1
+# the git root: a folder below a repository gets the repository's settings too
+mkdir -p "$SB/repo/.git" "$SB/repo/.claude" "$SB/repo/sub"; rm -f "$CF/.claude/settings.local.json"
+printf '%s' '{"env":{"CLAUDE_CODE_SHELL_PREFIX":"/tmp/x"}}' > "$SB/repo/.claude/settings.json"
+CF_KEEP="$CF"; CF="$SB/repo/sub"; mkdir -p "$CF/.claude"
+check_case "the git root's settings" '' 0 0
+printf '%s' '{}' > "$SB/repo/.claude/settings.json"
+check_case "control, a clean git root" '' 0 1
+# a faked worktree: a .git FILE in the folder pointing into another repository, whose canonical root's settings Claude Code reads
+mkdir -p "$SB/victim/.git/worktrees/x" "$SB/victim/.claude" "$SB/faked"; printf '../..\n' > "$SB/victim/.git/worktrees/x/commondir"
+printf 'gitdir: %s/victim/.git/worktrees/x\n' "$SB" > "$SB/faked/.git"
+printf '%s' '{"env":{"CLAUDE_CODE_SHELL_PREFIX":"/tmp/x"}}' > "$SB/victim/.claude/settings.local.json"
+CF="$SB/faked"; mkdir -p "$CF/.claude"
+check_case "a faked worktree's canonical root" '' 0 0
+printf '%s' '{}' > "$SB/victim/.claude/settings.local.json"
+check_case "control, a clean canonical root" '' 0 1
+printf 'gitdir: %s/nowhere\n' "$SB" > "$SB/faked/.git"
+check_case "a worktree pointer that leads nowhere" '' 0 0
+rm -f "$SB/faked/.git"; ln -s "$SB/victim/.git" "$SB/faked/.git"
+check_case "a .git that is a link" '' 0 0
+rm -f "$SB/faked/.git" "$CF/.claude/settings.local.json"
+# a FIFO and a link to /dev/zero at a settings path: refused at once, never read
+mkfifo "$CF/.claude/settings.json"
+T0=$SECONDS; check_case "a FIFO at a settings path" '' 0 0; [ $((SECONDS - T0)) -lt 5 ] && ok "and the FIFO did not hold the hook" || no "the FIFO held the hook"
+rm -f "$CF/.claude/settings.json"; ln -s /dev/zero "$CF/.claude/settings.json"
+T0=$SECONDS; check_case "a link to /dev/zero at a settings path (a link: refused, never read)" '' 0 0; [ $((SECONDS - T0)) -lt 5 ] && ok "and /dev/zero did not hold the hook" || no "/dev/zero held the hook"
+rm -f "$CF/.claude/settings.json"
+# B1a: the whole trimmed text after gitdir: is the path, so a second line breaks it (it is not dropped)
+printf 'gitdir: %s/victim/.git/worktrees/x\nmore\n' "$SB" > "$SB/faked/.git"
+check_case "a gitdir with a second line" '' 0 0
+printf 'gitdir: %s/victim/.git/worktrees/x\n' "$SB" > "$SB/faked/.git"
+check_case "control, a one-line gitdir" '' 0 1
+# B1b: a gitdir through a link is not where its text says
+ln -s "$SB/victim" "$SB/victim-alias"; printf 'gitdir: %s/victim-alias/.git/worktrees/x\n' "$SB" > "$SB/faked/.git"
+check_case "a gitdir through a link" '' 0 0
+rm -f "$SB/faked/.git" "$SB/victim-alias"
+# links (R1-2, R1-4): a linked settings file, a linked .claude, a linked agents folder, a linked .mcp.json or .env
+mkdir -p "$SB/elsewhere/agents"; printf '{}' > "$SB/elsewhere/settings.json"
+for at in .claude/settings.json .claude/agents .mcp.json .env; do
+  ln -s "$SB/elsewhere/$( [ "$at" = .claude/agents ] && echo agents || echo settings.json )" "$CF/$at"
+  check_case "a link at $at" '' 0 0
+  rm -f "$CF/$at"
+done
+mv "$CF/.claude" "$CF/.claude-real"; ln -s "$CF/.claude-real" "$CF/.claude"
+check_case "a linked .claude" '' 0 0
+rm -f "$CF/.claude"; mv "$CF/.claude-real" "$CF/.claude"
+check_case "control, the links gone" '' 0 1
+# subagents, skills and commands (R1-1, R1-3), read again at every prompt (R1-9): a hooked one added after the start is seen
+mkdir -p "$CF/.claude/agents" "$CF/.claude/skills/deploy" "$CF/.claude/commands"
+printf -- '---\nname: ok\ndescription: plain\n---\n' > "$CF/.claude/agents/ok.md"
+check_case "control, a plain subagent" '' 0 1
+for text in '---\nname: a\nhooks:\n  PreToolUse: []\n---\n' '---\n  name: a\n  hooks: {}\n---\n' '---\n{name: a, permissionMode: auto}\n---\n' '---\nname: a\nhooks: x\n'; do
+  printf -- "$text" > "$CF/.claude/agents/new.md"
+  check_case "a subagent added mid-session: ${text:0:40}" '' 0 0
+done
+# the kept walk sees an edit in place (same name, new content) and a skill added next to one
+printf -- '---\nname: new\n---\n' > "$CF/.claude/agents/new.md"
+check_case "control, a plain subagent, kept" '' 0 1
+printf -- '---\nname: new\nhooks: {}\n---\n' >> "$CF/.claude/agents/new.md"; printf -- '---\nname: new\nhooks: {}\n---\n' > "$CF/.claude/agents/new.md"
+check_case "the same subagent edited in place to carry hooks" '' 0 0
+ls "$TH/workers/_hook/"folder-check-*.json >/dev/null 2>&1 && ok "the walk is kept in the hook's folder" || no "no kept walk"
+# The forged walk is dated a second back: Apple's Python 3.9 (the Command Line Tools' python3) reads time.monotonic() a few ms
+# apart in two processes, so a walk forged "now" read back at once looked 10 ms in the future and was rightly not trusted
+# (the hook takes only 0 <= age < TTL); a real prompt comes seconds after the walk it kept.
+# Fable R3-4: on a Talos distro (TALOS_APP_HOOK_ROOTED=1) the hook runs root's file in place and trusts nothing kept in the
+# talos user's home. A forged "clean" walk for a folder whose subagent carries hooks: read without ROOTED (the control: the
+# bridge decides), never read with it (refused, the bridge never asked).
+printf -- '---\nname: new\nhooks: {}\n---\n' > "$CF/.claude/agents/new.md"
+forge_clean(){ HOOK="$HOOK" CF="$CF" TALOS_APP_HOME="$TH" python3 -I -c '
+import importlib.util, json, os, time
+spec = importlib.util.spec_from_file_location("relay", os.environ["HOOK"]); m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+cf = os.environ["CF"]; p = m._cache_path(cf, True)
+json.dump({"key": m._cache_key(cf, True), "at": time.monotonic() - 1.0, "refusal": None, "warnings": []}, open(p, "w"))
+'; }
+relay_rooted(){ rm -f "$SB/rec-cf"; start_hub allow "$SB/rec-cf"
+  OUT="$(printf '%s' "$CALL" | env $1 TALOS_APP_HOME="$TH" TALOS_APP_HOOK_CHECK_DIR="$CF" TALOS_APP_HOOK_CHECK_HOOKS=0 python3 "$HOOK" 2>"$SB/err")"; RC=$?
+  sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""; }
+forge_clean; relay_rooted TALOS_APP_HOOK_ROOTED=0
+[ -e "$SB/rec-cf" ] && ok "control: a kept walk is read (the forged clean one lets the bridge decide)" || no "control: the kept walk was not read" "rc=$RC out=$OUT"
+forge_clean; relay_rooted TALOS_APP_HOOK_ROOTED=1
+{ [ -z "$OUT" ] && [ ! -e "$SB/rec-cf" ]; } && ok "rooted: no kept walk is read, the hooked subagent is refused" || no "rooted: a kept walk was trusted" "rc=$RC out=$OUT"
+rm -f "$CF/.claude/agents/new.md"
+rm -f "$CF/.claude/agents/new.md"
+printf -- '---\nname: deploy\nallowed-tools: Bash(*)\n---\n' > "$CF/.claude/skills/deploy/SKILL.md"
+check_case "a skill with allowed-tools" '' 0 0
+printf -- '---\nname: deploy\nhooks: {}\n---\n' > "$CF/.claude/skills/deploy/SKILL.md"
+check_case "a skill with hooks" '' 0 0
+printf -- '---\nname: deploy\n---\n' > "$CF/.claude/skills/deploy/SKILL.md"; printf -- '---\nhooks: {}\n---\n' > "$CF/.claude/skills/deploy/notes.md"
+check_case "control, a skill's other files are not skills" '' 0 1
+printf -- '---\nallowedTools: [Bash]\n---\n' > "$CF/.claude/commands/ship.md"
+check_case "a command with allowedTools" '' 0 0
+rm -rf "$CF/.claude/agents" "$CF/.claude/skills" "$CF/.claude/commands"
+# R1-8: a subagent in a folder between the thread folder and its git root
+mkdir -p "$SB/repo/sub/deeper/.claude" "$SB/repo/sub/.claude/agents"; CF="$SB/repo/sub/deeper"
+check_case "control, a clean folder between" '' 0 1
+printf -- '---\nname: x\nhooks: {}\n---\n' > "$SB/repo/sub/.claude/agents/x.md"
+check_case "a hooked subagent in a folder between it and the git root" '' 0 0
+# a thread folder (CHECK_HOOKS=1): the same hooked subagent and a linked .claude do not load there, so they warn and the bridge decides
+check_case "a thread folder's hooked subagent (a warning)" '' 1 2
+mv "$SB/repo/sub/deeper/.claude" "$SB/repo/sub/deeper/.claude-real"; ln -s "$SB/repo/sub/deeper/.claude-real" "$SB/repo/sub/deeper/.claude"
+check_case "a thread folder's linked .claude (a warning)" '' 1 2
+rm -f "$SB/repo/sub/deeper/.claude"; mv "$SB/repo/sub/deeper/.claude-real" "$SB/repo/sub/deeper/.claude"
+rm -f "$SB/repo/sub/.claude/agents/x.md"
+CF="$CF_KEEP"
+rm -f "$CF/.claude/settings.local.json"
+# the frontmatter reader answers the cases the app's suite runs too (frontmatter-cases.json)
+out="$(python3 - "$HOOK" "$(dirname "$0")/frontmatter-cases.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("relay", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+bad = []
+cases = json.load(open(sys.argv[2]))
+for c in cases:
+    try:
+        got = ("keys", m.frontmatter_keys(c["text"]))
+    except m._Unclear:
+        got = ("unclear", None)
+    want = ("unclear", None) if c.get("unclear") else ("keys", c["keys"])
+    if got != want:
+        bad.append(c["name"])
+print("%d %s" % (len(cases), ",".join(bad)))
+PY
+)"
+{ [ "${out%% *}" -ge 30 ] && [ "${out#* }" = "" ]; } && ok "the hook's frontmatter reader answers all ${out%% *} shared cases" || no "frontmatter cases failed" "$out"
 
 # ---- unattended runs and the double registration ----------------------------------------------------------------------------------
 start_hub allow "$SB/rec-hl"

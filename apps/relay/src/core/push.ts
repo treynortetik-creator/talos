@@ -2,11 +2,14 @@
 // owner's rules: nothing while someone is at a visible app socket (visible AND active within 60 s; `needs_you` ignores that), nothing in the quiet window, per-thread notify settings, master
 // switch. Transports: Web Push now (`web-push`), a no-op sink until VAPID keys are set, APNs in Phase 2 (spec 14).
 
+import https from 'node:https'
 import type { AgentConfigT } from '@talos-app/protocol'
 import {
   badgeCount,
   buildPushPayload,
   grantScopes,
+  isBlockedHost,
+  isBlockedHostname,
   isNeedsYouTemplate,
   isQuiet,
   NativeGrant,
@@ -21,6 +24,7 @@ import {
   sealPush,
   secondsUntil,
 } from '@talos-app/protocol'
+import { checkedLookup } from '@talos-app/protocol/guarded-fetch'
 import webpush from 'web-push'
 import type { Clock, Logger, PushService, PushTransport, RichPushInput } from '../services.ts'
 import type { NtfySink } from './alerts-ntfy.ts'
@@ -40,20 +44,55 @@ export class NoopTransport implements PushTransport {
   }
 }
 
-export function createWebPushTransport(vapid: {
-  publicKey: string
-  privateKey: string
-  subject: string
-}): PushTransport {
+/**
+ * The longest the relay waits for any one send, web or Apple, whatever the transport does with its own timeout: a send that
+ * never settles must not hold its caller (the card reminder and the quiet summary run one tick at a time). Past it the send
+ * counts as refused, so a caller that retries tries again. Above APNs's own budget (a 3 s ping, a 10 s connect and a 10 s
+ * request), so a slow send Apple still delivers is not counted as refused.
+ */
+export const PUSH_SEND_DEADLINE_MS = 30_000
+
+/** How long one browser push may take. A push service answers in well under a second; a host that never answers must not hold the send open. */
+export const WEB_PUSH_TIMEOUT_MS = 15_000
+
+/**
+ * A browser's push endpoint is a URL the browser hands over, and the relay then POSTs to it on every notification from
+ * inside its own network. A real push service is a public https host, so anything else is refused: another scheme, a
+ * `user:pass@`, an address literal that is not public (loopback, private, link-local, the cloud metadata address and the
+ * IPv6 forms that carry one), and a name that is never public (`localhost`, `*.internal`, `*.local`, a single label).
+ */
+export function pushEndpointAllowed(endpoint: string): boolean {
+  let u: URL
+  try {
+    u = new URL(endpoint)
+  } catch {
+    return false
+  }
+  if (u.protocol !== 'https:' || u.username || u.password) return false
+  return !isBlockedHost(u.hostname) && !isBlockedHostname(u.hostname)
+}
+
+export function createWebPushTransport(
+  vapid: { publicKey: string; privateKey: string; subject: string },
+  /** Tests: how a host name is resolved. The connection only ever goes to an address this lookup just approved. */
+  opts: { resolve?: (host: string) => Promise<readonly string[]> } = {},
+): PushTransport {
+  // The name is resolved once, by a lookup that refuses any address that is not public, and the socket connects to the
+  // address that passed: a name that points inward (or is re-pointed after it was stored) is never contacted.
+  const agent = new https.Agent({ lookup: checkedLookup(opts.resolve ? { resolve: opts.resolve } : {}) as never })
   return {
     name: 'webpush',
-    async send(sub, payload, opts) {
+    async send(sub, payload, sendOpts) {
+      // A row stored before the endpoint was checked can never be sent to: drop it.
+      if (!pushEndpointAllowed(sub.endpoint)) return { ok: false, gone: true }
       try {
         await webpush.sendNotification(sub, JSON.stringify(payload), {
           vapidDetails: { subject: vapid.subject, publicKey: vapid.publicKey, privateKey: vapid.privateKey },
           // Picked from the payload so no caller can forget: a card push is urgent and keeps for a day (PUSH_TTL_S).
-          TTL: pushTtlSeconds(payload, opts?.secondsLeft),
+          TTL: pushTtlSeconds(payload, sendOpts?.secondsLeft),
           urgency: pushUrgency(payload),
+          agent,
+          timeout: WEB_PUSH_TIMEOUT_MS,
         })
         return { ok: true, gone: false }
       } catch (e) {
@@ -71,19 +110,30 @@ export function createWebPushTransport(vapid: {
 const SYSTEM_TEMPLATES = new Set<PushIntent['template']>([
   'device_pinned',
   'bridge_key',
+  'bridge_takeover',
   'sign_in',
   'sign_in_unproven',
   'storage_full',
   'messages_waiting',
   'action_failed',
+  'settings_changed',
+  'sent_always_allowed',
 ])
 
 /**
- * Sign-in alerts are the owner's only warning that someone signed in (or that a device signed in without proving its key).
- * Like the health templates they ignore the master switch and a visible socket: a tab open on the Mac, or a socket an
- * attacker keeps open with a made-up "visible" hello, must not swallow them. They stay out of ntfy and HEALTH_PUSH.
+ * Security alerts are the owner's only warning that someone signed in (or that a device signed in without proving its key), or
+ * that another Mac took the bridge. Like the health templates they ignore the master switch and a visible socket: a tab open on
+ * the Mac, or a socket an attacker keeps open with a made-up "visible" hello, must not swallow them. They stay out of ntfy and
+ * HEALTH_PUSH.
  */
-const SIGN_IN_ALERTS = new Set<PushIntent['template']>(['sign_in', 'sign_in_unproven'])
+const SIGN_IN_ALERTS = new Set<PushIntent['template']>(['sign_in', 'sign_in_unproven', 'bridge_takeover'])
+
+/**
+ * The agent changed a setting that decides which alerts reach the owner (packages/protocol push.ts). Like a sign-in alert it
+ * ignores the master switch and a visible socket, and like a system template the quiet window and thread alerts: a change that
+ * silences him is never itself silenced.
+ */
+const ALERTS_CHANGED = new Set<PushIntent['template']>(['settings_changed', 'sent_always_allowed'])
 
 /** Health templates ignore a visible socket (a desktop tab nobody watches must not swallow the phone push) and go to ntfy. */
 const HEALTH_PUSH = new Set<PushIntent['template']>([
@@ -114,7 +164,17 @@ export type PushDeps = {
 export type TestResult = { push: { sent: number; ok: number }; ntfy: 'off' | 'sent' | 'failed' }
 
 /** Pushes attempted and accepted, with the native (APNs) share on its own. */
-export type PushCounts = { sent: number; ok: number; native: { sent: number; ok: number } }
+/**
+ * What one push did: sends attempted and accepted (web and Apple), the native share, how many of the refused ones only ran
+ * out of time (the service may still have delivered them), and, for a health push, whether ntfy took it.
+ */
+export type PushCounts = {
+  sent: number
+  ok: number
+  native: { sent: number; ok: number }
+  timedOut?: number
+  ntfy?: boolean
+}
 
 export type PushOutcome = { last_ok_at: number | null; last_error_at: number | null }
 
@@ -178,17 +238,18 @@ export class CorePush implements PushService {
    * call from the health watchdog: the hub's own 5-minute `session_stopped` alarm is ignored (the watchdog owns that
    * alert: once per outage, rate-limited, quiet-window aware).
    */
+  /** Sends `intent` by the owner's rules; says what happened, like notifyCounted, for a caller that wants to know. */
   async notify(
     intent: PushIntent,
     opts: { force?: boolean; fromHealth?: boolean; rich?: RichPushInput } = {},
-  ): Promise<void> {
-    await this.run(intent, opts)
+  ): Promise<PushCounts | null> {
+    return this.run(intent, opts)
   }
 
   /** Like `notify`, but says what happened: how many pushes were attempted and accepted (null = the rules held it back). */
   async notifyCounted(
     intent: PushIntent,
-    opts: { force?: boolean; fromHealth?: boolean } = {},
+    opts: { force?: boolean; fromHealth?: boolean; rich?: RichPushInput } = {},
   ): Promise<PushCounts | null> {
     return this.run(intent, opts)
   }
@@ -203,7 +264,7 @@ export class CorePush implements PushService {
       return null
     }
     const health = HEALTH_PUSH.has(intent.template)
-    const alwaysOn = health || SIGN_IN_ALERTS.has(intent.template)
+    const alwaysOn = health || SIGN_IN_ALERTS.has(intent.template) || ALERTS_CHANGED.has(intent.template)
     if (!opts.force) {
       // health alarms are not chat notifications: the master switch silences chat, never "your Mac died" (and ntfy)
       if (!cfg.notifications.master && !alwaysOn) {
@@ -248,17 +309,19 @@ export class CorePush implements PushService {
     }
     const badge = this.badge(cfg)
     const payload = buildPushPayload({ app_badge: badge, ...intent }, cfg)
-    if (health && this.d.ntfy) await this.d.ntfy.send(payload.notification.body, payload.notification.title)
+    const ntfy =
+      health && this.d.ntfy ? await this.d.ntfy.send(payload.notification.body, payload.notification.title) : undefined
     const apple = forApple(buildPushPayload({ app_badge: badge, ...intent }, appleConfig(cfg)), (tid) =>
       this.d.store.pushRef(tid),
     )
-    return this.deliver(
+    const counts = await this.deliver(
       intent,
       payload,
       apple,
       opts.rich ? this.richFor(intent, cfg, payload, opts.rich) : undefined,
       opts.rich?.openOnly === true,
     )
+    return ntfy === undefined ? counts : { ...counts, ntfy }
   }
 
   /**
@@ -359,6 +422,39 @@ export class CorePush implements PushService {
     return Boolean(this.d.apns)
   }
 
+  /** `send()`'s answer, or `fallback` when it throws or has not settled within PUSH_SEND_DEADLINE_MS (on the relay's clock). */
+  private withinDeadline<T>(send: () => Promise<T> | T, fallback: T, onTimeout?: () => void): Promise<T> {
+    let sending: Promise<T>
+    try {
+      sending = Promise.resolve(send())
+    } catch {
+      return Promise.resolve(fallback)
+    }
+    return new Promise<T>((resolve) => {
+      let done = false
+      let timer: unknown = null
+      const settle = (v: T) => {
+        if (done) return
+        done = true
+        if (timer !== null) this.d.clock.clearTimeout(timer)
+        resolve(v)
+      }
+      sending.then(settle, () => settle(fallback))
+      // Armed a microtask later, so a send that answers at once never meets its deadline: a test clock fires the timers that
+      // fall due while it moves synchronously, before any answer can arrive. A real timer never fires that soon anyway.
+      queueMicrotask(() => {
+        if (done) return
+        timer = this.d.clock.setTimeout(() => {
+          if (done) return
+          done = true
+          this.d.log.error({ after_ms: PUSH_SEND_DEADLINE_MS }, 'push send timed out')
+          onTimeout?.()
+          resolve(fallback)
+        }, PUSH_SEND_DEADLINE_MS)
+      })
+    })
+  }
+
   private async deliver(
     intent: PushIntent,
     payload: PushPayloadT,
@@ -367,6 +463,8 @@ export class CorePush implements PushService {
     openOnly = false,
   ): Promise<PushCounts> {
     let unreadableSubs = 0
+    let timedOut = 0
+    const late = () => void timedOut++
     let subs: PushSub[] = []
     try {
       subs = this.d.store.listSubs(() => {
@@ -377,7 +475,12 @@ export class CorePush implements PushService {
     }
     if (unreadableSubs > 0)
       this.d.log.error({ template: intent.template, unreadable: unreadableSubs }, 'web push rows unreadable')
-    const secondsLeft = secondsUntil(intent.expires_at, this.d.clock.now())
+    // a card's time to live is on the relay's clock (store.putCard shifts it by the Mac's measured offset)
+    const relayExpiry = intent.card_id ? this.cardExpiry(intent.card_id) : null
+    const secondsLeft =
+      relayExpiry !== null
+        ? (relayExpiry - this.d.clock.now()) / 1000
+        : secondsUntil(intent.expires_at, this.d.clock.now())
     // A store error here (a row that no longer decrypts) must not take web push down with it.
     // When native push is on and the list cannot be read (a locked database, a row that no longer decrypts), that is one
     // attempted, failed send: callers that retry must see it, and "nobody to notify" would be a lie.
@@ -425,14 +528,17 @@ export class CorePush implements PushService {
             return 'template'
           }
         }
-        const res = (await this.d.apns
-          ?.send(dev, applePayload, {
-            secondsLeft,
-            ...(sealed ? { seal: sealed.seal } : {}),
-            ...(openOnly ? { openOnly } : {}),
-            gate,
-          })
-          .catch(() => null)) ?? {
+        const res = (await this.withinDeadline(
+          () =>
+            this.d.apns?.send(dev, applePayload, {
+              secondsLeft,
+              ...(sealed ? { seal: sealed.seal } : {}),
+              ...(openOnly ? { openOnly } : {}),
+              gate,
+            }) ?? null,
+          null,
+          late,
+        )) ?? {
           ok: false,
           gone: false,
         }
@@ -450,7 +556,11 @@ export class CorePush implements PushService {
     )
     const web = Promise.all(
       subs.map(async (sub) => {
-        const res = await this.d.transport.send(sub, payload, { secondsLeft }).catch(() => ({ ok: false, gone: false }))
+        const res = await this.withinDeadline(
+          () => this.d.transport.send(sub, payload, { secondsLeft }),
+          { ok: false, gone: false },
+          late,
+        )
         this.record(res.ok)
         if (res.gone) this.d.store.deleteSub(sub.endpoint)
         this.d.log.info({ template: intent.template, ok: res.ok, gone: res.gone }, 'push sent')
@@ -464,6 +574,15 @@ export class CorePush implements PushService {
       sent: results.length,
       ok: results.filter(Boolean).length,
       native: { sent: nativeResults.length, ok: nativeResults.filter(Boolean).length },
+      timedOut,
+    }
+  }
+
+  private cardExpiry(id: string): number | null {
+    try {
+      return this.d.store.cardExpiresAt(id)
+    } catch {
+      return null
     }
   }
 

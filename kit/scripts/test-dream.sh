@@ -5,10 +5,12 @@
 export PYTHONDONTWRITEBYTECODE=1
 set -uo pipefail
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 T="$(mktemp -d)" || exit 2
 case "$T" in /*/*) ;; *) echo "suspicious temp dir '$T'" >&2; exit 2 ;; esac
 trap 'rm -rf "$T"' EXIT
 export HOME="$T/home" XDG_CONFIG_HOME="$T/cfg" XDG_STATE_HOME="$T/state" XDG_DATA_HOME="$T/data" TMPDIR="$T"
+talos_test_sandbox "$T"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME"
 unset TALOS_UNATTENDED CHRONOS_RUN
 

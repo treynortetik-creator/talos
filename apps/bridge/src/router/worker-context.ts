@@ -170,7 +170,7 @@ export class WorkerContextFeed {
         scope: { thread_id: thread },
         source: 'hooks',
         capabilities: [],
-        rate_limits: [], // the plan's limits are one pool: the app shows main's
+        rate_limits: [], // the plan's limits are one pool: main's state carries the newest reading of any session (usage-pool.ts)
         surfaces: [],
         at: reading?.at ?? e.started_at ?? e.last_turn_at ?? new Date(0).toISOString(),
       }

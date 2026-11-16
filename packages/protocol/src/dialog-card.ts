@@ -166,10 +166,19 @@ export function dialogNothingPressedText(threadName: string): string {
   return `${name(threadName)}'s screen showed something different when Talos went to answer, so it left it alone. A new card comes if it still needs you.`
 }
 
-/** The one thread line when a dialog waits out its 15 minutes: the Mac's own wording, so the owner reads one meaning. */
-export function dialogFallbackLine(kind: DialogKindT, threadName: string): string {
-  const n = name(threadName)
-  return `${n}'s session is waiting on a '${DIALOG_PROMPT[kind]}' prompt; open Terminals → ${n} on the Mac to answer.`
+/** Where the session waiting on a dialog runs: the Mac app's own Terminals, or a Linux supervisor's tmux (its machine, its attach command). */
+export type DialogWhere = { kind: 'mac' } | { kind: 'linux'; machine: string; attach: string }
+
+/**
+ * The one thread line when a dialog waits out its 15 minutes. It is posted IN the thread, so it says "This thread's session" and
+ * never names the thread; the rest is the supervisor's own wording for the same prompt (SupervisorNotice.swift on the Mac,
+ * worker-notices.ts on Linux), so the owner reads one meaning wherever the session runs.
+ */
+export function dialogFallbackLine(kind: DialogKindT, where: DialogWhere): string {
+  const what = `This thread's session is waiting on a '${DIALOG_PROMPT[kind]}' prompt`
+  return where.kind === 'mac'
+    ? `${what}; open this thread in Terminals on the Mac to answer.`
+    : `${what}; attach on ${where.machine} to answer: ${where.attach}`
 }
 
 /**

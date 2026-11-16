@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
 // The Run button under a shell code block in an agent message. A tap sends the owner's own signed message (the script in one
 // fence, `intent: 'run'`). These tests hold: which blocks get a button, what is sent, one message per tap, the one-tap rule on
-// the bytes (plain ASCII, at most 6 lines and 300 characters) and the second confirm for everything else. One block, one Run
+// the bytes (any plain ASCII script, whatever its length) and the second confirm for everything else. One block, one Run
 // is the Mac's rule (run-intent.test.ts): here a tap names its block (message id and place), the screen shows what its own tap
-// did and no Run after it, and a reload shows Run again. A thread with its own session shows no button.
+// did, no Run while that tap is still sending or waiting, and Run again once it has left or failed; a reload shows Run too. A thread with its own session shows no button.
 import type { MessageT } from '@talos-app/protocol'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MessageView } from '../../src/features/threads/MessageView.tsx'
+import { RUN_AGAIN_SETTLE_MS } from '../../src/features/threads/RunButton.tsx'
 import { ClientProvider, type TalosClient } from '../../src/lib/client.ts'
 import { createMetaStore, MetaProvider } from '../../src/lib/connectionMeta.ts'
 import { createMemoryStorage } from '../../src/lib/storage.ts'
@@ -61,6 +62,19 @@ function mount(m: MessageT, client: Fake = setup({ macOffline: true }), meta = c
   )
   const r = render(view)
   return { client, meta, ...r, remount: () => r.rerender(<div key="again">{view}</div>) }
+}
+/**
+ * The id of the message this Run sent: the newest owner message, waited for (with the Mac offline the Run is the only owner
+ * message these tests make). Never "the last message" of any author: under load an agent row can land after it.
+ */
+async function sentRunId(client: Fake): Promise<string> {
+  let id: string | undefined
+  await waitFor(() => {
+    const mine = (client.store.getState().messages.general ?? []).filter((m) => m.author === 'owner')
+    id = mine.at(-1)?.id
+    expect(id).toBeDefined()
+  })
+  return id as string
 }
 const SENT = /^Sent to your Mac\. The thread below says whether it ran or was refused\.$/
 const runButton = () => screen.queryByTestId('run-button') as HTMLButtonElement | null
@@ -243,29 +257,33 @@ describe('the rule on the bytes: one tap or two', () => {
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
   })
 
-  it('7 lines asks a second time, says so, and still runs on the confirm', async () => {
+  it('a plain ASCII script of 7 lines is still one tap, with no note', async () => {
     const { client } = mount(msg(fence(lines(7))))
     const spy = sends(client)
-    expect(screen.getByTestId('run-note').textContent).toMatch(/longer than 6 lines or 300 characters/)
+    expect(screen.queryByTestId('run-note')).toBeNull()
     fireEvent.click(runButton() as HTMLElement)
-    expect(spy).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByTestId('run-confirm'))
+    expect(screen.queryByTestId('run-confirm')).toBeNull()
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
     expect(spy.mock.calls[0]?.[0].text).toBe(expected(lines(7)))
   })
 
-  it('300 characters is one tap and 301 is two', async () => {
-    const chars = (n: number) => 'a'.repeat(n - 1) // plus the block's final line break: n characters in all
-    const { client } = mount(msg(fence(chars(300))))
-    const spy = sends(client)
-    fireEvent.click(runButton() as HTMLElement)
-    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
-    cleanup()
-    const { client: c2 } = mount(msg(fence(chars(301))))
-    const spy2 = sends(c2)
-    fireEvent.click(runButton() as HTMLElement)
-    expect(spy2).not.toHaveBeenCalled()
-    expect(screen.getByTestId('run-confirm')).toBeTruthy()
+  it('a plain ASCII script is one tap at 300 characters, at 301 and at 3,000', async () => {
+    for (const n of [300, 301, 3000]) {
+      const { client } = mount(msg(fence('a'.repeat(n - 1)))) // plus the block's final line break: n characters in all
+      const spy = sends(client)
+      expect(screen.queryByTestId('run-note')).toBeNull()
+      fireEvent.click(runButton() as HTMLElement)
+      expect(screen.queryByTestId('run-confirm')).toBeNull()
+      await waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
+      cleanup()
+    }
+  })
+
+  it('the note under a script beyond plain ASCII says Run asks twice', () => {
+    mount(msg(fence('echo caf\u00e9')))
+    expect(screen.getByTestId('run-note').textContent).toBe(
+      'This script has characters beyond plain ASCII (look-alike letters, special spaces, accents), so Run asks twice.',
+    )
   })
 
   it.each([
@@ -348,12 +366,12 @@ describe('one message per tap, and the sent state', () => {
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
   })
 
-  it('sends the block the tap is for, its message and place in it, and the screen says Sent with no Run', async () => {
+  it('sends the block the tap is for, its message and place in it, and the screen says Sent, then offers Run again', async () => {
     const m = msg(`${fence('print(1)', 'python')}\n\n${fence('echo hi')}`)
     const { client } = mount(m)
     fireEvent.click(runButton() as HTMLElement)
     await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
-    expect(runButton()).toBeNull()
+    expect(runButton()?.textContent).toBe('Run again')
     const frames = client.sent.filter((f) => f.type === 'message')
     expect(frames).toHaveLength(1)
     expect(frames[0]?.intent).toBe('run')
@@ -361,7 +379,7 @@ describe('one message per tap, and the sent state', () => {
     expect(frames[0]?.run_block).toEqual({ message_id: m.id, index: 1 })
   })
 
-  it("after a reload the block shows Run again: nothing is kept on the screen (a second tap is the Mac's to refuse)", async () => {
+  it('after a reload the block shows Run: nothing is kept on the screen', async () => {
     const { client, remount } = mount(msg(fence('echo hi')))
     fireEvent.click(runButton() as HTMLElement)
     await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
@@ -371,7 +389,7 @@ describe('one message per tap, and the sent state', () => {
     expect(client.sent.filter((f) => f.type === 'message')).toHaveLength(1)
   })
 
-  it('deleting the Run row does not bring Run back on this screen: it says what its own tap did', async () => {
+  it('deleting the Run row changes nothing on this screen: it still says what its own tap did, with Run again', async () => {
     const { client } = mount(msg(fence('echo hi')))
     fireEvent.click(runButton() as HTMLElement)
     await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
@@ -381,22 +399,22 @@ describe('one message per tap, and the sent state', () => {
         messages: { ...s.messages, general: (s.messages.general ?? []).filter((m) => m.author !== 'owner') },
       })),
     )
-    expect(runButton()).toBeNull()
+    expect(runButton()?.textContent).toBe('Run again')
     expect(screen.getByTestId('run-status').textContent).toMatch(SENT)
   })
 
-  it('one script, one Run: even after the agent answers there is no Run again', async () => {
+  it('after the agent answers the status still says Sent and the button reads Run again', async () => {
     const client = setup({ macOffline: false }) // the fake agent answers
     mount(msg(fence('echo hi')), client)
     fireEvent.click(runButton() as HTMLElement)
     await waitFor(() =>
       expect(client.store.getState().messages.general?.some((m) => m.text?.startsWith('echo:'))).toBe(true),
     )
-    expect(runButton()).toBeNull()
+    expect(runButton()?.textContent).toBe('Run again')
     expect(screen.getByTestId('run-status').textContent).toMatch(SENT)
   })
 
-  it('a refusal line from the Mac does not change the block: it still says what its own tap did, and offers no Run', async () => {
+  it('a refusal line from the Mac does not change the block: it still says what its own tap did, and offers Run again', async () => {
     const client = setup({ macOffline: true })
     mount(msg(fence('echo hi')), client)
     fireEvent.click(runButton() as HTMLElement)
@@ -423,21 +441,42 @@ describe('one message per tap, and the sent state', () => {
         },
       })),
     )
-    expect(runButton()).toBeNull()
+    expect(runButton()?.textContent).toBe('Run again')
     expect(screen.getByTestId('run-status').textContent).toMatch(SENT)
   })
 
-  it('two blocks in one message do not share a state: tapping one leaves the other', async () => {
+  it('two blocks in one message do not share a state: tapping one leaves the other with its own Run', async () => {
     const client = setup({ macOffline: true })
     mount(msg(`${fence('echo A')}\n\n${fence('echo B')}`), client)
     const [a] = screen.getAllByTestId('run-button')
     fireEvent.click(a as HTMLElement)
     await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
-    expect(screen.getAllByTestId('run-button')).toHaveLength(1)
+    const buttons = screen.getAllByTestId('run-button')
+    expect(buttons).toHaveLength(2)
+    expect(buttons.map((b) => b.textContent)).toEqual(['Run again', 'Run'])
     const sent = client.sent.filter((f) => f.type === 'message')
     expect(sent).toHaveLength(1)
     expect(sent[0]?.text).toBe(expected('echo A'))
   })
+
+  it('Run again sends a fresh message for the same block, with the run intent', async () => {
+    const m = msg(fence('echo hi'))
+    const { client } = mount(m)
+    const spy = sends(client)
+    fireEvent.click(runButton() as HTMLElement)
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
+    expect(runButton()?.textContent).toBe('Run again')
+    // it takes a tap once it has settled (a double click's second click is not a second Run)
+    await waitFor(() => expect((runButton() as HTMLButtonElement).disabled).toBe(false), {
+      timeout: RUN_AGAIN_SETTLE_MS + 1000,
+    })
+    fireEvent.click(runButton() as HTMLElement)
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2))
+    for (const call of spy.mock.calls) {
+      expect(call[0].intent).toBe('run')
+      expect(call[0].runBlock).toEqual({ message_id: m.id, index: 0 })
+    }
+  }, 15_000)
 
   it('a thread with its own session shows no button and says why', () => {
     const client = setup({ macOffline: true })
@@ -502,26 +541,42 @@ describe('offline and failed', () => {
     )
   })
 
-  it('a Run the app gave up on says it did not send, and offers no Run: its outcome is not known', async () => {
+  it('a Run still waiting in the send queue offers no second Run', async () => {
     const client = setup({ macOffline: true })
     const meta = createMetaStore()
     mount(msg(fence('echo hi')), client, meta)
     fireEvent.click(runButton() as HTMLElement)
     await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
-    const id = client.store.getState().messages.general?.at(-1)?.id as string
-    act(() => meta.setState({ failed: { [id]: 'final' } }))
-    expect(within(screen.getByTestId('run-control')).getByRole('status').textContent).toMatch(
-      /Didn't send. See your message below/,
-    )
+    const id = await sentRunId(client)
+    act(() => meta.setState({ queuedIds: [id] }))
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(/^Queued\./))
     expect(runButton()).toBeNull()
+    act(() => meta.setState({ queuedIds: [] }))
+    await waitFor(() => expect(runButton()?.textContent).toBe('Run again'))
   })
 
-  it('a Run the relay dropped says it did not reach the Mac, not that it was sent, and offers no Run', async () => {
+  it('a Run the app gave up on says it did not send, and offers Run again', async () => {
+    const client = setup({ macOffline: true })
+    const meta = createMetaStore()
+    mount(msg(fence('echo hi')), client, meta)
+    fireEvent.click(runButton() as HTMLElement)
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
+    const id = await sentRunId(client)
+    act(() => meta.setState({ failed: { [id]: 'final' } }))
+    await waitFor(() =>
+      expect(within(screen.getByTestId('run-control')).getByRole('status').textContent).toMatch(
+        /Didn't send. See your message below/,
+      ),
+    )
+    expect(runButton()?.textContent).toBe('Run again')
+  })
+
+  it('a Run the relay dropped says it did not reach the Mac, not that it was sent, and offers Run again', async () => {
     const client = setup({ macOffline: true })
     mount(msg(fence('echo hi')), client)
     fireEvent.click(runButton() as HTMLElement)
     await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
-    const id = client.store.getState().messages.general?.at(-1)?.id as string
+    const id = await sentRunId(client)
     act(() =>
       client.store.setState((s) => ({
         ...s,
@@ -540,18 +595,38 @@ describe('offline and failed', () => {
       ),
     )
     expect(screen.getByTestId('run-status').textContent).not.toMatch(/Sent to your Mac/)
-    expect(runButton()).toBeNull()
+    expect(runButton()?.textContent).toBe('Run again')
   })
 
-  it('a Run that is only waiting for its retry does not offer a second one', async () => {
+  it('a Run the app will retry says it did not send, and offers Run again', async () => {
     const client = setup({ macOffline: true })
     const meta = createMetaStore()
     mount(msg(fence('echo hi')), client, meta)
     fireEvent.click(runButton() as HTMLElement)
     await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
-    const id = client.store.getState().messages.general?.at(-1)?.id as string
+    const id = await sentRunId(client)
     act(() => meta.setState({ failed: { [id]: 'retry' } }))
-    expect(screen.getByTestId('run-status').textContent).toMatch(/See your message below/)
-    expect(runButton()).toBeNull()
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(/See your message below/))
+    expect(runButton()?.textContent).toBe('Run again')
   })
+})
+
+describe('a double click', () => {
+  it('runs once: Run again takes no tap for a moment after the Run went, so the second click lands on nothing', async () => {
+    const { client } = mount(msg(fence('echo hi')))
+    const spy = sends(client)
+    fireEvent.click(runButton() as HTMLElement)
+    // the first click's Run has gone and Run again is in its place: the second click of a double click lands now
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
+    expect((runButton() as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(runButton() as HTMLElement)
+    await act(async () => {})
+    expect(spy).toHaveBeenCalledTimes(1)
+    // a moment later it is a real fresh tap
+    await waitFor(() => expect((runButton() as HTMLButtonElement).disabled).toBe(false), {
+      timeout: RUN_AGAIN_SETTLE_MS + 1000,
+    })
+    fireEvent.click(runButton() as HTMLElement)
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2))
+  }, 15_000)
 })

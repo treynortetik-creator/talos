@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { IntegrationId, IsoTs, ThreadId } from './ids.ts'
+import { AlwaysAllowList } from './always-allow.ts'
+import { HttpsUrl, IntegrationId, IsoTs, ThreadId } from './ids.ts'
 import { cardKindFacts, Thread } from './models.ts'
 import { STOCK_THEME_IDS, type Theme, validateTheme } from './theme.ts'
 import { DedicatedConfig } from './thread-sessions.ts'
@@ -73,6 +74,33 @@ export const AgentConfig = z.object({
    * Over `config.patch` the bridge accepts `false` only; `true` comes from the Mac (`talos-app memory on`).
    */
   memory_browser: z.boolean().default(true),
+  /**
+   * How long this Mac keeps message attachments it downloaded (`md_*` in the media folder), in days; null keeps them for good
+   * (the default). Set from the phone or the Mac, or by the agent when the owner asks it to. A file still in use (a send not yet
+   * taken, an open card, a retry) is never removed, and nothing is removed in the hour after the setting changes.
+   */
+  media_keep_days: z.number().int().min(1).max(3650).nullable().default(null),
+  /**
+   * "Lock Talos settings" (owner ruling 2026-11-14). Off (the default): the agent changes a setting when the owner asks it to, and
+   * tells him at once how to undo it. On: the agent changes nothing itself; a change it proposes is a card. The agent may turn it on
+   * when asked; only the owner turns it off, from the app or at the computer.
+   */
+  settings_lock: z.boolean().default(false),
+  /**
+   * Developer settings (owner ruling 2026-11-15; dev.ts DEV_ROWS is the page). `thread_fence`: on (the default, and a fresh
+   * install's), a thread's own session and its sub-agents cannot read or write the Talos home; off, they get the same access Main has,
+   * from their next start. `note_lookup`: on (the default), an owner message that names one of his notes reaches a thread's own
+   * session with a pointer to it; off, no pointer (nothing else changes). Anything unreadable here reads as the default.
+   */
+  dev: z
+    .object({
+      thread_fence: z.boolean().default(true).catch(true),
+      note_lookup: z.boolean().default(true).catch(true),
+    })
+    .default({ thread_fence: true, note_lookup: true })
+    .catch({ thread_fence: true, note_lookup: true }),
+  /** "Always allow": the send kinds sent without a card (always-allow.ts). An unreadable list is no list. */
+  always_allow: AlwaysAllowList.default([]).catch([]),
   /** Option C (docs/OPTION-C.md): the master switch and limits for per-thread sessions. Absent = off. */
   dedicated: DedicatedConfig.optional().catch(undefined),
   /**
@@ -90,6 +118,18 @@ export const AgentConfig = z.object({
    * passkey step-up, checked by the relay). No agent proposal can write it. On, the owner's own words are trusted further: fewer cards and fewer passkey steps.
    */
   trust_mode: z.boolean().optional().catch(undefined),
+  /**
+   * Where the relay tells (a Standard Webhooks call) that a bug report arrived. Absent = off, the public default. Set by the
+   * owner, at the Mac or in the app's Settings (with the passkey every time); the agent cannot write it, and phones never
+   * read it back (they see `bug_webhook_host`). The signing secret is the relay's `BUG_WEBHOOK_SECRET`,
+   * never part of the config the phones receive. Any value that is not an http(s) URL reads as off.
+   */
+  bug_webhook_url: HttpsUrl.optional().catch(undefined),
+  /**
+   * What phones and the web app see instead of `bug_webhook_url` (which may carry a token): the host it sends to, put in by
+   * the relay (`stripDeviceHidden`) and never read by the Mac. A config.json that has it is ignored for it.
+   */
+  bug_webhook_host: z.string().max(253).optional().catch(undefined),
 })
 export type AgentConfigT = z.infer<typeof AgentConfig>
 

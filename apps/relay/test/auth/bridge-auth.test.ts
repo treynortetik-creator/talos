@@ -2,13 +2,18 @@ import {
   b64urlEncode,
   generateBridgeKey,
   newChallengeNonce,
+  newUlid,
   signBridgeHttp,
   signChallenge,
   signRotation,
 } from '@talos-app/protocol'
+import { fakeClock } from '@talos-app/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
+import WebSocket from 'ws'
 import { verifyBridgeHello } from '../../src/auth/contract.ts'
 import { AuthCore } from '../../src/auth/core.ts'
+import { startTestRelay, type TestRelay } from '../core/harness.ts'
+import { type RealRelay, startRealRelay } from '../review/real-relay.ts'
 import { afterEachReset, makeHarness } from './helpers.ts'
 
 afterEach(afterEachReset)
@@ -230,6 +235,31 @@ describe('POST /bridge/rotate', () => {
     expect((await ping(h, next)).status).toBe(404)
   })
 
+  it('a retry naming the key the relay already switched to is answered ok, by the old key and later by the new one', async () => {
+    // bug hunt core #9: the 200 of a rotation was lost, and the Mac asks again for the same key
+    const h = await makeHarness()
+    const { next, res } = await rotate(h)
+    expect(res.status).toBe(200)
+    const again = async (signer: typeof next) => {
+      const ts = Math.floor(h.fake.clock.now() / 1000)
+      return h.bridgePost(
+        '/bridge/rotate',
+        { new_pubkey: next.publicKeyB64, sig_new: await signRotation(next.privateKey, next.publicKeyB64, ts), ts },
+        { key: signer },
+      )
+    }
+    const byOld = await again(h.bridgeKey) // inside the old key's 5 minutes
+    expect(byOld.status).toBe(200)
+    expect(await byOld.json()).toEqual({ ok: true, key_id: next.keyId })
+    h.fake.clock.advance(6 * 60_000) // the old key is gone now
+    expect((await again(h.bridgeKey)).status).toBe(401)
+    const byNew = await again(next)
+    expect(byNew.status).toBe(200)
+    expect(await byNew.json()).toEqual({ ok: true, key_id: next.keyId })
+    // and nothing moved: the new key is still the one that works
+    expect((await ping(h, next)).status).toBe(404)
+  })
+
   it('the env key stops being a bootstrap once a rotated key is active', async () => {
     const h = await makeHarness()
     const { next } = await rotate(h)
@@ -314,5 +344,98 @@ describe('POST /bridge/rotate', () => {
     const h = await makeHarness({ withBridgeKey: false })
     expect(h.state.core.trustedKeys()).toEqual([])
     expect((await ping(h, h.bridgeKey)).status).toBe(401)
+  })
+})
+
+describe('a bridge socket that closes while its hello is being checked', () => {
+  let t: TestRelay | null = null
+  afterEach(async () => {
+    await t?.stop()
+    t = null
+  })
+
+  it('never becomes the bridge: no ready, not online, and a live bridge is not replaced', async () => {
+    const clock = fakeClock()
+    t = await startTestRelay({ clock })
+    const relay = t
+    const hub = relay.runtime.hub
+    const open = (ip: string) => {
+      const sent: Array<Record<string, unknown>> = []
+      const closes: number[] = []
+      const conn = {
+        send: (text: string) => void sent.push(JSON.parse(text)),
+        close: (code: number) => void closes.push(code),
+        terminate: () => void closes.push(-1),
+      }
+      return { sent, closes, sock: hub.attachBridge(conn, { ip, relayHost: 'relay.example.com' }) }
+    }
+    const hello = async (challenge: Record<string, unknown>) =>
+      JSON.stringify({
+        v: 1,
+        type: 'hello',
+        id: newUlid(),
+        ts: new Date(clock.now()).toISOString(),
+        role: 'bridge',
+        key_id: relay.bridgeKey.keyId,
+        sig: await signChallenge(relay.bridgeKey.privateKey, challenge as never),
+        client: { name: 'bridge', version: '1' },
+        agent_config_rev: 0,
+      })
+    const settle = () => new Promise((done) => setTimeout(done, 100))
+    // alone: the peer drops while the signature is checked
+    const ghost = open('198.51.100.5')
+    ghost.sock.onMessage(await hello(ghost.sent[0] as Record<string, unknown>))
+    ghost.sock.onClose()
+    await settle()
+    expect(ghost.sent.some((f) => f.type === 'ready')).toBe(false)
+    expect(hub.bridgeOnline()).toBe(false)
+    // with a live bridge: a closing newcomer does not supersede it
+    const live = open('198.51.100.6')
+    live.sock.onMessage(await hello(live.sent[0] as Record<string, unknown>))
+    await settle()
+    expect(hub.bridgeOnline()).toBe(true)
+    const late = open('198.51.100.7')
+    late.sock.onMessage(await hello(late.sent[0] as Record<string, unknown>))
+    late.sock.onClose()
+    await settle()
+    expect(live.closes).toEqual([])
+    expect(hub.bridgeOnline()).toBe(true)
+  })
+})
+
+describe('a bridge socket the relay has refused', () => {
+  let r: RealRelay | null = null
+  afterEach(async () => {
+    await r?.stop()
+    r = null
+  })
+
+  it('is not read again: frames sent after the refusal are dropped unparsed, so they cannot count as failed hellos', async () => {
+    r = await startRealRelay()
+    const stranger = await generateBridgeKey()
+    const ws = new WebSocket(`${r.wsBase}/bridge`)
+    ws.on('error', () => undefined)
+    await new Promise((done) => ws.once('open', done))
+    const envelope = { v: 1, id: newUlid(), ts: new Date().toISOString() }
+    // The first frame is not a hello: the relay answers 4401 and that is the end of this socket.
+    ws.send(JSON.stringify({ ...envelope, type: 'ping', nonce: 'abcdefgh' }))
+    // A stranger keeps writing before the close completes. Each of these is a well-formed hello with an unknown key: if
+    // the relay still read them, five would block this address for an hour (and each would be a parse and a log line).
+    for (let i = 0; i < 20; i++)
+      ws.send(
+        JSON.stringify({
+          ...envelope,
+          id: newUlid(),
+          type: 'hello',
+          role: 'bridge',
+          key_id: stranger.keyId,
+          sig: 'A'.repeat(86),
+          client: { name: 'stranger', version: '0.0.0' },
+          agent_config_rev: 0,
+        }),
+      )
+    const code = await new Promise<number>((done) => ws.once('close', (c) => done(c)))
+    expect(code).toBe(4401)
+    expect(r.auth.helloGuard.isBlocked('127.0.0.1')).toBe(false)
   })
 })

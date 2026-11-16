@@ -1,6 +1,6 @@
-# Memory browser
+# Memory browser (Clio)
 
-A read-only view of notes folders on your Mac: a tree, a note view and search. Off until you set it up at the Mac.
+Clio, Talos's memory system: in the app it is the Memory screen. A read-only view of notes folders on your Mac: a tree, a note view and search. Off until you set it up at the Mac.
 
 ## Turn it on
 

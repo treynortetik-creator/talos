@@ -1,6 +1,6 @@
 // The one dispatcher: the keyboard (Shell) and the palette both run a keymap entry's `act` through here.
 // Nothing here answers a card. Needs-you only OPENS /card/:id; the answer is that card's own buttons.
-import type { ActionSpec } from '../../lib/keymap.ts'
+import { type ActionSpec, numberedThreads } from '../../lib/keymap.ts'
 import type { PaletteMode } from './store.ts'
 
 export type ActionCtx = {
@@ -14,13 +14,15 @@ export type ActionCtx = {
   toggleSession: () => boolean
   toggleSidebar: () => void
   closeDetail: () => void
+  /** Takes the picture of this screen and opens the bug reporter. */
+  openBugReport: () => void
 }
 
 /** True when it did something (false leaves the browser's own key alone). */
 export function runAction(act: ActionSpec, ctx: ActionCtx): boolean {
   switch (act.kind) {
     case 'thread': {
-      const t = ctx.threads[act.index]
+      const t = numberedThreads(ctx.threads)[act.index]
       if (t) ctx.nav(`/t/${t.id}`)
       return true
     }
@@ -60,6 +62,9 @@ export function runAction(act: ActionSpec, ctx: ActionCtx): boolean {
           return true
         case 'close':
           ctx.closeDetail()
+          return true
+        case 'bugReport':
+          ctx.openBugReport()
           return true
         case 'call':
           return false // not wired anywhere today

@@ -29,8 +29,9 @@ const minted = (x: Harness) =>
     (r) => r.direction === 'from_bridge' && r.raw.type === 'card.create' && (r.raw.card as CardT).kind === 'config',
   )
 
-// The owner can change `agent.voice_persona` from Settings; the agent may not. `mirror` is no setting at all.
-const OWNER_ONLY = 'agent.voice_persona'
+// The owner can change `permission_relay` from Settings; the agent may not (since 2026-11-14 the persona is the agent's when he
+// asks). `mirror` is no setting at all.
+const OWNER_ONLY = 'permission_relay'
 const NOT_A_SETTING = 'mirror'
 
 describe('a refused setting is refused at every entry point', () => {
@@ -64,7 +65,7 @@ describe('a refused setting is refused at every entry point', () => {
       reason: 'forged',
       changes: [{ path: 'agent.name', old: 'Talos', new: 'Hal' }],
     })
-    const payload = { v: 1, base_rev: 0, reason: 'forged', changes: [{ path: OWNER_ONLY, old: '', new: 'be rude' }] }
+    const payload = { v: 1, base_rev: 0, reason: 'forged', changes: [{ path: OWNER_ONLY, old: false, new: true }] }
     const card = Card.parse({ ...base, payload })
     card.payload_hash = payloadHash(bindingFrom(card))
     h.bridge.ctx.ledger.create(card, 'bridge')

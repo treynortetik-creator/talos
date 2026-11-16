@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { FakeApp } from '@talos-app/testkit'
 import { describeThreadChanges } from '../src/thread-changes.ts'
-import { type Harness, startHarness } from './helpers.ts'
+import { approveLatestConfigCard, CARD_RELAY, type Harness, startHarness } from './helpers.ts'
 
 let h: Harness
 afterEach(async () => h?.stop())
@@ -200,9 +200,10 @@ describe('thread management via config.patch', () => {
   })
 
   test('create_thread keeps a topic', async () => {
-    h = await startHarness()
+    h = await startHarness({ relay: CARD_RELAY })
     const res = await h.bridge.callTool('create_thread', { name: 'Garden', topic: 'Seeds and watering' })
-    expect((res.content[0] as { text: string }).text).toContain('created thread garden')
+    expect((res.content[0] as { text: string }).text).toContain('garden')
+    await approveLatestConfigCard(h)
     expect(onDisk().threads.find((t: { id: string }) => t.id === 'garden')?.topic).toBe('Seeds and watering')
   })
 })

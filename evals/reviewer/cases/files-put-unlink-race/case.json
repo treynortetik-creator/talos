@@ -1,0 +1,19 @@
+{
+  "id": "files-put-unlink-race",
+  "title": "Undoing a stray exclusive create by path: lstat then unlink, and the racer owns the folders on that path",
+  "base": "4a6637e3029ca2eddd01e8a1dd3a090e697504bf",
+  "buggy": "1502cd06",
+  "fix": "b4753fca",
+  "expect": [
+    {
+      "file": ["apps/bridge/src/safe-open.ts"],
+      "severity": "medium",
+      "must": [
+        ["unlink|delet|remov"],
+        ["race|TOCTOU|time.of.check|swap|replac|symlink|(?<!un)link"],
+        ["lstat|by path|pathname|re-?resolv|different file|another file|wrong file|same-named|elsewhere|arbitrary"]
+      ],
+      "note": "undoCreate lstat()s `where` then unlink()s it by path; unlink follows links in every parent folder, which the racer controls, so a folder swapped between the two calls makes the bridge unlink a same-named file elsewhere."
+    }
+  ]
+}

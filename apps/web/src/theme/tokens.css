@@ -10,6 +10,11 @@
   --talos-cream: #f3e6cf;
   --talos-ichor: #ffb15c;
 
+  /* the three inks for marking up a screenshot: drawn on a picture, so the same in both modes and every stock theme */
+  --ink-1: #f0923a;
+  --ink-2: #5ab0f2;
+  --ink-3: #f2f2f2;
+
   --font-display: "Cinzel Variable", "Cinzel", Georgia, serif; /* wordmark, thread headers, empty-state titles */
   --font-ui: "Inter Variable", "Inter", system-ui, sans-serif; /* UI and body */
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace; /* timestamps, status pills, ids */

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// Needs-you prompts, the Mac popup: the click. `WorkerManager.popupAnswer` is what the popup's button calls; it is the same press path as
 /// a verified card answer (arrows, then Enter from the fresh cursor row, the typing guard failing closed, the once-per-dialog rule shared),
@@ -87,6 +88,8 @@ struct NeedsYouPopupTests {
     defer { r.teardown(); keys.remove() }
     let o = try offered(r)
     #expect(click(r, o, choice: choice) == .pressed(choice: choice, label: label))
+    // The click returns once the keys are sent, which can be before the fake tmux has logged them, so wait for the log to catch up.
+    _ = r.wait(5) { keys.keys.count >= expected.count }
     #expect(keys.keys == expected, "arrows and one Enter, nothing else (no digit): \(keys.keys)")
     let res = try #require(macResult(r))
     #expect(Set(res.keys) == ["v", "dialog_id", "source", "outcome", "choice", "label", "at"], "the contract's popup shape, no control_id: \(res)")
@@ -186,7 +189,7 @@ struct NeedsYouPopupTests {
 
   @Test(arguments: ["trust-changed", "mcp", "trust-other"])
   func aScreenThatChangedBeforeTheClickGetsNoKeyAndNoResult(to: String) throws {
-    let swap = NSTemporaryDirectory() + "swap-\(UUID().uuidString.prefix(6))"
+    let swap = TestTemp.base + "swap-\(UUID().uuidString.prefix(6))"
     let (r, keys, _) = try make("trust", ["FAKE_DLG_SWAP": swap, "FAKE_DLG_SWAP_TO": to])
     defer { r.teardown(); keys.remove(); unlink(swap) }
     let o = try offered(r)
@@ -386,12 +389,48 @@ struct NeedsYouPopupTests {
   }
 
   @Test func theOfferIsGoneWhenTheDialogIsAnsweredInThePaneAndANewSightingIsANewPopup() throws {
-    let (r, keys, _) = try make("mcpwrap", ["FAKE_DLG_AGAIN": "1"])
+    let (r, keys, _) = try make("mcp", ["FAKE_DLG_AGAIN": "same"])
     defer { r.teardown(); keys.remove() }
     let o = try offered(r)
-    r.ownerPressesEnter("trip")  // the first server is answered in the pane; a second dialog that looks the same follows
+    // the first dialog is answered in the pane, on another row (the Mac sees the cursor move); a second one that reads the same follows
+    let before = screen(r)
+    #expect(r.tmuxCmd(["send-keys", "-t", "=t-trip:", "Up"]).ok)
+    #expect(r.wait(5) { screen(r) != before }, "control: the Up never showed")
+    r.mgr.tickOnce()
+    r.ownerPressesEnter("trip")
     #expect(r.wait(15) { r.mgr.popupOffers().first.map { $0.dialog.id != o.id } == true }, "\(r.mgr.popupOffers().map(\.dialog.id)) vs \(o.id)")
     #expect(click(r, o, choice: 2) == .nothing(.notOffered), "the old popup's click is for a dialog that is gone")
+  }
+
+  /// The lookalike, by a click: the screen was seen to change under the offer and a dialog that reads the same stands there now. The
+  /// old popup's button presses nothing onto it (NeedsYouTests has the card's side).
+  @Test func aClickNeverLandsOnADialogThatReplacedTheOneOffered() throws {
+    let (r, keys, _) = try make("mcp", ["FAKE_DLG_AGAIN": "same"])
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    let offeredScreen = screen(r)
+    r.mgr.tune { $0.dialogSettle = 60 }  // the window (5 s in the app) in which the old offer still stands
+    #expect(r.tmuxCmd(["send-keys", "-t", "=t-trip:", "Up"]).ok)
+    #expect(r.wait(5) { screen(r) != offeredScreen }, "control: the Up never showed")
+    r.mgr.tickOnce()  // a look at the changed screen
+    r.ownerPressesEnter("trip")
+    #expect(r.wait(5) { keys.keys == ["UP", "ENTER"] && screen(r) == offeredScreen }, "control: the second dialog reads as the first did: \(keys.keys)")
+    #expect(r.mgr.popupOffers().isEmpty, "a dialog the screen changed under is still in the popup")
+    #expect(click(r, o, choice: 2) == .nothing(.screenChanged))
+    usleep(300_000)
+    #expect(keys.keys == ["UP", "ENTER"], "a key went onto the dialog that replaced the offered one: \(keys.keys)")
+    #expect(!FileManager.default.fileExists(atPath: r.resultPath), "a click that pressed nothing writes no result")
+  }
+
+  /// A dialog with no readable subject is never in the popup either: there is nothing to tell it from another of its kind.
+  @Test func aDialogWithNoReadableSubjectIsNotInThePopup() throws {
+    let (r, keys, _) = try make("mcpwrap")
+    defer { r.teardown(); keys.remove() }
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(15) { r.mgr.needsYou()["trip"] == "approve a project MCP server" }, "\(r.mgr.needsYou()) \(r.why("trip"))")
+    for _ in 0..<5 { r.mgr.tickOnce() }
+    #expect(r.offer == nil && r.mgr.popupOffers().isEmpty, "\(String(describing: r.offer))")
   }
 
   /// A forged answer, or a phone that is not paired, gets `unverified`: nothing was pressed and the card says "Answer on the Mac". The popup is

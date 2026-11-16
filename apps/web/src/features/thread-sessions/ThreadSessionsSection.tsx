@@ -11,12 +11,14 @@ import {
 import { useId, useState } from 'react'
 import { Link } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
+import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { Input, Switch } from '../../ui/index.ts'
 import type { SettingsSectionProps } from '../contracts.ts'
 import { friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
 import { useThreadSessionsSupported, useWorkersStatus, workerLine } from './store.ts'
 
 export function ThreadSessionsSection({ readOnly }: SettingsSectionProps) {
+  const host = useHost()
   const client = useTalosClient()
   const config = useTalos((s) => s.config)
   const threads = useTalos((s) => s.threads)
@@ -41,7 +43,9 @@ export function ThreadSessionsSection({ readOnly }: SettingsSectionProps) {
       <h2 id="thread-sessions-h" className="m-0 font-display text-xl font-semibold">
         Thread sessions
       </h2>
-      {!status && <p className="m-0 text-text-2">Your Mac needs a newer Talos for thread sessions.</p>}
+      {!status && (
+        <p className="m-0 text-text-2">{placeWords('Your Mac needs a newer Talos for thread sessions.', host)}</p>
+      )}
       {/* turning it off is never refused, so the switch stays reachable on a Mac that no longer reports a status */}
       {(status || enabled) && (
         <div className="flex min-h-11 items-center justify-between gap-3">
@@ -55,6 +59,12 @@ export function ThreadSessionsSection({ readOnly }: SettingsSectionProps) {
             onCheckedChange={(v) => void toggle(v)}
           />
         </div>
+      )}
+      {/* under the switch it is about: at the end of the section it was below the limits and the thread list */}
+      {err && (
+        <p role="alert" className="m-0 text-sm text-danger">
+          {err}
+        </p>
       )}
       {status && (
         <>
@@ -85,7 +95,7 @@ export function ThreadSessionsSection({ readOnly }: SettingsSectionProps) {
                       {t?.name ?? w.thread_id}
                     </Link>
                     <span className="text-text-2">
-                      {workerLine(w)}
+                      {workerLine(w, host)}
                       {w.model && w.model !== 'inherit' ? ` · ${w.model}` : ''}
                     </span>
                   </li>
@@ -94,11 +104,6 @@ export function ThreadSessionsSection({ readOnly }: SettingsSectionProps) {
             </ul>
           )}
         </>
-      )}
-      {err && (
-        <p role="alert" className="m-0 text-sm text-danger">
-          {err}
-        </p>
       )}
     </section>
   )
@@ -144,14 +149,16 @@ function Limits({ readOnly }: { readOnly: boolean }) {
   const client = useTalosClient()
   const config = useTalos((s) => s.config)
   const [typed, setTyped] = useState<Partial<Record<LimitKey, string>>>({})
-  const [err, setErr] = useState<string | null>(null)
+  // each error under the box or switch it is about, not below them all
+  const [err, setErrAt] = useState<{ at: LimitKey | 'off'; text: string } | null>(null)
   const idBase = useId()
   const offId = useId()
   if (!config) return null
   const cur = dedicatedSettings(config)
   const clear = (k: LimitKey) => setTyped(({ [k]: _x, ...rest }) => rest)
 
-  const send = async (patch: Record<string, unknown>) => {
+  const send = async (patch: Record<string, unknown>, at: LimitKey | 'off') => {
+    const setErr = (text: string | null) => setErrAt(text === null ? null : { at, text })
     setErr(null)
     const after = applyMergePatch(config, patch) as AgentConfigT
     const shape = DedicatedConfigStrict.safeParse(after.dedicated)
@@ -175,11 +182,14 @@ function Limits({ readOnly }: { readOnly: boolean }) {
       n > l.max ||
       (l.key === 'max_live' && !Number.isInteger(n))
     ) {
-      setErr(`${l.label}: use ${l.key === 'max_live' ? 'a whole number' : 'a number'} from ${l.min} to ${l.max}.`)
+      setErrAt({
+        at: l.key,
+        text: `${l.label}: use ${l.key === 'max_live' ? 'a whole number' : 'a number'} from ${l.min} to ${l.max}.`,
+      })
       return clear(l.key)
     }
     if (n === limitValue(cur, l.key)) return clear(l.key)
-    await send(patchFor(l.key, n))
+    await send(patchFor(l.key, n), l.key)
     clear(l.key)
   }
   return (
@@ -205,6 +215,7 @@ function Limits({ readOnly }: { readOnly: boolean }) {
               }}
             />
             <span className="text-xs text-text-2">{l.hint}</span>
+            {err?.at === l.key && <LimitsError text={err.text} />}
           </div>
         )
       })}
@@ -217,14 +228,16 @@ function Limits({ readOnly }: { readOnly: boolean }) {
           id={offId}
           checked={cur.governor.off}
           disabled={readOnly}
-          onCheckedChange={(v) => void send({ dedicated: { governor: { off: v } } })}
+          onCheckedChange={(v) => void send({ dedicated: { governor: { off: v } } }, 'off')}
         />
       </div>
-      {err && (
-        <p role="alert" className="m-0 text-sm text-danger" data-testid="limits-error">
-          {err}
-        </p>
-      )}
+      {err?.at === 'off' && <LimitsError text={err.text} />}
     </div>
   )
 }
+
+const LimitsError = ({ text }: { text: string }) => (
+  <p role="alert" className="m-0 text-sm text-danger" data-testid="limits-error">
+    {text}
+  </p>
+)

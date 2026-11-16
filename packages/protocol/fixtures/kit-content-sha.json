@@ -1,0 +1,71 @@
+{
+  "about": "A tiny kit release and its content_sha256, as kit/scripts/plugin-release.py content_sha computes it (one SHA-256 over each file's path relative to the release, NUL, 'x' if executable else '-', NUL, its bytes, NUL; files of a folder before its subfolders, each sorted by name; __pycache__ folders, .pyc files and .talos-release left out). Root's kit.py (talos-wsl kit-update) and the supervisor's releaseContentSha (apps/bridge/src/supervisor/worker-hook.ts) are both held to it. Computed by the real plugin-release.py, run as the files' owner. A file's mode is `mode` (octal) when given, else 0755 if `exec`, else 0644: the x flag is \"can the reader execute it\", so root's kit-update copies every file 0555 or 0444 and nothing in between. Names are sorted by code point (Python's sorted(), the same as UTF-8 byte order), never UTF-16 units.",
+  "files": [
+    {
+      "path": "hooks/permission-relay.py",
+      "exec": true,
+      "text": "#!/usr/bin/env python3\nprint('hook')\n"
+    },
+    {
+      "path": "hooks/_talos_common.py",
+      "exec": false,
+      "text": "X = 1\n"
+    },
+    {
+      "path": "hooks/__pycache__/x.cpython-313.pyc",
+      "exec": false,
+      "text": "bytecode, left out\n"
+    },
+    {
+      "path": "hooks/stray.pyc",
+      "exec": false,
+      "text": "left out too\n"
+    },
+    {
+      "path": ".talos-release",
+      "exec": false,
+      "text": "content_sha256=ignored\n"
+    },
+    {
+      "path": "a/b/deep.md",
+      "exec": false,
+      "text": "deep\n"
+    },
+    {
+      "path": "a/zz.txt",
+      "exec": false,
+      "text": "after b? no: a folder's own files come before its subfolders\n"
+    },
+    {
+      "path": "plugin.json",
+      "exec": false,
+      "text": "{}\n"
+    },
+    {
+      "path": "skills/café/SKILL.md",
+      "exec": false,
+      "text": "naïve é\n"
+    },
+    {
+      "path": "B-upper.md",
+      "exec": false,
+      "text": "byte order: uppercase before lowercase\n"
+    },
+    {
+      "path": "names/�.md",
+      "exec": false,
+      "text": "U+FFFD: before U+1F600 by code point, after it by UTF-16 unit\n"
+    },
+    {
+      "path": "names/😀.md",
+      "exec": false,
+      "text": "U+1F600\n"
+    },
+    {
+      "path": "hooks/owner-only.sh",
+      "mode": "0744",
+      "text": "owner may run it; the caller is the owner here\n"
+    }
+  ],
+  "content_sha256": "0f1a590b6fab33d57d018b2cf84de60e1609338330df97a4531b8288150386cd"
+}

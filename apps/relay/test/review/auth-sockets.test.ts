@@ -23,8 +23,7 @@ describe('#1 a revoked or signed-out session loses its live socket', () => {
     const bridge = await r.bridge().connect()
 
     const closed = closeCodeWithin(appA, 3000)
-    const token = r.auth.core.mintStepup(b.sessionId, 'device:revoke')
-    const res = await r.post(`/api/devices/${a.device.deviceId}/revoke`, { stepup_token: token }, b)
+    const res = await r.post(`/api/devices/${a.device.deviceId}/revoke`, {}, b) // no step-up since 2026-11-14
     expect(res.status).toBe(204)
     expect(await closed).toBe(4401)
 
@@ -43,8 +42,7 @@ describe('#1 a revoked or signed-out session loses its live socket', () => {
     const appA = r.app(a)
     await appA.connect()
     const closed = closeCodeWithin(appA, 3000)
-    const token = r.auth.core.mintStepup(b.sessionId, 'device:revoke')
-    expect((await r.post(`/api/devices/${a.device.deviceId}/revoke`, { stepup_token: token }, b)).status).toBe(204)
+    expect((await r.post(`/api/devices/${a.device.deviceId}/revoke`, {}, b)).status).toBe(204)
     expect(await closed).toBe(4401)
     // A frame sent in the same breath, on the dead socket, gets no answer (the socket is gone).
     appA.send({ type: 'catchup.request', since_seq: 0 })
@@ -110,20 +108,6 @@ describe('#28 logout-all needs a pinned session', () => {
     expect(appOwner.connected).toBe(true)
     const me = await fetch(`${r.httpBase}/api/me`, { headers: { Cookie: owner.cookie } })
     expect(me.status).toBe(200)
-  })
-})
-
-describe('#19 step-up has its own rate bucket', () => {
-  it('twenty step-up calls in a minute do not hit the login limit', async () => {
-    r = await startRealRelay()
-    const o = await r.owner()
-    const codes: number[] = []
-    for (let i = 0; i < 20; i++) {
-      codes.push((await r.post('/api/auth/stepup/options', { purpose: 'device:revoke' }, o)).status)
-    }
-    expect(codes.every((c) => c === 200)).toBe(true)
-    // and the shared login budget is untouched
-    expect((await r.post('/api/auth/login/options', {}, null)).status).toBe(200)
   })
 })
 

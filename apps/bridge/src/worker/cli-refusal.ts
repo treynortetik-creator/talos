@@ -31,6 +31,11 @@ export const WORKER_COMMANDS_OK: readonly string[] = [
  * the flag on and never merged into the first. `errors show` and `errors list` print less to such a caller (problems/cli.ts).
  */
 export const WORKER_OPS_READ_OK: readonly string[] = ['errors list', 'errors show']
+/**
+ * Read-only commands every thread session may run (Pantheon 2026-11-15: a lead reads status, doctor and logs). `status` and
+ * `doctor` say how the setup is; `logs` shows a thread session only its own thread's lines (cli-main.ts `cmdLogs`).
+ */
+export const WORKER_READ_OK: readonly string[] = ['status', 'doctor', 'logs']
 const USAGE_WORDS = ['help', '--help', '-h']
 
 /** The nearest folder at or above `cwd` that holds a `.talos-lead` marker (a lead's folder), or undefined. */
@@ -54,7 +59,7 @@ const listed = (list: readonly string[], argv: readonly string[]) =>
 export function refusedForWorkers(argv: readonly string[], opsRead = false): boolean {
   const [cmd] = argv
   if (cmd === undefined || USAGE_WORDS.includes(cmd)) return false
-  if (listed(WORKER_COMMANDS_OK, argv)) return false
+  if (listed(WORKER_COMMANDS_OK, argv) || listed(WORKER_READ_OK, argv)) return false
   return !(opsRead && listed(WORKER_OPS_READ_OK, argv))
 }
 
@@ -107,6 +112,18 @@ function opsReadOn(thread: string | undefined, raw: Record<string, string | unde
  */
 export function isThreadCaller(raw: Record<string, string | undefined>, cwd: string = process.cwd()): boolean {
   return threadCaller(raw, cwd) !== undefined
+}
+
+/**
+ * For `logs`: null for the main session; for a thread session, the thread it belongs to (the supervisor's variable or the lead
+ * marker's), or undefined when that can't be told (then it is shown nothing).
+ */
+export function threadOfCaller(
+  raw: Record<string, string | undefined>,
+  cwd: string = process.cwd(),
+): string | undefined | null {
+  const caller = threadCaller(raw, cwd)
+  return caller ? caller.thread : null
 }
 
 /** The refusal in words when `argv` is run from a thread session, or undefined. `raw` is the environment, `cwd` the folder it runs in. */

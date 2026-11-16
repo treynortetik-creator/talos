@@ -31,6 +31,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 sid="" prev=""
 for a in "$@"; do
   case "$prev" in --resume|--session-id) sid="$a" ;; esac
+  case "$a" in --resume=*|--session-id=*) sid="${a#*=}" ;; esac
   prev="$a"
 done
 n=1
@@ -54,5 +55,18 @@ fi
 if [ -n "${FAKE_ARGV_DUMP:-}" ]; then
   { for a in "$@"; do printf '[%s]\n' "$a"; done; } > "$FAKE_ARGV_DUMP.$n.tmp" && mv "$FAKE_ARGV_DUMP.$n.tmp" "$FAKE_ARGV_DUMP.$n"
 fi
+# FAKE_TRANSCRIPTS=1 (the supervisor rig's default): this session has a saved conversation from its start, as one the owner has
+# typed in does, so a restart resumes it. `unsaved-session.sh` and `worker-unsaved.sh` play the CLI's own rule and save nothing by themselves.
+saves=1
+case "${FAKE_SCENARIO:-}" in unsaved-session.sh|worker-unsaved.sh) saves=0 ;; esac
+if [ -n "${FAKE_TRANSCRIPTS:-}" ] && [ "$saves" = 1 ]; then
+  enc="$(printf '%s' "$PWD" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  for t in "$sid" "${FAKE_REPORT_SESSION_ID:-}"; do
+    [ -n "$t" ] || continue
+    mkdir -p "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$enc" && printf '{"type":"user"}\n' >> "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$enc/$t.jsonl"
+  done
+fi
 [ -n "${FAKE_LOG:-}" ] && printf 'start %s %s\n' "$$" "$*" >> "$FAKE_LOG"
-exec /bin/bash "$here/${FAKE_SCENARIO:-dev-dialog.sh}" "$@"
+# FAKE_CLAUDE_EXEC: the shell that runs the scenario. The background-work tests give a `claude` link to a copy of bash named for a
+# version, as Claude Code's native install is (the kernel then names this process "2.1.325" and its argv[0] is the link).
+exec "${FAKE_CLAUDE_EXEC:-/bin/bash}" "$here/${FAKE_SCENARIO:-dev-dialog.sh}" "$@"

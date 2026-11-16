@@ -13,7 +13,7 @@ import {
   signChallenge,
   signOwnerFrame,
 } from '@talos-app/protocol'
-import { buildCard, type FakeClock, fakeClock } from '@talos-app/testkit'
+import { buildCard, type FakeClock, fakeClock, waitScale } from '@talos-app/testkit'
 import type { Conn } from '../../src/core/hub.ts'
 import type { RunningRelay } from '../../src/index.ts'
 import { startTestRelay, type TestRelay } from '../core/harness.ts'
@@ -97,9 +97,13 @@ export async function startReplay(): Promise<Replay> {
     const nonce = `sync${++counter}`.padEnd(8, '0')
     const before = log.length
     a.at.onMessage(JSON.stringify(frame('ping', { nonce })))
-    for (let i = 0; i < 2000; i++) {
+    // Wait on the pong itself, not a fixed number of turns: a loaded machine can take more turns than any count, and a
+    // barrier that gave up early let the test read the transcript before the hub had answered.
+    const deadline = Date.now() + 3000 * waitScale()
+    for (;;) {
       if (a.conn.closed) break
       if (log.slice(before).some((e) => 'frame' in e && (e.frame as { nonce?: string }).nonce === nonce)) break
+      if (Date.now() > deadline) throw new Error('the hub never answered the barrier ping')
       await new Promise<void>((r) => setImmediate(r))
     }
     // drop the barrier's own pong from the transcript

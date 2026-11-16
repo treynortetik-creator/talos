@@ -46,7 +46,7 @@ extension Supervisor {
       }
       writePromptRecord(PromptRecord(hash: hash, open: true))
       audit("prompt_notified", ["kind": p.title ?? "prompt"])
-      postToPhone { SupervisorNotice.mainPromptLine(agentName: $0, prompt: p) }
+      postToPhone(asMac: false) { SupervisorNotice.mainPromptLine(agentName: $0, prompt: p) }  // screen text: never as the Mac's own row
     case .cleared:
       audit("prompt_cleared", [:])
       closePromptRecord()

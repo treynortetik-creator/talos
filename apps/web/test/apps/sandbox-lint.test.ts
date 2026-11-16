@@ -2,8 +2,10 @@
 // The rule that keeps third-party pages in an opaque origin, enforced on the source: one component builds iframes,
 // its attributes are fixed, and nothing in the app names a sandbox token that would widen them.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
+import { PAGE_SANDBOX_ATTR } from '@talos-app/protocol'
 import { describe, expect, it } from 'vitest'
+import { SANDBOX_ATTR } from '../../src/ui/SandboxedFrame.tsx'
 
 const SRC = resolve(import.meta.dirname, '../../src')
 const files = (dir: string): string[] =>
@@ -11,7 +13,8 @@ const files = (dir: string): string[] =>
     const p = join(dir, n)
     return statSync(p).isDirectory() ? files(p) : /\.(ts|tsx)$/.test(n) ? [p] : []
   })
-const all = files(SRC).map((p) => ({ path: relative(SRC, p), text: readFileSync(p, 'utf8') }))
+// paths with `/` whatever the OS, as the expectations below spell them
+const all = files(SRC).map((p) => ({ path: relative(SRC, p).split(sep).join('/'), text: readFileSync(p, 'utf8') }))
 const code = (t: string) => t.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
 
 describe('sandbox lint', () => {
@@ -29,7 +32,11 @@ describe('sandbox lint', () => {
 
   it('SandboxedFrame fixes sandbox, referrer policy and permissions, and accepts no rest props', () => {
     const t = code(all.find((f) => f.path === 'ui/SandboxedFrame.tsx')?.text ?? '')
-    expect(t).toMatch(/SANDBOX_ATTR = 'allow-scripts'/)
+    expect(t).toMatch(/SANDBOX_ATTR = PAGE_SANDBOX_ATTR/)
+    expect(t).toMatch(/import \{ PAGE_SANDBOX_ATTR \} from '@talos-app\/protocol'/)
+    // the shared value itself, not a spelling of it
+    expect(PAGE_SANDBOX_ATTR).toBe('allow-scripts')
+    expect(SANDBOX_ATTR).toBe('allow-scripts')
     expect(t).toMatch(/sandbox=\{SANDBOX_ATTR\}/)
     expect(t).toMatch(/referrerPolicy="no-referrer"/)
     expect(t).not.toMatch(/\ballow=/)

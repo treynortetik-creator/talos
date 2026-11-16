@@ -14,7 +14,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { type CliIO, runCli } from '../src/cli-main.ts'
 import { mcpEntry } from '../src/mcp-config.ts'
 import { approvedFixture, tmp } from './apps/helpers.ts'
@@ -159,7 +159,8 @@ describe('talos-app adopt: a folder that has an .mcp.json', () => {
     const cfg = mcpOf(dir)
     expect(cfg.mcpServers.other).toEqual(other)
     expect(cfg.extra).toEqual({ keep: true })
-    expect(cfg.mcpServers['talos-app'].command).toBe('bun')
+    expect(isAbsolute(cfg.mcpServers['talos-app'].command)).toBe(true)
+    expect(cfg.mcpServers['talos-app'].env.PATH).toBeUndefined()
   })
 
   it('invalid JSON: refuses, says so, and changes nothing', async () => {
@@ -307,15 +308,37 @@ describe('talos-app adopt: refusals and the terminal gate', () => {
     expect((await run(['adopt', '--yes'])).code).toBe(1)
   })
 
-  it('without a terminal it refuses, even with --yes or --dry-run, and writes nothing', async () => {
-    for (const extra of [['--yes'], ['--dry-run'], []]) {
+  it('without a terminal (the agent, since 2026-11-14 when the owner asks): --yes adopts; without --yes it asks and writes nothing unanswered', async () => {
+    const dir = ownerFolder()
+    const before = tree(dir)
+    const r = await run(['adopt', '--agent-dir', dir, '--yes'], { terminal: false, answers: [] })
+    expect(r.code, r.err).toBe(0)
+    expect(r.err).not.toContain('only runs in Terminal')
+    expect(tree(dir)).not.toEqual(before)
+    const dir2 = ownerFolder()
+    const before2 = tree(dir2)
+    const r2 = await run(['adopt', '--agent-dir', dir2], { terminal: false, answers: ['n'] })
+    expect(r2.err).not.toContain('only runs in Terminal')
+    expect(tree(dir2)).toEqual(before2)
+  })
+
+  it('--dry-run runs without a terminal (it writes nothing and asks nothing), so an installer can check adopt first', async () => {
+    for (const extra of [['--dry-run'], ['--dry-run', '--yes']]) {
       const dir = ownerFolder()
       const before = tree(dir)
       const r = await run(['adopt', '--agent-dir', dir, ...extra], { terminal: false, answers: ['y'] })
-      expect(r.code).toBe(1)
-      expect(r.err).toContain('only runs in Terminal')
+      expect(r.code, r.err).toBe(0)
+      expect(r.out).toContain('would write the talos-app server')
+      expect(r.asked).toEqual([])
       expect(tree(dir)).toEqual(before)
     }
+    // and its refusals come through: another clone's talos-app server is exit 3, without --repoint
+    const other = ownerFolder({
+      '.mcp.json': JSON.stringify({ mcpServers: { 'talos-app': mcpEntry(otherClone(), tmp('adopt-home-'), '/x') } }),
+    })
+    const r = await run(['adopt', '--agent-dir', other, '--dry-run'], { terminal: false })
+    expect(r.code).toBe(3)
+    expect(r.err).toContain('--repoint')
   })
 })
 

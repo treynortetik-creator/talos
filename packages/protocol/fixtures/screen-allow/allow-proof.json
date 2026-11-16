@@ -1,0 +1,21 @@
+{
+  "proof": {
+    "signed": "{\"action\":\"primary\",\"card_id\":\"c_01M7ADMDN47YA9FPAH5QC9PE05\",\"device_id\":\"d_wj6iozpnazq5kkyfskuk\",\"id\":\"01M7ADMDN6HVS1GC2RHG1ZJXCM\",\"payload_hash\":\"sha256:787b87d7697290869d18b1d53693e8d827fc720d2f72420a846c5dd3b99d90f0\",\"ts\":\"2026-11-13T12:20:33.062Z\",\"type\":\"card.resolve\",\"v\":1}",
+    "osig": "7ZzgDeANoMxhqftz5RBuIyhNFe-mkVzbWexMWS6BDOW-W8He6ui_RtRvTNynxsSRRncUogVD6LyMWqJ7ywmQPQ",
+    "device_id": "d_wj6iozpnazq5kkyfskuk",
+    "binding": "{\"allow_edit\":false,\"allow_revise\":false,\"attachments\":[],\"body\":\"App: Notes Example\\nApp id: com.example.notes\\nSigned by: developer team ABCDE12345\",\"body_format\":\"plain\",\"destination\":[{\"label\":\"Mac\",\"value\":\"Test Mac\"}],\"expires_at\":\"2026-11-14T12:20:33.060Z\",\"fields\":[],\"id\":\"c_01M7ADMDN47YA9FPAH5QC9PE05\",\"kill_label\":\"Not now\",\"kind\":\"config\",\"origin\":\"background\",\"payload\":{\"screen_allow\":{\"bundle_id\":\"com.example.notes\",\"name\":\"Notes Example\",\"requirement\":\"anchor apple generic and identifier \\\"com.example.notes\\\" and certificate leaf[subject.OU] = ABCDE12345\",\"signer\":\"developer\",\"team_id\":\"ABCDE12345\"},\"v\":1},\"primary_label\":\"Allow\",\"risk\":\"low\",\"summary\":\"Any session of yours on this Mac could then see its windows and click and type in it. Remove it any time on the Mac: Talos → Settings → Screen control.\",\"thread_id\":\"general\",\"title\":\"Let your agent control Notes Example on this Mac?\",\"warning\":\"Your agent could click and type in this app.\"}"
+  },
+  "jwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "wtiaMEu2hoCapAJ7QbGKp757DGw9_FJfdBkOrqsAVEs",
+    "y": "f7PVvtB_i560N54HmKwo7vGcOpYJ0rOOMS1iHor_-Qw"
+  },
+  "measured": {
+    "bundle_id": "com.example.notes",
+    "team_id": "ABCDE12345",
+    "requirement": "anchor apple generic and identifier \"com.example.notes\" and certificate leaf[subject.OU] = ABCDE12345",
+    "name": "Notes Example",
+    "signer": "developer"
+  }
+}

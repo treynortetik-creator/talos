@@ -37,8 +37,8 @@ Talos ships ten, in `jobs/`:
 | Job | When | What it does |
 |---|---|---|
 | `talos-morning-brief` | weekdays 07:03 | brief from your wiki and any read-only tools you add by name; files at most five facts back |
-| `talos-weekly-wiki-lint` | Monday 08:17 | runs the linter and the deep-dive selector, reports, fixes nothing |
-| `talos-weekly-snapshot` | Friday 16:11 | `scripts/weekly-snapshot.sh`: `memory`, `wiki`, `.learnings`, one local commit |
+| `talos-weekly-wiki-lint` | Monday 08:17 | `scripts/weekly-wiki-check.sh` (a plain command, no Claude usage, on from install): the linter, the config lint and the deep-dive selector, reports, fixes nothing |
+| `talos-weekly-snapshot` | Friday 16:11 | `scripts/weekly-snapshot.sh` (a plain command, no Claude usage, on from install): `memory`, `wiki`, `.learnings`, one local commit |
 | `talos-memory-index` | daily 06:41 | refreshes the semantic search index; a plain command job, no Claude run; enabled by `scripts/memory/setup.sh`, useless without it |
 | `talos-state-sweep` | weekdays 16:37 | read-only report on `memory/STATE.md`: size, rows to close or evict, stale rows, dates coming up |
 | `talos-dream-cycle` | daily 02:30 | nightly consolidation (a restricted Claude job): at most 15 verified `## Related` links, the rest queued in `memory/dream/QUEUE.md`; [dream-cycle.md](dream-cycle.md) |

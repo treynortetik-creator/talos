@@ -17,6 +17,7 @@ import {
   type HeartbeatSourceConfigT,
   type HeartbeatSourceRequestT,
 } from '@talos-app/protocol'
+import { say } from '../owner-words.ts'
 import type { RunNote } from '../schedules/sidecar.ts'
 import { sharedInboxDir } from '../share/inbox-file.ts'
 import { baseEnv, runSource } from './spawn.ts'
@@ -141,7 +142,7 @@ const httpsOnly = (u: string | undefined) => (u && /^https:\/\/[^\s]+$/.test(u) 
 
 function ghFailure(stderr: string): string {
   if (/gh auth login|not logged in|authentication|GH_TOKEN|HTTP 401/i.test(stderr))
-    return 'gh is not signed in on this Mac'
+    return say({ mac: 'gh is not signed in on this Mac', linux: 'gh is not signed in on this computer' })
   const line = stderr.split('\n').find((l) => l.trim() !== '') ?? 'no details'
   return `gh failed: ${line.trim().slice(0, 120)}`
 }
@@ -149,7 +150,13 @@ function ghFailure(stderr: string): string {
 function bin(d: BuiltinDeps): string {
   if (d.ghBin) return d.ghBin
   const found = Bun.which('gh', { PATH: baseEnv(d.userHome).PATH ?? '' })
-  if (!found) throw new Error('gh (the GitHub command line) is not installed on this Mac')
+  if (!found)
+    throw new Error(
+      say({
+        mac: 'gh (the GitHub command line) is not installed on this Mac',
+        linux: 'gh (the GitHub command line) is not installed on this computer',
+      }),
+    )
   return found
 }
 

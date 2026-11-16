@@ -27,13 +27,29 @@ const CORE = [
   'talos_mod_hello',
   'talos_mod_sync',
 ]
-const SCHEDULES = ['schedules_list', 'schedule_propose', 'schedule_run_start', 'schedule_run_done']
+const SCHEDULES = ['schedules_list', 'schedule_propose', 'schedule_run_start', 'schedule_run_done', 'wake_me']
 const APPS = ['app_show', 'app_result', 'list_apps']
 
 describe('which tools each kind of session lists, in order', () => {
   test('TOOLS, ALL_TOOLS and WORKER_TOOLS', () => {
     expect(names(TOOLS)).toEqual(CORE)
-    expect(names(ALL_TOOLS)).toEqual([...CORE, ...SCHEDULES, 'config_propose', 'retry_attachment', 'handoff'])
+    expect(names(ALL_TOOLS)).toEqual([
+      ...CORE,
+      ...SCHEDULES,
+      'config_propose',
+      'retry_attachment',
+      'publish_page',
+      'handoff',
+      'thread_session',
+      'restart_main',
+      'screen_shot',
+      'screen_click',
+      'screen_type',
+      'screen_key',
+      'screen_scroll',
+      'screen_apps',
+      'screen_open_app',
+    ])
     expect(names(WORKER_TOOLS)).toEqual([
       'reply',
       'attach',
@@ -43,15 +59,57 @@ describe('which tools each kind of session lists, in order', () => {
       'list_threads',
       'read_thread',
       ...SCHEDULES,
+      'config_propose',
+      'publish_page',
       'read_inbound',
+      'memory_note_read',
       'handoff',
+      'restart_main',
+      'screen_shot',
+      'screen_click',
+      'screen_type',
+      'screen_key',
+      'screen_scroll',
+      'screen_apps',
+      'screen_open_app',
     ])
     expect([...APP_BRIDGE_TOOLS]).toEqual(APPS)
   })
 
   test('toolsFor: scheduler on, scheduler off, apps on, worker', () => {
-    const on = [...CORE, ...SCHEDULES, 'config_propose', 'retry_attachment', 'handoff']
-    const off = [...CORE, 'config_propose', 'retry_attachment', 'handoff']
+    const on = [
+      ...CORE,
+      ...SCHEDULES,
+      'config_propose',
+      'retry_attachment',
+      'publish_page',
+      'handoff',
+      'thread_session',
+      'restart_main',
+      'screen_shot',
+      'screen_click',
+      'screen_type',
+      'screen_key',
+      'screen_scroll',
+      'screen_apps',
+      'screen_open_app',
+    ]
+    const off = [
+      ...CORE,
+      'config_propose',
+      'retry_attachment',
+      'publish_page',
+      'handoff',
+      'thread_session',
+      'restart_main',
+      'screen_shot',
+      'screen_click',
+      'screen_type',
+      'screen_key',
+      'screen_scroll',
+      'screen_apps',
+      'screen_open_app',
+    ]
     expect(names(toolsFor({ scheduler: 'auto' }))).toEqual(on)
     expect(names(toolsFor({ scheduler: 'chronos' }))).toEqual(on)
     expect(names(toolsFor({ scheduler: 'off' }))).toEqual(off)
@@ -90,6 +148,7 @@ describe('which tools a headless process may run', () => {
       'read_thread',
       'inbox_raw',
       'schedules_list',
+      'publish_page',
     ])
   })
 })
@@ -116,7 +175,17 @@ describe('which tools are locked to a worker thread', () => {
       const r = await callTool(worker(), name, { thread_id: 'garden', chat_id: 'garden' })
       if (/can only post there/.test(r.content[0]?.text ?? '')) locked.push(name)
     }
-    expect(locked).toEqual(['reply', 'attach', 'card', 'set_status', 'read_thread', 'schedule_propose', 'handoff'])
+    expect(locked).toEqual([
+      'reply',
+      'attach',
+      'card',
+      'set_status',
+      'read_thread',
+      'schedule_propose',
+      'config_propose',
+      'publish_page',
+      'handoff',
+    ])
   })
 
   test('a worker that names no thread is told it is required on those same tools', async () => {
@@ -125,7 +194,17 @@ describe('which tools are locked to a worker thread', () => {
       const r = await callTool(worker(), name, {})
       if (/thread_id is required\. Valid thread ids: trip/.test(r.content[0]?.text ?? '')) required.push(name)
     }
-    expect(required).toEqual(['reply', 'attach', 'card', 'set_status', 'read_thread', 'schedule_propose', 'handoff'])
+    expect(required).toEqual([
+      'reply',
+      'attach',
+      'card',
+      'set_status',
+      'read_thread',
+      'schedule_propose',
+      'config_propose',
+      'publish_page',
+      'handoff',
+    ])
   })
 
   test('a tool a worker does not have is unknown to it', async () => {

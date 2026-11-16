@@ -13,6 +13,7 @@ import {
   type SearchMatchInT,
 } from '@talos-app/protocol'
 import type { HistoryStore } from '../history-store.ts'
+import { say } from '../owner-words.ts'
 import { ReadError, type SearchService } from '../v2-seams.ts'
 import { SENTINEL_CLOSE, SENTINEL_OPEN } from './columns.ts'
 import type { SearchIndexer } from './indexer.ts'
@@ -238,7 +239,10 @@ export function createQuery(d: QueryDeps) {
         return { hits, next_cursor: next, total_estimate: total, took_ms: Date.now() - t0, index: indexState() }
       } catch (e) {
         if (e instanceof ReadError) throw e
-        throw new ReadError('search_unavailable', 'Search is not ready on this Mac.')
+        throw new ReadError(
+          'search_unavailable',
+          say({ mac: 'Search is not ready on this Mac.', linux: 'Search is not ready on this computer.' }),
+        )
       }
     },
 

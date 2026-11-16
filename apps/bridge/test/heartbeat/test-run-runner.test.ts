@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fakeClock } from '@talos-app/testkit'
 import type { RunnerDeps } from '../../src/heartbeat/runner.ts'
-import { type Harness, startHarness } from '../helpers.ts'
+import { type Harness, startHarness, waitFor } from '../helpers.ts'
 import { cmd, config, item, type Kit, kit, MON_1000_UTC, ok, printing, script, tmpDir } from './kit.ts'
 
 let h: Harness
@@ -111,7 +111,7 @@ describe('a test run', () => {
     expect(out.result.sources[0]?.error).toContain('time limit')
     const pid = Number(readFileSync(pidFile, 'utf8').trim())
     expect(pid).toBeGreaterThan(0)
-    await new Promise((r) => setTimeout(r, 200))
+    await waitFor(() => !alive(pid), 1000, 'the hung child to die').catch(() => {}) // a loaded machine reaps it late
     expect(alive(pid)).toBe(false)
   })
 

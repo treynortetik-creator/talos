@@ -4,9 +4,18 @@
 // list shows it, and it snaps back if the save fails.
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { cn } from '../../../ui/cn.ts'
-import { moveItem, slotShift, targetIndex } from './reorder.ts'
+import { moveItem, nestTarget, slotShift, targetIndex } from './reorder.ts'
 
 type Item = { id: string; label: string }
+
+/** Dropping a row ONTO another (its middle half) instead of between two: `allowed` says which, `commit` saves it. */
+export type NestOnto = {
+  allowed: (id: string, onto: string) => boolean
+  /** Resolves true when saved; the list follows the store either way. */
+  commit: (id: string, onto: string) => Promise<boolean>
+  /** What the target row says while a row is held over it, given the held row's name ("Put Daily under this"). */
+  label: (heldLabel: string) => string
+}
 
 export function ReorderList<T extends Item>({
   items,
@@ -17,6 +26,7 @@ export function ReorderList<T extends Item>({
   tone = 'surface',
   label,
   testId,
+  nest,
 }: {
   items: readonly T[]
   /** Resolves true when saved; false snaps the list back. */
@@ -27,10 +37,14 @@ export function ReorderList<T extends Item>({
   tone?: 'surface' | 'chrome'
   label: string
   testId?: string
+  /** Turns on drag-to-nest (the thread list: a thread dropped onto another goes under it). */
+  nest?: NestOnto
 }) {
   const ids = items.map((i) => i.id).join('|')
   const [order, setOrder] = useState<string[]>(() => items.map((i) => i.id))
-  const [drag, setDrag] = useState<{ id: string; from: number; dy: number; to: number } | null>(null)
+  const [drag, setDrag] = useState<{ id: string; from: number; dy: number; to: number; onto: string | null } | null>(
+    null,
+  )
   const [grabbed, setGrabbed] = useState<{ id: string; before: string[] } | null>(null)
   const [say, setSay] = useState('')
   const rects = useRef<DOMRect[]>([])
@@ -89,15 +103,25 @@ export function ReorderList<T extends Item>({
     rects.current = order.map((x) => rows.current.get(x)?.getBoundingClientRect() ?? new DOMRect())
     startY.current = e.clientY
     const from = order.indexOf(id)
-    setDrag({ id, from, dy: 0, to: from })
+    setDrag({ id, from, dy: 0, to: from, onto: null })
   }
   const move = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (!drag) return
     const dy = e.clientY - startY.current
-    setDrag({ ...drag, dy, to: targetIndex(rects.current, drag.from, dy) })
+    // over the middle of a row it may go under: nest there (nothing slides); anywhere else: a reorder, as before
+    const n = nest ? nestTarget(rects.current, drag.from, dy) : null
+    const onto = n !== null && nest?.allowed(drag.id, order[n] as string) ? (order[n] as string) : null
+    setDrag({ ...drag, dy, onto, to: onto ? drag.from : targetIndex(rects.current, drag.from, dy) })
   }
   const end = () => {
     if (!drag) return
+    if (drag.onto && nest) {
+      const onto = drag.onto
+      setDrag(null)
+      setSay(`${name(drag.id)} put under ${name(onto)}.`)
+      void nest.commit(drag.id, onto)
+      return
+    }
     const next = moveItem(order, drag.from, drag.to)
     setDrag(null)
     if (drag.to !== drag.from) {
@@ -199,7 +223,9 @@ export function ReorderList<T extends Item>({
                 !isDrag && 'transition-transform duration-[var(--dur-2)] ease-talos',
                 isDrag && (chrome ? 'bg-chrome-active shadow-lg' : 'bg-surface-2 shadow-lg'),
                 grabbed?.id === item.id && 'outline-2 outline-focus',
+                drag?.onto === item.id && 'outline-2 outline-accent',
               )}
+              data-nest-target={drag?.onto === item.id ? '' : undefined}
             >
               <button
                 type="button"
@@ -228,6 +254,17 @@ export function ReorderList<T extends Item>({
                 <Grip />
               </button>
               <div className="flex min-w-0 flex-1 items-center gap-2">{renderRow(item)}</div>
+              {drag?.onto === item.id && nest && (
+                <span
+                  data-testid="nest-label"
+                  className={cn(
+                    'shrink-0 rounded-pill px-2 py-0.5 text-xs font-semibold',
+                    chrome ? 'bg-chrome-active text-on-chrome' : 'bg-accent/15 text-text',
+                  )}
+                >
+                  {nest.label(name(drag.id))}
+                </span>
+              )}
               {moveButtons && (
                 <>
                   <button

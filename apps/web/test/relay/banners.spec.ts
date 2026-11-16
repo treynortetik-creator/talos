@@ -22,15 +22,51 @@ test('the offline banner offers Retry, and Retry reconnects', async ({ page, con
 
 test('Mac-offline banner follows the presence frames', async ({ page, context, harness }) => {
   await openSignedIn(harness, page, context)
-  await expect(page.getByText(/Your Mac is offline/)).toBeVisible() // FakeRelay has no bridge connected
+  // FakeRelay has no bridge connected, so no host feature: the agent's computer is not known yet (lib/hostWords.ts)
+  await expect(page.getByText(/Your computer is offline/)).toBeVisible()
   harness.relay.sendToApps(
     mkFrame('presence', { bridge_online: true, last_seen: new Date().toISOString(), queue_depth: 0 }),
   )
-  await expect(page.getByText(/Your Mac is offline/)).toHaveCount(0)
+  await expect(page.getByText(/Your computer is offline/)).toHaveCount(0)
+  // a Mac bridge says so in its features: from then on the banner names the Mac
   harness.relay.sendToApps(
-    mkFrame('presence', { bridge_online: false, last_seen: new Date().toISOString(), queue_depth: 2 }),
+    mkFrame('presence', {
+      bridge_online: false,
+      last_seen: new Date().toISOString(),
+      queue_depth: 2,
+      features: ['host/mac'],
+    }),
   )
   await expect(page.getByText(/Your Mac is offline \(last seen/)).toBeVisible()
+})
+
+test('a superseded bridge says so, two bridges on one key get a notice, and both fit the screen', async ({
+  page,
+  context,
+  harness,
+}) => {
+  await openSignedIn(harness, page, context)
+  const fits = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  harness.relay.sendToApps(
+    mkFrame('presence', {
+      bridge_online: false,
+      last_seen: new Date().toISOString(),
+      queue_depth: 1,
+      superseded: true,
+    }),
+  )
+  await expect(page.getByTestId('mac-banner')).toContainText(/Bridge superseded/)
+  expect(await fits()).toBeLessThanOrEqual(0)
+  harness.relay.sendToApps(
+    mkFrame('presence', { bridge_online: true, last_seen: new Date().toISOString(), queue_depth: 0, superseded: true }),
+  )
+  await expect(page.getByTestId('mac-banner')).toHaveCount(0)
+  await expect(page.getByTestId('bridge-notice')).toContainText(/Another bridge connected/)
+  expect(await fits()).toBeLessThanOrEqual(0)
+  harness.relay.sendToApps(
+    mkFrame('presence', { bridge_online: true, last_seen: new Date().toISOString(), queue_depth: 0 }),
+  )
+  await expect(page.getByTestId('bridge-notice')).toHaveCount(0)
 })
 
 test('relay unreachable shows the retry banner with Retry now', async ({ page, context, harness }) => {

@@ -7,7 +7,8 @@ extension WorkerManager {
   func takeWakes(settings: DedicatedSettings, now t: Double) {
     let base = options.talosHome + "/workers"
     guard let ids = try? FileManager.default.contentsOfDirectory(atPath: base) else { return }
-    for id in ids.sorted() where WorkerSpec.isThreadId(id) && rt[id]?.adoptPending != true {
+    // a thread whose saved entry could not be read is never started under a new id: its wake waits for the file to be fixed
+    for id in ids.sorted() where WorkerSpec.isThreadId(id) && rt[id]?.adoptPending != true && unreadableKept[id] == nil {
       let wake = base + "/" + id + "/wake"
       let taken = wake + ".taken"
       guard rename(wake, taken) == 0 else { continue }  // taken atomically: a rewrite by the hub lands in a new file
@@ -31,7 +32,11 @@ extension WorkerManager {
     switch action {
     case "pointer":
       if state == "failed" { return }  // main answers; [Start fresh] or the settings sheet clears it
-      oweFromWake(id, cold: state != "live" && state != "busy", now: t, wakeAt: wakeAt)
+      let cold = state != "live" && state != "busy"
+      // a wake that waited longer than any message waits for its claim (the app was closed): the hub has given every message it names
+      // back to main, so nothing starts. Not the 90/120 s deadline: a hand-off waits 15 minutes, and the wake does not say which it holds.
+      if let at = wakeAt, t - at > PointerTyper.longestClaim { return }
+      oweFromWake(id, cold: cold, now: t, wakeAt: wakeAt)
       if resting { requestStart(id, s, resume: resume, settings, t) }
     case "park":
       if WorkersFile.liveStates.contains(state) {
@@ -51,8 +56,7 @@ extension WorkerManager {
         if state == "stopping" { armStopLimit(id) }
       } else {
         if action == "fresh", var r = rt[id] {
-          if let old = r.entry.session_id { r.entry.previous_ids = Array((r.entry.previous_ids + [old]).suffix(5)) }
-          r.entry.session_id = nil
+          r.entry.retireSessionId()
           r.entry.state = "off"
           r.restartTimes = []
           r.entry.restarts = []

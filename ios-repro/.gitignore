@@ -1,0 +1,5 @@
+.state/
+.sim-udid
+# Full-size frames stay on disk; the strips (four or five frames side by side) are what is kept.
+shots/*
+!shots/*-strip.png

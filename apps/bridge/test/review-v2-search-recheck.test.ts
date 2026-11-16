@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { buildFtsQuery, type FrameOf, MAX_FRAME_BYTES, type MessageT, newId, newUlid } from '@talos-app/protocol'
-import { mkFrame } from '@talos-app/testkit'
+import { mkFrame, t } from '@talos-app/testkit'
 import { type HistoryStore, openHistory } from '../src/history-store.ts'
 import { createSearchService, indexerFor } from '../src/search/install.ts'
 import { type Harness, startHarness, tempHome } from './helpers.ts'
@@ -94,24 +94,34 @@ describe('the chunked reindex next to the live indexer', () => {
     expect(ftsCount(live)).toBe(6000) // ...but 501..5000 were never indexed again
   })
 
-  test('(holds) the reindex converges under a heavy concurrent writer and indexes every row once', async () => {
-    const path = join(tempHome(), 'history.sqlite')
-    const live = open(path)
-    createSearchService(live)
-    live.db.transaction(() => {
-      for (let i = 0; i < 20_000; i++) live.addMessage(msg({ text: `seed ${i} okapi` }))
-    })()
-    const cli = open(path)
-    const B = indexerFor(cli)
-    if (!B) throw new Error('no indexer')
-    let written = 0
-    const n = await B.rebuildAll(async () => {
-      for (let k = 0; k < 100; k++) live.addMessage(msg({ text: `during ${written++} okapi` })) // 100 writes per pause
-    })
-    expect(B.dirty()).toBe('')
-    expect(n).toBe(20_000 + written)
-    expect(ftsCount(live)).toBe(20_000 + written)
-  })
+  test(
+    '(holds) the reindex converges under a heavy concurrent writer and indexes every row once',
+    async () => {
+      const path = join(tempHome(), 'history.sqlite')
+      const live = open(path)
+      // what this case tests is the race (two connections, a writer between every chunk), not how fast the disk syncs: its own
+      // two connections skip the fsync, which on an encrypted btrfs temp folder took the case from seconds to over 3 minutes
+      live.db.exec('PRAGMA synchronous = OFF')
+      createSearchService(live)
+      live.db.transaction(() => {
+        for (let i = 0; i < 20_000; i++) live.addMessage(msg({ text: `seed ${i} okapi` }))
+      })()
+      const cli = open(path)
+      cli.db.exec('PRAGMA synchronous = OFF')
+      const B = indexerFor(cli)
+      if (!B) throw new Error('no indexer')
+      let written = 0
+      const n = await B.rebuildAll(async () => {
+        for (let k = 0; k < 100; k++) live.addMessage(msg({ text: `during ${written++} okapi` })) // 100 writes per pause
+      })
+      expect(B.dirty()).toBe('')
+      expect(n).toBe(20_000 + written)
+      expect(ftsCount(live)).toBe(20_000 + written)
+      // 20,000 rows written and indexed again, with a writer between every chunk: real work, past the 5 s default on Titan (WSL),
+      // alone and more so under a full gate run (27 s there). It waits as long as the work takes, longer on a slow machine.
+    },
+    t(60_000),
+  )
 })
 
 describe('anchor-first byte fit', () => {

@@ -105,7 +105,7 @@ export async function unregisterNative(scope: unknown = globalThis): Promise<voi
 /**
  * Taps on a notification (or on its Open / Approve button). The path is the in-app path the relay put in the payload; it
  * is validated like every path a shell may hand the page, and anything else is dropped. `Approve` opens the card armed (in memory, not in the URL):
- * Face ID still comes first for a high-risk card, and nothing is approved by the link itself.
+ * its button gets focus and waits for a tap in the app, and nothing is approved by the link itself.
  */
 export function onNativePushAction(
   nav: (path: string, opts?: { arm?: string }) => void,
@@ -120,8 +120,8 @@ export function onNativePushAction(
       const e = event as { navigate?: unknown; action?: unknown } | null
       const path = NativeNavigate.shape.path.safeParse(e?.navigate)
       if (!path.success) return
-      // Approve on a card opens that card armed: a high-risk card starts its normal Approve flow, which asks for
-      // Face ID before anything is sent; any other card is shown with its button focused. Nothing approves by itself.
+      // Approve on a card opens that card armed: it is shown with its button focused, waiting for a tap in the app.
+      // Nothing approves by itself.
       // Only a bare /card/<id> path can be armed. Open, and every other path, never is.
       // The arm travels in memory (the second argument), never in the URL: a link in agent text cannot carry it.
       if (e?.action === 'approve' && CARD_PATH.test(path.data))
@@ -224,6 +224,23 @@ export function setNativeViewing(
     })
   } catch {
     /* a native call must never break the page */
+  }
+}
+
+/**
+ * `setNativeViewing` for as long as the thread is on screen, told again each time the page becomes visible: the shell
+ * forgets the thread when the app goes to the background. Returns the cleanup, which says no thread is on screen.
+ */
+export function watchNativeViewing(thread: string | null, scope: unknown = globalThis): () => void {
+  setNativeViewing(thread, scope)
+  const doc = (scope as { document?: Document }).document
+  const again = () => {
+    if (doc?.visibilityState === 'visible') setNativeViewing(thread, scope)
+  }
+  doc?.addEventListener('visibilitychange', again)
+  return () => {
+    doc?.removeEventListener('visibilitychange', again)
+    setNativeViewing(null, scope)
   }
 }
 

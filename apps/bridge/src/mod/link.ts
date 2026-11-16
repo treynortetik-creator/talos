@@ -114,6 +114,9 @@ export class ModLink {
   private lapseTimer: unknown
   private readonly keys: ModKeyStore
   private state: SessionStateT | undefined
+  /** How many turns the session has started since this process began (an idle state carries no turn id to compare). */
+  private turnsStarted = 0
+  private readonly turnsSeen = new Set<string>()
   private inventory: SessionInventoryT | undefined
   private sentState: SessionStateT | undefined
   private sentInventory: SessionInventoryT | undefined
@@ -252,6 +255,11 @@ export class ModLink {
     }
   }
 
+  /** Turns started so far: a hand-over's turn has run once this has grown and the session is idle (undo/busy.ts). */
+  turnStarts(): number {
+    return this.turnsStarted
+  }
+
   /** The last state, only while the mod is live: stale mod data must not feed any decision. */
   liveState(): SessionStateT | undefined {
     return this.live ? this.state : undefined
@@ -384,6 +392,13 @@ export class ModLink {
         continue
       }
       const e = p.data
+      // counted whether or not a state is held yet, and once per turn id: a resend after a lost answer is the same turn
+      if (e.type === 'turn_start' && !this.turnsSeen.has(e.turn_id)) {
+        this.turnsStarted++
+        this.turnsSeen.add(e.turn_id)
+        // a resend holds only recent turns: the last 64 ids are enough to know one again
+        if (this.turnsSeen.size > 64) this.turnsSeen.delete(this.turnsSeen.values().next().value as string)
+      }
       if (next) stateTouched = this.applyEvent(next, e) || stateTouched
       this.sink.event?.(e)
     }

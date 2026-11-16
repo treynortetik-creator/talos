@@ -1,0 +1,20 @@
+// Every string the Markdown file viewer shows (the viewer's text table). Components read from here and hold no literals.
+export const MD_TEXT = {
+  loading: (name: string) => `Loading ${name}…`,
+  expand: (name: string) => `Expand ${name} to full screen`,
+  expandLabel: 'Expand',
+  close: 'Close',
+  closeLabel: 'Close',
+  rendered: 'Rendered',
+  source: 'Source',
+  viewAria: 'View',
+  contents: 'Contents',
+  contentsAria: (name: string) => `Contents of ${name}`,
+  region: (name: string) => `${name}, Markdown`,
+  sourceRegion: (name: string) => `${name}, source`,
+  loadMore: (shown: number, total: number) => `Showing part ${shown} of ${total}. Show more`,
+  showAll: 'Show all',
+  largeNote: (parts: number) => `Large file. It is drawn in ${parts} parts as you scroll.`,
+  failed: (name: string) => `Couldn't read ${name}. Your Mac may be offline, or the file is gone.`,
+  retry: 'Retry',
+} as const

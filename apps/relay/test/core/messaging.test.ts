@@ -46,6 +46,7 @@ describe('core messaging', () => {
     await bridge.expectFrame('ack', (f) => f.seq === 5, { direction: 'in' })
     relay.runtime.store.db.prepare('delete from core_events where seq <= 3').run()
     relay.runtime.store.setState('floor', '4')
+    relay.runtime.store.setState('app_floor', '4') // the sweep sets both: rows 1-3 were app-visible
     const a = k.app({ lastSeq: 1 })
     await a.connect()
     const reset = await a.expectFrame('catchup.reset')
@@ -53,6 +54,66 @@ describe('core messaging', () => {
     const batch = await a.expectFrame('catchup.batch')
     expect(batch.from_seq).toBe(4)
     expect(batch.frames).toHaveLength(2)
+  })
+
+  describe('a message the Mac refuses after the relay acked it', () => {
+    const inFrames = (a: { rec: { frames: Array<{ direction: string; raw: Record<string, unknown> }> } }) =>
+      a.rec.frames.filter((r) => r.direction === 'in').map((r) => r.raw)
+
+    async function refused(senderConnected: boolean) {
+      const k = kit(relay)
+      const sender = await k.connectedApp()
+      const other = await k.connectedApp()
+      const bridge = await k
+        .bridge({ pinnedDevices: { [sender.device.deviceId]: sender.device.publicJwk }, autoReply: false })
+        .connect()
+      const sent = await sender.sendMessage('general', 'Draft the release notes')
+      await sender.expectFrame('ack', (f) => f.ref === sent.id)
+      await bridge.expectFrame('message', (f) => f.id === sent.id, { direction: 'in' })
+      if (!senderConnected) await sender.close()
+      const error = mkFrame('error', { ref: sent.id, code: 'bad_frame', message: 'unknown thread general' })
+      bridge.send(error as never)
+      return { k, sender, other, bridge, sent, error }
+    }
+
+    it('marks the row not delivered and says why in its thread, on the sender and on every other device', async () => {
+      const { sender, other, sent, error } = await refused(true)
+      for (const app of [sender, other]) {
+        const receipt = await app.expectFrame('receipt', (f) => f.message_id === sent.client_msg_id)
+        expect(receipt.state).toBe('not_delivered')
+        const row = await app.expectFrame('message.stored', (f) => f.message.author === 'system')
+        expect(row.message.thread_id).toBe('general')
+        expect(row.message.text).toBe('Your Mac did not take a message (bad_frame): unknown thread general')
+        // the id comes from the Mac's error frame, so the sender's app (which also hears the error) makes the same row
+        expect(row.message.id).toBe(`m_${error.id}`)
+      }
+      // the sender still hears the error itself, as before
+      await sender.expectFrame('error', (f) => f.ref === sent.id)
+      expect(inFrames(other).some((f) => f.type === 'error')).toBe(false)
+    })
+
+    it('a device that was away learns it at its next connection: ready lists it and the row is in the catch-up', async () => {
+      const { k, sender, sent } = await refused(false)
+      await waitFor(() => relay.runtime.store.notDelivered().includes(String(sent.client_msg_id)), 3000, 'stored')
+      const back = k.app({ deviceKey: sender.device, lastSeq: 1 })
+      const ready = await back.connect()
+      expect(ready.not_delivered).toContain(sent.client_msg_id)
+      const batch = await back.expectFrame('catchup.batch')
+      expect(JSON.stringify(batch.frames)).toContain('Your Mac did not take a message (bad_frame)')
+    })
+
+    it('the same refusal arriving twice (the Mac repeats it after a reconnect) adds one row, not two', async () => {
+      const { other, bridge, error, sent } = await refused(true)
+      await other.expectFrame('message.stored', (f) => f.message.author === 'system')
+      bridge.send(error as never)
+      bridge.send(mkFrame('error', { ref: sent.id, code: 'bad_frame', message: 'unknown thread general' }) as never)
+      await sleep(200)
+      const systemRows = inFrames(other).filter(
+        (f) => f.type === 'message.stored' && (f.message as { author?: string }).author === 'system',
+      )
+      expect(systemRows).toHaveLength(1)
+      expect(inFrames(other).filter((f) => f.type === 'receipt' && f.state === 'not_delivered')).toHaveLength(1)
+    })
   })
 
   it('forwards a message to the bridge with the owner signature fields untouched and a relay meta added', async () => {
@@ -138,7 +199,8 @@ describe('core messaging', () => {
     const k = kit(relay)
     const a = await k.connectedApp()
     const watcher = await k.connectedApp()
-    const bridge = await k.bridge({ autoReply: false, consume: 'manual' }).connect()
+    // verifyOwner off: the fake Mac would otherwise refuse the unpinned device first, and one refusal a message is kept
+    const bridge = await k.bridge({ autoReply: false, consume: 'manual', verifyOwner: false }).connect()
     const sent = await a.sendMessage('general', 'bye')
     await bridge.expectFrame('message', (f) => f.id === sent.id, { direction: 'in' })
     await a.close()
@@ -149,6 +211,7 @@ describe('core messaging', () => {
       (f) => f.message.author === 'system' && f.message.thread_id === 'general',
     )
     expect(stored.message.text).toContain('sig_invalid')
+    expect(relay.runtime.store.getMeta(String(sent.client_msg_id)).receipt).toBe('not_delivered')
   })
 
   it('serves history from the buffer, newest page first, with has_more', async () => {
@@ -211,6 +274,23 @@ describe('core messaging', () => {
     const synced = late.rec.of('ready', 'in')[0]?.agent_config as Record<string, unknown>
     expect(synced.rev).toBe(3)
     expect(synced.mirror).toEqual({ telegram: 'off' })
+  })
+
+  it('config.sync reaches the apps as the bridge sent it: the legacy mirror and a key this relay does not know stay', async () => {
+    const k = kit(relay)
+    const a = await k.connectedApp()
+    const bridge = await k.bridge().connect()
+    const cfg = { ...(a.rec.of('ready', 'in')[0]?.agent_config as object) } as Record<string, unknown>
+    const threads = (cfg.threads as Array<Record<string, unknown>>).map((t) => ({ ...t, future_field: 1 }))
+    bridge.send({ type: 'config.sync', config: { ...cfg, rev: 4, threads, future_setting: { on: true } }, rev: 4 })
+    await a.expectFrame('config.sync', (f) => f.rev === 4)
+    const sent = a.rec.frames.find((x) => x.raw.type === 'config.sync' && x.raw.rev === 4)?.raw.config as Record<
+      string,
+      unknown
+    >
+    expect(sent.mirror).toEqual({ telegram: 'off' })
+    expect(sent.future_setting).toEqual({ on: true })
+    expect((sent.threads as Array<Record<string, unknown>>)[0]?.future_field).toBe(1)
   })
 
   it('config.sync is stored, fanned out, served in ready, and survives a restart', async () => {

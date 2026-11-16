@@ -663,8 +663,9 @@ test.describe('a phone whose clock jumps back', () => {
     page,
     context,
   }) => {
-    // the Mac and the relay stay on the real clock (file times and the bridge's clock must agree); only the phone's moves
-    await pinBrowserClock(context, new Date().toISOString())
+    // the Mac and the relay stay on the stack's clock (file times and the bridge's clock must agree); only the phone's moves.
+    // The stack's, not the wall's: E2E_NOW moves the stack.
+    await pinBrowserClock(context, new Date(stack.now()).toISOString())
     const apps = await startApps(stack, { servers: [PROBE] })
     await enrollDevice(stack, page, context)
     await openThread(page, 'General')
@@ -682,7 +683,7 @@ test.describe('a phone whose clock jumps back', () => {
     expect((await ok).error).toBeUndefined()
     // the phone's clock jumps back ten minutes: the signed request is stale at the Mac and nothing reaches the agent
     const told = apps.notes('app_tool_call').length
-    await page.clock.setSystemTime(new Date(Date.now() - 10 * 60_000))
+    await page.clock.setSystemTime(new Date(stack.now() - 10 * 60_000))
     await tapView(page, NOTES)
     const r = await viewRequest(frame, 'tools/call', { name: 'read_note', arguments: { id: 'late' } })
     expect(talosCode(r)).toBe('sig_invalid') // the Mac's reason is in its security log: stale_ts

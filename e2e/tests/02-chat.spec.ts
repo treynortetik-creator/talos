@@ -16,6 +16,10 @@ test('2. a signed message reaches the agent in the right thread and the reply co
   // A message in another thread stays in that thread.
   const made = await stack.claude.callTool('create_thread', { name: 'Errands' })
   expect(made.isError).toBeFalsy()
+  // the owner spoke in General just now, so the thread is made at once (settings on request, 2026-11-14), with no card; an
+  // unasked one is still a card (journeys/palette-open-thread.spec.ts)
+  expect(made.content[0]?.text ?? '').toContain('created thread errands')
+  await expect(page.getByRole('button', { name: 'Apply', exact: true })).toHaveCount(0)
   await openThread(page, 'Errands')
   await sendText(page, 'over here')
   const other = await stack.claude.waitForNotification((n) => n.content === 'over here')

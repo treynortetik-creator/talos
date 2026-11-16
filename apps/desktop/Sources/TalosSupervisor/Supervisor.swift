@@ -31,17 +31,50 @@ public final class Supervisor: @unchecked Sendable {
   let q: DispatchQueue
   /// The agents poll's own serial queue, not `DispatchQueue.global`: that hop waits for a pool thread, and the process's own pool gives
   /// none while every cooperative thread in it is blocked (the note in SwiftTermPtyHost.swift), so no poll ran although `q` did.
-  private let pollQ: DispatchQueue
-  private var timer: DispatchSourceTimer?
+  let pollQ: DispatchQueue
+  var timer: DispatchSourceTimer?  // set and cleared on `q` only
+  /// The shapes of unknown status parts already in the audit this run (SupervisorKeyGuard.swift).
+  var unknownShapesSeen = Set<String>()
+  /// The shapes of refused status parts already in the audit this run (SupervisorKeyGuard.swift).
+  var refusedShapesSeen = Set<String>()
+  /// Held while the tick runs and Main is live (SupervisorNapGuard.swift); tests swap it before `startTicking`.
+  public var napGuard: NapGuard = ProcessActivityNapGuard(reason: "Talos supervises the agent session")
 
-  private(set) var config: DesktopConfig { didSet { statusLock.withLock { _config = config } } }
-  private(set) var phase: Phase = .idle
+  var config: DesktopConfig { didSet { statusLock.withLock { _config = config } } }
+  var phase: Phase = .idle { didSet { syncNapGuard() } }
+  /// The phone was told this run that Main started with Claude Code's own computer use on (`GuardsSettings.notDenied`).
+  var computerUseNotDeniedTold = false
+  /// The guards' refresh at each start of Main and the check of Main's guard hook (SupervisorGuardsRefresh.swift).
+  var guardsRefresh = GuardsRefreshState()
+  /// The release commit Main was last restarted onto by the app updater (SupervisorAutoUpdate.swift): once per commit.
+  var updateRestartedFor: String?
   var launch: Launch?  // written by the tick, and by the Mac popup's click (SupervisorDevPopup.swift), both on `q`
   /// The just-exited child's group and leader start time. Cleared once a stop completes.
   private var previousChild: (pgid: Int32, start: Double)?
-  private var loop: CrashLoop
+  var loop: CrashLoop
   /// The auto-answers of cold starts (`Timings.coldConfirmCap`), apart from `loop`'s crash-loop count.
-  private var coldLoop: CrashLoop
+  var coldLoop: CrashLoop
+  /// When Main ended by itself with exit code 0, within the last hour (the contract's `MAIN_RESTART.clean_exits_per_hour`). Such an
+  /// exit is not a crash: it never spends the crash loop's cap and never ends in `.crashLoop` (which brings the automatic restore).
+  private var cleanExits: [Double] = []
+  /// The restart now waiting follows an exit with code 0: it is not recorded in the crash loop, and its launch is marked.
+  private var restartAfterCleanExit = false
+  /// The next launch resumes this id: `--session-id` of it was refused as already in use (`sessionTrouble`). Spent by that launch.
+  private var forceResume: String?
+  /// Session errors already mended once (`inuse:<id>`, `empty:<id>`): never twice, so they cannot loop.
+  private var mended: Set<String> = []
+  /// Set around the launch of such a restart, for `Launch.afterCleanExit`.
+  private var launchingAfterCleanExit = false
+  /// Tries in a row of a restart that could not launch at all (`retriesRestart`); a launch that gets its child ends the row.
+  private var cannotLaunchTries = 0
+  /// The restart now waiting is another try of one that could not launch: it is not recorded in the crash loop again.
+  private var restartIsRetry = false
+  /// Set around the launch `doRestart` makes: a launch that cannot even begin then (the channels are held, no claude, no folder) is
+  /// a failed attempt that is tried again, not the end.
+  private var restartingAfterCrash = false
+  /// `desktop.json` was there and could not be read when this supervisor was made. Fixed for its lifetime: the app chose its host and
+  /// its workers from the defaults too, so nothing is started and nothing is saved until the owner has fixed the file and reopened Talos.
+  let configUnreadable: Bool
   private var attempt = -1
   private var cleanup: Cleanup?
   private var restartAt: Double?
@@ -51,17 +84,17 @@ public final class Supervisor: @unchecked Sendable {
   private var afterStop: (() -> Void)?
   /// Read by the recovery tick, in the same pass that may have just raised it; `status` is the copy of the pass before.
   var needsYou: NeedsYou?
-  private var agentActivity: String?
+  var agentActivity: String?
   private var lastExit: ExitInfo?
   private var nextRestartIsCold = false
   /// Set by `startAnyway()` for the one cold launch that follows it; spent by that launch (or cleared right after it).
   private var skipTakeoverOnce = false
   /// Restart and restore requests, and the automatic restore (SupervisorRecovery.swift).
   var recovery = RecoveryState()
-  private var lastAgentsPollAt: Double = -.infinity
-  private var agentsPollInFlight = false
+  var lastAgentsPollAt: Double = -.infinity
+  var agentsPollInFlight = false
   private var cachedLaunchEnv: [String: String]?
-  private var resolvedClaude: String?
+  var resolvedClaude: String?
 
   private let statusLock = NSLock()
   private var _status: Status
@@ -90,7 +123,10 @@ public final class Supervisor: @unchecked Sendable {
     self.random = random
     self.q = DispatchQueue(label: "talos.supervisor.\(options.name)")
     self.pollQ = DispatchQueue(label: "talos.supervisor.agents.\(options.name)", qos: .utility)
-    let (found, migrated) = LaunchTrustMigration.load(options.configPath)
+    // Read only: the migrated config is saved below through `saveConfig`, the app's one writer of desktop.json.
+    let (found, migrated) = LaunchTrustMigration.read(options.configPath)
+    // No config from the load is two things: no file (not set up: the defaults) or a file that cannot be read (never the defaults).
+    self.configUnreadable = options.configKnownUnreadable || (found == nil && ConfigFile.read(options.configPath) == .unreadable)
     let loaded = found ?? .defaults
     self.config = loaded
     self._config = loaded
@@ -103,7 +139,17 @@ public final class Supervisor: @unchecked Sendable {
     let queue = q
     let me = WeakRef(self)
     host.onExit = { info in queue.async { me.value?.handleExit(info) } }
-    if migrated { audit("launch_trust_migrated", [:]) }
+    if migrated {
+      audit("launch_trust_migrated", [:])
+      saveConfig()  // refused when the file is unreadable, and a failed write is logged (`config_save_failed`), not swallowed
+    }
+    if configUnreadable {
+      audit("config_unreadable", [:])
+      // One line to the phone, once per run of the app: nobody may be at the Mac to see the menu. Off the caller's thread (the login
+      // shell's environment is read for `talos-app`'s PATH). desktop.json says nothing now, so the post needs only `talos-app` on that
+      // PATH and the default thread of the bridge's own config.json.
+      q.async { [weak self] in self?.postToPhone { _ in CrashPost.configUnreadable } }
+    }
     publish()
   }
 
@@ -118,6 +164,7 @@ public final class Supervisor: @unchecked Sendable {
       t.setEventHandler { [weak me] in me?.tick() }
       t.resume()
       me.timer = t
+      me.syncNapGuard()
     }
   }
 
@@ -152,6 +199,7 @@ public final class Supervisor: @unchecked Sendable {
   /// [Start a new conversation] after a resume failure: the old id moves to `previous_ids`, then a cold start.
   public func startNewConversation() {
     q.async {
+      guard !self.refusesForUnreadableConfig("new_conversation") else { return }
       self.config.session.retireCurrentId()
       self.saveConfig()
       self.startColdLocked()
@@ -180,6 +228,7 @@ public final class Supervisor: @unchecked Sendable {
     q.sync {
       self.timer?.cancel()
       self.timer = nil
+      self.syncNapGuard()
       self.host.detach()
       self.releaseLock()
     }
@@ -235,15 +284,35 @@ public final class Supervisor: @unchecked Sendable {
   /// Changes the config as one step on the supervisor's own queue: `edit` sees the config as it is at that moment, including
   /// anything the supervisor itself changed meanwhile (the conversation id, the confirmation). A read, edit and `updateConfig`
   /// from outside can lose such a change; this cannot. Two callers editing different fields both keep their edit.
-  public func mutateConfig(createFile: Bool = false, _ edit: @escaping @Sendable (inout DesktopConfig) -> Void) {
+  /// `then` runs on the supervisor's queue once the edit is in `currentConfig()` (or was refused): a caller on the main thread
+  /// hops back from it instead of waiting on the queue, which a tick can hold through its tmux calls.
+  public func mutateConfig(
+    createFile: Bool = false, _ edit: @escaping @Sendable (inout DesktopConfig) -> Void, then: (@Sendable () -> Void)? = nil
+  ) {
     q.async {
       var c = self.config
       edit(&c)
       self.applyConfigLocked(c, createFile: createFile)
+      then?()
     }
   }
 
+  /// With `desktop.json` unreadable nothing is started and nothing is written: what is in memory is the defaults, not the owner's
+  /// setup, and a start or a save from it would put the defaults in place of what he had. The refusal is logged, told to the app
+  /// (`.configUnreadable`) and, for a start, shown as the reason it did not start. True when it refused.
+  private func refusesForUnreadableConfig(_ what: String, isStart: Bool = true) -> Bool {
+    guard configUnreadable else { return false }
+    audit("config_unreadable_refused", ["what": what])
+    if isStart, !isLive {
+      phase = .stopped(.startFailed(SupervisorNotice.configUnreadableShort))
+      publish()
+    }
+    emit(.configUnreadable)
+    return true
+  }
+
   private func applyConfigLocked(_ new: DesktopConfig, createFile: Bool) {
+    guard !refusesForUnreadableConfig("settings", isStart: false) else { return }
     var c = new
     // A session id and a first-start confirmation belong to one folder (Claude Code keys sessions by project folder). A different
     // folder starts clean, unless the caller sets the session itself (Import or Adopt of a running session).
@@ -278,13 +347,7 @@ public final class Supervisor: @unchecked Sendable {
 
   /// The rollback command (4.7): `cd <dir> && <env> claude <args> --resume <current id>`.
   public func terminalCommand() -> String {
-    q.sync {
-      LaunchSpec(
-        agentDir: config.expandedAgentDir(home: options.home), env: config.env,
-        program: config.claudePath == "auto" ? "claude" : config.claudePath, args: ResumeRewrite.strip(config.args),
-        resumeId: config.session.id
-      ).render()
-    }
+    q.sync { LaunchSpec.rollback(config, home: options.home).render() }
   }
 
   /// Runs the takeover check (4.2) now, read-only: what would block a start. The UI's "Check again"; Option C.
@@ -308,7 +371,7 @@ public final class Supervisor: @unchecked Sendable {
 
   /// Our groups for the takeover whitelist, each matched by (pgid, leader start time): a group whose leader pid now
   /// belongs to a process with another start time is not ours (D1-REVIEW finding 3).
-  private var ownedGroupsLocked: Set<Int32> {
+  var ownedGroupsLocked: Set<Int32> {
     var known: [(Int32, Double)] = signaller.ownedStarts
     if let p = previousChild { known.append((p.pgid, p.start)) }
     if let l = launch { known.append((l.childPid, l.leaderStart)) }
@@ -336,11 +399,13 @@ public final class Supervisor: @unchecked Sendable {
   }
 
   private func attachLocked() -> Bool {
+    guard !configUnreadable else { return false }  // not even watched: a crash would be restarted from the defaults
     guard host.attachIfRunning(), let pid = host.childPid else { return false }
     passiveReattach = false
     let snap = probe.snapshot(pid)
     // Without the lock this supervisor only watches (passive): it owns no group, so it can never signal one.
-    if tryLock() { signaller.own(pid, leaderStart: snap?.startTime ?? 0) }
+    let owner = tryLock()
+    if owner { signaller.own(pid, leaderStart: snap?.startTime ?? 0) }
     previousChild = nil
     let claude = resolveClaude(env: launchEnv())
     let fp = config.launchFingerprint(resolvedClaude: claude ?? config.claudePath)
@@ -348,14 +413,26 @@ public final class Supervisor: @unchecked Sendable {
     let markerSession = host.marker("talos_session")
     // A pane launched with another command or conversation keeps running, but its next restart is cold.
     if markerFp != fp || markerSession == nil || markerSession != config.session.id { nextRestartIsCold = true }
+    // The pane may still be sitting on the development-channels warning (the app quit, crashed or was updated while Main was
+    // starting). It is not running then: the start goes on from here, so the owner gets the card and the popup. Only the live warning
+    // counts (its shape at the bottom of the screen, not the words in a transcript), only for the copy that holds the lock (a
+    // passive one never types), and a screen that could not be read says nothing. The Mac never presses the Enter for an attached
+    // start by itself: an earlier copy of the app may already have pressed it, and the rule is never twice (`awakeStartedAt`
+    // puts this start outside the auto-accept's window whatever else matches).
+    let waiting = owner && DialogMatcher.liveDevChannels(host.visibleRows() ?? [])
+    // What the pane was launched with is known only when its marker is the launch the config names now.
+    let sameLaunch = markerFp == fp
     launch = Launch(
       kind: .attached, resumeId: config.session.id, sessionId: markerSession ?? config.session.id ?? "",
       startedAt: clock.now(), childPid: pid, leaderStart: snap?.startTime ?? 0, fingerprint: markerFp ?? "",
-      cliVersion: nil,
-      expectsDevDialog: false, devDialogSeen: nil, noticeSeen: true, agentDir: config.expandedAgentDir(home: options.home))
-    phase = .running
+      parts: sameLaunch ? config.launchParts(resolvedClaude: claude ?? config.claudePath) : [:], cliVersion: nil,
+      expectsDevDialog: waiting, launchedChannels: sameLaunch ? AutoConfirmGuard.channels(inArgv: config.args) : [],
+      awakeStartedAt: -.infinity, devDialogSeen: nil, dialogAnswered: !waiting, agentDir: config.expandedAgentDir(home: options.home))
+    launch?.narrowed = MainNarrowed.found(
+      argv: snap?.argv, env: snap?.env, sameLaunch: sameLaunch, configured: MainNarrowed.mode(args: config.args, env: launchEnv()))
+    phase = waiting ? .starting : .running
     needsYou = nil
-    audit("attach", ["pid": "\(pid)"])
+    audit("attach", ["pid": "\(pid)", "warning": waiting ? "live" : "no"])
     emit(.attached(pid: pid))
     publish()
     return true
@@ -366,8 +443,11 @@ public final class Supervisor: @unchecked Sendable {
     case .starting, .running, .cleaningUp, .waitingToRestart, .stopping: return
     default: break
     }
+    guard !refusesForUnreadableConfig("start") else { return }
     guard tryLock() else { return fail(.startFailed("another Talos instance supervises this session")) }
     attempt = -1
+    cannotLaunchTries = 0
+    restartIsRetry = false
     cachedLaunchEnv = nil
     nextRestartIsCold = false
     launchLocked(kind: .cold)
@@ -376,11 +456,13 @@ public final class Supervisor: @unchecked Sendable {
   private func launchLocked(kind: StartKind) {
     let env = launchEnv()
     guard let claude = resolveClaude(env: env) else {
+      if retriesRestart(.claudeMissing) { return }
       return fail(.startFailed("claude was not found (claude_path \(config.claudePath))"))
     }
     let cwd = config.expandedAgentDir(home: options.home)
     var isDir: ObjCBool = false
     guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir), isDir.boolValue else {
+      if retriesRestart(.folderMissing) { return }
       return fail(.startFailed("the agent folder \(cwd) does not exist"))
     }
 
@@ -390,6 +472,7 @@ public final class Supervisor: @unchecked Sendable {
     if options.takeoverCheck && !skipCheck {
       let blockers = TakeoverCheck.check(gatherTakeover(env: env, claude: claude))
       if !blockers.isEmpty {
+        if retriesRestart(.channelsHeld) { return }
         phase = .blocked(blockers)
         audit("blocked", ["holders": blockers.map { "\($0.resource.rawValue):\($0.sessionPid)" }.joined(separator: ",")])
         emit(.blocked(blockers))
@@ -401,8 +484,29 @@ public final class Supervisor: @unchecked Sendable {
     // Session id: --resume <session.id> if set, else --session-id <new uuid>, written now (the cold start owns it).
     let mode: ResumeRewrite.Mode
     let sessionId: String
+    var unsaved = false
+    launchClaudeDir = claudeDir(env)  // where this start's conversation file will be (`noteConversation`)
     if let id = config.session.id {
-      mode = .resume(id)
+      // desktop.json may be written by an agent and the id is outside the launch seal: anything but a UUID is not a conversation, and is
+      // never put in the argv. Nothing is started and nothing is changed for the owner (no fresh conversation under the old one): the
+      // menu's Start a new conversation, or a fixed file, is the way on. The value is never logged.
+      guard ResumeRewrite.isUUID(id) else {
+        audit("session_id_invalid", [:])
+        return fail(.startFailed(SupervisorNotice.sessionIdInvalid))
+      }
+      // Claude Code saves a conversation only after its first message (or an /exit). One nobody has typed in has no file, and
+      // `--resume` of it is refused ("No conversation found"), which stopped Main as "can't be resumed". It is the same session
+      // started again: `--session-id <the same id>`. The file is looked for in Main's own config folder, under the folder's exact
+      // name and then anywhere (`SessionTranscript.find`); an id the CLI refused as already in use is resumed whatever the look said.
+      // Only a session whose file the app has never seen is "unsaved" (`noteConversation`): one that had a conversation and
+      // whose file is not found now (deleted, another config folder) is resumed, and stops as "can't be resumed" with the owner's
+      // choice, never quietly empty under the same id.
+      let resumeAnyway = forceResume == id
+      let had = noteConversation(id, folder: cwd)
+      unsaved = !resumeAnyway && !had && !SessionTranscript.isSaved(sessionId: id, folder: cwd, claudeDir: claudeDir(env))
+      forceResume = nil
+      if unsaved { audit(SessionTranscript.notSavedEvent, ["session": id]) }
+      mode = unsaved ? .newSession(id) : .resume(id)
       sessionId = id
     } else {
       sessionId = UUID().uuidString.lowercased()
@@ -411,10 +515,17 @@ public final class Supervisor: @unchecked Sendable {
       mode = .newSession(sessionId)
     }
     var args = ResumeRewrite.apply(config.args, mode)
+    // the installed guards rebuilt by the bridge from this release, re-pinned to the bun and checkout found now, BEFORE they are read
+    refreshGuards(env: env)
     // optional guards (talos-app install-guards): added when installed; a --settings of the owner's own wins and is warned about
-    let guarded = GuardsSettings.applying(to: args, talosHome: talosAppHome)
+    // and Claude Code's own computer use off (Talos's screen tools replace it), in the same one --settings
+    let guarded = GuardsSettings.applyingToMain(to: args, talosHome: talosAppHome, cwd: cwd)
     args = guarded.args
-    if let w = guarded.warning { audit("guards_not_applied", ["why": w]) }
+    for w in guarded.warnings { audit("guards_not_applied", ["why": w]) }
+    // Main runs with Claude Code's own computer use on: the owner hears it once per run, not only the audit log
+    if guarded.warnings.contains(where: { $0.hasSuffix(GuardsSettings.notDenied) }), !computerUseNotDeniedTold {
+      computerUseNotDeniedTold = postToPhone { _ in GuardsSettings.notDeniedPhoneLine }
+    }
     let version = probe.cliVersion(claude: claude, env: env)
 
     do {
@@ -425,13 +536,18 @@ public final class Supervisor: @unchecked Sendable {
         try host.restart(executable: claude, args: args, env: env, cwd: cwd)
       }
     } catch {
+      // the child was gone before its pid could be read: the same two mends as an exit at the start, then the launch again
+      if case PtyHostError.exitedImmediately(let rows) = error, sessionTrouble(mode, sessionId, folder: cwd, env: env, rows: rows) {
+        return launchLocked(kind: kind)
+      }
       if resumeMissingAtStart(error, mode) { return }
       // A restart whose child dies before its pid can be read is a crash like any other: it counts toward the cap.
-      if kind == .supervisorRestart { return crashedWithoutChild(String(describing: error)) }
+      // (Any restart after a crash, a cold one too: the launch changed or the host was lost. Only a start the owner made ends at once.)
+      if restartingAfterCrash { return crashedWithoutChild(String(describing: error)) }
       return fail(.startFailed("\(error)"))
     }
     guard let pid = host.childPid else {
-      if kind == .supervisorRestart { return crashedWithoutChild("no child pid") }
+      if restartingAfterCrash { return crashedWithoutChild("no child pid") }
       return fail(.startFailed("no child pid after start"))
     }
     let snap = probe.snapshot(pid)
@@ -445,14 +561,90 @@ public final class Supervisor: @unchecked Sendable {
       sessionId: sessionId, startedAt: clock.now(), childPid: pid, leaderStart: snap?.startTime ?? 0, fingerprint: fp,
       parts: config.launchParts(resolvedClaude: claude), cliVersion: version,
       expectsDevDialog: expects, launchedChannels: AutoConfirmGuard.channels(inArgv: args), awakeStartedAt: options.awake(),
-      devDialogSeen: nil, agentDir: cwd)
+      devDialogSeen: nil, startedWallMs: options.wallClock(), agentDir: cwd, afterCleanExit: launchingAfterCleanExit)
+    launch?.narrowed = MainNarrowed.mode(args: args, env: env)
     lastAgentsPollAt = -.infinity
+    cannotLaunchTries = 0
     needsYou = nil
     phase = expects ? .starting : .running
     audit(
       "start",
       ["kind": kind.rawValue, "pid": "\(pid)", "session": sessionId, "resume": launch?.resumeId == nil ? "no" : "yes"])
     publish()
+  }
+
+  /// A restart after a crash that cannot launch at all right now: another session holds the channels (the dead agent's own
+  /// children can take a moment to go, or the owner opened a second session), claude is not where it was (an update in progress),
+  /// the folder is not there (a volume not mounted yet). Each used to end the restart for good, silently. It is a failed attempt
+  /// tried again after the backoff, but outside the crash loop (nothing crashed): it has the contract's own budget
+  /// (`MAIN_RESTART.cannot_launch_tries`, the same on Linux). True when another try is scheduled. False for a start the owner made
+  /// (it ends at once, with its reason) and at the last try: the caller then ends as it always did (Blocked, or could not start),
+  /// nothing is restored, and the owner's phone gets one line, since nobody may be at the Mac.
+  private func retriesRestart(_ why: CrashPost.RestartBlock) -> Bool {
+    guard restartingAfterCrash else { return false }
+    let now = clock.now()
+    cannotLaunchTries += 1
+    audit("restart_not_possible", ["why": why.rawValue, "tries": "\(cannotLaunchTries)"])
+    guard cannotLaunchTries < timings.cannotLaunchTries else {
+      cannotLaunchTries = 0
+      audit("restart_gave_up", ["why": why.rawValue])
+      postToPhone { CrashPost.restartGaveUp(agentName: $0, why: why, at: CrashPost.clockTime(Date())) }
+      return false
+    }
+    attempt += 1
+    let delay = timings.backoff.delay(attempt: attempt, unit: random())
+    restartAt = now + delay
+    restartAfterCleanExit = false
+    restartIsRetry = true  // the next try is not another restart for the crash loop's count
+    phase = .waitingToRestart
+    emit(.restarting(attempt: attempt, delay: delay))
+    publish()
+    return true
+  }
+
+  private func claudeDir(_ env: [String: String]) -> String { WorkerMcp.claudeDir(home: options.home, env: env) }
+  /// Claude Code's config folder as the last start this app decided saw it; nil before any.
+  private var launchClaudeDir: String?
+
+  /// Whether the current session is known to have a conversation: its file has been seen on disk, now or before
+  /// (`session.conversation_seen`, written the first time, so it outlives the file and a change of config folder). Claude Code
+  /// writes the file at the first message, so "seen" is "has had a turn". Looked at when a start is decided, while the session
+  /// runs (with the agents poll) and when it exits, in the config folder of the last start this app made (none yet: not looked
+  /// at until the next start). False for any id but the configured one.
+  @discardableResult
+  func noteConversation(_ id: String, folder: String) -> Bool {
+    guard config.session.id == id, let dir = launchClaudeDir else { return false }
+    if config.session.conversationSeen == id { return true }
+    guard SessionTranscript.find(sessionId: id, folder: folder, claudeDir: dir) != nil else { return false }
+    config.session.conversationSeen = id
+    saveConfig()
+    return true
+  }
+
+  /// The two session errors of the CLI the next launch can mend (the Linux supervisor's rule, seen with Claude Code 2.1.322), each
+  /// at most once per id, so neither can loop:
+  ///   - `--session-id` refused as already in use: the session is saved after all (the look missed it), so it is resumed;
+  ///   - `--resume` of a file that holds no conversation (an /exit before anything was typed): it can never be resumed, so the id
+  ///     moves to `previous_ids` and the next launch makes a new one.
+  /// True when the next launch is mended; anything else is not mended here (a real resume error still stops Main).
+  private func sessionTrouble(_ mode: ResumeRewrite.Mode, _ sessionId: String, folder: String, env: [String: String], rows: [String]) -> Bool {
+    switch mode {
+    case .newSession:
+      guard SessionTranscript.sessionInUse(rows), !mended.contains("inuse:" + sessionId) else { return false }
+      mended.insert("inuse:" + sessionId)
+      forceResume = sessionId
+      audit(SessionTranscript.inUseResumeEvent, ["session": sessionId])
+      return true
+    case .resume:
+      guard DialogMatcher.resumeMissing(rows), !mended.contains("empty:" + sessionId), config.session.id == sessionId,
+        SessionTranscript.conversationEmpty(sessionId: sessionId, folder: folder, claudeDir: claudeDir(env))
+      else { return false }
+      mended.insert("empty:" + sessionId)
+      config.session.retireCurrentId()
+      saveConfig()
+      audit(SessionTranscript.emptyNewIdEvent, ["session": sessionId])
+      return true
+    }
   }
 
   private func fail(_ reason: StopReason) {
@@ -464,17 +656,25 @@ public final class Supervisor: @unchecked Sendable {
 
   func launchEnv() -> [String: String] {
     if let e = cachedLaunchEnv { return e }
-    let shell = probe.loginShellEnv() ?? ProcessInfo.processInfo.environment
-    let e = LoginShellEnv.build(shellEnv: shell, overrides: config.env)
+    let login = probe.loginShellEnv()
+    let e = LoginShellEnv.build(shellEnv: login ?? ProcessInfo.processInfo.environment, overrides: config.env)
+    // An unreadable login shell (it timed out) leaves the app's own environment, often the bare launchd PATH. desktop.json's `env` is on top
+    // either way (PATH included), the fallback is not remembered (the next start tries the login shell again), and the log says so.
+    if login == nil { audit("login_env_unreadable", ["path_from": config.env["PATH"] == nil ? "app" : "desktop.json"]); return e }
     cachedLaunchEnv = e
     return e
   }
 
-  private func resolveClaude(env: [String: String]) -> String? {
-    let raw = config.claudePath == "auto" ? "claude" : PathUtil.expandTilde(config.claudePath, home: options.home)
-    let r = LoginShellEnv.which(raw, path: env["PATH"], isExecutable: probe.isExecutable)
+  func resolveClaude(env: [String: String]) -> String? {
+    let r = whichClaude(env: env)
     resolvedClaude = r
     return r
+  }
+
+  /// Where `claude` is for this config and env, as a start would find it; remembers nothing (the restart check asks every 5 s).
+  func whichClaude(env: [String: String]) -> String? {
+    let raw = config.claudePath == "auto" ? "claude" : PathUtil.expandTilde(config.claudePath, home: options.home)
+    return LoginShellEnv.which(raw, path: env["PATH"], isExecutable: probe.isExecutable)
   }
 
   var talosAppHome: String {
@@ -490,36 +690,8 @@ public final class Supervisor: @unchecked Sendable {
 
   var bridgePidPath: String { talosAppHome + "/bridge.pid" }
 
-  // MARK: takeover inputs (read-only)
-
-  func gatherTakeover(env: [String: String], claude: String) -> TakeoverCheck.Inputs {
-    var processes: [Int32: ProcessSnapshot] = [:]
-    var bot: TakeoverCheck.BotPid?
-    if let d = probe.readFile(botPidPath),
-      let pid = Int32(String(decoding: d, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0
-    {
-      let holder = probe.snapshot(pid)
-      bot = TakeoverCheck.BotPid(pid: pid, fileModifiedAt: probe.modifiedAt(botPidPath) ?? 0, holder: holder)
-      if let g = holder?.pgid, processes[g] == nil { processes[g] = probe.snapshot(g) }
-    }
-    var bridge: TakeoverCheck.BridgePid?
-    if let d = probe.readFile(bridgePidPath),
-      let rec = try? JSONDecoder().decode(TakeoverCheck.BridgePidRecord.self, from: d)
-    {
-      let holder = probe.snapshot(rec.pid)
-      bridge = TakeoverCheck.BridgePid(record: rec, ps: probe.psInfo(rec.pid), holder: holder)
-      if let g = holder?.pgid, processes[g] == nil { processes[g] = probe.snapshot(g) }
-    }
-    let agents = probe.agents(claude: claude, env: env)
-    for e in agents ?? [] where e.isInteractive {
-      if let pid = e.pid, processes[pid] == nil { processes[pid] = probe.snapshot(pid) }
-    }
-    return TakeoverCheck.Inputs(
-      ourPgids: ownedGroupsLocked.union(options.siblingGroups?() ?? []), botPid: bot, bridgePid: bridge, agents: agents, processes: processes)
-  }
-
   /// bot.pid / bridge.pid holders inside our child's group, recorded so clean-up can wait for them (4.3 step 1a).
-  private func recordHolders(_ l: inout Launch) {
+  func recordHolders(_ l: inout Launch) {
     let pgid = l.childPid
     var found: [Holder] = []
     if let d = probe.readFile(botPidPath),
@@ -555,243 +727,9 @@ public final class Supervisor: @unchecked Sendable {
     default: break
     }
     recoveryTick(now)
+    restartCheckTick(now)
+    guardHookTick(now)
     publish()
-  }
-
-  private func superviseLive(_ now: Double) {
-    guard var l = launch else { return }
-    // A screen that could not be read says nothing: not "no dialog". Nothing is read from it (no dialog is raised, cleared or
-    // answered), but the start deadline and the agent poll below still run, so a capture that keeps failing cannot hide a start
-    // that never settles or a session that has dropped out of the agent list. The notice deadline (it stops the session) does not.
-    let read = host.visibleRows()
-    let rows = read ?? []
-    let unread = read == nil
-    let screen = DialogMatcher.classify(rows)
-    if case .devChannels(let d) = screen { l.devDialogSeen = d }
-    if !unread { watchPrompt(rows, launch: &l, now: now) }
-
-    // The registration notice: channels are live, so the dialog was answered. It only counts after this start showed
-    // the dialog (a stale notice in old scrollback must never look like a confirmation).
-    let dialogOnScreen: Bool = { if case .devChannels = screen { return true } else { return false } }()
-    if l.expectsDevDialog, !l.noticeSeen, !dialogOnScreen, DialogMatcher.noticeSeen(rows) {
-      if l.devDialogSeen != nil {
-        l.noticeSeen = true
-        phase = .running
-        needsYou = nil
-        if l.confirmsSent == 0, !l.devCard.confirmed {
-          recordHumanConfirm(&l, now: now)
-        } else if !l.devCard.confirmed {  // (a tap on the card already recorded its own confirm)
-          audit("auto_confirm_ok", ["session": l.sessionId])
-          if config.session.confirmedAt == nil { recordStartConfirmed(l) }  // the first-start row of the checklist
-        }
-        adoptReportedIdIfNeeded(&l)
-      } else if now - l.startedAt >= timings.noticeWait {
-        // Channels are live but this start never showed the dialog (a CLI change?). Running, nothing recorded.
-        l.noticeSeen = true
-        phase = .running
-        // The start-stalled alarm was about this very wait, which is over: a healthy running session must not keep it.
-        if needsYou == .startStalled { needsYou = nil }
-        audit("notice_without_dialog", ["session": l.sessionId])
-      }
-    }
-
-    // The development-channels warning, at every start (cold or restart): answered when `AutoConfirmGuard` allows it, else held for the owner.
-    syncDevCard(onScreen: dialogOnScreen, unread: unread, launch: &l)
-    if phase == .starting, l.expectsDevDialog {
-      if l.confirmSentAt == nil {
-        if case .devChannels(let dialog) = screen {
-          // A crash restart counts against the crash loop's cap; a cold start (the owner's reset, the phone's restart) only against its own.
-          switch confirmDevDialog(screen, launch: &l, loop: l.kind == .supervisorRestart ? loop : coldLoop, now: now) {
-          case .sent:
-            if l.kind == .supervisorRestart {
-              loop.recordAutoConfirm(now: now)
-              emit(.autoConfirmed(sessionId: l.sessionId))  // quiet note; a cold start gets none
-            } else { coldLoop.recordAutoConfirm(now: now) }
-            recovery.postColdStart = false  // a start that got through its warning has nothing to tell the phone
-            l.devRefusal = nil
-          case .notSent: break
-          case .refused(let why): devDialogRefused(why, dialog: dialog, launch: &l)
-          }
-        }
-      } else if !l.noticeSeen {
-        if case .devChannels(let again) = screen, l.confirmsSent > 0, now - (l.confirmSentAt ?? now) >= timings.tick * 2 {
-          // The dialog is back after our one Enter: never press twice.
-          raiseNeedsYou(.restartNotConfirmed(.alreadyConfirmedThisStart), key: "twice", launch: &l)
-          offerDevDialog(again, launch: &l)
-        }
-        // Not on a screen that could not be read: the notice may be up where we cannot see it, and stopping a healthy agent for
-        // that would be an action taken on no information. The start deadline below warns instead.
-        if !unread, now - (l.confirmSentAt ?? now) >= timings.noticeWait {
-          audit("auto_confirm_no_notice", ["session": l.sessionId])
-          emit(.confirmFailed)
-          launch = l
-          beginStop(reason: .noNotice, closeHost: false)
-          return
-        }
-      }
-    }
-
-    takeDevAnswer(launch: &l)  // the owner's tap on the card, if one came
-
-    // A dialog that has gone from the screen, or been replaced by another, is dealt with: its stall warning is over, and the
-    // same kind of dialog appearing again later (a second login expiry) must raise a new one. Only the key of the dialog
-    // still showing is kept.
-    if !unread {
-      let showing = screen.isDialog ? "stall:\(screen.label)" : nil
-      l.notifiedScreens = l.notifiedScreens.filter { !$0.hasPrefix("stall:") || $0 == showing }
-      // The start-stalled warning is over too once the dev-channel dialog is up: the wait it was about has an answer.
-      var over = needsYou == .startStalled && dialogOnScreen
-      if case .dialog(let named) = needsYou, !screen.isDialog || named != screen.label { over = true }
-      // A held question is about the dialog on screen. Once that is gone and the stall was told before, the stall is what is left.
-      if needsYouNamesTheDialog, !dialogOnScreen, l.notifiedScreens.contains("start") { over = true }
-      // A screen read blank between two dialogs empties the slot while the cold-start question is still held. The dev-channel
-      // dialog itself (never another dialog) coming up on an empty slot gets the question back, quietly, before the stall check.
-      if needsYou == nil, phase == .starting, l.question != nil, dialogOnScreen { over = true }
-      if over { needsYou = Self.alarmUnderneath(l, phase: phase, devDialogOnScreen: dialogOnScreen) }
-    }
-
-    // Dialog stall (4.3 step 3): no output for 60 s and a dialog on screen. The generic "a dialog needs you" is the
-    // fallback for dialogs nothing above has already named: while the dev-channel dialog is still on screen and the
-    // cold-start or refused-restart question about it is held, the stall must not replace it with the vaguer one. A
-    // different dialog (trust, consent, login) is not covered by that question, so the stall still raises for it. Nor does the dev-channel
-    // dialog stall once our own Enter is on its way and the start is still starting: it is answered, and the screen only has to catch
-    // up. A dev-channel dialog that shows up again after the notice (a running session) still stalls.
-    if screen.isDialog, !(dialogOnScreen && (needsYouNamesTheDialog || (l.confirmSentAt != nil && phase == .starting))), let last = host.lastOutputAt(), Date().timeIntervalSince(last) >= timings.dialogStall {
-      raiseNeedsYou(.dialog(screen.label), key: "stall:\(screen.label)", launch: &l)
-    }
-
-    // A start that shows nothing Talos recognises must not wait forever. Only when the owner has not already been told
-    // something (the cold-start question, a refused restart, a dialog) that explains why it is still starting. A held
-    // question about the dev-channel dialog explains the wait only while that dialog is still on screen.
-    if phase == .starting, needsYou == nil || (needsYouNamesTheDialog && !dialogOnScreen && !unread), now - l.startedAt >= timings.startWait {
-      raiseNeedsYou(.startStalled, key: "start", launch: &l)
-    }
-
-    launch = l
-
-    if now - lastAgentsPollAt >= timings.agentsPoll, !agentsPollInFlight {
-      lastAgentsPollAt = now
-      pollAgents()
-    }
-  }
-
-  /// What the one `needsYou` slot held before a dialog's warning took it. The alarms are raised once, so their keys outlive the
-  /// warning: when the dialog is over and the cause still stands, the alarm comes back (nothing is told twice). The cold-start or
-  /// refused-restart question comes back, with its own reason, while the dev-channel dialog it is about is on screen again.
-  static func alarmUnderneath(_ l: Launch, phase: Phase, devDialogOnScreen: Bool) -> NeedsYou? {
-    if devDialogOnScreen, phase == .starting, let q = l.question { return q }
-    if l.notifiedScreens.contains("stuck") { return .stuck }
-    if l.notifiedScreens.contains("start"), phase == .starting { return .startStalled }
-    return nil
-  }
-
-  /// The owner has already been told what to do about the dialog on screen (press Enter, or why Talos did not).
-  private var needsYouNamesTheDialog: Bool {
-    switch needsYou {
-    case .confirmColdStart, .restartNotConfirmed: return true
-    default: return false
-    }
-  }
-
-  func raiseNeedsYou(_ n: NeedsYou, key: String, launch l: inout Launch) {
-    guard !l.notifiedScreens.contains(key) else { return }
-    l.notifiedScreens.insert(key)
-    needsYou = n
-    switch n {
-    case .confirmColdStart, .restartNotConfirmed: l.question = n
-    default: break
-    }
-    audit("needs_you", ["why": key])
-    emit(.needsYou(n))
-    if config.openTerminalOnDialog { emit(.openTerminal) }
-  }
-
-  /// Whether a running session belongs to the folder the config names now. After a switch of folder nothing restarts, so the old
-  /// session goes on, and what it reports or has confirmed is the old folder's: never written into the new folder's setup.
-  private func isForConfiguredFolder(_ l: Launch) -> Bool {
-    PathUtil.canonical(l.agentDir) == PathUtil.canonical(config.expandedAgentDir(home: options.home))
-  }
-
-  /// This start's session is the confirmed one (the checklist's "first start confirmed"), unless it is for another folder. Only the
-  /// verified tap on the card (`ownerConfirmed`) stores and seals the launch fingerprint the auto-accept compares with; an auto-accept or a plain Enter in the pane never does.
-  @discardableResult
-  func recordStartConfirmed(_ l: Launch, ownerConfirmed: Bool = false) -> Bool {
-    guard isForConfiguredFolder(l) else { return false }
-    config.session.id = l.sessionId
-    config.session.confirmedAt = ISO8601DateFormatter().string(from: Date())
-    if ownerConfirmed, !LaunchSeal.confirm(&config, fingerprint: l.fingerprint, parts: l.parts, trust: options.launchTrust) {
-      audit("launch_seal_unavailable", ["session": l.sessionId])  // no key could be used: stored unsealed, so the next start asks again
-    }
-    saveConfig()
-    return true
-  }
-
-  private func recordHumanConfirm(_ l: inout Launch, now: Double) {
-    // a plain Enter in the pane confirms this start only: it can be anyone with tmux, so it seals nothing (only a verified tap on the card does)
-    guard l.devDialogSeen != nil, recordStartConfirmed(l) else { return }
-    audit("human_confirm", ["session": l.sessionId])
-    emit(.humanConfirmed(sessionId: l.sessionId))
-  }
-
-  private func pollAgents() {
-    guard let l = launch, let claude = resolvedClaude ?? resolveClaude(env: launchEnv()) else { return }
-    let env = launchEnv()
-    let pid = l.childPid
-    agentsPollInFlight = true
-    let probe = self.probe
-    let queue = q
-    let me = WeakRef(self)
-    pollQ.async {
-      let entries = probe.agents(claude: claude, env: env)
-      queue.async { me.value?.handleAgents(entries, pid: pid) }
-    }
-  }
-
-  private func handleAgents(_ entries: [AgentEntry]?, pid: Int32) {
-    agentsPollInFlight = false
-    guard var l = launch, l.childPid == pid, phase == .running || phase == .starting else { return }
-    recordHolders(&l)
-    agentActivity = nil
-    if let entries {
-      if let e = AgentsList.interactive(entries, pid: pid) {
-        agentActivity = e.status
-        l.agentsMisses = 0
-        // It's listed again: no longer stuck, whatever the slot holds now (a dialog may have taken it).
-        if needsYou == .stuck { needsYou = nil }
-        l.notifiedScreens.remove("stuck")
-        if let sid = e.sessionId, sid != l.sessionId {
-          l.reportedSessionId = sid
-          if l.noticeSeen || !l.expectsDevDialog { adoptReportedIdIfNeeded(&l) }
-        }
-      } else if phase == .running {
-        l.agentsMisses += 1
-        if l.agentsMisses >= timings.hangPolls { raiseNeedsYou(.stuck, key: "stuck", launch: &l) }
-      }
-    }
-    launch = l
-    publish()
-  }
-
-  /// `agents --json` reports a different id than we launched with (4.4): follow it, after the notice, and move the
-  /// human confirmation with it only if this start was confirmed.
-  private func adoptReportedIdIfNeeded(_ l: inout Launch) {
-    guard let sid = l.reportedSessionId, sid != l.sessionId, ResumeRewrite.isUUID(sid), isForConfiguredFolder(l) else { return }
-    let old = l.sessionId
-    var s = config.session
-    let keepConfirm = s.confirmedAt != nil && s.id == old && (l.noticeSeen || !l.expectsDevDialog)
-    s.previousIds.removeAll { $0 == old }
-    s.previousIds.append(old)
-    if s.previousIds.count > 5 { s.previousIds.removeFirst(s.previousIds.count - 5) }
-    s.id = sid
-    if !keepConfirm {
-      s.confirmedAt = nil
-      s.confirmedCliVersion = nil
-    }
-    config.session = s
-    l.sessionId = sid
-    host.setMarker("talos_session", sid)
-    saveConfig()
-    audit("session_id_changed", ["from": old, "to": sid])
   }
 
   // MARK: exit, clean-up, restart
@@ -828,20 +766,57 @@ public final class Supervisor: @unchecked Sendable {
     if info.hostLost { nextRestartIsCold = true }
 
     let rows = info.lastRows.isEmpty ? (host.visibleRows() ?? []) : info.lastRows
-    if let rid = l.resumeId, DialogMatcher.resumeMissing(rows) {
+    // The CLI's resume error means a failed `--resume` only on an exit at the start (within the contract's window of the spawn,
+    // a start still on its warning included), as for a thread session (`WorkerManager.exited`). A session that ran and then crashed with those words on its screen
+    // (a transcript that quotes them) crashed: it is restarted, and its conversation is not declared gone.
+    let atTheStart = now - l.startedAt <= timings.resumeMissingWindow
+    noteConversation(l.sessionId, folder: l.agentDir)  // a first message typed just before the crash
+    // A failed start the next launch can mend, once each (`sessionTrouble`); not when the owner turned restarts off.
+    if atTheStart, config.autoRestart,
+      sessionTrouble(
+        l.resumeId.map { .resume($0) } ?? .newSession(l.sessionId), l.sessionId, folder: l.agentDir, env: launchEnv(), rows: rows)
+    {
+      restartAfterCleanExit = false
+      restartAt = now
+      return beginCleanup(pgid: l.childPid, holders: holders, now: now, then: .restart)
+    }
+    if atTheStart, let rid = l.resumeId, DialogMatcher.resumeMissing(rows) {
       return resumeMissingStop(rid, pgid: l.childPid, holders: holders, now: now)
     }
     guard config.autoRestart else {
       return beginCleanup(pgid: l.childPid, holders: holders, now: now, then: .stop(.crashedNoAutoRestart, closeHost: false))
     }
-    let expectsDialog = config.args.contains("--dangerously-load-development-channels")
-    let confirmCapHit = expectsDialog && !loop.mayAutoConfirm(now: now) && !nextRestartIsCold
-    guard loop.mayRestart(now: now), !confirmCapHit else {
-      audit("crash_loop", ["restarts": "\(loop.restartsInWindow(now: now))", "confirms": "\(loop.autoConfirmsInWindow(now: now))"])
-      postCrashLoopOnce()
-      emit(.stoppedRestarting)
-      return beginCleanup(pgid: l.childPid, holders: holders, now: now, then: .stop(.crashLoop, closeHost: false))
+    // Exit code 0 (no signal, the host not lost) is Main ending by itself, not a crash: claude also exits 0 after a self-update.
+    // The contract's rule (packages/protocol/src/supervisor.ts, `MAIN_RESTART`), the same on Linux: it restarts at the first backoff
+    // step, never counts toward the crash loop and never brings the automatic restore. Its own cap: more than
+    // `cleanExitsPerHour` of them in an hour stops Main (`clean_exit_loop`), with one line to the phone and nothing restored.
+    // (With auto-restart off no exit restarts Main, a clean one included: the guard above.)
+    let clean = info.code == 0 && info.signal == nil && !info.hostLost
+    if clean {
+      cleanExits = (cleanExits + [now]).filter { now - $0 < timings.cleanExitWindow }
+      guard cleanExits.count <= timings.cleanExitsPerHour else {
+        audit(MainRestartContract.cleanExitLoop, ["exits": "\(cleanExits.count)"])
+        postToPhone { _ in CrashPost.cleanExitLoop(at: CrashPost.clockTime(Date())) }
+        return beginCleanup(pgid: l.childPid, holders: holders, now: now, then: .stop(.cleanExitLoop, closeHost: false))
+      }
+      restartAfterCleanExit = true
+      attempt = -1  // a crash after it starts the steps over too
+      let delay = timings.backoff.delay(attempt: 0, unit: random())
+      restartAt = now + delay
+      emit(.restarting(attempt: 0, delay: delay))
+      return beginCleanup(pgid: l.childPid, holders: holders, now: now, then: .restart)
+    } else {
+      // Only the restart count is the crash loop. The auto-confirm cap ends the pressing, not the restarting: past it the restart
+      // still happens and its warning waits for the owner (`AutoConfirmGuard` refuses with `rateLimited`: the card, the popup, the
+      // phone line). Stopping there called three answered restarts in an hour a crash loop and put back the last good setup.
+      guard loop.mayRestart(now: now) else {
+        audit("crash_loop", ["restarts": "\(loop.restartsInWindow(now: now))", "confirms": "\(loop.autoConfirmsInWindow(now: now))"])
+        postCrashLoopOnce()
+        emit(.stoppedRestarting)
+        return beginCleanup(pgid: l.childPid, holders: holders, now: now, then: .stop(.crashLoop, closeHost: false))
+      }
     }
+    restartAfterCleanExit = false
     attempt = timings.backoff.nextAttempt(previous: attempt, runStartedAt: l.startedAt, crashAt: now)
     let delay = timings.backoff.delay(attempt: attempt, unit: random())
     restartAt = now + delay
@@ -860,6 +835,7 @@ public final class Supervisor: @unchecked Sendable {
     attempt += 1
     let delay = timings.backoff.delay(attempt: attempt, unit: random())
     restartAt = now + delay
+    restartAfterCleanExit = false
     phase = .waitingToRestart
     emit(.restarting(attempt: attempt, delay: delay))
     publish()
@@ -903,19 +879,26 @@ public final class Supervisor: @unchecked Sendable {
   }
 
   private func doRestart(_ now: Double) {
-    loop.recordRestart(now: now)
+    let afterCleanExit = restartAfterCleanExit
+    restartAfterCleanExit = false
+    if !afterCleanExit, !restartIsRetry { loop.recordRestart(now: now) }
+    restartIsRetry = false
     let kind: StartKind = nextRestartIsCold ? .cold : .supervisorRestart
     if nextRestartIsCold {
       cachedLaunchEnv = nil
       nextRestartIsCold = false
     }
     audit("restart", ["attempt": "\(attempt)", "kind": kind.rawValue])
+    restartingAfterCrash = true
+    launchingAfterCleanExit = afterCleanExit
     launchLocked(kind: kind)
+    restartingAfterCrash = false
+    launchingAfterCleanExit = false
   }
 
   // MARK: stop
 
-  private func beginStop(reason: StopReason, closeHost: Bool) {
+  func beginStop(reason: StopReason, closeHost: Bool) {
     guard tryLock() else {
       audit("stop_refused_passive", [:])
       emit(.actionRefusedNotOwner)
@@ -970,19 +953,29 @@ public final class Supervisor: @unchecked Sendable {
 
   // MARK: plumbing
 
-  private func saveConfig() {
-    do { try ConfigFile.save(config, to: options.configPath) } catch { audit("config_save_failed", [:]) }
+  func saveConfig() {
+    // The one place the app writes desktop.json, so the rule sits here too, whatever the caller checked: never over a file that
+    // could not be read when the app opened (what is in memory then is the defaults, not the owner's setup).
+    guard !configUnreadable else { return audit("config_unreadable_refused", ["what": "save"]) }
+    do {
+      // A file that has become unreadable since (the app holds the owner's real settings then) is set aside, not overwritten:
+      // say where it went (the name only, next to desktop.json).
+      if let moved = try ConfigFile.save(config, to: options.configPath) {
+        audit("config_unreadable_set_aside", ["file": (moved as NSString).lastPathComponent])
+      }
+    } catch { audit("config_save_failed", [:]) }
   }
 
   func emit(_ e: Event) { onEvent?(e) }
 
-  private func publish() {
+  func publish() {
     let s = Status(
       phase: phase, host: host.kind, childPid: launch?.childPid, sessionId: config.session.id,
       startKind: launch?.kind, needsYou: needsYou, lastExit: lastExit,
       restartsInWindow: loop.restartsInWindow(now: clock.now()), cliVersion: launch?.cliVersion,
       ownedGroups: ownedGroupsLocked, agentActivity: phase == .running ? agentActivity : nil, devDialog: launch?.devCard.offer,
-      devPhoneTold: launch?.devCard.phoneTold ?? false)
+      devPhoneTold: launch?.devCard.phoneTold ?? false, bridgeLive: launch?.bridgeSeenLive ?? false,
+      configUnreadable: configUnreadable, mainNarrowed: launch?.narrowed)
     statusLock.withLock { _status = s }
   }
 

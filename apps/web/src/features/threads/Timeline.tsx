@@ -1,30 +1,36 @@
 import type { AttachmentRefT, CardT, InboxItemT, MessageT } from '@talos-app/protocol'
-import { ownValue } from '@talos-app/protocol'
+import { cardExpiryMs, ownValue } from '@talos-app/protocol'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
 import { dayLabel } from '../../lib/format.ts'
 import { editingInside } from '../../lib/keyboardViewport.ts'
+import { cn } from '../../ui/cn.ts'
 import { RowErrorBoundary } from '../../ui/ErrorBoundary.tsx'
 import { IconArrowDown } from '../../ui/icons.tsx'
 import { Button } from '../../ui/index.ts'
 import { Mascot } from '../../ui/Mascot.tsx'
 import { ScrollRegion } from '../../ui/ScrollRegion.tsx'
+import { BugThreadButton, bugPlacement } from '../bugreport/BugButton.tsx'
 import { needsOwnerNow, placedAt } from '../cards/logic.ts'
 import { useNow } from '../cards/util.ts'
 import { ImageViewer, useVoiceOrder, VoiceOrderContext } from './Attachments.tsx'
 import {
+  FOLLOW_NEW_TEXT,
+  isFollowing,
   isNearBottom,
   jumpLabel,
   keepPlace,
+  NEAR_BOTTOM_PX,
   NEAR_TOP_PX,
   newArrivals,
+  OWN_CHANGE_MS,
   type Seen,
   SHORT_THREAD_ROWS,
   seenOf,
   unreadMarker,
 } from './jumpToLatest.ts'
 import { MessageView, TimelineCard } from './MessageView.tsx'
-import { useAgentName } from './useThreads.ts'
+import { useAgentName, useThreadName } from './useThreads.ts'
 
 type Row = { key: string; at: string; message?: MessageT; card?: CardT }
 
@@ -92,7 +98,7 @@ export function useTimelineRows(threadId: string): { rows: Row[]; messages: Mess
   const cards = useMemo(() => allCards.filter((c) => c.thread_id === threadId), [allCards, threadId])
   // A pending card passes its expiry with no frame to say so: the signature changes when one does, so the rows re-sort.
   const now = useNow()
-  const lapsed = cards.map((c) => (c.state === 'pending' && Date.parse(c.expires_at) <= now ? 1 : 0)).join('')
+  const lapsed = cards.map((c) => (c.state === 'pending' && cardExpiryMs(c) <= now ? 1 : 0)).join('')
   // biome-ignore lint/correctness/useExhaustiveDependencies: `lapsed` stands for `now`, which would re-sort every tick
   const rows = useMemo(() => orderTimelineRows(messages, cards, now), [messages, cards, lapsed])
   return { rows, messages, cards }
@@ -111,11 +117,13 @@ export function Timeline({
 }) {
   const client = useTalosClient()
   const agent = useAgentName()
+  const bugInThread = bugPlacement() === 'b'
   const macOnline = useTalos((s) => s.presence.bridge_online)
   const inbox = useTalos((s) => s.inbox)
   // The Inbox (a system thread) shares its screen with the event list, so its empty copy differs. Its conversation below
   // is real history like any thread's: only the empty copy knows the difference.
   const system = useTalos((s) => s.threads.find((t) => t.id === threadId)?.kind === 'system')
+  const threadName = useThreadName(threadId)
   const { rows, messages, cards } = useTimelineRows(threadId)
   const order = useVoiceOrder(messages)
   const [viewer, setViewer] = useState<AttachmentRefT | null>(null)
@@ -133,6 +141,8 @@ export function Timeline({
   // Why the last scroll-back failed when the Mac said so itself (clock off, update the app), shown until the next try.
   const [olderError, setOlderError] = useState<string | null>(null)
   const stick = useRef(true)
+  /** Within NEAR_BOTTOM_PX of the end: growth inside the thread (a streaming reply, an image loading) follows only then. */
+  const atEnd = useRef(true)
   const viewerOpen = useRef(false)
   viewerOpen.current = viewer !== null
   // Jump-to-latest: shown while scrolled away from the end; counts what arrived meanwhile.
@@ -238,11 +248,26 @@ export function Timeline({
     }
   }, [rows[0]?.key, firstStoredKey, scrollRef])
 
-  // Keep the bottom in view unless the owner scrolled up.
+  // Keep the bottom in view unless the owner scrolled up. The owner's own new message always goes there (FOLLOW_NEW_TEXT).
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs on every new row
   useLayoutEffect(() => {
     const el = scrollRef.current
-    if (!el || !stick.current) return
+    if (!el) return
+    const newest = rows[rows.length - 1]
+    if (
+      FOLLOW_NEW_TEXT &&
+      !stick.current &&
+      newest?.message?.author === 'owner' &&
+      newest.message.seq === undefined && // sent from this screen (not yet stored), not from another of the owner's devices
+      seen.current !== null &&
+      !seen.current.keys.has(newest.key) &&
+      !editingInside(el)
+    ) {
+      stick.current = true
+      setAway(false)
+      setFresh(0)
+    }
+    if (!stick.current) return
     // A card field is being edited: a new row must not scroll it away. Leave the owner where they are and offer Jump.
     if (editingInside(el)) {
       stick.current = false
@@ -267,18 +292,56 @@ export function Timeline({
     const el = scrollRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
-      // A card field being edited inside the scroller: the keyboard must not scroll it away.
-      if (stick.current) {
+      // A card field being edited inside the scroller: the keyboard must not scroll it away. Only right at the end: a few
+      // lines up the owner is rereading, and the keyboard opening must not move the view (atEnd, not the wider follow band).
+      if (atEnd.current) {
         if (!editingInside(el)) el.scrollTop = el.scrollHeight
       } else if (isNearBottom(el)) {
         // The scroller grew (keyboard closed) until the thread fits: no scroll event follows, so settle it here.
         stick.current = true
+        atEnd.current = true
         setAway(false)
         setFresh(0)
       }
     })
     ro.observe(el)
     return () => ro.disconnect()
+  }, [scrollRef])
+
+  // A reply growing as it streams, a card filling in: the rows are the same, the content is taller. Follow it while following
+  // (FOLLOW_NEW_TEXT), unless the owner just touched the thread (growth the owner caused, like expanding a row, is not news).
+  const touchedAt = useRef(0)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!FOLLOW_NEW_TEXT || !el || typeof MutationObserver === 'undefined') return
+    let height = el.scrollHeight
+    let queued = false
+    const settle = () => {
+      queued = false
+      const before = height - el.scrollTop - el.clientHeight // how far from the end the view was before it grew
+      const grew = el.scrollHeight > height
+      height = el.scrollHeight
+      // growth inside the thread follows only right at the end; a few lines up, the owner is rereading and the view stays put
+      if (!grew || before >= NEAR_BOTTOM_PX || viewerOpen.current || editingInside(el)) return
+      if (Date.now() - touchedAt.current < OWN_CHANGE_MS) return
+      el.scrollTop = el.scrollHeight
+    }
+    const mo = new MutationObserver(() => {
+      if (queued) return
+      queued = true
+      requestAnimationFrame(settle)
+    })
+    mo.observe(el, { childList: true, subtree: true, characterData: true })
+    const touch = () => {
+      touchedAt.current = Date.now()
+    }
+    el.addEventListener('pointerdown', touch, true)
+    el.addEventListener('keydown', touch, true)
+    return () => {
+      mo.disconnect()
+      el.removeEventListener('pointerdown', touch, true)
+      el.removeEventListener('keydown', touch, true)
+    }
   }, [scrollRef])
 
   // Open on the first unread message, once per thread, instead of the bottom.
@@ -325,9 +388,11 @@ export function Timeline({
   const onScroll = () => {
     const el = scrollRef.current
     if (!el) return
-    stick.current = isNearBottom(el)
-    setAway(!stick.current)
-    if (stick.current) setFresh(0)
+    stick.current = isFollowing(el)
+    // the down arrow shows whenever the end is out of view, even while new text would still follow
+    atEnd.current = isNearBottom(el)
+    setAway(!atEnd.current)
+    if (atEnd.current) setFresh(0)
     // Near the top with more behind it: fetch the next page before the owner hits the wall.
     if (el.scrollTop < NEAR_TOP_PX && hasMore && older === 'idle' && rows.length > 0) void loadOlder()
   }
@@ -352,7 +417,10 @@ export function Timeline({
     setOlder('loading')
     setOlderError(null)
     const el = scrollRef.current
-    anchor.current = el && !stick.current ? { height: el.scrollHeight, top: el.scrollTop } : null
+    // the reading place is kept unless the view is right at the end; reading a little way up must not snap to the bottom on a prepend
+    const keep = el !== null && !isNearBottom(el)
+    if (keep) stick.current = false
+    anchor.current = keep && el ? { height: el.scrollHeight, top: el.scrollTop } : null
     // Read now, not from this render: the rows may have changed since (a wipe after `ready`).
     const held = ownValue(client.store.getState().messages, threadId) ?? []
     const firstSeq = held.reduce<number | undefined>(
@@ -422,11 +490,16 @@ export function Timeline({
           onLoadCapture={() => {
             requestAnimationFrame(() => {
               const el = scrollRef.current
-              if (!el || !stick.current || viewerOpen.current || editingInside(el)) return
+              if (!el || !atEnd.current || viewerOpen.current || editingInside(el)) return
               if (el.scrollHeight - el.scrollTop - el.clientHeight > 1) el.scrollTop = el.scrollHeight
             })
           }}
-          className="relative flex-1 overflow-y-auto overscroll-contain pt-2 pb-4"
+          // placement B keeps its button in this timeline's bottom-right corner on a phone: room below the last row, so the
+          // newest message's own controls (time, Copy, the menu, Retry) are never under it
+          className={cn(
+            'relative flex-1 overflow-y-auto overscroll-contain pt-2',
+            bugInThread ? 'pb-16 md:pb-4' : 'pb-4',
+          )}
           data-testid="timeline"
         >
           {hasMore && (
@@ -509,7 +582,7 @@ export function Timeline({
                       onOpenItem={onOpenItem}
                     />
                   ) : r.card ? (
-                    <TimelineCard card={r.card} threadName={threadId} highlighted={r.card.id === highlightCard} />
+                    <TimelineCard card={r.card} threadName={threadName} highlighted={r.card.id === highlightCard} />
                   ) : null}
                 </RowErrorBoundary>
               </Fragment>
@@ -519,26 +592,30 @@ export function Timeline({
             {lastAgent?.text ? `${agent}: ${lastAgent.text.slice(0, 200)}` : ''}
           </div>
         </ScrollRegion>
-        {away && rows.length > 0 && (
-          <button
-            type="button"
-            data-testid="jump-to-latest"
-            aria-label={jumpLabel(fresh)}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={jump}
-            className="absolute right-3 bottom-3 inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-pill border border-line bg-surface px-3 text-sm font-medium text-text shadow-[0_2px_8px_rgb(0_0_0/0.25)] focus-visible:outline-2 focus-visible:outline-focus"
-          >
-            <IconArrowDown width={18} height={18} />
-            {fresh > 0 && (
-              <span
-                data-testid="jump-count"
-                className="grid min-w-5 place-items-center rounded-pill bg-accent px-1.5 text-xs font-semibold tabular-nums text-on-accent"
-              >
-                {fresh > 99 ? '99+' : fresh}
-              </span>
-            )}
-          </button>
-        )}
+        {/* bottom-right stack: jump-to-latest above the Report a bug button (placement B), both clear of the composer */}
+        <div className="pointer-events-none absolute right-3 bottom-3 flex flex-col items-end gap-2 [&>*]:pointer-events-auto">
+          {away && rows.length > 0 && (
+            <button
+              type="button"
+              data-testid="jump-to-latest"
+              aria-label={jumpLabel(fresh)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={jump}
+              className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-pill border border-line bg-surface px-3 text-sm font-medium text-text shadow-[0_2px_8px_rgb(0_0_0/0.25)] focus-visible:outline-2 focus-visible:outline-focus"
+            >
+              <IconArrowDown width={18} height={18} />
+              {fresh > 0 && (
+                <span
+                  data-testid="jump-count"
+                  className="grid min-w-5 place-items-center rounded-pill bg-accent px-1.5 text-xs font-semibold tabular-nums text-on-accent"
+                >
+                  {fresh > 99 ? '99+' : fresh}
+                </span>
+              )}
+            </button>
+          )}
+          <BugThreadButton />
+        </div>
       </div>
       <ImageViewer att={viewer} onClose={() => setViewer(null)} />
     </VoiceOrderContext.Provider>

@@ -10,6 +10,8 @@
 // A row's `where` is a path (Settings, then a section, then a label). The test checks the section is a row of the real
 // Settings list and that each label is in that section's own source files.
 
+import { BUG_CAPTURE_LIMITS } from '../bugreport/text.ts'
+
 export type Place = 'settings' | 'mac' | 'thread' | 'menubar' | 'topmenu' | 'terminal'
 
 /** How each place reads on the page. Test: these names are the ones the rest of this file uses. */
@@ -442,6 +444,24 @@ export const HELP_SECTIONS: Section[] = [
             a: 'They are two voices. The live-call voice is a Settings choice; spoken replies use your Mac’s speech command.',
           },
         ],
+      },
+    ],
+  },
+  {
+    id: 'report-bug',
+    title: 'Report a bug',
+    blocks: [
+      {
+        kind: 'p',
+        text: 'Something broke? Choose [[Report a bug]] in the … menu at the top of a thread (on a phone, in the menu), in Settings > Bug reports, at the bottom of this page, or in the command palette (Command-K). Talos takes a picture of the screen you were on. Mark it up with Pen, Arrow, Box or Text, and use Blur to hide anything private: Blur really pixelates that part of the picture before it is sent. Say what went wrong, then press [[Send report]]. Nothing leaves your Mac until you do.',
+      },
+      {
+        kind: 'p',
+        text: BUG_CAPTURE_LIMITS,
+      },
+      {
+        kind: 'p',
+        text: 'What goes with it: the versions of the app, the bridge, the relay and Claude Code, which thread and screen you were on, the recent errors, and the last 200 log lines. Keys, tokens and your home folder are taken out first, the same way {{talos-app report}} does. The last 5 messages of the thread go along only if you turn that on. [[Preview everything that will be sent]] shows every word of it.',
       },
     ],
   },

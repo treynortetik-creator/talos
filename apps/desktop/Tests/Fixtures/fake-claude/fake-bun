@@ -1,0 +1,10 @@
+#!/bin/bash
+# Fake bun for the guards' refresh at Main's start: `fake-bun <checkout>/apps/bridge/src/cli.ts guards refresh`. Records its words, its
+# PATH and how many FAKE_ variables reached it in $TALOS_APP_HOME/fake-guards/calls; copies fake-guards/write (if there) over the
+# guards' settings.json; prints fake-guards/output (default: the no-op line); exits with fake-guards/exit (default 0).
+d="$TALOS_APP_HOME/fake-guards"
+mkdir -p "$d"
+printf '%s | PATH=%s | FAKE=%s\n' "$*" "$PATH" "$(env | grep -c '^FAKE_')" >> "$d/calls"
+[ -f "$d/write" ] && cp "$d/write" "$TALOS_APP_HOME/guards/settings.json"
+if [ -f "$d/output" ]; then cat "$d/output"; else echo 'guards refresh: unchanged'; fi
+exit "$(cat "$d/exit" 2>/dev/null || echo 0)"

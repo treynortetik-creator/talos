@@ -130,14 +130,22 @@ const sequences: Record<string, (r: Replay) => Promise<void>> = {
   },
 
   async permission_card_precheck(r) {
-    // A prompt whose input is partly hidden gets a card with no Allow. A PRIMARY forged past the relay must be refused
-    // before the ledger moves, so the card stays pending.
-    await r.h.bridge.ctx.permission.onRequest(permissionFixture('elided').params)
-    const created = await r.h.relay.expectFrame('card.create', (x) => x.card.kind === 'permission', {
+    // A partly hidden call keeps Allow with a note; the one card with no Allow is a repeated request id. A PRIMARY forged past
+    // the relay on it must be refused before any verdict is sent (the id is poisoned, so it is refused as closed).
+    const fx = permissionFixture('repeated_id').params
+    await r.h.bridge.ctx.permission.onRequest(fx)
+    const first = await r.h.relay.expectFrame('card.create', (x) => x.card.kind === 'permission', {
       direction: 'from_bridge',
     })
     await r.settle()
-    r.note('a forged Allow on a card that cannot allow')
+    await r.h.bridge.ctx.permission.onRequest(fx)
+    const created = await r.h.relay.expectFrame(
+      'card.create',
+      (x) => x.card.kind === 'permission' && x.card.id !== first.card.id,
+      { direction: 'from_bridge' },
+    )
+    await r.settle()
+    r.note('a forged Allow on the repeated-id card, which cannot allow')
     await r.pushSigned(resolve(r, created.card, 'primary'))
     await r.settle()
   },

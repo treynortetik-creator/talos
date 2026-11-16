@@ -151,7 +151,7 @@ public enum WebPolicy {
   }
 
   /// What this Mac app can do for the page, listed in the user agent so the page never asks for something an older app drops.
-  public static let shellFeatures = ["pick-folder"]
+  public static let shellFeatures = ["pick-folder", ShellPane.shellFeature]
 
   /// The whole application name for the web view's user agent: the version mark, then `TalosFeatures/<list>`.
   public static func userAgentApplicationName(version: String) -> String {

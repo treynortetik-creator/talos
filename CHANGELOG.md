@@ -1,5 +1,648 @@
 # Changelog
 
+## Passwords in always-allowed commands are no longer kept
+
+- The record of always-allowed commands (and the line in your thread) now hides a password or key a command carries: `curl -u user:pass`, `?api_key=...` or `?token=...` in a link, `--password`, a `X-Api-Key` header. The same cleanup now covers bug reports and logs.
+
+## Always-allowed actions no longer buzz your phone
+
+- A git push to main is now its own kind, "pushing code", no longer lumped in with deploys. An "Always allow deploys" you already set still covers pushes; allowing pushing code on its own does not cover deploys.
+- Anything you always allow still shows in the thread, but quietly: no notification. Passes within 10 minutes in one thread fold into one line with a count ("Also always allowed in the last 10 minutes: 2 pushes and 1 deploy"). The first one in each stretch still gets its own quiet line, the counted line names what ran, and every pass is still recorded one by one on your Mac. Cards you had to approve before are still cards.
+
+## A thread with its own folder can sit under another thread
+
+- You can now put a thread that has its own session and its own folder under another thread, even when its folder is outside the parent's folder (your Talos code thread under the agent thread, say). Talos tells you once that it keeps its own folder, so it does not get the parent's instructions; the parent's privacy rules (files it may not read or send) still apply to it. The folder has to exist already; a missing one is refused, and so is the parent's own folder. A thread's own session now also lists its sub-threads when it looks at the thread list.
+## The live bridge checkout stays on its deployed commit
+
+- The clone the Mac's bridge runs from can be marked live (`scripts/live-checkout.sh mark`). In that clone a checkout or pull that moves HEAD off the marked commit is put straight back and refused with a plain line (`.githooks/live-guard.sh`, run by post-checkout and post-merge). `scripts/live-checkout.sh deploy <sha>` is the one way to move it: detached, dependencies installed, marker updated. Worktrees never carry the marker. `git reset` runs no hook and is not covered. Test: `scripts/live-guard-test.sh`.
+
+## Fewer "disconnected" flashes
+
+- Your server now restarts only when a change touches the server or the app it serves. Before, every change to Talos restarted it, more than 80 times a day, and each restart showed the app as disconnected for a moment. The server now also notes in its log when it stops, so each restart's real gap can be measured.
+- When the server does restart, the app and your computer reconnect within about a second instead of waiting out a growing delay.
+
+## No more flashing "offline" on short drops
+
+- A short drop of the connection (to your server, or your Mac going away for a moment) no longer flashes a banner. Talos says so only once the connection has been down for 30 seconds. Messages you send meanwhile wait and go out when it is back, as before.
+## Run: one tap for any plain script, and Run again
+
+- **Run** on a script your agent posts now takes one tap for any plain script, however long. A script with look-alike or other unusual characters still asks twice.
+- Once a Run has gone, the button says **Run again**: a fresh tap runs the same script again. A tap that is resent or replayed still runs only once.
+## A new install also fetches the reranker model
+
+- A new install now downloads the reranker model (about 571 MB) along with semantic memory search, so `--rerank` is ready when you want it. A computer with under 3 GiB of memory skips it with one line saying how to add it later. `--no-reranker` skips it. Searches still rerank only when asked. If the download fails the install still finishes, and `talos-app doctor` shows the memory search row as a warning with the command to try again.
+## A thread's own session is pointed at the notes you mention
+
+- When your message to a thread names a person, project or company you have a note about, that thread's own session is given a pointer to the note (its title, one line and the start of it) and can read it before answering, within the folders Memory already shows and nothing else. Settings, Developer, "Notes that may matter" turns it off.
+
+## The weekly wiki check and the weekly snapshot cost nothing, and are on from the start
+
+- The weekly wiki check and the weekly snapshot are now plain commands instead of Claude runs, so they use none of your plan. A new agent with the scheduler has both on from the start. The morning brief, the state sweep and the nightly memory run still use Claude, so they stay off until you turn them on. Jobs you already have are left as they are.
+## Clio, and the Clio graph
+
+- Talos's memory system is called **Clio**. The Memory screen now reads "Clio, your agent's memory"; the tab is still Memory.
+- **Graph** on Clio opens your notes in 3D, each a dot coloured by its folder and sized by how linked it is, with the links between them. Drag to turn it, scroll to zoom, choose a note to see what it links to and open it. Find a note narrows it to the matches and their neighbours; the folder buttons hide a folder. It turns slowly on its own (not with reduced motion). With a very large memory it shows the most recently changed 2,000 notes and says so.
+## Talos needs Bun 1.4.4 or newer
+
+- `./install.sh`, `apps/bridge/scripts/install.sh` and `talos-app doctor` now ask for Bun 1.4.4 or newer (it was 1.3.11),
+  and say how to upgrade: `bun upgrade` on macOS or Linux, or download the newest Talos Setup and open it on Windows.
+- `talos-app update` stops before you restart the agent if the new code needs a newer Bun than yours. A bridge started on an
+  older Bun keeps running, files a problem report and says how to upgrade.
+
+## Background jobs run on Linux and the Windows PC
+
+- With Chronos's background timer running (its Linux installer now starts it), jobs that run by themselves, and command jobs like the memory index refresh, run on Linux and on the Windows PC too, each card saying it runs unattended with full permissions. A job limited to the tools it lists still runs only on a Mac for now. Schedules says which jobs can't run on this computer and why.
+## Pick Memory's folders in Settings
+
+- **Settings, Memory folders** lists the folders in your agent folder, with how many notes each holds. Tick the ones Notes in Memory should show and tap Save; Memory turns on with them. Before, this was only possible in a terminal at the Mac. Untick them all to turn Notes off. If your Mac is offline, it says nothing was saved.
+## Library: your pages and files in one place
+
+- **Library** replaces Files and Pages: one list, newest first, of the pages your agent published and the files sent in Talos, in every thread. It opens on what your agent sent; the switch at the top shows what you sent. Pages are marked and open full screen. Filters: All, Pages or Files (with Docs, Audio and Images under Files).
+- With your Mac offline, the pages still list; the files come back when it is online.
+## A new agent's memory is searchable by meaning, and browsable from the phone, from the start
+
+- A new install now sets up semantic memory search by itself, so the agent finds a note that says the same thing in other words. On a computer with less than 15 GB of memory it uses the smaller model. `--no-memory-search` skips it. If the setup fails (no internet, no Python 3.10), search still works by words, and `talos-app doctor` (on Windows, **Check Talos**) says so with the one command that sets it up.
+- The phone's memory browser is set up at install too: your memory and wiki folders, with no questions. An agent you already have is not changed, and a memory browser you set up yourself is never replaced.
+## Your agent can set itself a wake-up
+
+- An agent that has to wait (for a build, a reply, a time of day) can now set a one-shot wake-up with a note to itself, then rest. Its thread's session can be parked meanwhile and use nothing; at the time it starts again and picks up where the note says.
+- The wake-ups waiting for a session show in its Session panel, with the time, the note and a Cancel button.
+- The note is your agent's own words, never yours: it approves nothing.
+
+## Files: what your agent sent, and what you sent, one tap apart
+
+- **Files** opens on the files your agent sent you. A switch at the top shows the files you sent instead. The old From menu is gone. Filters stay as they are when you switch.
+
+## The thread follows new text, and the keyboard goes down after Send on a phone
+
+- When a reply comes in or grows as it streams, the thread follows it to the newest line, on the phone, the iPhone app and a computer. Scrolled up to read? You stay put, and the down arrow counts what came. Your own message always takes you to the bottom.
+- On a phone, the keyboard goes down after you tap Send, so you see the whole thread while the reply comes in.
+## The prebuilt Mac app installs on a clean Mac with no questions
+
+- `install.sh --from-release` no longer needs Node on a Mac that has no relay set yet, and never fails an install because Node is missing.
+- After every one of its checks passes (the sha256 you gave, notarized by Apple, signed by the team you gave), it removes the download flag from the installed Talos, so macOS opens it from Applications without asking and without running it from a temporary copy. It says in one line what it checked.
+- A Talos that is running from such a temporary copy anyway does not try to update, and says once how to fix it: move it to Applications and reopen it.
+## A thread's session is no longer put to sleep while its background work runs
+
+- A thread with its own session is no longer parked for being idle while something it started is still running in the background (a long command, a wait it set for itself). It parks once that work ends. When the session limit forces one to stop anyway, Talos stops one with nothing running first; if every session has work running, the thread that loses it gets one line saying how many tasks were running and the first one's command.
+- Every time a thread's session is parked, the Mac app's log says why, how long it had been idle and how much background work was running.
+- A message another agent sends with Claude Code's own messaging does not wake a parked thread session; a Talos hand-off does. To wait a long time, a thread session should use a Talos schedule, not a timer of its own.
+
+## Report a bug opens at once, and you can add your own picture
+
+- **Report a bug** now opens the moment you tap it, with "Getting the screen…" while the picture of the screen is taken behind it. It used to wait two or three seconds first. Taps while it opens do nothing more.
+- **Add a picture**: choose a screenshot from your photo library or a file, or paste one, if the picture of the screen is missing or you want a different one. You can mark it up the same way.
+## A thread's agent comes back after you sign in
+
+## A Developer switch for the thread fence
+
+- A new developer setting, **Thread fence**. On (the default), a thread's own agent and its helpers can't read the Talos home. Turn it off and they get the same access your main agent has, from each thread's next start: ask your agent and tap the card it shows you; a Developer page in Settings follows. You get one line in your main thread whenever it changes. A lead thread still can't read your personal vault or your keys.
+- You can ask your agent to change how long a thread's own session stays idle before it is parked (5 to 720 minutes).
+
+## Files: what your agent sent, and what you sent, one tap apart
+
+- A thread whose own agent started before you signed in to Claude, and stopped at the sign-in screen, now starts again with your next message once you have signed in. It used to stay stopped until it was restarted by hand.
+
+## `talos-app errors` reads more plainly
+
+- A bug report from someone else's install now says `from another install` instead of `(external)`, and `errors list` and `errors show` give your local time beside the UTC time.
+
+## Your main agent and thread agents can hand off more work
+
+- Your main agent and a thread's own agent can now hand each other up to 20 short tasks or results a day each way, up from 5. Each thread still has at most 3 tasks open at once.
+
+## Fewer "no" answers from your agent's settings changes
+
+- Your agent no longer refuses to make a 21st thread, or a seventh settings change in an hour. It goes ahead and is told to check with you that you want it. The limit of 40 threads in all still holds.
+
+## A thread's own agent can check on Talos
+
+- A thread with its own agent can now run `talos-app status`, `doctor` and `logs` to see how things are running. `logs` shows it only the lines about its own thread.
+
+## Your agent can't approve its own "ask me first" actions
+
+- When one of your "ask me first" rules stops your agent (a push to main, a deploy, a publish, a message sent through a connected account), it can now ask you on your phone: an "Allow once" card shows the exact command, and only your tap lets that one command through, once. It no longer counts your words in chat, and nothing your agent writes or runs can approve it for you. Deploys, publishing and sends offer "Always allow" too, the same as on your agent's own cards.
+
+## Bug reports wait for your computer to catch up
+
+- A bug report sent to you while Talos on your computer is too old to take it is no longer deleted after a week: it waits up to 30 days, with its screenshot. After 5 days you get one line in your main thread saying reports are waiting for a newer Talos.
+
+## Saving on the iPhone app survives a trip to the background
+
+- When the iPhone app goes to the background just as it saves something (a draft being cleared after a send, a message waiting to go), the save now waits and finishes when you come back, instead of failing with "Attempt to delete range from database without an in-progress transaction". A newer save made meanwhile always wins over the one that waited.
+
+## Bug reports from beta users can reach the Talos team
+
+- A relay set up for a beta user can send her bug reports, with the marked-up screenshot, to the Talos team's relay, which files each one on the team's Mac. `talos-app errors list` shows them as `install:<name> (external)`, apart from your own problems. It is off unless both relays are set up for it; nothing changes for anyone else.
+
+## The bug reporter says truthfully where a report goes
+
+- The "Goes to" line in Report a bug, on a computer and now on a phone too, says what your relay really does with a report: it stays on your relay, or your relay passes it on to the Talos team or to the webhook address you set. It used to name an inbox that did not exist.
+
+## Report a bug from any screen
+
+- **Report a bug** is now one tap from every screen: a slot in the phone's bottom bar, a row at the foot of the computer's sidebar, and in a thread on a phone a small button in the corner above the message box. It never sits over a message or a control. One tap opens the reporter with a picture of the screen behind (the button itself is left out of it).
+
+## No more Face ID approvals, and "Always allow" on cards
+
+- Nothing asks for Face ID or your passkey any more except signing in. A tap approves every card and setting, risky ones included; a risky card is still approved in the app, not from a notification: Approve on a notification opens the card with its button ready. Revoking a device still asks you to confirm first. You stay signed in for up to 90 days of not using the app.
+- A card that sends something outside (an email, a message, a deploy, publishing, a purchase) now offers three buttons: the action itself ("Send"), "Always allow emails" (or deploys, and so on), and Deny. Once a kind is always allowed, your agent does it without a card and puts one line in the thread saying what it did, with a notification even in quiet hours that opens that thread.
+- Settings → Account → **Always allowed** lists what is always allowed, with the day you added each, Remove and Remove all. You can also tell your agent "always allow emails" or "stop always allowing emails".
+
+## An open app picks up a new version by itself
+
+- The app now notices a new version within about a minute while it stays open, also in the iPhone app (it used to need a relaunch), and reloads by itself at a quiet moment: after half a minute without a touch, and never while you are typing, recording or dictating a voice note, in a dialog, on a call or in Settings. Until then it shows "A new version of Talos is ready" with a Reload button.
+
+## Ask your agent to change a setting, and it's done
+
+- Your agent can also run the Talos commands you ask it to that used to need you at a terminal: updating, rolling back or restoring the agent kit (signed releases only), stopping and starting Main, connecting a folder, and scanning for MCP apps. These stay yours at a terminal: approving a device, listing or revoking devices, replacing the bridge key, turning trust mode on, and removing the guards (your agent can install them, never remove them). If you stopped Main yourself, your agent starts it again only when you ask it to.
+- Ask your agent to change a Talos setting, in your own words, and it makes the change and tells you right away what changed and how to undo it. No card to approve. This covers your agent's name and voices, threads, notifications, quiet hours, the theme, how long attachments are kept, the memory browser, the work section's wording and thread sessions. It also covers starting a thread's session fresh or parking it, resetting the theme, and setting up memory or a thread lead. Who you are and what is connected (devices, keys, trust mode, the work systems themselves) stay yours to change in Settings.
+- Your words count for two hours in the thread you said them in, unless something was shared into that thread since. A change that affects which alerts reach you (notifications, quiet hours, a thread's alerts) is pushed to you even in quiet hours.
+- **Lock Talos settings** in Settings stops all of this: with it on, your agent only proposes, and you approve each change on a card. Your agent can turn the lock on when you ask; only you can turn it off.
+
+## Scheduled jobs on Linux and the Windows PC
+
+- Chronos, the scheduler, now installs on Linux, and on the Windows PC Setup installs it and sets it up for Talos. Jobs that run in a Talos thread can be scheduled there. Jobs that run by themselves in the background need a timer that isn't on Linux or the Windows PC yet, so Talos asks you to run them in a thread instead.
+- On Linux and the Windows PC, the scheduler's health now warns about a job that is set to run by itself in the background, which can't run there yet, and names it. Setting it to run in a Talos thread with full permissions fixes it.
+
+## On a phone the message box has a row of its own
+
+- On a phone (or any narrow column) the box you type in now spans the whole width, with the plus, voice and send buttons in a row beneath it, so a long message is easier to read and edit. A wide window keeps the one row.
+
+## A Mac can install a prebuilt Talos instead of building it
+
+- `apps/desktop/scripts/install.sh --from-release <address> --sha256 <sha256> --team <team id>` installs a Talos that was built, signed and notarized elsewhere: no Swift, no build and no signing certificate on that Mac. It installs nothing unless the file's sha256, its signature, Apple's notarization and the publisher's team all check out, and says which one failed.
+- Installing a Talos signed by someone else than the one installed now stops and explains why: macOS would keep Screen Recording and Accessibility on the old signature. `--new-identity` installs it and says how to grant them again.
+- A prebuilt Talos asks you once, on a card, before it runs scripts from the clone the installer recorded, and refuses a recorded clone inside your agent, thread or temp folders.
+- After Talos's signer changes, the development-channel card is answered once instead of at every start.
+- Setup → Permissions: when you pressed Grant for Screen Recording and macOS still says no after Talos reopened, it now tells you how to remove the old Talos entry in System Settings and grant again.
+- Building the Mac app with no signing certificate now stops and says how to make one, instead of quietly building an app that macOS forgets after every rebuild.
+
+## On the Windows PC, a session that needs you opens from the tray
+
+- Where Talos used to say a thread's session can't be opened on a Windows PC yet, it now tells you how: click the Talos icon by the clock, choose Open a thread's session..., and pick the thread.
+
+## The rest of Talos's sentences follow your computer too
+
+- Sentences Talos missed the first time now say "your computer" on Linux too: "Apps are turned off", a reset message history, the relay connection lost and back, a version mismatch, attachments that could not be saved, undo, search, settings cards and the checks a heartbeat runs. On a Mac they read as before.
+- On the Windows PC every sentence says "your PC" or "this PC", as the app does.
+- `talos-app update` on Linux ends by telling you to restart the supervisor so it runs the new code, instead of building a Mac app.
+
+## The app speaks of your PC or your computer, not your Mac, when Talos runs elsewhere
+
+- On a Windows PC or a Linux computer, the phone and web app now name your PC or your computer instead of "your Mac" on the screens you meet first: pairing and sign-in, Health and its offline banners, the agents list, upload errors, approval and dialog cards, schedule cards and the Schedules tab, and thread-session status. Where a step names a command or a menu, it gives that computer's own (the Talos icon by the clock on a PC; `talos-app` commands on Linux), and where there is no way yet it says so. On a Mac every sentence reads as before.
+- The enroll page now tells a Mac owner the Mac's real way to pair a phone, `talos-app enroll` in Terminal; it used to point at a menu item the Mac does not have.
+
+## Talos on Linux and on a Windows PC speaks of your computer, not a Mac
+
+- On a Linux computer or the Windows PC, Talos no longer tells you to do things "at the Mac". Approval and dialog cards, a thread's status, the Restart and fresh-conversation buttons, file and message errors, clock warnings and read-aloud now say "your computer", and on Linux they name the command to run there. On a Mac every sentence is the same as before.
+- On the Windows PC, which has no terminal, Talos never tells you to run a command. It points at the Talos icon by the clock (for example "Sign in to Claude…" or "Open the log folder"), or says plainly that something can't be done on a Windows PC yet, such as opening a thread's session or setting up MCP apps.
+- With no scheduler installed, Linux and the Windows PC say "Scheduled jobs aren't available on Linux yet" (or "on a Windows PC") instead of offering a Mac-only install.
+- When a session hits its usage limit, the step under "waiting on" now says where to press Esc on your own computer.
+- The first time you open a session on tmux 3.4 (Ubuntu 24.04, and the Windows PC), you now see the session and its question, not a screen of tmux errors that swallowed what you typed.
+
+## An approval with no summary says so
+
+- When Claude asks to run something without describing it, the approval card now says "No description given" under Claude's summary instead of an empty heading.
+
+## Logging out of an app removes every leftover piece of its sign-in
+
+- `talos-app apps logout` (and deleting a stored value) now looks through the Keychain for every piece of that sign-in, not only the ones the current index names. Pieces left by an earlier failed save, a failed delete, or two writers at once are removed too, and only pieces of that one sign-in. It only looks in your default keychain and gives up after 10 seconds. If the Keychain cannot be listed in time or a piece cannot be removed, logout says so and files a problem report.
+- A failed save now files one problem report, not several. A save where the Mac's `security` tool reported an error but the value was stored anyway counts as saved and files nothing.
+
+## The Mac checks that a phone restart is yours
+
+- The phone's Restart agent now reaches the Mac with your own signature on it, and the Mac checks it against your paired
+  phones before restarting as you asked. A restart request without one (a session's `restart_main`, or anything else that
+  writes the request file) is checked first: the Mac restarts only if Main would come back by itself, and tells your phone
+  why when it does not. A request that claims to be yours and does not verify is refused, and your phone is told.
+- Until the bridge restarts after this update, your phone's Restart is treated like a session's: if the Mac would not
+  restart Main by itself, your phone says why and asks you to restart Main from the Mac's menu once.
+
+## Add files to a thread's folder
+
+- The Files pane has an Upload button: the file goes into the folder of the file you are looking at, or the thread's folder. On a wide
+  screen you can also drop a file on a folder in the tree. The phone's Files sheet has Upload too.
+- Nothing on your Mac is overwritten: if the name is taken, the new file gets "name (2)" and the pane says so. Hidden files and the
+  instruction files (AGENTS.md, CLAUDE.md) can't be uploaded; instructions are edited in thread settings. Up to 50 MB a file.
+
+## A thread's instructions in its settings
+
+- A thread with its own session and folder has an Instructions section in its settings: Edit AGENTS.md opens the file from that
+  folder, and Save writes it back. The thread's next session reads it, beside CLAUDE.md.
+- If the file changed on your Mac since you opened it (the agent may keep its own instructions), Save says so and Reload shows the
+  new text, so nothing is lost. A change made outside Settings shows as a diff against your last save, and the next session start
+  says so once, as a quiet line in the thread.
+- The shared agent folder is not editable here: a thread needs a folder of its own to have instructions of its own.
+
+## Mac: your own shell in the Terminal pane
+
+- The Mac app can lay your own login shell over the Terminal pane beside a thread. It starts in the folder of a thread that has
+  its own session, and in the agent folder for every other thread, with your environment and nothing left over from a Claude
+  Code or Talos session. `+` opens another tab. Hiding the pane keeps the shell running; closing the pane, or signing out in
+  the Mac app, ends it.
+- This is your shell, not the agent's terminal: it runs on its own pty, never in the agent's tmux session. The web app only
+  tells the Mac app where the pane's slot is and which thread it belongs to. Nothing in the web app, the relay or the bridge
+  can type into the shell or read it. The pane appears once the web app's pane column ships; until then nothing changes on
+  screen. [`docs/TERMINAL-PANE.md`](docs/TERMINAL-PANE.md) has the contract.
+
+## CI: each job skips on its own last pass
+
+- A job is skipped when none of its own inputs changed since that job last passed, whatever the rest of main shows. Before, one
+  red job anywhere on main made every job run on the next push. A skipped job posts `skipped: no <job> inputs changed since
+  <sha>`, naming the commit where it last passed; `ci-runner.sh verdict` still counts those (never for `check`) as no failure and
+  lists them apart. A job that failed, or is still running, on the nearest commit with a result for it runs. A test that passed
+  only on its retry counts as a pass here too. `--full` (every manual run and the nightly) still skips nothing.
+
+## Mac: thread sessions held to what the main session really has, and to their settings as they are now
+
+- A thread can no longer list an MCP server you switched off for the agent folder (`/mcp`), or one from the agent folder's own
+  `.mcp.json` that you never approved. Those are not servers the main session can use, so they are over a thread's ceiling.
+- Only the global config file Claude Code itself reads counts: `.claude.json` in `CLAUDE_CONFIG_DIR`, else `~/.claude.json`. A
+  leftover `~/.claude/.claude.json` no longer defines or approves a server.
+- When a thread's MCP list is taken away, its next start removes the generated config file from the earlier starts, which held
+  the listed servers' credentials. A thread that no longer has its own session loses that file too.
+- A thread session's shell is told not to run `talos-app post` (a best-effort rule: it matches the command's text).
+- A `session_opts` value that cannot be read (a folder that is not a path, a whole value that is not an object) no longer
+  restarts a running session into the agent folder, where its conversation is not. If a restart is due anyway (the MCP list was
+  narrowed), the start fails naming the field, and the conversation is kept for when the config is fixed.
+- A session started by an older build is restarted when its folder changes, as newer ones are.
+- One entry in `config.threads` that is not a thread no longer makes the Mac ignore the whole file and keep every session on the
+  last list it could read. The entry is left out, the rest is read, and the default thread gets one line naming the entry by its
+  position. If the entry was a thread with its own session, that session is parked; its conversation is kept until the file reads
+  whole again.
+- A running sub-thread whose parent was archived or removed, or whose folder is no longer inside its parent's after the parent
+  moved, is parked after its turn (after the same 30 seconds a settings change waits). Its next start is refused with the reason.
+  A parent folder that cannot be found for a moment stops nothing.
+- No thread session starts while the main session runs in a mode that narrows it and that a thread session cannot be held to:
+  restricted mode (`--restricted`, `CLAUDE_CODE_RESTRICTED`), `CLAUDE_CODE_RESTRICT_PERSONAL_CONFIG`, safe mode (`--safe-mode`,
+  `CLAUDE_CODE_SAFE_MODE`) or bare mode (`--bare`, `CLAUDE_CODE_SIMPLE`), set in the main session's arguments or in
+  `desktop.json`'s `env`. The thread gets one line naming the mode and saying how to get its own session back. A thread session
+  that is already running when the main session goes into one of these modes is parked after its turn. After the Mac app is
+  reopened onto a main session that was started with other settings than `desktop.json` has now, and whose environment macOS
+  will not show, thread sessions wait until the main session is restarted: the Mac cannot tell which mode it runs in.
+
+## Mac: thread sessions' prompts, dialog cards, stops and scrolled-back panes, hardened
+
+- The line a thread gets when its session (or the main session) stops at a prompt no longer quotes the question from the screen. It
+  names the kind of prompt only ("a 'Bash command' prompt"). The question is text an agent or a file in a repository can write, and
+  the line is read as Talos speaking. You read the question itself in Terminals.
+- A tap on a dialog card is never pressed onto a dialog that replaced the one the card showed. Once the Mac has seen the screen
+  change under a card, a tap or a popup click for it presses nothing ("the screen changed") and a new card follows for what is
+  there now. The same after the Mac app is reopened (and after the Linux supervisor restarts): the dialog it finds gets a new
+  card, and the card from before applies to nothing. A trust or MCP dialog whose folder or server name the Mac cannot read in full gets the thread's line straight away
+  and no card.
+- A thread session that was stopping when the Mac app went away no longer waits for its turn to end with no limit after the app
+  comes back. Ten minutes after the stop was asked for (and never less than two minutes after the app is back), the turn is ended
+  and the thread gets one line saying so. The conversation is kept.
+- A message for a thread whose pane you have scrolled back is no longer held in silence: the thread gets one line, and shows as
+  Needs you, until you return to the prompt. If the message has gone to the main session meanwhile, the line telling the session
+  about it is dropped, not typed later.
+- A scroll at exactly the wrong moment can no longer make Talos's line land in tmux's copy mode as commands.
+- A very large number printed next to the words "automatically block" in a session's pane can no longer end the Mac app.
+
+## Mac: a tap on Main's development-channels card is used once, however it is copied
+
+- The card that asks you to allow Talos's development channel now refuses a copy of a tap it has already acted on, even a copy whose
+  signature is written a different way. Before, such a copy could press the dialog after a first tap that pressed nothing. The taps it
+  has acted on are also kept on disk, as for thread sessions' dialog cards.
+
+## Mac: a tap on a thread session's dialog card is used once, across a relaunch too
+
+- When a tap on a dialog card (trust this folder, allow an MCP server) pressed nothing, for example because you were typing in that
+  session's pane, a copy of the same tap could press the dialog after the Mac app was reopened. The Mac now keeps the taps it has
+  acted on in the thread's folder, so each one is used once, whatever happened to it.
+
+## Mac: thread sessions start, stop and quit more reliably
+
+- A thread's own session that was still running after the app went away at the wrong moment is now taken back at launch, or
+  stopped and started again by the next message. Before, it ran on unseen, the thread showed Parked, and every Start, Restart
+  and Start fresh failed with "already running".
+- The limit on how many thread sessions run at once no longer stops one that is waiting on you: a question or dialog on its
+  screen, text you typed into its input box, or a message on its way to it. Another quiet session is stopped instead, or the
+  new one waits for a free slot.
+- Only real crashes count toward "crashed 5 times": not a start that failed, not a session that ended on its way to a stop you
+  asked for, and not a start that tmux never made (that now says so).
+- A message that waited for the Mac app longer than any message waits for a thread's session (the app was closed
+  meanwhile, say overnight) no longer starts that session when the app opens: the main session already has it.
+- The line that tells a thread's session about a new message is no longer typed twice when its Enter was slow but did land.
+- A thread whose `WORKER.md` starts with something like `-p` or `server:` now starts; before, it failed with a reason that
+  did not point at the file.
+- A thread switched back to the shared session, archived or deleted now leaves the session lists once its session has
+  stopped, instead of staying there with a Resume that did nothing. Turning off thread sessions altogether forgets nothing.
+- The Terminals window no longer asks tmux from the main thread every 1.5 seconds while the main session is stopped, so a
+  slow tmux can no longer freeze the app there.
+
+## The Mac now says when Main is up but nobody can reach it
+
+- If Main's bridge is running but can't reach the relay for 3 minutes, the Mac shows a Needs you line and a banner, with the
+  last close code. Before, the menu showed the bridge as live while your phone got nothing. The line clears when the bridge
+  reconnects.
+- If Main was given a message and has done nothing with it for 5 minutes, and its screen hasn't changed since, the Mac says
+  "Main isn't picking up messages". Nothing is restarted; you look at the pane. The bridge's `status.json` now carries the time
+  of the oldest such message (`unseen_oldest_at`), which the Linux supervisor reads too.
+- When the bridge won't start because its `config.json` is damaged, the Needs you line now names that file, instead of
+  Claude Code's vaguer "connection closed".
+- The Mac's phone lines (Main crash-looping, a restart that gave up) now reach you even when `config.json` is damaged or names
+  no default thread: the Mac signs and posts the line itself, to Inbox. Before, they were dropped.
+- New sign-in alerts, and the "another Mac took over your bridge" alert, show their own words on the Mac instead of
+  "New activity".
+
+## Mac: one unreadable thread session record no longer wipes the others
+
+- When the Mac app found one entry in `workers.json` it could not read (a hand edit, or a file from a newer build), it read
+  none of them and the next save cleared every thread's saved session. Now it keeps every entry it can read, sets the
+  unreadable one aside in the same file untouched, does not start that thread's own session, and says which thread in the
+  menu. A `workers.json` it cannot read at all is never saved over; thread sessions wait until it is fixed or removed.
+
+## Tighter limits on thread sessions, shares and cards
+
+- A thread's own session can no longer send a file it was not allowed to by swapping a link while an earlier file uploads,
+  and a sub-thread inside a lead's folder is held to that lead's protected folders.
+- A share from a share link can no longer replace a message already in the Mac's history.
+- When the agent reads a thread's history, a message can no longer be made to look like a separate message from you, and
+  hand-offs and app text are labelled as what they are.
+- A card for an app's request now shows all of its arguments, however long. Before, very long ones were cut off the card.
+- The agent can no longer replace one of Talos's own cards (a permission, a prompt, a schedule or a settings change) with a
+  card of its own.
+- The full review, with what is still open, is kept with the maintainers' internal audits.
+
+## Relay: three security fixes from an audit
+
+- A browser notification address must now be a public https address. Before, a signed-in browser could give the relay any
+  address, including one inside the relay's own network, and the relay would call it on every notification. An address like
+  that is now refused, and one saved earlier is dropped the next time a notification is sent.
+- The bug-report webhook uses the same list of addresses it must not call as the rest of Talos. Its own shorter list missed
+  some IPv6 forms of inward addresses.
+- A stranger who connects to the Mac's door on the relay and is turned away is no longer listened to. Before, the relay kept
+  reading what such a connection sent for up to 30 seconds after refusing it.
+- The full list, with what is still open, is kept with the maintainers' internal audits.
+
+## Mac: a phone answer to Main's warning starts it once
+
+- Answering Main's development-channel warning from your phone still starts that launch, but no longer remembers it: the next
+  start of the same changed launch asks again. Only a click on the Talos popup at your Mac remembers it, because the phone's
+  answer arrives through files a program running as you could also write.
+## Messages that went missing without a word
+
+- After a long time away, a new message arriving while the app was still catching up could make it skip everything it had
+  not fetched yet, for good, if the connection dropped at that moment. The app now only counts what it has in one
+  unbroken run, so the next connection carries on from the right place.
+- A message your Mac refuses after the relay accepted it (the thread was removed, or the phone's clock is far off) no
+  longer stays marked "sent". On every device it now reads "This message did not reach your agent", with a line under it
+  giving the Mac's reason. If the Mac's refusal is lost because the link dropped, it is given again at the next
+  connection.
+- The Mac no longer throws away a reply or a card update that waited more than a day to reach the relay (a closed lid
+  counted). Replies and cards are now kept until they are delivered. If the relay refuses one for good, the thread it was
+  for says which reply or card it was, and the agent is told there too. Other queued items are kept for a week instead
+  of a day. A reply or card the relay never answers at all is given up on, by name, after a month of trying.
+- Scrolling back through a thread that your Mac serves (older than a week, or a quiet thread on a new device) could skip
+  card rows and the occasional reply. Every row now appears, once.
+- If the relay accepted a connection from the Mac and then went silent, the Mac waited on it indefinitely. It now gives
+  up after 20 seconds, says so in `bridge.log`, and tries again.
+
+## App: larger text, keyboard and screen reader fixes
+
+- With a larger text size on a phone, the buttons at the top of Threads and Schedules ("Mark all read", "Edit", "Pause all",
+  "New") could be pushed off the screen. They now move to a row of their own under the title when they do not fit. The
+  Session tabs in Settings wrap the same way.
+- A table too wide for the screen, in a message or a Markdown file, can now be reached with Tab and scrolled with the arrow
+  keys.
+- The menus on a message, on a thread row, on a scheduled job and on the attach button are now announced by name to a screen
+  reader.
+- Closing a thread's settings, or the new-thread sheet, with Esc puts focus back on the button that opened it.
+
+## For contributors: a sandbox to break
+
+- `pnpm sandbox up` starts a second, throwaway Talos on this machine: its own relay on 127.0.0.1, its own Talos home, its own
+  tmux server and an enrolled test phone. It never touches the Talos you use. `pnpm sandbox drive <id> <action>` then acts
+  as its owner (send a message and read the reply, manage threads, answer cards, change settings) and as the troublemaker
+  (take the relay down, freeze or kill the bridge, kill the agent, damage a file), with JSON in and out, so an agent can
+  hunt for bugs on its own. `pnpm sandbox down <id>` stops everything it started and removes it. The agent is a scripted
+  stand-in by default; `--real-claude` uses your own Claude Code with `--model haiku`. See `docs/SANDBOX.md`.
+
+## Mac: the main agent's watcher keeps time with the window closed
+
+- Without tmux, and with the Talos window closed, macOS could put the menu-bar app to sleep (App Nap) and hold back the
+  timer that watches the main agent: its start and stop deadlines, the Enter for the development-channels warning and the
+  "needs you" warnings could all run late. The main agent's watcher now keeps the app out of App Nap itself while the main
+  agent is running (the Mac may still sleep), and lets go when it stops or you quit. With tmux, the thread sessions' watcher
+  already did this for the whole app.
+- The "a dialog needs you" warning now waits a full minute of real quiet by the Mac's own steady clock, so changing the
+  Mac's clock can no longer raise it early or hold it off.
+
+## Mac: a thread session nobody typed in starts again after a crash
+
+- A thread's own session that nobody has typed in yet has no saved conversation (Claude Code writes one only after the first
+  message or an `/exit`). When it crashed, or was parked, the next start tried to resume it, Claude Code refused ("No
+  conversation found") and the thread showed "can't be resumed" until you chose Start fresh. It is now started again as the
+  same session, the rule Main already has. The saved conversation is looked for in the session's own Claude Code config folder,
+  under any folder name.
+- If Claude Code says the session is already in use, it is resumed instead, straight away, and that session keeps being
+  resumed for as long as the app runs. A conversation file that holds only an `/exit` cannot be resumed either: the thread gets
+  a new conversation, once, and the old id is kept in `previous_ids`. Neither of these counts as a crash. A real conversation
+  that cannot be resumed still stops and waits for Start fresh.
+- Only a session that never had a message is started again this way. A thread session a message was typed into, or a Main
+  whose conversation file the app has seen, that later has no file (deleted, or Claude Code's config folder changed) is resumed
+  as before and stops with "can't be resumed", instead of coming back empty under the same id with no notice. Main had this
+  hole since the rule landed.
+
+## Mac: thread sessions no longer start with a bare PATH after a slow login shell
+
+- The Mac app read your login shell's environment for thread sessions once, as it opened. If that read timed out, every
+  thread session for the rest of that run started with the app's own bare `PATH`, could not find `claude`, and stopped at
+  once with nothing in the log. The environment is now built at each start, as the main agent's is: the login shell's, with
+  `desktop.json` `env` on top (thread sessions did not get `desktop.json` `env` before, so a pinned `PATH` or
+  `CLAUDE_CONFIG_DIR` now reaches them too).
+- The login shell is read in the background, the last read that worked is kept, and a failed read is tried again. The app
+  no longer waits on it while opening (that could hold the window for several seconds).
+- When the login shell cannot be read the log says `workers login_env_unreadable` and where `PATH` came from.
+- If it has never been read and `claude` is not on the `PATH` in use, a thread session waits for it instead of starting and
+  stopping at once; the log says `worker_start_held`.
+
+## Mac: the Talos popup ignores clicks that programs post
+
+- Main's development-channel popup now takes only a click from your mouse or trackpad. A click posted by another program
+  (cliclick, a computer-use tool) does nothing, as a scripted press already did. A click through Screen Sharing, Universal
+  Control, Sidecar, Voice or Switch Control, or a tool that remaps mouse buttons may do nothing either; press Enter in the pane
+  instead (it lets that one start through but is not remembered).
+- The docs now say plainly that the seal on your confirmed start command stops edits to `desktop.json`, but not a program
+  running as you that sets out to forge it: it can overwrite the Keychain key with Apple's `security` tool.
+
+## Mac: the agent's settings stay out of tmux and out of the process list
+
+- The Mac app used to hand the agent's environment variables to tmux as arguments, where any program on the Mac could see
+  them for a moment in the process list, and the first start also left them in the shared tmux server's own environment.
+  Each start of the main agent or a thread's session now writes its variables to a private file that only you can read,
+  which tmux runs and which deletes itself at once. Nothing is set on the tmux server any more.
+- An agent path with spaces, quotes, `$` or a backtick now runs as written, even with no arguments.
+- A variable name the shell can't use (such as `MY-VAR`), in `desktop.json` `env` or in your login shell's environment, now
+  stops the start with a message, instead of being passed on.
+- The main agent no longer sees tmux's own `TMUX` and `TMUX_PANE` variables, as thread sessions already did.
+
+## Mac: thread sessions no longer go unavailable while the app keeps running
+
+- The Mac app could stop updating the heartbeat the bridge reads for thread sessions while the app itself stayed open, so every
+  thread session showed as unavailable until you quit and reopened the app. The app now keeps itself out of App Nap while it
+  looks after thread sessions (before, that only happened while its window was signed in), so its once-a-second check is no
+  longer held back when the window is closed.
+- A watchdog now notices when that heartbeat is late. It writes a line to the app's log, files a problem you can see with
+  `talos-app errors list` saying what the check was doing, and gets it going again where it safely can: a check that stopped
+  running is started again, and a command that outlives its own time limit is stopped. It never starts a second check beside a
+  running one.
+
+## Settings saves: unreadable files are set aside, clears stick, resets reset
+
+- If the Mac app's settings file (`desktop.json`) cannot be read, a save no longer overwrites it unseen: the file is moved to `desktop.json.unreadable-<date and time>` next to it, the newest three copies are kept, a new file is written, and the supervisor log says where the old one went. This is for a file that goes bad while the app is running; one that is already unreadable when the app opens is not saved over at all (see "Mac: Main stays up" below).
+- Clearing a setting in the app now clears it even when the file held a value this version could not read and the setting falls back to a default.
+- Archiving a thread whose own-session value this version cannot read no longer leaves that value live: it moves to an `_unreadable` note on the thread, which nothing reads.
+- The log line for keeping an unreadable high-risk value now also appears when the value sits inside a larger kept setting (still the path only, never the value).
+- Starting a new conversation in the Mac app resets the whole session record, so keys a newer version added there are dropped with it.
+
+## iPhone: Approve from a notification signs only what the notification showed
+
+- When you press Approve on a notification, the phone checks that the words on the screen (title, thread name and text) are
+  the ones it read from the sealed message, and signs nothing otherwise. Before, a notification that never went through that
+  step could show one card and approve another.
+- A notification whose sealed message the phone cannot open now shows the plain phrase with no Reply or Approve button.
+- The title is now part of what Approve signs. Approve from a notification on an older iPhone build is refused and says to
+  open Talos; update the app.
+- If your server answers the app with an error page (for example while it restarts), the app now shows its offline page with
+  Try again, and tries again when you come back to it, instead of staying on the error.
+- A message notification is no longer hidden because the app still thought you were looking at that thread after it reloaded
+  or went to the background. When you come back to the thread, its notifications stay quiet again.
+
+## Large sign-in tokens are saved in the Keychain instead of being lost
+
+- A sign-in token or server setting bigger than about 3 KB (common for refresh bundles from MCP servers) could not be saved: the Mac's `security` tool cut the line and stored nothing. The bridge now splits such a value into several Keychain items behind a small index item, and puts it back together when it reads. Values that were saved before still read as they did.
+- Every save is read back. If what is stored differs from what was written, the save fails with an error and a problem report, and the previous value stays whole. Before, a failed save of a large value looked like any other Keychain error.
+- `talos-app apps logout` and replacing a value remove all of its pieces, and a failed delete now says so.
+
+## A replaced bridge comes back by itself
+
+- When a second bridge with the same key took over, the first one used to give up for good: your messages waited on the server ("Mac offline") while its replies still went out. It now keeps trying in the background, and takes its place again within a minute or two of the other one going away. It never takes the place back while the other bridge is connected, so two bridges never fight over it.
+- The app says **Bridge superseded** (with what to do) while the older bridge is away, and shows **Another bridge connected** while two bridges share a key. The server also writes a warning to its log when it sees two bridges using one key.
+- Messages you send while no bridge is connected wait on the server for up to 7 days and arrive in order, once each, when a bridge connects, also after the bridge process restarted. New tests check this.
+
+## Sub-threads: a thread can sit under another
+
+- A thread can now sit under one other thread, one level deep. In the sidebar and the phone menu a parent has a chevron that
+  opens and closes its sub-threads; your choice is remembered on each device, and a closed parent's count includes its
+  sub-threads' unread replies. On the phone's Threads list, sub-threads sit indented under their parent. A long thread name
+  shows in full when you hover over it.
+- A sub-thread uses its parent's folder, model, effort and MCP servers unless you set its own, and never gets an MCP server
+  its parent doesn't have. Its own folder sits inside the parent's.
+- A message in a sub-thread without a session of its own is answered by its parent's session, when that has one, and
+  otherwise by the main session. Archiving a parent archives its sub-threads with it; when the agent proposes it, the card
+  lists them.
+- Sub-threads need the Talos app on your Mac to be updated first; until then nothing changes.
+- A reply that was turned down (a thread session posting where it no longer may, or the relay refusing it) no longer stays in
+  the Mac's history as if you had seen it.
+
+## Linux and WSL: a running process is no longer mistaken for a new one
+
+- Talos tells a process apart from a later one that reuses its number by when it started. On WSL, the start time `ps` shows
+  for one process can jump by many seconds, so a running bridge, scheduled job or local CI run could look replaced: its lock
+  was taken over, or it was treated as gone. On Linux, Talos now reads the start time from `/proc`, which never moves. Macs are
+  unchanged.
+
+## Mac: Main stays up, and says so when it cannot
+
+- If the Mac app's settings file (`desktop.json`) is there but cannot be read (a typo, a value of the wrong kind), the app no
+  longer treats it as "not set up": it starts nothing, saves no setting over the file, the menu says why, and one line goes to
+  your default thread ("Talos can't read desktop.json; Main isn't started"). Fix the file or
+  move it out of its folder, then quit and reopen Talos. Before, Main was started from the default settings in the default
+  folder, and the next settings change wrote the defaults over what you had. The app writes `desktop.json` in one place only
+  now, and that place refuses too; the one-time launch-trust step saves through it, and a failed save of it is logged instead of
+  being dropped. So a file that was unreadable when the app opened is never moved aside and replaced by the app. (One that
+  becomes unreadable while the app is running, when the app still holds your real settings, is set aside at the next save as
+  described under "Settings saves" above, and so is the bridge's own settings file.)
+- A restart after a crash that cannot launch (another session holds the channels, `claude` is not found, the agent folder is
+  not there) is tried again with the usual waits, five tries in all, outside the crash loop's count (nothing crashed). If it
+  still cannot start, the Mac stops where it used to stop at once, restores nothing, and posts one line to your default thread. Before, it stopped at the first try and told nobody.
+- When Talos pressed Enter on the development-channels warning and the warning stayed, the warning is offered to you (the popup
+  on the Mac, a line on your phone) and Main now waits there for your click. Before, Main was stopped 15 seconds later while
+  the phone still said it was waiting. It is still stopped when the warning stays after your own click.
+- A session that ran for a while and then crashed with "No session found with ID" somewhere on its screen is restarted like any
+  crash. Only an exit within 30 seconds of the start counts as a conversation that cannot be resumed (the same on Linux).
+- An agent that ends by itself with no error (exit code 0) is started again, but it is not a crash: it no longer counts toward
+  the crash loop and never brings the automatic restore of the last good setup. It is started again after the shortest wait. If it
+  keeps ending (more than ten times in an hour, the same rule as on Linux) the Mac leaves it stopped and tells your phone once.
+- After three automatic Enters on crash restarts in an hour, the next restart still happens and its warning waits for you.
+  Before, that was called a crash loop: Main was stopped and the last good setup was put back.
+- A Main nobody has typed in yet has no saved conversation (Claude Code writes one only after the first message or an
+  `/exit`). After a crash, or after quitting and reopening the app, it is now started again as the same session instead of being
+  resumed. Before, the resume was refused ("No conversation found") and Main stopped with "The last conversation can't be resumed".
+  The saved conversation is looked for in Main's own Claude Code config folder, under any folder name. If Claude Code says the
+  session is already in use, it is resumed instead, once. A conversation file that holds only an `/exit` cannot be resumed
+  either: Main gets a new conversation, once, and the old id is kept in `previous_ids`. The same rules as on Linux.
+- Reopening the app while Main still sits on the development-channels warning no longer shows Main as running: the warning is
+  offered on the popup again. The app never presses Enter by itself on a session it re-attached to.
+
+## Linux: app sign-ins are kept in your keyring
+
+- On Linux, the sign-ins and settings of MCP apps are kept in your desktop keyring (GNOME Keyring or KWallet), as they are in
+  the Keychain on a Mac. Before, they could not be saved there at all.
+- On a machine without a keyring (WSL with no desktop), they go in files that only you can read, in your Talos settings
+  folder. That is weaker than a keyring: any program you run can read them. Talos refuses to keep them on a Windows drive
+  (/mnt/c), where file permissions are not enforced.
+- Once Talos has used your keyring, it keeps using it: if the keyring is not running or is locked, signing in to an app says
+  so rather than saving to a file instead.
+## Report a bug from the app
+
+- **Command palette > Report a bug** (and a row in Help) takes a picture of the screen you are on, then opens a form on top of it. Mark the picture with a pen, arrow, box, text or Blur in amber, blue or white ink; Blur really pixelates what is under it in the picture that is sent. Say what went wrong, and optionally what you expected.
+- On a computer the tools run down the left, the picture is in the middle and the words and the list of what is attached are on the right. Versions, this thread and screen, recent errors and the cleaned log lines are attached by default and each has its own tick box to leave it out; the last 5 messages of the thread are off until you tick them. "Preview everything that will be sent" shows the exact report.
+- On a phone the form fills the screen: Cancel, the title and Send along the top (clear of the status bar), the whole picture, one row of tools (the phone draws in amber), "What went wrong?", and one row for what is attached. Its Preview opens the tick boxes for each part and the exact report.
+- Send reads "Gathering details…" until your Mac has handed over its versions, errors and logs. If the Mac does not answer, or takes more than 10 seconds, Send turns on and the report says in its log field that it was sent without Mac details.
+- Keys, tokens and your home folder are removed from the report, and nothing leaves until you press Send. If the screen picture cannot be taken, or your Mac is away, the form says so and the report can still be sent.
+
+## The Mac app can run sub-threads
+
+- A sub-thread's own session starts with the folder, model, effort and MCP list it sets, and takes what it does not set from its parent. Its MCP list is limited to its parent's: a server the parent's list lacks is left out, and a sub-thread whose parent is gone and that has no list of its own gets only the agent's own server.
+- A sub-thread's session needs a folder of its own, strictly inside its parent's folder (links and `..` are resolved first), and its parent needs a folder too. If the folder does not exist yet, the Mac creates it. A sub-thread never shares its parent's folder; one without a folder of its own, or whose folder setting cannot be read, does not start and says why. Only one level of parent counts.
+- The Mac now tells the bridge (in `workers.json`) that it can launch sub-threads.
+
+## Linux: the bridge no longer stops when its hub socket appears, and a private vault stays private
+
+- On Linux the bridge could stop right after it started: the folder watch on the Talos folder raised an error when the hub
+  socket was created there, and nothing caught it. Every folder watch now ignores its own errors; the regular checks behind
+  each watch still run.
+- A history file that cannot be read is kept aside together with its -wal and -shm files on Linux too. Before, the check
+  itself could delete those two files there.
+- Sending a file whose name was replaced after it was opened sends the opened file on Linux, as on a Mac, instead of failing.
+- `install.sh --with-vault` on Linux now leaves the vault folder readable by you only (mode 700). Before, unpacking the vault
+  template reset it to readable by everyone.
+
+## Thread sessions read AGENTS.md too
+
+- A thread's own session, and the Claude Code the app opens by hand for a thread, now read a folder's `AGENTS.md` as well as its `CLAUDE.md`. Turning on a thread's list of allowed MCP servers never switches that built-in plugin off.
+- The Mac app checks that a sub-thread's folder is inside its parent thread's folder (after resolving links and `..`) and refuses to start it otherwise.
+
+## Saving settings no longer wipes what an older app does not know
+
+- When the bridge or the Mac app saves your settings, it now keeps everything in the file that it does not understand: a setting added by a newer version, a value it cannot read, a newer work-system name in the enabled list. Only what the save changed is written, so going back to an older version and forward again loses nothing.
+- If the settings file cannot be read at all (broken JSON, or a value this version rejects), a save is refused with a message and the file is left exactly as it is. Before, the save replaced it with the copy in memory.
+- Settings that were removed on purpose (the permission step-up, the sessions view, the Telegram mirror and its chat id, the old per-thread worktree flag) are now dropped from the file on the next save, so an old version cannot switch them back on.
+- Keeping an unreadable value in a high-risk setting is logged by its path only, never its value.
+
+## First run without Terminal
+
+- The Mac setup screen has a **Sign in to Claude** button: it runs `claude auth login` in a terminal of its own, shows the sign-in link (Open, Copy) and a box for the code if the page asks for one, waits for the sign-in to finish (up to 5 minutes, with Cancel and Try again, and a Terminal fallback in the errors) and shows already-signed-in as done. Only official claude.ai, claude.com and anthropic.com links are offered, a closed setup window never starts a second sign-in, and a result that a later check contradicts is dropped. It signs in Claude Code, not Talos.
+- claude, bun and tmux show their version and path, and a missing one has a button: an official install page, or `brew install tmux` as you.
+- **Start your agent** says done only when Main's Talos bridge is live, and shows the MCP-log reason when it is not.
+- A **Rules for your agent** box (empty by default) saves your own plain-English rules as `.claude/rules/owner-rules.md` in the agent folder, apart from the rules Talos ships.
+- Nothing about existing installs changes: `permission_relay` is on only for a new install, and stays as it was for one you already have.
+
+## Your agent can run the app through approval cards
+
+- The agent can now ask to rename a thread, change its topic, icon or alert level, switch a thread's own session on or off, archive a thread or make a new one, and to change the default thread, notifications on or off, thread names in notifications, driving mode, the model list and the thread-sessions switch. Each one is a card that shows the old and the new value; nothing is written until you tap Apply.
+- Every setting now has a risk. In trust mode a low-risk change (a name, a topic, a time zone, a new thread) is applied at once after you asked; a high-risk one (the theme, the default thread, notifications on or off, thread sessions, archiving) is still a card every time. A few settings (the permission relay, trust mode, the memory browser, the live-voice persona, work systems) stay yours alone, whatever the mode.
+- A thread with its own session can propose changes to its own thread only, never another thread or a global setting.
+- Turning a thread's alerts off, or changing the default thread's alerts, is a high-risk change. A high-risk change is always a card, never applied directly; a tap on the card approves it. Archiving a thread that has its own session says the session goes back to shared, and a new thread's card shows its icon. A new thread can be made from another thread after you asked there, and one proposal can no longer go past 20 agent threads.
+- Every applied change ends with "To undo: ..." naming the old value, on the card result and in the note to the agent.
+- `create_thread` and `archive_thread` keep working but go through the same cards now: a new thread shows a card (in trust mode, after you asked, it is made at once); an archive is always a card.
+- `talos events` lists four new events (`thread.created`, `thread.renamed`, `thread.archived`, `setting.changed`), also written when you change things in the app. They carry ids and setting names, never names or values.
+
 ## A list of named events, and a richer commands list
 
 - `talos events` (and `--json`) lists the named events the app emits, who emits each and the fields it carries (ids only, never a path or text). Nothing runs on them yet. The app now refuses to log an event that is not on that list.

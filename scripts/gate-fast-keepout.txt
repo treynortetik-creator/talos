@@ -1,0 +1,29 @@
+# The fast gate's keep-out list (scripts/gate.sh --fast): a change to any path matching a line here runs the full gate instead,
+# and the gate names the file. Why: the fast gate runs only the tests that import a changed file directly, without the heavy
+# lock, and leaves the rest to CI after the push. That is fine for product code, where a red on main is fixed forward. It is not
+# for the places where a missed failure costs more than a red build: the push path itself, the shared contract, and the
+# security and guard code. Read by both counts of the plan (gate.sh's and its node second count), so it is the one list,
+# and read as the base has it: a change never takes itself off the list (a list missing or empty there runs the full gate).
+# Also on the list, read from their own files: every line of scripts/gate-inputs.txt (the gate, the hook, CI, the package and
+# lock files, the test configs), and every path in docs/protected-paths.txt (the files the guards protect), with what is
+# under it. The list is for code, never for test files (*.test.ts, *.test.tsx, *.spec.ts, Swift Tests/): the fast gate skips it for
+# those (a change to only tests is fast), though the protected paths still apply to them.
+# One extended regex per line, matched against the whole repository path, case-blind; lines starting with # are comments.
+#
+# the shared contract every part imports
+^packages/protocol/
+# anything named for a guard: the bridge's guards and their hook, the Mac app's guards, the iPhone's BridgeGuard, the relay's
+# body guard, guarded-fetch, the kit's guard hooks, and their fixtures
+guard
+# the plugin's hooks (its guard hook runs before every tool call)
+^plugins/talos-app-mod/hooks/
+# the relay's sign-in and the bug inbox route
+^apps/relay/src/auth/
+^apps/relay/src/core/bug-reports\.ts$
+# the pairing path: only the e2e specs drive it end to end, and the fast gate does not run them
+^apps/bridge/src/enroll.*\.ts$
+^apps/bridge/src/(enrollment|devices|cli-main|cli|relay-http)\.ts$
+^apps/web/src/features/auth/
+^apps/web/src/lib/deviceKey\.ts$
+# every lock file, whatever the tool
+(^|/)(bun\.lockb?|package-lock\.json|yarn\.lock|Podfile\.lock)$

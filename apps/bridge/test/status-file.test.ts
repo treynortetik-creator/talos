@@ -9,6 +9,7 @@ import { loadEnv } from '../src/config.ts'
 import { nullLogger } from '../src/log.ts'
 import {
   bridgeLiveness,
+  GOVERNOR_STATES,
   parseStatusFile,
   readStatusFile,
   STATUS_KEYS,
@@ -45,6 +46,8 @@ describe('status.json written by a real live bridge', () => {
     expect(typeof s.instance).toBe('string')
     expect(typeof s.queue_depth).toBe('number')
     expect(typeof s.permission_relay).toBe('boolean')
+    // the governor now, for the Linux supervisor's restart-on-update queue (the harness has no usage limits: ok or off)
+    expect(['ok', 'off', 'unknown']).toContain(String(s.governor))
     expect(Number.isNaN(Date.parse(String(s.updated_at)))).toBe(false)
     expect(Number.isNaN(Date.parse(String(s.started_at)))).toBe(false)
     expect((statSync(statusPath(h.home)).mode & 0o777).toString(8)).toBe('600')
@@ -53,6 +56,57 @@ describe('status.json written by a real live bridge', () => {
     expect(text).not.toContain(h.relay.bridgeKey.publicKeyB64)
     expect(text).not.toContain(h.relay.httpUrl)
     expect(text).not.toContain('General')
+  })
+
+  test('unseen_oldest_at: null with nothing pending, the time of the oldest untouched owner message, null again once it is read', async () => {
+    h = await startHarness()
+    const home = h.home
+    await waitFor(() => readStatusFile(statusPath(home))?.relay.connected === true, 3000, 'connected')
+    expect(raw(home).unseen_oldest_at).toBeNull()
+    const before = Date.now()
+    await h.app.sendMessage('general', 'first')
+    await h.waitNotes(1)
+    await waitFor(() => readStatusFile(statusPath(home))?.unseen_oldest_at != null, 3000, 'the unseen time')
+    const first = String(raw(home).unseen_oldest_at)
+    expect(Date.parse(first)).toBeGreaterThanOrEqual(before - 1000)
+    // later messages, in the same thread or another, keep the OLDEST time: the age a supervisor measures is the first one's
+    await h.app.sendMessage('general', 'second')
+    await h.app.sendMessage('inbox', 'third')
+    await h.waitNotes(3)
+    await sleep(50)
+    expect(raw(home).unseen_oldest_at).toBe(first)
+    // the agent picking it up
+    await h.bridge.callTool('reply', { thread_id: 'general', text: 'on it' })
+    await waitFor(() => raw(home).unseen_oldest_at === null, 3000, 'unseen cleared')
+  })
+
+  test('last_owner_at: null before the owner writes, then the newest message time, changing with each message (the Mac updater postpones on it)', async () => {
+    h = await startHarness()
+    const home = h.home
+    await waitFor(() => readStatusFile(statusPath(home))?.relay.connected === true, 3000, 'connected')
+    expect(raw(home).last_owner_at).toBeNull()
+    await h.app.sendMessage('general', 'first')
+    await h.waitNotes(1)
+    await waitFor(() => readStatusFile(statusPath(home))?.last_owner_at != null, 3000, 'the owner time')
+    const first = String(raw(home).last_owner_at)
+    await sleep(5)
+    await h.app.sendMessage('inbox', 'second')
+    await h.waitNotes(2)
+    await waitFor(() => readStatusFile(statusPath(home))?.last_owner_at !== first, 3000, 'a newer owner time')
+    // only a time: no text, thread or id of the message
+    const text = readFileSync(statusPath(home), 'utf8')
+    expect(text).not.toContain('second')
+    expect(parseStatusFile({ ...JSON.parse(text), last_owner_at: 'not a time' })?.last_owner_at).toBeNull()
+  })
+
+  test('unseen_oldest_at: any tool call clears it, not only one on that thread (a session calling tools is not hung)', async () => {
+    h = await startHarness()
+    const home = h.home
+    await h.app.sendMessage('general', 'thanks')
+    await h.waitNotes(1)
+    await waitFor(() => readStatusFile(statusPath(home))?.unseen_oldest_at != null, 3000, 'the unseen time')
+    await h.bridge.callTool('list_threads', {})
+    await waitFor(() => raw(home).unseen_oldest_at === null, 3000, 'unseen cleared')
   })
 
   test('relay.connected flips to false when the socket drops, with the close code, and back to true on reconnect', async () => {
@@ -138,6 +192,7 @@ describe('StatusWriter ownership and heartbeat', () => {
     mode: 'live' as const,
     relay: { connected: true, last_connect_at: null, last_close_code: null },
     queue_depth: 0,
+    unseen_oldest_at: null,
     permission_relay: false,
     permission_relay_declared: false,
   })
@@ -226,6 +281,7 @@ describe('reading the file', () => {
     mode: 'live',
     relay: { connected: true, last_connect_at: null, last_close_code: null },
     queue_depth: 0,
+    unseen_oldest_at: null,
     permission_relay: false,
     permission_relay_declared: false,
     updated_at: '2026-11-01T10:00:00.000Z',
@@ -266,5 +322,41 @@ describe('reading the file', () => {
     )
     const l = bridgeLiveness(statusPath(home), Date.parse('2026-11-01T10:00:05Z'), () => true)
     expect(l.state === 'live' && l.relayConnected).toBe(false)
+  })
+})
+
+// The supervisor's #5 signal: the oldest owner message no bridge tool call has followed. The live bridge writes it (the
+// unseen contract); this reader passes it through, and anything that is not a time reads as none.
+describe('status.json unseen_oldest_at, as the supervisor reads it', () => {
+  const base = {
+    v: 1,
+    pid: 4242,
+    mode: 'live',
+    relay: { connected: true },
+    updated_at: '2026-11-01T10:00:00.000Z',
+  }
+  test('a time passes through; absent, null or not a time is none', () => {
+    expect(parseStatusFile({ ...base, unseen_oldest_at: '2026-11-01T09:55:00.000Z' })?.unseen_oldest_at).toBe(
+      '2026-11-01T09:55:00.000Z',
+    )
+    expect(parseStatusFile(base)?.unseen_oldest_at).toBeNull()
+    expect(parseStatusFile({ ...base, unseen_oldest_at: null })?.unseen_oldest_at).toBeNull()
+    expect(parseStatusFile({ ...base, unseen_oldest_at: 'soon' })?.unseen_oldest_at).toBeNull()
+    expect(parseStatusFile({ ...base, unseen_oldest_at: 7 })?.unseen_oldest_at).toBeNull()
+  })
+  test('read from the file the supervisor reads', () => {
+    const home = tempHome()
+    writeFileSync(join(home, 'status.json'), JSON.stringify({ ...base, unseen_oldest_at: '2026-11-01T09:55:00.000Z' }))
+    expect(readStatusFile(join(home, 'status.json'))?.unseen_oldest_at).toBe('2026-11-01T09:55:00.000Z')
+  })
+})
+
+describe('the governor in status.json (restart-on-update)', () => {
+  test('a known state is read as it is; one from an older bridge (absent) or unknown reads as null, which the queue holds on', () => {
+    const base = { v: 1, pid: 4242, mode: 'live', relay: { connected: true }, updated_at: new Date().toISOString() }
+    for (const g of GOVERNOR_STATES) expect(parseStatusFile({ ...base, governor: g })?.governor).toBe(g)
+    expect(parseStatusFile(base)?.governor).toBeNull()
+    expect(parseStatusFile({ ...base, governor: 'normal' })?.governor).toBeNull()
+    expect(parseStatusFile({ ...base, governor: 7 })?.governor).toBeNull()
   })
 })

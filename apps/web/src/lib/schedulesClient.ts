@@ -32,7 +32,11 @@ export function initialSchedulesSlice(): SchedulesSlice {
 
 export interface SchedulesClient {
   /** `schedules.list` -> `schedules.snapshot`. Also updates `ClientState.schedules`. */
-  listSchedules(): Promise<ScheduleSnapshotT>
+  /**
+   * `signal`: aborting it lets the request go (the Mac went away): it stops waiting at once, rejects, and writes nothing
+   * to the store, success or failure, so a request that comes after it is the only one that does.
+   */
+  listSchedules(opts?: { signal?: AbortSignal }): Promise<ScheduleSnapshotT>
   /** `schedule.get` -> `schedule.detail` (with a report when `runId` is set). */
   getSchedule(id: string, runId: string | null): Promise<{ detail: ScheduleDetailT; report: string | null }>
   /**

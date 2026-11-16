@@ -35,7 +35,6 @@ function setup() {
     CALLS: log,
     TALOS_CI_NESTED: '0',
     TALOS_NO_HOOKS: '0',
-    TALOS_PERSONAL_SCAN: 'stop', // the hard stop going public turns on; a test that wants the warning clears it
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_SYSTEM: '/dev/null',
     GIT_AUTHOR_NAME: 't',
@@ -51,8 +50,17 @@ function setup() {
   mkdirSync(clone)
   ok(clone, 'init', '-q', '-b', 'main')
   mkdirSync(join(clone, 'scripts'))
-  for (const f of ['pre-push.sh', 'install-hooks.sh', 'check-no-personal.sh', 'denylist.generic.txt'])
+  for (const f of [
+    'pre-push.sh',
+    'gate.sh',
+    'talos-machine.sh',
+    'path-fold.sh',
+    'install-hooks.sh',
+    'check-no-personal.sh',
+    'denylist.generic.txt',
+  ])
     cpSync(join(here, f), join(clone, 'scripts', f))
+  cpSync(join(here, 'gate'), join(clone, 'scripts/gate'), { recursive: true })
   cpSync(join(repoRoot, '.githooks'), join(clone, '.githooks'), { recursive: true })
   const put = (file: string, text = 'x\n') => {
     mkdirSync(dirname(join(clone, file)), { recursive: true })
@@ -80,7 +88,7 @@ function setup() {
 describe('review #96: pre-push hook', () => {
   // scripts/pre-push.sh:34. On this Mac node and pnpm live under ~/.nvm, so a launchd job or a GUI git client has neither. The
   // biome stand-in execs node the way the real pnpm shim does. A tool that can't start is not a code problem.
-  it('with no node or pnpm on PATH it says so and lets the push go, like a missing node_modules', () => {
+  it('with no node or pnpm on PATH the push is refused: a gate that cannot run is not a pass', () => {
     const r = setup()
     r.install()
     r.change('apps/web/src/b.ts', 'y\n')
@@ -113,6 +121,7 @@ describe('review #96: pre-push hook', () => {
       'basename',
       'mkdir',
       'find',
+      'perl', // the personal-data check rewrites each rule into a byte pattern with it
     ]) {
       symlinkSync(execFileSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' }).trim(), join(safe, t))
     }
@@ -121,8 +130,8 @@ describe('review #96: pre-push hook', () => {
       env: { ...r.env, PATH: safe },
       encoding: 'utf8',
     })
-    expect(p.stderr).not.toContain('pre-push: fix the above')
-    expect(p.status).toBe(0)
+    expect(p.status).not.toBe(0)
+    expect(p.stderr).toContain('gate: REFUSED: no node on PATH')
   })
 })
 

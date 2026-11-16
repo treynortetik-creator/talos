@@ -25,13 +25,13 @@ describe('a Chronos detail with runs rebuilt from old markers', () => {
     const run = {
       run_id: 'r_01M6GXC7WMQYASQ9CBWYEZW51K',
       ds: '2026-11-03',
-      started_at: '2026-11-03T07:35:36-07:00',
+      started_at: '2026-11-03T07:35:36-05:00',
       runner: 'session',
       trigger: 'clock',
       status: 'ok',
       duration_s: 63,
       has_report: true,
-      ended_at: '2026-11-03T07:36:39-07:00',
+      ended_at: '2026-11-03T07:36:39-05:00',
     }
     d.schedule.last_run = run
     d.runs = [run]

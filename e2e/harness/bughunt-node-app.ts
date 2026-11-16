@@ -149,15 +149,6 @@ export async function loginWith(stack: Stack, passkey: SoftPasskey, extra: Recor
   return { res, cookie: cookieFrom(res) }
 }
 
-export async function stepup(stack: Stack, passkey: SoftPasskey, cookie: string, purpose: string): Promise<string> {
-  const o = await apiPost(stack, '/api/auth/stepup/options', { purpose }, cookie)
-  if (o.status !== 200) throw new Error(`stepup/options ${o.status} ${await o.text()}`)
-  const { challenge } = (await o.json()) as { challenge: string }
-  const v = await apiPost(stack, '/api/auth/stepup/verify', { purpose, response: passkey.assert(challenge) }, cookie)
-  if (v.status !== 200) throw new Error(`stepup/verify ${v.status} ${await v.text()}`)
-  return ((await v.json()) as { stepup_token: string }).stepup_token
-}
-
 export type NodePhone = {
   passkey: SoftPasskey
   cookie: string
@@ -211,6 +202,9 @@ export async function enrollNodePhone(
   )
   if (dv.status !== 202) throw new Error(`device/verify ${dv.status} ${await dv.text()}`)
   await cli.waitFor(/\[y\/N\]/)
+  // A person reads the four words before answering: talos-app enroll takes an answer that comes under 500 ms after its
+  // question as typed ahead, a no (apps/bridge/src/enroll-cli.ts, READ_MS), so the harness waits as a person would.
+  await new Promise((r) => setTimeout(r, 600))
   cli.write(`${opts.answer ?? 'y'}\n`)
   if ((opts.answer ?? 'y') === 'y' && opts.waitPinned !== false) {
     const deadline = Date.now() + 15_000

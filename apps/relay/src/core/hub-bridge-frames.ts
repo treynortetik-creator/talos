@@ -1,11 +1,23 @@
 // The built-in handling of each bridge frame type once the Mac has authed: acks and the outbox, the durable frames it
 // sends (replies, cards, config, threads), status, receipts, and routing an error back to the socket that caused it.
 // Handlers of the Hub class (hub.ts), which forwards to them. The socket itself is in hub-bridge-conn.ts.
-import { type Frame, type FrameOf, type MessageT, markdownToPlain, NATIVE_ACT_TYPE, newId } from '@talos-app/protocol'
+import {
+  type CardT,
+  type Frame,
+  type FrameOf,
+  type MessageT,
+  markdownToPlain,
+  NATIVE_ACT_TYPE,
+  newId,
+  refusedMessageNote,
+  refusedMessageNoteId,
+  stripDeviceHidden,
+} from '@talos-app/protocol'
 import type { RichPushInput } from '../services.ts'
 import type { AppRouter } from './apps.ts'
 import { checkNewCard } from './cards.ts'
 import type { EphemeralRouter } from './ephemeral.ts'
+import { noteBridgeMain } from './features.ts'
 import { cardRich, countsUnread, threadOf } from './hub-helpers.ts'
 import type { AppConn, BridgeConn, HubDeps, Ref } from './hub-types.ts'
 import { FrameRejected, REF_TTL_MS } from './hub-types.ts'
@@ -82,24 +94,35 @@ export const bridgeFrames = {
       case 'error':
         return bridgeFrames.forwardError.call(this, frame, raw)
       case 'receipt':
-        store.setReceipt(frame.message_id, frame.state)
-        if (frame.state === 'seen') this.clearQueuedTimer(frame.message_id)
-        return this.fanOut(raw)
+        return bridgeFrames.onReceipt.call(this, frame, raw)
       case 'status': {
         store.setStatus(frame)
         this.clearThreadQueued(frame.thread_id)
         return this.fanOut(raw)
       }
+      // every answer in V2_READ_RESPONSE_FRAME_TYPES goes here (test/core/files-sent-relay.test.ts): without its case,
+      // files.sent_list was dropped and the app said the Mac was offline
       case 'search.results':
       case 'memory.listing':
       case 'memory.file':
       case 'memory.results':
+      case 'memory.graph_result':
       case 'speak.result':
       case 'fs.listing':
+      case 'files.listing':
+      case 'files.file':
+      case 'bug.context_result':
+      case 'agents_md.file':
+      case 'files.put_result':
+      case 'files.sent_list':
+      case 'memory.folders_result':
         return this.ephemeral.onResponse(frame, raw)
       case 'health.beat':
         // WP-V1 (core/health.ts) reads it through a bridge handler; the relay keeps the last one (V2.3, rule 1)
-        return this.d.store.setState('health_beat', JSON.stringify(frame.beat))
+        this.d.store.setState('health_beat', JSON.stringify(frame.beat))
+        // Main's state is in presence (the app's sign-in banner): a change goes out at once
+        if (noteBridgeMain(this.d.store, frame.beat.main)) this.broadcastPresence()
+        return
       case 'history.page': {
         const ref = this.historyReqs.get(frame.request_id)
         this.historyReqs.delete(frame.request_id)
@@ -148,6 +171,59 @@ export const bridgeFrames = {
     this.broadcastPresence()
   },
 
+  /**
+   * `delivered` / `seen` from the Mac. A receipt that moves a message this relay holds forward is stored for apps, in
+   * the same transaction as the message's meta, so a device that was away (the phone that sent it, now in the
+   * background) gets it in its catch-up (and with it, the message's undo point); before, it was only sent to the sockets open at that moment and the row stayed
+   * on "Sent". Anything else is passed on live as it always was and not stored: a repeat, a `delivered` after `seen`,
+   * or a message id this relay never took.
+   */
+  onReceipt(this: BridgeFramesCtx, frame: FrameOf<'receipt'>, raw: Record<string, unknown>): void {
+    const store = this.d.store
+    const meta = store.getMeta(frame.message_id)
+    const before = meta.receipt
+    const known = store.seen(`cm:${frame.message_id}`) !== undefined
+    const forward = before !== frame.state && !(before === 'seen' && frame.state === 'delivered')
+    // A message's undo point (undo.ts), only for a message this relay took and in a state it knows: anything else is
+    // never kept or passed on. It is kept whenever it is new, even on a receipt that moves nothing forward (the bridge
+    // sends a second `delivered` for a point recorded after the hand-over), and stored for apps with the receipt state
+    // the message already has, so a `delivered` after `seen` never takes the row back.
+    const undo = known ? frame.undo : undefined
+    const { undo: _dropped, ...plain } = raw
+    if (undo && meta.undo?.state !== undo.state) {
+      const shown = forward ? frame.state : (before ?? frame.state)
+      const stamped = store.db.transaction(() => {
+        if (forward) store.setReceipt(frame.message_id, frame.state)
+        store.setUndo(frame.message_id, undo.state)
+        return this.stampForApps(mkFrame(this.d.clock, 'receipt', { message_id: frame.message_id, state: shown, undo }))
+      })()
+      if (frame.state === 'seen') this.clearQueuedTimer(frame.message_id)
+      this.fanOut(stamped)
+      return
+    }
+    if (!known || !forward) {
+      // a repeat, or a `delivered` after `seen`, never takes a message this relay holds back
+      if (!known) store.setReceipt(frame.message_id, frame.state)
+      if (frame.state === 'seen') this.clearQueuedTimer(frame.message_id)
+      this.fanOut(undo ? raw : plain)
+      return
+    }
+    // a step forward carries the point the message already has, so the newest stored receipt never reads as "none"
+    const mark = undo ?? meta.undo
+    const stamped = store.db.transaction(() => {
+      store.setReceipt(frame.message_id, frame.state)
+      return this.stampForApps(
+        mkFrame(this.d.clock, 'receipt', {
+          message_id: frame.message_id,
+          state: frame.state,
+          ...(mark ? { undo: mark } : {}),
+        }),
+      )
+    })()
+    if (frame.state === 'seen') this.clearQueuedTimer(frame.message_id)
+    this.fanOut(stamped)
+  },
+
   /** Durable frames from the bridge, over the socket or POST /bridge/post. Idempotent on the frame id. */
   processBridgeDurable(
     this: BridgeFramesCtx,
@@ -171,9 +247,25 @@ export const bridgeFrames = {
       const known = store.getCard(explainOnly.card_id)
       if (known) stored = { ...raw, state: known.state }
     }
+    // Phones and the web app get the config without what the relay keeps to itself (`devices: false` settings); the relay's own
+    // copy (setConfig below, store.setConfig) keeps the full value.
+    // The copy is made from the config as the bridge sent it, not from this relay's parse of it: the parse drops every key this
+    // build does not know (a newer bridge's setting, the legacy `mirror` an older app still requires).
+    if (frame.type === 'config.sync')
+      stored = { ...stored, config: stripDeviceHidden((raw.config ?? frame.config) as Record<string, unknown>) }
     let reject: string | null = null
     if (frame.type === 'card.create') reject = checkNewCard(frame.card)
     if (reject) throw new FrameRejected('bad_frame', `card rejected: ${reject}`)
+    // The apps get the relay's own expiry beside the card (Mac clock offset applied), stored with it so a catch-up has it too.
+    // A value the Mac put there is replaced: only the relay sets it.
+    if (frame.type === 'card.create')
+      stored = {
+        ...stored,
+        card: {
+          ...(stored.card as Record<string, unknown>),
+          relay_expires_at: new Date(store.relayExpiryFor(frame.card)).toISOString(),
+        },
+      }
     const inherited = this.addedInheritedThread(frame)
     if (inherited) throw new FrameRejected('bad_frame', `thread id "${inherited}" is a name every object already has`)
 
@@ -186,7 +278,7 @@ export const bridgeFrames = {
       store.remember(`bf:${frame.id}`, s.relay.seq)
       switch (frame.type) {
         case 'card.create':
-          store.putCard(frame.card)
+          store.putCard(withoutRelayExpiry(frame.card)) // only the relay sets it, on what the apps get
           break
         case 'card.update':
           if (explainOnly) {
@@ -233,7 +325,13 @@ export const bridgeFrames = {
         if (!frame.silent) {
           this.notify(
             {
-              template: frame.voice_delegation_id ? 'answer_ready' : 'reply',
+              template: frame.sent_always_allowed
+                ? 'sent_always_allowed'
+                : frame.settings_changed
+                  ? 'settings_changed'
+                  : frame.voice_delegation_id
+                    ? 'answer_ready'
+                    : 'reply',
               thread_id: frame.message.thread_id,
             },
             frame.message.text && !frame.voice_delegation_id
@@ -246,7 +344,7 @@ export const bridgeFrames = {
         }
         break
       case 'card.create':
-        this.scheduleCardExpiry(frame.card.id, Date.parse(frame.card.expires_at))
+        this.scheduleCardExpiry(frame.card.id, store.cardExpiresAt(frame.card.id) ?? Date.parse(frame.card.expires_at))
         this.notify(
           {
             template: 'needs_you',
@@ -270,6 +368,48 @@ export const bridgeFrames = {
     return { seq: stamped.relay.seq, duplicate: false }
   },
 
+  /**
+   * The Mac refused an owner message or voice note this relay had already acked (an unknown thread, a signing time too
+   * far off). The app dropped its copy at the ack and shows the row as sent, so the refusal is put where every device
+   * reads it: the row's receipt becomes `not_delivered` (kept in message meta, so `ready` and history carry it) and one
+   * system row in the same thread gives the Mac's reason. Once per message, however often the Mac repeats itself.
+   * Returns false for any other frame.
+   */
+  failRefusedMessage(this: BridgeFramesCtx, frame: FrameOf<'error'>): boolean {
+    if (!frame.ref) return false
+    const store = this.d.store
+    const ev = store.getEventByFrameId(frame.ref) as {
+      type?: unknown
+      client_msg_id?: unknown
+      _thread: string | null
+    } | null
+    if (!ev || (ev.type !== 'message' && ev.type !== 'voice_note') || typeof ev.client_msg_id !== 'string') return false
+    const msgId = ev.client_msg_id
+    if (store.seen(`rf:${msgId}`) !== undefined) return true
+    const threadId = ev._thread ?? this.cfg().default_thread
+    const message: MessageT = {
+      id: refusedMessageNoteId(frame.id),
+      thread_id: threadId,
+      author: 'system',
+      kind: 'text',
+      text: refusedMessageNote(frame.code, frame.message, ev.type === 'voice_note'),
+      format: 'plain',
+      attachments: [],
+      via: 'app',
+      created_at: new Date(this.d.clock.now()).toISOString(),
+    }
+    const stamped = store.db.transaction(() => {
+      store.setReceipt(msgId, 'not_delivered', threadId)
+      const s = this.stampForApps(mkFrame(this.d.clock, 'message.stored', { client_msg_id: message.id, message }))
+      store.remember(`rf:${msgId}`, s.relay.seq)
+      return s
+    })()
+    this.clearQueuedTimer(msgId)
+    this.fanOut(mkFrame(this.d.clock, 'receipt', { message_id: msgId, state: 'not_delivered' }))
+    this.fanOut(stamped)
+    return true
+  },
+
   /** error{ref} from the bridge -> the socket that sent `ref` (10 min), else a system message in the frame's thread. */
   forwardError(this: BridgeFramesCtx, frame: FrameOf<'error'>, raw: Record<string, unknown>): void {
     if (!frame.ref) return
@@ -289,6 +429,10 @@ export const bridgeFrames = {
     // A read's refusal (media.fetch) is the asker's alone: it must never touch a stored frame that shares the id.
     if (ref?.volatile) {
       if (a?.authed) a.conn.send(JSON.stringify(raw))
+      return
+    }
+    if (bridgeFrames.failRefusedMessage.call(this, frame)) {
+      if (a?.authed) a.conn.send(JSON.stringify(raw)) // the sender's own app also hears the error, as it always has
       return
     }
     this.rollbackRejectedResolve(frame)
@@ -316,4 +460,10 @@ export const bridgeFrames = {
     // away from the app: a row in the thread alone would leave them thinking it went through. Say so with a push.
     if (wasNativeTap) this.notify({ template: 'action_failed', thread_id: threadId })
   },
+}
+
+/** A card as the Mac sent it, less a `relay_expires_at` it had no business setting. */
+function withoutRelayExpiry(card: CardT): CardT {
+  const { relay_expires_at: _ignored, ...rest } = card
+  return rest
 }

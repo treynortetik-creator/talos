@@ -47,6 +47,25 @@ export function startNativeNotify(
   }
   const offs = [
     client.onFrame('reply', (f) => {
+      // A send that went out without a card (its kind is always allowed): like the relay's push, it ignores the quiet window,
+      // the master switch and thread alerts, so nothing is sent unseen. Fixed words; it opens the thread with the line.
+      if (f.sent_always_allowed === true && !f.silent) {
+        // shown with the window in front too, like the relay's push (which goes to a visible app as well): the owner may be
+        // reading another thread
+        const cfg = client.store.getState().config
+        if (!cfg) return
+        const { notification } = buildPushPayload(
+          { template: 'sent_always_allowed', thread_id: f.message.thread_id },
+          cfg,
+        )
+        bridge.send({
+          type: 'notify',
+          title: notification.title,
+          body: notification.body,
+          navigate: notification.navigate,
+        })
+        return
+      }
       // A reply spoken to a live voice call, or marked silent, never makes a banner.
       if (f.silent || f.voice_delegation_id) return
       if (f.message.author !== 'agent') return

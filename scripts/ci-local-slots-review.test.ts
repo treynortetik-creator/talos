@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { cleanEnv } from './ci-test-env'
+import { cleanEnv, copyCiLocalParts } from './ci-test-env'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
@@ -136,6 +136,7 @@ describe('review #81: two runs of one commit', () => {
         '\njob_flaky() { if mkdir "$HOME/first" 2>/dev/null; then sleep 0.3; return 1; fi; sleep 1.5; }\ncd "$WT"\n',
       ),
     )
+    copyCiLocalParts(join(clone, 'scripts')) // the parts ci-local.sh sources in place
     const bin = join(T, 'bin')
     mkdirSync(bin)
     writeFileSync(
@@ -150,6 +151,7 @@ describe('review #81: two runs of one commit', () => {
       ...cleanEnv(),
       ...base,
       CI_SLOTS: '3',
+      CI_MAX_SUITES: '3',
       CI_LOCK_TIMEOUT: '20',
       HOME: home,
       PATH: `${bin}:${process.env.PATH}`,

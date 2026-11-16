@@ -10,7 +10,7 @@ import { wireThreads } from '../../src/features/threads/manage/useThreadPatch.ts
 import { TalosClientError } from '../../src/lib/client.ts'
 import { renderWith, setup } from '../cards/helpers.tsx'
 
-const wire = (t: unknown) => wireThreads([t as never], false)[0]
+const wire = (t: unknown) => wireThreads([t as never], false, { base: [] })[0]
 
 beforeEach(() => resetAgentDraft())
 afterEach(cleanup)
@@ -27,7 +27,9 @@ describe('Set up my agent', () => {
       name: 'Set up my agent',
     })
     await Promise.all([userEvent.click(button), userEvent.click(button)])
-    await waitFor(() => expect(setupThreads(c)).toHaveLength(1))
+    // The thread shows before the kickoff is signed and sent; the open Setup thread is what says the whole run is over.
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe(`/t/${SETUP_THREAD_ID}`))
+    expect(setupThreads(c)).toHaveLength(1)
     expect(c.sent.filter((f) => f.type === 'config.patch')).toHaveLength(1)
     expect(kickoffs(c)).toHaveLength(1)
     expect(setupThreads(c)[0]).toMatchObject({
@@ -43,6 +45,19 @@ describe('Set up my agent', () => {
     expect(a).toBe(b)
     expect(setupThreads(c)).toHaveLength(1)
     expect(kickoffs(c)).toHaveLength(1)
+  })
+
+  it('a run still going for one agent is never handed to another: each gets its own thread and kickoff', async () => {
+    const first = setup({ replyDelayMs: 60_000 })
+    const second = setup({ replyDelayMs: 60_000 })
+    const a = startSetup(first) // still in flight when the second starts
+    const b = startSetup(second)
+    expect(b).not.toBe(a)
+    await Promise.all([a, b])
+    for (const c of [first, second]) {
+      expect(setupThreads(c)).toHaveLength(1)
+      expect(kickoffs(c)).toHaveLength(1)
+    }
   })
 
   it('a second tap after the first finished adds no thread and does not ask again while the agent has not answered', async () => {
@@ -76,11 +91,12 @@ describe('Set up my agent', () => {
     expect(setupThreads(c)[0]?.archived).toBe(false)
   })
 
-  it('with the Mac offline it says so and sends nothing', async () => {
+  it('with the computer offline it says so in its own words, and sends nothing', async () => {
     const c = setup()
+    c.store.setState((s) => ({ presence: { ...s.presence, features: ['host/mac'], bridge_online: false } }))
     renderWith(<AgentSettingsSection readOnly={true} />, c)
     await userEvent.click(await screen.findByRole('button', { name: 'Set up my agent' }))
-    expect((await screen.findByRole('alert')).textContent).toContain('Mac is offline')
+    expect((await screen.findByRole('alert')).textContent).toContain('Your Mac is offline')
     expect(c.sent).toHaveLength(0)
   })
 
@@ -128,10 +144,11 @@ describe('Set up my agent', () => {
   it('unarchives a renamed, archived Setup thread without an error', async () => {
     const c = setup()
     await startSetup(c)
-    c.store.setState((s) => ({
-      ...s,
-      threads: s.threads.map((t) => (t.id === SETUP_THREAD_ID ? { ...t, name: 'Budget', archived: true } : t)),
-    }))
+    // renamed and archived on the Mac (a patch only carries what changed, so a rename the Mac never saw would not count)
+    const base = c.store.getState().threads
+    const renamed = base.map((t) => (t.id === SETUP_THREAD_ID ? { ...t, name: 'Budget', archived: true } : t))
+    await c.patchConfig({ threads: wireThreads(renamed, false, { base }) })
+    expect(c.store.getState().threads.find((x) => x.id === SETUP_THREAD_ID)?.archived).toBe(true)
     await startSetup(c)
     const t = c.store.getState().threads.find((x) => x.id === SETUP_THREAD_ID)
     expect(t).toMatchObject({ name: 'Budget', archived: false })

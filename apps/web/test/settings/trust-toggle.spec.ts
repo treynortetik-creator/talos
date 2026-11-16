@@ -20,16 +20,16 @@ for (const theme of ['light', 'dark'] as const) {
     })
     const sw = (page: Page) => page.getByRole('switch', { name: /Trust mode/ })
 
-    test('by keyboard: Space turns it on (passkey step, then On), Space again turns it off, focus stays', async ({
+    test('by keyboard: Space turns it on, Space again turns it off, focus stays (no passkey step: owner 2026-11-14)', async ({
       page,
     }, info) => {
       await expect(sw(page)).toHaveAttribute('aria-checked', 'false')
-      await expect(page.getByTestId('trust-mode-state')).toContainText('Turning it on asks for your passkey')
+      await expect(page.getByTestId('trust-mode-state')).toContainText('Off: cards as usual.')
       await sw(page).focus()
       await page.keyboard.press('Space')
       await expect(sw(page)).toHaveAttribute('aria-checked', 'true')
       await expect(sw(page)).toBeFocused()
-      await expect(page.getByTestId('trust-mode-state')).toContainText('Turning it off needs no passkey')
+      await expect(page.getByTestId('trust-mode-state')).toContainText('Your own messages run without a card')
       // the switch's own transition must be over before the picture is taken
       await page.evaluate(() => Promise.all(document.getAnimations().map((x) => x.finished)).then(() => undefined))
       if (SHOTS) {

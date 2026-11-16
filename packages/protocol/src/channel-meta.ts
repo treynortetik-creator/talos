@@ -24,6 +24,8 @@ export const CHANNEL_KINDS = [
   'share',
   // Option C hand-off between the main session and a thread lead (docs/OPTION-C.md "Hand-offs")
   'handoff',
+  // A `wake_me` timer the agent set for itself firing (docs/OPTION-C.md "Wake me"): always trust=agent, never the owner's word
+  'wake',
 ] as const
 /** `agent` is another Talos session (main or a thread lead): never the owner's word, and it approves nothing. */
 export const CHANNEL_TRUSTS = ['owner', 'owner_voice', 'external', 'system', 'agent'] as const
@@ -86,6 +88,10 @@ export const ChannelMeta = z
     // handoff: who sent it and what it asks
     handoff_type: z.enum(['TASK', 'RESULT', 'BLOCK']).optional(),
     handoff_from: z.enum(['main', 'lead']).optional(),
+    // wake: which wake fired, and whose it is (main's own, a thread session's, or a thread session's that was dropped and
+    // reaches main only as a report)
+    wake_id: z.string().optional(),
+    wake_for: z.enum(['main', 'thread', 'dropped']).optional(),
   })
   .catchall(z.string()) // file_path_2 ... file_path_10
   .superRefine((meta, ctx) => {

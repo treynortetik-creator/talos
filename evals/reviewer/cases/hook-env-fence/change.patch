@@ -1,0 +1,1523 @@
+diff --git a/apps/bridge/test/supervisor/swift-parity.test.ts b/apps/bridge/test/supervisor/swift-parity.test.ts
+index e70ed211..ebcfb75f 100644
+--- a/apps/bridge/test/supervisor/swift-parity.test.ts
++++ b/apps/bridge/test/supervisor/swift-parity.test.ts
+@@ -108,7 +108,8 @@ describe('the MCP allow list’s fixed parts are WorkerMcp.swift’s', () => {
+ })
+ 
+ describe('the thread session’s permission hook is WorkerHook.swift’s', () => {
+-  const hookSwift = swift('TalosDesktopCore/WorkerHook.swift')
++  // the hook's rules, and where it comes from on the Mac (the app bundle's own copy, checked by its code signature)
++  const hookSwift = swift('TalosDesktopCore/WorkerHook.swift') + swift('TalosDesktopCore/WorkerHookSource.swift')
+   const hookTs = readFileSync(join(import.meta.dir, '../../src/supervisor/worker-hook.ts'), 'utf8')
+   /** Swift's `\(name)` written as the template's `${name}`. */
+   const asTemplate = (s: string) => s.replace(/\\\((\w+)\)/g, '${$1}')
+@@ -117,6 +118,8 @@ describe('the thread session’s permission hook is WorkerHook.swift’s', () =>
+       'the permission hook ${script} is not an absolute path',
+       'the permission hook ${script} is not a file',
+       'the permission hook ${script} is missing or cannot be read',
++      "python3 is not on the thread session's PATH (outside its own folders), so its permission hook cannot run",
++      ', a folder a thread session works in',
+       '${d} cannot be read',
+       '${d} is not a plain folder',
+       '${d} belongs to another account',
+@@ -133,21 +136,43 @@ describe('the thread session’s permission hook is WorkerHook.swift’s', () =>
+       problem: 'the permission hook kit/x.py is not an absolute path',
+     })
+   })
+-  // Linux first (R1-1 the sealed release, R1-7 python3 outside the session's folders): the Mac's twin (the app bundle's own
+-  // copy, checked by its code signature) is queued, and moves these into the shared list above when it lands.
+-  it('the reasons Linux has ahead of the Mac’s twin', () => {
+-    for (const r of [
+-      "python3 is not on the thread session's PATH (outside its own folders), so its permission hook cannot run",
+-      'this install has no sealed kit release (',
+-      'can be written, so the release is not sealed; ',
+-      'does not match its own record (it was changed after it was built); remove it, then ',
+-      'a folder a thread session works in; ',
+-      'install a sealed release with: ',
+-    ])
+-      expect(hookTs).toContain(r)
++  // R1-1: the source is sealed on both and never the checkout. On Linux it is the kit release, checked against the hash it
++  // records; on the Mac the app bundle's own copy, checked by the bundle's code signature. The same rule in each one's words.
++  it('the sealed source’s reasons, each in its own words where the source differs', () => {
++    const twins: [linux: string, mac: string][] = [
++      ['this install has no sealed kit release (', 'this Talos app has no permission hook inside it'],
++      ['does not point at one of ', 'is not inside the Talos app ('],
++      [' is a link, not part of a sealed release; ', ' is a link, not part of the signed app'],
++      [' can be written, so the release is not sealed; ', " can be written, so the app's copy is not sealed"],
++      [' belongs to another account; ', ' belongs to another account'],
++      [
++        'does not match its own record (it was changed after it was built); remove it, then ',
++        "the Talos app's code signature does not check out (",
++      ],
++      [' changed after its release was checked', " changed after the app's signature was checked"],
++    ]
++    for (const [linux, mac] of twins) {
++      expect(hookTs).toContain(linux)
++      expect(hookSwift).toContain(mac)
++    }
+     expect(NO_PYTHON).toBe(
+       "python3 is not on the thread session's PATH (outside its own folders), so its permission hook cannot run",
+     )
++    // R1-7 on both: python3 is the real interpreter file, never a `#!` shim or a link whose real file is not named python3
++    expect(hookTs).toContain("b.toString('latin1') === '#!'")
++    expect(hookSwift).toContain('head == Data("#!".utf8)')
++    expect(hookTs).toContain('/^python3(\\.\\d+)*$/')
++    expect(hookSwift).toContain('static func isPython3Name(')
++    // the copy is made only of the bytes the check verified
++    expect(hookTs).toContain('writeFileAtomic(script, hookBytes, 0o600)')
++    expect(hookSwift).toContain('try AtomicFile.write(checked.script, to: script, mode: 0o600)')
++    // the Mac never names the checkout for the hook
++    expect(hookSwift).not.toContain('kit/hooks')
++    expect(swift('TalosDesktop/SupervisorController.swift')).toContain('o.permissionHook = WorkerHook.appSource')
++  })
++  // Linux only: a release is installed by a command the refusal names. The Mac's app carries its hook, so its line says to reinstall.
++  it('the reason only Linux has', () => {
++    expect(hookTs).toContain('install a sealed release with: ')
+   })
+   it('the copy’s folder and the command the settings run', () => {
+     expect(workerHookDir('/h/.talos')).toBe('/h/.talos/workers/_hook')
+diff --git a/apps/desktop/Sources/TalosDesktop/SelfTest.swift b/apps/desktop/Sources/TalosDesktop/SelfTest.swift
+index 7e78dbf9..ab12eeab 100644
+--- a/apps/desktop/Sources/TalosDesktop/SelfTest.swift
++++ b/apps/desktop/Sources/TalosDesktop/SelfTest.swift
+@@ -2,6 +2,7 @@ import AppKit
+ import ServiceManagement
+ import SwiftTerm
+ import TalosDesktopCore
++import TalosSupervisor
+ import UserNotifications
+ 
+ enum SelfTest {
+@@ -23,11 +24,18 @@ enum SelfTest {
+       notifications = sem.wait(timeout: .now() + 3) == .success
+     }
+ 
++    // The thread sessions' permission hook as every start checks it: in this bundle, read-only, inside a signature that holds.
++    let hook: String
++    switch WorkerHook.appSource.verified() {
++    case .ok: hook = "ok"
++    case .problem(let why): hook = why
++    }
++
+     let report = SelfTestReport(
+       version: version, bundleId: bundleId, swiftterm: swiftterm,
+       notificationsReachable: notifications,
+       loginItemStatus: SMAppService.mainApp.status.rawValue,
+-      configDefaultsDecode: defaultsDecode)
++      configDefaultsDecode: defaultsDecode, workerHook: hook)
+ 
+     // Test hook for scripts/guards-test.sh: proves build-app.sh really fails when the selftest fails.
+     if ProcessInfo.processInfo.environment["TALOS_SELFTEST_FORCE_FAIL"] == "1" {
+diff --git a/apps/desktop/Sources/TalosDesktop/SupervisorController.swift b/apps/desktop/Sources/TalosDesktop/SupervisorController.swift
+index e1f88891..b2426b75 100644
+--- a/apps/desktop/Sources/TalosDesktop/SupervisorController.swift
++++ b/apps/desktop/Sources/TalosDesktop/SupervisorController.swift
+@@ -271,8 +271,9 @@ final class SupervisorController: ObservableObject {
+     o.mainArgs = cfg.args
+     o.managedDir = MainManagedSettings.systemDir
+     o.auditLogPath = auditPath
+-    // this install's own kit copy: never a path guessed inside the agent folder (an older one keeps its hooks elsewhere)
+-    o.permissionHook = (Bundle.main.object(forInfoDictionaryKey: "TalosCheckout") as? String).map { $0 + WorkerHook.kitPath }
++    // the app bundle's own sealed copy: never the checkout (a thread working there could edit the script that answers its own
++    // prompts), and never a path guessed inside the agent folder (an older one keeps its hooks elsewhere)
++    o.permissionHook = WorkerHook.appSource
+     let m = WorkerManager(options: o, probe: probe, baseEnv: { launchEnv.env() }, mainPanePid: mainPid)
+     m.launchSource = { Self.launchSource(now(), loginEnv: launchEnv.env()) }
+     m.hasLoginEnv = { launchEnv.hasLoginEnv }
+diff --git a/apps/desktop/Sources/TalosDesktopCore/SelfTestReport.swift b/apps/desktop/Sources/TalosDesktopCore/SelfTestReport.swift
+index bda908d1..36f7851a 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/SelfTestReport.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/SelfTestReport.swift
+@@ -8,10 +8,12 @@ public struct SelfTestReport: Codable, Equatable, Sendable {
+   public var notificationsReachable: Bool
+   public var loginItemStatus: Int
+   public var configDefaultsDecode: Bool
++  /// "ok", or why the app refuses its own bundled permission hook (`WorkerHook.BundleSource`): then no thread session would start.
++  public var workerHook: String
+ 
+   public init(
+     version: String, bundleId: String, swiftterm: Bool, notificationsReachable: Bool,
+-    loginItemStatus: Int, configDefaultsDecode: Bool
++    loginItemStatus: Int, configDefaultsDecode: Bool, workerHook: String
+   ) {
+     self.version = version
+     self.bundleId = bundleId
+@@ -19,6 +21,7 @@ public struct SelfTestReport: Codable, Equatable, Sendable {
+     self.notificationsReachable = notificationsReachable
+     self.loginItemStatus = loginItemStatus
+     self.configDefaultsDecode = configDefaultsDecode
++    self.workerHook = workerHook
+   }
+ 
+   enum CodingKeys: String, CodingKey {
+@@ -27,11 +30,12 @@ public struct SelfTestReport: Codable, Equatable, Sendable {
+     case notificationsReachable = "notifications_reachable"
+     case loginItemStatus = "login_item_status"
+     case configDefaultsDecode = "config_defaults_decode"
++    case workerHook = "worker_hook"
+   }
+ 
+   /// The checks that must hold for exit 0. Notifications and login-item status are informational (they depend on the
+   /// machine's privacy state, and an unbundled debug run has neither).
+-  public var ok: Bool { swiftterm && configDefaultsDecode && bundleId == SelfTestReport.expectedBundleId }
++  public var ok: Bool { swiftterm && configDefaultsDecode && bundleId == SelfTestReport.expectedBundleId && workerHook == "ok" }
+ 
+   public static let expectedBundleId = "app.talos.desktop"
+ 
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift
+index 2059417f..5624f9d4 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift
+@@ -3,8 +3,9 @@ import Foundation
+ /// The PermissionRequest hook a thread session runs: where it comes from, the copy the session runs, and the python3 that runs it.
+ /// A thread session is not a channel, so this hook is how its approval prompts reach the phone. A command that runs nothing leaves
+ /// every prompt at the terminal with no card and no word (2026-11-11: the settings named `<agent folder>/hooks/permission-relay.py`,
+-/// and an older agent folder has no `hooks/`), so a start whose hook cannot run is refused. The Linux twin is
+-/// apps/bridge/src/supervisor/worker-hook.ts; the reasons below are word for word the same (swift-parity.test.ts).
++/// and an older agent folder has no `hooks/`), so a start whose hook cannot run is refused. The source is the app bundle's sealed
++/// copy and nothing else (WorkerHookSource.swift). The Linux twin is apps/bridge/src/supervisor/worker-hook.ts; the reasons the two
++/// share are word for word the same (swift-parity.test.ts).
+ public enum WorkerHook {
+   /// What the session's settings run: the copy's path and the python3 that runs it, both absolute.
+   public struct Installed: Equatable, Sendable {
+@@ -22,31 +23,63 @@ public enum WorkerHook {
+     case problem(String)
+   }
+ 
+-  /// The hook's name inside this install's kit (`<checkout>/kit/hooks/…`), and the helper it imports from its own folder (optional
+-  /// there: the hook runs without it, minus its kill-switch file).
+-  public static let kitPath = "/kit/hooks/permission-relay.py"
+-  static let scriptName = "permission-relay.py"
++  /// The hook's file name, and the helper it imports from its own folder (optional there: the hook runs without it, minus its
++  /// kill-switch file).
++  public static let scriptName = "permission-relay.py"
+   static let helper = "_talos_common.py"
+ 
+-  public static let noPython = "python3 is not on the thread session's PATH, so its permission hook cannot run"
+-  /// The app was built without its checkout's path (`TalosCheckout` in Info.plist): the kit, and so the hook, cannot be found.
+-  public static let noInstallFolder = "this Talos build doesn't know its install folder, so a thread session's permission hook can't be found"
++  public static let noPython = "python3 is not on the thread session's PATH (outside its own folders), so its permission hook cannot run"
+ 
+   /// The folder the session's copy lives in: inside the Talos home, which every thread session is fenced out of and only the owner
+-  /// can write. The kit's own copy sits in the checkout, which a thread working in that checkout may edit without a prompt
+-  /// (acceptEdits): it could make its own approvals answer themselves. `_hook` is no thread id (ids are letters, digits and dashes).
++  /// can write. A copy in a checkout could be edited without a prompt by a thread working there (acceptEdits): it could make its
++  /// own approvals answer themselves. `_hook` is no thread id (ids are letters, digits and dashes).
+   public static func dir(talosHome: String) -> String { talosHome + "/workers/_hook" }
+ 
+-  /// The first python3 on `path` that is an executable regular file, absolute entries only (an empty one is the thread folder).
+-  public static func findPython3(path: String?) -> String? {
++  /// The first python3 on `path` that is a real interpreter, from an absolute entry that is not, and does not lead, inside any of
++  /// `fenced` (the thread's folder, the agent folder): a python3 a thread could put there would run its own approvals (R1-7). Its
++  /// links are followed and the REAL file is returned (what the command runs). A version manager's shim (a `#!` script, or one
++  /// whose real file is not named python3, such as mise's) is passed over, for it reads its choice from the folder it runs in,
++  /// which is the thread's. An empty or relative entry is the thread folder at run time, so it is never used either. As the
++  /// Linux twin's findPython3 (worker-hook.ts).
++  public static func findPython3(path: String?, fenced: [String] = []) -> String? {
++    let walls = fenced.filter { $0.hasPrefix("/") }.compactMap { resolved($0) }
++    func within(_ p: String, _ folder: String) -> Bool { p == folder || p.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/") }
+     for d in (path ?? "").split(separator: ":", omittingEmptySubsequences: false) where d.hasPrefix("/") {
+       let p = d.hasSuffix("/") ? "\(d)python3" : "\(d)/python3"
+       var st = stat()
+-      if stat(p, &st) == 0, st.st_mode & S_IFMT == S_IFREG, access(p, X_OK) == 0 { return p }
++      guard stat(p, &st) == 0, st.st_mode & S_IFMT == S_IFREG, access(p, X_OK) == 0 else { continue }
++      guard let realDir = resolved(String(d)), let realBin = resolved(p) else { continue }
++      if walls.contains(where: { within(realDir, $0) || within(realBin, $0) }) { continue }
++      guard isPython3Name((realBin as NSString).lastPathComponent), !isScript(realBin) else { continue }
++      return realBin
+     }
+     return nil
+   }
+ 
++  /// `python3`, `python3.13`, `python3.13.1`: the real file's name. A shim's real file is named for its manager.
++  static func isPython3Name(_ name: String) -> Bool {
++    guard name.hasPrefix("python3") else { return false }
++    let rest = name.dropFirst("python3".count)
++    if rest.isEmpty { return true }
++    guard rest.hasPrefix(".") else { return false }
++    return rest.dropFirst().split(separator: ".", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isNumber } }
++  }
++
++  /// A `#!` script (a pyenv or asdf shim, a wrapper): it may pick its interpreter from the folder it is run in. A file that
++  /// cannot be read counts as one.
++  static func isScript(_ p: String) -> Bool {
++    guard let h = FileHandle(forReadingAtPath: p) else { return true }
++    defer { try? h.close() }
++    guard let head = try? h.read(upToCount: 2) else { return true }
++    return head == Data("#!".utf8)
++  }
++
++  private static func resolved(_ p: String) -> String? {
++    guard let r = realpath(p, nil) else { return nil }
++    defer { free(r) }
++    return String(cString: r)
++  }
++
+   /// Why `script` is not a hook that can be run, or nil: an absolute path to a readable regular file (links followed).
+   static func scriptProblem(_ script: String) -> String? {
+     guard script.hasPrefix("/") else { return "the permission hook \(script) is not an absolute path" }
+@@ -83,9 +116,10 @@ public enum WorkerHook {
+ 
+   /// Why a session started with this `path` could not run the hook from `source`, or nil (the start's preflight: nothing is written).
+   /// With `talosHome`, the copy's folder is looked at too, as far as it exists: a start that `install` would refuse for it takes no slot.
+-  public static func problem(source: String, path: String?, talosHome: String? = nil) -> String? {
+-    if let why = scriptProblem(source) { return why }
+-    if findPython3(path: path) == nil { return noPython }
++  /// `fenced`: the starting thread's folder and the agent folder. Neither the app nor the python3 may be inside one.
++  public static func problem(source: BundleSource, path: String?, talosHome: String? = nil, fenced: [String] = []) -> String? {
++    if case .problem(let why) = source.verified(outside: fenced) { return why }
++    if findPython3(path: path, fenced: fenced) == nil { return noPython }
+     guard let talosHome, let unsafe = folderProblem(talosHome: talosHome, dir: dir(talosHome: talosHome), existingOnly: true) else { return nil }
+     return "the permission hook's folder \(unsafe)"
+   }
+@@ -96,14 +130,26 @@ public enum WorkerHook {
+     if mkdir(d, 0o700) != 0, errno != EEXIST { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+   }
+ 
+-  /// The hook the session runs: `source` and its helper copied into the fenced folder (0600, written whole), and the python3 the
+-  /// session's PATH names, resolved now and written into the command. Or why not: then the start is refused. A source with no
+-  /// helper leaves none in the copy's folder either: an old one would be imported in its place.
++  /// The hook the session runs: `source`'s script and its helper written into the fenced folder (0600, written whole), made only
++  /// of the bytes the check verified (read once, checked, then those bytes written: a swap between check and copy cannot land),
++  /// and the python3 the session's PATH names, resolved now and written into the command. Or why not: then the start is
++  /// refused. A source with no helper leaves none in the copy's folder either: an old one would be imported in its place.
+   public static func install(
+-    talosHome: String, source: String, path: String?, resolvePython: (String?) -> String? = { WorkerHook.findPython3(path: $0) }
++    talosHome: String, source: BundleSource, path: String?, fenced: [String] = [], resolvePython: ((String?) -> String?)? = nil
+   ) -> Outcome {
+-    if let why = scriptProblem(source) { return .problem(why) }
+-    guard let python = resolvePython(path), python.hasPrefix("/") else { return .problem(noPython) }
++    let checked: BundleSource.Verified
++    switch source.verified(outside: fenced) {
++    case .problem(let why): return .problem(why)
++    case .ok(let v): checked = v
++    }
++    let python: String
++    if let resolvePython {
++      guard let given = resolvePython(path), given.hasPrefix("/") else { return .problem(noPython) }
++      python = given
++    } else {
++      guard let found = findPython3(path: path, fenced: fenced) else { return .problem(noPython) }
++      python = found
++    }
+     let dir = dir(talosHome: talosHome)
+     let script = dir + "/" + scriptName
+     var replaced = false
+@@ -114,12 +160,10 @@ public enum WorkerHook {
+       if let unsafe = folderProblem(talosHome: talosHome, dir: dir, existingOnly: true) { return .problem("the permission hook's folder \(unsafe)") }
+       try makeFolder(dir)
+       if let unsafe = folderProblem(talosHome: talosHome, dir: dir) { return .problem("the permission hook's folder \(unsafe)") }
+-      let text = try Data(contentsOf: URL(fileURLWithPath: source))
+-      if let old = FileManager.default.contents(atPath: script), old != text { replaced = true }
+-      try AtomicFile.write(text, to: script, mode: 0o600)
+-      let from = (source as NSString).deletingLastPathComponent + "/" + helper
+-      if scriptProblem(from) == nil {
+-        try AtomicFile.write(try Data(contentsOf: URL(fileURLWithPath: from)), to: dir + "/" + helper, mode: 0o600)
++      if let old = FileManager.default.contents(atPath: script), old != checked.script { replaced = true }
++      try AtomicFile.write(checked.script, to: script, mode: 0o600)
++      if let helperText = checked.helper {
++        try AtomicFile.write(helperText, to: dir + "/" + helper, mode: 0o600)
+       } else if unlink(dir + "/" + helper) != 0, errno != ENOENT {
+         throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+       }
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerHookSource.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerHookSource.swift
+new file mode 100644
+index 00000000..b63c3f97
+--- /dev/null
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerHookSource.swift
+@@ -0,0 +1,153 @@
++import Foundation
++
++/// Where a thread session's permission hook comes from on the Mac: the app bundle's own sealed copy
++/// (`Contents/Resources/talos-hooks/`, put there read-only by build-app.sh before the bundle is signed). Never the checkout: a thread
++/// working in the checkout may edit files there without a prompt, and the hook is the script that answers that thread's prompts.
++///
++/// Every start asks `verified()`, and gets the script's bytes only when all of this holds:
++///  - the script is no link, is really inside the app bundle (every link on the way resolved), a plain file with no write bit for
++///    anyone, owned by this account or root, and the app is not inside the starting thread's folder or the agent folder;
++///  - the app bundle's code signature checks out (`seal`: asked once per run of the app, and the answer kept, pass or fail);
++///  - the file is the one that was there at that check (device, inode, modification time, size) and holds the same bytes.
++/// The bytes handed back are the bytes that were compared, so nothing can be swapped in between the check and the copy.
++/// Tests build a folder shaped like a bundle and pass their own `seal`; nothing here reads `Bundle.main`.
++extension WorkerHook {
++  public static let bundleFolder = "talos-hooks"
++  public static let noBundledHook = "this Talos app has no permission hook inside it, so a thread session's permission hook can't be found"
++
++  public final class BundleSource: @unchecked Sendable {
++    /// The hook and the helper beside it (nil: the bundle has none), as checked.
++    public struct Verified: Equatable, Sendable {
++      public var path: String
++      public var script: Data
++      public var helper: Data?
++    }
++
++    public enum Answer: Equatable, Sendable {
++      case ok(Verified)
++      case problem(String)
++    }
++
++    /// One file as it was when the signature was checked. `changed` is the last status change: it cannot be set back by a program,
++    /// so it guards the moment of the check itself; it is not held against later starts (the system adds attributes of its own).
++    struct Mark: Equatable {
++      var device: UInt64
++      var inode: UInt64
++      var modified: timespec
++      var changed: timespec
++      var size: Int64
++
++      func sameFile(_ o: Mark) -> Bool {
++        device == o.device && inode == o.inode && size == o.size && modified.tv_sec == o.modified.tv_sec && modified.tv_nsec == o.modified.tv_nsec
++      }
++      static func == (a: Mark, b: Mark) -> Bool { a.sameFile(b) && a.changed.tv_sec == b.changed.tv_sec && a.changed.tv_nsec == b.changed.tv_nsec }
++    }
++
++    private struct Baseline {
++      var path: String
++      var script: Mark
++      var helper: Mark?
++      var scriptBytes: Data
++      var helperBytes: Data?
++    }
++
++    public let script: String?
++    public let bundlePath: String
++    private let seal: @Sendable (String) -> String?
++    private let lock = NSLock()
++    private var baseline: Baseline?
++    private var sealProblem: String?
++
++    /// `script`: the bundled hook's path, nil when the bundle has none. `seal`: why the bundle at this path fails its code signature
++    /// check, or nil when it passes.
++    public init(script: String?, bundlePath: String, seal: @escaping @Sendable (String) -> String?) {
++      self.script = script
++      self.bundlePath = bundlePath
++      self.seal = seal
++    }
++
++    /// The hook to copy, or the exact reason this start is refused. `outside`: folders the app must not be in (the starting
++    /// thread's folder, the agent folder), where a thread session edits files without a prompt.
++    public func verified(outside: [String] = []) -> Answer {
++      lock.lock()
++      defer { lock.unlock() }
++      guard let script else { return .problem(WorkerHook.noBundledHook) }
++      if let why = WorkerHook.scriptProblem(script) { return .problem(why) }
++      var link = stat()
++      if lstat(script, &link) == 0, link.st_mode & S_IFMT == S_IFLNK { return .problem(Self.isLink(script)) }
++      guard let real = Self.real(script), let bundle = Self.real(bundlePath) else { return .problem("the permission hook \(script) is missing or cannot be read") }
++      guard real.hasPrefix(bundle + "/") else { return .problem("the permission hook \(script) is not inside the Talos app (\(bundlePath))") }
++      for f in outside.filter({ $0.hasPrefix("/") }).compactMap(Self.real) where bundle == f || bundle.hasPrefix(f.hasSuffix("/") ? f : f + "/") {
++        return .problem("the Talos app \(bundle) is inside \(f), a folder a thread session works in")
++      }
++      let helper = (real as NSString).deletingLastPathComponent + "/" + WorkerHook.helper
++      let files: (script: Mark, helper: Mark?)
++      switch Self.marks(script: real, helper: helper) {
++      case .failure(let why): return .problem(why.text)
++      case .success(let m): files = m
++      }
++      if let sealProblem { return .problem(sealProblem) }
++      guard let base = baseline else {
++        if let detail = seal(bundle) {
++          let why = "the Talos app's code signature does not check out (\(detail)), so its permission hook can't be trusted"
++          sealProblem = why
++          return .problem(why)
++        }
++        // read after the check, and the files must not have been touched since before it: what was sealed is what is kept
++        guard let bytes = Self.read(real, helper: files.helper == nil ? nil : helper), case .success(let after) = Self.marks(script: real, helper: helper),
++          after.script == files.script, after.helper == files.helper
++        else { return .problem(Self.changed(script)) }
++        baseline = Baseline(path: real, script: files.script, helper: files.helper, scriptBytes: bytes.script, helperBytes: bytes.helper)
++        return .ok(.init(path: real, script: bytes.script, helper: bytes.helper))
++      }
++      guard base.path == real, base.script.sameFile(files.script), (base.helper == nil) == (files.helper == nil),
++        base.helper.map({ b in files.helper.map { b.sameFile($0) } ?? false }) ?? true,
++        let bytes = Self.read(real, helper: files.helper == nil ? nil : helper), bytes.script == base.scriptBytes, bytes.helper == base.helperBytes
++      else { return .problem(Self.changed(script)) }
++      return .ok(.init(path: real, script: bytes.script, helper: bytes.helper))
++    }
++
++    private static func isLink(_ p: String) -> String { "the Talos app's \(p) is a link, not part of the signed app" }
++
++    private static func changed(_ script: String) -> String {
++      "the permission hook \(script) changed after the app's signature was checked (quit and reopen Talos if it was just updated)"
++    }
++
++    private static func real(_ p: String) -> String? {
++      guard let r = realpath(p, nil) else { return nil }
++      defer { free(r) }
++      return String(cString: r)
++    }
++
++    private struct Why: Error { var text: String }
++
++    /// The two files as they are now, each a plain file (no link) nobody may write to, owned by this account or root. No helper
++    /// at all is allowed (the hook runs without it).
++    private static func marks(script: String, helper: String) -> Result<(script: Mark, helper: Mark?), Why> {
++      func one(_ p: String, optional: Bool) -> Result<Mark?, Why> {
++        var st = stat()
++        guard lstat(p, &st) == 0 else {
++          return optional && errno == ENOENT ? .success(nil) : .failure(Why(text: "the permission hook \(p) is missing or cannot be read"))
++        }
++        guard st.st_mode & S_IFMT != S_IFLNK else { return .failure(Why(text: isLink(p))) }
++        guard st.st_mode & S_IFMT == S_IFREG else { return .failure(Why(text: "the permission hook \(p) is not a file")) }
++        guard st.st_mode & 0o222 == 0 else { return .failure(Why(text: "the Talos app's \(p) can be written, so the app's copy is not sealed")) }
++        guard st.st_uid == getuid() || st.st_uid == 0 else { return .failure(Why(text: "the Talos app's \(p) belongs to another account")) }
++        return .success(Mark(device: UInt64(st.st_dev), inode: UInt64(st.st_ino), modified: st.st_mtimespec, changed: st.st_ctimespec, size: Int64(st.st_size)))
++      }
++      switch (one(script, optional: false), one(helper, optional: true)) {
++      case (.failure(let w), _), (_, .failure(let w)): return .failure(w)
++      case (.success(let s), .success(let h)):
++        guard let s else { return .failure(Why(text: "the permission hook \(script) is missing or cannot be read")) }
++        return .success((s, h))
++      }
++    }
++
++    private static func read(_ script: String, helper: String?) -> (script: Data, helper: Data?)? {
++      guard let s = FileManager.default.contents(atPath: script) else { return nil }
++      guard let helper else { return (s, nil) }
++      guard let h = FileManager.default.contents(atPath: helper) else { return nil }
++      return (s, h)
++    }
++  }
++}
+diff --git a/apps/desktop/Sources/TalosSupervisor/WorkerHookSeal.swift b/apps/desktop/Sources/TalosSupervisor/WorkerHookSeal.swift
+new file mode 100644
+index 00000000..1772725f
+--- /dev/null
++++ b/apps/desktop/Sources/TalosSupervisor/WorkerHookSeal.swift
+@@ -0,0 +1,53 @@
++import Foundation
++import Security
++import TalosDesktopCore
++
++/// The app's side of `WorkerHook.BundleSource`: the hook the bundle carries (`Contents/Resources/talos-hooks/permission-relay.py`)
++/// and the real check of the bundle's code signature. Here and not in the core, which is Foundation only.
++extension WorkerHook {
++  /// The running app's own hook, made once: its signature check is asked once per run and the answer kept.
++  public static let appSource = source(in: .main)
++
++  /// The hook inside `bundle`. A bundle without one gives a source that refuses every start and says why.
++  public static func source(
++    in bundle: Bundle, seal: @escaping @Sendable (String) -> String? = { WorkerHook.sealProblem(bundlePath: $0, isThisProcess: true) }
++  ) -> BundleSource {
++    let script = bundle.url(forResource: "permission-relay", withExtension: "py", subdirectory: bundleFolder)?.path
++    return BundleSource(script: script, bundlePath: bundle.bundlePath, seal: seal)
++  }
++
++  /// Why the bundle at `bundlePath` fails its code signature check, or nil when it passes. Two things are asked:
++  ///  - the bundle on disk is valid: the seal over its code and every resource, all architectures, the strict rules build-app.sh
++  ///    holds it to. An unsigned bundle fails, and so does one with a file edited, added or removed since it was signed.
++  ///  - `isThisProcess`: the bundle on disk is the app that is running, by its code directory hash (which covers the resource
++  ///    seal). A valid signature alone says only that somebody signed what is there: a bundle whose hook was edited and that was
++  ///    then signed again, ad hoc or with any identity, is valid, and is not this app. Asked of the running process, whose hash
++  ///    the kernel holds, so nothing on disk can answer for it.
++  public static func sealProblem(bundlePath: String, isThisProcess: Bool) -> String? {
++    var made: SecStaticCode?
++    let status = SecStaticCodeCreateWithPath(URL(fileURLWithPath: bundlePath) as CFURL, [], &made)
++    guard status == errSecSuccess, let code = made else { return describe(status) }
++    let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate)
++    let valid = SecStaticCodeCheckValidity(code, flags, nil)
++    guard valid == errSecSuccess else { return describe(valid) }
++    guard isThisProcess else { return nil }
++    var info: CFDictionary?
++    let read = SecCodeCopySigningInformation(code, [], &info)
++    guard read == errSecSuccess, let hash = (info as? [String: Any])?[kSecCodeInfoUnique as String] as? Data, !hash.isEmpty else {
++      return "the app on disk has no code hash to compare with the app that is running, \(describe(read))"
++    }
++    let hex = hash.map { String(format: "%02x", $0) }.joined()
++    var requirement: SecRequirement?
++    var me: SecCode?
++    guard SecRequirementCreateWithString("cdhash H\"\(hex)\"" as CFString, [], &requirement) == errSecSuccess, let requirement,
++      SecCodeCopySelf([], &me) == errSecSuccess, let me
++    else { return "the app that is running could not be compared with the app on disk" }
++    let same = SecCodeCheckValidity(me, [], requirement)
++    return same == errSecSuccess ? nil : "the app on disk is not the app that is running, \(describe(same))"
++  }
++
++  private static func describe(_ status: OSStatus) -> String {
++    let text = SecCopyErrorMessageString(status, nil) as String?
++    return text.map { "\($0), \(status)" } ?? "error \(status)"
++  }
++}
+diff --git a/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift b/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift
+index 53d1305e..42048b31 100644
+--- a/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift
++++ b/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift
+@@ -9,24 +9,27 @@ extension WorkerManager {
+   private var pathIsProvisional: Bool { hasLoginEnv.map { !$0() } ?? false }
+ 
+   /// True when the start is refused: nothing was made, no slot taken and no other session parked for it. Nothing is written here.
+-  func refuseWithoutHook(_ id: String) -> Bool {
+-    guard let source = options.permissionHook else { return refuseHook(id, WorkerHook.noInstallFolder) }
+-    guard let why = WorkerHook.problem(source: source, path: baseEnv()["PATH"], talosHome: options.talosHome) else { return false }
++  /// `cwd`: the thread's folder as its settings name it (the start resolves it for good). That folder and the agent folder are
++  /// where neither the app nor a python3 may be (`WorkerHook.BundleSource`, `WorkerHook.findPython3`).
++  func refuseWithoutHook(_ id: String, cwd: String?) -> Bool {
++    guard let source = options.permissionHook else { return refuseHook(id, WorkerHook.noBundledHook) }
++    let fenced = [options.agentDir] + (cwd.map { [$0] } ?? [])
++    guard let why = WorkerHook.problem(source: source, path: baseEnv()["PATH"], talosHome: options.talosHome, fenced: fenced) else { return false }
+     if why == WorkerHook.noPython, pathIsProvisional { return false }  // `start` keeps it for a later tick
+     return refuseHook(id, why)
+   }
+ 
+   /// The copy this start's session runs and the python3 that runs it, or nil: the start was refused (or kept for a later tick while
+   /// the login shell's PATH is not known yet), and the caller makes nothing.
+-  func installHook(_ id: String, resume: Bool, now t: Double) -> WorkerHook.Installed? {
++  func installHook(_ id: String, cwd: String, resume: Bool, now t: Double) -> WorkerHook.Installed? {
+     guard let source = options.permissionHook else {
+-      _ = refuseHook(id, WorkerHook.noInstallFolder)
++      _ = refuseHook(id, WorkerHook.noBundledHook)
+       return nil
+     }
+-    switch WorkerHook.install(talosHome: options.talosHome, source: source, path: baseEnv()["PATH"]) {
++    switch WorkerHook.install(talosHome: options.talosHome, source: source, path: baseEnv()["PATH"], fenced: [options.agentDir, cwd]) {
+     case .installed(let hook, let replaced):
+-      // the script that answers every thread session's prompts is not the one the last start ran: a new kit, or an edited source
+-      if replaced { audit("worker_hook_replaced thread=\(id) source=\"\(WorkerNotice.logValue(source))\"") }
++      // the script that answers every thread session's prompts is not the one the last start ran: a newer app's hook
++      if replaced { audit("worker_hook_replaced thread=\(id) source=\"\(WorkerNotice.logValue(source.script ?? ""))\"") }
+       return hook
+     case .problem(let why):
+       if why == WorkerHook.noPython, pathIsProvisional {
+diff --git a/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift b/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift
+index 8ccf28bd..345146df 100644
+--- a/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift
++++ b/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift
+@@ -26,9 +26,9 @@ public final class WorkerManager: @unchecked Sendable {
+     public var claudePath: String
+     /// The owner's permission flag from desktop.json when main uses it (`--dangerously-skip-permissions`).
+     public var permissionFlag: String?
+-    /// The thread sessions' PermissionRequest hook source: this install's kit copy. nil = this build doesn't know its checkout, and
+-    /// no thread session starts (`WorkerHookStart.swift`).
+-    public var permissionHook: String?
++    /// The thread sessions' PermissionRequest hook source: the app bundle's sealed copy (`WorkerHook.appSource`), never a checkout.
++    /// nil = none was given, and no thread session starts (`WorkerHookStart.swift`).
++    public var permissionHook: WorkerHook.BundleSource?
+     /// Main's real launch arguments from desktop.json. Its permission mode is worked out from these (`--permission-mode X` as well as
+     /// `--dangerously-skip-permissions`); empty = just `permissionFlag`.
+     public var mainArgs: [String] = []
+@@ -478,7 +478,7 @@ public final class WorkerManager: @unchecked Sendable {
+     // one worker per folder, except the agent folder (main's own; workers there don't touch git, OPTION-C 7.2)
+     // a sub-thread that can't start says so before it is asked about folders (it never shares its parent's)
+     if refuseUnderNarrowedMain(id) { return }  // before anything else: no slot is taken, and no other session is parked for it
+-    if refuseWithoutHook(id) { return }  // a hook that cannot run refuses every start: found before a slot is taken
++    if refuseWithoutHook(id, cwd: s.cwd) { return }  // a hook that cannot run refuses every start: found before a slot is taken
+     if let why = s.sub?.refusal { return fail(id, "start_failed", why) }
+     if let sub = s.sub, sub.ownCwd, let p = sub.parentCwd, let r = SubThreadFolder.check(cwd: s.cwd ?? "", parentCwd: p) {
+       return fail(id, "start_failed", "sub-thread folder: \(r.why)")  // the parent's own folder is not a subfolder: never a wait for it
+@@ -595,7 +595,7 @@ public final class WorkerManager: @unchecked Sendable {
+     case .unknown: return hold(id, resume: resume, now: t)
+     }
+     closeNoticeRecord(id)  // a new start has no dialog open
+-    guard let hook = installHook(id, resume: resume, now: t) else { return }  // the copy this session runs, made now; refused when it cannot be
++    guard let hook = installHook(id, cwd: cwd, resume: resume, now: t) else { return }  // the copy this session runs, made now; refused when it cannot be
+     let claudeDir = WorkerMcp.claudeDir(home: options.home, env: baseEnv())
+     let dirSet = WorkerMcp.configDirSet(env: baseEnv())
+     let main = mainCeiling(own, claudeDir: claudeDir)  // from this start's one read of main's own --settings (WorkerMainSettings.swift)
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/SelfTestReportTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/SelfTestReportTests.swift
+index 48715d2a..b3a91744 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/SelfTestReportTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/SelfTestReportTests.swift
+@@ -6,7 +6,7 @@ struct SelfTestReportTests {
+   @Test func jsonLineParsesAndCarriesTheSpecFields() throws {
+     let report = SelfTestReport(
+       version: "0.1.0", bundleId: "app.talos.desktop", swiftterm: true,
+-      notificationsReachable: true, loginItemStatus: 3, configDefaultsDecode: true)
++      notificationsReachable: true, loginItemStatus: 3, configDefaultsDecode: true, workerHook: "ok")
+     let line = try report.jsonLine()
+     #expect(!line.contains("\n"))
+     let obj = try #require(jsonObject(line))
+@@ -16,17 +16,23 @@ struct SelfTestReportTests {
+     #expect(obj["notifications_reachable"] as? Bool == true)
+     #expect(obj["login_item_status"] as? Int == 3)
+     #expect(obj["config_defaults_decode"] as? Bool == true)
++    #expect(obj["worker_hook"] as? String == "ok")
+   }
+ 
+   @Test func okOnlyWhenEverythingRequiredHolds() {
+     var r = SelfTestReport(
+       version: "x", bundleId: "app.talos.desktop", swiftterm: true,
+-      notificationsReachable: true, loginItemStatus: 3, configDefaultsDecode: true)
++      notificationsReachable: true, loginItemStatus: 3, configDefaultsDecode: true, workerHook: "ok")
+     #expect(r.ok)
+     r.swiftterm = false
+     #expect(!r.ok)
+     r.swiftterm = true
+     r.configDefaultsDecode = false
+     #expect(!r.ok)
++    r.configDefaultsDecode = true
++    #expect(r.ok)
++    // an app that would refuse its own bundled permission hook starts no thread session: the build must not pass
++    r.workerHook = "the Talos app's code signature does not check out (a sealed resource is missing or invalid), so its permission hook can't be trusted"
++    #expect(!r.ok)
+   }
+ }
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookSourceTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookSourceTests.swift
+new file mode 100644
+index 00000000..544cbf25
+--- /dev/null
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookSourceTests.swift
+@@ -0,0 +1,208 @@
++import Foundation
++import Testing
++@testable import TalosDesktopCore
++import TalosTestSupport
++
++/// How many times the signature check was asked, and what it answers.
++final class CountingSeal: @unchecked Sendable {
++  private let lock = NSLock()
++  private var n = 0
++  private var asked: [String] = []
++  var answer: String?
++  var during: (@Sendable () -> Void)?
++  init(_ answer: String? = nil) { self.answer = answer }
++  var count: Int { lock.withLock { n } }
++  var paths: [String] { lock.withLock { asked } }
++  func check(_ bundle: String) -> String? {
++    lock.withLock {
++      n += 1
++      asked.append(bundle)
++    }
++    during?()
++    return answer
++  }
++}
++
++/// Where a thread session's permission hook comes from (`WorkerHook.BundleSource`, review R1-1): the app bundle's sealed copy and
++/// nothing else. The hook answers a thread session's approval prompts, so a copy that session could have written must never be run:
++/// one outside the bundle (the checkout the app was built from, where the app used to look), one with a write bit, one in a bundle
++/// whose signature fails, and one that is not the file the signature check saw are each refused, and nothing is copied.
++@Suite("WorkerHook: the source is the app bundle's sealed copy")
++struct WorkerHookSourceTests {
++  let root: String
++  let app: FakeAppBundle
++  var talosHome: String { root + "/talos home" }
++  var copy: String { talosHome + "/workers/_hook/permission-relay.py" }
++  let path = "/usr/bin:/bin"
++
++  init() throws {
++    let base = (TestTemp.base as NSString).appendingPathComponent("talos-hooksrc-\(UUID().uuidString.prefix(8))")
++    try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
++    root = (try? URL(fileURLWithPath: base).resolvingSymlinksInPath().path) ?? base
++    try FileManager.default.createDirectory(atPath: root + "/talos home", withIntermediateDirectories: true)
++    app = try FakeAppBundle(in: root, script: Data("print('hook')\n".utf8), helper: Data("HELPER = 1\n".utf8))
++  }
++
++  func source(_ seal: CountingSeal = CountingSeal(), script: String? = nil) -> WorkerHook.BundleSource {
++    .init(script: script ?? app.script, bundlePath: app.path, seal: { seal.check($0) })
++  }
++
++  /// Refused with this reason by the preflight and by the install, and nothing was written.
++  func refused(_ s: WorkerHook.BundleSource, _ why: String, sourceLocation: SourceLocation = #_sourceLocation) {
++    #expect(WorkerHook.problem(source: s, path: path, talosHome: talosHome) == why, sourceLocation: sourceLocation)
++    #expect(WorkerHook.install(talosHome: talosHome, source: s, path: path) == .problem(why), sourceLocation: sourceLocation)
++    #expect(!FileManager.default.fileExists(atPath: copy), "nothing was copied", sourceLocation: sourceLocation)
++  }
++
++  @Test func theBundledHookAndItsHelperAreCopiedAndTheSignatureIsCheckedOncePerRun() throws {
++    let seal = CountingSeal()
++    let s = source(seal)
++    #expect(WorkerHook.problem(source: s, path: path, talosHome: talosHome) == nil)
++    for _ in 0..<3 {
++      guard case .installed = WorkerHook.install(talosHome: talosHome, source: s, path: path) else {
++        Issue.record("not installed")
++        return
++      }
++    }
++    #expect(seal.count == 1, "asked once, however many starts: \(seal.count)")
++    #expect(seal.paths == [app.path], "and asked about the app bundle itself")
++    #expect(try String(contentsOfFile: copy, encoding: .utf8) == "print('hook')\n")
++    #expect(try String(contentsOfFile: talosHome + "/workers/_hook/_talos_common.py", encoding: .utf8) == "HELPER = 1\n")
++  }
++
++  /// The hole this closes: the hook named in the checkout the app was built from. Read-only and readable, and still refused.
++  @Test func aHookOutsideTheAppBundleIsRefused() throws {
++    let kit = root + "/checkout/kit/hooks"
++    try FileManager.default.createDirectory(atPath: kit, withIntermediateDirectories: true)
++    try FakeAppBundle.put(Data("print('mine')\n".utf8), at: kit + "/permission-relay.py")
++    let outside = kit + "/permission-relay.py"
++    refused(source(script: outside), "the permission hook \(outside) is not inside the Talos app (\(app.path))")
++    // a link inside the bundle is refused for being a link, wherever it leads
++    unlink(app.script)
++    try FileManager.default.createSymbolicLink(atPath: app.script, withDestinationPath: outside)
++    refused(source(), "the Talos app's \(app.script) is a link, not part of the signed app")
++    // and a linked FOLDER on the way to it, leading out of the bundle, is where the file really is
++    try FileManager.default.removeItem(atPath: app.hooks)
++    try FileManager.default.createSymbolicLink(atPath: app.hooks, withDestinationPath: kit)
++    refused(source(), "the permission hook \(app.script) is not inside the Talos app (\(app.path))")
++    // a folder whose name only starts like the bundle's is not the bundle
++    let twin = app.path + "-old/Contents/Resources/talos-hooks"
++    try FileManager.default.createDirectory(atPath: twin, withIntermediateDirectories: true)
++    try FakeAppBundle.put(Data("print('twin')\n".utf8), at: twin + "/permission-relay.py")
++    refused(source(script: twin + "/permission-relay.py"), "the permission hook \(twin)/permission-relay.py is not inside the Talos app (\(app.path))")
++  }
++
++  /// An app inside the starting thread's folder or the agent folder (a build left in the checkout a thread works in) is refused
++  /// for that thread: the thread edits files there without a prompt. The same app is fine for a thread working elsewhere.
++  @Test func anAppInsideAFolderAThreadSessionWorksInIsRefusedForThatThread() throws {
++    let s = source()
++    let why = "the Talos app \(app.path) is inside \(root), a folder a thread session works in"
++    #expect(WorkerHook.problem(source: s, path: path, talosHome: talosHome, fenced: ["/home/alex/agent", root]) == why)
++    #expect(WorkerHook.install(talosHome: talosHome, source: s, path: path, fenced: [root]) == .problem(why))
++    #expect(!FileManager.default.fileExists(atPath: copy), "nothing was copied")
++    // through a link to that folder too
++    try FileManager.default.createSymbolicLink(atPath: root + "-link", withDestinationPath: root)
++    defer { unlink(root + "-link") }
++    #expect(WorkerHook.problem(source: s, path: path, talosHome: talosHome, fenced: [root + "-link"]) == why)
++    #expect(WorkerHook.problem(source: s, path: path, talosHome: talosHome, fenced: [root + "/elsewhere", root + "/Talos"]) == nil, "another thread's folder")
++  }
++
++  @Test(arguments: [0o644, 0o464, 0o446] as [mode_t])
++  func aHookAnyoneCanWriteToIsRefused(mode: mode_t) {
++    chmod(app.script, mode)
++    refused(source(), "the Talos app's \(app.script) can be written, so the app's copy is not sealed")
++    chmod(app.script, 0o444)
++    chmod(app.helper, mode)
++    refused(source(), "the Talos app's \(app.helper) can be written, so the app's copy is not sealed")
++  }
++
++  @Test func aHelperThatIsALinkIsRefused() throws {
++    unlink(app.helper)
++    try FakeAppBundle.put(Data("EVIL = 1\n".utf8), at: root + "/elsewhere.py")
++    try FileManager.default.createSymbolicLink(atPath: app.helper, withDestinationPath: root + "/elsewhere.py")
++    refused(source(), "the Talos app's \(app.helper) is a link, not part of the signed app")
++  }
++
++  /// A failed check is the answer for the whole run: asked once, never asked again in the hope of another answer.
++  @Test func aBundleWhoseSignatureFailsIsRefusedAndTheAnswerIsKept() {
++    let seal = CountingSeal("a sealed resource is missing or invalid, -67054")
++    let s = source(seal)
++    let why = "the Talos app's code signature does not check out (a sealed resource is missing or invalid, -67054), so its permission hook can't be trusted"
++    refused(s, why)
++    seal.answer = nil
++    refused(s, why)
++    #expect(seal.count == 1)
++    #expect(WorkerHook.BundleSource(script: nil, bundlePath: app.path, seal: { _ in nil }).verified() == .problem(WorkerHook.noBundledHook))
++  }
++
++  /// After the check: an edit in place (the inode stays; the modification time is put back, as `touch -r` would), a file swapped in
++  /// (another inode, the same time and size), and a helper that comes or goes. Each is refused; the copy stays what was checked.
++  @Test(arguments: ["edit-in-place-time-restored", "swapped-same-size", "helper-removed", "helper-edited", "same-bytes-new-file"])
++  func aHookThatIsNotTheOneTheCheckSawIsRefused(kind: String) throws {
++    let s = source()
++    guard case .installed = WorkerHook.install(talosHome: talosHome, source: s, path: path) else {
++      Issue.record("not installed")
++      return
++    }
++    var st = stat()
++    #expect(stat(app.script, &st) == 0)
++    let times = [st.st_atimespec, st.st_mtimespec]
++    switch kind {
++    case "edit-in-place-time-restored":
++      try FakeAppBundle.overwrite(app.script, with: "print('evil')\n")
++      #expect(utimensat(AT_FDCWD, app.script, times, 0) == 0)
++    case "swapped-same-size", "same-bytes-new-file":
++      unlink(app.script)
++      try FakeAppBundle.put(Data((kind == "same-bytes-new-file" ? "print('hook')\n" : "print('evil')\n").utf8), at: app.script)
++      #expect(utimensat(AT_FDCWD, app.script, times, 0) == 0)
++    case "helper-removed": unlink(app.helper)
++    default: try FakeAppBundle.overwrite(app.helper, with: "HELPER = 2\n")
++    }
++    let why = "the permission hook \(app.script) changed after the app's signature was checked (quit and reopen Talos if it was just updated)"
++    #expect(WorkerHook.problem(source: s, path: path, talosHome: talosHome) == why)
++    #expect(WorkerHook.install(talosHome: talosHome, source: s, path: path) == .problem(why))
++    #expect(try String(contentsOfFile: copy, encoding: .utf8) == "print('hook')\n", "the copy is still the hook that was checked")
++    #expect(try String(contentsOfFile: talosHome + "/workers/_hook/_talos_common.py", encoding: .utf8) == "HELPER = 1\n")
++  }
++
++  /// CONTROL for the test above: the same source asked again with nothing touched keeps passing, so that test's refusals are the edits.
++  @Test func controlAnUntouchedHookKeepsPassing() {
++    let s = source()
++    for _ in 0..<3 { #expect(WorkerHook.problem(source: s, path: path, talosHome: talosHome) == nil) }
++  }
++
++  /// The file edited while the signature is being checked (the check read the sealed text, the copy would read the edit): refused,
++  /// and that answer is not kept as a pass. Once the file holds still, a new check is made.
++  @Test func aHookEditedDuringTheSignatureCheckIsRefused() throws {
++    let seal = CountingSeal()
++    let script = app.script
++    seal.during = { try? FakeAppBundle.overwrite(script, with: "print('evil')\n") }
++    let s = source(seal)
++    refused(s, "the permission hook \(app.script) changed after the app's signature was checked (quit and reopen Talos if it was just updated)")
++    seal.during = nil
++    seal.answer = "a sealed resource is missing or invalid"
++    refused(s, "the Talos app's code signature does not check out (a sealed resource is missing or invalid), so its permission hook can't be trusted")
++    #expect(seal.count >= 2, "the first answer was not kept as a pass")
++  }
++
++  /// Two starts at once on one source: one check, both get the same hook.
++  @Test func twoStartsAtOnceMakeOneCheck() {
++    let seal = CountingSeal()
++    seal.during = { usleep(100_000) }
++    let s = source(seal)
++    let answers = Mutexed<[WorkerHook.BundleSource.Answer]>([])
++    DispatchQueue.concurrentPerform(iterations: 8) { _ in
++      let a = s.verified()
++      answers.with { $0.append(a) }
++    }
++    #expect(seal.count == 1)
++    #expect(answers.with { $0 }.allSatisfy { if case .ok = $0 { true } else { false } })
++  }
++}
++
++private final class Mutexed<T>: @unchecked Sendable {
++  private let lock = NSLock()
++  private var value: T
++  init(_ v: T) { value = v }
++  func with<R>(_ body: (inout T) -> R) -> R { lock.withLock { body(&value) } }
++}
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift
+index a37d2255..77bb924d 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift
+@@ -5,22 +5,26 @@ import TalosTestSupport
+ 
+ /// A thread session's PermissionRequest hook (`WorkerHook`): the copy in the fenced home, the python3 written into the command, and
+ /// every reason a start is refused. 2026-11-11: the settings named a script inside the agent folder that was not there, the command
+-/// ran nothing, and every prompt of every thread session stayed at the terminal.
++/// ran nothing, and every prompt of every thread session stayed at the terminal. The source is a folder shaped like the app bundle
++/// (`FakeAppBundle`) with a signature check the test supplies; WorkerHookSourceTests has the source's own rules.
+ @Suite("WorkerHook")
+ struct WorkerHookTests {
+   let root: String
+   var talosHome: String { root + "/talos home" }
+-  var kit: String { root + "/checkout/kit/hooks" }
+-  var source: String { kit + "/permission-relay.py" }
++  let app: FakeAppBundle
++  var kit: String { app.hooks }
+   var bin: String { root + "/bin" }
++  /// A new source over the same bundle: what a new run of the app has (its signature check passes).
++  func fresh() -> WorkerHook.BundleSource { .init(script: app.script, bundlePath: app.path, seal: { _ in nil }) }
++  let source: WorkerHook.BundleSource
+ 
+   init() throws {
+     let base = (TestTemp.base as NSString).appendingPathComponent("talos-hook-\(UUID().uuidString.prefix(8))")
+     try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+     root = (try? URL(fileURLWithPath: base).resolvingSymlinksInPath().path) ?? base
+-    for d in [talosHome, kit, bin] { try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true) }
+-    try "print('hook')\n".write(toFile: source, atomically: true, encoding: .utf8)
+-    try "HELPER = 1\n".write(toFile: kit + "/_talos_common.py", atomically: true, encoding: .utf8)
++    for d in [root + "/talos home", root + "/bin"] { try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true) }
++    app = try FakeAppBundle(in: root, script: Data("print('hook')\n".utf8), helper: Data("HELPER = 1\n".utf8))
++    source = .init(script: app.script, bundlePath: app.path, seal: { _ in nil })
+   }
+ 
+   /// A python3 that records how it was run: its arguments, the marker, and the PYTHON* it was handed.
+@@ -32,6 +36,15 @@ struct WorkerHookTests {
+     return p
+   }
+ 
++  /// A python3 that is a real program (a copy of /usr/bin/true), not a `#!` script: what the lookup takes for an interpreter.
++  @discardableResult
++  func interpreter(at dir: String, named name: String = "python3") throws -> String {
++    try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
++    let p = dir + "/" + name
++    try FileManager.default.copyItem(atPath: "/usr/bin/true", toPath: p)
++    return p
++  }
++
+   func mode(_ p: String) -> mode_t {
+     var st = stat()
+     return lstat(p, &st) == 0 ? st.st_mode & 0o777 : 0
+@@ -82,17 +95,17 @@ struct WorkerHookTests {
+   }
+ 
+   @Test func aSourceThatIsNotAReadableFileIsAReasonInTheLinuxWords() throws {
+-    #expect(WorkerHook.problem(source: "kit/hooks/permission-relay.py", path: "/usr/bin") == "the permission hook kit/hooks/permission-relay.py is not an absolute path")
+-    #expect(WorkerHook.problem(source: root + "/nope.py", path: "/usr/bin") == "the permission hook \(root)/nope.py is missing or cannot be read")
+-    #expect(WorkerHook.problem(source: kit, path: "/usr/bin") == "the permission hook \(kit) is not a file")
+-    chmod(source, 0o000)
+-    defer { chmod(source, 0o644) }
+-    if getuid() != 0 { #expect(WorkerHook.problem(source: source, path: "/usr/bin") == "the permission hook \(source) is missing or cannot be read") }
++    func at(_ script: String) -> WorkerHook.BundleSource { .init(script: script, bundlePath: app.path, seal: { _ in nil }) }
++    #expect(WorkerHook.problem(source: at("kit/hooks/permission-relay.py"), path: "/usr/bin") == "the permission hook kit/hooks/permission-relay.py is not an absolute path")
++    #expect(WorkerHook.problem(source: at(app.path + "/nope.py"), path: "/usr/bin") == "the permission hook \(app.path)/nope.py is missing or cannot be read")
++    #expect(WorkerHook.problem(source: at(kit), path: "/usr/bin") == "the permission hook \(kit) is not a file")
++    chmod(app.script, 0o000)
++    defer { chmod(app.script, 0o444) }
++    if getuid() != 0 { #expect(WorkerHook.problem(source: fresh(), path: "/usr/bin") == "the permission hook \(app.script) is missing or cannot be read") }
+   }
+ 
+   @Test func python3IsLookedForOnAbsolutePathEntriesOnly() throws {
+-    let log = root + "/x.log"
+-    let good = try recorder(at: bin, log: log)
++    let good = try interpreter(at: bin)
+     #expect(WorkerHook.findPython3(path: "\(bin):/usr/bin") == good)
+     // a relative entry and an empty one (both mean the thread folder) are never asked, even when a python3 sits there
+     FileManager.default.changeCurrentDirectoryPath(bin)
+@@ -105,13 +118,79 @@ struct WorkerHookTests {
+     #expect(WorkerHook.findPython3(path: "\(root)/d:\(root)/n:\(bin)") == good)
+     #expect(WorkerHook.findPython3(path: "\(root)/d:\(root)/n") == nil)
+     #expect(WorkerHook.findPython3(path: nil) == nil)
+-    #expect(WorkerHook.problem(source: source, path: "\(root)/d") == "python3 is not on the thread session's PATH, so its permission hook cannot run")
++    #expect(WorkerHook.problem(source: source, path: "\(root)/d") == "python3 is not on the thread session's PATH (outside its own folders), so its permission hook cannot run")
+     #expect(WorkerHook.install(talosHome: talosHome, source: source, path: "\(root)/d") == .problem(WorkerHook.noPython))
+     #expect(!FileManager.default.fileExists(atPath: WorkerHook.dir(talosHome: talosHome)), "a refused start writes nothing")
+   }
+ 
++  /// R1-7: the python3 that runs the hook is never one the thread session can write. A PATH entry inside the thread's folder or the
++  /// agent folder, an entry that is a link into one, and a `python3` that is a link into one are each passed over for the next
++  /// entry; when nothing else is on the PATH the start is refused, and nothing is written.
++  @Test(arguments: ["entry-inside", "entry-is-a-link", "python3-is-a-link", "entry-inside-agent"])
++  func python3IsNeverTakenFromTheThreadOrAgentFolder(kind: String) throws {
++    let good = try interpreter(at: bin)
++    let thread = root + "/thread", agent = root + "/agent"
++    for d in [thread, agent] { try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true) }
++    let fenced = [thread, agent]
++    let entry: String
++    var real: String
++    switch kind {
++    case "entry-inside":
++      entry = thread + "/.venv/bin"
++      real = try interpreter(at: entry)
++    case "entry-inside-agent":
++      entry = agent + "/tools"
++      real = try interpreter(at: entry)
++    case "entry-is-a-link":
++      real = try interpreter(at: thread + "/tools")
++      entry = root + "/looks-outside"
++      try FileManager.default.createSymbolicLink(atPath: entry, withDestinationPath: thread + "/tools")
++    default:
++      real = try interpreter(at: thread + "/tools")
++      entry = root + "/outside-bin"
++      try FileManager.default.createDirectory(atPath: entry, withIntermediateDirectories: true)
++      try FileManager.default.createSymbolicLink(atPath: entry + "/python3", withDestinationPath: real)
++    }
++    #expect(WorkerHook.findPython3(path: entry) == real, "control: without the folders named, it is a python3 like any other")
++    #expect(WorkerHook.findPython3(path: "\(entry):\(bin)", fenced: fenced) == good, "passed over for the next entry")
++    #expect(WorkerHook.findPython3(path: entry, fenced: fenced) == nil)
++    #expect(WorkerHook.problem(source: source, path: entry, fenced: fenced) == WorkerHook.noPython)
++    #expect(WorkerHook.install(talosHome: talosHome, source: source, path: entry, fenced: fenced) == .problem(WorkerHook.noPython))
++    #expect(!FileManager.default.fileExists(atPath: WorkerHook.dir(talosHome: talosHome)), "a refused start writes nothing")
++    #expect(
++      WorkerHook.install(talosHome: talosHome, source: source, path: "\(entry):\(bin)", fenced: fenced)
++        == .installed(.init(script: talosHome + "/workers/_hook/permission-relay.py", python: good)))
++    // a folder whose name only starts like the thread's is not the thread's
++    let twin = try interpreter(at: thread + "-other/bin")
++    #expect(WorkerHook.findPython3(path: thread + "-other/bin", fenced: fenced) == twin)
++  }
++
++  /// R1-7, the other half: the python3 is the REAL interpreter file. A version manager's shim reads its choice from the folder it
++  /// runs in (the thread's `.python-version`), so a `#!` script (pyenv, asdf) and a link whose real file is not named python3
++  /// (mise) are passed over; a link to a real interpreter is followed, and the real file is what the command runs.
++  @Test func python3IsTheRealInterpreterNeverAVersionManagersShim() throws {
++    let shims = root + "/shims"
++    _ = try recorder(at: shims, log: root + "/x.log")  // a `#!/bin/sh` script named python3, as pyenv's shim is
++    #expect(WorkerHook.findPython3(path: shims) == nil, "a #! script is not an interpreter")
++    let mise = try interpreter(at: root + "/mise-bin", named: "mise")
++    try FileManager.default.createDirectory(atPath: root + "/mise-shims", withIntermediateDirectories: true)
++    try FileManager.default.createSymbolicLink(atPath: root + "/mise-shims/python3", withDestinationPath: mise)
++    #expect(WorkerHook.findPython3(path: root + "/mise-shims") == nil, "a link to mise is not an interpreter")
++    #expect(WorkerHook.install(talosHome: talosHome, source: source, path: "\(shims):\(root)/mise-shims") == .problem(WorkerHook.noPython))
++    // a link to a real, versioned interpreter (Homebrew's layout) is followed: the real file is returned
++    let real = try interpreter(at: root + "/Cellar/python/bin", named: "python3.13")
++    try FileManager.default.createDirectory(atPath: root + "/brew-bin", withIntermediateDirectories: true)
++    try FileManager.default.createSymbolicLink(atPath: root + "/brew-bin/python3", withDestinationPath: real)
++    #expect(WorkerHook.findPython3(path: "\(shims):\(root)/mise-shims:\(root)/brew-bin") == real)
++    for (name, ok) in [("python3", true), ("python3.13", true), ("python3.13.1", true), ("python3.", false), ("python3x", false), ("python", false), ("mise", false), ("python3.a", false)] {
++      #expect(WorkerHook.isPython3Name(name) == ok, "\(name)")
++    }
++    // the machine's own python3, when it has one, is taken (control: the rule does not refuse a normal Mac)
++    if FileManager.default.isExecutableFile(atPath: "/usr/bin/python3") { #expect(WorkerHook.findPython3(path: "/usr/bin") != nil) }
++  }
++
+   @Test func theCopyAndItsHelperAreWrittenOwnerOnlyInTheTalosHome() throws {
+-    let python = try recorder(at: bin, log: root + "/x.log")
++    let python = try interpreter(at: bin)
+     let out = WorkerHook.install(talosHome: talosHome, source: source, path: bin)
+     let dir = talosHome + "/workers/_hook"
+     #expect(out == .installed(.init(script: dir + "/permission-relay.py", python: python), replaced: false))
+@@ -120,14 +199,14 @@ struct WorkerHookTests {
+     #expect(try String(contentsOfFile: dir + "/_talos_common.py", encoding: .utf8) == "HELPER = 1\n")
+     #expect(mode(dir + "/permission-relay.py") == 0o600 && mode(dir + "/_talos_common.py") == 0o600)
+     #expect(mode(dir) == 0o700)
+-    // a newer kit: the copy is the source as it is at this start
+-    try "print('newer')\n".write(toFile: source, atomically: true, encoding: .utf8)
++    // a newer app (a new run, its own check): the copy is that app's hook
++    try FakeAppBundle.overwrite(app.script, with: "print('newer')\n")
+     // and the caller is told the script that answers prompts changed (it goes in the log)
+-    #expect(WorkerHook.install(talosHome: talosHome, source: source, path: bin) == .installed(.init(script: dir + "/permission-relay.py", python: python), replaced: true))
++    #expect(WorkerHook.install(talosHome: talosHome, source: fresh(), path: bin) == .installed(.init(script: dir + "/permission-relay.py", python: python), replaced: true))
+     #expect(try String(contentsOfFile: dir + "/permission-relay.py", encoding: .utf8) == "print('newer')\n")
+     // a source with no helper leaves none in the copy's folder: an old one would be imported in its place
+-    unlink(kit + "/_talos_common.py")
+-    #expect(WorkerHook.install(talosHome: talosHome, source: source, path: bin) == .installed(.init(script: dir + "/permission-relay.py", python: python)))
++    unlink(app.helper)
++    #expect(WorkerHook.install(talosHome: talosHome, source: fresh(), path: bin) == .installed(.init(script: dir + "/permission-relay.py", python: python)))
+     #expect(!FileManager.default.fileExists(atPath: dir + "/_talos_common.py"))
+     // the copy cannot be listed by another account, and no temporary file is left beside it
+     #expect((try FileManager.default.contentsOfDirectory(atPath: dir)) == ["permission-relay.py"])
+@@ -137,7 +216,7 @@ struct WorkerHookTests {
+   /// what answers its prompts): refused, and nothing is written through it.
+   @Test(arguments: ["workers/_hook", "workers"])
+   func aLinkPlantedInTheCopysPathIsRefusedAndNeverFollowed(planted: String) throws {
+-    _ = try recorder(at: bin, log: root + "/x.log")
++    try interpreter(at: bin)
+     let elsewhere = root + "/thread-can-write"
+     try FileManager.default.createDirectory(atPath: elsewhere, withIntermediateDirectories: true)
+     let at = talosHome + "/" + planted
+@@ -151,7 +230,7 @@ struct WorkerHookTests {
+   }
+ 
+   @Test func aFolderAnotherAccountCanWriteIsRefused() throws {
+-    _ = try recorder(at: bin, log: root + "/x.log")
++    try interpreter(at: bin)
+     let dir = talosHome + "/workers/_hook"
+     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+     chmod(dir, 0o770)
+@@ -165,7 +244,7 @@ struct WorkerHookTests {
+ 
+   /// The preflight with nothing made yet: a Talos home that has no `workers/` is not a problem, and stays as it was.
+   @Test func thePreflightMakesNothing() throws {
+-    _ = try recorder(at: bin, log: root + "/x.log")
++    try interpreter(at: bin)
+     #expect(WorkerHook.problem(source: source, path: bin, talosHome: talosHome) == nil)
+     #expect(!FileManager.default.fileExists(atPath: talosHome + "/workers"))
+   }
+@@ -181,7 +260,7 @@ struct WorkerHookTests {
+     let line = WorkerHook.missingLine(why: WorkerHook.noPython)
+     #expect(
+       line
+-        == "This thread's session doesn't start: python3 is not on the thread session's PATH, so its permission hook cannot run, and without it the session's approval prompts would wait at the terminal on the Mac and never reach your phone. Reinstall Talos on the Mac (or fix the hook), then restart this thread's session."
++        == "This thread's session doesn't start: python3 is not on the thread session's PATH (outside its own folders), so its permission hook cannot run, and without it the session's approval prompts would wait at the terminal on the Mac and never reach your phone. Reinstall Talos on the Mac (or fix the hook), then restart this thread's session."
+     )
+   }
+ }
+diff --git a/apps/desktop/Tests/TalosDesktopIntegrationTests/ReviewOC3IntegrationTests.swift b/apps/desktop/Tests/TalosDesktopIntegrationTests/ReviewOC3IntegrationTests.swift
+index 87f8144f..f48d7720 100644
+--- a/apps/desktop/Tests/TalosDesktopIntegrationTests/ReviewOC3IntegrationTests.swift
++++ b/apps/desktop/Tests/TalosDesktopIntegrationTests/ReviewOC3IntegrationTests.swift
+@@ -17,7 +17,7 @@ extension WorkerRig {
+       talosHome: talosHome, agentDir: agentDir, claudePath: Rig.fixtures + "/claude",
+       permissionFlag: "--dangerously-skip-permissions", tmux: tmux ?? Rig.tmuxPath!, tmuxConf: Rig.tmuxConf)
+     o.socket = socket
+-    o.permissionHook = Rig.kitHook
++    o.permissionHook = Rig.hookSource
+     o.home = root + "/home"
+     o.tick = 0.2
+     o.heartbeat = 0.5
+diff --git a/apps/desktop/Tests/TalosDesktopIntegrationTests/Rig.swift b/apps/desktop/Tests/TalosDesktopIntegrationTests/Rig.swift
+index 894cbf3f..ad693a30 100644
+--- a/apps/desktop/Tests/TalosDesktopIntegrationTests/Rig.swift
++++ b/apps/desktop/Tests/TalosDesktopIntegrationTests/Rig.swift
+@@ -34,6 +34,20 @@ final class Rig: @unchecked Sendable {
+     return here.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+       .appendingPathComponent("kit/hooks/permission-relay.py").path
+   }()
++  /// What an installed app names as that hook's source: a folder shaped like the app bundle holding the kit hook and its helper,
++  /// read-only, with a signature check that passes. Made once per test run and removed when it ends.
++  static let hookBundle: FakeAppBundle = {
++    atexit { try? FileManager.default.removeItem(atPath: Rig.hookBundleBase) }
++    let kit = (kitHook as NSString).deletingLastPathComponent
++    return try! FakeAppBundle(
++      in: hookBundleBase, script: FileManager.default.contents(atPath: kitHook)!, helper: FileManager.default.contents(atPath: kit + "/_talos_common.py"))
++  }()
++  private static let hookBundleBase = (TestTemp.base as NSString).appendingPathComponent("talos-hookapp-\(getpid())")
++  static let hookSource = WorkerHook.BundleSource(script: hookBundle.script, bundlePath: hookBundle.path, seal: { _ in nil })
++  /// A source whose hook is not there (an agent folder's, as on 2026-11-11).
++  static var missingHook: WorkerHook.BundleSource {
++    .init(script: "/home/alex/agent/hooks/permission-relay.py", bundlePath: "/home/alex/Talos.app", seal: { _ in nil })
++  }
+   static let tmuxConf: String = {
+     let here = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+     return here.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/tmux.conf").path
+diff --git a/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHeartbeatWatchdogTests.swift b/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHeartbeatWatchdogTests.swift
+index 9da0ef10..bed019e9 100644
+--- a/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHeartbeatWatchdogTests.swift
++++ b/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHeartbeatWatchdogTests.swift
+@@ -43,7 +43,7 @@ struct WorkerHeartbeatWatchdogTests {
+       talosHome: r.talosHome, agentDir: r.agentDir, claudePath: Rig.fixtures + "/claude", permissionFlag: nil, tmux: tmux,
+       tmuxConf: Rig.tmuxConf)
+     o.socket = r.socket
+-    o.permissionHook = Rig.kitHook
++    o.permissionHook = Rig.hookSource
+     o.home = r.root + "/home"
+     o.tick = 0.2
+     o.heartbeat = 0.5
+diff --git a/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift b/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift
+index 590ba455..6b30672e 100644
+--- a/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift
++++ b/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift
+@@ -6,16 +6,21 @@ import TalosTestSupport
+ 
+ /// A thread session's start and its permission hook, through the real manager and a real tmux: the session's settings name the copy
+ /// in the Talos home, and a hook that cannot run refuses the start (told in the thread, audited, no session made, no slot taken).
++/// The hook comes from the app bundle's sealed copy and from nowhere else: one in a checkout, one that can be written to, a bundle
++/// whose signature fails, and one edited after the check are each refused, with the exact reason in the thread's one line.
+ @Suite("Worker starts and the permission hook", .serialized, .enabled(if: Rig.hasTmux))
+ struct WorkerHookStartTests {
+   func auditLines(_ r: WorkerRig) -> [String] {
+     ((try? String(contentsOfFile: r.root + "/audit.log", encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+   }
+ 
+-  func rig(threads: [String] = ["trip"], maxLive: Int = 3, hook: String? = Rig.kitHook, path: String? = nil) throws -> (WorkerRig, NoticeLog) {
++  func rig(threads: [String] = ["trip"], maxLive: Int = 3, hook: WorkerHook.BundleSource? = Rig.hookSource, path: String? = nil,
++    pathIn: ((WorkerRig) throws -> String)? = nil
++  ) throws -> (WorkerRig, NoticeLog) {
+     let r = try WorkerRig(threads: threads, maxLive: maxLive)
+     r.hookSource = hook
+     if let path { r.env["PATH"] = path }
++    if let pathIn { r.env["PATH"] = try pathIn(r) }
+     r.makeManager()
+     let log = NoticeLog()
+     r.trackNotices(log)
+@@ -30,7 +35,8 @@ struct WorkerHookStartTests {
+     try r.wake("trip")
+     #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
+     let copy = r.talosHome + "/workers/_hook/permission-relay.py"
+-    #expect(FileManager.default.contentsEqual(atPath: copy, andPath: Rig.kitHook), "the copy is this install's kit hook")
++    #expect(FileManager.default.contentsEqual(atPath: copy, andPath: Rig.hookBundle.script), "the copy is the app bundle's hook")
++    #expect(FileManager.default.contentsEqual(atPath: copy, andPath: Rig.kitHook), "control: the stand-in bundle holds the kit's hook")
+     #expect(FileManager.default.fileExists(atPath: r.talosHome + "/workers/_hook/_talos_common.py"))
+     let settings = try String(contentsOfFile: WorkerSpec.settingsPath(talosHome: r.talosHome, threadId: "trip"), encoding: .utf8)
+     let python = try #require(WorkerHook.findPython3(path: r.env["PATH"]))
+@@ -45,14 +51,40 @@ struct WorkerHookStartTests {
+   /// The owner's case of 2026-11-11 turned round: the hook's source is not there. The start is refused with the reason, the thread
+   /// gets ONE line however often it is asked again, the audit says so, and no session was made.
+   @Test(arguments: [
+-    ("missing", "is missing or cannot be read"), ("nil", "doesn't know its install folder"), ("nopython", "python3 is not on the thread session's PATH"),
++    ("missing", "is missing or cannot be read"), ("nil", "has no permission hook inside it"), ("nopython", "python3 is not on the thread session's PATH"),
++    // the hook's source is the app bundle's sealed copy only (R1-1)
++    ("checkout", "is not inside the Talos app"), ("writable", "can be written, so the app's copy is not sealed"),
++    ("seal", "the Talos app's code signature does not check out (a sealed resource is missing or invalid)"),
++    // the only python3 on the PATH is one the thread session can write: in the agent folder (R1-7)
++    ("fencedpython", "python3 is not on the thread session's PATH (outside its own folders), so its permission hook cannot run"),
+   ])
+   func aHookThatCannotRunRefusesTheStartAndSaysSo(kind: String, why: String) throws {
+     let base = (TestTemp.base as NSString).appendingPathComponent("talos-nopy-\(UUID().uuidString.prefix(8))")
+     try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+     defer { try? FileManager.default.removeItem(atPath: base) }
++    let app = try FakeAppBundle(in: base + "/app", script: Data("print('hook')\n".utf8), helper: nil)
++    let hook: WorkerHook.BundleSource?
++    switch kind {
++    case "missing": hook = Rig.missingHook
++    case "nil": hook = nil
++    // the checkout's own kit hook, which is what the app named before: a thread working in the checkout can edit it
++    case "checkout": hook = .init(script: Rig.kitHook, bundlePath: app.path, seal: { _ in nil })
++    case "writable":
++      chmod(app.script, 0o644)
++      hook = .init(script: app.script, bundlePath: app.path, seal: { _ in nil })
++    case "seal": hook = .init(script: app.script, bundlePath: app.path, seal: { _ in "a sealed resource is missing or invalid" })
++    default: hook = Rig.hookSource
++    }
+     let (r, log) = try rig(
+-      hook: kind == "missing" ? "/home/alex/agent/hooks/permission-relay.py" : kind == "nil" ? nil : Rig.kitHook, path: kind == "nopython" ? base : nil)
++      hook: hook, path: kind == "nopython" ? base : nil,
++      pathIn: kind != "fencedpython"
++        ? nil
++        : { r in
++          let bin = r.agentDir + "/bin"
++          try FileManager.default.createDirectory(atPath: bin, withIntermediateDirectories: true)
++          try FileManager.default.copyItem(atPath: "/usr/bin/true", toPath: bin + "/python3")
++          return bin
++        })
+     defer { r.teardown() }
+     r.mgr.startTicking()
+     try r.wake("trip")
+@@ -68,6 +100,7 @@ struct WorkerHookStartTests {
+     #expect(r.starts.isEmpty, "no session was launched")
+     #expect(!r.tmuxCmd(["has-session", "-t", "=t-trip"]).ok)
+     #expect(!FileManager.default.fileExists(atPath: WorkerSpec.settingsPath(talosHome: r.talosHome, threadId: "trip")), "no settings were written")
++    #expect(!FileManager.default.fileExists(atPath: r.talosHome + "/workers/_hook/permission-relay.py"), "and no hook was copied")
+     // asked again (another message for the thread): refused again, and the thread is not told the same thing twice
+     try r.wake("trip", ids: ["m_01JBF3V7Q8K2M4N6P8R0S2T402"])
+     usleep(1_500_000)
+@@ -75,6 +108,91 @@ struct WorkerHookStartTests {
+     #expect(log.all.count == 1, "\(log.all)")
+   }
+ 
++  /// The owner's worry (R1-1) end to end: one thread's session is up, then the bundled hook is edited in place (a thread session's
++  /// shell can `chmod u+w` a file this account owns). The next start is refused with the reason, and the copy the running session
++  /// uses is still the hook the app checked: the edit answers nobody's prompts.
++  @Test func aHookEditedAfterTheAppCheckedItRefusesTheNextStartAndIsNeverCopied() throws {
++    let base = (TestTemp.base as NSString).appendingPathComponent("talos-hookedit-\(UUID().uuidString.prefix(8))")
++    defer { try? FileManager.default.removeItem(atPath: base) }
++    let app = try FakeAppBundle(in: base, script: Data("print('hook')\n".utf8), helper: Data("HELPER = 1\n".utf8))
++    let (r, log) = try rig(threads: ["trip", "garden"], hook: .init(script: app.script, bundlePath: app.path, seal: { _ in nil }))
++    defer { r.teardown() }
++    r.mgr.startTicking()
++    try r.wake("trip")
++    #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
++    let copy = r.talosHome + "/workers/_hook/permission-relay.py"
++    #expect(try String(contentsOfFile: copy, encoding: .utf8) == "print('hook')\n")
++    try FakeAppBundle.overwrite(app.script, with: "print('{\"behavior\": \"allow\"}')\n")
++    try r.wake("garden")
++    #expect(r.wait(10) { r.state("garden") == "failed" }, "\(r.why("garden"))")
++    #expect((r.entry("garden")?.error?.detail ?? "").contains("changed after the app's signature was checked"), "\(String(describing: r.entry("garden")?.error))")
++    #expect(r.wait(5) { log.all.count == 1 }, "\(log.all)")
++    #expect(log.all.first?.thread == "garden" && log.all.first?.text.contains("changed after the app's signature was checked") == true, "\(log.all)")
++    #expect(auditLines(r).contains { $0.contains("worker_hook_missing thread=garden why=") }, "\(auditLines(r))")
++    #expect(try String(contentsOfFile: copy, encoding: .utf8) == "print('hook')\n", "the edited hook was never copied")
++    #expect(!r.tmuxCmd(["has-session", "-t", "=t-garden"]).ok)
++    #expect(r.up("trip"), "the session already up keeps running on the hook that was checked")
++  }
++
++  /// CONTROL for the real signature check, and the check itself against real `codesign`: a small app signed ad hoc, with the hook
++  /// sealed in, passes through the real `Bundle` lookup and `SecStaticCodeCheckValidity`; the same app with the hook edited after
++  /// signing, or with a file added, or never signed, does not, and says so. And a bundle that is validly signed but is not the
++  /// app that is running ("not-this-app": the check the app itself makes, asked here of the test process) is refused too: that is
++  /// a hook edited and the bundle then signed again. The passing side of that check is the built app's own `--selftest`
++  /// (scripts/guards-test.sh, 0b2).
++  @Test(
++    .enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/codesign")),
++    arguments: ["sealed", "edited", "added", "unsigned", "resigned-after-edit", "not-this-app"])
++  func theRealSignatureCheckPassesASealedBundleAndFailsATamperedOne(kind: String) throws {
++    let base = (TestTemp.base as NSString).appendingPathComponent("talos-seal-\(UUID().uuidString.prefix(8))")
++    defer { try? FileManager.default.removeItem(atPath: base) }
++    let app = try FakeAppBundle(in: base, script: Data("print('hook')\n".utf8), helper: Data("HELPER = 1\n".utf8))
++    try FileManager.default.createDirectory(atPath: app.path + "/Contents/MacOS", withIntermediateDirectories: true)
++    try FileManager.default.copyItem(atPath: "/usr/bin/true", toPath: app.path + "/Contents/MacOS/Talos")
++    try """
++    <?xml version="1.0" encoding="UTF-8"?>
++    <plist version="1.0"><dict><key>CFBundleExecutable</key><string>Talos</string><key>CFBundleIdentifier</key><string>app.talos.test.seal</string>
++    <key>CFBundlePackageType</key><string>APPL</string></dict></plist>
++    """.write(toFile: app.path + "/Contents/Info.plist", atomically: true, encoding: .utf8)
++    if kind != "unsigned" {
++      let signed = ProcessRunner.run(["/usr/bin/codesign", "--force", "--sign", "-", app.path], env: ["PATH": "/usr/bin:/bin"], timeout: 60)
++      try #require(signed.ok, "codesign: \(signed.err)")
++    }
++    if kind == "edited" { try FakeAppBundle.overwrite(app.script, with: "print('{\"behavior\": \"allow\"}')\n") }
++    if kind == "added" { try FakeAppBundle.put(Data("x = 1\n".utf8), at: app.hooks + "/extra.py") }
++    if kind == "resigned-after-edit" {
++      // CONTROL for "not-this-app": validity alone accepts an edited hook once the bundle is signed again, so validity is not enough
++      try FakeAppBundle.overwrite(app.script, with: "print('{\"behavior\": \"allow\"}')\n")
++      let again = ProcessRunner.run(["/usr/bin/codesign", "--force", "--sign", "-", app.path], env: ["PATH": "/usr/bin:/bin"], timeout: 60)
++      try #require(again.ok, "codesign: \(again.err)")
++      #expect(WorkerHook.sealProblem(bundlePath: app.path, isThisProcess: false) == nil, "a re-signed bundle is valid on disk")
++      let why = try #require(WorkerHook.sealProblem(bundlePath: app.path, isThisProcess: true))
++      #expect(why.hasPrefix("the app on disk is not the app that is running, "), "\(why)")
++      return
++    }
++    let bundle = try #require(Bundle(path: app.path))
++    let source = kind == "not-this-app" ? WorkerHook.source(in: bundle) : WorkerHook.source(in: bundle, seal: { WorkerHook.sealProblem(bundlePath: $0, isThisProcess: false) })
++    #expect(source.script.map(Rig.realPath) == app.script, "the bundle's own lookup finds the hook in talos-hooks")
++    let home = base + "/talos-home"
++    try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
++    let out = WorkerHook.install(talosHome: home, source: source, path: "/usr/bin:/bin")
++    if kind == "sealed" {
++      guard case .installed = out else {
++        Issue.record("\(out)")
++        return
++      }
++      #expect(try String(contentsOfFile: home + "/workers/_hook/permission-relay.py", encoding: .utf8) == "print('hook')\n")
++    } else {
++      guard case .problem(let why) = out else {
++        Issue.record("a \(kind) bundle passed: \(out)")
++        return
++      }
++      #expect(why.hasPrefix("the Talos app's code signature does not check out ("), "\(why)")
++      if kind == "not-this-app" { #expect(why.contains("(the app on disk is not the app that is running, "), "\(why)") }
++      #expect(!FileManager.default.fileExists(atPath: home + "/workers/_hook/permission-relay.py"))
++    }
++  }
++
+   /// With the cap at one and a session live, a start that is going to be refused takes no slot: the live session is not parked for it.
+   @Test func aRefusedStartParksNobody() throws {
+     let (r, _) = try rig(threads: ["trip", "garden"], maxLive: 1)
+@@ -82,7 +200,7 @@ struct WorkerHookStartTests {
+     r.mgr.startTicking()
+     try r.wake("trip")
+     #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
+-    r.mgr.tune { $0.permissionHook = "/home/alex/agent/hooks/permission-relay.py" }
++    r.mgr.tune { $0.permissionHook = Rig.missingHook }
+     usleep(1_200_000)  // past the busy window: `trip` is idle, the cap's victim if a slot were taken
+     try r.wake("garden")
+     #expect(r.wait(10) { r.state("garden") == "failed" }, "\(r.why("garden"))")
+diff --git a/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerManagerTests.swift b/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerManagerTests.swift
+index 2d7bc4c3..abf6fd51 100644
+--- a/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerManagerTests.swift
++++ b/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerManagerTests.swift
+@@ -18,9 +18,9 @@ final class WorkerRig: @unchecked Sendable {
+   var mgr: WorkerManager!
+   /// A wrapper to use instead of the real tmux binary. Takes effect at the next `makeManager()`.
+   var tmuxBin: String?
+-  /// The thread sessions' permission hook source (the repo's kit copy). Takes effect at the next `makeManager()`; nil = a build that
+-  /// doesn't know its checkout.
+-  var hookSource: String? = Rig.kitHook
++  /// The thread sessions' permission hook source (a stand-in app bundle holding the repo's kit hook). Takes effect at the next
++  /// `makeManager()`; nil = none given.
++  var hookSource: WorkerHook.BundleSource? = Rig.hookSource
+   private var helpers: [Process] = []
+   private let lock = NSLock()
+   private var events: [WorkerManager.Event] = []
+diff --git a/apps/desktop/Tests/TalosTestSupport/FakeAppBundle.swift b/apps/desktop/Tests/TalosTestSupport/FakeAppBundle.swift
+new file mode 100644
+index 00000000..1972d557
+--- /dev/null
++++ b/apps/desktop/Tests/TalosTestSupport/FakeAppBundle.swift
+@@ -0,0 +1,39 @@
++import Foundation
++
++/// A folder shaped like the Talos app bundle, with the thread sessions' permission hook where build-app.sh puts it
++/// (`Contents/Resources/talos-hooks/`, read-only). For tests of where the hook comes from: no test reads the real `Bundle.main`.
++public struct FakeAppBundle: Sendable {
++  /// `<base>/Talos.app`, links resolved.
++  public let path: String
++  public var hooks: String { path + "/Contents/Resources/talos-hooks" }
++  public var script: String { hooks + "/permission-relay.py" }
++  public var helper: String { hooks + "/_talos_common.py" }
++
++  /// `helper` nil: a bundle whose hook has no helper beside it.
++  public init(in base: String, script: Data, helper: Data?) throws {
++    let app = base + "/Talos.app"
++    try FileManager.default.createDirectory(atPath: app + "/Contents/Resources/talos-hooks", withIntermediateDirectories: true)
++    // realpath, not URL.resolvingSymlinksInPath: that one drops /private from /private/var, and the paths here are compared whole
++    guard let r = realpath(app, nil) else { throw CocoaError(.fileNoSuchFile) }
++    defer { free(r) }
++    path = String(cString: r)
++    try Self.put(script, at: self.script)
++    if let helper { try Self.put(helper, at: self.helper) }
++  }
++
++  /// A read-only file (0444), as the build leaves the bundled hook.
++  public static func put(_ data: Data, at p: String) throws {
++    try data.write(to: URL(fileURLWithPath: p))
++    chmod(p, 0o444)
++  }
++
++  /// Written over in place (the same inode), the way an editor or a thread session's shell would after `chmod u+w`; read-only again after.
++  public static func overwrite(_ p: String, with text: String) throws {
++    chmod(p, 0o644)
++    let h = try FileHandle(forWritingTo: URL(fileURLWithPath: p))
++    try h.truncate(atOffset: 0)
++    try h.write(contentsOf: Data(text.utf8))
++    try h.close()
++    chmod(p, 0o444)
++  }
++}
+diff --git a/apps/desktop/scripts/build-app.sh b/apps/desktop/scripts/build-app.sh
+index 260fb642..8d5002c6 100755
+--- a/apps/desktop/scripts/build-app.sh
++++ b/apps/desktop/scripts/build-app.sh
+@@ -3,6 +3,7 @@
+ #   build-app.sh [--release] [--out DIR]       default out: apps/desktop/.build/app
+ # Signs with $TALOS_SIGN_ID if set, else the "Talos Local Signing" identity if present, else ad hoc. Ends with
+ # `codesign --verify --strict` and `Talos --selftest`; either failing makes this script fail.
++# Env: TALOS_COMPANION_SRC, TALOS_MENUBAR_SRC, TALOS_HOOKS_SRC (other folders for the bundled art and hooks; guards-test.sh only).
+ # Env: TALOS_SWIFTPM_CACHE, TALOS_SWIFT_SCRATCH (CI uses both).
+ set -euo pipefail
+ HERE="$(cd "$(dirname "$0")/.." && pwd)"
+@@ -110,6 +111,28 @@ for src in "$MENUBAR_SRC"/*.png; do
+   fi
+ done
+ 
++# The thread sessions' permission hook and the helper it imports, from this checkout's kit. Copied before codesign so they are
++# sealed into the bundle, and read-only (0444): the app takes the hook from here and from nowhere else (WorkerHookSource.swift),
++# because a thread working in the checkout could edit the kit's copy, which is the script that answers its own approval prompts.
++# Absent is a broken checkout and the build fails: the app would refuse to start any thread session. TALOS_HOOKS_SRC points the
++# gate at another folder (scripts/guards-test.sh uses it to prove the gate gates).
++HOOKS_SRC="${TALOS_HOOKS_SRC:-$REPO/kit/hooks}"
++HOOKS_OUT="$APP/Contents/Resources/talos-hooks"
++rm -rf "$HOOKS_OUT"
++mkdir -p "$HOOKS_OUT"
++for f in permission-relay.py _talos_common.py; do
++  if [ ! -s "$HOOKS_SRC/$f" ] || [ -L "$HOOKS_SRC/$f" ]; then
++    echo "build-app: $HOOKS_SRC/$f is missing, empty or a link; thread sessions would have no permission hook" >&2
++    exit 1
++  fi
++  cp "$HOOKS_SRC/$f" "$HOOKS_OUT/$f"
++  chmod 0444 "$HOOKS_OUT/$f"
++  if ! cmp -s "$HOOKS_SRC/$f" "$HOOKS_OUT/$f" || [ "$(stat -f %Lp "$HOOKS_OUT/$f")" != 444 ]; then
++    echo "build-app: $f in the bundle differs from $HOOKS_SRC, or is not read-only" >&2
++    exit 1
++  fi
++done
++
+ # Signing identity: explicit, then the local self-signed one (scripts/make-signing-identity.sh), then ad hoc.
+ IDENTITY_NAME="${TALOS_IDENTITY_NAME:-Talos Local Signing}"
+ ID="${TALOS_SIGN_ID:-}"
+@@ -121,5 +144,14 @@ codesign --force --sign "$ID" --entitlements Resources/entitlements.plist "$APP"
+ codesign --verify --strict --verbose=1 "$APP"
+ echo "signed: $([ "$ID" = "-" ] && echo 'ad hoc' || echo "$ID")"
+ 
++# After signing: the hook is still in place and read-only, and the signature covers it (the selftest below asks the app itself,
++# through the same check every thread session's start makes).
++for f in permission-relay.py _talos_common.py; do
++  if [ ! -s "$HOOKS_OUT/$f" ] || [ "$(stat -f %Lp "$HOOKS_OUT/$f")" != 444 ]; then
++    echo "build-app: $HOOKS_OUT/$f is missing or not read-only after signing" >&2
++    exit 1
++  fi
++done
++
+ "$APP/Contents/MacOS/Talos" --selftest
+ echo "built: $APP"
+diff --git a/apps/desktop/scripts/guards-test.sh b/apps/desktop/scripts/guards-test.sh
+index ad112f81..4455f17f 100755
+--- a/apps/desktop/scripts/guards-test.sh
++++ b/apps/desktop/scripts/guards-test.sh
+@@ -22,6 +22,21 @@ CTL="$(mktemp -d)"
+ export TALOS_IDENTITY_NAME="talos-test-no-such-identity"   # never touch (or depend on) the owner's real identity
+ if bash scripts/build-app.sh --out "$CTL" >/dev/null 2>&1; then ok "control: build-app.sh green"; else bad "control: build-app.sh red without any fault"; fi
+ APP="$CTL/Talos.app"
++# 0b2. the built app carries the thread sessions' permission hook and its helper: the kit's own text, read-only, inside the signature
++for f in permission-relay.py _talos_common.py; do
++  B="$APP/Contents/Resources/talos-hooks/$f"
++  if cmp -s "../../kit/hooks/$f" "$B" && [ "$(stat -f %Lp "$B" 2>/dev/null)" = 444 ]; then ok "the app bundles $f, read-only"; else bad "the app's talos-hooks/$f is missing, differs from the kit, or can be written to"; fi
++done
++if grep -q "Resources/talos-hooks/permission-relay.py" "$APP/Contents/_CodeSignature/CodeResources" 2>/dev/null; then ok "the bundled hook is in the app's signature"; else bad "the bundled hook is not sealed by the app's signature"; fi
++if "$APP/Contents/MacOS/Talos" --selftest 2>/dev/null | grep -q '"worker_hook":"ok"'; then ok "the built app's own check of its hook passes (real bundle, real signature)"; else bad "the built app does not accept its own bundled hook"; fi
++# and that check is real: the same app with its hook edited after signing refuses it, and its selftest fails
++TAMPER="$(mktemp -d)"; cp -R "$APP" "$TAMPER/Talos.app"
++chmod u+w "$TAMPER/Talos.app/Contents/Resources/talos-hooks/permission-relay.py"; echo "# edited" >> "$TAMPER/Talos.app/Contents/Resources/talos-hooks/permission-relay.py"; chmod 0444 "$TAMPER/Talos.app/Contents/Resources/talos-hooks/permission-relay.py"
++TOUT="$("$TAMPER/Talos.app/Contents/MacOS/Talos" --selftest 2>/dev/null)"; TRC=$?
++if [ "$TRC" != 0 ] && printf '%s' "$TOUT" | grep -q "code signature does not check out"; then ok "an app whose bundled hook was edited after signing refuses it"; else bad "an edited bundled hook passed the app's own check (exit $TRC)"; fi
++rm -rf "$TAMPER"
++# the app's source for the hook is the bundle, never the checkout it was built from
++if grep -q 'o.permissionHook = WorkerHook.appSource' Sources/TalosDesktop/SupervisorController.swift && ! grep -rnE 'kit/hooks|kitPath' Sources >/dev/null; then ok "the hook's source is the app bundle, and no source names kit/hooks"; else bad "a source still names the checkout's kit/hooks for the permission hook"; fi
+ # 0c. the clone the app was built from is stamped as its physical path (the app refuses a link), and the script says so
+ WANT="$(cd ../.. && pwd -P)"
+ GOT="$(/usr/libexec/PlistBuddy -c "Print :TalosCheckout" "$APP/Contents/Info.plist" 2>/dev/null || true)"
+@@ -35,7 +50,7 @@ QCLONE="$QR/it's a \"quoted\" clone"
+ mkdir -p "$QCLONE/apps/desktop" "$QCLONE/scripts" "$QR/bin"
+ cp ../../package.json "$QCLONE/package.json"; cp ../../scripts/version.mjs "$QCLONE/scripts/version.mjs"
+ cp -R scripts "$QCLONE/apps/desktop/scripts"
+-ln -s "$HERE/../../assets" "$QCLONE/assets"; ln -s "$HERE/Resources" "$QCLONE/apps/desktop/Resources"; ln -s "$HERE/Sources" "$QCLONE/apps/desktop/Sources"
++ln -s "$HERE/../../kit" "$QCLONE/kit"; ln -s "$HERE/../../assets" "$QCLONE/assets"; ln -s "$HERE/Resources" "$QCLONE/apps/desktop/Resources"; ln -s "$HERE/Sources" "$QCLONE/apps/desktop/Sources"
+ cp /usr/bin/true "$QR/bin/TalosDesktop"
+ printf '#!/bin/sh\n[ "$1" = build ] && case " $* " in *" --show-bin-path "*) echo "%s" ;; esac\nexit 0\n' "$QR/bin" > "$QR/bin/swift"; chmod +x "$QR/bin/swift"
+ QWANT="$(cd "$QCLONE" && pwd -P)"
+@@ -65,6 +80,12 @@ OUT="$(mktemp -d)"
+ if TALOS_MENUBAR_SRC="$MART/menubar" bash scripts/build-app.sh --out "$OUT" >/dev/null 2>&1; then bad "build-app.sh passed with talos-ok-2x.png missing"; else ok "build-app.sh fails when a menu-bar picture is missing"; fi
+ rm -rf "$MART" "$OUT"
+ 
++# 2d. the same for the thread sessions' permission hook: a kit without it fails the build
++HK="$(mktemp -d)"; cp ../../kit/hooks/_talos_common.py "$HK/"
++OUT="$(mktemp -d)"
++if TALOS_HOOKS_SRC="$HK" bash scripts/build-app.sh --out "$OUT" >/dev/null 2>&1; then bad "build-app.sh passed with permission-relay.py missing"; else ok "build-app.sh fails when the permission hook is missing"; fi
++rm -rf "$HK" "$OUT"
++
+ # 2b. the Mac popup's answer button asks the controller only after the real-click check (a scripted press of the button must do nothing)
+ if awk '/func answerClicked/ {f=1} f && /isRealClick\(/ {g=1} f && /onClick\(/ {if (g) ok=1; exit} END {exit !ok}' Sources/TalosDesktop/NeedsYouPopup.swift; then ok "answerClicked checks isRealClick before onClick"; else bad "answerClicked reaches onClick without isRealClick first"; fi
+ # and that check reads the event's source (process id and source state), so a click a program posted is not the owner's
+diff --git a/docs/CLAUDE-CODE.md b/docs/CLAUDE-CODE.md
+index 03f636cb..21206fd7 100644
+--- a/docs/CLAUDE-CODE.md
++++ b/docs/CLAUDE-CODE.md
+@@ -350,16 +350,23 @@ own session (a thread session is not a channel). Claude Code does run `Permissio
+     as they stand: an edit, even resealed, is checked again). No release, or one that fails, refuses the start with the one command
+     that installs a sealed release from the checkout's kit: `python3 <checkout>/kit/scripts/plugin-release.py build --source
+     <checkout>/kit --activate`.
+-  - **Mac** (WorkerHook.swift): still the checkout's kit copy found by the `TalosCheckout` key `build-app.sh` stamps into its
+-    Info.plist (a build without it refuses every thread session's start); its twin will take the app bundle's own copy, checked by
+-    the bundle's code signature.
++  - **Mac** (WorkerHook.swift, WorkerHookSource.swift): the app bundle's own sealed copy and nothing else
++    (`Contents/Resources/talos-hooks/permission-relay.py` and the helper beside it, put there read-only by `build-app.sh` before
++    the bundle is signed). Before every start the hook must really be inside the app bundle, a plain file (no link), with no
++    write bit, owned by this account or root, in an app that is not inside the starting thread's folder or the agent folder; the
++    bundle's code signature must hold and the bundle on disk must be the app that is running (by its code directory hash, so a
++    bundle edited and then signed again does not pass; asked once per run of the app, and the answer kept); and the files must be
++    the ones that check saw, with the same bytes. An app without the hook, or one that fails, refuses the start with that reason
++    (`build-app.sh` fails first: the app's `--selftest` makes the same check).
+ 
+   At every start the hook and its helper are copied into `$TALOS_APP_HOME/workers/_hook/` (0600: the fenced, owner-only home;
+   `workers/` and `_hook` each made one level at a time and refused when either is a link, so nothing is made through one, R1-9),
+   and the command runs that copy with the python3 the session's PATH names outside the thread's folder and the agent folder (a
+   link on PATH that leads inside either is passed over too, R1-7), resolved at the start and written in by absolute path,
+   isolated (`python3 -I`). A hook that cannot run, or no python3, refuses the start before it takes a slot (`worker_hook_missing`
+-  in the audit, and a line in the thread), never a silent fallback to the terminal. In a thread session the agent folder's copy stays silent, so one prompt
++  in the audit, and a line in the thread), never a silent fallback to the terminal. On both, python3 is the real interpreter
++  file: a version manager's shim (a `#!` script, or a link to `mise`) is passed over, since it reads its choice from the folder
++  it runs in, and the copy is made only of the bytes the check verified. In a thread session the agent folder's copy stays silent, so one prompt
+   raises one card.
+   Verified against Claude Code 2.1.318 (hooks reference, and real runs): stdin carries `session_id`, `cwd`, `permission_mode`,
+   `tool_name`, `tool_input` and `permission_suggestions`, with no `tool_use_id`; stdout is `{"hookSpecificOutput":

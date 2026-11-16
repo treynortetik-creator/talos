@@ -1,4 +1,27 @@
-// Loaded before every bridge test (bunfig.toml). A test bridge, in process or spawned, must never find the owner's real
+// Loaded before every bridge test (bunfig.toml). First of all, every temp folder of this run goes in one that the run removes.
+import { runTmp } from './run-tmp.ts'
+
+// No bridge test may inherit the session it runs in: on 2026-11-15 a kit test run from inside a thread session sent real cards
+// to the owner's phone, because the session's app folder and worker proof were still in the environment. Every Talos app and
+// session variable goes, and TALOS_TEST_SANDBOX (this run's temp folder) tells the kit hooks they may reach no hub outside it.
+for (const key of Object.keys(process.env)) if (key.startsWith('TALOS_APP_')) delete process.env[key]
+for (const key of ['TALOS_SESSION_ROLE', 'CLAUDE_PID', 'CLAUDE_CODE_SESSION_ATTENDED']) delete process.env[key]
+process.env.TALOS_TEST_SANDBOX = runTmp
+
+// The bridge's own SQLite files sync only at a checkpoint in tests (synchronous = NORMAL with WAL, src/sqlite-test-seam.ts): the
+// tests check behaviour, not the disk, and on an encrypted btrfs temp folder the per-commit syncs made SQLite-heavy tests take
+// minutes. A test whose point is durability puts the product's value back (durableSqlite in sqlite-durable.ts).
+import { SQLITE_TEST } from '../src/sqlite-test-seam.ts'
+
+SQLITE_TEST.synchronous = 'NORMAL'
+
+// Every sentence that names the owner's computer is the Mac's in tests (platform.ts ownerHost), whatever machine runs them: the
+// Mac's sentences are pinned byte for byte, and a test of the Linux or Windows words sets the seam and puts it back.
+import { OWNER_HOST_TEST } from '../src/platform.ts'
+
+OWNER_HOST_TEST.host = 'mac'
+
+// A test bridge, in process or spawned, must never find the owner's real
 // Chronos and touch its live runs: on 2026-11-03 a test's bridge closed the live morning brief as session_ended.
 // Tests that want a scheduler pass TALOS_APP_CHRONOS_BIN to a fake one, which still works.
 process.env.TALOS_APP_CHRONOS_AUTODISCOVER = 'off'
@@ -23,3 +46,16 @@ process.env.TALOS_EXPLAINER = 'off'
 // Nor the owner's Claude folder: the hub reads each thread session's transcript from `<CLAUDE_CONFIG_DIR>/projects`, and the
 // fake relay lists thread-sessions/1, so without this a test would look in the real ~/.claude/projects.
 process.env.CLAUDE_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'talos-test-claude-'))
+
+// Nothing a run makes in $TMPDIR outlives it: these two folders, and every folder made through temp-dirs.ts (tempHome, the
+// apps tests' tmp, ChronosBox) that is still there after the last test file.
+import { afterAll } from 'bun:test'
+import { rmSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { removeTestTempDirs } from './temp-dirs.ts'
+
+const runFolders = [dirname(process.env.TALOS_INBOX_ROOT), process.env.CLAUDE_CONFIG_DIR]
+afterAll(() => {
+  removeTestTempDirs()
+  for (const dir of runFolders) rmSync(dir, { recursive: true, force: true })
+})

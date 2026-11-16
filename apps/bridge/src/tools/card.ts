@@ -10,6 +10,7 @@ import {
   payloadHash,
   validateCard,
 } from '@talos-app/protocol'
+import { allowWithoutCard, alwaysAllowedNow } from '../always-allow.ts'
 import { touchThread } from '../context.ts'
 import { cardCreateFrame, cardUpdateFrame } from '../frames-out.ts'
 import { CARD_EXPIRY_S, MAX_PENDING_CARDS } from '../heartbeat/cards.ts'
@@ -33,10 +34,10 @@ export const card: ToolRecord = {
   group: 'core',
   headless: true,
   ...OWN_THREAD,
-  instructions: `Anything that sends, posts, deploys, pays or deletes on the owner's behalf goes through \`card\` first; act only on a \`card_action\` with action PRIMARY, exactly as approved, then call \`card_result\`.`,
+  instructions: `Anything that sends, posts, pays or deletes on the owner's behalf goes through \`card\` first; act only on a \`card_action\` with action PRIMARY, exactly as approved, then call \`card_result\`. When the owner always allows that kind (email, message, deploy, publish, purchase), \`card\` answers "approved without a card" at once: go ahead, the owner was told.`,
   told: ['main', 'worker'],
   description:
-    "Ask the owner to approve something before you do it. Anything that sends, posts, deploys, pays or deletes on the owner's behalf goes through a card first; act only on a card_action with action PRIMARY, exactly as approved, then call card_result.",
+    "Ask the owner to approve something before you do it. Anything that sends, posts, pays or deletes on the owner's behalf goes through a card first; act only on a card_action with action PRIMARY, exactly as approved, then call card_result. If the owner always allows that kind (email, message, deploy, publish, purchase), it returns 'approved without a card' at once instead of a pending card: do it now; the owner sees a line in the thread.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -48,7 +49,8 @@ export const card: ToolRecord = {
       risk: {
         type: 'string',
         enum: ['low', 'high'],
-        description: 'high = leaves the app, irreversible, spends or deletes (the owner must re-authenticate).',
+        description:
+          'high = leaves the app, irreversible, spends or deletes (marked on the card; approved in the app, never from a notification).',
       },
       origin: { type: 'string', enum: ['chat', 'background'] },
       run_id: {
@@ -161,6 +163,9 @@ export const card: ToolRecord = {
       const issues = validateCard(c)
       if (issues.length) throw new ToolError(`invalid card: ${issues.join(', ')}`)
       c.payload_hash = payloadHash(bindingFrom(c))
+      // "Always allow" (always-allow.ts): a send kind the owner always allows is approved now, with no card; read from config at
+      // this moment, so a kind he removed a second ago is a card again
+      if (alwaysAllowedNow(ctx, c.kind)) return ok(await allowWithoutCard(ctx, c))
       const createFrame = cardCreateFrame(nowMs, c)
       assertFrameFits(createFrame) // a schema-valid card can still be over the relay's frame limit; refuse it up front
       // From here to `ledger.create` there is no await: the supersede check, the count of pending cards and the card itself are
@@ -168,6 +173,10 @@ export const card: ToolRecord = {
       if (typeof c.supersedes === 'string') {
         const t = ctx.ledger.get(c.supersedes)
         if (t && t.thread_id !== threadId) throw new ToolError('supersedes must name a pending card in the same thread')
+        // only a card the agent made: a permission prompt, a needs-you dialog, a schedule or settings card is the bridge's, and
+        // retiring one would leave the owner a look-alike in its place
+        if (t && (t.actor !== 'agent' || !isAgentCardKind(t.binding.kind)))
+          throw new ToolError('supersedes must name one of your own cards, not one Talos made')
         const usable = t?.state === 'pending' && !superseding.has(c.supersedes)
         if (hbJob && !usable) throw new ToolError('supersedes must name a pending card in the same thread')
         if (usable) {

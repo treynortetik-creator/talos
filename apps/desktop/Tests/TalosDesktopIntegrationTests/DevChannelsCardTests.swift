@@ -30,10 +30,11 @@ extension Rig {
   }
 
   /// A tap on the card, as the bridge writes it: the owner's signature over the card.resolve frame, the card's binding, the answer file.
+  @discardableResult
   func tap(
     _ offer: DialogOffer, owner: TestOwner, choice: Int, control: String, tsOffset: Double = 0, dialogId: String? = nil, thread: String = general,
     omitLaunchChanged: Bool = false, at: Double = Date().timeIntervalSince1970
-  ) throws {
+  ) throws -> [String: Any] {
     let cardId = "c_01JBF3V7Q8K2M4N6P8R0S2T404"
     var payload: [String: Any] = [
       "dialog_id": offer.id, "dialog_kind": offer.kind.rawValue, "expires_at": offer.expires_at, "options": offer.options, "thread": thread,
@@ -54,12 +55,34 @@ extension Rig {
     ]
     try FileManager.default.createDirectory(atPath: generalDir, withIntermediateDirectories: true)
     try JSONSerialization.data(withJSONObject: o).write(to: URL(fileURLWithPath: answerPath), options: .atomic)
+    return o
+  }
+
+  /// An answer file written as given (a copy of an earlier tap).
+  func writeAnswerRaw(_ o: [String: Any]) throws {
+    try JSONSerialization.data(withJSONObject: o).write(to: URL(fileURLWithPath: answerPath), options: .atomic)
+  }
+
+  /// The owner's click on Main's Mac popup: the view lets only a mouse or trackpad click through to this call. The supervisor's answer.
+  func clickPopup(_ offer: DialogOffer, choice: Int) -> PopupAnswerResult? {
+    let done = DispatchSemaphore(value: 0)
+    let got = PopupAnswerBox()
+    sup.popupAnswerMain(dialogId: offer.id, action: .choose(choice, label: offer.options[choice])) { got.set($0); done.signal() }
+    return done.wait(timeout: .now() + 30) == .success ? got.get() : nil
   }
 
   /// Waits for a card offer, with the supervisor ticking.
   func waitForOffer(_ cap: Double = 30) -> DialogOffer? {
     poll(cap) { sup.tickNow(); return offer }
   }
+}
+
+/// The popup's answer, handed back on the supervisor queue.
+final class PopupAnswerBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: PopupAnswerResult?
+  func set(_ v: PopupAnswerResult) { lock.withLock { value = v } }
+  func get() -> PopupAnswerResult? { lock.withLock { value } }
 }
 
 private func keyedEnv(_ keys: KeyLog, row: Int = 1) -> [String: String] { ["FAKE_DLG_KEYLOG": keys.path, "FAKE_START_ROW": "\(row)"] }
@@ -168,7 +191,7 @@ struct DevChannelsCardTests {
     try r.pairPhone(owner)
     r.start()
     let first = try #require(r.waitForOffer())
-    try r.tap(first, owner: owner, choice: 0, control: "ctl_1")
+    #expect(r.clickPopup(first, choice: 0) == .pressed(choice: 0, label: first.options[0]))
     #expect(r.wait(10) { r.sup.tickNow(); return isRunning(r.phase()) && r.config.confirmedLaunchParts != nil }, "\(r.phase())")
     #expect(Set(r.config.confirmedLaunchParts?.keys.map { $0 } ?? []) == ["folder", "program", "flags", "env"])
     r.sup.mutateConfig { $0.env["SOME_NEW_VARIABLE"] = "hunter2" }
@@ -194,9 +217,11 @@ struct DevChannelsCardTests {
 
   // MARK: the tap
 
-  /// "I am using this for local development": one Enter after a fresh look, the launch he confirmed is stored, the guard never pressed anything.
+  /// "I am using this for local development" from the phone: one Enter after a fresh look, and this start goes on. It seals nothing: the
+  /// answer file is checked against devices.json, which a program running as the owner can write too, so it is no stronger than an Enter in
+  /// the pane. The next start of the same launch asks again; only a click at the Mac remembers it.
   @Test(arguments: bothHosts)
-  func theTapOnConfirmPressesEnterAndStoresTheLaunch(kind: HostKind) throws {
+  func theTapOnConfirmPressesEnterButSealsNothing(kind: HostKind) throws {
     let keys = KeyLog()
     defer { keys.remove() }
     let r = try Rig(kind, scenario: "dev-dialog-keys.sh", env: keyedEnv(keys), launchConfirmed: false)
@@ -213,16 +238,39 @@ struct DevChannelsCardTests {
     #expect(r.result?["label"] as? String == "I am using this for local development")
     #expect(r.wait(cap) { r.sup.tickNow(); return isRunning(r.phase()) }, "\(r.phase()), audit: \(r.audit)")
     #expect(keys.presses == ["ENTER"], "\(keys.keys)")
-    #expect(r.config.confirmedLaunch != nil, "the owner's tap is his confirm")
-    #expect(r.config.confirmedLaunch == r.config.launchFingerprint(resolvedClaude: r.config.claudePath))
+    #expect(r.config.confirmedLaunch == nil && r.config.confirmedLaunchMac == nil, "a file answer seals nothing")
+    #expect(!r.trust.hasKey, "the seal key was never made or used")
     #expect(r.autoConfirms == 0, "the app pressed nothing by itself: \(r.audit)")
     #expect(r.answeredEvents == [0])
     #expect(r.audit.contains("dev_card_answered"))
     #expect(r.wait(10) { r.sup.tickNow(); return r.offer == nil }, "the offer ends with the dialog")
-    // the next start with the same launch is automatic
+    // the next start with the same launch asks again: offered (popup and card), never auto-pressed
+    r.sup.restartCold()
+    #expect(r.wait(60) { r.sup.tickNow(); return r.starts.count == 2 && r.offer != nil }, "\(r.phase()), audit: \(r.audit)")
+    #expect(r.sup.mainPopupItem() != nil, "the popup is offered again")
+    #expect(r.autoConfirms == 0, "no Enter by itself on the next start: \(r.audit)")
+  }
+
+  /// The owner's click on the Mac popup (the view lets only a mouse or trackpad click through) presses Enter and seals the launch: the next
+  /// start of the same launch is automatic.
+  @Test(arguments: bothHosts)
+  func aClickOnTheMacPopupPressesEnterAndSealsTheLaunch(kind: HostKind) throws {
+    let keys = KeyLog()
+    defer { keys.remove() }
+    let r = try Rig(kind, scenario: "dev-dialog-keys.sh", env: keyedEnv(keys), launchConfirmed: false)
+    defer { r.teardown() }
+    r.start()
+    let o = try #require(r.waitForOffer(), "audit: \(r.audit)")
+    let got = r.clickPopup(o, choice: 0)
+    #expect(got == .pressed(choice: 0, label: o.options[0]), "\(String(describing: got)), audit: \(r.audit)")
+    let cap: Double = kind == .tmux ? 30 : 10
+    #expect(r.wait(cap) { r.sup.tickNow(); return isRunning(r.phase()) }, "\(r.phase()), audit: \(r.audit)")
+    #expect(keys.presses == ["ENTER"], "\(keys.keys)")
+    #expect(r.config.confirmedLaunch == r.config.launchFingerprint(resolvedClaude: r.config.claudePath) && r.config.confirmedLaunchMac != nil)
+    #expect(r.trust.hasKey)
     r.sup.restartCold()
     #expect(r.wait(60) { r.sup.tickNow(); return r.starts.count == 2 && isRunning(r.phase()) }, "\(r.phase()), audit: \(r.audit)")
-    #expect(r.offer == nil)
+    #expect(r.offer == nil && r.autoConfirms == 1)
   }
 
   /// The wrong row highlighted: the guard refuses it; a tap on the confirm walks Up one row, then Enter, each on a fresh look.
@@ -264,7 +312,8 @@ struct DevChannelsCardTests {
     #expect(r.wait(cap) { r.sup.tickNow(); return r.result?["control_id"] as? String == "ctl_1" }, "no result: \(keys.keys)")
     #expect(r.result?["outcome"] as? String == "pressed" && r.result?["choice"] as? Int == 1 && r.result?["label"] as? String == "Exit", "\(String(describing: r.result))")
     #expect(keys.presses == ["DOWN", "ENTER"], "\(keys.keys)")
-    #expect(r.config.confirmedLaunch == nil, "Exit confirms nothing")
+    #expect(r.config.confirmedLaunch == nil && r.config.confirmedLaunchMac == nil, "Exit confirms nothing")
+    #expect(!r.trust.hasKey, "Exit never uses the seal key")
     #expect(r.answeredEvents == [1])
   }
 
@@ -401,6 +450,62 @@ struct DevChannelsCardTests {
     #expect(r.result?["outcome"] as? String == "nothing_pressed" && r.result?["reason"] as? String == "screen_changed", "\(String(describing: r.result))")
     #expect(!FileManager.default.fileExists(atPath: sends), "no key was sent")
     #expect(r.config.confirmedLaunch == nil)
+  }
+}
+
+/// The same 64-byte signature spelled another way: the last base64url character carries four bits the signature does not use, and a
+/// decoder ignores them. It still verifies; only its text differs.
+func respelledSignature(_ osig: String) -> String {
+  let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+  var chars = Array(osig)
+  guard let last = chars.popLast(), let i = alphabet.firstIndex(of: last) else { return osig }
+  return String(chars) + String(alphabet[i ^ 1])
+}
+
+extension DevChannelsCardTests {
+  /// One signed tap is used once, however its signature is spelled. A tap that pressed nothing (the clients could not be read, so the owner
+  /// may be typing) is used, so a copy whose signature is written another way presses nothing either, and the used tap is on disk.
+  @Test(.enabled(if: Rig.hasTmux))
+  func aRespelledCopyOfAUsedTapPressesNothing() throws {
+    let r = try Rig(.tmux, scenario: "dev-dialog-keys.sh", launchConfirmed: false)
+    defer { r.teardown() }
+    let block = r.root + "/block"
+    let sends = r.root + "/sends"
+    let shim = r.root + "/tmux-block-shim"
+    try """
+    #!/bin/bash
+    for a in "$@"; do
+      case "$a" in
+        send-keys) echo x >> '\(sends)' ;;
+        list-clients) if [ -e '\(block)' ]; then echo 'list-clients: broken' >&2; exit 1; fi ;;
+      esac
+    done
+    exec '\(Rig.tmuxPath!)' "$@"
+    """.write(toFile: shim, atomically: true, encoding: .utf8)
+    chmod(shim, 0o755)
+    r.tmuxBin = shim
+    r.makeSupervisor()
+    let owner = TestOwner()
+    try r.pairPhone(owner)
+    r.start()
+    let o = try #require(r.waitForOffer(40), "audit: \(r.audit)")
+    FileManager.default.createFile(atPath: block, contents: Data())
+    var first = try r.tap(o, owner: owner, choice: 0, control: "ctl_1")
+    #expect(r.wait(30) { r.sup.tickNow(); return r.result?["control_id"] as? String == "ctl_1" }, "no result")
+    #expect(r.result?["outcome"] as? String == "nothing_pressed", "\(String(describing: r.result))")
+    unlink(block)
+    #expect(r.offer?.id == o.id, "control: the same offer stands")
+    var proof = try #require(first["proof"] as? [String: Any])
+    let osig = try #require(proof["osig"] as? String)
+    proof["osig"] = respelledSignature(osig)
+    first["proof"] = proof
+    first["control_id"] = "ctl_2"
+    try r.writeAnswerRaw(first)
+    #expect(r.wait(30) { r.sup.tickNow(); return r.result?["control_id"] as? String == "ctl_2" }, "no result for the copy")
+    #expect(r.result?["reason"] as? String == "already_answered", "\(String(describing: r.result))")
+    #expect(!FileManager.default.fileExists(atPath: sends), "the respelled copy pressed a key")
+    let used = DialogProofsUsed.read(path: r.generalDir + "/" + DialogProofsUsed.mainFileName)
+    #expect(used.count == 1 && used.first?.hasPrefix(o.id + "|") == true, "the used tap is not on disk: \(used)")
   }
 }
 

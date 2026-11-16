@@ -13,6 +13,20 @@ public struct BridgeStatus: Equatable, Sendable {
   public var queueDepth: Int
   public var permissionRelay: Bool
   public var updatedAt: Date
+  /// `unseen_oldest_at`: when the session was first told about an owner message with no tool call from it since; nil for none,
+  /// and for an older bridge that never writes it (which says nothing).
+  public var unseenOldestAt: Date? = nil
+  /// `governor`: the usage governor now (`ok`, `paused`, `park_all`, `off`, `unknown`), which the restart-on-update queue holds on. nil
+  /// from a bridge that predates it or wrote null; a value this build does not know reads as `unknown`.
+  public var governor: String? = nil
+  /// `bridge_commit`: the commit the running bridge started from (D61); nil when it cannot tell.
+  public var bridgeCommit: String? = nil
+  /// `last_owner_at`: when the owner's newest message arrived (as the bridge got it); nil for none, or from an older bridge. Only a
+  /// change is read (the app updater's postponement), never the time against this Mac's clock.
+  public var lastOwnerAt: String? = nil
+  /// `started_at`: when this bridge process started; nil when unreadable.
+  public var startedAt: Date? = nil
+  public static let governorStates: Set<String> = ["ok", "paused", "park_all", "off", "unknown"]
 
   /// Strict about shape, tolerant of extra fields. A torn or half-written file (invalid JSON) is nil, never a guess.
   public static func decode(_ data: Data) -> BridgeStatus? {
@@ -25,7 +39,13 @@ public struct BridgeStatus: Equatable, Sendable {
     return BridgeStatus(
       pid: Int32(pid), mode: mode, relayConnected: connected, lastConnectAt: relay["last_connect_at"] as? String,
       lastCloseCode: JSONValue.int(relay["last_close_code"]), queueDepth: JSONValue.int(o["queue_depth"]) ?? 0,
-      permissionRelay: JSONValue.bool(o["permission_relay"]) ?? false, updatedAt: when)
+      permissionRelay: JSONValue.bool(o["permission_relay"]) ?? false, updatedAt: when,
+      unseenOldestAt: (o["unseen_oldest_at"] as? String).flatMap(isoDate),
+      governor: (o["governor"] as? String).map { governorStates.contains($0) ? $0 : "unknown" },
+      bridgeCommit: (o["bridge_commit"] as? String).flatMap { c in
+        c.count <= 64 && c.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) && $0.isASCII }) ? c : nil },
+      lastOwnerAt: (o["last_owner_at"] as? String).flatMap { isoDate($0) == nil || $0.count > 64 ? nil : $0 },
+      startedAt: (o["started_at"] as? String).flatMap(isoDate))
   }
 
   static func isoDate(_ s: String) -> Date? {

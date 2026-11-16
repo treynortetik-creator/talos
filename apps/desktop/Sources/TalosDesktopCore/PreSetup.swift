@@ -30,12 +30,13 @@ public struct PreSetup: Equatable, Sendable {
   public var keepAwakeOnAC: Bool?
   public var openWindowAtLaunch: Bool?
   public var hotkey: String?
+  public var autoUpdate: Bool?
 
   public init(
     host: DesktopConfig.Host? = nil, agentDir: String? = nil, autoRestart: Bool? = nil, autoConfirmRestart: Bool? = nil,
     startSessionOnLaunch: Bool? = nil, openTerminalOnDialog: Bool? = nil, relayUrl: String? = nil, talosAppCommand: [String]? = nil,
     notifyThread: String? = nil, notifyThreadSet: Bool = false, keepAwakeOnAC: Bool? = nil, hotkey: String? = nil,
-    openWindowAtLaunch: Bool? = nil
+    openWindowAtLaunch: Bool? = nil, autoUpdate: Bool? = nil
   ) {
     self.host = host
     self.agentDir = agentDir
@@ -50,6 +51,7 @@ public struct PreSetup: Equatable, Sendable {
     self.keepAwakeOnAC = keepAwakeOnAC
     self.hotkey = hotkey
     self.openWindowAtLaunch = openWindowAtLaunch
+    self.autoUpdate = autoUpdate
   }
 
   /// Every value the Settings window can change before setup, as the config holds it now. The launch command is not among
@@ -59,7 +61,7 @@ public struct PreSetup: Equatable, Sendable {
       host: c.host, agentDir: c.agentDir, autoRestart: c.autoRestart, autoConfirmRestart: c.autoConfirmRestart,
       startSessionOnLaunch: c.startSessionOnLaunch, openTerminalOnDialog: c.openTerminalOnDialog, relayUrl: c.relayUrl,
       talosAppCommand: c.talosAppCommand, notifyThread: c.notifyThread, notifyThreadSet: true, keepAwakeOnAC: c.keepAwakeOnAC,
-      openWindowAtLaunch: c.openWindowAtLaunch)
+      openWindowAtLaunch: c.openWindowAtLaunch, autoUpdate: c.autoUpdate)
   }
 
   /// `c` with the held values laid over it. Anything not held is left as it is. The launch command, environment and
@@ -77,6 +79,7 @@ public struct PreSetup: Equatable, Sendable {
     if notifyThreadSet { o.notifyThread = notifyThread }
     if let v = keepAwakeOnAC { o.keepAwakeOnAC = v }
     if let v = openWindowAtLaunch { o.openWindowAtLaunch = v }
+    if let v = autoUpdate { o.autoUpdate = v }
     if let v = hotkey { o.hotkeys.compose = v }
     return o
   }
@@ -96,6 +99,7 @@ public struct PreSetup: Equatable, Sendable {
     var notify_thread_set: Bool?
     var keep_awake_on_ac: Bool?
     var open_window_at_launch: Bool?
+    var auto_update: Bool?
   }
 
   /// What the store holds, or nil when nothing is held. A damaged blob is ignored (it is a convenience, never a reason to
@@ -116,6 +120,7 @@ public struct PreSetup: Equatable, Sendable {
       p.notifyThreadSet = w.notify_thread_set ?? false
       p.keepAwakeOnAC = w.keep_awake_on_ac
       p.openWindowAtLaunch = w.open_window_at_launch
+      p.autoUpdate = w.auto_update
       any = true
     }
     if let h = store.string(forKey: hotkeyKey), !h.isEmpty {
@@ -130,7 +135,7 @@ public struct PreSetup: Equatable, Sendable {
       host: host?.rawValue, agent_dir: agentDir, auto_restart: autoRestart, auto_confirm_restart: autoConfirmRestart,
       start_session_on_launch: startSessionOnLaunch, open_terminal_on_dialog: openTerminalOnDialog, relay_url: relayUrl,
       talos_app_command: talosAppCommand, notify_thread: notifyThread, notify_thread_set: notifyThreadSet, keep_awake_on_ac: keepAwakeOnAC,
-      open_window_at_launch: openWindowAtLaunch)
+      open_window_at_launch: openWindowAtLaunch, auto_update: autoUpdate)
     store.set(try? JSONEncoder().encode(w), forKey: Self.key)
   }
 

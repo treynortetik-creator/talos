@@ -21,7 +21,7 @@ export type RunBlock = {
   lang: string
   /** The script has characters that are shown as tokens, not obeyed. */
   hidden: boolean
-  /** Plain ASCII, at most 6 lines and 300 characters (protocol `isOneTapRunScript`): the one kind of script a single tap may run. */
+  /** Plain ASCII, any length up to the cap (protocol `isOneTapRunScript`): a single tap runs it; anything else asks twice. */
   oneTap: boolean
   /** Why there is no Run button on a shell block, in words for the owner; undefined when it can run or is not a shell block. */
   blocked?: string

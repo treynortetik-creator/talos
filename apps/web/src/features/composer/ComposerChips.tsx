@@ -1,5 +1,5 @@
 // The attachment chips above the box, and the two effects that keep the list tidy.
-import { type Dispatch, type MutableRefObject, type RefObject, type SetStateAction, useEffect } from 'react'
+import { type Dispatch, type MutableRefObject, type RefObject, type SetStateAction, useEffect, useState } from 'react'
 import type { TalosClient } from '../../lib/client.ts'
 import { IconClose } from '../../ui/icons.tsx'
 import { type Chip, removeChip, uploadChip } from './composerStore.ts'
@@ -29,6 +29,40 @@ export function useChipUpkeep(o: {
   }, [chips])
 }
 
+/** Larger images get no thumbnail: decoding a phone photo whole for a 32 px picture costs tens of MB. */
+const THUMB_MAX_BYTES = 8 * 1024 * 1024
+
+/**
+ * A small picture of an image attachment, from its own bytes (an object URL, let go when the chip goes). None for a large
+ * image, and none when the browser cannot draw the type (HEIC outside Safari): the name is always there.
+ */
+function ChipThumb({ file }: { file: File }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [broken, setBroken] = useState(false)
+  useEffect(() => {
+    let u: string | null = null
+    try {
+      u = URL.createObjectURL(file)
+    } catch {
+      // no object URLs here (an old engine, a test without them): the chip shows its name only
+    }
+    setUrl(u)
+    return () => {
+      if (u) URL.revokeObjectURL(u)
+    }
+  }, [file])
+  if (!url || broken) return null
+  return (
+    <img
+      src={url}
+      alt=""
+      onError={() => setBroken(true)}
+      data-testid="chip-thumb"
+      className="-ml-2 size-8 shrink-0 rounded-button border border-line bg-surface-2 object-cover"
+    />
+  )
+}
+
 export function ChipList({
   chips,
   chipsRef,
@@ -51,6 +85,7 @@ export function ChipList({
           data-state={c.state}
           className="flex min-h-9 items-center gap-2 rounded-pill border border-line bg-surface px-3 text-sm"
         >
+          {c.file?.type.startsWith('image/') && c.file.size <= THUMB_MAX_BYTES ? <ChipThumb file={c.file} /> : null}
           <span className="max-w-40 truncate">{c.name}</span>
           <span className="text-text-2" data-testid="chip-status">
             {c.state === 'uploading'

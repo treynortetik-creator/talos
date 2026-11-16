@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  NATIVE_CAPTURE_EDGE_MAX,
+  NATIVE_CAPTURE_MAX_BYTES,
   NATIVE_FEATURES_MAX,
   NATIVE_TO_WEB,
   NATIVE_VOICE_NOTE_MAX_BYTES,
   NativeToWeb,
+  TERMINAL_RECT_MAX,
   WEB_TO_NATIVE,
   WebToNative,
 } from '../src/native.ts'
@@ -41,6 +44,9 @@ const ok = {
   terminal_resume: { type: 'terminal_resume', thread_id: 'trip' },
   terminal_leave: { type: 'terminal_leave' },
   pick_folder: { type: 'pick_folder', req: 'r12', start: '/Users/alex/Projects' },
+  shell_pane: { type: 'shell_pane', thread_id: 'trip', rect: { x: 760, y: 420, width: 520, height: 360 } },
+  shell_pane_close: { type: 'shell_pane_close', thread_id: 'trip' },
+  capture_ack: { type: 'capture_ack', req: 'r12', ok: true },
 } as const
 
 describe('web -> native bridge messages', () => {
@@ -184,6 +190,39 @@ describe('terminal_view session and terminal_resume (page -> shell, untrusted)',
   })
 })
 
+describe('shell_pane (page -> shell, untrusted): where the owner shell goes, never what it runs or reads', () => {
+  const pane = ok.shell_pane
+  it('a null rect hides the pane; the thread is always named; cwd is optional and absolute', () => {
+    expect(WebToNative.safeParse({ ...pane, rect: null }).success).toBe(true)
+    expect(WebToNative.safeParse({ ...pane, cwd: '/home/alex/trip' }).success).toBe(true)
+    expect(WebToNative.safeParse({ ...pane, cwd: 'trip' }).success).toBe(false)
+    expect(WebToNative.safeParse({ type: 'shell_pane', rect: null }).success).toBe(false)
+    expect(WebToNative.safeParse({ type: 'shell_pane', thread_id: 'trip' }).success).toBe(false)
+  })
+  it('carries no input, command, environment or tab of its own', () => {
+    for (const extra of [
+      { input: 'ls\n' },
+      { text: 'ls' },
+      { command: '/bin/sh' },
+      { env: {} },
+      { tab: 2 },
+      { focus: true },
+    ])
+      expect(WebToNative.safeParse({ ...pane, ...extra }).success, JSON.stringify(extra)).toBe(false)
+    expect(WebToNative.safeParse({ ...ok.shell_pane_close, input: 'exit' }).success).toBe(false)
+  })
+  it('the thread id is a thread id, and the rectangle stays inside the limit', () => {
+    for (const thread_id of ['all', '../x', 't-trip', '=agent', '', 'Trip'])
+      expect(WebToNative.safeParse({ ...pane, thread_id }).success, thread_id).toBe(false)
+    expect(WebToNative.safeParse({ ...pane, rect: { ...pane.rect, width: TERMINAL_RECT_MAX + 1 } }).success).toBe(false)
+    expect(WebToNative.safeParse({ ...pane, rect: { ...pane.rect, x: 1.5 } }).success).toBe(false)
+  })
+  it('nothing about the shell ever goes shell -> page', () => {
+    expect(Object.keys(NATIVE_TO_WEB).filter((k) => k.startsWith('shell'))).toEqual([])
+    expect(NativeToWeb.safeParse(pane).success).toBe(false)
+  })
+})
+
 describe('terminal_leave and terminal_select', () => {
   it('terminal_leave is page -> shell only and carries nothing', () => {
     expect(WebToNative.safeParse({ type: 'terminal_leave' }).success).toBe(true)
@@ -279,6 +318,16 @@ describe('native -> web bridge messages', () => {
     terminal_resume_result: { type: 'terminal_resume_result', thread_id: 'trip', outcome: 'asked' },
     terminal_select: { type: 'terminal_select', session: 'trip' },
     folder_picked: { type: 'folder_picked', req: 'r12', path: '/Users/alex/Projects' },
+    capture_drop: {
+      type: 'capture_drop',
+      req: 'r12',
+      thread_id: null,
+      mime: 'image/png',
+      data_b64: 'iVBORw0KGgo=',
+      width: 1280,
+      height: 800,
+      mode: 'region',
+    },
   } as const
   it('companion_replies is native -> web only, a boolean and an optional list of what he showed', () => {
     expect(WebToNative.safeParse(good.companion_replies).success).toBe(false)
@@ -329,6 +378,33 @@ describe('native -> web bridge messages', () => {
     expect(NativeToWeb.safeParse({ ...good.compose, extra: 1 }).success).toBe(false)
     expect(NativeToWeb.safeParse({ type: 'badge', count: 1 }).success).toBe(false)
     expect(WebToNative.safeParse(good.compose).success).toBe(false)
+  })
+  it('capture_drop: a PNG of at most 8 MB and 2560 px a side, for a pinned thread or none, nothing else about the screen', () => {
+    const d = good.capture_drop
+    expect(NativeToWeb.safeParse({ ...d, thread_id: 'general' }).success).toBe(true)
+    const fit = Math.floor(NATIVE_CAPTURE_MAX_BYTES / 3) * 4
+    expect(NativeToWeb.safeParse({ ...d, data_b64: 'A'.repeat(fit) }).success).toBe(true)
+    for (const bad of [
+      { data_b64: 'A'.repeat(fit + 8) },
+      { data_b64: 'not base64!' },
+      { data_b64: 'AAA' },
+      { mime: 'image/jpeg' },
+      { width: 0 },
+      { height: NATIVE_CAPTURE_EDGE_MAX + 1 },
+      { width: 12.5 },
+      { mode: 'screen' },
+      { thread_id: 'All' },
+      { req: 'has space' },
+      { window_title: 'Mail' },
+    ])
+      expect(NativeToWeb.safeParse({ ...d, ...bad }).success, JSON.stringify(bad).slice(0, 60)).toBe(false)
+    expect(WebToNative.safeParse(d).success).toBe(false)
+  })
+  it('capture_ack: ok, or not ok with one of three reasons', () => {
+    for (const reason of ['not_signed_in', 'bad_image', 'no_thread'])
+      expect(WebToNative.safeParse({ type: 'capture_ack', req: 'r1', ok: false, reason }).success).toBe(true)
+    expect(WebToNative.safeParse({ type: 'capture_ack', req: 'r1', ok: false, reason: 'busy' }).success).toBe(false)
+    expect(NativeToWeb.safeParse({ type: 'capture_ack', req: 'r1', ok: true }).success).toBe(false)
   })
   it('voice_note is capped at 25 MB decoded', () => {
     const fit = Math.floor(NATIVE_VOICE_NOTE_MAX_BYTES / 3) * 4

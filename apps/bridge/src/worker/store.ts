@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS card_raisers (
 export type Claimer = 'main' | `worker:${string}`
 
 /** A message a worker took with `read_inbound` and nobody has yet seen answered, or reported unanswered. */
-export type OpenClaim = { message_id: string; thread_id: string; at: number; kind: string }
+/** `thread_id` is the session that claimed it (the route); `message_thread` is where the message was sent (a sub-thread, for a parent's lead). */
+export type OpenClaim = { message_id: string; thread_id: string; message_thread: string; at: number; kind: string }
 
 export type RouteRow = {
   message_id: string
@@ -132,12 +133,34 @@ export class WorkerStore {
          WHERE c.claimed_by LIKE 'worker:%' AND s.message_id IS NULL ORDER BY c.at`,
       )
       .all() as Array<{ message_id: string; at: number; thread_id: string; notification_json: string }>
-    return rows.map((r) => ({
-      message_id: r.message_id,
-      thread_id: r.thread_id,
-      at: r.at,
-      kind: (JSON.parse(r.notification_json) as Notification).meta.kind ?? '',
-    }))
+    return rows.map((r) => {
+      const meta = (JSON.parse(r.notification_json) as Notification).meta
+      return {
+        message_id: r.message_id,
+        thread_id: r.thread_id,
+        message_thread: meta.thread_id ?? r.thread_id,
+        at: r.at,
+        kind: meta.kind ?? '',
+      }
+    })
+  }
+
+  /**
+   * Did the session of `lead` answer in `thread` at or after `at`? For its own thread, `answeredSince`. For a sub-thread it
+   * answers as the parent's lead: an agent message in that sub-thread, or a card the lead raised there. A post in the lead's
+   * own thread does not answer a sub-thread's message.
+   */
+  answeredIn(lead: string, thread: string, at: number): boolean {
+    if (thread === lead) return this.answeredSince(lead, at)
+    const message = this.db
+      .query(`SELECT 1 FROM messages WHERE thread_id = ? AND author = 'agent' AND created_at >= ? LIMIT 1`)
+      .get(thread, new Date(at).toISOString())
+    if (message) return true
+    return !!this.db
+      .query(
+        'SELECT 1 FROM card_raisers r JOIN cards c ON c.id = r.card_id WHERE r.thread_id = ? AND c.thread_id = ? AND r.at >= ? LIMIT 1',
+      )
+      .get(lead, thread, at)
   }
 
   /** Did the thread's agent say anything (a message, a card, or a hand-off answer) at or after `at`? */
@@ -154,7 +177,10 @@ export class WorkerStore {
 
   settleClaims(messageIds: readonly string[], now: number): void {
     const add = this.db.query('INSERT OR IGNORE INTO claim_settled(message_id, at) VALUES (?, ?)')
-    for (const id of messageIds) add.run(id, now)
+    // one commit for the lot: each commit waits for a full sync to the disk (sqlite-sync.ts)
+    this.db.transaction(() => {
+      for (const id of messageIds) add.run(id, now)
+    })()
   }
 
   route(messageId: string): RouteRow | undefined {

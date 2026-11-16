@@ -1,0 +1,40 @@
+
+           Claude Code
+ ▐▛███▛█   v2.1.325
+▝▜██████▀  Fable 5.2
+ ▝▝   ▝▝   Claude Max  
+           /…/proj
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  You've used 50% of your w…
+──────────────────────────────
+❯ Try "fix typecheck errors"
+──────────────────────────────
+  ⏸ manual mode on · ? for …

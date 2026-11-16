@@ -56,7 +56,13 @@
       "project": ["src/**/*.ts", "test/**/*.ts"]
     },
     "e2e": {
-      "entry": ["tests/**/*.ts", "harness/drive-reporter.ts"],
+      "entry": [
+        "tests/**/*.ts",
+        "harness/drive-reporter.ts",
+        "sandbox.ts",
+        "sandbox/fake-claude.ts",
+        "sandbox/relay-main.ts"
+      ],
       "project": ["**/*.ts"],
       "ignoreDependencies": ["@modelcontextprotocol/server-.*"]
     }

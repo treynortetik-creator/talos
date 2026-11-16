@@ -77,12 +77,14 @@ describe('classifyUnparsed', () => {
     expect(classifyUnparsed({ ...fixtures.error, code: 12345 }, dir)).toEqual({ kind: 'broken' })
   })
 
-  it('v above ours is newer; an unlisted string code is newer', () => {
+  it('v above ours is newer; an unlisted string value is newer', () => {
     expect(classifyUnparsed({ ...replyFixture(), v: 12345 }, dir)).toEqual({ kind: 'newer_shape', type: 'reply' })
-    expect(classifyUnparsed({ ...fixtures.error, code: 'brand_new_code' }, dir)).toEqual({
+    expect(classifyUnparsed({ ...fixtures.status, state: 'brand_new_state' }, dir)).toEqual({
       kind: 'newer_shape',
-      type: 'error',
+      type: 'status',
     })
+    // an unlisted error code is no longer a refusal at all: it parses as 'internal' (protocol audit O5)
+    expect(parseFrame({ ...fixtures.error, code: 'brand_new_code' }, { direction: dir }).ok).toBe(true)
   })
 
   it('an unknown tag in a discriminated union is newer; a missing or non-string tag is broken', () => {

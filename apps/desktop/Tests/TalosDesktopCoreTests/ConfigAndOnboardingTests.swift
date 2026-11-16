@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 @Suite("DesktopConfig (D1 schema)")
 struct DesktopConfigSchemaTests {
@@ -28,7 +29,7 @@ struct DesktopConfigSchemaTests {
   }
 
   @Test func savesAtomicallyWith0600() throws {
-    let dir = NSTemporaryDirectory() + "talos-cfg-\(UUID().uuidString.prefix(6))"
+    let dir = TestTemp.base + "talos-cfg-\(UUID().uuidString.prefix(6))"
     defer { try? FileManager.default.removeItem(atPath: dir) }
     let path = dir + "/desktop.json"
     var c = DesktopConfig.defaults
@@ -79,7 +80,7 @@ struct PermissionsModelTests {
     #expect(rows.allSatisfy { $0.isWarningOnly })
     #expect(rows.first { $0.kind == .accessibility }?.needsAttention == false)
     #expect(rows.first { $0.kind == .fullDiskAccess }?.action == .openSettings(PermissionsModel.settingsBase + "Privacy_AllFiles"))
-    #expect(rows.first { $0.kind == .screenRecording }?.action == .openSettings(PermissionsModel.settingsBase + "Privacy_ScreenCapture"))
+    #expect(rows.first { $0.kind == .screenRecording }?.action == .grant(PermissionsModel.settingsBase + "Privacy_ScreenCapture"))
     #expect(rows.first { $0.kind == .desktopFolder }?.action == .triggerPrompt)
     #expect(PermissionsModel.summary(rows) == "Permissions: 1 to review (warnings only)")
     #expect(PermissionsModel.summary(PermissionsModel.rows { _ in .granted }).hasPrefix("Permissions: nothing missing"))

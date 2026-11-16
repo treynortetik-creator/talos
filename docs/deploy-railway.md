@@ -7,6 +7,9 @@ Railway side.
   connection must stay up. Health check `/healthz`; restart on failure.
 - **One volume** mounted at `/data` (SQLite database and uploaded media). One gigabyte is enough. There is brief
   downtime on each deploy while the old container stops; the app and the bridge reconnect with backoff.
+- **Deploys only for relay changes.** `railway.json` `build.watchPatterns` lists what the image is built from (the relay,
+  the web app, `packages/`, the workspace manifests and lockfile); a push touching nothing there does not redeploy.
+  `apps/relay/test/deploy-watch.test.ts` fails if the Dockerfile copies something no pattern covers.
 - **Daily backups** of the volume: switch them on in the volume's **Backups** tab. They hold the passkey registration, the
   device list and the integration connections. They are useless without `DATA_KEY`, which you must keep separately.
 - **Domain.** Use the generated `*.up.railway.app` address. **Moving to a custom domain later voids every passkey and

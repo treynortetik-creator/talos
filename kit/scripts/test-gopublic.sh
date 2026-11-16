@@ -7,6 +7,7 @@
 set -uo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 GP="$KIT/scripts/go-public.sh"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
@@ -17,6 +18,7 @@ case "$SB" in /*/*) ;; *) echo "suspicious temp dir '$SB'" >&2; exit 2 ;; esac
 trap 'rm -rf "$SB"' EXIT
 REALGIT="$(command -v git)" || { echo "git is required" >&2; exit 2; }
 export HOME="$SB/home"; mkdir -p "$HOME/bin" "$HOME/.config"
+talos_test_sandbox "$SB"
 export XDG_CONFIG_HOME="$HOME/.config" TMPDIR="$SB/tmp"; mkdir -p "$TMPDIR"
 unset TALOS_GITHUB_ACCOUNT TALOS_PRIVACY_DENYLIST GH_TOKEN GITHUB_TOKEN
 

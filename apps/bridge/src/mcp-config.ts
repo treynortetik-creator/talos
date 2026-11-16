@@ -1,21 +1,41 @@
 // `.mcp.json` of the AGENT FOLDER (never ~/.claude user scope, which would spawn the bridge in every session).
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { basename, isAbsolute, join } from 'node:path'
+import { defaultHome } from './config.ts'
 import { writeFileAtomic } from './fsutil.ts'
+import { realFileSync } from './real-file.ts'
 
 export type McpEntry = { command: string; args: string[]; env: Record<string, string> }
 
 /**
- * `agentDir` goes in as TALOS_AGENT_DIR: the server runs with the bridge folder as its working folder (`bun run --cwd`), so
- * the agent folder it serves cannot be read from there. Only the last-good save uses it.
+ * bun by absolute path: Claude Code starts the MCP server with the PATH of its own session, and Main can start with a bare one
+ * (2026-11-09: "Executable not found in $PATH: bun", the bridge never ran). The bun on PATH comes first (a stable path like
+ * ~/.bun/bin/bun or /opt/homebrew/bin/bun), the running binary next (a versioned Cellar path breaks on upgrade), `bun` last.
  */
-export function mcpEntry(bridgeDir: string, home: string, agentDir?: string): McpEntry {
+export function bunPath(): string {
+  const found = typeof Bun !== 'undefined' ? Bun.which('bun', { PATH: process.env.PATH ?? '' }) : null
+  if (found && isAbsolute(found)) return found
+  if (isAbsolute(process.execPath) && /^bun(-|$)/.test(basename(process.execPath))) return process.execPath
+  return 'bun'
+}
+
+/**
+ * `agentDir` goes in as TALOS_AGENT_DIR: the server runs with the bridge folder as its working folder (`bun run --cwd`), so
+ * the agent folder it serves cannot be read from there. Only the last-good save uses it. No PATH is written: Claude Code puts the entry's
+ * env over the session's, so a PATH here would hide ~/.local/bin (claude) and /opt/homebrew/bin (ffmpeg, gh, tmux) from the bridge.
+ * `server.ts` is run directly (not through the `start` script, whose shell needs a bare `bun`).
+ */
+export function mcpEntry(bridgeDir: string, home: string, agentDir?: string, bun: string = bunPath()): McpEntry {
   return {
-    command: 'bun',
-    args: ['run', '--cwd', bridgeDir, '--silent', 'start'],
+    command: bun,
+    args: ['run', '--cwd', bridgeDir, '--silent', 'src/server.ts'],
     env: { TALOS_APP_HOME: home, ...(agentDir ? { TALOS_AGENT_DIR: agentDir } : {}) },
   }
 }
+
+/** The PATH an earlier Talos wrote (bun's folder, then the system ones): ours, so it goes; any other PATH is the owner's. */
+const OLD_FORMULA_PATH = /^[^:]+:\/usr\/local\/bin:\/usr\/bin:\/bin:\/usr\/sbin:\/sbin$/
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
@@ -44,6 +64,8 @@ export function mergeMcpConfig(
       if (typeof v === 'string') oldEnv[k] = v
       else droppedEnv.push(k)
     }
+  // A PATH the owner set is his: kept. The one an earlier Talos wrote (`OLD_FORMULA_PATH`) is dropped. The other keys Talos sets are overwritten.
+  if (oldEnv.PATH && OLD_FORMULA_PATH.test(oldEnv.PATH)) delete oldEnv.PATH
   const merged: McpEntry = { ...entry, env: { ...oldEnv, ...entry.env } }
   const changed = !same(old, merged)
   servers['talos-app'] = merged
@@ -51,19 +73,78 @@ export function mergeMcpConfig(
   return { config: cfg, changed, droppedEnv }
 }
 
-export function installMcp(agentDir: string, entry: McpEntry, dryRun: boolean) {
+/**
+ * Where `.mcp.json` really is: itself, or the target of a symlink to it (a .mcp.json kept in a dotfiles folder). Resolved once,
+ * so the file read and the file written are the same one. A link is followed only to a regular file named `.mcp.json` or
+ * `mcp.json`: the agent can make links in its own folder, and a link to `~/.claude.json`, the Talos home's config.json or a
+ * settings.json must never turn the owner's install-mcp into a write the agent is not allowed to make (bug hunt core #8).
+ */
+/** Folders a link from the agent folder is never followed into: the Claude config folders and the Talos home. */
+export function mcpProtectedRoots(talosHome?: string): string[] {
+  const roots = [join(homedir(), '.claude'), defaultHome()]
+  if (process.env.CLAUDE_CONFIG_DIR) roots.push(process.env.CLAUDE_CONFIG_DIR)
+  if (talosHome) roots.push(talosHome)
+  return [...new Set(roots)]
+}
+
+// for folders only: a file's real path goes through realFileSync (real-file.ts), as realpath can name a hard-linked file by another of its names
+const realOr = (p: string): string => {
+  try {
+    return realpathSync(p)
+  } catch {
+    return p
+  }
+}
+
+function mcpTarget(path: string, protectedRoots: readonly string[]): string {
+  if (!lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) return path
+  let target: string
+  try {
+    // on macOS the realpath of a file can report another hard-linked name; resolve files with realFileSync (real-file.ts)
+    target = realFileSync(path)
+  } catch {
+    return path // a dangling link: a new regular file takes its place, as before
+  }
+  const st = statSync(target)
+  if (!st.isFile() || !['.mcp.json', 'mcp.json'].includes(basename(target)))
+    throw new Error(
+      `${path} is a link to ${target}, which is not an mcp.json file; nothing was changed. Replace the link with the file itself, or point it at your mcp.json.`,
+    )
+  // the agent can make links in its own folder: never into the Claude config or the Talos home, whatever the file is called
+  for (const root of protectedRoots) {
+    const r = realOr(root)
+    if (target === r || target.startsWith(`${r}/`))
+      throw new Error(
+        `${path} is a link to ${target}, inside ${r}, which this command never writes; nothing was changed. Replace the link with the file itself.`,
+      )
+  }
+  return target
+}
+
+export function installMcp(
+  agentDir: string,
+  entry: McpEntry,
+  dryRun: boolean,
+  protectedRoots: readonly string[] = mcpProtectedRoots(),
+) {
   const path = join(agentDir, '.mcp.json')
+  const target = mcpTarget(path, protectedRoots)
   let existing: unknown
-  if (existsSync(path)) {
+  if (existsSync(target)) {
     try {
-      existing = JSON.parse(readFileSync(path, 'utf8'))
+      existing = JSON.parse(readFileSync(target, 'utf8'))
     } catch {
-      throw new Error(`${path} is not valid JSON; fix it by hand first (nothing was changed)`)
+      throw new Error(`${target} is not valid JSON; fix it by hand first (nothing was changed)`)
     }
   }
   const { config, changed, droppedEnv } = mergeMcpConfig(existing, entry)
-  if (changed && !dryRun) writeFileAtomic(path, `${JSON.stringify(config, null, 2)}\n`, 0o644)
-  return { path, changed, config, droppedEnv }
+  if (changed && !dryRun) {
+    // Through the link to its target (the link stays a link), keeping the file's mode (a 0600 file that holds a token stays
+    // 0600; a new file is 0644), as writePlan does.
+    const mode = existsSync(target) ? statSync(target).mode & 0o777 : 0o644
+    writeFileAtomic(target, `${JSON.stringify(config, null, 2)}\n`, mode)
+  }
+  return { path, target, changed, config, droppedEnv }
 }
 
 export function readMcpEntry(agentDir: string): unknown {

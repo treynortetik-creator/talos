@@ -54,12 +54,12 @@ describe('items', () => {
       else expect(opt.querySelector('kbd'), id).toBeNull()
     }
   })
-  it('lists the threads in sidebar order, the first nine with their Cmd+digit', () => {
+  it('lists the threads in sidebar order, the first nine with their Cmd+digit (numbered as the sidebar: no Inbox)', () => {
     const { client } = mount()
     open()
     const names = client.store
       .getState()
-      .threads.filter((t) => !t.archived)
+      .threads.filter((t) => !t.archived && t.id !== 'inbox')
       .map((t) => t.name)
     expect(names.length).toBeGreaterThan(0)
     names.forEach((n, i) => {

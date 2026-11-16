@@ -17,8 +17,6 @@ const SPEC_ROUTES = [
   'POST /api/auth/device/verify',
   'POST /api/auth/device/prove/options',
   'POST /api/auth/device/prove',
-  'POST /api/auth/stepup/options',
-  'POST /api/auth/stepup/verify',
   'POST /api/auth/logout',
   'POST /api/auth/logout-all',
   'GET /api/me',
@@ -67,6 +65,19 @@ const SPEC_ROUTES = [
   'GET /api/status',
   'POST /api/health/test',
   'POST /api/problems',
+  'POST /api/bug-reports',
+  'GET /api/bug-reports/destination',
+  'POST /api/bug-inbox',
+  // org pages, phase 1 (docs/ORG-PAGES-SPEC.md): the owner's devices only until viewer sign-in (phase 3)
+  'POST /bridge/pages',
+  'GET /api/pages',
+  'GET /api/pages/:id',
+  'POST /api/pages/:id/share',
+  'POST /api/pages/:id/unshare',
+  'POST /api/pages/:id/current',
+  'DELETE /api/pages/:id',
+  'GET /p/:id',
+  'GET /p/:id/frame',
   'GET /api/share/tokens',
   'POST /api/share/tokens',
   'DELETE /api/share/tokens/:id',
@@ -100,7 +111,11 @@ describe('http route table', () => {
       '/api/auth/login/verify',
     ])
     // The v2 share bearer has its own auth mode, for exactly one route (docs/V2-FEATURES.md V1.4)
-    const bearer: Record<string, string> = { '/api/share': 'share-token', '/api/native/act': 'native-act' }
+    const bearer: Record<string, string> = {
+      '/api/share': 'share-token',
+      '/api/native/act': 'native-act',
+      '/api/bug-inbox': 'bug-inbox',
+    }
     for (const r of ROUTE_LIST) {
       if (!r.path.startsWith('/api/') || open.has(r.path)) continue
       if (bearer[r.path]) expect(r.auth, r.path).toBe(bearer[r.path])
@@ -111,6 +126,9 @@ describe('http route table', () => {
     ])
     expect(ROUTE_LIST.filter((r) => r.auth === 'native-act').map((r) => `${r.method} ${r.path}`)).toEqual([
       'POST /api/native/act',
+    ])
+    expect(ROUTE_LIST.filter((r) => r.auth === 'bug-inbox').map((r) => `${r.method} ${r.path}`)).toEqual([
+      'POST /api/bug-inbox',
     ])
   })
   it('state-changing session routes declare a request schema where there is a body', () => {
@@ -129,12 +147,11 @@ describe('http route table', () => {
     expect(routes.enrollSession.req.safeParse({}).success).toBe(false)
     expect(routes.enrollSession.res.safeParse({ ok: true }).success).toBe(true)
   })
-  it('stepup purposes are the three documented kinds', () => {
-    const p = routes.stepupOptions.req
-    expect(p.safeParse({ purpose: 'config:work' }).success).toBe(true)
-    expect(p.safeParse({ purpose: 'device:revoke' }).success).toBe(true)
-    expect(p.safeParse({ purpose: 'card:c_01JBF3V7Q8K2M4N6P8R0S2T4V6' }).success).toBe(true)
-    expect(p.safeParse({ purpose: 'everything' }).success).toBe(false)
+  it("no step-up routes (2026-11-14); device revoke takes an old app's stepup_token and ignores it", () => {
+    expect('stepupOptions' in routes).toBe(false)
+    expect('stepupVerify' in routes).toBe(false)
+    expect(routes.deviceRevoke.req.safeParse({}).success).toBe(true)
+    expect(routes.deviceRevoke.req.safeParse({ stepup_token: 'old' }).success).toBe(true)
   })
   it('POST /bridge/post accepts exactly the four durable bridge frames', () => {
     const req = routes.bridgePost.req

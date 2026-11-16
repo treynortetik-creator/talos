@@ -115,7 +115,7 @@ struct PromptDetectorReviewTests {
     for chrome in ["\u{273B} Worked for 2s", "\u{23FA} Ran 1 command", "\u{23BF}  Interrupted"] {
       let p = try #require(PromptDetector.detect([rule, " " + chrome, " \u{276F} 1. A", "   2. B"]), "\(chrome)")
       #expect(p.question == nil, "\(chrome)")
-      #expect(SupervisorNotice.workerPromptLine(threadName: "T", prompt: p) == "T's session is waiting on a prompt; open Terminals \u{2192} T on the Mac to answer.")
+      #expect(SupervisorNotice.workerPromptLine(prompt: p) == "This thread's session is waiting on a prompt; open this thread in Terminals on the Mac to answer.")
     }
   }
 
@@ -274,12 +274,38 @@ struct PermissionFixtureTests {
   }
 
   @Test func theNoticeSaysItBlocksItselfAndWhenFromTheFrameItWasAnnouncedOn() throws {
-    let line = SupervisorNotice.workerPromptLine(threadName: "OC Test", prompt: try prompt("perm-dangerous-rm-t0"))
-    #expect(line == "OC Test's session is waiting on a 'Bash command' prompt, \"Do you want to proceed?\" (Claude Code blocks it automatically in about 2 min); open Terminals \u{2192} OC Test on the Mac to answer.")
+    let line = SupervisorNotice.workerPromptLine(prompt: try prompt("perm-dangerous-rm-t0"))
+    #expect(line == "This thread's session is waiting on a 'Bash command' prompt (Claude Code blocks it automatically in about 2 min); open this thread in Terminals on the Mac to answer.")
     #expect(SupervisorNotice.mainPromptLine(agentName: "Testagent", prompt: try prompt("perm-dangerous-rm-t3"))
-      == "Testagent is waiting on a 'Bash command' prompt, \"Do you want to proceed?\" (Claude Code blocks it automatically in about 2 min); open Terminal on the Mac to answer.")
+      == "Testagent is waiting on a 'Bash command' prompt (Claude Code blocks it automatically in about 2 min); open Terminal on the Mac to answer.")
     // a prompt with no countdown says nothing of the kind
-    #expect(!SupervisorNotice.workerPromptLine(threadName: "T", prompt: try prompt("perm-ask-rule-bypass")).contains("automatically"))
+    #expect(!SupervisorNotice.workerPromptLine(prompt: try prompt("perm-ask-rule-bypass")).contains("automatically"))
+  }
+
+  /// The countdown is screen text: an agent's echo, or a file it prints, can put any digits after "automatically block". A number
+  /// near Int.max used to be multiplied unchecked, which ended the app on every look while the row was on the pane. It is bounded.
+  @Test(arguments: [
+    "9223372036854775807:00", "153722867280912931:00", "99999999999999999999999999:59", "9223372036854775807 seconds", "9223372036854775807s",
+    "99999999999999999999999999 seconds",
+  ])
+  func aCountdownOfAnySizeIsReadWithoutEndingTheApp(n: String) throws {
+    let row = " \u{26A0} Claude Code will automatically block this request in \(n), to avoid it type something"
+    let masked = PromptDetector.maskCountdown(["echo", row])
+    let s = try #require(masked.seconds, "\(n)")
+    #expect(s >= 0 && s <= PromptDetector.countdownCap, "\(n): \(s)")
+    #expect(!masked.rows[1].contains("9223372036854775807") || n.hasPrefix("9999"), "\(masked.rows[1])")
+    _ = PromptDetector.detect(["some output", row, ""])  // every look runs this on whatever the pane shows
+    // and inside a prompt, through to the line the thread gets
+    let rule = String(repeating: "\u{2500}", count: 60)
+    let p = try #require(PromptDetector.detect([rule, " Do you want to proceed?", row, " \u{276F} 1. Yes", "   2. No", " Esc to cancel"]), "\(n)")
+    let line = SupervisorNotice.workerPromptLine(prompt: p)
+    #expect(line.hasPrefix("This thread's session is waiting on a") && line.contains("automatically in about 1440 min"), "\(line)")
+  }
+
+  @Test func aRealCountdownStillReadsAsItIs() {
+    #expect(PromptDetector.maskCountdown([" Claude Code will automatically block this request in 1:54, to avoid"]).seconds == 114)
+    #expect(PromptDetector.maskCountdown([" will automatically block this request in 40 seconds"]).seconds == 40)
+    #expect(PromptDetector.maskCountdown([" will automatically block this request in 0:07"]).seconds == 7)
   }
 
   @Test func underAMinuteSaysSo() throws {

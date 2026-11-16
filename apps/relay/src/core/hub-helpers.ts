@@ -31,8 +31,8 @@ export function cardRich(card: CardT): RichPushInput {
   return {
     text: n.text,
     ...(n.complete ? { card: { id: card.id, risk: card.risk, payload_hash: card.payload_hash } } : {}),
-    // A permission card the app shows without Allow is deny-only: its push gets Open, not an Approve that opens a card with
-    // nothing to approve.
+    // A permission card the notification can't offer Approve for (a note it has no room for, a long call, a repeated id)
+    // gets Open: the app shows it with its note, and Allow is a tap there.
     ...(card.kind === 'permission' && !n.complete ? { openOnly: true } : {}),
   }
 }
@@ -44,4 +44,19 @@ export function countsUnread(frame: Record<string, unknown>): boolean {
   // A share is an owner-authored row the owner has not seen yet: it counts as unread (Inbox badge).
   if (frame.type === 'message.stored') return msg?.via === 'share' || (author !== undefined && author !== 'owner')
   return frame.type === 'inbox.item'
+}
+
+/** Runs every hook; one that throws is logged and the rest still run. */
+export function runHooks(
+  hooks: ReadonlyArray<() => void>,
+  log: { error(o: object, m: string): void },
+  msg: string,
+): void {
+  for (const fn of hooks) {
+    try {
+      fn()
+    } catch (e) {
+      log.error({ err: errName(e) }, msg)
+    }
+  }
 }

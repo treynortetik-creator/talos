@@ -52,7 +52,7 @@ struct SupervisorSeamsTests {
     #expect(startStalls(r), "needsYou \(String(describing: r.sup.status.needsYou)), phase \(r.phase()), audit: \(r.audit)")
     r.humanEnter()
     #expect(r.wait(60) { r.sup.tickNow(); return isRunning(r.phase()) }, "running: \(r.phase()), audit: \(r.audit)")
-    #expect(r.audit.contains("notice_without_dialog"))
+    #expect(r.audit.contains("ready_without_dialog"))
     #expect(r.sup.status.needsYou == nil, "a healthy running session must not keep the start alarm: \(String(describing: r.sup.status.needsYou))")
   }
 
@@ -202,7 +202,7 @@ struct SupervisorSeamsTests {
 
     #expect(r.wait(30) { r.starts.count >= 2 }, "a second start: \(r.starts), audit: \(r.audit)")
     #expect(r.wait(10) { !ProcessInspect.alive(oldPid) }, "the old child is gone")
-    #expect((r.starts.dropFirst().first ?? "").contains("--resume \(id)"), "the same conversation resumes")
+    #expect((r.starts.dropFirst().first ?? "").contains("--resume=\(id)"), "the same conversation resumes")
     #expect(
       r.wait(15) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart },
       "a menu restart is a cold start: the owner presses Enter. needsYou \(String(describing: r.sup.status.needsYou)), phase \(r.phase())")

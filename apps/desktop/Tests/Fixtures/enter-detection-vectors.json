@@ -1,0 +1,426 @@
+{
+  "about": "After the pointer's Enter (apps/bridge/src/supervisor/enter-check.ts; the Mac mirrors it): captures before the Enter (pre), at once after it (after) about 300 ms later (later) and, only when later still shows our line, about 1000 ms after the Enter (latest; absent: not taken), as plain rows (null: unreadable), with the verdict both sides must give: flagged, why (line_still_in_box at the last look taken first, then prompt_appeared: a select the pre-send capture did not have, at once after the Enter, or later unless the box was empty at once after it) and each capture's class. Classes are words, never screen text.",
+  "vectors": [
+    {
+      "name": "a clean submit",
+      "pre": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "after": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ ",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "later": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ ",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "flagged": false,
+      "why": null,
+      "classes": {
+        "pre": "box_ours",
+        "after": "box_empty",
+        "later": "box_empty"
+      }
+    },
+    {
+      "name": "the line still in the box 300 ms and 1000 ms later",
+      "pre": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "after": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "later": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "flagged": true,
+      "why": "line_still_in_box",
+      "classes": {
+        "pre": "box_ours",
+        "after": "box_ours",
+        "later": "box_ours",
+        "latest": "box_ours"
+      },
+      "latest": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ]
+    },
+    {
+      "name": "a select appears after the Enter",
+      "pre": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "after": [
+        "⏺ Done.",
+        "⏺ Bash(rm -rf build)",
+        "────────────────────────────────────────────────────────────",
+        " Bash command",
+        "",
+        "   rm -rf build",
+        "",
+        " Do you want to proceed?",
+        " ❯ 1. Yes",
+        "   2. No, and tell Claude what to do differently (esc)",
+        ""
+      ],
+      "later": [
+        "⏺ Done.",
+        "⏺ Bash(rm -rf build)",
+        "────────────────────────────────────────────────────────────",
+        " Bash command",
+        "",
+        "   rm -rf build",
+        "",
+        " Do you want to proceed?",
+        " ❯ 1. Yes",
+        "   2. No, and tell Claude what to do differently (esc)",
+        ""
+      ],
+      "flagged": true,
+      "why": "prompt_appeared",
+      "classes": {
+        "pre": "box_ours",
+        "after": "prompt",
+        "later": "prompt"
+      }
+    },
+    {
+      "name": "a select appears and is gone by later, the line still there",
+      "pre": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "after": [
+        "⏺ Done.",
+        "⏺ Bash(rm -rf build)",
+        "────────────────────────────────────────────────────────────",
+        " Bash command",
+        "",
+        "   rm -rf build",
+        "",
+        " Do you want to proceed?",
+        " ❯ 1. Yes",
+        "   2. No, and tell Claude what to do differently (esc)",
+        ""
+      ],
+      "later": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "flagged": true,
+      "why": "line_still_in_box",
+      "classes": {
+        "pre": "box_ours",
+        "after": "prompt",
+        "later": "box_ours",
+        "latest": "box_ours"
+      },
+      "latest": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ]
+    },
+    {
+      "name": "ROBUSTNESS ONLY (the guard refuses this Enter): a select already on pre",
+      "pre": [
+        "⏺ Done.",
+        "⏺ Bash(rm -rf build)",
+        "────────────────────────────────────────────────────────────",
+        " Bash command",
+        "",
+        "   rm -rf build",
+        "",
+        " Do you want to proceed?",
+        " ❯ 1. Yes",
+        "   2. No, and tell Claude what to do differently (esc)",
+        ""
+      ],
+      "after": [
+        "⏺ Done.",
+        "⏺ Bash(rm -rf build)",
+        "────────────────────────────────────────────────────────────",
+        " Bash command",
+        "",
+        "   rm -rf build",
+        "",
+        " Do you want to proceed?",
+        " ❯ 1. Yes",
+        "   2. No, and tell Claude what to do differently (esc)",
+        ""
+      ],
+      "later": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ ",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "flagged": false,
+      "why": null,
+      "classes": {
+        "pre": "prompt",
+        "after": "prompt",
+        "later": "box_empty"
+      }
+    },
+    {
+      "name": "after unreadable, later clean",
+      "pre": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "after": null,
+      "later": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ ",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "flagged": false,
+      "why": null,
+      "classes": {
+        "pre": "box_ours",
+        "after": "unreadable",
+        "later": "box_empty"
+      }
+    },
+    {
+      "name": "the usage-limit menu after the Enter",
+      "pre": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "after": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "  You've hit your Fable limit · resets 4pm (Europe/Paris)",
+        "  What do you want to do?",
+        "  ❯ 1. Stop and wait for limit to reset",
+        "    2. Wait here, then continue automatically when the limit resets",
+        "    3. Switch to usage credits",
+        "  Enter to confirm · Esc to cancel"
+      ],
+      "later": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "  You've hit your Fable limit · resets 4pm (Europe/Paris)",
+        "  What do you want to do?",
+        "  ❯ 1. Stop and wait for limit to reset",
+        "    2. Wait here, then continue automatically when the limit resets",
+        "    3. Switch to usage credits",
+        "  Enter to confirm · Esc to cancel"
+      ],
+      "flagged": true,
+      "why": "prompt_appeared",
+      "classes": {
+        "pre": "box_ours",
+        "after": "usage_limit",
+        "later": "usage_limit"
+      }
+    },
+    {
+      "name": "the line went in (box empty at once), and the turn's own select shows later: not flagged (Fable R2-2a)",
+      "pre": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "after": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ ",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "later": [
+        "⏺ Done.",
+        "⏺ Bash(rm -rf build)",
+        "────────────────────────────────────────────────────────────",
+        " Bash command",
+        "",
+        "   rm -rf build",
+        "",
+        " Do you want to proceed?",
+        " ❯ 1. Yes",
+        "   2. No, and tell Claude what to do differently (esc)",
+        ""
+      ],
+      "flagged": false,
+      "why": null,
+      "classes": {
+        "pre": "box_ours",
+        "after": "box_empty",
+        "later": "prompt"
+      }
+    },
+    {
+      "name": "a slow redraw: the line still shows at 300 ms and is gone at 1000 ms: not flagged (Fable R2-2b)",
+      "pre": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "after": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "later": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "latest": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ ",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "flagged": false,
+      "why": null,
+      "classes": {
+        "pre": "box_ours",
+        "after": "box_ours",
+        "later": "box_ours",
+        "latest": "box_empty"
+      }
+    },
+    {
+      "name": "the line still shows at once, and a select shows later: flagged",
+      "pre": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "after": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "later": [
+        "⏺ Done.",
+        "⏺ Bash(rm -rf build)",
+        "────────────────────────────────────────────────────────────",
+        " Bash command",
+        "",
+        "   rm -rf build",
+        "",
+        " Do you want to proceed?",
+        " ❯ 1. Yes",
+        "   2. No, and tell Claude what to do differently (esc)",
+        ""
+      ],
+      "flagged": true,
+      "why": "prompt_appeared",
+      "classes": {
+        "pre": "box_ours",
+        "after": "box_ours",
+        "later": "prompt"
+      }
+    },
+    {
+      "name": "the line still shows at 300 ms, and a select at 1000 ms: flagged",
+      "pre": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "after": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "later": [
+        "⏺ Done.",
+        "────────────────────────────────────────────────────────────",
+        "❯ Talos: new message in this thread. Call read_inbound.",
+        "────────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts"
+      ],
+      "latest": [
+        "⏺ Done.",
+        "⏺ Bash(rm -rf build)",
+        "────────────────────────────────────────────────────────────",
+        " Bash command",
+        "",
+        "   rm -rf build",
+        "",
+        " Do you want to proceed?",
+        " ❯ 1. Yes",
+        "   2. No, and tell Claude what to do differently (esc)",
+        ""
+      ],
+      "flagged": true,
+      "why": "prompt_appeared",
+      "classes": {
+        "pre": "box_ours",
+        "after": "box_ours",
+        "later": "box_ours",
+        "latest": "prompt"
+      }
+    }
+  ]
+}

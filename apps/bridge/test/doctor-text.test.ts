@@ -28,6 +28,9 @@ function emptyHome(): string {
   return join(home, '.claude') // also passed as --claude-dir: that flag is what the doctor's settings read follows
 }
 
+/** No process list (the real `ps` shows whatever channels this machine runs) and no WSL rows (only a WSL machine has them). */
+const OFF_THIS_MACHINE = { processes: () => [], wsl: { wsl: false } }
+
 /** Replaces the parts that differ per run (temp paths, ports, the key, the Bun version) with fixed names. */
 function normalise(lines: string[], parts: Record<string, string>): string[] {
   return lines.map((l) => {
@@ -37,11 +40,12 @@ function normalise(lines: string[], parts: Record<string, string>): string[] {
   })
 }
 
-/** The Bun and MCP SDK versions and the Codex line depend on the machine; the floor in "(needs >= 1.3.11)" is fixed text and stays. */
+/** The Bun and MCP SDK versions and the Codex line depend on the machine; the floor in "(needs 1.4.4 or newer)" is fixed text and stays. */
 function stabilise(l: string): string {
   if (l.startsWith('ok    codex (optional):')) return 'ok    codex (optional): <varies>'
   return l
     .replace(`bun version: ${Bun.version} `, 'bun version: <bun> ')
+    .replace(/^(ok {4}\.mcp\.json entry: command )\S+\/bun,/, '$1<bun-path>,')
     .replace(/^(ok {4}|warn {2}|FAIL {2})MCP SDK version: \S+ /, '$1MCP SDK version: <sdk> ')
 }
 
@@ -61,9 +65,7 @@ describe('talos-app doctor text', () => {
     }
     await runCli(['install-mcp', '--agent-dir', agent], { ...io, out: () => {} }, env)
     // No process list: the real `ps` would show whatever channels this machine happens to be running.
-    expect(
-      await runCli(['doctor', '--agent-dir', agent, '--claude-dir', claudeDir], io, env, { processes: () => [] }),
-    ).toBe(0)
+    expect(await runCli(['doctor', '--agent-dir', agent, '--claude-dir', claudeDir], io, env, OFF_THIS_MACHINE)).toBe(0)
     const key = JSON.parse(readFileSync(paths(h.home).bridgeKey, 'utf8')) as { public: string }
     const lines = normalise(out, {
       [h.relay.httpUrl]: '<relay>',
@@ -91,11 +93,43 @@ describe('talos-app doctor text', () => {
     // Port 1 refuses connections, so the relay is really unreachable.
     const env = { TALOS_APP_HOME: home, TALOS_APP_RELAY_URL: 'http://127.0.0.1:1' }
     const args = ['doctor', '--agent-dir', agent, '--claude-dir', claudeDir]
-    expect(await runCli(args, io, env, { processes: () => [] })).toBe(1)
+    expect(await runCli(args, io, env, OFF_THIS_MACHINE)).toBe(1)
     const lines = normalise(out, { [home]: '<home>', [agent]: '<agent>' }).map((l) =>
       // Bun words the connection error its own way; the row and its FAIL level are what is pinned.
       stabilise(l.startsWith('FAIL  relay /healthz:') ? 'FAIL  relay /healthz: <unreachable>' : l),
     )
     expect(lines.join('\n')).toMatchSnapshot()
+  })
+})
+
+// The Windows tray's "Check Talos" (apps/windows/tray.ps1) reads `doctor --json`: the same rows, as JSON, exit 0
+describe('talos-app doctor --json', () => {
+  test('the same rows as the text, level, name and detail only, no key line, and exit 0 even with FAIL rows', async () => {
+    const claudeDir = emptyHome()
+    const home = mkdtempSync(join(tmpdir(), 'talos-nohome-'))
+    const agent = mkdtempSync(join(tmpdir(), 'talos-agent-'))
+    const env = { TALOS_APP_HOME: home, TALOS_APP_RELAY_URL: 'http://127.0.0.1:1' }
+    const args = ['doctor', '--agent-dir', agent, '--claude-dir', claudeDir]
+    const io = (out: string[]) => ({
+      out: (l: string) => out.push(l),
+      err: () => {},
+      prompt: async () => 'n',
+      sleep: async () => {},
+      now: () => Date.now(),
+    })
+    const text: string[] = []
+    expect(await runCli(args, io(text), env, OFF_THIS_MACHINE)).toBe(1)
+    const json: string[] = []
+    expect(await runCli([...args, '--json'], io(json), env, OFF_THIS_MACHINE)).toBe(0)
+    expect(json).toHaveLength(1)
+    const rows = (JSON.parse(json[0] as string) as { checks: { level: string; name: string; detail: string }[] }).checks
+    expect(rows.every((r) => Object.keys(r).join(',') === 'level,name,detail')).toBe(true)
+    expect(rows.some((r) => r.level === 'FAIL')).toBe(true)
+    // each row is a text line (the relay's own error words vary run to run, so its detail is left out of the compare)
+    const asText = (l: string) => l.replace(/^(FAIL {2}relay \/healthz:).*/, '$1')
+    expect(rows.map((r) => asText(`${r.level.padEnd(4)}  ${r.name}: ${r.detail}`))).toEqual(
+      text.filter((l) => /^(ok|warn|FAIL) /.test(l)).map(asText),
+    )
+    expect(json[0]).not.toContain('BRIDGE_PUBKEY')
   })
 })

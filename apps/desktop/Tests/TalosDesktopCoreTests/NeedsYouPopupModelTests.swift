@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import TalosDesktopCore
@@ -510,8 +511,23 @@ struct NeedsYouPopupFilesTests {
 
 @Suite("Needs-you popup: what a real click is")
 struct PopupRealClickTests {
-  private func real(_ kind: PopupClickCheck.Kind = .leftMouseUp, age: Double = 0.05, window: Bool = true, bounds: Bool = true) -> Bool {
-    PopupClickCheck.isRealClick(kind: kind, age: age, sameWindow: window, onButton: bounds)
+  private func real(
+    _ kind: PopupClickCheck.Kind = .leftMouseUp, age: Double = 0.05, window: Bool = true, bounds: Bool = true, pid: Int64 = 0,
+    state: Int64 = PopupClickCheck.hidSystemStateId
+  ) -> Bool {
+    PopupClickCheck.isRealClick(kind: kind, age: age, sameWindow: window, onButton: bounds, sourcePid: pid, sourceStateId: state)
+  }
+
+  /// A program that posts a click (cliclick, a computer-use tool) makes a real left mouse event on the button; the system stamps it with the
+  /// poster's process id, and a source other than the hardware state shows in the state id. Only the mouse or trackpad itself answers.
+  @Test func aClickAProgramPostedIsNotTheOwnersClick() {
+    #expect(real(pid: 0, state: PopupClickCheck.hidSystemStateId), "the mouse or trackpad")
+    #expect(!real(pid: 4242), "posted by another process, even from the hardware state")
+    #expect(!real(pid: 1), "any non-zero process id")
+    #expect(!real(state: Int64(CGEventSourceStateID.combinedSessionState.rawValue)), "the combined session state")
+    #expect(!real(state: Int64(CGEventSourceStateID.privateState.rawValue)), "a private state")
+    #expect(!real(pid: -1, state: -1), "an event with no CGEvent behind it")
+    #expect(PopupClickCheck.hidSystemStateId == Int64(CGEventSourceStateID.hidSystemState.rawValue))
   }
 
   @Test func onlyAFreshLeftMouseEventInThisWindowOnTheButtonIsAClick() {

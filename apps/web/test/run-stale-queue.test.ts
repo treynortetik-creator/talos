@@ -71,7 +71,7 @@ describe('a Run that waited in the offline queue', () => {
     expect(bridge.notified).toHaveLength(0)
     const said = (client.store.getState().messages.general ?? []).find((m) => m.author === 'system')
     expect(said?.text).toMatch(/Run waited more than a day and was not sent/)
-    expect(said?.text).toMatch(/ask your agent to post the script again/)
+    expect(said?.text).toMatch(/tap Run again/)
     expect(said?.text).not.toMatch(/Tap Run/)
   })
 

@@ -2,7 +2,7 @@
 //   challenge on connect · `hello` within 10 s or close 4408 · anything else first, or a bad hello, is 4401 ·
 //   a pre-auth frame over 64 KiB is 4413.
 import { type BridgeKeyPair, generateBridgeKey, signChallenge, WS_CLOSE } from '@talos-app/protocol'
-import { fakeClock, waitFor } from '@talos-app/testkit'
+import { fakeClock, t as scaled, waitFor } from '@talos-app/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 import { startTestRelay, type TestRelay } from './harness.ts'
 
@@ -24,7 +24,9 @@ async function setup() {
     terminate: () => void closes.push(-1),
   }
   const sock = hub.attachBridge(conn, { ip: '198.51.100.5', relayHost: 'relay.example.com' })
-  const settle = () => new Promise((r) => setTimeout(r, 20))
+  // The hello is checked with an async signature verification: wait for the socket to be closed, never a fixed delay (20 ms
+  // was not enough under a full gate's parallel load)
+  const closed = (list: number[] = closes) => waitFor(() => list.length > 0, scaled(4000), 'the socket closed')
   const hello = async (key: BridgeKeyPair = relay!.bridgeKey, ch = sent[0]) => ({
     v: 1,
     type: 'hello',
@@ -36,7 +38,7 @@ async function setup() {
     client: { name: 'bridge', version: '1' },
     agent_config_rev: 0,
   })
-  return { clock, hub, sent, closes, sock, settle, hello }
+  return { clock, hub, sent, closes, sock, closed, hello }
 }
 
 describe('bridge WebSocket handshake (real hub)', () => {
@@ -54,7 +56,7 @@ describe('bridge WebSocket handshake (real hub)', () => {
   it('wrong key closes 4401', async () => {
     const s = await setup()
     s.sock.onMessage(JSON.stringify(await s.hello(await generateBridgeKey())))
-    await s.settle()
+    await s.closed()
     expect(s.closes).toEqual([WS_CLOSE.UNAUTHORIZED])
   })
 
@@ -67,7 +69,7 @@ describe('bridge WebSocket handshake (real hub)', () => {
       { ip: '198.51.100.6', relayHost: 'relay.example.com' },
     )
     second.onMessage(JSON.stringify(await s.hello(undefined, s.sent[0])))
-    await s.settle()
+    await s.closed(closes)
     expect(closes).toEqual([WS_CLOSE.UNAUTHORIZED])
   })
 
@@ -76,11 +78,11 @@ describe('bridge WebSocket handshake (real hub)', () => {
     s.sock.onMessage(
       JSON.stringify({ v: 1, type: 'ping', id: '01JBF3V7Q8K2M4N6P8R0S2T41M', ts: new Date().toISOString() }),
     )
-    await s.settle()
+    await s.closed()
     expect(s.closes[0]).toBe(WS_CLOSE.UNAUTHORIZED)
     const t = await setup()
     t.sock.onMessage('not json')
-    await t.settle()
+    await t.closed()
     expect(t.closes[0]).toBe(WS_CLOSE.UNAUTHORIZED)
   })
 
@@ -95,7 +97,7 @@ describe('bridge WebSocket handshake (real hub)', () => {
   it('a 70 KiB pre-auth frame closes 4413', async () => {
     const s = await setup()
     s.sock.onMessage(JSON.stringify({ pad: 'x'.repeat(70 * 1024) }))
-    await s.settle()
+    await s.closed()
     expect(s.closes).toEqual([WS_CLOSE.FRAME_TOO_LARGE])
   })
 })

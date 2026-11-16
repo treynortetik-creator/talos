@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type CardT, type PermissionExplainT, permissionCardAllowsPrimary } from '@talos-app/protocol'
 import { permissionFixture } from '@talos-app/testkit'
+import { createLogger } from '../src/log.ts'
 import { createExplainer, type Explainer, type ExplainOutcome } from '../src/permission/explainer.ts'
 import { eventually, fixture, type Harness, sleep, startHarness } from './helpers.ts'
 
@@ -17,8 +18,8 @@ afterEach(async () => {
   h = undefined
 })
 
-async function start(explainer?: Explainer) {
-  h = await startHarness()
+async function start(explainer?: Explainer, opts: Parameters<typeof startHarness>[0] = {}) {
+  h = await startHarness(opts)
   h.bridge.ctx.config.config.permission_relay = true
   h.bridge.setClientVersion(() => '2.1.312')
   h.bridge.ctx.permission.setHookTimings({ graceMs: 20 })
@@ -230,6 +231,52 @@ describe('the hook path', () => {
     await x.app.resolveCard(card, 'kill', card.payload_hash)
     await done
   })
+
+  test('a failed explanation logs one line with the reason, the tool and the length, never the command or description', async () => {
+    const lines: string[] = []
+    const x = await start(
+      { explain: async () => ({ ok: false, reason: 'too long' }) },
+      { bridge: { logger: createLogger(null, 'debug', (l) => lines.push(l)) } },
+    )
+    const { done } = startHook(x)
+    const card = await hookCard(x)
+    await nextExplain(x, card.id)
+    const failed = lines.filter((l) => l.includes('card explanation failed'))
+    expect(failed).toHaveLength(1)
+    expect(failed[0]).toContain('too long')
+    expect(failed[0]).toContain('Bash')
+    expect(failed[0]).toContain(String('rm -rf build/ ~/Downloads/*'.length))
+    for (const l of lines) {
+      expect(l).not.toContain('Downloads')
+      expect(l).not.toContain('cleans up the build folder')
+    }
+    await x.app.resolveCard(card, 'kill', card.payload_hash)
+    await done
+  })
+
+  for (const [name, tool, reason, want] of [
+    ['an MCP tool is logged as mcp, never its server name', 'mcp__acme-private__lookup', 'timeout', 1],
+    ['a stop (closed) logs nothing', 'Bash', 'closed', 0],
+  ] as const) {
+    test(name, async () => {
+      const lines: string[] = []
+      const x = await start(
+        { explain: async () => ({ ok: false, reason }) },
+        { bridge: { logger: createLogger(null, 'debug', (l) => lines.push(l)) } },
+      )
+      const ac = new AbortController()
+      const done = x.bridge.ctx.permission.onHookRequest({ ...HOOK_CALL, tool_name: tool }, ac.signal)
+      const card = await hookCard(x)
+      await nextExplain(x, card.id)
+      const failed = lines.filter((l) => l.includes('card explanation failed'))
+      expect(failed).toHaveLength(want)
+      if (want) expect(failed[0]).toContain('"tool":"mcp"')
+      for (const l of lines) expect(l).not.toContain('acme-private')
+      await x.app.resolveCard(card, 'kill', card.payload_hash)
+      await done
+      ac.abort()
+    })
+  }
 
   test('Deny before the explanation: answered at once, late explanation dropped', async () => {
     let release: (o: ExplainOutcome) => void = () => {}

@@ -1,7 +1,8 @@
 // The worker side of the hub socket (docs/OPTION-C.md "The hub socket"). A worker-mode bridge connects to main's live
-// bridge over `$TALOS_APP_HOME/hub.sock`, says `hello` (thread, pid, the supervisor's nonce), and from then on hands it
+// bridge over `$TALOS_APP_HOME/run/hub.sock`, says `hello` (thread, pid, the supervisor's nonce), and from then on hands it
 // every frame it would have sent the relay. The hub validates, sends and acks. When the socket is down the
 // worker falls back to the signed HTTP path (worker/transport.ts); it never opens the relay socket itself.
+import { existsSync } from 'node:fs'
 import { createConnection, type Socket } from 'node:net'
 import { HUB_FEATURE_SCHEDULES, HUB_MAX_LINE_BYTES, HubHubLine, type HubHubLineT, newUlid } from '@talos-app/protocol'
 import type { Logger } from '../log.ts'
@@ -28,13 +29,40 @@ function unansweredText(tool: string, why: string): string {
       "Check schedules_list for the run's state. Calling schedule_run_done again is safe: a run that is already closed answers that it is.",
     schedule_propose:
       "A card may be waiting in this thread: look at it, and don't propose the same thing again until you have. Use schedules_list to see the job's current state.",
+    config_propose:
+      "A card may be waiting in this thread: look at it, and don't propose the same thing again until you have.",
   }
   return `${why} It may or may not have run. ${next[tool] ?? 'Check with schedules_list before trying again.'}`
 }
 const RECONNECT_MS = 3_000
+/** Down this long, the link is not coming back on its own: the session likely predates the main bridge it should reach. */
+export const HUB_DOWN_STALE_MS = 120_000
+/** A session that has never reached the hub is only "older than the main bridge" once its first tries have had time. */
+const FIRST_TRIES_MS = 15_000
+
+/** When the link went down, on this clock, as the owner's words should say it. */
+const timeText = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
+
+/**
+ * What a thread session says when it has no hub link. A short drop (the main bridge restarting) is worth a retry; a link down
+ * since this bridge started, or for minutes, will not come back by waiting: the session is older than the main bridge, or the
+ * main bridge is gone, and the session needs a restart.
+ */
+export function hubDownText(o: { since: number; now: number; everUp: boolean; startedAt: number }): string {
+  const long = o.now - o.since > HUB_DOWN_STALE_MS || (!o.everUp && o.now - o.startedAt > FIRST_TRIES_MS)
+  if (!long)
+    return "The main bridge isn't reachable from this thread session (no hub socket). Nothing was done; try again shortly."
+  const since = o.everUp ? `since ${timeText(o.since)}` : `since this session's bridge started (${timeText(o.since)})`
+  return `The main bridge hasn't been reachable from this thread session ${since}, so waiting will not fix it. This session may be older than the main bridge (it was restarted or updated after this session started), and needs a restart: ask Main to restart this thread's session, or tell the owner. Nothing was done.`
+}
 
 export type HubClientOptions = {
   sockPath: string
+  /**
+   * Where the hub socket was before it moved to its own folder: used while `sockPath` is not there, so a worker updated
+   * before the live bridge restarts still reaches it. For one release.
+   */
+  legacySockPath?: string
   threadId: string
   nonce: string
   pid?: number
@@ -43,6 +71,8 @@ export type HubClientOptions = {
   reconnectMs?: number
   /** Test seam: what the hello advertises (default: everything this build does). `[]` plays an older worker. */
   features?: string[]
+  /** Test seam: the clock the down time is measured on (default Date.now). */
+  now?: () => number
 }
 
 export class HubClient {
@@ -59,7 +89,34 @@ export class HubClient {
   /** The hub's last refusal of our hello (shown in the log; a refused worker keeps retrying slowly). */
   lastRefusal: { code: string; message: string } | undefined
 
-  constructor(private readonly o: HubClientOptions) {}
+  private readonly startedAt: number
+  /** Since when the link has been down (this bridge's start, until the first welcome); undefined while it is up. */
+  private downAt: number | undefined
+  private everUp = false
+
+  constructor(private readonly o: HubClientOptions) {
+    this.startedAt = this.now()
+    this.downAt = this.startedAt
+  }
+
+  private now(): number {
+    return this.o.now?.() ?? Date.now()
+  }
+
+  /** Since when the link to the main bridge has been down; undefined while it is up. For the session's own status. */
+  get downSince(): number | undefined {
+    return this.connected ? undefined : (this.downAt ?? this.startedAt)
+  }
+
+  /** The words for "no hub link", as long as it has been down. */
+  downText(): string {
+    return hubDownText({
+      since: this.downSince ?? this.now(),
+      now: this.now(),
+      everUp: this.everUp,
+      startedAt: this.startedAt,
+    })
+  }
 
   get connected(): boolean {
     return this.welcomed && this.sock !== undefined && !this.sock.destroyed
@@ -71,7 +128,10 @@ export class HubClient {
     if (this.connected) return Promise.resolve(true)
     return new Promise((resolve) => {
       let settled = false
-      const sock = createConnection(this.o.sockPath)
+      const legacy = this.o.legacySockPath
+      const sock = createConnection(
+        !existsSync(this.o.sockPath) && legacy && existsSync(legacy) ? legacy : this.o.sockPath,
+      )
       const t = setTimeout(() => {
         finish(false)
         sock.destroy()
@@ -104,6 +164,7 @@ export class HubClient {
       sock.on('close', () => {
         const wasUp = this.welcomed
         this.welcomed = false
+        if (wasUp) this.downAt = this.now()
         if (this.sock === sock) this.sock = undefined
         for (const w of this.waiters.values())
           w({ t: 'ack', frame_id: '', state: 'refused', code: 'hub_closed', message: 'the hub closed' })
@@ -159,6 +220,8 @@ export class HubClient {
     const msg = m.data
     if (msg.t === 'welcome') {
       this.welcomed = true
+      this.everUp = true
+      this.downAt = undefined
       this.lastRefusal = undefined
       this.o.log.info('hub: connected as a thread session', { thread: msg.thread_id })
       this.helloWait?.(true)
@@ -212,11 +275,7 @@ export class HubClient {
    */
   rpc(tool: string, args: Record<string, unknown>, timeoutMs?: number): Promise<{ ok: boolean; text: string }> {
     const sock = this.sock
-    if (!this.connected || !sock)
-      return Promise.resolve({
-        ok: false,
-        text: "The main bridge isn't reachable from this thread session (no hub socket). Nothing was done; try again shortly.",
-      })
+    if (!this.connected || !sock) return Promise.resolve({ ok: false, text: this.downText() })
     const id = `rpc_${newUlid()}`
     const wait = timeoutMs ?? RPC_TIMEOUT_BY_TOOL[tool] ?? RPC_TIMEOUT_MS
     return new Promise((resolve) => {

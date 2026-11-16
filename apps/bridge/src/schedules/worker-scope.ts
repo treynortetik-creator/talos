@@ -172,6 +172,13 @@ export async function workerScheduleTool(d: WorkerRpcDeps, tool: string, args: R
       if (r.ok && r.text.startsWith('recorded')) d.store.settleClaims([runId], d.now())
       return r
     }
+    case 'wake_me': {
+      // the session's own thread, as the hub proved it: nothing in the request can name another
+      const lane = { kind: 'thread' as const, thread: d.thread }
+      return args.cancel !== undefined
+        ? d.schedules.wakeMe.cancel(args.cancel, lane)
+        : d.schedules.wakeMe.set(lane, args)
+    }
     default:
       return fail(`unknown tool ${tool.slice(0, 40)}`)
   }

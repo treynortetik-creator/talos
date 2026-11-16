@@ -199,6 +199,9 @@ problemRoutes.post('/api/problems', requireSession, requireCsrf, rateLimit('prob
   }
   const parsed = Problem.safeParse(body)
   if (!parsed.success) return c.json({ error: 'bad_request', message: 'not a problem report' }, 400)
+  // Only the bug inbox, which checked another install's signature, makes a report from another install.
+  if (parsed.data.source === 'install')
+    return c.json({ error: 'bad_request', message: 'not a problem report from this install' }, 400)
   // The relay knows its own version and the app does not; set it here so every report from the app carries it.
   const p = scrubProblem({ ...parsed.data, versions: { ...parsed.data.versions, relay: VERSION.slice(0, 40) } })
   if (p.screenshot) {

@@ -42,7 +42,8 @@ async function ensureThread(client: TalosClient): Promise<boolean> {
           },
         ]
   try {
-    await client.patchConfig({ threads: wireThreads(apply(client.store.getState().threads), false) })
+    const base = client.store.getState().threads
+    await client.patchConfig({ threads: wireThreads(apply(base), false, { base }) })
   } catch (e) {
     // Another device made it at the same moment: the thread is there now, which is all that was wanted.
     // Not created by this client, so the kickoff goes only if the other device's has not been sent.
@@ -53,20 +54,49 @@ async function ensureThread(client: TalosClient): Promise<boolean> {
   return !existing
 }
 
-let running: Promise<SetupStart> | null = null
+// One run in flight per client (per agent connection), never one for the whole page: a run still finishing for one client
+// must not be handed to another, which would then return without its own thread or kickoff.
+const running = new WeakMap<TalosClient, Promise<SetupStart>>()
 
 export function startSetup(client: TalosClient): Promise<SetupStart> {
-  if (running) return running
+  const inFlight = running.get(client)
+  if (inFlight) return inFlight
   const run = (async () => {
     const created = await ensureThread(client)
     const asked = created || !kickoffPending(client)
     if (asked) await client.sendMessage({ threadId: SETUP_THREAD_ID, text: SETUP_KICKOFF })
     return { threadId: SETUP_THREAD_ID, created, asked } as SetupStart
   })()
-  running = run
+  running.set(client, run)
   const clear = () => {
-    if (running === run) running = null
+    if (running.get(client) === run) running.delete(client)
   }
   run.then(clear, clear)
   return run
+}
+
+export const SETUP_SKIP = 'Skip the setup interview for now. I can start it later from Settings → Agent.'
+
+/**
+ * The first-run card's Skip: the Setup thread is archived (it stays, so first run never starts again: any Setup thread,
+ * archived or not, means this agent was offered setup) and the agent is told, so it does not carry on asking.
+ * Settings → Agent → "Set up my agent" brings the thread back and picks up the interview.
+ */
+export async function skipSetup(client: TalosClient): Promise<void> {
+  // told first: a question the agent is posting now still lands in the Setup thread, not the default one. Once: a retry
+  // after a failed archive does not tell it twice.
+  const msgs = client.store.getState().messages[SETUP_THREAD_ID] ?? []
+  const kickoff = msgs.findLastIndex((m) => m.author === 'owner' && m.text === SETUP_KICKOFF)
+  if (!msgs.slice(kickoff + 1).some((m) => m.author === 'owner' && m.text === SETUP_SKIP))
+    await client.sendMessage({ threadId: SETUP_THREAD_ID, text: SETUP_SKIP })
+  const base = client.store.getState().threads
+  const there = base.find((t) => t.id === SETUP_THREAD_ID)
+  if (there && !there.archived)
+    await client.patchConfig({
+      threads: wireThreads(
+        base.map((t) => (t.id === SETUP_THREAD_ID ? { ...t, archived: true } : t)),
+        false,
+        { base },
+      ),
+    })
 }

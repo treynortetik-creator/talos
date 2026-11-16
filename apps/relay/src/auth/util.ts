@@ -6,10 +6,9 @@ import { pickClientIp } from '../client-ip.ts'
 import type { AppEnv } from '../services.ts'
 
 export const COOKIE_NAME = '__Host-talos_s'
-/** How long a sign-in lasts and how long it may sit unused: SESSION_TTL_DAYS and SESSION_IDLE_DAYS (30 and 14 by default). */
+/** How long a sign-in lasts and how long it may sit unused: SESSION_TTL_DAYS and SESSION_IDLE_DAYS (both 90 by default since 2026-11-14: the owner signs in rarely, and nothing else asks for his passkey). */
 export const sessionTtlMs = (env: { SESSION_TTL_DAYS: number }): number => env.SESSION_TTL_DAYS * 24 * 3600_000
 export const sessionIdleMs = (env: { SESSION_IDLE_DAYS: number }): number => env.SESSION_IDLE_DAYS * 24 * 3600_000
-export const STEPUP_TTL_MS = 120_000
 export const CHALLENGE_TTL_MS = 5 * 60_000
 export const ENROLL_CODE_MAX_TTL_MS = 10 * 60_000
 export const ENROLL_FAILURE_WINDOW_MS = 10 * 60_000

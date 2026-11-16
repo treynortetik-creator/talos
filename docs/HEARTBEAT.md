@@ -17,12 +17,22 @@ the bridge wires the real one (`heartbeat/wake.ts`).
    `quiet` and no source runs. Run now and a test run bypass quiet hours.
 3. Each enabled source is started at once, with its own `timeout_s`; the whole run has `run_timeout_s`. Anything still
    running at its limit is killed together with everything it started (by process group). A source that hangs costs only
-   itself. A child it leaves running after a clean exit is killed with the group too. A process that leaves the group on
-   purpose (`setsid`) is out of reach: a known limit. While a source runs, its group id and command line are in the job's
-   store (`running`) with its start time, cleared when it ends. If the bridge crashed in between, the next start (before
+   itself. A child it leaves running after it exits is ended with the group, under one rule: never signal a group that has
+   no members. The source is reaped by then, but a group id cannot be handed out again while the group has a member, so the
+   group is signalled only while `ps` lists members and every one of them is in the session the source was started in (and
+   it is never the bridge's own group, 0 or 1): TERM, a look again after a short grace, KILL only if members remain.
+   Otherwise nothing is signalled, and the reason is logged. The source's result waits only a short grace for its output;
+   the look at its group (one `ps`, at most 5 s, plus the grace when it signals) comes just after, once its `running`
+   record below is cleared: a bridge crash inside that short window can leave such a child that no record points to. A process
+   that leaves the group on purpose (`setsid`) is out of reach: a known limit. While a source runs, its
+   group id and command line are in the job's store (`running`) with its start time, cleared when it ends. If the bridge
+   crashed in between, the next start (before
    any slot) kills a recorded group only if it is alive and either its leader is gone (a group id cannot be handed out again
-   while the group has a member) or its leader still has the recorded command and start time (pids get reused); a `ps`
-   that cannot answer leaves the record for the next start; a group nobody recorded is never touched. Only `command`
+   while the group has a member) or its leader still has the recorded command and start time (pids get reused). The command
+   recorded is the argv the source was spawned with, not what `ps` shows (between fork and exec that is the bare shell,
+   `(sh)`), and `ps`'s command line must be it or end with it (a script runs as `/bin/sh /path/script`). A leader `ps` still
+   shows as `(sh)` after a few tries, or a `ps` that cannot answer, leaves the record for the next start and is never
+   killed; a group nobody recorded is never touched. Only `command`
    sources are recorded: the `gh` calls of the built-in `github` source are not, so one of those left running by a crash is
    not found, and a test run records nothing.
 4. Each answer is read with `parseHeartbeatSourceResponse`. Over 256 KiB, over 50 items, not JSON, a wrong schema or a

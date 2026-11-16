@@ -998,3 +998,21 @@ describe('a second device', () => {
     expect(f.device_id).toBe(a.h.app.device.deviceId)
   })
 })
+
+describe('the arguments an app card shows', () => {
+  it('arguments too long to show indented are shown compact, never cut: the last key is on the card', async () => {
+    const { APP_CARD_BODY_MAX, prettyArgs } = await import('../../src/apps/cards.ts')
+    const args = {
+      to: 'alex@example.com',
+      note: 'hi',
+      pad: Array.from({ length: 3500 }, () => 0),
+      bcc: 'last@example.com',
+    }
+    expect(JSON.stringify(args, null, 2).length).toBeGreaterThan(APP_CARD_BODY_MAX)
+    const body = prettyArgs(args)
+    expect(body.length).toBeLessThanOrEqual(APP_CARD_BODY_MAX)
+    expect(JSON.parse(body)).toEqual(args)
+    // short arguments keep the indented form
+    expect(prettyArgs({ a: 1 })).toBe('{\n  "a": 1\n}')
+  })
+})

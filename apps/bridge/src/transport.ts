@@ -21,10 +21,37 @@ export type Wire = { readonly connected: boolean; send(frame: Record<string, unk
 
 export const ACK_WAIT_MS = 8000
 /**
- * A durable row the relay still has not acked after this long is given up on. Reconnect count never drops a row: a
- * flappy link (relay redeploy, Mac sleep and wake) must not lose a reply. Generous on purpose.
+ * A durable row the relay still has not acked after this long is given up on, and the agent is told. The age is wall-clock
+ * time, so a Mac that slept counts: the window is the relay's own week, not a day. Reconnect count alone never drops a
+ * row. Rows in `KEPT_UNTIL_DELIVERED` are not under this limit (see `KEPT_CEILING_MS`), except the bridge's own notices.
  */
-export const OUTBOX_RETENTION_MS = 24 * 3_600_000
+export const OUTBOX_RETENTION_MS = 7 * 24 * 3_600_000
+
+/**
+ * Rows that are never given up on for their age: what the agent said and what became of a card. Dropping a reply leaves
+ * the owner without an answer the Mac's history says was given; dropping a `card.update` leaves the card in the app on a
+ * state the Mac has moved past, with nothing that sends it again. They wait for the relay however long it is away.
+ * The outbox counts an attempt each time a row is put on a live socket, so waiting through an outage adds none.
+ */
+export const KEPT_UNTIL_DELIVERED: ReadonlySet<string> = new Set(['reply', 'card.create', 'card.update'])
+
+/**
+ * The one ceiling on a kept row: the relay has been offered it this many times and it is this old, and still no ack and
+ * no refusal. That is a frame the relay chokes on, not a relay that is away (a row that waited out a long outage has
+ * hardly been tried), and it would otherwise be resent on every `ready` for good. Both must hold.
+ */
+export const KEPT_CEILING_MS = 30 * 24 * 3_600_000
+export const KEPT_CEILING_ATTEMPTS = 20
+
+/** A reply row written by the bridge itself (a notice), not by the agent. */
+function isOwnNotice(type: string, json: string): boolean {
+  if (type !== 'reply') return false
+  try {
+    return (JSON.parse(json) as { message?: { author?: unknown } }).message?.author === 'system'
+  } catch {
+    return false
+  }
+}
 
 /** The relay closes the socket (and HTTP answers 413) for any frame whose JSON text is over MAX_FRAME_BYTES. */
 export class FrameTooLargeError extends Error {
@@ -60,7 +87,7 @@ export function refusedCardKind(type: string | undefined, json: string | undefin
   }
 }
 
-export type DropReason = 'too_large' | 'expired' | 'refused'
+export type DropReason = 'too_large' | 'expired' | 'refused' | 'unreadable'
 
 export const frameBytes = (frame: unknown): number => Buffer.byteLength(JSON.stringify(frame))
 
@@ -85,8 +112,13 @@ export class LiveTransport implements Transport {
     private readonly onDrop: (row: {
       id: string
       type: string
+      /** The frame as it was queued, so the notice can name the thread and the message or card it was. */
+      json: string
       reason: DropReason
       cardKind?: string
+      /** For `expired`: how long it waited and how often the relay was offered it. */
+      ageMs?: number
+      attempts?: number
     }) => void = () => {},
   ) {}
 
@@ -127,7 +159,13 @@ export class LiveTransport implements Transport {
       w({ rejected: new RelayRejectedError(code, why) })
     } else if (row) {
       // nobody is waiting on it (a row resent after a reconnect): the agent was told "queued", so it must hear this
-      this.onDrop({ id: row.id, type: row.type, reason: 'refused', ...(kind ? { cardKind: kind } : {}) })
+      this.onDrop({
+        id: row.id,
+        type: row.type,
+        json: row.json,
+        reason: 'refused',
+        ...(kind ? { cardKind: kind } : {}),
+      })
     }
     return true
   }
@@ -166,8 +204,13 @@ export class LiveTransport implements Transport {
     return { state: 'queued' }
   }
 
-  private expired(createdAt: number): 'expired' | undefined {
-    return this.clock.now() - createdAt > OUTBOX_RETENTION_MS ? 'expired' : undefined
+  private expired(row: { type: string; json: string; created_at: number; attempts: number }): 'expired' | undefined {
+    const age = this.clock.now() - row.created_at
+    if (age <= OUTBOX_RETENTION_MS) return undefined
+    // The bridge's own notices are news, not answers: after a long outage a pile of week-old ones would all land at
+    // once. They go the way of every other row.
+    if (!KEPT_UNTIL_DELIVERED.has(row.type) || isOwnNotice(row.type, row.json)) return 'expired'
+    return age > KEPT_CEILING_MS && row.attempts >= KEPT_CEILING_ATTEMPTS ? 'expired' : undefined
   }
 
   /**
@@ -178,12 +221,18 @@ export class LiveTransport implements Transport {
     for (const row of this.store.outboxList()) {
       if (opts.idleOnly && this.waiters.has(row.id)) continue
       // a row the relay cannot take (too big) would make it hang up on every `ready`; one older than the retention
-      // window is given up on. A plain missing ack is retried on every `ready`.
-      const reason = Buffer.byteLength(row.json) > MAX_FRAME_BYTES ? 'too_large' : this.expired(row.created_at)
+      // window is given up on, unless it is a reply or a card. A plain missing ack is retried on every `ready`.
+      const reason = Buffer.byteLength(row.json) > MAX_FRAME_BYTES ? 'too_large' : this.expired(row)
       if (reason) {
         this.log.warn('dropping an undeliverable outbox row', { type: row.type, id: row.id, reason })
         this.store.outboxDelete(row.id)
-        this.onDrop({ id: row.id, type: row.type, reason })
+        this.onDrop({
+          id: row.id,
+          type: row.type,
+          json: row.json,
+          reason,
+          ...(reason === 'expired' ? { ageMs: this.clock.now() - row.created_at, attempts: row.attempts } : {}),
+        })
         continue
       }
       try {
@@ -192,7 +241,10 @@ export class LiveTransport implements Transport {
         this.store.outboxAttempt(row.id)
         this.client.send(frame)
       } catch {
+        // a row that is not JSON can never be sent: say so, like every other row given up on
+        this.log.warn('dropping an unreadable outbox row', { type: row.type, id: row.id })
         this.store.outboxDelete(row.id)
+        this.onDrop({ id: row.id, type: row.type, json: row.json, reason: 'unreadable' })
       }
     }
   }

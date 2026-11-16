@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 @testable import TalosDesktop
+import TalosTestSupport
 
 /// D48: the Thread sessions tab. No SupervisorController, no tmux server of ours: the pane is handed rows and commands.
 /// Needs TALOS_GUI_TESTS=1.
@@ -10,7 +11,7 @@ import TalosDesktopCore
 @Suite("Thread sessions pane", .serialized, .guiExclusive, .enabled(if: guiTestsEnabled))
 struct ThreadSessionsPaneGuiTests {
   func scratch() -> String {
-    let d = (NSTemporaryDirectory() as NSString).appendingPathComponent("talos-tsp-\(UUID().uuidString.prefix(8))")
+    let d = (TestTemp.base as NSString).appendingPathComponent("talos-tsp-\(UUID().uuidString.prefix(8))")
     try? FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true)
     return d
   }

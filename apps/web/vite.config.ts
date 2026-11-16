@@ -23,7 +23,8 @@ export default defineConfig({
       manifest: false,
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2,webmanifest}'],
-        globIgnores: ['**/talos-icon-1024.png'],
+        // the Clio graph's 3D chunk (three.js, ~380 KB gzip) is fetched only when the graph opens, never on install
+        globIgnores: ['**/talos-icon-1024.png', '**/ClioGraph-*.js'],
         maximumFileSizeToCacheInBytes: 4_000_000,
       },
       devOptions: { enabled: true, type: 'module', navigateFallback: 'index.html' },

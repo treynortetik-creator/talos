@@ -19,11 +19,26 @@ export const MANUAL_SHARE_HELP = "Open the file, then use Safari's share button.
 const EXPIRED = 'This file expired from the relay; ask the agent to resend.'
 
 // One native share runs at a time (the shell ignores a second request too), so the busy flag is shared by every attachment.
+// What ends it lives here with it, not in a mounted hook: the shell's answer, or the download budget running out. Leaving the
+// thread before the shell answers must not leave the flag set, or every later Share does nothing until the app restarts.
 let nativePending = false
+let nativeTimer: ReturnType<typeof setTimeout> | null = null
+let listeningForDone = false
 const nativeListeners = new Set<() => void>()
 const settleNative = () => {
   nativePending = false
+  if (nativeTimer) clearTimeout(nativeTimer)
+  nativeTimer = null
   for (const l of [...nativeListeners]) l()
+}
+function startNativeShare(budgetMs: number) {
+  if (!listeningForDone) {
+    window.addEventListener(SHARE_MEDIA_DONE_EVENT, settleNative)
+    listeningForDone = true
+  }
+  nativePending = true
+  if (nativeTimer) clearTimeout(nativeTimer)
+  nativeTimer = setTimeout(settleNative, budgetMs) // an older shell never answers
 }
 
 export type DeliveryNote = { kind: 'info' | 'error'; text: string; manual?: boolean } | null
@@ -43,7 +58,6 @@ export function useDelivery(att: AttachmentRefT, gateState: GateState, inView = 
   const [preparing, setPreparing] = useState(false)
   const [note, setNote] = useState<DeliveryNote>(null)
   const [nativeBusy, setNativeBusy] = useState(false)
-  const nativeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ac = useRef<AbortController | null>(null)
   const ready = gateState === 'ready'
   const fileRef = useRef<File | null>(null)
@@ -82,15 +96,10 @@ export function useDelivery(att: AttachmentRefT, gateState: GateState, inView = 
   }, [ready])
   // The shell answers with a window event; if it never does (an older shell), the busy state ends after the download budget.
   useEffect(() => {
-    const clear = () => {
-      if (nativeTimer.current) clearTimeout(nativeTimer.current)
-      nativeTimer.current = null
-      setNativeBusy(false)
-    }
+    const clear = () => setNativeBusy(false)
     nativeListeners.add(clear)
     return () => {
       nativeListeners.delete(clear)
-      if (nativeTimer.current) clearTimeout(nativeTimer.current)
     }
   }, [])
   useEffect(
@@ -128,9 +137,8 @@ export function useDelivery(att: AttachmentRefT, gateState: GateState, inView = 
           setNote({ kind: 'error', text: "Couldn't open the share sheet. Update the app." })
           return
         }
-        nativePending = true
+        startNativeShare(prepareTimeoutFor(att.size) + 10_000)
         setNativeBusy(true)
-        nativeTimer.current = setTimeout(settleNative, prepareTimeoutFor(att.size) + 10_000)
         return
       }
       const f = fileRef.current
@@ -151,11 +159,6 @@ export function useDelivery(att: AttachmentRefT, gateState: GateState, inView = 
     },
     [ready, mode, att, prepare],
   )
-
-  useEffect(() => {
-    window.addEventListener(SHARE_MEDIA_DONE_EVENT, settleNative)
-    return () => window.removeEventListener(SHARE_MEDIA_DONE_EVENT, settleNative)
-  }, [])
 
   const verb = mode === 'link' ? (isNativeShell() ? 'Open' : 'Download') : 'Share'
   return {

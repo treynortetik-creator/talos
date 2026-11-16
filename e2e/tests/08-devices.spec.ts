@@ -28,7 +28,13 @@ test("1b. a device the Mac answers N for stays unpinned and sees none of the own
 
   // Signed in but not pinned yet: the app shows only the waiting notice. There is no thread to type into.
   await page.goto(`${stack.origin}/t/general`)
-  await expect(page.getByText('Waiting for your Mac to confirm this device.').first()).toBeVisible()
+  // The bridge runs on this machine and names its own host (apps/web/src/lib/hostWords.ts): the Mac's words exactly on a
+  // Mac; elsewhere a PC (a Windows Talos distro) or "your computer" (Linux, a developer's own WSL), never the Mac.
+  const waiting =
+    process.platform === 'darwin'
+      ? 'Waiting for your Mac to confirm this device.'
+      : /^Waiting for your (PC|computer) to confirm this device\.$/
+  await expect(page.getByText(waiting).first()).toBeVisible()
   await expect(page.getByLabel('Message', { exact: true })).toHaveCount(0)
 
   cli.write('N\n')

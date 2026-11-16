@@ -7,6 +7,20 @@
 . "$(dirname "$0")/lib.sh"
 d="$TALOS_APP_HOME/workers/$TALOS_APP_WORKER_THREAD"
 mkdir -p "$d"
+# Until `$1` appears: each line typed is logged and the box drawn again empty, as Claude's is after an Enter (a box that kept the
+# pointer after its Enter would read as an Enter that may have answered something, EnterDetection).
+take_lines_until() {
+  local line buf=''
+  until [ -f "$1" ]; do
+    if IFS= read -r -t 1 line; then  # whole seconds: the Mac's bash 3.2 takes no fraction
+      printf '%s %s\n' "$TALOS_APP_WORKER_THREAD" "$buf$line" >> "${FAKE_TYPED_LOG:-/dev/null}"
+      buf=''
+      printf '\033[2J\033[H\n'; typing_box
+    else
+      buf="$buf$line"  # a read that timed out mid-line keeps what it read
+    fi
+  done
+}
 ready() { printf '{"v":1,"thread_id":"%s","pid":%d,"at":"2026-10-30T00:00:00.000Z"}\n' "$TALOS_APP_WORKER_THREAD" "$$" > "$d/ready"; }
 RULE='────────────────────────────────────────────────'
 dialog() {
@@ -19,7 +33,7 @@ if [ -n "${FAKE_TRUST_FLAP:-}" ]; then
   # the dialog comes and goes, as often as the test likes, on a running session
   ready
   printf '\n'; typing_box
-  until [ -f "$FAKE_TRUST_FLAP" ]; do sleep 0.2; done
+  take_lines_until "$FAKE_TRUST_FLAP"
   while true; do
     dialog; sleep 2
     printf '\033[2J\033[H\n'; typing_box; sleep 2
@@ -28,8 +42,8 @@ fi
 if [ -n "${FAKE_TRUST_LATE:-}" ]; then
   ready
   printf '\n'; typing_box
-  until [ -f "$FAKE_TRUST_LATE" ]; do sleep 0.2; done
-  while IFS= read -r -t 1 line; do  # the pointer typed before the dialog
+  take_lines_until "$FAKE_TRUST_LATE"
+  while IFS= read -r -t 1 line; do  # a pointer typed just before the dialog
     printf '%s %s\n' "$TALOS_APP_WORKER_THREAD" "$line" >> "${FAKE_TYPED_LOG:-/dev/null}"
     printf '\033[2J\033[H\n'; typing_box
   done

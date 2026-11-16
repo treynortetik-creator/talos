@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type FrameOf, type MessageT, newId, newUlid } from '@talos-app/protocol'
-import { mkFrame } from '@talos-app/testkit'
+import { mkFrame, waitScale } from '@talos-app/testkit'
 import { type HistoryStore, openHistory } from '../src/history-store.ts'
 import { RECONCILE_BATCH } from '../src/search/indexer.ts'
 import { createSearchService, indexerFor } from '../src/search/install.ts'
@@ -195,7 +195,9 @@ describe('isolation under a full reindex', () => {
     stores.push(probe)
     probe.db.exec('PRAGMA busy_timeout = 0')
     let locked = false
-    for (let i = 0; i < 200 && !locked; i++) {
+    // a fresh bun process opening a 100k-row file can take a while to start on a loaded machine
+    const deadline = Date.now() + 5000 * waitScale()
+    while (!locked && Date.now() < deadline) {
       try {
         probe.db.exec('BEGIN IMMEDIATE')
         probe.db.exec('ROLLBACK')

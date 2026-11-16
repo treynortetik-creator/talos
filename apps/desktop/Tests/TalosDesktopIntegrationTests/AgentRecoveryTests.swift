@@ -29,7 +29,9 @@ private extension Rig {
   var recoveredTexts: [String] { recovered.map(SupervisorNotice.recovery) }
   func audited(_ event: String) -> Int { audit.components(separatedBy: " \(event)").count - 1 }
 
+  /// The phone's request: a restart carries the owner's proof, as a current bridge writes it; any other action is not a request.
   func writeRequest(_ action: String, id: String, ageMs: Double = 0) throws {
+    if action == "restart" { return try writeOwnerRequest(id, ageMs: ageMs) }
     let ts = Int(clock.wallMs() - ageMs)
     try #"{"v":1,"control_id":"\#(id)","action":"\#(action)","ts":\#(ts)}"#.write(
       toFile: requestPath, atomically: true, encoding: .utf8)

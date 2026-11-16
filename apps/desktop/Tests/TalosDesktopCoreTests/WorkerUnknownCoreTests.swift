@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import TalosDesktopCore
+import TalosTestSupport
 
 /// "Uncertain state must never cause an action": the core half. The strings are real output, captured from tmux 3.8 on a
 /// private socket and read from the Claude Code 2.1.314 binary on 2026-10-30.
@@ -63,7 +64,9 @@ struct WorkerUnknownCoreTests {
     #expect(read(#"{"dedicated":{"enabled":"yes"}}"#) == nil)
     #expect(read("[]") == nil)
     #expect(read("{ half a file") == nil)
-    #expect(read(#"{"dedicated":{"enabled":true},"threads":[1]}"#) == nil)
+    // an entry that is not a thread is left out and the rest is read (WorkerTwinsCoreTests): the last good list could be the wider one
+    #expect(read(#"{"dedicated":{"enabled":true},"threads":[1]}"#)?.droppedEntries == [1])
+    #expect(read(#"{"dedicated":{"enabled":true},"threads":{"0":1}}"#) == nil)
     #expect(read(#"{"dedicated":{"enabled":true},"threads":[]}"#)?.threads.isEmpty == true)
     // control: a file that says off, or says nothing, is off
     #expect(read(#"{"dedicated":{"enabled":false}}"#) == .off)
@@ -96,7 +99,7 @@ struct WorkerUnknownCoreTests {
   }
 
   @Test func exactlyTheLongestPathTheProtocolTakes() throws {
-    let t = (NSTemporaryDirectory() as NSString).appendingPathComponent("talos-u-\(UUID().uuidString.prefix(8))")
+    let t = (TestTemp.base as NSString).appendingPathComponent("talos-u-\(UUID().uuidString.prefix(8))")
     try FileManager.default.createDirectory(atPath: t, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: t) }
     let home = String(cString: realpath(t, nil))

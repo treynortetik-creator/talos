@@ -8,6 +8,7 @@ import { proveDeviceInPlace } from './features/auth/passkeys.ts'
 import { StorageRecovery } from './features/auth/StorageRecovery.tsx'
 import { clearAfterSessionEnd, pendingWipe, useSession } from './features/auth/session.ts'
 import { startOwnerClient } from './features/auth/startClient.ts'
+import { BugCornerButton } from './features/bugreport/BugButton.tsx'
 import { spendArm } from './features/cards/arm.tsx'
 import { HelpLoading } from './features/help/HelpLoading.tsx'
 import { HELP_PATH } from './features/help/path.ts'
@@ -51,6 +52,7 @@ import { Button } from './ui/index.ts'
 import { Mascot } from './ui/Mascot.tsx'
 import { Meander } from './ui/Meander.tsx'
 
+const ClioGraphScreen = lazy(() => import('./features/memory/ClioGraph.tsx').then((m) => ({ default: m.ClioGraph })))
 const HelpScreen = lazy(() => import('./features/help/HelpScreen.tsx').then((m) => ({ default: m.HelpScreen })))
 const FAKE = import.meta.env.VITE_FAKE === '1'
 /** How long a stale 'online' (no new `ready` since the screen opened) is trusted before a missing card is called gone. */
@@ -251,7 +253,15 @@ function CardScreen({ id }: { id: string }) {
   useEffect(() => {
     if (gone) spendArm(id) // decided elsewhere: the Approve tap has nothing to start
   }, [gone, id])
-  if (!card) return gone ? <Navigate to="/" replace /> : <div className="p-6 text-text-2">Loading…</div>
+  if (!card)
+    return gone ? (
+      <Navigate to="/" replace />
+    ) : (
+      <div className="relative flex-1 p-6 text-text-2">
+        Loading…
+        <BugCornerButton />
+      </div>
+    )
   return <ThreadView threadId={card.thread_id} highlightCard={id} />
 }
 
@@ -355,6 +365,15 @@ export function App({ client, storage }: { client: TalosClient; storage: Storage
                     element={
                       <Suspense fallback={null}>
                         <MemoryScreen />
+                      </Suspense>
+                    }
+                  />
+                  {/* the Clio graph: three.js and 3d-force-graph load only here (their own chunk) */}
+                  <Route
+                    path="memory/graph"
+                    element={
+                      <Suspense fallback={null}>
+                        <ClioGraphScreen />
                       </Suspense>
                     }
                   />

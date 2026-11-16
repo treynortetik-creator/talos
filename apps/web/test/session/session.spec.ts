@@ -197,3 +197,43 @@ test('an older peer that still sends the 5-hour window: read without error, show
   await expect(sheet).not.toContainText('5-hour')
   await expect(page.getByTestId('session-trigger')).not.toHaveAttribute('aria-label', /97|5-hour/)
 })
+
+// The weekly figure is the newest reading of any session on the Mac (`as_of`, the time it was taken). An old one says how old
+// beside the figure and is dimmed past 15 minutes; a fresh one says nothing. At the narrowest phone, in both themes.
+for (const scheme of ['light', 'dark'] as const) {
+  test(`an old weekly reading says how old, beside the figure, and dims (320 px, ${scheme})`, async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 })
+    await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' })
+    // the owner's own choice, so the stock theme paints this scheme from the first frame
+    await page.addInitScript((m) => localStorage.setItem('talos-theme', m), scheme)
+    await openThread(page)
+    await expect(page.locator('html')).toHaveAttribute('data-theme', scheme)
+    const week = (min: number) =>
+      `{ kind: 'seven_day', percent: 35, resets_at: new Date(Date.now() + 3 * 86400000).toISOString(), as_of: new Date(Date.now() - ${min} * 60000).toISOString() }`
+    const patch = (min: number) => page.evaluate(`window.__talos.session.patch({ rate_limits: [${week(min)}] })`)
+    await patch(0)
+    // by keyboard: the trigger takes focus and opens the sheet
+    await page.getByTestId('session-trigger').focus()
+    await page.keyboard.press('Enter')
+    await expect(sessionPanel(page)).toBeVisible()
+    const meter = sessionPanel(page).getByTestId('meter-week')
+    await expect(meter).toContainText('35% used')
+    await expect(meter).not.toContainText('as of')
+    await expect(meter).not.toHaveAttribute('data-stale', 'true')
+    await patch(3)
+    await expect(meter).toContainText('35% used, as of 3 min ago')
+    await expect(meter).not.toHaveAttribute('data-stale', 'true')
+    await patch(20)
+    await expect(meter).toContainText('35% used, as of 20 min ago')
+    await expect(meter).toHaveAttribute('data-stale', 'true')
+    await expect(meter.getByRole('progressbar')).toHaveAttribute('aria-valuetext', '35% used, as of 20 min ago')
+    // it fits: nothing in the meter runs past the sheet, and the page does not scroll sideways
+    const fit = await meter.evaluate((el) => {
+      const box = el.getBoundingClientRect()
+      const over = [...el.querySelectorAll('*')].some((c) => c.getBoundingClientRect().right > box.right + 1)
+      return { over, sideways: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 }
+    })
+    expect(fit).toEqual({ over: false, sideways: false })
+    await expectAxeClean(page)
+  })
+}

@@ -230,8 +230,18 @@ public struct LaunchSpec: Equatable, Sendable {
     for k in shown.keys.sorted() { parts.append("\(k)=\(Self.shellQuote(shown[k] ?? ""))") }
     parts.append(Self.shellQuote(program))
     parts += args.map(Self.shellQuote)
-    if let r = resumeId { parts += ["--resume", Self.shellQuote(r)] }
+    // A saved id is from desktop.json, which an agent may write: only a UUID follows `--resume`, where the CLI would read anything
+    // else that starts with `-` as a flag of its own. Checked here, in the one renderer every copy goes through.
+    if let r = resumeId, ResumeRewrite.isUUID(r) { parts += ["--resume", Self.shellQuote(r)] }
     return parts.joined(separator: " ")
+  }
+
+  /// The rollback command (4.7) for a config: the menu's Copy Terminal command and `Supervisor.terminalCommand` both build it here.
+  /// A saved id that is not a UUID is left out (no `--resume` at all), the same fence as a start (`launchLocked`).
+  public static func rollback(_ c: DesktopConfig, home: String) -> LaunchSpec {
+    LaunchSpec(
+      agentDir: c.expandedAgentDir(home: home), env: c.env, program: c.claudePath == "auto" ? "claude" : c.claudePath,
+      args: ResumeRewrite.strip(c.args), resumeId: c.session.id.flatMap { ResumeRewrite.isUUID($0) ? $0 : nil })
   }
 
   public static func shellQuote(_ s: String) -> String {

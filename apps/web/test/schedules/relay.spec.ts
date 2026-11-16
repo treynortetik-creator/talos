@@ -125,13 +125,13 @@ test('edit sends only the touched fields; the card arrives over the socket, is a
 test('a bridge without a scheduler: "Update Talos on your Mac"', async ({ page, context, harness }) => {
   const { bridge } = await startMac(harness, { scheduler: false })
   await openTab(harness, page, context, bridge)
-  await expect(page.getByTestId('empty-update_mac')).toContainText('Update Talos on your Mac to use Schedules.')
+  await expect(page.getByTestId('empty-update_mac')).toContainText('Update Talos on your computer to use Schedules.') // FakeRelay has no bridge connected, so no host feature (lib/hostWords.ts)
   expect(frameOfType(harness, 'schedules.list')).toHaveLength(0)
   await bridge.close()
 })
 
 test('the Mac away: the tab says so instead of an endless spinner', async ({ page, context, harness }) => {
   await openTab(harness, page, context, null)
-  await expect(page.getByTestId('empty-mac_offline')).toContainText('Your Mac is offline.')
+  await expect(page.getByTestId('empty-mac_offline')).toContainText('Your computer is offline.') // no host known: see above
   await expect(page.getByTestId('offline-banner')).toBeVisible()
 })

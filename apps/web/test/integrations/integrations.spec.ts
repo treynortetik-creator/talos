@@ -16,22 +16,13 @@ test('the work tile is locked and shows the config ask_note', async ({ page }) =
   await expect(tile).toContainText('🔒')
 })
 
-test('enabling a work integration requires step-up and sends a config.patch touching work.enabled', async ({
+test('enabling a work integration sends a config.patch touching work.enabled, with no passkey step', async ({
   page,
 }) => {
   await open(page, '/settings/integrations')
-  await page.evaluate(() => {
-    const c = window.__talos
-    const orig = c.stepup.bind(c)
-    c.stepup = async (purpose: string) => {
-      window.__order.push(`${purpose}:sent=${c.sent.length}`)
-      return orig(purpose)
-    }
-  })
   await page.locator('[data-tile="slack"]').click()
-  await page.getByRole('button', { name: /^Confirm (it's you|with Face ID)$/ }).click()
+  await page.getByRole('button', { name: 'Turn on' }).click()
   await expect(page.locator('[data-tile="slack"]')).toHaveAttribute('data-locked', 'false')
-  expect(await page.evaluate(() => window.__order)).toEqual(['config:work:sent=0'])
   const frame = (await sentFrames(page)).at(-1) as Record<string, unknown>
   expect(frame.type).toBe('config.patch')
   expect(frame.patch).toEqual({ work: { enabled: ['slack'] } })

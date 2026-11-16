@@ -262,7 +262,7 @@ function Detail({ s, embedded = false }: { s: ScheduleT; embedded?: boolean }) {
                 <IconMore />
               </Button>
             </PopoverTrigger>
-            <PopoverContent align="end" className="w-48 p-1">
+            <PopoverContent aria-label="More actions" align="end" className="w-48 p-1">
               <button
                 type="button"
                 className="flex min-h-11 w-full items-center rounded-button px-3 text-left text-sm hover:bg-surface-2"

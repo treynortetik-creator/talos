@@ -237,6 +237,7 @@ export function ThreadRowMenu({
         </div>
       </PopoverAnchor>
       <PopoverContent
+        aria-label={`Actions for ${thread.name}`}
         className="flex w-56 flex-col gap-1 p-1"
         align="end"
         data-testid="row-menu"

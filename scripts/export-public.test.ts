@@ -88,6 +88,7 @@ describe('export-public.sh', () => {
       'apps/desktop/scripts/review-d0-test.sh',
       'apps/desktop/scripts/review-d0-recheck-test.sh',
       'scripts/personal-denylist.txt',
+      'docs/CI-MACHINES.md',
     ])
       expect(excludes, must).toContain(must)
   })

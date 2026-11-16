@@ -5,6 +5,9 @@
 // (`mac_offline`, `search_unavailable`, `bad_query`, `memory_off`, `memory_not_found`).
 import {
   type AttachmentRefT,
+  type BugReportBodyT,
+  type BugReportDestinationT,
+  type FilesSentFiltersT,
   HEALTH_FEATURE,
   type MemoryEntryT,
   type MemoryHitT,
@@ -14,7 +17,9 @@ import {
   type PresenceT,
   type SearchFiltersT,
   type SearchHitT,
+  type SentFileT,
   SHARE_FEATURE,
+  UNDO_FEATURE,
 } from '@talos-app/protocol'
 import { useTalos } from './client.ts'
 
@@ -65,6 +70,17 @@ export interface MemoryClient {
     cursor: string | null,
     limit: number,
   ): Promise<{ hits: MemoryHitT[]; nextCursor: string | null; index: SearchIndexStateT }>
+  /** `memory.graph`: every visible note and the links between them, for the 3D view. Checked against the frame schema. */
+  graph?(): Promise<MemoryGraph>
+}
+
+/** The graph as the 3D view draws it: notes by index, links as index pairs; `total` counts every visible note. */
+export type MemoryGraph = {
+  roots: Array<{ id: string; label: string }>
+  nodes: Array<{ root: number; path: string; title: string }>
+  edges: Array<[number, number]>
+  total: number
+  truncated: boolean
 }
 
 /** What the Mac answered to one `speak.request`. `working` means ask again; an unknown state from a newer Mac reads as `working`. */
@@ -104,10 +120,122 @@ export interface FolderClient {
   list(path: string | null, hidden: boolean): Promise<FolderListing>
 }
 
+/** One folder of a thread's folder, as the Files pane shows it (src/files in the bridge). Paths are relative to the thread's folder. */
+export type FilesListing = {
+  threadId: string
+  /** The thread's folder on the Mac, absolute, for display (the app shows it as ~/…). */
+  root: string
+  /** The folder listed: '' is the thread's folder itself. */
+  path: string
+  /** Folders first, then files, by name. */
+  entries: Array<{ name: string; kind: 'dir' | 'file'; size?: number }>
+  /** Entries past the cap that were not sent. */
+  more: number
+  /** A very large folder: only part of it was looked at (`more` does not count the rest). */
+  partial?: boolean
+}
+
+/** One file of a thread's folder: text (a chunk of it), an image (an attachment to load), or something the pane cannot show. */
+export type FilesFile = {
+  threadId: string
+  path: string
+  kind: 'text' | 'image' | 'binary'
+  size: number
+  mtime: string
+  text?: string
+  offset?: number
+  /** Where the next chunk starts; null at the end. */
+  nextOffset: number | null
+  /** The Mac stopped at its cap: the rest of the file is not shown. */
+  truncated: boolean
+  media?: AttachmentRefT
+  /** Why it is not shown (too big, not text). */
+  message?: string
+}
+
+export interface FilesClient {
+  /** `files.list` -> `files.listing`. Rejects with `TalosClientError` (`bad_frame` with the Mac's sentence, `mac_offline`, ...). */
+  list(threadId: string, path: string): Promise<FilesListing>
+  /** `files.read` -> `files.file`, from `offset` (0 = start). */
+  read(threadId: string, path: string, offset: number): Promise<FilesFile>
+  /**
+   * `files.put` -> `files.put_result`: puts uploaded media in the folder `dir` of the thread's folder under `name`. Resolves
+   * with the name it got (another when that was taken). Absent on a client that cannot ask the Mac to.
+   */
+  put?(threadId: string, dir: string, name: string, media: AttachmentRefT): Promise<{ name: string; size: number }>
+  /**
+   * `files.sent` -> `files.sent_list`: the files sent in Talos, newest first (frames-files-sent.ts). Asked again each time the
+   * sheet opens, never kept. Absent on a client that cannot ask the Mac.
+   */
+  sent?(args: { filters: FilesSentFiltersT; cursor: string | null; limit: number }): Promise<FilesSentPage>
+}
+
+/** One page of sent files, as checked by the app (rows that don't fit, or name a thread it doesn't know, are dropped). */
+export type FilesSentPage = { files: SentFileT[]; nextCursor: string | null; days: number }
+
+/** The thread's AGENTS.md as the Mac has it (`agents_md.file`). */
+export type AgentsMdFile = {
+  threadId: string
+  exists: boolean
+  /** The sha256 of the file (null: none, or too large): what a save says it was loaded from. */
+  sha: string | null
+  text?: string
+  tooLarge: boolean
+  /** The change since the last save made in Settings, when the file was changed elsewhere (a unified diff). */
+  outsideDiff?: string
+  saved: boolean
+}
+
+/** The thread's instructions in its settings. Both reject with `TalosClientError` (the Mac's sentence, `mac_offline`, ...). */
+/** Which folders Memory's Notes show (`memory.folders` / `memory.roots_set` -> `memory.folders_result`). */
+export type MemoryFolders = {
+  folders: Array<{ name: string; notes: number }>
+  chosen: string[]
+  /** Memory browsing is on at the Mac. */
+  enabled: boolean
+  /** Answers a save that was written. */
+  saved: boolean
+  /** The Mac's plain line when it could not list or save. */
+  error?: string
+}
+export interface MemoryFoldersClient {
+  list(): Promise<MemoryFolders>
+  /** Notes shows exactly these (names from the last list); none turns Notes off. Rejects `mac_offline` when not saved. */
+  set(names: readonly string[]): Promise<MemoryFolders>
+}
+
+export interface AgentsMdClient {
+  /** `agents_md.read` -> `agents_md.file`. */
+  read(threadId: string): Promise<AgentsMdFile>
+  /** `agents_md.write` -> `agents_md.file`: saves `text` over the file loaded as `baseSha` (null: there was none). */
+  write(threadId: string, text: string, baseSha: string | null): Promise<AgentsMdFile>
+}
+
+/** What the Mac knows for a bug report (`bug.context` -> `bug.context_result`): its own versions, the errors it filed, the cleaned log. */
+export type BugContext = {
+  bridgeVersion: string
+  claudeCode: string | null
+  recentErrors: string[]
+  logs: string
+}
+
+/** The bug reporter's calls. Both reject with `TalosClientError` (`mac_offline`, `rate_limited`, `internal`). */
+export interface BugReportClient {
+  /** The Mac's side of a report. Rejects when the Mac is away or too old to answer; the report is still sendable without it. */
+  context(lines: number): Promise<BugContext>
+  /** Signs the report with this device's key and posts it to the relay. Resolves with the report's id. */
+  send(
+    report: BugReportBodyT,
+    picture: { type: 'image/png' | 'image/jpeg'; bytes: Uint8Array },
+  ): Promise<{ id: string }>
+  /** Where a report goes after the relay keeps it (the relay's answer, never an address). Rejects when it cannot be had. */
+  destination(): Promise<BugReportDestinationT>
+}
+
 export type FeatureState = 'on' | 'needs_mac' | 'off'
 
-/** Features the relay itself provides: usable with the Mac offline. */
-export const RELAY_FEATURES: readonly string[] = [HEALTH_FEATURE, SHARE_FEATURE]
+/** Features the relay itself provides: usable with the Mac offline (undo/1 is the relay's: its item also needs the message's undo point). */
+export const RELAY_FEATURES: readonly string[] = [HEALTH_FEATURE, SHARE_FEATURE, UNDO_FEATURE]
 
 /**
  * Relay features ('health/1', 'share/1'): 'on' when the relay lists them, whatever the bridge does.

@@ -5,7 +5,7 @@
 //   - the owner frames (list, get, patch, run now, control) and the card apply (S3.4),
 //   - failures reaching the app (S3.6) and `schedule.status` (S2.2).
 // Chronos keeps the registry, the due logic, the claim and the approved record; nothing here does schedule maths.
-import { existsSync, type FSWatcher, watch } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   dateOfRunKey,
@@ -18,10 +18,12 @@ import {
   safeLine,
 } from '@talos-app/protocol'
 import { type BridgeContext, defaultThreadRef, threadRef } from '../context.ts'
+import { quietWatch } from '../fs-watch.ts'
 import { reapOrphans } from '../heartbeat/orphans.ts'
 import { HeartbeatRunner, type HeartbeatSeams, type HeartbeatWake, type RunnerDeps } from '../heartbeat/runner.ts'
 import { HeartbeatTester } from '../heartbeat/test-run.ts'
 import { makeWake, triageAvailable } from '../heartbeat/wake.ts'
+import { WakeMe } from '../wake-me/service.ts'
 import type { AdapterError, ChronosAdapter } from './chronos-adapter.ts'
 import { type Discovered, discover } from './discovery.ts'
 import { InstanceRegistry } from './instances.ts'
@@ -57,6 +59,7 @@ import {
   chronosLimits,
   closeRun,
   expireRuns,
+  heartbeatClaimFailed,
   heartbeatRun,
   noticeHeldById,
   noticeUnreadableAtSlot,
@@ -69,10 +72,12 @@ import { MAIN_PROPOSER, NEEDS_V2 } from './service-shared.ts'
 import {
   degraded,
   markAll,
+  missedWhy,
   noteByDay,
   noticeHeld,
   noticesFor,
   overlay,
+  pauseJobsOfArchivedThreads,
   postFailure,
   reportFailure,
   safeSnapshot,
@@ -111,6 +116,8 @@ export type ScheduleServiceDeps = {
   chronosNow?: () => string | undefined
   /** fs.watch on the scheduler's files. Default true. */
   watch?: boolean
+  /** Test seam: opens a watch on one file (default quietWatch, a real fs.watch); a test drives the change itself. */
+  watchFn?: (path: string, onChange: () => void) => { close(): void }
   /** Test seam: the `chronos api version` budget in discovery (ms). */
   discoveryTimeoutMs?: number
   /** Test seam: wraps the discovered adapter. */
@@ -133,7 +140,7 @@ export class ScheduleService {
   private started = false
   stopped = false
   private timers: { refresh?: unknown; runner?: unknown; discover?: unknown } = {}
-  private watchers: FSWatcher[] = []
+  private watchers: Array<{ close(): void }> = []
   private watchKey = ''
   private pokeTimer: ReturnType<typeof setTimeout> | null = null
   private relayFeatures: string[] = []
@@ -159,6 +166,8 @@ export class ScheduleService {
   readonly wakeRuns = new Map<string, { started: boolean }>()
   /** Wake closes started from the schedule queue and not waited on there (a slow source must not hold the queue). */
   readonly wakeEnds = new Set<Promise<unknown>>()
+  /** The agents' own `wake_me` timers: one-shot jobs this bridge writes and delivers (wake-me/service.ts). */
+  readonly wakeMe: WakeMe
 
   constructor(
     readonly ctx: BridgeContext,
@@ -170,6 +179,7 @@ export class ScheduleService {
       () => this.gate(),
       (e) => this.log('schedules-meta.json not written; trying again next tick', { error: e.message }),
     )
+    this.wakeMe = new WakeMe(this)
     this.jobMemory = new JobMemory(
       ctx.paths.home,
       () => this.gate(),
@@ -377,10 +387,10 @@ export class ScheduleService {
       }
       tick()
     }
-    every('refresh', REFRESH_EVERY_MS, async () => {
+    every('refresh', this.ctx.env.scheduleRefreshMs ?? REFRESH_EVERY_MS, async () => {
       await this.refresh(true)
     })
-    every('runner', RUNNER_EVERY_MS, () => this.runnerTick())
+    every('runner', this.ctx.env.scheduleRunnerMs ?? RUNNER_EVERY_MS, () => this.runnerTick())
     every('discover', DISCOVER_EVERY_MS, () => this.rediscover())
   }
 
@@ -472,6 +482,7 @@ export class ScheduleService {
     this.armWatchers()
     if (!this.gate()) return snap
     await this.noticesFor(snap)
+    await this.pauseJobsOfArchivedThreads(snap)
     await this.syncBackgroundMemory(snap)
     this.sendStatus(snap)
     return snap
@@ -510,6 +521,12 @@ export class ScheduleService {
   postFailure(...a: Parameters<typeof postFailure>) {
     return postFailure.call(this, ...a)
   }
+  missedWhy(...a: Parameters<typeof missedWhy>) {
+    return missedWhy.call(this, ...a)
+  }
+  pauseJobsOfArchivedThreads(...a: Parameters<typeof pauseJobsOfArchivedThreads>) {
+    return pauseJobsOfArchivedThreads.call(this, ...a)
+  }
 
   threadOfJob(jobId: string) {
     const t = this.sidecar.threadOf(jobId)
@@ -538,13 +555,18 @@ export class ScheduleService {
     if (key === this.watchKey) return
     this.closeWatchers()
     this.watchKey = key
+    const open = this.deps.watchFn ?? quietWatch
     for (const p of paths) {
       try {
-        this.watchers.push(watch(p, { persistent: false }, () => this.poke()))
+        this.watchers.push(open(p, () => this.poke()))
       } catch {
         // the poll still runs
       }
     }
+    // One catch-up pass once the watch is open: a change made after the snapshot this refresh read and before the watch
+    // opened is never reported (and macOS's fs.watch can miss one made just as it opens). Without this it waits for the 30 s
+    // poll. The pass is the usual refresh; it finds the same files, so it opens nothing new and does not loop.
+    if (this.watchers.length > 0) this.poke()
   }
 
   private poke() {
@@ -558,6 +580,10 @@ export class ScheduleService {
   }
 
   // ---- the session runner (S3.3) --------------------------------------------------------------------------------
+
+  heartbeatClaimFailed(...a: Parameters<typeof heartbeatClaimFailed>) {
+    return heartbeatClaimFailed.call(this, ...a)
+  }
 
   runnerTick(...a: Parameters<typeof runnerTick>) {
     return runnerTick.call(this, ...a)
@@ -838,7 +864,9 @@ export class ScheduleService {
     if (!job || this.ctx.mode !== 'headless') return null
     this.sidecar.reload()
     const t = this.sidecar.threadOf(job)
-    return t && this.ctx.config.thread(t) ? t : null
+    // An archived thread is not a place to post (nobody sees it): fall back to the default thread, as the live path
+    // does (threadOfJob). The live bridge pauses such a job and tells the owner (pauseJobsOfArchivedThreads).
+    return t && this.ctx.config.thread(t) && !this.ctx.config.thread(t)?.archived ? t : null
   }
 
   /** `list_threads` marks the job's thread (S3.6). */

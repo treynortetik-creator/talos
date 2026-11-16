@@ -2,7 +2,7 @@
 // it acks `consumed`; state and results reach apps; a reconnecting app gets the last state in `ready`.
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { AGENT_LIMITS, newUlid } from '@talos-app/protocol'
+import { AGENT_LIMITS, newUlid, USAGE_AS_OF_FEATURE } from '@talos-app/protocol'
 import { sleep } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { startTestRelay, type TestRelay } from './harness.ts'
@@ -66,6 +66,26 @@ describe('session frames through the relay', () => {
     expect(b.received.some((f) => f.type === 'ack')).toBe(true)
     const late = await k.connectedApp()
     expect(late.rec.of('ready', 'in')[0]?.session_state).toMatchObject({ session_id: 'sess_1' })
+  })
+
+  it('usage-as-of/1: listed to the bridge and the app; a state whose readings carry as_of reaches the app and ready intact', async () => {
+    relay = await startTestRelay()
+    const k = kit(relay)
+    const a = await k.connectedApp()
+    const b = await silentBridge(relay, relay.bridgeKey)
+    const ready = b.received.find((f) => f.type === 'ready') as { features?: string[] } | undefined
+    expect(ready?.features).toContain(USAGE_AS_OF_FEATURE)
+    expect(a.rec.of('ready', 'in')[0]?.features).toContain(USAGE_AS_OF_FEATURE)
+    const asOf = new Date(Date.now() - 180_000).toISOString()
+    const rows = [
+      { kind: 'seven_day', percent: 35, resets_at: new Date(Date.now() + 86_400_000).toISOString(), as_of: asOf },
+      { kind: 'a_kind_from_later', percent: 2, as_of: asOf },
+    ]
+    b.send({ type: 'session.state', state: { ...state, rate_limits: rows } })
+    await vi.waitFor(() => expect(a.rec.of('session.state', 'in')).toHaveLength(1), { timeout: 10_000 })
+    expect(a.rec.of('session.state', 'in')[0]?.state.rate_limits).toEqual(rows)
+    const late = await k.connectedApp()
+    expect(late.rec.of('ready', 'in')[0]?.session_state?.rate_limits).toEqual(rows)
   })
 
   it('session.agents: fanned out, the last one in ready, never stored (gone after a restart), never pushed', async () => {

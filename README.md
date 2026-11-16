@@ -27,16 +27,16 @@
 
 ## What you need
 
-| Needed                                        | Version                                               | Notes                                                                          |
-| --------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------ |
-| A **Mac**                                     | macOS 14+                                             | Linux works for the terminal-only setup (`./install.sh --no-app`).             |
-| Homebrew, Xcode command line tools            | any                                                   | `xcode-select --install`; Homebrew for `tmux` and the optional extras.         |
-| **python3**, **git**                          | 3.9+ (3.10+ for the optional search and voice extras) | Come with the command line tools.                                              |
-| **Node**, **pnpm**, **Bun**                   | Node 24, pnpm 10.33 (`corepack enable`), Bun 1.3.11+  | `./install.sh` checks them and says what is missing.                           |
-| [Claude Code](https://claude.com/claude-code) | 2.1.304+ for the Talos mod                            | Signed in, with a Claude plan.                                                 |
-| **tmux**                                      | 3.2+                                                  | For the Mac app and thread sessions.                                           |
-| **Railway** and **GitHub** accounts           |                                                       | For the relay, which builds from your fork.                                    |
-| An **iPhone or any browser**                  | iOS 18.4+ for Home Screen notifications               | The web app is all you need; the iPhone app and Mac menu-bar app are optional. |
+| Needed                                        | Version                                                     | Notes                                                                          |
+| --------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| A **Mac**                                     | macOS 14+                                                   | Linux works for the terminal-only setup (`./install.sh --no-app`).             |
+| Homebrew, Xcode command line tools            | any                                                         | `xcode-select --install`; Homebrew for `tmux` and the optional extras.         |
+| **python3**, **git**                          | 3.9+ (3.10+ for the optional search and voice extras)       | Come with the command line tools.                                              |
+| **Node**, **pnpm**, **Bun**                   | Node 24, pnpm 10.33 (`corepack enable`), Bun 1.4.4 or newer | `./install.sh` checks them and says what is missing.                           |
+| [Claude Code](https://claude.com/claude-code) | 2.1.304+ for the Talos mod                                  | Signed in, with a Claude plan.                                                 |
+| **tmux**                                      | 3.2+                                                        | For the Mac app and thread sessions.                                           |
+| **Railway** and **GitHub** accounts           |                                                             | For the relay, which builds from your fork.                                    |
+| An **iPhone or any browser**                  | iOS 18.4+ for Home Screen notifications                     | The web app is all you need; the iPhone app and Mac menu-bar app are optional. |
 
 The full list, with install and check commands, is in [`SETUP.md`](SETUP.md), step 1.
 
@@ -125,20 +125,20 @@ tuned is never overwritten); `--yes` skips the prompt.
 | `apps/desktop`                 | The Mac menu-bar app (Swift): runs the agent, shows bridge status. Optional. See `docs/desktop.md`.               |
 | `apps/mobile`                  | The iPhone app (Capacitor shell around the web app). See `docs/ios.md`.                                           |
 | `e2e`                          | End-to-end suite: the built relay, the built app and the real bridge together.                                    |
-| `railway.json`, `.env.example` | Deploy settings and the list of every environment variable.                                                       |
+| `railway.json`, `.env.example` | Deploy settings and every environment variable the relay reads.                                                   |
 | `third_party`                  | Vendored reference code with licences (read-only). See `THIRD_PARTY_NOTICES.md`.                                  |
 | `examples`                     | Generic agent configs.                                                                                            |
 | `kit`                          | The agent kit: config, hooks, rules and scripts for a Claude Code agent folder. See `kit/README.md`.              |
 
 ## Working in the repo
 
-Needs Node 24, pnpm 10.33 and Bun 1.3.
+Needs Node 24, pnpm 10.33 and Bun 1.4.4 or newer.
 
 ```bash
 pnpm install --frozen-lockfile   # the lockfile is committed; never regenerate it on a feature branch
 pnpm typecheck
 pnpm lint
-pnpm test                        # Vitest: protocol, testkit, integrations, relay, web, scripts
+pnpm test                        # Vitest: protocol, testkit, integrations, relay, web, mobile, scripts
 pnpm test:bun                    # bridge (bun test)
 pnpm build                       # relay bundle and web app
 pnpm test:browser                # owner-signature round trips in Chromium and WebKit

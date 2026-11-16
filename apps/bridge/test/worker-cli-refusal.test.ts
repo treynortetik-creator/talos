@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runCli } from '../src/cli.ts'
 import { COMMANDS, runTalos } from '../src/talos.ts'
-import { refusedForWorkers, WORKER_COMMANDS_OK, workerCliRefusal } from '../src/worker/cli-refusal.ts'
+import { refusedForWorkers, WORKER_COMMANDS_OK, WORKER_READ_OK, workerCliRefusal } from '../src/worker/cli-refusal.ts'
 
 const made: string[] = []
 afterEach(() => {
@@ -87,10 +87,8 @@ describe('digest, post and inbox from a worker thread', () => {
 
 // Every command that reads the log, the history, the schedules, the search or memory index, the error reports, the app
 // registry or the config, or posts into a thread it is given, is refused to a thread session. One test per command.
+// (status, doctor and logs are a thread session's own since 2026-11-15: see "status, doctor and logs from a lead" below)
 const READS_ACROSS_THREADS: string[][] = [
-  ['status'],
-  ['doctor'],
-  ['logs'],
   ['report'],
   ['errors', 'list'],
   ['search', 'reindex'],
@@ -124,7 +122,7 @@ describe('commands that read across threads or the Talos home, from a thread ses
     })
   }
   test('the talos front door refuses them too, including `doctor --json`, which it answers itself', async () => {
-    for (const argv of [['status'], ['doctor', '--json'], ['logs'], ['codex', 'run', '--thread', 'g', '--', 'x']]) {
+    for (const argv of [['report'], ['codex', 'run', '--thread', 'g', '--', 'x']]) {
       const err: string[] = []
       const io = {
         out: () => {},
@@ -190,7 +188,7 @@ describe('commands that read across threads or the Talos home, from a thread ses
       expect(
         refused,
         `talos-app ${c.name}: ${refused ? 'refused, but named safe' : 'allowed, but not named safe'}`,
-      ).toBe(!WORKER_COMMANDS_OK.includes(c.name))
+      ).toBe(!WORKER_COMMANDS_OK.includes(c.name) && !WORKER_READ_OK.includes(c.name))
     }
     // the safe names are real commands (guard-hook is the one hook entry the list of commands does not carry)
     const known = new Set(COMMANDS.map((c) => c.name))
@@ -198,5 +196,85 @@ describe('commands that read across threads or the Talos home, from a thread ses
   })
   test('the marker and the variables are a backstop only: with neither, nothing is known (cd /tmp && env -u ... gets past it)', () => {
     expect(workerCliRefusal(['logs'], {}, plain())).toBeUndefined()
+  })
+})
+
+// Pantheon 2026-11-15: a lead reads status, doctor and logs; `logs` shows it only the lines of its own thread.
+describe('status, doctor and logs from a lead', () => {
+  const LINES = [
+    { level: 'info', time: 1, msg: 'trip line', thread: 'trip' },
+    { level: 'info', time: 2, msg: 'garden line', thread: 'garden' },
+    { level: 'info', time: 3, msg: 'no thread line' },
+    { level: 'info', time: 4, msg: 'trip card', thread_id: 'trip' },
+  ]
+  function logs(env: Record<string, string>, cwd = plain(), args: string[] = []) {
+    const home = mkdtempSync(join(realpathSync(tmpdir()), 'wc-'))
+    made.push(home)
+    writeFileSync(join(home, 'bridge.log'), `${LINES.map((l) => JSON.stringify(l)).join('\n')}\nnot json\n`)
+    const out: string[] = []
+    const err: string[] = []
+    const io = {
+      out: (l: string) => out.push(l),
+      err: (l: string) => err.push(l),
+      prompt: async () => 'n',
+      sleep: async () => {},
+      now: () => Date.now(),
+    }
+    return runCli(['logs', ...args], io, { TALOS_APP_HOME: home, ...env }, { cwd }).then((code) => ({
+      code,
+      out: out.join('\n'),
+      err: err.join('\n'),
+    }))
+  }
+  test('status, doctor and logs are not refused to a thread session', () => {
+    for (const argv of [
+      ['status'],
+      ['status', '--json'],
+      ['doctor'],
+      ['doctor', '--json'],
+      ['logs'],
+      ['logs', '-n', '5'],
+    ])
+      expect(workerCliRefusal(argv, { TALOS_APP_WORKER_THREAD: 'trip', TALOS_SESSION_ROLE: 'worker' }, plain())).toBe(
+        undefined,
+      )
+  })
+  test("a thread session's logs show its own thread's lines and nothing else", async () => {
+    const r = await logs({ TALOS_APP_WORKER_THREAD: 'trip', TALOS_SESSION_ROLE: 'worker' })
+    expect(r.code).toBe(0)
+    expect(r.out).toContain('trip line')
+    expect(r.out).toContain('trip card')
+    expect(r.out).not.toContain('garden line')
+    expect(r.out).not.toContain('no thread line')
+    expect(r.out).not.toContain('not json')
+  })
+  test("-n counts the thread's own lines", async () => {
+    const r = await logs({ TALOS_APP_WORKER_THREAD: 'trip' }, plain(), ['-n', '1'])
+    expect(r.out).toContain('trip card')
+    expect(r.out).not.toContain('trip line')
+  })
+  test("a lead folder's marker names the thread", async () => {
+    const root = plain()
+    writeFileSync(join(root, '.talos-lead'), JSON.stringify({ thread: 'garden' }))
+    const r = await logs({}, root)
+    expect(r.out).toContain('garden line')
+    expect(r.out).not.toContain('trip')
+  })
+  test("a thread session whose thread can't be told is shown nothing", async () => {
+    const root = plain()
+    writeFileSync(join(root, '.talos-lead'), '{}')
+    const r = await logs({}, root)
+    expect(r.code).toBe(1)
+    expect(r.out).toBe('')
+    expect(r.err).toMatch(/can't be told/)
+    // the variable and the marker disagree: no thread
+    writeFileSync(join(root, '.talos-lead'), JSON.stringify({ thread: 'garden' }))
+    const d = await logs({ TALOS_APP_WORKER_THREAD: 'trip' }, root)
+    expect(d.code).toBe(1)
+    expect(d.out).toBe('')
+  })
+  test('the main session still sees every line', async () => {
+    const r = await logs({})
+    for (const l of ['trip line', 'garden line', 'no thread line', 'trip card']) expect(r.out).toContain(l)
   })
 })

@@ -1,12 +1,11 @@
-// Enabling (or disabling) a work integration: config.work.enabled changes through a signed config.patch, which needs a
-// passkey step-up (`config:work`). The confirm dialog lists what leaves the work system and how long it is kept.
+// Enabling (or disabling) a work integration: config.work.enabled changes through an owner-signed config.patch. The confirm
+// dialog lists what leaves the work system and how long it is kept.
 import { useState } from 'react'
 import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
-import { confirmLabel } from '../../lib/confirmLabel.ts'
-import { passkeyErrorCopy } from '../../lib/passkeyGate.ts'
-import { withStepup } from '../../lib/stepup.ts'
 import { Button, Dialog, DialogContent, DialogDescription, DialogTitle } from '../../ui/index.ts'
 import { daysWord, useRelayLimits } from '../health/limits.ts'
+import { NOT_CONNECTED_LINE, useWriteBlock } from '../settings/offline.ts'
+import { connectionRefusal } from '../threads/manage/useThreadPatch.ts'
 import type { Spec } from './data.ts'
 
 export function useWorkGate() {
@@ -33,8 +32,8 @@ export function WorkEnableDialog({
   onClose: (changed: boolean) => void
 }) {
   const client = useTalosClient()
+  const block = useWriteBlock()
   const agent = useTalos((s) => s.config?.agent.name ?? 'Talos')
-  const config = useTalos((s) => s.config)
   const gate = useWorkGate()
   const { bufferDays } = useRelayLimits()
   const days = daysWord(bufferDays)
@@ -47,17 +46,15 @@ export function WorkEnableDialog({
     try {
       const next =
         mode === 'enable' ? [...new Set([...gate.enabled, spec.id])] : gate.enabled.filter((id) => id !== spec.id)
-      await withStepup(client, config, 'config:work', (token) =>
-        client.patchConfig({ work: { enabled: next } }, token ? { stepupToken: token } : {}),
-      )
+      await client.patchConfig({ work: { enabled: next } })
       onClose(true)
     } catch (e) {
       setError(
-        passkeyErrorCopy(e) ??
+        connectionRefusal(e) ??
           (e instanceof TalosClientError && e.code === 'config_conflict'
             ? 'Your settings changed on another device. Close this and try again.'
             : e instanceof TalosClientError && e.code === 'mac_offline'
-              ? `${agent}'s Mac is offline. Try again when it is back.`
+              ? e.message // not confirmed yet, in the client's words: the Mac may be fine and the link what dropped
               : 'That did not go through. Nothing was changed.'),
       )
     } finally {
@@ -86,12 +83,10 @@ export function WorkEnableDialog({
               </span>
             </>
           ) : (
-            <span className="block">
-              New {spec.name} events will be refused. Existing connections stay saved. You will confirm it's you first,
-              because this changes what can reach {agent}.
-            </span>
+            <span className="block">New {spec.name} events will be refused. Existing connections stay saved.</span>
           )}
         </DialogDescription>
+        {readOnly && block === 'link' ? <p className="mt-2 text-sm text-text-2">{NOT_CONNECTED_LINE}</p> : null}
         {error ? (
           <p role="alert" className="mt-2 text-sm text-danger">
             {error}
@@ -102,7 +97,7 @@ export function WorkEnableDialog({
             Cancel
           </Button>
           <Button disabled={busy || readOnly} onClick={confirm}>
-            {readOnly ? 'Mac is offline' : mode === 'enable' ? confirmLabel() : 'Turn off'}
+            {readOnly && block !== 'link' ? 'Mac is offline' : mode === 'enable' ? 'Turn on' : 'Turn off'}
           </Button>
         </div>
       </DialogContent>

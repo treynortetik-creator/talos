@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# post-checkout: see live-guard.sh
+exec bash "$(dirname "$0")/live-guard.sh"

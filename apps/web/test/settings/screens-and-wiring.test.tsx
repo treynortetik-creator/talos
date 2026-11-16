@@ -1,6 +1,6 @@
 // The rest of the settings home work: Health (connection merged in, relay limits, tool prompts read-only), real limits in
 // the copy with a fallback, Integrations (renamed, work thread, work system off, rename and move), Schedules (Pause all,
-// description), the phone menu's driving entry, and the Face ID wording.
+// description), the phone menu's driving entry, and the work system's plain Turn on (no Face ID).
 import { listSetupSpecs } from '@talos-app/integrations/catalog'
 import type { HealthStatusT } from '@talos-app/protocol'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -17,7 +17,6 @@ import { ConnectionPanel } from '../../src/features/integrations/ConnectionPanel
 import { IntegrationsScreen } from '../../src/features/integrations/index.tsx'
 import { WorkEnableDialog } from '../../src/features/integrations/WorkEnable.tsx'
 import { SchedulesScreen } from '../../src/features/schedules/SchedulesScreen.tsx'
-import { confirmLabel } from '../../src/lib/confirmLabel.ts'
 import { getPlatform } from '../../src/lib/platform.ts'
 import { renderWith, setup } from '../cards/helpers.tsx'
 import { statusOf } from '../health/status.ts'
@@ -128,12 +127,18 @@ describe('limitsLine and the copy that used to hard-code 7 days and 50 MB (M34)'
   })
 })
 
-describe('confirmLabel (M10)', () => {
-  it('says Face ID only on an iPhone', () => {
-    vi.spyOn(getPlatform(), 'isIos').mockReturnValue(true)
-    expect(confirmLabel()).toBe('Confirm with Face ID')
-    vi.spyOn(getPlatform(), 'isIos').mockReturnValue(false)
-    expect(confirmLabel()).toBe("Confirm it's you")
+describe('turning a work system on (no passkey since 2026-11-14)', () => {
+  it('says Turn on, on an iPhone and elsewhere, never Face ID or "confirm it\'s you"', () => {
+    const spec = listSetupSpecs().find((x) => x.category === 'work')
+    if (!spec) throw new Error('no work system in the catalog')
+    for (const ios of [true, false]) {
+      vi.spyOn(getPlatform(), 'isIos').mockReturnValue(ios)
+      renderWith(<WorkEnableDialog spec={spec as never} readOnly={false} onClose={() => {}} />, setup())
+      const dialog = screen.getByRole('dialog')
+      expect(within(dialog).getByRole('button', { name: 'Turn on' })).toBeTruthy()
+      expect(dialog.textContent).not.toMatch(/face id|confirm it's you|passkey/i)
+      cleanup()
+    }
   })
 })
 

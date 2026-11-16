@@ -81,8 +81,12 @@ final class MediaViewerController: UIViewController, WKNavigationDelegate, WKUID
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
-            systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        // An X at the top right (the system close button: inside the safe area, a 44 pt target) is how the viewer closes;
+        // it is presented over full screen, so no swipe closes it (TalosBridgeViewController.showMedia).
+        let close = UIBarButtonItem(
+            systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        close.accessibilityLabel = "Close"  // VoiceOver reads the bare system item as "close"
+        navigationItem.rightBarButtonItem = close
         load()
     }
 

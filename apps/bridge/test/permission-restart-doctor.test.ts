@@ -33,6 +33,7 @@ async function doctor(opts: { configured: boolean; declared: boolean | undefined
     mode: 'live',
     relay: { connected: true, last_connect_at: null, last_close_code: null },
     queue_depth: 0,
+    unseen_oldest_at: null,
     permission_relay: opts.configured,
     ...(opts.declared === undefined ? {} : { permission_relay_declared: opts.declared }),
     bridge_commit: null,

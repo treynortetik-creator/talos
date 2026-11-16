@@ -56,9 +56,9 @@ struct HotkeyView: View {
       // Before setup there is no desktop.json, and writing one would make the next launch start a session: keep the hotkey
       // in the app's own defaults until the config exists.
       if model.configured {
-        var c = model.supervisor.currentConfig()
-        c.hotkeys.compose = saved
-        model.supervisor.updateConfig(c)
+        // one field, as an edit on the supervisor's queue: a read, change and replace here would write over a settings change
+        // that is still on its way there
+        model.saveComposeHotkey(saved)
       } else {
         UserDefaults.standard.set(saved, forKey: HotkeyController.preSetupKey)
       }

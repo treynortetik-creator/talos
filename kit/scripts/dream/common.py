@@ -22,7 +22,14 @@ try:        # the agent folder, not the folder above this file (that is a plugin
 except ImportError:        # a lone copy of this file with no helper beside it: the old rule
     ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 MEM = os.path.join(ROOT, "memory")
-WIKI = os.path.join(ROOT, "wiki")
+try:        # where the wiki is: wiki/, or memory/wiki/ on a layout-2 agent (one resolver, scripts/_talos_layout.py)
+    from _talos_layout import paths as _layout_paths
+    WIKI = _layout_paths(ROOT)["wiki"]
+except ImportError:        # a lone copy with no helper beside it: the old rule
+    WIKI = os.path.join(ROOT, "wiki")
+WIKI_REL = os.path.relpath(WIKI, ROOT).replace(os.sep, "/")        # "wiki", or "memory/wiki" on a layout-2 agent
+# the folders whose changes the nightly cycle looks at (a layout-2 wiki is inside memory/, which is one already)
+TOPS = ("memory",) if WIKI_REL.startswith("memory/") else (WIKI_REL, "memory")
 DREAM = os.path.join(MEM, "dream")
 QUEUE = os.path.join(DREAM, "QUEUE.md")
 QUEUE_ONLY = os.path.join(DREAM, "QUEUE-ONLY")
@@ -66,7 +73,7 @@ def allowed_input(relpath):
     base = os.path.basename(r).lower()
     if DAILY_RE.match(r):
         return True
-    if not r.startswith("wiki/") or not base.endswith(".md"):
+    if not r.startswith(WIKI_REL + "/") or not base.endswith(".md"):
         return False
     if base.startswith("_") or base in SKIP_BASENAMES:
         return False

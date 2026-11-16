@@ -11,6 +11,7 @@ import {
   parseFrame,
   problemFingerprint,
   routes,
+  scrubAttached,
   scrubOwnerText,
   scrubProblem,
   scrubProblemText,
@@ -354,5 +355,73 @@ describe('framesFromV8Stack', () => {
     expect(frames).toHaveLength(PROBLEM_LIMITS.stackFrames)
     expect(frames[0]).toEqual({ file: 'src/a.ts', line: 10, col: 5 })
     expect(frames[1]).toEqual({ fn: 'fn', file: 'assets/index-abc.js', line: 1, col: 2345 })
+  })
+})
+
+describe('a report from another install', () => {
+  const theirs = (over: Partial<ProblemT> = {}) =>
+    make({
+      source: 'install',
+      install: 'beta1',
+      kind: 'owner',
+      attached: { what_went_wrong: 'it broke', errors: [] },
+      ...over,
+    })
+  it('needs its install name, and only it may carry one or attached', () => {
+    expect(Problem.safeParse(theirs()).success).toBe(true)
+    expect(Problem.safeParse(theirs({ install: undefined })).success).toBe(false)
+    expect(Problem.safeParse(make({ install: 'beta1' })).success).toBe(false)
+    expect(Problem.safeParse(make({ attached: { what_went_wrong: 'x', errors: [] } })).success).toBe(false)
+    expect(Problem.safeParse(theirs({ install: 'Beta One' })).success).toBe(false)
+  })
+  it('attached is strict and bounded: no unknown key, no more messages or errors than the caps', () => {
+    const a = { what_went_wrong: 'x', errors: [] }
+    expect(Problem.safeParse(theirs({ attached: { ...a, screenshot_b64: 'x' } as never })).success).toBe(false)
+    expect(
+      Problem.safeParse(theirs({ attached: { ...a, errors: Array(PROBLEM_LIMITS.errors + 1).fill('e') } })).success,
+    ).toBe(false)
+    expect(
+      Problem.safeParse(
+        theirs({
+          attached: { ...a, messages: Array(PROBLEM_LIMITS.attachedMessages + 1).fill({ role: 'you', text: 'm' }) },
+        }),
+      ).success,
+    ).toBe(false)
+  })
+  it('scrubbing keeps her sentences, takes out tokens and named secrets, and fits the frame budget', () => {
+    const key = `sk-${'A1b2C3d4'.repeat(6)}`
+    const out = scrubAttached({
+      what_went_wrong: `I pasted "my key" ${key} and password=hunter2 and it broke`,
+      errors: [`Error: bad input "${CANARY}"`],
+      logs: `Bearer ${key}`,
+      messages: [{ role: 'you', text: `client_secret: ${key}` }],
+    })
+    const text = JSON.stringify(out)
+    expect(text).not.toContain(key)
+    expect(text).not.toContain('hunter2')
+    expect(out.errors[0]).not.toContain(CANARY) // an error line loses its quoted input, as every error does
+    expect(out.what_went_wrong).toContain('"my key"') // her own words keep their quotes
+    // wide characters: the log and then the messages go before the frame budget is passed
+    const wide = '\u{1F600}'.repeat(PROBLEM_LIMITS.logChars / 2)
+    const big = scrubAttached({
+      what_went_wrong: 'x',
+      errors: [],
+      logs: wide,
+      messages: Array(5).fill({ role: 'you', text: '一'.repeat(PROBLEM_LIMITS.attachedMessageChars) }),
+    })
+    expect(new TextEncoder().encode(JSON.stringify(big)).length).toBeLessThanOrEqual(PROBLEM_LIMITS.attachedBytes)
+    expect(big.logs).toBeUndefined()
+    expect(Problem.safeParse(theirs({ attached: big })).success).toBe(true)
+    // and the problem says something was cut
+    const fat = theirs({
+      attached: {
+        what_went_wrong: 'x',
+        errors: [],
+        logs: wide,
+        messages: Array(5).fill({ role: 'you', text: '\u4e00'.repeat(PROBLEM_LIMITS.attachedMessageChars) }),
+      },
+    })
+    expect(scrubProblem(fat).truncated).toBe(true)
+    expect(scrubProblem(theirs()).truncated).toBe(false)
   })
 })

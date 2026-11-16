@@ -1,0 +1,19 @@
+{
+  "id": "wsl-mount-propagation",
+  "title": "Unmounting WSLg mounts before making them private: the unmount propagates through the shared peer group to WSL's own VM",
+  "base": "f6926cc478b803162ab8ee1db26a0447830520c2",
+  "buggy": "3c4d3509",
+  "fix": "953a5d13",
+  "expect": [
+    {
+      "file": ["apps/windows/distro/talos-wsl.sh"],
+      "severity": "high",
+      "must": [
+        ["propagat|peer group|still shared|shared (parent|subtree|peer)|make-private|rprivate"],
+        ["unmount|umount"],
+        ["wslg|X11|parent|child|order|deepest|\\|\\| true|ignor|swallow"]
+      ],
+      "note": "The WSLg mounts and /mnt/wsl sit in a shared peer group that reaches WSL's own VM; unmounting one before every mount (parents first) is private propagates the unmount there and breaks every distro on the PC."
+    }
+  ]
+}

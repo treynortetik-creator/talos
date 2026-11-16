@@ -1,7 +1,9 @@
 import CryptoKit
 import Foundation
+import Security
 import Testing
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 /// The seal on `confirmed_launch`: an HMAC with a key that is not in desktop.json. Pure: the in-memory store; the real Keychain has its own
 /// opt-in suite (KeychainLaunchTrustTests).
@@ -163,7 +165,7 @@ struct LaunchTrustTests {
   }
 
   @Test func theMigrationRunsAgainWhenTheVersionIsResetAndLoadSavesOnlyWhenItRan() throws {
-    let dir = NSTemporaryDirectory() + "talos-trust-\(UUID().uuidString.prefix(8))"
+    let dir = TestTemp.base + "talos-trust-\(UUID().uuidString.prefix(8))"
     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: dir) }
     let path = dir + "/desktop.json"
@@ -214,7 +216,8 @@ struct LaunchTrustTests {
 
 /// The real Keychain, opt-in: `TALOS_KEYCHAIN_TESTS=1 swift test --filter KeychainLaunchTrustTests`. Only a throwaway item under a service name this
 /// test makes up is touched (and deleted); prompts are switched off, so a read the Keychain would ask about fails instead.
-@Suite("Launch trust: the real Keychain", .enabled(if: ProcessInfo.processInfo.environment["TALOS_KEYCHAIN_TESTS"] == "1"))
+@Suite(
+  "Launch trust: the real Keychain", .enabled(if: ProcessInfo.processInfo.environment["TALOS_KEYCHAIN_TESTS"] == "1"), .keychainPromptsOff)
 struct KeychainLaunchTrustTests {
   @Test func aKeyIsMadeOnTheOwnersConfirmAndSealsAndVerifies() {
     let store = KeychainLaunchTrust(service: "com.talos.test.launch-seal.\(UUID().uuidString.lowercased())", account: "test")
@@ -226,5 +229,144 @@ struct KeychainLaunchTrustTests {
     #expect(store.mac("m", createKey: false) == mac, "the same key the second time")
     #expect(mac.map { store.verify("m", mac: $0) } == true)
     #expect(mac.map { store.verify("other", mac: $0) } == false)
+  }
+}
+
+/// A program running as the owner against the seal's key, in a throwaway keychain made here (never the login keychain): Apple's `security`
+/// tool rewrites the key item's secret with no prompt and keeps the item's access list, so the Talos store then reads a key that program
+/// knows. Nothing in a file-based keychain tells the two apart (the access list, creator and label are all the program's to set), and the
+/// data-protection keychain needs an entitlement this app's signing (ad hoc, or the local self-signed identity) cannot carry.
+@Suite("Launch trust: a key swapped by another program", .keychainPromptsOff)
+struct LaunchTrustKeySwapTests {
+  private let parts = ["folder": "aaaaaaaaaaaaaaaa", "program": "bbbbbbbbbbbbbbbb", "flags": "cccccccccccccccc", "env": "dddddddddddddddd"]
+
+  @Test func aKeyRewrittenByTheSecurityToolLetsThatProgramSealAChangedLaunch() throws {
+    let k = try ThrowawayKeychain.make("swap")
+    defer { k.remove() }
+    let kc = k.keychain
+    let service = "com.talos.test.launch-seal.\(UUID().uuidString.lowercased())"
+    let store = KeychainLaunchTrust(service: service, account: "test", keychain: kc)
+    var c = DesktopConfig.defaults
+    #expect(LaunchSeal.confirm(&c, fingerprint: "f1", parts: parts, trust: store), "the owner's confirm seals with a key the app made")
+    #expect(LaunchSeal.isConfirmed(c, fingerprint: "f1", parts: parts, trust: store))
+
+    let known = Data((0..<32).map { UInt8($0) })
+    let hex = known.map { String(format: "%02x", $0) }.joined()
+    let rewrote = try k.security(["add-generic-password", "-U", "-s", service, "-a", "test", "-X", hex])
+    try #require(rewrote == 0, "the security tool rewrote the item")
+    #expect(!LaunchSeal.isConfirmed(c, fingerprint: "f1", parts: parts, trust: store), "the owner's own seal no longer verifies")
+
+    var forged = c
+    forged.confirmedLaunch = "f2"
+    forged.confirmedLaunchMac = LaunchSeal.hmac(LaunchSeal.message(fingerprint: "f2", parts: parts), key: SymmetricKey(data: known))
+    // Open: closing this needs the data-protection keychain with an access group, so a build signed by an Apple developer team.
+    withKnownIssue("a program running as the owner can rewrite the key and seal a changed launch") {
+      #expect(!LaunchSeal.isConfirmed(forged, fingerprint: "f2", parts: parts, trust: store), "a launch sealed by the other program is not confirmed")
+    }
+  }
+}
+
+/// After the app's signer changes (a local build, then the notarized one), the item the old signer made exists and this build may not
+/// read it. Played in a throwaway keychain: the old signer's item is made by Apple's `security` tool with an empty list of trusted apps
+/// (`-T ""`), so this process (any signer) cannot read it with prompts off, exactly as a build signed by someone else cannot.
+@Suite("Launch trust: another signer's key", .serialized, .keychainPromptsOff)
+struct LaunchTrustOtherSignerTests {
+  static func otherSignersItem(service: String, account: String, keychain k: ThrowawayKeychain) throws {
+    let made = try k.security(["add-generic-password", "-s", service, "-a", account, "-T", "", "-X", String(repeating: "ab", count: 32)])
+    try #require(made == 0, "the other signer's item was made")
+  }
+
+  @Test func aNewSignerKeepsItsOwnKeyAndLeavesTheOldOneAlone() throws {
+    let k = try ThrowawayKeychain.make("seal")
+    defer { k.remove() }
+    let kc = k.keychain
+    let service = "com.talos.test.launch-seal.\(UUID().uuidString.lowercased())"
+    try Self.otherSignersItem(service: service, account: "test", keychain: k)
+    let old = KeychainItem(service: service, account: "test", keychain: kc)
+    let (_, oldStatus) = old.read()
+    try #require(oldStatus != errSecSuccess && oldStatus != errSecItemNotFound, "the old signer's item is there and unreadable (\(oldStatus))")
+
+    // the new signer: the owner's confirm seals with a key of its own, and every later start of the same signer verifies it
+    let store = KeychainLaunchTrust(service: service, account: "test", keychain: kc, signer: "1111111111111111")
+    var c = DesktopConfig.defaults
+    let parts = ["folder": "aaaaaaaaaaaaaaaa"]
+    #expect(LaunchSeal.confirm(&c, fingerprint: "f1", parts: parts, trust: store), "the confirm seals, with no prompt")
+    let nextStart = KeychainLaunchTrust(service: service, account: "test", keychain: kc, signer: "1111111111111111")
+    #expect(LaunchSeal.isConfirmed(c, fingerprint: "f1", parts: parts, trust: nextStart), "the next start reads the same key: no card again")
+    #expect(KeychainItem(service: service, account: "test.signer-1111111111111111", keychain: kc).read().1 == errSecSuccess)
+    // the old signer's item is untouched (still there, still unreadable here), and another signer does not see this one's key
+    #expect(old.read().1 == oldStatus)
+    let third = KeychainLaunchTrust(service: service, account: "test", keychain: kc, signer: "2222222222222222")
+    #expect(!LaunchSeal.isConfirmed(c, fingerprint: "f1", parts: parts, trust: third))
+    // an ad hoc build (no signer key) makes nothing and verifies nothing: fail closed, as before
+    let adHoc = KeychainLaunchTrust(service: service, account: "test", keychain: kc, signer: nil)
+    #expect(adHoc.mac("m", createKey: true) == nil)
+    #expect(!LaunchSeal.isConfirmed(c, fingerprint: "f1", parts: parts, trust: adHoc))
+  }
+
+  @Test func theScreenListRecordMovesToTheNewSignerToo() throws {
+    let k = try ThrowawayKeychain.make("list")
+    defer { k.remove() }
+    let kc = k.keychain
+    let service = "com.talos.test.screen-list.\(UUID().uuidString.lowercased())"
+    try Self.otherSignersItem(service: service, account: "list", keychain: k)
+    let keys = KeychainListKeyStore(service: service, keychain: kc, signer: "1111111111111111")
+    guard case .success(let made) = keys.load(account: "list") else {
+      Issue.record("the new signer could not make its own record")
+      return
+    }
+    var next = made
+    next.generation = 7
+    guard case .success = keys.save(next, account: "list") else {
+      Issue.record("the new signer could not save its record")
+      return
+    }
+    guard case .success(let again) = KeychainListKeyStore(service: service, keychain: kc, signer: "1111111111111111").load(account: "list")
+    else {
+      Issue.record("the next start could not read the record")
+      return
+    }
+    #expect(again.generation == 7)
+    if case .success = KeychainListKeyStore(service: service, keychain: kc, signer: nil).load(account: "list") {
+      Issue.record("an ad hoc build must not read or make a record past an unreadable one")
+    }
+  }
+
+  @Test func theSignerKeyIsStableAndNoneForAdHoc() {
+    let devId = #"identifier "app.talos.desktop" and anchor apple generic and certificate leaf[subject.OU] = "ABCDE12345""#
+    #expect(SignerKey.key(requirement: devId) == SignerKey.key(requirement: devId))
+    #expect(SignerKey.key(requirement: devId)?.count == 16)
+    #expect(SignerKey.key(requirement: devId + " ") != SignerKey.key(requirement: devId))
+    #expect(SignerKey.key(requirement: #"cdhash H"0123456789abcdef0123456789abcdef01234567""#) == nil)
+  }
+}
+
+@Suite("Keychain: prompts stay off while any call is inside")
+struct KeychainQuietTests {
+  /// Two calls overlapping: the second one ending must not turn prompts back on while the first is still inside (the hang this fixes).
+  @Test func anOverlappingCallEndingKeepsPromptsOffForTheOther() {
+    KeychainQuiet.enter()
+    #expect(KeychainQuiet.promptsOff)
+    KeychainQuiet.enter()
+    KeychainQuiet.leave()
+    #expect(KeychainQuiet.promptsOff, "the inner call ended; the outer one is still inside")
+    KeychainQuiet.leave()
+  }
+
+  @Test func manyAtOnceAlwaysSeePromptsOff() async {
+    let seen = await withTaskGroup(of: Bool.self) { g in
+      for _ in 0..<64 {
+        g.addTask {
+          KeychainQuiet.enter()
+          defer { KeychainQuiet.leave() }
+          for _ in 0..<50 where !KeychainQuiet.promptsOff { return false }
+          return true
+        }
+      }
+      var all = true
+      for await ok in g { all = all && ok }
+      return all
+    }
+    #expect(seen)
   }
 }

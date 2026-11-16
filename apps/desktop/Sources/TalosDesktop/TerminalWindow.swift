@@ -252,7 +252,7 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
     }
     if viewer?.process.running == true { note?.isHidden = true; return }
     let live = model.status.childPid != nil
-    switch TerminalPane.choose(configured: model.configured, hasLiveChild: live, sessionExists: live || model.agentSessionExists()) {
+    switch TerminalPane.choose(configured: model.configured, hasLiveChild: live, sessionExists: live || cachedAgentSessionExists()) {
     case .note(let text):
       note?.isHidden = false
       note?.stringValue = text

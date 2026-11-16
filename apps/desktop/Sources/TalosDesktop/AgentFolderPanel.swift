@@ -52,6 +52,16 @@ struct AgentFolderPanel: View {
       self.note(note).foregroundStyle(.green)
       self.note(text)
       self.note("To apply the update, run this in Terminal without --dry-run:\n\(command.replacingOccurrences(of: " --dry-run", with: ""))")
+    case .confirmClone(let clone, _):
+      note(
+        "Talos will run this clone's install.sh and start your agent with its Talos mod:\n\(clone)\n"
+          + "It was recorded by apps/desktop/scripts/install.sh, and this Talos hasn't used it before. Use it only if it is the clone you installed Talos from."
+      )
+      .accessibilityIdentifier("agent-folder-clone-card")
+      HStack {
+        Button("Use this clone") { Task { await flow.useClone() } }
+        Button("Cancel") { flow.cancel() }
+      }
     case .done(let m): note(m).foregroundStyle(.green)
     case .failed(let m): note(m).foregroundStyle(.red)
     }

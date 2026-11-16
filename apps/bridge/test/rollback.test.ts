@@ -27,6 +27,10 @@ import { DEFAULT_ASK_RULES, planAskRules } from '../src/permission/ask-rules.ts'
 import { lostFields } from '../src/rollback.ts'
 import { REPO_DIR } from '../src/version.ts'
 import { type Harness, startHarness, tempHome, waitFor } from './helpers.ts'
+import { durableSqlite } from './sqlite-durable.ts'
+
+// this file damages history.sqlite on purpose and reopens it: SQLite syncs as the product runs (sqlite-test-seam.ts)
+durableSqlite()
 
 const sh = (cwd: string, ...a: string[]) => {
   const r = Bun.spawnSync(['git', '-c', 'user.email=t@e.x', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], {

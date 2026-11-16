@@ -1,9 +1,10 @@
 // Adversarial review tests for PR #5 (not part of the PR). Each test states the behaviour the spec needs.
 import { request } from 'node:http'
 import { bindingFrom, payloadHash, signBridgeHttp, signChallenge, verifyOwnerFrame } from '@talos-app/protocol'
-import { BridgeState, FakeBridge, mkFrame, sleep, waitFor } from '@talos-app/testkit'
+import { BridgeState, FakeBridge, fakeClock, mkFrame, sleep, waitFor } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
+import { HANDSHAKE_MS } from '../../src/core/hub-types.ts'
 import { startTestRelay, type TestRelay } from './harness.ts'
 import { kit } from './helpers.ts'
 
@@ -152,14 +153,37 @@ describe('review: limits before auth', () => {
     expect([1009, 4413]).toContain(code)
   })
 
+  // On the relay's own clock, never a 10 s real wait (that flaked under load): the deadline is armed when the challenge
+  // goes out, nothing closes 1 ms before it, and the close at the deadline is 4408.
   it('a bridge that never answers the challenge is closed 4408 after 10 s', async () => {
-    relay = await startTestRelay()
+    const clock = fakeClock()
+    relay = await startTestRelay({ clock })
     const ws = new WebSocket(`${relay.wsBase}/bridge`)
-    const started = Date.now()
-    const code = await new Promise<number>((resolve) => ws.on('close', (c) => resolve(c)))
-    expect(code).toBe(4408)
-    expect(Date.now() - started).toBeGreaterThanOrEqual(9_500)
-  }, 20_000)
+    let closed: number | undefined
+    const close = new Promise<number>((resolve) =>
+      ws.on('close', (c) => {
+        closed = c
+        resolve(c)
+      }),
+    )
+    await new Promise<void>((resolve) =>
+      ws.on('message', (d) => JSON.parse(d.toString()).type === 'challenge' && resolve()),
+    )
+    // The timer runs inside advance(), so a close it sends is on the wire before this ping: a pong means still open.
+    const roundTrip = () =>
+      Promise.race([
+        close.then((c) => `closed ${c}`),
+        new Promise<string>((resolve) => {
+          ws.once('pong', () => resolve('open'))
+          ws.ping()
+        }),
+      ])
+    clock.advance(HANDSHAKE_MS - 1)
+    expect(await roundTrip()).toBe('open')
+    expect(closed).toBeUndefined()
+    clock.advance(1)
+    expect(await roundTrip()).toBe('closed 4408')
+  })
 })
 
 describe('review: supersede', () => {

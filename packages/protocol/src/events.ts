@@ -3,7 +3,8 @@
 // free text, a path, a token or a card body. The bridge's `emitEvent` refuses a name or a field set that is not registered.
 import { z } from 'zod'
 import { DialogKind } from './dialog-files.ts'
-import { CardId, ThreadId } from './ids.ts'
+import { CardId, DeviceId, ThreadId, Ulid } from './ids.ts'
+import { SETTING_EVENT_KEYS } from './settings-table.ts'
 
 /** The event name for "a thread's folder was chosen" (the bridge emits it when a saved patch changes `session_opts.cwd`). */
 export const THREAD_FOLDER_CHOSEN_EVENT = 'thread.folder_chosen'
@@ -11,8 +12,22 @@ export const THREAD_FOLDER_CHOSEN_EVENT = 'thread.folder_chosen'
 export const DIALOG_CARD_POSTED_EVENT = 'dialog.card_posted'
 export const DIALOG_CARD_ANSWERED_EVENT = 'dialog.card_answered'
 
-/** Who emits it. Only `bridge` events exist; `mac` and `web` wait for a frame to the bridge (phase 4). */
-export const EVENT_EMITTERS = ['bridge', 'mac', 'web'] as const
+/** Thread and setting changes, from whoever made them (see `CONFIG_EVENT_SOURCES`). */
+export const THREAD_CREATED_EVENT = 'thread.created'
+export const THREAD_RENAMED_EVENT = 'thread.renamed'
+export const THREAD_ARCHIVED_EVENT = 'thread.archived'
+export const THREAD_UNARCHIVED_EVENT = 'thread.unarchived'
+export const SETTING_CHANGED_EVENT = 'setting.changed'
+/** Who made a change: the owner (a signed `config.patch`), an agent proposal the owner approved on a card, or one applied directly because the owner asked (agent_asked; agent_trust in older logs). */
+// agent_trust: written by bridges before the settings-on-request change (kept so older logs still read)
+export const CONFIG_EVENT_SOURCES = ['owner', 'agent_card', 'agent_trust', 'agent_asked'] as const
+export type ConfigEventSource = (typeof CONFIG_EVENT_SOURCES)[number]
+
+/** The bug report a paired device sent, as stored by the relay. */
+export const BUG_REPORTED_EVENT = 'bug.reported'
+
+/** Who emits it. `bridge` and `relay` events exist; `mac` and `web` wait for a frame to the bridge (phase 4). */
+export const EVENT_EMITTERS = ['bridge', 'relay', 'mac', 'web'] as const
 export type EventEmitter = (typeof EVENT_EMITTERS)[number]
 /** `live`: something emits it today. `planned`: named, nothing emits it yet. */
 export const EVENT_STATUSES = ['live', 'planned'] as const
@@ -49,6 +64,33 @@ export const EVENTS: readonly EventInfo[] = [
       choice: z.number().int().nonnegative().nullable(),
     }),
     emitter: 'bridge',
+    status: 'live',
+  },
+  // Ids and enums only: a thread's id, never its name or topic; a setting's name from the table, never its value.
+  ...[THREAD_CREATED_EVENT, THREAD_RENAMED_EVENT, THREAD_ARCHIVED_EVENT, THREAD_UNARCHIVED_EVENT].map(
+    (name): EventInfo => ({
+      name,
+      payload: z.strictObject({ thread_id: ThreadId, source: z.enum(CONFIG_EVENT_SOURCES) }),
+      emitter: 'bridge',
+      status: 'live',
+    }),
+  ),
+  {
+    name: SETTING_CHANGED_EVENT,
+    // `thread_id` is set for the per-thread fields (`threads.topic`, ...); the value is never carried
+    payload: z.strictObject({
+      setting: z.enum(SETTING_EVENT_KEYS),
+      source: z.enum(CONFIG_EVENT_SOURCES),
+      thread_id: ThreadId.optional(),
+    }),
+    emitter: 'bridge',
+    status: 'live',
+  },
+  {
+    name: BUG_REPORTED_EVENT,
+    // ids and enums only: never the words, the logs or the picture. `webhook`: whether a webhook call was started for it.
+    payload: z.strictObject({ report_id: Ulid, device_id: DeviceId, webhook: z.enum(['off', 'queued']) }),
+    emitter: 'relay',
     status: 'live',
   },
 ]

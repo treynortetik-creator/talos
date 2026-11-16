@@ -1,6 +1,7 @@
 // Rich notifications on the relay, end to end through the real routes: a phone registers a grant, pushes carry a seal only
 // that phone can open, and a Reply / Approve tapped from a notification is checked, stored once, queued for the Mac,
 // shown to the app, and undone when the Mac refuses it. Real relay, real HTTP/2 fake APNs, testkit bridge and app.
+import { createHash } from 'node:crypto'
 import {
   type ActBodyT,
   type CardT,
@@ -143,6 +144,7 @@ const cardInput = {
 }
 const approveBody = (card: CardT, shown = shownHash(cardNotice(card).text, 'General')): ActBodyT => ({
   a: 'approve',
+  shown_v: '3',
   card_id: card.id,
   payload_hash: card.payload_hash,
   shown,
@@ -567,16 +569,39 @@ describe('Approve from a notification', () => {
     await bridge.expectFrame('native.act', (f) => f.id === frame.id, { direction: 'in' })
   })
 
-  it('the subtitle is part of what was shown: a hash of the body alone or with another thread name is refused', async () => {
+  it('the subtitle and title are part of what was shown, and an older phone hash is refused', async () => {
     const w = await world()
     const grant = await registerGrant(w)
     const bridge = await bridgeFor(w)
     const card = await pendingCard(w, bridge)
-    for (const shown of [shownHash(cardNotice(card).text), shownHash(cardNotice(card).text, 'Payroll')]) {
+    const text = cardNotice(card).text
+    for (const shown of [
+      shownHash(text),
+      shownHash(text, 'Payroll'),
+      shownHash(text, 'General', 'Approve: pay the invoice'),
+      `sha256:${createHash('sha256').update(`talos-shown/v2\n7\nGeneral\n${text}`).digest('hex')}`, // no title: an older phone
+    ]) {
       const res = await sendTap(w, await tapBody(w, grant, approveBody(card, shown)))
       expect(res.status).toBe(409)
       expect(((await res.json()) as { error: string }).error).toBe('card_hash_mismatch')
     }
+    expect(w.r.runtime.store.getCard(card.id)?.state).toBe('pending')
+  })
+
+  it('refuses an approve from an older phone, which signs whatever shown hash the notification data held', async () => {
+    const w = await world()
+    const grant = await registerGrant(w)
+    const bridge = await bridgeFor(w)
+    const card = await pendingCard(w, bridge)
+    const old = {
+      a: 'approve',
+      card_id: card.id,
+      payload_hash: card.payload_hash,
+      shown: shownHash(cardNotice(card).text, 'General'),
+    }
+    const res = await sendTap(w, await tapBody(w, grant, old as never))
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toBe('bad_body')
     expect(w.r.runtime.store.getCard(card.id)?.state).toBe('pending')
   })
 
@@ -590,7 +615,7 @@ describe('Approve from a notification', () => {
     expect(((await lie.json()) as { error: string }).error).toBe('card_hash_mismatch')
     const high = await pendingCard(w, bridge, { risk: 'high', title: 'Pay the invoice' })
     const h = await sendTap(w, await tapBody(w, grant, approveBody(high)))
-    expect(((await h.json()) as { error: string }).error).toBe('stepup_required')
+    expect(((await h.json()) as { error: string }).error).toBe('open_in_app') // approved in the app, never from the lock screen; no passkey since 2026-11-14
     const email = await pendingCard(w, bridge, {
       kind: 'email',
       title: 'Tidy up inbox',
@@ -801,7 +826,7 @@ describe('Approve from a notification', () => {
     const first = await tapBody(w, grant, approveBody(card))
     expect((await sendTap(w, first)).status).toBe(200)
     await bridge.expectFrame('native.act', (f) => f.id === first.id, { direction: 'in' })
-    for (const code of ['stale', 'stepup_required', 'sig_invalid', 'bad_frame']) {
+    for (const code of ['stale', 'open_in_app', 'sig_invalid', 'bad_frame']) {
       bridge.send({ type: 'error', ref: first.id, code, message: 'refused' })
       await waitFor(() => w.r.runtime.store.getCard(card.id)?.state === 'pending', 5000, `rollback after ${code}`)
       await app.expectFrame('card.update', (f) => f.card_id === card.id && f.state === 'pending')

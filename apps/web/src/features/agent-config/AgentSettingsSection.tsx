@@ -3,8 +3,10 @@
 import { type ReactNode, useEffect, useId, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
+import { capital, useHostWords } from '../../lib/hostWords.ts'
 import { Button, Input } from '../../ui/index.ts'
 import type { SettingsSectionProps } from '../contracts.ts'
+import { connectionRefusal, friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
 import { AgentRecover } from './AgentRecover.tsx'
 import { setAgentDraft, useEffectiveAgentDraft } from './draftStore.ts'
 import { type AgentDraft, draftFromConfig, validateDraft } from './patch.ts'
@@ -20,7 +22,7 @@ function zones(): string[] {
   }
 }
 
-export function AgentSettingsSection({ readOnly }: SettingsSectionProps) {
+export function AgentSettingsSection({ readOnly, readOnlyWhy = 'mac' }: SettingsSectionProps) {
   const client = useTalosClient()
   // The draft and the config it started from live in a store outside this component (draftStore.ts), so leaving the
   // screen keeps them. When the config moves under an edit (another section here, another device, the agent), the
@@ -40,8 +42,9 @@ export function AgentSettingsSection({ readOnly }: SettingsSectionProps) {
   const dirty = Object.keys(patch).length > 0
   const browserZone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, [])
   const zoneList = useMemo(zones, [])
+  const words = useHostWords()
 
-  if (!config || !draft) return <p className="p-4 text-text-2">Waiting for your Mac to share its settings…</p>
+  if (!config || !draft) return <p className="p-4 text-text-2">Waiting for {words.computer} to share its settings…</p>
   const locked = readOnly
   const set = (p: Partial<AgentDraft>) => {
     setMessage(null)
@@ -60,7 +63,10 @@ export function AgentSettingsSection({ readOnly }: SettingsSectionProps) {
       setMessage({ tone: 'ok', text: 'Saved.' })
       setAgentDraft(null, null) // re-seeded from the new config by the effect above
     } catch (e) {
-      if (e instanceof TalosClientError && e.code === 'config_conflict') {
+      const conn = connectionRefusal(e) // the connection first: its sentence is the whole message
+      if (conn) {
+        setMessage({ tone: 'error', text: conn })
+      } else if (e instanceof TalosClientError && e.code === 'config_conflict') {
         // Nothing is thrown away: the edits stay and merge onto the newer config when it arrives.
         setMessage({
           tone: 'error',
@@ -69,7 +75,8 @@ export function AgentSettingsSection({ readOnly }: SettingsSectionProps) {
       } else if (e instanceof TalosClientError && e.code === 'config_field_forbidden') {
         setMessage({ tone: 'error', text: "One of those settings can't be changed from the app." })
       } else if (e instanceof TalosClientError && e.code === 'mac_offline') {
-        setMessage({ tone: 'error', text: "Your Mac is offline. Try again when it's back." })
+        // the relay took it but the Mac has not confirmed: its own words, never "offline" (the link may be what dropped)
+        setMessage({ tone: 'error', text: friendlyPatchError(e) })
       } else {
         setMessage({ tone: 'error', text: "Couldn't save. Nothing was changed." })
       }
@@ -81,9 +88,9 @@ export function AgentSettingsSection({ readOnly }: SettingsSectionProps) {
   return (
     <section aria-label="Agent settings" className="w-full space-y-6" data-readonly={locked}>
       <h2 className="m-0 font-display text-xl font-semibold">Agent</h2>
-      {locked ? (
+      {locked && readOnlyWhy === 'mac' ? (
         <p role="status" className="rounded-card border border-line p-3 text-sm text-text-2">
-          Your Mac is offline, so these settings are read-only until it's back.
+          {capital(words.computer)} is offline, so these settings are read-only until it's back.
         </p>
       ) : null}
 
@@ -113,11 +120,11 @@ export function AgentSettingsSection({ readOnly }: SettingsSectionProps) {
       </Group>
 
       <Group title="Set up my agent">
-        <SetupAgent macOnline={!locked} />
+        <SetupAgent />
       </Group>
 
       <Group title="If the agent is stuck">
-        <AgentRecover macOnline={!locked} />
+        <AgentRecover />
       </Group>
 
       <Group title="Threads">

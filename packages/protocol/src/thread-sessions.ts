@@ -5,6 +5,9 @@
 import { z } from 'zod'
 import { WorkerDialog } from './dialog-files.ts'
 import { IsoTs, ThreadId } from './ids.ts'
+import { SpecHash } from './spec-hash.ts'
+import { PendingWakes } from './wake-me.ts'
+import { WORKERS_UNREADABLE_KEY } from './workers-unreadable.ts'
 
 // ---- the per-thread switch (OPTION-C 9.1) -----------------------------------------------------------------------
 
@@ -40,7 +43,9 @@ const MCP_NAME = new RegExp(`^[^\\s${MCP_BAD}](?:[^${MCP_BAD}]*[^\\s${MCP_BAD}])
 export const McpAllowList = z
   .array(z.string().max(MCP_NAME_MAX).regex(MCP_NAME))
   .max(MCP_ALLOW_MAX)
-  .refine((l) => new Set(l).size === l.length, { message: 'a server is named twice' })
+  // twice by canonical equivalence (NFC), as the Mac's Set compares names: `café` written precomposed and with a combining
+  // accent is one name named twice, and the list fails closed there. Only the check normalizes: names stay as written
+  .refine((l) => new Set(l.map((n) => n.normalize('NFC'))).size === l.length, { message: 'a server is named twice' })
 export type McpAllowListT = z.infer<typeof McpAllowList>
 /**
  * As read: a list this build cannot read is the EMPTY list (talos-app only), never "no list". Reading junk as "allow
@@ -92,6 +97,7 @@ export const DedicatedConfigStrict = z.object({
       off: z.boolean().default(GOVERNOR_DEFAULTS.off),
     })
     .default(GOVERNOR_DEFAULTS),
+  restart_on_update: z.boolean().default(true),
 })
 
 const percent = (fallback: number) => z.number().min(1).max(100).default(fallback).catch(fallback)
@@ -118,6 +124,11 @@ export const DedicatedConfig = z.object({
   /** Workers in `live`/`busy`/`starting` at once (C8.2 cap). */
   max_live: z.number().int().min(1).max(6).default(DEFAULT_MAX_LIVE).catch(DEFAULT_MAX_LIVE),
   governor: DedicatedGovernor.default(GOVERNOR_DEFAULTS).catch(GOVERNOR_DEFAULTS),
+  /**
+   * After an update, restart each running thread session whose launch spec changed (spec-hash.ts), once per spec, resuming its
+   * conversation and never cutting a turn. A junk value is on (the default), never a silent off.
+   */
+  restart_on_update: z.boolean().default(true).catch(true),
 })
 export type DedicatedConfigT = z.infer<typeof DedicatedConfig>
 
@@ -192,7 +203,7 @@ export function clearArchivedSessions<C extends { threads: readonly ThreadLike[]
 }
 
 /**
- * `Thread.session`, `Thread.session_opts` and `AgentConfig.dedicated` are tolerant when READ: a value this build doesn't
+ * `Thread.session`, `Thread.session_opts`, `Thread.parent_id` and `AgentConfig.dedicated` are tolerant when READ: a value this build doesn't
  * know falls back on its own, field by field, so a newer config can't make `config.sync` or `ready` unparseable, or a hand edit stop
  * the bridge from loading. The Mac must still refuse junk it would WRITE, so `config.patch` runs this strict check on the
  * merged object first. Returns a reason, or null.
@@ -203,6 +214,9 @@ export function sessionFieldsIssue(merged: { threads?: unknown; dedicated?: unkn
   if (!Array.isArray(merged.threads)) return null
   for (const t of merged.threads as Array<Record<string, unknown>>) {
     if (typeof t !== 'object' || t === null) continue
+    // read tolerantly (a value this build can't read is no parent), so a write must refuse it or the thread lands top-level
+    if (t.parent_id !== undefined && !ThreadId.safeParse(t.parent_id).success)
+      return `thread "${String(t.id)}": the parent is not a thread id`
     if (t.session !== undefined && !ThreadSessionMode.safeParse(t.session).success)
       return `thread "${String(t.id)}": not a session mode`
     if (t.session_opts !== undefined && !ThreadSessionOptsStrict.safeParse(t.session_opts).success)
@@ -294,6 +308,15 @@ export const WorkerFailure = z.enum([
 export const WorkerCeilingAxis = z.enum(['permission_mode', 'mcp', 'deny_rules'])
 export type WorkerFailureT = z.infer<typeof WorkerFailure>
 
+/** At most `max` UTF-16 units, never ending on half of a pair. */
+function clipUnits(s: string, max: number): string {
+  if (s.length <= max) return s
+  const cut = s.slice(0, max)
+  const last = cut.charCodeAt(max - 1)
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, max - 1) : cut
+}
+const clipUnits300 = (s: string): string => clipUnits(s, 300)
+
 const SessionUuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
 
 /** The folder, model, effort and MCP list a worker was actually started with (the Mac records it at launch). */
@@ -302,8 +325,96 @@ export const WorkerLaunched = z.object({
   model: WorkerModel.default('inherit'),
   effort: WorkerEffort.optional().catch(undefined),
   mcp_allow: McpAllowRead,
+  /**
+   * The launch spec's hash (spec-hash.ts) when this session was launched; missing on an entry an older supervisor wrote, which
+   * is restarted once on update. A value that is not a hash reads as missing.
+   */
+  spec_hash: SpecHash.optional().catch(undefined),
+  /** The spec hash an update restart was last tried for, written BEFORE the try: never tried twice for the same spec. */
+  update_tried_hash: SpecHash.optional().catch(undefined),
+  /**
+   * The digest of the instructions the start handed a session outside the agent folder (the system prompt, its delimiter token
+   * replaced), so the update check can tell an instruction edit alone from any other change. Absent in the agent folder (that
+   * folder's files are loaded by the session itself and never hashed) and from an older supervisor. A value that is not a hash
+   * reads as missing.
+   */
+  instructions_hash: SpecHash.optional().catch(undefined),
 })
 export type WorkerLaunchedT = z.infer<typeof WorkerLaunched>
+
+/**
+ * Why a session is parked or on its way out (`stopped_why`), as the supervisor recorded it at the park or stop: the idle limit,
+ * the live cap (another thread needed the slot), the owner (a tap, a park), a crash, an interruption (the Mac or the app went
+ * away mid-turn), a restart, or the usage governor. A value this build does not know reads as `unknown` for that entry only.
+ */
+export const WORKER_STOPPED_WHY = ['idle', 'cap', 'owner', 'crash', 'interrupted', 'restart', 'governor'] as const
+export const WorkerStoppedWhy = z.enum([...WORKER_STOPPED_WHY, 'unknown'])
+export type WorkerStoppedWhyT = z.infer<typeof WorkerStoppedWhy>
+/** `needs_you.kind`, in UTF-16 units: what the session waits on the owner for, in the supervisor's words (a dialog's name). */
+export const WORKER_NEEDS_YOU_KIND_MAX = 80
+/**
+ * The `needs_you.kind` values of screens the owner must never be told to "answer" (the Mac's `DialogMatcher.Screen.answerless`):
+ * the computer-use permission dialog (Enter on its first row opens System Settings) and Claude Code's usage-limit screen (one of its
+ * options spends usage credits; the Mac sends it no key at all). Same words as the Mac writes.
+ */
+export const NEEDS_YOU_COMPUTER_USE = 'computer-use permissions'
+export const NEEDS_YOU_USAGE_LIMIT = 'usage limit'
+/**
+ * The `needs_you.kind` names a supervisor writes for the prompts it knows (the Mac's SessionSwitcher.promptName; the Linux
+ * supervisor uses the same words). Only these go to the app: any other kind is a screen's own title, which can name a file,
+ * so `workers.status` says "a prompt" for it and the raw title stays on the Mac for Main's status tool.
+ */
+export const WORKER_NEEDS_YOU_KINDS = [
+  'trust this folder',
+  'approve a project MCP server',
+  'bypass permissions',
+  'sign in',
+  NEEDS_YOU_COMPUTER_USE,
+  NEEDS_YOU_USAGE_LIMIT,
+  'development channels',
+  'an unknown question',
+  'conversation not found',
+] as const
+export const NEEDS_YOU_OTHER_PROMPT = 'a prompt'
+/** Where a step is done on a Mac: its sentences are the Mac's, byte for byte. */
+export const NEEDS_YOU_MAC_PLACE = 'at the Mac'
+const NEEDS_YOU_STEPS: Record<string, (place: string) => string> = {
+  // computer use is Claude Code's on a Mac only (no Linux detector raises it), but the kind is shared: elsewhere its pane is
+  // closed the same way, and there is no System Settings to open
+  [NEEDS_YOU_COMPUTER_USE]: (place) =>
+    place === NEEDS_YOU_MAC_PLACE
+      ? 'press Esc in its pane at the Mac to close it (Esc only: Enter opens System Settings)'
+      : `press Esc in its pane ${place} to close it (Esc only)`,
+  [NEEDS_YOU_USAGE_LIMIT]: (place) =>
+    `press Esc in its pane ${place}, then /model <another model> (Talos presses nothing there: one option spends usage credits)`,
+}
+/**
+ * What the owner does for a `needs_you.kind`, for the kinds that must never read as "answer it"; undefined for any other kind, one
+ * this build does not know included (the caller then says what it always said). `place`: where, in the platform's words ("at the
+ * Mac", the default and the Mac's sentences unchanged; a Linux computer's "on <its name>", or "there" in a sentence that names it).
+ */
+export function needsYouStep(kind: unknown, place: string = NEEDS_YOU_MAC_PLACE): string | undefined {
+  return typeof kind === 'string' && Object.hasOwn(NEEDS_YOU_STEPS, kind)
+    ? (NEEDS_YOU_STEPS[kind] as (place: string) => string)(place)
+    : undefined
+}
+/**
+ * The session waits on the owner (a dialog or a prompt on its pane), since when. The supervisor raises it where it posts
+ * "waiting on ..." and clears it when the prompt goes. `kind` is clipped, never refused; anything else that does not fit reads as none.
+ */
+export const WorkerNeedsYou = z.object({
+  kind: z
+    .string()
+    .min(1)
+    .transform((s) => clipUnits(s, WORKER_NEEDS_YOU_KIND_MAX)),
+  since: IsoTs,
+  /**
+   * The usage-limit screen's reset as an absolute time, worked out by the supervisor that read the screen: the next such
+   * moment after it read it, in the zone the screen names, else the supervisor's own. Absent when it cannot be parsed.
+   */
+  resets_at: IsoTs.optional().catch(undefined),
+})
+export type WorkerNeedsYouT = z.infer<typeof WorkerNeedsYou>
 
 export const WorkerEntry = z.object({
   state: WorkerState,
@@ -322,7 +433,8 @@ export const WorkerEntry = z.object({
       // A code this build does not know (a newer Mac) is `unknown` for THIS entry: it must never make the whole file unreadable,
       // which would take every thread's session down with it.
       code: z.enum([...WorkerFailure.options, 'unknown']).catch('unknown'),
-      detail: z.string().max(300).optional(),
+      // clipped to 300 UTF-16 units, never refused: the Mac clips at 300 Characters, which can be more units (audit O3)
+      detail: z.string().transform(clipUnits300).optional(),
       at: IsoTs,
       /** With `mode_escalation_denied`. An axis this build does not know is dropped, never the file. */
       axis: WorkerCeilingAxis.optional().catch(undefined),
@@ -335,6 +447,16 @@ export const WorkerEntry = z.object({
   dialog: WorkerDialog.optional().catch(undefined),
   /** What the running session was started with. The Mac writes it; the bridge only tolerates it. A value that does not fit reads as none. */
   launched: WorkerLaunched.optional().catch(undefined),
+  /** The session id a message was last typed into, or the id last retired. The Mac writes and reads it (whether `session_id` ever had a turn); the bridge only tolerates it. */
+  turn_session: z.string().max(64).optional().catch(undefined),
+  // The three below are optional and added late (status that tells the truth): an older reader strips them, and a value this
+  // build cannot read is none for this entry only, never an unreadable file. Null reads as none too.
+  /** What the session waits on the owner for right now, and since when. */
+  needs_you: WorkerNeedsYou.nullish().catch(undefined),
+  /** Why it is parked or stopping; cleared when it starts. */
+  stopped_why: WorkerStoppedWhy.catch('unknown').nullish(),
+  /** When the turn now running began (a message typed into it); cleared when the turn ends. `last_turn_at` is when the last one ended. */
+  turn_started_at: IsoTs.nullish().catch(undefined),
 })
 export type WorkerEntryT = z.infer<typeof WorkerEntry>
 
@@ -344,7 +466,11 @@ export const WorkersFile = z.object({
     pid: z.number().int().nonnegative(),
     heartbeat_at: IsoTs,
     /** This supervisor can host workers (OC3 and later). The app shows the switch only when it is true. */
-    workers_supported: z.boolean().default(false),
+    workers_supported: z.boolean().default(false).catch(false),
+    /** This Mac app checks a sub-thread's folder is inside its parent's before every start; until it says so, no thread gets a parent. */
+    subthreads_supported: z.boolean().default(false).catch(false),
+    /** This Mac app also starts a dedicated sub-thread in an existing folder outside its parent's; without it that is refused. */
+    subthreads_own_folder: z.boolean().default(false).catch(false),
     /** The pane pid of main's session (diagnostics). */
     main_pane_pid: z.number().int().nonnegative().default(0),
     /** Main's own dialog on its pane right now (the development-channels warning), published here because Main has no thread entry. A value that does not fit reads as none. */
@@ -367,6 +493,43 @@ export function parseWorkersFile(text: string): WorkersFileT | null {
   }
   const res = WorkersFile.safeParse(raw)
   return res.success ? res.data : null
+}
+
+/** workers.json as the hub reads it: every entry it could read, and the threads whose own session it must not count on. */
+export type WorkersReadT = WorkersFileT & { unavailable: string[] }
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/**
+ * Reads `workers.json` for the hub entry by entry (protocol audit O3; the contract is workers-unreadable.ts). An entry of
+ * `threads` this build cannot read, and a thread set aside under `unreadable_threads`, is listed in `unavailable`: that
+ * thread's session is neither "off" nor started on a guess, and every other thread reads as written. The whole file is
+ * `null` (the supervisor reads as down) only where WORKERS_FILE_REFUSED_WHEN says, or when `supervisor` cannot be read.
+ * A writer reads with parseWorkersFile instead, which stays all-or-nothing so a save never drops an entry it could not read.
+ */
+export function readWorkersFile(text: string): WorkersReadT | null {
+  let raw: unknown
+  try {
+    raw = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (!isPlainObject(raw) || raw.v !== 1 || !isPlainObject(raw.threads)) return null
+  const aside = raw[WORKERS_UNREADABLE_KEY]
+  if (aside !== undefined && !isPlainObject(aside)) return null
+  const head = WorkersFile.safeParse({ ...raw, threads: {} })
+  if (!head.success) return null
+  const threads: Record<string, WorkerEntryT> = {}
+  const unavailable = new Set<string>()
+  for (const [id, e] of Object.entries(raw.threads)) {
+    if (!ThreadId.safeParse(id).success) continue // not a thread: nothing can route to it
+    const r = WorkerEntry.safeParse(e)
+    if (r.success) threads[id] = r.data
+    else unavailable.add(id)
+  }
+  for (const id of Object.keys(aside ?? {})) if (ThreadId.safeParse(id).success) unavailable.add(id) // `K#` is not an id
+  return { ...head.data, threads, unavailable: [...unavailable] }
 }
 
 /** Is the supervisor alive by its heartbeat? A future timestamp (clock skew) older than the window counts as fresh. */
@@ -394,6 +557,17 @@ export const WakeFile = z
     /** Why the worker is woken: an owner message, a card action for a card it raised, or a control. */
     reason: z.enum(['message', 'card_action', 'control', 'governor']).default('message'),
     action: z.enum(['pointer', 'park', 'restart', 'fresh', 'resume']).default('pointer'),
+    /**
+     * Who asked for a control: the owner's button or the main session's `thread_session` tool. For the log only; nothing acts
+     * on it. Optional and added late: a supervisor that predates it ignores the key (zod strips unknown keys; the Mac's
+     * Decodable reads named keys only), and a value this build does not know reads as none, never a dropped wake.
+     */
+    by: z.enum(['owner', 'main']).optional().catch(undefined),
+    /**
+     * Ignored. An early build of the reader-side checks numbered wakes; nothing writes or reads it now (wake-decision.ts says why).
+     * Still tolerated so a file written then parses: a value that is not a positive safe integer reads as none, never a failed wake.
+     */
+    counter: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().catch(undefined),
   })
   .refine((w) => w.action !== 'pointer' || w.message_ids.length > 0, {
     path: ['message_ids'],
@@ -417,6 +591,13 @@ export const WORKER_FILES = {
   // Main's own answer (the development-channels card): apart from a worker's, which can sit on the same default thread
   mainDialogAnswer: 'main-dialog-answer.json',
   dialogResult: 'dialog-result.json',
+  // the Mac's own record of the signed taps it has acted on, so a copy of one is refused after a relaunch too
+  dialogProofsUsed: 'dialog-proofs-used.json',
+  mainDialogProofsUsed: 'main-dialog-proofs-used.json',
+  // the bridge's record of the capped wakes it wrote (writeWake), for its up-front check when the reader keeps no state. 0600
+  wakeWritten: 'wake-written.json',
+  // the reader's own record (wake-decision.ts WakeState): the capped wakes it carried out. 0600
+  wakeState: 'wake-state.json',
 } as const
 export const WORKER_NONCE_ENV = 'TALOS_APP_WORKER_NONCE'
 
@@ -463,9 +644,16 @@ export const HubMod = z.strictObject({
 })
 /**
  * The tools a thread session cannot run in its own process because they need main's live bridge (the Schedules service and
- * its Chronos): it asks the hub, and the hub answers as the thread the connection proved, never one the request names.
+ * its Chronos, and the settings cards `config_propose` draws): it asks the hub, and the hub answers as the thread the connection proved, never one the request names.
  */
-export const HUB_RPC_TOOLS = ['schedules_list', 'schedule_propose', 'schedule_run_start', 'schedule_run_done'] as const
+export const HUB_RPC_TOOLS = [
+  'schedules_list',
+  'schedule_propose',
+  'schedule_run_start',
+  'schedule_run_done',
+  'config_propose',
+  'wake_me',
+] as const
 export const HUB_RPC_MAX_TEXT = 100_000
 /** worker → hub: run one of HUB_RPC_TOOLS. `tool` is a plain string so a newer worker's tool is refused as one answer, not dropped. */
 export const HubRpc = z.strictObject({
@@ -494,7 +682,43 @@ export const HubPerm = z.looseObject({
   cwd: z.string().max(1000).optional(),
 })
 export type HubPermT = z.infer<typeof HubPerm>
-export const HubWorkerLine = z.discriminatedUnion('t', [HubHello, HubOut, HubMod, HubRpc, HubPerm])
+/**
+ * hook → hub: the kit's action rules (kit/hooks/action-rules.py, audit item 28). An "ask first" rule's approval is the owner's
+ * signed tap on a card that shows the exact call, never anything a session writes. Proof of WHO is asking is the same as `perm`
+ * (a thread session's nonce and pane pid; none for main). One request per connection, no `hello`.
+ *   `ask_rule`  `approve`: raise (or wait on) the "Allow once" card for this call and wait for the tap.
+ *   `rule_take` the PreToolUse check: take the one-use approval for exactly this call, if the owner gave one, or go ahead for a
+ *               send kind the owner always allows. The kind is never in the line: the bridge decides it from the shipped rules.
+ */
+const HubRuleCall = {
+  id: z.string().min(1).max(64),
+  thread_id: ThreadId.optional(),
+  pid: z.number().int().positive().optional(),
+  nonce: z.string().min(16).max(64).optional(),
+  rule: z.string().min(1).max(80),
+  tool_name: z.string().min(1).max(4096),
+  tool_input: z.unknown().optional(),
+  cwd: z.string().max(1000).optional(),
+}
+export const HubAskRule = z.looseObject({
+  t: z.literal('ask_rule'),
+  ...HubRuleCall,
+  why: z.string().max(300).optional(),
+  /** How long this request waits for the tap; the card itself stays open after it gives up. */
+  wait_ms: z.number().int().min(0).max(3_600_000).optional(),
+})
+export type HubAskRuleT = z.infer<typeof HubAskRule>
+export const HubRuleTake = z.looseObject({ t: z.literal('rule_take'), ...HubRuleCall })
+export type HubRuleTakeT = z.infer<typeof HubRuleTake>
+export const HubWorkerLine = z.discriminatedUnion('t', [
+  HubHello,
+  HubOut,
+  HubMod,
+  HubRpc,
+  HubPerm,
+  HubAskRule,
+  HubRuleTake,
+])
 export type HubWorkerLineT = z.infer<typeof HubWorkerLine>
 
 /** hub → worker. */
@@ -554,6 +778,15 @@ export const WorkerStatusState = z.enum([...WorkerState.options, 'unknown']).cat
 export type WorkerStatusStateT = z.infer<typeof WorkerStatusState>
 export const WorkerStatusFailure = z.enum([...WorkerFailure.options, 'unknown']).catch('unknown')
 
+/** What a session waits on the owner for, as `workers.status` carries it: a known prompt name or "a prompt", since when. */
+export const StatusNeedsYou = z.object({
+  kind: z.string().min(1).max(WORKER_NEEDS_YOU_KIND_MAX),
+  since: IsoTs,
+  step: z.string().min(1).max(300).optional().catch(undefined),
+  resets_at: IsoTs.optional().catch(undefined),
+})
+export type StatusNeedsYouT = z.infer<typeof StatusNeedsYou>
+
 export const WorkerStatusItem = z.object({
   thread_id: ThreadId,
   state: WorkerStatusState,
@@ -562,6 +795,21 @@ export const WorkerStatusItem = z.object({
   last_turn_at: IsoTs.optional().catch(undefined),
   parked_at: IsoTs.optional().catch(undefined),
   error: WorkerStatusFailure.optional(),
+  // Added for the app's status line (what the session is doing, in words). Each is optional and reads as none when it does not
+  // fit, so an older bridge (none sent) and a newer one (a value this build cannot read) never cost the frame. An older page
+  // strips them.
+  /** When the failure was recorded. Its detail stays on the Mac (it can name paths). */
+  error_at: IsoTs.optional().catch(undefined),
+  /** What the session waits on the owner for: `kind` one of WORKER_NEEDS_YOU_KINDS, else "a prompt"; `step` what to do at the Mac when "answer it" is wrong. */
+  needs_you: StatusNeedsYou.optional().catch(undefined),
+  stopped_why: WorkerStoppedWhy.optional().catch(undefined),
+  started_at: IsoTs.optional().catch(undefined),
+  turn_started_at: IsoTs.optional().catch(undefined),
+  /** Crash restarts in the hour before `at`. */
+  restarts_1h: z.number().int().min(0).max(10).optional().catch(undefined),
+  /** The session's own pending `wake_me` timers, soonest first (at most WAKE_STATUS_MAX), and how many there are in all. */
+  wakes: PendingWakes.optional().catch(undefined),
+  wakes_total: z.number().int().min(0).max(10_000).optional().catch(undefined),
 })
 export type WorkerStatusItemT = z.infer<typeof WorkerStatusItem>
 
@@ -573,6 +821,14 @@ export const WorkersStatus = z.object({
   threads: z.array(WorkerStatusItem).max(40),
   governor: z.object({ state: GovernorState, resets_at: IsoTs.optional().catch(undefined) }),
   at: IsoTs,
+  /**
+   * Main's own session sits on a prompt at the Mac (main-restart-check.json `needs_you`, while that file is fresh). Optional:
+   * an older bridge sends none, and one this build cannot read is none.
+   */
+  main_needs_you: StatusNeedsYou.optional().catch(undefined),
+  /** Main's own pending `wake_me` timers (and those of a thread that has gone back to main), like `threads[].wakes`. */
+  main_wakes: PendingWakes.optional().catch(undefined),
+  main_wakes_total: z.number().int().min(0).max(10_000).optional().catch(undefined),
 })
 export type WorkersStatusT = z.infer<typeof WorkersStatus>
 

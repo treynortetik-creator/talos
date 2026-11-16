@@ -17,7 +17,14 @@ import {
 import { type Harness, makeHarness } from './helpers.ts'
 
 // Some sandboxes ship a Chromium whose revision differs from the one this Playwright pins.
-if (process.env.TALOS_CHROMIUM) test.use({ launchOptions: { executablePath: process.env.TALOS_CHROMIUM } })
+// It replaces the project's launchOptions whole, so it carries the flag ci-local adds (playwright.config.ts).
+if (process.env.TALOS_CHROMIUM)
+  test.use({
+    launchOptions: {
+      executablePath: process.env.TALOS_CHROMIUM,
+      args: process.env.CI_FLAKE_FILE ? ['--no-proxy-server'] : [],
+    },
+  })
 
 const HARNESS = `<!doctype html><meta charset=utf-8><title>harness</title><script>
 const call = async (path, body, method = 'POST') => {
@@ -137,10 +144,10 @@ test('enroll with a valid code sets the exact cookie, binds the device key, and 
   expect(cookies).toHaveLength(1)
   expect(cookies[0]).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Strict', path: '/' })
   expect(cookies[0]?.value).toMatch(/^[A-Za-z0-9_-]{43}$/)
-  expect((cookies[0]?.expires ?? 0) - Date.now() / 1000).toBeGreaterThan(29 * 86400)
+  expect((cookies[0]?.expires ?? 0) - Date.now() / 1000).toBeGreaterThan(89 * 86400) // 90 days since 2026-11-14
   await expect.poll(() => seen.length).toBe(1)
   expect(seen[0]).toMatch(
-    /^__Host-talos_s=[A-Za-z0-9_-]{43}; Max-Age=2592000; Path=\/; Secure; HttpOnly; SameSite=Strict$/,
+    /^__Host-talos_s=[A-Za-z0-9_-]{43}; Max-Age=7776000; Path=\/; Secure; HttpOnly; SameSite=Strict$/,
   )
 
   // half 2: the device key, with no WebAuthn registration involved
@@ -265,7 +272,10 @@ test('a second storage jar signs in with the same passkey and binds its own devi
   await b.close()
 })
 
-test('sign-in rotates the session and idle for more than 14 days is 401', async ({ browser, playwright }) => {
+test('sign-in rotates the session and idle for more than 90 days is 401 (not at 89)', async ({
+  browser,
+  playwright,
+}) => {
   const ctx = await browser.newContext()
   const { page } = await jar(ctx, relay, '198.51.100.7')
   const c = await newCode(relay)
@@ -287,14 +297,19 @@ test('sign-in rotates the session and idle for more than 14 days is 401', async 
   expect((await withCookie(first)).status()).toBe(401)
   expect((await withCookie(second)).status()).toBe(200)
 
-  relay.h.fake.clock.advance(14 * 86400_000 + 1000)
+  // sessions last 90 days unused since 2026-11-14 (no step-up; SESSION_IDLE_DAYS): still in at 89 days, out after 90
+  relay.h.fake.clock.advance(89 * 86400_000)
+  expect((await withCookie(second)).status()).toBe(200)
+  relay.h.fake.clock.advance(90 * 86400_000 + 1000)
   expect((await withCookie(second)).status()).toBe(401)
   expect((await call(page, '/api/me', undefined, 'GET')).status).toBe(401)
   await raw.dispose()
   await ctx.close()
 })
 
-test('a passkey step-up mints a single-use token bound to its purpose', async ({ browser }) => {
+test('no step-up (owner 2026-11-14): revoking a device takes no token, and the step-up routes are gone', async ({
+  browser,
+}) => {
   const ctx = await browser.newContext()
   const { page } = await jar(ctx, relay, '198.51.100.8')
   const c = await newCode(relay)
@@ -302,55 +317,14 @@ test('a passkey step-up mints a single-use token bound to its purpose', async ({
   const d1 = await deviceBody(c.code, c.codeAuth, 'Phone')
   await call(page, '/api/auth/device/verify', d1.body)
   relay.h.state.core.setPinned(d1.key.deviceId, true)
-
-  const run = (purpose: string) =>
-    page.evaluate(
-      (p) =>
-        (window as unknown as { assert(a: string, b: string, e: unknown): Promise<Reply> }).assert(
-          '/api/auth/stepup/options',
-          '/api/auth/stepup/verify',
-          { purpose: p },
-        ),
-      purpose,
-    )
-
-  const wrong = await run('config:work')
-  expect(wrong.status).toBe(200)
-  const wrongToken = (wrong.body as { stepup_token: string }).stepup_token
-  expect((await call(page, `/api/devices/${d1.key.deviceId}/revoke`, { stepup_token: wrongToken })).status).toBe(403)
-
-  const right = await run('device:revoke')
-  const token = (right.body as { stepup_token: string }).stepup_token
-  expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/)
-  expect((await call(page, `/api/devices/${d1.key.deviceId}/revoke`, { stepup_token: token })).status).toBe(204)
+  for (const path of ['/api/auth/stepup/options', '/api/auth/stepup/verify'])
+    expect((await call(page, path, { purpose: 'device:revoke' })).status).toBe(404)
+  // an old app's token is accepted and never read
+  expect(
+    (await call(page, `/api/devices/${d1.key.deviceId}/revoke`, { stepup_token: 'st_from_an_old_app' })).status,
+  ).toBe(204)
   // the only device is gone, so the passkey and the session went with it
-  expect((await call(page, `/api/devices/${d1.key.deviceId}/revoke`, { stepup_token: token })).status).toBe(401)
-  await ctx.close()
-})
-
-test('a step-up challenge for one purpose cannot mint a token for another', async ({ browser }) => {
-  const ctx = await browser.newContext()
-  const { page } = await jar(ctx, relay, '198.51.100.9')
-  const c = await newCode(relay)
-  await page.evaluate((x) => (window as unknown as { register(c: string): Promise<Reply> }).register(x), c.codeAuth)
-  // Step-up is for a pinned device: bind this jar's key and let the "Mac" pin it first.
-  const d = await deviceBody(c.code, c.codeAuth)
-  expect((await call(page, '/api/auth/device/verify', d.body)).status).toBe(202)
-  relay.h.state.core.setPinned(d.key.deviceId, true)
-  const opt = await call(page, '/api/auth/stepup/options', { purpose: 'config:work' })
-  expect(opt.status).toBe(200)
-  const res = await page.evaluate(async (options) => {
-    const cred = await navigator.credentials.get({
-      publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(options as never),
-    })
-    const r = await fetch('/api/auth/stepup/verify', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-talos-csrf': '1' },
-      body: JSON.stringify({ purpose: 'device:revoke', response: (cred as PublicKeyCredential | null)?.toJSON() }),
-    })
-    return r.status
-  }, opt.body)
-  expect(res).toBe(403)
+  expect((await call(page, `/api/devices/${d1.key.deviceId}/revoke`, {})).status).toBe(401)
   await ctx.close()
 })
 

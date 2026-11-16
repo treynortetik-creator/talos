@@ -38,6 +38,9 @@ test.describe('Text size at phone width', () => {
       '/settings/notifications',
       '/settings/agent',
       '/settings/health',
+      '/settings/session',
+      '/threads',
+      '/schedules',
     ]) {
       await page.goto(path)
       await page.waitForLoadState('networkidle')

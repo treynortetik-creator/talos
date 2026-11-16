@@ -60,8 +60,9 @@ struct ResumeRewriteTests {
   @Test func stripsEverySessionFlagThenAppendsOne() {
     let args = ["--a", "--resume", "x", "-r", "y", "--session-id=z", "--continue", "-c", "--fork-session", "--b"]
     #expect(ResumeRewrite.strip(args) == ["--a", "--b"])
-    #expect(ResumeRewrite.apply(args, .resume("id1")) == ["--a", "--b", "--resume", "id1"])
-    #expect(ResumeRewrite.apply(args, .newSession("id2")) == ["--a", "--b", "--session-id", "id2"])
+    let id1 = "11111111-2222-4333-8444-555555555551", id2 = "11111111-2222-4333-8444-555555555552"
+    #expect(ResumeRewrite.apply(args, .resume(id1)) == ["--a", "--b", "--resume=\(id1)"])
+    #expect(ResumeRewrite.apply(args, .newSession(id2)) == ["--a", "--b", "--session-id=\(id2)"])
   }
 
   @Test func aFollowingFlagIsNotAValue() {

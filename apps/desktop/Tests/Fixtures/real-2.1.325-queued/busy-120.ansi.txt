@@ -1,0 +1,40 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.325[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mFable 5.2 · Claude Max  [39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/home/alex/proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[39m
+
+
+[38;5;246m[48;5;237m❯ [38;5;231mRun the shell command: sleep 90. Then reply done.[39m
+
+[49m  [38;5;246mRan [1m2[0m[38;5;246m shell commands [39m
+
+[38;5;231m⏺[39m Foreground sleep is blocked, so it's running in the background. I'll say done when it finishes.
+
+[38;5;246m✻[39m [38;5;246mCooked for 9s · done 7:39 PM · 1 shell still running[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mfirst queued note[39m
+
+[38;5;231m[49m⏺[39m Got it. Sleep's still running, no "done" yet.
+
+[38;5;246m✻[39m [38;5;246mCogitated for 3s · done 7:40 PM · 1 shell still running[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231msecond queued note[39m
+
+[38;5;231m[49m⏺[39m Noted. Still waiting on the damn sleep.
+
+[38;5;246m✻[39m [38;5;246mCogitated for 2s · done 7:40 PM · 1 shell still running[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mWrite a 1500-word story about a lighthouse keeper, as plain prose. Use no tools.[39m
+
+
+
+
+
+
+[38;5;174m[49m✽[39m [38;5;174mPondering… [38;5;246m(2s · [38;5;248mthinking[38;5;246m)[39m
+[38;5;246m  ⎿  Tip: Use Plan Mode to prepare for a complex request before making changes. Press shift+tab twice to enable.[39m
+
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;5;246m❯ [39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246m⏸ manual mode on · [38;5;44m1 shell[38;5;246m · esc to interrupt · ↓ to manage[39m

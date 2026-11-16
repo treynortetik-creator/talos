@@ -1,7 +1,17 @@
-// The usage governor (docs/OPTION-C.md, OPTION-C spec 6.3). Every session draws on one account pool, so main's own
-// reading (the mod's `$.session.usage().rateLimits`, or the status line) covers every worker. No reading = "unknown",
-// which never blocks (minimal friction).
-import type { DedicatedConfigT, SessionStateT } from '@talos-app/protocol'
+// The usage governor (docs/OPTION-C.md, OPTION-C spec 6.3). Every session draws on one account pool, and each session only
+// learns the pool's figures from its own API responses, so the governor reads the NEWEST reading per limit kind across main and
+// every thread session (usage-pool.ts). No reading = "unknown", which never blocks (minimal friction). A reading whose window has
+// reset is no reading, and neither is one older than GOVERNOR_READING_MAX_AGE_MS: that is what a missing reading already does, so a
+// stale high figure cannot hold sessions after a reset and a stale low one cannot stand in for hours. A reading with no time (main's
+// first, taken before the bridge saw it change) is used as before.
+import {
+  type DedicatedConfigT,
+  dedicatedSettings,
+  GOVERNOR_READING_MAX_AGE_MS,
+  newestReadings,
+  type RateLimitT,
+} from '@talos-app/protocol'
+import type { BridgeContext } from '../context.ts'
 
 export type GovernorReading = {
   state: 'ok' | 'paused' | 'park_all' | 'off' | 'unknown'
@@ -11,9 +21,13 @@ export type GovernorReading = {
 const FIVE_HOUR = new Set(['five_hour', '5h', 'five_hour_limit'])
 const WEEKLY = new Set(['seven_day', 'weekly', 'seven_day_opus', 'seven_day_sonnet'])
 
-export function governor(settings: DedicatedConfigT, state: SessionStateT | undefined): GovernorReading {
+export function governor(
+  settings: DedicatedConfigT,
+  state: { rate_limits: readonly RateLimitT[] } | undefined,
+  nowMs: number = Date.now(),
+): GovernorReading {
   if (settings.governor.off) return { state: 'off' }
-  const limits = state?.rate_limits ?? []
+  const limits = newestReadings([state?.rate_limits ?? []], nowMs, { maxAgeMs: GOVERNOR_READING_MAX_AGE_MS })
   const five = limits.filter((l) => FIVE_HOUR.has(l.kind) && l.percent !== undefined)
   const week = limits.filter((l) => WEEKLY.has(l.kind) && l.percent !== undefined)
   if (!five.length && !week.length) return { state: 'unknown' }
@@ -31,6 +45,28 @@ export function governor(settings: DedicatedConfigT, state: SessionStateT | unde
     return r ? { state: 'paused', resets_at: r } : { state: 'paused' }
   }
   return { state: 'ok' }
+}
+
+/**
+ * The governor now, for every path that starts or parks a thread session (routing, the poll's park-all, thread.session.control):
+ * the pooled readings of every session on this Mac, main's only while its mod is live.
+ */
+export function governorNow(ctx: Pick<BridgeContext, 'clock' | 'config' | 'mod' | 'usage'>): GovernorReading {
+  const now = ctx.clock.now()
+  const main = ctx.mod.liveState()
+  const rate_limits = ctx.usage ? ctx.usage.readings(main, now) : (main?.rate_limits ?? [])
+  return governor(dedicatedSettings(ctx.config.config), { rate_limits }, now)
+}
+
+/** governorNow's state for status.json (the Linux supervisor's update queue reads it), or null when it cannot be read. */
+export function governorState(
+  ctx: Pick<BridgeContext, 'clock' | 'config' | 'mod' | 'usage'>,
+): GovernorReading['state'] | null {
+  try {
+    return governorNow(ctx).state
+  } catch {
+    return null
+  }
 }
 
 /**

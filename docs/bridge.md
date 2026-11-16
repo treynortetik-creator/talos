@@ -23,7 +23,7 @@ apps/bridge/scripts/install.sh --agent-dir <agent folder> --relay-url https://<y
   `bun run --cwd <bridge folder> --silent start`, which is what the Mac app reads when `talos-app` is not on its PATH.
 - Safe to run again; `--dry-run` shows what it would do (including which folder the command would go in).
 
-Needs Bun 1.3.11 or newer.
+Needs Bun 1.4.4 or newer.
 
 ## Launch
 
@@ -63,15 +63,20 @@ TALOS_APP_BRIDGE=1 MCP_PROTOCOL_NEGOTIATION=legacy claude <your existing flags> 
 
 ### Live and headless
 
-| Mode     | When                                                                                                                       | What it does                                                                                                                                                                                                                                                                                                                                                               |
-| -------- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Live     | `TALOS_APP_BRIDGE=1`                                                                                                       | Opens `wss://<host>/bridge`, delivers notifications, runs the timers, owns the PID file                                                                                                                                                                                                                                                                                    |
-| Headless | anything else (e.g. scheduled `claude -p`)                                                                                 | No socket, no notifications. `reply`, `attach`, `card` use the signed `POST /bridge/post`; `list_threads` and `read_thread` read local files                                                                                                                                                                                                                               |
-| Worker   | `TALOS_APP_WORKER_THREAD=<id>` (set only by the desktop supervisor for a thread's own session, [OPTION-C.md](OPTION-C.md)) | No relay socket, no `bridge.pid`. Lists only its thread's tools plus `read_inbound` and `handoff` (a RESULT, BLOCK or TASK to the main session, for its own thread only), and posts only to its own thread. Sends through the live bridge's `hub.sock`; with no hub, replies and cards go over `POST /bridge/post`. Exits with an error if `TALOS_APP_BRIDGE=1` is set too |
+| Mode     | When                                                                                                                       | What it does                                                                                                                                                                                                                                                                                                                                                                                       |
+| -------- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Live     | `TALOS_APP_BRIDGE=1`                                                                                                       | Opens `wss://<host>/bridge`, delivers notifications, runs the timers, owns the PID file                                                                                                                                                                                                                                                                                                            |
+| Headless | anything else (e.g. scheduled `claude -p`)                                                                                 | No socket, no notifications. `reply`, `attach`, `card` use the signed `POST /bridge/post`; `list_threads` and `read_thread` read local files                                                                                                                                                                                                                                                       |
+| Worker   | `TALOS_APP_WORKER_THREAD=<id>` (set only by the desktop supervisor for a thread's own session, [OPTION-C.md](OPTION-C.md)) | No relay socket, no `bridge.pid`. Lists only its thread's tools plus `read_inbound`, `handoff` (a RESULT, BLOCK or TASK to the main session, for its own thread only) and `restart_main` (below), and posts only to its own thread. Sends through the live bridge's `hub.sock`; with no hub, replies and cards go over `POST /bridge/post`. Exits with an error if `TALOS_APP_BRIDGE=1` is set too |
 
 A live bridge that is **superseded** (the relay closes it with 4409 because a newer bridge connected with the same key)
-never reconnects. It tells the agent once, then behaves like a headless process until it is restarted. If that happens
-without you starting a second bridge, run `talos-app rotate`.
+tells the agent once and stays a whole process: it receives no app messages, but replies and cards still go over signed
+HTTP, like a bridge whose socket dropped. It stops writing `status.json`, filing problems and raising the no-relay alert,
+and it asks the relay back in as a standby on the usual reconnect backoff (1, 2, 5, 10, 30 s, then every 60 s). The relay
+turns that ask away while the other bridge is connected, so two live bridges never trade the slot. Once the other bridge
+is gone the next ask is accepted, the agent hears that app messages reach it again, and everything above starts again.
+Against a relay that does not list `bridge-standby/1` it stays down, as it used to (a relay rolled back to an older version while a bridge waits can let that one waiting bridge replace the live one once). If this happens without you starting a
+second bridge, run `talos-app rotate`.
 
 Only one live bridge per `$TALOS_APP_HOME`: on start it stops the previous one through `bridge.pid`, but only when `ps`
 shows the same start time and a command containing `apps/bridge/src/server.ts`. It never kills by name.
@@ -102,6 +107,11 @@ shows the same start time and a command containing `apps/bridge/src/server.ts`. 
 | `TALOS_APP_CHRONOS_NOW`         | unset                       | test builds only (`NODE_ENV=test`), passed to Chronos as `CHRONOS_NOW`; any other environment refuses to start                                  |
 | `TALOS_APP_APPS`                | unset                       | `1` = MCP apps on (the three app tools, the app instructions, `app.request` handling). Re-read every 2 s, so `0` takes effect without a restart |
 
+Under `TALOS_INBOX_ROOT` Talos prunes and removes only the thread folders it made (each holds a `.talos-inbox-folder`
+marker file) and never anything else, so the root may be a folder you share with other things. Folders an earlier build
+made in the default `~/.talos-inbox` are given the marker once (a `.talos-inbox-adopted` file records it); in a root you
+set yourself nothing is ever adopted.
+
 Commands run from an argv array, never through a shell. Example: `TALOS_APP_STT_CMD='["/path/stt.sh","{in}"]'`.
 More examples (use your own programs; these paths are placeholders):
 
@@ -120,21 +130,49 @@ codes, never message text, tokens, codes or cookies.
 
 ## Files in `$TALOS_APP_HOME`
 
-| File                                     | Mode | What                                                                                                                                  |
-| ---------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.json`                            | 0600 | The agent config. The Mac file is authoritative; every write bumps `rev`                                                              |
-| `bridge.key`                             | 0600 | Ed25519 key (`.prev` and `.next` exist around a rotation)                                                                             |
-| `devices.json`                           | 0600 | Pinned devices (id, name, public key, fingerprint). A revoked id keeps a tombstone                                                    |
-| `history.sqlite`                         |      | WAL. Messages, seen ids, the card ledger, the unsent outbox, a few counters                                                           |
-| `media/`, `approved/`                    | 0700 | Downloaded attachments and audio; approved card bindings                                                                              |
-| `enroll-pending/`                        | 0700 | Enrollment codes and the y/N prompt files                                                                                             |
-| `bridge.pid`, `bridge.log`, `bridge.env` |      |                                                                                                                                       |
-| `good-starts.json`                       | 0600 | Versions the live bridge started cleanly from; `talos-app rollback` reads it                                                          |
-| `status.json`                            | 0600 | The live bridge's health, for the Mac menu bar, `talos-app status`, `doctor` and `enroll` (below)                                     |
-| `hub.sock`                               | 0600 | Option C: the live bridge's socket for thread sessions (only while live)                                                              |
-| `workers.json`, `workers/<thread>/`      | 0600 | Option C: written by the desktop supervisor (`workers.json`, `nonce`) and the hub (`wake`, `ready`)                                   |
-| `agent-request.json`                     | 0600 | Phone recovery: `{"v":1,"control_id","action":"restart","ts":<unix ms>}`, written atomically for the Mac app, which reads it and acts |
-| `apps/`                                  | 0700 | MCP apps: `catalog.json`, `resources/`, `captures/`, `pending/`, `claimed/`, `scan.log`, `live-cc-version`                            |
+| File                                     | Mode | What                                                                                                                                                                                          |
+| ---------------------------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.json`                            | 0600 | The agent config. The Mac file is authoritative; every write bumps `rev`                                                                                                                      |
+| `bridge.key`                             | 0600 | Ed25519 key (`.prev` and `.next` exist around a rotation)                                                                                                                                     |
+| `devices.json`                           | 0600 | Pinned devices (id, name, public key, fingerprint). A revoked id keeps a tombstone                                                                                                            |
+| `history.sqlite`                         |      | WAL. Messages, seen ids, the card ledger, the unsent outbox, a few counters                                                                                                                   |
+| `media/`, `approved/`                    | 0700 | Downloaded attachments and audio; approved card bindings                                                                                                                                      |
+| `enroll-pending/`                        | 0700 | Enrollment codes and the y/N prompt files                                                                                                                                                     |
+| `bridge.pid`, `bridge.log`, `bridge.env` |      |                                                                                                                                                                                               |
+| `good-starts.json`                       | 0600 | Versions the live bridge started cleanly from; `talos-app rollback` reads it                                                                                                                  |
+| `status.json`                            | 0600 | The live bridge's health, for the Mac menu bar, `talos-app status`, `doctor` and `enroll` (below)                                                                                             |
+| `relay-features.json`                    | 0600 | The relay's last `ready.features` and its URL (empty after a 4401: the next start sends the safe 20 first). None, or a bad or foreign one: the whole list (src/relay-features-memo.ts)        |
+| `run/hub.sock`                           | 0600 | Option C: the live bridge's socket for thread sessions (only while live; `run/` is 0700, apart from home)                                                                                     |
+| `workers.json`, `workers/<thread>/`      | 0600 | Option C: written by the desktop supervisor (`workers.json`, `nonce`) and the hub (`wake`, `ready`)                                                                                           |
+| `agent-request.json`                     | 0600 | Phone recovery: `{"v":1,"control_id","action":"restart","ts":<unix ms>,"proof"?}`, written atomically for the Mac app, which reads it and acts (the phone's Restart agent, or `restart_main`) |
+| `main-restart-check.json`                | 0600 | Written by the Mac app, read by `restart_main`: would Main come back after a restart (contract below)                                                                                         |
+| `apps/`                                  | 0700 | MCP apps: `catalog.json`, `resources/`, `captures/`, `pending/`, `claimed/`, `scan.log`, `live-cc-version`                                                                                    |
+
+**How `history.sqlite` and the memory index reach the disk.** Both run WAL with `synchronous = FULL`, `fullfsync = ON` and
+`checkpoint_fullfsync = ON`, set by name at every open that can write (`src/sqlite-sync.ts`), on every platform. SQLite's own
+default is not used because it differs: Bun's bundled SQLite on Linux defaults to FULL, but the system SQLite Bun uses on macOS
+defaults to NORMAL with `fullfsync` off, where a power cut or OS crash can lose the last commits. `history.sqlite` holds the
+outbox, so such a loss is a reply the bridge had queued that is never sent. On macOS only `F_FULLFSYNC` gets a write past the
+drive's own cache, which is what `fullfsync` turns on; other platforms ignore that setting. The cost, measured on a Mac
+(2026-11-13): one 600-byte insert per commit went from about 0.01 ms (the macOS default) to between 0.3 ms (the average of
+10,000 commits in a row) and 1.2 ms (the median of 300 timed one by one). So the bulk rebuilds commit in batches: the search
+rebuild 500 rows per pass, the memory index 100 notes per commit (a 10,000-note build about 1 s, against about 4.8 s one note
+per commit). A few small loops still commit per row: settling claims once per stopped thread, the undo-point prune, at most 20
+search-file marks per tick, and the card-row backfill at start. The bridge's own
+tests lower `synchronous` to NORMAL for both files (`src/sqlite-test-seam.ts`, set only by `test/preload.ts`, after the
+product value): on a Linux builder whose home is on btrfs (2 cores) the per-commit syncs dominated, with one 8000-row search
+rebuild beside a live writer taking about 22 s on btrfs and 0.2 s on tmpfs, and the two-process reindex test about 122 s at
+FULL and 32 s at NORMAL. `test/sqlite-test-seam.test.ts` asserts the product value and the test value, and that every
+`new Database(` under `src/` that can write sets it.
+
+REVIEW (Mac and Linux): at FULL on btrfs the starvation can run the other way. A bulk writer can starve the reindex: in one run
+a single reconcile pass took about 10 s and `rebuildAll` returned `dirty`. The two-process test runs at NORMAL, so it does not
+exercise that case.
+
+REVIEW (search reindex yield): the rebuild waits a fixed 120 ms (`REINDEX_YIELD_MS`) between passes. That is longer than
+Bun's SQLite busy-poll backoff (about 100 ms), so a waiting writer gets a try each time. The pause cannot help when a single pass
+outlasts the writer's 5 s busy timeout. Possible hardening, not done: pause for max(120 ms, the last pass's length), capped at 1 s,
+and cap reconcile's row loop at about 250 ms per pass.
 
 The live bridge checks `history.sqlite` before it opens it. It reads the whole file through the OS first; a read error there
 (EIO, no permission) leaves the file alone and the bridge refuses to start. Then one whole-file `quick_check` runs. If it
@@ -150,16 +188,89 @@ second time. Owner controls do not repeat: the reset time (`history_reset_at`) i
 `control_stale` and run by nothing; the note says so (`docs/SECURITY.md`, replay protection). A file that is busy, locked, fails with an
 I/O error or cannot be opened is left alone and the bridge stops, including when the search drop finds it busy. Headless and thread-session processes never move it.
 
+### Undo to here
+
+Before an owner message's turn the bridge saves an undo point of the folder the turn runs in (`apps/bridge/src/undo`). In a
+git repo it is a commit under `refs/talos/undo/<thread>/<turn>`, built from a temporary index; anywhere else it is a copy.
+"Undo to here" on the message sends a signed `undo.request`; the bridge answers with an undo card listing what comes back and
+which new files may go, and restores only once you approve it. Its state (`ready`, `not_saved`, `too_large`) reaches the app
+on the message's `delivered` receipt and its history rows, only through a relay that says `undo/1`.
+
+Known gaps, by design:
+- The refs are ordinary refs: `git push --mirror` (or a fetch of `refs/*`) carries them, and `git log --all` lists them.
+- A question asked on a voice call gets no point.
+- Ignored files (`.env`) are never restored. Any change to an ignored file during the turn, or more ignored files than a
+  point keeps, means no new file is offered for deletion.
+- New files are offered for deletion only on apfs, btrfs and ext4 (`apps/bridge/src/undo/fs-type.ts`; ext4 probed on
+  WSL2 ext4); on any other file system (WSL's `/mnt/c` is 9p, which keeps no birth times), or one Talos can't name,
+  every new file is left in place and the card says why. The birth-time probe still runs on each. Another file system
+  joins only after a probe run: `bun apps/bridge/scripts/undo-fs-probe.ts <folder>` prints what the bridge reads there.
+- A copy point (a folder outside git) must hold exactly the folder's names; one that lost a name (`A.txt` and `a.txt`
+  on a case-insensitive disk) is not saved.
+- The chat is not rewound: the thread gets one line saying the files were put back.
+
 ### `agent-request.json`
 
 The phone's Restart agent button sends a signed `agent.recover`. The bridge writes this file for the Mac app and the agent is
 never asked. Restoring the last good setup is not a phone action: the Mac cannot tell a restore the phone asked for from one
 the agent asked for (both would arrive as this file, and the agent runs as the same user), so it is done at the Mac, from the
 Talos menu or Terminal. An old app that still sends `restore_last_good` gets a plain refusal ("This needs the Mac now"),
-from the relay and again from the bridge, and no file is written. Signed phone-to-Mac requests are a later package. The contract between writer and reader:
+from the relay and again from the bridge, and no file is written. The contract between writer and reader:
 
-- Content: `{"v":1,"control_id":"<id>","action":"restart","ts":<unix ms>}`. Mode 0600, written atomically
-  (a temporary file, then a rename), so a reader never sees half a file.
+- Content: `{"v":1,"control_id":"<id>","action":"restart","ts":<unix ms>,"proof"?,"by_thread"?,"why"?}`.
+  Mode 0600, written atomically (a temporary file, then a rename), so a reader never sees half a file. The phone's request
+  carries `proof` (`AgentRequestProof`, `buildAgentRequestProof`): `{"device_id","osig","signed_b64url"}`, where
+  `signed_b64url` is base64url of the exact UTF-8 bytes the owner's device signed (`ownerSignedString` of the `agent.recover`
+  frame as received, the same text Inbound hashed when it checked the signature), so the Mac hashes those bytes and never
+  rebuilds them. `restart_main` writes no proof; it adds `why` (plain text: letters, digits, spaces and plain punctuation, at
+  most 80 characters, `agentRequestWhy`) and, from a thread's lead, `by_thread` (the thread id). The Mac app makes `why` plain
+  again when it reads it and uses `by_thread` only when it is a thread id; both are text a session chose, so the Mac never
+  posts them as its own row. A file from a bridge older than the proof may carry `asked_by`: both readers ignore it.
+- Only the proof decides who asked. The Mac app checks it itself (`RestartProofCheck`): a device paired and not revoked in
+  `devices.json` (`DeviceKeys.pinnedKey`, the dialog answers' own check), the P-256 `talos-owner/v1` signature over the
+  signed bytes, that those bytes are exactly one `agent.recover` in its JCS form (the Mac's own canonicaliser, tested against
+  canonical.ts on shared vectors: a repeated key, a byte-order mark, white space or anything after the object fails) with
+  action `restart` by that device and the file's own `control_id`, and that its key is not in the used list (a replay).
+  Then, for a proof that is real but not taken as the owner's word now: signed no more than 5 minutes ago and no more than 2
+  minutes ahead on the wall clock, not before the app started, later than the newest signed time the app has accepted (the
+  replay mark), and in a form this version can canonicalise (strings, integers, true, false, null). A proof that passes everything
+  restarts as the owner asked, whatever the restart check says. It stops a forged owner request from anything without a
+  paired phone's key; it is not a wall, devices.json is writable by anything running as you.
+- Every other request is an agent's. With no proof (a session's `restart_main`, or the phone's button through a bridge
+  older than the proof, until that bridge restarts) the app checks it again when it reads it (`main-restart-check.json`'s
+  own answer, computed then): on a no nothing restarts, the file is deleted, the audit log says `agent_request_refused`,
+  and `last` records `refused` with the first reason. Such a refusal does not count as a request acted on, so it does not
+  hold the owner's next phone request back for the 120 s gap. When a request with no proof and no `by_thread` is refused,
+  the line also says "If you tapped Restart on your phone, restart Main from the Mac's menu." A request whose proof is
+  there and does not verify is refused whatever the restart check says: the audit log says `restart_proof_bad step=<the
+  check that failed>` (never the signature or the signed bytes), `last` records `refused` with no detail, and the owner gets
+  one fixed line, "Main was not restarted: a restart request that claimed to be yours did not verify." A proof that verified
+  but could not be recorded as used goes the agent's way (`restart_proof_unrecorded`).
+- A real proof that fails one of those last checks is not a forgery: the request goes the agent's way (audited
+  `proof=time_skew`, `time_before_launch`, `time_before_mark` or `form_unknown`), and the owner gets the Mac's own line for
+  it ("Your phone's restart request was signed at a time this Mac does not accept (check the phone's clock)", "...was signed
+  before this app started", "...was signed earlier than one this Mac already accepted (check the phone's clock)", "...uses
+  a form this version of the Mac app does not know (update the Mac app)", each ending "it was treated as a session's."), with
+  the refusal's reason after it when the check says no.
+- What is remembered, and for how long: a proof that verified (the owner's, or one with only its time off) is spent the
+  moment its request is decided, restart or refusal. The app keeps, for as long as it runs, the newest 64 spent proofs (by
+  the SHA-256 of the signed bytes, not the signature's spelling) and the newest signed time it accepted; the list is seeded
+  once from its file at the first request (at most its newest 64, the oldest and the first to go), and nothing written to the
+  files afterwards can push a spent key out of it. Both are written beside this file (`restart-proofs-used.json`,
+  `restart-proof-mark.json`, mode 0600); a relaunch reads them back as a start (the mark no later than the launch), and since
+  a proof signed before the launch is never the owner's, deleting them and relaunching frees nothing.
+- The gap is per asker. The owner's (proved) request is held only to the last OWNER request acted on, so the owner can always restart
+  again at once after a session did; a session's request is held to both (the last owner and the last session request).
+- The Mac app tells the owner itself, through its own route (`talos-app post`, which needs no bridge of Main's; Main's bridge
+  dies with the restart): one line when it acts on a session's request (`Main is restarting, asked by a session in thread
+  "<id>": <why>` when this Mac's config.json or workers.json knows that thread, `a session (thread not known)` when not, `a
+  session (no thread named)` with none: never a bare name), and one for every outcome that is not "came back": a refusal
+  (`Main was not restarted: <reason>`, for the owner's requests too) and the first stall of a restart (a dialog, the takeover
+  check, a start that could not be made, a screen Talos does not know). The bridge posts nothing for `restart_main`.
+- Those three lines are spaced, because a process that writes the file can make a request every second: each kind at most
+  once per 120 s on the awake clock (30 an hour of each, 90 in all, worst case), and one `talos-app post` at a time for them
+  (a line due while one runs is dropped, not queued). Every request is still recorded in `last` and the audit log. `why` is
+  capped at 80 unicode scalars and 320 bytes on the Mac.
 - The writer writes the file first and only then records and sends the result. If the write fails, the phone gets `ok: false`
   and nothing else. A success result means "handed to the Mac app", not "done": the Mac app may ignore the request (the owner stopped the agent,
   a phone restart in the last two minutes), or not be running, and sends nothing back, so the phone's text promises no restart.
@@ -169,9 +280,75 @@ from the relay and again from the bridge, and no file is written. Signed phone-t
 - The reader deletes the file after acting, and also when it ignores a stale one.
 - A newer request overwrites an older one that has not been read yet; only the latest is acted on.
 - The reader posts a visible notice to the owner for every action it takes, so a recovery is never silent.
-- The agent runs as the same user and could write this file, so the guards deny it (`talos-app install-guards`: Write, Edit
-  and shell writes to this file, `last-good/` and `config-history/`). The notice above is what catches an agent without the
-  guards. See `docs/SECURITY.md`, "Bypasses that remain".
+- The agent runs as the same user and can write this file. The guards (`talos-app install-guards`) deny a session's direct
+  routes to it: its Write and Edit tools, and a shell command that names this file, `last-good/`, `config-history/` or
+  `main-restart-check.json`. They do not stop a determined process: a name spliced or computed at run time, or a script
+  file, still writes it (`docs/SECURITY.md`, "Bypasses that remain"). So the file says nothing about who wrote it; only
+  the owner's proof does, and only as far as devices.json can be trusted. A bridge signature would add nothing: the bridge
+  runs as the owner, so any key it can read, a session can read too.
+- Two writers, one shape: the phone's `agent.recover` (Main's live bridge) and the `restart_main` tool (the bridge of the
+  session that calls it: Main's, or a thread lead's, which shares this home) both call the same writer
+  (`writeAgentRequest`, `src/agent-recover.ts`); only the phone's carries a proof.
+
+### `main-restart-check.json` (the Mac app's answer to "would Main come back?")
+
+Only the Mac app can tell whether a restarted Main would get past its startup warning by itself (it alone reads the launch
+seal), so it writes this file and keeps it fresh; the bridge only reads it, for `restart_main`. The schema is
+`MainRestartCheckFile` in `packages/protocol/src/main-restart.ts`; the names are constants there.
+
+- Name `MAIN_RESTART_CHECK_FILE` (`main-restart-check.json`), beside `AGENT_REQUEST_FILE`. Mode 0600, written atomically,
+  under 4 KB (`MAIN_RESTART_CHECK_MAX_BYTES`; a bigger file is not read).
+- Content: `{"v":1,"at":"<ISO 8601 with offset>","will_return":true|false,"reasons":[...],"last"?:{...},"needs_you"?:{...}}`. `will_return` is the whole
+  answer; `reasons` (at most 32) say why not, from a closed list: `launch_changed`, `claude_path_changed`,
+  `auto_confirm_off`, `budget_spent`, `someone_typing`, `takeover_held`, `owner_stopped`, `too_soon`, `session_id_invalid`
+  (desktop.json's saved conversation id is not a UUID, so the start would refuse it and Main would stay stopped), `unknown`.
+  Who says what: the Mac app writes these reasons, and only these. The bridge adds its own, in sentences and never in the
+  file: a missing, stale, unreadable or future-dated file (a stopped app writes nothing, so "not running" is the bridge's to
+  say), and an approval Main owes a result on (`restart_main`, below). A reason the reader does not know reads as `unknown` and the rest of the file still counts; a field it does
+  not know is dropped.
+- `needs_you` (optional, the WorkerNeedsYou shape `{"kind","since"}`; an older app writes none, and one the reader cannot read
+  is dropped): Main sits on a dialog at the Mac, a dialog Talos never answers or its startup warning held, and since when. The
+  alarms that are not a dialog (stuck, not reading, no bridge, no relay) are not written: a restart is what those are for.
+  `restart_main check` makes it a no, first among the reasons: "Main is waiting at the Mac on <kind> (since <time>); the owner
+  has to answer it there."
+- A yes says in one clause what the Mac checked: the launch and the claude program match the confirmed ones, answering the
+  startup warning automatically is on with restarts left, nobody is typing in Main's window, nothing holds or stopped Main.
+- `last` (optional; an older app writes none, and one the reader cannot read is dropped, never the file):
+  `{"control_id","at","outcome":"came_back"|"stalled"|"refused","detail"?}`, what came of the newest restart request the app
+  read. `came_back`: the restarted Main reached its ready state (warning answered, Claude's input box up, or nothing on screen
+  for the start's notice wait). `stalled`: it waits at the Mac; `detail` is the dialog's label (`folder trust`, `MCP server
+  consent`, `dev-channel warning`, ...) or `takeover check`, `could not start`, `no screen Talos knows`. A stall the owner then
+  answers is rewritten as `came_back`. `refused`: the app did not act; `detail` is the reason (`owner_stopped`, `too_soon`). A
+  request dropped as old or already handled records nothing. `detail` is printable ASCII, at most `MAIN_RESTART_DETAIL_MAX`
+  (80). An app relaunch keeps `last` (it reads it back from its own file), but only the outcome, the id and the time, and
+  `detail` only when it is one of the app's own labels: the file may have been forged meanwhile, and no one else's text is
+  served again. `restart_main check` says it in one sentence, also
+  when the file is stale, so a lead that asked learns the result while Main's bridge is down.
+- A restart a request began that is held for the first time sends the owner one line naming what holds it (`talos-app
+  post`, which the Mac app runs itself, so no bridge of Main's is needed; the dev-channel warning keeps its own line).
+- Freshness: the app rewrites it at least every `MAIN_RESTART_CHECK_WRITE_MS` (5 s, the supervisor heartbeat,
+  `SUPERVISOR_HEARTBEAT_MS`). Older than `MAIN_RESTART_CHECK_STALE_MS` (15 s, `SUPERVISOR_STALE_MS`) by its own `at` means
+  the app is not running, and the answer is no. Dated more than `MAIN_RESTART_CHECK_MAX_FUTURE_MS` (5 s) ahead is a bad
+  clock: no.
+- Missing, unreadable (bad JSON, another `v`, a wrong field type, too big, not a file) is no. Each case has its own
+  sentence for the agent, and every no adds that the owner can restart from the phone.
+- The app should say no for anything its own request handling would refuse (`owner_stopped`, `too_soon` within
+  `AGENT_REQUEST_MIN_GAP_MS`, 120 s, AgentRecovery.swift `requestMinGap`), so the answer matches what it would do.
+- The file is advice to the agent, not a gate. The bridge's check only decides whether the bridge writes a request; the
+  Mac app is the one that decides whether to restart, and it must re-check everything itself (the launch against the seal,
+  Stop, the gap, someone typing, a takeover) when it reads a request, never trusting that a request means "the check said
+  yes". It does: a request without an owner's proof that verifies is checked again when read (the request file, above).
+  The phone's requests with a proof that verifies never pass this check: the owner asked.
+- The Mac app (`MainRestartCheck.swift`, written from `SupervisorRestartCheck.swift` on the supervisor's own tick) asks the
+  development-channels guard itself (`AutoConfirmGuard.decide`) about the best warning a cold start could show, with this
+  launch's seal, the setting, the cold-start budget and the typing check, so a yes is exactly a start the guard would answer.
+  It cannot know what only the real screen shows (that the warning appears, its channels, the cursor, the 60 s window, any other
+  dialog), so a yes can still end at a dialog: that is what `last` and the stall line are for. `unknown` when desktop.json cannot
+  be read or the seal's key cannot be read; only the copy holding the session lock writes the file.
+- Only the Mac app is meant to write it. The guards deny a session's direct routes to it (Write, Edit, a shell command that
+  names it), as for `agent-request.json`, and thread sessions are fenced off the whole Talos home; a determined process can
+  still forge it (computed name, script file), which is why the app re-checks a request itself and why a relaunch reads back
+  only its own labels.
 
 ### `status.json`
 
@@ -188,14 +365,20 @@ tokens:
   "mode": "live",
   "relay": { "connected": true, "last_connect_at": "2026-11-01T10:00:01.200Z", "last_close_code": null },
   "queue_depth": 0,
+  "unseen_oldest_at": null,
   "permission_relay": true,
   "updated_at": "2026-11-01T10:00:15.000Z"
 }
 ```
 
+- `unseen_oldest_at` is when this session was first told about an owner message with no tool call from it since, or
+  `null` when there is none. Messages handed to a thread's own session are left out until they fall back to Main. A
+  supervisor reads it to tell a Main that stopped reading (`MAIN_RESTART.unseen_s`); a file without it says nothing.
+- `last_owner_at` is when the owner's newest message arrived (the message's own time), or `null` before the first. The Mac
+  app's updater reads only whether it changed, to postpone an update the owner wrote during. Never the text, thread or id.
 - Only the live bridge writes it. A worker, or a headless process (`talos-app post`, scheduled jobs), never touches it.
 - When another bridge takes over with the same key (close code 4409) the old one writes one last `"mode":"superseded"`
-  and stops; it will not overwrite a newer bridge's file.
+  and pauses; it will not overwrite a newer bridge's file. If it rejoins it writes `live` again.
 - A reader must check that `pid` is alive before it believes the file: a bridge that was killed leaves a fresh-looking
   file behind. Older than 45 seconds while the pid lives means the bridge is stuck. A missing file means "unknown", not
   "down": a bridge started before this feature never wrote one, so restart it once.
@@ -214,8 +397,23 @@ The bridge trims itself; there is nothing to schedule. At start and every 6 hour
   (90 days by default, `TALOS_APP_HISTORY_DAYS`), so an old attachment can still be asked back from the Mac. When `TALOS_APP_FFMPEG` is set, the uncompressed original is
   removed as soon as the `.m4a` exists.
 
-Unsent outbox rows are retried on every reconnect and given up after 24 hours; the agent gets a system note when that
-happens. `bridge.log` rolls to `bridge.log.1` at 5 MB (one old generation is kept).
+Attachments the Mac downloaded (`media/md_*`) are kept for good unless the owner chooses otherwise in Settings, Storage
+(config `media_keep_days`: 30, 90, 180 or 365 days; the agent can never set it). With a time set, a downloaded file older
+than that is removed, except one still in use: named by an unsent row, an open card, an attachment retry, a thread route
+not yet read or an app page. Nothing is removed in the hour after the setting changes, and the owner is told in the default
+thread what the change will remove. A removed file's sidecar stays, so the app says "removed after N days" instead of an
+error, and each sweep that removes something logs one `media retention removed` line (files, bytes, the oldest date).
+
+Unsent outbox rows are retried on every reconnect. A reply, a card and a card update are kept until the relay takes them,
+however long it is away; one is given up on only when it is over 30 days old and the relay has been offered it 20 times
+with no answer either way. Any other row, and the bridge's own notices, are given up on after 7 days. A row the relay refuses for good, or one too large to
+send, is dropped at once. Every drop is reported: the agent gets a system note in the thread the frame was for, naming the
+reply or the card, and for a reply or a card the owner gets a line in that thread too; a dropped reply is also taken out
+of the Mac's history. A history page for the app that has to be cut to fit one frame always keeps the numbered row its
+newest run of un-numbered rows (card rows) follows, so the app can go on to what is older; the oldest rows of such a run
+are the ones left out. Before a reconnect is retried, one dial has 20 seconds to reach the relay's `ready`: a relay that
+takes the connection and then stalls is logged (`relay handshake timed out; reconnecting`) and dialled again on the usual
+backoff. `bridge.log` rolls to `bridge.log.1` at 5 MB (one old generation is kept).
 
 ## Enrollment is instant
 
@@ -290,7 +488,8 @@ Relay frames are processed strictly one at a time, in arrival order. `ack` stage
 
 `reply`, `attach`, `card`, `card_result`, `set_status`, `voice_progress`, `list_threads`, `create_thread`,
 `archive_thread`, `read_thread`, `inbox_triage`, `inbox_raw`, plus the four Schedules tools (below), `config_propose`
-(below) and `retry_attachment`. The schemas are in `src/tools/`. Notes:
+(below), `retry_attachment`, and for the main session only `handoff` and `thread_session` ([OPTION-C.md](OPTION-C.md)).
+`restart_main` (below) is for the main session and a thread's lead. The schemas are in `src/tools/`. Notes:
 
 - `reply`, `attach` and `card` accept `chat_id` as an alias for `thread_id`. An unknown thread is an error that lists
   the valid ids.
@@ -313,15 +512,132 @@ Relay frames are processed strictly one at a time, in arrival order. `ack` stage
   A thread with its own session is told to send the file again, because
   that session has no `retry_attachment`.
 
-### `config_propose` (settings the agent may ask for)
+### `restart_main` (Main restarted without a mouse)
 
-The agent never changes config. `config_propose {thread_id, reason, changes:[{path, value}]}` is the one way it can ask,
-and only for these seven leaves (`AGENT_CONFIG_ALLOWLIST`, a separate list from the app's `config.patch` allowlist):
-`agent.name`, `agent.voice`, `owner.display_name`, `timezone`, `quiet_window`, `voice_notes.reply_with_voice`, `theme`. A theme is always a card, even in trust mode, and the bridge refuses it unless the relay lists `custom-themes/1`. Everything
-else is refused by name or by the closed list: `permission_relay`, `work`, `notifications`, `threads`,
-`default_thread`, `session_models`, `dedicated`, `memory_browser`, `agent.voice_persona`, and always devices, keys,
-enrollment and security settings.
+`restart_main {action: "check" | "go", why?}` asks the Mac app to restart the main session, for when Main is stuck or must
+load new bridge code. The main session and a thread's lead (a thread with its own session) may call it; a headless job,
+and a session whose thread went back to shared, are refused.
 
+- `check` reads `main-restart-check.json` (above) and answers yes or no with the reasons in sentences. It writes nothing.
+- `go` needs `why`: 1-80 characters, cleaned as hand-off text is (one line, tag look-alikes and invisible characters
+  neutralised). It runs the same check; on no it writes nothing, posts nothing and counts nothing. On yes it writes
+  `agent-request.json` through the phone's own writer, with a fresh `control_id`, no owner's proof, `why` and (from a
+  lead) `by_thread`. The bridge's check is advice to the agent: the Mac app decides, and re-checks for itself when it reads the request.
+- Limits, on the bridge clock: no second `go` within 120 s of the last (the Mac's own gap; the answer says how long to
+  wait), and at most 3 agent-asked restarts per rolling hour, all sessions together. They are rows in `history.sqlite`
+  (`main_restarts`, the same ledger `thread_session restart` uses, under its own key `talos__main`, so neither tool uses
+  up the other's hour), checked and recorded in one immediate transaction around the file write: two sessions asking at
+  once get one winner, a refused or failed `go` counts nothing, and the count survives a bridge restart. A record dated
+  up to an hour ahead still counts (a clock set back gains nothing); one further ahead is ignored. The phone's button is
+  not counted. `main_restart_notices` keeps who asked and why, as a record; the bridge posts nothing from it.
+- `go` is refused, for any caller, while Main owes a result on an approval: a card in one of Main's own threads (a thread
+  without its own session) that the owner approved (`resolved`, action `primary`) within the last 15 minutes and that has no
+  `card_result` yet. The answer is "Main is acting on something the owner approved; try again when it has reported the
+  result", nothing is written, and `check` says the same. A lead's bridge reads the same `history.sqlite`, so it sees the same
+  cards. Whether Main has READ the approval is not recorded for its own threads, so an approval not yet read counts too; one
+  older than 15 minutes does not (Main may be stuck on it, which is when a restart is wanted).
+- Each caller writes from its own bridge. A lead's bridge shares the Talos home and `history.sqlite` with Main's, so its
+  `go` works while Main's bridge (the hub) is down. The session's own Write and Edit tools, and shell commands that name the
+  request file, are denied it; the bridge writes it (the guards line above says what that does not stop).
+- The owner hears from the Mac app, not from the bridge: `Main is restarting, asked by Main: <why>` (or `asked by the
+  <thread> thread`) when it acts on the request, and a line for a refusal or a stall (the request file, above). The tool's
+  answer says only that the request was written and that the Mac app decides and tells the owner.
+- The phone's `agent.recover` is still answered only by Main's live bridge: a thread lead's bridge has no relay socket and
+  receives no owner frames, so when Main's bridge is down the phone's request waits at the relay until it is back.
+
+### The screen tools (`screen_shot`, `screen_click`, `screen_type`, `screen_key`, `screen_scroll`, `screen_apps`, `screen_open_app`)
+
+Main and thread sessions see and drive the Mac's screen through Talos.app's own screen helper, never through Claude Code's
+built-in computer use: `computer-use` is in every session's `deniedMcpServers`. Main gets it in its one `--settings` on
+every launch path (the Mac app, `talos-app start`, the Linux supervisor; merged with the guards when installed). When the
+owner's own args carry a `--settings`, theirs stays exactly where and what it is (a copy would change what its relative paths
+mean); the deny goes in beside it as `--disallowedTools mcp__computer-use`, a command-line permission rule Claude Code adds to
+every settings source. If the deny can't be added at all (the guards' file unreadable), the owner's phone is told once.
+Every thread session has it, list or no list, and so does a thread session opened by hand from the Mac. Headless jobs do not
+get the tools.
+
+- The bridge sends one JSON line to `$TALOS_APP_HOME/run/screen.sock` (TalosDesktopCore `ScreenSocket.swift`, mode 0600 in
+  the 0700 `run/` folder; the app answers only a peer of its own uid) and reads one back, 15 s at most.
+- `screen_shot` answers an image plus a line mapping its pixels to screen points. Only windows of apps on this Mac's allowed
+  list show, plus the desktop picture; other windows are gaps. When the window list cannot be read the app takes no
+  screenshot at all.
+- Clicks, typing, keys and scrolls go only to an allowed app in front (and, for a click or scroll, an allowed window under the
+  pointer), never to Talos itself.
+- Every failure is one sentence at once: the app not running, a macOS grant missing ("macOS hasn't allowed Talos to see the
+  screen yet. On the Mac: Talos → Permissions → Grant. Nothing is stuck."), an app not on the list ("<app> isn't on this
+  Mac's allowed list yet."), the filter unavailable, no answer in time. An unknown code from a newer app reads as its text.
+- **Consent, per app per Mac** (`src/screen-consent.ts`, TalosDesktopCore `ScreenAllowStore.swift`). The first time a click,
+  key, typing, scroll, window shot or open hits an app off the list, the app measures it (bundle id, team id, code-signing
+  designated requirement, name) and answers `app_not_allowed` with an opaque `ask` id. The tool says at once "Asked the owner to
+  allow <app> on this Mac. Try again after they answer." and the main bridge (a thread session goes through the hub's
+  `screen_ask`, sending only the id) asks the app back (`ask_info`) and posts ONE card to the default thread: "Let your agent
+  control <app> on this Mac?" Allow · Not now (a bridge `config` card with a `screen_allow` payload; relay feature
+  `config-propose/1`; never approvable from a notification). One card per signed app at a time; "Not now" holds an hour.
+- On Allow the bridge sends the owner's own signed `card.resolve` and the card's binding to the app (`allow`). The app checks
+  the signature against devices.json and the binding, then writes `<home>/screen/allowed-apps.json` (0600, Talos.app its only
+  writer; not desktop.json). The file is sealed: an HMAC with a key kept in the Keychain the way the launch seal keeps its key
+  (no prompt ever; a record that can't be read allows nothing). That same Keychain record holds the file's generation and the
+  removal memory, so an edited file, a copy from more than one change back, or a deleted list allows no app (Settings says the
+  list can't be read). Start a new list re-keys the record. The guard hook keeps sessions from writing `screen/` at all. Every
+  entry also keeps its proof and is checked again on every read.
+- **Known gap (accepted): owner approvals kept in the Keychain stop accidents, not a deliberate session running as you.** It
+  covers all three: the launch seal's key (the development-channel card), this list's record, and a prebuilt app's "Use this
+  clone" yes (`docs/desktop.md`, "The prebuilt app"). Each is a login-keychain item, and a program already running as the owner
+  can rewrite one without a prompt (Apple's `security add-generic-password -U`): here it could seal a list of its own and undo a
+  Remove after Talos restarts; for the clone, it could mark a clone it wrote to the record file as already accepted (the clone
+  must still pass the folder and ownership rules). Talos asking again per app does not protect against that. The tests
+  `aRecordRewrittenByTheSecurityToolLetsARemovedApprovalBack` and `aKeyRewrittenByTheSecurityToolLetsThatProgramSealAChangedLaunch`
+  pin it. Closing it needs the data-protection keychain with an access group, so a build signed by an Apple developer team. An app counts as allowed only while its running code (or, to open it, the app on disk) meets the stored
+  requirement and team id: an app that claims an allowed id with another signature is a gap and gets no input. Ad-hoc signed
+  apps are bound to that exact build; unsigned apps and apps with no id can never be allowed and are said so. Talos itself is
+  never on the list. Settings → Permissions → "Apps your agent may control" lists the apps with Remove; a removed approval is
+  remembered in the Keychain record, within the known gap above.
+
+### `config_propose` (settings and threads the agent may ask for)
+
+The agent never changes config. `config_propose {thread_id, reason, changes:[{path, value}]}` is the one way it can ask, and
+only for a closed list built from the settings table (`packages/protocol/src/settings-table.ts`, a separate list from the
+app's `config.patch` allowlist): the table rows whose agent rule is on (`agent.name`, `agent.voice`, `owner.display_name`,
+`default_thread`, `timezone`, `quiet_window`, `notifications.master`, `notifications.show_thread_names`,
+`voice_notes.reply_with_voice`, `voice_notes.driving_until`, `session_models`, `dedicated` (the master switch for thread
+sessions, a boolean), `theme`) and the thread paths: `threads.<new_id>` (create, value `{name, topic?, icon?}`) and
+`threads.<id>.<field>` with the field `name`, `topic`, `icon`, `notify`, `session` (`shared` or `dedicated`) or
+`archived`. Nothing else of a thread (kind, order, colour, folder, session settings) is on the list. A theme needs the relay to
+list `custom-themes/1`. Everything else is refused by name or by the closed list: `permission_relay`, `trust_mode`,
+`memory_browser`, `agent.voice_persona`, `work.*`, and always devices, keys, enrollment and security settings.
+
+- **Risk, from the table.** Every table row has a `risk`, required by the type: `low`, `high` or `mac`. `mac` rows are the
+  ones the agent must never set (a `mac` row cannot be `agent: true`). In trust mode a proposal whose every change is `low` is
+  applied directly; one `high` change makes the whole proposal a card, with nothing written until the owner taps Apply.
+  `high` today: `default_thread`, `notifications.master`, `notifications.show_thread_names`, `dedicated`, `theme`, and for
+  threads `session`, `archived`, and `notify` when the value is `off` or the thread is the default thread (a thread on `off`
+  gets no push at all, approval-card pushes included). High means always a card, never applied directly; the card's own
+  `risk` stays `low`, so a tap approves it, as for every settings card. The tool's description and instructions are built from the table, not from a list kept by
+  hand.
+- **Threads.** A rename, new topic, icon or alert level shows old and new on the card (`Thread trip name: Trip → Travel`).
+  A new thread is `threads.<new_id>`: the bridge fills in the rest (an agent thread at the end of the list, notify all,
+  dated when it is applied; its icon and topic show on the card). Past 20 active agent threads a proposal
+  still goes ahead, and the agent is told in a warning to check with the owner (Pantheon 2026-11-15; trust mode skips the
+  warning); 40 threads in all, archived ones included, is the config's own limit and still refuses. One proposal counts its own
+  new threads and any thread it brings back from the archive against both. Archiving a
+  dedicated thread adds a second line to the card, `own session: dedicated → shared`, because the write switches it off; the
+  undo lists both. The card also says archiving clears the thread's saved copies of the owner's files. Archiving is for agent-made threads
+  only, never the default thread, and drops that thread's inbox copies. A system thread (`inbox`) is never changed. The write
+  is a `threads` patch through `ConfigFile.applyPatch`, so the Option C checks on `session` run too.
+- **`create_thread` and `archive_thread`** keep their names and arguments and are thin wrappers over the same path
+  (`threads.<id>` and `threads.<id>.archived`): in trust mode, after the owner asked in the thread they asked in, a new thread
+  is created at once; an archive is always a card. The card goes to that thread: an optional `thread_id` on `create_thread`,
+  else the thread the owner spoke in last, else the default thread. They need no "the owner asked" first (the card is the
+  ask), but without it they are never applied directly. `create_thread` takes an optional `reason`.
+- **A thread's own session** has `config_propose` too, for its own thread only. It asks main over the hub (`rpc`
+  `config_propose`; the thread is the one the connection proved) and may name only `threads.<its id>.<field>`; the card goes
+  into that thread. A global setting, another thread or a new thread is refused. "The owner asked" is checked in that thread.
+- **Undo.** Every applied change, from a card or directly, ends its result with `To undo: Thread trip name back to Trip;
+  ...`: the old value of each change, or `archive thread <id>` for a created thread. The owner sees it in the card result
+  and the agent in the note.
+- **Events.** An applied change writes the named events `thread.created`, `thread.renamed`, `thread.archived` and
+  `setting.changed` (see `docs/HOOKS-AND-COMMANDS.md` B1), with a `source` of `agent_card` or `agent_trust`. The owner's own
+  `config.patch` writes the same events with `source: owner`.
 - **A card, minted only by the bridge.** `kind:'config'` is in `BRIDGE_ONLY_CARD_KINDS`, not `AGENT_CARD_KINDS`, so the
   `card` tool and headless posts cannot mint it. `allow_edit` false, `allow_revise` true, `actor='bridge'`. The body has the
   old and new value of each setting; `payload_hash` binds what was shown.
@@ -334,8 +650,10 @@ enrollment and security settings.
 - **Checked twice.** At propose time, and again on PRIMARY on the payload bound to the card. The bridge then applies it with
   `ConfigFile.applyPatch` and syncs like an owner `config.patch`. If a touched value changed since the card was drawn, the
   card fails in words and nothing is written. Two cards for one setting have one winner.
-- **Limits.** 6 proposals an hour, 5 settings cards pending, 6 changes a card. Not available to worker sessions or headless
-  processes. An agent restart is needed to pick up the instruction text (a running session reads it at start).
+- **Limits.** Past 6 proposals an hour a proposal still goes ahead, with a warning to the agent to ask the owner and propose
+  once (Pantheon 2026-11-15; direct thread creation by `create_thread` does not count). 5 settings cards pending and 6 changes a
+  card still refuse. Not available to headless processes. An agent restart is needed to pick up the
+  instruction text (a running session reads it at start).
 
 ### Cards
 
@@ -412,27 +730,28 @@ again), `talos-app schedules notify <message>` (Chronos's notify command: posts 
 `talos-app` (the wrapper `install.sh` puts on your PATH; it runs `bun run apps/bridge/src/cli.ts <command>`). It never
 opens the bridge socket.
 
-| Command                                                       | Does                                                                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `init --relay-url <url> [--config …]`                         | Creates the home, key, config and `bridge.env`; prints `BRIDGE_PUBKEY=…`. Keeps whatever exists                                                                                                                                                                                                                           |
-| `start [--agent-dir <dir>] [-- <claude flags>]`               | Starts `claude` in the agent folder with the bridge variables and the development-channel flag added after your flags. `--dry-run` only prints                                                                                                                                                                            |
-| `enroll [--label phone] [--no-qr] [--confirm]`                | Warns first if no live bridge is running, then prints a one-time link and a QR code of it (`--no-qr` skips the code), waits up to 10 minutes, shows the y/N prompt. `--confirm` answers a waiting prompt later                                                                                                            |
-| `devices [revoke <id>]`                                       | Lists pinned devices; revoke marks `devices.json` and calls the relay                                                                                                                                                                                                                                                     |
-| `rotate`                                                      | Key rotation (below)                                                                                                                                                                                                                                                                                                      |
-| `status [--json]`                                             | Relay reachable, **whether the relay accepts this Mac's key**, the live bridge's state from `status.json`, key id, last connect, queue depth, STT/TTS. `--json` prints the `status.json` fields plus `liveness`, `relay_reachable` and `relay_accepts_key`                                                                |
-| `doctor [--agent-dir <dir>]`                                  | Bun version, MCP SDK 1.x, `.mcp.json` entry, file modes, config, relay `/healthz`, **a signed read-only call that proves the relay accepts this Mac** (on a 401 it prints the fix), the live bridge's state; the `BRIDGE_PUBKEY=` line to paste into the relay; warns about other relaying channels and missing ask rules |
-| `rollback [--dry-run] [--yes] [--skip-data-check]`            | Puts this checkout one recorded healthy version further back (asks y/N), then reinstalls. Refuses with uncommitted changes, a git operation in progress, or settings the older code would lose; leaves data and branches alone                                                                                            |
-| `logs [-n 50] [-f]`                                           | Prints the last lines of `bridge.log` in plain words (`-f` keeps following it)                                                                                                                                                                                                                                            |
-| `report [--out <file>]`                                       | One text bundle for a bug report: `doctor`, `status --json` and the last 100 log lines, with keys, tokens, setup codes and your home folder removed. Read it once before you share it                                                                                                                                     |
-| `post <thread> <text>`                                        | Headless reply, for scripts and jobs                                                                                                                                                                                                                                                                                      |
-| `digest [--since <ISO>]`                                      | Prints the relay digest as plain text inside the untrusted wrapper, for a morning-brief job                                                                                                                                                                                                                               |
-| `install-mcp --agent-dir <dir>`                               | Merges the `.mcp.json` entry (what `install.sh` calls)                                                                                                                                                                                                                                                                    |
-| `adopt --agent-dir <dir>`                                     | Connects a Claude Code folder you already use (owner only, Terminal only). Changes only `<dir>/.mcp.json` (other servers kept) and the app hooks in `.claude/settings.local.json`. Exit 3: its `talos-app` entry runs another clone (`--repoint` replaces it). `--dry-run`, `--yes`                                       |
-| `schedules [adopt \| notify <msg>]`                           | Lists the scheduler's jobs and health; `adopt` hands the registry to Talos (S3.7); `notify` is Chronos's notify command                                                                                                                                                                                                   |
-| `apps scan \| list \| revoke \| login \| logout \| strict`    | MCP apps, at the Mac only (below)                                                                                                                                                                                                                                                                                         |
-| `install-app-hooks --agent-dir <dir>`                         | Re-writes the app hook entries from the catalog into `<dir>/.claude/settings.local.json` (what `install.sh` calls); a no-op without a catalog                                                                                                                                                                             |
-| `hook pre-tool-use \| post-tool-use \| post-tool-use-failure` | Run by Claude Code around catalogued tool calls; not for people                                                                                                                                                                                                                                                           |
-| `install-ask-rules --agent-dir <dir>`                         | Shows a diff, asks y/N, then adds `permissions.ask` rules (deploys, merges, deletes, pushes, shells). `--dry-run` writes nothing; `--scope user` edits the user settings instead                                                                                                                                          |
+| Command                                                       | Does                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `init --relay-url <url> [--config …]`                         | Creates the home, key, config and `bridge.env`; prints `BRIDGE_PUBKEY=…`. Keeps whatever exists                                                                                                                                                                                                                                                                                                                          |
+| `start [--agent-dir <dir>] [-- <claude flags>]`               | Starts `claude` in the agent folder with the bridge variables and the development-channel flag added after your flags. `--dry-run` only prints                                                                                                                                                                                                                                                                           |
+| `enroll [--label phone] [--no-qr] [--confirm]`                | Warns first if no live bridge is running, then prints a one-time link and a QR code of it (`--no-qr` skips the code), waits up to 10 minutes, shows the y/N prompt. `--confirm` answers a waiting prompt later                                                                                                                                                                                                           |
+| `devices [revoke <id>]`                                       | Lists pinned devices; revoke marks `devices.json` and calls the relay                                                                                                                                                                                                                                                                                                                                                    |
+| `rotate`                                                      | Key rotation (below)                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `status [--json]`                                             | Relay reachable, **whether the relay accepts this Mac's key**, the live bridge's state from `status.json`, key id, last connect, queue depth, STT/TTS. `--json` prints the `status.json` fields plus `liveness`, `relay_reachable` and `relay_accepts_key`                                                                                                                                                               |
+| `doctor [--agent-dir <dir>]`                                  | Bun version, MCP SDK 1.x, `.mcp.json` entry, file modes, config, relay `/healthz`, **a signed read-only call that proves the relay accepts this Mac** (on a 401 it prints the fix), the live bridge's state; the `BRIDGE_PUBKEY=` line to paste into the relay; warns about other relaying channels and missing ask rules                                                                                                |
+| `rollback [--dry-run] [--yes] [--skip-data-check]`            | Puts this checkout one recorded healthy version further back (asks y/N), then reinstalls. Refuses with uncommitted changes, a git operation in progress, or settings the older code would lose; leaves data and branches alone                                                                                                                                                                                           |
+| `logs [-n 50] [-f]`                                           | Prints the last lines of `bridge.log` in plain words (`-f` keeps following it)                                                                                                                                                                                                                                                                                                                                           |
+| `report [--out <file>]`                                       | One text bundle for a bug report: `doctor`, `status --json` and the last 100 log lines, with keys, tokens, setup codes and your home folder removed. Read it once before you share it                                                                                                                                                                                                                                    |
+| `post <thread> <text>`                                        | Headless reply, for scripts and jobs                                                                                                                                                                                                                                                                                                                                                                                     |
+| `digest [--since <ISO>]`                                      | Prints the relay digest as plain text inside the untrusted wrapper, for a morning-brief job                                                                                                                                                                                                                                                                                                                              |
+| `install-mcp --agent-dir <dir>`                               | Merges the `.mcp.json` entry (what `install.sh` calls)                                                                                                                                                                                                                                                                                                                                                                   |
+| `adopt --agent-dir <dir>`                                     | Connects a Claude Code folder you already use (you, or the agent when you ask). Changes only `<dir>/.mcp.json` (other servers kept) and the app hooks in `.claude/settings.local.json`. Exit 3: its `talos-app` entry runs another clone (`--repoint` replaces it). `--dry-run`, `--yes`                                                                                                                                 |
+| `schedules [adopt \| notify <msg>]`                           | Lists the scheduler's jobs and health; `adopt` hands the registry to Talos (S3.7); `notify` is Chronos's notify command                                                                                                                                                                                                                                                                                                  |
+| `apps scan \| list \| revoke \| login \| logout \| strict`    | MCP apps, at the Mac only (below)                                                                                                                                                                                                                                                                                                                                                                                        |
+| `install-app-hooks --agent-dir <dir>`                         | Re-writes the app hook entries from the catalog into `<dir>/.claude/settings.local.json` (what `install.sh` calls); a no-op without a catalog                                                                                                                                                                                                                                                                            |
+| `hook pre-tool-use \| post-tool-use \| post-tool-use-failure` | Run by Claude Code around catalogued tool calls; not for people                                                                                                                                                                                                                                                                                                                                                          |
+| `install-ask-rules --agent-dir <dir>`                         | Shows a diff, asks y/N, then adds `permissions.ask` rules (deploys, merges, deletes, pushes, shells). `--dry-run` writes nothing; `--scope user` edits the user settings instead                                                                                                                                                                                                                                         |
+| `guards refresh`                                              | Run by the Mac app before each start of Main, not by people or sessions: rebuilds the installed guards from this release, pinned to this bun, for the checkout they were installed from (another checkout is refused). No arguments; refuses unless the guards are installed and intact; never installs or removes them. One stdout line: `guards refresh: unchanged`, `changed <rules bun settings>` or `refused <why>` |
 
 ### MCP apps (off by default)
 
@@ -507,6 +826,32 @@ which still prompt in bypass mode, for the risky calls only. It changes a settin
 
 If the terminal closed before the phone finished, run `talos-app enroll --confirm` later. Pending codes are kept 24 hours
 and survive a bridge restart.
+
+### Enroll from a program
+
+`talos-app enroll --json [--label <name>]` is the same flow for a program that puts it in front of a person (the Windows
+tray, `apps/windows`). It is still terminal-only, so the program runs it in a pty as the Mac app does. In a pty the lines
+end in CR LF and what is written to stdin is echoed: read only lines that start with `{`. `--json` implies `--no-qr`
+and does not go with `--confirm`. stdout carries one JSON object per line, written at once; each has an `event`:
+
+| Event        | Fields                                                                    | What to do                                                                                                                                                        |
+| ------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `warning`    | `code: "bridge_not_live"`, `text`                                         | Show the text and go on: nobody can pin until a bridge runs.                                                                                                      |
+| `link`       | `link`, `expires_at`                                                      | Show it and draw it as a QR. It works once, for 10 minutes.                                                                                                       |
+| `confirm`    | `device_name`, `words` (four plain words)                                 | Stop showing the link. Show the words with Yes and No, then write one line: `y` or `n`. `device_name` is the device's own, untrusted text: show it as plain text. |
+| `answered`   | `yes`                                                                     | The answer was recorded.                                                                                                                                          |
+| `pinned`     | `device_id`                                                               | The live bridge pinned it.                                                                                                                                        |
+| `not_pinned` | `code: "timeout"`                                                         | Answered yes, but no live bridge pinned it within 60 seconds.                                                                                                     |
+| `used`       |                                                                           | The code was used or removed elsewhere, before or during the question.                                                                                            |
+| `expired`    |                                                                           | Ten minutes passed with no device.                                                                                                                                |
+| `error`      | `code` (`usage`, `key_refused`, `relay`, `bad_words`, `internal`), `text` | Show the text. An open question was answered no.                                                                                                                  |
+
+Only the line `y` (a trailing CR allowed) is yes, and only when it comes at least 500 ms after `confirm`: a line already
+waiting in stdin was typed before anyone saw the words. Any other line, `yes` and an empty line included, or stdin
+closing, is no, and there is no second question. The four words are computed from the device id the live bridge
+recorded, as the phone computes them, never taken from the program or the record's own copy. Exit code 0 after
+`pinned`, or after `answered` with `yes: false`; 1 otherwise. Killed by a signal, the process may end with no last
+event. SIGTERM cancels: the code stays unused and expires.
 
 ### Rotating the bridge key
 

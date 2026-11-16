@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { runCli } from '../src/cli.ts'
 import { paths } from '../src/config.ts'
 import { ConfigFile, parseConfig } from '../src/config-file.ts'
 import { type McpEntry, mcpEntry, mergeMcpConfig } from '../src/mcp-config.ts'
+import { postSystemRow } from '../src/system-post.ts'
 import { type Harness, startHarness, tempHome } from './helpers.ts'
 
 let h: Harness | undefined
@@ -146,6 +147,24 @@ describe('talos-app post, digest, status, doctor', () => {
     expect(await runCli(['post', 'general'], bad.io, env(h))).toBe(1)
   })
 
+  // the supervisor's phone line when Main crash-loops: config.json may be the very thing that is damaged (sandbox #3)
+  test('a system row goes out with only bridge.env and the key, even when config.json is damaged; the CLI has no way to one', async () => {
+    h = await startHarness({ startBridge: false })
+    writeFileSync(paths(h.home).configJson, '{"threads": [')
+    const id = await postSystemRow(env(h), 'inbox', 'Main stopped')
+    const f = await h.relay.expectFrame('reply', (r) => r.message.text === 'Main stopped', { direction: 'from_bridge' })
+    expect(f.message.id).toBe(id)
+    expect(f.message.author).toBe('system')
+    expect(f.message.thread_id).toBe('inbox')
+    expect(f.message.via).toBe('headless')
+    expect(h.relay.bridgeConnected).toBe(false)
+    await expect(postSystemRow(env(h), 'Not A Thread', 'x')).rejects.toThrow(/not a thread id/)
+    // an agent runs `talos-app post`: there is no flag that makes its text a Talos notice
+    const bad = cliIO()
+    expect(await runCli(['post', '--system', 'inbox', 'x'], bad.io, env(h))).toBe(1)
+    expect(h.relay.http.filter((r) => r.path === '/bridge/post')).toHaveLength(1)
+  })
+
   test('digest prints the relay digest inside the untrusted wrapper', async () => {
     h = await startHarness({ startBridge: false })
     const { out, io } = cliIO()
@@ -213,7 +232,7 @@ describe('talos-app post, digest, status, doctor', () => {
 })
 
 describe('.mcp.json merge and install.sh', () => {
-  const entry = mcpEntry('/opt/talos-app/apps/bridge', '/home/user/.config/talos/app')
+  const entry = mcpEntry('/opt/talos-app/apps/bridge', '/home/user/.config/talos/app', undefined, '/opt/bun/bin/bun')
 
   test('merge keeps other servers and top-level keys, and is idempotent', () => {
     const existing = { someKey: 1, mcpServers: { other: { command: 'x', args: [] } } }
@@ -225,8 +244,8 @@ describe('.mcp.json merge and install.sh', () => {
     expect(mergeMcpConfig(first.config, entry).changed).toBe(false)
     expect(mergeMcpConfig(undefined, entry).config).toEqual({ mcpServers: { 'talos-app': entry } })
     expect(entry).toEqual({
-      command: 'bun',
-      args: ['run', '--cwd', '/opt/talos-app/apps/bridge', '--silent', 'start'],
+      command: '/opt/bun/bin/bun',
+      args: ['run', '--cwd', '/opt/talos-app/apps/bridge', '--silent', 'src/server.ts'],
       env: { TALOS_APP_HOME: '/home/user/.config/talos/app' },
     })
   })
@@ -241,7 +260,7 @@ describe('.mcp.json merge and install.sh', () => {
         },
       },
     }
-    const next = mcpEntry('/opt/talos-app/apps/bridge', '/home/user/.config/talos/app')
+    const next = mcpEntry('/opt/talos-app/apps/bridge', '/home/user/.config/talos/app', undefined, '/opt/bun/bin/bun')
     const r = mergeMcpConfig(existing, next)
     const got = (r.config.mcpServers as Record<string, McpEntry>)['talos-app']
     expect(got.env).toEqual({ EXTRA_FLAG: 'on', TALOS_APP_HOME: '/home/user/.config/talos/app' })
@@ -274,7 +293,12 @@ describe('.mcp.json merge and install.sh', () => {
         },
       },
     }
-    const next = mcpEntry('/opt/talos-app/apps/bridge', '/home/user/.config/talos/app', '/home/alex/agent')
+    const next = mcpEntry(
+      '/opt/talos-app/apps/bridge',
+      '/home/user/.config/talos/app',
+      '/home/alex/agent',
+      '/opt/bun/bin/bun',
+    )
     const { config, changed } = mergeMcpConfig(existing, next)
     const got = (config.mcpServers as Record<string, McpEntry>)['talos-app']
     expect(changed).toBe(true)
@@ -298,7 +322,7 @@ describe('.mcp.json merge and install.sh', () => {
     expect(await runCli(['install-mcp', '--agent-dir', agent], a.io, { TALOS_APP_HOME: home })).toBe(0)
     const cfg = JSON.parse(readFileSync(join(agent, '.mcp.json'), 'utf8'))
     expect(cfg.mcpServers['talos-app'].env.TALOS_AGENT_DIR).toBe(resolve(agent))
-    expect(mcpEntry('/b', '/h', '/home/alex/agent').env).toEqual({
+    expect(mcpEntry('/b', '/h', '/home/alex/agent', '/opt/bun/bin/bun').env).toEqual({
       TALOS_APP_HOME: '/h',
       TALOS_AGENT_DIR: '/home/alex/agent',
     })
@@ -357,9 +381,12 @@ describe('.mcp.json merge and install.sh', () => {
     const mcp1 = readFileSync(join(agent, '.mcp.json'), 'utf8')
     const parsed = JSON.parse(mcp1)
     expect(parsed.mcpServers.keep).toEqual({ command: 'keep-me', args: ['1'] })
-    expect(parsed.mcpServers['talos-app'].command).toBe('bun')
+    expect(isAbsolute(parsed.mcpServers['talos-app'].command)).toBe(true)
     expect(parsed.mcpServers['talos-app'].args.slice(0, 3)).toEqual(['run', '--cwd', resolve(import.meta.dir, '..')])
-    expect(parsed.mcpServers['talos-app'].env).toEqual({ TALOS_APP_HOME: home, TALOS_AGENT_DIR: resolve(agent) })
+    expect(parsed.mcpServers['talos-app'].env).toEqual({
+      TALOS_APP_HOME: home,
+      TALOS_AGENT_DIR: resolve(agent),
+    })
     const key1 = readFileSync(join(home, 'bridge.key'), 'utf8')
     const cfg1 = readFileSync(join(home, 'config.json'), 'utf8')
 

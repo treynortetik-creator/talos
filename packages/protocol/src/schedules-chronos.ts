@@ -30,6 +30,7 @@ import {
   type ScheduleT,
   ScheduleWhen,
   safeLine,
+  shortWhenText,
 } from './schedules.ts'
 
 const Fields = z.array(z.strictObject({ path: z.string(), message: z.string() }))
@@ -143,7 +144,13 @@ export const ChronosChange = z.discriminatedUnion('op', [
 export const ChronosValidateOk = z.strictObject({
   ok: z.literal(true),
   normalized: ChronosChange,
-  preview: SchedulePreview,
+  // Chronos's words for 12 fire times are longer than a card may show: cut here, where its answer is read, never refused
+  preview: SchedulePreview.extend({
+    when_text: z
+      .string()
+      .max(4000)
+      .transform((s) => shortWhenText(s)),
+  }),
   expected_etag: Sha256Ref.nullable(),
 })
 export const ChronosWriteOk = z.strictObject({ ok: z.literal(true), id: ScheduleId, etag: Sha256Ref.nullable() })

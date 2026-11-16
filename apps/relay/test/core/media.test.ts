@@ -30,7 +30,7 @@ const get = (r: TestRelay, path: string, headers: Record<string, string> = {}) =
   fetch(`${r.httpBase}${path}`, { headers: { ...SESSION, ...headers } })
 
 describe('media upload limits', () => {
-  it('MEDIA_DAILY_MAX_MB is the 24-hour byte budget: over it is rate_limited, and the next day is clear', async () => {
+  it('MEDIA_DAILY_MAX_MB is the 24-hour byte budget: over it is refused with 429, and the next day is clear', async () => {
     const c = fakeClock(new Date().toISOString())
     relay = await startTestRelay({ clock: c, env: { MEDIA_DAILY_MAX_MB: '1' } })
     const big = new Uint8Array(600 * 1024).fill(97)

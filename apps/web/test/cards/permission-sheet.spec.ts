@@ -248,7 +248,19 @@ test('Allow from the sheet sends a primary resolve with the card hash', async ({
   })
 })
 
-test('a run of Hangul conjoining jamo (one grapheme cluster, nothing to break) never runs off the side with Allow on', async ({
+test('a call Claude Code cut short: the sheet says what is not shown, above the call, and Allow comes at the end', async ({
+  page,
+}) => {
+  const { sheet } = await openCard(page, '{"command":"rsync -av ./dist/ server:/srv/app/ && echo done …')
+  await expect(sheet.getByTestId('approval-note')).toHaveText(
+    'Not all of this call is shown: its end is cut off (…). Allow approves the call as Claude Code holds it.',
+  )
+  await scrollTo(page, 'end')
+  await settle(page)
+  await expect(allow(sheet)).toBeEnabled()
+})
+
+test('a run of Hangul conjoining jamo (one grapheme cluster, nothing to break): off the side it says so, and Allow still comes at the end', async ({
   page,
 }) => {
   const { sheet } = await openCard(page, `echo ${'\u1100'.repeat(300)}SECRETTAIL`)
@@ -270,10 +282,13 @@ test('a run of Hangul conjoining jamo (one grapheme cluster, nothing to break) n
     }
   })
   if (m.sideways) {
-    // part of the call is off the side: Allow must be off
+    // part of the call is off the side: a hint says to scroll sideways, and Allow is not taken away (the owner's rule, 2026-11-13)
+    await expect(sheet.getByTestId('approval-hint')).toHaveText(
+      'Part of this call runs off the side of the screen: scroll sideways to see all of it.',
+    )
     await scrollTo(page, 'end')
     await settle(page)
-    await expect(allow(sheet)).toBeDisabled()
+    await expect(allow(sheet)).toBeEnabled()
   } else {
     // it wrapped: every character is inside the screen, and Allow comes once the end has been reached
     expect(m.scrollW).toBeLessThanOrEqual(m.clientW + 1)

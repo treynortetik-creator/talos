@@ -55,19 +55,33 @@ extension WorkerManager {
       """
   }
 
+  /// A start with no MCP list removes the file an earlier start with a list wrote (`workers/<id>/mcp/mcp.json`): it holds the listed
+  /// servers' credentials, and nothing reads it any more. Only that file: `workers/<id>/mcp.json` (`mcpConfig` below, the `talos-app`
+  /// entry for a thread outside the agent folder) is another file and is never touched here. Never through a link: one at the worker's
+  /// folder or at `mcp/` is left alone and said in the log. nil when the file is gone (or was never there), else why the start stops.
+  func removeListConfig(_ id: String, quiet: Bool = false) -> String? {
+    let file = WorkerMcp.configPath(talosHome: options.talosHome, threadId: id)
+    let folder = (file as NSString).deletingLastPathComponent
+    for p in [dir(id), folder] {
+      var st = stat()
+      if lstat(p, &st) == 0, st.st_mode & S_IFMT == S_IFLNK {
+        if !quiet { audit("worker_mcp_config_kept thread=\(id) reason=link_in_the_way") }
+        return nil  // the path is not ours: nothing of ours is behind it
+      }
+    }
+    if unlink(file) == 0 {
+      audit("worker_mcp_config_removed thread=\(id)")
+      return nil
+    }
+    if errno == ENOENT || errno == ENOTDIR { return nil }
+    if !quiet { audit("worker_mcp_config_not_removed thread=\(id) errno=\(errno)") }
+    return "the old MCP config of this thread (it holds server credentials) could not be removed: \(file)"
+  }
+
   /// `--mcp-config` for a folder outside the agent folder: the agent folder's `talos-app` server entry, nothing else, and
   /// nothing in its env a worker must never have.
   func mcpConfig(_ id: String, cwd: String) -> String? {
-    guard cwd != options.agentDir,
-      let d = FileManager.default.contents(atPath: options.agentDir + "/.mcp.json"),
-      let root = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
-      let servers = root["mcpServers"] as? [String: Any], let talos = servers["talos-app"] as? [String: Any]
-    else { return nil }
-    let path = dir(id) + "/mcp.json"
-    let clean = WorkerSpec.cleanMcpEntry(talos)
-    guard let out = try? JSONSerialization.data(withJSONObject: ["mcpServers": ["talos-app": clean]], options: [.sortedKeys]),
-      (try? AtomicFile.write(out, to: path, mode: 0o600)) != nil
-    else { return nil }
-    return path
+    guard let made = talosOnlyMcp(id, cwd: cwd), (try? AtomicFile.write(made.bytes, to: made.path, mode: 0o600)) != nil else { return nil }
+    return made.path
   }
 }

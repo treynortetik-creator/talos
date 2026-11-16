@@ -26,6 +26,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     didSet {
       if !signedIn { companionGone() }
       applyTerminal()
+      applyShellPane()
     }
   }
   @Published private(set) var needsYou = 0
@@ -41,6 +42,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
         terminalRect = nil
         terminal.close()
         stopTerminalSessions()
+        forgetShellPaneSlot()
       }
     }
   }
@@ -81,6 +83,13 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   let terminal = EmbeddedTerminal()
 
   private(set) var terminalRect: TerminalViewRect?
+  /// The owner's own shell laid over the page's Terminal pane slot (`shell_pane`, WebWindowShellPane.swift), and the slot the
+  /// page last asked for. The page places it; it cannot type into it, read it, or choose what it runs.
+  let shellPane = OwnerShellPane()
+  var shellPaneSlot: (thread: String, rect: TerminalViewRect)?
+  /// Set while this Mac is signing out or being forgotten, until the next document loads: the page that is on its way out is
+  /// still alive and may say it is signed in and ask for a pane, and no shell may start for it.
+  var shellPaneBarred = false
   /// What the Terminal screen's tabs read: the Terminals window's list, and what Resume does. Tests hand in their own.
   struct TerminalSessionSource {
     var snapshot: () -> (entries: [SwitcherEntry], workers: WorkersFile?)?
@@ -246,6 +255,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     NSApp.activate(ignoringOtherApps: true)
     window?.makeKeyAndOrderFront(nil)
     applyTerminal()
+    applyShellPane()
   }
 
   private func build(_ relay: RelayOrigin) {
@@ -365,6 +375,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   /// Closing only hides the window; the page keeps running.
   func windowShouldClose(_ sender: NSWindow) -> Bool {
     terminal.close()  // a hidden window keeps no tmux viewer; `show()` brings it back
+    shellPane.hide()  // the shells keep running; `show()` lays the pane back
     sender.orderOut(nil)
     // willClose never posts for a window that only hides, so the Dock icon is told here (a hidden window does not count).
     ActivationPolicyController.shared.refresh(excluding: sender)
@@ -372,7 +383,10 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   }
 
   /// The page sends the new room a moment after a resize. Until then the terminal is cut to what the window has left.
-  func windowDidResize(_ notification: Notification) { applyTerminal() }
+  func windowDidResize(_ notification: Notification) {
+    applyTerminal()
+    applyShellPane()
+  }
 
   // MARK: agent terminal
 
@@ -531,6 +545,9 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     case .terminalLeave: pauseTerminalSessions()
     case .terminalResume(let id): terminalResume(id)
     case .pickFolder(let req, let start): pickFolder(req: req, start: start)
+    case .shellPane(let thread, let rect): shellPaneAsked(thread: thread, rect: rect)
+    case .shellPaneClose(let thread): shellPaneClosed(thread: thread)
+    case .captureAck: break  // the screenshot hotkey (screen-helper lane 5) handles it; nothing sends capture_drop yet
     }
   }
 
@@ -656,6 +673,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   /// (a 204, a dropped connection) leaves the old page up and ready, and must not strand the next message.
   func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
     pageReady = false
+    shellPaneBarred = false  // a new document: the page that was signed out is gone
     loadFailed = false
     retryAttempt = 0
     retryTimer?.invalidate()
@@ -779,6 +797,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     // The terminal goes first: it sits over the page, and nothing of the session may stay on screen while the logout runs.
     // Signed out at once as well, or a `terminal_view` the page sends during the logout would open it again.
     terminalRect = nil
+    endShellPanes()  // the owner signed this Mac out: the shells end with the session, and none starts until the next page
     setSignedIn(false)
     // End the session on the relay first (through the page, which carries the cookie and the CSRF rules), so the session
     // row doesn't live on until its TTL and an in-flight response can't put the cookie back; the local delete is the fallback.
@@ -787,6 +806,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     let store = wv.configuration.websiteDataStore
     let cookies = await store.httpCookieStore.allCookies()
     for c in cookies where Self.cookie(c, belongsTo: relay) { await store.httpCookieStore.deleteCookie(c) }
+    endShellPanes()  // again: whatever the outgoing page did while the logout ran
     setSignedIn(false)
     wv.load(URLRequest(url: relay.url))
   }
@@ -811,6 +831,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
       return d == relay.host || relay.host.hasSuffix("." + d) || d.hasSuffix("." + relay.host)
     }
     await store.removeData(ofTypes: types, for: mine)
+    endShellPanes()  // this Mac was forgotten: the shells end with its sign-in
     setSignedIn(false)
     wv.load(URLRequest(url: relay.url))
   }
@@ -848,7 +869,7 @@ extension WebController {
         if ask.runModal() == .alertFirstButtonReturn {
           let byName = await Task.detached { Self.revokeByName(config: config) }.value
           note = byName.note
-          wipe = byName.ok
+          wipe = byName.wipe
         } else {
           note = "Nothing was revoked and nothing was deleted."
           wipe = false
@@ -866,7 +887,11 @@ extension WebController {
     enum Kind: Sendable { case revoked, needsName, failed }
     var kind: Kind
     var note: String
+    /// Revoked by name: this window's device may be among the ones that were revoked, even when another revoke failed.
+    var revokedSome = false
     var ok: Bool { kind == .revoked }
+    /// Whether the window's sign-in and device key go. A key the bridge now refuses must not stay looking signed in.
+    var wipe: Bool { ok || revokedSome }
   }
 
   nonisolated static func revoke(config: DesktopConfig, id: String?) -> RevokeOutcome {
@@ -894,9 +919,22 @@ extension WebController {
     if ids.isEmpty { return RevokeOutcome(kind: .failed, note: "No pinned \"Mac app\" device was found, so nothing was deleted.") }
     var failed = 0
     for id in ids where TalosAppCLI.run(r, ["devices", "revoke", id])?.status != 0 { failed += 1 }
-    return failed == 0
-      ? RevokeOutcome(kind: .revoked, note: "Revoked \(ids.count) device(s).")
-      : RevokeOutcome(kind: .failed, note: "\(failed) revoke(s) failed; nothing was deleted. Run them again.")
+    return byNameOutcome(found: ids.count, failed: failed)
+  }
+
+  /// What revoking every "Mac app" device came to. A revoke that worked stays done whatever the next one did, and which of them
+  /// is this window's is not known here, so once any worked the sign-in is deleted and the count of each is said.
+  nonisolated static func byNameOutcome(found: Int, failed: Int) -> RevokeOutcome {
+    let revoked = found - failed
+    if failed == 0 { return RevokeOutcome(kind: .revoked, note: "Revoked \(found) device(s).") }
+    if revoked == 0 {
+      return RevokeOutcome(kind: .failed, note: "\(failed) revoke(s) failed; nothing was revoked and nothing was deleted. Run them again.")
+    }
+    return RevokeOutcome(
+      kind: .failed,
+      note: "Revoked \(revoked) of \(found) devices; \(failed) revoke(s) failed. This window's device may be one of the revoked, "
+        + "so its sign-in and device key were deleted. Run Forget this Mac again to revoke the rest.",
+      revokedSome: true)
   }
 }
 

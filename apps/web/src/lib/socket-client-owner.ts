@@ -1,9 +1,7 @@
-// The client methods for the owner acting on what the agent sent: cards, config, inbox, read marks, history, step-up.
+// The client methods for the owner acting on what the agent sent: cards, config, inbox, read marks, history.
 
-import { startAuthentication } from '@simplewebauthn/browser'
-import { newUlid, ownValue, routes, signOwnerFrame } from '@talos-app/protocol'
+import { newUlid, ownValue, signOwnerFrame } from '@talos-app/protocol'
 import { type CardResolveInput, TalosClientError } from './client.ts'
-import { PasskeyUnavailableError, passkeyBlock, shellPasskeyDeclined } from './passkeyGate.ts'
 import { APP_REQUEST_SETTLE_MS, CONFIG_APPLY_MS, HISTORY_PAGE, REQUEST_TIMEOUT_MS } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 import type { SocketClient } from './socket-types.ts'
@@ -21,10 +19,9 @@ export function createClientOwner(
   | 'markThreadRead'
   | 'loadHistory'
   | 'uploadMedia'
-  | 'stepup'
   | 'signOwnerFrame'
 > {
-  const { configWaiters, http, pending, set, settleConfig, signedTs, store } = c
+  const { configWaiters, pending, set, settleConfig, signedTs, store } = c
   return {
     // CC-C3: session.control. Never queued (the bridge refuses a stale control anyway).
     async sendOwnerFrame(frame) {
@@ -63,11 +60,11 @@ export function createClientOwner(
         ...(input.editedHash ? { edited_hash: input.editedHash } : {}),
         ...(input.note ? { note: input.note } : {}),
         ...(input.choice !== undefined ? { choice: input.choice } : {}),
-        // `stepup_token` is not covered by the signature (3.5); the relay checks it and strips it.
-        ...(input.stepupToken ? { stepup_token: input.stepupToken } : {}),
+        // signed with the rest: only the owner's own tap can always-allow a kind
+        ...(input.always ? { always: true } : {}),
       })
     },
-    async patchConfig(patch, popts) {
+    async patchConfig(patch) {
       const cfg = store.getState().config
       if (!cfg) throw new TalosClientError('config_conflict', 'No config yet.')
       const id = newUlid()
@@ -93,7 +90,6 @@ export function createClientOwner(
           type: 'config.patch',
           base_rev: cfg.rev,
           patch,
-          ...(popts?.stepupToken ? { stepup_token: popts.stepupToken } : {}),
         })
       } catch (e) {
         settleConfig(id, e instanceof TalosClientError ? e : new TalosClientError('internal', String(e)))
@@ -102,6 +98,14 @@ export function createClientOwner(
       await applied
     },
     async updateInbox(eventId, patch) {
+      // What the row holds now, kept until the relay answers: a refused change goes back to it. With a change already
+      // queued for this item the older note stands (it is what the relay last held).
+      const row = store.getState().inbox.find((i) => i.id === eventId)
+      if (row && !c.inboxQueue.has(eventId))
+        c.inboxBefore.set(eventId, {
+          state: row.state,
+          ...(row.snooze_until ? { snooze_until: row.snooze_until } : {}),
+        })
       c.applyInboxPatch(eventId, patch)
       // Queued, not fire-and-forget: offline, the change would show as done and then revert at the next `ready`.
       c.inboxQueue.set(eventId, { ...patch })
@@ -117,14 +121,21 @@ export function createClientOwner(
     },
     markThreadRead(threadId, upToSeq, opts) {
       if (opts?.needConnection && (!c.canSend() || !store.getState().devicePinned)) return false
-      if ((ownValue(store.getState().unread, threadId) ?? 0) === 0) return true
+      const before = store.getState()
+      const cleared = ownValue(before.unread, threadId) ?? 0
+      if (cleared === 0) return true
+      // The relay's mark as this device knows it, before it is raised here: what the next `ready` is checked against.
+      const known = before.readUpto ? (ownValue(before.readUpto, threadId) ?? 0) : undefined
       set((s) => ({
         unread: { ...s.unread, [threadId]: 0 },
         ...(s.readUpto
           ? { readUpto: { ...s.readUpto, [threadId]: Math.max(ownValue(s.readUpto, threadId) ?? 0, upToSeq) } }
           : {}),
       }))
-      c.send({ type: 'thread.read', thread_id: threadId, up_to_seq: upToSeq })
+      c.forgetUnreadSeqs(threadId, upToSeq)
+      // Queued, not fire-and-forget: with the socket down the mark would never reach the relay, and its next `ready`
+      // would put the count back on a thread the owner has read.
+      c.queueRead(threadId, upToSeq, cleared, known)
       return true
     },
     async loadHistory(threadId, beforeSeq) {
@@ -145,27 +156,6 @@ export function createClientOwner(
       return { hasMore: page.has_more, ...(page.unavailable ? { unavailable: page.unavailable } : {}) }
     },
     uploadMedia: c.uploadMediaNow,
-    async stepup(purpose) {
-      // The shell may have no passkeys (WP-I6): say so before a challenge is issued, never as a false "cancelled".
-      const blocked = await passkeyBlock()
-      if (blocked) throw new PasskeyUnavailableError(blocked)
-      const optionsJSON = await http.json<Parameters<typeof startAuthentication>[0]['optionsJSON']>(
-        'POST',
-        routes.stepupOptions.path,
-        { purpose },
-      )
-      let response: Awaited<ReturnType<typeof startAuthentication>>
-      try {
-        response = await startAuthentication({ optionsJSON })
-      } catch (e) {
-        if (shellPasskeyDeclined(e)) throw new PasskeyUnavailableError('shell_declined')
-        throw e
-      }
-      const res = routes.stepupVerify.res.parse(
-        await http.json('POST', routes.stepupVerify.path, { purpose, response }),
-      )
-      return res.stepup_token
-    },
     async signOwnerFrame(frame) {
       const k = await c.ensureKey()
       return signOwnerFrame({ ...frame, device_id: k.deviceId }, k.privateKey)

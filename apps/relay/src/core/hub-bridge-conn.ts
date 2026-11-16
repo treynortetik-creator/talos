@@ -11,7 +11,7 @@ import {
   WS_CLOSE,
 } from '@talos-app/protocol'
 import { verifyBridgeHello } from '../auth/contract.ts'
-import type { BridgeFeatures } from './features.ts'
+import { type BridgeFeatures, noteBridgeMain } from './features.ts'
 import { errName } from './hub-helpers.ts'
 import type { BridgeConn, Conn, HubDeps } from './hub-types.ts'
 import { HANDSHAKE_MS } from './hub-types.ts'
@@ -28,7 +28,17 @@ export type BridgeConnCtx = {
   /** A bridge is back: the session-stopped timer and its "already told" mark are cleared. */
   resetSessionStopped(): void
   armSessionStopped(): void
-  noteSupersede(): void
+  /** Runs the onBridgeGone hooks (the session module drops its busy and turn picture). */
+  bridgeGone(): void
+  /** A hello from `by` replaced the connected bridge. */
+  noteSupersede(by: string): void
+  /** A verified standby hello came in from `standby`: a replaced bridge that is still alive. */
+  noteStandby(standby: string): void
+  /**
+   * Presence says "superseded" from the moment a replaced bridge is seen alive (its standby hello is turned away) until a
+   * hello finds the slot empty. Returns whether the mark changed.
+   */
+  setSuperseded(on: boolean): boolean
   sendBridge(frame: Record<string, unknown>): void
   ready(forApp: boolean): Record<string, unknown>
   broadcastPresence(): void
@@ -37,6 +47,16 @@ export type BridgeConnCtx = {
   clearQueuedTimers(): void
   onBridgeFrameBuiltin(b: BridgeConn, frame: Frame, raw: Record<string, unknown>): Promise<void>
   runBridgeHandlers(keyId: string, frame: Frame, raw: Record<string, unknown>): Promise<void>
+}
+
+/**
+ * Closes a socket that has not signed in, and marks it so nothing it sends afterwards is read. A close is a handshake:
+ * until the peer answers it (or the library gives up, 30 s later) its frames keep arriving, and each one used to be
+ * parsed, and a hello among them checked, logged and counted as a failure. One refusal is the end of the socket.
+ */
+function refuseBridge(b: BridgeConn, code: number): void {
+  b.refused = true
+  b.conn.close(code)
 }
 
 export const bridgeConnFrames = {
@@ -50,6 +70,8 @@ export const bridgeConnFrames = {
       conn,
       ip: args.ip,
       authed: false,
+      refused: false,
+      closed: false,
       keyId: '',
       lastInbound: this.d.clock.now(),
       handshake: null,
@@ -63,15 +85,17 @@ export const bridgeConnFrames = {
       ),
     )
     b.handshake = this.d.clock.setTimeout(() => {
-      if (!b.authed) conn.close(WS_CLOSE.HANDSHAKE_TIMEOUT)
+      if (!b.authed) refuseBridge(b, WS_CLOSE.HANDSHAKE_TIMEOUT)
     }, HANDSHAKE_MS)
     this.track(b.handshake)
     let chain: Promise<void> = Promise.resolve()
     return {
       onMessage: (text) => {
+        if (b.refused) return
         b.lastInbound = this.d.clock.now()
         const limit = b.authed ? MAX_FRAME_BYTES : MAX_FRAME_BYTES_UNAUTH
-        if (Buffer.byteLength(text) > limit) return void conn.close(WS_CLOSE.FRAME_TOO_LARGE)
+        if (Buffer.byteLength(text) > limit)
+          return b.authed ? void conn.close(WS_CLOSE.FRAME_TOO_LARGE) : refuseBridge(b, WS_CLOSE.FRAME_TOO_LARGE)
         chain = chain.then(() =>
           bridgeConnFrames.handleBridgeText
             .call(this, b, text, { nonce, relay_host: args.relayHost, server_time: serverTime })
@@ -81,6 +105,7 @@ export const bridgeConnFrames = {
         )
       },
       onClose: () => {
+        b.closed = true
         if (this.isStopped()) return
         this.d.clock.clearTimeout(b.handshake)
         if (this.getBridge() === b) {
@@ -88,6 +113,7 @@ export const bridgeConnFrames = {
           this.d.store.setState('bridge_last_seen', String(this.d.clock.now()))
           this.clearQueuedTimers()
           this.resetStaleStatuses()
+          this.bridgeGone()
           this.broadcastPresence()
           this.armSessionStopped()
         }
@@ -101,11 +127,13 @@ export const bridgeConnFrames = {
     text: string,
     challenge: { nonce: string; relay_host: string; server_time: number },
   ): Promise<void> {
+    // Frames queued behind the one that got this socket refused (they arrived while it was being checked) are dropped too.
+    if (b.refused) return
     const parsed = parseFrameText(text, { authenticated: b.authed, direction: 'bridge_to_relay' })
     if (!parsed.ok) {
       const rawId = (parsed.raw as { id?: unknown } | undefined)?.id
       if (!b.authed)
-        return void b.conn.close(parsed.code === 'too_large' ? WS_CLOSE.FRAME_TOO_LARGE : WS_CLOSE.UNAUTHORIZED)
+        return refuseBridge(b, parsed.code === 'too_large' ? WS_CLOSE.FRAME_TOO_LARGE : WS_CLOSE.UNAUTHORIZED)
       return this.sendBridge(
         mkFrame(this.d.clock, 'error', {
           ...(typeof rawId === 'string' ? { ref: rawId } : {}),
@@ -117,12 +145,38 @@ export const bridgeConnFrames = {
     const raw = parsed.raw as Record<string, unknown>
     const frame = parsed.frame
     if (!b.authed) {
-      if (frame.type !== 'hello' || frame.role !== 'bridge') return void b.conn.close(WS_CLOSE.UNAUTHORIZED)
+      if (frame.type !== 'hello' || frame.role !== 'bridge') return refuseBridge(b, WS_CLOSE.UNAUTHORIZED)
       const res = await verifyBridgeHello({ hello: { key_id: frame.key_id, sig: frame.sig }, challenge, ip: b.ip })
       if (!res.ok) {
         this.d.log.warn({ ip: b.ip }, 'bridge hello refused')
-        return void b.conn.close(WS_CLOSE.UNAUTHORIZED)
+        return refuseBridge(b, WS_CLOSE.UNAUTHORIZED)
       }
+      // The socket may have gone while the signature was being checked: closed by the 10 s handshake deadline, or by the peer.
+      // Either way it stays gone; a socket that closed must never become the bridge (it would hold the slot as a ghost).
+      if (b.refused || b.closed) return
+      // A bridge that was replaced asks to come back without replacing anyone: while another one is connected it is turned
+      // away the way a replaced one is (4409), so two live bridges never trade the slot. With the slot empty it is an
+      // ordinary hello.
+      const holder = this.getBridge()
+      if (frame.standby) this.noteStandby(b.ip)
+      if (frame.standby && holder && holder !== b && holder.authed) {
+        // A replaced bridge that is still alive proves two bridges use this key (a bridge that only redialled over its own
+        // dead socket never asks again): presence says so until a hello finds the slot empty. The push is noteStandby's.
+        if (this.setSuperseded(true)) {
+          this.d.log.warn(
+            { holder_ip: holder.ip, standby_ip: b.ip },
+            'two bridges are connected with the same key; the older one waits as a standby',
+          )
+          this.broadcastPresence()
+        }
+        return void b.conn.close(WS_CLOSE.SUPERSEDED)
+      }
+      // The Mac's clock against ours, sampled as it answers our challenge (its hello is sent the moment the challenge
+      // arrives): new cards' expiry on the relay is shifted by it (store.putCard). Under 5 s is noise and counts as none.
+      const skew = this.d.clock.now() - Date.parse(frame.ts)
+      this.d.store.setState('mac_clock_skew_ms', String(Number.isFinite(skew) && Math.abs(skew) >= 5_000 ? skew : 0))
+      if (Number.isFinite(skew) && Math.abs(skew) > 120_000)
+        this.d.log.warn({ skew_s: Math.round(skew / 1000) }, "the Mac's clock is off; card expiry follows the relay's")
       this.bridgeFeatures.onHello(frame.client.features ?? [], new Date(this.d.clock.now()).toISOString())
       return bridgeConnFrames.bridgeHello.call(this, b, res.keyId, frame.client.features ?? [])
     }
@@ -139,13 +193,16 @@ export const bridgeConnFrames = {
     if (old && old !== b) {
       this.setBridge(null) // so the old socket's close does not arm the session-stopped timer
       old.conn.close(WS_CLOSE.SUPERSEDED)
-      this.noteSupersede()
-    }
+      this.d.log.info({ old_ip: old.ip, new_ip: b.ip }, 'a new bridge hello replaced the connected one')
+      this.noteSupersede(b.ip)
+    } else this.setSuperseded(false)
     this.setBridge(b)
     this.resetSessionStopped()
     this.d.store.setState('bridge_last_seen', String(this.d.clock.now()))
     // The relay may have restarted while the bridge was down: no 'working' row survives a new bridge.
     this.resetStaleStatuses()
+    // nor Main's state from the last one: a new bridge says its own in its first beat (no stale sign-in banner meanwhile)
+    noteBridgeMain(this.d.store, undefined)
     b.conn.send(JSON.stringify(this.ready(false)))
     this.broadcastPresence()
     this.resendAllUnconsumed()

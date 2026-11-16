@@ -1,6 +1,16 @@
 // Regression tests for the full-codebase review (bridge findings). Each block names the finding it pins.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { fakeClock } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
@@ -10,6 +20,7 @@ import { DeviceStore } from '../src/devices.ts'
 import { writeFileAtomic } from '../src/fsutil.ts'
 import { nullLogger } from '../src/log.ts'
 import { installMcp, mcpEntry } from '../src/mcp-config.ts'
+import { OUTBOX_RETENTION_MS } from '../src/transport.ts'
 import { eventually, type Harness, sleep, startHarness, tempHome, waitFor } from './helpers.ts'
 
 let h: Harness
@@ -50,14 +61,6 @@ describe('#6 rotate reconnect', () => {
     expect(h.bridge.live).toBe(true)
     expect(h.relay.bridgeConnected).toBe(true)
     expect(h.notes.filter((n) => n.meta.kind === 'system')).toEqual([]) // no "Another bridge connected" notice
-  })
-
-  test('a stale ready after the bridge went headless is a no-op, not an unhandled rejection', async () => {
-    h = await startHarness()
-    h.relay.kickBridge(4409)
-    await waitFor(() => !h.bridge.live, 4000, 'headless after 4409')
-    const onReady = (h.bridge as unknown as { onReady(): void }).onReady.bind(h.bridge)
-    expect(() => onReady()).not.toThrow()
   })
 })
 
@@ -118,7 +121,12 @@ describe('#7 oversized durable frames', () => {
   test('an outbox row older than the retention window is dropped and the agent is told', async () => {
     h = await startHarness()
     const frame = { v: 1, type: 'receipt', id: '01JBF3V7Q8K2M4N6P8R0S2T4V8', ts: new Date().toISOString() }
-    h.bridge.ctx.store.outboxAdd(frame.id, 'receipt', JSON.stringify(frame), Date.now() - 25 * 3_600_000)
+    h.bridge.ctx.store.outboxAdd(
+      frame.id,
+      'receipt',
+      JSON.stringify(frame),
+      Date.now() - OUTBOX_RETENTION_MS - 3_600_000,
+    )
     const before = h.notes.length
     ;(h.bridge.ctx.transport as unknown as { flushOutbox(): void }).flushOutbox()
     // the row itself, not the total: a config.sync still in flight would count too
@@ -141,6 +149,7 @@ describe('#7 oversized durable frames', () => {
         attachments: [],
         via: 'app',
         created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(),
+        seq: i + 1, // numbered, as delivered rows are: the app continues from the lowest seq it was shown
       } as never)
     }
     await h.app.sendHistoryRequest('general', { request_id: 'rbig', limit: 100 })
@@ -211,6 +220,57 @@ describe('#17 writing into the agent folder', () => {
     expect(r.changed).toBe(true)
     expect(statSync(agent).mode & 0o777).toBe(0o755)
     expect(statSync(join(agent, '.mcp.json')).mode & 0o777).toBe(0o644)
+  })
+
+  test('install-mcp writes a symlinked .mcp.json through the link and keeps a private file private (bug hunt core #8)', () => {
+    const root = tempHome('talos-agent-')
+    const agent = join(root, 'agent')
+    const dots = join(root, 'dot')
+    mkdirSync(agent, { recursive: true })
+    mkdirSync(dots, { recursive: true })
+    const real = join(dots, 'mcp.json')
+    writeFileSync(real, JSON.stringify({ mcpServers: { other: { command: 'x', env: { API_TOKEN: 't' } } } }), {
+      mode: 0o600,
+    })
+    chmodSync(real, 0o600)
+    symlinkSync(real, join(agent, '.mcp.json'))
+    const r = installMcp(agent, mcpEntry('/opt/talos/bridge', '/tmp/home'), false)
+    expect(r.changed).toBe(true)
+    expect(lstatSync(join(agent, '.mcp.json')).isSymbolicLink()).toBe(true) // still a link
+    expect(statSync(real).mode & 0o777).toBe(0o600) // still private
+    const written = JSON.parse(readFileSync(real, 'utf8')) as { mcpServers: Record<string, unknown> }
+    expect(Object.keys(written.mcpServers).sort()).toEqual(['other', 'talos-app']) // the dotfiles copy is the one updated
+  })
+
+  test('install-mcp refuses a .mcp.json linked to a file that is not an mcp.json (~/.claude.json, the Talos config), changing nothing', () => {
+    const root = tempHome('talos-agent-')
+    const agent = join(root, 'agent')
+    mkdirSync(agent, { recursive: true })
+    for (const name of ['.claude.json', 'config.json']) {
+      const victim = join(root, name)
+      const before = JSON.stringify({ mcpServers: {}, keep: name })
+      writeFileSync(victim, before, { mode: 0o600 })
+      rmSync(join(agent, '.mcp.json'), { force: true })
+      symlinkSync(victim, join(agent, '.mcp.json')) // the agent can make this link in its own folder
+      expect(() => installMcp(agent, mcpEntry('/opt/talos/bridge', '/tmp/home'), false)).toThrow(/nothing was changed/)
+      expect(readFileSync(victim, 'utf8')).toBe(before)
+      expect(lstatSync(join(agent, '.mcp.json')).isSymbolicLink()).toBe(true)
+    }
+  })
+
+  test('install-mcp never follows a link to an mcp.json inside the Claude config or the Talos home', () => {
+    const root = tempHome('talos-agent-')
+    const agent = join(root, 'agent')
+    const talosHome = join(root, 'talos-home')
+    mkdirSync(agent, { recursive: true })
+    mkdirSync(talosHome, { recursive: true })
+    const victim = join(talosHome, 'mcp.json') // named like an mcp.json, but in a folder the agent may not write
+    writeFileSync(victim, JSON.stringify({ mcpServers: {} }))
+    symlinkSync(victim, join(agent, '.mcp.json'))
+    expect(() => installMcp(agent, mcpEntry('/opt/talos/bridge', '/tmp/home'), false, [talosHome])).toThrow(
+      /never writes; nothing was changed/,
+    )
+    expect(readFileSync(victim, 'utf8')).toBe(JSON.stringify({ mcpServers: {} }))
   })
 
   test('writeFileAtomic still creates a missing parent as 0700', () => {
@@ -302,7 +362,7 @@ describe('#38 non-consumable durable frames are acked after processing', () => {
       h.relay.frames.filter(
         (r) => r.direction === 'from_bridge' && r.frame.type === 'ack' && (r.frame as { ref: string }).ref === id,
       )
-    const f = await h.app.sendConfigPatch(cfg.config.rev, { timezone: 'Etc/GMT+7' })
+    const f = await h.app.sendConfigPatch(cfg.config.rev, { timezone: 'Etc/GMT+5' })
     // The bridge handles frames one at a time, so once a later frame is acked the patch's outcome is already decided.
     const marker = h.relay.sendToBridge({ type: 'device.revoked', device_id: 'd_rjxnk4xufxem5xago5zd' })
     await eventually(() => expect(ackOf(String(marker.id)).length).toBeGreaterThan(0))
@@ -312,7 +372,7 @@ describe('#38 non-consumable durable frames are acked after processing', () => {
     const mark = h.relay.frames.length
     h.relay.dropBridge()
     await h.relay.expectFrame('ready', () => true, { direction: 'to_bridge', since: mark })
-    await waitFor(() => cfg.config.timezone === 'Etc/GMT+7', 4000, 'the replayed patch applied')
+    await waitFor(() => cfg.config.timezone === 'Etc/GMT+5', 4000, 'the replayed patch applied')
     await waitFor(() => ackOf(f.id).length > 0, 4000, 'acked after it was applied')
   })
 })

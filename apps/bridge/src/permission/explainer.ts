@@ -237,11 +237,12 @@ export function createExplainer(o: ExplainerOptions): Explainer & { close(): voi
         return { ok: false, reason: 'timeout' }
       }
       if (closed) return { ok: false, reason: 'closed' }
-      if (res.code !== 0 || res.out.length > OUTPUT_MAX) return { ok: false, reason: `exit ${res.code}` }
+      if (res.code !== 0) return { ok: false, reason: `exit ${res.code}` }
+      if (res.out.length > OUTPUT_MAX) return { ok: false, reason: 'answer too long' }
       return parseModelAnswer(res.out) ?? { ok: false, reason: 'unreadable answer' }
-    } catch (e) {
+    } catch {
       if (pid !== undefined) killGroup(pid)
-      return { ok: false, reason: (e as Error).message }
+      return { ok: false, reason: 'could not run' } // never the error's text: it can name paths
     } finally {
       if (pid !== undefined) live.delete(pid)
       release()
@@ -335,7 +336,12 @@ const withStop = (t: string) => (/[.!?]$/.test(t) ? t : `${t}.`)
  * - The floor never depends on the model: when the run fails, times out, is not understood or the call is too long to send, a
  *   call with a floor still gets a ready, mismatched explanation made from the floor alone. Only a failure with no floor is `failed`.
  */
-export async function explainToCard(explainer: Explainer, req: ExplainRequest): Promise<PermissionExplainT> {
+export async function explainToCard(
+  explainer: Explainer,
+  req: ExplainRequest,
+  /** Why the model gave no answer, from a fixed set (too long, timeout, exit N, ...), never the command: for the log. */
+  onFail?: (reason: string) => void,
+): Promise<PermissionExplainT> {
   const floor = permissionFloor(req.tool, req.input)
   let r: ExplainOutcome
   try {
@@ -343,6 +349,7 @@ export async function explainToCard(explainer: Explainer, req: ExplainRequest): 
   } catch {
     r = { ok: false, reason: 'threw' }
   }
+  if (!r.ok) onFail?.(r.reason)
   const seen = floor && !floor.opaque ? floor : undefined // a specific thing Talos saw, not just "cannot read"
   const cap = (t: string) => t.slice(0, EXPLAIN_SENTENCE_MAX)
   if (!r.ok) {

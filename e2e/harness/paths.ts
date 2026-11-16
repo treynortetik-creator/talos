@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url'
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 export const RELAY_DIST = join(ROOT, 'apps', 'relay', 'dist', 'index.js')
-export const WEB_DIST = join(ROOT, 'apps', 'web', 'dist')
+// E2E_WEB_DIST serves another built web app instead, the saved bundle of the old-client step (scripts/old-client.sh).
+export const WEB_DIST = process.env.E2E_WEB_DIST ? resolve(process.env.E2E_WEB_DIST) : join(ROOT, 'apps', 'web', 'dist')
 export const BRIDGE_DIR = join(ROOT, 'apps', 'bridge')
 export const BRIDGE_SERVER = join(BRIDGE_DIR, 'src', 'server.ts')
 export const BRIDGE_CLI = join(BRIDGE_DIR, 'src', 'cli.ts')

@@ -114,7 +114,7 @@ test('mac-away-approve (no result): an approved card whose result never comes st
   page,
   context,
 }) => {
-  await page.clock.install()
+  await page.clock.install({ time: new Date(stack.now()) }) // the stack's clock: not the wall's when E2E_NOW moves it
   recordWire(page)
   // This agent takes the approval and never calls card_result (the fake one would, by default).
   const claude = await stack.startBridge({ autoReply: false })

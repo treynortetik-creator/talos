@@ -5,7 +5,6 @@ import { frame, ownerFrame } from './frame-base.ts'
 import { CardId, Sha256Ref } from './ids.ts'
 import { Card } from './models.ts'
 import { PermissionExplain } from './permission-explain.ts'
-import { StepupAssertion } from './stepup.ts'
 
 export const CardCreateFrame = frame('card.create', { card: Card })
 
@@ -32,9 +31,14 @@ export const CardResolveFrame = ownerFrame('card.resolve', {
     .min(0)
     .max(DIALOG_MAX_OPTIONS - 1)
     .optional(),
-  stepup_token: z.string().max(200).optional(), // relay-checked, stripped before forwarding, not signed
-  /** Raw WebAuthn assertion, verified by the BRIDGE (docs/CLAUDE-CODE.md C3.6). Signed; the relay never strips it. */
-  stepup: StepupAssertion.optional(),
+  /**
+   * "Always allow <kind>": with action 'primary' on a card of a SEND_KINDS kind, the owner also allows that kind from now on
+   * (owner ruling 2026-11-14). Signed with the rest of the frame, so only the owner's own tap carries it; the bridge adds the
+   * kind to `always_allow` only after it verifies that signature for this card. Ignored on any other action or kind.
+   */
+  always: z.literal(true).optional(),
+  stepup_token: z.string().max(200).optional(), // old apps only (the passkey step-up, removed 2026-11-14): stripped, never read
+  stepup: z.unknown().optional(), // old apps only (the passkey step-up, removed 2026-11-14): accepted, never read
 })
 
 export const CardUpdateFrame = frame('card.update', {

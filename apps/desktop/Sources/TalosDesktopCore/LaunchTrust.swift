@@ -7,7 +7,7 @@ import Security
 /// HMAC-SHA256 over the fingerprint (and the per-piece description stored beside it) with a 32-byte key that is created on the owner's first
 /// confirm and lives in the Keychain, where an agent writing files cannot read it. `desktop.json` keeps the fingerprint and its MAC; the guard
 /// trusts the fingerprint only while the MAC verifies. Fail closed: no key, no MAC, a MAC that does not verify, or a Keychain that cannot be
-/// read all read as "this launch is not the confirmed one", which puts the warning on a card the owner taps once.
+/// read all read as "this launch is not the confirmed one", which puts the warning on the popup the owner clicks once.
 public protocol LaunchTrust: Sendable {
   /// The MAC of `message`. With `createKey` (the owner's own confirm) a missing key is made first; without it a missing key gives nil.
   /// nil also when the key store cannot be used.
@@ -96,57 +96,29 @@ public final class MemoryLaunchTrust: LaunchTrust, @unchecked Sendable {
 ///
 /// Whether the item survives an update of the app was checked before this was written (apps/desktop/scripts/keychain-survival-probe.sh): an
 /// item made by a build signed with the owner's team is read by the next build signed with it, with no prompt. A build that cannot read the
-/// existing item (signed another way, ad hoc) never re-seals: it only makes a key when none exists, so every start of that build shows the
-/// card. That is fail-closed and the cost is a tap, not a hole.
+/// existing item never replaces it. A build signed by another signer (a local build, then the notarized one) keeps its own key in a second
+/// item for that signer (`SignerScopedItem`), so its card is answered once, not at every start; the old signer's item is left alone. An
+/// ad hoc build has no signer key and makes no second item: every start of it shows the card (fail closed; the cost is a tap, not a hole).
 public final class KeychainLaunchTrust: LaunchTrust, @unchecked Sendable {
   public static let service = "com.talos.app.launch-seal"
   public static let account = "confirmed-launch-v1"
-  private let service: String
-  private let account: String
+  private let scoped: SignerScopedItem
+  private var item: KeychainItem { scoped.primary }
   private let lock = NSLock()
 
-  public init(service: String = KeychainLaunchTrust.service, account: String = KeychainLaunchTrust.account) {
-    self.service = service
-    self.account = account
-  }
-
-  private func base() -> [String: Any] {
-    [
-      kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account,
-      kSecAttrSynchronizable as String: false, kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail,
-    ]
-  }
-
-  /// Runs `body` with Keychain prompts switched off for this process, and puts the setting back.
-  private func quietly<T>(_ body: () -> T) -> T {
-    var prior = DarwinBoolean(true)
-    SecKeychainGetUserInteractionAllowed(&prior)
-    SecKeychainSetUserInteractionAllowed(false)
-    defer { SecKeychainSetUserInteractionAllowed(prior.boolValue) }
-    return body()
+  /// `keychain` limits every call to that one keychain (a test's throwaway one); nil is the owner's Keychain search list, as the app uses.
+  /// `signer` is this build's signer key (`SignerKey.current()`); tests pass their own.
+  public init(
+    service: String = KeychainLaunchTrust.service, account: String = KeychainLaunchTrust.account, keychain: SecKeychain? = nil,
+    signer: String? = SignerKey.current()
+  ) {
+    scoped = SignerScopedItem(service: service, account: account, keychain: keychain, signer: signer)
   }
 
   /// The 32 key bytes, or nil (missing, locked, not ours to read). A key is made only when the item is missing (`errSecItemNotFound`) and
-  /// `create` is set; an item that exists but cannot be read is never replaced.
+  /// `create` is set; an item that exists but cannot be read is never replaced (this signer's own item is used instead).
   private func loadKey(create: Bool) -> SymmetricKey? {
-    lock.withLock {
-      quietly {
-        var q = base()
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        let s = SecItemCopyMatching(q as CFDictionary, &out)
-        if s == errSecSuccess, let d = out as? Data, d.count == 32 { return SymmetricKey(data: d) }
-        guard create, s == errSecItemNotFound else { return nil }
-        var bytes = [UInt8](repeating: 0, count: 32)
-        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return nil }
-        var add = base()
-        add[kSecValueData as String] = Data(bytes)
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else { return nil }
-        return SymmetricKey(data: Data(bytes))
-      }
-    }
+    lock.withLock { scoped.key(create: create).map { SymmetricKey(data: $0) } }
   }
 
   public func mac(_ message: String, createKey: Bool) -> String? {
@@ -162,10 +134,8 @@ public final class KeychainLaunchTrust: LaunchTrust, @unchecked Sendable {
   @discardableResult
   public func deleteKey() -> Bool {
     lock.withLock {
-      quietly {
-        let s = SecItemDelete(base() as CFDictionary)
-        return s == errSecSuccess || s == errSecItemNotFound
-      }
+      let s = item.delete()
+      return s == errSecSuccess || s == errSecItemNotFound
     }
   }
 }
@@ -173,19 +143,30 @@ public final class KeychainLaunchTrust: LaunchTrust, @unchecked Sendable {
 /// The one-time step that comes with the seal (standing rule 6: a changed default ships with a re-runnable migration and a way back).
 /// Version 2 also changed the fingerprint from FNV-1a to SHA-256 over a length-prefixed encoding, so every earlier seal is cleared.
 /// Before the seal, `confirmed_launch` was a plain fingerprint. It cannot be told from one an agent wrote, so it is not trusted: the first
-/// start after the update puts the warning on a card, the owner's tap seals it. This step removes the unsealed value (so the card says "not
+/// start after the update puts the warning on a card, the owner's click on the Mac popup seals it. This step removes the unsealed value (so the card says "not
 /// confirmed on this Mac yet" rather than "changed") and records that it ran, in `launch_trust`. It does nothing a second time; setting
 /// `launch_trust` back to 0 (or deleting the key) in desktop.json runs it again. The way back to the old behaviour: turn "Press Enter for me"
 /// (`auto_confirm_restart`) off, and press Enter in the pane (or tap the card) yourself.
 public enum LaunchTrustMigration {
   public static let version = 2
 
-  /// Loads desktop.json, runs the step and saves the file when it changed it (only a file that exists is rewritten). `migrated` is true when it ran now.
-  public static func load(_ path: String) -> (config: DesktopConfig?, migrated: Bool) {
+  /// Loads desktop.json and runs the step on what it loaded, writing NOTHING. `migrated` is true when the step changed the config:
+  /// the caller saves it. The app's one caller is the supervisor, which saves through its own `saveConfig` (the one place the app
+  /// writes desktop.json: it refuses while the file is unreadable, and logs a failed write). No config (no file, or one that cannot
+  /// be read) is never migrated.
+  public static func read(_ path: String) -> (config: DesktopConfig?, migrated: Bool) {
     guard var c = (try? ConfigFile.load(path)) ?? nil else { return (nil, false) }
     let migrated = run(&c)
-    if migrated { try? ConfigFile.save(c, to: path) }
     return (c, migrated)
+  }
+
+  /// `read`, then the save when the step ran (only a file that exists and loaded is rewritten). The app does not use this (see
+  /// `read`); it is for tools and tests. A failed write is returned in `saveError`, never swallowed.
+  public static func load(_ path: String) -> (config: DesktopConfig?, migrated: Bool, saveError: Error?) {
+    let r = read(path)
+    guard r.migrated, let c = r.config else { return (r.config, r.migrated, nil) }
+    do { try ConfigFile.save(c, to: path) } catch { return (c, true, error) }
+    return (c, true, nil)
   }
 
   /// True when it changed the config.
@@ -193,7 +174,7 @@ public enum LaunchTrustMigration {
   public static func run(_ c: inout DesktopConfig) -> Bool {
     guard (c.launchTrust ?? 0) < version else { return false }
     c.launchTrust = version
-    // an earlier value is either unsealed or sealed over the old fingerprint: neither is the current format, so the owner taps once
+    // an earlier value is either unsealed or sealed over the old fingerprint: neither is the current format, so the owner clicks once
     c.confirmedLaunch = nil
     c.confirmedLaunchParts = nil
     c.confirmedLaunchMac = nil

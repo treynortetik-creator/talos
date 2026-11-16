@@ -3,6 +3,7 @@
 // malformed frame of a KNOWN kind is still refused with no note. Runs on the replay harness: scripted socket, fake clock.
 import { buildCard } from '@talos-app/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
+import { createMemoryStorage } from '../src/lib/storage.ts'
 import { createUnknownNotes, UPDATE_NOTE } from '../src/lib/unknownFrames.ts'
 import { type Run, readyFrame, START_ISO, srv, startRun, uid } from './replay/replay-harness.ts'
 
@@ -387,5 +388,55 @@ describe('the note rules in detail', () => {
     await run.settle()
     expect(notes(run).length).toBeGreaterThan(0)
     expect(lastSeq(run)).toBe(before)
+  })
+})
+
+describe('the note does not outlive the build that wrote it', () => {
+  /** An older build meets a card kind it cannot show, notes it, and saves the thread with the note in it; then the page goes. */
+  async function olderBuildSaw(open: Record<string, unknown>) {
+    const storage = createMemoryStorage()
+    const older = await startRun({ storage })
+    await online(older, { open_cards: [open] })
+    expect(notes(older)).toHaveLength(1)
+    older.sock().receive(
+      srv('reply', {
+        message: {
+          id: uid('m_'),
+          thread_id: 'general',
+          seq: 2,
+          author: 'agent',
+          kind: 'text',
+          text: 'kept',
+          format: 'plain',
+          attachments: [],
+          via: 'app',
+          created_at: START_ISO,
+        },
+      }),
+    )
+    await older.settle()
+    await older.advance(1000) // the debounced save of the render cache
+    older.stop()
+    return storage
+  }
+
+  it('a note written by an older build is gone once a build that can show the thing loads', async () => {
+    const open = futureCard('ledger')
+    const storage = await olderBuildSaw(open)
+    // the newer build reads the saved thread before it connects: the note is not brought back, the rest of the thread is
+    run = await startRun({ storage })
+    expect(notes(run)).toHaveLength(0)
+    expect((run.client.store.getState().messages.general ?? []).map((m) => m.text)).toContain('kept')
+    // this build knows the kind (here: one it lists), so the same card shows and nothing is noted again
+    await online(run, { open_cards: [{ ...open, kind: 'email' }] })
+    expect(notes(run)).toHaveLength(0)
+    expect(cards(run).map((c) => c.id)).toEqual([open.id])
+  })
+
+  it('a build that still cannot show it says so again, once', async () => {
+    const open = futureCard('ledger')
+    run = await startRun({ storage: await olderBuildSaw(open) })
+    await online(run, { open_cards: [open] })
+    expect(notes(run)).toHaveLength(1)
   })
 })

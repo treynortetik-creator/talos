@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# The pre-push hook: the personal-data check, then format, lint and type-check what this push changes, in about 10 seconds, so a
-# typo fails here and not after the code is on main. The personal-data check (scripts/check-no-personal.sh, the repo's
-# `pnpm check:personal`) comes first and always runs, but it only warns by default (docs/CI-LOCAL.md, "The personal-data scan").
-# TALOS_PERSONAL_SCAN=stop makes it stop this push.
-# It also runs a maintainer's private list when the main checkout of this repository has one (a worktree has none of its own). The
-# rest never replaces CI, so it stays quick: biome on the changed files, tsc on the changed packages (not on what depends on them:
-# CI does that, after the push). tsc gets 8 seconds (PRE_PUSH_TSC_SECONDS): on a quiet Mac that is plenty, and with CI
-# running it can take 30, so it is cut off and the push goes on, because a hook that holds up every push gets --no-verify.
-#
-# Git gives it one line per ref on stdin: <local ref> <local sha> <remote ref> <remote sha>. A change it cannot place in
-# one package (root config, the lockfile) type-checks everything. It reads files on disk, so when those aren't what is being
-# pushed, it says so and lets the push go. So it does with no node_modules, or no node or pnpm on PATH (a launchd job, a GUI
-# git client): a check that can't run is not a code problem.
+# The pre-push hook. Fail closed: any failure, or a check that cannot run, refuses the push (git push --no-verify is the
+# owner's own override, never a builder's). Two parts:
+#   1. The personal-data check of what is being PUSHED: every commit in the range (the files it changes, as committed) and its
+#      message, with the maintainer's private list from the main checkout when there is one (it says so when there is none).
+#      A hit stops the push; there is no warning-only mode.
+#   2. scripts/gate.sh, the one gate every machine runs: typecheck, lint, the personal-data check, the size budget and the test
+#      suites this push touches (all of them when the hook cannot tell what the push contains). It is the fast gate (gate.sh
+#      --fast, which falls back to the full gate where it must, and says which ran and why) unless GATE_FULL=1 asks for the full one.
+# A handoff branch (refs/heads/handoff/<machine>/<name>) gets part 1 only: a machine that cannot gate hands its work to one
+# that can, which lands it with `scripts/gate.sh --push --from` (the whole gate, then main). No other branch is spared part 2.
+# The gate reads files on disk, so they must be the ones being pushed: uncommitted edits, or another branch checked out, refuse
+# the push. Git gives the hook one line per ref on stdin: <local ref> <local sha> <remote ref> <remote sha>.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 ZERO=0000000000000000000000000000000000000000
@@ -26,19 +25,12 @@ base_of() { # base_of <local sha> <remote sha>: where this push starts from
   return 1
 }
 
-CHANGED="$(mktemp "${TMPDIR:-/tmp}/talos-pre-push.XXXXXX")" # what goes to biome: changed files still there
-TOUCHED="$(mktemp "${TMPDIR:-/tmp}/talos-pre-push.XXXXXX")" # what picks packages: deleted files count, others may import them
-TYPES_PID=""
+CHANGED="$(mktemp "${TMPDIR:-/tmp}/talos-pre-push.XXXXXX")" # the changed files still there, to compare with the disk
 SCAN_DIR=""
-TYPES_OUT="$(mktemp "${TMPDIR:-/tmp}/talos-pre-push.XXXXXX")" # what the type check printed; shown only if it finished
-CUT=0
-trap 'rm -f "$CHANGED" "$TOUCHED" "$TYPES_OUT"; [ -z "$SCAN_DIR" ] || rm -rf "$SCAN_DIR"' EXIT # also on Ctrl-C: the INT trap below exits
-# capped() puts the type check in a group of its own, out of reach of the terminal's Ctrl-C, so it has to be stopped from here.
-trap '[ -z "$TYPES_PID" ] || kill -TERM -- "-$TYPES_PID" 2>/dev/null; exit 130' INT TERM
+trap 'rm -f "$CHANGED"; [ -z "$SCAN_DIR" ] || rm -rf "$SCAN_DIR"' EXIT # also on Ctrl-C: the INT trap below exits
+trap 'exit 130' INT TERM
 PERSONAL_RC=0
-SCAN_MODE="${TALOS_PERSONAL_SCAN:-warn}" # the one place that default lives: change it to stop to make the scan a hard stop (docs/CI-LOCAL.md)
-if [ "$SCAN_MODE" = stop ]; then SCAN_ENDS="the push is stopped"; else SCAN_ENDS="warning only, the push goes on"; fi
-skip() { echo "pre-push: $1; skipping the lint and type checks (the personal-data check above already ran). They run in CI, after the push." >&2; exit $PERSONAL_RC; }
+SCAN_ENDS="the push is stopped"
 # The personal-data check reads what is being pushed, not the working tree: every commit in the range (the files it changes, as
 # committed) and its message. So a value that a later commit removes, a file deleted on disk, or a push of another branch than
 # the one checked out cannot slip past. The private list and private-docs list are gitignored, so a worktree does
@@ -87,7 +79,7 @@ scan_commit() { # scan_commit <commit> <whole tree: 1|0>: the commit's message a
   return $rc
 }
 personal() {
-  local common main="" l sha base commits c bad=0 d limit count
+  local common main="" l sha base commits c bad=0 d
   if [ ! -f scripts/check-no-personal.sh ]; then
     echo "pre-push: scripts/check-no-personal.sh is missing, so the personal-data check could not run; $SCAN_ENDS" >&2
     return 1
@@ -109,10 +101,6 @@ personal() {
   # Commits already on the pushed-to remote's main are not this push's to fix (a rebase or merge brings them into the range).
   NOT_MAIN=""
   [ -z "$REMOTE_MAIN" ] || NOT_MAIN="--not $REMOTE_MAIN"
-  # PRE_PUSH_SCAN_COMMITS is a plain base-10 number (08 is eight). Anything else, empty or 0 or too long to count, means no cap.
-  limit="${PRE_PUSH_SCAN_COMMITS-100}"
-  case "$limit" in '' | *[!0-9]* | ??????????*) limit="" ;; *) limit=$((10#$limit)) ;; esac
-  [ "${limit:-0}" -gt 0 ] || limit="" # 0 is no cap either
   while read -r sha base; do
     [ -n "$sha" ] || continue
     c="$(git rev-parse --verify -q "$sha^{commit}")" || { echo "pre-push: $sha is not a commit I can read; $SCAN_ENDS" >&2; bad=1; continue; }
@@ -120,14 +108,6 @@ personal() {
       scan_commit "$c" 1 || bad=1 # no idea where the push starts: the whole tree of its tip
     else
       commits="$(git rev-list "$base..$c" $NOT_MAIN)" || { echo "pre-push: cannot list the commits of the push; $SCAN_ENDS" >&2; bad=1; continue; }
-      count="$(printf '%s\n' "$commits" | grep -c .)"
-      if [ -n "$limit" ] && [ "$SCAN_MODE" != stop ] && [ "$count" -gt "$limit" ]; then
-        # One scanner run per commit is too slow for a very large push. Warn, never refuse: read the newest commits one by one
-        # and the whole tree of the tip, and say what that leaves out. Not in stop mode: that one reads every commit.
-        echo "pre-push: this push has $count commits, more than the $limit the personal-data check reads one by one (PRE_PUSH_SCAN_COMMITS). It reads the newest $limit and the whole tree of the tip. The other $((count - limit)) older commits are not checked one by one: their messages, and a value added and taken out again inside them, are not checked. This is a warning only; the push goes on." >&2
-        commits="$(printf '%s\n' "$commits" | head -n "$limit")"
-        scan_commit "$c" 1 || bad=1
-      fi
       for l in $commits; do scan_commit "$l" 0 || bad=1; done
     fi
   done <<EOF
@@ -135,100 +115,197 @@ $PUSHES
 EOF
   return $bad
 }
-ANY=0 ALL=0 SHAS=""
-while read -r _lref lsha _rref rsha; do
+# nl_names: NUL-separated names on stdin (git's -z, so none is ever a quoted C string, whatever core.quotePath says), one per line
+# on stdout. A name with a newline in it cannot be one line: exit 3, and the caller refuses. (A name holding byte 036, the
+# stand-in for a newline here, is taken for one: a refusal too, never a pass.)
+nl_names() {
+  local out
+  out="$(tr '\n\000' '\036\n')" || return 1
+  case "$out" in *$'\036'*) return 3 ;; esac
+  printf '%s\n' "$out"
+}
+ANY=0 ALL=0 SHAS="" GATE_BASE="" HANDOFF=0
+while read -r _lref lsha rref rsha; do
   [ -n "${lsha:-}" ] || continue
   [ "$lsha" = "$ZERO" ] && continue # deleting a branch: nothing to check
+  # the push lease (scripts/gate.sh --push), never code: refs/locks/push, a commit (not a tag) with an empty tree, no parent
+  # and a message in exactly the lease's form (so nothing else, personal data included, can ride on it unscanned); and the
+  # queue for it, refs/locks/wait/<machine>, held to the same rules in its own form
+  case "$rref" in refs/locks/*)
+    if [ "$rref" = refs/locks/push ] && [ "$(git cat-file -t "$lsha" 2>/dev/null)" = commit ] &&
+      [ "$(git rev-parse "$lsha^{tree}" 2>/dev/null)" = "$(git hash-object -t tree /dev/null)" ] &&
+      [ "$(git rev-list --parents -n 1 "$lsha" | wc -w | tr -d ' ')" = 1 ] &&
+      [ "$(git log -1 --format=%B "$lsha" | sed '/^$/d' | grep -Exc -e 'talos push lease' -e 'machine=[A-Za-z0-9._-]{1,63}' \
+        -e 'until=[0-9]{1,12}' -e 'until_iso=[0-9TZ:.-]{1,32}' -e 'pid=[0-9]{1,10}')" = 5 ] &&
+      [ "$(git log -1 --format=%B "$lsha" | sed '/^$/d' | wc -l | tr -d ' ')" = 5 ] &&
+      [ "$(git log -1 --format=%B "$lsha" | sed -n 1p)" = "talos push lease" ] &&
+      [ "$(git log -1 --format=%B "$lsha" | sed '/^$/d' | sed 1d | cut -d= -f1 | sort -u | tr '\n' ' ')" = "machine pid until until_iso " ]; then
+      continue
+    fi
+    # a machine's place in the queue for the lease: refs/locks/wait/<machine>, the same empty commit, its own form
+    wmsg="$(git log -1 --format=%B "$lsha" 2>/dev/null | sed '/^$/d')"
+    if [ "${rref#refs/locks/wait/}" != "$rref" ] && [ "$(git cat-file -t "$lsha" 2>/dev/null)" = commit ] &&
+      [ "$(git rev-parse "$lsha^{tree}" 2>/dev/null)" = "$(git hash-object -t tree /dev/null)" ] &&
+      [ "$(git rev-list --parents -n 1 "$lsha" | wc -w | tr -d ' ')" = 1 ] &&
+      { { [ "$(printf '%s\n' "$wmsg" | wc -l | tr -d ' ')" = 5 ] &&
+        [ "$(printf '%s\n' "$wmsg" | sed 1d | cut -d= -f1 | sort -u | tr '\n' ' ')" = "machine pid seen since " ]; } ||
+        { [ "$(printf '%s\n' "$wmsg" | wc -l | tr -d ' ')" = 6 ] && # with a red-main claim (gate.sh --push --red-main)
+          [ "$(printf '%s\n' "$wmsg" | grep -Exc -e 'red_main=[0-9a-f]{40}')" = 1 ] &&
+          [ "$(printf '%s\n' "$wmsg" | sed 1d | cut -d= -f1 | sort -u | tr '\n' ' ')" = "machine pid red_main seen since " ]; }; } &&
+      [ "$(printf '%s\n' "$wmsg" | sed -n 1p)" = "talos push wait" ] &&
+      [ "$(printf '%s\n' "$wmsg" | grep -Exc -e 'machine=[A-Za-z0-9._-]{1,63}' -e 'since=[0-9]{1,12}' -e 'seen=[0-9]{1,12}' -e 'pid=[0-9]{1,10}')" = 4 ] &&
+      [ "refs/locks/wait/$(printf '%s\n' "$wmsg" | sed -n 's/^machine=//p')" = "$rref" ]; then
+      continue
+    fi
+    # a red-main jump, once per machine per red (scripts/gate-push.sh): refs/locks/red-main/<machine>/<red sha>, the same
+    # empty commit, its own form
+    if [ "${rref#refs/locks/red-main/}" != "$rref" ] && [ "$(git cat-file -t "$lsha" 2>/dev/null)" = commit ] &&
+      [ "$(git rev-parse "$lsha^{tree}" 2>/dev/null)" = "$(git hash-object -t tree /dev/null)" ] &&
+      [ "$(git rev-list --parents -n 1 "$lsha" | wc -w | tr -d ' ')" = 1 ] &&
+      [ "$(printf '%s\n' "$wmsg" | wc -l | tr -d ' ')" = 5 ] &&
+      [ "$(printf '%s\n' "$wmsg" | sed -n 1p)" = "talos red-main" ] &&
+      [ "$(printf '%s\n' "$wmsg" | grep -Exc -e 'machine=[A-Za-z0-9._-]{1,63}' -e 'red=[0-9a-f]{40}' -e 'failed=[A-Za-z0-9._/,-]{1,255}' -e 'at=[0-9]{1,12}')" = 4 ] &&
+      [ "$(printf '%s\n' "$wmsg" | sed 1d | cut -d= -f1 | sort -u | tr '\n' ' ')" = "at failed machine red " ] &&
+      [ "refs/locks/red-main/$(printf '%s\n' "$wmsg" | sed -n 's/^machine=//p')/$(printf '%s\n' "$wmsg" | sed -n 's/^red=//p')" = "$rref" ]; then
+      continue
+    fi
+    echo "pre-push: REFUSED: refs/locks/ holds only the push lease (refs/locks/push, an empty commit in the lease's form), the queue for it (refs/locks/wait/<machine>) and red-main jumps (refs/locks/red-main/<machine>/<sha>)" >&2
+    exit 1
+    ;;
+  esac
+  # A handoff: a machine that cannot gate (too slow, or a broken environment) hands finished work to one that can, which
+  # lands it with `scripts/gate.sh --push --from <remote>/handoff/<machine>/<name>` (full gate, then main by sha). Only
+  # under refs/heads/handoff/<machine>/<name>; it gets the personal-data check of its commits (always, fail closed) and
+  # not the gate. Every other ref in the same push is checked as usual.
+  case "$rref" in refs/heads/handoff/*)
+    if ! printf '%s\n' "$rref" | grep -Eqx 'refs/heads/handoff/[A-Za-z0-9._-]{1,63}/[A-Za-z0-9._-]{1,80}'; then
+      echo "pre-push: REFUSED: a handoff branch is refs/heads/handoff/<machine>/<name> (letters, digits and . _ -)" >&2
+      exit 1
+    fi
+    # no private list here: the generic rules run (a hit still refuses), and the landing machine, which must have the list
+    # (gate-push.sh --from refuses without one), scans it with the private list too
+    common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
+    if [ ! -f scripts/personal-denylist.txt ] && { [ -z "$common" ] || [ ! -f "$(dirname "$common")/scripts/personal-denylist.txt" ]; } &&
+      [ -z "${CHECK_EXTRA_RULES:-}" ]; then
+      echo "pre-push: a handoff from a machine with no private list: the generic rules run here; the private-list scan happens at landing" >&2
+    fi
+    # What the handoff is: every commit it has on top of the remote's main (<main>..<tip>), whatever the ref held before. Never
+    # <old ref>..<tip>: after a rebase onto a newer main and a force-push, that range holds main's new commits too (refused for
+    # gate inputs the handoff never touched), and on a plain push it skips commits the old ref holds that main has not (let
+    # through unchecked, though the landing replays them). <main>..<tip> holds every commit the landing replays, and only those.
+    if [ -n "$REMOTE_MAIN" ] && b="$(git merge-base "$REMOTE_MAIN" "$lsha" 2>/dev/null)"; then
+      PUSHES="$PUSHES$lsha $b"$'\n'
+      names="$(git diff -z --name-only --no-renames "$b" "$lsha" | nl_names)" || { echo "pre-push: REFUSED: cannot list the handoff's files (or a name in it holds a newline)" >&2; exit 1; }
+      range="$REMOTE_MAIN..$lsha"
+    elif b="$(base_of "$lsha" "$rsha")"; then # no main here to read against: today's base (the old ref)
+      PUSHES="$PUSHES$lsha $b"$'\n'
+      range="$b..$lsha"
+      names="$(git diff -z --name-only --no-renames "$b" "$lsha" | nl_names)" || { echo "pre-push: REFUSED: cannot list the handoff's files (or a name in it holds a newline)" >&2; exit 1; }
+    else
+      PUSHES="$PUSHES$lsha none"$'\n'
+      range="$lsha"
+      names="$(git ls-tree -r -z --name-only "$lsha" | nl_names)" || { echo "pre-push: REFUSED: cannot list the handoff's files (or a name in it holds a newline)" >&2; exit 1; }
+    fi
+    # main and the handoff share no history at all: still every commit the handoff has that main has not
+    [ -z "$REMOTE_MAIN" ] || range="$REMOTE_MAIN..$lsha"
+    # a handoff is a straight line of commits: the landing machine's rebase drops merges and replays their side commits
+    merges="$(git rev-list --merges "$range")" || { echo "pre-push: REFUSED: cannot list the handoff's commits" >&2; exit 1; }
+    [ -z "$merges" ] || {
+      echo "pre-push: REFUSED: the handoff holds a merge commit (${merges:0:7}): rebase it onto main, then hand it off again" >&2
+      exit 1
+    }
+    # The push path is never handed off: the landing machine would check it with the handoff's own versions. The push path is
+    # the one list, scripts/gate-inputs.txt (main's copy when this clone has the remote's main, else this checkout's), matched
+    # with names folded as a Mac's disk folds them (scripts/path-fold.sh). The landing machine checks again with main's list.
+    [ -f scripts/path-fold.sh ] || { echo "pre-push: REFUSED: scripts/path-fold.sh is missing, so the handoff's files cannot be checked" >&2; exit 1; }
+    # shellcheck source=scripts/path-fold.sh
+    . scripts/path-fold.sh
+    pats=""
+    [ -z "$REMOTE_MAIN" ] || pats="$(git show "$REMOTE_MAIN:scripts/gate-inputs.txt" 2>/dev/null)" || pats=""
+    [ -n "$pats" ] || pats="$(cat scripts/gate-inputs.txt 2>/dev/null)" || pats=""
+    [ -n "$pats" ] || { echo "pre-push: REFUSED: no gate-inputs list (scripts/gate-inputs.txt), so the handoff's files cannot be checked" >&2; exit 1; }
+    # every commit's names, not the net diff (a gate input changed and put back is still replayed at landing: Fable R1-1)
+    f="$(path_fold_range <(printf '%s\n' "$pats") "$range")"
+    rc=$?
+    [ "$rc" = 0 ] || [ "$rc" = 1 ] || { echo "pre-push: REFUSED: the handoff's files could not be checked against the gate-inputs list (exit $rc)" >&2; exit 1; }
+    if [ "$rc" = 0 ]; then
+      echo "pre-push: REFUSED: a handoff may not change the push path ($f, a gate input: scripts/gate-inputs.txt). Push a plain branch instead; the landing machine reads the scripts/ diff itself and lands it by cherry-pick (that read is the trust step)." >&2
+      exit 1
+    fi
+    HANDOFF=1
+    continue
+    ;;
+  esac
   ANY=1
   SHAS="$SHAS $lsha"
   if b="$(base_of "$lsha" "$rsha")"; then
     PUSHES="$PUSHES$lsha $b"$'\n'
+    [ -n "$GATE_BASE" ] || GATE_BASE="$b"
     git diff --name-only -z --no-renames --diff-filter=d "$b" "$lsha" >> "$CHANGED" || ALL=1
-    git diff --name-only -z --no-renames "$b" "$lsha" >> "$TOUCHED" || ALL=1
   else
     PUSHES="$PUSHES$lsha none"$'\n'
     ALL=1 # no idea what this push contains: check everything
   fi
 done
-[ "$ANY" = 1 ] || exit 0
-personal || { [ "$SCAN_MODE" != stop ] || PERSONAL_RC=1; }
+[ "$ANY" = 1 ] || [ "$HANDOFF" = 1 ] || exit 0
+personal || PERSONAL_RC=1
+if [ "$ANY" = 0 ]; then # handoff branches only: the personal-data check is all they get, and all they need here
+  [ "$PERSONAL_RC" = 0 ] || { echo "pre-push: REFUSED: the personal-data check failed (above)" >&2; exit 1; }
+  echo "pre-push: a handoff branch: the personal-data check passed; the landing machine runs the gate" >&2
+  exit 0
+fi
 
-[ -x node_modules/.bin/biome ] || skip "no node_modules here (run pnpm install)"
-command -v node >/dev/null 2>&1 || skip "no node on PATH"
-command -v pnpm >/dev/null 2>&1 || skip "no pnpm on PATH"
+# The gate checks the files on disk, so they must be what is being pushed. Otherwise the push is refused: fail closed.
 for sha in $SHAS; do
-  [ ! -s "$CHANGED" ] || xargs -0 git diff --quiet "$sha" -- < "$CHANGED" ||
-    skip "the files on disk aren't what you are pushing (uncommitted edits, or another branch)"
+  # --literal-pathspecs: each name is that file, never a pattern (a * or a backslash in a name)
+  [ ! -s "$CHANGED" ] || xargs -0 git --literal-pathspecs diff --quiet "$sha" -- < "$CHANGED" || {
+    echo "pre-push: REFUSED: the files on disk aren't what you are pushing (uncommitted edits, or another branch checked out). Commit or stash them, or push from that branch's checkout." >&2
+    exit 1
+  }
 done
+[ "$PERSONAL_RC" = 0 ] || { echo "pre-push: REFUSED: the personal-data check failed (above)" >&2; exit 1; }
 
-rc=$PERSONAL_RC
-if [ "$ALL" = 1 ]; then
-  node_modules/.bin/biome check . || rc=1
-elif [ -s "$CHANGED" ]; then
-  # --files-ignore-unknown skips what biome has no parser for.
-  xargs -0 node_modules/.bin/biome check --no-errors-on-unmatched --files-ignore-unknown=true < "$CHANGED" || rc=1
-fi
-
-# Packages to type-check: the paths decide, because pnpm's own "[base]" filter would miss files outside a package.
-FILTERS=() TYPES=none MOD=0
-while IFS= read -r -d '' f; do
-  case "$f" in
-    apps/*/* | packages/*/*) d="$(printf '%s' "$f" | cut -d/ -f1-2)" ;;
-    e2e/*) d=e2e ;;
-    plugins/*) MOD=1; continue ;;
-    *.md | docs/* | scripts/* | .githooks/* | assets/* | examples/* | third_party/* | .github/*) continue ;;
-    *) TYPES=all; continue ;; # root config, lockfile, anything new: everything may depend on it
-  esac
-  [ -f "$d/tsconfig.json" ] || continue
-  [ "$TYPES" = all ] || TYPES=some
-  FILTERS+=("--filter=./$d")
-done < "$TOUCHED"
-[ "$ALL" = 1 ] && TYPES=all
-# After a rebase onto a new lockfile, node_modules is old and tsc would blame code nobody touched.
-if [ "$TYPES" != none ] && [ -f node_modules/.modules.yaml ] && [ pnpm-lock.yaml -nt node_modules/.modules.yaml ]; then
-  echo "pre-push: pnpm-lock.yaml is newer than node_modules (run pnpm install); skipping the type check. It runs in CI, after the push." >&2
-  TYPES=none MOD=0
-fi
-
-types() {
-  local bad=0
-  case "$TYPES" in
-    all) pnpm -r --workspace-concurrency=0 --if-present typecheck || bad=1 ;;
-    some) pnpm "${FILTERS[@]}" -r --workspace-concurrency=0 --if-present typecheck || bad=1 ;;
-  esac
-  if [ "$MOD" = 1 ] || [ "$TYPES" = all ]; then pnpm typecheck:mod || bad=1; fi
-  return $bad
+# One gate for every machine (scripts/gate.sh): typecheck, lint, the personal-data check of the tree, the size budget and the
+# suites this push touches. It refuses on any failure, and when it cannot run (no node, no pnpm, no node_modules).
+# exec replaces this shell, so its EXIT trap would never run: the temp file goes first.
+rm -f "$CHANGED"
+trap - EXIT
+if [ "$ALL" = 1 ] || [ -z "$GATE_BASE" ]; then exec bash scripts/gate.sh --full; fi
+# scripts/gate.sh --push ran the gate on exactly this tree, from this base, with this plan and this gate, a moment ago: the
+# stamp says so, and the gate is not run a second time. Anything else about it (another tree or base, another version of the
+# gate or of this hook, older than 30 minutes) and the gate runs here as usual.
+stamp="$(git rev-parse --absolute-git-dir)/talos-gate.pass"
+field() { sed -n "s/^$1=//p" "$stamp" 2>/dev/null | head -1; }
+sum() { { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1" 2>/dev/null; } | cut -d' ' -f1; }
+sum_in() { { shasum -a 256 2>/dev/null || sha256sum 2>/dev/null; } | cut -d' ' -f1; }
+# the gate's own code, one sha: scripts/gate.sh, then every file under scripts/gate/ in byte order (a change to any of them is
+# another gate); nothing printed when gate.sh is missing. The gate-push.sh stamp computes it the same way (scripts/gate-push.sh).
+gate_sha() {
+  local f
+  [ -f scripts/gate.sh ] || return 0
+  { cat scripts/gate.sh; find scripts/gate -type f 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do cat "$f"; done; } | sum_in
 }
-capped() { # capped <cmd...>: its exit code, or 0 with a note if it runs past the budget (the whole process group is stopped)
-  local pid ticks=0 limit=$((${PRE_PUSH_TSC_SECONDS:-8} * 4))
-  set -m
-  "$@" </dev/null &
-  pid=$!
-  TYPES_PID=$pid
-  set +m
-  while kill -0 "$pid" 2>/dev/null; do
-    if [ "$ticks" -ge "$limit" ]; then
-      kill -TERM -- "-$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
-      CUT=1
-      return 0
-    fi
-    sleep 0.25
-    ticks=$((ticks + 1))
-  done
-  wait "$pid"
-}
-if [ "$TYPES" != none ] || [ "$MOD" = 1 ]; then
-  # Its output is held back: a type check that is stopped prints "Failed" and a signal, which reads like a real failure.
-  capped types >"$TYPES_OUT" 2>&1 || rc=1
-  if [ "$CUT" = 1 ]; then
-    # whatever it had already found is still worth seeing; the stopped run's own "Failed" noise is not
-    grep -F 'error TS' "$TYPES_OUT" >&2 || true
-    echo "pre-push: typecheck: skipped, over ${PRE_PUSH_TSC_SECONDS:-8}s, so the push continues; CI runs the full check" >&2
-  else
-    cat "$TYPES_OUT" >&2
-  fi
+at="$(field at)"
+case "$at" in '' | 0?* | *[!0-9]* | ????????????*) at="" ;; esac # a number of seconds (no leading 0), or no stamp age at all
+age=$(($(date +%s) - ${at:-0}))
+gate_sum="$(gate_sha)"
+hook_sum="$(sum scripts/pre-push.sh)"
+one_sha="${SHAS# }"
+if [ -f "$stamp" ] && [ -n "$at" ] && [ "$age" -ge 0 ] && [ "$age" -lt 1800 ] && [ "${one_sha#* }" = "$one_sha" ] &&
+  [ -n "$gate_sum" ] && [ -n "$hook_sum" ] && [ -n "$(field plan)" ] &&
+  [ "$(field tree)" = "$(git rev-parse "$one_sha^{tree}" 2>/dev/null)" ] && [ "$(field base)" = "$GATE_BASE" ] &&
+  [ "$(field gate)" = "$gate_sum" ] && [ "$(field hook)" = "$hook_sum" ] &&
+  plan="$(bash scripts/gate.sh --plan --base "$GATE_BASE" 2>/dev/null)" && [ -n "$plan" ] &&
+  [ "$(field plan)" = "$(printf '%s' "$plan" | sum_in)" ]; then
+  echo "pre-push: the gate passed on this tree ${age} s ago ($(field mode)): not run again" >&2
+  exit 0
 fi
-
-[ "$rc" = 0 ] || echo "pre-push: fix the above and push again" >&2
-exit $rc
+# The fast gate (gate.sh --fast: the full gate itself for a change on its keep-out list or one it cannot follow, saying why; CI
+# runs everything after the push), measured from GATE_BASE: the remote's old tip, or for a new branch its merge base with the
+# remote's main. A hook takes no flags: GATE_FULL=1 in the environment asks for the full gate (gate.sh --push --full sets it).
+if [ "${GATE_FULL:-}" = 1 ]; then
+  echo "pre-push: the full gate (GATE_FULL=1)" >&2
+  exec bash scripts/gate.sh --base "$GATE_BASE"
+fi
+echo "pre-push: the fast gate where this change allows it (GATE_FULL=1 for the full gate)" >&2
+exec bash scripts/gate.sh --base "$GATE_BASE" --fast

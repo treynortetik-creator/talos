@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "type": "bug.context_result",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T44E",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T44D",
+  "bridge_version": "0.4.2",
+  "claude_code": "2.1.312",
+  "recent_errors": [
+    "web: TypeError: x is not a function"
+  ],
+  "logs": "2026-11-10T04:00:00.000Z info     bridge up"
+}

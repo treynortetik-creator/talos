@@ -10,7 +10,6 @@ import {
   DEFAULT_SESSION_MODELS,
   inventoryCommandsFromEngine,
   type PaletteContext,
-  PERMISSION_HIDDEN_WARNING,
   PERMISSION_MIN_CLIENT_VERSION,
   PERMISSION_OLD_CLIENT_WARNING,
   permissionCardAllowsPrimary,
@@ -91,11 +90,14 @@ describe('R1: the Claude Code version floor on the permission path', () => {
     expect(PERMISSION_MIN_CLIENT_VERSION).toBe('2.1.234')
   })
   for (const v of [undefined, '', '2.1.233', '2.1.211', '2.0.999', '1.9.400', 'claude-code', '2.1', 'v2.1.300']) {
-    it(`client version ${JSON.stringify(v)}: deny-only, "Approve at the Mac"`, () => {
+    it(`client version ${JSON.stringify(v)}: Allow kept, with the old-client note`, () => {
       expect(permissionClientVerified(v)).toBe(false)
       const c = compose({}, v ?? null)
-      expect(permissionCardAllowsPrimary(c)).toBe(false)
+      expect(permissionCardAllowsPrimary(c)).toBe(true)
       expect(c.warning).toBe(PERMISSION_OLD_CLIENT_WARNING)
+      expect(PERMISSION_OLD_CLIENT_WARNING).toBe(
+        'This Claude Code is older than 2.1.234, so a hidden part of the call may not be marked. Check it before you allow.',
+      )
     })
   }
   for (const v of ['2.1.234', '2.1.312', '2.2.0', '3.0.0', '2.1.312 (Claude Code)']) {
@@ -106,13 +108,15 @@ describe('R1: the Claude Code version floor on the permission path', () => {
   }
 })
 
-describe('L4: Allow also requires no summary line and the risk the tool implies', () => {
+describe('L4: Allow also requires no summary line and a known risk', () => {
   const good = compose()
   it('a summary line removes Allow', () => {
     expect(permissionCardAllowsPrimary({ ...good, summary: 'Harmless' } as CardT)).toBe(false)
   })
-  it('a lowered risk removes Allow', () => {
-    expect(permissionCardAllowsPrimary({ ...good, risk: 'low' })).toBe(false)
+  it('either risk keeps Allow (an older bridge says high); any other value removes it', () => {
+    expect(good.risk).toBe('low')
+    expect(permissionCardAllowsPrimary({ ...good, risk: 'high' })).toBe(true)
+    expect(permissionCardAllowsPrimary({ ...good, risk: 'medium' as never })).toBe(false)
   })
 })
 

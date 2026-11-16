@@ -3,10 +3,11 @@
 // tee, only after showing the exact change and a y/N. An owner's own `subagentStatusLine` command is never replaced: it is
 // wrapped (`subagent-tee -- /bin/sh -c '<original>'`), so its output still reaches the CLI. A dry run writes nothing;
 // broken JSON, or a setting of a shape we do not know, stops the command before anything is touched.
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { defaultHome } from './config.ts'
 import { writeFileAtomic } from './fsutil.ts'
+import { realFileSync } from './real-file.ts'
 
 export class TeeInstallError extends Error {}
 
@@ -86,7 +87,8 @@ export function describeTeePlan(plan: TeePlan): string[] {
 
 /** Writes the plan atomically, through a symlink, keeping the mode; refuses if the file changed since the plan. */
 export function writeTeePlan(plan: TeePlan): void {
-  const target = existsSync(plan.path) ? realpathSync(plan.path) : plan.path
+  // on macOS the realpath of a file can report another hard-linked name; resolve files with realFileSync (real-file.ts)
+  const target = existsSync(plan.path) ? realFileSync(plan.path) : plan.path
   const now = existsSync(target) ? readFileSync(target, 'utf8') : null
   if (now !== plan.raw)
     throw new TeeInstallError(`${plan.path} changed while waiting for your answer; nothing was written. Run it again.`)

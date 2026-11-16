@@ -16,7 +16,6 @@ import {
   sha256Hex,
   shownHash,
 } from '@talos-app/protocol'
-import { consumeStepupToken } from '../auth/contract.ts'
 import { checkResolve } from './cards.ts'
 import { DEFAULT_AGENT_CONFIG } from './default-config.ts'
 import type { BridgeFeatures } from './features.ts'
@@ -49,6 +48,9 @@ export type CardsCtx = {
   nativeApproveCard(body: unknown): string | undefined
   putCardBackToPending(cardId: string, reason: string): void
 }
+
+/** Refusals of a card.resolve that mean the card is closed on the Mac. Every other refusal reopens the card here. */
+export const CARD_CLOSED_ON_MAC: readonly string[] = ['card_not_pending', 'card_expired', 'permission_closed']
 
 export const cardsFrames = {
   /** Arms the timer that expires a pending card when its time comes. */
@@ -89,17 +91,7 @@ export const cardsFrames = {
     if (dup !== undefined) return this.sendApp(a, mkFrame(this.d.clock, 'ack', { ref: frame.id, seq: dup }))
     const known = store.getCard(frame.card_id)
     if (!known) return this.appError(a, 'card_not_pending', 'unknown card', frame.id)
-    // Step-up comes first: a reused or wrong-purpose token is refused as such even when the card has already moved on.
-    if (known.risk === 'high' && frame.action === 'primary') {
-      if (typeof frame.stepup_token !== 'string')
-        return this.appError(a, 'stepup_required', 'step-up required for this card', frame.id)
-      const ok = await consumeStepupToken({
-        token: frame.stepup_token,
-        purpose: `card:${frame.card_id}`,
-        session: a.session,
-      })
-      if (!ok) return this.appError(a, 'stepup_invalid', 'step-up token is invalid for this card', frame.id)
-    }
+    // No passkey step-up for any card (owner ruling 2026-11-14): the owner's signed tap is the approval, high risk or not.
     const check = checkResolve(store, this.d.clock, frame)
     if (!check.ok) {
       this.appError(a, check.code, check.message, frame.id)
@@ -118,7 +110,7 @@ export const cardsFrames = {
    * A Reply or an Approve that a phone signed with its notification key and posted to `/api/native/act`. By the time it
    * gets here the route has checked the whole chain (`checkNativeAct`) and that the device is pinned and not revoked. This
    * is the same gate the socket path applies, in the same order: the thread or card must exist, a high-risk card is never
-   * approved here (it needs the passkey step-up a notification cannot give), the card must be pending, unexpired and
+   * approved here (it is approved in the app, never from the lock screen; no passkey since 2026-11-14), the card must be pending, unexpired and
    * unchanged, and the text the phone says it showed must be the text this card produces.
    *
    * One transaction from the claim to the outbox row: a crash or a failed write leaves nothing behind (no claim, no event,
@@ -184,11 +176,7 @@ export const cardsFrames = {
         const known = store.getCard(act.card_id)
         if (!known) throw new NativeRefusal(404, 'card_not_pending', 'unknown card')
         if (known.risk === 'high')
-          throw new NativeRefusal(
-            403,
-            'stepup_required',
-            'This card needs your passkey. Open it in the app to approve.',
-          )
+          throw new NativeRefusal(403, 'open_in_app', 'This card is approved in the app, not from a notification.')
         const notice = cardNotice(known)
         if (!notice.complete)
           throw new NativeRefusal(
@@ -222,17 +210,22 @@ export const cardsFrames = {
   },
 
   /**
-   * The Mac refused a card.resolve before acting on it: put the card back to pending so the next tap can work. A native
-   * Approve is the same case with a different frame: the relay marked the card resolved when it queued the tap, so ANY
-   * refusal of that frame (stale, not pinned, bad signature, step-up, an older Mac that cannot parse it) must undo it.
-   * The guard below keeps a card the Mac did decide (it sends card.update with a resolution) from being touched.
+   * The Mac refused a card decision before acting on it: put the card back to pending so the next tap, from any device,
+   * can work. The relay marked the card resolved when it queued the tap, so ANY refusal of that frame must undo it: a
+   * clock that is off (`stale`), not pinned, bad signature, step-up, a permission card, an older Mac that cannot parse a
+   * native Approve, and whatever code a later Mac adds. A list of codes that roll back was tried first and left every
+   * code not on it as a card resolved here and pending on the Mac, which nobody could answer.
+   *
+   * Two things are left alone. A card the Mac did decide (its card.update carried the resolution) is kept by the guard in
+   * putCardBackToPending. And a tap from the app that the Mac refuses because the card itself is closed there
+   * (CARD_CLOSED_ON_MAC) is not reopened: the Mac's own card.update, sent before the refusal, carries the real state.
    */
   rollbackRejectedResolve(this: CardsCtx, frame: FrameOf<'error'>): void {
     if (!frame.ref) return
     const ev = this.d.store.getEventByFrameId(frame.ref) as { type?: string; card_id?: string; body?: string } | null
     let cardId: string | undefined
     if (ev?.type === 'card.resolve') {
-      if (!['sig_invalid', 'device_not_pinned', 'unauthorized', 'bad_frame'].includes(frame.code)) return
+      if (CARD_CLOSED_ON_MAC.includes(frame.code)) return
       cardId = ev.card_id
     } else if (ev?.type === NATIVE_ACT_TYPE) {
       cardId = this.nativeApproveCard(ev.body)
@@ -250,7 +243,10 @@ export const cardsFrames = {
     }
   },
 
-  /** A card past its expiry is expired instead: nothing re-arms its timer, so a pending one would never be closed. */
+  /**
+   * A card past its expiry is expired instead. One put back to pending gets its expiry timer again: timers are armed at
+   * boot only for cards pending then, so a card that was `resolved` across a restart had none and would stay open here.
+   */
   putCardBackToPending(this: CardsCtx, cardId: string, reason: string): void {
     let card: CardT | null
     try {
@@ -259,9 +255,11 @@ export const cardsFrames = {
       return // a card row that no longer opens stays as it is; it must not stop the reports after it
     }
     if (card?.state !== 'resolved' || card.resolution || card.result) return
-    const expired = Date.parse(card.expires_at) <= this.d.clock.now()
+    const expiresAt = this.d.store.cardExpiresAt(card.id) ?? Date.parse(card.expires_at)
+    const expired = expiresAt <= this.d.clock.now()
     const state = expired ? 'expired' : 'pending'
     if (!this.d.store.setCardState(card.id, { state })) return
+    if (!expired) cardsFrames.scheduleCardExpiry.call(this, card.id, expiresAt)
     this.fanOut(
       this.stampForApps(
         mkFrame(this.d.clock, 'card.update', { card_id: card.id, state, reason: expired ? 'expired' : reason }),

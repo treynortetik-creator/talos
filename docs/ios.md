@@ -84,6 +84,20 @@ If Apple emails about "required reason" APIs, the first thing to check is the pr
 On a real phone, work through the checks below (the maintainer keeps a longer private checklist that is not in this repository):
 
 - Airplane mode, force-quit, open the app. **Expect** the Talos splash, then within 12 seconds a "Talos can't connect right now" page. **Try again** works, and so does turning airplane mode off or reopening the app.
-- Open a zip, CSV, Word file or PDF from a thread. **Expect** a preview with Share and Done; a PDF never opens without Share.
+- Open a zip, CSV, Word file or PDF from a thread. **Expect** a preview with Share and an X at the top right; a PDF never opens without Share.
+- Open a long HTML attachment and swipe down to scroll, including at the very top. **Expect** it only scrolls (or bounces); the X at the top right is the only way out.
 - Open an mp4 attachment. **Expect** it plays (or shows the player), never "Talos could not load this file".
 - Open a zip, CSV or Word file from a thread. **Expect** a preview with a Share button, never a blank sheet. A file the Mac no longer has shows a plain message.
+- Use the app, leave it for a long while (an hour, or overnight), open it again. **Expect** the page, or "Reconnecting…" with a spinner and then the page or the "can't connect" page. Never a black or blank screen that takes no touch.
+
+## Coming back to the app
+
+iOS may end or freeze the page's web process while the app is in the background. On every return to the front the shell asks the page one question (`BridgeGuard.livenessScript`) and acts on the answer (`WebViewRevival`):
+
+- the page answers with content: nothing happens;
+- the web process is gone, or the document is empty: the page is loaded again, where it was;
+- no answer twice (2 s, then 5 s): the web view is replaced with a new one.
+
+When WebKit itself reports that the web process died, the shell loads the page again through the same path. Any of these loads is watched by the launch watchdog, so a relay that does not answer ends on the "can't connect" page with **Try again**. "Reconnecting…" is on screen while a check is open for more than 0.4 seconds and while such a load runs. The watchdog stops in the background and starts again, with its full limit, on return.
+
+`ios-repro/repro.sh` reproduces the cases on a simulator against a stub relay (`setup`, then `run <scenario> <tag>`, then `teardown`): `slow-relay` and `frozen` are the two that showed a dead screen before this was added. The screenshots it takes are in `ios-repro/shots/`. What a simulator cannot show is iOS's own memory kill of a suspended app's web process; `suspended-kill` is the nearest stand-in.

@@ -71,8 +71,8 @@ test('settings-switches: Chat notifications and Quiet hours set in the app chang
 }) => {
   await signedIn(stack, page, context)
   // A push subscription so the relay has somewhere to send; the endpoint is a made-up host and the send may fail, which
-  // the relay still logs as a decision. Pushes also stay quiet while someone is at a visible screen, so the relay's clock
-  // jumps past the 60 s presence window after each tap, before the reply.
+  // the relay still logs as a decision. Pushes also stay quiet while someone is at a visible screen, so the page says it is
+  // hidden (below): the relay then never counts it as someone looking, whatever is tapped.
   const ecdh = createECDH('prime256v1')
   ecdh.generateKeys()
   const sub = await page.request.post(`${stack.origin}/api/push/subscribe`, {
@@ -89,10 +89,20 @@ test('settings-switches: Chat notifications and Quiet hours set in the app chang
   await expect(master).toBeChecked()
   await expect(quiet).not.toBeChecked()
 
+  // The page is hidden, as a tab behind another window is: the app tells the relay (its `visibility: hidden` frame), sends no
+  // activity reports while hidden, and the relay holds no push for a hidden screen. This used to jump the relay's clock past the
+  // presence window instead, but a jump past DEAD_MS makes the relay's next keep-alive tick drop the page's socket, and the
+  // page that comes back keeps time with the jumped relay while the bridge does not: a tap in that second was refused, and
+  // one after it was signed four minutes "in the future" for the bridge (found on Titan's WSL; Cyclops, 22195ba2).
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+
   let n = 0
   /** One agent reply, then what the relay decided to do about its push. */
   const replyAndWatch = async (): Promise<string[]> => {
-    stack.skew.ms += 120_000
     const since = stack.relayLog.length
     const r = await stack.claude.callTool('reply', { thread_id: 'general', text: `switch probe ${++n}` })
     expect(r.isError, JSON.stringify(r)).toBeFalsy()
@@ -100,21 +110,35 @@ test('settings-switches: Chat notifications and Quiet hours set in the app chang
     await new Promise((r) => setTimeout(r, 300))
     return pushVerdicts(stack, since)
   }
+  /**
+   * Probes until the relay decides `want`, up to 5 replies. What decides the push is the relay's copy of the page's
+   * visibility and of the config, which arrive a moment after the page and config.json change; one probe straight after
+   * read the old state on a loaded machine. A relay that never applies the change still fails here, after 5 probes.
+   */
+  const replyUntil = async (want: string[]): Promise<string[]> => {
+    let got: string[] = []
+    for (let i = 0; i < 5; i++) {
+      got = await replyAndWatch()
+      if (JSON.stringify(got) === JSON.stringify(want)) break
+      await new Promise((r) => setTimeout(r, 500))
+    }
+    return got
+  }
 
   await test.step('both on and off as shipped: the reply is pushed', async () => {
-    expect(await replyAndWatch()).toEqual(['sent'])
+    expect(await replyUntil(['sent'])).toEqual(['sent'])
   })
 
   await test.step('Chat notifications off: config.json says so and the reply is held back', async () => {
     await master.click()
     await waitUntil(() => readConfig(stack).notifications.master === false, 'config.json to say master false')
-    expect(await replyAndWatch()).toEqual(['skipped:master_off'])
+    expect(await replyUntil(['skipped:master_off'])).toEqual(['skipped:master_off'])
   })
 
   await test.step('Chat notifications on again: pushes resume', async () => {
     await master.click()
     await waitUntil(() => readConfig(stack).notifications.master === true, 'config.json to say master true')
-    expect(await replyAndWatch()).toEqual(['sent'])
+    expect(await replyUntil(['sent'])).toEqual(['sent'])
   })
 
   await test.step('Quiet hours on, around now: config.json holds the window and the reply is held back', async () => {
@@ -123,7 +147,7 @@ test('settings-switches: Chat notifications and Quiet hours set in the app chang
     const zone = readConfig(stack).timezone ?? 'UTC'
     const at = (offsetMs: number) =>
       new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(
-        new Date(stack.now() + 120_000 + offsetMs),
+        new Date(stack.now() + offsetMs),
       )
     await page.getByLabel('Quiet hours start').fill(at(-3_600_000))
     await page.getByLabel('Quiet hours end').fill(at(3_600_000))
@@ -136,13 +160,13 @@ test('settings-switches: Chat notifications and Quiet hours set in the app chang
         readConfig(stack).quiet_window?.end === at(3_600_000),
       'config.json to hold both new times',
     )
-    expect(await replyAndWatch()).toEqual(['skipped:quiet'])
+    expect(await replyUntil(['skipped:quiet'])).toEqual(['skipped:quiet'])
   })
 
   await test.step('Quiet hours off: config.json drops the window and pushes resume', async () => {
     await quiet.click()
     await waitUntil(() => readConfig(stack).quiet_window === null, 'config.json to drop the quiet window')
-    expect(await replyAndWatch()).toEqual(['sent'])
+    expect(await replyUntil(['sent'])).toEqual(['sent'])
   })
 })
 

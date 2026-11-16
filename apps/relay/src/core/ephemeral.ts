@@ -26,7 +26,7 @@ export interface EphemeralHost {
   appError(socketId: string, code: string, message: string, ref: string): void
 }
 
-type Route = { response: string; limit: string | null }
+type Route = { response: string; limit: string | null; ttlMs: number }
 type Pending = {
   socketId: string
   at: number
@@ -54,9 +54,9 @@ export class EphemeralRouter {
     this.limits = new RateLimiter(h.clock)
   }
 
-  /** `limit` names a per-socket bucket in auth/limits.ts (null = none). */
-  register(requestType: string, responseType: string, limit: string | null = null): void {
-    this.routes.set(requestType, { response: responseType, limit })
+  /** `limit` names a per-socket bucket in auth/limits.ts (null = none); `ttlMs`, how long its answer may take. */
+  register(requestType: string, responseType: string, limit: string | null = null, ttlMs = EPHEMERAL_TTL_MS): void {
+    this.routes.set(requestType, { response: responseType, limit, ttlMs })
     this.responses.add(responseType)
   }
 
@@ -89,7 +89,7 @@ export class EphemeralRouter {
       at: h.clock.now(),
       want: route.response,
       frameId: frame.id,
-      ttlMs: EPHEMERAL_TTL_MS,
+      ttlMs: route.ttlMs,
       keep: false,
       deviceId: null,
     })

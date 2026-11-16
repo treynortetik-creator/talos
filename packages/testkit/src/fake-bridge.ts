@@ -77,7 +77,11 @@ export type FakeBridgeOptions = {
   /** Send `replay.request` for unconsumed ids after `ready` (an optional hint; the relay already re-sends them). */
   requestReplay?: boolean
   agentConfigRev?: number
+  /** Say hello as a standby: the relay turns it away with 4409 while another bridge is connected, instead of replacing that one. */
+  standby?: boolean
   clientName?: string
+  /** How far this Mac's clock is from the relay's, in ms (negative: slow); its hello says so. */
+  clockOffsetMs?: number
   /** Answer schedule frames from this adapter (and advertise 'schedules/1'). Without it they get scheduler_unavailable. */
   scheduler?: SchedulerAdapter
   /** `hello.client.features`. Default: ['schedules/1'] when a scheduler is set, plus 'heartbeat/1' with `heartbeatTest`. */
@@ -100,6 +104,10 @@ export type FakeReadAnswer = Record<string, unknown> | { error: string; message?
 
 const EMPTY_READ: Record<FakeReadType, (f: Record<string, unknown>) => Record<string, unknown>> = {
   'search.query': () => ({ hits: [], next_cursor: null, total_estimate: 0, took_ms: 1, index: 'ready' }),
+  'files.sent': () => ({ files: [], next_cursor: null, days: 90 }),
+  'memory.folders': () => ({ folders: [], chosen: [], enabled: false }),
+  'memory.roots_set': () => ({ folders: [], chosen: [], enabled: false, saved: true }),
+  'memory.graph': () => ({ roots: [], nodes: [], edges: [], total_nodes: 0, truncated: false }),
   'memory.tree': (f) => ({
     ...(f.root_id === null ? { roots: [] } : { root_id: f.root_id, path: f.path }),
     entries: [],
@@ -119,6 +127,41 @@ const EMPTY_READ: Record<FakeReadType, (f: Record<string, unknown>) => Record<st
   'memory.search': () => ({ hits: [], next_cursor: null, index: 'ready' }),
   'speak.request': () => ({ state: 'failed', reason: 'no_tts', message: 'Your Mac has no voice set up yet.' }),
   'fs.list': () => ({ home: '/Users/alex', entries: [], more: 0 }),
+  'files.list': (f) => ({
+    thread_id: f.thread_id,
+    root: '/Users/alex/talos-agent',
+    path: f.path,
+    entries: [],
+    more: 0,
+  }),
+  'files.read': (f) => ({
+    thread_id: f.thread_id,
+    path: f.path,
+    kind: 'text',
+    size: 0,
+    mtime: now(),
+    text: '',
+    offset: 0,
+    next_offset: null,
+    truncated: false,
+  }),
+  'bug.context': () => ({ bridge_version: '0.0.0', claude_code: null, recent_errors: [], logs: '' }),
+  // a thread with no AGENTS.md yet; a save answers the text it was given
+  'agents_md.read': (f) => ({ thread_id: f.thread_id, exists: false, sha: null }),
+  // the file goes in under the name asked
+  'files.put': (f) => ({
+    thread_id: f.thread_id,
+    dir: f.dir,
+    name: f.name,
+    size: (f.media as { size?: number }).size ?? 0,
+  }),
+  'agents_md.write': (f) => ({
+    thread_id: f.thread_id,
+    exists: true,
+    sha: '0'.repeat(64),
+    text: f.text,
+    saved: true,
+  }),
 }
 
 const OWNER_TYPES = new Set(['message', 'voice_note', 'card.resolve', 'voice.ask'])
@@ -559,6 +602,8 @@ export class FakeBridge {
         const sig = await signChallenge(this.key.privateKey, frame)
         this.send({
           type: 'hello',
+          // a Mac whose clock agrees with the relay's (the challenge carries it, in seconds), unless the test sets an offset
+          ts: new Date(frame.server_time * 1000 + (this.opts.clockOffsetMs ?? 0)).toISOString(),
           role: 'bridge',
           key_id: this.key.keyId,
           sig,
@@ -568,6 +613,7 @@ export class FakeBridge {
             ...(this.features.length ? { features: this.features } : {}),
           },
           agent_config_rev: this.opts.agentConfigRev ?? 0,
+          ...(this.opts.standby ? { standby: true } : {}),
         })
         return
       }

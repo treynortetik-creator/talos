@@ -15,15 +15,17 @@
 set -uo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 PASS=0; FAIL=0
-ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
-no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
+ok(){ PASS=$((PASS+1)); printf '  ok   %s%s\n' "$1" "${MODETAG:+ [$MODETAG]}"; }
+no(){ FAIL=$((FAIL+1)); printf '  FAIL %s%s\n' "$1" "${MODETAG:+ [$MODETAG]}"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
 
 SB="$(mktemp -d)" || exit 2
 case "$SB" in /*/*) ;; *) echo "suspicious temp dir '$SB'" >&2; exit 2 ;; esac
 trap 'rm -rf "$SB"' EXIT
 REALHOME="$HOME"
 export HOME="$SB/home"; mkdir -p "$HOME"
+talos_test_sandbox "$SB"
 export XDG_DATA_HOME="$SB/xdg"          # recall.py and the hooks look for the venv here, never in the real ~/.local
 
 mkfixture() {   # $1 = dir. A tiny agent folder with the search scripts and a handful of notes
@@ -45,7 +47,24 @@ mkfixture() {   # $1 = dir. A tiny agent folder with the search scripts and a ha
 
 R() { ( cd "$F" && python3 scripts/recall.py "$@" 2>&1 ); }
 
+# Every output check runs in BOTH keyword modes: "rg" (ripgrep found; skipped, visibly, when this machine has none) and
+# "norg" (TALOS_RG forced to a missing file, so the note-by-note fallback runs). The mode is an exported environment
+# variable, so every recall call in the check, however it is spelled, sees it.
+setmode() {   # $1 = rg | norg ; returns 1 when the mode cannot run here
+  MODETAG="$1"
+  if [ "$1" = norg ]; then export TALOS_RG=/nonexistent/rg; return 0; fi
+  unset TALOS_RG
+  [ -n "$RGREAL" ] && return 0
+  echo "  skip (no ripgrep on this machine): the rg-mode checks"; MODETAG=""; return 1
+}
+runmodes() {  # $1 = function holding the checks
+  local m; for m in rg norg; do if setmode "$m"; then "$1"; fi; done
+  unset TALOS_RG; MODETAG=""
+}
+mkfixture "$SB/agent-probe"; RGREAL="$( cd "$SB/agent-probe/scripts" && env -u TALOS_RG python3 -c 'import recall; print(recall.find_rg() or "")' )"
+
 # ===================================================================================== (a)
+general_checks() {
 F="$SB/agent-a"; mkfixture "$F"
 
 out="$(R "vendor contract")"
@@ -88,6 +107,9 @@ if [ -x /usr/bin/python3 ] && /usr/bin/python3 -c 'import sys; sys.exit(0 if sys
   o="$( cd "$F" && /usr/bin/python3 scripts/recall.py "vendor contract" 2>&1 )"
   <<<"$o" grep -q 'dana-ruiz.md' && ok "recall.py runs on Apple's python 3.9 (stdlib only)" || no "recall.py failed on python 3.9" "$o"
 else echo "  skip python 3.9 check (the system python is not 3.9 here)"; fi
+}
+runmodes general_checks
+
 
 # ---- fallback banners, with a FAKE semantic backend (a shell script that stands in for the venv's python)
 V="$XDG_DATA_HOME/talos/venv/bin"; mkdir -p "$V"
@@ -155,6 +177,240 @@ rm -f "$SB/refresh.called"; touch "$F/.index/.last-index-ok"
 rm -f "$V/../.talos-memory-ok" "$SB/refresh.called"; touch -t 202601010000 "$F/.index/.last-index-ok"
 ( cd "$F" && CLAUDE_PROJECT_DIR="$F" python3 hooks/session-start.py >/dev/null 2>&1 ); sleep 1
 [ ! -e "$SB/refresh.called" ] && ok "a shared venv WITHOUT the memory packages (voice only) never launches an indexer that would crash every session" || no "indexer launched from a voice-only venv"
+rm -rf "$XDG_DATA_HOME"
+
+# ===================================================================================== (c)
+# Clio search upgrades (a stub semantic arm and a stub reranker; no model, no network):
+#   link menu, fast keyword arm (ripgrep), rerank by default for questions, loud degraded warning, preimage exclusion.
+export XDG_DATA_HOME="$SB/xdg-c"; mkdir -p "$XDG_DATA_HOME"      # no venv here yet: lexical only
+files_of() { python3 -c 'import json,sys; print("\n".join(r["file"] for r in json.load(sys.stdin)["results"]))'; }
+jget() { python3 -c 'import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1]))' "$1"; }   # jget 'expr on d' < json
+
+# ---- (c1) fast keyword arm: ONE rg pass, same ranked lists as the fallback, a note when rg is missing
+FA="$SB/agent-fast"; mkfixture "$FA"
+for i in 1 2 3 4 5 6; do printf -- '---\ntitle: Note %s\ntype: concept\n---\n# Note %s\nVENDOR terms and the Contract number %s. Budget review %s.\n' "$i" "$i" "$i" "$i" > "$FA/wiki/concepts/tie-$i.md"; done
+printf -- '---\ntitle: Vendor contract\ntype: concept\n---\n# Vendor contract\nplain\n' > "$FA/wiki/concepts/vendor-contract.md"
+printf -- '# Upper\nuppercasexylo is only here\n' > "$FA/wiki/concepts/Upper.MD"; printf -- '# Mixed\nmixedcasezeta is only here\n' > "$FA/wiki/concepts/Mixed.Md"
+FR() { ( cd "$FA" && python3 scripts/recall.py "$@" ); }
+if [ -n "$RGREAL" ]; then
+  printf '#!/bin/bash\necho call >> "%s/rg.calls"\nexec "%s" "$@"\n' "$SB" "$RGREAL" > "$SB/rgwrap"; chmod +x "$SB/rgwrap"
+  badq=""
+  for q in "vendor contract" "budget review quarter" "brake pads oil change" "dana" "fleet fleet vehicles" "zzznomatch" "VENDOR Contract" "uppercasexylo" "mixedcasezeta"; do
+    a="$(TALOS_RG="$SB/rgwrap" FR "$q" --json -k 20 2>/dev/null)"; b="$(TALOS_RG=/nonexistent/rg FR "$q" --json -k 20 2>/dev/null)"
+    [ "$a" = "$b" ] && [ -n "$a" ] || badq="$badq [$q]"
+  done
+  [ -z "$badq" ] && ok "fast keyword arm: identical results (order, ties, scores) to the fallback on 9 queries" || no "fast arm and fallback disagree on:$badq"
+  rm -f "$SB/rg.calls"; TALOS_RG="$SB/rgwrap" FR "vendor contract budget review" --json >/dev/null 2>&1
+  [ "$(wc -l < "$SB/rg.calls" | tr -d ' ')" = 1 ] && ok "fast keyword arm: ONE rg pass covers all the query words" || no "rg was not called exactly once: $(cat "$SB/rg.calls" 2>/dev/null)"
+  n1="$(TALOS_RG="$SB/rgwrap" FR uppercasexylo --json 2>/dev/null | files_of)"; n2="$(TALOS_RG="$SB/rgwrap" FR mixedcasezeta --json 2>/dev/null | files_of)"
+  { [ "$n1" = "wiki/concepts/Upper.MD" ] && [ "$n2" = "wiki/concepts/Mixed.Md" ]; } && ok "fast keyword arm: notes named .MD and .Md are found (the corpus accepts any case of .md)" || no "upper/mixed-case extension lost on the fast path" "$n1 // $n2"
+  rm -f "$SB/rg.calls"; TALOS_RG="$SB/rgwrap" FR --batch "vendor" "budget" "contract" --json >/dev/null 2>&1
+  [ "$(wc -l < "$SB/rg.calls" | tr -d ' ')" = 3 ] && ok "fast keyword arm: --batch makes one rg pass per query" || no "batch rg calls wrong"
+else echo "  skip (no ripgrep on this machine): rg-vs-fallback comparison"; fi
+# the note: a forced bad TALOS_RG is a misconfiguration (says so on every run, stderr only); machine-read output stays clean
+err="$(TALOS_RG=/nonexistent/rg FR "vendor contract" 2>&1 >/dev/null)"; err2="$(TALOS_RG=/nonexistent/rg FR "vendor contract" 2>&1 >/dev/null)"
+{ [ "$(printf '%s\n' "$err" | grep -c 'ripgrep unavailable')" = 1 ] && [ "$(printf '%s\n' "$err2" | grep -c 'ripgrep unavailable')" = 1 ]; } && ok "a forced TALOS_RG that cannot run: the slower path says so on stderr, on every run" || no "bad-TALOS_RG note wrong" "$err // $err2"
+out="$(TALOS_RG=/nonexistent/rg FR "vendor contract" 2>/dev/null)"
+<<<"$out" grep -q 'ripgrep unavailable' && no "the ripgrep note leaked into stdout" "$out" || ok "the ripgrep note goes to stderr, never stdout"
+err="$(TALOS_RG=/nonexistent/rg FR --batch "vendor" "budget" "contract" 2>&1 >/dev/null)$(TALOS_RG=/nonexistent/rg FR "vendor" --json 2>&1 >/dev/null)"
+[ -z "$err" ] && ok "--batch and --json print no ripgrep note (stdout and stderr both clean)" || no "note printed for machine-read output" "$err"
+out="$(TALOS_RG=/nonexistent/rg FR --batch "vendor" "budget" 2>&1)"; printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null && ok "--batch output with stderr merged in is still valid JSON without ripgrep" || no "batch output polluted" "$out"
+# no ripgrep and TALOS_RG unset is a normal setup: the note prints at most once a day (stamp in .index/), fail-soft on a read-only folder
+NR() { ( cd "$1/scripts" && env -u TALOS_RG python3 -c '
+import sys, recall
+recall._RG_CACHE.append(None)      # no ripgrep on this machine
+sys.exit(recall.main(sys.argv[1:]))' "${@:2}" 2>&1 >/dev/null ); }
+FN="$SB/agent-norg"; mkfixture "$FN"
+n1="$(NR "$FN" "vendor contract")"; n2="$(NR "$FN" "vendor contract")"
+{ [ "$(printf '%s\n' "$n1" | grep -c 'ripgrep unavailable')" = 1 ] && [ -z "$n2" ] && [ -f "$FN/.index/rg-off-note-date" ]; } && ok "no ripgrep, TALOS_RG unset: the note prints once, then not again the same day" || no "once-a-day note wrong" "$n1 // $n2"
+printf '2000-01-01\n' > "$FN/.index/rg-off-note-date"; n3="$(NR "$FN" "vendor contract")"
+<<<"$n3" grep -q 'ripgrep unavailable' && ok "no ripgrep: the note prints again on a new day" || no "note did not return on a new day" "$n3"
+rm -rf "$FN/.index"; n4="$(NR "$FN" --batch "vendor" "budget")$(NR "$FN" "vendor" --json)"
+{ [ -z "$n4" ] && [ ! -e "$FN/.index/rg-off-note-date" ]; } && ok "no ripgrep: --batch / --json print no note and do not use up the day's note" || no "machine-read run printed or stamped" "$n4"
+FRO="$SB/agent-ro"; mkfixture "$FRO"; : > "$FRO/.index"      # .index is a FILE: nothing can be stamped
+r1="$(NR "$FRO" "vendor contract")"; r2="$( cd "$FRO/scripts" && env -u TALOS_RG python3 -c '
+import sys, recall
+recall._RG_CACHE.append(None)
+rc = recall.main(["vendor contract"]); sys.exit(rc)' 2>/dev/null | grep -c 'dana-ruiz' )"
+{ <<<"$r1" grep -q 'ripgrep unavailable' && ! <<<"$r1" grep -qi traceback && [ "$r2" -ge 1 ]; } && ok "no ripgrep on a folder that cannot be written: the note still prints, results still arrive, no traceback" || no "read-only .index mishandled" "$r1 // $r2"
+out="$(TALOS_RG=/nonexistent/rg FR "vendor contract" 2>/dev/null)"
+<<<"$out" grep -q 'tie-1.md' && ok "no ripgrep: results still arrive (fallback path)" || no "fallback returned nothing" "$out"
+printf '#!/bin/bash\nexit 2\n' > "$SB/rgbad"; chmod +x "$SB/rgbad"
+a="$(TALOS_RG="$SB/rgbad" FR "vendor contract" --json 2>"$SB/rgbad.err")"; b="$(TALOS_RG=/nonexistent/rg FR "vendor contract" --json 2>/dev/null)"
+TALOS_RG="$SB/rgbad" FR "vendor contract" >/dev/null 2>"$SB/rgbad.err"
+{ [ "$a" = "$b" ] && grep -q 'ripgrep unavailable' "$SB/rgbad.err"; } && ok "a ripgrep that fails (exit 2) falls back to the same results and says so" || no "failing rg not handled" "$(cat "$SB/rgbad.err")"
+mkdir -p "$SB/claude-code/vendor/ripgrep"; printf '#!/bin/bash\nexit 0\n' > "$SB/claude-code/vendor/ripgrep/rg"; chmod +x "$SB/claude-code/vendor/ripgrep/rg"
+got="$( cd "$FA/scripts" && env -u TALOS_RG PATH="$SB/claude-code/vendor/ripgrep:/usr/bin:/bin" python3 -c 'import recall; print(recall.find_rg())' )"
+[ "$got" != "$SB/claude-code/vendor/ripgrep/rg" ] && ok "a ripgrep bundled inside Claude Code is never used" || no "bundled rg was picked"
+mkdir -p "$SB/x/node_modules/@anthropic-ai/claude-code/vendor/ripgrep" "$SB/people/claude/.cargo/bin" "$SB/y/.claude/bin"
+for d in "$SB/x/node_modules/@anthropic-ai/claude-code/vendor/ripgrep" "$SB/people/claude/.cargo/bin" "$SB/y/.claude/bin"; do printf '#!/bin/bash\nexit 0\n' > "$d/rg"; chmod +x "$d/rg"; done
+FINDRG() { ( cd "$FA/scripts" && env -u TALOS_RG PATH="$1:/usr/bin:/bin" python3 -c 'import recall; print(recall.find_rg())' ); }
+[ "$(FINDRG "$SB/people/claude/.cargo/bin")" = "$SB/people/claude/.cargo/bin/rg" ] && ok "a ripgrep in a home folder that merely has 'claude' in its name is used" || no "rg under a folder named claude rejected"
+[ "$(FINDRG "$SB/x/node_modules/@anthropic-ai/claude-code/vendor/ripgrep")" != "$SB/x/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/rg" ] && ok "a ripgrep inside node_modules/@anthropic-ai/ is rejected" || no "npm-bundled rg accepted"
+[ "$(FINDRG "$SB/y/.claude/bin")" != "$SB/y/.claude/bin/rg" ] && ok "a ripgrep under a .claude/ folder is rejected" || no ".claude rg accepted"
+got="$( cd "$FA/scripts" && TALOS_RG="$SB/rgbad" python3 -c 'import recall; print(recall.find_rg())' )"
+[ "$got" = "$SB/rgbad" ] && ok "TALOS_RG names the ripgrep to use" || no "TALOS_RG ignored: $got"
+
+menu_checks() {
+# ---- (c2) link menu
+mkmenu() {   # $1 = dir, $2 = wiki folder relative to it
+  local M="$1" W="$2"; mkfixture "$M"
+  if [ "$W" != wiki ]; then mkdir -p "$M/memory"; mv "$M/wiki" "$M/$W"; printf 'layout=2\n' > "$M/.talos-version"; cp "$KIT/scripts/_talos_layout.py" "$M/scripts/"; fi
+  mkdir -p "$M/$W/spokes"
+  printf -- '---\ntitle: Orbit hub\ntype: concept\ndescription: the index everything links to\n---\n# Orbit hub\n' > "$M/$W/hub.md"
+  printf -- '---\ntitle: Alpha note\ntype: concept\ndescription: "Alpha facts, see [[beta-note]]"\n---\n# Alpha note\nbody\n' > "$M/$W/alpha-note.md"
+  printf -- '---\ntitle: Beta note\ntype: person\n---\n# Beta note\nbody\n' > "$M/$W/beta-note.md"
+  printf -- '---\ntitle: Zeppelin routes\ntype: concept\n---\n# Zeppelin routes\nSee [[alpha-note]], [[Beta-Note|the beta]], [[hub]] and [[no-such-note]].\n' > "$M/$W/zeppelin.md"
+  local i; for i in $(seq 1 31); do printf -- '---\ntitle: Spoke %s\ntype: concept\n---\n# Spoke %s\nlinks to [[hub]]\n' "$i" "$i" > "$M/$W/spokes/s$i.md"; done
+}
+FM="$SB/agent-menu"; mkmenu "$FM" wiki
+MR() { ( cd "$FM" && python3 scripts/recall.py "$@" 2>&1 ); }
+out="$(MR "zeppelin" --expand)"
+{ <<<"$out" grep -q 'alpha-note (concept) -- Alpha facts, see beta-note' && <<<"$out" grep -q 'beta-note (person) -- (no description)'; } \
+  && ok "link menu: each linked note shows its type and one-line description ((no description) when absent; [[links]] in it flattened)" || no "link menu lines wrong" "$out"
+{ <<<"$out" grep -q 'skipped 1 hubs: hub (in 3[0-9])' && ! <<<"$out" grep -q 'hub (concept)'; } && ok "link menu: a hub (top 1%, at least 30 inbound) is left out and counted in 'skipped N hubs'" || no "hub not skipped" "$out"
+<<<"$out" grep -q 'unresolved: no-such-note' && ok "link menu: a link that matches no note is listed as unresolved" || no "unresolved not listed" "$out"
+out="$(MR "zeppelin" --expand --hubs)"
+{ <<<"$out" grep -q 'hub (concept)' && ! <<<"$out" grep -q 'skipped'; } && ok "--hubs includes the hub notes" || no "--hubs did not include the hub" "$out"
+a="$(MR "alpha beta zeppelin note" --json -k 20 | files_of)"; b="$(MR "alpha beta zeppelin note" --json --expand -k 20 | files_of)"
+[ -n "$a" ] && [ "$a" = "$b" ] && ok "link menu: the ranking is identical with and without --expand" || no "--expand changed the ranking" "$a // $b"
+out="$(MR "zeppelin" --json --expand)"
+printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); r=d["results"][0]; assert "alpha-note" in r["links"]; m=r["link_menu"]; assert [x["slug"] for x in m["links"]]==["alpha-note","beta-note"] and m["hubs_skipped"][0]["slug"]=="hub"' 2>/dev/null \
+  && ok "--json --expand keeps the plain links list and adds link_menu (links and hubs_skipped)" || no "--json link_menu wrong" "$out"
+C="$FM/.index/wiki-inbound.json"
+[ -f "$C" ] && ok "inbound counts are cached under the agent's .index/" || no "no inbound cache at $C"
+b1="$(jget 'd["built"]' < "$C")"; sleep 1; MR "zeppelin" --expand >/dev/null; b2="$(jget 'd["built"]' < "$C")"
+[ "$b1" = "$b2" ] && ok "inbound cache: reused while no note is newer than it" || no "cache rebuilt for no reason ($b1 vs $b2)"
+printf -- '---\ntitle: Gamma\ntype: concept\n---\n# Gamma\nSee [[hub]].\n' > "$FM/wiki/gamma.md"
+MR "zeppelin" --expand >/dev/null
+jget '"gamma" in d["paths"]' < "$C" | grep -q True && ok "inbound cache: rebuilt when a note is newer than it" || no "cache not rebuilt after a new note"
+FM2="$SB/agent-menu2"; mkmenu "$FM2" memory/wiki
+out="$( cd "$FM2" && python3 scripts/recall.py "zeppelin" --expand 2>&1 )"
+{ <<<"$out" grep -q 'alpha-note (concept)' && <<<"$out" grep -q 'skipped 1 hubs'; } && ok "link menu on a layout-2 agent: the wiki folder comes from the layout resolver (memory/wiki)" || no "layout-2 link menu wrong" "$out"
+}
+runmodes menu_checks
+
+
+# ---- (c3) which queries are questions
+python3 - "$FA/scripts" <<'PY' && ok "question detection: 14 questions and 14 non-questions classified as expected" || no "question detection table failed"
+import sys
+sys.path.insert(0, sys.argv[1])
+import recall
+yes = ["what did we decide", "Why is the van late", "how do I renew", "who owns the contract", "when is the review", "where are the keys",
+       "which vendor won", "did Dana approve it", "does this repeat", "is the shop open", "are we late", "was it signed", "were they there",
+       "can I book the room", "should we renew", "vendor contract?", "vendor decision", "the decided plan", "Decision log", "notes on contract?"]
+no_ = ["vendor contract", "budget review", "dana ruiz", "brake pads", "ISH-5252", "the vendor", "whatever", "howard", "island", "diditall",
+       "candle", "whoever signs", "isolated vendor", "decisive moment"]
+bad = [q for q in yes if not recall.is_question_shaped(q)] + [q for q in no_ if recall.is_question_shaped(q)]
+assert not bad, bad
+assert len(yes) >= 14 and len(no_) >= 14
+PY
+
+# ---- (c4) preimage copies are never indexed or returned
+PRE="$FA/memory/dream/2026-11-15/preimage"; mkdir -p "$PRE"; printf -- '# Copy\nzebrafoxtrot vendor contract copy\n' > "$PRE/wiki__people__dana-ruiz.md"
+printf -- '# Kept\nzebrafoxtrot is in a real note\n' > "$FA/memory/dream-notes.md"
+out="$(FR "zebrafoxtrot" --json 2>/dev/null)"
+printf '%s' "$out" | python3 -c 'import json,sys; fs=[r["file"] for r in json.load(sys.stdin)["results"]]; assert fs==["memory/dream-notes.md"], fs' 2>/dev/null \
+  && ok "a dream-cycle preimage copy is not searched; a real note beside it is" || no "preimage copy leaked into the lexical arm" "$out"
+python3 - "$FA/scripts/memory" <<'PY' && ok "is_index_excluded (mem_common) and corpus.source_files agree: preimage out, everything else in" || no "is_index_excluded table failed"
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import corpus, mem_common as M
+for p in ("memory/dream/2026-11-15/preimage/x.md", "/srv/agent/memory/dream/2026-11-15/preimage/sub/x.md", "memory\\dream\\2026-11-15\\preimage\\x.md"):
+    assert M.is_index_excluded(p), p
+for p in ("memory/dream-notes.md", "memory/dream/2026-11-15/applied.md", "wiki/preimage/x.md", "memory/2026-11-15.md", "wiki/dream/a/preimage-x.md"):
+    assert not M.is_index_excluded(p), p
+assert not any("preimage" in f for f in corpus.source_files(corpus.ROOT))
+PY
+
+# ---- (c5) rerank by default for questions, degraded warning: a stub semantic arm and a stub reranker worker (real protocol)
+V="$XDG_DATA_HOME/talos/venv/bin"; mkdir -p "$V" "$SB/block" "$SB/rr-ok/onnx"; touch "$V/../.talos-memory-ok" "$SB/rr-ok/tokenizer.json" "$SB/rr-ok/onnx/model_int8.onnx"
+printf 'raise ImportError("blocked for the test")\n' > "$SB/block/onnxruntime.py"          # force mem_rerank to use its worker child
+cat > "$V/python" <<FAKE
+#!/bin/bash
+[ -e "$SB/sem-fail" ] && exit 1
+case " \$* " in
+ *" --worker "*) exec python3 -c '
+import json, sys
+for line in sys.stdin:
+    if line.strip():
+        n = len(json.loads(line)["paths"])
+        print(json.dumps({"scores": [float(i) for i in range(n)]}), flush=True)' ;;
+esac
+exec python3 -c '
+import json, os, sys
+qs = json.load(sys.stdin)
+path = "memory/dream/2026-11-15/preimage/wiki__people__dana-ruiz.md" if os.path.exists("$SB/sem-preimage") else "wiki/concepts/fleet-vehicles.md"
+hit = {"path": path, "heading": "H", "score": 0.83, "distance": 0.5, "snippet": "The delivery van"}
+print(json.dumps({"model": "fake", "batch": {q: [hit] for q in qs}}))'
+FAKE
+chmod +x "$V/python"
+F="$SB/agent-c"; mkfixture "$F"; mkdb; touch "$F/.index/.last-index-ok"
+RC() { ( cd "$F" && PYTHONPATH="$SB/block" TALOS_RG=/nonexistent/rg python3 scripts/recall.py "$@" 2>"$SB/last.err" ); }   # stdout; stderr kept for ERR
+ERR() { grep -v 'ripgrep unavailable' "$SB/last.err"; }
+Q="what did we decide about the vendor contract"
+probe() { mkdir -p "$F/.index"; printf '{"seconds": 1.0, "cold_seconds": %s, "n": 15, "measured": "2026-11-15T00:00:00Z", "cpus": 4}\n' "$1" > "$F/.index/rerank-time.json"; }   # $1 = the COLD time
+probe_warm_only() { mkdir -p "$F/.index"; printf '{"seconds": %s, "n": 15, "measured": "2026-11-15T00:00:00Z", "cpus": 4}\n' "$1" > "$F/.index/rerank-time.json"; }
+NOTE="$F/.index/rerank-off-note-date"
+applied() { jget 'd.get("rerank",{}).get(sys.argv[2] if False else "'"$Q"'",{}).get("applied",False)'; }
+export TALOS_RERANK_MODEL_DIR="$SB/rr-ok"
+
+rm -f "$F/.index/rerank-time.json" "$NOTE"
+out="$(RC "$Q" --json)"; e="$(ERR)"
+{ [ "$(applied <<<"$out")" = False ] && <<<"$e" grep -q 'reranking is off on this computer (no timing yet); use --rerank to force it'; } \
+  && ok "rerank default: OFF for a question with no .index/rerank-time.json, and says why once" || no "no-probe case wrong" "$e"
+RC "$Q" --json >/dev/null; e="$(ERR)"; [ -z "$e" ] && ok "rerank default: the 'off' line prints once a day, not on every query" || no "note repeated" "$e"
+printf '{ broken' > "$F/.index/rerank-time.json"; rm -f "$NOTE"
+RC "$Q" --json >/dev/null; e="$(ERR)"; <<<"$e" grep -q '(no timing yet)' && ok "rerank default: an unreadable timing file counts as no timing yet" || no "bad probe file not handled" "$e"
+probe 9.0; rm -f "$NOTE"; out="$(RC "$Q" --json)"; e="$(ERR)"
+{ [ "$(applied <<<"$out")" = False ] && <<<"$e" grep -q '(it took 9.0 s)'; } && ok "rerank default: OFF when the measured time is 9.0 s" || no "9.0 s case wrong" "$e"
+probe_warm_only 3.0; rm -f "$NOTE"; out="$(RC "$Q" --json)"; e="$(ERR)"
+{ [ "$(applied <<<"$out")" = False ] && <<<"$e" grep -q '(no timing yet)'; } && ok "rerank default: a probe file with a warm time but no cold_seconds (an older install) keeps it OFF, 'no timing yet'" || no "warm-only probe turned rerank on" "$e"
+probe 9.0; rm -f "$NOTE"; RC "$Q" --json >/dev/null; <<<"$(ERR)" grep -q 'it took 9.0 s' && ok "rerank default: the off line quotes the COLD time, even when the warm time is 1.0 s" || no "cold time not quoted"
+probe 8.0; out="$(RC "$Q" --json)"; [ "$(applied <<<"$out")" = False ] && ok "rerank default: 8.0 s is not under 8.0, so OFF" || no "8.0 s case wrong"
+probe 3.0; rm -f "$NOTE"
+out="$(RC "$Q" --json)"; e="$(ERR)"
+{ [ "$(applied <<<"$out")" = True ] && [ -z "$e" ]; } && ok "rerank default: ON for a question at 3.0 s with the model present (nothing printed to stderr)" || no "3.0 s case wrong" "$e"
+a="$(RC "$Q" --json --no-rerank | files_of)"; b="$(<<<"$out" files_of)"
+[ -n "$a" ] && [ "$(printf '%s\n' "$a" | sed '1!G;h;$!d')" = "$b" ] && ok "rerank default: the stub reranker really re-sorted (order reversed against --no-rerank)" || no "rerank did not change the order" "$a // $b"
+out="$(RC "vendor contract" --json)"; [ "$(jget 'd.get("rerank",{})' <<<"$out")" = "{}" ] && ok "rerank default: a non-question (a plain topic) is never reranked automatically" || no "non-question reranked"
+out="$(RC "$Q" --json --no-rerank)"; [ "$(applied <<<"$out")" = False ] && ok "--no-rerank turns it off" || no "--no-rerank ignored"
+out="$(TALOS_RECALL_RERANK=0 RC "$Q" --json)"; [ "$(applied <<<"$out")" = False ] && ok "TALOS_RECALL_RERANK=0 turns it off" || no "env off ignored"
+probe 9.0
+out="$(RC "$Q" --json --rerank)"; [ "$(applied <<<"$out")" = True ] && ok "--rerank forces it on even when the measured time is 9.0 s" || no "--rerank did not force"
+out="$(TALOS_RECALL_RERANK=1 RC "$Q" --json)"; [ "$(applied <<<"$out")" = True ] && ok "TALOS_RECALL_RERANK=1 forces it on" || no "env on ignored"
+out="$(TALOS_RECALL_RERANK=0 RC "$Q" --json --rerank)"; [ "$(applied <<<"$out")" = True ] && ok "flags beat the environment (--rerank over TALOS_RECALL_RERANK=0)" || no "flag did not beat env"
+probe 3.0; out="$(TALOS_RECALL_RERANK=1 RC "$Q" --json --no-rerank)"; [ "$(applied <<<"$out")" = False ] && ok "flags beat the environment (--no-rerank over TALOS_RECALL_RERANK=1)" || no "--no-rerank did not beat env"
+rm -f "$NOTE"; out="$(TALOS_RERANK_MODEL_DIR="$SB/rr-none" RC "$Q" --json)"; e="$(ERR)"
+{ [ "$(applied <<<"$out")" = False ] && <<<"$e" grep -q '(model not installed)'; } && ok "rerank default: OFF with a fast probe but no reranker model, and says 'model not installed'" || no "model-missing case wrong" "$e"
+
+# degraded warning
+out="$(RC "$Q")"; rc=$?
+first="$(<<<"$out" head -1)"; last="$(<<<"$out" tail -1)"
+{ [ "$rc" = 0 ] && case "$first" in recall:*) true ;; *) false ;; esac && case "$last" in WARNING*|NOTE*) false ;; *) true ;; esac && ! <<<"$out" grep -q 'DOWN'; } && ok "healthy: no degraded warning, first line is the normal banner" || no "healthy run printed a warning" "$first"
+printf '%s' "$(RC "$Q" --json)" | python3 -c 'import json,sys; assert "degraded" not in json.load(sys.stdin)' 2>/dev/null && ok "healthy: --json has no degraded object" || no "degraded present when healthy"
+touch "$SB/sem-fail"
+out="$(RC "vendor contract")"; rc=$?
+first="$(<<<"$out" head -1)"; last="$(<<<"$out" tail -1)"
+{ [ "$rc" = 0 ] && case "$first" in WARNING*) true ;; *) false ;; esac && [ "$first" = "$last" ] && <<<"$out" grep -q 'dana-ruiz.md'; } \
+  && ok "semantic backend failing: the FIRST and LAST text lines are the same loud WARNING, exit 0, lexical results still printed" || no "degraded text wrong (rc=$rc)" "$first // $last"
+out="$(RC "vendor contract" --json)"
+printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); x=d["degraded"]["semantic"]; assert x["reason"] and d["semantic"]=="unavailable" and d["results"]' 2>/dev/null && ok "semantic backend failing: --json carries degraded.semantic with the reason" || no "degraded json wrong" "$out"
+out="$(RC --batch "vendor contract" "brake pads" --json)"
+printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["degraded"]["semantic"]["queries"]==["vendor contract","brake pads"]' 2>/dev/null && ok "--batch: degraded names the queries it hit" || no "batch degraded wrong" "$out"
+rm -f "$SB/sem-fail"
+probe 3.0
+out="$(TALOS_RERANK_MODEL_DIR="$SB/rr-none" RC "$Q" --rerank)"; first="$(<<<"$out" head -1)"; last="$(<<<"$out" tail -1)"
+{ case "$first" in NOTE:*RERANKER*) true ;; *) false ;; esac && [ "$first" = "$last" ]; } && ok "a forced rerank that cannot run: first and last line say the reranker did not run, results still arrive" || no "rerank-degraded text wrong" "$first // $last"
+out="$(TALOS_RERANK_MODEL_DIR="$SB/rr-none" RC "$Q" --rerank --json)"
+printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["degraded"]["rerank"]["reason"] and "semantic" not in d["degraded"]' 2>/dev/null && ok "a forced rerank that cannot run: --json carries degraded.rerank" || no "rerank-degraded json wrong" "$out"
+out="$(RC "vendor contract" --json -k 1)"; touch "$SB/sem-preimage"
+out="$(RC "automobile servicing" --json)"; rm -f "$SB/sem-preimage"
+printf '%s' "$out" | python3 -c 'import json,sys; assert not [r for r in json.load(sys.stdin)["results"] if "preimage" in r["file"]]' 2>/dev/null && ok "a semantic hit on a preimage path (old index) is dropped from the results" || no "preimage semantic hit returned" "$out"
+rm -f "$V/../.talos-memory-ok"
+out="$(RC "vendor contract")"; first="$(<<<"$out" head -1)"
+case "$first" in recall:*) ok "semantic NOT INSTALLED is the opt-in state, not a degraded warning" ;; *) no "not-installed raised a warning" "$first" ;; esac
+unset TALOS_RERANK_MODEL_DIR
 rm -rf "$XDG_DATA_HOME"
 
 # ===================================================================================== (b)

@@ -31,6 +31,21 @@ const provider = () => new TalosOAuthProvider(memSecrets().secrets, 'srv', 'http
 const signInRequests = () =>
   calls.filter((c) => c.url.includes('/.well-known/') || c.url.includes('/oauth') || c.url.includes('/token'))
 
+// The connector with the system lookup replaced by one that answers at once ("no such host") and notes what it was asked: the
+// same connect code as realDirectConnector, with no network. The 401 below names mcp.example.test for sign-in, so with the
+// real lookup every case waited on DNS, and where .test is blackholed rather than refused (WSL: found on Titan) the first
+// cases ran past the 5 s test limit. The guard itself never dialed: a blocked literal is refused before any lookup.
+let asked: string[] = []
+const noNetwork = makeDirectConnector({
+  resolve: async (h) => {
+    asked.push(h)
+    throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${h}`), { code: 'ENOTFOUND' })
+  },
+})
+beforeEach(() => {
+  asked = []
+})
+
 describe('realDirectConnector with an OAuth provider: sign-in requests go through the address check', () => {
   for (const url of [
     'http://mcp.example.test/mcp', // a NAME is never local by its looks (the old line made every name local)
@@ -50,18 +65,21 @@ describe('realDirectConnector with an OAuth provider: sign-in requests go throug
     'http://[fd00:ec2::254]/mcp', // the IPv6 metadata address sits inside fc00::/7
   ]) {
     it(`${url}: connect fails and no sign-in request is sent to it`, async () => {
-      const e = await realDirectConnector.connect({ type: 'http', url }, { kind: 'oauth', provider: provider() }).then(
+      const e = await noNetwork.connect({ type: 'http', url }, { kind: 'oauth', provider: provider() }).then(
         () => undefined,
         (x) => x,
       )
       expect(e).toBeInstanceOf(Error)
       expect(calls.some((c) => c.method === 'POST')).toBe(true) // the harness did reach the sign-in decision
       expect(signInRequests()).toEqual([])
+      // a blocked address is refused as written, never looked up first
+      const host = new URL(url).hostname.replace(/^\[|\]$/g, '')
+      if (host !== 'mcp.example.test') expect(asked).not.toContain(host)
     })
   }
 
   it('control: an owner-approved local server (a loopback literal) does get its sign-in discovery over the plain fetch', async () => {
-    await realDirectConnector
+    await noNetwork
       .connect({ type: 'http', url: 'http://127.0.0.1:9/mcp' }, { kind: 'oauth', provider: provider() })
       .catch(() => {})
     expect(signInRequests().length).toBeGreaterThan(0)

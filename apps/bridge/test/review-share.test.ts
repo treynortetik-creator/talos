@@ -92,3 +92,30 @@ describe('FAILS on PR #42: a token share escaping its wrapper', () => {
     expect((cc.card as CardT).origin).toBe('background')
   })
 })
+
+describe('a share never replaces a row the Mac already has', () => {
+  test("a share.item that reuses an existing message's id is refused, and that row stays as it was", async () => {
+    h = await startHarness()
+    const store = (h as Harness).bridge.ctx.store
+    const existing = {
+      id: newId('m'),
+      thread_id: 'general',
+      author: 'agent' as const,
+      kind: 'text' as const,
+      text: 'the agent said this',
+      format: 'plain' as const,
+      attachments: [],
+      via: 'app' as const,
+      created_at: new Date().toISOString(),
+    }
+    store.addMessage(existing)
+    const f = shareItem(new Date().toISOString())
+    f.message.id = existing.id
+    h.relay.sendToBridge(f, { durable: true })
+    // a second, honest share after it shows the first one was handled
+    h.relay.sendToBridge(shareItem(new Date().toISOString()), { durable: true })
+    await h.waitNotes(1)
+    expect(store.getMessage(existing.id)).toMatchObject({ author: 'agent', text: 'the agent said this' })
+    expect(h.notes).toHaveLength(1)
+  })
+})

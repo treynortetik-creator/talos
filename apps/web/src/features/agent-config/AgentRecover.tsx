@@ -1,20 +1,26 @@
 // Settings → Agent: Restart agent. It sends one signed `agent.recover` to the Mac, which hands it to the Mac app; the agent
 // is not asked and does not need to be working. Putting back the last good setup is NOT here: the Mac cannot tell a
-// restore the phone asked for from one the agent asked for, so it is done at the Mac, and a line says so.
+// restore the phone asked for from one the agent asked for, so it is done at the computer (the Mac's menu, the PC's tray),
+// and a line says where (hostWords.restore).
 // With the Mac offline the button stays where it is and says why nothing is sent: recovery needs the Mac app running.
 import { type AgentRecoverActionT, type FrameOf, newUlid } from '@talos-app/protocol'
 import { useEffect, useRef, useState } from 'react'
 import { TalosClientError, useTalosClient } from '../../lib/client.ts'
-import { passkeyErrorCopy } from '../../lib/passkeyGate.ts'
+import { capital, type HostWords, useHostWords } from '../../lib/hostWords.ts'
 import { Button } from '../../ui/index.ts'
+import { NOT_CONNECTED_LINE, useWriteBlock } from '../settings/offline.ts'
+import { connectionRefusal } from '../threads/manage/useThreadPatch.ts'
 
-export const RECOVER_OFFLINE_TEXT = "Your Mac is offline. Recovery needs the Mac app running; try again when it's back."
-const NO_ANSWER_TEXT = 'Your Mac did not answer. Check that it is awake and try again.'
+export const recoverOfflineText = (w: HostWords) =>
+  `${capital(w.computer)} is offline. Recovery needs ${w.app} running; try again when it's back.`
+const noAnswerText = (w: HostWords) => `${capital(w.computer)} did not answer. Check that it is awake and try again.`
 const WAIT_MS = 30_000
 
 type Outcome = { ok: boolean; text: string }
 
-export function AgentRecover({ macOnline }: { macOnline: boolean }) {
+export function AgentRecover() {
+  const block = useWriteBlock()
+  const words = useHostWords()
   const client = useTalosClient()
   const [pending, setPending] = useState<AgentRecoverActionT | null>(null)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
@@ -41,8 +47,14 @@ export function AgentRecover({ macOnline }: { macOnline: boolean }) {
   const run = async (action: AgentRecoverActionT) => {
     if (pending) return // never disabled while waiting: a disabled control drops keyboard focus on some phones
     setOutcome(null)
-    if (!macOnline || !client.sendOwnerFrame) {
-      setOutcome({ ok: false, text: macOnline ? 'This build cannot send that.' : RECOVER_OFFLINE_TEXT })
+    if (block !== null || !client.sendOwnerFrame) {
+      const text =
+        block === 'link'
+          ? NOT_CONNECTED_LINE
+          : block === 'mac'
+            ? recoverOfflineText(words)
+            : 'This build cannot send that.'
+      setOutcome({ ok: false, text })
       return
     }
     const send = client.sendOwnerFrame.bind(client)
@@ -50,18 +62,18 @@ export function AgentRecover({ macOnline }: { macOnline: boolean }) {
     setPending(action)
     waiting.current = {
       id: control_id,
-      timer: setTimeout(() => done.current({ ok: false, text: NO_ANSWER_TEXT }), WAIT_MS),
+      timer: setTimeout(() => done.current({ ok: false, text: noAnswerText(words) }), WAIT_MS),
     }
     try {
       await send({ type: 'agent.recover', control_id, action })
     } catch (e) {
       const text =
-        passkeyErrorCopy(e) ??
+        connectionRefusal(e) ??
         (e instanceof TalosClientError && e.code === 'mac_offline'
-          ? RECOVER_OFFLINE_TEXT
+          ? recoverOfflineText(words)
           : e instanceof TalosClientError && e.message
             ? e.message
-            : 'Couldn’t reach your Mac. Nothing was changed.')
+            : `Couldn’t reach ${words.computer}. Nothing was changed.`)
       done.current({ ok: false, text })
     }
   }
@@ -69,7 +81,7 @@ export function AgentRecover({ macOnline }: { macOnline: boolean }) {
   return (
     <div className="space-y-3" data-testid="agent-recover">
       <p className="m-0 text-sm text-text-2">
-        If the agent stops answering, this asks your Mac to restart it. It doesn’t go through the agent.
+        If the agent stops answering, this asks {words.computer} to restart it. It doesn’t go through the agent.
       </p>
       <div className="flex flex-col gap-2">
         <Button
@@ -82,16 +94,16 @@ export function AgentRecover({ macOnline }: { macOnline: boolean }) {
         </Button>
       </div>
       <p data-testid="agent-recover-restore-note" className="m-0 text-sm text-text-2">
-        To put back the last good setup, use the Talos menu on your Mac: Restore last good setup.
+        {words.restore}
       </p>
-      {!macOnline ? (
+      {block === 'mac' ? (
         <p data-testid="agent-recover-offline" className="m-0 text-sm text-text-2">
-          {RECOVER_OFFLINE_TEXT}
+          {recoverOfflineText(words)}
         </p>
       ) : null}
       {pending ? (
         <p role="status" className="m-0 text-sm text-text-2">
-          Asking your Mac…
+          Asking {words.computer}…
         </p>
       ) : null}
       {outcome ? (

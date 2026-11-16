@@ -8,6 +8,8 @@ import {
   useLayoutEffect,
   useRef,
 } from 'react'
+import { PHONE_QUERY } from '../phone/PhoneChrome.tsx'
+import { FOLLOW_NEW_TEXT } from '../threads/jumpToLatest.ts'
 import { followsInsert } from './followInsert.ts'
 
 export function useComposerTextBox(o: {
@@ -62,10 +64,14 @@ export function useComposerTextBox(o: {
   }, [syncFromDom])
 
   // Dictation tools only paste into a focused editable element, so the box keeps focus through a send. Not on phones:
-  // refocusing there would pop the keyboard back up.
+  // refocusing there would pop the keyboard back up. On a phone the keyboard goes down after a send instead, so the whole
+  // thread shows while the reply comes in (owner, 2026-11-15; the same switch as following new text, FOLLOW_NEW_TEXT).
   // biome-ignore lint/correctness/useExhaustiveDependencies: taRef is stable; the list is kept as it was
-  const keepFocus = useCallback(() => {
-    if (window.matchMedia?.('(pointer: coarse)').matches) return
+  const keepFocus = useCallback((blurOnPhone = true) => {
+    if (window.matchMedia?.('(pointer: coarse)').matches) {
+      if (blurOnPhone && FOLLOW_NEW_TEXT && window.matchMedia(PHONE_QUERY).matches) taRef.current?.blur()
+      return
+    }
     taRef.current?.focus({ preventScroll: true })
   }, [])
 

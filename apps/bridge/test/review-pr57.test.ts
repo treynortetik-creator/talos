@@ -14,7 +14,7 @@ import {
   newUlid,
   payloadHash,
 } from '@talos-app/protocol'
-import { mkFrame } from '@talos-app/testkit'
+import { mkFrame, t } from '@talos-app/testkit'
 import { type HistoryStore, openHistory } from '../src/history-store.ts'
 import { createSearchService, indexerFor } from '../src/search/install.ts'
 import { type Harness, startHarness, tempHome } from './helpers.ts'
@@ -116,48 +116,65 @@ describe('(2) reindex next to a live LISTENER write (not a live reconcile pass)'
     expect({ indexed: ftsCount(live), stored: msgCount(live) }).toEqual({ indexed: 2001, stored: 2001 })
   })
 
-  test('two real OS processes: a headless writer (listener only) while `search reindex` runs; every row ends up indexed', async () => {
-    const path = join(tempHome(), 'history.sqlite')
-    const seed = open(path)
-    seed.db.transaction(() => {
-      for (let i = 0; i < 5000; i++) seed.addMessage(msg({ text: `seed ${i} tapir` }))
-    })()
-    const script = join(tempHome(), 'writer.ts')
-    await Bun.write(
-      script,
-      `import { openHistory } from ${JSON.stringify(join(import.meta.dir, '../src/history-store.ts'))}
+  test(
+    'two real OS processes: a headless writer (listener only) while `search reindex` runs; every row ends up indexed',
+    async () => {
+      const path = join(tempHome(), 'history.sqlite')
+      const seed = open(path)
+      seed.db.transaction(() => {
+        for (let i = 0; i < 5000; i++) seed.addMessage(msg({ text: `seed ${i} tapir` }))
+      })()
+      const script = join(tempHome(), 'writer.ts')
+      await Bun.write(
+        script,
+        `import { openHistory } from ${JSON.stringify(join(import.meta.dir, '../src/history-store.ts'))}
        const s = openHistory(process.argv[2])
+       s.db.exec('PRAGMA synchronous = NORMAL')
        const base = { thread_id: 'general', author: 'owner', kind: 'text', format: 'plain', attachments: [], via: 'app' }
+       let worst = 0
        for (let i = 0; i < 3000; i++) {
+         const t0 = performance.now()
          s.addMessage({ ...base, id: 'm_' + String(i).padStart(26, '0').replace(/[ILOU]/g, '0'), text: 'proc ' + i + ' tapir', created_at: new Date().toISOString() })
+         worst = Math.max(worst, performance.now() - t0)
          if (i % 50 === 0) await Bun.sleep(1)
        }
-       s.close()`,
-    )
-    const child = Bun.spawn(['bun', 'run', script, path], { stdout: 'pipe', stderr: 'pipe' })
-    const cli = open(path)
-    const B = indexerFor(cli)
-    if (!B) throw new Error('no indexer')
-    let runs = 0
-    while (child.exitCode === null) {
-      await B.rebuildAll(() => new Promise((r) => setTimeout(r, 1)))
-      runs++
-    }
-    await child.exited
-    expect(child.exitCode, await new Response(child.stderr).text()).toBe(0)
-    while (B.reconcile()); // the live bridge's next ticks
-    expect(runs).toBeGreaterThan(0)
-    expect({ indexed: ftsCount(cli), stored: msgCount(cli), dirty: B.dirty() }).toEqual({
-      indexed: 8000,
-      stored: 8000,
-      dirty: '',
-    })
-    // the mark never sits past an unindexed row
-    const gap = cli.db
-      .query('SELECT COUNT(*) AS n FROM messages WHERE ord <= ? AND ord NOT IN (SELECT rowid FROM msg_fts)')
-      .get(B.hwm()) as { n: number }
-    expect(gap.n).toBe(0)
-  }, 60_000)
+       s.close()
+       console.log('worst_ms=' + Math.round(worst))`,
+      )
+      const child = Bun.spawn(['bun', 'run', script, path], { stdout: 'pipe', stderr: 'pipe' })
+      const cli = open(path)
+      // what this checks is the lock and the index, not durability: no fsync per commit (on btrfs that alone took minutes).
+      // So it does not run the product's own setting (synchronous = FULL), where a bulk writer can starve the reindex instead
+      // (docs/bridge.md, the open question on synchronous)
+      cli.db.exec('PRAGMA synchronous = NORMAL')
+      const B = indexerFor(cli)
+      if (!B) throw new Error('no indexer')
+      let runs = 0
+      // the CLI's own pause between passes (indexer.ts REINDEX_YIELD_MS): a 1 ms one let the writer sleep through every gap
+      while (child.exitCode === null) {
+        await B.rebuildAll()
+        runs++
+      }
+      await child.exited
+      expect(child.exitCode, await new Response(child.stderr).text()).toBe(0)
+      // the yield holds: no write waited anywhere near its 5 s busy timeout (120 ms: under 0.1 s; at a 2 ms pause it was 0.6-4 s)
+      const worst = Number(/worst_ms=(\d+)/.exec(await new Response(child.stdout).text())?.[1] ?? Number.NaN)
+      expect(worst).toBeLessThan(t(400))
+      while (B.reconcile()); // the live bridge's next ticks
+      expect(runs).toBeGreaterThan(0)
+      expect({ indexed: ftsCount(cli), stored: msgCount(cli), dirty: B.dirty() }).toEqual({
+        indexed: 8000,
+        stored: 8000,
+        dirty: '',
+      })
+      // the mark never sits past an unindexed row
+      const gap = cli.db
+        .query('SELECT COUNT(*) AS n FROM messages WHERE ord <= ? AND ord NOT IN (SELECT rowid FROM msg_fts)')
+        .get(B.hwm()) as { n: number }
+      expect(gap.n).toBe(0)
+    },
+    t(60_000),
+  )
 })
 
 // ---------------------------------------------------------------------------------------------------------------------

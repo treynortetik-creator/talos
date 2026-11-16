@@ -2,13 +2,14 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// The supervisor half of "Mac settings get one home". No tmux, no claude: the supervisor is built as SupervisorController
 /// builds it and never started.
 @Suite("Mac settings: config edits")
 struct MacHomesConfigTests {
   private func world() throws -> (root: String, path: String, sup: Supervisor) {
-    let root = NSTemporaryDirectory() + "talos-mh-\(UUID().uuidString)"
+    let root = TestTemp.base + "talos-mh-\(UUID().uuidString)"
     try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
     let path = root + "/desktop.json"
     let sup = Supervisor(

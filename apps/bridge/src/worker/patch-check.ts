@@ -8,6 +8,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { type AgentConfigT, checkWorkerCwd, dedicatedPatchIssue, FOLDER_WORDING } from '@talos-app/protocol'
 import { folderDeps, folderRefusedRoots, underRefusedRoot } from '../folders/service.ts'
+import { say } from '../owner-words.ts'
 
 /**
  * `claudeDir` and `agentDir` are optional: the first defaults to `<home>/.claude`, the second to nothing (the agent folder is
@@ -25,6 +26,7 @@ export function defaultWorkerRoots(configPath: string): WorkerRoots {
   }
 }
 
+// for folders only: a file's real path goes through realFileSync (real-file.ts), as realpath can name a hard-linked file by another of its names
 const real = (p: string): string | null => {
   try {
     return realpathSync(p)
@@ -49,11 +51,12 @@ export function checkWorkerFolder(cwd: string, roots: WorkerRoots): string | nul
   const lexical = checkWorkerCwd(cwd, roots)
   if (lexical) return lexical
   const resolved = real(cwd)
-  if (!resolved) return 'that folder does not exist on your Mac'
+  if (!resolved)
+    return say({ mac: 'that folder does not exist on your Mac', linux: 'that folder does not exist on your computer' })
   try {
     if (!statSync(resolved).isDirectory()) return 'that path is not a folder'
   } catch {
-    return 'that folder does not exist on your Mac'
+    return say({ mac: 'that folder does not exist on your Mac', linux: 'that folder does not exist on your computer' })
   }
   // compare like with like: the roots resolved too (macOS /var -> /private/var and the like)
   const resolvedRoots = {

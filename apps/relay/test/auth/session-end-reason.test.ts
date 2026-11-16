@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createDeviceKey, generateBridgeKey } from '@talos-app/protocol'
-import { FakeApp, type FakeClock, fakeClock } from '@talos-app/testkit'
+import { FakeApp, type FakeClock, fakeClock, t as scaled } from '@talos-app/testkit'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetAuthImplementation } from '../../src/auth/contract.ts'
 import { authState } from '../../src/auth/state.ts'
@@ -17,7 +17,9 @@ import { TEST_DATA_KEY } from '../helpers/fake-services.ts'
 import { afterEachReset, type Harness, makeHarness, registerPasskey } from './helpers.ts'
 import { softAuthenticator } from './soft-passkey.ts'
 
-vi.setConfig({ testTimeout: 60_000 })
+// The tests already had a longer budget; the setup hook (a relay and a passkey per test) needs one too: under a full gate's
+// parallel load it took over the 10 s default (8 of 8 under load here). Scaled by the machine's time factor.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: scaled(30_000) })
 
 const DAY = 24 * 3600_000
 
@@ -25,7 +27,8 @@ describe('the 401 says why the session ended', () => {
   let h: Harness
   afterEach(afterEachReset)
   beforeEach(async () => {
-    h = await makeHarness()
+    // these test the idle and end-record mechanics with the old limits named; the defaults are 90 and 90 (csrf-session.test.ts)
+    h = await makeHarness({ env: { SESSION_TTL_DAYS: '30', SESSION_IDLE_DAYS: '14' } })
   })
   const me = async (cookie: string) => {
     const res = await h.app.request('/api/me', { headers: { Cookie: cookie } })
@@ -45,7 +48,7 @@ describe('the 401 says why the session ended', () => {
   })
 
   it('with a sign-in lasting 100 days, the idle-expired record is still there when the cookie comes back at day 75', async () => {
-    const long = await makeHarness({ env: { SESSION_TTL_DAYS: '100' } })
+    const long = await makeHarness({ env: { SESSION_TTL_DAYS: '100', SESSION_IDLE_DAYS: '14' } })
     const cookie = await long.loginPinned()
     long.fake.clock.advance(15 * DAY)
     long.state.core.purge() // ends the session as "expired"
@@ -57,7 +60,7 @@ describe('the 401 says why the session ended', () => {
   })
 
   it('a lowered SESSION_TTL_DAYS does not shorten how long the end record is kept; the bound is 365 days', async () => {
-    const long = await makeHarness({ env: { SESSION_TTL_DAYS: '100' } })
+    const long = await makeHarness({ env: { SESSION_TTL_DAYS: '100', SESSION_IDLE_DAYS: '14' } })
     const cookie = await long.loginPinned()
     long.fake.clock.advance(15 * DAY)
     long.state.core.purge() // ends the session as "expired"

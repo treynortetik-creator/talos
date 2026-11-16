@@ -1,0 +1,13 @@
+# Talos on Windows: the WSL 2 limits (docs/windows/README.md). A draft: nothing installs it. With the owner's OK, copy it to
+# %UserProfile%\.wslconfig, then run `wsl --shutdown` in Windows so the next start reads it. It applies to every distro.
+[wsl2]
+# By default WSL 2 may take half the machine's memory and gives it back slowly. A cap keeps a game's memory free; Talos itself
+# (the bridge, a few Claude Code sessions, tmux) fits well inside it. Raise it if a full test gate runs here.
+memory=8GB
+# Cores WSL may use; the test runs here are held to 4 as well.
+processors=4
+swap=4GB
+
+[experimental]
+# Hand memory the Linux page cache no longer needs back to Windows a little at a time.
+autoMemoryReclaim=gradual

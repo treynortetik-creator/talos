@@ -1,0 +1,40 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.325[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mFable 5.2 · Claude Max  [39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/home/alex/proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[39m
+
+
+[38;5;246m[48;5;237m❯ [38;5;231mRun the shell command: sleep 20, in the background. Then reply ok and stop.[39m
+
+[38;5;246m[49m⏺[39m Sleeping for 20 seconds
+[38;5;246m  ⎿  $ sleep 20[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[38;5;174m✢[39m [38;5;216mPerambulating…[38;5;174m [38;5;246m(4s · ↓[39m [38;5;246m77 tokens)[39m
+                                        [38;5;220mYou've used 50% of your weekly limit · resets Dec 01 at 09am (UTC)            [39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;5;246m❯ [39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246m⏸ manual mode on · [38;5;44m1 shell[38;5;246m · esc to interrupt · ↓ to manage[39m

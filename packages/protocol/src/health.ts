@@ -3,6 +3,7 @@
 // v1.1): no /api/health, no HEALTH_TOKEN, no external_check field.
 import { z } from 'zod'
 import { IsoTs } from './ids.ts'
+import { MainState } from './main-state.ts'
 
 export const HEALTH_FEATURE = 'health/1'
 
@@ -22,15 +23,35 @@ export const ModHealth = z.object({
   expected: z.boolean(), // the mod synced at least once in the last 7 days (bridge kv `mod_seen_at`)
 })
 
+/** The retention choices the app offers for media_keep_days, in days (null, keep for good, is the default). */
+export const MEDIA_KEEP_CHOICES = [30, 90, 180, 365] as const
+
 /** bridge -> relay, every 60 s and within 2 s of a change. No content: no thread names, paths or text. */
 export const HealthBeat = z.object({
   bridge: z.object({ version: z.string().max(40), started_at: IsoTs }),
+  /** Main's first-start state, from the supervisor's run/main-state while it is fresh (main-state.ts). Absent on a Mac. */
+  main: MainState.optional().catch(undefined),
   mod: ModHealth,
   tts: z.boolean(),
   stt: z.boolean(),
   sqlite: z.object({ fts5: z.boolean() }), // probe result (V3.1); false = search/memory not advertised
   /** Free bytes on the volume the bridge keeps its data on: a number only, never a path. Absent from an older bridge. */
   disk_free_bytes: z.number().int().nonnegative().optional(),
+  /**
+   * Downloaded attachments older than each of the retention choices the app offers (MEDIA_KEEP_CHOICES): what a setting of
+   * `days` would remove now, files still in use left out. Counts and bytes only. Absent from an older bridge.
+   */
+  media_by_age: z
+    .array(
+      z.object({
+        days: z.number().int().positive(),
+        files: z.number().int().nonnegative(),
+        bytes: z.number().int().nonnegative(),
+      }),
+    )
+    .max(12)
+    .optional()
+    .catch(undefined),
   /**
    * Whether this session declared `claude/channel/permission` to Claude Code when it started. Claude Code only sends tool
    * prompts to a server that did, so a `permission_relay` setting turned on later does nothing until a restart. One
@@ -74,8 +95,17 @@ export const HealthStatus = z.object({
      * `MacProblem`: that enum is strict, and an older web client would reject the whole status for one new value.
      */
     auth_refused_at: IsoTs.nullable().optional(),
+    /** Same meaning as `Presence.superseded`. Optional: an older relay never sends it. */
+    superseded: z.boolean().optional(),
+    /** The bridge's build, from its last health beat (Settings -> About). Optional: before a beat, or an older relay. */
+    version: z.string().max(40).optional(),
   }),
   mod: ModHealth.extend({ state: z.enum(['alive', 'quiet', 'absent', 'unknown']) }), // unknown = bridge offline
+  /**
+   * The owner's connected, pinned app pages: `wide` read the bridge's whole features list (their hello listed
+   * features-64/1), `narrow` get its first 20. Counts only. Optional: an older relay never sends it.
+   */
+  apps: z.object({ wide: z.number().int().nonnegative(), narrow: z.number().int().nonnegative() }).optional(),
   push: z.object({
     subscriptions: z.number().int(),
     last_ok_at: IsoTs.nullable(),

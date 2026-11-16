@@ -6,15 +6,16 @@ import {
   EXPLAIN_FAILED_TEXT,
   EXPLAIN_GIVE_UP_MS,
   type PermissionExplainT,
+  permissionHiddenWarning,
 } from '@talos-app/protocol'
-import { act, screen, within } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { installAlwaysVisible } from '../helpers/intersection.ts'
 import { LiveCard, renderWith, setup } from './helpers.tsx'
 
 const CMD = 'rm -rf build/ ~/Downloads/*'
-const make = (explain: boolean, ageMs = 1000, over: { input_preview?: string } = {}) =>
+const make = (explain: boolean, ageMs = 1000, over: { input_preview?: string; repeated?: boolean } = {}) =>
   composePermissionCard({
     request: {
       request_id: 'abcde',
@@ -27,6 +28,7 @@ const make = (explain: boolean, ageMs = 1000, over: { input_preview?: string } =
     now: Date.now() - ageMs,
     client_version: '2.1.312',
     ...(explain ? { explain: true } : {}),
+    ...(over.repeated ? { repeated: true } : {}),
   })
 
 /** The card as the store holds it once the explanation arrived. */
@@ -71,7 +73,8 @@ describe('waiting for the explanation', () => {
     const client = setup({ cards: [c] })
     renderWith(<LiveCard id={c.id} />, client)
     await userEvent.click(screen.getByRole('button', { name: 'Deny' }))
-    expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true)
+    // the resolve is signed before it is sent, so it lands a moment after the click
+    await waitFor(() => expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true))
   })
 
   it('an explanation that never came, past the give-up time, reads as failed', () => {
@@ -213,10 +216,17 @@ describe("a card with no explanation field is today's card", () => {
     expect(screen.getByRole('button', { name: 'Review to allow' })).toBeTruthy()
   })
 
-  it('a deny-only card (a hidden part) keeps the whole call in view even with an explanation, and offers no Allow', () => {
-    const c = withExplain(READY, 1000, { input_preview: '{"command": "cat <<EOF ⋯ 4812 code points elided ⋯ EOF"}' })
+  it('a deny-only card (a repeated id) keeps the whole call in view even with an explanation, and offers no Allow', () => {
+    const c = withExplain(READY, 1000, { repeated: true })
     renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
     expect(screen.getByTestId('permission-call')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /allow/i })).toBeNull()
+  })
+
+  it('a card with a hidden part keeps its way to Allow beside the explanation, and shows the note', () => {
+    const c = withExplain(READY, 1000, { input_preview: '{"command": "cat <<EOF ⋯ 4812 code points elided ⋯ EOF"}' })
+    renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
+    expect(screen.getByRole('button', { name: 'Review to allow' })).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toContain(permissionHiddenWarning(['elided']))
   })
 })

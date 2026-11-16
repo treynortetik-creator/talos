@@ -97,13 +97,28 @@ struct NeedsYouPopupGuiTests {
   // MARK: only the owner's own click answers
 
   /// A real mouse click on an answer button; Accessibility presses and AppleScript send no mouse event, so the button's action is judged by the
-  /// event the app is handling when it runs.
-  private func mouse(_ type: NSEvent.EventType, on b: NSButton, at: NSPoint? = nil, age: TimeInterval = 0, window: Int? = nil) throws -> NSEvent {
+  /// event the app is handling when it runs. `pid` and `state` are the source fields the system stamps: 0 and the hardware state for the mouse
+  /// itself, the poster's process id for a click a program posted. The event is only made here, never posted.
+  private func mouse(
+    _ type: NSEvent.EventType, on b: NSButton, at: NSPoint? = nil, age: TimeInterval = 0, window: Int? = nil, pid: Int64 = 0,
+    state: Int64 = PopupClickCheck.hidSystemStateId
+  ) throws -> NSEvent {
     let p = at ?? b.convert(NSPoint(x: b.bounds.midX, y: b.bounds.midY), to: nil)
-    return try #require(
+    let e = try #require(
       NSEvent.mouseEvent(
         with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime - age, windowNumber: window ?? b.window?.windowNumber ?? 0,
         context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+    let cg = try #require(e.cgEvent)
+    cg.setIntegerValueField(.eventSourceUnixProcessID, value: pid)
+    cg.setIntegerValueField(.eventSourceStateID, value: state)
+    // A CGEvent's location is global with a top-left origin; how NSEvent(cgEvent:) maps it into a window that is never on screen depends on
+    // where AppKit thinks the window is. Measure that offset once (x keeps its direction, y flips), then aim at the button with it.
+    let probe = try #require(NSEvent(cgEvent: cg)).locationInWindow
+    cg.location = CGPoint(x: cg.location.x + p.x - probe.x, y: cg.location.y - (p.y - probe.y))
+    let stamped = try #require(NSEvent(cgEvent: cg))
+    try #require(stamped.type == e.type)
+    if window == nil { try #require(stamped.windowNumber == e.windowNumber && stamped.locationInWindow == e.locationInWindow, "the stamped copy is the same click") }
+    return stamped
   }
 
   @Test func onlyAFreshLeftMouseClickInsideTheButtonCountsAsAnAnswer() throws {
@@ -118,6 +133,8 @@ struct NeedsYouPopupGuiTests {
     #expect(!NeedsYouPopupView.isRealClick(try mouse(.mouseMoved, on: b), on: b))
     #expect(!NeedsYouPopupView.isRealClick(try mouse(.leftMouseUp, on: b, at: NSPoint(x: -50, y: -50)), on: b), "a click somewhere else")
     #expect(!NeedsYouPopupView.isRealClick(try mouse(.leftMouseUp, on: b, window: b.window!.windowNumber + 1), on: b), "a click in another window")
+    #expect(!NeedsYouPopupView.isRealClick(try mouse(.leftMouseUp, on: b, pid: 4242), on: b), "a click another program posted")
+    #expect(!NeedsYouPopupView.isRealClick(try mouse(.leftMouseUp, on: b, state: 0), on: b), "a click posted from the combined session state")
     let key = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: b.window?.windowNumber ?? 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
     #expect(!NeedsYouPopupView.isRealClick(key, on: b))
   }
@@ -148,7 +165,8 @@ struct NeedsYouPopupGuiTests {
   }
 
   /// Main's development-channels popup: Accept (the one that seals the launch) is answered only by a real mouse click. A program that presses
-  /// the button (Accessibility, AppleScript) sends no mouse event, so nothing is asked, nothing is pressed, nothing is sealed.
+  /// the button (Accessibility, AppleScript) sends no mouse event, and one that posts a click stamps its own process id on it, so nothing is
+  /// asked, nothing is pressed, nothing is sealed.
   @Test func mainsAcceptButtonIsPressedOnlyByARealClick() throws {
     _ = NSApplication.shared
     let main = NeedsYouPopupItem(
@@ -163,6 +181,9 @@ struct NeedsYouPopupGuiTests {
     accept.performClick(nil)  // no mouse event: a scripted press
     click(accept)
     #expect(clicked.isEmpty, "a scripted press of Accept asked for nothing")
+    event = try mouse(.leftMouseUp, on: accept, pid: 4242)
+    click(accept)
+    #expect(clicked.isEmpty, "a click another program posted on Accept asked for nothing")
     event = try mouse(.leftMouseUp, on: accept)
     click(accept)
     #expect(clicked == [0], "the owner's click asks")
@@ -280,7 +301,7 @@ struct NeedsYouPopupGuiTests {
     b.offers = [item(idB, thread: "b", seen: "2026-11-07T10:00:02.000Z")]  // the popup above it is gone: this one moves up
     ctl.tick()
     #expect(ctl.panels[idB] === panelB && panelB.frame.origin.y != yBefore, "control: the same panel moved")
-    event = NSEvent.mouseEvent(with: .leftMouseUp, location: btn.convert(NSPoint(x: btn.bounds.midX, y: btn.bounds.midY), to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panelB.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)
+    event = try mouse(.leftMouseUp, on: btn)
     click(btn)
     #expect(b.asked == 0, "it moved just now: the click was ignored")
     b.clock += NeedsYouPopupCoordinator.clickDelay + 0.1
@@ -336,7 +357,7 @@ struct NeedsYouPopupGuiTests {
     try await Task.sleep(for: .seconds(0.9))  // let the first moment pass (0.6 s, the real clock here)
     let panel = try #require(ctl.panels[idA])
     let btn = try #require(buttons(in: try content(panel)).first { $0.tag == 1 })
-    event = NSEvent.mouseEvent(with: .leftMouseUp, location: btn.convert(NSPoint(x: btn.bounds.midX, y: btn.bounds.midY), to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)
+    event = try mouse(.leftMouseUp, on: btn)
     click(btn)
     #expect(await until(5) { source.asked.count == 1 })
     #expect(source.asked.first?.contains("garden|\(idA)|choose(1") == true, "\(source.asked)")
@@ -348,11 +369,11 @@ struct NeedsYouPopupGuiTests {
     let sc = StatusCoordinator.shared
     let saved = sc.now
     defer { sc.now = saved; sc.setQuietForTest(nil) }
-    let q = QuietWindow.read(Data(#"{"quiet_window":{"start":"20:30","end":"04:00"},"timezone":"Etc/GMT+7"}"#.utf8))
+    let q = QuietWindow.read(Data(#"{"quiet_window":{"start":"22:00","end":"06:00"},"timezone":"Etc/GMT+5"}"#.utf8))
     sc.setQuietForTest(q)
-    sc.now = { Date(timeIntervalSince1970: 1_793_462_400 + 13 * 3600) }  // 22:00 in the UTC-7 zone: inside the window
+    sc.now = { Date(timeIntervalSince1970: 1_793_455_200 + 14 * 3600) }  // 23:00 in the UTC-5 zone: inside the window
     #expect(NeedsYouPopupController.statusQuiet() == true)
-    sc.now = { Date(timeIntervalSince1970: 1_793_462_400 + 20 * 3600) }  // 05:00, after the window
+    sc.now = { Date(timeIntervalSince1970: 1_793_455_200 + 22 * 3600) }  // 07:00, after the window
     #expect(NeedsYouPopupController.statusQuiet() == false)
   }
 

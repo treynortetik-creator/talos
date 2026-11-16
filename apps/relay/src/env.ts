@@ -1,6 +1,8 @@
-// Every relay environment variable (spec section 11). Seam: ownership stays with WP0; do not edit.
+// Every relay environment variable (spec section 11). A new switch is a flag01 (0|1, default 0: off is today's behaviour)
+// with an entry in flags.json at the repo root; scripts/flags.test.ts fails on one without.
 import { z } from 'zod'
 
+/** A kill switch: register it in flags.json (scripts/flags.test.ts checks its default and that it is listed). */
 const flag01 = z
   .enum(['0', '1'])
   .default('0')
@@ -65,14 +67,19 @@ const base = z.object({
   VOICE_SESSION_MAX_MIN: int(30, 1),
   BUFFER_DAYS: int(7, 1, 90),
   MEDIA_MAX_MB: int(50, 1, 50),
+  /**
+   * How often a scheduler alert held by the quiet window is looked at again (seconds). The browser suite runs it faster;
+   * never slower than the default, never under 5 s.
+   */
+  SCHEDULE_ALERT_HOLD_POLL_S: int(60, 5, 60),
   /** Uploads one owner may make in an hour. The default is today's limit. */
   MEDIA_UPLOADS_PER_HOUR: int(60, 1, 100_000),
   /** Megabytes of owner uploads in any 24 hours before the relay answers 429. Share uploads have their own budget and also stop at this limit. */
   MEDIA_DAILY_MAX_MB: int(200, 1, 100_000),
   /** How long a sign-in lasts, in days, counted from when it was last used (the end moves forward each time it is used). */
-  SESSION_TTL_DAYS: int(30, 1, 365),
+  SESSION_TTL_DAYS: int(90, 1, 365),
   /** A sign-in unused for this many days ends. Must not be longer than SESSION_TTL_DAYS. */
-  SESSION_IDLE_DAYS: int(14, 1, 365),
+  SESSION_IDLE_DAYS: int(90, 1, 365),
   VOLUME_SOFT_CAP_MB: int(800, 1),
   /** 0 = no proxy: socket address. Above 0: X-Real-IP (Railway), else the entry this many hops from the right of X-Forwarded-For. */
   TRUST_PROXY_HOPS: int(1, 0, 10),
@@ -93,6 +100,57 @@ const base = z.object({
     .optional(),
   /** Optional bearer for a protected ntfy topic. */
   ALERT_NTFY_TOKEN: z.string().min(1).optional(),
+  /** Megabytes all kept bug reports may use together; a new report past it is refused (507). Reports also expire after 90 days. */
+  BUG_REPORTS_MAX_MB: int(500, 1, 100_000),
+  /** Megabytes every kept org-page version may use together; a publish past it is refused (507 pages_full). */
+  PAGES_MAX_MB: int(500, 1, 100_000),
+  /** Org pages the relay keeps at most; a new page past it is refused (507 pages_full). Versions of a kept page still go in. */
+  PAGES_MAX: int(500, 1, 100_000),
+  /**
+   * Signs the bug-report webhook (Standard Webhooks): `whsec_` plus base64. The webhook is off unless this is set AND the
+   * owner put a URL in config.json (`bug_webhook_url`, set at the Mac). Without it no report is ever sent anywhere.
+   */
+  BUG_WEBHOOK_SECRET: z
+    .string()
+    .regex(/^whsec_[A-Za-z0-9+/]{16,}={0,2}$/, { message: 'must be whsec_ followed by base64' })
+    .optional(),
+  /**
+   * The Talos team's bug inbox (`https://<the team's relay>/api/bug-inbox`), set by whoever deploys this relay for someone
+   * else. Used only when the owner set no `bug_webhook_url` of their own, and only with BUG_WEBHOOK_SECRET, which signs the
+   * call; the reporter then says reports go to the Talos team. Unset (the default): nothing changes.
+   */
+  BUG_TEAM_INBOX_URL: z.string().url().optional(),
+  /**
+   * The bug inbox (`POST /api/bug-inbox`, core/bug-inbox.ts), on the Talos team's relay: one `name=whsec_…` pair per other
+   * install, separated by commas, the same secret as that install's BUG_WEBHOOK_SECRET. The name is who a report is from
+   * (proven by the signature) and what `talos-app errors list` shows. Unset (the default): the route answers 404 and does nothing.
+   */
+  BUG_INBOX_SECRETS: z
+    .string()
+    .transform((v) => v.split(',').map((p) => p.trim()))
+    .pipe(
+      z
+        .array(
+          z
+            .string()
+            .regex(/^[a-z0-9][a-z0-9-]{0,31}=whsec_[A-Za-z0-9+/]{16,}={0,2}$/, {
+              message: 'each entry is name=whsec_<base64>, the name in lowercase letters, digits and -',
+            })
+            .transform((e) => ({ name: e.slice(0, e.indexOf('=')), secret: e.slice(e.indexOf('=') + 1) })),
+        )
+        .min(1)
+        .refine((l) => new Set(l.map((e) => e.name)).size === l.length, { message: 'each name once' })
+        .refine((l) => new Set(l.map((e) => e.secret)).size === l.length, { message: 'each secret once' }),
+    )
+    .optional(),
+  /** The bug inbox keeps the marked-up screenshot by default; 1 leaves it out of what reaches the Mac. */
+  BUG_INBOX_NO_SCREENSHOT: flag01,
+  /** The bug inbox keeps the log lines the sender attached (already cleaned) by default; 1 leaves them out. */
+  BUG_INBOX_NO_LOGS: flag01,
+  /** The bug inbox keeps the last messages when the sender chose to attach them; 1 leaves them out always. */
+  BUG_INBOX_NO_MESSAGES: flag01,
+  /** The bug inbox keeps the sender's thread id and screen name by default; 1 leaves them out. */
+  BUG_INBOX_NO_THREAD: flag01,
   /** The Talos mod counts as quiet after this many minutes without a sync. */
   MOD_QUIET_MIN: int(10, 1, 24 * 60),
   /** Minimum gap between two bridge-down pushes (a laptop that sleeps is normal). */

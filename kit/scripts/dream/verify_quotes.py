@@ -70,7 +70,7 @@ def resolve(path):
         return None, "env-file"
     if not os.path.isfile(real):
         return None, "file-missing"
-    if not C.allowed_input(r) and not r.startswith("wiki/"):
+    if not C.allowed_input(r) and not r.startswith(C.WIKI_REL + "/"):
         return None, "file-not-allowed"
     return (real, r), ""
 

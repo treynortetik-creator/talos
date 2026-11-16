@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// Needs-you prompts, the Mac side: a known dialog on a worker's pane is offered in `workers.json`, a tap's answer (a file from the
 /// bridge) is turned into arrows and Enter, and the Mac says what it pressed. Real private tmux server; the screens are the REAL Claude
@@ -11,7 +12,7 @@ import TalosSupervisor
 /// never touched.
 final class KeyLog: @unchecked Sendable {
   let path: String
-  init() { path = NSTemporaryDirectory() + "keys-\(UUID().uuidString.prefix(8)).log" }
+  init() { path = TestTemp.base + "keys-\(UUID().uuidString.prefix(8)).log" }
   var keys: [String] { completeLines(path) }
   /// What the pane received that is not the pointer line: the arrows and Enters (a normal session's typed text is `CHAR:` and the Enter
   /// after it, which only follow once the dialog is gone).
@@ -204,8 +205,10 @@ struct NeedsYouTests {
     #expect(r.wait(10) { r.offer == nil }, "the offer stayed after the dialog went")
   }
 
-  @Test func aRelaunchKeepsTheSameOfferForTheSameDialog() throws {
-    let (r, keys, _, _) = try make("trust")
+  /// A relaunch does not vouch for the dialog on the pane: the app was not looking while it was away. Whatever is there when it comes
+  /// back is a new sighting with a new id, however exactly it reads as the record in the file, and a tap signed for the old id presses nothing.
+  @Test func aRelaunchIsANewSightingEvenOfTheSameDialog() throws {
+    let (r, keys, _, owner) = try make("trust")
     defer { r.teardown(); keys.remove() }
     let o = try offered(r)
     usleep(900_000)
@@ -216,8 +219,38 @@ struct NeedsYouTests {
     r.firstTick(again)
     again.startTicking()
     #expect(r.wait(10) { again.needsYou()["trip"] != nil }, "re-adopted and flagged: \(r.why("trip"))")
-    usleep(1_500_000)
-    #expect(again.snapshot().threads["trip"]?.dialog?.id == o.id, "a new sighting would be a new card")
+    #expect(r.wait(10) { r.offer != nil && r.offer?.id != o.id && again.popupOffers().count == 1 }, "the id from the file was kept: \(String(describing: r.offer?.id))")
+    let fresh = try #require(r.offer)
+    #expect(fresh.kind == o.kind && fresh.subject == o.subject && fresh.options == o.options, "control: it reads as the same dialog")
+    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
+    nothing(r, keys, reason: "unverified")
+    try r.writeAnswer(fresh, owner: owner, choice: 1, control: "ctl_2")
+    #expect(r.wait(15) { r.resultControl() == "ctl_2" })
+    #expect(r.result?["outcome"] as? String == "pressed" && keys.keys == ["DOWN", "ENTER"], "\(String(describing: r.result)) \(keys.keys)")
+  }
+
+  /// The lookalike across a relaunch: while the app is away the offered dialog is answered in the pane and another that reads exactly
+  /// the same takes its place. The file's record equals the screen, and the card for the old id is still on the phone. The copy that
+  /// comes back must not carry the old id over to the dialog it finds: a tap signed for the first dialog presses nothing on the second.
+  @Test func aDialogReplacedWhileTheAppWasAwayIsNotAnsweredByTheOldCard() throws {
+    let (r, keys, _, owner) = try make("mcp", ["FAKE_DLG_AGAIN": "same"])
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    let offeredScreen = r.tmuxCmd(["capture-pane", "-p", "-J", "-t", "=t-trip:"]).out
+    usleep(900_000)  // one heartbeat with the offer
+    r.mgr.detach()
+    r.ownerPressesEnter("trip")  // answered in the pane; the second dialog is drawn, the same down to the cursor row
+    #expect(r.wait(5) { keys.keys == ["ENTER"] && r.tmuxCmd(["capture-pane", "-p", "-J", "-t", "=t-trip:"]).out == offeredScreen }, "control: \(keys.keys)")
+    let again = r.makeManager()
+    r.trackNotices(NoticeLog(), on: again)
+    again.tune { $0.cardAckWait = 600 }
+    r.firstTick(again)
+    again.startTicking()
+    #expect(r.wait(10) { r.offer != nil && r.offer?.id != o.id && again.popupOffers().count == 1 }, "the old id stands for the dialog that replaced it: \(String(describing: r.offer?.id))")
+    try r.writeAnswer(o, owner: owner, choice: 2, control: "ctl_1")  // the row the cursor is on: one Enter would answer the second dialog
+    #expect(r.wait(15) { r.resultControl() == "ctl_1" }, "no result: \(keys.keys)")
+    #expect(r.result?["outcome"] as? String == "nothing_pressed", "\(String(describing: r.result))")
+    #expect(keys.keys == ["ENTER"], "the old card's tap went onto the dialog that replaced it: \(keys.keys)")
   }
 
   // MARK: the answer
@@ -238,6 +271,8 @@ struct NeedsYouTests {
     #expect(res["choice"] as? Int == choice && res["label"] as? String == label && res["reason"] == nil)
     #expect(res["dialog_id"] as? String == o.id && res["control_id"] as? String == "ctl_1")
     #expect(res["at"] is String)
+    // The result can be written before the fake tmux has logged the keys it was sent, so wait for the log to catch up.
+    _ = r.wait(5) { keys.keys.count >= expected.count }
     #expect(keys.keys == expected, "arrows and one Enter, nothing else (no digit): \(keys.keys)")
     // the answer file is taken, and the session carries on: its input box, ready, the pointer typed once
     #expect(!FileManager.default.fileExists(atPath: r.answerPath))
@@ -359,7 +394,7 @@ struct NeedsYouTests {
 
   @Test(arguments: ["trust-changed", "mcp", "trust-other"])
   func aScreenThatChangedBeforeTheKeyGetsNoKey(to: String) throws {
-    let swap = NSTemporaryDirectory() + "swap-\(UUID().uuidString.prefix(6))"
+    let swap = TestTemp.base + "swap-\(UUID().uuidString.prefix(6))"
     let (r, keys, _, owner) = try make("trust", ["FAKE_DLG_SWAP": swap, "FAKE_DLG_SWAP_TO": to])
     defer { r.teardown(); keys.remove(); unlink(swap) }
     let o = try offered(r)
@@ -513,28 +548,91 @@ struct NeedsYouTests {
   // MARK: a new dialog is a new sighting
 
   private func secondDialogGetsANewId(byTap: Bool) throws {
-    let (r, keys, log, owner) = try make("mcpwrap", ["FAKE_DLG_AGAIN": "1"], ackWait: 1)
+    let (r, keys, log, owner) = try make("mcp", ["FAKE_DLG_AGAIN": "same"], ackWait: 1)
     defer { r.teardown(); keys.remove() }
     let o = try offered(r)
-    #expect(o.kind == .mcpConsent && o.subject == nil, "control: the server name is wrapped, so there is no subject to tell two servers apart")
+    #expect(o.kind == .mcpConsent && o.subject == "harmless")
     try r.ack(o.id)
     if byTap {
       try r.writeAnswer(o, owner: owner, choice: 2, control: "ctl_1")
       #expect(r.wait(15) { r.resultControl() == "ctl_1" })
       #expect(r.result?["outcome"] as? String == "pressed")
     } else {
-      r.ownerPressesEnter("trip")  // the owner answers in the pane
+      // the owner answers in the pane, on another row: the Mac sees the cursor move before the second dialog is drawn. (An Enter alone,
+      // followed at once by a dialog that reads the same, leaves no frame to see: docs/OPTION-C.md "Known gaps".)
+      let before = r.tmuxCmd(["capture-pane", "-p", "-J", "-t", "=t-trip:"]).out
+      #expect(r.tmuxCmd(["send-keys", "-t", "=t-trip:", "Up"]).ok)
+      #expect(r.wait(5) { r.tmuxCmd(["capture-pane", "-p", "-J", "-t", "=t-trip:"]).out != before }, "control: the Up never showed")
+      r.mgr.tickOnce()
+      r.ownerPressesEnter("trip")
     }
     #expect(r.wait(15) { r.offer != nil && r.offer?.id != o.id }, "the next dialog kept the old id: \(String(describing: r.offer?.id))")
     let next = try #require(r.offer)
-    #expect(next.kind == .mcpConsent && next.options == o.options && next.subject == nil, "control: it does look the same")
+    #expect(next.kind == .mcpConsent && next.options == o.options && next.subject == o.subject && next.cursor == o.cursor, "control: it does read the same")
     // the old card does not stand for it: the Mac's line comes, as for any dialog with no card
     #expect(r.wait(10) { log.all.count == 1 }, "\(log.all)")
     // and an old proof does not apply to it
     try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_9")
     #expect(r.wait(15) { r.resultControl() == "ctl_9" })
     #expect(r.result?["outcome"] as? String == "nothing_pressed" && r.result?["reason"] as? String == "unverified")
-    #expect(keys.keys == ["ENTER"], "one Enter, the one that answered the first dialog: \(keys.keys)")
+    #expect(keys.presses.filter { $0 == "ENTER" } == ["ENTER"], "one Enter, the one that answered the first dialog: \(keys.keys)")
+  }
+
+  /// A dialog whose subject cannot be read (here the MCP consent with its server name wrapped over two rows) has nothing to tell it from
+  /// another of its kind, so a card for it could be answered onto a lookalike. It gets the thread's line at once, however long the bridge
+  /// is given for a card, and is never offered: not in workers.json, not in the popup. An answer that claims to be for it presses nothing.
+  @Test func aDialogWithNoReadableSubjectGetsTheLineAndIsNeverOffered() throws {
+    let (r, keys, log, owner) = try make("mcpwrap")  // ackWait 600: only a dialog that is NOT offered gets its line inside that
+    defer { r.teardown(); keys.remove() }
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(15) { log.all.count == 1 }, "no line: \(r.mgr.needsYou()) offer \(String(describing: r.offer)) \(r.why("trip"))")
+    #expect(log.all.first?.text == "This thread's session is waiting on a 'approve a project MCP server' prompt; open this thread in Terminals on the Mac to answer.")
+    #expect(r.mgr.needsYou()["trip"] == "approve a project MCP server")
+    #expect(r.offer == nil && r.mgr.popupOffers().isEmpty, "offered with no subject: \(String(describing: r.offer))")
+    let rows = r.tmuxCmd(["capture-pane", "-p", "-J", "-t", "=t-trip:"]).out.components(separatedBy: "\n")
+    let d = try #require(DialogReader.read(rows: rows), "control: the reader does read the dialog")
+    #expect(d.kind == .mcpConsent && d.subject == nil && d.options.count == 3, "control: it is the dialog, with no subject: \(d)")
+    // an answer made for exactly what the screen shows, by the paired phone
+    let t = Date().timeIntervalSince1970
+    let made = DialogOffer(
+      id: "Aq5Lm8ZtRx3Cv9PkNa2HdB", kind: d.kind, subject: nil, options: d.options, cursor: d.cursor, seen_at: ISOTime.string(t),
+      expires_at: ISOTime.string(t + 900))
+    try r.writeAnswer(made, owner: owner, choice: 0, control: "ctl_1")
+    for _ in 0..<8 { r.mgr.tickOnce() }
+    #expect(keys.keys.isEmpty, "pressed on a dialog that was never offered: \(keys.keys)")
+    #expect(r.result == nil && r.offer == nil)
+  }
+
+  /// The lookalike. The offered dialog is answered in the pane and another takes its place that reads exactly the same (same kind, same
+  /// server name, same rows, the cursor where it was). The Mac saw the screen change in between. A tap signed for the dialog the card
+  /// showed must not be pressed onto the one that replaced it: nothing is pressed, and what holds still next is a new sighting, a new id.
+  @Test func aTapNeverLandsOnADialogThatReplacedTheOneOffered() throws {
+    let (r, keys, _, owner) = try make("mcp", ["FAKE_DLG_AGAIN": "same"])
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    let offeredScreen = r.tmuxCmd(["capture-pane", "-p", "-J", "-t", "=t-trip:"]).out
+    r.mgr.tune { $0.dialogSettle = 60 }  // the window (5 s in the app) in which the old offer still stands
+    // the owner moves the cursor and answers in the pane: the Mac sees the screen change, then the second dialog is drawn
+    #expect(r.tmuxCmd(["send-keys", "-t", "=t-trip:", "Up"]).ok)
+    #expect(r.wait(5) { r.tmuxCmd(["capture-pane", "-p", "-J", "-t", "=t-trip:"]).out != offeredScreen }, "control: the Up never showed")
+    r.mgr.tickOnce()  // a look at the changed screen
+    r.ownerPressesEnter("trip")
+    #expect(r.wait(5) { keys.keys == ["UP", "ENTER"] && r.tmuxCmd(["capture-pane", "-p", "-J", "-t", "=t-trip:"]).out == offeredScreen }, "control: the second dialog reads as the first did: \(keys.keys)")
+    #expect(r.offer?.id == o.id, "control: the old offer still stands")
+    try r.writeAnswer(o, owner: owner, choice: 2, control: "ctl_1")  // the row the cursor is on: one Enter would answer the second dialog
+    #expect(r.wait(15) { r.resultControl() == "ctl_1" }, "no result: \(keys.keys)")
+    #expect(r.result?["outcome"] as? String == "nothing_pressed" && r.result?["reason"] as? String == "screen_changed", "\(String(describing: r.result))")
+    #expect(keys.keys == ["UP", "ENTER"], "a key went onto the dialog that replaced the offered one: \(keys.keys)")
+    #expect(r.mgr.popupOffers().isEmpty, "the popup still shows a button that can only say the screen changed")
+    // the second dialog, once it has held still, is its own sighting, and a tap for THAT one presses
+    r.mgr.tune { $0.dialogSettle = 0.5 }
+    #expect(r.wait(15) { r.offer != nil && r.offer?.id != o.id }, "no new sighting: \(String(describing: r.offer?.id))")
+    let next = try #require(r.offer)
+    try r.writeAnswer(next, owner: owner, choice: 2, control: "ctl_2")
+    #expect(r.wait(15) { r.resultControl() == "ctl_2" })
+    #expect(r.result?["outcome"] as? String == "pressed", "\(String(describing: r.result))")
+    #expect(keys.keys == ["UP", "ENTER", "ENTER"], "\(keys.keys)")
   }
 
   @Test func theDialogThatFollowsOurEnterIsANewSighting() throws { try secondDialogGetsANewId(byTap: true) }
@@ -570,7 +668,7 @@ struct NeedsYouTests {
   // MARK: a proof is used once
 
   @Test func aSignedProofIsUsedOncePerDialogEvenAfterNothingWasPressed() throws {
-    let swap = NSTemporaryDirectory() + "swap-\(UUID().uuidString.prefix(6))"
+    let swap = TestTemp.base + "swap-\(UUID().uuidString.prefix(6))"
     let (r, keys, _, owner) = try make("trust", ["FAKE_DLG_SWAP": swap, "FAKE_DLG_SWAP_TO": "trust-changed"])
     defer { r.teardown(); keys.remove(); unlink(swap) }
     let o = try offered(r)
@@ -585,6 +683,48 @@ struct NeedsYouTests {
     #expect(r.wait(15) { r.resultControl() == "ctl_2" })
     #expect(r.result?["outcome"] as? String == "nothing_pressed" && r.result?["reason"] as? String == "already_answered", "\(String(describing: r.result))")
     #expect(keys.keys.isEmpty)
+  }
+
+  /// A signed tap that pressed nothing (the owner was typing at the pane) does not press after the app relaunches either: a copy of that
+  /// answer dropped in again, under a new control id, must not press what the owner was told was not pressed. The dialog the new copy
+  /// finds is a new sighting under a new id, so the old tap applies to nothing (and is in the used list besides).
+  @Test func aSignedProofThatPressedNothingStillPressesNothingAfterARelaunch() throws {
+    let (r, keys, _, owner) = try make("trust")
+    defer { r.teardown(); keys.remove() }
+    r.mgr.tune { $0.clientQuiet = 60 }
+    let o = try offered(r)
+    r.mgr.tune { $0.dialogSettle = 60 }  // the client's attach may redraw the pane; the offer is the one the tap meets
+    let client = try r.attachClient()
+    var first = try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
+    nothing(r, keys, reason: nil)
+    client.terminate()
+    client.waitUntilExit()
+    usleep(900_000)  // one heartbeat with the offer
+    r.mgr.detach()
+    let again = r.makeManager()
+    r.trackNotices(NoticeLog(), on: again)
+    again.tune { $0.cardAckWait = 600 }
+    r.firstTick(again)
+    again.startTicking()
+    #expect(r.wait(10) { again.needsYou()["trip"] != nil && again.popupOffers().count == 1 }, "re-adopted: \(r.why("trip"))")
+    #expect(again.snapshot().threads["trip"]?.dialog?.id != o.id, "the relaunch kept the id from the file")
+    first["control_id"] = "ctl_2"
+    try r.writeRaw(first)
+    #expect(r.wait(15) { r.resultControl() == "ctl_2" })
+    #expect(r.result?["outcome"] as? String == "nothing_pressed" && r.result?["reason"] as? String == "unverified", "\(String(describing: r.result))")
+    #expect(keys.keys.isEmpty, "the replayed tap pressed: \(keys.keys)")
+  }
+
+  /// The tap is on disk as used before any key is sent. When that cannot be written (here a folder stands where the file goes), nothing
+  /// is pressed: a press the Mac could not record could be repeated after a relaunch.
+  @Test func aTapThatCannotBeRecordedAsUsedPressesNothing() throws {
+    let (r, keys, _, owner) = try make("trust")
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    try FileManager.default.createDirectory(
+      atPath: r.talosHome + "/workers/trip/" + DialogProofsUsed.fileName, withIntermediateDirectories: true)
+    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
+    nothing(r, keys, reason: nil)
   }
 
   // MARK: the line
@@ -603,7 +743,7 @@ struct NeedsYouTests {
       r.mgr.startTicking()
       try r.wake("trip")
       #expect(r.wait(10) { log.all.count == 1 }, "\(text): \(r.mgr.needsYou()) \(r.why("trip"))")
-      #expect(log.all.first?.text == "trip's session is waiting on a '\(text)' prompt; open Terminals \u{2192} trip on the Mac to answer.")
+      #expect(log.all.first?.text == "This thread's session is waiting on a '\(text)' prompt; open this thread in Terminals on the Mac to answer.")
       #expect(r.offer == nil, "\(text) was offered")
       #expect(r.typedLines.isEmpty)
     }
@@ -660,7 +800,7 @@ struct NeedsYouTests {
 
   @Test func aLiveWorkerOnADialogPastTheLimitIsNotStoppedAStartingOneStillIs() throws {
     // live: the dialog comes up on a running session
-    let late = NSTemporaryDirectory() + "late-\(UUID().uuidString.prefix(6))"
+    let late = TestTemp.base + "late-\(UUID().uuidString.prefix(6))"
     let (r, keys, _, _) = try make("trust", ["FAKE_DLG_LATE": late])
     defer { r.teardown(); keys.remove(); unlink(late) }
     r.mgr.tune { $0.dialogLimit = 1.5 }

@@ -46,6 +46,15 @@ function Where() {
   return <p data-testid="where">{l.pathname + l.search}</p>
 }
 
+/** A fake Mac that lists no thread folders (files/1 off): Memory is the notes alone. */
+function withoutFolders() {
+  const c = createFakeClient()
+  c.store.setState((s) => ({
+    presence: { ...s.presence, features: (s.presence.features ?? []).filter((f) => f !== 'files/1') },
+  }))
+  return c
+}
+
 function mount(route = '/memory', opts: { fake?: ReturnType<typeof createFakeClient>; steps?: typeof all } = {}) {
   const client = opts.fake ?? createFakeClient()
   const mac = macFrom(opts.steps ?? all)
@@ -106,7 +115,23 @@ describe('logic', () => {
 })
 
 describe('MemoryScreen', () => {
-  it('one root opens at once; folders and notes list; a note shows frontmatter, grey and live links, and no script element', async () => {
+  it("one root opens at once, with each thread's folder listed under its top; one opens in place", async () => {
+    const user = userEvent.setup()
+    mount()
+    expect(await screen.findByTestId('memory-entry-Overview.md')).toBeTruthy()
+    const folders = await screen.findByTestId('agent-folders')
+    await user.click(within(folders).getByTestId('agent-folder-general'))
+    expect(await screen.findByTestId('agent-folder')).toBeTruthy()
+    expect(screen.getByTestId('where').textContent).toBe('/memory?af=general')
+  })
+
+  it('on a Mac without thread folders there is no agent folder list', async () => {
+    mount('/memory', { fake: withoutFolders() })
+    expect(await screen.findByTestId('memory-entry-Overview.md')).toBeTruthy()
+    expect(screen.queryByTestId('agent-folders')).toBeNull()
+  })
+
+  it('folders and notes list; a note shows frontmatter, grey and live links, and no script element', async () => {
     const user = userEvent.setup()
     mount()
     expect(await screen.findByTestId('memory-entry-Overview.md')).toBeTruthy()

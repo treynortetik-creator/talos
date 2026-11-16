@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "type": "files.sent",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T458",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T459",
+  "filters": {
+    "type": "docs",
+    "name": "50%_plan",
+    "thread_ids": [],
+    "from": "any",
+    "after": null,
+    "before": null
+  },
+  "cursor": null,
+  "limit": 50,
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "FwF-YILItcJEvOO-7dn88RWRXoJ3sg2VVog876_OQIRYjw2EMRNnbEaq3R1HFUoqlYy1sax0DN6MJzkLJr7Ojg"
+}

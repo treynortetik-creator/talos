@@ -1,0 +1,117 @@
+{
+  "about": "Permission rules a thread folder's settings may carry into a session's --settings (permissionRuleProblem in packages/protocol/src/thread-folder-settings.ts). `carried`: whether the rule is carried over. A rule that is not carried refuses the start of a thread session whose folder holds it (fail closed: never dropped, which would widen what the session may do). `claude_code_2_1_322`: what real Claude Code 2.1.322 said of it in a worker --settings file, run on Hestia on 2026-11-12 (skipped = listed in its start-blocking Settings Warning dialog; no_tool = only a 'matches no tool' notice; not_skipped = not in that dialog; the notices under the input box were seen only in part). The check is stricter than Claude Code: every rule Claude Code skips is refused, and a few it keeps are refused too. Read today by the Linux supervisor only; the Mac's WorkerSpec does not read this file yet.",
+  "cases": [
+    {
+      "rule": "Bash(",
+      "carried": false,
+      "claude_code_2_1_322": "skipped"
+    },
+    {
+      "rule": "Bash)",
+      "carried": false,
+      "claude_code_2_1_322": "skipped"
+    },
+    {
+      "rule": "Bash(x)y",
+      "carried": false,
+      "claude_code_2_1_322": "skipped"
+    },
+    {
+      "rule": "Read(",
+      "carried": false,
+      "claude_code_2_1_322": "skipped"
+    },
+    {
+      "rule": "bash",
+      "carried": false,
+      "claude_code_2_1_322": "skipped"
+    },
+    {
+      "rule": "Bash()",
+      "carried": false,
+      "claude_code_2_1_322": "skipped"
+    },
+    {
+      "rule": "9Tool",
+      "carried": false,
+      "claude_code_2_1_322": "no_tool"
+    },
+    {
+      "rule": "Tool.With.Dots",
+      "carried": false,
+      "claude_code_2_1_322": "no_tool"
+    },
+    {
+      "rule": "(x)",
+      "carried": false,
+      "claude_code_2_1_322": "not_skipped"
+    },
+    {
+      "rule": "Foo Bar",
+      "carried": false,
+      "claude_code_2_1_322": "not_skipped"
+    },
+    {
+      "rule": "Bash(x\ny)",
+      "carried": false,
+      "claude_code_2_1_322": "not_skipped"
+    },
+    {
+      "rule": "",
+      "carried": false
+    },
+    {
+      "rule": "Bash(()",
+      "carried": true,
+      "claude_code_2_1_322": "not_skipped"
+    },
+    {
+      "rule": "Bash(a(b)c)",
+      "carried": true,
+      "claude_code_2_1_322": "not_skipped"
+    },
+    {
+      "rule": "Bash(x))",
+      "carried": true,
+      "claude_code_2_1_322": "not_skipped"
+    },
+    {
+      "rule": "Bash( x )",
+      "carried": true,
+      "claude_code_2_1_322": "not_skipped"
+    },
+    {
+      "rule": "Bash",
+      "carried": true
+    },
+    {
+      "rule": "WebFetch(domain:x.com)",
+      "carried": true,
+      "claude_code_2_1_322": "not_skipped"
+    },
+    {
+      "rule": "Read(/a b/*)",
+      "carried": true,
+      "claude_code_2_1_322": "not_skipped"
+    },
+    {
+      "rule": "Read(*)",
+      "carried": true,
+      "claude_code_2_1_322": "not_skipped"
+    },
+    {
+      "rule": "My_Tool2",
+      "carried": true
+    },
+    {
+      "rule": "mcp__s-x__t",
+      "carried": true,
+      "claude_code_2_1_322": "not_skipped"
+    },
+    {
+      "rule": "mcp__srv",
+      "carried": true,
+      "claude_code_2_1_322": "not_skipped"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.325
+▝▜██████▀  Fable 5.2 · Claude Max  
+ ▝▝   ▝▝   /home/alex/proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+
+❯ Run the shell command: sleep 20, in the background. Then reply ok and stop.
+
+⏺ Sleeping for 20 seconds
+  ⎿  $ sleep 20
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✢ Perambulating… (4s · ↓ 77 tokens)
+                                        You've used 50% of your weekly limit · resets Dec 01 at 09am (UTC)            
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · 1 shell · esc to interrupt · ↓ to manage

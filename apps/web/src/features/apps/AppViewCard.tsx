@@ -342,10 +342,21 @@ export function AppViewCard({ view }: { view: AppViewT }) {
                 type="button"
                 aria-label={fullscreen ? `Close ${label} full screen` : `Expand ${label} to full screen`}
                 onClick={fullscreen ? exitFullscreen : enterFullscreen}
-                className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-pill px-2 font-mono text-xs text-text-2 hover:text-text"
+                className={
+                  fullscreen
+                    ? // full screen: the X is the last control, at the top right (the owner, 2026-11-14)
+                      'order-last grid size-11 shrink-0 place-items-center rounded-pill text-text hover:bg-surface'
+                    : 'flex min-h-11 shrink-0 items-center gap-1.5 rounded-pill px-2 font-mono text-xs text-text-2 hover:text-text'
+                }
               >
-                {fullscreen ? <IconClose width={16} height={16} /> : <IconExpand width={16} height={16} />}
-                <span>{fullscreen ? 'Close' : 'Expand'}</span>
+                {fullscreen ? (
+                  <IconClose width={22} height={22} />
+                ) : (
+                  <>
+                    <IconExpand width={16} height={16} />
+                    <span>Expand</span>
+                  </>
+                )}
               </button>
             )}
             <div className="relative">

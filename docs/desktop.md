@@ -26,20 +26,171 @@ It is built from source on your Mac. There is no download.
 From the repository folder:
 
 ```bash
-apps/desktop/scripts/make-signing-identity.sh   # once, optional: a free local certificate (one password prompt)
+apps/desktop/scripts/make-signing-identity.sh   # once: a free local certificate (one password prompt)
 apps/desktop/scripts/build-app.sh               # builds apps/desktop/.build/app/Talos.app
 apps/desktop/scripts/install.sh                 # copies it to ~/Applications and opens it
 ```
 
 - The certificate matters because macOS ties its privacy grants (Desktop folder, microphone, and so on) to how an app is
-  signed. An unsigned (ad hoc) build looks like a new app after every rebuild, so macOS asks again each time. Set
-  `TALOS_SIGN_ID` to use a different identity.
+  signed. An unsigned (ad hoc) build looks like a new app after every rebuild, so macOS asks again each time. Without a
+  certificate `build-app.sh` stops before building and says how to make one; `TALOS_SIGN_ID=-` builds ad hoc on purpose
+  (tests and CI). Set `TALOS_SIGN_ID` to use a different identity; with `TALOS_REQUIRE_SIGN_ID=1` only that one is used.
 - `build-app.sh` ends by verifying the signature and running the app's self-test; if either fails, so does the script.
   `--release` builds the optimised version.
 - `install.sh` installs for you only (it refuses `/Applications`, `/System` and the other system folders). It replaces an
   existing Talos, and refuses to touch any other app called `Talos.app`. If Talos is running it asks it to quit first (a
   tmux agent keeps running) and reopens the new copy. `--dest <folder>` picks another folder, `--no-open` and `--no-quit`
   do what they say.
+- On a paired Mac, `install.sh` first waits (up to 10 minutes, checking every 15 seconds) until the relay serves the same
+  build or a newer one, so the web app never shows "Talos on your phone or Mac is newer than this app" because the Mac got
+  ahead of a relay deploy. It reads the relay address from the Mac's own Talos settings and never prints it. If the relay is
+  still behind, can't be reached or answers oddly, it stops with one line and installs nothing; run it again later, or pass
+  `--no-relay-wait` to install anyway. A relay on another branch than the build stops at once (waiting would not help);
+  a relay whose version is not a commit (a tag or a package version) can't be compared, so the install goes ahead and says
+  so. `--rollback` never waits.
+
+### The prebuilt app
+
+A Mac that should not build Talos installs a prebuilt one instead: Developer ID signed with the hardened runtime, notarized by
+Apple and stapled.
+
+```bash
+# on the publishing Mac (env: TALOS_RELEASE_SIGN_ID, ASC_KEY_PATH, ASC_KEY_ID, ASC_ISSUER_ID; see the script's header)
+apps/desktop/scripts/release-app.sh                       # universal (Apple Silicon and Intel); --arch arm64; --no-notarize to try
+# on the other Mac, from its own clone
+apps/desktop/scripts/install.sh --from-release <https URL or path> --sha256 <sha256> --team <team id>
+```
+
+- `release-app.sh` writes the zip, its `.sha256` and a manifest (version, git sha, sha256, architectures, team id). The app
+  carries no clone path; `install.sh` records the clone it runs from in `~/Library/Application Support/Talos/checkout`. Any program
+  of the owner's can write that file, so the app uses it for Create, Adopt and Choose only when the clone is outside the Talos
+  home, the agent folder, every thread folder, the temp folders and the app's support folder, has no link in its path, and is
+  owned by the owner and writable by no one else; and only after the owner says yes to that exact path on a card (the yes is kept
+  in the Keychain, and a different path asks again). Like the launch seal and the screen list, that yes stops accidents, not a
+  deliberate program running as you ([bridge.md](bridge.md), the known gap under the screen helper's allowed list).
+- The hardened build takes `Resources/entitlements-release.plist`: Apple Events, microphone, camera, Contacts and Photos, the
+  resources a local build already has. Without them the hardened runtime refuses them with no prompt.
+- `install.sh --from-release` installs nothing unless, in this order, the sha256 matches, the zip holds only `Talos.app`, the
+  signature verifies (`--strict --deep`), Gatekeeper accepts it as notarized Developer ID, and the signer is a Developer ID
+  Application certificate of the given team through Apple's certificates (exit 9 otherwise). The team comes from `--team` or
+  `TALOS_RELEASE_TEAM`, never from the app. The last three checks run again on the staged copy, after the relay wait. The tools
+  are called by full path.
+- What an IT reviewer can rely on: after all of those checks pass, and only then, `install.sh` removes macOS's download flag
+  (`com.apple.quarantine`, which a browser puts on the zip and which spreads to every file unpacked from it) from the installed
+  copy in `~/Applications/Talos.app`, and prints one line: "checked: sha256 matches, notarized by Apple, signed by team X;
+  removed the download flag". It never removes it from the zip that was given, from a local build (`--app`), or when any check
+  failed or `--sha256` or `--team` was missing. Why: with the flag left on, macOS asks "downloaded from the Internet... Open?" and
+  runs the app from a read-only temporary copy (App Translocation), where updates cannot be put in place and start at login
+  points at the wrong path. Gatekeeper's own verdict is still asked first (`spctl`), so removing the flag skips no Apple check.
+  If the flag cannot be removed, a warning says so with the command to run. Tested by
+  `apps/desktop/scripts/release-install-test.sh` ("the download flag" cases).
+- Node is needed only to compare the relay's version with the app's. A Mac with no relay set (not paired yet, as on a first
+  install) skips that step with one line and needs no Node; a Mac with a relay but no Node installs anyway and says the relay's
+  version was not checked. Tested by `apps/desktop/scripts/relay-wait-test.sh`.
+- Any install refuses an app signed by another identity than the installed Talos (exit 10), because macOS keeps Screen
+  Recording and Accessibility tied to the old signature. `--new-identity` installs it and prints how to grant them again. An
+  installed ad hoc build is replaced without the flag. `--rollback` to a kept copy signed by another identity is refused the
+  same way.
+- After a signer change the new app cannot read the old signer's Keychain items (the launch seal's key, the screen helper's
+  allowed-apps record). It keeps its own beside them, under a name for its signer, and leaves the old ones alone; so the
+  development-channel card is answered once, and the allowed apps are chosen again once.
+
+### Automatic updates
+
+A Talos installed from a release updates itself from the public repo's releases. Mac settings → General → "Update Talos
+automatically" (`desktop.json` `auto_update`) turns it on or off. It is on for a new install. A `desktop.json` written before the
+setting existed has no `auto_update` key and reads as off, so a Mac that is kept up to date another way stays that way until its
+owner switches it on.
+
+- On launch (a minute after) and every 6 hours it fetches `latest.json` and `latest.json.sig` from the feed (`update_feed_url`,
+  default `https://github.com/treynortetik-creator/talos/releases/latest/download/`; https only). The feed is only an address:
+  the manifest names its signer's `kid` and must be signed (ECDSA P-256, raw low-S signature) by a release key the app trusts:
+  the list pinned in the app (`RELEASE_KEYS` in `packages/protocol/src/release-manifest.ts`, `ReleaseTrust.keys` in
+  `ReleaseManifest.swift`), then Developer ID and notarization. Until the real key is pinned (the placeholder is an empty list),
+  the updater installs nothing and logs `no_release_key`.
+- Rotation: a manifest that verifies under a key trusted now may carry `keys: {add, retire}`. The app keeps the result in
+  `$TALOS_APP_HOME/auto-update/keys.json` (0600), never lets the list go empty, and refuses a retired kid from then on.
+- **Losing the release key:** it lives only in the publishing Mac's Secure Enclave and cannot be backed up; if that Mac is lost,
+  each Mac with Talos needs one install by hand of a build that pins a new key.
+- Only a newer version installs (`x.y.z`, compared as numbers). An app older than the release's `min_app_version` is told to
+  install by hand.
+- The zip is downloaded into `$TALOS_APP_HOME/auto-update/`, its size and sha256 must be the manifest's, and then
+  `install.sh --from-release <zip> --sha256 <sha> --team <team> --check-only` runs every check of an install (codesign,
+  Gatekeeper, the team) and stops. The bridge checkout (the clone the app uses) must have no changes of its own, and the
+  release's commit (`git_sha`, a commit of the PUBLIC repo) is fetched into it now; nothing moves yet. All the slow work
+  happens here, while the sessions may be busy.
+- Then it waits for a quiet moment: Main and every thread session quiet (no turn, nothing asking you, nothing typed in a box, no key
+  in an attached terminal for 2 minutes), and no background work under any of their panes (a shell that claude started, a
+  command still running, or anything else that is not claude or one of its MCP servers). Quiet must hold for two looks 30 seconds
+  apart. After 2 hours of waiting it gives up until the next check.
+- The default thread gets "Talos will update to 1.5.0 in 2 minutes; send anything to postpone." A message from you in those 2
+  minutes (status.json `last_owner_at` changes) or a session getting busy postpones it by 30 minutes, with one line saying so.
+- `auto-update-apply.sh --prepare` (a copy) moves the checkout to the release's commit (`git checkout --detach`,
+  `pnpm install --frozen-lockfile`). Then quiet is checked again, two looks in a row with no message from you; anything else puts
+  the checkout back (`--restore`) and postpones. Then `--swap`, in a session of its own, runs that commit's
+  `install.sh --from-release --no-relay-wait`, which checks the zip again, quits Talos, swaps it (keeping the old copy for
+  `--rollback`) and opens the new one. Restart on update and the guard refresh do the rest.
+- An app running from a translocated copy (a path under `AppTranslocation`, because it still carried the download flag) never
+  updates: it fetches nothing and says once in the default thread "Talos is running from a temporary copy; move it to
+  Applications and reopen it, then updates can install." (`AutoUpdaterTests.aTranslocatedAppRefusesToUpdateAndSaysSoOnce`).
+- Right before the swap the running app must pass the same health check itself (Main running, the bridge live on the relay);
+  if it does not, the checkout goes back and the update waits for the next window, with nothing said.
+- The health gate: the swap then waits, in its own session, up to 5 minutes for the NEW app's own report that it came up healthy
+  (`$TALOS_APP_HOME/auto-update/healthy-<version>.json`, which only the app of that version writes). Healthy there means Main
+  running under the new app, and the live bridge on the relay running the release's commit (`status.json` `bridge_commit`),
+  started after the swap, as a process under that Main. A Main that tmux kept running across the swap still runs the old bridge,
+  so the new app restarts it onto the release first (the menu's own cold restart, when nobody is typing). No report in time,
+  whether the new app never started, hangs or never got ready: the new app is stopped (TERM, then KILL, only the process running
+  from `Talos.app`'s own executable), `install.sh --rollback` puts the previous app back, the code folder goes back to the previous
+  commit, and the previous app opens and posts "Talos 1.5.0 didn't start properly, so it went back to 1.4.0. The update is paused
+  for a week." If the rollback itself fails, the line says so and the kept copy stays as `.Talos.app.previous`. Only after the
+  report does the new app post "Talos updated to ...".
+- `$TALOS_APP_HOME/auto-update/skipped.json` holds the versions the health gate rolled back and when; each is skipped for 7 days
+  and then tried once more (a newer version is tried at once). Delete the file to try again sooner.
+- The relay is not waited for. A newer bridge talks to an older relay through the features each side lists in its hello and
+  `ready` (`packages/protocol/src/features-cap.ts`): a feature the relay does not list yet is left out or refused plainly. Until
+  the relay deploys, the web app may show its "newer than this app" note.
+- Anything that fails before the swap leaves the app and the checkout as they were; a failure after the checkout moved puts it
+  back. The default thread gets one line: "Talos updated to 1.5.0. The relay updates separately." or "Talos couldn't update to
+  1.5.0: <why>. It's still on 1.4.0." A failure is said once per version and reason, and that version is not tried again for a
+  day. A swap that has not said how it ended after 30 minutes is stopped (its process, known by pid and start time), the
+  checkout goes back and the line is posted. Every step is a row in the Mac app's log (`auto_update ...`).
+- Turning the switch off stops a check or a waiting update at the next look (30 seconds), putting the checkout back if it had
+  moved; a swap already started finishes.
+
+Publishing (on the owner's Mac, by hand, gh signed in as the owner): `release-app.sh` (its manifest records `source_sha`, the
+private commit it was built from), then the public snapshot (`scripts/publish-public.sh`; its commit carries the trailer
+`Talos-Source: <private sha>`) and its tag, then `release-sign-manifest.sh --tag <tag>` (latest.json's `git_sha` is the public
+commit, taken from the tag as git fetches it and signed only when that commit's trailer names the build's `source_sha` and its
+tree equals a fresh local export of that private commit, so a tag moved to someone else's commit is refused; signed by
+`apps/desktop/scripts/release-key.swift sign` with the Secure Enclave key file in `TALOS_RELEASE_KEY`, made once by
+`release-key.swift create --out ~/.config/talos/release-key/<kid>.se`, outside the repo and every backup), then
+`release-publish.sh <tag>` (`--dry-run` first). It refuses unless gh is the owner's account, the public tag is at latest.json's
+commit, that commit's `Talos-Source` is the build's `source_sha`, and that private commit has all six local-ci statuses green; it
+runs the personal-data check over the generated notes and prints `release <version>: ok` or `FAILED: <why>`.
+
+### Going back one version
+
+Each install that replaces a Talos keeps the copy it replaced, hidden beside the app as `~/Applications/.Talos.app.previous`.
+One copy is kept, and only if it still passes `codesign --verify`. To put it back:
+
+```bash
+apps/desktop/scripts/install.sh --rollback
+```
+
+- It quits a running Talos, swaps the kept copy into `Talos.app` and reopens it, the same way an install does (`--dest`,
+  `--no-open` and `--no-quit` work here too). It prints which version, build and commit (`build-app.sh` stamps the git sha) is now installed and which is kept.
+- The version you rolled back from becomes the kept copy, so running `--rollback` again goes forward to it.
+- It changes only the two bundles. Your login item, `~/.config/talos`, your settings and the agent's tmux session are left alone.
+- It refuses, and changes nothing, when no previous version is kept (exit 3), or when the kept copy is a link, is not Talos
+  or no longer verifies. The message says which. A first install keeps nothing, so there is nothing to go back to until
+  the second.
+- If an install or rollback is stopped between its two renames it puts the old copy back as it exits. If it is killed
+  outright (power loss, `kill -9`), `Talos.app` can be missing until you run `install.sh` again, with or without
+  `--rollback`: it puts the copy back before doing anything else.
+- With the local signing certificate, the copy you go back to is signed the same way, so macOS keeps its privacy grants.
+  Ad hoc builds are asked again, as after any rebuild.
+- This goes back the app only. `talos-app rollback` ([SETUP.md](SETUP.md), "Going back") puts the checkout and the bridge back.
 
 ## First run
 
@@ -59,7 +210,7 @@ apps/desktop/scripts/install.sh                 # copies it to ~/Applications an
      agent folder Talos already uses, or not connected to this Talos yet (use Adopt, which asks before it points a folder wired to another clone or home at this one). A file, or an empty box, is refused too.
 
    On first setup each one saves your folder, flags and environment in `~/Library/Application Support/Talos/desktop.json`
-   (readable by you only) as its last step, then starts the session unless Claude is not signed in. After setup they change
+   (mode 0600: closed to other users of this Mac, not to programs running as you) as its last step, then starts the session unless Claude is not signed in. After setup they change
    only the folder, which applies the next time the agent starts. Adopt runs `talos-app adopt` through the
    same small terminal Sign in uses, because it only runs in a real terminal. Create, Adopt and Choose need the whole clone Talos
    was built from (install.sh, the bridge and the Talos mod); if it has moved or is partial, the row says so. A different
@@ -79,25 +230,33 @@ apps/desktop/scripts/install.sh                 # copies it to ~/Applications an
    else stays on screen and the menu says Talos needs you, and the warning comes up as a **Needs-you popup on the Mac**: "Allow Talos's development channel?" with the screen's own two buttons,
    "I am using this for local development" and "Exit". When the start came from your phone, from a recovery or from a crash restart (you are probably away), the phone gets one plain line per start ("Main is waiting at your Mac: answer the Talos popup there"); a start you make yourself at the Mac gets none. Main's own bridge cannot run while Main sits on this warning (it is Main's child), so no card can be posted
    from it; the answer is at the Mac. Your real click on the first button is your confirmation (a press sent by a script or by
-   Accessibility does nothing); "Exit"
+   Accessibility does nothing, and so does a click another program posts, such as cliclick or a computer-use tool: the popup takes
+   only a click that comes from the mouse or trackpad itself, so a click through Screen Sharing, Universal Control, Sidecar, Voice or
+   Switch Control, or a tool that remaps mouse buttons may do nothing either); "Exit"
    presses Exit and leaves Main stopped until you start it again. An Enter you press in the pane lets that one start through, but is not
    remembered (anyone with tmux can press one), so the next changed start asks again. If the Mac cannot carry the channels whole (a very
    long list) the card offers Exit only. The popup names any channel Talos did not add, and, when it is your start command that changed (another program,
    flag, environment variable or folder), says which piece (never a value): the first start after a change waits for your click
    once, and the next starts are automatic again. When a bridge does run (a warning that comes back after Enter), the same
-   warning is also a card on your default thread.
+   warning is also a card on your default thread. Answering the card from your phone starts this launch once, like an Enter in
+   the pane: the next start of the same changed launch asks again. Only a click at the Mac remembers it.
 
    **The seal.** The launch you confirmed is stored in `desktop.json` (`confirmed_launch`) together with a MAC
    (`confirmed_launch_mac`) made with a 32-byte key kept in your Keychain (service `com.talos.app.launch-seal`, this Mac
-   only, never read with a prompt), so a program that can write the file cannot make an edited launch look confirmed. A missing
-   key, a missing or wrong MAC or a Keychain that cannot be read all count as "not confirmed": the warning waits for your tap,
-   and the tap seals it again. The key survives an update of the app when the update is signed with the same certificate (check
+   only, never read with a prompt), so a program that only writes the file cannot make an edited launch look confirmed. A missing
+   key, a missing or wrong MAC or a Keychain that cannot be read all count as "not confirmed": the warning waits for your click
+   on the Mac popup, and the click seals it again. The key survives an update of the app when the update is signed with the same certificate (check
    it with `apps/desktop/scripts/keychain-survival-probe.sh`); a build that cannot read the existing item (signed another way, ad hoc) never
-   re-seals, so every start of that build shows the card, which is safe and costs a tap.
+   re-seals, so every start of that build shows the popup, which is safe and costs a click.
 
-   **What the seal does not stop.** It stops accidental and casual auto-accepts of a changed launch: an edited `desktop.json` is not
-   trusted. It does not stop an agent running as you with access to tmux, which can press Enter on Main's dialog itself; agent guards
-   do not block tmux. The one development channel the app ever answers is still `server:talos-app`.
+   **What the seal does not stop.** It stops accidental and casual auto-accepts of a changed launch: an edited confirmed launch
+   in `desktop.json` is not trusted. `desktop.json` is writable by anything running as you. Only the confirmed launch is sealed;
+   the other settings, `talos_app_command` and `relay_url` among them, take effect at the app's next launch. It does not stop an agent running as you with access to tmux, which can press Enter on Main's dialog itself; agent guards
+   do not block tmux. Nor does it stop a program running as you that sets out to forge it: Apple's `security` tool can overwrite the
+   key's value with one that program knows, with no prompt and without changing who may read it, and the program can then seal a
+   changed launch itself. The Keychain this app can use (the file-based one) cannot tell that overwrite apart; the protected one
+   needs a build signed by an Apple developer team (or the key kept by a helper running as root). The popup's click check stops
+   posted clicks, not a program that moves the pointer onto the button so your own click lands there. The one development channel the app ever answers is still `server:talos-app`.
 
    **After an update that brings the seal** the first start asks once (the card): an unsealed `confirmed_launch` cannot be told
    from one a program wrote, so it is cleared once (`launch_trust` in `desktop.json` records that the step ran, version 2 with the SHA-256
@@ -106,6 +265,34 @@ apps/desktop/scripts/install.sh                 # copies it to ~/Applications an
 
 While the same agent is still running in Terminal, Talos refuses to start a second one ("another session holds the
 channels"), so a chat channel does not lose its connection by accident.
+
+
+### The rest of the setup screen (no Terminal needed)
+
+- **Tools.** claude, bun and tmux are found by absolute path through your login shell's environment (never a bare name) and
+  shown with their version and path. A missing one has a button: claude and bun open their official install pages; tmux runs
+  `brew install tmux` as you (never an administrator) when Homebrew is installed, else opens brew.sh.
+- **Sign in to Claude.** Runs `claude auth login` in a terminal of its own (the CLI opens your browser; if it cannot, or the
+  page shows a code instead of redirecting back, the step shows **Open sign-in page**, **Copy link** and a box to paste the
+  code into, which is typed into that terminal). It asks `claude auth status --json` every 2 seconds for up to 5 minutes.
+  Already signed in shows as done. A failure says why with **Try again**, and the way out: open Terminal and run
+  `claude auth login`. **Cancel**, the time limit and quitting Talos end the login and everything it started. Closing and
+  reopening the setup window finds the same sign-in; a second one never starts. This signs in Claude Code, not Talos (that is
+  **Sign this device in**, below). Talos shows only official claude.ai, claude.com and anthropic.com https links, never logs
+  the link's query or the code, and never keeps the code.
+- **Start your agent.** The development-channel warning is answered in the Talos popup. This step says "done" only when
+  Main's Talos bridge is live (`status.json`, written by a process of Main's group). If it never comes up, the line shows
+  the reason from Claude Code's MCP log for the `talos-app` server. A trust, connector or sign-in question from Claude says to
+  look at the Terminal pane; only the development-channel warning is answered in the Talos popup.
+- **Rules for your agent.** One box of plain sentences, empty by default (for example a rule to keep patient details out
+  of anything the agent writes). Saved as `<agent folder>/.claude/rules/owner-rules.md`, which Claude Code reads at the
+  start of a session, so it applies the next time the agent starts. It is a file of its own beside the kit's
+  `talos-defaults.md`: an update never replaces it, and Talos only ever changes a file it wrote (it carries a first line
+  saying so). Empty text removes that file.
+- **Tool prompts as approval cards.** A new install (`talos-app init`) turns `permission_relay` on; the agent folder's
+  `.mcp.json` is written with bun's absolute path. An install you already have is not changed. To turn the cards off:
+  Settings, Health, "Tool prompts as approval cards" (or `permission_relay: false` in `~/.config/talos/app/config.json`),
+  then restart the agent.
 
 ## What the menu bar shows
 
@@ -214,6 +401,14 @@ The **Thread sessions** tab is still there for the one case below.
   that resumes the same conversation. (A message alone does not start it; while the thread shows Needs attention, main
   answers. **Start fresh** begins a new conversation.)
 
+## The Terminal pane: your own shell beside a thread
+
+Beside a thread, the Terminal pane is your own login shell, started in that thread's folder when the thread has its own
+session, and in the agent folder otherwise. It is not the agent's terminal: it runs on its own pty, with your environment and nothing of a Claude Code or Talos
+session in it. `+` opens another tab; closing the pane ends its shells, hiding it does not. It exists only in the Mac app, and
+nothing reaches it over the relay. The pane shows once the web app reserves its slot. The contract with the web app, and what
+is tested, is in [`docs/TERMINAL-PANE.md`](TERMINAL-PANE.md).
+
 ## When something is wrong
 
 - **"Blocked: another session holds the channels".** The agent is still running somewhere else (Terminal). Stop that one
@@ -227,6 +422,34 @@ The **Thread sessions** tab is still there for the one case below.
   folder from the agent folder's `.mcp.json`.
 - **The agent restarted itself.** That is the crash restart working. The log says why: `~/Library/Logs/Talos/supervisor.log`
   (event names and ids, no text).
+  A restart that cannot launch yet (another session holds the channels, `claude` is not found, the agent folder is not there) is
+  tried again with the same waits, five tries in all and outside the crash loop's count (log: `restart_not_possible`). If it still cannot, the
+  Mac ends at Blocked or "couldn't start" and posts one line to your default thread (`restart_gave_up`). A start you make
+  yourself ends at once with its reason, as before.
+  An agent that ends by itself with exit code 0 (an `/exit`, a self-update) is started again too, after the shortest wait, but is
+  not counted as a crash: it never becomes a crash loop and never brings the restore below. It has a cap of its own, the same on
+  Linux: more than ten such exits in an hour leave it stopped (log: `clean_exit_loop`), with one line on your phone ("Main keeps
+  exiting cleanly"), and nothing is restored. To keep Main off, use Stop, not `/exit`. With auto-restart off no exit restarts it. After three automatic Enters on crash restarts in an hour, the next restart still happens and its
+  warning waits for you on the popup.
+  A session nobody has typed in has no saved conversation yet (Claude Code writes
+  `~/.claude/projects/<folder>/<id>.jsonl` after the first message or an `/exit`), and `--resume` of it would be refused. Such a
+  start uses `--session-id` with the same id instead (log: `session_not_saved`). The file is looked for in Main's own
+  `CLAUDE_CONFIG_DIR` (else `~/.claude`), under the folder's own name first and then under any name. The first time the file is
+  seen (at a start, while Main runs, or as it exits) its id is written to `session.conversation_seen` in `desktop.json`. A
+  session with that mark whose file is not found later (deleted, another config folder) had a conversation and lost it: it is
+  resumed, and stops with "can't be resumed", never quietly empty under the same id. Two errors are mended, once
+  per session: "Session ID ... is already in use" (the session is saved after all: the next try resumes it, log
+  `session_in_use_resume`), and a resume refused for a file that holds only an `/exit` (nothing to resume: a new conversation is
+  started and the old id goes to `previous_ids`, log `session_empty_new_id`). A real conversation whose resume fails still stops
+  Main with "can't be resumed". With auto-restart off no mending restart is made.
+- **"Talos couldn't start: its settings file (desktop.json) can't be read".** `~/Library/Application Support/Talos/desktop.json`
+  is there, but it is not valid JSON or holds a value of the wrong kind (a number where text belongs, say). Talos starts nothing
+  and saves no setting while that is so, and posts one line to your default thread when the app opens (if `talos-app` is on your PATH): a session that was already running in tmux keeps running, unwatched, and Settings changes
+  are refused with the same line. Fix the file, or move it out of the folder to set up again, then quit and reopen Talos. A
+  value this version does not know (a setting from a newer version) is not this: that one setting falls back and the rest loads.
+- **You reopened Talos and Main is "starting", with the popup up.** Main was still on the development-channels warning when the
+  app went away. The app does not press Enter on a session it re-attached to (an earlier copy may already have): click the
+  popup, or press Enter in the pane.
 - **The menu says Talos put back the last good setup.** The agent crash-looped, or the bridge stayed down for five minutes
   (counted while the Mac is awake, after the bridge was up in this start); the line names the files it wrote and the date of
   the version. It happens by itself once, then waits for ten healthy minutes. If the restore failed, nothing was restarted: run
@@ -242,6 +465,56 @@ The **Thread sessions** tab is still there for the one case below.
   decides (nothing happens if the app is not running). A restore cut off by quitting the app tells nobody, because the quit ends
   the process. After a phone restart or an automatic restore, if Claude Code stops at the dev-channel warning
   and Talos did not press Enter (the screen was not exactly the expected warning), the app posts "Main is waiting at your Mac: answer the Talos popup there" to your default thread, once per start (not for a start you make yourself at the Mac).
+- **Main is stopped only for a warning that stays; it counts as up when its bridge is live.** After the Enter the app sends (its own, the
+  tap on the card or the click on the Mac popup), the warning must be gone: once it has left a screen the app could read, and the screen
+  shows something else, Main is running (audit `auto_confirm_ok`; an Enter at the pane counts at once). The channels notice is not
+  waited for: Claude Code 2.1.322 prints none on a resumed start, even with its MCP server connected. Main is stopped ("The restart
+  wasn't confirmed in time", audit `auto_confirm_no_notice`) only when the warning is still on screen 15 seconds (`noticeWait`) after
+  the Enter and nobody is left to answer it. When it was the app's own Enter that did not take, the warning is offered to you
+  (the Mac popup, and "Main is waiting at your Mac" on the phone when you are probably away) and Main waits there for your
+  click, however long; the stop comes only if the warning is still up 15 seconds after your own click or tap. A blank screen, another dialog or a screen that cannot be read is never that stop: Main stays starting and the "start is
+  taking too long" warning comes at two minutes. "Gone" is read by shape (Claude's input box up, no dialog at the bottom of the screen), so a resumed conversation that quotes the warning's words is not mistaken for it. A start that never showed the warning is running once the input box is up and 15 seconds have passed; a live bridge alone is not enough (it is up before the warning is drawn).
+- **Main running without its bridge.** Within 60 seconds (`bridgeWait`) of the warning being answered, the bridge (the talos-app MCP
+  server, Main's child) must have written a live `status.json` (stamped after this start, by a process of Main's group). If not, Needs you says "Main is running but
+  its Talos bridge didn't start", with the last line of Claude Code's log for that server when it can be read
+  (`~/Library/Caches/claude-cli-nodejs/<agent folder>/mcp-logs-talos-app/`). A damaged `config.json` in the Talos home (not valid
+  JSON, so the bridge refuses to start) is named as the reason first, since that log often says only that the connection closed.
+  Main is not stopped. The line clears when the bridge goes live.
+- **Main's bridge live but off the relay.** Once the bridge has been seen live, `status.json` saying `relay.connected: false` for 3
+  minutes (the contract's `relay_down_s`) is Needs you: "Talos bridge is running but can't reach the relay", with the last close code
+  when there is one. The bridge's reconnect backoff tops out at a minute, so a relay restart or a short drop never gets that far. It
+  clears when the bridge connects again; nothing is restarted.
+- **Main not picking up messages.** `status.json`'s `unseen_oldest_at` (an owner message Main was told about, with no bridge tool call
+  since) 5 minutes old (`unseen_s`), with Main's pane silent for 2 minutes (`unseen_quiet_s`) and nothing printed since that message, is
+  Needs you: "Main isn't picking up messages". A Main that read the message prints it and its turn, so a message that needed no
+  answer does not count. Told once per message; once told it stays until Main makes a bridge tool call (a turn at the pane with no
+  tool leaves it up). Never a restart. Both waits run on the awake clock, so sleep never counts. Neither needs a default thread:
+  the line and its banner are on this Mac.
+- **The phone line when config.json is broken.** The phone lines (crash loop, a restart that gave up, Main exiting cleanly) go
+  through `talos-app post` to the default thread. With no `talos-app`, no thread in `config.json` (damaged, or none named), or a
+  post that was refused, the Mac posts the line itself: a system row signed with the bridge key (`$TALOS_APP_HOME/bridge.key`, the
+  file the bridge signs with) to the relay named in `bridge.env`, in the `desktop.json` notify thread, else `inbox`. It has no
+  command line, so an agent cannot post a row that looks like the app's.
+- **Main's environment** is your login shell's plus `desktop.json` `env` (its `PATH` wins; if the login shell cannot be read in 5
+  seconds the app's own environment stands in, with `desktop.json` on top, and the log says `login_env_unreadable`). A thread
+  session's identity (`TALOS_APP_WORKER_THREAD`, `TALOS_SESSION_ROLE`, `TALOS_APP_WORKER_NONCE`) and Claude Code's session variables
+  never reach Main, from any source; nor do a worker's no-channel state dirs or `ENABLE_CLAUDEAI_MCP_SERVERS` (unless `desktop.json` sets them). `install.sh` relaunches the app without them and says so when it was run from a thread session.
+  Under tmux it reaches Main only through a launch file (0600, under `$TALOS_APP_HOME/launch`, deleted as soon as it runs):
+  tmux runs `/usr/bin/env -i /bin/sh <file>`, so no value is in a tmux argument or the tmux server's environment.
+- **A thread session's environment** is built the same way at each start: your login shell's plus `desktop.json` `env` as it is
+  then (its `PATH` wins), then the session's own identity and no-channel settings. The app reads the login shell in the background
+  (never while it is opening), keeps the last read that worked and reads it again when that is 15 minutes old. A read that fails
+  keeps the last good one; with none yet, the app's own environment stands in with `desktop.json` on top. Either way the log says
+  `workers login_env_unreadable` with where `PATH` came from (`last_good`, `desktop.json` or `app`), and the read is tried again
+  after 30 seconds, then at longer gaps up to 5 minutes. A start waits only for the first read after the app opens (12 seconds
+  at most); later retries never hold one. While no read has worked and `claude` is not on the `PATH` in use, a thread
+  session is not started: the start is held (the log says `worker_start_held`) and goes ahead once the login shell answers; after
+  two minutes the message goes to Main as it does when every session slot is busy. If a Finder-opened app keeps saying
+  `path_from=app`, pin `PATH` in `desktop.json` `env`.
+- **`.mcp.json` names bun by its absolute path** (no `PATH` is written: the session keeps its own, with `~/.local/bin` and `/opt/homebrew/bin`; the server runs `src/server.ts` directly), written by `install-mcp`, adopt and
+  setup, because Claude Code starts the server with the session's PATH, and Main can start with a bare one. `talos-app doctor`
+  warns about a bare `bun` and says to run `talos-app install-mcp --agent-dir <dir>`. A `PATH` you put in the entry is kept; the one an earlier Talos wrote is removed on the next `install-mcp`.
+- **Main's warning shows only the Talos popup,** centred on the screen. The terminal is not opened beside it (other dialogs still open it).
 - **macOS asks for the Desktop folder again.** The app was signed differently from last time. Use the local signing
   certificate above, or grant it again.
 - **A bug report.** `talos-app report --out report.txt` bundles doctor, status and the log with keys, tokens and your home
@@ -252,6 +525,7 @@ The **Thread sessions** tab is still there for the one case below.
 | Where                                              | What                                                      |
 | -------------------------------------------------- | --------------------------------------------------------- |
 | `~/Applications/Talos.app`                         | The app (by default)                                      |
+| `~/Applications/.Talos.app.previous`               | The version the last install replaced (`--rollback`)      |
 | `~/Library/Application Support/Talos/desktop.json` | Your session settings (0600)                              |
 | `~/Library/Logs/Talos/supervisor.log`              | What the supervisor did: event names and ids only         |
 | `$TALOS_APP_HOME/status.json`                      | The bridge's health, written by the bridge, read by Talos |

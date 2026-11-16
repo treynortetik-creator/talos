@@ -4,32 +4,23 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
-import {
-  DeviceId,
-  deriveEnrollAuth,
-  enrollAuthHash,
-  enrollCodeId,
-  type Frame,
-  fingerprintWords,
-  HookDigestFrame,
-  isIanaZone,
-  newEnrollCode,
-} from '@talos-app/protocol'
+import { DeviceId, type Frame, HookDigestFrame, isIanaZone, signRotation } from '@talos-app/protocol'
 import { Bridge } from './bridge.ts'
 import { launchEnv } from './claude-env.ts'
 import { checkCodex, runCodex } from './codex.ts'
-import { assertSecureRelayUrl, type BridgeEnv, loadEnv, paths } from './config.ts'
+import { assertSecureRelayUrl, type BridgeEnv, defaultHome, loadEnv, paths } from './config.ts'
 import { parseConfig } from './config-file.ts'
 import { DeviceStore } from './devices.ts'
-import { EnrollFiles } from './enroll-files.ts'
-import { cleanDeviceName } from './enrollment.ts'
+import { cmdEnroll, type EnrollCli } from './enroll-cli.ts'
 import { cmdEvents } from './events.ts'
 import { ensureDir, readJsonFile, writeFileAtomic, writeJsonAtomic } from './fsutil.ts'
 import { withGuardsSettings } from './guards/install.ts'
 import { openHistory } from './history-store.ts'
 import { commitRotation, ensureBridgeKey, loadBridgeKey, loadKeyFile, prepareRotation } from './keys.ts'
-import { installMcp, mcpEntry, readMcpEntry } from './mcp-config.ts'
+import { formatLogLine, tailLines } from './log-tail.ts'
+import { installMcp, mcpEntry, mcpProtectedRoots, readMcpEntry } from './mcp-config.ts'
 import { hookDigestNotification } from './notify.ts'
+import { say } from './owner-words.ts'
 import {
   AskRulesError,
   describePlan,
@@ -38,6 +29,7 @@ import {
   settingsPath,
   writePlan,
 } from './permission/ask-rules.ts'
+import { ownerHost } from './platform.ts'
 import { redact } from './redact.ts'
 import { RelayHttp, RelayHttpError } from './relay-http.ts'
 import { runCommand } from './run-command.ts'
@@ -57,7 +49,7 @@ import { cmdTheme } from './theme-cli.ts'
 import { cmdTrust } from './trust-cli.ts'
 import { cmdV2 } from './v2-cli.ts'
 import { BRIDGE_COMMIT, BRIDGE_VERSION, commitReport, resolveVersion, versionSkew } from './version.ts'
-import { isThreadCaller, workerCliRefusal } from './worker/cli-refusal.ts'
+import { isThreadCaller, threadOfCaller, workerCliRefusal } from './worker/cli-refusal.ts'
 
 export type CliIO = {
   /** False when stdin or stdout is not a terminal. Absent (a test's io) counts as a terminal. */
@@ -68,6 +60,8 @@ export type CliIO = {
   prompt(question: string): Promise<string>
   sleep(ms: number): Promise<void>
   now(): number
+  /** `enroll --json`: one event line, written at once. Absent: a synchronous write to stdout (enroll-cli.ts). */
+  emit?(line: string): void
 }
 
 const BRIDGE_DIR = resolve(dirname(import.meta.path), '..')
@@ -151,12 +145,15 @@ export async function keyRefusedHint(env: BridgeEnv, e?: RelayHttpError, localNo
     const skew = localNowMs - e.serverDate
     if (Math.abs(skew) > CLOCK_SKEW_LIMIT_MS) {
       const mins = Math.round(Math.abs(skew) / 60_000)
-      return `The relay turned away this Mac's request, and this Mac's clock is about ${mins} minute${mins === 1 ? '' : 's'} ${skew > 0 ? 'ahead of' : 'behind'} the relay's. The relay refuses requests more than 2 minutes off. Fix: set this Mac's date and time to automatic (System Settings > General > Date & Time), then run this again. The key itself is probably fine.`
+      return say({
+        mac: `The relay turned away this Mac's request, and this Mac's clock is about ${mins} minute${mins === 1 ? '' : 's'} ${skew > 0 ? 'ahead of' : 'behind'} the relay's. The relay refuses requests more than 2 minutes off. Fix: set this Mac's date and time to automatic (System Settings > General > Date & Time), then run this again. The key itself is probably fine.`,
+        linux: `The relay turned away this computer's request, and this computer's clock is about ${mins} minute${mins === 1 ? '' : 's'} ${skew > 0 ? 'ahead of' : 'behind'} the relay's. The relay refuses requests more than 2 minutes off. Fix: set this computer's date and time to automatic (timedatectl set-ntp true), then run this again. The key itself is probably fine.`,
+      })
     }
   }
   const key = await loadKeyFile(paths(env.home).bridgeKey).catch(() => undefined)
   const line = key ? `BRIDGE_PUBKEY=${key.publicKeyB64}` : 'BRIDGE_PUBKEY=<run: talos-app init>'
-  return `The relay turned away this Mac's key. Most likely fix: in Railway open your relay service, set the variable ${line} and press Deploy (if you have run \`talos-app rotate\`, also set BRIDGE_PUBKEY_FORCE=1 for that one deploy, then remove it). If that line is already there, check this Mac's date and time is set to automatic: the relay also answers 401 when the clock is more than 2 minutes off.`
+  return `The relay turned away ${say({ mac: "this Mac's", linux: "this computer's" })} key. Most likely fix: in Railway open your relay service, set the variable ${line} and press Deploy (if you have run \`talos-app rotate\`, also set BRIDGE_PUBKEY_FORCE=1 for that one deploy, then remove it). If that line is already there, check ${say({ mac: "this Mac's", linux: "this computer's" })} date and time is set to automatic: the relay also answers 401 when the clock is more than 2 minutes off.`
 }
 
 export type RelayAuth = { ok: true } | { ok: false; refused: boolean; message: string }
@@ -251,94 +248,20 @@ async function cmdInit(env: BridgeEnv, args: string[], io: CliIO) {
   io.out(`BRIDGE_PUBKEY=${key.publicKeyB64}`)
 }
 
-// ---- enroll ----------------------------------------------------------------------------------------------------
-
 const yes = (a: string) => /^\s*y(es)?\s*$/i.test(a)
 
-async function promptPending(files: EnrollFiles, codeId: string, io: CliIO) {
-  const c = files.readConfirm(codeId)
-  if (!c) return
-  const words = c.fingerprint.length ? c.fingerprint : [...fingerprintWords(c.device_id)]
-  const answer = await io.prompt(`Pin ${JSON.stringify(cleanDeviceName(c.name))} [${words.join(' ')}]? [y/N] `)
-  files.writeAnswer(codeId, { yes: yes(answer), device_id: c.device_id })
-  io.out(
-    yes(answer) ? 'Answered yes; the live bridge will pin the device.' : 'Answered no; the device will not be pinned.',
-  )
-}
+// ---- enroll (enroll-cli.ts) ------------------------------------------------------------------------------------
 
-async function cmdEnroll(env: BridgeEnv, args: string[], io: CliIO, deps: CliDeps = {}) {
-  const { values } = parseArgs({
-    args,
-    options: { label: { type: 'string' }, confirm: { type: 'boolean' }, 'no-qr': { type: 'boolean' } },
-    strict: true,
-  })
+function enrollCli(env: BridgeEnv, io: CliIO, deps: CliDeps): EnrollCli {
   const p = paths(env.home)
-  const files = new EnrollFiles(p.enrollPending)
-  if (values.confirm) {
-    const ids = files.awaitingAnswer()
-    if (!ids.length) io.out('nothing is waiting for confirmation')
-    for (const id of ids) await promptPending(files, id, io)
-    return
+  return {
+    http: () => httpFor(env),
+    relayUrl: () => needRelay(env),
+    bridge: () => describeBridge(bridgeLiveness(p.status, io.now(), deps.alive)),
+    renderQr: (t) => renderQr(t),
+    keyRefusedHint: (e) => keyRefusedHint(env, e),
+    fail: (m) => new CliError(m),
   }
-  const http = await httpFor(env)
-  const relayUrl = needRelay(env)
-  // D56: the phone's four words only reach a live bridge. Say so BEFORE the one-use code is made and shown.
-  const bridge = describeBridge(bridgeLiveness(p.status, io.now(), deps.alive))
-  if (bridge.level !== 'ok') {
-    io.out(`Warning: ${bridge.text}`)
-    io.out(
-      'Nobody can pin the new device until a live bridge is running, and this link works only once. Start the agent first if you can; continuing.',
-    )
-  }
-  const code = newEnrollCode()
-  const hash = enrollAuthHash(deriveEnrollAuth(code))
-  const codeId = enrollCodeId(hash)
-  const now = io.now()
-  const createdAt = new Date(now).toISOString()
-  const expiresAt = new Date(now + 10 * 60_000).toISOString()
-  ensureDir(p.enrollPending)
-  files.writePending(codeId, {
-    code,
-    ...(values.label ? { label: values.label } : {}),
-    created_at: createdAt,
-    expires_at: expiresAt,
-  })
-  // only the hash goes to the relay; the code itself stays on this Mac and in the link fragment
-  try {
-    await http.enroll({
-      code_id: codeId,
-      code_auth_hash: hash,
-      expires_at: expiresAt,
-      ...(values.label ? { label: values.label } : {}),
-    })
-  } catch (e) {
-    // the file above holds a code the relay never heard of: take it back
-    files.removeAll(codeId)
-    if (e instanceof RelayHttpError && e.status === 401) throw new CliError(await keyRefusedHint(env, e))
-    throw e
-  }
-  const link = `${relayUrl}/enroll#${code}`
-  io.out('Open this link on the device you want to add (it works once, for 10 minutes):')
-  io.out(link)
-  if (!values['no-qr']) {
-    io.out('Or point the phone camera at this code:')
-    const lines = await renderQr(link)
-    if (lines) for (const l of lines) io.out(l)
-    else io.out('(The code could not be drawn here; use the link above.)')
-  }
-  io.out('Waiting for the device… (Ctrl-C to stop; `talos-app enroll --confirm` answers later)')
-  while (io.now() - now < 10 * 60_000) {
-    if (files.readConfirm(codeId)) {
-      await promptPending(files, codeId, io)
-      return
-    }
-    if (!files.readPending(codeId)) {
-      io.out('This code was used or removed.')
-      return
-    }
-    await io.sleep(500)
-  }
-  io.out('Timed out. Run `talos-app enroll` again for a new link.')
 }
 
 // ---- devices / rotate --------------------------------------------------------------------------------------------
@@ -381,27 +304,88 @@ async function cmdDevices(env: BridgeEnv, args: string[], io: CliIO) {
   }
 }
 
-async function cmdRotate(env: BridgeEnv, io: CliIO) {
+async function cmdRotate(env: BridgeEnv, args: string[], io: CliIO) {
+  // nothing is written or sent for a call that is not exactly `rotate`: a new key pair is the first thing it makes
+  if (args.length > 0) {
+    if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
+      io.out(
+        'usage: talos-app rotate   (no arguments: makes a new bridge key, has the relay accept it, then switches to it)',
+      )
+      return
+    }
+    throw new CliError('usage: talos-app rotate (it takes no arguments)')
+  }
   const p = paths(env.home)
   const http = await httpFor(env)
-  const prepared = await prepareRotation(p, Math.floor(io.now() / 1000))
-  try {
-    const res = await http.rotate({ new_pubkey: prepared.newPubkey, sig_new: prepared.sigNew, ts: prepared.ts })
-    commitRotation(p)
+  const nowS = Math.floor(io.now() / 1000)
+  const switched = (keyId: string, newPubkey: string) => {
     io.out(
-      `rotated; new key id ${res.key_id}. The live bridge reconnects with it on its own; the old key stays valid at the relay for 5 minutes.`,
+      `rotated; new key id ${keyId}. The live bridge reconnects with it on its own; the old key stays valid at the relay for 5 minutes.`,
     )
     // The relay keeps the rotated key in its database, but its BRIDGE_PUBKEY variable on Railway still holds the OLD one.
     // If the volume is ever lost or restored, the relay falls back to that variable and trusts a dead key (audit D58).
     io.out('')
     io.out('Now update the relay: in Railway set BRIDGE_PUBKEY to this line, then press Deploy.')
-    io.out(`BRIDGE_PUBKEY=${prepared.newPubkey}`)
+    io.out(`BRIDGE_PUBKEY=${newPubkey}`)
     io.out(
       'Until you do, Railway still trusts the OLD key, and a restored or emptied relay volume would bring it back.',
     )
-  } catch (e) {
-    throw new CliError(`rotation failed, bridge.key is unchanged: ${(e as Error).message}`)
   }
+  const commit = (keyId: string, newPubkey: string) => {
+    try {
+      commitRotation(p)
+    } catch (e) {
+      // the relay has switched; a running bridge may have finished the switch on its own (it tries bridge.key.next when
+      // refused), so bridge.key may already be the new key
+      throw new CliError(
+        say({
+          mac: `the relay switched to key ${keyId}, but this Mac could not finish the switch: ${(e as Error).message}. If the bridge is running it finishes it itself; otherwise run talos-app rotate again.`,
+          linux: `the relay switched to key ${keyId}, but this computer could not finish the switch: ${(e as Error).message}. If the bridge is running it finishes it itself; otherwise run talos-app rotate again.`,
+        }),
+      )
+    }
+    switched(keyId, newPubkey)
+  }
+
+  // A bridge.key.next left by an earlier try (bug hunt core #9): the relay may have switched to it although its answer never
+  // arrived. It is only CHECKED, signed with itself: the relay says yes only if it is already its active key. It is never the
+  // target of a new rotation: a key that sat on disk may be as exposed as the one being replaced.
+  let leftover: Awaited<ReturnType<typeof loadKeyFile>>
+  try {
+    leftover = await loadKeyFile(p.bridgeKeyNext)
+  } catch {
+    leftover = undefined // damaged: a fresh key replaces it below
+  }
+  const current = await loadBridgeKey(p)
+  if (leftover && leftover.publicKeyB64 !== current.publicKeyB64) {
+    const body = {
+      new_pubkey: leftover.publicKeyB64,
+      sig_new: await signRotation(leftover.privateKey, leftover.publicKeyB64, nowS),
+      ts: nowS,
+    }
+    const kept = leftover
+    try {
+      const res = await new RelayHttp(needRelay(env), () => kept).rotate(body)
+      return commit(res.key_id, leftover.publicKeyB64)
+    } catch (e) {
+      if (e instanceof CliError) throw e
+      if (!(e instanceof RelayHttpError && e.status === 401))
+        throw new CliError(
+          `could not check the key an earlier rotation left (bridge.key.next): ${(e as Error).message}. bridge.key is unchanged; try again when the relay is reachable.`,
+        )
+      // 401: the relay does not trust it, so it never switched: a fresh key, as for a first try
+    }
+  }
+  const prepared = await prepareRotation(p, nowS)
+  let res: { key_id: string }
+  try {
+    res = await http.rotate({ new_pubkey: prepared.newPubkey, sig_new: prepared.sigNew, ts: prepared.ts })
+  } catch (e) {
+    throw new CliError(
+      `rotation failed, bridge.key is unchanged: ${(e as Error).message}. If the relay switched without answering, the next talos-app rotate finds out and finishes it.`,
+    )
+  }
+  commit(res.key_id, prepared.newPubkey)
 }
 
 // ---- status / doctor ----------------------------------------------------------------------------------------------
@@ -463,7 +447,10 @@ async function cmdStatus(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
   }
   io.out(`relay reachable: ${reachable}`)
   io.out(
-    `relay accepts this Mac: ${auth ? (auth.ok ? 'yes' : `NO. ${auth.message}`) : reachableBool === false ? 'unknown (relay not reachable)' : 'unknown'}`,
+    say({
+      mac: `relay accepts this Mac: ${auth ? (auth.ok ? 'yes' : `NO. ${auth.message}`) : reachableBool === false ? 'unknown (relay not reachable)' : 'unknown'}`,
+      linux: `relay accepts this computer: ${auth ? (auth.ok ? 'yes' : `NO. ${auth.message}`) : reachableBool === false ? 'unknown (relay not reachable)' : 'unknown'}`,
+    }),
   )
   io.out(`bridge: ${describeBridge(live).text}`)
   if (!runningBridge(live).running) io.out(`bridge version: ${BRIDGE_VERSION} (the code on disk; no bridge is running)`)
@@ -485,6 +472,8 @@ async function cmdStatus(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
 /** Injection points for tests; the real CLI passes none. */
 export type CliDeps = {
   processes?: () => string[]
+  /** `doctor` on WSL: what the WSL rows read (default: this machine); tests that print the whole doctor turn them off. */
+  wsl?: import('./doctor-wsl.ts').WslProbe
   codexTimeoutMs?: number
   /** `share shortcut`: the OS (default `process.platform`) and the signer (default `shortcuts sign`); tests inject both. */
   platform?: NodeJS.Platform
@@ -510,7 +499,12 @@ export type CliDeps = {
 async function cmdDoctor(env: BridgeEnv, args: string[], io: CliIO, deps: CliDeps) {
   const { values } = parseArgs({
     args,
-    options: { 'agent-dir': { type: 'string' }, 'claude-dir': { type: 'string' }, deep: { type: 'boolean' } },
+    options: {
+      'agent-dir': { type: 'string' },
+      'claude-dir': { type: 'string' },
+      deep: { type: 'boolean' },
+      json: { type: 'boolean' },
+    },
     strict: true,
   })
   const { runDoctorChecks } = await import('./doctor-checks.ts')
@@ -524,11 +518,17 @@ async function cmdDoctor(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
     io,
     deps,
   )
+  // --json (the Windows tray's "Check Talos"): the rows only, one JSON line, exit 0 whatever they say (the levels carry it).
+  // No key line: the tray copies the relay key from root's own record (talos-wsl.sh relay-key), never from talos's output.
+  if (values.json) {
+    io.out(JSON.stringify({ checks: checks.map((c) => ({ level: c.level, name: c.name, detail: c.detail })) }))
+    return
+  }
   for (const c of checks) io.out(`${c.level.padEnd(4)}  ${c.name}: ${c.detail}`)
   // The line the server needs when it turns this Mac's key away (the app's "key refused" banner points here).
   if (key) {
     io.out(
-      "If the app says the server turned away this Mac's key, put this line in the relay variables on Railway and deploy:",
+      `If the app says the server turned away ${say({ mac: "this Mac's", linux: "this computer's" })} key, put this line in the relay variables on Railway and deploy:`,
     )
     io.out(`BRIDGE_PUBKEY=${key.publicKeyB64}`)
     io.out('If you have run `talos-app rotate`, also set BRIDGE_PUBKEY_FORCE=1 for that one deploy, then remove it.')
@@ -587,32 +587,22 @@ async function cmdStart(args: string[], io: CliIO, deps: CliDeps, home: string):
 
 // ---- logs / report (D62) -----------------------------------------------------------------------------------------
 
-/** One bridge.log line (pino-style JSON) as a readable line; anything that is not JSON is passed through. */
-export function formatLogLine(line: string): string {
-  try {
-    const { level, time, msg, ...rest } = JSON.parse(line) as Record<string, unknown>
-    const when = typeof time === 'number' ? new Date(time).toISOString() : '?'
-    const extra = Object.keys(rest).length ? ` ${JSON.stringify(rest)}` : ''
-    return `${when} ${String(level ?? '').padEnd(8)} ${String(msg ?? '')}${extra}`
-  } catch {
-    return line
-  }
-}
-
-function tailLines(file: string, n: number): string[] {
-  const text = readFileSync(file, 'utf8')
-  const lines = text.split('\n').filter((l) => l !== '')
-  return lines.slice(-n)
-}
+export { formatLogLine }
 
 function parseCount(v: string | undefined, dflt: number, name: string): number {
   if (v === undefined) return dflt
+  // digits only: Number() also reads 0x10, 1e1 and " 7 "
+  if (!/^[0-9]+$/.test(v)) throw new CliError(`${name} needs a whole number from 1 to 5000`)
   const n = Number(v)
   if (!Number.isInteger(n) || n < 1 || n > 5000) throw new CliError(`${name} needs a whole number from 1 to 5000`)
   return n
 }
 
-async function cmdLogs(env: BridgeEnv, args: string[], io: CliIO, deps: CliDeps) {
+/**
+ * The bridge's log. Run from a thread session (a lead, Pantheon 2026-11-15) it shows only the lines that name that thread
+ * (`thread` or `thread_id`); a session whose thread can't be told is refused.
+ */
+async function cmdLogs(env: BridgeEnv, args: string[], io: CliIO, deps: CliDeps, own: string | undefined | null) {
   const { values } = parseArgs({
     args,
     options: { lines: { type: 'string', short: 'n' }, follow: { type: 'boolean', short: 'f' } },
@@ -622,8 +612,22 @@ async function cmdLogs(env: BridgeEnv, args: string[], io: CliIO, deps: CliDeps)
   if (!existsSync(file))
     throw new CliError(`no log yet at ${file}. The bridge creates it when it starts (talos-app start).`)
   const n = parseCount(values.lines, 50, '-n')
-  const show = (l: string) => io.out(redact(formatLogLine(l), { userHome: homedir(), appHome: env.home }))
-  for (const l of tailLines(file, n)) show(l)
+  if (own === undefined)
+    throw new CliError("this thread session's thread can't be told, so no log lines are shown. Ask the owner.")
+  const mine = (l: string) => {
+    if (own === null) return true
+    try {
+      const o = JSON.parse(l) as { thread?: unknown; thread_id?: unknown }
+      return o.thread === own || o.thread_id === own
+    } catch {
+      return false
+    }
+  }
+  const show = (l: string) => {
+    if (mine(l)) io.out(redact(formatLogLine(l), { userHome: homedir(), appHome: env.home }))
+  }
+  for (const l of own === null ? tailLines(file, n) : tailLines(file, Number.MAX_SAFE_INTEGER).filter(mine).slice(-n))
+    show(l)
   if (!values.follow) return
   let offset = statSync(file).size
   let partial = ''
@@ -657,6 +661,10 @@ async function cmdReport(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
     strict: true,
   })
   const n = parseCount(values.lines, 100, '--lines')
+  if (values.out && existsSync(values.out) && statSync(values.out).isDirectory())
+    throw new CliError(
+      `--out ${resolve(values.out)} is a folder; give a file path, for example ${join(resolve(values.out), 'talos-report.txt')}`,
+    )
   const buf: string[] = []
   const cap: CliIO = { ...io, out: (l) => buf.push(l), err: (l) => buf.push(l) }
   buf.push(
@@ -730,8 +738,14 @@ function cmdInstallMcp(env: BridgeEnv, args: string[], io: CliIO) {
   })
   if (!values['agent-dir']) throw new CliError('usage: talos-app install-mcp --agent-dir <dir> [--dry-run]')
   const agentDir = resolve(values['agent-dir'])
-  const r = installMcp(agentDir, mcpEntry(BRIDGE_DIR, env.home, agentDir), Boolean(values['dry-run']))
-  io.out(`${r.changed ? (values['dry-run'] ? 'would write' : 'wrote') : 'already up to date:'} ${r.path}`)
+  const r = installMcp(
+    agentDir,
+    mcpEntry(BRIDGE_DIR, env.home, agentDir),
+    Boolean(values['dry-run']),
+    mcpProtectedRoots(env.home),
+  )
+  const where = r.target === r.path ? r.path : `${r.target} (through the link ${r.path})`
+  io.out(`${r.changed ? (values['dry-run'] ? 'would write' : 'wrote') : 'already up to date:'} ${where}`)
   if (r.droppedEnv.length)
     io.out(
       `dropped env key${r.droppedEnv.length > 1 ? 's' : ''} ${r.droppedEnv.join(', ')}: the value is not a string (every string-valued key was kept)`,
@@ -739,7 +753,7 @@ function cmdInstallMcp(env: BridgeEnv, args: string[], io: CliIO) {
   if (values['dry-run']) io.out(JSON.stringify(r.config, null, 2))
 }
 
-async function cmdInstallAskRules(args: string[], io: CliIO) {
+async function cmdInstallAskRules(env: BridgeEnv, args: string[], io: CliIO) {
   const { values } = parseArgs({
     args,
     options: {
@@ -759,9 +773,22 @@ async function cmdInstallAskRules(args: string[], io: CliIO) {
     resolve(values['agent-dir']),
     values['claude-dir'] ? resolve(values['claude-dir']) : undefined,
   )
+  // the project scope's file is in the agent's own folder, where the agent can make links: one into the Claude config folder
+  // or the Talos home is refused (the user scope is the owner's own file)
+  const claudeDir = values['claude-dir']
+    ? resolve(values['claude-dir'])
+    : (process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'))
+  const guard =
+    scope === 'project'
+      ? {
+          root: resolve(values['agent-dir']),
+          // the ones this shell names, and the defaults: the bridge may run with another TALOS_APP_HOME or CLAUDE_CONFIG_DIR
+          protectedRoots: [...new Set([claudeDir, join(homedir(), '.claude'), env.home, defaultHome()])],
+        }
+      : { root: claudeDir }
   let plan: ReturnType<typeof planAskRules>
   try {
-    plan = planAskRules(path)
+    plan = planAskRules(path, undefined, guard)
   } catch (e) {
     if (e instanceof AskRulesError) throw new CliError(e.message)
     throw e
@@ -774,16 +801,16 @@ async function cmdInstallAskRules(args: string[], io: CliIO) {
   if (values['dry-run']) return io.out('dry run: nothing was written')
   if (plan.added.length === 0) return io.out('already up to date')
   const answer = await io.prompt(
-    `Write ${plan.added.length} rule${plan.added.length === 1 ? '' : 's'} to ${plan.path}? [y/N] `,
+    `Write ${plan.added.length} rule${plan.added.length === 1 ? '' : 's'} to ${plan.target === plan.path ? plan.path : `${plan.target} (through the link ${plan.path})`}? [y/N] `,
   )
   if (!yes(answer)) return io.out('Not written.')
   try {
-    writePlan(plan)
+    writePlan(plan, guard)
   } catch (e) {
     if (e instanceof AskRulesError) throw new CliError(e.message)
     throw e
   }
-  io.out(`wrote ${plan.path}`)
+  io.out(`wrote ${plan.target === plan.path ? plan.path : `${plan.target} (through the link ${plan.path})`}`)
 }
 
 // ---- subagent tee (docs/SUBAGENTS.md 5.2) ------------------------------------------------------------------------
@@ -890,6 +917,7 @@ async function cmdCodex(env: BridgeEnv, args: string[], io: CliIO, deps: CliDeps
 
 // ---- update -------------------------------------------------------------------------------------------------------
 
+// for folders only: a file's real path goes through realFileSync (real-file.ts), as realpath can name a hard-linked file by another of its names
 /** A symlinked folder (/var -> /private/var) must compare equal to the path git prints. */
 function realpathOr(p: string): string {
   try {
@@ -903,7 +931,20 @@ function realpathOr(p: string): string {
  * `talos-app update`: fast-forward this checkout and reinstall its packages, then say what is still left. It never restarts
  * the agent (a restart drops the live conversation) and never touches Railway, the Mac app or the phone.
  */
-async function cmdUpdate(args: string[], io: CliIO, deps: CliDeps) {
+/** The kit's release updater by its path, where plugin-release.py puts releases: no installer puts a `talos` command on PATH. */
+function kitUpdater(e: Record<string, string | undefined> = process.env): string {
+  const vendor =
+    e.TALOS_KIT_HOME ||
+    join(e.TALOS_VENDOR_DIR || join(e.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'talos'), 'kit')
+  return join(resolve(vendor), 'current', 'talos-kit', 'bin', 'talos-update')
+}
+
+async function cmdUpdate(
+  args: string[],
+  io: CliIO,
+  deps: CliDeps,
+  procEnv: Record<string, string | undefined> = process.env,
+) {
   parseArgs({ args, options: {}, strict: true })
   const repo = deps.update?.repoDir ?? REPO_DIR
   const run = deps.update?.run ?? runCommand
@@ -959,6 +1000,18 @@ async function cmdUpdate(args: string[], io: CliIO, deps: CliDeps) {
       `the code is now at ${after.version}, but pnpm install --frozen-lockfile failed (${install.code === 127 ? 'pnpm is not installed: run corepack enable' : install.out.split('\n').slice(-3).join(' ')}). Fix that and run it in ${repo} before restarting the agent.`,
     )
   }
+  // The pulled code's own Bun check, run by this Bun (the one the agent's bridge runs on): a newer floor arrives with the code.
+  const floorCheck = join(repo, 'apps', 'bridge', 'src', 'bun-floor.ts')
+  if (existsSync(floorCheck)) {
+    const bun = run([process.execPath, '--no-env-file', floorCheck], repo)
+    if (bun.code !== 0) {
+      throw new CliError(
+        bun.out.includes('is older than')
+          ? `the code is now at ${after.version}, but this Bun is too old to run it. Do not restart the agent yet.\n${bun.out}`
+          : `the code is now at ${after.version}, but its Bun check failed (${bun.out}). Run talos-app doctor before restarting the agent.`,
+      )
+    }
+  }
   io.out(
     moved
       ? `updated: ${before.version} -> ${after.version}`
@@ -967,16 +1020,29 @@ async function cmdUpdate(args: string[], io: CliIO, deps: CliDeps) {
   io.out('')
   io.out('What is left (this command changed the code on disk only; nothing was restarted):')
   io.out(
+    "  0. Sync your fork first, if you have not: the relay builds from your fork, and this command pulls the branch your clone follows. git fetch upstream, git switch main, git merge --ff-only upstream/main, git push origin main (or GitHub's Sync fork button, then git pull --ff-only), then run this again.",
+  )
+  io.out(
     '  1. Restart the agent. A bridge that was already running keeps its old code in memory until the agent restarts. Stop it, then run talos-app start --agent-dir <dir> again. talos-app never restarts the agent for you: that would end the live conversation.',
   )
   io.out(
-    '  2. The relay deploys from Railway, not from this Mac. Check Railway after you push or merge, then run talos-app doctor.',
+    say({
+      mac: '  2. The relay deploys from Railway, not from this Mac. Check Railway after you push or merge, then run talos-app doctor.',
+      linux:
+        '  2. The relay deploys from Railway, not from this computer. Check Railway after you push or merge, then run talos-app doctor.',
+    }),
   )
+  // the Mac app is a Mac's; elsewhere the supervisor runs the bridge's code, so it is what restarts for it
+  if (ownerHost() === 'mac')
+    io.out(
+      `  3. Mac app: run ${join(repo, 'apps', 'desktop', 'scripts', 'build-app.sh')}, then ${join(repo, 'apps', 'desktop', 'scripts', 'install.sh')} (it copies the new app to ~/Applications and opens it). build-app.sh alone leaves the old app in place.`,
+    )
+  else
+    io.out(
+      '  3. The supervisor: restart it so it runs the new code: systemctl --user restart talos-supervisor (the thread sessions keep running).',
+    )
   io.out(
-    `  3. Mac app: run ${join(repo, 'apps', 'desktop', 'scripts', 'build-app.sh')}, then ${join(repo, 'apps', 'desktop', 'scripts', 'install.sh')} (it copies the new app to ~/Applications and opens it). build-app.sh alone leaves the old app in place.`,
-  )
-  io.out(
-    `  4. Agent folder (the kit: hooks, scripts, skills, migrations): run ${join(repo, 'kit', 'scripts', 'upgrade.sh')} --into <your agent folder> --dry-run, read the plan, then run it again without --dry-run. It backs the folder up first and never touches your memory or wiki. The agent folder is not changed by this command.`,
+    `  4. Agent folder (the kit): not changed by this command. An agent on the plugin layout (every new install) updates with ${kitUpdater(procEnv)} update --agent <your agent folder> --dry-run, then the same without --dry-run (the talos update of docs/SETUP.md; the first time, a release signing key is trusted once with talos-update trust-key <public-key-file>): it checks the release's signature, swaps it, runs the migrations and rolls back by itself if the agent does not load it. An older agent (hooks/ is a folder, not a link) uses ${join(repo, 'kit', 'scripts', 'upgrade.sh')} --into <your agent folder> --dry-run, then again without --dry-run; it backs the folder up first and never touches your memory or wiki.`,
   )
   io.out(
     '  5. iPhone: the web app (the Home Screen icon) picks up web changes on its next launch. A native iPhone app is one you built yourself (docs/ios.md): rebuild and install it again after a native change, or if you use TestFlight, upload a new build.',
@@ -1003,10 +1069,27 @@ export async function runCli(
     return 1
   }
   const env = loadEnv(raw)
-  const gated = io.isTerminal === false ? terminalOnly(argv) : undefined
+  // `adopt --dry-run` writes nothing and asks nothing, so it runs without a terminal: an installer checks adopt's refusals with
+  // it before it writes anything. adopt itself (the write) stays terminal-only.
+  const readOnly = cmd === 'adopt' && rest.includes('--dry-run')
+  const gated = io.isTerminal === false && !readOnly ? terminalOnly(argv) : undefined
+  // the three the agent runs when the owner asked (on-request-cli.ts); typed in a terminal they are the owner's own
+  {
+    const no = (await import('./on-request-cli.ts')).onRequestRefusal(env, argv, Date.now(), {
+      terminal: io.isTerminal !== false,
+    })
+    if (no) {
+      io.err(no)
+      return 1
+    }
+  }
   if (gated) {
     io.err(
-      `talos-app ${gated} only runs in Terminal, typed by you. Open Terminal on your Mac and run it there; it will not run from an agent, a script or a pipe.`,
+      say({
+        mac: `talos-app ${gated} only runs in Terminal, typed by you. Open Terminal on your Mac and run it there; it will not run from an agent, a script or a pipe.`,
+        linux: `talos-app ${gated} only runs in a terminal, typed by you. Open a terminal on this computer and run it there; it will not run from an agent, a script or a pipe.`,
+        windows: `talos-app ${gated} needs a terminal, which Talos on a Windows PC doesn't offer.`,
+      }),
     )
     return 1
   }
@@ -1016,13 +1099,12 @@ export async function runCli(
         await cmdInit(env, rest, io)
         break
       case 'enroll':
-        await cmdEnroll(env, rest, io, deps)
-        break
+        return await cmdEnroll(env, rest, io, enrollCli(env, io, deps))
       case 'devices':
         await cmdDevices(env, rest, io)
         break
       case 'rotate':
-        await cmdRotate(env, io)
+        await cmdRotate(env, rest, io)
         break
       case 'status':
         await cmdStatus(env, rest, io, deps)
@@ -1030,7 +1112,7 @@ export async function runCli(
       case 'start':
         return await cmdStart(rest, io, deps, env.home)
       case 'logs':
-        await cmdLogs(env, rest, io, deps)
+        await cmdLogs(env, rest, io, deps, threadOfCaller(raw, deps.cwd))
         break
       case 'report':
         await cmdReport(env, rest, io, deps)
@@ -1039,7 +1121,7 @@ export async function runCli(
         await cmdDoctor(env, rest, io, deps)
         break
       case 'update':
-        await cmdUpdate(rest, io, deps)
+        await cmdUpdate(rest, io, deps, envOverride ?? process.env)
         break
       case 'restore-last-good':
         return await (await import('./last-good.ts')).restoreLastGood(rest, io, envOverride) // normally dispatched by cli.ts
@@ -1072,12 +1154,18 @@ export async function runCli(
         return (await import('./apps/cli.ts')).cmdInstallAppHooks(env, rest, io)
       case 'apps':
         return await (await import('./apps/cli.ts')).cmdApps(env, rest, io, deps.apps)
+      case 'supervise':
+        return await (await import('./supervisor/cli.ts')).cmdSupervise(env, rest, io)
+      case 'update-check':
+        return (await import('./supervisor/update-check.ts')).cmdUpdateCheck(env, rest, io)
       case 'install-guards':
         return (await import('./guards/install.ts')).cmdInstallGuards(env, rest, io)
       case 'guard-hook':
         return await (await import('./guards/hook.ts')).mainGuardHook(rest)
+      case 'guards':
+        return (await import('./guards/refresh.ts')).cmdGuards(env, rest, io)
       case 'install-ask-rules':
-        await cmdInstallAskRules(rest, io)
+        await cmdInstallAskRules(env, rest, io)
         break
       case 'install-subagent-tee':
         await cmdInstallSubagentTee(env, rest, io)

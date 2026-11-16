@@ -32,6 +32,7 @@ test('a right-click on a thread row opens the menu; Mark unread shows the badge,
   await row.click({ button: 'right' })
   const menu = page.getByTestId('row-menu')
   await expect(menu).toBeVisible()
+  await expect(menu).toHaveAccessibleName(/^Actions for /) // announced by name, with the thread it acts on
   await expect(page).toHaveURL(/\/threads$/) // the right-click did not open the thread
   await menu.getByTestId('row-read').click() // "Mark unread": nothing was unread
   await expect(page.getByTestId(`thread-row-${id}`).getByRole('img', { name: '1 unread' })).toBeVisible()

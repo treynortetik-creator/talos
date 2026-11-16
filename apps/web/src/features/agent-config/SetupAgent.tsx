@@ -2,23 +2,29 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { TalosClientError, useTalosClient } from '../../lib/client.ts'
+import { type HostWords, useHostWords } from '../../lib/hostWords.ts'
 import { Button } from '../../ui/index.ts'
+import { NOT_CONNECTED_LINE, useWriteBlock } from '../settings/offline.ts'
 import { friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
 import { SETUP_THREAD_ID, startSetup } from './setupThread.ts'
 
-export const SETUP_OFFLINE_TEXT = "Your Mac is offline. Setup needs your agent running; try again when it's back."
+/** The Setup button with the agent's computer unreachable: "Your Mac is offline." and the rest. */
+export const setupOfflineText = (w: HostWords) =>
+  `${w.offline} Setup needs your agent running; try again when it's back.`
 
-export function SetupAgent({ macOnline }: { macOnline: boolean }) {
+export function SetupAgent() {
+  const block = useWriteBlock()
   const client = useTalosClient()
   const navigate = useNavigate()
+  const words = useHostWords()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const start = async () => {
     if (busy) return // not disabled: a disabled control drops keyboard focus on some phones
     setError(null)
-    if (!macOnline) {
-      setError(SETUP_OFFLINE_TEXT)
+    if (block !== null) {
+      setError(block === 'link' ? NOT_CONNECTED_LINE : setupOfflineText(words))
       return
     }
     setBusy(true)
@@ -28,7 +34,7 @@ export function SetupAgent({ macOnline }: { macOnline: boolean }) {
     } catch (e) {
       setError(
         e instanceof TalosClientError && e.code === 'mac_offline'
-          ? SETUP_OFFLINE_TEXT
+          ? setupOfflineText(words)
           : friendlyPatchError(e, 'threads'),
       )
     } finally {

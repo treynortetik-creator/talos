@@ -5,6 +5,7 @@ import TalosDesktopCore
 import TalosSupervisor
 
 @testable import TalosDesktop
+import TalosTestSupport
 
 // Real NSPanels, real CALayers, real CoreAudio listeners. Runs only with TALOS_GUI_TESTS=1 from a logged-in session (a green
 // `local-ci` skips these: DESKTOP-COMPANION-SPEC section 10). Panels are shown for a moment and no test activates the app.
@@ -473,7 +474,7 @@ struct CompanionPanelGuiTests {
 
   @Test func missingArtShowsTheIconStillAndSettingsSaysSo() throws {
     _ = NSApplication.shared
-    let empty = NSTemporaryDirectory() + "companion-empty-\(UUID().uuidString)"
+    let empty = TestTemp.base + "companion-empty-\(UUID().uuidString)"
     try FileManager.default.createDirectory(atPath: empty, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: empty) }
     let fx = CompanionFixture(art: empty, enabled: true)
@@ -489,7 +490,7 @@ struct CompanionPanelGuiTests {
 
   @Test func corruptArtIsTheSameAsMissingArt() throws {
     _ = NSApplication.shared
-    let dir = NSTemporaryDirectory() + "companion-corrupt-\(UUID().uuidString)"
+    let dir = TestTemp.base + "companion-corrupt-\(UUID().uuidString)"
     try FileManager.default.copyItem(atPath: companionFixtures, toPath: dir)
     defer { try? FileManager.default.removeItem(atPath: dir) }
     try Data("not a png".utf8).write(to: URL(fileURLWithPath: dir + "/talos-2x.png"))
@@ -921,9 +922,9 @@ struct CompanionPanelGuiTests {
     let sc = StatusCoordinator.shared
     let saved = sc.now
     defer { sc.now = saved }
-    let q = QuietWindow.read(Data(#"{"quiet_window":{"start":"20:30","end":"04:00"},"timezone":"Etc/GMT+7"}"#.utf8))
+    let q = QuietWindow.read(Data(#"{"quiet_window":{"start":"22:00","end":"06:00"},"timezone":"Etc/GMT+5"}"#.utf8))
     sc.setQuietForTest(q)
-    sc.now = { Date(timeIntervalSince1970: 1_793_462_400 + 13 * 3600) }  // 22:00 in the UTC-7 zone: inside the window
+    sc.now = { Date(timeIntervalSince1970: 1_793_455_200 + 14 * 3600) }  // 23:00 in the UTC-5 zone: inside the window
     let before = sc.collected
     sc.notify(.needsYou)
     sc.notify(.stoppedRestarting)

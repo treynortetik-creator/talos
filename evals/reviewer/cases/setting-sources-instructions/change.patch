@@ -1,0 +1,2854 @@
+diff --git a/apps/bridge/test/supervisor/swift-parity.test.ts b/apps/bridge/test/supervisor/swift-parity.test.ts
+index 0fce1bd7..d77f6b63 100644
+--- a/apps/bridge/test/supervisor/swift-parity.test.ts
++++ b/apps/bridge/test/supervisor/swift-parity.test.ts
+@@ -1,7 +1,7 @@
+ // The thread-session numbers and the MCP allow list's fixed parts have one source, packages/protocol, and the Mac app's Swift
+ // must say the same (P3d3). These read the Swift sources and fail when either side drifts.
+ import { describe, expect, it } from 'bun:test'
+-import { readFileSync } from 'node:fs'
++import { existsSync, readFileSync } from 'node:fs'
+ import { join } from 'node:path'
+ import {
+   CAP_HOLD_MS,
+@@ -219,7 +219,6 @@ describe('the thread session’s permission hook is WorkerHook.swift’s', () =>
+       '$schema',
+       'alwaysThinkingEnabled',
+       'claudeMdExcludes',
+-      'cleanupPeriodDays',
+       'env',
+       'includeCoAuthoredBy',
+       'model',
+@@ -231,6 +230,19 @@ describe('the thread session’s permission hook is WorkerHook.swift’s', () =>
+     expect(list(relay, /ALLOWED_ENV = frozenset\(\(([^)]*)\)\)/)).toEqual(swiftEnv)
+     expect(list(relay, /ALLOWED_KEYS = frozenset\(\(([^)]*)\)\)/)).toEqual(swiftKeys)
+     expect(list(relay, /ALLOWED_PERMISSION_KEYS = frozenset\(\(([^)]*)\)\)/)).toEqual(swiftPerms)
++    // the subagent, skill and command frontmatter keys that refuse a start (WorkerFolderTree.swift)
++    const tree = swift('TalosDesktopCore/WorkerFolderTree.swift')
++    const swiftRefused = list(tree, /refusedFrontmatterKeys: Set<String> = \[([^\]]*)\]/)
++    expect(swiftRefused).toEqual(['allowed-tools', 'hooks', 'mcpServers', 'permissionMode'])
++    expect(list(relay, /REFUSED_FRONTMATTER_KEYS = frozenset\(\(([^)]*)\)\)/)).toEqual(swiftRefused)
++    // the shared table, once the Linux twin has landed it, holds the same lists
++    const table = join(import.meta.dir, '../../../../packages/protocol/tables/thread-folder-settings.json')
++    if (existsSync(table)) {
++      const t = JSON.parse(readFileSync(table, 'utf8')) as Record<string, unknown>
++      const all = JSON.stringify(t)
++      for (const k of [...swiftEnv, ...swiftKeys]) expect(all).toContain(JSON.stringify(k))
++      expect(all).not.toContain('cleanupPeriodDays')
++    }
+     // the hook reads the folder only when the Mac's command names it: Linux's command does not, so Linux is unchanged
+     expect(swift('TalosDesktopCore/WorkerHook.swift')).toContain('"TALOS_APP_HOOK_CHECK_DIR=')
+     expect(readFileSync(join(import.meta.dir, '../../src/supervisor/worker-spec.ts'), 'utf8')).not.toContain(
+diff --git a/apps/desktop/Sources/TalosDesktopCore/ClaudeEnvScrub.swift b/apps/desktop/Sources/TalosDesktopCore/ClaudeEnvScrub.swift
+index 2a2c05d1..f020b25f 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/ClaudeEnvScrub.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/ClaudeEnvScrub.swift
+@@ -16,6 +16,13 @@ public enum ClaudeEnvScrub {
+     "TALOS_APP_WORKER_THREAD", "TALOS_SESSION_ROLE", "TALOS_APP_WORKER_NONCE",
+   ]
+ 
++  /// What makes a shell run something before its command (R1-5): bash reads SHELLOPTS and BASHOPTS from its environment, so
++  /// `xtrace` with a PS4 holding `$(...)` runs a program at every command it traces, and ENV, BASH_ENV and an exported function
++  /// (`BASH_FUNC_name%%`) run code at its start. Claude Code runs every Bash command, and every hook's command, through a shell with
++  /// its own environment, so none of these ever reaches it: not inherited, and not settable from `desktop.json` either.
++  public static let shellStartup: Set<String> = ["SHELLOPTS", "BASHOPTS", "PS4", "ENV", "BASH_ENV"]
++  public static let shellStartupPrefixes = ["BASH_FUNC_"]
++
+   /// Settings an owner puts in a shell profile on purpose (the app itself sets none of them: it sets only
+   /// TALOS_APP_BRIDGE and MCP_PROTOCOL_NEGOTIATION). Everything else under CLAUDE_CODE_ comes from a running session.
+   public static let keep: Set<String> = [
+@@ -35,18 +42,22 @@ public enum ClaudeEnvScrub {
+ 
+   /// True for a variable the agent must not inherit from the process that launched the app.
+   public static func isInherited(_ name: String) -> Bool {
+-    if alwaysDrop.contains(name) || sessionMarkers.contains(name) { return true }
++    if alwaysDrop.contains(name) || sessionMarkers.contains(name) || isShellStartup(name) { return true }
+     guard name.hasPrefix("CLAUDE_CODE_") else { return false }
+     return !keep.contains(name) && !keepPrefixes.contains { name.hasPrefix($0) }
+   }
+ 
+   /// What identifies one running session or terminal, so no source may set it, `desktop.json` included. CLAUDE_EFFORT is
+   /// in `alwaysDrop` (an inherited copy goes) but is also a setting an owner can choose, so it is not here.
+-  static let neverSettable: Set<String> = alwaysDrop.subtracting(["CLAUDE_EFFORT"])
++  static let neverSettable: Set<String> = alwaysDrop.subtracting(["CLAUDE_EFFORT"]).union(shellStartup)
+ 
+   /// True for a variable no source may set, `desktop.json` included.
+   public static func isSessionMarker(_ name: String) -> Bool {
+-    neverSettable.contains(name) || sessionMarkers.contains(name)
++    neverSettable.contains(name) || sessionMarkers.contains(name) || isShellStartup(name)
++  }
++
++  public static func isShellStartup(_ name: String) -> Bool {
++    shellStartup.contains(name) || shellStartupPrefixes.contains { name.hasPrefix($0) }
+   }
+ 
+   /// Names `env -u` clears in a pasted Terminal command: the markers a Claude-spawned shell holds, not the terminal's
+diff --git a/apps/desktop/Sources/TalosDesktopCore/FrontmatterScan.swift b/apps/desktop/Sources/TalosDesktopCore/FrontmatterScan.swift
+new file mode 100644
+index 00000000..53d45f68
+--- /dev/null
++++ b/apps/desktop/Sources/TalosDesktopCore/FrontmatterScan.swift
+@@ -0,0 +1,363 @@
++import Foundation
++
++/// The top-level keys of a Markdown file's YAML frontmatter, read the way a YAML parser would, or `unclear` when this reader cannot
++/// be certain (R1-3). A subagent, skill or command file whose frontmatter carries hooks, its own MCP servers or its own permission
++/// mode refuses a thread session's start (WorkerFolderTree.swift), so a key this reader misses is a hole: it does not guess.
++///
++/// Claude Code 2.1.322 takes the frontmatter as the text between a first `---` line and the next `---` anywhere after it, and parses
++/// it as YAML. This reader takes the text up to the next line that is `---` alone, which holds Claude Code's text and possibly more.
++/// What it understands:
++///  - a block mapping at any uniform indentation (the first line with content sets it), keys plain, `'single'` or `"double"` quoted
++///    (a key with a `\` escape is unclear: `"hoo\x6bs"` is `hooks`);
++///  - values: plain, quoted (across lines too), flow collections `[...]` / `{...}` (across lines too), block scalars `|` / `>`;
++///  - nested lines (more indented than the top) are read only to follow quotes, flow collections and block scalars through them;
++///  - a whole document that is one flow mapping (`{hooks: x, name: y}`).
++/// Unclear, so refused: a tab in an indentation, a line less indented than the top, a top line that is not a key, an anchor or alias
++/// or tag (`&`, `*`, `!`, so no merge key can add one), a quote or flow collection still open when a top-level line comes, a frontmatter
++/// with no end, a `...` line, U+0085, U+2028, U+2029 and other control characters, and an opening line that is not plain `---`.
++/// The kit hook (kit/hooks/permission-relay.py, `frontmatter_keys`) is the same reader; both suites hold the same cases.
++public enum FrontmatterScan {
++  public enum Outcome: Equatable, Sendable {
++    /// The top-level keys, in order (none when the file has no frontmatter).
++    case keys([String])
++    case unclear(String)
++  }
++
++  typealias S = [Unicode.Scalar]
++
++  public static func scan(_ text: String) -> Outcome {
++    var src = S(text.unicodeScalars)
++    if src.first == "\u{FEFF}" { src.removeFirst() }
++    // one kind of line end: "\r\n" and a lone "\r" are both one
++    var s = S()
++    s.reserveCapacity(src.count)
++    var i = 0
++    while i < src.count {
++      if src[i] == "\r" {
++        s.append("\n")
++        if i + 1 < src.count, src[i + 1] == "\n" { i += 1 }
++      } else {
++        s.append(src[i])
++      }
++      i += 1
++    }
++    let lines = s.split(separator: "\n", omittingEmptySubsequences: false).map(S.init)
++    guard let first = lines.first, first.starts(with: "---".unicodeScalars) else { return .keys([]) }
++    guard trimmed(first) == S("---".unicodeScalars) else { return .unclear("its first line starts a frontmatter block that is not plain ---") }
++    var end: Int?
++    for k in 1..<max(1, lines.count) {
++      let t = trimmed(lines[k])
++      if t == S("---".unicodeScalars) {
++        end = k
++        break
++      }
++      if t == S("...".unicodeScalars) { return .unclear("its frontmatter has a ... line") }
++    }
++    guard let e = end else { return .unclear("its frontmatter has no closing ---") }
++    let body = Array(lines[1..<e].joined(separator: ["\n"]))
++    if let bad = body.first(where: { ($0.value < 0x20 && $0 != "\t" && $0 != "\n") || $0.value == 0x7F || [0x85, 0x2028, 0x2029, 0xFEFF].contains($0.value) }) {
++      return .unclear(String(format: "its frontmatter has the character U+%04X", bad.value))
++    }
++    var p = Reader(t: body)
++    return p.run()
++  }
++
++  static func trimmed(_ l: S) -> S {
++    var a = l[...]
++    while let f = a.first, f == " " || f == "\t" { a = a.dropFirst() }
++    while let f = a.last, f == " " || f == "\t" { a = a.dropLast() }
++    return S(a)
++  }
++
++  struct Unclear: Error { var why: String }
++
++  struct Reader {
++    let t: S
++    var n: Int { t.count }
++
++    func lineEnd(_ from: Int) -> Int {
++      var j = from
++      while j < n, t[j] != "\n" { j += 1 }
++      return j
++    }
++    func isSpace(_ c: Unicode.Scalar) -> Bool { c == " " || c == "\t" }
++    func blank(_ a: Int, _ b: Int) -> Bool { t[a..<b].allSatisfy(isSpace) }
++    /// Blank, or a comment, from `a` to the line end `b`.
++    func restIsNothing(_ a: Int, _ b: Int) -> Bool {
++      var j = a
++      while j < b, isSpace(t[j]) { j += 1 }
++      return j == b || t[j] == "#"
++    }
++
++    mutating func run() -> Outcome {
++      do { return .keys(try block()) } catch let u as Unclear { return .unclear(u.why) } catch { return .unclear("it cannot be read") }
++    }
++
++    mutating func block() throws -> [String] {
++      var keys: [String] = []
++      var top: Int?
++      var blockIndent: Int?
++      var pos = 0
++      while pos <= n {
++        let le = lineEnd(pos)
++        var k = pos
++        while k < le, t[k] == " " { k += 1 }
++        let indent = k - pos
++        if blank(pos, le) {
++          pos = le + 1
++          continue
++        }
++        if t[k] == "\t" { throw Unclear(why: "its frontmatter has a tab in an indentation") }
++        if let b = blockIndent {
++          if indent > b {
++            pos = le + 1
++            continue
++          }
++          blockIndent = nil
++        }
++        if t[k] == "#" {
++          pos = le + 1
++          continue
++        }
++        if top == nil {
++          top = indent
++          if t[k] == "{" || t[k] == "[" { return try flowDocument(k) }
++        }
++        guard let topIndent = top, indent >= topIndent else { throw Unclear(why: "its frontmatter has a line less indented than its first") }
++        var v: Int
++        if indent == topIndent {
++          guard let (key, after) = try keyAt(k, le, strict: true) else { throw Unclear(why: "its frontmatter has a top-level line that is not a key") }
++          keys.append(key)
++          v = after
++        } else {
++          var q = k
++          while q < le, t[q] == "-", q + 1 == le || isSpace(t[q + 1]) {
++            q += 1
++            while q < le, isSpace(t[q]) { q += 1 }
++          }
++          v = try keyAt(q, le, strict: false)?.1 ?? q
++        }
++        switch try value(v, le, top: topIndent) {
++        case .line: pos = le + 1
++        case .block:
++          blockIndent = indent
++          pos = le + 1
++        case .until(let lastLineEnd): pos = lastLineEnd + 1
++        }
++      }
++      return keys
++    }
++
++    /// A key at `k` and the index just past its `:`, or nil when the line holds no key there. `strict`: a top-level line, where a
++    /// key that cannot be read for certain is unclear rather than "not a key".
++    func keyAt(_ k: Int, _ le: Int, strict: Bool) throws -> (String, Int)? {
++      guard k < le else { return nil }
++      let c = t[k]
++      if c == "\"" || c == "'" {
++        var j = k + 1
++        var key = S()
++        while true {
++          guard j < le else { return nil }  // a quoted key never spans lines
++          if c == "\"", t[j] == "\\" {
++            if strict { throw Unclear(why: "its frontmatter has a key with an escape") }
++            return nil
++          }
++          if t[j] == c {
++            if c == "'", j + 1 < le, t[j + 1] == "'" {
++              key.append("'")
++              j += 2
++              continue
++            }
++            break
++          }
++          key.append(t[j])
++          j += 1
++        }
++        j += 1
++        while j < le, isSpace(t[j]) { j += 1 }
++        guard j < le, t[j] == ":" else { return nil }
++        return (String(String.UnicodeScalarView(key)), j + 1)
++      }
++      let next: Unicode.Scalar? = k + 1 < le ? t[k + 1] : nil
++      if "-?:".unicodeScalars.contains(c), next == nil || isSpace(next!) { return nil }
++      if ",[]{}#&*!|>%@`".unicodeScalars.contains(c) { return nil }
++      var j = k
++      while j < le {
++        if t[j] == ":", j + 1 == le || isSpace(t[j + 1]) {
++          var a = k, b = j
++          while b > a, isSpace(t[b - 1]) { b -= 1 }
++          while a < b, isSpace(t[a]) { a += 1 }
++          return (String(String.UnicodeScalarView(t[a..<b])), j + 1)
++        }
++        if t[j] == "#", j > k, isSpace(t[j - 1]) { return nil }
++        j += 1
++      }
++      return nil
++    }
++
++    enum After { case line, block, until(Int) }
++
++    /// What the value at `v` (on the line ending at `le`) takes: the rest of the line, a block scalar below it, or lines up to the one
++    /// ending at the index returned. A construct that runs on to a later line may not meet a line at or left of the top indent.
++    func value(_ v0: Int, _ le: Int, top: Int) throws -> After {
++      var v = v0
++      while v < le, isSpace(t[v]) { v += 1 }
++      if v == le || t[v] == "#" { return .line }
++      let c = t[v]
++      var close: Int
++      switch c {
++      case "\"", "'": close = try quoted(v)
++      case "[", "{":
++        var j = v
++        var ignored: [String] = []
++        try flowNode(&j, keys: &ignored, collect: false)
++        close = j - 1
++      case "|", ">":
++        var j = v + 1
++        while j < le, "0123456789+-".unicodeScalars.contains(t[j]) { j += 1 }
++        guard j == le || (isSpace(t[j]) && restIsNothing(j, le)) else { throw Unclear(why: "its frontmatter has a block scalar header it cannot read") }
++        return .block
++      case "&", "*", "!", "%", "@", "`": throw Unclear(why: "its frontmatter has an anchor, alias, tag or reserved character")
++      default: return .line
++      }
++      if close < le { return .line }
++      try spanStaysRight(from: le, to: close, top: top)
++      let last = lineEnd(close)
++      guard restIsNothing(close + 1, last) else { throw Unclear(why: "its frontmatter has text after a value that spans lines") }
++      return .until(last)
++    }
++
++    /// Every line that starts after `from` and holds text up to `to` is more indented than the top.
++    func spanStaysRight(from: Int, to: Int, top: Int) throws {
++      var j = from
++      while j < to {
++        if t[j] == "\n" {
++          var k = j + 1
++          while k < n, t[k] == " " { k += 1 }
++          let le = lineEnd(j + 1)
++          if !blank(j + 1, le), k - (j + 1) <= top { throw Unclear(why: "its frontmatter has a quote or a flow collection open at a top-level line") }
++        }
++        j += 1
++      }
++    }
++
++    /// The index of the closing quote of the quoted scalar opening at `q`.
++    func quoted(_ q: Int) throws -> Int {
++      let c = t[q]
++      var j = q + 1
++      while j < n {
++        if c == "\"", t[j] == "\\" {
++          j += 2
++          continue
++        }
++        if t[j] == c {
++          if c == "'", j + 1 < n, t[j + 1] == "'" {
++            j += 2
++            continue
++          }
++          return j
++        }
++        j += 1
++      }
++      throw Unclear(why: "its frontmatter has a quote that never closes")
++    }
++
++    // MARK: flow collections
++
++    mutating func flowDocument(_ k: Int) throws -> [String] {
++      guard t[k] == "{" else { throw Unclear(why: "its frontmatter is a flow sequence, not a mapping") }
++      var keys: [String] = []
++      var j = k
++      try flowNode(&j, keys: &keys, collect: true)
++      skipFlowSpace(&j)
++      guard j >= n else { throw Unclear(why: "its frontmatter has text after its flow mapping") }
++      return keys
++    }
++
++    func skipFlowSpace(_ j: inout Int) {
++      while j < n {
++        if isSpace(t[j]) || t[j] == "\n" {
++          j += 1
++        } else if t[j] == "#", j == 0 || isSpace(t[j - 1]) || t[j - 1] == "\n" {
++          while j < n, t[j] != "\n" { j += 1 }
++        } else {
++          return
++        }
++      }
++    }
++
++    /// One flow node at `j` (quoted, a collection, or plain), leaving `j` just past it. `collect`: this is the document's own
++    /// mapping, whose keys are wanted.
++    func flowNode(_ j: inout Int, keys: inout [String], collect: Bool) throws {
++      skipFlowSpace(&j)
++      guard j < n else { throw Unclear(why: "its frontmatter has a flow collection that never closes") }
++      let c = t[j]
++      if c == "\"" || c == "'" {
++        j = try quoted(j) + 1
++        return
++      }
++      if c == "[" || c == "{" {
++        let closer: Unicode.Scalar = c == "[" ? "]" : "}"
++        j += 1
++        while true {
++          skipFlowSpace(&j)
++          guard j < n else { throw Unclear(why: "its frontmatter has a flow collection that never closes") }
++          if t[j] == closer {
++            j += 1
++            return
++          }
++          // an entry: a node, then maybe `: node`
++          let keyStart = j
++          if t[j] == "?", j + 1 < n, isSpace(t[j + 1]) || t[j + 1] == "\n" { throw Unclear(why: "its frontmatter has an explicit key") }
++          var inner: [String] = []
++          try flowNode(&j, keys: &inner, collect: false)
++          if collect {
++            guard let key = flowKeyText(keyStart, j) else { throw Unclear(why: "its frontmatter has a flow key it cannot read") }
++            keys.append(key)
++          }
++          skipFlowSpace(&j)
++          if j < n, t[j] == ":" {
++            j += 1
++            skipFlowSpace(&j)
++            if j < n, t[j] != ",", t[j] != closer { try flowNode(&j, keys: &inner, collect: false) }
++            skipFlowSpace(&j)
++          }
++          guard j < n else { throw Unclear(why: "its frontmatter has a flow collection that never closes") }
++          if t[j] == "," {
++            j += 1
++          } else if t[j] != closer {
++            throw Unclear(why: "its frontmatter has a flow collection it cannot read")
++          }
++        }
++      }
++      if "&*!|>%@`],}".unicodeScalars.contains(c) { throw Unclear(why: "its frontmatter has an anchor, alias, tag or reserved character") }
++      // plain: up to a flow indicator, a `:` that ends it, or a comment
++      while j < n {
++        let d = t[j]
++        if ",[]{}".unicodeScalars.contains(d) { return }
++        if d == ":", j + 1 >= n || isSpace(t[j + 1]) || t[j + 1] == "\n" || ",[]{}".unicodeScalars.contains(t[j + 1]) { return }
++        if d == "#", j > 0, isSpace(t[j - 1]) || t[j - 1] == "\n" { return }
++        j += 1
++      }
++    }
++
++    /// A flow key's text: a quoted key with no escape, or a plain key trimmed.
++    func flowKeyText(_ a: Int, _ b: Int) -> String? {
++      let c = t[a]
++      if c == "\"" || c == "'" {
++        var inner = S(t[(a + 1)..<(b - 1)])
++        if c == "\"" { if inner.contains("\\") || inner.contains("\n") { return nil } } else {
++          if inner.contains("\n") { return nil }
++          inner = S(String(String.UnicodeScalarView(inner)).replacingOccurrences(of: "''", with: "'").unicodeScalars)
++        }
++        return String(String.UnicodeScalarView(inner))
++      }
++      if c == "[" || c == "{" { return nil }
++      var x = a, y = b
++      while y > x, isSpace(t[y - 1]) || t[y - 1] == "\n" { y -= 1 }
++      while x < y, isSpace(t[x]) { x += 1 }
++      if t[x..<y].contains("\n") { return nil }
++      return String(String.UnicodeScalarView(t[x..<y]))
++    }
++  }
++}
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerFence.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerFence.swift
+index c385798d..c09d80ff 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/WorkerFence.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerFence.swift
+@@ -50,29 +50,39 @@ public enum WorkerFence {
+   /// The tools that write a file, for the settings-file deny.
+   public static let writers = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+ 
+-  /// A session may not edit the Claude Code settings of any folder a thread session works in (`projectFolders`: its own, the agent
+-  /// folder, every other thread's) or the owner's (`configDirs`: ~/.claude and CLAUDE_CONFIG_DIR). Those files add variables and hooks
+-  /// to a session, and so to the shell that runs its permission hook (WorkerHookFolder.swift). Each path in every spelling
+-  /// `spellings` gives. A folder whose name Claude Code would read as a glob is left out: no rule can name it (its start is refused
+-  /// by the folder check instead, which reads the files themselves).
+   /// Tools no thread session may call: a worktree it enters is a checkout whose settings this start never read (Hestia's third
+   /// review, F6).
+   public static let deniedTools = ["EnterWorktree"]
+ 
+-  public static func settingsDeny(projectFolders: [String], configDirs: [String]) -> [String] {
++  /// What a session may not edit in each folder a thread session could load Claude Code files from (`projectFolders`: its own, every
++  /// folder above it up to its git root, its git roots, the agent folder, every other thread's): the whole `.claude` folder (settings,
++  /// subagents, skills, commands, hooks, output styles), `.mcp.json` and every `.env*` (R1-8).
++  public static let projectFiles = ["/.claude", "/.claude/**", "/.mcp.json", "/.env", "/.env*"]
++  /// And in the owner's config folders (`configDirs`: ~/.claude and CLAUDE_CONFIG_DIR), what every session of his loads, main's too:
++  /// the settings, and the subagents, skills and commands whose frontmatter can carry hooks.
++  public static let configFiles = [
++    "/settings.json", "/settings.local.json", "/agents", "/agents/**", "/skills", "/skills/**", "/commands", "/commands/**",
++  ]
++
++  /// `files`: single files besides (the global config, `~/.claude.json`, which holds the user-scope MCP servers).
++  /// Those files add variables and hooks to a session, and so to the shell that runs its permission hook (WorkerHookFolder.swift).
++  /// Each path in every spelling `spellings` gives. A folder whose name Claude Code would read as a glob is left out: no rule can
++  /// name it (its start is refused by the folder check instead, which reads the files themselves).
++  public static func settingsDeny(projectFolders: [String], configDirs: [String], files extra: [String] = []) -> [String] {
+     var files: [String] = []
+-    // and the subagents folder, whose files' frontmatter can carry hooks of their own (WorkerHookFolder.swift)
++    for f in extra where isSafe(talosHome: f) { files += spellings(f) }
+     for f in projectFolders where isSafe(talosHome: f) {
+-      files += spellings(f).flatMap { [$0 + "/.claude/settings.json", $0 + "/.claude/settings.local.json", $0 + "/.claude/agents", $0 + "/.claude/agents/**"] }
++      files += spellings(f).flatMap { base in projectFiles.map { base + $0 } }
+     }
+     for d in configDirs where isSafe(talosHome: d) {
+-      files += spellings(d).flatMap { [$0 + "/settings.json", $0 + "/settings.local.json", $0 + "/agents", $0 + "/agents/**"] }
++      files += spellings(d).flatMap { base in configFiles.map { base + $0 } }
+     }
+     var out: [String] = []
++    var seen = Set<String>()
+     for tool in writers {
+       for file in files where file.hasPrefix("/") {
+         let rule = "\(tool)(/\(file))"
+-        if !out.contains(rule) { out.append(rule) }
++        if seen.insert(rule).inserted { out.append(rule) }
+       }
+     }
+     return out
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerFolderTree.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerFolderTree.swift
+new file mode 100644
+index 00000000..ca33091d
+--- /dev/null
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerFolderTree.swift
+@@ -0,0 +1,124 @@
++import Foundation
++
++/// A thread folder's Claude Code files that refuse its session's start (R1-1, R1-2, R1-4): checked in the folder, every folder above
++/// it up to its git root, and the git roots (`WorkerHook.configFolders`).
++///  - `.claude`, anything under it, `.mcp.json` and `.env` may not be links. A link is a file this check reads in one place while
++///    the session, or a later edit, reaches another. Everything is opened from the folder down with O_NOFOLLOW, one level at a time,
++///    so a link put in while it runs is refused rather than followed. `.claude/worktrees` (checkouts Claude Code makes) is not walked:
++///    nothing in it loads for a session started in the folder.
++///  - a subagent (`.claude/agents/**/*.md`), a skill (`.claude/skills/**/SKILL.md`) or a command (`.claude/commands/**/*.md`) whose
++///    frontmatter carries hooks, allowed-tools, its own MCP servers or its own permission mode, or whose frontmatter cannot be read
++///    for certain (`FrontmatterScan`). Thread sessions outside the agent folder do not load the folder's own skills, commands or
++///    agents at all (`--setting-sources user`, WorkerSpec.swift); this holds them anyway, and in the agent folder they do load.
++/// The kit hook (kit/hooks/permission-relay.py) runs the same check at every prompt.
++extension WorkerHook {
++  /// Frontmatter keys that refuse the start, compared without case and without `-` and `_` (`allowed-tools`, `allowedTools`).
++  public static let refusedFrontmatterKeys: Set<String> = ["hooks", "allowed-tools", "mcpServers", "permissionMode"]
++  static func refusedKey(_ k: String) -> Bool {
++    let norm = { (s: String) in s.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "") }
++    return refusedFrontmatterKeys.contains { norm($0) == norm(k) }
++  }
++  /// How many entries under one folder's `.claude` are looked at, and how deep.
++  static let treeEntriesCap = 5000
++  static let treeDepthCap = 24
++
++  /// Why `folder`'s own Claude Code files refuse the start, or nil (see above). `folder` is a real path (`configFolders`).
++  public static func folderFilesProblem(_ folder: String) -> String? {
++    let dfd = open(folder, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
++    guard dfd >= 0 else { return nil }  // the folder is gone: the start itself fails on it
++    defer { close(dfd) }
++    for name in [".mcp.json", ".env", ".claude"] {
++      var st = stat()
++      if fstatat(dfd, name, &st, AT_SYMLINK_NOFOLLOW) != 0 { continue }
++      if st.st_mode & S_IFMT == S_IFLNK { return linkLine(folder + "/" + name) }
++    }
++    var st = stat()
++    guard fstatat(dfd, ".claude", &st, AT_SYMLINK_NOFOLLOW) == 0, st.st_mode & S_IFMT == S_IFDIR else { return nil }
++    let cfd = openat(dfd, ".claude", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
++    guard cfd >= 0 else { return "the thread folder's \(folder)/.claude cannot be opened, so what it loads is not known" }
++    defer { close(cfd) }
++    var seen = 0
++    return walk(cfd, path: folder + "/.claude", area: nil, depth: 0, seen: &seen)
++  }
++
++  static func linkLine(_ path: String) -> String {
++    "the thread folder's \(path) is a link, which a thread session's Claude Code files may not be: what it loads would not be what was checked (replace the link with the file itself)"
++  }
++
++  /// The names in the folder open at `fd`, without `.` and `..`.
++  static func names(_ fd: Int32) -> [String]? {
++    let d = dup(fd)
++    guard d >= 0, let dir = fdopendir(d) else { return nil }
++    defer { closedir(dir) }
++    var out: [String] = []
++    while let e = readdir(dir) {
++      let name = withUnsafePointer(to: e.pointee.d_name) { $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) } }
++      if name != "." && name != ".." { out.append(name) }
++    }
++    return out.sorted()
++  }
++
++  /// `area`: which of agents, skills or commands the walk is under (lower case), nil at the top of `.claude`.
++  static func walk(_ fd: Int32, path: String, area: String?, depth: Int, seen: inout Int) -> String? {
++    guard depth <= treeDepthCap, let list = names(fd) else { return "the thread folder's \(path) cannot be read, so what it loads is not known" }
++    for name in list {
++      seen += 1
++      if seen > treeEntriesCap { return "the thread folder's \(path) has more files than are checked (\(treeEntriesCap)), so what it loads is not known" }
++      let full = path + "/" + name
++      var st = stat()
++      guard fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else { return "the thread folder's \(full) cannot be read, so what it loads is not known" }
++      switch st.st_mode & S_IFMT {
++      case S_IFLNK: return linkLine(full)
++      case S_IFDIR:
++        if area == nil, name.lowercased() == "worktrees" { continue }
++        let sub = openat(fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
++        guard sub >= 0 else { return "the thread folder's \(full) cannot be read, so what it loads is not known" }
++        let why = walk(sub, path: full, area: area ?? name.lowercased(), depth: depth + 1, seen: &seen)
++        close(sub)
++        if let why { return why }
++      default:
++        guard let kind = loadedKind(area: area, name: name) else { continue }
++        if let why = frontmatterProblem(fd, name: name, path: full, kind: kind) { return why }
++      }
++    }
++    return nil
++  }
++
++  /// What Claude Code loads the file as, when it loads it: a subagent, a skill or a command.
++  static func loadedKind(area: String?, name: String) -> String? {
++    let lower = name.lowercased()
++    switch area {
++    case "agents"?: return lower.hasSuffix(".md") ? "subagent" : nil
++    case "commands"?: return lower.hasSuffix(".md") ? "command" : nil
++    case "skills"?: return lower == "skill.md" ? "skill" : nil
++    default: return nil
++    }
++  }
++
++  static func frontmatterProblem(_ dirfd: Int32, name: String, path: String, kind: String) -> String? {
++    guard let data = readSmallAt(dirfd, name, cap: settingsCap), let text = String(data: data, encoding: .utf8) else {
++      return "the thread folder's \(kind) \(path) cannot be read, so what it runs is not known"
++    }
++    switch FrontmatterScan.scan(text) {
++    case .unclear(let why):
++      return "the thread folder's \(kind) \(path) cannot be read for certain (\(why)), so what it runs is not known"
++    case .keys(let keys):
++      if let k = keys.first(where: refusedKey) {
++        return "the thread folder's \(kind) \(path) has \(shownKey(k)) of its own, which a thread session's \(kind)s may not carry: it runs beside the permission hook or widens the session (remove it from that file)"
++      }
++      return nil
++    }
++  }
++
++  /// The bytes of `name` in the folder open at `dirfd` when it is a regular file, not a link, of at most `cap` bytes, read through
++  /// one descriptor that never blocks; nil otherwise.
++  static func readSmallAt(_ dirfd: Int32, _ name: String, cap: Int) -> Data? {
++    let fd = openat(dirfd, name, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
++    guard fd >= 0 else { return nil }
++    let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
++    var st = stat()
++    guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= cap else { return nil }
++    guard let d = try? h.read(upToCount: cap + 1), d.count <= cap else { return nil }
++    return d
++  }
++}
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift
+index 44251fec..95076995 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift
+@@ -183,8 +183,10 @@ public enum WorkerHook {
+   /// The shell Claude Code runs this line with has the SESSION's environment, so this part of it does nothing but assign `f` and
+   /// call `exec`, a special builtin (found before any function, so an imported `exec` or `[` function changes nothing). The test
+   /// that the copy is there, and the run, are made by a second `/bin/sh` that `env -i` starts clean (`cleanLine`).
+-  /// What this cannot cover: that first shell reads SHELLOPTS and PS4 from the session (xtrace with a PS4 that runs a program), so
+-  /// a start whose folder's settings set such a variable is refused before this line is ever written (WorkerHookFolder.swift).
++  /// What this cannot cover: that first shell reads SHELLOPTS and PS4 from the session (xtrace with a PS4 that runs a program). The
++  /// session never has them: the app strips them, BASH_ENV, ENV, BASHOPTS and every BASH_FUNC_ from its environment
++  /// (`ClaudeEnvScrub.shellStartup`), and a session outside the agent folder does not load the folder's settings that could set them
++  /// (`--setting-sources user`); the agent folder's own are held to the env list (WorkerHookFolder.swift).
+   public static func command(_ hook: Installed, for s: Session) -> String {
+     let fixed = [
+       "HOME=\(quote(s.home))", "PATH=/usr/bin:/bin", "LANG=en_US.UTF-8", "TALOS_APP_HOME=\(quote(s.talosHome))",
+@@ -197,6 +199,13 @@ public enum WorkerHook {
+   /// Always quoted, as the Linux twin quotes its paths.
+   static func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+ 
++  /// The one line the thread gets when its session starts without settings files of its folder that carry more than a thread
++  /// session may have (WorkerHookFolder.swift): the start goes ahead, since those files are not loaded.
++  public static func ignoredLine(_ whys: [String]) -> String {
++    let list = whys.prefix(3).joined(separator: "; ") + (whys.count > 3 ? "; and \(whys.count - 3) more" : "")
++    return "This thread's session started without its folder's own Claude Code settings: \(list). A thread session loads only your own settings (~/.claude) and the ones Talos gives it, so those files are ignored and change nothing."
++  }
++
+   /// The one line the thread gets when its start is refused for this.
+   public static func missingLine(why: String) -> String {
+     "This thread's session doesn't start: \(why), and without it the session's approval prompts would wait at the terminal on the Mac and never reach your phone. Reinstall Talos on the Mac (or fix the hook), then restart this thread's session."
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerHookFolder.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerHookFolder.swift
+index 4566b2ed..f1cebbc3 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/WorkerHookFolder.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerHookFolder.swift
+@@ -1,20 +1,20 @@
+ import Foundation
+ 
+-/// What a thread folder's own Claude Code settings may carry, for its session's permission hook to be trusted. Claude Code runs the
+-/// hook's command, and every Bash command, in the SESSION's environment, and the project's `.claude/settings.json` and
+-/// `.claude/settings.local.json` (the folder's, and its git root's when the folder sits below one) add to that environment (`env`)
+-/// and to what the session runs (`hooks`, `statusLine`, `apiKeyHelper`, `CLAUDE_CODE_SHELL_PREFIX`, which wraps every hook and
+-/// command in a script of the folder's choosing). A deny-list of the dangerous ones keeps missing one, so these are allow-lists:
++/// What a thread folder's own Claude Code settings may carry. Claude Code runs the hook's command, and every Bash command, in the
++/// SESSION's environment, and a folder's `.claude/settings.json` and `.claude/settings.local.json` (the folder's, and its git root's
++/// when the folder sits below one) add to that environment (`env`) and to what the session runs (`hooks`, `statusLine`,
++/// `apiKeyHelper`, `CLAUDE_CODE_SHELL_PREFIX`). Closing that by lists kept missing a way in, so a thread session outside the agent
++/// folder does not load those files at all: it starts with `--setting-sources user` (WorkerSpec.swift). The lists stay, as defence in
++/// depth and to tell the owner:
+ ///  - `env` may hold only Claude Code's own tunables (`allowedEnv`), each a plain value;
+-///  - outside the agent folder, only the settings keys of `allowedKeys`, and `permissions` with only `deny` and `ask` (an `allow`
+-///    there would widen the session past what the owner approved);
+-///  - the agent folder's settings carry the kit's own hooks and status line by design (its permission hook stays silent in a thread
+-///    session), so only their `env` is held to this there.
+-/// A start whose folder's settings carry anything else is refused, and the owner is told which file and, when it is a plain name,
+-/// which key (`worker_hook_missing`). The files are read at every start, and again by the hook at every prompt; a session's own edits
+-/// to them are denied in its settings (`WorkerFence.settingsDeny`). The hook's own re-check stops only an honest hook: one whose
+-/// shell was already steered does not run the check at all.
+-/// The same lists are the kit hook script's, permission-relay.py (swift-parity.test.ts holds them equal).
++///  - outside the agent folder, only the settings keys of `allowedKeys`, and `permissions` with only `deny`, `ask` and `defaultMode`;
++///  - the agent folder's settings carry the kit's own hooks and status line by design, so only their `env` is held to this there.
++/// Outside the agent folder a file that carries anything else is a WARNING: the start goes ahead (the file is ignored) and the thread
++/// gets one line naming the file and, when it is a plain name, the key. A session in the agent folder loads its settings as main does,
++/// so there it is still a refusal (`worker_hook_missing`). Links, subagents, skills and commands refuse the start everywhere
++/// (WorkerFolderTree.swift). The files are read at every start, and again by the hook at every prompt; a session's own edits to them
++/// are denied in its settings (`WorkerFence.settingsDeny`).
++/// The same lists are the kit hook script's, permission-relay.py (swift-parity.test.ts holds them equal, and to the shared table).
+ extension WorkerHook {
+   /// Claude Code's own tunables: numbers and switches, none of which names a program, a library or a folder to run from.
+   public static let allowedEnv: Set<String> = [
+@@ -25,7 +25,8 @@ extension WorkerHook {
+   ]
+   /// The settings keys a thread folder's project settings may have (outside the agent folder).
+   public static let allowedKeys: Set<String> = [
+-    "$schema", "env", "permissions", "model", "includeCoAuthoredBy", "cleanupPeriodDays", "alwaysThinkingEnabled", "outputStyle",
++    // each names text or a choice, never a path, a program or a deletion (cleanupPeriodDays went: it deletes transcripts, R1-6)
++    "$schema", "env", "permissions", "model", "includeCoAuthoredBy", "alwaysThinkingEnabled", "outputStyle",
+     // which CLAUDE.md files and skills load: text the session reads, never a program (this repository's own settings use both)
+     "claudeMdExcludes", "skillOverrides",
+   ]
+@@ -57,8 +58,10 @@ extension WorkerHook {
+   /// The git roots whose project settings Claude Code reads for a session in `folder`, or why they cannot be known. The nearest
+   /// folder with a `.git` (its working tree), and when that `.git` is a FILE (a linked worktree, or a submodule) the CANONICAL root
+   /// it leads to: Claude Code reads `settings.local.json` there, following `.git` -> `gitdir:` -> `commondir`. A thread can write
+-  /// such a file in its own folder to name any repository, so the chain is followed here too, and a `.git` that is a link, or a
+-  /// pointer that does not resolve, refuses the start.
++  /// such a file in its own folder to name any repository, so the chain is followed here too, the way Claude Code follows it (Hestia's
++  /// B1a, B1b): the whole trimmed text after `gitdir:` (not its first line), each path resolved by its text alone (`..` takes away a
++  /// name), and each step must be where its text says, with no link on the way (its real path is that text). A `.git` that is a
++  /// link, text with a control character or a line separator, or a step that does not resolve that way, refuses the start.
+   public static func gitRoots(of folder: String) -> (roots: [String], problem: String?) {
+     guard let top = gitRoot(of: folder) else { return ([], nil) }
+     let dotGit = top + "/.git"
+@@ -70,25 +73,48 @@ extension WorkerHook {
+     case S_IFREG: break
+     default: return ([top], "the thread folder's \(dotGit) is a link, so the settings Claude Code reads for it are not known")
+     }
+-    guard let text = readSmall(dotGit, cap: 4096).flatMap({ String(data: $0, encoding: .utf8) }),
+-      let line = text.split(whereSeparator: \.isNewline).first, line.hasPrefix("gitdir:")
++    guard let text = readSmall(dotGit, cap: 4096).flatMap({ String(data: $0, encoding: .utf8) }), text.hasPrefix("gitdir:"),
++      let gitdir = pointer(String(text.dropFirst("gitdir:".count)), from: top), isDir(gitdir)
+     else { return ([top], broken) }
+-    var gitdir = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
+-    if !gitdir.hasPrefix("/") { gitdir = top + "/" + gitdir }
+-    guard let realGitdir = resolved(gitdir), isDir(realGitdir) else { return ([top], broken) }
+     // a submodule's git folder has no commondir: its working tree is the canonical root
+-    let commonFile = realGitdir + "/commondir"
+-    guard FileManager.default.fileExists(atPath: commonFile) else { return ([top], nil) }
+-    guard let ct = readSmall(commonFile, cap: 4096).flatMap({ String(data: $0, encoding: .utf8) }) else { return ([top], broken) }
+-    var common = ct.trimmingCharacters(in: .whitespacesAndNewlines)
+-    if !common.hasPrefix("/") { common = realGitdir + "/" + common }
+-    guard let realCommon = resolved(common), isDir(realCommon) else { return ([top], broken) }
++    let commonFile = gitdir + "/commondir"
++    guard lstat(commonFile, &st) == 0 else { return errno == ENOENT ? ([top], nil) : ([top], broken) }
++    guard let ct = readSmall(commonFile, cap: 4096).flatMap({ String(data: $0, encoding: .utf8) }), let common = pointer(ct, from: gitdir),
++      isDir(common)
++    else { return ([top], broken) }
+     // the main working tree is the folder holding the common git folder (`<root>/.git`); a bare repository has none
+-    guard (realCommon as NSString).lastPathComponent == ".git" else { return ([top], nil) }
+-    let canonical = (realCommon as NSString).deletingLastPathComponent
++    guard (common as NSString).lastPathComponent == ".git" else { return ([top], nil) }
++    let canonical = (common as NSString).deletingLastPathComponent
++    guard resolved(canonical) == canonical else { return ([top], broken) }
+     return canonical == top ? ([top], nil) : ([top, canonical], nil)
+   }
+ 
++  /// A path a git pointer file names: its whole text trimmed, taken from `base` when relative, resolved by its text alone, and only
++  /// when that is also where it really is. nil for text with a control character or any non-ASCII space (U+0085, U+2028, U+2029,
++  /// U+00A0 ...: Claude Code trims some of those and not others), or a path through a link.
++  static func pointer(_ raw: String, from base: String) -> String? {
++    // ASCII spaces only: Claude Code's trim takes more, so what is left of it is refused below
++    let text = raw.trimmingCharacters(in: CharacterSet(charactersIn: " \t\n\r\u{0B}\u{0C}"))
++    guard !text.isEmpty, !text.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F || (!$0.isASCII && $0.properties.isWhitespace) })
++    else { return nil }
++    let lexical = lexicalPath(text.hasPrefix("/") ? text : base + "/" + text)
++    return resolved(lexical) == lexical ? lexical : nil
++  }
++
++  /// An absolute path with `.`, `..` and repeated slashes taken out by its text, as Node's `path.resolve` does.
++  static func lexicalPath(_ p: String) -> String {
++    var parts: [Substring] = []
++    for c in p.split(separator: "/", omittingEmptySubsequences: true) {
++      if c == "." { continue }
++      if c == ".." {
++        if !parts.isEmpty { parts.removeLast() }
++        continue
++      }
++      parts.append(c)
++    }
++    return "/" + parts.joined(separator: "/")
++  }
++
+   private static func isDir(_ p: String) -> Bool {
+     var st = stat()
+     return stat(p, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR
+@@ -97,10 +123,10 @@ extension WorkerHook {
+   /// The settings files' size cap: far past any real settings file, and a reader never holds a session's start on a big one.
+   public static let settingsCap = 256 * 1024
+ 
+-  /// The bytes of `p` when it is a regular file (links followed) of at most `cap` bytes, read through one open descriptor that never
+-  /// blocks; nil otherwise. A FIFO, a device (a link to /dev/zero) or a huge file at a settings path cannot hold the reader.
++  /// The bytes of `p` when it is a regular file of at most `cap` bytes and not a link, read through one open descriptor that never
++  /// blocks; nil otherwise. A FIFO, a device or a huge file at a settings path cannot hold the reader.
+   static func readSmall(_ p: String, cap: Int) -> Data? {
+-    let fd = open(p, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
++    let fd = open(p, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+     guard fd >= 0 else { return nil }
+     let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+     var st = stat()
+@@ -109,11 +135,21 @@ extension WorkerHook {
+     return d
+   }
+ 
+-  /// The folders whose project settings a session in `folder` reads: it, and its git roots (`gitRoots`), or why they are not known.
+-  public static func settingsFolders(_ folder: String) -> (folders: [String], problem: String?) {
++  /// The folders whose Claude Code files a session in `folder` could load: it, every folder above it up to its git root (R1-8), and
++  /// the git roots (`gitRoots`), as real paths; or why they are not known.
++  public static func configFolders(_ folder: String) -> (folders: [String], problem: String?) {
+     let me = resolved(folder) ?? folder
+     let g = gitRoots(of: folder)
+-    return ([me] + g.roots.filter { $0 != me }, g.problem)
++    var out = [me]
++    if let top = g.roots.first, me != top, me.hasPrefix(top == "/" ? "/" : top + "/") {
++      var d = (me as NSString).deletingLastPathComponent
++      while d != top, d.count > top.count {
++        out.append(d)
++        d = (d as NSString).deletingLastPathComponent
++      }
++    }
++    for r in g.roots where !out.contains(r) { out.append(r) }
++    return (out, g.problem)
+   }
+ 
+   /// The two project settings files Claude Code reads in `folder`.
+@@ -122,61 +158,33 @@ extension WorkerHook {
+     return [f + "/.claude/settings.json", f + "/.claude/settings.local.json"]
+   }
+ 
+-  /// Why the start in `folder` is refused for its project settings (or its git root's), or nil. A file that is there and cannot be
+-  /// read as settings is a refusal too: what it would set is not known. `isAgentFolder`: `folder` is the agent folder.
+-  public static func folderSettingsProblem(folder: String, isAgentFolder: Bool) -> String? {
+-    let found = settingsFolders(folder)
+-    if let why = found.problem { return why }
+-    for (n, f) in found.folders.enumerated() {
+-      for file in projectSettingsFiles(f) {
+-        if let why = fileProblem(file, kitOwned: isAgentFolder && n == 0) { return why }
+-      }
+-      if let why = agentFilesProblem(f) { return why }
+-    }
+-    return nil
++  /// What a start in `folder` finds in its folders' Claude Code files: why it is refused (nil: it is not), and what the session
++  /// ignores that the owner is told about. `isAgentFolder`: `folder` is the agent folder, whose sessions load its settings.
++  public struct FolderCheck: Equatable, Sendable {
++    public var refusal: String?
++    public var warnings: [String]
+   }
+ 
+-  /// The frontmatter keys of a subagent file (`.claude/agents/**/*.md`) that make a session run something with no card, or widen
+-  /// it: its own hooks, its own MCP servers, its own permission mode (Hestia's third review, F1).
+-  public static let refusedAgentKeys: Set<String> = ["hooks", "mcpServers", "permissionMode"]
+-  static let agentFilesCap = 500
+-
+-  /// Why the subagent files of `folder` refuse the start, or nil: one whose frontmatter has a key of `refusedAgentKeys`, one that
+-  /// is not a small regular file, or more files than are looked at. Held in the agent folder too (the kit's own agents carry none).
+-  public static func agentFilesProblem(_ folder: String) -> String? {
+-    let dir = folder + "/.claude/agents"
+-    guard let names = FileManager.default.enumerator(atPath: dir) else { return nil }
+-    var seen = 0
+-    while let name = names.nextObject() as? String {
+-      guard name.hasSuffix(".md") else { continue }
+-      seen += 1
+-      let file = dir + "/" + name
+-      if seen > agentFilesCap { return "the thread folder's \(dir) has more subagent files than are checked (\(agentFilesCap)), so what they run is not known" }
+-      guard let data = readSmall(file, cap: settingsCap), let text = String(data: data, encoding: .utf8) else {
+-        return "the thread folder's subagent \(file) cannot be read, so what it runs is not known"
+-      }
+-      if let k = frontmatterKeys(text).sorted().first(where: refusedAgentKeys.contains) {
+-        return "the thread folder's subagent \(file) has \(k) of its own, which a thread session's subagents may not carry: it runs beside the permission hook or widens the session (remove it from that file)"
++  public static func folderCheck(folder: String, isAgentFolder: Bool) -> FolderCheck {
++    let found = configFolders(folder)
++    if let why = found.problem { return .init(refusal: why, warnings: []) }
++    var warnings: [String] = []
++    for f in found.folders {
++      if let why = folderFilesProblem(f) { return .init(refusal: why, warnings: []) }
++    }
++    for (n, f) in found.folders.enumerated() {
++      for file in projectSettingsFiles(f) {
++        guard let why = fileProblem(file, kitOwned: isAgentFolder && n == 0) else { continue }
++        if isAgentFolder { return .init(refusal: why, warnings: []) }
++        warnings.append(why)
+       }
+     }
+-    return nil
++    return .init(refusal: nil, warnings: warnings)
+   }
+ 
+-  /// The top-level keys of a Markdown file's YAML frontmatter (between a first line `---` and the next `---`).
+-  static func frontmatterKeys(_ text: String) -> [String] {
+-    // by newline of any kind: "\r\n" is one Character in Swift, so a split on "\n" alone would not see a Windows line end
+-    var lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+-    guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return [] }
+-    lines.removeFirst()
+-    var keys: [String] = []
+-    for line in lines {
+-      if line.trimmingCharacters(in: .whitespaces) == "---" { break }
+-      guard let first = line.first, !first.isWhitespace, first != "#", let colon = line.firstIndex(of: ":") else { continue }
+-      var key = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
+-      if key.count >= 2, let q = key.first, q == "\"" || q == "'", key.last == q { key = String(key.dropFirst().dropLast()) }
+-      keys.append(key)
+-    }
+-    return keys
++  /// The refusal alone (`folderCheck`).
++  public static func folderSettingsProblem(folder: String, isAgentFolder: Bool) -> String? {
++    folderCheck(folder: folder, isAgentFolder: isAgentFolder).refusal
+   }
+ 
+   static func fileProblem(_ file: String, kitOwned: Bool) -> String? {
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerMcp.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerMcp.swift
+index 4cb49840..647fa186 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/WorkerMcp.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerMcp.swift
+@@ -152,8 +152,9 @@ public enum WorkerMcp {
+   /// What the owner approved of the folder's `.mcp.json`. The docs name the keys (`enabledMcpjsonServers`, `enableAllProjectMcpServers`,
+   /// `disabledMcpjsonServers`) and say they live in settings files; they do not say whether Claude Code also keeps them in the folder's
+   /// entry in the global config, which older versions do, so both are read: the folder's entry in the global config, and the user's own
+-  /// `settings.json`. The folder's own settings files are NOT read: a cloned repository can't approve its own servers. A rejection beats
+-  /// an approval.
++  /// `settings.json`. The folder's own settings files are NOT read: a cloned repository can't approve its own servers, and a thread
++  /// session outside the agent folder does not load them anyway (`--setting-sources user`), so an approval kept there is none. A
++  /// rejection beats an approval.
+   static func projectApproved(_ name: String, cwd: String, home: String, claudeDir: String, configDirSet: Bool = false) -> Bool {
+     var enabled = Set<String>()
+     var disabled = Set<String>()
+@@ -310,7 +311,7 @@ public enum WorkerMcp {
+     let refusal: String? = unapproved.isEmpty
+       ? nil
+       : unapproved.map {
+-        "`\($0)` is defined only in \(cwd)/.mcp.json and has not been approved there. Run `claude mcp add -s local \($0) …` in that folder, or approve it once in Claude Code there (start `claude` in it and answer the question), then save the thread again."
++        "`\($0)` is defined only in \(cwd)/.mcp.json and has not been approved for that folder, so this thread's session would not get it. Add it as your own for the folder: run `claude mcp add -s local \($0) …` there (or name it in enabledMcpjsonServers in your own ~/.claude/settings.json), then save the thread again. Approving it inside a Claude Code session there does not count: that answer is kept in the folder's .claude/settings.local.json, which a thread session does not load."
+       }.joined(separator: " ")
+     guard let data = try? JSONSerialization.data(withJSONObject: ["mcpServers": servers], options: [.sortedKeys]) else { return nil }
+     return Plan(
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerSpec.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerSpec.swift
+index 347e4e88..e9c01802 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/WorkerSpec.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerSpec.swift
+@@ -17,6 +17,10 @@ public struct WorkerSpec: Equatable, Sendable {
+   public var mcpOwnFolder: [String] = []
+   /// What main has: the ceiling this spec is checked against (`PrivilegeCeiling`).
+   public var main = PrivilegeCeiling.Main()
++  /// The session is outside the agent folder, so it must load the owner's settings only (`userSourcesOnly`).
++  public var foldersSettingsOff = false
++  /// The settings sources main loads (nil: all of them): a worker never loads one main does not.
++  public var mainSources: Set<MainArgs.Source>?
+ 
+   public var tmuxSession: String { WorkerSpec.tmuxName(threadId) }
+   public var argv: [String] { [program] + args }
+@@ -29,6 +33,8 @@ public struct WorkerSpec: Equatable, Sendable {
+   /// Stripped from the environment, on top of every `TELEGRAM_*` and `IMESSAGE_*` key.
+   public static let strippedEnv: Set<String> = ["TALOS_APP_BRIDGE", "MCP_PROTOCOL_NEGOTIATION", "TELEGRAM_BOT_TOKEN"]
+   public static let strippedPrefixes = ["TELEGRAM_", "IMESSAGE_"]
++  /// A thread session outside the agent folder loads only the owner's own settings.
++  public static let userSourcesOnly = ["--setting-sources", "user"]
+   public static let telegramPlugin = "telegram@claude-plugins-official"
+   public static let imessagePlugin = "imessage@claude-plugins-official"
+ 
+@@ -63,6 +69,10 @@ public struct WorkerSpec: Equatable, Sendable {
+     case unsafeTalosHome(String)
+     /// The spec is wider than the main session on one axis (`PrivilegeCeiling`).
+     case escalation(PrivilegeCeiling.Denial)
++    /// A session outside the agent folder would load that folder's own settings.
++    case folderSettingsLoaded
++    /// Main's own --setting-sources leaves out what the session would load.
++    case settingSourcesWiderThanMain
+ 
+     public var description: String {
+       switch self {
+@@ -79,6 +89,9 @@ public struct WorkerSpec: Equatable, Sendable {
+       case .fenceMissing: return "the worker's settings lack the Talos home deny"
+       case .unsafeTalosHome(let h): return "the Talos home can't be named in a deny rule: \(h)"
+       case .escalation(let d): return "\(PrivilegeCeiling.code) (\(d.axis.rawValue)): \(d.detail)"
++      case .folderSettingsLoaded: return "a thread session outside the agent folder must start with --setting-sources user"
++      case .settingSourcesWiderThanMain:
++        return "the main session's --setting-sources leaves out settings a thread session would load (a thread session outside the agent folder loads your own settings, ~/.claude); add user to main's --setting-sources, or remove the flag"
+       }
+     }
+   }
+@@ -192,6 +205,24 @@ public struct WorkerSpec: Equatable, Sendable {
+     var args: [String] = []
+     if let p = i.permissionFlag, !p.isEmpty { args.append(p) }
+     args += ["--settings", settingsPath(talosHome: i.talosHome, threadId: i.threadId)]
++    // Outside the agent folder, none of the folder's own settings load: not its .claude/settings(.local).json, nor its git root's,
++    // nor its skills, commands, subagents or CLAUDE.md (Claude Code 2.1.322 holds all of them to the project source). Only the
++    // owner's own (~/.claude), this file (--settings) and managed settings do. The agent folder's are the kit's, the ones main runs
++    // under, so a session there loads them as main does.
++    // Never wider than main: when main's own --setting-sources leaves out `user`, a session outside the agent folder is refused (it
++    // would load settings main does not), and one in the agent folder gets main's own sources.
++    let ownFolder = WorkerSpec.folderKey(cwd) != WorkerSpec.folderKey(i.agentDir)
++    // main's own --setting-sources only: a main in restricted, safe or bare mode refuses every thread start already (MainNarrowed)
++    let mainSources = MainArgs.lastValue(i.mainArgs ?? [], "--setting-sources").map { v in
++      Set(v.split(separator: ",").compactMap { MainArgs.Source(rawValue: $0.trimmingCharacters(in: .whitespaces)) })
++    }
++    if ownFolder {
++      if let m = mainSources, !m.contains(.user) { throw BuildError.settingSourcesWiderThanMain }
++      args += Self.userSourcesOnly
++    } else if let m = mainSources {
++      guard !m.isEmpty else { throw BuildError.settingSourcesWiderThanMain }
++      args += ["--setting-sources", [MainArgs.Source.user, .project, .local].filter(m.contains).map(\.rawValue).joined(separator: ",")]
++    }
+     args += ["--name", sessionName(i.threadId)]
+     if i.model != "inherit" { args += ["--model", i.model] }
+     if let pre = i.preamble, !pre.isEmpty { args += ["--append-system-prompt", promptValue(pre)] }
+@@ -223,9 +254,12 @@ public struct WorkerSpec: Equatable, Sendable {
+     // come with it, so a worker is never wider than main on that axis.
+     let home = i.baseEnv["HOME"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? NSHomeDirectory()
+     let settingsDeny = WorkerFence.settingsDeny(
+-      // and the git root of each, whose project settings Claude Code reads too for a folder below it
+-      projectFolders: ([cwd, i.agentDir] + i.otherFolders).flatMap { [$0] + WorkerHook.gitRoots(of: $0).roots },
+-      configDirs: Array(Set([home + "/.claude", WorkerMcp.claudeDir(home: home, env: i.baseEnv)])).sorted())
++      // and the folders above each up to its git root, and its git roots, whose Claude Code files a session there reads too
++      projectFolders: ([cwd, i.agentDir] + i.otherFolders).flatMap { [$0] + WorkerHook.configFolders($0).folders },
++      configDirs: Array(Set([home + "/.claude", WorkerMcp.claudeDir(home: home, env: i.baseEnv)])).sorted(),
++      // the global config, which holds the owner's user-scope MCP servers (and CLAUDE_CONFIG_DIR's own)
++      files: WorkerMcp.globalConfigFiles(home: home, claudeDir: WorkerMcp.claudeDir(home: home, env: i.baseEnv), configDirSet: WorkerMcp.configDirSet(env: i.baseEnv))
++        + [home + "/.claude.json"])
+     let fenceRules = WorkerFence.denyRules(talosHome: i.talosHome) + WorkerFence.extraDeny + settingsDeny + WorkerFence.deniedTools + i.mainDenyRules
+       + (i.mcp?.denyRules ?? [])
+     guard var fenced = WorkerFence.adding(deny: fenceRules, to: Self.withPermissionHook(
+@@ -257,7 +291,7 @@ public struct WorkerSpec: Equatable, Sendable {
+     let spec = WorkerSpec(
+       threadId: i.threadId, program: i.claudePath, args: args, env: env, cwd: cwd,
+       settingsJSON: String(decoding: data, as: UTF8.self), mcpAllowed: i.mcp?.allowed ?? [],
+-      mcpOwnFolder: i.mcp.map { Array($0.ownFolder.keys) } ?? [], main: main)
++      mcpOwnFolder: i.mcp.map { Array($0.ownFolder.keys) } ?? [], main: main, foldersSettingsOff: ownFolder, mainSources: mainSources)
+     try spec.validate()
+     return spec
+   }
+@@ -297,8 +331,11 @@ public struct WorkerSpec: Equatable, Sendable {
+       if a.hasPrefix("-p"), !a.hasPrefix("--") { throw BuildError.forbiddenArg("-p") }  // `-pfoo` is `-p foo` to a parser
+       if a.hasPrefix("server:") || a.hasPrefix("plugin:") { throw BuildError.forbiddenArg(a) }
+     }
++    // the folder's own settings stay off: exactly the user source, read the way Claude Code reads the flag (its last one wins)
++    if foldersSettingsOff, MainArgs.settingSources(args) != [.user] { throw BuildError.folderSettingsLoaded }
++    if let m = mainSources, !(MainArgs.settingSources(args) ?? [.user, .project, .local]).isSubset(of: m) { throw BuildError.settingSourcesWiderThanMain }
+     for k in env.keys {
+-      if Self.strippedEnv.contains(k) { throw BuildError.forbiddenEnv(k) }
++      if Self.strippedEnv.contains(k) || ClaudeEnvScrub.isShellStartup(k) { throw BuildError.forbiddenEnv(k) }
+       if Self.strippedPrefixes.contains(where: { k.hasPrefix($0) }), k != "TELEGRAM_STATE_DIR", k != "IMESSAGE_STATE_DIR" {
+         throw BuildError.forbiddenEnv(k)
+       }
+diff --git a/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift b/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift
+index 82ac80bf..20efec4a 100644
+--- a/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift
++++ b/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift
+@@ -19,10 +19,23 @@ extension WorkerManager {
+   /// its own folder without a prompt, so a python3 there must never run thread A's hook).
+   private func pythonRules(_ folders: [String]) -> WorkerHook.PythonRules { .init(folders: folders, home: options.home) }
+ 
+-  /// Why the hook cannot be trusted in `folder`, for the config not read yet or the folder's own settings, or nil.
++  /// Why the hook cannot be trusted in `folder`, for the config not read yet or the folder's own Claude Code files, or nil.
+   private func folderProblem(_ folder: String) -> String? {
+     if threadFolders == nil { return WorkerHook.noConfig }
+-    return WorkerHook.folderSettingsProblem(folder: folder, isAgentFolder: WorkerSpec.folderKey(folder) == WorkerSpec.folderKey(options.agentDir))
++    return folderCheck(folder).refusal
++  }
++
++  private func folderCheck(_ folder: String) -> WorkerHook.FolderCheck {
++    WorkerHook.folderCheck(folder: folder, isAgentFolder: WorkerSpec.folderKey(folder) == WorkerSpec.folderKey(options.agentDir))
++  }
++
++  /// What the session started in `folder` does not load and the owner should know: one line in the thread for each new set (the audit
++  /// has every one). Nothing when there is none.
++  func noteIgnoredSettings(_ id: String, folder: String) {
++    let warnings = folderCheck(folder).warnings
++    guard !warnings.isEmpty else { return }
++    for w in warnings { audit("worker_folder_settings_ignored thread=\(id) why=\"\(WorkerNotice.logValue(w))\"") }
++    tell(id, slot: \.ignoredSettingsNote, kind: "ignored: " + warnings.joined(separator: "|"), WorkerHook.ignoredLine(warnings))
+   }
+ 
+   /// True when the start is refused: nothing was made, no slot taken and no other session parked for it. Nothing is written here.
+@@ -51,6 +64,7 @@ extension WorkerManager {
+       _ = refuseHook(id, why)
+       return nil
+     }
++    noteIgnoredSettings(id, folder: cwd)
+     let rules = pythonRules(threadFolders ?? [])
+     switch WorkerHook.install(talosHome: options.talosHome, source: source, path: baseEnv()["PATH"], fenced: [options.agentDir, cwd], python: rules) {
+     case .installed(let hook, let replaced):
+diff --git a/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift b/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift
+index 44d3565e..47d7e87f 100644
+--- a/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift
++++ b/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift
+@@ -206,7 +206,7 @@ public final class WorkerManager: @unchecked Sendable {
+     var folderNote = NoticeState()
+     var missingNote = NoticeState()
+     var refusedNote = NoticeState()
+-    var ceilingNote = NoticeState(), mainSettingsNote = NoticeState(), hookNote = NoticeState()
++    var ceilingNote = NoticeState(), mainSettingsNote = NoticeState(), hookNote = NoticeState(), ignoredSettingsNote = NoticeState()
+     /// When the thread was last told a new reason its permission hook refuses a start (awake clock): one new reason a minute at most.
+     var hookToldAt: Double?
+     var fenceKinds: [AnyHashable: String] = [:]
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/GuardsSettingsTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/GuardsSettingsTests.swift
+index ae0e04a8..368ff4db 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/GuardsSettingsTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/GuardsSettingsTests.swift
+@@ -57,7 +57,8 @@ struct GuardsSettingsTests {
+     #expect(Set(plainHooks.keys) == ["PermissionRequest"])
+     #expect(plainHooks["PreToolUse"] == nil)
+     // and the settings-file deny: no session edits the Claude Code settings of a folder a thread session works in, or the owner's
+-    let settingsDeny = WorkerFence.settingsDeny(projectFolders: ["/home/alex/agent"], configDirs: [NSHomeDirectory() + "/.claude"])
++    let settingsDeny = WorkerFence.settingsDeny(
++      projectFolders: ["/home/alex/agent"], configDirs: [NSHomeDirectory() + "/.claude"], files: [NSHomeDirectory() + "/.claude.json"])
+     #expect(((plainObj["permissions"] as? [String: Any])?["deny"] as? [String]) == WorkerFence.denyRules(talosHome: plainHome) + WorkerFence.extraDeny + settingsDeny + WorkerFence.deniedTools)
+     #expect(plain.settingsJSON.contains("TALOS_APP_PERM_HOOK_SOURCE=worker"))
+   }
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/LeadFenceCoreTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/LeadFenceCoreTests.swift
+index 9db176b5..97a4dcbb 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/LeadFenceCoreTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/LeadFenceCoreTests.swift
+@@ -274,7 +274,7 @@ struct WorkerMcpTests {
+   /// The whole argv of a fresh session with a list: the same for a user server, a project server and a missing one.
+   func listArgv(_ t: FenceTree) -> [String] {
+     [
+-      "--dangerously-skip-permissions", "--settings", settings(t), "--name", "talos-trip", "--append-system-prompt",
++      "--dangerously-skip-permissions", "--settings", settings(t), "--setting-sources", "user", "--name", "talos-trip", "--append-system-prompt",
+       "Be the trip thread.", "--strict-mcp-config", "--mcp-config", mcpFile(t), "--no-chrome", "--session-id", fenceSid,
+     ]
+   }
+@@ -287,7 +287,7 @@ struct WorkerMcpTests {
+     let spec = try WorkerSpec.build(fenceInputs(t))
+     #expect(
+       spec.args == [
+-        "--dangerously-skip-permissions", "--settings", settings(t), "--name", "talos-trip", "--append-system-prompt",
++        "--dangerously-skip-permissions", "--settings", settings(t), "--setting-sources", "user", "--name", "talos-trip", "--append-system-prompt",
+         "Be the trip thread.", "--session-id", fenceSid,
+       ])
+     let obj = try #require(jsonObject(spec.settingsJSON))
+@@ -304,7 +304,7 @@ struct WorkerMcpTests {
+     let spec = try WorkerSpec.build(fenceInputs(t, mcp: plan, resume: true))
+     #expect(
+       spec.args == [
+-        "--dangerously-skip-permissions", "--settings", settings(t), "--name", "talos-trip", "--append-system-prompt",
++        "--dangerously-skip-permissions", "--settings", settings(t), "--setting-sources", "user", "--name", "talos-trip", "--append-system-prompt",
+         "Be the trip thread.", "--strict-mcp-config", "--mcp-config", mcpFile(t), "--no-chrome", "--resume", fenceSid,
+       ])
+     #expect(plan.configPath == mcpFile(t))
+@@ -391,7 +391,7 @@ struct WorkerMcpTests {
+     let text = d?.detail ?? ""
+     #expect(text.contains("local-db"))
+     #expect(text.contains("claude mcp add -s local local-db"))
+-    #expect(text.contains("approve it once in Claude Code"))
++    #expect(text.contains("claude mcp add -s local") && text.contains("does not count"), "the approval Claude Code keeps in the folder is not loaded")
+     #expect(!text.contains("db-mcp"), "never a value from the definition")
+     // approved, it launches; rejected in the owner's record, it is refused again even when everything is approved
+     try t.standardServers(approve: ["local-db"])
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/MainCeilingTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/MainCeilingTests.swift
+index c0d4dc4e..128826e6 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/MainCeilingTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/MainCeilingTests.swift
+@@ -32,8 +32,8 @@ struct MainCeilingRuleTests {
+     // and in the settings the worker is launched with: main's, and the guards' own copy that `anchoring` writes
+     let deny = denyList(try WorkerSpec.build(fenceInputs(t, mainDeny: rules)))
+     for whole in ["Edit(*)", "Write()", "NotebookEdit(*)", "MultiEdit()"] { #expect(deny.contains(whole), "\(whole): \(deny)") }
+-    // (the settings-file deny names the agent folder's two Claude Code settings files: that is its own rule, not main's made narrower)
+-    #expect(!deny.contains { !$0.contains("/.claude/settings") && !$0.contains("/.claude/agents") && ($0.hasPrefix("Edit(/\(t.agentDir)") || $0.hasPrefix("Write(/\(t.agentDir)")) }, "\(deny)")
++    // (the settings-file deny names the agent folder's .claude, .mcp.json and .env*: that is its own rule, not main's made narrower)
++    #expect(!deny.contains { !isFenceRule($0) && ($0.hasPrefix("Edit(/\(t.agentDir)") || $0.hasPrefix("Write(/\(t.agentDir)")) }, "\(deny)")
+     let anchored = WorkerFence.anchoring(["permissions": ["deny": ["Edit(*)", "Write()"]]], slashAnchor: "/g", cwdAnchor: t.agentDir)
+     #expect((anchored["permissions"] as? [String: Any])?["deny"] as? [String] == ["Edit(*)", "Write()"])
+   }
+@@ -350,3 +350,6 @@ struct MainOwnSettingsOneReadTests {
+     #expect(!manager.contains("PrivilegeCeiling.mainDenyRules(") && !manager.contains("PrivilegeCeiling.mainDefaultMode("), "the ceiling comes from the read")
+   }
+ }
++
++/// One of the rules that keep a session from editing a folder's Claude Code files (`WorkerFence.projectFiles`).
++func isFenceRule(_ rule: String) -> Bool { WorkerFence.projectFiles.contains { rule.hasSuffix($0 + ")") } }
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerCoreTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerCoreTests.swift
+index 26da7938..31bf0e37 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerCoreTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerCoreTests.swift
+@@ -81,15 +81,17 @@ struct WorkerSpecTests {
+     let deny = ((jsonObject(try WorkerSpec.build(i).settingsJSON)?["permissions"] as? [String: Any])?["deny"] as? [String]) ?? []
+     for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
+       for file in [
+-        "/home/example/trip/.claude/settings.json", "/home/example/trip/.claude/settings.local.json", "/home/example/agent/.claude/settings.json",
+-        "/home/example/garden/.claude/settings.local.json", "/home/example/.claude/settings.json", "/home/example/cfg/settings.local.json",
++        // the whole .claude folder of each folder a thread session works in (R1-8), and the owner's settings
++        "/home/example/trip/.claude/**", "/home/example/trip/.claude", "/home/example/agent/.claude/**", "/home/example/garden/.claude/**",
++        "/home/example/garden/.mcp.json", "/home/example/agent/.env*", "/home/example/.claude/settings.json", "/home/example/cfg/settings.local.json",
++        "/home/example/cfg/.claude.json",
+       ] {
+         #expect(deny.contains("\(tool)(/\(file))"), "\(tool) \(file): \(deny)")
+       }
+     }
+     // Hestia's third review on the Mac: the subagents folder too (F1), no EnterWorktree (F6), no auto mode (F2), no skill shell (F3)
+     for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
+-      for dir in ["/home/example/trip/.claude/agents/**", "/home/example/garden/.claude/agents", "/home/example/.claude/agents/**", "/home/example/cfg/agents/**"] {
++      for dir in ["/home/example/.claude/agents/**", "/home/example/cfg/agents/**", "/home/example/cfg/skills/**", "/home/example/cfg/commands/**"] {
+         #expect(deny.contains("\(tool)(/\(dir))"), "\(tool) \(dir)")
+       }
+     }
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerFolderFilesTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerFolderFilesTests.swift
+new file mode 100644
+index 00000000..5ad59ba5
+--- /dev/null
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerFolderFilesTests.swift
+@@ -0,0 +1,259 @@
++import Foundation
++import Testing
++@testable import TalosDesktopCore
++import TalosTestSupport
++
++/// A thread folder's own Claude Code files at a thread session's start (WorkerFolderTree.swift, FrontmatterScan.swift, the review of
++/// a70d598c, R1-1 to R1-9): links refuse, subagents, skills and commands with hooks refuse, settings the session does not load warn.
++@Suite("Worker folder files")
++final class WorkerFolderFilesTests {
++  let root: String
++  let repoRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../..").standardized.path
++
++  init() throws {
++    let base = (TestTemp.base as NSString).appendingPathComponent("talos-folder-\(UUID().uuidString.prefix(8))")
++    try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
++    root = try TestTemp.real(base)
++  }
++  deinit { try? FileManager.default.removeItem(atPath: root) }
++
++  func mk(_ p: String) throws { try FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true) }
++  func put(_ text: String, _ p: String) throws {
++    try mk((p as NSString).deletingLastPathComponent)
++    try text.write(toFile: p, atomically: false, encoding: .utf8)
++  }
++  func link(_ at: String, to: String) throws {
++    try mk((at as NSString).deletingLastPathComponent)
++    try FileManager.default.createSymbolicLink(atPath: at, withDestinationPath: to)
++  }
++  func check(_ folder: String, agent: Bool = false) -> WorkerHook.FolderCheck { WorkerHook.folderCheck(folder: folder, isAgentFolder: agent) }
++
++  /// The reader and the kit hook's run the same cases (kit/scripts/frontmatter-cases.json; test-permission-relay.sh runs them too).
++  @Test func theFrontmatterReaderAnswersEverySharedCase() throws {
++    let data = try Data(contentsOf: URL(fileURLWithPath: repoRoot + "/kit/scripts/frontmatter-cases.json"))
++    let cases = try #require(try JSONSerialization.jsonObject(with: data) as? [[String: Any]])
++    #expect(cases.count >= 30)
++    for c in cases {
++      let name = c["name"] as? String ?? "?"
++      let got = FrontmatterScan.scan(c["text"] as? String ?? "")
++      if c["unclear"] as? Bool == true {
++        if case .unclear = got {} else { Issue.record("\(name): expected unclear, got \(got)") }
++      } else {
++        #expect(got == .keys(c["keys"] as? [String] ?? ["?"]), "\(name)")
++      }
++    }
++  }
++
++  /// R1-2, R1-4: a linked settings file, a linked `.claude`, a linked agents subfolder, a linked `.mcp.json` or `.env` refuse the
++  /// start; links inside `.claude/worktrees` (checkouts Claude Code makes) do not.
++  @Test func aLinkAtClaudeUnderItAtMcpJsonOrEnvRefusesTheStart() throws {
++    let folder = root + "/thread", elsewhere = root + "/elsewhere"
++    try put("{\"model\":\"opus\"}", elsewhere + "/settings.json")
++    try mk(elsewhere + "/agents")
++    try mk(folder + "/.claude")
++    #expect(check(folder) == .init(refusal: nil, warnings: []), "control: a plain folder")
++    let cases: [(String, String)] = [
++      (folder + "/.claude/settings.json", elsewhere + "/settings.json"), (folder + "/.claude/agents", elsewhere + "/agents"),
++      (folder + "/.claude/skills/x/SKILL.md", elsewhere + "/settings.json"), (folder + "/.mcp.json", elsewhere + "/settings.json"),
++      (folder + "/.env", elsewhere + "/settings.json"),
++    ]
++    for (at, to) in cases {
++      try link(at, to: to)
++      #expect(check(folder).refusal == WorkerHook.linkLine(at), "\(at): \(String(describing: check(folder).refusal))")
++      unlink(at)
++      #expect(check(folder).refusal == nil, "removed: \(at)")
++    }
++    try FileManager.default.removeItem(atPath: folder + "/.claude")
++    try link(folder + "/.claude", to: elsewhere)
++    #expect(check(folder).refusal == WorkerHook.linkLine(folder + "/.claude"))
++    unlink(folder + "/.claude")
++    try link(folder + "/.claude/worktrees/wt/node_modules/x", to: elsewhere)
++    #expect(check(folder).refusal == nil, "a checkout under .claude/worktrees is not walked")
++  }
++
++  /// R1-1, R1-3: skills and commands are held as subagents are; frontmatter in uniform indentation or as a flow mapping is read; a
++  /// skill's other files are not skills; frontmatter that cannot be read for certain refuses.
++  @Test func skillsCommandsAndAgentsWithHooksRefuseInEveryShape() throws {
++    let folder = root + "/shapes"
++    try mk(folder + "/.claude")
++    let shapes: [(String, String, String)] = [
++      ("skills/deploy/SKILL.md", "---\nname: deploy\nhooks:\n  PreToolUse: []\n---\nDo it.\n", "skill"),
++      ("skills/deploy/SKILL.md", "---\nname: deploy\nallowed-tools: Bash(*)\n---\n", "skill"),
++      ("commands/ship.md", "---\nallowed-tools: [Bash]\n---\nShip.\n", "command"),
++      ("commands/nested/ship.md", "---\nallowedTools: Bash\n---\n", "command"),
++      ("agents/a.md", "---\n  name: a\n  hooks: {}\n---\n", "subagent"),
++      ("agents/a.md", "---\n{name: a, permissionMode: bypassPermissions}\n---\n", "subagent"),
++      ("agents/a.md", "---\n{name: a,\n  mcpServers: {x: {}}}\n---\n", "subagent"),
++    ]
++    for (rel, text, kind) in shapes {
++      let file = folder + "/.claude/" + rel
++      try put(text, file)
++      let why = check(folder).refusal ?? ""
++      #expect(why.hasPrefix("the thread folder's \(kind) \(file) has ") && why.contains("of its own"), "\(rel): \(why)")
++      #expect(check(folder, agent: true).refusal != nil, "in the agent folder too: \(rel)")
++      unlink(file)
++    }
++    try put("---\nname: ok\ndescription: plain\n---\n", folder + "/.claude/skills/deploy/SKILL.md")
++    try put("---\nhooks: {}\n---\nA reference page the skill reads.\n", folder + "/.claude/skills/deploy/reference.md")
++    #expect(check(folder).refusal == nil, "control: a plain skill, and a skill's other files are not loaded as skills")
++    try put("---\nname: a\nhooks: x\n", folder + "/.claude/agents/open.md")
++    #expect(check(folder).refusal?.contains("cannot be read for certain (its frontmatter has no closing ---)") == true, "\(String(describing: check(folder).refusal))")
++    unlink(folder + "/.claude/agents/open.md")
++    #expect(mkfifo(folder + "/.claude/commands/stuck.md", 0o644) == 0)
++    #expect(check(folder).refusal?.contains("cannot be read, so what it runs is not known") == true)
++    unlink(folder + "/.claude/commands/stuck.md")
++    // the kit's own subagents and skills carry none of these, in the shape the app ships them
++    #expect(WorkerHook.folderFilesProblem(repoRoot + "/kit") == nil, "\(String(describing: WorkerHook.folderFilesProblem(repoRoot + "/kit")))")
++  }
++
++  /// R1-8: every folder between the thread folder and its git root is looked at, and the git root itself.
++  @Test func aSubagentInAFolderBetweenTheThreadAndItsGitRootRefuses() throws {
++    let repo = root + "/repo", mid = repo + "/apps", thread = mid + "/web"
++    try mk(repo + "/.git")
++    try mk(thread)
++    #expect(WorkerHook.configFolders(thread).folders == [thread, mid, repo])
++    #expect(check(thread).refusal == nil)
++    try put("---\nname: x\nhooks: {}\n---\n", mid + "/.claude/agents/x.md")
++    #expect(check(thread).refusal?.hasPrefix("the thread folder's subagent \(mid)/.claude/agents/x.md has hooks") == true, "\(String(describing: check(thread).refusal))")
++    unlink(mid + "/.claude/agents/x.md")
++    try link(mid + "/.env", to: "/dev/null")
++    #expect(check(thread).refusal == WorkerHook.linkLine(mid + "/.env"))
++    unlink(mid + "/.env")
++    try put("---\nname: x\nhooks: {}\n---\n", repo + "/.claude/commands/x.md")
++    #expect(check(thread).refusal != nil, "the git root's own")
++  }
++
++  /// Item 1: a thread session outside the agent folder does not load its folder's settings, so what they carry is a warning, and
++  /// the start goes ahead; the agent folder's load as main's do, so there it is still a refusal.
++  @Test func settingsTheSessionDoesNotLoadWarnAndTheAgentFoldersStillRefuse() throws {
++    let folder = root + "/warned"
++    let local = folder + "/.claude/settings.local.json"
++    try put("{\"hooks\":{\"PreToolUse\":[]},\"env\":{\"PS4\":\"$(touch /tmp/x)\"}}", local)
++    let c = check(folder)
++    #expect(c.refusal == nil, "an ignored file cannot hurt")
++    #expect(c.warnings == ["the thread folder's \(local) sets PS4 for the session, which is not one of Claude Code's own settings a thread session may change (remove it from that file's env)"], "\(c.warnings)")
++    #expect(check(folder, agent: true).refusal == c.warnings.first, "the agent folder's settings load: refused")
++    try put("{\"cleanupPeriodDays\":0}", local)
++    #expect(check(folder).warnings.first?.contains("has cleanupPeriodDays") == true, "R1-6: it deletes transcripts")
++    #expect(!WorkerHook.allowedKeys.contains("cleanupPeriodDays"))
++    // the line the thread gets
++    let line = WorkerHook.ignoredLine(check(folder).warnings)
++    #expect(line.hasPrefix("This thread's session started without its folder's own Claude Code settings: the thread folder's \(local) has cleanupPeriodDays"))
++    #expect(line.hasSuffix("so those files are ignored and change nothing."))
++  }
++
++  /// Hestia's B1a and B1b: the whole trimmed text after `gitdir:` is the path (a second line is not dropped), a control character or
++  /// a line separator in it refuses, and each step must really be where its text says (no link on the way).
++  @Test func aGitPointerIsFollowedAsClaudeCodeFollowsIt() throws {
++    let victim = root + "/victim", thread = root + "/wt"
++    try mk(victim + "/.git/worktrees/x")
++    try mk(thread)
++    try "../..\n".write(toFile: victim + "/.git/worktrees/x/commondir", atomically: true, encoding: .utf8)
++    func point(_ text: String) throws { try text.write(toFile: thread + "/.git", atomically: true, encoding: .utf8) }
++    try point("gitdir: \(victim)/.git/worktrees/x\n")
++    #expect(WorkerHook.gitRoots(of: thread).roots == [thread, victim] && WorkerHook.gitRoots(of: thread).problem == nil, "control")
++    let broken = "the thread folder's git repository at \(thread)/.git points somewhere that cannot be followed, so the settings Claude Code reads for it are not known"
++    for text in [
++      "gitdir: \(victim)/.git/worktrees/x\nmore\n", "gitdir: \(victim)/.git/worktrees/x\u{2028}", "gitdir: \(victim)/.git/worktrees/x\u{85}",
++      "gitdir: \(victim)/.git/worktrees/x\u{A0}",
++    ] {
++      try point(text)
++      #expect(WorkerHook.gitRoots(of: thread).problem == broken, "\(text.debugDescription)")
++    }
++    // through a link: the text says one place, the file system another
++    try link(root + "/alias", to: victim)
++    try point("gitdir: \(root)/alias/.git/worktrees/x\n")
++    #expect(WorkerHook.gitRoots(of: thread).problem == broken, "a gitdir through a link")
++    // `..` is taken away by the text, as Claude Code does: `x/../x` is `x`
++    try point("gitdir: \(victim)/.git/worktrees/x/../x\n")
++    #expect(WorkerHook.gitRoots(of: thread).roots == [thread, victim])
++    try point("gitdir: \(victim)/.git/worktrees/x\n")
++    try "../../../alias/.git\n".write(toFile: victim + "/.git/worktrees/x/commondir", atomically: true, encoding: .utf8)
++    #expect(WorkerHook.gitRoots(of: thread).problem == broken, "a commondir through a link")
++  }
++
++  /// R1-8: every session's settings deny edits of the whole `.claude` folder, `.mcp.json` and every `.env*` in each such folder, and
++  /// of the owner's subagents, skills and commands.
++  @Test func theFenceCoversClaudeMcpJsonAndEnvInEveryFolderOnTheWay() throws {
++    let repo = root + "/fenced", mid = repo + "/apps", thread = mid + "/web"
++    try mk(repo + "/.git")
++    try mk(thread)
++    let deny = WorkerFence.settingsDeny(
++      projectFolders: [thread] + WorkerHook.configFolders(thread).folders, configDirs: ["/home/alex/.claude"])
++    for f in [thread, mid, repo] {
++      for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
++        for file in ["/.claude", "/.claude/**", "/.mcp.json", "/.env", "/.env*"] {
++          #expect(deny.contains("\(tool)(/\(f)\(file))"), "\(tool) \(f)\(file)")
++        }
++      }
++    }
++    for file in ["/skills/**", "/commands/**", "/agents/**", "/settings.json"] {
++      #expect(deny.contains("Write(//home/alex/.claude\(file))"), "\(file)")
++    }
++  }
++}
++
++extension WorkerSpecTests {
++  /// Item 1: a thread session outside the agent folder starts with `--setting-sources user`, and `validate` refuses one without it;
++  /// one in the agent folder loads what main loads; main itself never gets the flag from the app. Never wider than main: a main
++  /// whose own sources leave out `user` refuses a thread-folder start, and an agent-folder one takes main's sources.
++  @Test func aThreadFolderSessionLoadsOnlyTheOwnersSettingsAndNeverMoreThanMain() throws {
++    var i = inputs()
++    i.cwd = "/home/example/trip"
++    let s = try WorkerSpec.build(i)
++    #expect(MainArgs.settingSources(s.args) == [.user], "\(s.args)")
++    #expect(s.foldersSettingsOff)
++    var stripped = s
++    stripped.args = s.args.filter { $0 != "--setting-sources" && $0 != "user" }
++    #expect(throws: WorkerSpec.BuildError.folderSettingsLoaded) { try stripped.validate() }
++    var widened = s
++    widened.args += ["--setting-sources", "user,project"]
++    #expect(throws: WorkerSpec.BuildError.folderSettingsLoaded) { try widened.validate() }
++    // the agent folder's session: no flag, as main
++    let agent = try WorkerSpec.build(inputs())
++    #expect(!agent.args.contains { $0.hasPrefix("--setting-sources") }, "\(agent.args)")
++    // main's own sources bound it
++    var narrow = i
++    narrow.mainArgs = ["--dangerously-skip-permissions", "--setting-sources", "project"]
++    #expect(throws: WorkerSpec.BuildError.settingSourcesWiderThanMain) { try WorkerSpec.build(narrow) }
++    var agentNarrow = inputs()
++    agentNarrow.mainArgs = ["--dangerously-skip-permissions", "--setting-sources", "local,user"]
++    let a2 = try WorkerSpec.build(agentNarrow)
++    #expect(MainArgs.lastValue(a2.args, "--setting-sources") == "user,local", "\(a2.args)")
++    var a3 = a2
++    a3.args = a2.args.filter { $0 != "--setting-sources" && $0 != "user,local" }
++    #expect(throws: WorkerSpec.BuildError.settingSourcesWiderThanMain) { try a3.validate() }
++    // main's launch: the app adds only the guards' --settings, and no source of the app names the flag but the worker's spec
++    let mainArgs = GuardsSettings.applying(to: ["--channels", "plugin:talos-app@x"], talosHome: "/home/example/.talos", fileExists: { _ in true }).args
++    #expect(!mainArgs.contains { $0.hasPrefix("--setting-sources") })
++    let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Sources").standardized
++    let files = FileManager.default.enumerator(atPath: sources.path)?.compactMap { $0 as? String }.filter { $0.hasSuffix(".swift") } ?? []
++    #expect(files.count > 50)
++    let naming = files.filter { f in
++      ((try? String(contentsOfFile: sources.path + "/" + f, encoding: .utf8)) ?? "").contains("userSourcesOnly")
++    }
++    #expect(naming == ["TalosDesktopCore/WorkerSpec.swift"], "\(naming)")
++  }
++
++  /// R1-5: the claude process never gets what makes its shells run something first; desktop.json cannot set it either.
++  @Test func shellStartupVariablesNeverReachTheSession() throws {
++    var i = inputs()
++    i.cwd = "/home/example/trip"
++    for k in ["SHELLOPTS", "BASHOPTS", "PS4", "ENV", "BASH_ENV", "BASH_FUNC_ls%%"] { i.baseEnv[k] = "x" }
++    let s = try WorkerSpec.build(i)
++    for k in ["SHELLOPTS", "BASHOPTS", "PS4", "ENV", "BASH_ENV", "BASH_FUNC_ls%%"] {
++      #expect(s.env[k] == nil, "\(k)")
++      #expect(ClaudeEnvScrub.isSessionMarker(k), "desktop.json may not set \(k)")
++    }
++    #expect(!ClaudeEnvScrub.isInherited("BASH_DEFAULT_TIMEOUT_MS") && !ClaudeEnvScrub.isInherited("PATH"), "control")
++    var forced = s
++    forced.env["PS4"] = "$(touch x)"
++    #expect(throws: WorkerSpec.BuildError.forbiddenEnv("PS4")) { try forced.validate() }
++    // and the global config is fenced with the owner's subagents, skills and commands
++    let deny = ((jsonObject(s.settingsJSON)?["permissions"] as? [String: Any])?["deny"] as? [String]) ?? []
++    for f in ["/home/example/.claude.json", "/home/example/.claude/skills/**", "/home/example/.claude/agents/**", "/home/example/.claude/commands/**",
++      "/home/example/trip/.claude/**", "/home/example/trip/.env*", "/home/example/trip/.mcp.json"] {
++      #expect(deny.contains("Write(/\(f))"), "\(f)")
++    }
++  }
++}
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift
+index e95c1272..dea15ed6 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift
+@@ -181,7 +181,8 @@ struct WorkerHookTests {
+     try FileManager.default.createDirectory(atPath: folder + "/.claude", withIntermediateDirectories: true)
+     let local = folder + "/.claude/settings.local.json"
+     func put(_ text: String, _ file: String? = nil) throws { try text.write(toFile: file ?? local, atomically: true, encoding: .utf8) }
+-    func why(agent: Bool = false) -> String? { WorkerHook.folderSettingsProblem(folder: folder, isAgentFolder: agent) }
++    // outside the agent folder these files are not loaded: what they carry is a warning; in the agent folder, a refusal
++    func why(agent: Bool = false) -> String? { WorkerHook.found(folder: folder, isAgentFolder: agent) }
+     #expect(why() == nil, "no settings files: fine")
+     for key in [
+       "CLAUDE_CODE_SHELL_PREFIX", "GCONV_PATH", "LC_ALL", "LANGUAGE", "OUTPUT_CHARSET", "SHLVL", "PATH", "DEVELOPER_DIR", "LD_PRELOAD",
+@@ -231,7 +232,7 @@ struct WorkerHookTests {
+     try FileManager.default.createDirectory(atPath: repo + "/.claude", withIntermediateDirectories: true)
+     let rootFile = repo + "/.claude/settings.json"
+     #expect(WorkerHook.gitRoot(of: folder) == WorkerHook.resolved(repo))
+-    #expect(WorkerHook.settingsFolders(folder).folders == [WorkerHook.resolved(folder)!, WorkerHook.resolved(repo)!])
++    #expect(WorkerHook.configFolders(folder).folders == [WorkerHook.resolved(folder)!, WorkerHook.resolved(repo + "/sub")!, WorkerHook.resolved(repo)!])
+     try put("{\"env\":{\"CLAUDE_CODE_SHELL_PREFIX\":\"/tmp/x\"}}", rootFile)
+     #expect(why()?.contains("\(WorkerHook.resolved(repo)!)/.claude/settings.json sets CLAUDE_CODE_SHELL_PREFIX") == true, "\(String(describing: why()))")
+     #expect(why(agent: true) != nil, "the agent folder's git root is held to every rule")
+@@ -239,7 +240,7 @@ struct WorkerHookTests {
+     #expect(why(agent: true)?.contains("has hooks") == true, "a kit folder's git root is not the kit's")
+   }
+ 
+-  /// Hestia's third review, B1: Claude Code reads `settings.local.json` from the CANONICAL git root, following a worktree's `.git`
++  /// Hestia's third review, B1 (and B1a, B1b in WorkerFolderFilesTests): Claude Code reads `settings.local.json` from the CANONICAL git root, following a worktree's `.git`
+   /// file to its `gitdir` and that to its `commondir`. A thread can write such a file in its own folder to name any repository, so
+   /// the chain is followed for the check and for the deny rules; a `.git` that is a link, or a pointer that does not resolve,
+   /// refuses the start. And F4: a FIFO, a link to /dev/zero or a huge file at a settings path is refused at once, never read.
+@@ -252,38 +253,38 @@ struct WorkerHookTests {
+     try "gitdir: \(victim)/.git/worktrees/x\n".write(toFile: thread + "/.git", atomically: true, encoding: .utf8)
+     let realVictim = WorkerHook.resolved(victim)!, realThread = WorkerHook.resolved(thread)!
+     #expect(WorkerHook.gitRoots(of: thread).roots == [realThread, realVictim], "\(WorkerHook.gitRoots(of: thread))")
+-    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false) == nil, "control: a clean canonical root")
++    #expect(WorkerHook.found(folder: thread, isAgentFolder: false) == nil, "control: a clean canonical root")
+     try "{\"env\":{\"CLAUDE_CODE_SHELL_PREFIX\":\"/tmp/x\"}}".write(toFile: victim + "/.claude/settings.local.json", atomically: true, encoding: .utf8)
+     #expect(
+-      WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)?.hasPrefix("the thread folder's \(realVictim)/.claude/settings.local.json sets CLAUDE_CODE_SHELL_PREFIX") == true,
+-      "\(String(describing: WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)))")
++      WorkerHook.found(folder: thread, isAgentFolder: false)?.hasPrefix("the thread folder's \(realVictim)/.claude/settings.local.json sets CLAUDE_CODE_SHELL_PREFIX") == true,
++      "\(String(describing: WorkerHook.found(folder: thread, isAgentFolder: false)))")
+     // the deny rules name the canonical root's files too
+     let deny = WorkerFence.settingsDeny(projectFolders: [thread] + WorkerHook.gitRoots(of: thread).roots, configDirs: [])
+-    #expect(deny.contains("Write(/\(realVictim)/.claude/settings.local.json)"), "\(deny)")
++    #expect(deny.contains("Write(/\(realVictim)/.claude/**)"), "\(deny)")
+     // a pointer that leads nowhere, an unreadable first line, and a `.git` that is a link: refused
+     for text in ["gitdir: \(root)/nowhere\n", "not a pointer\n"] {
+       try text.write(toFile: thread + "/.git", atomically: true, encoding: .utf8)
+-      #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)?.contains("points somewhere that cannot be followed") == true, "\(text)")
++      #expect(WorkerHook.found(folder: thread, isAgentFolder: false)?.contains("points somewhere that cannot be followed") == true, "\(text)")
+     }
+     unlink(thread + "/.git")
+     try FileManager.default.createSymbolicLink(atPath: thread + "/.git", withDestinationPath: victim + "/.git")
+-    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false) == "the thread folder's \(realThread)/.git is a link, so the settings Claude Code reads for it are not known")
++    #expect(WorkerHook.found(folder: thread, isAgentFolder: false) == "the thread folder's \(realThread)/.git is a link, so the settings Claude Code reads for it are not known")
+     unlink(thread + "/.git")
+     // F4: what cannot be read without waiting, or is too big, is refused at once
+     let local = thread + "/.claude/settings.local.json"
+     try FileManager.default.createDirectory(atPath: thread + "/.claude", withIntermediateDirectories: true)
+     #expect(mkfifo(local, 0o644) == 0)
+     let began = Date()
+-    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)?.contains("cannot be read as settings") == true)
++    #expect(WorkerHook.found(folder: thread, isAgentFolder: false)?.contains("cannot be read as settings") == true)
+     unlink(local)
+     try FileManager.default.createSymbolicLink(atPath: local, withDestinationPath: "/dev/zero")
+-    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)?.contains("cannot be read as settings") == true)
++    #expect(WorkerHook.found(folder: thread, isAgentFolder: false) == WorkerHook.linkLine(realThread + "/.claude/settings.local.json"), "a link: refused, never read")
+     #expect(Date().timeIntervalSince(began) < 5, "the FIFO and /dev/zero held the reader")
+     unlink(local)
+     try Data(("{\"model\":\"" + String(repeating: "a", count: WorkerHook.settingsCap) + "\"}").utf8).write(to: URL(fileURLWithPath: local))
+-    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)?.contains("cannot be read as settings") == true, "past the size cap")
++    #expect(WorkerHook.found(folder: thread, isAgentFolder: false)?.contains("cannot be read as settings") == true, "past the size cap")
+     try "{\"model\":\"opus\"}".write(toFile: local, atomically: true, encoding: .utf8)
+-    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false) == nil, "control: a small plain file")
++    #expect(WorkerHook.found(folder: thread, isAgentFolder: false) == nil, "control: a small plain file")
+   }
+ 
+   /// Hestia's third review, F1: a subagent file's frontmatter can carry hooks (they run with no card), its own MCP servers, or its
+@@ -292,26 +293,26 @@ struct WorkerHookTests {
+     let folder = root + "/agents-thread", agents = folder + "/.claude/agents"
+     try FileManager.default.createDirectory(atPath: agents + "/nested", withIntermediateDirectories: true)
+     try "---\nname: helper\ndescription: plain\ntools: Read, Grep\n---\nDo things.\n".write(toFile: agents + "/helper.md", atomically: true, encoding: .utf8)
+-    #expect(WorkerHook.folderSettingsProblem(folder: folder, isAgentFolder: false) == nil, "control: a plain subagent")
++    #expect(WorkerHook.found(folder: folder, isAgentFolder: false) == nil, "control: a plain subagent")
+     for (key, body) in [
+       ("hooks", "hooks:\n  PreToolUse:\n    - matcher: Bash\n"), ("mcpServers", "mcpServers:\n  x: {}\n"), ("permissionMode", "permissionMode: auto\n"),
+       ("hooks", "\"hooks\": {}\n"),
+     ] {
+       try "---\r\nname: evil\r\n\(body)---\nbody\n".write(toFile: agents + "/nested/evil.md", atomically: true, encoding: .utf8)
+-      let why = WorkerHook.folderSettingsProblem(folder: folder, isAgentFolder: false)
++      let why = WorkerHook.found(folder: folder, isAgentFolder: false)
+       #expect(why?.contains("subagent \(agents)/nested/evil.md has \(key) of its own") == true, "\(key): \(String(describing: why))")
+-      #expect(WorkerHook.folderSettingsProblem(folder: folder, isAgentFolder: true) != nil, "in the agent folder too")
++      #expect(WorkerHook.found(folder: folder, isAgentFolder: true) != nil, "in the agent folder too")
+     }
+     // a key named in the body (after the frontmatter) is not frontmatter
+     try "---\nname: ok\n---\nhooks: none here\n".write(toFile: agents + "/nested/evil.md", atomically: true, encoding: .utf8)
+-    #expect(WorkerHook.folderSettingsProblem(folder: folder, isAgentFolder: false) == nil)
++    #expect(WorkerHook.found(folder: folder, isAgentFolder: false) == nil)
+     unlink(agents + "/nested/evil.md")
+     #expect(mkfifo(agents + "/nested/stuck.md", 0o644) == 0)
+-    #expect(WorkerHook.folderSettingsProblem(folder: folder, isAgentFolder: false)?.contains("cannot be read, so what it runs is not known") == true)
++    #expect(WorkerHook.found(folder: folder, isAgentFolder: false)?.contains("cannot be read, so what it runs is not known") == true)
+     unlink(agents + "/nested/stuck.md")
+     // the kit's own subagents carry none of these
+     let kit = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../../kit").standardized.path
+-    #expect(WorkerHook.agentFilesProblem(kit) == nil)
++    #expect(WorkerHook.folderFilesProblem(kit) == nil)
+   }
+ 
+   /// R1-1 as it was found, with nothing stood in: Apple's /usr/bin/python3 is the `xcrun` launcher and runs whatever DEVELOPER_DIR
+@@ -651,3 +652,11 @@ struct WorkerHookTests {
+     )
+   }
+ }
++
++extension WorkerHook {
++  /// What the start finds in the folder's files: its refusal, else its first warning.
++  static func found(folder: String, isAgentFolder: Bool) -> String? {
++    let c = folderCheck(folder: folder, isAgentFolder: isAgentFolder)
++    return c.refusal ?? c.warnings.first
++  }
++}
+diff --git a/apps/desktop/Tests/TalosDesktopIntegrationTests/ClaudeDotEnvProbeTests.swift b/apps/desktop/Tests/TalosDesktopIntegrationTests/ClaudeDotEnvProbeTests.swift
+new file mode 100644
+index 00000000..3f316d40
+--- /dev/null
++++ b/apps/desktop/Tests/TalosDesktopIntegrationTests/ClaudeDotEnvProbeTests.swift
+@@ -0,0 +1,59 @@
++import Foundation
++import Testing
++import TalosTestSupport
++
++/// R1-5, part 2: does the real `claude` (a Bun executable) load a `.env` from the folder it starts in? Bun itself does, before any
++/// script runs. Run without a session (`--help` only, no plugins, a fresh home), so the only way to see it is cost: a `.env` with a
++/// variable past a large hole (a sparse file, nothing on disk) makes a runtime that reads it hold the whole file in memory. Bun, the
++/// control, does exactly that; `claude --help` must not. Skipped where neither is installed. A session path that reads `.env` later
++/// is not covered (that needs a session): the thread folders' `.env*` are fenced from edits either way (WorkerFence.projectFiles).
++@Suite("claude and .env")
++struct ClaudeDotEnvProbeTests {
++  static func find(_ name: String) -> String? {
++    let path = (ProcessInfo.processInfo.environment["PATH"] ?? "") + ":" + NSHomeDirectory() + "/.local/bin:/opt/homebrew/bin:/usr/local/bin"
++    for d in path.split(separator: ":") where FileManager.default.isExecutableFile(atPath: "\(d)/\(name)") { return "\(d)/\(name)" }
++    return nil
++  }
++  static let claude = find("claude")
++  static let bun = find("bun")
++  static let hole: off_t = 320 * 1024 * 1024
++
++  /// Peak memory in bytes of `argv` run in `dir` with an empty home (`/usr/bin/time -l`).
++  func peak(_ argv: [String], in dir: String, home: String) throws -> Int {
++    let p = Process()
++    p.executableURL = URL(fileURLWithPath: "/usr/bin/time")
++    p.arguments = ["-l"] + argv
++    p.currentDirectoryURL = URL(fileURLWithPath: dir)
++    p.environment = ["HOME": home, "PATH": "/usr/bin:/bin", "TMPDIR": home]
++    let err = Pipe()
++    p.standardError = err
++    p.standardOutput = FileHandle.nullDevice
++    try p.run()
++    let data = err.fileHandleForReading.readDataToEndOfFile()
++    p.waitUntilExit()
++    let text = String(decoding: data, as: UTF8.self)
++    let line = try #require(text.split(separator: "\n").first { $0.contains("maximum resident set size") }, "\(text)")
++    return Int(line.split(separator: " ").first.map(String.init) ?? "") ?? 0
++  }
++
++  @Test(.enabled(if: claude != nil && bun != nil))
++  func claudeDoesNotLoadTheFoldersDotEnvAtStartWhileBunDoes() throws {
++    let root = try TestTemp.real(TestTemp.base) + "/talos-dotenv-\(UUID().uuidString.prefix(8))"
++    let dir = root + "/folder", home = root + "/home"
++    for d in [dir, home] { try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true) }
++    defer { try? FileManager.default.removeItem(atPath: root) }
++    let fd = open(dir + "/.env", O_WRONLY | O_CREAT | O_EXCL, 0o600)
++    #expect(fd >= 0)
++    _ = "A=1\n".withCString { write(fd, $0, 4) }
++    lseek(fd, Self.hole, SEEK_SET)
++    _ = "\nB=2\n".withCString { write(fd, $0, 5) }
++    close(fd)
++    let mb = 1024 * 1024
++    // the control: a runtime that loads the file holds it
++    let bunPeak = try peak([Self.bun!, "-e", "process.env.B"], in: dir, home: home)
++    #expect(bunPeak > Int(Self.hole), "the probe cannot see a .env load: bun peaked at \(bunPeak / mb) MB")
++    let claudePeak = try peak([Self.claude!, "--help"], in: dir, home: home)
++    let baseline = try peak([Self.claude!, "--help"], in: home, home: home)
++    #expect(claudePeak < baseline + 64 * mb, "claude --help peaked at \(claudePeak / mb) MB with the .env, \(baseline / mb) MB without")
++  }
++}
+diff --git a/apps/desktop/Tests/TalosDesktopIntegrationTests/LeadFenceMacTests.swift b/apps/desktop/Tests/TalosDesktopIntegrationTests/LeadFenceMacTests.swift
+index fff13c8a..ba5b5fcb 100644
+--- a/apps/desktop/Tests/TalosDesktopIntegrationTests/LeadFenceMacTests.swift
++++ b/apps/desktop/Tests/TalosDesktopIntegrationTests/LeadFenceMacTests.swift
+@@ -156,7 +156,7 @@ struct LeadFenceLaunchTests {
+     usleep(1_000_000)
+     #expect(log.all.count == 1, "\(log.all)")
+     let text = log.all.first?.text ?? ""
+-    #expect(text.contains("local-db") && text.contains("claude mcp add -s local local-db") && text.contains("approve it once in Claude Code"), "\(text)")
++    #expect(text.contains("local-db") && text.contains("claude mcp add -s local local-db") && text.contains("does not count"), "\(text)")
+     #expect(!FileManager.default.fileExists(atPath: r.talosHome + "/workers/trip/mcp/mcp.json") || r.starts.isEmpty)
+   }
+ 
+diff --git a/apps/desktop/Tests/TalosDesktopIntegrationTests/MainSettingsStartTests.swift b/apps/desktop/Tests/TalosDesktopIntegrationTests/MainSettingsStartTests.swift
+index c385cfa3..d7ea9d15 100644
+--- a/apps/desktop/Tests/TalosDesktopIntegrationTests/MainSettingsStartTests.swift
++++ b/apps/desktop/Tests/TalosDesktopIntegrationTests/MainSettingsStartTests.swift
+@@ -96,8 +96,8 @@ struct MainSettingsStartTests {
+     #expect(deny.contains("Read(/\(r.agentDir)/secrets/**)") && deny.contains("NotebookEdit(*)"), "\(shown)")
+     // a main made read-only: its worker cannot edit anywhere, not only in the agent folder
+     #expect(deny.contains("Edit(*)") && deny.contains("Write()"), "\(shown)")
+-    // (the settings-file deny names the agent folder's two Claude Code settings files: that is its own rule, not main's made narrower)
+-    #expect(!deny.contains { !$0.contains("/.claude/settings") && !$0.contains("/.claude/agents") && ($0.hasPrefix("Edit(/\(r.agentDir)") || $0.hasPrefix("Write(/\(r.agentDir)")) }, "\(shown)")
++    // (the settings-file deny names the agent folder's .claude, .mcp.json and .env*: that is its own rule, not main's made narrower)
++    #expect(!deny.contains { rule in !WorkerFence.projectFiles.contains { rule.hasSuffix($0 + ")") } && (rule.hasPrefix("Edit(/\(r.agentDir)") || rule.hasPrefix("Write(/\(r.agentDir)")) }, "\(shown)")
+     #expect(deny.contains("Read(/\(r.agentDir)/**/.env)"), "any depth: \(shown)")
+     #expect(deny.contains("Bash(claude plugin:*)"), "the guards' rules stay")
+   }
+diff --git a/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift b/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift
+index 5800ced3..b5c06120 100644
+--- a/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift
++++ b/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift
+@@ -137,22 +137,27 @@ struct WorkerHookStartTests {
+     #expect(log.all.count == 1, "\(log.all)")
+   }
+ 
+-  /// A thread folder whose own Claude Code settings set a variable that steers the shell running the hook (here SHELLOPTS), or add
+-  /// hooks of their own: the start is refused through the real manager, the thread is told which file and why, and nothing is made.
+-  /// CONTROL ("plain"): the same folder with an ordinary variable starts.
+-  @Test(arguments: ["shellopts", "hooks", "plain"])
+-  func aThreadFoldersOwnSettingsThatCouldSteerTheHookRefuseTheStart(kind: String) throws {
++  /// A thread folder whose own Claude Code settings set a variable that steers the shell (SHELLOPTS) or add hooks: the session
++  /// does not load them (`--setting-sources user`), so the start goes ahead and the thread is told once which file is ignored, and
++  /// the audit has it. A subagent with hooks of its own ("agent") still refuses the start through the real manager, the thread is
++  /// told which file and why, and nothing is made. CONTROL ("plain"): an ordinary variable starts with no line at all.
++  @Test(arguments: ["shellopts", "hooks", "agent", "plain"])
++  func aThreadFoldersOwnSettingsAreIgnoredAndItsHookedSubagentsRefuseTheStart(kind: String) throws {
+     var file = ""
+     let (r, log) = try rig(pathIn: { r in
+       let folder = r.root + "/home/trip"
+-      try FileManager.default.createDirectory(atPath: folder + "/.claude", withIntermediateDirectories: true)
++      try FileManager.default.createDirectory(atPath: folder + "/.claude/agents", withIntermediateDirectories: true)
+       file = folder + "/.claude/settings.local.json"
+       let text = [
+         "shellopts": "{\"env\":{\"SHELLOPTS\":\"xtrace\"}}",
+         "hooks": "{\"hooks\":{\"PermissionRequest\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"echo allow\"}]}]}}",
+-        "plain": "{\"env\":{\"MAX_THINKING_TOKENS\":\"1024\"},\"permissions\":{\"deny\":[\"Bash(rm:*)\"]}}",
++        "agent": "{}", "plain": "{\"env\":{\"MAX_THINKING_TOKENS\":\"1024\"},\"permissions\":{\"deny\":[\"Bash(rm:*)\"]}}",
+       ][kind]!
+       try text.write(toFile: file, atomically: true, encoding: .utf8)
++      if kind == "agent" {
++        file = folder + "/.claude/agents/helper.md"
++        try "---\nname: helper\nhooks:\n  PreToolUse: []\n---\n".write(toFile: file, atomically: true, encoding: .utf8)
++      }
+       try """
+       {"default_thread":"general","dedicated":{"enabled":true,"max_live":3},"threads":[{"id":"general","kind":"fixed"},{"id":"trip","name":"trip","kind":"fixed","session":"dedicated","session_opts":{"cwd":"\(folder)"}}]}
+       """.write(toFile: r.talosHome + "/config.json", atomically: true, encoding: .utf8)
+@@ -161,11 +166,23 @@ struct WorkerHookStartTests {
+     defer { r.teardown() }
+     r.mgr.startTicking()
+     try r.wake("trip")
+-    if kind == "plain" {
++    if kind != "agent" {
+       #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
++      let launched = try String(contentsOfFile: WorkerSpec.settingsPath(talosHome: r.talosHome, threadId: "trip"), encoding: .utf8)
++      #expect(!launched.isEmpty)
++      if kind == "plain" {
++        usleep(300_000)
++        #expect(log.all.isEmpty, "\(log.all)")
++        return
++      }
++      let why = kind == "hooks" ? "has hooks" : "sets SHELLOPTS for the session"
++      #expect(r.wait(5) { log.all.count == 1 }, "\(log.all)")
++      let line = log.all.first?.text ?? ""
++      #expect(line.hasPrefix("This thread's session started without its folder's own Claude Code settings:") && line.contains(file) && line.contains(why), "\(line)")
++      #expect(auditLines(r).contains { $0.contains("worker_folder_settings_ignored thread=trip why=") }, "\(auditLines(r))")
+       return
+     }
+-    let why = kind == "hooks" ? "has hooks, which a thread session's project settings may not carry" : "sets SHELLOPTS for the session"
++    let why = "has hooks of its own, which a thread session's subagents may not carry"
+     #expect(r.wait(10) { r.state("trip") == "failed" }, "\(r.why("trip"))")
+     #expect((r.entry("trip")?.error?.detail ?? "").contains(why), "\(String(describing: r.entry("trip")?.error))")
+     #expect(r.wait(5) { log.all.count == 1 }, "\(log.all)")
+@@ -174,10 +191,10 @@ struct WorkerHookStartTests {
+     #expect(r.starts.isEmpty && !FileManager.default.fileExists(atPath: WorkerSpec.settingsPath(talosHome: r.talosHome, threadId: "trip")))
+ 
+     // a folder edited to give a new reason at every start: refused again, in the audit, but the thread is told at most one new
+-    // reason a minute (the key named is the folder's text, so only a plain name is shown)
+-    try "{\"env\":{\"PS4\":\"x\",\"a\\nb\":\"1\"}}".write(toFile: file, atomically: true, encoding: .utf8)
++    // reason a minute
++    try "---\nname: helper\npermissionMode: auto\n---\n".write(toFile: file, atomically: true, encoding: .utf8)
+     try r.wake("trip", action: "restart", ids: ["m_01JBF3V7Q8K2M4N6P8R0S2T402"])  // the owner's restart: a new start
+-    #expect(r.wait(10) { auditLines(r).contains { $0.contains("sets PS4 for the session") } }, "\(auditLines(r))")
++    #expect(r.wait(10) { auditLines(r).contains { $0.contains("has permissionMode of its own") } }, "\(auditLines(r))")
+     usleep(1_000_000)
+     #expect(log.all.count == 1, "a second new reason inside a minute was told: \(log.all)")
+     #expect(r.state("trip") == "failed")
+diff --git a/docs/CLAUDE-CODE.md b/docs/CLAUDE-CODE.md
+index 2741603c..2b8d699c 100644
+--- a/docs/CLAUDE-CODE.md
++++ b/docs/CLAUDE-CODE.md
+@@ -383,33 +383,46 @@ own session (a thread session is not a channel). Claude Code does run `Permissio
+       and options before `env -i` runs. It therefore does nothing but assign the copy's path and call `exec` (a special builtin,
+       found before any function): the test that the copy is there and the run itself are made by a second `/bin/sh` that
+       `env -i` starts clean. An imported function named `[` or `exec` changes nothing.
+-    - What a command line cannot cover is stopped at the start instead, by ALLOW-lists (a deny-list kept missing one:
+-      `CLAUDE_CODE_SHELL_PREFIX` wraps every hook and Bash command in a script of the folder's choosing; on Linux, `GCONV_PATH`
+-      with a locale loads a library into the first shell). The thread folder's `.claude/settings.json` and
+-      `.claude/settings.local.json`, and its git roots' when the folder sits below one (Claude Code reads those too: the nearest
+-      folder with a `.git`, and when that `.git` is a file, the canonical root it leads to through `gitdir:` and `commondir`; a
+-      `.git` that is a link, or a pointer that does not resolve, refuses the start), may carry:
+-      in `env`, only Claude Code's own tunables (`WorkerHookFolder.allowedEnv`: timeouts, token limits, `DISABLE_*` switches),
++    - What a command line cannot cover is not loaded at all. A thread session outside the agent folder starts with
++      `--setting-sources user`: the folder's `.claude/settings.json` and `.claude/settings.local.json`, its git roots' (the nearest
++      folder with a `.git`, and the canonical root a worktree's `.git` file leads to), and its project skills, commands,
++      subagents and CLAUDE.md files are not read (Claude Code 2.1.322 holds all of them to the project source; read from its
++      binary). Only the owner's own settings (`~/.claude`), the session's `--settings` and managed settings load. A session in
++      the agent folder loads the kit's files there, as main does. Never wider than main: when main's own `--setting-sources`
++      leaves out `user`, a thread-folder start is refused, and an agent-folder one gets main's sources.
++      Trade-off: a thread working in a repository no longer gets that repository's CLAUDE.md or `.claude/rules`.
++    - The ALLOW-lists stay as defence in depth (a deny-list kept missing one: `CLAUDE_CODE_SHELL_PREFIX` wraps every hook and
++      Bash command in a script of the folder's choosing): in `env`, only Claude Code's own tunables (`WorkerHookFolder.allowedEnv`),
+       each a plain value; outside the agent folder, only `$schema`, `env`, `permissions`, `model`, `includeCoAuthoredBy`,
+-      `cleanupPeriodDays`, `alwaysThinkingEnabled`, `outputStyle`, `claudeMdExcludes` and `skillOverrides`, with `permissions`
+-      holding only `deny`, `ask` and `defaultMode` (the session's own `--settings` names main's mode and outranks a
+-      project's, so the folder's is never in force). So no `hooks`, `statusLine`, `apiKeyHelper`, MCP approvals or `permissions.allow`. The
+-      agent folder's own files carry the kit's hooks and status line by design, so only their `env` is held to the list there
+-      (its git root, if another, is held to all of it). Each file is read only when it is a regular file of at most 256 KB, through one descriptor that never blocks (a FIFO
+-      or a link to /dev/zero there is refused at once). Anything else, or a file that cannot be read as settings, refuses the
+-      start; the thread's line names the file and the key when the key is a plain name, and a thread is told at most one new
+-      reason a minute (the audit has every one). The files are read again at every start, and every session's settings deny
+-      Edit, Write, MultiEdit and NotebookEdit of those files in its own folder, the agent folder, every other thread's folder,
+-      each one's git root, `~/.claude` and `CLAUDE_CONFIG_DIR`. A start before the agent config has been read once is refused.
+-      Subagent files (`.claude/agents/**/*.md`, in the folder and its git roots) whose frontmatter carries `hooks`,
+-      `mcpServers` or `permissionMode` refuse the start too (those hooks run with no card), and edits of `.claude/agents` are
+-      denied like the settings files. Every thread session's settings also carry `disableAutoMode: "disable"` (no classifier
+-      answers its prompts), `disableSkillShellExecution: true` (no inline shell from skills or commands) and deny `EnterWorktree`
+-      (a worktree it enters is a checkout whose settings its start never read).
+-      On the Mac, `/bin/sh` is bash 3.2 as `sh`: it reads neither `ENV` nor `BASH_ENV` for a command (checked), links no
+-      libintl (no message catalogue to point elsewhere) and has no `GCONV_PATH`; SHELLOPTS and PS4 do apply, which is why the
+-      list is an allow-list. The lists are one: the app's and the hook script's are held equal by swift-parity.test.ts.
+-      The hook reads the same files (and the git root's) again at every prompt, against the same lists. This stops only an
++      `alwaysThinkingEnabled`, `outputStyle`, `claudeMdExcludes` and `skillOverrides` (`cleanupPeriodDays` went: it deletes
++      transcripts), with `permissions` holding only `deny`, `ask` and `defaultMode`. Outside the agent folder a file with more
++      is a WARNING: the start goes ahead (the file is ignored) and the thread gets one line naming the file and the key when it
++      is a plain name; the audit has `worker_folder_settings_ignored`. The agent folder's files carry the kit's hooks and status
++      line by design, so only their `env` is held to the list, and there a breach still refuses the start.
++    - Refused everywhere (the thread's line names the file; at most one new reason a minute; the audit has every one), in the
++      folder, every folder above it up to its git root, and each git root: `.claude`, anything under it (`.claude/worktrees`
++      is not walked), `.mcp.json` or `.env` that is a link (everything is opened from the folder down with O_NOFOLLOW, one level
++      at a time); a subagent (`.claude/agents/**/*.md`), skill (`.claude/skills/**/SKILL.md`) or command
++      (`.claude/commands/**/*.md`) whose frontmatter has `hooks`, `allowed-tools` (or `allowedTools`), `mcpServers` or
++      `permissionMode`, or that cannot be read for certain (FrontmatterScan.swift: a YAML key scan that reads uniform
++      indentation, flow mappings, quotes and block scalars, and refuses anchors, tags, tabs in indentation, line separators and
++      anything else it cannot be sure of; the kit hook has the same reader, and both suites run kit/scripts/frontmatter-cases.json);
++      a `.git` that is a link, or a git pointer not followed the way Claude Code follows it (the whole trimmed text after
++      `gitdir:`, resolved by its text, each step where its text says with no link on the way; a control character or a
++      non-ASCII space in it refuses). A start before the agent config has been read once is refused.
++    - Every session's settings deny Edit, Write, MultiEdit and NotebookEdit of `<f>/.claude`, `<f>/.claude/**`, `<f>/.mcp.json`
++      and `<f>/.env*` for its own folder, each folder above it up to its git root, its git roots, the agent folder and every
++      other thread's folder; and of the settings, `agents/**`, `skills/**` and `commands/**` of `~/.claude` and
++      `CLAUDE_CONFIG_DIR`, and `~/.claude.json` (the owner's user-scope MCP servers). Every thread session's settings also carry
++      `disableAutoMode: "disable"`, `disableSkillShellExecution: true` and deny `EnterWorktree`.
++    - SHELLOPTS, BASHOPTS, PS4, ENV, BASH_ENV and every `BASH_FUNC_*` are stripped from every session's environment, main's
++      included, and `desktop.json` cannot set them (`ClaudeEnvScrub.shellStartup`): xtrace with a PS4 holding `$(...)` would run
++      a program at every traced command. Whether `claude` loads a `.env` from its folder: checked against 2.1.322 without a
++      session (ClaudeDotEnvProbeTests: a sparse 320 MB `.env` makes Bun, the control, hold it in memory; `claude --help` does
++      not), so it does not at start; a session's later reads are not covered, and `.env*` is fenced from edits either way.
++      The lists are one: the app's and the hook script's are held equal by swift-parity.test.ts.
++      The hook runs the same checks again at every prompt (a hooked subagent added mid-session is seen): a refusal keeps the
++      prompt at the terminal, a warning is one stderr line and the prompt goes on. This stops only an
+       honest hook: if the session's shell was already steered, the check never runs, so the start-time refusal and the deny
+       rules are what hold. The Mac's command names the session's folder
+       (`TALOS_APP_HOOK_CHECK_DIR`, and `TALOS_APP_HOOK_CHECK_HOOKS=0` for the agent folder); on a hit the bridge is never
+diff --git a/docs/OPTION-C.md b/docs/OPTION-C.md
+index 04cb6e7c..4b610643 100644
+--- a/docs/OPTION-C.md
++++ b/docs/OPTION-C.md
+@@ -575,7 +575,9 @@ local scope (only the owner writes `~/.claude.json`), or from the folder's `.mcp
+ (`enabledMcpjsonServers`, or `enableAllProjectMcpServers`, in the folder's entry of `~/.claude.json` or in the user's own
+ `~/.claude/settings.json`; a `disabledMcpjsonServers` entry beats both; the folder's own settings files are not read, since a cloned
+ repository cannot approve its own servers). An unapproved one is not launched: the worker goes `failed` on the `mcp` axis and the
+-thread is told how to fix it (`claude mcp add -s local <name> ...` in that folder, or approve it once in Claude Code there). Each
++thread is told how to fix it (`claude mcp add -s local <name> ...` in that folder, or `enabledMcpjsonServers` in his own
++`~/.claude/settings.json`; an approval answered inside Claude Code there is kept in the folder's `settings.local.json`, which a thread
++session does not load, so it does not count). Each
+ own-folder server a session is started with is written to the app log (`supervisor.log`) with its scope. A plugin server gets
+ `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PROJECT_DIR}` (the thread folder) filled in and `CLAUDE_PLUGIN_ROOT` set in its environment;
+ one that uses `${CLAUDE_PLUGIN_DATA}` is left out, because the app cannot name that folder. A channel plugin (`plugin:telegram:...`,
+diff --git a/kit/hooks/permission-relay.py b/kit/hooks/permission-relay.py
+index 665addf4..9f364578 100755
+--- a/kit/hooks/permission-relay.py
++++ b/kit/hooks/permission-relay.py
+@@ -255,12 +255,17 @@ def ask_bridge(req, deadline, parent, watcher):
+     return d if d in ("allow", "deny") else None
+ 
+ 
+-# The Mac's thread sessions name their folder here (TALOS_APP_HOOK_CHECK_DIR, written into the command by the app): its own Claude
+-# Code settings, and its git root's when it sits below one, are read again at every prompt. They may carry only what the app
+-# allows (env: Claude Code's own tunables; outside the agent folder, a few plain keys and permissions with deny and ask only). Any
+-# other means the session may not be what it seems: the prompt stays at the terminal, the bridge is never asked, and one line says
+-# why. This stops only an honest hook: one whose shell was already steered never runs this. Unset (Linux, main's own session):
+-# nothing is read. The lists are the app's (WorkerHookFolder.swift; swift-parity.test.ts holds them equal).
++# The Mac's thread sessions name their folder here (TALOS_APP_HOOK_CHECK_DIR, written into the command by the app). Its Claude Code
++# files, and those of every folder above it up to its git root and of its git roots, are looked at again at every prompt:
++#  - REFUSED (the prompt stays at the terminal, the bridge is never asked, one line says why): `.claude`, anything under it,
++#    `.mcp.json` or `.env` that is a link; a subagent, skill or command whose frontmatter has hooks, allowed-tools, its own MCP
++#    servers or permission mode, or cannot be read for certain; a git pointer that cannot be followed the way Claude Code follows it.
++#  - WARNED (one line, then the prompt goes on as usual): a `.claude/settings(.local).json` carrying more than the lists below. A
++#    thread session outside the agent folder starts with `--setting-sources user` and never loads those files. In the agent folder
++#    (TALOS_APP_HOOK_CHECK_HOOKS=0), whose settings a session does load, it is still refused.
++# This stops only an honest hook: one whose shell was already steered never runs this. Unset (Linux, main's own session): nothing
++# is read. The lists and the reader are the app's (WorkerHookFolder.swift, WorkerFolderTree.swift, FrontmatterScan.swift;
++# swift-parity.test.ts holds the lists equal, and both suites run kit/scripts/frontmatter-cases.json).
+ ALLOWED_ENV = frozenset((
+     "BASH_DEFAULT_TIMEOUT_MS", "BASH_MAX_TIMEOUT_MS", "BASH_MAX_OUTPUT_LENGTH", "MAX_THINKING_TOKENS", "MAX_MCP_OUTPUT_TOKENS", "MCP_TIMEOUT",
+     "MCP_TOOL_TIMEOUT", "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
+@@ -268,10 +273,17 @@ ALLOWED_ENV = frozenset((
+     "DISABLE_COST_WARNINGS", "DISABLE_NON_ESSENTIAL_MODEL_CALLS", "DISABLE_PROMPT_CACHING",
+ ))
+ ALLOWED_KEYS = frozenset((
+-    "$schema", "env", "permissions", "model", "includeCoAuthoredBy", "cleanupPeriodDays", "alwaysThinkingEnabled", "outputStyle",
++    "$schema", "env", "permissions", "model", "includeCoAuthoredBy", "alwaysThinkingEnabled", "outputStyle",
+     "claudeMdExcludes", "skillOverrides",
+ ))
+ ALLOWED_PERMISSION_KEYS = frozenset(("deny", "ask", "defaultMode"))  # the session's own --settings names main's mode and outranks it
++REFUSED_FRONTMATTER_KEYS = frozenset(("hooks", "allowed-tools", "mcpServers", "permissionMode"))
++TREE_ENTRIES_CAP = 5000
++TREE_DEPTH_CAP = 24
++
++
++def _norm_key(k):
++    return k.lower().replace("-", "").replace("_", "")
+ 
+ 
+ def _shown(k):
+@@ -282,11 +294,11 @@ def _shown(k):
+ SETTINGS_CAP = 256 * 1024
+ 
+ 
+-def _read_small(path, cap):
+-    """The bytes of a regular file (links followed) of at most `cap` bytes, through one descriptor that never blocks, else None:
++def _read_small(path, cap, dir_fd=None):
++    """The bytes of a regular file that is not a link, of at most `cap` bytes, through one descriptor that never blocks, else None:
+     a FIFO, a device or a huge file at a settings path cannot hold the hook."""
+     try:
+-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
++        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=dir_fd)
+     except OSError:
+         return None
+     try:
+@@ -305,9 +317,42 @@ def stat_is_reg(mode):
+     return (mode & 0o170000) == 0o100000
+ 
+ 
++def stat_is_dir(mode):
++    return (mode & 0o170000) == 0o040000
++
++
++def stat_is_lnk(mode):
++    return (mode & 0o170000) == 0o120000
++
++
++def _lexical(p):
++    parts = []
++    for c in p.split("/"):
++        if c in ("", "."):
++            continue
++        if c == "..":
++            if parts:
++                parts.pop()
++            continue
++        parts.append(c)
++    return "/" + "/".join(parts)
++
++
++def _pointer(raw, base):
++    """A path a git pointer file names: its whole text trimmed, from `base` when relative, resolved by its text alone, and only when
++    that is where it really is (no link on the way). None for a control character or any non-ASCII space (U+0085, U+2028, U+2029,
++    U+00A0 ...): Claude Code trims some of those and not others."""
++    text = raw.strip(" \t\n\r\f\v")       # ASCII only: Claude Code's trim takes more, so what is left of it is refused below
++    if not text or any(ord(c) < 0x20 or ord(c) == 0x7F or (not c.isascii() and c.isspace()) for c in text):
++        return None
++    lex = _lexical(text if text.startswith("/") else base + "/" + text)
++    return lex if os.path.realpath(lex) == lex else None
++
++
+ def _git_roots(folder):
+     """The git roots whose settings Claude Code reads for `folder`: the nearest folder with a .git, and when that .git is a file
+-    (a linked worktree) the canonical root it leads to (.git -> gitdir -> commondir). (roots, problem)."""
++    (a linked worktree) the canonical root it leads to (.git -> gitdir -> commondir), followed as Claude Code follows it: the whole
++    trimmed text after `gitdir:`, each path resolved by its text, and each step where its text says. (roots, problem)."""
+     d = os.path.realpath(folder)
+     while not os.path.lexists(os.path.join(d, ".git")):
+         up = os.path.dirname(d)
+@@ -321,33 +366,439 @@ def _git_roots(folder):
+     if os.path.isdir(dot):
+         return [d], None
+     raw = _read_small(dot, 4096)
+-    line = (raw or b"").decode("utf-8", "replace").splitlines()[:1]
+-    if not line or not line[0].startswith("gitdir:"):
++    try:
++        text = (raw or b"").decode("utf-8")
++    except UnicodeDecodeError:
++        return [d], broken
++    if not text.startswith("gitdir:"):
+         return [d], broken
+-    gitdir = line[0][len("gitdir:"):].strip()
+-    if not os.path.isabs(gitdir):
+-        gitdir = os.path.join(d, gitdir)
+-    gitdir = os.path.realpath(gitdir)
+-    if not os.path.isdir(gitdir):
++    gitdir = _pointer(text[len("gitdir:"):], d)
++    if gitdir is None or not os.path.isdir(gitdir):
+         return [d], broken
+     common_file = os.path.join(gitdir, "commondir")
+-    if not os.path.exists(common_file):
++    if not os.path.lexists(common_file):
+         return [d], None
+     raw = _read_small(common_file, 4096)
+-    if raw is None:
+-        return [d], broken
+-    common = raw.decode("utf-8", "replace").strip()
+-    if not os.path.isabs(common):
+-        common = os.path.join(gitdir, common)
+-    common = os.path.realpath(common)
+-    if not os.path.isdir(common):
++    try:
++        common = _pointer((raw or b"").decode("utf-8"), gitdir) if raw is not None else None
++    except UnicodeDecodeError:
++        common = None
++    if common is None or not os.path.isdir(common):
+         return [d], broken
+     if os.path.basename(common) != ".git":
+         return [d], None
+     canonical = os.path.dirname(common)
++    if os.path.realpath(canonical) != canonical:
++        return [d], broken
+     return ([d] if canonical == d else [d, canonical]), None
+ 
+ 
++def _config_folders(folder):
++    """The folder, every folder above it up to its git root, and its git roots, as real paths. (folders, problem)."""
++    me = os.path.realpath(folder)
++    roots, problem = _git_roots(folder)
++    out = [me]
++    if roots and me != roots[0] and me.startswith("/" if roots[0] == "/" else roots[0] + "/"):
++        d = os.path.dirname(me)
++        while d != roots[0] and len(d) > len(roots[0]):
++            out.append(d)
++            d = os.path.dirname(d)
++    out += [r for r in roots if r not in out]
++    return out, problem
++
++
++class _Unclear(Exception):
++    pass
++
++
++def frontmatter_keys(text):
++    """The top-level keys of a Markdown file's YAML frontmatter, or raises _Unclear (FrontmatterScan.swift is the same reader)."""
++    if text.startswith("﻿"):
++        text = text[1:]
++    text = text.replace("\r\n", "\n").replace("\r", "\n")
++    lines = text.split("\n")
++    if not lines[0].startswith("---"):
++        return []
++    if lines[0].strip(" \t") != "---":
++        raise _Unclear("its first line starts a frontmatter block that is not plain ---")
++    end = None
++    for k in range(1, len(lines)):
++        t = lines[k].strip(" \t")
++        if t == "---":
++            end = k
++            break
++        if t == "...":
++            raise _Unclear("its frontmatter has a ... line")
++    if end is None:
++        raise _Unclear("its frontmatter has no closing ---")
++    body = "\n".join(lines[1:end])
++    for c in body:
++        o = ord(c)
++        if (o < 0x20 and c not in "\t\n") or o in (0x7F, 0x85, 0x2028, 0x2029, 0xFEFF):
++            raise _Unclear("its frontmatter has the character U+%04X" % o)
++    return _FrontReader(body).block()
++
++
++class _FrontReader(object):
++    def __init__(self, t):
++        self.t = t
++        self.n = len(t)
++
++    def line_end(self, i):
++        j = self.t.find("\n", i)
++        return self.n if j < 0 else j
++
++    def blank(self, a, b):
++        return all(c in " \t" for c in self.t[a:b])
++
++    def rest_is_nothing(self, a, b):
++        j = a
++        while j < b and self.t[j] in " \t":
++            j += 1
++        return j == b or self.t[j] == "#"
++
++    def block(self):
++        t = self.t
++        keys = []
++        top = None
++        block_indent = None
++        pos = 0
++        while pos <= self.n:
++            le = self.line_end(pos)
++            k = pos
++            while k < le and t[k] == " ":
++                k += 1
++            indent = k - pos
++            if self.blank(pos, le):
++                pos = le + 1
++                continue
++            if t[k] == "\t":
++                raise _Unclear("its frontmatter has a tab in an indentation")
++            if block_indent is not None:
++                if indent > block_indent:
++                    pos = le + 1
++                    continue
++                block_indent = None
++            if t[k] == "#":
++                pos = le + 1
++                continue
++            if top is None:
++                top = indent
++                if t[k] in "{[":
++                    return self.flow_document(k)
++            if indent < top:
++                raise _Unclear("its frontmatter has a line less indented than its first")
++            if indent == top:
++                got = self.key_at(k, le, True)
++                if got is None:
++                    raise _Unclear("its frontmatter has a top-level line that is not a key")
++                keys.append(got[0])
++                v = got[1]
++            else:
++                q = k
++                while q < le and t[q] == "-" and (q + 1 == le or t[q + 1] in " \t"):
++                    q += 1
++                    while q < le and t[q] in " \t":
++                        q += 1
++                got = self.key_at(q, le, False)
++                v = got[1] if got else q
++            kind, last = self.value(v, le, top)
++            if kind == "block":
++                block_indent = indent
++                pos = le + 1
++            elif kind == "until":
++                pos = last + 1
++            else:
++                pos = le + 1
++        return keys
++
++    def key_at(self, k, le, strict):
++        t = self.t
++        if k >= le:
++            return None
++        c = t[k]
++        if c in "\"'":
++            j = k + 1
++            key = []
++            while True:
++                if j >= le:
++                    return None
++                if c == '"' and t[j] == "\\":
++                    if strict:
++                        raise _Unclear("its frontmatter has a key with an escape")
++                    return None
++                if t[j] == c:
++                    if c == "'" and j + 1 < le and t[j + 1] == "'":
++                        key.append("'")
++                        j += 2
++                        continue
++                    break
++                key.append(t[j])
++                j += 1
++            j += 1
++            while j < le and t[j] in " \t":
++                j += 1
++            if j >= le or t[j] != ":":
++                return None
++            return "".join(key), j + 1
++        nxt = t[k + 1] if k + 1 < le else None
++        if c in "-?:" and (nxt is None or nxt in " \t"):
++            return None
++        if c in ",[]{}#&*!|>%@`":
++            return None
++        j = k
++        while j < le:
++            if t[j] == ":" and (j + 1 == le or t[j + 1] in " \t"):
++                return t[k:j].strip(" \t"), j + 1
++            if t[j] == "#" and j > k and t[j - 1] in " \t":
++                return None
++            j += 1
++        return None
++
++    def value(self, v, le, top):
++        t = self.t
++        while v < le and t[v] in " \t":
++            v += 1
++        if v == le or t[v] == "#":
++            return "line", None
++        c = t[v]
++        if c in "\"'":
++            close = self.quoted(v)
++        elif c in "[{":
++            close = self.flow_node(v, None) - 1
++        elif c in "|>":
++            j = v + 1
++            while j < le and t[j] in "0123456789+-":
++                j += 1
++            if not (j == le or (t[j] in " \t" and self.rest_is_nothing(j, le))):
++                raise _Unclear("its frontmatter has a block scalar header it cannot read")
++            return "block", None
++        elif c in "&*!%@`":
++            raise _Unclear("its frontmatter has an anchor, alias, tag or reserved character")
++        else:
++            return "line", None
++        if close < le:
++            return "line", None
++        self.span_stays_right(le, close, top)
++        last = self.line_end(close)
++        if not self.rest_is_nothing(close + 1, last):
++            raise _Unclear("its frontmatter has text after a value that spans lines")
++        return "until", last
++
++    def span_stays_right(self, start, end, top):
++        t = self.t
++        for j in range(start, end):
++            if t[j] == "\n":
++                k = j + 1
++                while k < self.n and t[k] == " ":
++                    k += 1
++                le = self.line_end(j + 1)
++                if not self.blank(j + 1, le) and k - (j + 1) <= top:
++                    raise _Unclear("its frontmatter has a quote or a flow collection open at a top-level line")
++
++    def quoted(self, q):
++        t = self.t
++        c = t[q]
++        j = q + 1
++        while j < self.n:
++            if c == '"' and t[j] == "\\":
++                j += 2
++                continue
++            if t[j] == c:
++                if c == "'" and j + 1 < self.n and t[j + 1] == "'":
++                    j += 2
++                    continue
++                return j
++            j += 1
++        raise _Unclear("its frontmatter has a quote that never closes")
++
++    def flow_document(self, k):
++        if self.t[k] != "{":
++            raise _Unclear("its frontmatter is a flow sequence, not a mapping")
++        keys = []
++        j = self.skip_space(self.flow_node(k, keys))
++        if j < self.n:
++            raise _Unclear("its frontmatter has text after its flow mapping")
++        return keys
++
++    def skip_space(self, j):
++        t = self.t
++        while j < self.n:
++            if t[j] in " \t\n":
++                j += 1
++            elif t[j] == "#" and (j == 0 or t[j - 1] in " \t\n"):
++                while j < self.n and t[j] != "\n":
++                    j += 1
++            else:
++                return j
++        return j
++
++    def flow_node(self, j, keys):
++        """One flow node at `j`; the index just past it. `keys`: a list for this mapping's own keys, or None."""
++        t = self.t
++        never = "its frontmatter has a flow collection that never closes"
++        j = self.skip_space(j)
++        if j >= self.n:
++            raise _Unclear(never)
++        c = t[j]
++        if c in "\"'":
++            return self.quoted(j) + 1
++        if c in "[{":
++            closer = "]" if c == "[" else "}"
++            j += 1
++            while True:
++                j = self.skip_space(j)
++                if j >= self.n:
++                    raise _Unclear(never)
++                if t[j] == closer:
++                    return j + 1
++                start = j
++                if t[j] == "?" and j + 1 < self.n and t[j + 1] in " \t\n":
++                    raise _Unclear("its frontmatter has an explicit key")
++                j = self.flow_node(j, None)
++                if keys is not None:
++                    key = self.flow_key_text(start, j)
++                    if key is None:
++                        raise _Unclear("its frontmatter has a flow key it cannot read")
++                    keys.append(key)
++                j = self.skip_space(j)
++                if j < self.n and t[j] == ":":
++                    j = self.skip_space(j + 1)
++                    if j < self.n and t[j] not in (",", closer):
++                        j = self.flow_node(j, None)
++                    j = self.skip_space(j)
++                if j >= self.n:
++                    raise _Unclear(never)
++                if t[j] == ",":
++                    j += 1
++                elif t[j] != closer:
++                    raise _Unclear("its frontmatter has a flow collection it cannot read")
++        if c in "&*!|>%@`],}":
++            raise _Unclear("its frontmatter has an anchor, alias, tag or reserved character")
++        while j < self.n:
++            d = t[j]
++            if d in ",[]{}":
++                return j
++            if d == ":" and (j + 1 >= self.n or t[j + 1] in " \t\n,[]{}"):
++                return j
++            if d == "#" and j > 0 and t[j - 1] in " \t\n":
++                return j
++            j += 1
++        return j
++
++    def flow_key_text(self, a, b):
++        t = self.t
++        c = t[a]
++        if c in "\"'":
++            inner = t[a + 1:b - 1]
++            if "\n" in inner or (c == '"' and "\\" in inner):
++                return None
++            return inner.replace("''", "'") if c == "'" else inner
++        if c in "[{":
++            return None
++        key = t[a:b].strip(" \t\n")
++        return None if "\n" in key else key
++
++
++def _link_line(path):
++    return "%s is a link, which a thread session's Claude Code files may not be" % path
++
++
++def _loaded_kind(area, name):
++    lower = name.lower()
++    if area == "agents" and lower.endswith(".md"):
++        return "subagent"
++    if area == "commands" and lower.endswith(".md"):
++        return "command"
++    if area == "skills" and lower == "skill.md":
++        return "skill"
++    return None
++
++
++def _walk(fd, path, area, depth, seen):
++    if depth > TREE_DEPTH_CAP:
++        return "%s cannot be read" % path
++    try:
++        names = sorted(os.listdir(fd))
++    except OSError:
++        return "%s cannot be read" % path
++    for name in names:
++        seen[0] += 1
++        if seen[0] > TREE_ENTRIES_CAP:
++            return "%s has more files than are checked (%d)" % (path, TREE_ENTRIES_CAP)
++        full = path + "/" + name
++        try:
++            st = os.stat(name, dir_fd=fd, follow_symlinks=False)
++        except OSError:
++            return "%s cannot be read" % full
++        if stat_is_lnk(st.st_mode):
++            return _link_line(full)
++        if stat_is_dir(st.st_mode):
++            if area is None and name.lower() == "worktrees":
++                continue
++            try:
++                sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
++            except OSError:
++                return "%s cannot be read" % full
++            try:
++                why = _walk(sub, full, area or name.lower(), depth + 1, seen)
++            finally:
++                os.close(sub)
++            if why:
++                return why
++            continue
++        kind = _loaded_kind(area, name)
++        if kind is None:
++            continue
++        data = _read_small(name, SETTINGS_CAP, dir_fd=fd)
++        try:
++            text = data.decode("utf-8") if data is not None else None
++        except UnicodeDecodeError:
++            text = None
++        if text is None:
++            return "the %s %s cannot be read" % (kind, full)
++        try:
++            keys = frontmatter_keys(text)
++        except _Unclear as e:
++            return "the %s %s cannot be read for certain (%s)" % (kind, full, e)
++        for k in keys:
++            if _norm_key(k) in {_norm_key(r) for r in REFUSED_FRONTMATTER_KEYS}:
++                return "the %s %s has %s of its own" % (kind, full, _shown(k))
++    return None
++
++
++def folder_files_problem(folder):
++    """A link at .claude, under it, at .mcp.json or .env, or a subagent, skill or command that refuses (WorkerFolderTree.swift)."""
++    try:
++        dfd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
++    except OSError:
++        return None
++    try:
++        for name in (".mcp.json", ".env", ".claude"):
++            try:
++                st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
++            except OSError:
++                continue
++            if stat_is_lnk(st.st_mode):
++                return _link_line(folder + "/" + name)
++        try:
++            st = os.stat(".claude", dir_fd=dfd, follow_symlinks=False)
++        except OSError:
++            return None
++        if not stat_is_dir(st.st_mode):
++            return None
++        try:
++            cfd = os.open(".claude", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
++        except OSError:
++            return "%s/.claude cannot be opened" % folder
++        try:
++            return _walk(cfd, folder + "/.claude", None, 0, [0])
++        finally:
++            os.close(cfd)
++    finally:
++        os.close(dfd)
++
++
+ def _file_problem(path, kit_owned):
+     if not os.path.lexists(path):
+         return None
+@@ -385,22 +836,32 @@ def _file_problem(path, kit_owned):
+     return None
+ 
+ 
+-def folder_settings_problem():
++def folder_check():
++    """(refusal, warnings) for the folder the Mac named, or (None, []) when it named none."""
+     folder = os.environ.get("TALOS_APP_HOOK_CHECK_DIR")
+     if not folder:
+-        return None
++        return None, []
+     agent = os.environ.get("TALOS_APP_HOOK_CHECK_HOOKS") == "0"
+-    me = os.path.realpath(folder)
+-    roots, problem = _git_roots(folder)
++    folders, problem = _config_folders(folder)
+     if problem:
+-        return problem
+-    folders = [me] + [r for r in roots if r != me]
++        return problem, []
++    for f in folders:
++        why = folder_files_problem(f)
++        if why:
++            return why, []
++    warnings = []
+     for n, f in enumerate(folders):
+         for name in ("settings.json", "settings.local.json"):
+             why = _file_problem(os.path.join(f, ".claude", name), agent and n == 0)
+             if why:
+-                return why
+-    return None
++                if agent:
++                    return why, []
++                warnings.append(why)
++    return None, warnings
++
++
++def folder_settings_problem():
++    return folder_check()[0]
+ 
+ 
+ def main():
+@@ -417,10 +878,12 @@ def main():
+             return                        # an unattended `claude -p` run: an ask stays refused (C3.1)
+         if os.environ.get("TALOS_APP_WORKER_THREAD") and os.environ.get("TALOS_APP_PERM_HOOK_SOURCE") != "worker":
+             return                        # the agent folder's copy in a thread session: the session's own copy answers
+-        unsafe = folder_settings_problem()
++        unsafe, ignored = folder_check()
+         if unsafe:
+             sys.stderr.write("talos permission hook: %s, so this prompt stays at the terminal (restart the thread's session once the file is fixed)\n" % unsafe)
+             return
++        for why in ignored:
++            sys.stderr.write("talos permission hook: %s; a thread session does not load that file, so it is ignored\n" % why)
+         parent = os.getppid()
+         deadline = time.monotonic() + wait_seconds()
+         req = build_request(call, "h_" + uuid.uuid4().hex[:24])
+diff --git a/kit/scripts/frontmatter-cases.json b/kit/scripts/frontmatter-cases.json
+new file mode 100644
+index 00000000..03d425a4
+--- /dev/null
++++ b/kit/scripts/frontmatter-cases.json
+@@ -0,0 +1,235 @@
++[
++ {
++  "name": "plain keys",
++  "text": "---\nname: helper\ndescription: plain\ntools: Read, Grep\n---\nBody.\n",
++  "keys": [
++   "name",
++   "description",
++   "tools"
++  ]
++ },
++ {
++  "name": "no frontmatter",
++  "text": "# Title\nhooks: x\n",
++  "keys": []
++ },
++ {
++  "name": "empty frontmatter",
++  "text": "---\n---\nbody\n",
++  "keys": []
++ },
++ {
++  "name": "a key in the body is not frontmatter",
++  "text": "---\nname: ok\n---\nhooks: none here\n",
++  "keys": [
++   "name"
++  ]
++ },
++ {
++  "name": "uniform indentation",
++  "text": "---\n  name: a\n  hooks:\n    PreToolUse: []\n---\n",
++  "keys": [
++   "name",
++   "hooks"
++  ]
++ },
++ {
++  "name": "a whole flow mapping",
++  "text": "---\n{name: a, hooks: {PreToolUse: []}}\n---\n",
++  "keys": [
++   "name",
++   "hooks"
++  ]
++ },
++ {
++  "name": "a flow mapping over lines, quoted key",
++  "text": "---\n{name: a,\n  \"allowed-tools\": [Bash, Read],\n  'mcpServers': {x: {}}}\n---\n",
++  "keys": [
++   "name",
++   "allowed-tools",
++   "mcpServers"
++  ]
++ },
++ {
++  "name": "quoted keys",
++  "text": "---\n'hooks': x\n\"mcpServers\": {}\n'it''s': y\n---\n",
++  "keys": [
++   "hooks",
++   "mcpServers",
++   "it's"
++  ]
++ },
++ {
++  "name": "an escape in a key is unclear",
++  "text": "---\n\"hoo\\x6bs\": x\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "CRLF",
++  "text": "---\r\nname: a\r\nhooks: x\r\n---\r\nbody\r\n",
++  "keys": [
++   "name",
++   "hooks"
++  ]
++ },
++ {
++  "name": "lone CR",
++  "text": "---\rname: a\rpermissionMode: auto\r---\r",
++  "keys": [
++   "name",
++   "permissionMode"
++  ]
++ },
++ {
++  "name": "a byte order mark",
++  "text": "\ufeff---\nhooks: x\n---\n",
++  "keys": [
++   "hooks"
++  ]
++ },
++ {
++  "name": "a block scalar hides nothing",
++  "text": "---\ndescription: |\n  hooks: not a key\n  more\nname: x\n---\n",
++  "keys": [
++   "description",
++   "name"
++  ]
++ },
++ {
++  "name": "a folded scalar with indicators",
++  "text": "---\ndescription: >-\n  text\n\n  hooks: no\nallowed-tools: Bash\n---\n",
++  "keys": [
++   "description",
++   "allowed-tools"
++  ]
++ },
++ {
++  "name": "a quote over lines",
++  "text": "---\ndescription: \"a\n  hooks: no\n  b\"\nname: x\n---\n",
++  "keys": [
++   "description",
++   "name"
++  ]
++ },
++ {
++  "name": "a flow value over lines",
++  "text": "---\ntools: [Read,\n  Grep]\nhooks: {}\n---\n",
++  "keys": [
++   "tools",
++   "hooks"
++  ]
++ },
++ {
++  "name": "a quote open at a top-level line is unclear",
++  "text": "---\ndescription: 'a\nhooks: x\n'\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "a flow open at a top-level line is unclear",
++  "text": "---\ntools: [a,\nhooks: x]\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "a tab indentation is unclear",
++  "text": "---\nname: a\n\thooks: x\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "a line less indented than the first is unclear",
++  "text": "---\n  name: a\nhooks: x\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "an anchor and a merge key are unclear",
++  "text": "---\nbase: &b {hooks: x}\n<<: *b\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "a tag is unclear",
++  "text": "---\nhooks: !!map {}\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "no closing line is unclear",
++  "text": "---\nhooks: x\n",
++  "unclear": true
++ },
++ {
++  "name": "a ... line is unclear",
++  "text": "---\nname: a\n...\nhooks: x\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "a line separator is unclear",
++  "text": "---\nname: a\u2028hooks: x\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "a next-line character is unclear",
++  "text": "---\nname: a\u0085hooks: x\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "an opening line that is not plain is unclear",
++  "text": "--- x\nhooks: y\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "comments",
++  "text": "---\n# hooks: x\nname: a # hooks: y\n---\n",
++  "keys": [
++   "name"
++  ]
++ },
++ {
++  "name": "nested keys are not top-level",
++  "text": "---\nname: a\nlist:\n  - hooks: x\n  - {mcpServers: y}\n---\n",
++  "keys": [
++   "name",
++   "list"
++  ]
++ },
++ {
++  "name": "a quote in a plain value",
++  "text": "---\ndescription: don't stop\nhooks: x\n---\n",
++  "keys": [
++   "description",
++   "hooks"
++  ]
++ },
++ {
++  "name": "a top-level line that is not a key is unclear",
++  "text": "---\njust text\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "a sequence is unclear",
++  "text": "---\n- a\n- b\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "a flow sequence is unclear",
++  "text": "---\n[a, b]\n---\n",
++  "unclear": true
++ },
++ {
++  "name": "a colon inside a plain key",
++  "text": "---\na:b: c\n---\n",
++  "keys": [
++   "a:b"
++  ]
++ },
++ {
++  "name": "a plain multi-line value",
++  "text": "---\ndescription: a long\n  'quoted' words\nmodel: x\n---\n",
++  "keys": [
++   "description",
++   "model"
++  ]
++ },
++ {
++  "name": "a plain continuation that opens a quote is unclear",
++  "text": "---\ndescription: it is\n  'not closed\nhooks: x\n---\n",
++  "unclear": true
++ }
++]
+diff --git a/kit/scripts/test-permission-relay.sh b/kit/scripts/test-permission-relay.sh
+index 5a9b0bdb..8bf4a29e 100644
+--- a/kit/scripts/test-permission-relay.sh
++++ b/kit/scripts/test-permission-relay.sh
+@@ -212,8 +212,10 @@ run_hook "$CALL"; sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/
+ { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -e "$SB/rec-badpid" ]; } && ok "a garbled bridge.pid: nothing sent, no output" || no "garbled pidfile case wrong" "out=$OUT"
+ 
+ # ---- the Mac's thread session: its folder's own settings, read again at every prompt (TALOS_APP_HOOK_CHECK_DIR) ------------------
+-# A folder whose settings set a variable that steers the shell or the hook, or (outside the agent folder) add hooks: the bridge is
+-# never asked, even one that would answer allow; nothing on stdout; one line on stderr. Unset, or a clean folder: the bridge decides.
++# Outside the agent folder (CHECK_HOOKS=1) a thread session does not load its folder's settings (--setting-sources user), so what
++# they carry is a warning: one line on stderr, and the bridge still decides (mode 2). In the agent folder (CHECK_HOOKS=0) they load,
++# so the bridge is never asked, even one that would answer allow; nothing on stdout; one line on stderr (mode 0). Links, subagents,
++# skills and commands with hooks, and git pointers that cannot be followed are refused everywhere (mode 0). Clean: mode 1.
+ CF="$SB/thread-folder"; mkdir -p "$CF/.claude"
+ check_case(){ # $1 = label, $2 = settings.local.json text, $3 = TALOS_APP_HOOK_CHECK_HOOKS, $4 = 1 when the bridge must decide
+   printf '%s' "$2" > "$CF/.claude/settings.local.json"
+@@ -221,19 +223,22 @@ check_case(){ # $1 = label, $2 = settings.local.json text, $3 = TALOS_APP_HOOK_C
+   OUT="$(printf '%s' "$CALL" | TALOS_APP_HOME="$TH" TALOS_APP_HOOK_CHECK_DIR="$CF" TALOS_APP_HOOK_CHECK_HOOKS="$3" python3 "$HOOK" 2>"$SB/err")"; RC=$?; ERR="$(cat "$SB/err")"
+   sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
+   if [ "$4" = 1 ]; then
+-    { [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest allow" ] && [ -e "$SB/rec-cf" ]; } && ok "control, $1: the bridge decides" || no "control, $1: the bridge did not decide" "rc=$RC out=$OUT err=$ERR"
++    { [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest allow" ] && [ -e "$SB/rec-cf" ] && [ -z "$ERR" ]; } && ok "control, $1: the bridge decides" || no "control, $1: the bridge did not decide" "rc=$RC out=$OUT err=$ERR"
++  elif [ "$4" = 2 ]; then
++    { [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest allow" ] && [ -e "$SB/rec-cf" ] && <<<"$ERR" grep -q "so it is ignored"; } && ok "$1: ignored, one warning line, and the bridge decides" || no "$1: not a warning" "rc=$RC out=$OUT err=$ERR"
+   else
+     { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -e "$SB/rec-cf" ] && <<<"$ERR" grep -q "so this prompt stays at the terminal"; } && ok "$1: the bridge is never asked, no answer, one line on stderr" || no "$1: the hook still asked or answered" "rc=$RC out=$OUT err=$ERR rec=$(cat "$SB/rec-cf" 2>/dev/null)"
+   fi
+ }
+ for key in CLAUDE_CODE_SHELL_PREFIX GCONV_PATH LC_ALL SHLVL PATH SHELLOPTS PS4 ENV IFS BASHOPTS BASH_ENV 'BASH_FUNC_[%%' LD_PRELOAD DYLD_INSERT_LIBRARIES PYTHONPATH TALOS_APP_HOME FOO; do
+-  check_case "env $key" "{\"env\":{\"MAX_THINKING_TOKENS\":\"1\",\"$key\":\"x\"}}" 1 0
++  check_case "env $key" "{\"env\":{\"MAX_THINKING_TOKENS\":\"1\",\"$key\":\"x\"}}" 1 2
++  check_case "env $key in the agent folder" "{\"env\":{\"MAX_THINKING_TOKENS\":\"1\",\"$key\":\"x\"}}" 0 0
+ done
+-check_case "hooks of its own" '{"hooks":{"PermissionRequest":[{"hooks":[{"type":"command","command":"echo allow"}]}]}}' 1 0
+-check_case "a status line" '{"statusLine":{"type":"command","command":"x"}}' 1 0
+-check_case "an api key helper" '{"apiKeyHelper":"x"}' 1 0
+-check_case "permissions.allow" '{"permissions":{"allow":["Bash(*)"]}}' 1 0
+-check_case "settings that cannot be read" '{not json' 1 0
++check_case "hooks of its own" '{"hooks":{"PermissionRequest":[{"hooks":[{"type":"command","command":"echo allow"}]}]}}' 1 2
++check_case "a status line" '{"statusLine":{"type":"command","command":"x"}}' 1 2
++check_case "an api key helper" '{"apiKeyHelper":"x"}' 1 2
++check_case "permissions.allow" '{"permissions":{"allow":["Bash(*)"]}}' 1 2
++check_case "settings that cannot be read" '{not json' 1 2
+ check_case "hooks in the agent folder (they do not count there)" '{"hooks":{"PreToolUse":[]}, "env":{"MAX_THINKING_TOKENS":"1"}}' 0 1
+ check_case "the agent folder's env is held to it" '{"env":{"SHELLOPTS":"xtrace"}}' 0 0
+ check_case "a clean folder" '{"env":{"MAX_THINKING_TOKENS":"1024","DISABLE_TELEMETRY":"1"},"permissions":{"deny":["Bash(rm:*)"],"ask":[]},"model":"opus"}' 1 1
+@@ -241,7 +246,7 @@ check_case "a clean folder" '{"env":{"MAX_THINKING_TOKENS":"1024","DISABLE_TELEM
+ mkdir -p "$SB/repo/.git" "$SB/repo/.claude" "$SB/repo/sub"; rm -f "$CF/.claude/settings.local.json"
+ printf '%s' '{"env":{"CLAUDE_CODE_SHELL_PREFIX":"/tmp/x"}}' > "$SB/repo/.claude/settings.json"
+ CF_KEEP="$CF"; CF="$SB/repo/sub"; mkdir -p "$CF/.claude"
+-check_case "the git root's settings" '' 1 0
++check_case "the git root's settings" '' 1 2
+ printf '%s' '{}' > "$SB/repo/.claude/settings.json"
+ check_case "control, a clean git root" '' 1 1
+ # a faked worktree: a .git FILE in the folder pointing into another repository, whose canonical root's settings Claude Code reads
+@@ -249,7 +254,7 @@ mkdir -p "$SB/victim/.git/worktrees/x" "$SB/victim/.claude" "$SB/faked"; printf
+ printf 'gitdir: %s/victim/.git/worktrees/x\n' "$SB" > "$SB/faked/.git"
+ printf '%s' '{"env":{"CLAUDE_CODE_SHELL_PREFIX":"/tmp/x"}}' > "$SB/victim/.claude/settings.local.json"
+ CF="$SB/faked"; mkdir -p "$CF/.claude"
+-check_case "a faked worktree's canonical root" '' 1 0
++check_case "a faked worktree's canonical root" '' 1 2
+ printf '%s' '{}' > "$SB/victim/.claude/settings.local.json"
+ check_case "control, a clean canonical root" '' 1 1
+ printf 'gitdir: %s/nowhere\n' "$SB" > "$SB/faked/.git"
+@@ -259,12 +264,74 @@ check_case "a .git that is a link" '' 1 0
+ rm -f "$SB/faked/.git" "$CF/.claude/settings.local.json"
+ # a FIFO and a link to /dev/zero at a settings path: refused at once, never read
+ mkfifo "$CF/.claude/settings.json"
+-T0=$SECONDS; check_case "a FIFO at a settings path" '' 1 0; [ $((SECONDS - T0)) -lt 5 ] && ok "and the FIFO did not hold the hook" || no "the FIFO held the hook"
++T0=$SECONDS; check_case "a FIFO at a settings path" '' 1 2; [ $((SECONDS - T0)) -lt 5 ] && ok "and the FIFO did not hold the hook" || no "the FIFO held the hook"
+ rm -f "$CF/.claude/settings.json"; ln -s /dev/zero "$CF/.claude/settings.json"
+-T0=$SECONDS; check_case "a link to /dev/zero at a settings path" '' 1 0; [ $((SECONDS - T0)) -lt 5 ] && ok "and /dev/zero did not hold the hook" || no "/dev/zero held the hook"
++T0=$SECONDS; check_case "a link to /dev/zero at a settings path (a link: refused, never read)" '' 1 0; [ $((SECONDS - T0)) -lt 5 ] && ok "and /dev/zero did not hold the hook" || no "/dev/zero held the hook"
+ rm -f "$CF/.claude/settings.json"
++# B1a: the whole trimmed text after gitdir: is the path, so a second line breaks it (it is not dropped)
++printf 'gitdir: %s/victim/.git/worktrees/x\nmore\n' "$SB" > "$SB/faked/.git"
++check_case "a gitdir with a second line" '' 1 0
++printf 'gitdir: %s/victim/.git/worktrees/x\n' "$SB" > "$SB/faked/.git"
++check_case "control, a one-line gitdir" '' 1 1
++# B1b: a gitdir through a link is not where its text says
++ln -s "$SB/victim" "$SB/victim-alias"; printf 'gitdir: %s/victim-alias/.git/worktrees/x\n' "$SB" > "$SB/faked/.git"
++check_case "a gitdir through a link" '' 1 0
++rm -f "$SB/faked/.git" "$SB/victim-alias"
++# links (R1-2, R1-4): a linked settings file, a linked .claude, a linked agents folder, a linked .mcp.json or .env
++mkdir -p "$SB/elsewhere/agents"; printf '{}' > "$SB/elsewhere/settings.json"
++for at in .claude/settings.json .claude/agents .mcp.json .env; do
++  ln -s "$SB/elsewhere/$( [ "$at" = .claude/agents ] && echo agents || echo settings.json )" "$CF/$at"
++  check_case "a link at $at" '' 1 0
++  rm -f "$CF/$at"
++done
++mv "$CF/.claude" "$CF/.claude-real"; ln -s "$CF/.claude-real" "$CF/.claude"
++check_case "a linked .claude" '' 1 0
++rm -f "$CF/.claude"; mv "$CF/.claude-real" "$CF/.claude"
++check_case "control, the links gone" '' 1 1
++# subagents, skills and commands (R1-1, R1-3), read again at every prompt (R1-9): a hooked one added after the start is seen
++mkdir -p "$CF/.claude/agents" "$CF/.claude/skills/deploy" "$CF/.claude/commands"
++printf -- '---\nname: ok\ndescription: plain\n---\n' > "$CF/.claude/agents/ok.md"
++check_case "control, a plain subagent" '' 1 1
++for text in '---\nname: a\nhooks:\n  PreToolUse: []\n---\n' '---\n  name: a\n  hooks: {}\n---\n' '---\n{name: a, permissionMode: auto}\n---\n' '---\nname: a\nhooks: x\n'; do
++  printf -- "$text" > "$CF/.claude/agents/new.md"
++  check_case "a subagent added mid-session: $(printf '%s' "$text" | head -c 40)" '' 1 0
++done
++rm -f "$CF/.claude/agents/new.md"
++printf -- '---\nname: deploy\nallowed-tools: Bash(*)\n---\n' > "$CF/.claude/skills/deploy/SKILL.md"
++check_case "a skill with allowed-tools" '' 1 0
++printf -- '---\nname: deploy\nhooks: {}\n---\n' > "$CF/.claude/skills/deploy/SKILL.md"
++check_case "a skill with hooks" '' 1 0
++printf -- '---\nname: deploy\n---\n' > "$CF/.claude/skills/deploy/SKILL.md"; printf -- '---\nhooks: {}\n---\n' > "$CF/.claude/skills/deploy/notes.md"
++check_case "control, a skill's other files are not skills" '' 1 1
++printf -- '---\nallowedTools: [Bash]\n---\n' > "$CF/.claude/commands/ship.md"
++check_case "a command with allowedTools" '' 1 0
++rm -rf "$CF/.claude/agents" "$CF/.claude/skills" "$CF/.claude/commands"
++# R1-8: a subagent in a folder between the thread folder and its git root
++mkdir -p "$SB/repo/sub/deeper/.claude" "$SB/repo/sub/.claude/agents"; CF="$SB/repo/sub/deeper"
++check_case "control, a clean folder between" '' 1 1
++printf -- '---\nname: x\nhooks: {}\n---\n' > "$SB/repo/sub/.claude/agents/x.md"
++check_case "a hooked subagent in a folder between it and the git root" '' 1 0
++rm -f "$SB/repo/sub/.claude/agents/x.md"
+ CF="$CF_KEEP"
+ rm -f "$CF/.claude/settings.local.json"
++# the frontmatter reader answers the cases the app's suite runs too (frontmatter-cases.json)
++out="$(python3 - "$HOOK" "$(dirname "$0")/frontmatter-cases.json" <<'PY'
++import importlib.util, json, sys
++spec = importlib.util.spec_from_file_location("relay", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
++bad = []
++cases = json.load(open(sys.argv[2]))
++for c in cases:
++    try:
++        got = ("keys", m.frontmatter_keys(c["text"]))
++    except m._Unclear:
++        got = ("unclear", None)
++    want = ("unclear", None) if c.get("unclear") else ("keys", c["keys"])
++    if got != want:
++        bad.append(c["name"])
++print("%d %s" % (len(cases), ",".join(bad)))
++PY
++)"
++{ [ "${out%% *}" -ge 30 ] && [ "${out#* }" = "" ]; } && ok "the hook's frontmatter reader answers all ${out%% *} shared cases" || no "frontmatter cases failed" "$out"
+ 
+ # ---- unattended runs and the double registration ----------------------------------------------------------------------------------
+ start_hub allow "$SB/rec-hl"

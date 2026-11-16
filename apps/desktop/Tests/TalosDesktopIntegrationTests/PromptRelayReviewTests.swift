@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// An attached tmux client with a tty (`script`), the way a Terminals window is one. Its activity time is the attach.
 private func attachClient(socket: String, session: String, home: String, wait r: (Double, () -> Bool) -> Bool) throws -> Process {
@@ -36,7 +37,7 @@ struct WorkerPromptReviewTests {
   /// S3: a picker the owner opened (a client is typing in the pane) is not a notice; once the client has been quiet, it is.
   @Test(arguments: [(60.0, false), (1.0, true)])
   func aPromptWaitsWhileAClientTypedLately(quiet: Double, notices: Bool) throws {
-    let trigger = NSTemporaryDirectory() + "prm-\(UUID().uuidString.prefix(6))"
+    let trigger = TestTemp.base + "prm-\(UUID().uuidString.prefix(6))"
     let (r, log) = try rig(["FAKE_REAL_START": "empty", "FAKE_REAL_SWITCH": trigger, "FAKE_REAL_THEN": "bash-permission"])
     defer {
       r.teardown()
@@ -64,7 +65,7 @@ struct WorkerPromptReviewTests {
   /// L1: the record is the prompt's own hash. After a relaunch another prompt of the same kind (SYNTHETIC: another command) still
   /// notifies, and the open one does not repeat.
   @Test func aDifferentPromptAfterARelaunchStillNotifies() throws {
-    let go = NSTemporaryDirectory() + "prm-\(UUID().uuidString.prefix(6))"
+    let go = TestTemp.base + "prm-\(UUID().uuidString.prefix(6))"
     let (r, log) = try rig(["FAKE_REAL_START": "screen:bash-permission", "FAKE_REAL_SWITCH": go, "FAKE_REAL_THEN": "bash-permission-other"])
     defer {
       r.teardown()

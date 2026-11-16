@@ -14,7 +14,21 @@
 set -uo pipefail
 
 TERM_RAW="${1:-}"
-WIKI="${2:-wiki}"
+WIKI="${2:-}"
+if [ -z "$WIKI" ]; then
+  # the default wiki folder: wiki/ (layout 1, exactly as always), or the layout-2 agent's memory/wiki/ (relative when we are in
+  # the agent folder, as the layout-1 default is)
+  WIKI=wiki
+  HERE="$(cd "$(dirname "$0")" && pwd)"
+  AGENT_DIR="$(python3 "$HERE/_agent_root.py" "$0" 1 2>/dev/null)" || AGENT_DIR="$(cd "$HERE/.." && pwd)"
+  if grep -qi '^[[:space:]]*layout' "$AGENT_DIR/.talos-version" 2>/dev/null; then      # only then is a resolver needed
+    [ -f "$HERE/_talos_layout.py" ] || { echo "! $AGENT_DIR/.talos-version has a layout line but $HERE/_talos_layout.py is missing: refusing to guess where the wiki is"; exit 2; }
+    _w="$(python3 "$HERE/_talos_layout.py" "$AGENT_DIR" wiki)" || exit 2
+    if [ "$_w" != "$AGENT_DIR/wiki" ]; then
+      if [ "$(pwd -P)" = "$(cd "$AGENT_DIR" && pwd -P)" ]; then WIKI="${_w#"$AGENT_DIR"/}"; else WIKI="$_w"; fi
+    fi
+  fi
+fi
 [ -z "$TERM_RAW" ] && { echo "usage: $0 \"<term>\" [wiki-dir]"; exit 2; }
 
 if [ ! -d "$WIKI" ]; then

@@ -21,7 +21,7 @@ const endpoints = (rel: RealRelay) => rel.runtime.store.listSubs().map((s) => s.
 const stepupRevoke = async (rel: RealRelay, by: Owner, target: Owner) =>
   rel.post(
     `/api/devices/${target.device.deviceId}/revoke`,
-    { stepup_token: rel.auth.core.mintStepup(by.sessionId, 'device:revoke') },
+    {}, // no passkey step-up since 2026-11-14
     by,
   )
 

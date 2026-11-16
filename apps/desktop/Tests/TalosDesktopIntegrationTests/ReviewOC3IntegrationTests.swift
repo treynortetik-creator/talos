@@ -17,6 +17,7 @@ extension WorkerRig {
       talosHome: talosHome, agentDir: agentDir, claudePath: Rig.fixtures + "/claude",
       permissionFlag: "--dangerously-skip-permissions", tmux: tmux ?? Rig.tmuxPath!, tmuxConf: Rig.tmuxConf)
     o.socket = socket
+    o.permissionHook = Rig.hookSource
     o.home = root + "/home"
     o.tick = 0.2
     o.heartbeat = 0.5
@@ -36,6 +37,7 @@ extension WorkerRig {
       m = WorkerManager(options: o, probe: LiveSystem(loginEnv: { e }), baseEnv: { e }, mainPanePid: mainPanePid)
     }
     record(m)
+    Self.noBackgroundLook(m)
     if install {
       mgr?.detach()
       mgr = m
@@ -77,7 +79,7 @@ extension WorkerRig {
     #!/bin/bash
     for a in "$@"; do
       if [ "$a" = display-message ] && [ -f '\(flag)' ]; then rm -f '\(flag)'; exit 1; fi
-      if [ "$a" = send-keys ]; then echo send-keys >> '\(log)'; fi
+      case "$a" in send-keys | send-keys\\ *) echo send-keys >> '\(log)' ;; esac  # alone, or as the send of an if-shell
     done
     exec '\(Rig.tmuxPath!)' "$@"
     """.write(toFile: p, atomically: true, encoding: .utf8)
@@ -336,12 +338,13 @@ struct ReviewOC3Parking {
     #expect(r.state("trip") == "starting", "\(String(describing: r.state("trip")))")
   }
 
-  /// Control: 30 minutes by default (not the test override), on the injected clock.
+  /// Control: 30 minutes by default (not the test override), on the injected clocks. Idle time is measured on the awake clock, so the
+  /// time that passes here passes on both (a wall clock moved alone parks nothing: WorkerFollowupsTests).
   @Test func parksAtThirtyMinutesByDefaultNotBefore() throws {
     let r = try WorkerRig(scenario: reviewScenario)
     defer { r.teardown() }
     let clock = Clock()
-    r.manager(now: { clock.now })
+    r.manager(now: { clock.now }, awake: { clock.now })
     r.firstTick()
     try r.wake("trip")
     #expect(r.wait(8) { r.mgr.tickOnce(); return r.up("trip") })
@@ -503,7 +506,8 @@ struct ReviewOC3Folders {
     #expect(WorkerSpec.folderProblem(literal, home: r.root + "/home", talosHome: r.talosHome) == nil, "the check passes it")
     r.mgr.startTicking()
     try r.wake("trip")
-    _ = r.wait(5) { FileManager.default.fileExists(atPath: r.root + "/pwd.trip") || r.state("trip") == "failed" }
+    // Wait for the line itself, not just the file: the fake writes it after creating the file, and a loaded Mac can read between.
+    _ = r.wait(5) { !(r.lines(r.root + "/pwd.trip").first ?? "").isEmpty || r.state("trip") == "failed" }
     if r.state("trip") != "failed" {
       let ran = r.lines(r.root + "/pwd.trip").first ?? ""
       #expect(ran == literal, "checked \(literal), ran in \(ran)")

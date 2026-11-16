@@ -49,6 +49,14 @@ test.describe('sending with the box unfocused', () => {
     await page.clock.install()
     await page.goto('/t/general')
     await page.clock.runFor(50)
+    // the tests wrap window.__talos.sendMessage: wait for the app to set it (a loaded machine is still booting), moving the
+    // page clock as they do, so a boot step on a timer is not held up
+    await expect
+      .poll(async () => {
+        await page.clock.runFor(50)
+        return page.evaluate(() => Boolean((window as unknown as { __talos?: unknown }).__talos))
+      })
+      .toBe(true)
   })
 
   for (const focused of [false, true]) {
@@ -69,11 +77,9 @@ test.describe('sending with the box unfocused', () => {
       await expect.poll(() => storedDraft(page)).toBeUndefined()
       expect(await page.evaluate(() => window.__sent)).toEqual(['hello there'])
       const coarse = await page.evaluate(() => window.matchMedia('(pointer: coarse)').matches)
-      // Phones skip the refocus on purpose (it would raise the keyboard), so a blurred box stays blurred there; a box
-      // that had focus keeps it, and everywhere else the box takes focus back.
-      expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Message')).toBe(
-        focused || !coarse,
-      )
+      // Phones drop the keyboard after Send (FOLLOW_NEW_TEXT, 4fa88fa), so the box ends unfocused there whether or not it
+      // had focus; everywhere else the box keeps focus or takes it back.
+      expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Message')).toBe(!coarse)
     })
   }
 

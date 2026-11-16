@@ -1,0 +1,2058 @@
+diff --git a/apps/bridge/src/heartbeat/builtin.ts b/apps/bridge/src/heartbeat/builtin.ts
+index 63a75330..e12c7423 100644
+--- a/apps/bridge/src/heartbeat/builtin.ts
++++ b/apps/bridge/src/heartbeat/builtin.ts
+@@ -126,6 +126,13 @@ const ACT_REASONS = new Set(['review_requested', 'mention', 'assign', 'security_
+ /** Open PRs looked at per repo, and in all per run: each one costs two `gh` calls. */
+ const PRS_PER_REPO = 10
+ const PR_CHECK_BUDGET = 30
++/** PRs whose status is asked for at the same time: 30 PRs one after another took ~40 s, against a limit of 60. */
++const PR_LOOKUPS_AT_ONCE = 6
++/** Notification pages (of 50) read in one run. A run that hits it says so and picks up where it stopped. */
++const NOTIFICATION_PAGES = 5
++const NOTIFICATIONS_PER_PAGE = 50
++/** Notification items in one answer: one slot of the answer's 50 is kept for the line that says it was cut short. */
++const NOTIFICATION_ITEMS = HEARTBEAT_SOURCE_MAX_ITEMS - 1
+ 
+ type Json = Record<string, unknown>
+ const isObj = (x: unknown): x is Json => x !== null && typeof x === 'object' && !Array.isArray(x)
+@@ -172,6 +179,96 @@ function htmlUrlOf(subjectUrl: string | undefined, repoUrl: string | undefined):
+   return httpsOnly(repoUrl)
+ }
+ 
++/** `fn` over `xs`, `size` at a time, results in the order of `xs`. After a failure nothing new starts; the first error is thrown once everything running has ended. */
++async function inPool<T, R>(xs: readonly T[], size: number, fn: (x: T) => Promise<R>): Promise<R[]> {
++  const out: R[] = new Array(xs.length)
++  let next = 0
++  let failed: { e: unknown } | null = null
++  const worker = async () => {
++    while (!failed && next < xs.length) {
++      const i = next++
++      try {
++        out[i] = await fn(xs[i] as T)
++      } catch (e) {
++        failed ??= { e }
++      }
++    }
++  }
++  await Promise.all(Array.from({ length: Math.min(size, xs.length) }, worker))
++  if (failed) throw (failed as { e: unknown }).e
++  return out
++}
++
++/** Notifications updated after `since` and before `before` (GitHub's `before` leaves out the second it names), newest first. */
++type Span = { since: string; before?: string | undefined }
++/** What one run's walk over the notification list has collected, shared by the spans it walks. */
++type Walk = { seen: Set<string>; items: Answer['items']; pages: number; read: number }
++
++function notificationItem(n: unknown, repos: string[]): Answer['items'][number] | null {
++  if (!isObj(n) || !isObj(n.repository) || !isObj(n.subject)) return null
++  const reason = str(n.reason)
++  const repo = str(n.repository.full_name)
++  const id = str(n.id)
++  if (!reason || !ACT_REASONS.has(reason) || !repo || !id || !repos.includes(repo)) return null
++  return {
++    key: `gh:${id}`,
++    sig: str(n.updated_at) ?? '1',
++    title: `${repo}: ${str(n.subject.title) ?? 'a notification'}`,
++    level: 'act',
++    class: 'own',
++    why: `github.${reason}`.replace(/_/g, '-'),
++    url: htmlUrlOf(str(n.subject.url), str(n.repository.html_url)),
++    deadline: null,
++  }
++}
++
++/**
++ * Reads a span newest first, until it ends or the run's page or item limit is reached. Returns the part left unread, or null.
++ * It always asks for page 1 with `before` set one second past the oldest row so far: a walk by page number skips rows when the
++ * list changes under it (a notification gets a comment, or is read), and `before` leaves out its whole second, so a second is
++ * included again and the rows already seen are skipped by id. Whatever is not put into the answer counts as unread.
++ */
++async function walkSpan(
++  span: Span,
++  w: Walk,
++  repos: string[],
++  d: BuiltinDeps,
++  deadline: number,
++  signal: AbortSignal,
++): Promise<Span | null> {
++  const unread = (at: number | null): Span | null =>
++    at === null
++      ? { since: span.since, before: span.before }
++      : { since: span.since, before: new Date(at + 1000).toISOString() }
++  let before = span.before
++  while (w.pages < NOTIFICATION_PAGES && w.items.length < NOTIFICATION_ITEMS) {
++    const q = `notifications?per_page=${NOTIFICATIONS_PER_PAGE}&since=${encodeURIComponent(span.since)}${before ? `&before=${encodeURIComponent(before)}` : ''}`
++    const page = await ghJson(q, d, deadline, signal)
++    if (!Array.isArray(page)) throw new Error('gh notifications did not come back as a list')
++    w.pages++
++    let oldest: number | null = null
++    let fresh = 0
++    for (const n of page) {
++      const id = isObj(n) ? str(n.id) : undefined
++      if (id !== undefined) {
++        if (w.seen.has(id)) continue
++        w.seen.add(id)
++      }
++      fresh++
++      w.read++
++      const t = isObj(n) ? Date.parse(str(n.updated_at) ?? '') : Number.NaN
++      if (Number.isFinite(t)) oldest = Math.min(oldest ?? t, t)
++      const item = notificationItem(n, repos)
++      if (item) w.items.push(item)
++      if (w.items.length >= NOTIFICATION_ITEMS) return unread(Number.isFinite(t) ? t : oldest)
++    }
++    if (page.length < NOTIFICATIONS_PER_PAGE) return null
++    if (fresh === 0 || oldest === null) return unread(null) // a whole page of rows already seen, or none dated: it cannot go on
++    before = new Date(oldest + 1000).toISOString()
++  }
++  return { since: span.since, before }
++}
++
+ type Ci = { red: Array<{ name: string; at: number }>; pending: boolean; total: number }
+ async function prCi(repo: string, sha: string, d: BuiltinDeps, deadline: number, signal: AbortSignal): Promise<Ci> {
+   const status = await ghJson(`repos/${repo}/commits/${sha}/status`, d, deadline, signal)
+@@ -209,26 +306,37 @@ async function github(
+     return { cursor: { since: req.now }, items: [] }
+   }
+   const items: Answer['items'] = []
+-  const notes = await ghJson(`notifications?per_page=50&since=${encodeURIComponent(since)}`, d, deadline, signal)
+-  if (!Array.isArray(notes)) throw new Error('gh notifications did not come back as a list')
+-  for (const n of notes) {
+-    if (!isObj(n) || !isObj(n.repository) || !isObj(n.subject)) continue
+-    const reason = str(n.reason)
+-    const repo = str(n.repository.full_name)
+-    const id = str(n.id)
+-    if (!reason || !ACT_REASONS.has(reason) || !repo || !id || !args.repos.includes(repo)) continue
+-    items.push({
+-      key: `gh:${id}`,
+-      sig: str(n.updated_at) ?? '1',
+-      title: `${repo}: ${str(n.subject.title) ?? 'a notification'}`,
+-      level: 'act',
++  // The list is newest first, so a run that cannot read it all has read the NEWER part. `since` stays where it was, `before` names
++  // the span still unread, and `upto` is where the newer part starts: the next run reads both and nothing between them is missed.
++  const before = typeof req.cursor?.before === 'string' ? req.cursor.before : null
++  const upto = typeof req.cursor?.upto === 'string' ? req.cursor.upto : null
++  const backlog: Span | null = before && upto ? { since, before } : null
++  const walk: Walk = { seen: new Set(), items: [], pages: 0, read: 0 }
++  const unread: Span[] = []
++  for (const span of backlog ? [{ since: upto as string }, backlog] : [{ since }]) {
++    const rest = await walkSpan(span, walk, args.repos, d, deadline, signal)
++    if (rest) unread.push(rest)
++  }
++  items.push(...walk.items)
++  // two unread spans (the limit hit twice) become one, from the older start to the newer end: a little is read again, none is missed
++  const left: Span | undefined = unread.length
++    ? { since: unread.at(-1)?.since as string, before: unread[0]?.before }
++    : undefined
++  let truncated: Answer['items'][number] | null = null
++  if (left) {
++    const pages = `${walk.pages} ${walk.pages === 1 ? 'page' : 'pages'}`
++    truncated = {
++      key: 'gh:notifications-truncated',
++      sig: left.before ?? left.since, // the same unread boundary is said once
++      title: `GitHub notifications were cut off after ${pages} (${walk.read} read); the older ones are read at the next check`,
++      level: 'fyi',
+       class: 'own',
+-      why: `github.${reason}`.replace(/_/g, '-'),
+-      url: htmlUrlOf(str(n.subject.url), str(n.repository.html_url)),
++      why: 'github.truncated',
+       deadline: null,
+-    })
++    }
+   }
+   let budget = PR_CHECK_BUDGET
++  const looks: Array<{ repo: string; n: number; sha: string; pr: Json }> = []
+   for (const repo of args.repos) {
+     if (budget <= 0) break
+     const prs = await ghJson(
+@@ -245,42 +353,52 @@ async function github(
+       const sha = str(pr.head.sha)
+       if (n === undefined || !sha) continue
+       budget--
+-      const ci = await prCi(repo, sha, d, deadline, signal)
+-      const url = httpsOnly(str(pr.html_url))
+-      const title = str(pr.title) ?? `PR ${n}`
+-      // "red for 24 h" is counted from the LATEST failure: a fresh red is someone mid-work, not a stuck PR
+-      const redSince = ci.red.length ? Math.max(...ci.red.map((r) => r.at)) : Number.NaN
+-      if (ci.red.length && Number.isFinite(redSince) && nowMs - redSince >= DAY_MS) {
+-        for (const r of ci.red)
+-          items.push({
+-            key: `gh:pr:${repo}#${n}:${r.name}`,
+-            sig: sha,
+-            title: `${repo}#${n} ${r.name} red for over 24 h: ${title}`,
+-            level: 'act',
+-            class: 'own',
+-            why: 'github.ci-red-24h',
+-            url,
+-            deadline: null,
+-          })
+-      } else if (!ci.red.length && !ci.pending && ci.total > 0) {
+-        const touched = Date.parse(str(pr.updated_at) ?? '')
+-        if (Number.isFinite(touched) && nowMs - touched >= DAY_MS)
+-          items.push({
+-            key: `gh:pr:${repo}#${n}:green`,
+-            sig: sha,
+-            title: `${repo}#${n} is green and untouched for a day: ${title}`,
+-            level: 'fyi',
+-            class: 'own',
+-            why: 'github.pr-green-24h',
+-            url,
+-            deadline: null,
+-          })
+-      }
++      looks.push({ repo, n, sha, pr })
++    }
++  }
++  const cis = await inPool(looks, PR_LOOKUPS_AT_ONCE, (l) => prCi(l.repo, l.sha, d, deadline, signal))
++  for (const [i, { repo, n, sha, pr }] of looks.entries()) {
++    const ci = cis[i] as Ci
++    const url = httpsOnly(str(pr.html_url))
++    const title = str(pr.title) ?? `PR ${n}`
++    // "red for 24 h" is counted from the LATEST failure: a fresh red is someone mid-work, not a stuck PR
++    const redSince = ci.red.length ? Math.max(...ci.red.map((r) => r.at)) : Number.NaN
++    if (ci.red.length && Number.isFinite(redSince) && nowMs - redSince >= DAY_MS) {
++      for (const r of ci.red)
++        items.push({
++          key: `gh:pr:${repo}#${n}:${r.name}`,
++          sig: sha,
++          title: `${repo}#${n} ${r.name} red for over 24 h: ${title}`,
++          level: 'act',
++          class: 'own',
++          why: 'github.ci-red-24h',
++          url,
++          deadline: null,
++        })
++    } else if (!ci.red.length && !ci.pending && ci.total > 0) {
++      const touched = Date.parse(str(pr.updated_at) ?? '')
++      if (Number.isFinite(touched) && nowMs - touched >= DAY_MS)
++        items.push({
++          key: `gh:pr:${repo}#${n}:green`,
++          sig: sha,
++          title: `${repo}#${n} is green and untouched for a day: ${title}`,
++          level: 'fyi',
++          class: 'own',
++          why: 'github.pr-green-24h',
++          url,
++          deadline: null,
++        })
+     }
+   }
+   const rank = (i: Json) => (i.level === 'act' ? 0 : 1)
+   items.sort((a, b) => rank(a) - rank(b))
+-  return { cursor: { since: req.now }, items: items.slice(0, HEARTBEAT_SOURCE_MAX_ITEMS) }
++  const cursor: Record<string, unknown> = !left
++    ? { since: req.now }
++    : left.before === undefined
++      ? (req.cursor as Record<string, unknown>) // nothing names where the unread part ends: stay where it was
++      : { since: left.since, before: left.before, upto: req.now }
++  const kept = items.slice(0, HEARTBEAT_SOURCE_MAX_ITEMS - (truncated ? 1 : 0))
++  return { cursor, items: truncated ? [...kept, truncated] : kept }
+ }
+ 
+ /** The JSON text a built-in source "prints". Throws a plain Error for a source error. */
+diff --git a/apps/bridge/src/heartbeat/cold.ts b/apps/bridge/src/heartbeat/cold.ts
+new file mode 100644
+index 00000000..3a97903f
+--- /dev/null
++++ b/apps/bridge/src/heartbeat/cold.ts
+@@ -0,0 +1,59 @@
++// "Cold": a heartbeat that has been off so long that its cursors mean nothing, so every source starts over and what it reports
++// on that first look is recorded as shown, not woken. How long is "so long" comes from the job's own weekly times: twice the
++// largest gap between two of them (counting the wrap from the last time of the week to the first), and never under 48 hours.
++// A Monday/Thursday job is then not cold every week, and a daily one is cold after two days.
++//
++// TODO: this reads the weekly time list itself and does no calendar maths beyond it. If Chronos ever gets a verb that lists a
++// job's slots over a range (chronoslib's `slots(job, d)` is the function it would wrap), ask that instead of reading the list here.
++import type { ScheduleWhenT } from '@talos-app/protocol'
++import type { HeartbeatStore } from './store.ts'
++
++const HOUR_MS = 3600_000
++const DAY_MS = 24 * HOUR_MS
++const WEEK_MIN = 7 * 24 * 60
++export const COLD_FLOOR_MS = 48 * HOUR_MS
++/** A job whose days or times cannot be read: the longest limit any weekly list can have (a single weekly slot, 7 days, twice). */
++export const COLD_UNKNOWN_MS = 14 * DAY_MS
++
++const NAMES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
++
++/** Day indexes (Monday 0) a `times` job runs on, or null when they cannot be read. Chronos may print them as numbers. */
++function daysOf(days: unknown): number[] | null {
++  if (days === 'daily') return [0, 1, 2, 3, 4, 5, 6]
++  if (days === 'weekdays') return [0, 1, 2, 3, 4]
++  if (!Array.isArray(days) || days.length === 0) return null
++  const out: number[] = []
++  for (const d of days) {
++    const i = typeof d === 'number' ? d : NAMES.indexOf(String(d).toLowerCase())
++    if (!Number.isInteger(i) || i < 0 || i > 6) return null
++    out.push(i)
++  }
++  return out
++}
++
++export function coldAfterMs(when: ScheduleWhenT | undefined): number {
++  if (when?.type !== 'times') return COLD_UNKNOWN_MS
++  const days = daysOf(when.days)
++  const mins = when.times.map((t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)))
++  if (!days || !mins.length || mins.some((m) => !Number.isFinite(m))) return COLD_UNKNOWN_MS
++  const at = [...new Set(days.flatMap((d) => mins.map((m) => d * 1440 + m)))].sort((a, b) => a - b)
++  const gap =
++    at.length > 1
++      ? Math.max(...at.map((m, i) => (at[(i + 1) % at.length] as number) - m + (i + 1 === at.length ? WEEK_MIN : 0)))
++      : WEEK_MIN // one slot a week: the next one is a week away
++  return Math.max(2 * gap * 60_000, COLD_FLOOR_MS)
++}
++
++/** How long the heartbeat has been off, if over `limitMs` (`ms`; 0 otherwise), and whether that makes it cold. */
++export function coldness(store: HeartbeatStore, nowMs: number, limitMs: number): { ms: number; cold: boolean } {
++  const gap = store.last_run ? nowMs - Date.parse(store.last_run) : 0
++  const ms = gap > limitMs ? gap : 0
++  // A store an earlier version wrote knows its sources but has no `last_run`: how long it was off is unknown, so it starts over once.
++  return { ms, cold: ms > 0 || (store.last_run === null && Object.keys(store.sources).length > 0) }
++}
++
++export function coldNote(ms: number, backlog: number): string {
++  const days = Math.floor(ms / DAY_MS)
++  const gone = ms > 0 ? `Heartbeat was off for ${days} ${days === 1 ? 'day' : 'days'}.` : 'Heartbeat started over.'
++  return `${gone} Skipped the backlog${backlog ? ` (${backlog} ${backlog === 1 ? 'item' : 'items'})` : ''}.`
++}
+diff --git a/apps/bridge/src/heartbeat/orphans.ts b/apps/bridge/src/heartbeat/orphans.ts
+new file mode 100644
+index 00000000..7e1050d8
+--- /dev/null
++++ b/apps/bridge/src/heartbeat/orphans.ts
+@@ -0,0 +1,69 @@
++// A heartbeat source runs in a process group of its own and outlives a bridge crash. While it runs, the store holds its group id,
++// the command it was started with and its start time (`running`). At bridge start, before any slot, this kills what a crash left:
++// a group only if it is still alive and it is the one that was recorded. A group nobody recorded is never touched.
++import { readdirSync } from 'node:fs'
++import { join } from 'node:path'
++import type { PsInfo } from '../lifecycle.ts'
++import { killGroup, processInfo } from './spawn.ts'
++import { loadStore, type Running, saveStore } from './store.ts'
++
++/** Every job's store: live and shadow. */
++const STORE_FILE = /^heartbeat-state\..+\.json$/
++
++type Verdict = 'kill' | 'clear' | 'keep'
++
++/** Whether a group with this id exists: `foreign` when it does but this user may not signal it (so it is not ours). */
++function groupState(pgid: number): 'alive' | 'gone' | 'foreign' {
++  try {
++    process.kill(-pgid, 0)
++    return 'alive'
++  } catch (e) {
++    return (e as NodeJS.ErrnoException).code === 'EPERM' ? 'foreign' : 'gone'
++  }
++}
++
++function judge(r: Running, info: (pid: number) => PsInfo | 'gone' | 'unknown'): Verdict {
++  if (r.pgid <= 1 || r.pgid === process.pid || r.pgid === process.ppid) return 'clear'
++  if (groupState(r.pgid) !== 'alive') return 'clear'
++  // A group id cannot be handed out again while its group still has a member. So if the leader is gone and the group is alive, it
++  // is the recorded one; if the leader is there, it must be the process that was recorded (same command, same start time).
++  const leader = info(r.pgid)
++  if (leader === 'unknown') return 'keep' // ps did not answer: no proof either way, the next start looks again
++  if (leader === 'gone') return 'kill'
++  return leader.command === r.command && (r.lstart === undefined || leader.lstart === r.lstart) ? 'kill' : 'clear'
++}
++
++export function reapOrphans(
++  home: string,
++  log: (msg: string, f?: Record<string, unknown>) => void,
++  deps: { info?: (pid: number) => PsInfo | 'gone' | 'unknown' } = {},
++): { killed: number[] } {
++  const killed: number[] = []
++  let files: string[]
++  try {
++    files = readdirSync(home).filter((f) => STORE_FILE.test(f))
++  } catch {
++    return { killed }
++  }
++  for (const f of files) {
++    const path = join(home, f)
++    const { store, corrupt } = loadStore(path, false) // a store that cannot be read is left exactly where it is
++    if (corrupt || !Object.keys(store.running).length) continue
++    for (const [id, r] of Object.entries(store.running)) {
++      const v = judge(r, deps.info ?? processInfo)
++      if (v === 'keep') continue
++      if (v === 'kill') {
++        killGroup(r.pgid, true) // the group only: a lone-pid signal could hit a process that reused the number
++        killed.push(r.pgid)
++        log('heartbeat source left running by an earlier bridge was stopped', { source: id })
++      }
++      delete store.running[id]
++    }
++    try {
++      saveStore(path, store)
++    } catch (e) {
++      log('heartbeat store not saved after the sweep', { error: (e as Error).message })
++    }
++  }
++  return { killed }
++}
+diff --git a/apps/bridge/src/heartbeat/run-parts.ts b/apps/bridge/src/heartbeat/run-parts.ts
+index ff40cc60..671b75c4 100644
+--- a/apps/bridge/src/heartbeat/run-parts.ts
++++ b/apps/bridge/src/heartbeat/run-parts.ts
+@@ -1,4 +1,7 @@
+ // Small pure parts of a heartbeat run, kept out of runner.ts (which has a size limit).
++
++import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs'
++import { join } from 'node:path'
+ import {
+   HEARTBEAT_ERROR_MAX_CHARS,
+   HEARTBEAT_SOURCE_SCHEMA,
+@@ -9,6 +12,7 @@ import {
+   type HeartbeatSourceRequestT,
+   parseHeartbeatSourceResponse,
+ } from '@talos-app/protocol'
++import { ensureDir, writeFileAtomic } from '../fsutil.ts'
+ import type { DigestInput } from './digest.ts'
+ import type { HeartbeatStore, SourceState } from './store.ts'
+ 
+@@ -174,3 +178,24 @@ export function plainError(s: string): string {
+   )
+   return r.ok ? 'the source failed' : r.error
+ }
++
++// ---- moved from runner.ts (its size limit)
++
++export const SHADOW_LOG = 'heartbeat-shadow.jsonl'
++const SHADOW_LOG_MAX_BYTES = 512 * 1024
++const SHADOW_LOG_KEEP_LINES = 200
++
++export function appendShadow(home: string, row: Record<string, unknown>) {
++  const path = join(home, SHADOW_LOG)
++  ensureDir(home)
++  appendFileSync(path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
++  try {
++    if (existsSync(path) && statSync(path).size > SHADOW_LOG_MAX_BYTES) {
++      const lines = readFileSync(path, 'utf8').split('\n').filter(Boolean)
++      const keep = lines.slice(-SHADOW_LOG_KEEP_LINES).join('\n')
++      writeFileAtomic(path, `${keep}\n`, 0o600)
++    }
++  } catch {
++    // trimming is housekeeping; the row above is already written
++  }
++}
+diff --git a/apps/bridge/src/heartbeat/runner.ts b/apps/bridge/src/heartbeat/runner.ts
+index dbbc3a3b..aa4b81b2 100644
+--- a/apps/bridge/src/heartbeat/runner.ts
++++ b/apps/bridge/src/heartbeat/runner.ts
+@@ -5,10 +5,8 @@
+ //   default one hands nothing over, so act items become plain lines the owner can answer (HB4 wires the real wake).
+ //
+ // Nothing here talks to Chronos. The caller (ScheduleService) claims the slot before and closes it after.
+-import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs'
+-import { join } from 'node:path'
++import { existsSync } from 'node:fs'
+ import {
+-  type Frame,
+   type HeartbeatConfigT,
+   HeartbeatItem,
+   type HeartbeatItemT,
+@@ -18,19 +16,18 @@ import {
+   type HeartbeatSourceItemT,
+   heartbeatMuteMatches,
+   isQuiet,
+-  type MessageT,
+   newId,
+   newUlid,
+   parseHeartbeatSourceResponse,
+ } from '@talos-app/protocol'
+ import type { BridgeContext } from '../context.ts'
+-import { replyFrame } from '../frames-out.ts'
+-import { ensureDir, writeFileAtomic } from '../fsutil.ts'
+ import type { ThreadRef } from '../notify.ts'
+ import { type BuiltinDeps, runBuiltin } from './builtin.ts'
++import { COLD_UNKNOWN_MS, coldNote, coldness } from './cold.ts'
+ import { composeDigest, type DigestInput } from './digest.ts'
+ import { pickForPack, prunePacks, removePack } from './pack.ts'
+ import {
++  appendShadow,
+   countsOnly,
+   plainError,
+   type SrcOut,
+@@ -42,6 +39,7 @@ import {
+   updateSources,
+   zero,
+ } from './run-parts.ts'
++import { sendRow } from './send.ts'
+ import { baseEnv, runSource } from './spawn.ts'
+ import {
+   addWake,
+@@ -51,18 +49,14 @@ import {
+   loadStore,
+   localDate,
+   prune,
++  type Running,
+   type StoredItem,
+   saveStore,
+   storeFile,
+   wakesOn,
+ } from './store.ts'
+ 
+-/** A source not heard from for this long starts over (no cursor) instead of flooding the owner with a backlog. */
+-export const REBASELINE_AFTER_MS = 72 * 3600_000
+-export { FAIL_STREAK_SAY } from './run-parts.ts'
+-export const SHADOW_LOG = 'heartbeat-shadow.jsonl'
+-const SHADOW_LOG_MAX_BYTES = 512 * 1024
+-const SHADOW_LOG_KEEP_LINES = 200
++export { FAIL_STREAK_SAY, SHADOW_LOG } from './run-parts.ts'
+ 
+ /**
+  * What the agent wake gets (HB4: the real one builds the run pack from `items`). The answer says what happened to the hand-over:
+@@ -93,8 +87,6 @@ export const stubWake: HeartbeatWake = async () => ({ delivered: false })
+ 
+ /** A wake that has not come back after this long is treated as killed (the run timeout is under 45 minutes). */
+ export const WAKE_STALE_MS = 2 * 3600_000
+-/** The most backlog days said in the "was off" line. */
+-const DAY_MS = 24 * 3600_000
+ 
+ export type RunnerDeps = {
+   ctx: Pick<BridgeContext, 'paths' | 'clock' | 'config' | 'store' | 'transport' | 'log' | 'env'>
+@@ -129,6 +121,8 @@ export type RunInput = {
+     windowH: number /** Called as each source answers, so a run that breaks later can still report them. */
+     onSource?: (o: SrcOut) => void
+   }
++  /** How long this heartbeat may be off before it starts over (`coldAfterMs` of its schedule). Unset: the longest any job allows. */
++  coldAfterMs?: number
+   /** The run id of this slot (the Chronos claim's). Needed for a wake; a run without one cannot wake. */
+   runId?: string
+   signal?: AbortSignal
+@@ -309,12 +303,9 @@ export class HeartbeatRunner {
+     }
+ 
+     // How long THIS HEARTBEAT has gone without a completed run (its own last_run, not a source's silence: a source that was down
+-    // while the heartbeat kept running holds its cursor and delivers normally when it recovers). Past 72 h every source starts
+-    // over with no cursor, and whatever it reports on that first look is the backlog, recorded and not shown.
+-    const coldMs =
+-      store.last_run && nowMs - Date.parse(store.last_run) > REBASELINE_AFTER_MS
+-        ? nowMs - Date.parse(store.last_run)
+-        : 0
++    // while the heartbeat kept running holds its cursor and delivers normally when it recovers). Past the job's own limit
++    // (cold.ts) every source starts over with no cursor, and whatever it reports on that first look is the backlog, recorded and not shown.
++    const { ms: coldMs, cold } = coldness(store, nowMs, input.coldAfterMs ?? COLD_UNKNOWN_MS)
+ 
+     // ---- the sources
+     const runMs = config.run_timeout_s * this.secondMs
+@@ -327,7 +318,9 @@ export class HeartbeatRunner {
+     try {
+       outs.push(
+         ...(await Promise.all(
+-          enabled.map((s) => this.runSource(s, store, nowMs, dry, input.jobId, lim, ac, coldMs > 0, input.test)),
++          enabled.map((s) =>
++            this.runSource(s, store, dry ? null : file, nowMs, dry, input.jobId, lim, ac, cold, input.test),
++          ),
+         )),
+       )
+     } finally {
+@@ -387,7 +380,7 @@ export class HeartbeatRunner {
+         old.level = it.level
+         continue
+       }
+-      const skipped = it.level !== 'silent' && coldMs > 0
++      const skipped = it.level !== 'silent' && cold
+       if (skipped) backlog++
+       else newBy[it.level]++
+       store.items[id] = {
+@@ -399,12 +392,7 @@ export class HeartbeatRunner {
+         attempts: 0,
+       }
+     }
+-    if (coldMs > 0 && outs.some((o) => o.ok)) {
+-      const days = Math.floor(coldMs / DAY_MS)
+-      notes.push(
+-        `Heartbeat was off for ${days} ${days === 1 ? 'day' : 'days'}. Skipped the backlog${backlog ? ` (${backlog} ${backlog === 1 ? 'item' : 'items'})` : ''}.`,
+-      )
+-    }
++    if (cold && outs.some((o) => o.ok)) notes.push(coldNote(coldMs, backlog))
+ 
+     // ---- sources' own state
+     const failures = updateSources(store, outs, nowIso)
+@@ -476,7 +464,7 @@ export class HeartbeatRunner {
+       }
+       try {
+         saveStore(file, store)
+-        this.appendShadow({
++        appendShadow(this.home, {
+           at: nowIso,
+           run_key: input.runKey,
+           job_id: input.jobId,
+@@ -693,6 +681,7 @@ export class HeartbeatRunner {
+   private async runSource(
+     cfg: HeartbeatSourceConfigT,
+     store: HeartbeatStore,
++    file: string | null,
+     nowMs: number,
+     dry: boolean,
+     jobId: string,
+@@ -701,7 +690,7 @@ export class HeartbeatRunner {
+     cold: boolean,
+     test?: RunInput['test'],
+   ): Promise<SrcOut> {
+-    const out = await this.runSourceOne(cfg, store, nowMs, dry, jobId, lim, run, cold, test?.windowH)
++    const out = await this.runSourceOne(cfg, store, file, nowMs, dry, jobId, lim, run, cold, test?.windowH)
+     test?.onSource?.(out)
+     return out
+   }
+@@ -709,6 +698,7 @@ export class HeartbeatRunner {
+   private async runSourceOne(
+     cfg: HeartbeatSourceConfigT,
+     store: HeartbeatStore,
++    file: string | null,
+     nowMs: number,
+     dry: boolean,
+     jobId: string,
+@@ -749,6 +739,13 @@ export class HeartbeatRunner {
+           stdin: JSON.stringify(req),
+           timeoutMs: limitMs,
+           signal: own.signal,
++          ...(file
++            ? {
++                onStart: (p) =>
++                  this.markRunning(store, file, cfg.id, { ...p, at: new Date(ctx.clock.now()).toISOString() }),
++                onEnd: () => this.markRunning(store, file, cfg.id, null),
++              }
++            : {}),
+         })
+         if (!r.ok) {
+           if (r.reason === 'aborted' || r.reason === 'timeout')
+@@ -795,6 +792,21 @@ export class HeartbeatRunner {
+     }
+   }
+ 
++  /**
++   * Keeps the store's `running` record of a source process: set when it starts, cleared when it ends. Written at once, so a crash
++   * leaves it for the next start to find (orphans.ts). A superseded bridge writes nothing: the store is the next one's.
++   */
++  private markRunning(store: HeartbeatStore, file: string, id: string, r: Running | null) {
++    if (r) store.running[id] = r
++    else delete store.running[id]
++    if (!this.alive()) return
++    try {
++      saveStore(file, store)
++    } catch (e) {
++      this.d.ctx.log.warn('heartbeat store not saved', { error: (e as Error).message })
++    }
++  }
++
+   // ---- posting
+ 
+   /** A row with no store behind it (an unreadable config). Never throws. */
+@@ -810,38 +822,17 @@ export class HeartbeatRunner {
+     )
+   }
+ 
+-  /**
+-   * One row, idempotent on its message id: the history row is made first, then the frame goes through the outbox (which
+-   * keeps it until the relay acks, across reconnects). A message that already exists is never made or sent again. Throws
+-   * when the frame cannot be accepted (too big, refused).
+-   */
+-  private async send(
+-    p: { message_id: string; frame_id: string; thread_id: string; text: string; silent: boolean },
+-    nowMs: number,
+-  ) {
+-    const { ctx } = this.d
+-    if (ctx.store.getMessage(p.message_id)) return
+-    const message: MessageT = {
+-      id: p.message_id,
+-      thread_id: p.thread_id,
+-      author: 'system',
+-      kind: 'text',
+-      text: p.text,
+-      format: 'plain',
+-      attachments: [],
+-      via: 'app',
+-      created_at: new Date(nowMs).toISOString(),
+-      heartbeat: true,
+-    }
+-    ctx.store.addMessage(message)
+-    const frame = { ...replyFrame(nowMs, message, p.silent ? { silent: true } : {}), id: p.frame_id } as Frame
+-    await ctx.transport.sendDurable(frame)
++  /** One row, idempotent on its message id (send.ts). Throws when the frame cannot be accepted. */
++  private send(p: Parameters<typeof sendRow>[1], nowMs: number) {
++    return sendRow(this.d.ctx, p, nowMs)
+   }
+ 
+   /**
+-   * A crash between the store write and the post leaves `pending`. The post is retried ONCE: if its message already exists
+-   * (the crash came after the post began) nothing is sent; otherwise it is sent now. Either way its items are then marked
+-   * shown. A second leftover (a crash during the retry) is dropped and its items go out in the next digest.
++   * A crash between the store write and the post leaves `pending`. The post is retried ONCE: if its history row already exists
++   * the post is taken as made and nothing is sent; otherwise it is sent now. Either way its items are then marked shown. The row
++   * is made just before its frame goes to the outbox, so a crash in the few statements between the two leaves a row with no
++   * frame, and that digest is not sent (known gap). A second leftover (a crash during the retry) is dropped and its items go out
++   * in the next digest.
+    */
+   private async recoverPending(
+     store: HeartbeatStore,
+@@ -972,19 +963,4 @@ export class HeartbeatRunner {
+       this.d.ctx.clock.now(),
+     )
+   }
+-
+-  private appendShadow(row: Record<string, unknown>) {
+-    const path = join(this.home, SHADOW_LOG)
+-    ensureDir(this.home)
+-    appendFileSync(path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
+-    try {
+-      if (existsSync(path) && statSync(path).size > SHADOW_LOG_MAX_BYTES) {
+-        const lines = readFileSync(path, 'utf8').split('\n').filter(Boolean)
+-        const keep = lines.slice(-SHADOW_LOG_KEEP_LINES).join('\n')
+-        writeFileAtomic(path, `${keep}\n`, 0o600)
+-      }
+-    } catch {
+-      // trimming is housekeeping; the row above is already written
+-    }
+-  }
+ }
+diff --git a/apps/bridge/src/heartbeat/send.ts b/apps/bridge/src/heartbeat/send.ts
+new file mode 100644
+index 00000000..f191f5bb
+--- /dev/null
++++ b/apps/bridge/src/heartbeat/send.ts
+@@ -0,0 +1,46 @@
++// One plain heartbeat row: its history row and its frame (docs/HEARTBEAT.md).
++import type { Frame, MessageT } from '@talos-app/protocol'
++import type { BridgeContext } from '../context.ts'
++import { replyFrame } from '../frames-out.ts'
++
++/**
++ * One row, idempotent on its message id: the history row is made first, then the frame goes through the outbox (which keeps it
++ * until the relay acks, across reconnects). A message that already exists is never made or sent again. Throws when the frame
++ * cannot be accepted (too big, refused); then no frame is kept, so the row is removed again: a row for a frame that never
++ * arrives would be posted a second time, under a new id, by the retry. A frame that IS in the outbox is delivered whatever
++ * this call saw, so it counts as sent and its row stays.
++ */
++export async function sendRow(
++  ctx: Pick<BridgeContext, 'store' | 'transport' | 'log'>,
++  p: { message_id: string; frame_id: string; thread_id: string; text: string; silent: boolean },
++  nowMs: number,
++) {
++  if (ctx.store.getMessage(p.message_id)) return
++  const message: MessageT = {
++    id: p.message_id,
++    thread_id: p.thread_id,
++    author: 'system',
++    kind: 'text',
++    text: p.text,
++    format: 'plain',
++    attachments: [],
++    via: 'app',
++    created_at: new Date(nowMs).toISOString(),
++    heartbeat: true,
++  }
++  ctx.store.addMessage(message)
++  const frame = { ...replyFrame(nowMs, message, p.silent ? { silent: true } : {}), id: p.frame_id } as Frame
++  try {
++    const r = await ctx.transport.sendDurable(frame)
++    if (r.state === 'acked' && r.seq !== undefined) ctx.store.setSeq(message.id, r.seq)
++  } catch (e) {
++    if (ctx.store.outboxGet(frame.id)) {
++      ctx.log.warn('heartbeat post failed after its frame was kept; the outbox delivers it', {
++        error: (e as Error).message,
++      })
++      return
++    }
++    ctx.store.deleteMessage(message.id)
++    throw e
++  }
++}
+diff --git a/apps/bridge/src/heartbeat/spawn.ts b/apps/bridge/src/heartbeat/spawn.ts
+index 08a4fbd6..90124238 100644
+--- a/apps/bridge/src/heartbeat/spawn.ts
++++ b/apps/bridge/src/heartbeat/spawn.ts
+@@ -1,8 +1,9 @@
+ // Runs one heartbeat source as a process (docs/HEARTBEAT.md, docs/SCHEDULES.md S1.7): argv exactly as configured, never a
+ // shell, an own process group so a hung source and everything it started can be killed by PID, a minimal base environment
+ // (no inherited secrets), and a hard cap on what it may print. Never throws: every way it can go wrong is a plain result.
+-import { spawn } from 'node:child_process'
++import { spawn, spawnSync } from 'node:child_process'
+ import { HEARTBEAT_SOURCE_MAX_BYTES } from '@talos-app/protocol'
++import { type PsInfo, parsePsLine } from '../lifecycle.ts'
+ 
+ /** Not a secret, and enough for a source to find its own tools and its own credential files. Nothing else is inherited. */
+ const BASE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin'
+@@ -24,6 +25,27 @@ export type SpawnOptions = {
+   timeoutMs: number
+   signal?: AbortSignal | undefined
+   maxBytes?: number
++  /** The process started: its group id, the command line and the start time the system shows for it. Not called when that cannot be read. */
++  onStart?: (p: { pgid: number; command: string; lstart: string }) => void
++  /** The source is over and its group is gone (or was signalled). Called once, only after `onStart`. */
++  onEnd?: () => void
++}
++
++/**
++ * What `ps` shows for `pid` (start time and command line, parsed like the instance registry does): `gone` when there is no such
++ * process, `unknown` when ps itself could not answer (it timed out or could not run), which is not proof of anything.
++ */
++export function processInfo(pid: number): PsInfo | 'gone' | 'unknown' {
++  const r = spawnSync('ps', ['-p', String(pid), '-o', 'lstart=,command='], {
++    encoding: 'utf8',
++    timeout: 2000,
++    env: { ...process.env, LC_ALL: 'C' }, // lstart text must not depend on the shell's locale
++  })
++  if (r.error || r.signal) return 'unknown'
++  const line = r.status === 0 ? r.stdout.replace(/\n$/, '') : ''
++  if (line.trim() === '') return 'gone'
++  const info = parsePsLine(line)
++  return { lstart: info.lstart, command: info.command.slice(0, 2000) }
+ }
+ 
+ /**
+@@ -44,6 +66,15 @@ export function killGroup(pid: number | undefined, leaderGone = false) {
+   }
+ }
+ 
++/** A bookkeeping callback must never break the run it watches. */
++const tell = (f: (() => void) | undefined) => {
++  try {
++    f?.()
++  } catch {
++    // the caller logs its own failures
++  }
++}
++
+ export function runSource(o: SpawnOptions): Promise<SpawnResult> {
+   const max = o.maxBytes ?? HEARTBEAT_SOURCE_MAX_BYTES
+   return new Promise((resolve) => {
+@@ -65,12 +96,14 @@ export function runSource(o: SpawnOptions): Promise<SpawnResult> {
+     let bytes = 0
+     let stderr = ''
+     let settled = false
++    let started = false
+     let timer: ReturnType<typeof setTimeout> | undefined
+     const done = (r: SpawnResult) => {
+       if (settled) return
+       settled = true
+       clearTimeout(timer)
+       o.signal?.removeEventListener('abort', onAbort)
++      if (started) tell(o.onEnd)
+       resolve(r)
+     }
+     const stop = (r: Extract<SpawnResult, { ok: false }>) => {
+@@ -81,6 +114,12 @@ export function runSource(o: SpawnOptions): Promise<SpawnResult> {
+       done(r) // the caller never waits for a pipe a grandchild may hold open
+     }
+     const onAbort = () => stop({ ok: false, reason: 'aborted', message: 'stopped' })
++    // Recorded before the source can read its input, so a crash at any later point leaves a way to find the group.
++    const info = o.onStart && child.pid ? processInfo(child.pid) : null
++    if (child.pid && info && typeof info !== 'string') {
++      started = true
++      tell(() => o.onStart?.({ pgid: child.pid as number, ...info }))
++    }
+     o.signal?.addEventListener('abort', onAbort, { once: true })
+     timer = setTimeout(
+       () => stop({ ok: false, reason: 'timeout', message: `no answer within ${Math.round(o.timeoutMs / 1000)} s` }),
+diff --git a/apps/bridge/src/heartbeat/store.ts b/apps/bridge/src/heartbeat/store.ts
+index 87c2a577..dcaf7e25 100644
+--- a/apps/bridge/src/heartbeat/store.ts
++++ b/apps/bridge/src/heartbeat/store.ts
+@@ -59,6 +59,16 @@ const Wake = z.object({
+ })
+ export type Wake = z.infer<typeof Wake>
+ 
++/** A source process that is running now: its group, command and start time, so a crash leaves a way to find it. */
++const Running = z.object({
++  pgid: z.number().int().min(2).max(4_194_304),
++  command: z.string().min(1).max(2000),
++  /** The start time `ps` showed for it: a reused pid has another one. */
++  lstart: z.string().min(1).max(64).optional(),
++  at: IsoTs,
++})
++export type Running = z.infer<typeof Running>
++
+ export type HeartbeatStore = {
+   schema: typeof STORE_SCHEMA
+   items: Record<string, StoredItem>
+@@ -69,7 +79,9 @@ export type HeartbeatStore = {
+   pending: Pending | null
+   /** The wake in flight, if any. Written BEFORE the notification is sent, so a crash never loses track of it. */
+   wake: Wake | null
+-  /** When this heartbeat last completed a live run. A gap of over 72 hours here (not a source's own silence) skips the backlog. */
++  /** Source processes running now, by source id. Cleared as each ends; a bridge start kills what a crash left (orphans.ts). */
++  running: Record<string, Running>
++  /** When this heartbeat last completed a live run. A gap here (not a source's own silence) longer than the job's limit (cold.ts) skips the backlog. */
+   last_run: string | null
+   /** "Install talos-app-mod" has been said and the agent has not been available since, so it is not said again. */
+   triage_said: boolean
+@@ -87,6 +99,7 @@ export const emptyStore = (): HeartbeatStore => ({
+   wakes_today: { date: '0000-00-00', count: 0 },
+   pending: null,
+   wake: null,
++  running: {},
+   last_run: null,
+   triage_said: false,
+   triage_unknown: 0,
+@@ -138,6 +151,11 @@ export function loadStore(path: string, setAside = true): LoadedStore {
+   if (pend.success) store.pending = pend.data
+   const wk = Wake.safeParse(r.wake)
+   if (wk.success) store.wake = wk.data
++  if (r.running && typeof r.running === 'object' && !Array.isArray(r.running))
++    for (const [id, x] of Object.entries(r.running)) {
++      const p = Running.safeParse(x)
++      if (p.success) store.running[id] = p.data
++    }
+   const lr = IsoTs.safeParse(r.last_run)
+   if (lr.success) store.last_run = lr.data
+   if (r.triage_said === true) store.triage_said = true
+diff --git a/apps/bridge/src/history-store.ts b/apps/bridge/src/history-store.ts
+index 05181992..f1eb8af5 100644
+--- a/apps/bridge/src/history-store.ts
++++ b/apps/bridge/src/history-store.ts
+@@ -212,6 +212,12 @@ export class HistoryStore {
+     }
+   }
+ 
++  /** Removes one message (a row whose frame was never accepted). Listeners hear it as a prune: they drop what no longer exists. */
++  deleteMessage(id: string) {
++    const r = this.db.query('DELETE FROM messages WHERE id = ?').run(id)
++    if (r.changes > 0 && this.listeners.length) this.told({ op: 'prune', before_iso: new Date(0).toISOString() })
++  }
++
+   setSeq(id: string, seq: number) {
+     this.db.query('UPDATE messages SET seq = ? WHERE id = ?').run(seq, id)
+   }
+diff --git a/apps/bridge/src/lifecycle.ts b/apps/bridge/src/lifecycle.ts
+index 4e052b0d..71acab48 100644
+--- a/apps/bridge/src/lifecycle.ts
++++ b/apps/bridge/src/lifecycle.ts
+@@ -10,7 +10,13 @@ export type PidRecord = { pid: number; started_at: string; instance: string }
+ export type PsInfo = { lstart: string; command: string }
+ export const BRIDGE_ENTRY = 'apps/bridge/src/server.ts'
+ 
+-/** `ps -p <pid> -o lstart=,command=`: lstart is a fixed 24 characters, the command follows. Undefined when the pid is gone. */
++/** One line of `ps -o lstart=,command=`: lstart is a fixed 24 characters, the command follows. */
++export const parsePsLine = (line: string): PsInfo => ({
++  lstart: line.slice(0, 24).trim(),
++  command: line.slice(24).trim(),
++})
++
++/** `ps -p <pid> -o lstart=,command=`. Undefined when the pid is gone. */
+ export function psInfo(pid: number): PsInfo | undefined {
+   try {
+     const r = Bun.spawnSync(['ps', '-p', String(pid), '-o', 'lstart=,command='], {
+@@ -21,7 +27,7 @@ export function psInfo(pid: number): PsInfo | undefined {
+     if (r.exitCode !== 0) return undefined
+     const line = r.stdout.toString().replace(/\n$/, '')
+     if (line.trim() === '') return undefined
+-    return { lstart: line.slice(0, 24).trim(), command: line.slice(24).trim() }
++    return parsePsLine(line)
+   } catch {
+     return undefined
+   }
+diff --git a/apps/bridge/src/schedules/service.ts b/apps/bridge/src/schedules/service.ts
+index 1b988638..20ffd27b 100644
+--- a/apps/bridge/src/schedules/service.ts
++++ b/apps/bridge/src/schedules/service.ts
+@@ -58,6 +58,8 @@ import {
+   schedulesSnapshotFrame,
+ } from '../frames-out.ts'
+ import { readJsonFile, writeJsonAtomic } from '../fsutil.ts'
++import { coldAfterMs } from '../heartbeat/cold.ts'
++import { reapOrphans } from '../heartbeat/orphans.ts'
+ import { WAKE_ENDED_TEXT } from '../heartbeat/prompt.ts'
+ import { BUSY_SUMMARY } from '../heartbeat/run-parts.ts'
+ import {
+@@ -475,6 +477,11 @@ export class ScheduleService {
+     if (this.started || !this.gate()) return
+     this.started = true
+     this.instances.register(this.deps.instance) // before any claim, so another bridge's sweep can see this one is alive
++    try {
++      reapOrphans(this.ctx.paths.home, (m, f) => this.log(m, f)) // before any slot: sources a crash left running
++    } catch (e) {
++      this.log('heartbeat orphan sweep failed', { error: (e as Error).message })
++    }
+     await this.enqueue(async () => {
+       await this.ensure()
+       if (this.stopped) return
+@@ -494,7 +501,7 @@ export class ScheduleService {
+   stop(final = true) {
+     this.stopped = true
+     this.wakeRuns.clear() // a wake open at shutdown is the next bridge's orphan sweep to settle; no card is believed after this
+-    this.heartbeat.abortAll() // sources are killed by process group; a run that was in flight writes and posts nothing
++    this.heartbeat.abortAll() // sources are killed by process group; a run in flight posts nothing and saves no result (a source's record stays for the next start)
+     this.tester.abortAll() // the same for a test the owner is waiting on: its sources die with the bridge
+     if (final) this.instances.markStopped(this.deps.instance, this.now())
+     this.chronos()?.close()
+@@ -1032,6 +1039,7 @@ export class ScheduleService {
+         runKey: claimed.ds,
+         config: 'config' in a.hb ? { config: a.hb.config, skipped: a.hb.skipped } : { problem: a.hb.problem },
+         trigger: a.trigger,
++        coldAfterMs: coldAfterMs(this.lastGood?.schedules.find((s) => s.id === a.id)?.when),
+         runId,
+       })
+     } catch (e) {
+@@ -1327,7 +1335,7 @@ export class ScheduleService {
+       let timer: ReturnType<typeof setTimeout> | undefined
+       try {
+         await Promise.race([
+-          this.safeSnapshot(),
++          this.lookupSnapshot(),
+           new Promise<void>((resolve) => {
+             timer = setTimeout(resolve, HB_THREAD_LOOKUP_MS)
+           }),
+@@ -1344,6 +1352,18 @@ export class ScheduleService {
+     return this.savedThreadMap().get(threadId) ?? this.threadFromStores(threadId)
+   }
+ 
++  /**
++   * The read a card's thread lookup waits on. The lookup gives up after HB_THREAD_LOOKUP_MS but the read it started keeps going,
++   * so a burst of cards while Chronos is slow would start one read each. Callers share the one in flight; it clears when it settles.
++   */
++  private lookupRead: Promise<ScheduleSnapshotT> | null = null
++  private lookupSnapshot(): Promise<ScheduleSnapshotT> {
++    this.lookupRead ??= this.safeSnapshot().finally(() => {
++      this.lookupRead = null
++    })
++    return this.lookupRead
++  }
++
+   private threadMapFile(): string {
+     return join(this.ctx.paths.home, 'heartbeat-threads.json')
+   }
+diff --git a/apps/bridge/test/heartbeat/builtin.test.ts b/apps/bridge/test/heartbeat/builtin.test.ts
+index b5a88250..ec2420de 100644
+--- a/apps/bridge/test/heartbeat/builtin.test.ts
++++ b/apps/bridge/test/heartbeat/builtin.test.ts
+@@ -47,21 +47,69 @@ afterEach(async () => {
+ })
+ 
+ const fileFor = (path: string) => `${path.replace(/[/?&=#]/g, '_')}.json`
+-/** A fake `gh`: answers from <dir>/answers/, logs every call to <dir>/calls.log. */
+-function fakeGh(answers: Record<string, unknown>, opts: { signedOut?: boolean; hang?: boolean } = {}): string {
++/**
++ * A fake `gh` (a small bun script): logs every call to <dir>/calls.log and answers like GitHub's API.
++ * - `notifications`: the whole list. A request is answered the way GitHub does: only rows updated after `since` and before
++ *   `before` (both exclusive, to the second), newest first, `per_page` rows of page `page`. `opts.shift` swaps the list for another
++ *   once that many notification calls have been made, so a list can change while it is being read.
++ * - every other key is an exact path -> body (a path with no answer is a 404 and exit 1).
++ */
++function fakeGh(
++  answers: Record<string, unknown>,
++  opts: {
++    signedOut?: boolean
++    hang?: boolean
++    commitDelaySec?: number
++    shift?: { after: number; notes: unknown[] }
++  } = {},
++): string {
+   const ans = join(dir, 'answers')
+   mkdirSync(ans, { recursive: true })
+-  for (const [path, body] of Object.entries(answers)) writeFileSync(join(ans, fileFor(path)), JSON.stringify(body))
++  const { notifications, ...exact } = answers
++  for (const [path, body] of Object.entries(exact)) writeFileSync(join(ans, fileFor(path)), JSON.stringify(body))
++  writeFileSync(join(dir, 'notifications.json'), JSON.stringify(notifications ?? []))
++  if (opts.shift) writeFileSync(join(dir, 'shift.json'), JSON.stringify(opts.shift))
+   const bin = join(dir, 'gh')
+   writeFileSync(
+     bin,
+-    `#!/bin/sh
+-echo "$@" >> '${join(dir, 'calls.log')}'
+-[ "$1" = api ] || { echo "unknown command" >&2; exit 2; }
+-${opts.signedOut ? 'echo "To get started with GitHub CLI, please run:  gh auth login" >&2; exit 4' : ''}
+-${opts.hang ? 'sleep 300' : ''}
+-f="${ans}/$(printf '%s' "$2" | tr '/?&=#' '_____').json"
+-if [ -f "$f" ]; then cat "$f"; else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
++    `#!${process.execPath}
++import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
++const dir = ${JSON.stringify(dir)}
++const [cmd, path = ''] = process.argv.slice(2)
++const logFile = dir + '/calls.log'
++const before = existsSync(logFile) ? readFileSync(logFile, 'utf8').split('\\n').filter((l) => l.startsWith('api notifications?per_page=50')).length : 0
++appendFileSync(logFile, process.argv.slice(2).join(' ') + '\\n')
++if (cmd !== 'api') { console.error('unknown command'); process.exit(2) }
++if (${JSON.stringify(Boolean(opts.signedOut))}) { console.error('To get started with GitHub CLI, please run:  gh auth login'); process.exit(4) }
++if (${JSON.stringify(Boolean(opts.hang))}) await Bun.sleep(300000)
++if (path.startsWith('notifications?')) {
++  const q = new URLSearchParams(path.slice('notifications?'.length))
++  if (q.get('per_page') === '1') { process.stdout.write('[]'); process.exit(0) }
++  let list = JSON.parse(readFileSync(dir + '/notifications.json', 'utf8'))
++  if (existsSync(dir + '/shift.json')) {
++    const sh = JSON.parse(readFileSync(dir + '/shift.json', 'utf8'))
++    if (before >= sh.after) list = sh.notes
++  }
++  const at = (n) => Date.parse(n.updated_at)
++  if (q.get('since')) list = list.filter((n) => at(n) > Date.parse(q.get('since')))
++  if (q.get('before')) list = list.filter((n) => at(n) < Date.parse(q.get('before')))
++  list = [...list].sort((a, b) => at(b) - at(a) || String(b.id).localeCompare(String(a.id)))
++  const per = Number(q.get('per_page') ?? 30)
++  const page = Number(q.get('page') ?? 1)
++  process.stdout.write(JSON.stringify(list.slice((page - 1) * per, page * per)))
++  process.exit(0)
++}
++if (path.startsWith('repos/') && path.includes('/commits/') && ${JSON.stringify(opts.commitDelaySec ?? 0)} > 0) {
++  // a commit lookup takes a while, and the log says how many were in flight at the same moment
++  mkdirSync(dir + '/inflight', { recursive: true })
++  writeFileSync(dir + '/inflight/' + process.pid, '')
++  appendFileSync(dir + '/inflight.log', readdirSync(dir + '/inflight').length + '\\n')
++  await Bun.sleep(${JSON.stringify((opts.commitDelaySec ?? 0) * 1000)})
++  rmSync(dir + '/inflight/' + process.pid, { force: true })
++}
++const f = dir + '/answers/' + path.replace(/[/?&=#]/g, '_') + '.json'
++if (existsSync(f)) process.stdout.write(readFileSync(f, 'utf8'))
++else { console.error('gh: Not Found (HTTP 404)'); process.exit(1) }
+ `,
+   )
+   chmodSync(bin, 0o755)
+@@ -75,6 +123,15 @@ const calls = () => {
+   }
+ }
+ 
++/** The most commit lookups that were running at the same moment. */
++const mostAtOnce = () => {
++  try {
++    return Math.max(...readFileSync(join(dir, 'inflight.log'), 'utf8').trim().split('\n').map(Number))
++  } catch {
++    return 0
++  }
++}
++
+ const ghSource = (over: Record<string, unknown> = {}) => ({
+   id: 'gh',
+   kind: 'github' as const,
+@@ -88,7 +145,7 @@ const note = (repo: string, id: string, reason: string, title: string, over: Rec
+   id,
+   unread: true,
+   reason,
+-  updated_at: ago(1),
++  updated_at: new Date(NOW + 60_000).toISOString(), // after the first look, like a notification that came in since
+   last_read_at: null,
+   url: `https://api.github.com/notifications/threads/${id}`,
+   subscription_url: `https://api.github.com/notifications/threads/${id}/subscription`,
+@@ -125,8 +182,7 @@ const checks = (
+ 
+ describe('github', () => {
+   const answersFor = (nowNotes: unknown[], prs: unknown[], per: Record<string, [unknown, unknown]>) => ({
+-    'notifications?per_page=1': [],
+-    [`notifications?per_page=50&since=${encodeURIComponent(MON_1000_UTC)}`]: nowNotes,
++    notifications: nowNotes,
+     'repos/acme/widgets/pulls?state=open&sort=updated&direction=desc&per_page=10': prs,
+     ...Object.fromEntries(
+       Object.entries(per).flatMap(([sha, [s, c]]) => [
+@@ -227,6 +283,148 @@ describe('github', () => {
+     expect(calls().some((c) => c.includes('sha5'))).toBe(false) // drafts are not looked at
+   })
+ 
++  describe('more notifications than one page', () => {
++    const at = (sec: number) => new Date(NOW + sec * 1000).toISOString()
++    /** A notification updated `sec` seconds after the first look. */
++    const mk = (id: string, sec: number, reason = 'subscribed') =>
++      note('acme/widgets', id, reason, `${reason} ${id}`, { updated_at: at(sec) })
++    const mine = (id: string, sec: number) => mk(id, sec, 'review_requested')
++    const notifCalls = () => calls().filter((c) => c.startsWith('api notifications?per_page=50'))
++    const found = () =>
++      Object.keys(k.store().items)
++        .filter((i) => i.startsWith('gh|gh:') && !i.includes('truncated'))
++        .map((i) => i.slice(6))
++        .sort()
++    const src = ghSource({ timeout_s: 20 }) // 4 s in these tests: every call starts a process
++    const cursor = () => k.store().sources.gh.cursor
++    const iso = () => new Date(clock.now()).toISOString()
++    const HOUR = 3600_000
++
++    test('120 notifications over three pages are all read', async () => {
++      const all = Array.from({ length: 120 }, (_, i) => mk(`n${i + 1}`, 3500 - i))
++      all[3] = mine('p1', 3500 - 3)
++      all[60] = mine('p2', 3500 - 60)
++      all[119] = mine('p3', 3500 - 119)
++      await start({ ghBin: fakeGh(answersFor(all, [], {})) })
++      await k.run(config([src]))
++      clock.advance(HOUR)
++      const out = await k.run(config([src]))
++      expect(out.result.items_new).toBe(3)
++      expect(found()).toEqual(['p1', 'p2', 'p3'])
++      expect(notifCalls().length).toBe(3) // a short last page ends it
++      expect(cursor()).toEqual({ since: iso() })
++    })
++
++    test('a page cap says so and leaves the cursor behind what was not read; the next look reads the rest', async () => {
++      const all = Array.from({ length: 300 }, (_, i) => mk(`n${i + 1}`, 3500 - i))
++      all[9] = mine('near', 3500 - 9)
++      all[279] = mine('far', 3500 - 279)
++      await start({ ghBin: fakeGh(answersFor(all, [], {})) })
++      await k.run(config([src]))
++      clock.advance(HOUR)
++      const runAt = iso()
++      await k.run(config([src]))
++      expect(notifCalls().length).toBe(5)
++      const truncated = k.store().items['gh|gh:notifications-truncated']
++      expect(truncated.level).toBe('fyi')
++      expect(truncated.title).toContain('5 pages')
++      expect(found()).toEqual(['near'])
++      // 5 pages of 50, each starting at the row the last one ended on, reach the 246th row: everything older is unread, and
++      // `before` is one second past that row, so a tie at its second is read again
++      expect(cursor()).toEqual({ since: MON_1000_UTC, before: at(3500 - 245 + 1), upto: runAt })
++      clock.advance(HOUR)
++      await k.run(config([src]))
++      expect(found()).toEqual(['far', 'near'])
++      expect(cursor()).toEqual({ since: iso() })
++    })
++
++    test('notifications that share a second across the cut are not skipped, and the ones read twice are not raised twice', async () => {
++      // ranks 244 to 252 all carry the same time, and the page cap (which reaches the 246th row) cuts through them
++      const tie = (i: number) => i >= 243 && i <= 251
++      const all = Array.from({ length: 300 }, (_, i) =>
++        tie(i) ? mine(`n${1000 - i}`, 3253) : mk(`n${1000 - i}`, 3500 - i),
++      )
++      const ties = all.filter((_, i) => tie(i)).map((n) => (n as { id: string }).id)
++      await start({ ghBin: fakeGh(answersFor(all, [], {})) })
++      await k.run(config([src]))
++      clock.advance(HOUR)
++      await k.run(config([src]))
++      expect(found().length).toBe(3) // the cut fell inside the tie
++      clock.advance(HOUR)
++      const out = await k.run(config([src]))
++      expect(found()).toEqual([...ties].sort())
++      expect(out.result.items_new).toBe(6) // the three read twice are the same items, not new ones
++    })
++
++    test('more than 50 act items: the answer stops at the cap, says so, and the rest come on the next looks', async () => {
++      const all = Array.from({ length: 70 }, (_, i) => mine(`a${i + 1}`, 3500 - i))
++      await start({ ghBin: fakeGh(answersFor(all, [], {})) })
++      await k.run(config([src]))
++      clock.advance(HOUR)
++      await k.run(config([src]))
++      expect(found().length).toBe(49) // one slot of the 50 is kept for the line that says so
++      expect(k.store().items['gh|gh:notifications-truncated']).toBeDefined()
++      expect(cursor()).toMatchObject({ since: MON_1000_UTC, before: at(3500 - 48 + 1) })
++      clock.advance(HOUR)
++      await k.run(config([src]))
++      expect(found().length).toBe(70)
++      expect(cursor()).toEqual({ since: iso() })
++    })
++
++    test('a list that changes between pages loses nothing', async () => {
++      const all = Array.from({ length: 120 }, (_, i) => mk(`n${i + 1}`, 3500 - i))
++      for (let i = 50; i < 55; i++) all[i] = mine(`m${i}`, 3500 - i) // ranks 51 to 55: the ones a page-number walk would skip
++      // after the first page is read, five notes from page 1 are marked read
++      const shifted = all.filter((_, i) => i < 2 || i > 6)
++      await start({ ghBin: fakeGh(answersFor(all, [], {}), { shift: { after: 1, notes: shifted } }) })
++      await k.run(config([src]))
++      clock.advance(HOUR)
++      await k.run(config([src]))
++      expect(found()).toEqual(['m50', 'm51', 'm52', 'm53', 'm54'])
++    })
++
++    test('two unread spans merge into one, and every item is found by the end', async () => {
++      const olds = Array.from({ length: 300 }, (_, i) => mk(`o${String(i).padStart(3, '0')}`, 399 - i))
++      olds[299] = mine('old-first', 100) // the oldest of the first batch
++      olds[150] = mine('old-mid', 399 - 150)
++      const news = Array.from({ length: 300 }, (_, i) => mk(`w${String(i).padStart(3, '0')}`, 7599 - i))
++      news[299] = mine('new-first', 7300)
++      news[0] = mine('new-last', 7599)
++      const all = [...olds]
++      await start({ ghBin: fakeGh(answersFor(all, [], {})) })
++      await k.run(config([src]))
++      clock.advance(2 * HOUR) // 7200 s
++      await k.run(config([src])) // reads the newest 250 of the first batch
++      expect(cursor()).toMatchObject({ since: MON_1000_UTC, upto: iso() })
++      expect(found()).toEqual(['old-mid'])
++      // 300 more arrive; the budget goes to the newer span, and the older one is still unread
++      const ans = JSON.parse(readFileSync(join(dir, 'notifications.json'), 'utf8'))
++      writeFileSync(join(dir, 'notifications.json'), JSON.stringify([...ans, ...news]))
++      clock.advance(HOUR)
++      await k.run(config([src]))
++      expect(cursor()).toMatchObject({ since: MON_1000_UTC, upto: iso() }) // one span, from the older start
++      expect(found()).toEqual(['new-last', 'old-mid'])
++      for (let i = 0; i < 3; i++) {
++        clock.advance(HOUR)
++        await k.run(config([src]))
++      }
++      expect(found()).toEqual(['new-first', 'new-last', 'old-first', 'old-mid'])
++      expect(cursor()).toEqual({ since: iso() })
++    })
++
++    test('PR lookups run side by side, a few at a time', async () => {
++      const prs = Array.from({ length: 8 }, (_, i) => pr(i + 1))
++      const per = Object.fromEntries(prs.map((p) => [`sha${p.number}`, [status(`sha${p.number}`, []), checks([])]]))
++      const bin = fakeGh(answersFor([], prs, per as never), { commitDelaySec: 0.2 })
++      await start({ ghBin: bin })
++      await k.run(config([src]))
++      const out = await k.run(config([src]))
++      expect(sourceOf(out.result, 'gh')?.ok).toBe(true)
++      expect(mostAtOnce()).toBeGreaterThan(1)
++      expect(mostAtOnce()).toBeLessThanOrEqual(6)
++    })
++  })
++
+   test('signed out is a source error that names the problem, never a silent slot', async () => {
+     await start({ ghBin: fakeGh({}, { signedOut: true }) })
+     const out = await k.run(config([ghSource()]))
+diff --git a/apps/bridge/test/heartbeat/cold.test.ts b/apps/bridge/test/heartbeat/cold.test.ts
+new file mode 100644
+index 00000000..af05f95d
+--- /dev/null
++++ b/apps/bridge/test/heartbeat/cold.test.ts
+@@ -0,0 +1,66 @@
++// "Cold": the heartbeat has been off so long that its cursors mean nothing. The limit is twice the job's own largest gap
++// between two of its weekly times (and never under 48 hours), so a Monday/Thursday job is not cold every week.
++import { describe, expect, test } from 'bun:test'
++import type { ScheduleWhenT } from '@talos-app/protocol'
++import { COLD_FLOOR_MS, COLD_UNKNOWN_MS, coldAfterMs, coldness } from '../../src/heartbeat/cold.ts'
++import { emptyStore } from '../../src/heartbeat/store.ts'
++
++const HOUR = 3600_000
++const DAY = 24 * HOUR
++const times = (days: unknown, t: string[]) => ({ type: 'times', days, times: t }) as unknown as ScheduleWhenT
++
++describe('how long a heartbeat may be off', () => {
++  test('Monday and Thursday: the longest gap is Thursday to Monday, 4 days, so 8', () => {
++    expect(coldAfterMs(times(['mon', 'thu'], ['09:00']))).toBe(8 * DAY)
++    expect(coldAfterMs(times([0, 3], ['09:00']))).toBe(8 * DAY) // Chronos may print the days as numbers, Monday 0
++  })
++
++  test('a daily job: a 24 hour gap is 48 hours, which is also the floor', () => {
++    expect(coldAfterMs(times('daily', ['09:00']))).toBe(48 * HOUR)
++    expect(coldAfterMs(times('daily', ['09:00', '21:00']))).toBe(COLD_FLOOR_MS) // 12 hour gaps would be 24: the floor wins
++  })
++
++  test('a single weekly slot: a 7 day gap, so 14 days', () => {
++    expect(coldAfterMs(times(['wed'], ['09:00']))).toBe(14 * DAY)
++  })
++
++  test('weekdays with four times: the gap over the weekend counts, and times given out of order do not matter', () => {
++    // Friday 17:15 to Monday 09:45 is 64.5 hours
++    expect(coldAfterMs(times('weekdays', ['17:15', '09:45', '12:15', '14:45']))).toBe(129 * HOUR)
++  })
++
++  test('days or times it cannot read, or a job that is not a times job: the longest any weekly list can have, 14 days', () => {
++    expect(coldAfterMs(times(['someday'], ['09:00']))).toBe(COLD_UNKNOWN_MS)
++    expect(coldAfterMs({ type: 'daily', time: '09:00' } as ScheduleWhenT)).toBe(COLD_UNKNOWN_MS)
++    expect(coldAfterMs(undefined)).toBe(COLD_UNKNOWN_MS)
++    expect(COLD_UNKNOWN_MS).toBe(14 * DAY)
++  })
++})
++
++describe('cold, judged against that limit', () => {
++  const NOW = Date.parse('2026-10-12T10:00:00.000Z')
++  const stored = (lastRunMs: number | null) => {
++    const s = emptyStore()
++    s.sources.ss = { cursor: null, last_ok: null, fail_streak: 0 }
++    s.last_run = lastRunMs === null ? null : new Date(lastRunMs).toISOString()
++    return s
++  }
++  for (const [name, limit] of [
++    ['Monday and Thursday (8 days)', 8 * DAY],
++    ['daily (48 hours)', 48 * HOUR],
++    ['one weekly slot (14 days)', 14 * DAY],
++  ] as const) {
++    test(`${name}: exactly at the limit is not cold, a second over is`, () => {
++      expect(coldness(stored(NOW - limit), NOW, limit).cold).toBe(false)
++      expect(coldness(stored(NOW - limit - 1000), NOW, limit)).toEqual({ ms: limit + 1000, cold: true })
++    })
++    test(`${name}: a little under is not cold`, () => {
++      expect(coldness(stored(NOW - limit + 1000), NOW, limit).cold).toBe(false)
++    })
++  }
++
++  test('a store with sources and no last_run is cold; a store that has never run is not', () => {
++    expect(coldness(stored(null), NOW, 8 * DAY)).toEqual({ ms: 0, cold: true })
++    expect(coldness(emptyStore(), NOW, 8 * DAY).cold).toBe(false)
++  })
++})
+diff --git a/apps/bridge/test/heartbeat/orphans.test.ts b/apps/bridge/test/heartbeat/orphans.test.ts
+new file mode 100644
+index 00000000..3522d14c
+--- /dev/null
++++ b/apps/bridge/test/heartbeat/orphans.test.ts
+@@ -0,0 +1,172 @@
++// A heartbeat source runs in its own process group and outlives a bridge crash. The store records its group while it runs;
++// the next bridge start kills a recorded group only if it is still alive AND its leader still has the command we recorded
++// (pids get reused). Every process here is one the test started itself.
++import { afterEach, describe, expect, test } from 'bun:test'
++import { spawn } from 'node:child_process'
++import { readFileSync, writeFileSync } from 'node:fs'
++import { reapOrphans } from '../../src/heartbeat/orphans.ts'
++import { processInfo } from '../../src/heartbeat/spawn.ts'
++import { emptyStore, storeFile } from '../../src/heartbeat/store.ts'
++import { longTimeouts, type SchedHarness, startSched, tempHome, waitFor } from '../schedules/harness.ts'
++
++longTimeouts()
++
++type Child = { pid: number; exited: Promise<void>; isGone(): boolean }
++const started: Child[] = []
++let h = undefined as unknown as SchedHarness
++afterEach(async () => {
++  for (const c of started.splice(0))
++    try {
++      if (!c.isGone()) process.kill(-c.pid, 'SIGKILL')
++    } catch {
++      // already gone
++    }
++  await h?.stop()
++  h = undefined as unknown as SchedHarness
++})
++
++/** A `sleep` in a group of its own, like a source. */
++function leader(secs: number): Child {
++  const child = spawn('/bin/sleep', [String(secs)], { detached: true, stdio: 'ignore' })
++  let gone = false
++  const exited = new Promise<void>((resolve) =>
++    child.on('exit', () => {
++      gone = true
++      resolve()
++    }),
++  )
++  const c = { pid: child.pid as number, exited, isGone: () => gone }
++  started.push(c)
++  return c
++}
++const infoOf = (pid: number) => {
++  const i = processInfo(pid)
++  if (typeof i === 'string') throw new Error(`no process ${pid}`)
++  return i
++}
++const record = (c: Child, over: { command?: string; lstart?: string } = {}) => ({
++  pgid: c.pid,
++  command: infoOf(c.pid).command,
++  lstart: infoOf(c.pid).lstart,
++  at: '2026-10-05T10:00:00.000Z',
++  ...over,
++})
++const logs: Array<[string, unknown]> = []
++const log = (m: string, f?: unknown) => logs.push([m, f])
++function writeStore(home: string, running: Record<string, unknown>, shadow = false, jobId = 'beat') {
++  writeFileSync(storeFile(home, shadow, jobId), JSON.stringify({ ...emptyStore(), running }))
++}
++// biome-ignore lint/suspicious/noExplicitAny: a test's view of a JSON file it pokes at
++const readStore = (home: string, shadow = false, jobId = 'beat'): any =>
++  JSON.parse(readFileSync(storeFile(home, shadow, jobId), 'utf8'))
++const stays = (c: Child, ms = 400) => Bun.sleep(ms).then(() => !c.isGone())
++
++describe('leftover source processes', () => {
++  test('a recorded group that is alive and still has its recorded command is killed, and the record is cleared', async () => {
++    const home = tempHome()
++    const orphan = leader(300)
++    const bystander = leader(300) // same command, never recorded
++    writeStore(home, { src: record(orphan) })
++    const out = reapOrphans(home, log)
++    await Promise.race([orphan.exited, Bun.sleep(3000)])
++    expect(orphan.isGone()).toBe(true)
++    expect(out.killed).toEqual([orphan.pid])
++    expect(await stays(bystander)).toBe(true) // a pgid nobody recorded is never touched
++    expect(readStore(home).running).toEqual({})
++  })
++
++  test('a reused pid that now runs something else is left alone, and the record is cleared', async () => {
++    const home = tempHome()
++    const stranger = leader(300)
++    writeStore(home, { src: record(stranger, { command: '/usr/bin/some-other-program --serve' }) })
++    const out = reapOrphans(home, log)
++    expect(out.killed).toEqual([])
++    expect(await stays(stranger)).toBe(true)
++    expect(readStore(home).running).toEqual({})
++  })
++
++  test('a dead group is just cleared', async () => {
++    const home = tempHome()
++    const gone = leader(300)
++    const rec = record(gone)
++    process.kill(-gone.pid, 'SIGKILL')
++    await gone.exited
++    writeStore(home, { src: rec })
++    const out = reapOrphans(home, log)
++    expect(out.killed).toEqual([])
++    expect(readStore(home).running).toEqual({})
++  })
++
++  test('shadow stores are swept too, every record in a file is judged on its own, and a store nobody can read is left where it is', async () => {
++    const home = tempHome()
++    const a = leader(300)
++    const b = leader(300)
++    writeStore(home, { one: record(a), two: record(b, { command: 'not what it was' }) }, true, 'beat')
++    writeFileSync(storeFile(home, false, 'broken'), '{not json')
++    const out = reapOrphans(home, log)
++    await Promise.race([a.exited, Bun.sleep(3000)])
++    expect(out.killed).toEqual([a.pid])
++    expect(await stays(b)).toBe(true)
++    expect(readStore(home, true).running).toEqual({})
++    expect(readFileSync(storeFile(home, false, 'broken'), 'utf8')).toBe('{not json')
++  })
++
++  test('a record that points at pid 0, 1 or this process is cleared and never signalled', () => {
++    const home = tempHome()
++    const bad = (pgid: number) => ({ pgid, command: infoOf(process.pid).command, at: '2026-10-05T10:00:00.000Z' })
++    writeStore(home, { a: bad(process.pid), b: { ...bad(1), pgid: 1 } })
++    expect(reapOrphans(home, log).killed).toEqual([])
++    expect(readStore(home).running).toEqual({})
++  })
++
++  test('a pid that was reused by the same command at another start time is left alone', async () => {
++    const home = tempHome()
++    const stranger = leader(300)
++    writeStore(home, { src: record(stranger, { lstart: 'Mon Jan  1 00:00:00 2001' }) })
++    expect(reapOrphans(home, log).killed).toEqual([])
++    expect(await stays(stranger)).toBe(true)
++    expect(readStore(home).running).toEqual({})
++  })
++
++  test('a group whose leader is gone but which still has members is killed: its pgid cannot have been reused', async () => {
++    const home = tempHome()
++    // the leader (a shell) exits after a moment and leaves a `sleep` in its group
++    const child = spawn('/bin/sh', ['-c', 'sleep 300 & sleep 1'], { detached: true, stdio: 'ignore' })
++    const pgid = child.pid as number
++    const exited = new Promise<void>((resolve) => child.on('exit', () => resolve()))
++    started.push({ pid: pgid, exited, isGone: () => false })
++    const rec = { pgid, ...infoOf(pgid), at: '2026-10-05T10:00:00.000Z' }
++    await exited
++    writeStore(home, { src: rec })
++    const groupAlive = () => {
++      try {
++        process.kill(-pgid, 0)
++        return true
++      } catch {
++        return false
++      }
++    }
++    expect(groupAlive()).toBe(true)
++    expect(reapOrphans(home, log).killed).toEqual([pgid])
++    await waitFor(() => !groupAlive(), 3000, 'the group to be gone')
++    expect(readStore(home).running).toEqual({})
++  })
++
++  test('a ps that cannot answer keeps the record for the next start and kills nothing', async () => {
++    const home = tempHome()
++    const orphan = leader(300)
++    writeStore(home, { src: record(orphan) })
++    expect(reapOrphans(home, log, { info: () => 'unknown' }).killed).toEqual([])
++    expect(await stays(orphan)).toBe(true)
++    expect(Object.keys(readStore(home).running)).toEqual(['src'])
++  })
++
++  test('a bridge start sweeps before any slot: the leftover is killed and its record gone', async () => {
++    const home = tempHome()
++    const orphan = leader(300)
++    writeStore(home, { src: record(orphan) })
++    h = await startSched({ now: '2026-10-05T13:30:00Z', home })
++    await waitFor(() => orphan.isGone(), 15_000, 'the leftover to be killed')
++    await waitFor(() => Object.keys(readStore(home).running).length === 0, 5000, 'the record to be cleared')
++  })
++})
+diff --git a/apps/bridge/test/heartbeat/runner.test.ts b/apps/bridge/test/heartbeat/runner.test.ts
+index 48372467..f64675ad 100644
+--- a/apps/bridge/test/heartbeat/runner.test.ts
++++ b/apps/bridge/test/heartbeat/runner.test.ts
+@@ -41,6 +41,11 @@ beforeEach(() => {
+ afterEach(async () => {
+   await h?.stop()
+ })
++/** The heartbeat rows in the history of the default thread. */
++const history = () =>
++  h.bridge.ctx.store
++    .page({ thread_id: h.bridge.ctx.config.config.default_thread, limit: 50 })
++    .messages.filter((m) => m.heartbeat)
+ const alive = (pid: number) => {
+   try {
+     process.kill(pid, 0)
+@@ -605,6 +610,81 @@ describe('crash safety', () => {
+     expect(k.store().items['cc|a'].state).toBe('surfaced')
+   })
+ 
++  test('a refused post leaves no history row, so the retry makes exactly one row under one id', async () => {
++    await start()
++    const real = h.bridge.ctx.transport.sendDurable.bind(h.bridge.ctx.transport)
++    h.bridge.ctx.transport.sendDurable = async () => {
++      throw new Error('relay refused the row')
++    }
++    const cfg = config([cmd('cc', printing(dir, 'c', ok([item('a')])))])
++    expect((await k.run(cfg)).result.outcome).toBe('failed')
++    expect(history()).toEqual([]) // nothing was delivered, so nothing is in the history
++    h.bridge.ctx.transport.sendDurable = real
++    expect((await k.run(cfg)).result.outcome).toBe('fyi')
++    await waitFor(() => k.rows().length === 1, 5000, 'the retried digest')
++    expect(history().length).toBe(1)
++    expect(new Set(history().map((m) => m.id)).size).toBe(1)
++    // and the relay saw the same id the history holds
++    const sent = h.relay.frames.filter((r) => r.frame.type === 'reply' && r.direction === 'from_bridge')
++    expect(sent.map((r) => (r.frame as unknown as { message: { id: string } }).message.id)).toEqual([history()[0]?.id])
++  })
++
++  test('a digest that goes out leaves one history row, carrying the seq the relay acked', async () => {
++    await start()
++    const real = h.bridge.ctx.transport.sendDurable.bind(h.bridge.ctx.transport)
++    h.bridge.ctx.transport.sendDurable = async (f) => {
++      await real(f)
++      return { state: 'acked', seq: 7 }
++    }
++    await k.run(config([cmd('cc', printing(dir, 'c', ok([item('a')])))]))
++    const rows = h.bridge.ctx.store
++      .page({ thread_id: h.bridge.ctx.config.config.default_thread, limit: 50 })
++      .messages.filter((m) => m.heartbeat)
++    expect(rows.length).toBe(1)
++    expect(rows[0]?.seq).toBe(7)
++  })
++
++  test('an ack that lands before the send returns still sets the seq on the row', async () => {
++    await start()
++    const t = h.bridge.ctx.transport as unknown as { onAck(ref: string, seq: number): void }
++    h.bridge.ctx.transport.sendDurable = async (f) => {
++      h.bridge.ctx.store.outboxAdd(f.id, f.type, JSON.stringify(f), 0)
++      t.onAck(f.id, 9) // the relay's ack, before sendDurable gives its answer
++      return { state: 'acked' } // an answer that carries no seq
++    }
++    await k.run(config([cmd('cc', printing(dir, 'c', ok([item('a')])))]))
++    expect(history().map((m) => m.seq)).toEqual([9])
++  })
++
++  test('a send that fails after the frame is in the outbox is not posted again: the outbox delivers it', async () => {
++    await start()
++    h.bridge.ctx.transport.sendDurable = async (f) => {
++      h.bridge.ctx.store.outboxAdd(f.id, f.type, JSON.stringify(f), 0)
++      throw new Error('something broke after the frame was kept')
++    }
++    const cfg = config([cmd('cc', printing(dir, 'c', ok([item('a')])))])
++    expect((await k.run(cfg)).result.outcome).toBe('fyi')
++    expect(k.store().items['cc|a'].state).toBe('surfaced')
++    expect(history().length).toBe(1)
++    expect((await k.run(cfg)).result.outcome).toBe('silent') // not a second digest
++    expect(history().length).toBe(1)
++  })
++
++  test('a history store that throws leaves nothing sent, and the retry makes one row', async () => {
++    await start()
++    const real = h.bridge.ctx.store.addMessage.bind(h.bridge.ctx.store)
++    h.bridge.ctx.store.addMessage = () => {
++      throw new Error('disk full')
++    }
++    const cfg = config([cmd('cc', printing(dir, 'c', ok([item('a')])))])
++    expect((await k.run(cfg)).result.outcome).toBe('failed')
++    expect(k.rows()).toEqual([])
++    h.bridge.ctx.store.addMessage = real
++    expect((await k.run(cfg)).result.outcome).toBe('fyi')
++    await waitFor(() => k.rows().length === 1, 5000, 'the retried digest')
++    expect(history().length).toBe(1)
++  })
++
+   test('a store that cannot be saved fails the run: nothing is posted from state that was not kept', async () => {
+     await start()
+     const cfg = config([cmd('cc', printing(dir, 'c', ok([item('a')])))])
+@@ -859,7 +939,7 @@ describe('the store', () => {
+     expect((statSync(storeFile(h.home, false, 'beat')).mode & 0o777).toString(8)).toBe('600')
+   })
+ 
+-  test('a source not heard from for 72 hours starts over with no cursor', async () => {
++  test("a heartbeat off for longer than its job's limit starts over with no cursor", async () => {
+     await start()
+     const src = printing(dir, 'c', ok([], { n: 1 }))
+     const cfg = config([cmd('cc', src)])
+@@ -867,10 +947,41 @@ describe('the store', () => {
+     await k.run(cfg)
+     expect(JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8')).cursor).toEqual({ n: 1 })
+     clock.advance(73 * 3600_000)
++    await k.run(cfg, { coldAfterMs: 3 * 24 * 3600_000 })
++    const req = JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8'))
++    expect(req.cursor).toBeNull()
++    expect(req.since).toBeNull()
++  })
++
++  test('a store from before last_run was kept (sources known, no last_run) starts over once, like a long gap', async () => {
++    await start()
++    const src = printing(dir, 'c', ok([item('a')], { n: 1 }))
++    const cfg = config([cmd('cc', src)])
++    await k.run(cfg)
++    await k.run(cfg)
++    expect(JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8')).cursor).toEqual({ n: 1 })
++    const old = k.store()
++    old.last_run = null // what an earlier version wrote
++    writeFileSync(storeFile(h.home, false, 'beat'), JSON.stringify(old))
++    const rowsBefore = k.rows().length
+     await k.run(cfg)
+     const req = JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8'))
+     expect(req.cursor).toBeNull()
+     expect(req.since).toBeNull()
++    await waitFor(() => k.rows().length === rowsBefore + 1, 5000, 'the note')
++    expect(k.rows().at(-1)?.text).toContain('started over')
++    expect(k.store().last_run).toBe(MON_1000_UTC)
++    // and it is once: the run after that is a normal one
++    await k.run(cfg)
++    expect(JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8')).cursor).toEqual({ n: 1 })
++  })
++
++  test('a heartbeat that has never run is not cold: its first look shows what it finds, with no note', async () => {
++    await start()
++    await k.run(config([cmd('cc', printing(dir, 'c', ok([item('a')])))]))
++    expect(k.rows().length).toBe(1)
++    expect(k.rows()[0]?.text).toContain('Item a')
++    expect(k.rows()[0]?.text).not.toContain('started over')
+   })
+ 
+   test('the request carries the cursor and the time of the last good look', async () => {
+@@ -951,7 +1062,10 @@ describe('hostile text and the process boundary', () => {
+     const out = await p
+     expect(out.aborted).toBe(true)
+     await waitFor(() => !alive(pid), 3000, 'the source to be killed')
+-    expect(existsSync(storeFile(h.home, false, 'beat'))).toBe(false)
++    // the only thing the store ever held was the source's own record, and that is gone
++    const st = k.store()
++    expect([st.items, st.sources, st.running]).toEqual([{}, {}, {}])
++    expect([st.pending, st.last_run]).toEqual([null, null])
+     expect(k.rows()).toEqual([])
+   })
+ 
+@@ -964,3 +1078,37 @@ describe('hostile text and the process boundary', () => {
+     expect((await p).aborted).toBe(true)
+   })
+ })
++
++describe('the group of a running source is recorded in the store', () => {
++  test('while a source runs its group and command are in the store; when it ends the record is gone', async () => {
++    await start()
++    const seen = join(dir, 'during.json')
++    const pidFile = join(dir, 'pid')
++    const src = script(
++      dir,
++      'rec',
++      `echo $$ > '${pidFile}'\ncp '${storeFile(h.home, false, 'beat')}' '${seen}'\ncat <<'JSON_END'\n${ok([])}\nJSON_END`,
++    )
++    await k.run(config([cmd('rec', src)]))
++    const during = JSON.parse(readFileSync(seen, 'utf8'))
++    const rec = during.running.rec
++    expect(rec.pgid).toBe(Number(readFileSync(pidFile, 'utf8')))
++    expect(rec.command).toContain(src)
++    expect(rec.lstart).toMatch(/\d{4}$/) // the start time ps shows, so a reused pid can be told apart
++    expect(k.store().running).toEqual({})
++  })
++
++  test('a source that is killed at its time limit leaves no record behind', async () => {
++    await start()
++    const hang = script(dir, 'hang', 'sleep 300')
++    const out = await k.run(config([cmd('hang', hang)]))
++    expect(sourceOf(out.result, 'hang')?.ok).toBe(false)
++    expect(k.store().running).toEqual({})
++  })
++
++  test('a dry run records nothing and writes no file', async () => {
++    await start()
++    await k.run(config([cmd('dd', printing(dir, 'dd', ok([])))]), { dry: true })
++    expect(k.storeBytes()).toBeNull()
++  })
++})
+diff --git a/apps/bridge/test/heartbeat/service.test.ts b/apps/bridge/test/heartbeat/service.test.ts
+index d5af1bb2..bd341737 100644
+--- a/apps/bridge/test/heartbeat/service.test.ts
++++ b/apps/bridge/test/heartbeat/service.test.ts
+@@ -2,12 +2,12 @@
+ // bridge, and closed with `finish`, so Chronos writes the same `ran-` marker it writes for any finished run. The agent is
+ // `h.notes`: a heartbeat slot that finds nothing, or only fyi, must leave it empty.
+ import { afterEach, describe, expect, test } from 'bun:test'
+-import { existsSync, readdirSync, readFileSync } from 'node:fs'
++import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+ import { join } from 'node:path'
+ import { HEARTBEAT_META_KEY } from '@talos-app/protocol'
+ import { SHADOW_LOG } from '../../src/heartbeat/runner.ts'
+-import { storeFile } from '../../src/heartbeat/store.ts'
+-import { draft, longTimeouts, type SchedHarness, startSched, waitFor } from '../schedules/harness.ts'
++import { emptyStore, storeFile } from '../../src/heartbeat/store.ts'
++import { draft, longTimeouts, type SchedHarness, startSched, tempHome, waitFor } from '../schedules/harness.ts'
+ import { cmd, config, errAnswer, item, ok, printing, script, tmpDir } from './kit.ts'
+ 
+ longTimeouts()
+@@ -180,7 +180,10 @@ describe('a heartbeat slot, claimed and closed by the bridge', () => {
+     )
+     await Bun.sleep(300)
+     expect(ran()).toEqual([])
+-    expect(existsSync(storeFile(h.home, false, 'beat'))).toBe(false)
++    // the stopped bridge leaves the source's record for the next start to sweep, and nothing else
++    const st = JSON.parse(readFileSync(storeFile(h.home, false, 'beat'), 'utf8'))
++    expect([st.items, st.sources, st.pending, st.last_run]).toEqual([{}, {}, null, null])
++    expect(Object.keys(st.running)).toEqual(['hang'])
+     expect(rows()).toEqual([])
+   })
+ 
+@@ -250,3 +253,27 @@ describe('a heartbeat slot, claimed and closed by the bridge', () => {
+     expect(h.notesOf('schedule_run')).toEqual([])
+   })
+ })
++
++describe("how long a heartbeat may be off comes from the job's own times", () => {
++  // weekdays at 09:45, 12:15, 14:45, 17:15: the longest gap is Friday 17:15 to Monday 09:45 (64.5 h), so the limit is 129 h
++  async function requestAfterOff(hours: number): Promise<{ cursor: unknown }> {
++    const home = tempHome()
++    const d = tmpDir()
++    const iso = new Date(Date.parse(T0950) - hours * 3600_000).toISOString()
++    const st = emptyStore()
++    st.last_run = iso
++    st.sources.news = { cursor: { n: 1 }, last_ok: iso, fail_streak: 0 }
++    writeFileSync(storeFile(home, false, 'beat'), JSON.stringify(st))
++    await begin(config([cmd('news', printing(d, 'n', ok([])))]), { home })
++    await waitFor(() => ran().length === 1 && closed(), 30_000, 'the slot to close')
++    return JSON.parse(readFileSync(join(d, 'n.stdin'), 'utf8'))
++  }
++
++  test('100 hours off is not cold for this job (it was 72 before): the source keeps its cursor', async () => {
++    expect((await requestAfterOff(100)).cursor).toEqual({ n: 1 })
++  })
++
++  test('130 hours off is cold: the source starts over', async () => {
++    expect((await requestAfterOff(130)).cursor).toBeNull()
++  })
++})
+diff --git a/apps/bridge/test/heartbeat/thread-map.test.ts b/apps/bridge/test/heartbeat/thread-map.test.ts
+index b098d604..b40f6346 100644
+--- a/apps/bridge/test/heartbeat/thread-map.test.ts
++++ b/apps/bridge/test/heartbeat/thread-map.test.ts
+@@ -4,7 +4,8 @@ import { afterEach, describe, expect, test } from 'bun:test'
+ import { chmodSync, copyFileSync, existsSync, rmSync, writeFileSync } from 'node:fs'
+ import { join } from 'node:path'
+ import { HEARTBEAT_META_KEY } from '@talos-app/protocol'
+-import { draft, longTimeouts, type SchedHarness, startSched, tempHome } from '../schedules/harness.ts'
++import { AdapterError } from '../../src/schedules/chronos-adapter.ts'
++import { draft, longTimeouts, type SchedHarness, startSched, tempHome, waitFor } from '../schedules/harness.ts'
+ import { cmd, config, ok, printing, tmpDir } from './kit.ts'
+ 
+ longTimeouts()
+@@ -127,4 +128,35 @@ describe('the heartbeat thread map', () => {
+     expect(r.isError).toBeFalsy()
+     expect(took).toBeLessThan(3500)
+   })
++
++  test('a burst of cards while no snapshot is known shares one read of Chronos; a later call makes a new one', async () => {
++    const seen = { snapshots: 0 }
++    h = await startSched({
++      now: T0930,
++      config: cfgOf,
++      // Chronos is up but its snapshot never works, so the bridge has no good one and every card has to ask
++      wrapAdapter: (a) =>
++        new Proxy(a, {
++          get(t, p) {
++            if (p === 'snapshot')
++              return async () => {
++                seen.snapshots++
++                await Bun.sleep(300)
++                throw new AdapterError('exit', 'chronos api snapshot: not answering')
++              }
++            const v = (t as unknown as Record<string | symbol, unknown>)[p]
++            return typeof v === 'function' ? v.bind(t) : v
++          },
++        }),
++    })
++    const schedules = h.bridge.ctx.schedules as NonNullable<typeof h.bridge.ctx.schedules>
++    await waitFor(() => schedules.hasStarted, 15_000, 'the schedules to start')
++    await schedules.idle()
++    seen.snapshots = 0
++    const jobs = await Promise.all(Array.from({ length: 6 }, () => schedules.heartbeatJobOfThread('trip')))
++    expect(jobs).toEqual([null, null, null, null, null, null])
++    expect(seen.snapshots).toBe(1)
++    await schedules.heartbeatJobOfThread('trip') // the first read has settled: this one asks again
++    expect(seen.snapshots).toBe(2)
++  })
+ })
+diff --git a/apps/bridge/test/heartbeat/wake.test.ts b/apps/bridge/test/heartbeat/wake.test.ts
+index b9c0fd03..ae6a3328 100644
+--- a/apps/bridge/test/heartbeat/wake.test.ts
++++ b/apps/bridge/test/heartbeat/wake.test.ts
+@@ -1,11 +1,12 @@
+ // HB4: the wake, driven through the REAL runner and the REAL wake (pack file, notification builder) against a real bridge
+ // context. The agent is a recorder behind `emit`; the closes the service would send (done ok, killed) are called directly.
+ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
++import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+ import { join } from 'node:path'
+ import { fakeClock } from '@talos-app/testkit'
+ import { MAX_PACK_ITEMS, packDir, packPath } from '../../src/heartbeat/pack.ts'
+ import { type RunnerDeps, WAKE_STALE_MS } from '../../src/heartbeat/runner.ts'
++import { emptyStore, storeFile } from '../../src/heartbeat/store.ts'
+ import { makeWake, triageAvailable } from '../../src/heartbeat/wake.ts'
+ import type { Notification } from '../../src/notify.ts'
+ import { type Harness, startHarness } from '../helpers.ts'
+@@ -263,12 +264,15 @@ describe('the big cold wake', () => {
+     expect(left.length).toBe(15)
+   })
+ 
+-  test('after a gap over 72 hours the backlog is skipped with one line, not woken: "Heartbeat was off for 4 days"', async () => {
++  test('after a gap over the job\'s limit the backlog is skipped with one line, not woken: "Heartbeat was off for 4 days"', async () => {
+     await start()
+     const cfg = src([])
+     await k.run(cfg, { runId: runId() }) // records last_ok
+     clock.advance(4 * 24 * 3600_000 + 60_000)
+-    const r = await k.run(src([act('old1'), act('old2'), item('f1')]), { runId: runId() })
++    const r = await k.run(src([act('old1'), act('old2'), item('f1')]), {
++      runId: runId(),
++      coldAfterMs: 3 * 24 * 3600_000,
++    })
+     expect(sent).toEqual([])
+     expect(r.result.outcome).not.toBe('woke')
+     const text = sysRows()
+@@ -340,28 +344,24 @@ describe('a missing triage agent (R1-4)', () => {
+   })
+ })
+ 
+-describe("the 72 hour gap is the heartbeat's own (R1-8)", () => {
++describe("the cold limit is the heartbeat's own (R1-8)", () => {
++  const HOUR = 3600_000
++  const COLD_AFTER = 3 * 24 * HOUR // what a job's own schedule would allow
++  /** A store as a heartbeat leaves it: one source known, the heartbeat itself last run `ranAgoH` hours ago. */
++  const seed = (ranAgoH: number, sourceOkAgoH: number) => {
++    const iso = (agoH: number) => new Date(clock.now() - agoH * HOUR).toISOString()
++    const st = emptyStore()
++    st.sources.ss = { cursor: null, last_ok: iso(sourceOkAgoH), fail_streak: 0 }
++    st.last_run = iso(ranAgoH)
++    writeFileSync(storeFile(h.home, false, 'beat'), JSON.stringify(st))
++  }
++
+   test('a source that failed for 3 days while the heartbeat kept running delivers its items normally', async () => {
+     await start()
+-    const good = (items: unknown[]) => config([cmd('ss', printing(tmpDir(), 'g', ok(items)))])
+-    const bad = config([
+-      cmd(
+-        'ss',
+-        printing(
+-          tmpDir(),
+-          'b',
+-          JSON.stringify({ schema: 'talos.heartbeat-source/1', status: 'error', error: 'no token' }),
+-        ),
+-      ),
+-    ])
+-    await k.run(good([]), { runId: runId() })
+-    for (let i = 0; i < 4; i++) {
+-      clock.advance(18 * 3600_000)
+-      await k.run(bad, { runId: runId() }) // the heartbeat runs; its source is down
+-    }
+-    clock.advance(3600_000)
+-    expect(Date.parse(new Date(clock.now()).toISOString()) - Date.parse(MON_1000_UTC)).toBeGreaterThan(72 * 3600_000)
+-    const r = await k.run(good([act('back', { title: 'Back after outage' })]), { runId: runId() })
++    clock.advance(4 * 24 * HOUR)
++    seed(18, 4 * 24) // the heartbeat ran 18 hours ago; its source has not answered for four days
++    const good = config([cmd('ss', printing(tmpDir(), 'g', ok([act('back', { title: 'Back after outage' })])))])
++    const r = await k.run(good, { runId: runId(), coldAfterMs: COLD_AFTER })
+     expect(r.result.outcome).toBe('woke')
+     expect(sent.length).toBe(1)
+     expect(
+@@ -369,21 +369,20 @@ describe("the 72 hour gap is the heartbeat's own (R1-8)", () => {
+         .map((x) => x.text)
+         .join('\n'),
+     ).not.toContain('was off')
+-  })
++  }, 20_000)
+ 
+-  test('a heartbeat that did not run for 72 hours skips the backlog, whatever each source last said', async () => {
++  test('a heartbeat that did not run for longer than its limit skips the backlog, whatever each source last said', async () => {
+     await start()
+-    await k.run(src([]), { runId: runId() })
+-    expect(typeof k.store().last_run).toBe('string')
+-    clock.advance(4 * 24 * 3600_000)
+-    await k.run(src([act('old')]), { runId: runId() })
++    clock.advance(4 * 24 * HOUR)
++    seed(4 * 24, 1) // its source answered an hour ago, but the heartbeat itself has been off for four days
++    await k.run(src([act('old')]), { runId: runId(), coldAfterMs: COLD_AFTER })
+     expect(sent).toEqual([])
+     expect(
+       sysRows()
+         .map((x) => x.text)
+         .join('\n'),
+     ).toContain('Heartbeat was off for 4 days')
+-  })
++  }, 20_000)
+ })
+ 
+ describe('packs and ended wakes (R1-7, R1-12)', () => {
+diff --git a/docs/HEARTBEAT.md b/docs/HEARTBEAT.md
+index acb9e867..43c235df 100644
+--- a/docs/HEARTBEAT.md
++++ b/docs/HEARTBEAT.md
+@@ -18,7 +18,13 @@ the bridge wires the real one (`heartbeat/wake.ts`).
+ 3. Each enabled source is started at once, with its own `timeout_s`; the whole run has `run_timeout_s`. Anything still
+    running at its limit is killed together with everything it started (by process group). A source that hangs costs only
+    itself. A child it leaves running after a clean exit is killed with the group too. A process that leaves the group on
+-   purpose (`setsid`) is out of reach: a known limit.
++   purpose (`setsid`) is out of reach: a known limit. While a source runs, its group id and command line are in the job's
++   store (`running`) with its start time, cleared when it ends. If the bridge crashed in between, the next start (before
++   any slot) kills a recorded group only if it is alive and either its leader is gone (a group id cannot be handed out again
++   while the group has a member) or its leader still has the recorded command and start time (pids get reused); a `ps`
++   that cannot answer leaves the record for the next start; a group nobody recorded is never touched. Only `command`
++   sources are recorded: the `gh` calls of the built-in `github` source are not, so one of those left running by a crash is
++   not found, and a test run records nothing.
+ 4. Each answer is read with `parseHeartbeatSourceResponse`. Over 256 KiB, over 50 items, not JSON, a wrong schema or a
+    non-zero exit is a **source error**, never an empty list. One item that does not parse is dropped and counted.
+ 5. Items are merged and deduped by `(source, key)`. The same `sig` is the same item; a new `sig` raises it again. Mutes
+@@ -49,8 +55,8 @@ the bridge wires the real one (`heartbeat/wake.ts`).
+ 
+ A failure outranks a quiet word: `failed` and `partial` win over `capped`, `woke`, `fyi` and `silent`. The run still
+ delivers what it found. A run that closes `failed` says why in the thread, once. A source that has failed three checks in
+-a row is said once more; recovery resets the count. If the heartbeat itself has not completed a run for 72 hours, every
+-source starts over with no cursor instead of flooding you with a backlog (see "A big or cold wake"). A source that was down
++a row is said once more; recovery resets the count. If the heartbeat itself has been off longer than its own schedule
++allows, every source starts over with no cursor instead of flooding you with a backlog (see "A big or cold wake"). A source that was down
+ while the heartbeat kept running keeps its cursor and delivers normally when it recovers.
+ 
+ The wake cap counts per local day (your time zone). A stored day later than today (a clock once set forward) is ignored, so it never pins the count.
+@@ -127,9 +133,13 @@ cannot be removed does not stop the rest.
+ 
+ **A big or cold wake.** One wake carries at most 10 items (nearest deadline first, then oldest). The rest stay `new` for the
+ next wake and the thread says "N more items are waiting for the next check-in". The store keeps `last_run`, when this
+-heartbeat last completed a live run. If that was over 72 hours ago, every source starts over with no cursor, what they report
+-on that first look is recorded as shown and not woken, and the thread gets one line, "Heartbeat was off for N days. Skipped
+-the backlog (M items)." A source's own silence does not trigger this: one that failed for three days while the heartbeat
++heartbeat last completed a live run (a store written before `last_run` was kept, with sources but no `last_run`, starts over
++once the same way, with the line "Heartbeat started over."). If it was longer ago than twice the job's largest gap
++between two of its weekly times (counting the wrap from the last time of the week to the first), and never under 48 hours,
++every source starts over with no cursor, what they report on that first look is recorded as shown and not woken, and the
++thread gets one line, "Heartbeat was off for N days. Skipped the backlog (M items)." A Monday and Thursday job may be off
++8 days, a daily one 48 hours, a job with one weekly time 14 days; a job whose days or times cannot be read, 14 days. A
++source's own silence does not trigger this: one that failed for three days while the heartbeat
+ kept running keeps its cursor and delivers normally. The bridge can see its own state file only; it cannot see Chronos's
+ history or the agent's last turn.
+ 
+@@ -185,7 +195,14 @@ A source is either a built-in (`github`, `schedule-failures`, `inbox`) or a `com
+ - `github` reads PRs and CI for the configured repos with `gh api`: CI red for over 24 h is `act`, a PR green and untouched
+   for 24 h is `fyi`, and notifications for review requested, mention, assigned and security alert are `act`.
+   `ci_activity` and every other reason raise nothing. It needs `gh` signed in on this Mac; if it is not, that is a source
+-  error that says so. At most 30 PRs are checked per run.
++  error that says so. At most 30 PRs are checked per run, six at a time. Notifications are read newest first, 50 a page,
++  5 pages at most, and at most 49 act items go into one answer. Each page after the first asks for the rows before the
++  oldest one so far (one second past it, so rows that share a second are read again and skipped by id), because walking by
++  page number skips rows when the list changes meanwhile. A run that stops at a limit adds an `fyi` saying how many pages it
++  read, treats everything it did not put into the answer as unread, and keeps its cursor behind it (`since` stays, `before`
++  names where the unread part ends, `upto` is where the newer part starts); the next run reads both, so nothing is
++  skipped silently. Two unread parts merge into one, from the older start to the newer end, which reads a little twice.
++  A burst of more than 50 notifications in one second cannot be walked past, and is said again only if the boundary moves.
+ - `schedule-failures` reports failed, timed-out, restarted and missed runs of the bridge's own scheduled jobs (`fyi`).
+ - `inbox` reports things filed into the shared inbox since the last look (`fyi`).
+ - Every source baselines first: with no cursor it records where it is and raises nothing.
+@@ -212,13 +229,13 @@ is capped and escaped once, when your answer is read, so control and bidi charac
+ 
+ ## Files
+ 
+-| File in `$TALOS_APP_HOME`              | What                                                                                                                      |
+-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+-| `heartbeat-state.<job id>.json`        | live store: items, per-source cursor / `last_ok` / `fail_streak`, `wakes_today`, `last_run`, an open wake, a pending post |
+-| `heartbeat-state.<job id>.shadow.json` | the same, for shadow mode                                                                                                 |
+-| `heartbeat-shadow.jsonl`               | what shadow would have posted                                                                                             |
+-| `heartbeat/runs/<run id>.json`         | the run pack for a wake; deleted when the wake ends, pruned after 14 days                                                 |
+-| `heartbeat/tests.json`                 | the last passing test of each config hash (hash and time); a pass is good for 24 hours                                    |
++| File in `$TALOS_APP_HOME`              | What                                                                                                                                                        |
++| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
++| `heartbeat-state.<job id>.json`        | live store: items, per-source cursor / `last_ok` / `fail_streak`, `wakes_today`, `last_run`, an open wake, a pending post, the source processes running now |
++| `heartbeat-state.<job id>.shadow.json` | the same, for shadow mode                                                                                                                                   |
++| `heartbeat-shadow.jsonl`               | what shadow would have posted                                                                                                                               |
++| `heartbeat/runs/<run id>.json`         | the run pack for a wake; deleted when the wake ends, pruned after 14 days                                                                                   |
++| `heartbeat/tests.json`                 | the last passing test of each config hash (hash and time); a pass is good for 24 hours                                                                      |
+ 
+ One store per heartbeat job: two jobs never share cursors, dedupe, wakes or a pending post.
+ 
+diff --git a/scripts/smoke/option-c.md b/scripts/smoke/option-c.md
+index a654739b..78e7241e 100644
+--- a/scripts/smoke/option-c.md
++++ b/scripts/smoke/option-c.md
+@@ -13,7 +13,7 @@ Restart main.
+ | --- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+ | O1  | With main live, note the live session's pid. Turn the master switch on, switch one test thread to Own session, send it a message from the phone | a `t-<thread>` session appears in `tmux -L talos ls`; the main session's pid is unchanged; a message to main still reaches it                                                                                                                                                 |
+ | O2  | Ask the worker "what are your rules about schedules?"                                                                                           | it answers from the worker preamble (it doesn't own schedules)                                                                                                                                                                                                                |
+-| O3  | Send two messages quickly, the second while the worker is mid-turn                                                                              | the second pointer line queues and runs after the first turn; nothing is lost                                                                                                                                                                                                 |
++| O3  | Send two messages quickly, the second while the worker is mid-turn                                                                              | CLI 2.1.318 delivers the second pointer line at once instead of queueing it; nothing is lost (2026-11-05 run)                                                                                                                                                                 |
+ | O4  | In the worker pane, `/mcp`                                                                                                                      | `talos-app` is connected; `$TALOS_APP_HOME/bridge.log` says `mode: worker` for that process                                                                                                                                                                                   |
+ | O5  | Give a thread a repo folder (`session_opts.cwd`), message it                                                                                    | no MCP consent dialog; `talos-app` tools present                                                                                                                                                                                                                              |
+ | O6  | Set the thread's model to `sonnet`, Restart from the session sheet                                                                              | same session id (`--resume`), model honoured; main's default model unchanged afterwards                                                                                                                                                                                       |
+@@ -25,5 +25,5 @@ Restart main.
+ | O12 | Stop the app for 30 s and send the thread a message                                                                                             | main answers at once with "Thread session didn't pick this up"                                                                                                                                                                                                                |
+ | O13 | Park a large session for hours, then message it                                                                                                 | it resumes. CLI 2.1.314 has a "Resume from summary" picker: a numbered cursor reads as `needs_mac`, so note what the worker does                                                                                                                                              |
+ | O14 | Start a long Bash tool in a thread's session (`sleep 600`), then `kill -9` the worker's pane pid. Repeat with `kill -TERM`                      | note whether the `sleep` survives each one (a group kill misses it: its own group, no tty) and whether the next message starts beside it. If real Claude takes its tools down on SIGTERM, only hard crashes leak. If it hurts, change the row after a crash; don't add a kill |
+-| O15 | Set a thread's session id to one that doesn't exist, send it a message                                                                          | `resume_missing`, not a crash: confirms the CLI's real wording (`No conversation found with session ID`, read from 2.1.314)                                                                                                                                                   |
+-| O16 | Start a turn that keeps printing (`yes` in a Bash tool) and tap Restart                                                                         | it stays `stopping`; 15 minutes after the tap the worker is stopped and resumes with the same conversation. A governor park on the same turn waits for ever                                                                                                                   |
++| O15 | Set a thread's session id to one that doesn't exist, send it a message                                                                          | `resume_missing`, not a crash. CLI 2.1.318 prints `No session found with ID` (2.1.314 printed `No conversation found with session ID`); the matcher accepts both                                                                                                              |
++| O16 | Start a turn with a Bash tool running `while true; do echo tick; sleep 1; done` with timeout 600000, and tap Restart within the first minutes   | it stays `stopping`; 15 minutes after the tap the worker is stopped and resumes with the same conversation. A foreground Bash past its timeout is backgrounded, not killed, so tap early. A governor park on the same turn waits for ever                                     |

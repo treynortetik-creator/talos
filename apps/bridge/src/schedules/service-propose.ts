@@ -10,6 +10,7 @@ import {
   type ScheduleDetailT,
 } from '@talos-app/protocol'
 import { threadRef } from '../context.ts'
+import { say } from '../owner-words.ts'
 import { handoffSince } from '../worker/handoff.ts'
 import type { ClosedAdapter } from './closed-adapter.ts'
 import { proposerKey } from './kv-prune.ts'
@@ -42,7 +43,12 @@ export function toolPropose(
     const snap = this.lastGood ?? (await this.safeSnapshot())
     if (!this.managed(snap))
       return fail(
-        'Talos does not manage this scheduler yet. Tell the owner to run `talos-app schedules adopt` at the Mac.',
+        say({
+          mac: 'Talos does not manage this scheduler yet. Tell the owner to run `talos-app schedules adopt` at the Mac.',
+          linux:
+            'Talos does not manage this scheduler yet. Tell the owner to run `talos-app schedules adopt` on this computer.',
+          windows: "Talos does not manage this scheduler yet, and it can't take it over on a Windows PC yet.",
+        }),
       )
     const now = this.now()
     const lane = scope?.thread ?? 'main'

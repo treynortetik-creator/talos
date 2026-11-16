@@ -168,3 +168,43 @@ describe('D11 free disk in the beat', () => {
     expect(m.keyOf(beat(1 * GB))).toBe(m.keyOf(beat(1.5 * GB)))
   })
 })
+
+describe('Main state in the beat (the supervisor run/main-state, for the sign-in banner)', () => {
+  const put = (home: string, text: string, ageMs = 0) => {
+    const { mkdirSync, writeFileSync, utimesSync } = require('node:fs') as typeof import('node:fs')
+    mkdirSync(join(home, 'run'), { recursive: true })
+    const f = join(home, 'run', 'main-state')
+    writeFileSync(f, text)
+    const t = (Date.now() - ageMs) / 1000
+    utimesSync(f, t, t)
+  }
+
+  test('one word while the file is fresh, sent within a poll of a change; stale, unknown or missing: left out', async () => {
+    h = await startHarness()
+    await waitFor(() => beats(h as Harness).length >= 1, 4000, 'first beat')
+    expect(lastBeat(h)?.main).toBeUndefined() // no file (a Mac)
+    put(h.home, 'main=signin\n')
+    await waitFor(() => lastBeat(h as Harness)?.main === 'signin', 4000, 'signin beat')
+    put(h.home, 'main=waiting:trust\n')
+    await waitFor(() => lastBeat(h as Harness)?.main === 'waiting', 4000, 'waiting beat')
+    put(h.home, 'main=waiting:unknown\nsome screen text sk-ant-[redacted]\n')
+    await waitFor(() => lastBeat(h as Harness)?.main === 'waiting', 4000, 'waiting beat (unknown)')
+    // only the word: never the screen line behind it
+    expect(JSON.stringify(beats(h).at(-1)?.raw)).not.toContain('screen text')
+    put(h.home, 'main=running\n')
+    await waitFor(() => lastBeat(h as Harness)?.main === 'running', 4000, 'running beat')
+    put(h.home, 'main=signin\n', 20_000) // left behind by a supervisor that stopped
+    await waitFor(() => lastBeat(h as Harness)?.main === undefined, 4000, 'stale: no state')
+    put(h.home, 'main=sleeping\n')
+    await sleep(1500)
+    expect(lastBeat(h)?.main).toBeUndefined()
+    put(h.home, 'main=signin\n')
+    await waitFor(() => lastBeat(h as Harness)?.main === 'signin', 4000, 'signin again')
+    put(h.home, `main=signin\n${'x'.repeat(2000)}\n`) // over 1 KiB: not the supervisor's file
+    await waitFor(() => lastBeat(h as Harness)?.main === undefined, 4000, 'oversize: no state')
+    put(h.home, 'main=signin\n')
+    await waitFor(() => lastBeat(h as Harness)?.main === 'signin', 4000, 'signin again')
+    put(h.home, 'main=signin\n', -60_000) // a time ahead of the clock (it stepped back after sleep): not fresh
+    await waitFor(() => lastBeat(h as Harness)?.main === undefined, 4000, 'future: no state')
+  }, 30_000)
+})

@@ -1,6 +1,8 @@
 // What to tell the owner when an attachment upload fails: the real reason when the server or bridge gave one
 // (a full disk, a size cap, a rate limit), else a plain "Couldn't upload".
+import type { Host } from '@talos-app/protocol'
 import { TalosClientError } from '../../lib/client.ts'
+import { placeWords } from '../../lib/hostWords.ts'
 import { HttpError } from '../../lib/http.ts'
 import { getKnownLimits } from '../health/limits.ts'
 
@@ -18,7 +20,9 @@ const say = (reason: string) => `${PREFIX}: ${reason}`
 /** The relay's error codes, in words. A code not listed here is never shown as it is. */
 const KNOWN: Record<string, string> = {
   too_large: TOO_BIG, // replaced by tooBigNote() below
-  rate_limited: say('daily upload limit reached'),
+  // the relay's two upload limits: an hourly count of uploads, and a daily total in megabytes
+  rate_limited: say('hourly upload limit reached, try again in a while'),
+  daily_limit: say('daily upload limit reached'),
   request_timeout: say('it took too long, try again'),
   bad_request: say('the file was empty or unreadable'),
   unsupported_media_type: say("this file type isn't supported"),
@@ -60,7 +64,12 @@ function bodyReason(body: unknown): string | undefined {
 }
 
 /** `undefined` means "no specific reason": the chip falls back to "Couldn't upload". */
-export function uploadFailureNote(e: unknown): string | undefined {
+export function uploadFailureNote(e: unknown, host: Host | null = 'mac'): string | undefined {
+  const note = macUploadFailureNote(e)
+  return note === undefined ? undefined : placeWords(note, host)
+}
+
+function macUploadFailureNote(e: unknown): string | undefined {
   if (e instanceof TalosClientError) {
     if (e.code === 'too_large') return tooBigNote()
     return (e.message && e.message !== e.code ? reasonText(e.message) : undefined) ?? KNOWN[e.code]
@@ -68,7 +77,8 @@ export function uploadFailureNote(e: unknown): string | undefined {
   if (e instanceof HttpError) {
     if (e.status === 413) return tooBigNote()
     if (e.status === 415) return KNOWN.unsupported_media_type
-    if (e.status === 429) return KNOWN.rate_limited
+    // the relay names which limit (hourly or daily); with no body, say only that it was a limit
+    if (e.status === 429) return bodyReason(e.body) ?? say('upload limit reached, try again later')
     const r = bodyReason(e.body)
     if (r) return r
     if (e.status === 507) return say('the Mac is out of disk space')

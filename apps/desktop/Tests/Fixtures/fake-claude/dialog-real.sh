@@ -10,8 +10,17 @@
 #   FAKE_DLG_SWAP=<file>       when that file appears the screen becomes FAKE_DLG_SWAP_TO (mcp | trust-changed | trust-other), as if Claude
 #                              had put up another dialog in place of this one (SYNTHETIC for the last two: ../synthetic)
 #   FAKE_DLG_AGAIN=1           the first Enter on an MCP dialog is followed at once by a second dialog that looks the same (another wrapped server name), as when
-#                              a project names two servers; the second Enter answers
+#                              a project names two servers; the second Enter answers. FAKE_DLG_AGAIN=same: the second dialog is the SAME screen
+#                              again (same server name, same rows, the cursor back on its first row), as a dialog that replaced the first and reads alike
 #   FAKE_DLG_STICKY=1          an Enter is logged and does nothing (a dialog that does not go away), to see a second Enter never sent
+#   FAKE_DLG=cu                the REAL 2.1.322 computer-use permission dialog (../real-2.1.322). With FAKE_DLG_LATE it shows when that file
+#                              appears and removes the file, so a test can raise it again. A lone Escape is logged as ESC and draws the real
+#                              screen after Escape (the turn went on); with FAKE_DLG_STICKY=1 it is logged and the dialog stays. Any other
+#                              key is logged and does nothing here (on the real one, Enter would open System Settings).
+#   FAKE_DLG=ul                Claude Code's usage-limit screen, SYNTHETIC (../synthetic/usage-limit.txt: no real capture yet). With FAKE_DLG_LATE it
+#                              shows when that file appears and removes the file. EVERY key is logged and does nothing (on the real one, Enter on
+#                              its third option spends usage credits). FAKE_DLG_UL_END=<file>: when that file appears the screen goes (the idle box,
+#                              ../synthetic/usage-limit-after-esc.txt), as if the owner had pressed Esc at the Mac.
 # Enter on trust "Yes, I trust this folder" or on any MCP row: the input box (worker-real.sh's `empty` screen, with its ready file and
 # typed-line log). Enter on trust "No, exit": Claude exits.
 # The captures are pane-sized (40 rows), joined by CR LF with no final newline, like worker-real.sh draws its screens.
@@ -37,6 +46,8 @@ case "$kind" in
   mcp) files=("${mcp_files[@]}"); cur=2 ;;
   mcpwrap) files=("$here/../synthetic/mcp-wrapped-a-0.ansi.txt" "$here/../synthetic/mcp-wrapped-a-1.ansi.txt" "$here/../synthetic/mcp-wrapped-a-2.ansi.txt"); cur=2; kind=mcp ;;
   login) files=("$C/10-trust-after-enter.ansi.txt") ;;
+  cu) files=("$here/../real-2.1.322/computer-use-permissions.txt") ;;
+  ul) files=("$here/../synthetic/usage-limit.txt") ;;
 esac
 again=${FAKE_DLG_AGAIN:-}
 swap_to() {
@@ -59,7 +70,13 @@ fi
 swapped=
 n=${#files[@]}
 while true; do
-  if [ -n "$pre" ] && [ -f "$FAKE_DLG_LATE" ]; then pre=; draw "${files[$cur]}"; fi
+  if [ -n "$pre" ] && [ -f "$FAKE_DLG_LATE" ]; then
+    pre=; draw "${files[$cur]}"
+    { [ "$kind" != cu ] && [ "$kind" != ul ]; } || rm -f "$FAKE_DLG_LATE"
+  fi
+  if [ "$kind" = ul ] && [ -z "$pre" ] && [ -n "${FAKE_DLG_UL_END:-}" ] && [ -f "$FAKE_DLG_UL_END" ]; then
+    rm -f "$FAKE_DLG_UL_END"; draw "$here/../synthetic/usage-limit-after-esc.txt"; [ -z "${FAKE_DLG_LATE:-}" ] || pre=1
+  fi
   if [ -z "$pre" ] && [ -z "$swapped" ] && [ -n "${FAKE_DLG_SWAP:-}" ] && [ -f "$FAKE_DLG_SWAP" ]; then
     swapped=1; swap_to "${FAKE_DLG_SWAP_TO:-mcp}"; n=${#files[@]}
   fi
@@ -67,6 +84,12 @@ while true; do
     case "$ch" in
       $'\033')
         IFS= read -rsn2 -t 1 seq
+        if [ "$kind" = ul ]; then keylog "ESC${seq:+:$seq}"; continue; fi  # the usage-limit screen: logged, nothing happens
+        if [ "$kind" = cu ] && [ -z "$seq" ]; then  # a lone Escape
+          keylog ESC
+          [ -n "$pre" ] || [ -n "${FAKE_DLG_STICKY:-}" ] || { draw "$here/../real-2.1.322/computer-use-permissions-after-esc.txt"; [ -z "${FAKE_DLG_LATE:-}" ] || pre=1; }
+          continue
+        fi
         case "$seq" in
           "[A"|"OA") keylog UP; [ -n "$pre" ] || [ "$kind" = login ] || { cur=$(( (cur + n - 1) % n )); draw "${files[$cur]}"; } ;;
           "[B"|"OB") keylog DOWN; [ -n "$pre" ] || [ "$kind" = login ] || { cur=$(( (cur + 1) % n )); draw "${files[$cur]}"; } ;;
@@ -74,11 +97,11 @@ while true; do
         esac ;;
       "")  # Enter
         keylog ENTER
-        { [ -n "$pre" ] || [ "$kind" = login ] || [ -n "${FAKE_DLG_STICKY:-}" ]; } && continue
+        { [ -n "$pre" ] || [ "$kind" = login ] || [ "$kind" = cu ] || [ "$kind" = ul ] || [ -n "${FAKE_DLG_STICKY:-}" ]; } && continue
         if [ "$kind" = trust ] && [ "$cur" = 0 ]; then exit 0; fi   # "No, exit"
         if [ -n "$again" ]; then
-          again=
-          files=("$here/../synthetic/mcp-wrapped-b-0.ansi.txt" "$here/../synthetic/mcp-wrapped-b-1.ansi.txt" "$here/../synthetic/mcp-wrapped-b-2.ansi.txt"); cur=2; n=3
+          [ "$again" = same ] || files=("$here/../synthetic/mcp-wrapped-b-0.ansi.txt" "$here/../synthetic/mcp-wrapped-b-1.ansi.txt" "$here/../synthetic/mcp-wrapped-b-2.ansi.txt")
+          again=; cur=2; n=3
           draw "${files[$cur]}"
           continue
         fi

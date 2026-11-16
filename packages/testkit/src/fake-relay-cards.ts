@@ -7,8 +7,11 @@ type Held = { card: CardT } & Pick<CardT, 'state'> & Partial<Pick<CardT, 'resolu
 
 export type ResolveRefusal = { code: string; message: string; expired?: CardT }
 
-/** Errors from the Mac that mean it did not act on a card.resolve (hub.ts: the card goes back to pending). */
-export const RESOLVE_REFUSALS = ['sig_invalid', 'device_not_pinned', 'unauthorized', 'bad_frame']
+/**
+ * Refusals of a card.resolve that mean the card is closed on the Mac. Every other refusal puts the card back to pending
+ * (hub-cards.ts CARD_CLOSED_ON_MAC and rollbackRejectedResolve).
+ */
+export const CARD_CLOSED_ON_MAC = ['card_not_pending', 'card_expired', 'permission_closed']
 
 export class RelayCards {
   private cards = new Map<string, Held>()

@@ -51,7 +51,7 @@ export function useComposerSend(o: {
   /** The "not sent" note is showing. */
   leftNote: MutableRefObject<boolean>
   alive: MutableRefObject<boolean>
-  keepFocus: () => void
+  keepFocus: (blurOnPhone?: boolean) => void
   emptyBox: () => void
 }) {
   const {
@@ -147,7 +147,7 @@ export function useComposerSend(o: {
       setChips((cur) => [...sentChips, ...cur.filter((c) => !sentChips.some((s) => s.key === c.key))])
       setError(message)
     }
-    keepFocus()
+    keepFocus(false) // after the send settles: focus back on a computer, but never a second keyboard drop on a phone
   }, [
     ready,
     uploading,

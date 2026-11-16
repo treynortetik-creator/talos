@@ -4,6 +4,7 @@ import ImageIO
 import Testing
 
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 /// The real bundled art (Resources/companion), not the fixtures. The first failure here was a manifest that said the ember
 /// sheet was one cell wide while the file was eleven: every load came back "corrupt" and the owner saw the app icon on an
@@ -84,7 +85,7 @@ struct CompanionRealArtTests {
   }
 
   @Test func aManifestGridDecidesTheExpectedSizeAndAWrongFileNamesItselfAndWhy() throws {
-    let tmp = URL(fileURLWithPath: NSTemporaryDirectory() + "companion-grid-\(UUID().uuidString)", isDirectory: true)
+    let tmp = URL(fileURLWithPath: TestTemp.base + "companion-grid-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.copyItem(at: Self.dir, to: tmp)
     defer { try? FileManager.default.removeItem(at: tmp) }
     // Swap the ember sheet for the one-pose fixture: right manifest, wrong file.
@@ -100,7 +101,7 @@ struct CompanionRealArtTests {
   }
 
   @Test func aMissingFileOrManifestIsNamedNotJustMissing() throws {
-    let tmp = URL(fileURLWithPath: NSTemporaryDirectory() + "companion-gone-\(UUID().uuidString)", isDirectory: true)
+    let tmp = URL(fileURLWithPath: TestTemp.base + "companion-gone-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.copyItem(at: Self.dir, to: tmp)
     defer { try? FileManager.default.removeItem(at: tmp) }
     try FileManager.default.removeItem(at: tmp.appendingPathComponent("talos-1x.png"))
@@ -110,7 +111,7 @@ struct CompanionRealArtTests {
   }
 
   private func copyOfTheArt() throws -> URL {
-    let tmp = URL(fileURLWithPath: NSTemporaryDirectory() + "companion-art-\(UUID().uuidString)", isDirectory: true)
+    let tmp = URL(fileURLWithPath: TestTemp.base + "companion-art-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.copyItem(at: Self.dir, to: tmp)
     return tmp
   }
@@ -304,7 +305,7 @@ struct CompanionRealArtTests {
   }
 
   @Test func anArtBundleWithoutTheLifeSheetStillLoadsAndJustHasNoAntics() throws {
-    let tmp = URL(fileURLWithPath: NSTemporaryDirectory() + "companion-old-\(UUID().uuidString)", isDirectory: true)
+    let tmp = URL(fileURLWithPath: TestTemp.base + "companion-old-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.copyItem(at: Self.dir, to: tmp)
     defer { try? FileManager.default.removeItem(at: tmp) }
     var m = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: tmp.appendingPathComponent("companion.json"))) as? [String: Any])
@@ -399,7 +400,7 @@ struct CompanionRealArtTests {
   }
 
   @Test func anArtBundleWithoutTheLoopsSheetStillLoadsAndKeepsItsStillIdle() throws {
-    let tmp = URL(fileURLWithPath: NSTemporaryDirectory() + "companion-noloops-\(UUID().uuidString)", isDirectory: true)
+    let tmp = URL(fileURLWithPath: TestTemp.base + "companion-noloops-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.copyItem(at: Self.dir, to: tmp)
     defer { try? FileManager.default.removeItem(at: tmp) }
     var m = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: tmp.appendingPathComponent("companion.json"))) as? [String: Any])
@@ -421,7 +422,7 @@ struct CompanionRealArtTests {
   }
 
   @Test func aManifestThatListsTheLoopsButLacksTheirFileIsNamedAtEnable() throws {
-    let tmp = URL(fileURLWithPath: NSTemporaryDirectory() + "companion-noloopfile-\(UUID().uuidString)", isDirectory: true)
+    let tmp = URL(fileURLWithPath: TestTemp.base + "companion-noloopfile-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.copyItem(at: Self.dir, to: tmp)
     defer { try? FileManager.default.removeItem(at: tmp) }
     try FileManager.default.removeItem(at: tmp.appendingPathComponent("talos-loops-2x.png"))
@@ -432,7 +433,7 @@ struct CompanionRealArtTests {
   }
 
   @Test func aManifestThatListsTheLifeClipsButLacksItsFileIsNamedAtEnable() throws {
-    let tmp = URL(fileURLWithPath: NSTemporaryDirectory() + "companion-nolife-\(UUID().uuidString)", isDirectory: true)
+    let tmp = URL(fileURLWithPath: TestTemp.base + "companion-nolife-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.copyItem(at: Self.dir, to: tmp)
     defer { try? FileManager.default.removeItem(at: tmp) }
     try FileManager.default.removeItem(at: tmp.appendingPathComponent("talos-life-2x.png"))

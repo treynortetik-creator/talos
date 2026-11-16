@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, statSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { buildConfig } from '../capacitor.config'
 import { swiftBody, withoutComments } from './swift-source'
 
 const read = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8')
-const REPO = new URL('../../../', import.meta.url).pathname
+const REPO = fileURLToPath(new URL('../../../', import.meta.url)) // not .pathname: that keeps %20 and, on Windows, a /C:
 const APP = 'ios/App/App'
 
 describe('D3: offline page retry is native', () => {
@@ -16,6 +17,13 @@ describe('D3: offline page retry is native', () => {
   })
   it('does not use the word relay', () => {
     expect(html.toLowerCase()).not.toContain('relay')
+  })
+  it('a relay page that answers with a server error is cancelled as a failed load, so the offline page and its retries follow', () => {
+    const vc = withoutComments(read(`${APP}/TalosBridgeViewController.swift`))
+    // which statuses count is BridgeGuard.isFailedPageLoad (ShellPolicyTests)
+    expect(swiftBody(vc, 'decidePolicyFor navigationResponse')).toMatch(
+      /if navigationResponse\.isForMainFrame, let url = navigationResponse\.response\.url, guardian\.isRelayURL\(url\),\s*BridgeGuard\.isFailedPageLoad\(statusCode: \(navigationResponse\.response as\? HTTPURLResponse\)\?\.statusCode\) \{\s*return decisionHandler\(\.cancel\)/,
+    )
   })
   it('the view controller intercepts the same scheme the page links to, and retries on tap, network return and foreground', () => {
     const swift = read('ios/BridgeGuard/Sources/BridgeGuard/ShellPolicy.swift')
@@ -120,10 +128,33 @@ describe('D6: files go through the download path', () => {
   })
 })
 
+describe('the media viewer closes with an X, never a swipe (the owner, 2026-11-14)', () => {
+  // A card (the default) closes on a swipe down, which fought every scroll of a long HTML page. Over full screen has no
+  // swipe either and, unlike full screen, keeps the shell's web view in the window (a live call, the stuck-page rebuild).
+  it('is presented over full screen, so no swipe closes it and the shell stays in the window', () => {
+    const vc = withoutComments(read(`${APP}/TalosBridgeViewController.swift`))
+    expect(vc).toMatch(
+      /UINavigationController\(rootViewController: viewer\)[\s\S]{0,400}?modalPresentationStyle = \.overFullScreen/,
+    )
+    expect(vc).toContain('modalPresentationCapturesStatusBarAppearance = true')
+    expect(vc).not.toMatch(/modalPresentationStyle = \.fullScreen\b/)
+  })
+  it('has the system close X at the top right, and no Done', () => {
+    const viewer = withoutComments(read(`${APP}/MediaViewerController.swift`))
+    expect(viewer).toMatch(/rightBarButtonItem = close/)
+    expect(viewer).toContain('systemItem: .close')
+    expect(viewer).not.toContain('systemItem: .done')
+    // VoiceOver reads the bare system item as "close"; the label says Close (Delphi, simulator, 2026-11-14)
+    expect(viewer).toContain('close.accessibilityLabel = "Close"')
+  })
+})
+
 describe('D52: TestFlight script and doc', () => {
   const script = readFileSync(`${REPO}scripts/testflight.sh`, 'utf8')
   const doc = readFileSync(`${REPO}docs/ios.md`, 'utf8')
-  it('script is executable and passes bash -n', () => {
+  // These two run the bash script and read its mode bits: POSIX only (Windows has no exec bit and no bash of its own).
+  const posixOnly = it.skipIf(process.platform === 'win32')
+  posixOnly('script is executable and passes bash -n', () => {
     expect(statSync(`${REPO}scripts/testflight.sh`).mode & 0o111).toBeGreaterThan(0)
     execFileSync('bash', ['-n', `${REPO}scripts/testflight.sh`])
   })
@@ -136,7 +167,7 @@ describe('D52: TestFlight script and doc', () => {
     expect(script).toMatch(/CURRENT_PROJECT_VERSION=/)
     expect(script).toContain('worktree add --detach')
   })
-  it('refuses to run without credentials, and says which are missing, before touching anything', () => {
+  posixOnly('refuses to run without credentials, and says which are missing, before touching anything', () => {
     let out = ''
     let code = 0
     try {

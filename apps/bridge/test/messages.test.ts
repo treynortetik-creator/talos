@@ -198,6 +198,74 @@ describe('inbound messages', () => {
     expect(h.notes).toHaveLength(0)
   })
 
+  test('a refusal that could not be sent (the socket had just dropped) is not the end: the replayed message is refused again', async () => {
+    h = await startHarness()
+    const t = h.bridge.ctx.transport as { sendEphemeral(f: { type: string }): boolean }
+    const real = t.sendEphemeral.bind(t)
+    const lost: string[] = []
+    // the link is gone for exactly the refusal: nothing of it reaches the relay
+    t.sendEphemeral = (f) => {
+      if (f.type !== 'error') return real(f)
+      lost.push(f.type)
+      return false
+    }
+    const sent = await h.app.sendMessage('nope', 'lost')
+    await waitFor(() => lost.length === 1, 3000, 'the refusal was tried and lost')
+    await h.bridge.inbound?.idle()
+    // not marked as dealt with: were it, the relay's replay would be swallowed and the app's row would say "sent" for ever
+    expect(h.bridge.ctx.store.hasSeen(String(sent.id))).toBe(false)
+    expect(h.bridge.ctx.store.hasSeen(String(sent.client_msg_id))).toBe(false)
+    expect(
+      h.relay.frames.some((f) => f.direction === 'from_bridge' && f.raw.type === 'ack' && f.raw.stage === 'consumed'),
+    ).toBe(false)
+
+    t.sendEphemeral = real
+    const raw = h.relay.frames.find((f) => f.direction === 'to_bridge' && f.raw.id === sent.id)?.raw
+    h.relay.sendToBridge(raw as Record<string, unknown>) // what the relay does on the next hello: the same frame again
+    const err = await h.relay.expectFrame('error', (f) => f.ref === sent.id, { direction: 'from_bridge' })
+    expect(err.code).toBe('bad_frame')
+    await waitFor(() => h.bridge.ctx.store.hasSeen(String(sent.id)), 3000, 'now it is settled')
+    expect(h.notes).toHaveLength(0)
+  })
+
+  test('a refusal the socket swallowed is given again when the relay replays the message, before it is acked as consumed', async () => {
+    h = await startHarness()
+    const sent = await h.app.sendMessage('nope', 'lost')
+    await h.relay.expectFrame('error', (f) => f.ref === sent.id, { direction: 'from_bridge' })
+    await h.relay.expectFrame('ack', (f) => f.ref === sent.id && f.stage === 'consumed', { direction: 'from_bridge' })
+    // The relay never got that error or the consumed ack (they were buffered on a socket that died), so it replays.
+    const mark = h.relay.frames.length
+    const raw = h.relay.frames.find((f) => f.direction === 'to_bridge' && f.raw.id === sent.id)?.raw
+    h.relay.sendToBridge(raw as Record<string, unknown>)
+    const again = await h.relay.expectFrame('error', (f) => f.ref === sent.id, {
+      direction: 'from_bridge',
+      since: mark,
+    })
+    expect(again.code).toBe('bad_frame')
+    await h.relay.expectFrame('ack', (f) => f.ref === sent.id && f.stage === 'consumed', {
+      direction: 'from_bridge',
+      since: mark,
+    })
+    const after = h.relay.frames.slice(mark).filter((f) => f.direction === 'from_bridge')
+    const errorAt = after.findIndex((f) => f.raw.type === 'error' && f.raw.ref === sent.id)
+    const ackAt = after.findIndex((f) => f.raw.type === 'ack' && f.raw.ref === sent.id && f.raw.stage === 'consumed')
+    expect(ackAt).toBeGreaterThan(errorAt)
+    expect(h.notes).toHaveLength(0)
+  })
+
+  test('a replayed message the Mac did deliver is acked again and nothing is refused', async () => {
+    h = await startHarness()
+    const sent = await h.app.sendMessage('general', 'hello')
+    await h.waitNotes(1)
+    await waitFor(() => h.bridge.ctx.store.hasSeen(String(sent.id)), 3000, 'settled')
+    const mark = h.relay.frames.length
+    const raw = h.relay.frames.find((f) => f.direction === 'to_bridge' && f.raw.id === sent.id)?.raw
+    h.relay.sendToBridge(raw as Record<string, unknown>)
+    await h.relay.expectFrame('ack', (f) => f.ref === sent.id, { direction: 'from_bridge', since: mark })
+    expect(h.relay.frames.slice(mark).some((f) => f.direction === 'from_bridge' && f.raw.type === 'error')).toBe(false)
+    expect(h.notes).toHaveLength(1)
+  })
+
   test('history.request pages the Mac store and every frame sent parses', async () => {
     h = await startHarness()
     for (let i = 1; i <= 3; i++) await h.app.sendMessage('general', `m${i}`)

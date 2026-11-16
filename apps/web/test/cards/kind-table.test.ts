@@ -14,9 +14,11 @@ import {
   IconKeyboard,
   IconMail,
   IconMegaphone,
+  IconPush,
   IconRocket,
   IconScale,
   IconSettings,
+  IconUndo,
 } from '../../src/ui/icons.tsx'
 
 const draw = (I: (typeof KIND_ICON)[CardKind]) => renderToStaticMarkup(createElement(I))
@@ -44,6 +46,7 @@ describe('card kind table', () => {
       email: IconMail,
       message: IconChat,
       deploy: IconRocket,
+      push: IconPush,
       publish: IconMegaphone,
       purchase: IconCardPay,
       decision: IconScale,
@@ -53,6 +56,7 @@ describe('card kind table', () => {
       app_action: IconDiamond,
       config: IconSettings,
       dialog: IconKeyboard,
+      undo: IconUndo,
     }
     for (const kind of CARD_KINDS) expect(draw(KIND_ICON[kind]), kind).toBe(draw(expected[kind]))
     // The pin only means something if the icons differ from each other (the two diamonds aside).

@@ -9,7 +9,10 @@ import { useStorage } from '../../lib/storageContext.tsx'
 import { navDot, needsRefetch, revsOf } from './logic.ts'
 
 const CACHE_KEY = 'snapshot'
-const inflight = new WeakMap<TalosClient, Promise<void>>()
+/** The `schedules.list` running now, per client; `token` tells a request apart from one started after it was abandoned. */
+const inflight = new WeakMap<TalosClient, { token: object; p: Promise<void>; ac: AbortController }>()
+/** How many requests each client has started: the newest one is the only one whose failure is shown. */
+const latest = new WeakMap<TalosClient, number>()
 
 function setSlice(client: TalosClient, next: Partial<ClientState['schedules']>) {
   client.store.setState((s) => ({ ...s, schedules: { ...s.schedules, ...next } }))
@@ -30,19 +33,35 @@ function errorName(e: unknown, current: string | null): string {
 /** One `schedules.list`, shared by everyone who asks while it is running. */
 export function refreshSchedules(client: TalosClient): Promise<void> {
   const cur = inflight.get(client)
-  if (cur) return cur
+  if (cur) return cur.p
+  const token = {}
+  const ac = new AbortController()
+  // a request may speak only while no newer one has started: an abandoned one's late failure is not news
+  const mine = (latest.get(client) ?? 0) + 1
+  latest.set(client, mine)
   const p = (async () => {
     try {
-      await client.schedules.listSchedules()
+      await client.schedules.listSchedules({ signal: ac.signal })
     } catch (e) {
+      // an abandoned request's late failure says nothing about the list a newer one fetched
+      if (ac.signal.aborted || latest.get(client) !== mine) return
       const s = client.store.getState().schedules
       setSlice(client, { status: 'error', error: errorName(e, s.status === 'error' ? s.error : null) })
     } finally {
-      inflight.delete(client)
+      if (inflight.get(client)?.token === token) inflight.delete(client)
     }
   })()
-  inflight.set(client, p)
+  inflight.set(client, { token, p, ac })
   return p
+}
+
+/**
+ * The Mac went away: a request it was answering will never be answered, only time out. It is let go, so the refresh when
+ * the Mac is back starts a new one at once instead of waiting on the dead one.
+ */
+export function abandonRefresh(client: TalosClient): void {
+  inflight.get(client)?.ac.abort() // it stops waiting, and writes nothing from now on (socketSchedules.ts)
+  inflight.delete(client)
 }
 
 export async function loadCached(client: TalosClient, storage: Storage): Promise<void> {
@@ -70,6 +89,7 @@ export function useSchedulesSync(): void {
 
   useEffect(() => {
     if (macOnline) void refreshSchedules(client)
+    else abandonRefresh(client)
   }, [client, macOnline])
 
   useEffect(() => {

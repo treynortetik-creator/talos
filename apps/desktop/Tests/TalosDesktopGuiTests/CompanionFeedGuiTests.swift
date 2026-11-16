@@ -4,6 +4,7 @@ import Testing
 import WebKit
 import TalosDesktopCore
 @testable import TalosDesktop
+import TalosTestSupport
 
 /// The companion feed through a real WKWebView into the real decoder and `WebController` (DESKTOP-COMPANION-SPEC 7, 10).
 /// Two kinds of page: the real one (the actual `attachShell`, bridge and feed from apps/web, bundled by
@@ -68,7 +69,7 @@ struct CompanionFeedGuiTests {
     var url = URL(fileURLWithPath: #filePath)
     for _ in 0..<2 { url.deleteLastPathComponent() }  // .../apps/desktop/Tests
     let script = url.appending(path: "Fixtures/companion/build-harness.mjs").path
-    let out = FileManager.default.temporaryDirectory.appending(path: "talos-companion-harness-\(UUID().uuidString)")
+    let out = TestTemp.url.appending(path: "talos-companion-harness-\(UUID().uuidString)")
     do { try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true) } catch {
       return .failure(HarnessError("can't make a temp dir: \(error)"))
     }

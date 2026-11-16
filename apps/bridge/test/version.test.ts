@@ -164,6 +164,7 @@ describe('status and doctor compare the bridge and the relay', () => {
           mode: 'live',
           relay: { connected: true, last_connect_at: null, last_close_code: null },
           queue_depth: 0,
+          unseen_oldest_at: null,
           permission_relay: false,
           ...(commit === undefined ? {} : { bridge_commit: commit }),
           updated_at: new Date().toISOString(),

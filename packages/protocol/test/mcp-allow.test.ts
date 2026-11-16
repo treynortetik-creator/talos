@@ -74,6 +74,20 @@ describe('session_opts.mcp_allow, as read (tolerant)', () => {
   })
 })
 
+describe('a name twice, by canonical equivalence (the Mac’s Set)', () => {
+  const nfc = 'caf\u00e9'
+  const nfd = 'cafe\u0301'
+  it('café precomposed and with a combining accent is one name named twice: refused as written, the empty list as read', () => {
+    expect(issue({ mcp_allow: [nfc, nfd] })).toMatch(/not valid/)
+    expect(McpAllowList.safeParse([nfc, nfd]).success).toBe(false)
+    expect(ThreadSessionOpts.parse({ mcp_allow: ['github', nfc, nfd] }).mcp_allow).toEqual([])
+  })
+  it('the names stay as written: only the check normalizes', () => {
+    expect(McpAllowList.parse([nfd, 'github'])).toEqual([nfd, 'github'])
+    expect(McpAllowList.parse([nfd])[0]).not.toBe(nfc)
+  })
+})
+
 describe('names the list refuses', () => {
   it('bidi overrides, line and paragraph separators, zero-width marks and C0/C1 controls', () => {
     for (const bad of [

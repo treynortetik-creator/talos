@@ -1,4 +1,4 @@
-# A thread session that shows REAL Claude Code 2.1.318 screens: the files in ../real-2.1.318 are captures, printed back as they are.
+# A thread session that shows REAL Claude Code screens: the files in ../real-2.1.318 (and ../real-2.1.322) are captures, printed back as they are.
 # FAKE_REAL_START=trust|empty|draft|screen:<fixture>: the first screen (screen:<name> shows ../real-2.1.318/<name>.txt and then writes the hub's ready file, unless FAKE_REAL_NOT_READY is set). With trust, the screen becomes `empty` after the owner's Enter and the hub's ready file is written then (with
 # FAKE_REAL_READY_FIRST it is written as soon as the dialog is drawn, before the Enter).
 # FAKE_REAL_SWITCH=<file> with FAKE_REAL_THEN=<screen>: when that file appears, the screen changes to the named one. FAKE_REAL_SWITCH2 and
@@ -13,6 +13,7 @@ ready() { printf '{"v":1,"thread_id":"%s","pid":%d,"at":"2026-10-30T00:00:00.000
 cur=
 show() {  # one whole screen, rows joined by CR LF, no final newline (the pane is 40 rows). $2: what is typed, drawn in the input row
   f="$D/$1.txt"; cur="$1"
+  [ -f "$f" ] || f="$D/../real-2.1.322/$1.txt"  # the 2.1.322 captures (a sub-agent's Bash ask), by their own names
   [ -f "$f" ] || f="$D/../synthetic/$1.txt"  # SYNTHETIC screens (../synthetic), for "another prompt of the same kind"
   local row=0
   [ -z "${2:-}" ] || row="$(LC_ALL=C grep -n $'\xe2\x9d\xaf\xc2\xa0' "$f" | tail -1 | cut -d: -f1)"

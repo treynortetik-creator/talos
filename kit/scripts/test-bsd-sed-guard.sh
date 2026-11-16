@@ -3,10 +3,12 @@
 export PYTHONDONTWRITEBYTECODE=1
 set -uo pipefail
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 SB="$(mktemp -d)" || exit 2
 case "$SB" in /*/*) ;; *) echo "suspicious temp dir '$SB'" >&2; exit 2 ;; esac
 trap 'rm -rf "$SB"' EXIT
 export HOME="$SB/home" XDG_STATE_HOME="$SB/state" XDG_CONFIG_HOME="$SB/cfg"; mkdir -p "$HOME"
+talos_test_sandbox "$SB"
 unset CHRONOS_RUN TALOS_UNATTENDED
 export TALOS_BSD_SED_FORCE=1
 H="$KIT/hooks/bsd-sed-guard.py"

@@ -1,12 +1,14 @@
 // Edit mode for the thread list (sidebar and the phone Threads tab): drag or move to reorder, a gear per thread for its
 // settings sheet, and the archived threads with Restore. Reorders save as one owner-signed config.patch on drop.
-import type { ThreadT } from '@talos-app/protocol'
+import { SUBTHREADS_FEATURE, type ThreadT } from '@talos-app/protocol'
 import { useMemo, useState } from 'react'
+import { useFeature } from '../../../lib/v2Client.ts'
 import { cn } from '../../../ui/cn.ts'
 import { IconSettings } from '../../../ui/icons.tsx'
 import { ThreadIcon } from '../../../ui/ThreadIcon.tsx'
 import { ReorderList } from './ReorderList.tsx'
 import { ThreadEditor } from './ThreadEditor.tsx'
+import { underBlocked, underChoices } from './UnderPicker.tsx'
 import { reorderThreads, sortThreads, useThreadPatch } from './useThreadPatch.ts'
 
 export function ThreadManageList({
@@ -17,6 +19,7 @@ export function ThreadManageList({
   moveButtons?: boolean
 }) {
   const { threads, macOnline, err, busy, apply } = useThreadPatch()
+  const subthreads = useFeature(SUBTHREADS_FEATURE) === 'on'
   const [editing, setEditing] = useState<ThreadT | null>(null)
   const { active, archived } = useMemo(() => {
     const s = sortThreads(threads)
@@ -41,6 +44,26 @@ export function ThreadManageList({
         disabled={!macOnline}
         items={items}
         onCommit={(ids) => apply((latest) => reorderThreads(latest, ids))}
+        // dropped ONTO another thread: it goes under it, the same parent_id patch as the Under picker (the Mac judges it again)
+        nest={
+          subthreads
+            ? {
+                allowed: (id, onto) => {
+                  const t = threads.find((x) => x.id === id)
+                  return (
+                    t !== undefined &&
+                    !t.archived &&
+                    t.kind !== 'system' &&
+                    underBlocked(threads, t) === null &&
+                    underChoices(threads, t).some((c) => c.id === onto)
+                  )
+                },
+                commit: (id, onto) =>
+                  apply((latest) => latest.map((x) => (x.id === id ? { ...x, parent_id: onto } : x))),
+                label: (held) => `Put ${held} under this`,
+              }
+            : undefined
+        }
         renderRow={({ t }) => (
           <>
             <ThreadIcon id={t.id} icon={t.icon} color={t.color} size={28} framed />

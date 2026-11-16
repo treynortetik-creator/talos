@@ -71,7 +71,7 @@ async function claimed(n = 1): Promise<{ hub: Harness; me: number; startedAt: st
     })) as never,
   })
   h = hub
-  await waitFor(() => existsSync(join(hub.home, 'hub.sock')))
+  await waitFor(() => existsSync(join(hub.home, 'run', 'hub.sock')))
   const me = pgidOf(process.pid) as number
   const startedAt = new Date(Date.now() - 60_000).toISOString()
   writeWorkers(hub.home, { state: 'live', pane_pid: me, started_at: startedAt })
@@ -109,17 +109,47 @@ async function ticks(hub: Harness, n = 2) {
   }
 }
 
+/** Ticks until no claim is open: the run's end is settled. */
+async function untilSettled(hub: Harness) {
+  await waitFor(
+    () => {
+      if ((hub.bridge.router?.store.openClaims().length ?? 0) === 0) return true
+      hub.bridge.optionCTick()
+      return false
+    },
+    3000,
+    'the claim to be settled',
+  )
+}
+
+/** Ticks until the row lands: a loaded machine can finish a fixed number of ticks before it does. */
+async function untilRow(hub: Harness) {
+  await waitFor(
+    () => {
+      if (rows(hub).length > 0) return true
+      hub.bridge.optionCTick()
+      return false
+    },
+    3000,
+    'the unanswered row',
+  )
+}
+
 describe('a worker that ends after claiming', () => {
   test('a run that was parked or failed leaves one row, however many messages and ticks', async () => {
     const { hub } = await claimed(3)
     writeWorkers(hub.home, { state: 'parked', restarts: [new Date().toISOString()] })
     await ticks(hub, 4)
+    await waitFor(() => rows(hub).length > 0) // a loaded machine can finish the ticks before the row lands
+    await ticks(hub, 2)
     expect(rows(hub)).toHaveLength(1)
   })
 
   test('failed, the same', async () => {
     const { hub } = await claimed()
     writeWorkers(hub.home, { state: 'failed' })
+    await ticks(hub)
+    await untilRow(hub)
     await ticks(hub)
     expect(rows(hub)).toHaveLength(1)
   })
@@ -129,6 +159,8 @@ describe('a worker that ends after claiming', () => {
     await sleep(5)
     writeWorkers(hub.home, { state: 'live', pane_pid: me, started_at: new Date().toISOString() })
     await ticks(hub)
+    await untilRow(hub)
+    await ticks(hub)
     expect(rows(hub)).toHaveLength(1)
   })
 
@@ -136,6 +168,7 @@ describe('a worker that ends after claiming', () => {
     const { hub } = await claimed()
     writeWorkers(hub.home, { state: 'parked' })
     await ticks(hub)
+    await untilRow(hub)
     expect(rows(hub)).toHaveLength(1)
     // a fresh router over the same database, as after a restart
     new ThreadRouter(hub.bridge.ctx, async () => {}).tick(() => {})
@@ -170,6 +203,7 @@ describe('nothing proves the run ended, so no row', () => {
     expect(rows(hub)).toHaveLength(0)
     writeWorkers(hub.home, { state: 'parked' })
     await ticks(hub)
+    await untilRow(hub)
     expect(rows(hub)).toHaveLength(1)
   })
 
@@ -291,7 +325,15 @@ describe('an approval the worker read and then did not finish', () => {
     const t = await approvedAndRead()
     writeWorkers(t.hub.home, { state: 'failed' })
     await ticks(t.hub, 3)
-    expect(t.state()).toBe('failed')
+    await waitFor(
+      () => {
+        if (t.state() === 'failed') return true
+        t.hub.bridge.optionCTick()
+        return false
+      },
+      3000,
+      'the card to end as failed',
+    )
     const upd = await t.hub.relay.expectFrame('card.update', (f) => f.card_id === t.id && f.state === 'failed', {
       direction: 'from_bridge',
     })
@@ -331,6 +373,7 @@ describe('an approval the worker read and then did not finish', () => {
     t.hub.bridge.ctx.store.db.query("UPDATE cards SET state = 'resolved' WHERE id = ?").run(t.id)
     writeWorkers(t.hub.home, { state: 'failed' })
     await ticks(t.hub, 3)
+    await untilSettled(t.hub)
     expect(t.notes()).toHaveLength(0)
     expect(t.state()).toBe('resolved') // nothing to fail: no result is owed for a Kill
     expect(t.hub.bridge.router?.store.openClaims()).toHaveLength(0)
@@ -348,6 +391,7 @@ describe('an approval the worker read and then did not finish', () => {
     }
     writeWorkers(t.hub.home, { state: 'failed' })
     await ticks(t.hub, 2)
+    await untilSettled(t.hub)
     expect(openWhenEnded).toBe(1)
     expect(store.openClaims()).toHaveLength(0)
   })

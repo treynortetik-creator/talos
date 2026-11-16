@@ -21,6 +21,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import _rooted  # noqa: E402  (a Talos distro, read as plugin-settings.py and the supervisor read it)
 
 
 def fail(msg):
@@ -122,14 +123,24 @@ def cmd_start(a):
     if not isinstance(settings, dict):
         fail("settings.json is not a JSON object")
     mk = (settings.get("extraKnownMarketplaces") or {}).get("talos-local")
-    if not (isinstance(mk, dict) and isinstance(mk.get("source"), dict) and os.path.realpath(mk["source"].get("path", "")) == vendor):
+    try:
+        rooted = _rooted.mode() == "rooted"
+    except _rooted.Bad as e:
+        fail(str(e))
+    if rooted:
+        # a Talos distro: Main's plugin is root's sealed copy, named by its path as written (root's policy allows only that). This
+        # release is the talos user's until "Update the kit" copies it: root's copy is checked by the supervisor at every start.
+        if mk != _rooted.market_entry():
+            fail("settings.json does not name root's kit (%s) as the talos-local marketplace" % _rooted.ROOTED_KIT)
+    elif not (isinstance(mk, dict) and isinstance(mk.get("source"), dict) and os.path.realpath(mk["source"].get("path", "")) == vendor):
         fail("settings.json does not name the talos-local marketplace at %s" % vendor)
     if (settings.get("enabledPlugins") or {}).get("talos@talos-local") is not True:
         fail("settings.json does not enable talos@talos-local")
-    market = load_json(os.path.join(vendor, ".claude-plugin", "marketplace.json"), "marketplace.json")
-    src = (market.get("plugins") or [{}])[0].get("source", "")
-    if os.path.realpath(os.path.join(vendor, src)) != rel:
-        fail("the marketplace's plugin source %r does not lead to this release" % src)
+    if not rooted:
+        market = load_json(os.path.join(vendor, ".claude-plugin", "marketplace.json"), "marketplace.json")
+        src = (market.get("plugins") or [{}])[0].get("source", "")
+        if os.path.realpath(os.path.join(vendor, src)) != rel:
+            fail("the marketplace's plugin source %r does not lead to this release" % src)
     for ev, c in commands(settings.get("hooks")):
         for name in HOOK_REF.findall(c):
             p = os.path.join(agent, "hooks", name)

@@ -9,7 +9,17 @@ import { spawn, spawnSync } from 'node:child_process'
 
 type Env = Record<string, string | undefined>
 
-export const ALWAYS_DROP = new Set(['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'TMUX', 'TMUX_PANE'])
+// TALOS_APP_WORKER_*, TALOS_SESSION_ROLE: a thread session's identity (install.sh run from one left them in Main's env, 2026-11-09).
+export const ALWAYS_DROP = new Set([
+  'CLAUDECODE',
+  'CLAUDE_PID',
+  'CLAUDE_EFFORT',
+  'TMUX',
+  'TMUX_PANE',
+  'TALOS_APP_WORKER_THREAD',
+  'TALOS_SESSION_ROLE',
+  'TALOS_APP_WORKER_NONCE',
+])
 export const KEEP = new Set([
   'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
   'CLAUDE_CODE_USE_BEDROCK',
@@ -40,9 +50,12 @@ export const SESSION_MARKERS = new Set([
   'CLAUDE_CODE_SSE_PORT',
 ])
 
+/** The prefix of Claude Code's own variables a launch drops unless it keeps them (KEEP, KEEP_PREFIXES). */
+export const INHERITED_CLAUDE_PREFIX = 'CLAUDE_CODE_'
+
 export function isInheritedClaudeVar(name: string): boolean {
   if (ALWAYS_DROP.has(name) || SESSION_MARKERS.has(name)) return true
-  if (!name.startsWith('CLAUDE_CODE_')) return false
+  if (!name.startsWith(INHERITED_CLAUDE_PREFIX)) return false
   return !KEEP.has(name) && !KEEP_PREFIXES.some((p) => name.startsWith(p))
 }
 

@@ -76,4 +76,27 @@ describe('native viewing thread', () => {
     expect(calls).toEqual([{ thread: 'general' }, { thread: null }])
     expect(() => setNativeViewing('general', { Capacitor: { Plugins: {} } })).not.toThrow()
   })
+
+  it('tells the shell again when the page comes back to the front, which forgot the thread in the background', async () => {
+    const { watchNativeViewing } = await import('../../src/lib/nativePush.ts')
+    const calls: unknown[] = []
+    const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' })
+    const scope = {
+      document: doc,
+      Capacitor: {
+        isNativePlatform: () => true,
+        getPlatform: () => 'ios',
+        Plugins: { TalosPush: { setViewing: async (a: unknown) => void calls.push(a) } },
+      },
+    }
+    const stop = watchNativeViewing('general', scope)
+    doc.visibilityState = 'hidden'
+    doc.dispatchEvent(new Event('visibilitychange'))
+    doc.visibilityState = 'visible'
+    doc.dispatchEvent(new Event('visibilitychange'))
+    expect(calls).toEqual([{ thread: 'general' }, { thread: 'general' }])
+    stop()
+    doc.dispatchEvent(new Event('visibilitychange'))
+    expect(calls).toEqual([{ thread: 'general' }, { thread: 'general' }, { thread: null }])
+  })
 })

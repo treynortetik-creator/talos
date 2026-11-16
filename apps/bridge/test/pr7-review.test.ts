@@ -1,6 +1,6 @@
 // PR #7 (WP5 bridge) adversarial review: failing tests.
 // Copy to apps/bridge/test/pr7-review.test.ts and run `bun test test/pr7-review.test.ts` from apps/bridge.
-// NOTE: on Bun 1.3.11 (the spec minimum, and a typical Mac) every FakeRelay test hangs in afterEach unless
+// NOTE: on Bun 1.3.11 (then the spec minimum, and a typical Mac) every FakeRelay test hangs in afterEach unless
 // packages/testkit/src/fake-relay.ts stop() stops awaiting server.close() (otherwise teardown never returns). Apply that patch first.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'

@@ -1,5 +1,5 @@
 // The "Own session" switch for one thread (docs/OPTION-C.md 9.2). Shown only when the master switch is on, the Mac can
-// host thread sessions, and the thread may have one (never the default thread, General or Inbox). No card, no step-up:
+// host thread sessions, and the thread may have one (never the default thread, General or Inbox). No card:
 // it is a config.patch like any thread setting. Off by default.
 import {
   DEFAULT_IDLE_PARK_MIN,
@@ -10,6 +10,7 @@ import {
 } from '@talos-app/protocol'
 import { useId, useState } from 'react'
 import { useTalos } from '../../lib/client.ts'
+import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { Button, Input, Switch } from '../../ui/index.ts'
 import { useThreadPatch } from '../threads/manage/useThreadPatch.ts'
 import { FolderField } from './FolderField.tsx'
@@ -21,6 +22,7 @@ export function costNote(idleMin: number): string {
 }
 
 export function OwnSession({ thread }: { thread: ThreadT }) {
+  const host = useHost()
   const { macOnline, err, busy: saving, apply } = useThreadPatch()
   const view = useThreadSessionView(thread.id)
   const ctl = useThreadSessionsController()
@@ -59,7 +61,9 @@ export function OwnSession({ thread }: { thread: ThreadT }) {
       {view.dedicated && (
         <>
           <p className="m-0 pt-1 text-xs" data-testid="own-session-state">
-            {view.unsupported ? "Your Mac isn't running thread sessions right now, so main answers." : workerLine(w)}
+            {view.unsupported
+              ? placeWords("Your Mac isn't running thread sessions right now, so main answers.", host)
+              : workerLine(w, host)}
           </p>
           {!view.unsupported && (
             <div className="flex flex-wrap gap-1 pt-2">
@@ -85,7 +89,7 @@ export function OwnSession({ thread }: { thread: ThreadT }) {
       )}
       {outcome && (
         <p role="status" className="m-0 pt-1 text-xs">
-          {outcome.text}
+          {placeWords(outcome.text, host)}
         </p>
       )}
       {err && (

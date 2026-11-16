@@ -22,3 +22,15 @@ export function appCsp(origin: string): string {
     "object-src 'none'",
   ].join('; ')
 }
+
+/**
+ * The policy agent-made HTML is served with (an attachment page, /media/:id/page, and an org page's frame, /p/:id/frame): a
+ * sandboxed, opaque origin that runs only its own inline script and style, shows only `data:`/`blob:` images, media and fonts,
+ * and has no `connect-src`, so no fetch, XHR or WebSocket; no forms, popups, downloads or top navigation (the sandbox allows
+ * none of them). The page can read nothing but its own bytes.
+ */
+export const PAGE_CSP =
+  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:"
+
+/** The `sandbox` attribute of the frame that shows such a page: script only, never `allow-same-origin` (the web lint refuses it). */
+export const PAGE_SANDBOX_ATTR = 'allow-scripts'

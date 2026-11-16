@@ -266,12 +266,11 @@ describe('2. POST /api/devices/:id/revoke checks the session before it reads, an
     expect(login.status).toBe(200)
   })
 
-  it('the real owner can still revoke (session, csrf, step-up, in that order)', async () => {
+  it('the real owner can still revoke (session, then csrf; no step-up since 2026-11-14)', async () => {
     r = await startRealRelay()
     const a = await r.owner()
     const b = await r.owner()
-    const token = r.auth.core.mintStepup(b.sessionId, 'device:revoke')
-    const res = await r.post(`/api/devices/${a.device.deviceId}/revoke`, { stepup_token: token }, b)
+    const res = await r.post(`/api/devices/${a.device.deviceId}/revoke`, {}, b)
     expect(res.status).toBe(204)
   })
 })
@@ -398,12 +397,12 @@ describe('3. PUT /bridge/media checks the key id and the time before it reads th
 
 describe('4. the client address', () => {
   it('pickClientIp: X-Real-IP wins, a malformed one falls back, hops 0 ignores every header', () => {
-    const edge = '203.0.113.9, 84.17.44.225'
+    const edge = '203.0.113.9, 198.51.100.25'
     expect(pickClientIp({ realIp: '203.0.113.9', xff: edge, remote: '10.0.0.1', hops: 1 })).toBe('203.0.113.9')
     expect(pickClientIp({ realIp: '2001:db8::7', xff: edge, remote: '10.0.0.1', hops: 1 })).toBe('2001:db8:0:0::') // per /64
     // hostile text in the header is not an address
     for (const bad of ['evil, 1.2.3.4', '<script>', 'a'.repeat(5000), '', ' ', '999.1.1.1'])
-      expect(pickClientIp({ realIp: bad, xff: edge, remote: '10.0.0.1', hops: 1 }), bad).toBe('84.17.44.225')
+      expect(pickClientIp({ realIp: bad, xff: edge, remote: '10.0.0.1', hops: 1 }), bad).toBe('198.51.100.25')
     // no X-Real-IP: the old rule still works for a proxy that only sets X-Forwarded-For
     expect(pickClientIp({ xff: '198.51.100.4', remote: '10.0.0.1', hops: 1 })).toBe('198.51.100.4')
     expect(pickClientIp({ realIp: '203.0.113.9', xff: edge, remote: '10.0.0.1', hops: 0 })).toBe('10.0.0.1')
@@ -413,7 +412,7 @@ describe('4. the client address', () => {
   it('two visitors behind one shared edge hop get separate sign-in budgets (the lock-out attack)', async () => {
     r = await startRealRelay()
     const app = buildApp(r.relay.services)
-    const edgeHop = '84.17.44.225'
+    const edgeHop = '198.51.100.25'
     // a stranger burns 10 sign-in calls from the same edge site as the owner
     for (let i = 0; i < 10; i++) {
       const res = await send(app, '/api/auth/login/options', {

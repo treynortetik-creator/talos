@@ -21,7 +21,7 @@ import Foundation
 ///    an extra one, a second flag, or a screen and argv that disagree all stay at Needs you;
 ///  - Main's launch is the one the owner last confirmed (`launchChanged`): the launch fingerprint of this start equals the one stored
 ///    when a start last got through the warning. A changed program, flag, env var or folder, or none stored yet, waits for the owner
-///    (a Needs-you card he taps); an ordinary cold start or restart with the same launch does not. The stored fingerprint lives in
+///    (his click on the Mac's Needs-you popup); an ordinary cold start or restart with the same launch does not. The stored fingerprint lives in
 ///    desktop.json but is sealed with a MAC under a Keychain key (`LaunchTrust`, `LaunchSeal.isConfirmed`): no key, no MAC or a wrong one
 ///    counts as changed, so an agent that writes the file cannot confirm a launch; the floor under that is the constant-channel check above;
 ///  - it is within `window` (60 s, the awake clock the supervisor uses, `Options.awake`) of this start's spawn;

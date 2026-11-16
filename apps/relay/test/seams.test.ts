@@ -2,7 +2,6 @@ import { generateBridgeKey, signBridgeHttp, signChallenge } from '@talos-app/pro
 import { Hono } from 'hono'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  consumeStepupToken,
   guardWsUpgrade,
   requireSession,
   resetAuthImplementation,
@@ -12,7 +11,7 @@ import {
 import { registerModules } from '../src/modules.ts'
 import type { AppEnv } from '../src/services.ts'
 import { createFakeServices, testEnv } from './helpers/fake-services.ts'
-import { installTestAuth, mintTestStepup, testAppHeaders } from './helpers/test-auth.ts'
+import { installTestAuth, testAppHeaders } from './helpers/test-auth.ts'
 
 afterEach(() => resetAuthImplementation())
 
@@ -40,7 +39,6 @@ describe('relay seams', () => {
     const { app } = guardApp()
     expect((await app.request('/secret', { headers: { 'X-Test-Session': 'none' } })).status).toBe(401)
     expect((await app.request('/ws', { headers: testAppHeaders('https://relay.example.com') })).status).toBe(401)
-    expect(await consumeStepupToken({ token: 'st_x', purpose: 'config:work', session: null })).toBe(false)
     expect(
       (
         await verifyBridgeHello({
@@ -69,13 +67,10 @@ describe('relay seams', () => {
     expect((await app.request('/ws', { headers: testAppHeaders('https://evil.example.net') })).status).toBe(403)
   })
 
-  it('test-auth step-up tokens are single use and bound to a purpose', async () => {
-    installTestAuth()
-    const t = mintTestStepup('config:work')
-    expect(await consumeStepupToken({ token: t, purpose: 'device:revoke', session: null })).toBe(false)
-    expect(await consumeStepupToken({ token: t, purpose: 'config:work', session: null })).toBe(true)
-    expect(await consumeStepupToken({ token: t, purpose: 'config:work', session: null })).toBe(false)
-    expect(await consumeStepupToken({ token: 'st_made_up', purpose: 'config:work', session: null })).toBe(false)
+  it('the auth seam has no step-up any more (2026-11-14): nothing to require, nothing to consume', async () => {
+    const contract = await import('../src/auth/contract.ts')
+    expect('requireStepup' in contract).toBe(false)
+    expect('consumeStepupToken' in contract).toBe(false)
   })
 
   it('test-auth verifies bridge hello and HTTP signatures for real when given the key', async () => {

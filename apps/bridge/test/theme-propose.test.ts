@@ -15,8 +15,14 @@ afterEach(async () => {
   await h?.stop()
   h = undefined
 })
+// the card flow, with "Lock Talos settings" on (with it off, the owner's ask applies the theme directly)
 const start = (opts: Parameters<typeof startHarness>[0] = {}) =>
-  startHarness({ relay: { relayFeatures: ['schedules/1', CONFIG_PROPOSE_FEATURE, CUSTOM_THEMES_FEATURE] }, ...opts })
+  startHarness({
+    relay: { relayFeatures: ['schedules/1', CONFIG_PROPOSE_FEATURE, CUSTOM_THEMES_FEATURE] },
+    ...opts,
+    // lock on unless the test brings its own config
+    config: opts.config ?? ((c) => ({ ...c, settings_lock: true })),
+  })
 const text = (r: { content: Array<{ text?: string }> }) => r.content[0]?.text ?? ''
 const cards = (x: Harness) =>
   x.relay.frames
@@ -140,32 +146,21 @@ describe('a relay and web that cannot preview themes yet', () => {
   })
 })
 
-describe('trust mode', () => {
-  test('a theme still gets a card and is never applied directly; a plain setting is applied with no card', async () => {
-    h = await start()
+describe('the lock off (the default): a theme he asked for is applied at once, like any setting', () => {
+  test('a custom theme he asked for is written with no card, and the undo names "reset the theme"', async () => {
+    h = await start({ config: (c) => ({ ...c, settings_lock: false }) })
     await ownerAsks(h)
-    h.bridge.ctx.config.update((c) => ({ ...c, trust_mode: true }), { setsTrustMode: true })
     const r = await propose(h, draft())
     expect(r.isError, text(r)).toBeFalsy()
-    expect(text(r)).toMatch(/card c_\S+ pending/)
-    expect(text(r)).not.toContain('applied directly')
-    expect(h.bridge.ctx.config.config.theme).toBeUndefined()
-    const id = /card (c_\S+) pending/.exec(text(r))?.[1] as string
-    await waitFor(() => cards(h as Harness).some((c) => c.id === id), 4000, 'card')
-    // control: the same mode does apply a plain setting straight away, so the exception above is the theme clause
-    const plain = await h.bridge.callTool('config_propose', {
-      thread_id: 'general',
-      reason: 'you asked',
-      changes: [{ path: 'agent.name', value: 'Hal' }],
-    })
-    expect(text(plain)).toContain('applied directly')
-    expect(h.bridge.ctx.config.config.agent.name).toBe('Hal')
+    expect(text(r)).toContain('applied: the owner asked')
+    expect(text(r)).toContain('or say "reset the theme"')
+    expect(h.bridge.ctx.config.config.theme).toBeDefined()
+    expect(cards(h).filter((c) => c.kind === 'config')).toHaveLength(0)
   })
 
-  test('a theme bundled with a plain setting is carded whole in trust mode, and the plain one is not applied early', async () => {
-    h = await start()
+  test('a theme bundled with a plain setting: both written together', async () => {
+    h = await start({ config: (c) => ({ ...c, settings_lock: false }) })
     await ownerAsks(h)
-    h.bridge.ctx.config.update((c) => ({ ...c, trust_mode: true }), { setsTrustMode: true })
     const r = await h.bridge.callTool('config_propose', {
       thread_id: 'general',
       reason: 'you asked',
@@ -174,8 +169,8 @@ describe('trust mode', () => {
         { path: 'theme', value: draft() },
       ],
     })
-    expect(text(r)).toMatch(/card c_\S+ pending/)
-    expect(h.bridge.ctx.config.config.agent.name).not.toBe('Hal')
-    expect(h.bridge.ctx.config.config.theme).toBeUndefined()
+    expect(text(r)).toContain('applied: the owner asked')
+    expect(h.bridge.ctx.config.config.agent.name).toBe('Hal')
+    expect(h.bridge.ctx.config.config.theme).toBeDefined()
   })
 })

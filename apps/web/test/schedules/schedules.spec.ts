@@ -450,17 +450,31 @@ test.describe('offline', () => {
   test('a cold start with the Mac away shows the cached list', async ({ page }) => {
     await open(page, '/schedules', { variant: 'cachedPast' })
     await expect(page.getByTestId('schedule-row-standup-prep')).toBeVisible()
-    await page.waitForFunction(
-      () =>
-        new Promise<boolean>((resolve) => {
-          const o = indexedDB.open('talos-app')
-          o.onsuccess = () => {
-            const r = o.result.transaction('schedules').objectStore('schedules').get('snapshot')
-            r.onsuccess = () => resolve(Boolean(r.result))
-          }
-          o.onerror = () => resolve(false)
-        }),
-    )
+    // bounded, with its own message: an unbounded wait here rode the test's timeout on a loaded machine and said nothing
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              new Promise<boolean>((resolve) => {
+                const o = indexedDB.open('talos-app')
+                o.onsuccess = () => {
+                  const r = o.result.transaction('schedules').objectStore('schedules').get('snapshot')
+                  r.onsuccess = () => {
+                    o.result.close()
+                    resolve(Boolean(r.result))
+                  }
+                  r.onerror = () => resolve(false)
+                }
+                o.onerror = () => resolve(false)
+              }),
+          ),
+        {
+          message: 'the schedule list was never saved for offline use (IndexedDB "schedules" snapshot)',
+          timeout: 15_000,
+        },
+      )
+      .toBe(true)
     await page.clock.install({ time: new Date(NOW_ISO) })
     await page.goto(`/test/schedules/harness/index.html?route=/schedules&offline=1`)
     await expandGroups(page)
@@ -670,7 +684,8 @@ test.describe('with the real-bridge captures', () => {
     await expect(low).toContainText('Proposed by')
     await expect(low).toContainText('Save change')
     await expect(page.getByText('altered in transit')).toHaveCount(0)
-    await expect(mine.nth(1).getByText('asks you to confirm with Face ID')).toBeAttached()
+    // no passkey since 2026-11-14: the high-risk card's button says nothing about Face ID
+    await expect(mine.nth(1).getByText(/face id/i)).toHaveCount(0)
     // the conflict the real bridge reports
     await page.evaluate(() => {
       const c = window.__talos

@@ -14,7 +14,7 @@ Two extension seams:
   needs_terminal? }`. A name is one word or `word sub`.
 - There is ONE source: `export const COMMANDS` in `talos.ts`. The same list drives `terminalOnly()` and `terminalOnlyNames()` (the
   permission deny rules) and the worker fence.
-- `WORKER_COMMANDS_OK` in `apps/bridge/src/worker/cli-refusal.ts` is a second, hand-kept list of what a thread session may run.
+- `WORKER_COMMANDS_OK` (and `WORKER_READ_OK`: `status`, `doctor`, `logs` filtered to the thread's own lines) in `apps/bridge/src/worker/cli-refusal.ts` is a second, hand-kept list of what a thread session may run.
 - `talos-app` itself: `apps/bridge/src/cli-main.ts` has a hand-kept `USAGE` string and a `switch` of `case '<cmd>':`.
 - Existing honesty tests (`apps/bridge/test/talos.test.ts`): every COMMANDS name has one probe and every probe is listed; every listed
   command reaches its handler through the real CLI; every listed top-level name has a `case` in `cli-main.ts`.
@@ -32,29 +32,40 @@ JSON v1 (additive; today's keys stay):
 - Top level: `schema: 1`, `app_version`, `commands[]`.
 - New optional fields on `CommandInfo`:
   - `args`: the usage string, e.g. `[--json] | revoke <id>`. Today it lives only in the `USAGE` text.
-  - `who`: `'agent' | 'owner' | 'owner_terminal'`, derived from `agent_may_run` and `needs_terminal`. The old booleans stay.
+  - `who`: `'agent' | 'internal' | 'owner_terminal'` (2026-11-14: `owner`, advice nobody enforced, is gone; `internal` is run by
+    Talos itself). `agent_may_run` stays in the JSON as `who === 'agent'`, for readers of schema 1.
   - `effects`: a list from `'read' | 'writes_home' | 'writes_agent_dir' | 'network' | 'changes_app'`.
   - `risk`: `'low' | 'ask' | 'high'`, where `ask` means behind an approval card.
   - No `needs_mod` field: no CLI row needs the Talos mod. Add it when a row does.
 - Single source: new fields are added in `COMMANDS` only.
 - `USAGE` is generated from `COMMANDS` (`args` + `summary`), with a test.
-- `WORKER_COMMANDS_OK` is derived from `COMMANDS`, or tested to be a subset of the `agent_may_run` rows.
+- `WORKER_COMMANDS_OK` is derived from `COMMANDS`, or tested to be a subset of the agent rows.
 - Versioning: the `schema` integer. Adding a field does not bump it; renaming or removing one does. Readers ignore unknown keys.
 - Honesty tests:
   1. Every `case '<x>':` in `cli-main.ts` is a COMMANDS top-level name, or on a short named exception list.
   2. The generated `USAGE` covers every COMMANDS row.
-  3. Every `needs_terminal` row has `agent_may_run: false`.
+  3. A `needs_terminal` row carries no other label.
   4. The JSON parses against a `CommandsList` zod schema in `packages/protocol`, with a fixture.
 
 ## B. Owner event hooks
 
 ### B1. Named events that exist today
 
-| Event                  | Emitted at                                        | Payload                                         |
-| ---------------------- | ------------------------------------------------- | ----------------------------------------------- |
-| `thread.folder_chosen` | `emitFolderEvents` in `apps/bridge/src/events.ts` | `thread_id`, `cleared` (never the path)         |
-| `dialog.card_posted`   | `apps/bridge/src/dialog-card.ts`                  | `dialog_kind`, `thread_id`, `card_id`           |
-| `dialog.card_answered` | `apps/bridge/src/dialog-card.ts`                  | `dialog_kind`, `thread_id`, `card_id`, `choice` |
+| Event                  | Emitted at                                        | Payload                                                                                   |
+| ---------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `thread.folder_chosen` | `emitFolderEvents` in `apps/bridge/src/events.ts` | `thread_id`, `cleared` (never the path)                                                   |
+| `dialog.card_posted`   | `apps/bridge/src/dialog-card.ts`                  | `dialog_kind`, `thread_id`, `card_id`                                                     |
+| `dialog.card_answered` | `apps/bridge/src/dialog-card.ts`                  | `dialog_kind`, `thread_id`, `card_id`, `choice`                                           |
+| `thread.created`       | `emitConfigEvents` in `apps/bridge/src/events.ts` | `thread_id`, `source` (never the name)                                                    |
+| `thread.renamed`       | `emitConfigEvents`                                | `thread_id`, `source` (never the names)                                                   |
+| `thread.archived`      | `emitConfigEvents`                                | `thread_id`, `source`                                                                     |
+| `thread.unarchived`    | `emitConfigEvents`                                | `thread_id`, `source`                                                                     |
+| `setting.changed`      | `emitConfigEvents`                                | `setting` (a table path), `source`, `thread_id?` (never the value)                        |
+| `bug.reported`         | `apps/relay/src/core/bug-reports.ts` (the relay)  | `report_id`, `device_id`, `webhook` (`off` or `queued`; never the words, logs or picture) |
+
+`source` is `owner` (a signed `config.patch`), `agent_card` (an agent proposal the owner approved) or `agent_trust` (applied
+directly in trust mode).
+
 - Mechanism: `emitEvent(log, name, fields)` writes one `log.info('event', …)` line. Nothing subscribes yet.
 - The Mac app's `devCardOffered` / `devCardAnswered` are in-process Swift events, not bridge events.
 - `keymap:changed` is only named in a comment in `apps/web/src/lib/keymap.ts`; nothing emits it. It is a web, per-device moment, so
@@ -74,7 +85,7 @@ JSON v1 (additive; today's keys stay):
 - Hooks never block. They are fire-and-forget: the bridge never waits, and a failing hook never delays or changes the event. A veto
   would be a different feature with its own card.
 - Limits: a 10 s timeout that kills the process group, a capped output (e.g. 4 KiB) that is logged, and a per-minute rate limit.
-- Where it runs: the bridge, since all three existing events are bridge events.
+- Where it runs: the bridge, since all the existing events are bridge events.
 - Logging: one `hook.ran` line per run (event, hook, exit code, ms, truncated). Hooks never fire on `hook.*` events, so there are no
   loops.
 

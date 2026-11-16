@@ -57,7 +57,7 @@ struct TmuxSemicolonTests {
     let again = argv(r, 2) ?? []
     #expect(containsRun(first, wanted), "\(first)")
     #expect(containsRun(again, wanted), "\(again)")
-    #expect(again.contains("[--resume]"), "the restart is a resume: \(again)")
+    #expect(again.contains { $0.hasPrefix("[--resume=") }, "the restart is a resume, its id one argument: \(again)")
     #expect(env(r, 2)?.contains("TALOS_TEST_VALUE=ends;") == true, "\(env(r, 2) ?? [])")
     #expect(!r.audit.contains(" restart_failed"), "\(r.audit)")
   }

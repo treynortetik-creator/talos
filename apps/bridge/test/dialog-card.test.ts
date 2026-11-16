@@ -1,8 +1,10 @@
 // Needs-you prompts, bridge side (docs/OPTION-C.md "Needs-you prompts"). A thread session shows a known dialog; the Mac records
 // it in workers.json; the bridge makes a card, the owner taps, the bridge writes the answer file for the Mac, the Mac reports
 // what it did. Real bridge + FakeRelay + a signing FakeApp; the Mac is played by the test writing the files it writes.
+
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import {
   type CardT,
@@ -122,8 +124,8 @@ function writeWorkers(x: Harness, dialogs: Record<string, unknown>, opts: { stal
 const file = (x: Harness, id: string, name: string) => join(x.home, 'workers', id, name)
 const readJson = (path: string) => JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
 /** The card file the Mac reads: written after the card is sent, so a test waits for it rather than reading it at once. */
-async function cardFile(x: Harness, want: Record<string, unknown>) {
-  const path = file(x, 'trip', 'dialog-card.json')
+async function cardFile(x: Harness, want: Record<string, unknown>, thread = 'trip') {
+  const path = file(x, thread, 'dialog-card.json')
   const says = () => {
     try {
       const j = readJson(path)
@@ -809,6 +811,63 @@ describe('the dialog goes away', () => {
   })
 })
 
+// The card file used to be written after the card.create send came back, so a dialog that went (or was answered) while the
+// create was in flight had its "closed" overwritten with "waiting" when the send returned: the Mac would show a card that is
+// gone. Under load that window is wide, and the two tests that read the file flaked.
+describe('the create still in flight', () => {
+  /** Holds the bridge's card.create send open (the relay already has the frame) until `release()`. */
+  function holdCreate(x: Harness) {
+    const t = x.bridge.ctx.transport
+    const send = t.sendDurable.bind(t)
+    let release = () => {}
+    const held = new Promise<void>((r) => {
+      release = r
+    })
+    let done: Promise<unknown> = Promise.resolve()
+    t.sendDurable = ((f: Parameters<typeof send>[0]) => {
+      const p = send(f)
+      if (f.type !== 'card.create') return p
+      const q = p.then(async (r) => {
+        await held
+        return r
+      })
+      done = q
+      return q
+    }) as typeof t.sendDurable
+    return {
+      release,
+      settled: async () => {
+        await done
+        await new Promise((r) => setImmediate(r)) // the bridge's own continuation after the send
+      },
+    }
+  }
+
+  test('a dialog gone before the send came back stays closed in the card file, never back to waiting', async () => {
+    await start()
+    const x = h as Harness
+    const hold = holdCreate(x)
+    const card = await show(x, trust(x)) // the relay has it; the bridge's send has not returned
+    writeWorkers(x, {})
+    x.bridge.optionCTick()
+    await cardFile(x, { status: 'closed' })
+    hold.release()
+    await hold.settled()
+    expect(readJson(file(x, 'trip', 'dialog-card.json'))).toMatchObject({ status: 'closed', card_id: card.id })
+  })
+
+  test('a card still waiting when the send comes back gets its waiting card file', async () => {
+    await start()
+    const x = h as Harness
+    const hold = holdCreate(x)
+    const card = await show(x, trust(x))
+    expect(existsSync(file(x, 'trip', 'dialog-card.json'))).toBe(false) // only once the send is done
+    hold.release()
+    await hold.settled()
+    expect(readJson(file(x, 'trip', 'dialog-card.json'))).toMatchObject({ status: 'waiting', card_id: card.id })
+  })
+})
+
 describe('first sighting plus 15 minutes', () => {
   test('the card expires and exactly one thread line says what the Mac used to', async () => {
     const clock = fakeClock()
@@ -817,7 +876,13 @@ describe('first sighting plus 15 minutes', () => {
     const card = await show(x, trust(x))
     await advanceSteps(clock, 901_000)
     await waitFor(() => lastUpdate(x, card.id)?.state === 'expired', 4000, 'expired')
-    const line = dialogFallbackLine('trust', 'Trip')
+    const line = dialogFallbackLine(
+      'trust',
+      process.platform === 'darwin'
+        ? { kind: 'mac' }
+        : { kind: 'linux', machine: hostname(), attach: 'talos-app supervise attach trip' },
+    )
+    expect(line.startsWith("This thread's session is waiting on a 'trust this folder' prompt")).toBe(true)
     await waitFor(() => notices(x).some((m) => m.text === line), 4000, 'the thread line')
     // more ticks and more time: still one
     for (let i = 0; i < 3; i++) {
@@ -981,7 +1046,8 @@ describe("Main's development-channels dialog", () => {
       subject: 'server:talos-app',
       options: ['I am using this for local development', 'Exit'],
     })
-    const ack = DialogCardFile.parse(readJson(file(x, mainThread(x), 'dialog-card.json')))
+    // written once the card's send is done, after the relay has it: waited for, never read at once
+    const ack = DialogCardFile.parse(await cardFile(x, { card_id: card.id }, mainThread(x)))
     expect(ack).toMatchObject({ dialog_id: DEV_ID, card_id: card.id, status: 'waiting' })
   })
 

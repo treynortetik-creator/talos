@@ -8,9 +8,19 @@
 // itself stays untouched. `expected` = the mod synced at some point in the last 7 days (kv `mod_seen_at`, written at most
 // once a minute): it survives a restart, which is what lets "quiet" and "never installed" be told apart.
 import type { Database } from 'bun:sqlite'
-import { statfsSync } from 'node:fs'
-import { DISK_LOW_BYTES, type Frame, type HealthBeatT, newUlid } from '@talos-app/protocol'
+import { readFileSync, statfsSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  DISK_LOW_BYTES,
+  type Frame,
+  type HealthBeatT,
+  type MainStateT,
+  mainStateOf,
+  newUlid,
+} from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
+import { mediaByAge } from '../media-retention.ts'
+import { MAIN_STATE_FILE } from '../supervisor/main-state.ts'
 import type { HealthService } from '../v2-seams.ts'
 import { BRIDGE_VERSION } from '../version.ts'
 
@@ -33,6 +43,11 @@ export function probeFts5(db: Database): boolean {
 
 /** Free disk is read at most this often: it is a syscall, and the beat only needs it to the minute. */
 const DISK_READ_EVERY_MS = 30_000
+/**
+ * The supervisor rewrites run/main-state every second while it runs and leaves it when it stops: older than this, it says
+ * nothing about now (Hestia, main-first-start).
+ */
+export const MAIN_STATE_FRESH_MS = 15_000
 
 /**
  * Free bytes the bridge's volume has for an ordinary process (`bavail`, not `bfree`), or null when it cannot be read. A
@@ -148,6 +163,7 @@ export class HealthMonitor implements HealthService {
     const expected = live || (seen !== null && now - seen <= MOD_EXPECTED_MS)
     if (this.fts5 === null) this.fts5 = this.ctx.search ? this.ctx.search.available : probeFts5(this.ctx.store.db)
     const free = this.freeBytes()
+    const byAge = mediaByAge(this.ctx)
     return {
       bridge: { version: BRIDGE_VERSION.slice(0, 40), started_at: iso(this.startedAt) },
       mod: {
@@ -159,7 +175,28 @@ export class HealthMonitor implements HealthService {
       stt: Boolean(this.ctx.env.sttCmd?.length),
       sqlite: { fts5: this.fts5 },
       ...(free !== null ? { disk_free_bytes: free } : {}),
+      ...(byAge ? { media_by_age: byAge } : {}),
       ...this.relayDeclaredField(),
+      ...this.mainField(),
+    }
+  }
+
+  /**
+   * Main's state, one word, from the supervisor's run/main-state (Linux and Windows; a Mac writes none), only while the file
+   * is fresh by the wall clock (it is the file's own time). Missing, stale, unreadable or unknown: left out.
+   */
+  private mainField(): { main?: MainStateT } {
+    try {
+      const f = join(this.ctx.env.home, MAIN_STATE_FILE)
+      const st = statSync(f)
+      const age = Date.now() - st.mtimeMs
+      // a plain small file only (a FIFO would block the bridge), and fresh: not old, and not from the future (a clock that
+      // stepped back after sleep would keep an old state fresh)
+      if (!st.isFile() || st.size > 1024 || age > MAIN_STATE_FRESH_MS || age < -2_000) return {}
+      const main = mainStateOf(readFileSync(f, 'utf8'))
+      return main ? { main } : {}
+    } catch {
+      return {}
     }
   }
 

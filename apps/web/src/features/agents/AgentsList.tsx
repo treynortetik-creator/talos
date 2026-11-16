@@ -4,12 +4,14 @@
 import type { AgentRowT, AgentRunStatusT, AgentsSnapshotT } from '@talos-app/protocol'
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from 'zustand'
-import { useTalos } from '../../lib/client.ts'
+import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconBack, IconChevron } from '../../ui/icons.tsx'
 import { Badge, Button } from '../../ui/index.ts'
 import { phaseOf } from '../session/logic.ts'
 import { showsAgentStop, useSessionController, visibleAgents } from '../session/store.ts'
+import { NOT_CONNECTED_LINE, useWriteBlock } from '../settings/offline.ts'
+import { connectionRefusalOf } from '../threads/manage/useThreadPatch.ts'
 import {
   type AgentNode,
   ago,
@@ -31,8 +33,11 @@ import { useNowTick } from './useNowTick.ts'
 
 export type AgentsView = {
   snap: AgentsSnapshotT | undefined
-  /** The mod lapsed (rows are `unknown`) or the Mac is offline: the panel greys and Stop hides. */
-  offline: 'mod' | 'mac' | null
+  /**
+   * The mod lapsed (rows are `unknown`), the Mac is offline, or this device is not connected ('link': what it last heard
+   * about the Mac is not current, so it never says the Mac is offline): the panel greys and Stop hides.
+   */
+  offline: 'mod' | 'mac' | 'link' | null
 }
 
 export function useAgentsView(): AgentsView {
@@ -40,9 +45,9 @@ export function useAgentsView(): AgentsView {
   const snap = useStore(ctl.store, visibleAgents)
   const state = useStore(ctl.store, (s) => s.state)
   const modOnline = useStore(ctl.store, (s) => s.modOnline)
-  const macOnline = useTalos((s) => s.presence.bridge_online)
+  const block = useWriteBlock()
   const phase = phaseOf(state, modOnline)
-  return { snap, offline: !macOnline ? 'mac' : phase === 'offline' ? 'mod' : null }
+  return { snap, offline: block ?? (phase === 'offline' ? 'mod' : null) }
 }
 
 // ---- status mark ---------------------------------------------------------------------------------------------------
@@ -175,6 +180,7 @@ function StopAgent({ row, threadId, macOnline }: { row: AgentRowT; threadId: str
  * row: collapsing the detail or going back never loses a failed Stop, and it is announced once, here only.
  */
 function AgentOutcome({ agentId }: { agentId: string }) {
+  const host = useHost()
   const ctl = useSessionController()
   const stopping = useStore(ctl.store, (s) => Object.values(s.pending).some((p) => p.agentId === agentId))
   const result = useStore(ctl.store, (s) => s.agentOutcomes[agentId])
@@ -188,13 +194,13 @@ function AgentOutcome({ agentId }: { agentId: string }) {
   return (
     <div aria-live="polite" {...(shown ? { 'data-testid': 'agent-outcome' } : {})} className="px-2 text-sm">
       {stopping ? (
-        <p className="m-0 pb-2 text-text-2">Waiting for the Mac…</p>
+        <p className="m-0 pb-2 text-text-2">{placeWords('Waiting for the Mac…', host)}</p>
       ) : result ? (
         <p
           data-kind={result.kind}
           className={cn('m-0 break-words pb-2', result.kind === 'error' ? 'text-danger' : 'text-text')}
         >
-          {result.text}
+          {placeWords(result.kind === 'error' ? (connectionRefusalOf(result) ?? result.text) : result.text, host)}
         </p>
       ) : null}
     </div>
@@ -212,7 +218,7 @@ function AgentDetail({
   now: number
   headingRef?: React.Ref<HTMLHeadingElement>
 }) {
-  const macOnline = useTalos((s) => s.presence.bridge_online)
+  const canSend = useWriteBlock() === null // a Stop can't go while this device is not connected or the Mac is offline
   const started = row.started_at ? new Date(row.started_at) : undefined
   const facts: Array<[string, string]> = [
     ['Task', row.title],
@@ -255,7 +261,7 @@ function AgentDetail({
           </ol>
         )}
       </div>
-      <StopAgent row={row} threadId={threadId} macOnline={macOnline} />
+      <StopAgent row={row} threadId={threadId} macOnline={canSend} />
     </div>
   )
 }
@@ -305,10 +311,11 @@ function Rows({
 }
 
 export function OfflineBadge({ offline }: { offline: AgentsView['offline'] }) {
+  const host = useHost()
   if (!offline) return null
   return (
     <Badge tone="neutral" data-testid="agents-offline" className="whitespace-nowrap">
-      {offline === 'mac' ? 'Mac offline' : 'Mod offline'}
+      {offline === 'link' ? 'Not connected' : offline === 'mac' ? placeWords('Mac offline', host) : 'Mod offline'}
     </Badge>
   )
 }
@@ -318,6 +325,7 @@ const GREYED = 'grayscale [&_*]:!text-text-2'
 
 /** The list in the Session panel: a tap opens a detail view in its place, with a way back. */
 export function AgentsList({ threadId, view, className }: { threadId: string; view: AgentsView; className?: string }) {
+  const host = useHost()
   const { snap, offline } = view
   const now = useNowTick(hasTicking(snap))
   const [open, setOpen] = useState<string | null>(null)
@@ -351,7 +359,11 @@ export function AgentsList({ threadId, view, className }: { threadId: string; vi
   if (!snap)
     return (
       <p data-testid="agents-mod-missing" className={cn('m-0 text-sm text-text-2', className)}>
-        {offline === 'mac' ? 'The Mac is offline.' : MOD_MISSING_TEXT}
+        {offline === 'link'
+          ? NOT_CONNECTED_LINE
+          : offline === 'mac'
+            ? placeWords('The Mac is offline.', host)
+            : MOD_MISSING_TEXT}
       </p>
     )
 

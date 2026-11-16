@@ -75,10 +75,12 @@ describe('sessions', () => {
     expect(rows[0]?.id).toMatch(/^[0-9a-f]{64}$/)
   })
 
-  it('idle for more than 14 days is 401', async () => {
+  it('by default a sign-in lasts 90 days unused (2026-11-14: nothing else asks for the passkey); past that it is 401', async () => {
     const h = await makeHarness()
-    const cookie = h.login()
-    h.fake.clock.advance(14 * DAY + 1000)
+    const cookie = await h.loginPinned()
+    h.fake.clock.advance(89 * DAY)
+    expect((await h.app.request('/probe/session', { headers: { Cookie: cookie } })).status).toBe(200)
+    h.fake.clock.advance(90 * DAY + 1000)
     expect((await h.app.request('/probe/session', { headers: { Cookie: cookie } })).status).toBe(401)
   })
 

@@ -1,0 +1,23 @@
+{
+  "_comment": "TEST KEYS ONLY (P-256, software). They sign the committed release-manifest vectors. None is a release key; no real updater trusts them.",
+  "test": {
+    "private_pkcs8_pem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgRSMpIwLaPX7NnR4x\n7pOM3GhX63Gn7aptLR+NPZHZjCyhRANCAAQl4p2QpzjjmnwDn8wLLkSnwRlcc0bp\n2vvTFhBX5laf4D48+KHfKHQ38FrdKutl7M4F69O0lxRHcgUCOFa9JNt6\n-----END PRIVATE KEY-----\n",
+    "public_key": "BCXinZCnOOOafAOfzAsuRKfBGVxzRuna+9MWEFfmVp/gPjz4od8odDfwWt0q62XszgXr07SXFEdyBQI4Vr0k23o=",
+    "kid": "6525d5cf268c7497"
+  },
+  "other": {
+    "private_pkcs8_pem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgn7zSu/WNjB33BhUF\nDsIkfVPi0lSGDP2jCffvcyE/3Y6hRANCAAS8eqZZXnvWacPnDjrsG2/lZg9oIicr\nojKYt8cHZvIVxoWcHYvgRBVgddpCYw+rqmDuCrBnUIQpGY6qAie24Zt4\n-----END PRIVATE KEY-----\n",
+    "public_key": "BLx6pllee9Zpw+cOOuwbb+VmD2giJyuiMpi3xwdm8hXGhZwdi+BEFWB12kJjD6uqYO4KsGdQhCkZjqoCJ7bhm3g=",
+    "kid": "e8423f86b21907a7"
+  },
+  "next": {
+    "private_pkcs8_pem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgGxQMkW7n1l/u6l/W\nAlQATGaFCgC70ZwjBN+m12+DKTGhRANCAATMVoy7y58qMNanjs5wsH7/t06Mh2B2\nVD0D4RBTPROaKmxV9gWuBsGHerR2I+xUc31AqjYgT86dIZKRBQJ0fEj7\n-----END PRIVATE KEY-----\n",
+    "public_key": "BMxWjLvLnyow1qeOznCwfv+3ToyHYHZUPQPhEFM9E5oqbFX2Ba4GwYd6tHYj7FRzfUCqNiBPzp0hkpEFAnR8SPs=",
+    "kid": "abc7db49e88ddacd"
+  },
+  "old": {
+    "private_pkcs8_pem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgMb7EPRR5Qby2Xrvp\nGJOZ1q5F6r6EPoVXuZLxw3VNNJ2hRANCAATaZNZV0EyhgcJ+7WsuHIsfavND8Tqb\nIWAUc/sx76ubOn5Kt/uBqesGzXwlgJW52xanXBjnDuL1zC1t07lVSICA\n-----END PRIVATE KEY-----\n",
+    "public_key": "BNpk1lXQTKGBwn7tay4cix9q80PxOpshYBRz+zHvq5s6fkq3+4Gp6wbNfCWAlbnbFqdcGOcO4vXMLW3TuVVIgIA=",
+    "kid": "92809146a99c6ce1"
+  }
+}

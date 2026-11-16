@@ -1,4 +1,4 @@
-// Settings → Agent: Restart agent only. Restoring the last good setup is done at the Mac, and the screen says so.
+// Settings → Agent: Restart agent only. Restoring the last good setup is done at the computer, and the screen says where.
 import { AgentRecoverFrame, RECOVER_SENT_TEXT } from '@talos-app/protocol'
 import { cleanup, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -29,6 +29,24 @@ describe('recover buttons', () => {
     expect(recoverFrames(c)).toHaveLength(1)
   })
 
+  it('on a Windows PC the line points to the tray: the Talos icon by the clock, Restore last good setup', async () => {
+    const c = setup()
+    c.store.setState((s) => ({ presence: { ...s.presence, features: ['host/windows'] } }))
+    renderWith(<AgentSettingsSection readOnly={false} />, c)
+    expect((await screen.findByTestId('agent-recover-restore-note')).textContent).toBe(
+      'To put back the last good setup, use the Talos icon by the clock on your PC: Restore last good setup.',
+    )
+  })
+
+  it('with no known host the line is the generic one', async () => {
+    const c = setup()
+    c.store.setState((s) => ({ presence: { ...s.presence, features: [] } }))
+    renderWith(<AgentSettingsSection readOnly={false} />, c)
+    expect((await screen.findByTestId('agent-recover-restore-note')).textContent).toBe(
+      'To put back the last good setup, do it on your computer, not from here.',
+    )
+  })
+
   it('a failed answer is shown as an alert', async () => {
     const c = setup()
     c.failNextRecoverWith('There is no saved setup to put back.')
@@ -39,6 +57,7 @@ describe('recover buttons', () => {
 
   it('with the Mac offline the button is still there, the screen says recovery needs the Mac app, and nothing is sent', async () => {
     const c = setup()
+    c.setMacOnline(false) // the row reads the Mac's presence itself (settings/offline.ts), as the screen does
     renderWith(<AgentSettingsSection readOnly={true} />, c)
     const restart = await screen.findByRole('button', { name: 'Restart agent' })
     expect((restart as HTMLButtonElement).disabled).toBe(false)

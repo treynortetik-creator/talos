@@ -152,6 +152,8 @@ describe('docs/SECURITY.md', () => {
 // Paths named in the docs must exist. Tokens that are not repo files are listed here on purpose.
 const NOT_REPO_FILES = new Set<string>([
   'settings.local.json', // lives in the agent folder, not this repo (no slash and not a checked extension anyway)
+  'AGENTS.md', // in SECURITY.md: a thread folder's instruction file, edited from thread settings, not this repo's
+  'CLAUDE.md', // the same, Claude Code's own name for it
 ])
 
 describe('paths named in the apps docs', () => {

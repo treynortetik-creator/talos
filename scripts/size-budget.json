@@ -7,8 +7,7 @@
     "apps/bridge/src/apps/service.ts": 1174,
     "apps/bridge/src/cli-main.ts": 1101,
     "apps/desktop/Sources/TalosDesktop/CompanionController.swift": 1254,
-    "packages/protocol/src/frames.ts": 1145,
-    "scripts/ci-local.sh": 1003
+    "packages/protocol/src/frames.ts": 1145
   },
   "functionsOverLimit": {
     "apps/bridge/src/apps/scan.ts::evaluateServer": 323,
@@ -26,8 +25,8 @@
     "packages/protocol/src/memory-links.ts::maskNote": 335,
     "plugins/talos-app-mod/hooks/register.ts::register": 313
   },
-  "filesListedCount": 6,
-  "filesListedLines": 6683,
+  "filesListedCount": 5,
+  "filesListedLines": 5680,
   "functionsListedCount": 14,
   "functionsListedLines": 5199
 }

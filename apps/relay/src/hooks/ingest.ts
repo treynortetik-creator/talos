@@ -14,9 +14,11 @@ import {
   dedupFirstSeen,
   deliveriesInLastHour,
   getConn,
+  listConns,
   randomId,
   secretsFor,
   toConn,
+  updateConn,
 } from './store.ts'
 import {
   type BodyRead,
@@ -99,6 +101,17 @@ function verifySecretsFor(rt: HooksRuntime, conn: ConnRow, mod: ReturnType<Hooks
 
 export function normConn(c: ConnRow, work: boolean): NormalizeConnection {
   return { id: c.id, integration: c.integration, thread: c.thread, work, extra: c.extra }
+}
+
+/** `normConn` plus what the module wants this connection to know about its siblings (Slack: the bots' user ids). */
+function connWithSiblings(rt: HooksRuntime, c: ConnRow, work: boolean): NormalizeConnection {
+  const n = normConn(c, work)
+  const sib = moduleExtras(rt.module(c.integration)).siblingExtra
+  if (!sib) return n
+  const others = listConns(rt)
+    .filter((x) => x.integration === c.integration && x.id !== c.id)
+    .map((x) => ({ ...normConn(x, work), createdAt: x.created_at }))
+  return { ...n, extra: { ...n.extra, ...sib(n, others, rt.now()) } }
 }
 
 // ---- the request ---------------------------------------------------------------------------------------------------
@@ -184,7 +197,19 @@ export async function handleHookRequest(rt: HooksRuntime, req: HookRequest): Pro
   if (admitted === 'conn') return shed(rt, conn, mod)
 
   const work = mod.setup.category === 'work'
-  const nconn = normConn(conn, work)
+  // Read again: the body read above awaited, and a credentials save or another first event may have changed `extra`
+  // meanwhile. From here to the write below nothing awaits, so the learned values never overwrite newer ones.
+  const fresh = getConn(rt, conn.id) ?? conn
+  let nconn = connWithSiblings(rt, fresh, work)
+  const learned = moduleExtras(mod).learn?.(raw, nconn) ?? null
+  if (learned && 'refuse' in learned) {
+    addDelivery(rt, conn.id, 200, learned.refuse, { received: 1, kept: 0 })
+    return ack(rt, conn, mod)
+  }
+  if (learned) {
+    updateConn(rt, conn.id, { extra: { ...fresh.extra, ...learned.extra } })
+    nconn = { ...nconn, extra: { ...nconn.extra, ...learned.extra } }
+  }
   if (mod.prefilter && !mod.prefilter(raw, nconn)) {
     addDelivery(rt, conn.id, 200, 'prefiltered', { received: 1, kept: 0 })
     return ack(rt, conn, mod)
@@ -365,7 +390,7 @@ async function processRow(rt: HooksRuntime, row: InboundRow): Promise<void> {
   ) as Record<string, string>
   const delivery: RawDelivery = { headers, rawBody, json: tryJson(rawBody), receivedAt: row.received_at }
   const toggles = effectiveToggles(mod, conn.filters)
-  const nconn = withToggleState(normConn(conn, work), toggles)
+  const nconn = withToggleState(connWithSiblings(rt, conn, work), toggles)
   const events = await mod.normalize(delivery, nconn)
   const ttl = conn.integration === 'github' ? GITHUB_DEDUP_TTL_MS : DEDUP_TTL_MS
   // One transaction: per-event dedup keys, the event rows and the inbound state commit together. A crash before the
@@ -411,7 +436,7 @@ function forceConn(e: NormalizedEventT, conn: ConnRow, work: boolean): Normalize
 export async function ingestPolled(rt: HooksRuntime, conn: ConnRow, deliveries: RawDelivery[]): Promise<number> {
   const mod = rt.module(conn.integration)
   if (!integrationEnabled(rt, conn.integration)) return 0 // switched off: nothing is stored
-  const nconn = normConn(conn, mod.setup.category === 'work')
+  const nconn = connWithSiblings(rt, conn, mod.setup.category === 'work')
   let stored = 0
   for (const raw of deliveries) {
     if (mod.prefilter && !mod.prefilter(raw, nconn)) continue

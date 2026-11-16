@@ -1,0 +1,40 @@
+
+           [1mClaude Code[0m
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [38;5;246mv2.1.325[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mFable 5.2[39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246mClaude Max  [39m
+           [38;5;246m/…/proj[39m
+
+
+[38;5;246m[48;5;237m❯ [38;5;231mUse the Task tool to start [39m
+  [38;5;231mone general-purpose [39m
+  [38;5;231msubagent. Its only job: [39m
+  [38;5;231mwrite a 500-word essay [39m
+  [38;5;231mabout lighthouses as plain [39m
+  [38;5;231mprose and use no tools. [39m
+  [38;5;231mWait for it, then reply [39m
+  [38;5;231mdone.[39m
+
+[38;5;114m[49m⏺[39m [1mAgent[0m(Write lighthouse
+       essay)
+[38;5;246m  ⎿  [39mBackgrounded agent[38;5;246m [39m
+
+[38;5;231m⏺[39m Agent's running — I'll say
+  done when it finishes.
+
+[38;5;246m✻[39m [38;5;246mWaiting for [1m1[0m[38;5;246m background [39m
+  [38;5;246magent to finish[39m
+
+[38;5;114m⏺[39m Agent "Write lighthouse
+essay" finished[38;5;246m · 16s[39m
+
+[38;5;231m⏺[39m Done.
+
+[38;5;246m✻[39m [38;5;246mSautéed for 23s · done 8:27
+[39m  [38;5;246mPM[39m
+
+
+[38;5;244m──────────────────────────────
+[39m❯ 
+[38;5;244m──────────────────────────────
+[39m  [38;5;246m⏸ manual mode on · /tasks…[39m

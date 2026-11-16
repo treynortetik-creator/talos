@@ -274,6 +274,7 @@ export class FolderService implements FolderServiceSeam {
   }
 }
 
+// for folders only: a file's real path goes through realFileSync (real-file.ts), as realpath can name a hard-linked file by another of its names
 function realOrSync(p: string): string {
   try {
     return realpathSync(p)

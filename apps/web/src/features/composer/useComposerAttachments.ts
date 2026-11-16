@@ -65,7 +65,10 @@ export function useComposerAttachments(o: {
   const takeDropped = useComposerStore((s) => s.takeDropped)
   // biome-ignore lint/correctness/useExhaustiveDependencies: attach reads fresh state through setChips only
   useEffect(() => {
-    if (dropped && dropped.length > 0) void attach(takeDropped(threadId))
+    if (!dropped || dropped.length === 0) return
+    const focus = useComposerStore.getState().takeDropFocus(threadId)
+    void attach(takeDropped(threadId))
+    if (focus) setTimeout(() => taRef.current?.focus(), 0) // a screenshot from the Mac app: ready for a line of text
   }, [dropped, takeDropped, threadId])
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     let imgs: File[] = []

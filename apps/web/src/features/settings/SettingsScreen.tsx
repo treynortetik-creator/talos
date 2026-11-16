@@ -3,12 +3,12 @@
 
 import { type ComponentType, Suspense, useMemo } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
-import { useTalos } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import {
   IconBack,
   IconBell,
   IconBook,
+  IconBug,
   IconChat,
   IconChevron,
   IconLink,
@@ -21,10 +21,16 @@ import {
 import { Meander } from '../../ui/Meander.tsx'
 import { ScrollRegion } from '../../ui/ScrollRegion.tsx'
 import { useAgentUnsaved } from '../agent-config/useAgentUnsaved.ts'
+import { BugHeaderButton } from '../bugreport/BugButton.tsx'
 import type { SettingsSectionProps } from '../contracts.ts'
+import { AboutBuild } from '../help/HelpAbout.tsx'
 import { HELP_PATH } from '../help/path.ts'
 import { settingsSections as external } from '../registry.ts'
 import { Banners } from '../threads/Banners.tsx'
+import { BugReportsSection } from './BugReportsSection.tsx'
+import { MediaRetentionSection } from './MediaRetentionSection.tsx'
+import { MemoryFoldersSection } from './MemoryFoldersSection.tsx'
+import { NOT_CONNECTED_LINE, useWriteBlock } from './offline.ts'
 import { ShortcutsSection } from './ShortcutsSection.tsx'
 import { AccountSection, AppearanceSection, NotificationsSection } from './sections.tsx'
 import { useMediaQuery } from './useMedia.ts'
@@ -38,12 +44,26 @@ const SECTION_ICON: Record<string, typeof IconSettings> = {
   health: IconLink,
   appearance: IconSun,
   help: IconBook,
+  'bug-reports': IconBug,
+  about: IconBook,
 }
 
 type Def = { id: string; title: string; order: number; Component?: ComponentType<SettingsSectionProps>; href?: string }
 
 /** Sections that write synced config through the Mac: read-only, and said so, while the Mac is offline (audit U11). */
-export const WRITES_SYNCED_CONFIG = ['agent', 'notifications', 'voice', 'thread-sessions', 'session']
+export const WRITES_SYNCED_CONFIG = [
+  'agent',
+  'notifications',
+  'voice',
+  'thread-sessions',
+  'session',
+  'storage',
+  'bug-reports',
+]
+
+function AboutSection() {
+  return <AboutBuild />
+}
 
 export function useSections(): Def[] {
   return useMemo(
@@ -53,7 +73,12 @@ export function useSections(): Def[] {
         { id: 'notifications', title: 'Notifications', order: 2, Component: NotificationsSection },
         ...external,
         { id: 'appearance', title: 'Appearance', order: 7, Component: AppearanceSection },
+        { id: 'storage', title: 'Storage', order: 7.5, Component: MediaRetentionSection },
+        { id: 'memory-folders', title: 'Memory folders', order: 7.6, Component: MemoryFoldersSection },
         { id: 'shortcuts', title: 'Keyboard shortcuts', order: 8, Component: ShortcutsSection },
+        { id: 'bug-reports', title: 'Bug reports', order: 9, Component: BugReportsSection },
+        // which build is running here, on the server and on the computer: "which version am I on" at a glance
+        { id: 'about', title: 'About', order: 98, Component: AboutSection },
         // The last row: Talos Help is its own page (one text, shared with the Mac app's Help menu).
         { id: 'help', title: 'Help', order: 99, href: HELP_PATH },
       ].sort((a, b) => a.order - b.order) as Def[],
@@ -67,7 +92,7 @@ export function SettingsScreen({ children }: { children?: React.ReactNode }) {
   const wide = useMediaQuery('(min-width: 768px)')
   // Shortcuts are for a keyboard: the phone does not list them.
   const sections = useSections().filter((s) => s.id !== 'shortcuts' || wide)
-  const macOnline = useTalos((s) => s.presence.bridge_online)
+  const block = useWriteBlock()
   const agentUnsaved = useAgentUnsaved()
   const active = sections.find((s) => s.id === section)
 
@@ -117,10 +142,18 @@ export function SettingsScreen({ children }: { children?: React.ReactNode }) {
   )
 
   const body = children ?? (
-    <div className="mx-auto w-full max-w-2xl p-4">
+    <div className="mx-auto w-full max-w-2xl p-4" data-testid="settings-body">
       {active?.Component && (
         <Suspense fallback={<p className="text-text-2">Loading…</p>}>
-          <active.Component readOnly={!macOnline && WRITES_SYNCED_CONFIG.includes(active.id)} />
+          {WRITES_SYNCED_CONFIG.includes(active.id) && block === 'link' ? (
+            <p role="status" data-testid="settings-not-connected" className="m-0 mb-3 text-sm text-text-2">
+              {NOT_CONNECTED_LINE}
+            </p>
+          ) : null}
+          <active.Component
+            readOnly={block !== null && WRITES_SYNCED_CONFIG.includes(active.id)}
+            readOnlyWhy={block === 'link' ? 'reconnecting' : 'mac'}
+          />
         </Suspense>
       )}
     </div>
@@ -140,7 +173,8 @@ export function SettingsScreen({ children }: { children?: React.ReactNode }) {
               <IconBack />
             </button>
           )}
-          <h1 className="m-0 py-3.5 pl-2 font-display text-2xl font-semibold">Settings</h1>
+          <h1 className="m-0 flex-1 py-3.5 pl-2 font-display text-2xl font-semibold">Settings</h1>
+          <BugHeaderButton />
         </header>
         <Meander />
       </div>

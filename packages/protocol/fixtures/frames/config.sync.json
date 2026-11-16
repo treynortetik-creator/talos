@@ -62,6 +62,13 @@
       "sonnet",
       "haiku"
     ],
+    "media_keep_days": null,
+    "dev": {
+      "thread_fence": true,
+      "note_lookup": true
+    },
+    "settings_lock": false,
+    "always_allow": [],
     "memory_browser": true,
     "mirror": {
       "telegram": "off"

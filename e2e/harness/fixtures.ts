@@ -7,6 +7,13 @@ export { waitUntil } from './stack.ts'
 export { expect }
 
 export const test = base.extend<{ stack: Stack; worldAt: string | undefined }>({
+  // a drop of the link or the Mac is said at once here (the app waits 30 s for an owner: lib/linkShown.ts)
+  context: async ({ context }, use) => {
+    await context.addInitScript(() => {
+      ;(window as unknown as { __talosLinkGraceMs: number }).__talosLinkGraceMs = 0
+    })
+    await use(context)
+  },
   /** The instant the whole stack's clock starts at. A spec overrides this; unset means E2E_NOW, or the wall clock. */
   worldAt: [undefined, { option: true }],
   stack: async ({ worldAt }, use, testInfo) => {
@@ -66,9 +73,12 @@ export async function enrollDevice(
     )
   })
   expect((words as string).split(' ')).toEqual(shown)
+  // A person reads the four words before answering: talos-app enroll takes an answer that comes under 500 ms after its
+  // question as typed ahead, a no (apps/bridge/src/enroll-cli.ts, READ_MS), so the harness waits as a person would.
+  await new Promise((r) => setTimeout(r, 600))
   cli.write(`${opts.answer ?? 'y'}\n`)
   if ((opts.answer ?? 'y') === 'y') {
-    await expect(page.getByRole('heading', { name: 'This device is ready' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'This device is ready' })).toBeVisible({ timeout: 20_000 }) // pairing under a full gate's load can pass 10 s
     await expect(MAIN_NAV(page)).toBeVisible({ timeout: 15_000 })
   }
   const devices = (await (await page.request.get(`${stack.origin}/api/devices`)).json().catch(() => [])) as Array<{
@@ -78,23 +88,42 @@ export async function enrollDevice(
   return { deviceId, words: shown, cli }
 }
 
-const wire = new WeakMap<Page, string[]>()
+const wire = new WeakMap<Page, { sent: string[]; received: string[] }>()
 
-/** Starts recording every WebSocket frame the page SENDS (call before the app connects). */
+/** Starts recording every WebSocket frame the page sends and receives (call before the app connects). */
 export function recordWire(page: Page): void {
   const sent: string[] = []
-  wire.set(page, sent)
+  const received: string[] = []
+  wire.set(page, { sent, received })
   page.on('websocket', (ws) => {
     ws.on('framesent', (e) => {
       if (typeof e.payload === 'string') sent.push(e.payload)
+    })
+    ws.on('framereceived', (e) => {
+      if (typeof e.payload === 'string') received.push(e.payload)
     })
   })
 }
 
 export function sentFrames(page: Page, type?: string): Array<{ text: string; json: Record<string, unknown> }> {
-  return (wire.get(page) ?? [])
+  return (wire.get(page)?.sent ?? [])
     .map((text) => ({ text, json: JSON.parse(text) as Record<string, unknown> }))
     .filter((f) => !type || f.json.type === type)
+}
+
+/**
+ * The JSON frames the page received, oldest first: the signal that a chain through the relay and the Mac has answered, which
+ * an assertion on the screen alone cannot tell apart from a slow render.
+ */
+export function receivedFrames(page: Page, type?: string): Array<{ text: string; json: Record<string, unknown> }> {
+  const out: Array<{ text: string; json: Record<string, unknown> }> = []
+  for (const text of wire.get(page)?.received ?? []) {
+    try {
+      const json = JSON.parse(text) as Record<string, unknown>
+      if (!type || json.type === type) out.push({ text, json })
+    } catch {}
+  }
+  return out
 }
 
 /**
@@ -163,6 +192,16 @@ export function cardIdFrom(result: { content: Array<{ text?: string }> }): strin
   const id = /\bc_[0-9A-HJKMNP-TV-Z]{26}\b/.exec(result.content[0]?.text ?? '')?.[0]
   if (!id) throw new Error(`no card id in ${JSON.stringify(result)}`)
   return id
+}
+
+/**
+ * `create_thread` and `archive_thread` show the owner a settings card in the default thread (docs/bridge.md). Tap Apply on the
+ * card the tool just made, then wait for the card to settle, so the change is in the app before the test goes on.
+ */
+export async function applySettingsCard(page: Page, result: { content: Array<{ text?: string }> }): Promise<void> {
+  const article = card(page, cardIdFrom(result))
+  await article.getByRole('button', { name: 'Apply', exact: true }).click()
+  await expect(article.getByRole('button', { name: 'Apply', exact: true })).toHaveCount(0)
 }
 
 export const HIGH_RISK_CARD = {

@@ -21,6 +21,10 @@ import { Bridge } from '../src/bridge.ts'
 import { loadEnv } from '../src/config.ts'
 import { nullLogger } from '../src/log.ts'
 import { type Harness, startHarness, tempHome, waitFor } from './helpers.ts'
+import { durableSqlite } from './sqlite-durable.ts'
+
+// this file damages history.sqlite on purpose and reopens it: SQLite syncs as the product runs (sqlite-test-seam.ts)
+durableSqlite()
 
 let h: Harness | undefined
 let b2: Bridge | undefined
@@ -75,6 +79,7 @@ test('card decisions replayed against the empty ledger of a reset history run no
     const notice = cardNotice(card as never)
     const body = {
       a: 'approve',
+      shown_v: '3',
       card_id: card.id,
       payload_hash: card.payload_hash,
       shown: shownHash(notice.text, noticeSubtitle(card.thread_id, (h as Harness).bridge.ctx.config.config)),

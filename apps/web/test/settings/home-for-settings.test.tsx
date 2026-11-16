@@ -107,7 +107,11 @@ describe('Quiet hours live in Notifications', () => {
     client.failNextPatchWith('config_conflict')
     fireEvent.change(screen.getByLabelText('Quiet hours end'), { target: { value: '06:00' } })
     fireEvent.blur(screen.getByLabelText('Quiet hours end'))
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/Not saved/))
+    // one message, under quiet hours: the section's note, in words for the refusal (no second "Not saved" of its own)
+    await waitFor(() =>
+      expect(screen.getByTestId('notifications-note').textContent).toMatch(/changed these settings at the same time/),
+    )
+    expect(screen.queryByText(/Not saved/)).toBeNull()
     expect((screen.getByLabelText('Quiet hours end') as HTMLInputElement).value).toBe('07:00')
     expect(cfg(client).quiet_window).toEqual({ start: '22:00', end: '07:00' })
   })
@@ -151,12 +155,12 @@ describe('Quiet hours live in Notifications', () => {
     const real = client.patchConfig.bind(client)
     let running = 0
     let overlap = 0
-    client.patchConfig = async (patch, o) => {
+    client.patchConfig = async (patch) => {
       running++
       overlap = Math.max(overlap, running)
       try {
         await new Promise((r) => setTimeout(r, 80))
-        return await real(patch, o)
+        return await real(patch)
       } finally {
         running--
       }
@@ -179,9 +183,9 @@ describe('Quiet hours live in Notifications', () => {
       s.config ? { ...s, config: { ...s.config, quiet_window: { start: '22:00', end: '07:00' } } } : s,
     )
     const real = client.patchConfig.bind(client)
-    client.patchConfig = async (patch, o) => {
+    client.patchConfig = async (patch) => {
       await new Promise((r) => setTimeout(r, 80))
-      return await real(patch, o)
+      return await real(patch)
     }
     renderWith(<NotificationsSection readOnly={false} />, client)
     const start = screen.getByLabelText('Quiet hours start') as HTMLInputElement
@@ -284,7 +288,8 @@ describe('Thread settings', () => {
     await userEvent.click(screen.getByRole('switch', { name: /Live-call context/ }))
     await waitFor(() => expect(cfg(client).threads.find((x) => x.id === 'trip')?.voice_context).toBe('none'))
     const sent = lastPatch(client)?.threads as ThreadT[]
-    expect(sent.find((x) => x.id === 'general')?.name).toBe('Renamed elsewhere') // the other edit is not overwritten
+    // the other edit is not overwritten: that thread goes without a name (a stale copy would send its old one back)
+    expect(sent.find((x) => x.id === 'general')).not.toHaveProperty('name')
   })
 
   it('a refusal leaves the switch on the saved value', async () => {
@@ -678,15 +683,15 @@ describe('SettingsScreen', () => {
 
   it('every section that writes synced config is read-only, and says so, with the Mac offline (U11)', async () => {
     expect(WRITES_SYNCED_CONFIG.sort()).toEqual(
-      ['agent', 'notifications', 'session', 'thread-sessions', 'voice'].sort(),
+      ['agent', 'bug-reports', 'notifications', 'session', 'storage', 'thread-sessions', 'voice'].sort(),
     )
-    for (const id of ['voice', 'notifications', 'agent']) {
+    for (const id of ['voice', 'notifications', 'agent', 'storage', 'bug-reports']) {
       const client = setup({ macOffline: true })
       stubStatus()
       const view = at(client, `/settings/${id}`)
       await waitFor(() => expect(document.querySelector('section')).toBeTruthy())
       // the driving rows and microphone choice are per-device preferences, not synced config: they stay usable
-      const sw = [...view.container.querySelectorAll('[role="switch"], select, textarea')].filter(
+      const sw = [...view.container.querySelectorAll('[role="switch"], select, textarea, input[type="url"]')].filter(
         (el) => !el.closest('[data-testid="driving-row"]'),
       )
       expect(sw.length, id).toBeGreaterThan(0)

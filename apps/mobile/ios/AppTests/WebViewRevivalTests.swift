@@ -16,6 +16,8 @@ final class WebViewRevivalTests: XCTestCase {
         var active = true
         var pings: [(timeout: TimeInterval, done: (PagePulse) -> Void)] = []
         var hops: [() -> Void] = []
+        var timers: [(delay: TimeInterval, run: () -> Void)] = []
+        var notice: [Bool] = []
         var reloads = 0
         var rebuilds = 0
         private(set) var revival: WebViewRevival!
@@ -23,12 +25,19 @@ final class WebViewRevivalTests: XCTestCase {
             revival = WebViewRevival(
                 hasPage: { [unowned self] in hasPage }, isBusy: { [unowned self] in busy }, isActive: { [unowned self] in active },
                 ping: { [unowned self] t, d in pings.append((t, d)) }, hop: { [unowned self] in hops.append($0) },
+                after: { [unowned self] t, run in timers.append((t, run)) }, waiting: { [unowned self] in notice.append($0) },
                 reload: { [unowned self] in reloads += 1 }, rebuild: { [unowned self] in rebuilds += 1 })
         }
         /// Answers the n-th ping; a missing ping is a failed test, not a crash.
         func answer(_ n: Int, _ pulse: PagePulse, file: StaticString = #filePath, line: UInt = #line) {
             guard pings.indices.contains(n) else { return XCTFail("no ping \(n) was asked", file: file, line: line) }
             pings[n].done(pulse)
+        }
+        /// The notice delay passes: every timer set so far fires.
+        func delay() {
+            let run = timers
+            timers = []
+            run.forEach { $0.run() }
         }
         /// Runs what was deferred one run-loop turn.
         func turn() {
@@ -158,6 +167,99 @@ final class WebViewRevivalTests: XCTestCase {
         XCTAssertEqual(r.reloads, 0)
     }
 
+    // MARK: A document that came back empty
+
+    func testAnEmptyDocumentWithNothingLoadingIsLoadedAgain() {
+        let r = Rig()
+        r.revival.appDidForeground()
+        r.answer(0, .blank)
+        XCTAssertEqual(r.reloads, 1, "the process answers, so a load will run: no new web view is needed")
+        XCTAssertEqual(r.rebuilds, 0)
+        XCTAssertEqual(r.pings.count, 1)
+    }
+
+    func testAnEmptyDocumentWhileALoadRunsIsLeftToThatLoad() {
+        let r = Rig(); r.busy = true
+        r.revival.appDidForeground()
+        r.answer(0, .blank)
+        XCTAssertEqual(r.reloads + r.rebuilds, 0, "a page that is still arriving is empty for a moment")
+    }
+
+    func testAnEmptyDocumentIsLoadedOncePerForeground() {
+        let r = Rig()
+        r.revival.appDidForeground()
+        r.answer(0, .blank); r.answer(0, .blank)
+        XCTAssertEqual(r.reloads, 1)
+    }
+
+    // MARK: The notice ("Reconnecting…")
+
+    func testALivePageThatAnswersAtOnceNeverShowsTheNotice() {
+        let r = Rig()
+        r.revival.appDidForeground()
+        XCTAssertEqual(r.timers.map(\.delay), [WebViewRevival.noticeDelay])
+        r.answer(0, .answered)
+        r.delay()
+        XCTAssertEqual(r.notice, [], "no flash on a normal return to the app")
+    }
+
+    func testACheckStillOpenAfterTheDelayShowsTheNoticeAndTheAnswerTakesItDown() {
+        let r = Rig()
+        r.revival.appDidForeground()
+        r.delay()
+        XCTAssertEqual(r.notice, [true])
+        r.answer(0, .silent)
+        XCTAssertEqual(r.notice, [true], "still asking: the notice stays")
+        r.answer(1, .answered)
+        XCTAssertEqual(r.notice, [true, false])
+    }
+
+    func testAStuckPageShowsTheNoticeForTheWholeWaitBeforeTheNewWebView() {
+        let r = Rig()
+        r.revival.appDidForeground()
+        r.delay()
+        r.answer(0, .silent)
+        XCTAssertEqual(r.notice, [true])
+        XCTAssertEqual(r.rebuilds, 0)
+        r.answer(1, .silent)
+        XCTAssertEqual(r.rebuilds, 1)
+        XCTAssertEqual(r.notice, [true, false], "the old controller's notice is not left up if the swap is refused")
+    }
+
+    func testTheNoticeStaysUpFromAGoneProcessToTheLoadDecision() {
+        let r = Rig()
+        r.revival.appDidForeground()
+        r.delay()
+        r.answer(0, .failed)
+        XCTAssertEqual(r.notice, [true], "no blink between the check and the load")
+        r.turn()
+        XCTAssertEqual(r.reloads, 1)
+        XCTAssertEqual(r.notice, [true, false])
+    }
+
+    func testLeavingTheFrontTakesTheNoticeDown() {
+        let r = Rig()
+        r.revival.appDidForeground()
+        r.delay()
+        r.revival.cancel()
+        XCTAssertEqual(r.notice, [true, false])
+        r.answer(0, .silent)
+        XCTAssertEqual(r.notice, [true, false], "a void answer changes nothing")
+    }
+
+    func testADelayFromAnEarlierForegroundDoesNotRaiseTheNoticeInALaterOne() {
+        let r = Rig()
+        r.revival.appDidForeground()
+        let old = r.timers
+        r.timers = []
+        r.revival.cancel()
+        r.revival.appDidForeground()
+        r.answer(1, .answered)
+        old.forEach { $0.run() }
+        r.delay()
+        XCTAssertEqual(r.notice, [])
+    }
+
     // MARK: No loops
 
     func testAForegroundThatFiresTwiceWhileAskingActsOnce() {
@@ -194,7 +296,7 @@ final class WebViewRevivalTests: XCTestCase {
 final class WebViewPingTests: XCTestCase {
     @MainActor
     private final class Rig {
-        var replies: [(Error?) -> Void] = []
+        var replies: [(Any?, Error?) -> Void] = []
         var timers: [(TimeInterval, () -> Void)] = []
         var results: [PagePulse] = []
         init(timeout: TimeInterval = 2) {
@@ -209,25 +311,42 @@ final class WebViewPingTests: XCTestCase {
 
     func testAScriptThatRunsIsAnswered() {
         let r = Rig()
-        r.replies[0](nil)
+        r.replies[0]("page", nil)
         XCTAssertEqual(r.results, [.answered])
     }
 
     func testAGoneProcessIsFailedWhateverTheErrorSaysElse() {
-        XCTAssertEqual(WebViewRevival.pulse(for: wk(.webContentProcessTerminated)), .failed)
-        XCTAssertEqual(WebViewRevival.pulse(for: wk(.webViewInvalidated)), .failed)
+        XCTAssertEqual(WebViewRevival.pulse(result: nil, error: wk(.webContentProcessTerminated)), .failed)
+        XCTAssertEqual(WebViewRevival.pulse(result: "page", error: wk(.webViewInvalidated)), .failed)
     }
 
-    func testAScriptThatThrewOrReturnedAnOddTypeMeansThePageIsThere() {
-        XCTAssertEqual(WebViewRevival.pulse(for: wk(.javaScriptExceptionOccurred)), .answered)
-        XCTAssertEqual(WebViewRevival.pulse(for: wk(.javaScriptResultTypeIsUnsupported)), .answered)
-        XCTAssertEqual(WebViewRevival.pulse(for: NSError(domain: NSURLErrorDomain, code: -1009)), .answered)
-        XCTAssertEqual(WebViewRevival.pulse(for: nil), .answered)
+    /// The other hole in the first version: a dead web process answers with "result of an unsupported type" (see
+    /// WebViewLivenessTests for the real one), and that was read as "the page is there". The script never throws and always
+    /// returns a string, so no error can come from a page that is there.
+    func testAnyErrorMeansThereIsNoPageToRunTheScript() {
+        XCTAssertEqual(WebViewRevival.pulse(result: nil, error: wk(.javaScriptResultTypeIsUnsupported)), .failed)
+        XCTAssertEqual(WebViewRevival.pulse(result: nil, error: wk(.javaScriptExceptionOccurred)), .failed)
+        XCTAssertEqual(WebViewRevival.pulse(result: nil, error: wk(.unknown)), .failed)
+        XCTAssertEqual(WebViewRevival.pulse(result: "page", error: NSError(domain: NSURLErrorDomain, code: -1009)), .failed)
+    }
+
+    /// The hole in the first version of this check: a web process that came back empty ran `1` and read as a live page.
+    func testOnlyTheScriptsOwnAnswerIsALivePage() {
+        XCTAssertEqual(WebViewRevival.pulse(result: "page", error: nil), .answered)
+        XCTAssertEqual(WebViewRevival.pulse(result: "blank", error: nil), .blank)
+        XCTAssertEqual(WebViewRevival.pulse(result: 1, error: nil), .blank, "a script that merely ran proves no page")
+        XCTAssertEqual(WebViewRevival.pulse(result: nil, error: nil), .blank)
+    }
+
+    func testAnEmptyDocumentComesThroughThePing() {
+        let r = Rig()
+        r.replies[0]("blank", nil)
+        XCTAssertEqual(r.results, [.blank])
     }
 
     func testAnErrorFromTheGoneProcessComesThroughThePing() {
         let r = Rig()
-        r.replies[0](wk(.webContentProcessTerminated))
+        r.replies[0](nil, wk(.webContentProcessTerminated))
         XCTAssertEqual(r.results, [.failed])
     }
 
@@ -241,14 +360,14 @@ final class WebViewPingTests: XCTestCase {
     func testALateAnswerAfterTheTimeoutIsIgnored() {
         let r = Rig()
         r.timers[0].1()
-        r.replies[0](nil)
+        r.replies[0]("page", nil)
         XCTAssertEqual(r.results, [.silent], "answered once, by the timeout")
     }
 
     func testATimeoutAfterTheAnswerIsIgnoredAndASecondAnswerToo() {
         let r = Rig()
-        r.replies[0](nil)
-        r.replies[0](wk(.webContentProcessTerminated))
+        r.replies[0]("page", nil)
+        r.replies[0](nil, wk(.webContentProcessTerminated))
         r.timers[0].1()
         XCTAssertEqual(r.results, [.answered])
     }

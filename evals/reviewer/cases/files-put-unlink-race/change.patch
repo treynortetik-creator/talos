@@ -1,0 +1,314 @@
+diff --git a/apps/bridge/src/safe-open.ts b/apps/bridge/src/safe-open.ts
+index ae96605e..61bacfe7 100644
+--- a/apps/bridge/src/safe-open.ts
++++ b/apps/bridge/src/safe-open.ts
+@@ -16,7 +16,17 @@
+ // folder, which can also copy the file, so it is documented in docs/SECURITY.md and not closed here.
+ // The caller passes a path that is already fully resolved (no links in it); anything that turns into a link afterwards
+ // fails the open instead of being followed.
+-import { closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, realpathSync } from 'node:fs'
++import {
++  closeSync,
++  constants,
++  fstatSync,
++  lstatSync,
++  openSync,
++  readFileSync,
++  readlinkSync,
++  realpathSync,
++  unlinkSync,
++} from 'node:fs'
+ 
+ const O_NOFOLLOW_ANY = 0x20000000
+ 
+@@ -33,13 +43,13 @@ export function openResolvedNoFollow(resolved: string, extraFlags = 0): number {
+   // macOS rejects O_NOFOLLOW together with O_NOFOLLOW_ANY (EINVAL); the latter already covers the last component too
+   if (process.platform === 'darwin') {
+     const fd = openSync(resolved, constants.O_RDONLY | extraFlags | O_NOFOLLOW_ANY)
+-    return verified(fd, resolved, () => realpathSync(`/dev/fd/${fd}`))
++    return verified(fd, resolved, extraFlags, () => realpathSync(`/dev/fd/${fd}`))
+   }
+   if (process.platform === 'linux') {
+     const fd = openSync(resolved, constants.O_RDONLY | constants.O_NOFOLLOW | extraFlags)
+     // A name replaced or unlinked after the open reads "<path> (deleted)": still the file opened at that path. Only when the
+     // handle has NO name left (nlink 0): a file still linked elsewhere (a hard link outside the root) keeps the suffix and fails
+-    return verified(fd, resolved, () => {
++    return verified(fd, resolved, extraFlags, () => {
+       const at = readlinkSync(`/proc/self/fd/${fd}`)
+       return fstatSync(fd).nlink === 0 ? at.replace(/ \(deleted\)$/, '') : at
+     })
+@@ -47,10 +57,14 @@ export function openResolvedNoFollow(resolved: string, extraFlags = 0): number {
+   throw new Error(`no safe open on ${process.platform}`)
+ }
+ 
+-function verified(fd: number, resolved: string, whereIs: () => string): number {
++function verified(fd: number, resolved: string, extraFlags: number, whereIs: () => string): number {
+   try {
+     openSeam.afterOpen?.(resolved)
+-    if (whereIs() !== resolved) throw new Error('opened file is not at the resolved path')
++    const where = whereIs()
++    if (where !== resolved) {
++      undoCreate(fd, where, extraFlags)
++      throw new Error('opened file is not at the resolved path')
++    }
+     return fd
+   } catch (e) {
+     closeSync(fd)
+@@ -58,6 +72,27 @@ function verified(fd: number, resolved: string, whereIs: () => string): number {
+   }
+ }
+ 
++/**
++ * An exclusive create (O_CREAT|O_EXCL) whose handle is somewhere else than asked made that file, wherever it landed. Linux
++ * has no O_NOFOLLOW_ANY: O_NOFOLLOW covers only the last part of the path, so a folder swapped for a link between the fence
++ * and the open is followed, and the empty file is created outside (found on Titan: files-put.test.ts). It is taken out
++ * again, and only it: at the place the handle really is, the same file (device and inode), a regular file, still empty. For a
++ * moment an empty file exists out there; a full fix needs openat on a checked folder handle, which Node does not have
++ * (docs/SECURITY.md, "Upload into a thread's folder"). On macOS O_NOFOLLOW_ANY refuses the open itself, so this never runs.
++ */
++function undoCreate(fd: number, where: string, extraFlags: number): void {
++  const exclusive = constants.O_CREAT | constants.O_EXCL
++  if ((extraFlags & exclusive) !== exclusive) return
++  try {
++    const mine = fstatSync(fd)
++    const there = lstatSync(where)
++    if (there.isFile() && there.dev === mine.dev && there.ino === mine.ino && there.size === 0 && mine.size === 0)
++      unlinkSync(where)
++  } catch {
++    // gone already, or not ours to touch
++  }
++}
++
+ /**
+  * Reads a whole small file by name through one safe handle: realpath, open with no link followed and O_NONBLOCK (a named
+  * pipe must not freeze the one thread the bridge runs on), fstat the HANDLE (regular file, at most `maxBytes`), read the
+diff --git a/apps/bridge/test/apps/connector-address.test.ts b/apps/bridge/test/apps/connector-address.test.ts
+index 7f1e5fac..b353c2d5 100644
+--- a/apps/bridge/test/apps/connector-address.test.ts
++++ b/apps/bridge/test/apps/connector-address.test.ts
+@@ -31,6 +31,21 @@ const provider = () => new TalosOAuthProvider(memSecrets().secrets, 'srv', 'http
+ const signInRequests = () =>
+   calls.filter((c) => c.url.includes('/.well-known/') || c.url.includes('/oauth') || c.url.includes('/token'))
+ 
++// The connector with the system lookup replaced by one that answers at once ("no such host") and notes what it was asked: the
++// same connect code as realDirectConnector, with no network. The 401 below names mcp.example.test for sign-in, so with the
++// real lookup every case waited on DNS, and where .test is blackholed rather than refused (WSL: found on Titan) the first
++// cases ran past the 5 s test limit. The guard itself never dialed: a blocked literal is refused before any lookup.
++let asked: string[] = []
++const noNetwork = makeDirectConnector({
++  resolve: async (h) => {
++    asked.push(h)
++    throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${h}`), { code: 'ENOTFOUND' })
++  },
++})
++beforeEach(() => {
++  asked = []
++})
++
+ describe('realDirectConnector with an OAuth provider: sign-in requests go through the address check', () => {
+   for (const url of [
+     'http://mcp.example.test/mcp', // a NAME is never local by its looks (the old line made every name local)
+@@ -50,18 +65,21 @@ describe('realDirectConnector with an OAuth provider: sign-in requests go throug
+     'http://[fd00:ec2::254]/mcp', // the IPv6 metadata address sits inside fc00::/7
+   ]) {
+     it(`${url}: connect fails and no sign-in request is sent to it`, async () => {
+-      const e = await realDirectConnector.connect({ type: 'http', url }, { kind: 'oauth', provider: provider() }).then(
++      const e = await noNetwork.connect({ type: 'http', url }, { kind: 'oauth', provider: provider() }).then(
+         () => undefined,
+         (x) => x,
+       )
+       expect(e).toBeInstanceOf(Error)
+       expect(calls.some((c) => c.method === 'POST')).toBe(true) // the harness did reach the sign-in decision
+       expect(signInRequests()).toEqual([])
++      // a blocked address is refused as written, never looked up first
++      const host = new URL(url).hostname.replace(/^\[|\]$/g, '')
++      if (host !== 'mcp.example.test') expect(asked).not.toContain(host)
+     })
+   }
+ 
+   it('control: an owner-approved local server (a loopback literal) does get its sign-in discovery over the plain fetch', async () => {
+-    await realDirectConnector
++    await noNetwork
+       .connect({ type: 'http', url: 'http://127.0.0.1:9/mcp' }, { kind: 'oauth', provider: provider() })
+       .catch(() => {})
+     expect(signInRequests().length).toBeGreaterThan(0)
+diff --git a/apps/bridge/test/apps/tools-cli.test.ts b/apps/bridge/test/apps/tools-cli.test.ts
+index 3a3fa043..e5607a07 100644
+--- a/apps/bridge/test/apps/tools-cli.test.ts
++++ b/apps/bridge/test/apps/tools-cli.test.ts
+@@ -358,76 +358,95 @@ describe('the loaded environment', () => {
+ })
+ 
+ describe('doctor: the apps part', () => {
++  // `doctor` runs the whole doctor (it spawns bun, codex and the gate command): about 1.2 s alone, longer under a full gate
++  // run's load, so the 5 s default ran out on Titan (WSL). These wait as long as the real work takes, not a clock guess.
++  const DOCTOR_MS = 20_000
+   const doctor = async (home: string, agentDir: string, extra: string[] = [], deps: AppsCliDeps = {}) => {
+     const c = cli(home, deps)
+     const code = await c.run(['doctor', '--agent-dir', agentDir, ...extra])
+     return { code, lines: c.out.filter((l) => /^\S+\s+apps /.test(l)) }
+   }
+-  it('silent unless apps are on or a catalog exists', async () => {
+-    const r = await doctor(tmp(), tmp('agent-'))
+-    expect(r.lines).toEqual([])
+-  })
+-  it('healthy: catalog, version, hook entries with onFailure block, and the gate command really runs', async () => {
+-    const home = tmp()
+-    const agentDir = tmp('agent-')
+-    await approvedFixture(home)
+-    const c = cli(home)
+-    await c.run(['install-app-hooks', '--agent-dir', agentDir])
+-    const r = await doctor(home, agentDir)
+-    expect(r.lines.join('\n')).toContain('ok    apps catalog: rev 1, 1 server(s) with an approved app')
+-    expect(r.lines.join('\n')).toContain('ok    apps hooks: 1 gate entry with onFailure block')
+-    expect(r.lines.join('\n')).toContain('ok    apps gate runs: exit 0')
+-  })
+-  it('FAILs when the gate entry would fail open, when there is no entry, and when the catalog is corrupt; warns on a version change', async () => {
+-    const home = tmp()
+-    const agentDir = tmp('agent-')
+-    await approvedFixture(home)
+-    const c = cli(home)
+-    await c.run(['install-app-hooks', '--agent-dir', agentDir])
+-    const file = join(agentDir, '.claude', 'settings.local.json')
+-    const cfg = JSON.parse(readFileSync(file, 'utf8'))
+-    delete cfg.hooks.PreToolUse[0].hooks[0].onFailure
+-    writeFileSync(file, JSON.stringify(cfg))
+-    const open = await doctor(home, agentDir)
+-    expect(open.code).toBe(1)
+-    expect(open.lines.join('\n')).toContain('FAIL  apps hooks: the gate entry is missing "onFailure": "block"')
+-    writeFileSync(file, '{}')
+-    expect((await doctor(home, agentDir)).lines.join('\n')).toContain('FAIL  apps hooks: no gate entry for probe')
+-    const P = appPaths(home)
+-    mkdirSync(P.dir, { recursive: true })
+-    writeFileSync(P.liveVersion, '9.9.9\n')
+-    expect((await doctor(home, agentDir)).lines.join('\n')).toContain(
+-      'warn  apps Claude Code version: scanned with 2.1.312, live session runs 9.9.9',
+-    )
+-    writeFileSync(P.catalog, '{broken')
+-    expect((await doctor(home, agentDir)).lines.join('\n')).toContain('FAIL  apps catalog: catalog is not JSON')
+-  })
+-  it('--deep runs the scan check through the same session and reports drift', async () => {
+-    const home = tmp()
+-    const agentDir = tmp('agent-')
+-    const sec = memSecrets()
+-    const probe = await readProbe()
+-    const mk = (p: typeof probe) =>
+-      new ScriptedSource(
+-        '2.1.312',
+-        [{ name: 'probe', status: 'connected', source: 'local', config: stdioConfig(), tools: p.tools as never }],
+-        { 'probe:ui://probe/view.html': p.contents },
++  it(
++    'silent unless apps are on or a catalog exists',
++    async () => {
++      const r = await doctor(tmp(), tmp('agent-'))
++      expect(r.lines).toEqual([])
++    },
++    DOCTOR_MS,
++  )
++  it(
++    'healthy: catalog, version, hook entries with onFailure block, and the gate command really runs',
++    async () => {
++      const home = tmp()
++      const agentDir = tmp('agent-')
++      await approvedFixture(home)
++      const c = cli(home)
++      await c.run(['install-app-hooks', '--agent-dir', agentDir])
++      const r = await doctor(home, agentDir)
++      expect(r.lines.join('\n')).toContain('ok    apps catalog: rev 1, 1 server(s) with an approved app')
++      expect(r.lines.join('\n')).toContain('ok    apps hooks: 1 gate entry with onFailure block')
++      expect(r.lines.join('\n')).toContain('ok    apps gate runs: exit 0')
++    },
++    DOCTOR_MS,
++  )
++  it(
++    'FAILs when the gate entry would fail open, when there is no entry, and when the catalog is corrupt; warns on a version change',
++    async () => {
++      const home = tmp()
++      const agentDir = tmp('agent-')
++      await approvedFixture(home)
++      const c = cli(home)
++      await c.run(['install-app-hooks', '--agent-dir', agentDir])
++      const file = join(agentDir, '.claude', 'settings.local.json')
++      const cfg = JSON.parse(readFileSync(file, 'utf8'))
++      delete cfg.hooks.PreToolUse[0].hooks[0].onFailure
++      writeFileSync(file, JSON.stringify(cfg))
++      const open = await doctor(home, agentDir)
++      expect(open.code).toBe(1)
++      expect(open.lines.join('\n')).toContain('FAIL  apps hooks: the gate entry is missing "onFailure": "block"')
++      writeFileSync(file, '{}')
++      expect((await doctor(home, agentDir)).lines.join('\n')).toContain('FAIL  apps hooks: no gate entry for probe')
++      const P = appPaths(home)
++      mkdirSync(P.dir, { recursive: true })
++      writeFileSync(P.liveVersion, '9.9.9\n')
++      expect((await doctor(home, agentDir)).lines.join('\n')).toContain(
++        'warn  apps Claude Code version: scanned with 2.1.312, live session runs 9.9.9',
+       )
+-    const scan = cli(home, { source: mk(probe), secrets: sec.secrets, bridgeDir: BRIDGE_DIR }, ['y', 'Notes', 'auto'])
+-    await scan.run(['apps', 'scan', '--agent-dir', agentDir])
+-    const clean = await doctor(home, agentDir, ['--deep'], {
+-      source: mk(probe),
+-      secrets: sec.secrets,
+-      bridgeDir: BRIDGE_DIR,
+-    })
+-    expect(clean.lines.join('\n')).toContain('ok    apps scan --check: no drift')
+-    const drifted = await doctor(home, agentDir, ['--deep'], {
+-      source: mk(await readProbe({ PROBE_GEN: '1', PROBE_DRIFT: 'csp' })),
+-      secrets: sec.secrets,
+-      bridgeDir: BRIDGE_DIR,
+-    })
+-    expect(drifted.lines.join('\n')).toContain('warn  apps scan --check: drift: probe')
+-  })
++      writeFileSync(P.catalog, '{broken')
++      expect((await doctor(home, agentDir)).lines.join('\n')).toContain('FAIL  apps catalog: catalog is not JSON')
++    },
++    DOCTOR_MS,
++  )
++  it(
++    '--deep runs the scan check through the same session and reports drift',
++    async () => {
++      const home = tmp()
++      const agentDir = tmp('agent-')
++      const sec = memSecrets()
++      const probe = await readProbe()
++      const mk = (p: typeof probe) =>
++        new ScriptedSource(
++          '2.1.312',
++          [{ name: 'probe', status: 'connected', source: 'local', config: stdioConfig(), tools: p.tools as never }],
++          { 'probe:ui://probe/view.html': p.contents },
++        )
++      const scan = cli(home, { source: mk(probe), secrets: sec.secrets, bridgeDir: BRIDGE_DIR }, ['y', 'Notes', 'auto'])
++      await scan.run(['apps', 'scan', '--agent-dir', agentDir])
++      const clean = await doctor(home, agentDir, ['--deep'], {
++        source: mk(probe),
++        secrets: sec.secrets,
++        bridgeDir: BRIDGE_DIR,
++      })
++      expect(clean.lines.join('\n')).toContain('ok    apps scan --check: no drift')
++      const drifted = await doctor(home, agentDir, ['--deep'], {
++        source: mk(await readProbe({ PROBE_GEN: '1', PROBE_DRIFT: 'csp' })),
++        secrets: sec.secrets,
++        bridgeDir: BRIDGE_DIR,
++      })
++      expect(drifted.lines.join('\n')).toContain('warn  apps scan --check: drift: probe')
++    },
++    DOCTOR_MS,
++  )
+ })
+ 
+ describe('the agent folder is never the home folder', () => {
+diff --git a/docs/SECURITY.md b/docs/SECURITY.md
+index a128e572..7b269a08 100644
+--- a/docs/SECURITY.md
++++ b/docs/SECURITY.md
+@@ -744,7 +744,10 @@ as an attachment in a message.
+ - **Never over a file.** The file is created with `O_EXCL` and no link followed anywhere in its path (`safe-open.ts`, checked by where the
+   kernel says the handle is): a file or a link already at that name is never opened, and a folder swapped for a link fails the create. A
+   taken name becomes "name (2).ext", up to 99 tries. A write that fails, or a create the handle check then refuses, removes the file it
+-  created.
++  created. On Linux there is no O_NOFOLLOW_ANY (only the last name is checked at the open), so a folder swapped for a link between the
++  fence and the create IS followed and the empty file is made outside; the handle check refuses it and removes that file where the
++  handle really is (the same device and inode, a regular file, still empty), then refuses. For that moment an empty file exists outside
++  the folder; closing it fully needs openat on a checked folder handle, which Node does not have. On macOS the open itself is refused.
+ - **Limits.** 50 MB a file, two at once, and 1 GB a device a UTC day: reserved before the download and given back on a failure. The day's
+   count is kept in memory: a restart of the bridge starts it again.
+ - **What the app trusts.** The answer must be for the thread and folder asked, under one plain name, with the size sent, or it is

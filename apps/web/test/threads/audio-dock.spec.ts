@@ -105,12 +105,12 @@ const goHome = async (page: Page) => {
 }
 
 async function online(harness: Harness, page: Page) {
-  await expect(page.getByText(/Your Mac is offline/)).toBeVisible()
+  await expect(page.getByText(/Your computer is offline/)).toBeVisible()
   const { mkFrame } = await import('@talos-app/testkit')
   harness.relay.sendToApps(
     mkFrame('presence', { bridge_online: true, last_seen: new Date().toISOString(), queue_depth: 0 }),
   )
-  await expect(page.getByText(/Your Mac is offline/)).toHaveCount(0)
+  await expect(page.getByText(/Your computer is offline/)).toHaveCount(0)
 }
 
 test('a long note keeps playing and keeps its place after he leaves the thread; a reload resumes it', async ({

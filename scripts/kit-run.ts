@@ -88,6 +88,18 @@ export function runScript(script: string, opts: RunOptions): Promise<RunResult> 
 /** Why a "skip ..." line a kit test prints is expected. A line that matches nothing here is reported as unlisted. */
 export const KNOWN_SKIPS: { script: string; line: RegExp; reason: string }[] = [
   {
+    script: 'test-memory-reflex.sh',
+    line: /^skip ordinary word that is a project\b/i,
+    reason:
+      'telling an ordinary word from a one-word name needs the system dictionary (/usr/share/dict/words), which macOS ships and many Linux systems do not',
+  },
+  {
+    script: 'test-install.sh',
+    line: /^skip no-python fallback\b/i,
+    reason:
+      'the no-Python-3.10 path needs a system without one; a /usr/bin/python3 of 3.10 or newer (most Linux) cannot be hidden from the installer',
+  },
+  {
     script: 'test-address.sh',
     line: /^skip address parity\b/i,
     reason:
@@ -112,7 +124,13 @@ export const KNOWN_SKIPS: { script: string; line: RegExp; reason: string }[] = [
   {
     script: 'test-plugin.sh',
     line: /^skip claude plugin validate and the real-session checks\b/i,
-    reason: 'the claude CLI is not installed here; these checks run the real Claude Code against the built plugin',
+    reason:
+      'no claude CLI here, or one older than 2.1.304 (the oldest Talos supports, SETUP.md; the line names which): these checks run the real Claude Code against the built plugin',
+  },
+  {
+    script: 'test-install.sh',
+    line: /^skip case-insensitive clone check\b/i,
+    reason: "needs a git clone on a case-insensitive volume (a Mac's default); Linux filesystems are case-sensitive",
   },
   {
     script: 'test-plugin.sh',
@@ -133,7 +151,8 @@ export const KNOWN_SKIPS: { script: string; line: RegExp; reason: string }[] = [
   {
     script: 'test-install.sh',
     line: /^skip setup\.sh python3\.14 discovery\b/i,
-    reason: 'only runs on a machine that has a Python 3.10+ to wrap',
+    reason:
+      'needs a Python 3.10+ to wrap and none in /usr/bin or /bin (it proves python3.14 is found when it is the only 3.10+ on PATH; most Linux ship one)',
   },
 ]
 
@@ -159,7 +178,8 @@ export function failureReport(out: string, tail = 40): string {
   for (let i = 0; i < from; i++) {
     if (!/^\s*FAIL\b/.test(lines[i] ?? '')) continue
     head.push(lines[i] ?? '')
-    while (i + 1 < from && /^ {7}\S/.test(lines[i + 1] ?? '')) head.push(lines[++i] ?? '')
+    // the lines under it that say why, indented 7 or more (self-test.sh's `        | ` lines: why upgrade.sh exited, say)
+    while (i + 1 < from && /^ {7,}\S/.test(lines[i + 1] ?? '')) head.push(lines[++i] ?? '')
   }
   return [
     ...head,

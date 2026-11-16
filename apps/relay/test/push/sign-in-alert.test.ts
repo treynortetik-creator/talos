@@ -69,7 +69,7 @@ describe('sign-in alerts ignore the rules that silence chat', () => {
   })
 
   it('and through the quiet window, as the other system alerts do', async () => {
-    const x = await rig({ quiet_window: { start: '07:00', end: '09:00' }, timezone: 'Etc/GMT+7' })
+    const x = await rig({ quiet_window: { start: '09:00', end: '11:00' }, timezone: 'Etc/GMT+5' })
     await x.push.notify({ template: 'sign_in' })
     expect(x.web.sent).toHaveLength(1)
   })

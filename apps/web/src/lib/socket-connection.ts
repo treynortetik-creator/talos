@@ -1,15 +1,30 @@
 // The WebSocket: connect, hello/ready, ping and pong, reconnect backoff, the session probe, and the wire send
 // helper.
-import { newId, newUlid, parseFrame } from '@talos-app/protocol'
-import { NoAnswerError } from './client.ts'
+import { newId, newUlid, parseFrame, WIDE_FEATURES_FEATURE, WS_CLOSE } from '@talos-app/protocol'
+import { NoAnswerError, TalosClientError } from './client.ts'
 import { endReasonOf, HttpError } from './http.ts'
 import { MAX_CLOCK_OFFSET_MS } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
-import { unknownOfFrame, unknownOfOpenCards } from './unknownFrames.ts'
+import { unknownOfFrame, unknownOfOpenCards, unknownOfParsed, unknownOfReady } from './unknownFrames.ts'
+
+/** Why the link drops, for the console (owner, 2026-11-15): every close with its code and reason, counted for this page. */
+const drops = { count: 0, codes: {} as Record<number, number>, since: Date.now() }
+function noteDrop(code: number, reason: string, wasReady: boolean) {
+  drops.count += 1
+  drops.codes[code] = (drops.codes[code] ?? 0) + 1
+  const mins = Math.max(1, Math.round((Date.now() - drops.since) / 60_000))
+  console.info(
+    `[talos] relay link closed: code ${code}${reason ? ` (${reason})` : ''}${wasReady ? '' : ', before it was ready'}; ${drops.count} drop(s) in ${mins} min`,
+    drops.codes,
+  )
+  ;(globalThis as { __talosDrops?: typeof drops }).__talosDrops = drops
+}
+
+/** How long after a 1012 close the client keeps retrying on the short delay before the normal backoff resumes. */
+const RESTART_WINDOW_MS = 30_000
 
 export function createSocketConnection(c: SocketCtx) {
-  const { WS, baseMs, http, inboxInFlight, info, isOnline, isVisible, maxMs, now, pending, rnd, set, setMeta, store } =
-    c
+  const { WS, baseMs, http, info, isOnline, isVisible, maxMs, now, pending, rnd, set, setMeta, store } = c
 
   const canSend = () => c.ws?.readyState === WS?.OPEN && c.ready
 
@@ -48,7 +63,8 @@ export function createSocketConnection(c: SocketCtx) {
           device_id: c.key?.deviceId,
           last_seq: store.getState().lastSeq,
           visible: isVisible(),
-          client: info,
+          // this build reads a features list of up to FEATURES_MAX: the relay then sends the bridge's whole list
+          client: { ...info, features: [WIDE_FEATURES_FEATURE] },
         }),
       )
     }
@@ -66,6 +82,7 @@ export function createSocketConnection(c: SocketCtx) {
         return
       }
       const frame = res.frame
+      c.noteUnknown(unknownOfParsed(raw)) // an error code from a newer build: delivered as 'internal', still noted (O5)
       if (frame.type === 'ping') {
         send({ type: 'pong', nonce: frame.nonce })
         return
@@ -83,19 +100,23 @@ export function createSocketConnection(c: SocketCtx) {
           // the time could otherwise choose where inside the window (days ahead) a signature falls.
           c.clockOffset =
             Math.abs(off) < 30_000 ? 0 : Math.max(-MAX_CLOCK_OFFSET_MS, Math.min(MAX_CLOCK_OFFSET_MS, off))
+          // The screens read it from the store: a card's expiry is the relay's time, not this device's.
+          if ((store.getState().clockOffset ?? 0) !== c.clockOffset) set(() => ({ clockOffset: c.clockOffset }))
         }
         c.ready = true
         c.connection++
         c.round++
         c.attempt = 0
+        c.restartUntil = 0
         c.lastPong = now()
         set(() => ({ connection: 'online' }))
         setMeta({ retryAt: null, authFailed: false, authReason: null, lastCloseCode: null })
         c.dispatch(frame)
         // After dispatch: the frame's threads are stored, so a card in one of them is filed there on the first connect too.
         for (const u of unknownOfOpenCards(raw)) c.noteUnknown(u)
-        inboxInFlight.clear() // a new connection: nothing sent on the old one will be answered
+        for (const u of unknownOfReady(raw, frame)) c.noteUnknown(u) // a thread, status or session field left out
         for (const [eventId, patch] of c.inboxQueue) c.applyInboxPatch(eventId, patch) // the snapshot predates them
+        c.readsOnReady(frame) // and the read marks made while the socket was down
         startPing(frame.policy.ping_ms)
         void c.flushOutbox()
         c.flushInbox()
@@ -105,20 +126,24 @@ export function createSocketConnection(c: SocketCtx) {
       c.dispatch(frame)
     }
     sock.onclose = (ev) => {
+      // Every frame the relay sent on it has arrived: an inbox change still unanswered there goes out again. Not for the
+      // close the wake probe runs by hand: that socket may still be open, and its grace covers it.
+      if (c.closedByHand.has(sock)) c.closedByHand.delete(sock)
+      else c.inboxSocketClosed(sock)
       if (c.ws !== sock) return
       const wasReady = c.ready
       c.ws = null
-      c.ready = false
-      stopPing()
-      inboxInFlight.clear()
-      rejectAllPending(new NoAnswerError('internal', 'Connection lost'))
+      socketGone(sock)
       if (c.closed) return
       setMeta({ lastCloseCode: ev.code })
+      noteDrop(ev.code, ev.reason, wasReady)
       if (ev.code === 4401 || ev.code === 4403) {
         set(() => ({ connection: 'offline' }))
         setMeta({ authFailed: true, authReason: ev.reason ? ev.reason : null })
         return
       }
+      // only a socket that was up opens the window: a 1012 at every dial (a proxy, a broken relay) must not redial for ever
+      if (ev.code === WS_CLOSE.RESTARTING && wasReady) c.restartUntil = now() + RESTART_WINDOW_MS
       scheduleReconnect()
       // An expired session is refused with HTTP 401 before the upgrade, which a browser only reports as close code 1006.
       if (!wasReady && c.attempt >= 2) void probeSession()
@@ -168,14 +193,31 @@ export function createSocketConnection(c: SocketCtx) {
       setMeta({ networkOffline: true, retryAt: null })
       return
     }
-    set(() => ({ connection: 'unreachable' }))
-    const delay = Math.min(maxMs, baseMs * 2 ** c.attempt) * (0.75 + rnd() * 0.5)
-    c.attempt++
+    // The relay said 1012 ("restarting", a deploy): it is back in about a second, so for 30 s retry on a short fixed delay
+    // that does not grow the backoff and does not show "unreachable".
+    const restarting = now() < c.restartUntil
+    set(() => ({ connection: restarting ? 'connecting' : 'unreachable' }))
+    const delay = restarting ? 250 + rnd() * 500 : Math.min(maxMs, baseMs * 2 ** c.attempt) * (0.75 + rnd() * 0.5)
+    if (!restarting) c.attempt++
     setMeta({ retryAt: now() + delay })
     c.retryTimer = setTimeout(() => {
       c.retryTimer = null
       connect()
     }, delay)
+  }
+
+  /**
+   * The socket is no longer ours (it closed, or `reconnect()` let go of it): no request sent on it will be answered. Every
+   * request still waiting hears that now, not after its own timer. An inbox change keeps its place until the socket closes.
+   */
+  function socketGone(sock: WebSocket | null) {
+    c.ready = false
+    stopPing()
+    c.inboxSocketGone(sock)
+    rejectAllPending(new NoAnswerError('internal', 'Connection lost'))
+    // A history page is sent back to the socket that asked for it: with that socket gone it will not come. Failing the
+    // request also clears what it left behind (the `latestRequests` entry a newest-page request holds until it ends).
+    for (const fail of [...c.historyErrors.values()]) fail(new TalosClientError('internal', 'Connection lost'))
   }
 
   function rejectAllPending(err: Error) {
@@ -190,5 +232,6 @@ export function createSocketConnection(c: SocketCtx) {
   c.connect = connect
   c.rejectAllPending = rejectAllPending
   c.send = send
+  c.socketGone = socketGone
   c.stopPing = stopPing
 }

@@ -14,6 +14,9 @@ export const AGENT_TOOL_GROUPS = [
   'apps',
   'worker',
   'handoff',
+  'pages',
+  'sessions',
+  'screen',
 ] as const
 export type AgentToolGroup = (typeof AGENT_TOOL_GROUPS)[number]
 
@@ -30,6 +33,12 @@ export type WorkerAccess =
 
 /** The tools that only read a thread's history. A worker's copy is still locked to its own thread. */
 export const READ_THREAD_TOOLS = ['read_thread'] as const
+
+/**
+ * The locked tools a parent's lead may also point at a sub-thread it answers (one without a lead of its own): what it needs
+ * to answer the owner there. Every other locked tool (settings and schedule proposals, hand-offs) stays on its own thread.
+ */
+export const SUB_THREAD_POST_TOOLS = ['reply', 'attach', 'card', 'set_status'] as const
 
 export const NOT_FOR_WORKERS = { worker: false, locked: false } as const
 export const OWN_THREAD = { worker: true, locked: true, thread: 'post' } as const

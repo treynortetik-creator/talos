@@ -44,4 +44,8 @@ export const DEFAULT_AGENT_CONFIG: AgentConfigT = {
   permission_relay: false,
   session_models: ['default', 'opus', 'sonnet', 'haiku'],
   memory_browser: true,
+  media_keep_days: null,
+  dev: { thread_fence: true, note_lookup: true },
+  settings_lock: false,
+  always_allow: [],
 }

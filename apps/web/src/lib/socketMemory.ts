@@ -2,10 +2,11 @@
 // The socket MemoryClient (docs/V2-FEATURES.md V5). Every call is one signed owner frame; the answer is a frame routed
 // back to this socket by `request_id`, and a refusal is an `error{ref}` that rejects with `TalosClientError`
 // (`memory_off`, `memory_not_found`, `mac_offline`, `rate_limited`). Reads are not queued: they need the Mac now.
-import { newUlid } from '@talos-app/protocol'
+import { MemoryGraphResultFrame, newUlid } from '@talos-app/protocol'
+import { TalosClientError } from './client.ts'
 import type { MemoryClient } from './v2Client.ts'
 
-type Answer = 'memory.listing' | 'memory.file' | 'memory.results'
+type Answer = 'memory.listing' | 'memory.file' | 'memory.results' | 'memory.graph_result'
 
 export type SocketMemoryDeps = {
   /** Signs and sends `frame`, resolves with the answer frame that carries its `request_id`. */
@@ -42,6 +43,20 @@ export function createSocketMemory(d: SocketMemoryDeps): MemoryClient {
         'memory.results',
       )
       return { hits: f.hits ?? [], nextCursor: f.next_cursor ?? null, index: f.index }
+    },
+    async graph() {
+      const f = await d.ask({ type: 'memory.graph', request_id: newUlid() }, 'memory.graph_result')
+      // the relay carries it: a garbled answer (a link to no note, a note in no folder) is refused, never drawn
+      const ok = MemoryGraphResultFrame.safeParse(f)
+      if (!ok.success) throw new TalosClientError('bad_frame', "The graph your Mac sent couldn't be read.")
+      const g = ok.data
+      return {
+        roots: g.roots,
+        nodes: g.nodes.map((n) => ({ root: n.r, path: n.p, title: n.t })),
+        edges: g.edges.map(([a, b]) => [a, b] as [number, number]),
+        total: g.total_nodes,
+        truncated: g.truncated,
+      }
     },
   }
 }

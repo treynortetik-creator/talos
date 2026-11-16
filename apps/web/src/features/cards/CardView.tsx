@@ -1,20 +1,24 @@
 // CardView (spec 8.4): the approval card. It recomputes the hash from exactly what it renders, refuses to show buttons
-// for an altered or expired card, supports inline edit (edited_hash), revise, step-up for high risk, and collapses to
-// one line after a decision.
+// for an altered or expired card, supports inline edit (edited_hash), revise, "Always allow" for a send kind, and
+// collapses to one line after a decision. The owner's signed tap is the whole approval (owner ruling 2026-11-14).
 import {
+  ALWAYS_ALLOW_FEATURE,
   CARD_KIND_TABLE,
   CARD_KINDS,
   type CardIconKey,
   type CardKind,
   type CardT,
+  cardExpiryMs,
+  type Host,
   isBodyEditable,
+  isSendKind,
   ScheduleCardPayload,
+  type SendKind,
 } from '@talos-app/protocol'
 import { type ComponentType, type ReactNode, type SVGProps, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { NoAnswerError, NotSentError, TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
+import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { HttpError } from '../../lib/http.ts'
-import { isNativeShell } from '../../lib/native.ts'
-import { passkeyErrorCopy } from '../../lib/passkeyGate.ts'
 import { cn } from '../../ui/cn.ts'
 import {
   IconAlert,
@@ -26,9 +30,11 @@ import {
   IconKeyboard,
   IconMail,
   IconMegaphone,
+  IconPush,
   IconRocket,
   IconScale,
   IconSettings,
+  IconUndo,
 } from '../../ui/icons.tsx'
 import { Button, Input, Textarea } from '../../ui/index.ts'
 import { StatusDot } from '../../ui/StatusDot.tsx'
@@ -50,7 +56,7 @@ import {
 } from './logic.ts'
 import { PermissionCardLive } from './PermissionCard.tsx'
 import { ThemePreview, themeOfCard } from './ThemePreview.tsx'
-import { copyText, formatExpiry, prefersReducedMotion, revealHidden, useNow } from './util.ts'
+import { copyText, formatExpiry, prefersReducedMotion, revealHidden, useRelayNow } from './util.ts'
 
 const BODY_PREVIEW_LINES = 6
 
@@ -61,6 +67,7 @@ const ICON_BY_KEY = {
   mail: IconMail,
   chat: IconChat,
   rocket: IconRocket,
+  'arrow-up': IconPush,
   megaphone: IconMegaphone,
   'card-pay': IconCardPay,
   scale: IconScale,
@@ -69,6 +76,7 @@ const ICON_BY_KEY = {
   alert: IconAlert,
   settings: IconSettings,
   keyboard: IconKeyboard,
+  undo: IconUndo,
 } satisfies Record<CardIconKey, CardIcon>
 
 /** One icon per card kind, read from the kind table (CARD_KIND_TABLE), so a kind cannot lack one. */
@@ -87,9 +95,25 @@ function KindIcon({ kind }: { kind: CardT['kind'] }) {
 
 const NO_ANSWER_COPY = "Didn't hear back. Check whether it ran before trying again."
 
-function errorCopy(e: unknown, agent: string): string {
-  const noPasskey = passkeyErrorCopy(e)
-  if (noPasskey) return noPasskey
+/**
+ * The second button on a live card of a send kind (always-allow.ts): what it allows from now on. A table, so each kind reads
+ * right ("Always allow publishing", not "publishs").
+ */
+export const ALWAYS_ALLOW_LABEL: Record<SendKind, string> = {
+  email: 'Always allow emails',
+  message: 'Always allow messages',
+  deploy: 'Always allow deploys',
+  publish: 'Always allow publishing',
+  purchase: 'Always allow purchases',
+  push: 'Always allow pushing code',
+}
+
+/** Shown when a high-risk card was answered from a notification (error `open_in_app`). */
+export const OPEN_IN_APP_COPY = 'This card is approved in the app, not from a notification.'
+/** An older relay or Mac that still asks for the confirmation step this app no longer has (two old error codes). */
+export const OLDER_STEP_COPY = 'Your relay or your Mac is older than this app. Update Talos, then try again.'
+
+export function errorCopy(e: unknown, agent: string, host: Host | null): string {
   // The phone only says "nothing was sent" when the frame never left it, and never guesses at the outcome otherwise.
   if (e instanceof NotSentError) return `${e.message} Nothing was sent.`
   if (e instanceof NoAnswerError) return NO_ANSWER_COPY
@@ -103,11 +127,14 @@ function errorCopy(e: unknown, agent: string): string {
         return "This card changed after it was drafted. Don't approve it."
       case 'card_edit_forbidden':
         return "This card doesn't allow that edit."
+      case 'open_in_app':
+        return OPEN_IN_APP_COPY
+      // no relay or Mac of this release sends these two; an older one may still
       case 'stepup_required':
       case 'stepup_invalid':
-        return 'Confirmation failed. Try again.'
+        return OLDER_STEP_COPY
       case 'mac_offline':
-        return `${agent}'s Mac is offline. Try again when it is back.`
+        return placeWords(`${agent}'s Mac is offline. Try again when it is back.`, host)
       default:
         // The relay's own sentence says more than the code. A bare `internal` is the relay failing without saying how
         // (a deploy mid-tap): the outcome is unknown, so it reads like silence. Other bare codes name themselves.
@@ -115,16 +142,11 @@ function errorCopy(e: unknown, agent: string): string {
         return e.message && e.message !== e.code ? e.message : `Something went wrong (${e.code}).`
     }
   }
-  // Only the browser's own words for "the owner cancelled the passkey prompt" read as cancelled. Everything else
-  // (a 403 from verify, a 5xx, a dropped connection) is not a Cancel and must not say so.
   if (e instanceof HttpError) {
     const code = (e.body as { error?: unknown } | undefined)?.error
-    if (e.status === 403 || e.status === 401 || code === 'stepup_invalid' || code === 'stepup_required')
-      return 'Confirmation failed. Try again.'
+    if (code === 'stepup_invalid' || code === 'stepup_required') return OLDER_STEP_COPY
     return `Something went wrong (${e.status}).`
   }
-  if (e instanceof Error && (e.name === 'NotAllowedError' || e.name === 'AbortError'))
-    return 'Confirmation was cancelled.'
   if (e instanceof TypeError) return "Couldn't reach the server. Check your connection and try again."
   return 'Something went wrong.'
 }
@@ -139,17 +161,19 @@ function sizeLabel(bytes: number): string {
 }
 
 export function CardView({ card, threadName, highlighted, armPrimary, inline = true }: CardViewProps) {
+  const host = useHost()
   const client = useTalosClient()
   const agent = useTalos((s) => s.config?.agent.name ?? 'Talos')
   const timeZone = useTalos((s) => s.config?.timezone ?? 'UTC')
-  const now = useNow(1000)
+  // The relay's clock: `expires_at` is its time, and a phone clock minutes off must not expire a live card (or keep a dead one).
+  const now = useRelayNow(1000)
   const rootRef = useRef<HTMLElement>(null)
   const titleId = useId()
 
   const altered = useMemo(() => isAltered(card), [card])
   const hash = useMemo(() => renderedHash(card), [card])
   const expired = isExpiredNow(card, now)
-  const line = collapseLine(card, { agent, timeZone, nowMs: now })
+  const line = collapseLine(card, { agent, timeZone, nowMs: now, host })
   const live = card.state === 'pending' && !altered && !expired
 
   const [editing, setEditing] = useState(false)
@@ -180,12 +204,13 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
   }, [highlighted])
 
   // An Approve tap from a push: once, and only for a card that is still live and as rendered (live = pending, unaltered,
-  // unexpired). A high-risk card goes through its normal primary flow (Face ID first, nothing sent without it); anything
-  // else just gets focus on its button. The card is on screen for a moment first, and the check is made again when the
-  // moment is up, so a card that changed or expired in between is left alone.
+  // unexpired). It only puts focus on the card's button: nothing is sent until the owner taps it here. (With the
+  // confirmation step gone the primary flow has no second step, so starting it from a push would approve from the
+  // notification; the bridge refuses that for a high-risk card anyway, `open_in_app`.) The card is on screen for a moment
+  // first, and the check is made again when the moment is up, so a card that changed or expired in between is left alone.
   const armedInMemory = useArmedCard() === card.id
   const armedOnce = useRef(false)
-  const latest = useRef<{ live: boolean; high: boolean; busy: boolean; primary: () => Promise<void> } | null>(null)
+  const latest = useRef<{ live: boolean; busy: boolean } | null>(null)
   useEffect(() => {
     if (armedInMemory && !live) spendArm(card.id) // a card that is not live is never armed
     if (!(armPrimary || armedInMemory) || armedOnce.current || !live) return
@@ -194,10 +219,7 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
       spendArm(card.id) // and spent at the store, so a second CardView for this card (a sheet) or a later visit does not re-arm
       const now = latest.current
       if (!now?.live || now.busy) return
-      // In the iPhone app a passkey prompt needs a tap in the page (WebKit refuses one with no user gesture, and a push
-      // Approve was tapped in a native notification). So there a high-risk card only gets focus and waits for the tap.
-      if (now.high && !isNativeShell()) void now.primary()
-      else rootRef.current?.querySelector<HTMLElement>('[data-card-primary]')?.focus()
+      rootRef.current?.querySelector<HTMLElement>('[data-card-primary]')?.focus()
     }, ARM_DELAY_MS)
     return () => clearTimeout(t)
   }, [armPrimary, armedInMemory, live, card.id])
@@ -213,17 +235,21 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
     try {
       await fn()
     } catch (e) {
-      setError(errorCopy(e, agent))
+      setError(errorCopy(e, agent, host))
     } finally {
       setBusy(false)
     }
   }
 
-  const primary = () =>
+  // "Always allow" is offered only on a card of a send kind, and only by a bridge that reads it (an older one would approve
+  // this card and ignore the rest). Without the feature the card is unchanged.
+  const alwaysOffered = useTalos((s) => s.presence.features?.includes(ALWAYS_ALLOW_FEATURE) ?? false)
+  const alwaysLabel = alwaysOffered && isSendKind(card.kind) ? ALWAYS_ALLOW_LABEL[card.kind] : null
+
+  const primary = (opts: { always?: true } = {}) =>
     run(async () => {
-      const stepupToken = card.risk === 'high' ? await client.stepup(`card:${card.id}`) : undefined
-      // Face ID can outlast the card: an expired card is never sent.
-      if (isExpiredNow(card, Date.now())) {
+      // the card may have run out while it sat on screen: an expired card is never sent
+      if (isExpiredNow(card, Date.now() + (client.store.getState().clockOffset ?? 0))) {
         setError('This card expired, so this tap was not sent.')
         return
       }
@@ -231,12 +257,12 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
         action: 'primary',
         payloadHash: hash,
         ...(edits && editedHash ? { edited: edits, editedHash } : {}),
-        ...(stepupToken ? { stepupToken } : {}),
+        ...(opts.always && alwaysLabel ? { always: true as const } : {}),
       })
       setEditing(false)
       setDecided(true)
     })
-  latest.current = { live: live && !decided, high: card.risk === 'high', busy, primary }
+  latest.current = { live: live && !decided, busy }
   const kill = () =>
     run(async () => {
       await client.resolveCard(card.id, { action: 'kill', payloadHash: hash })
@@ -346,7 +372,7 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
             {ask.kind === 'sent' || ask.kind === 'queued' ? (
               <p role="status" data-testid="ask-again-status" className="text-sm text-text-2">
                 {ask.kind === 'queued'
-                  ? `Queued. ${agent} will ask again when your Mac is back.`
+                  ? placeWords(`Queued. ${agent} will ask again when your Mac is back.`, host)
                   : `Asked. ${agent} will send it again.`}
               </p>
             ) : (
@@ -408,13 +434,13 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
 
   // ---- live permission card (docs/CLAUDE-CODE.md C3.2): its own layout, never the generic one ----------------------
   if (card.kind === 'permission')
-    return <PermissionCardLive {...shared} highlighted={highlighted} onAllow={primary} onDeny={kill} />
+    return <PermissionCardLive {...shared} highlighted={highlighted} onAllow={() => primary()} onDeny={kill} />
 
   // ---- live pending card ----------------------------------------------------------------------------------------
   const body = card.body ?? ''
   const bodyLines = body.split('\n')
   const longBody = bodyLines.length > BODY_PREVIEW_LINES || body.length > 600
-  const msLeft = Date.parse(card.expires_at) - now
+  const msLeft = cardExpiryMs(card) - now
   const showCountdown = msLeft <= COUNTDOWN_WINDOW_MS
   const primaryText = edits ? `${card.primary_label} edited` : card.primary_label
 
@@ -629,16 +655,31 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
             {editing ? 'Cancel edit' : 'Edit'}
           </Button>
         ) : null}
-        <Button className="ml-auto" disabled={busy} onClick={primary} data-card-primary="">
+        {alwaysLabel ? (
+          <Button
+            variant="outline"
+            className="ml-auto"
+            disabled={busy}
+            onClick={() => primary({ always: true })}
+            data-card-always=""
+          >
+            {alwaysLabel}
+          </Button>
+        ) : null}
+        <Button
+          className={alwaysLabel ? undefined : 'ml-auto'}
+          disabled={busy}
+          onClick={() => primary()}
+          data-card-primary=""
+        >
           {revealHidden(primaryText)}
-          {card.risk === 'high' ? <span className="sr-only"> (asks you to confirm with Face ID)</span> : null}
         </Button>
       </div>
       <p className="mt-2 font-mono text-xs text-text-2" data-testid="card-expiry">
         {showCountdown
           ? `Expires in ${countdown(msLeft)}`
           : card.origin === 'background'
-            ? `Expires ${formatExpiry(card.expires_at, timeZone, now)} if untouched`
+            ? `Expires ${formatExpiry(new Date(cardExpiryMs(card)).toISOString(), timeZone, now)} if untouched`
             : null}
       </p>
     </article>

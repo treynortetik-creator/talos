@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// Option C worker manager (docs/OPTION-C.md) against a real private tmux server (`talos-test-…`, never `-L talos`) and
 /// the fake claude's `worker.sh`. Nothing here touches the owner's tmux, Telegram or bridge.
@@ -15,6 +16,11 @@ final class WorkerRig: @unchecked Sendable {
   let socket: String
   var env: [String: String]
   var mgr: WorkerManager!
+  /// A wrapper to use instead of the real tmux binary. Takes effect at the next `makeManager()`.
+  var tmuxBin: String?
+  /// The thread sessions' permission hook source (a stand-in app bundle holding the repo's kit hook). Takes effect at the next
+  /// `makeManager()`; nil = none given.
+  var hookSource: WorkerHook.BundleSource? = Rig.hookSource
   private var helpers: [Process] = []
   private let lock = NSLock()
   private var events: [WorkerManager.Event] = []
@@ -22,7 +28,7 @@ final class WorkerRig: @unchecked Sendable {
   init(threads: [String] = ["trip"], maxLive: Int = 3, scenario: String = "worker.sh", extraEnv: [String: String] = [:])
     throws
   {
-    let base = (NSTemporaryDirectory() as NSString).appendingPathComponent("talos-oc-\(UUID().uuidString.prefix(8))")
+    let base = (TestTemp.base as NSString).appendingPathComponent("talos-oc-\(UUID().uuidString.prefix(8))")
     try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
     root = Rig.realPath(base)
     talosHome = root + "/talos-home"
@@ -44,6 +50,8 @@ final class WorkerRig: @unchecked Sendable {
       "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": root + "/home", "LANG": "en_US.UTF-8",
       "FAKE_SCENARIO": scenario, "FAKE_LOG": log, "FAKE_TYPED_LOG": typed, "FAKE_WORKER_ENV_LOG": envLog,
       "FAKE_MAX_LIFETIME": "120",
+      // every fake session has a saved conversation from its start, as one the owner typed in has (`worker-unsaved.sh` saves none)
+      "FAKE_TRANSCRIPTS": "1",
       // must never reach a worker
       "TELEGRAM_BOT_TOKEN": "123:not-a-real-token", "TALOS_APP_BRIDGE": "1", "MCP_PROTOCOL_NEGOTIATION": "legacy",
     ].merging(extraEnv) { _, b in b }
@@ -65,8 +73,9 @@ final class WorkerRig: @unchecked Sendable {
   func makeManager(idle: Double? = nil) -> WorkerManager {
     var o = WorkerManager.Options(
       talosHome: talosHome, agentDir: agentDir, claudePath: Rig.fixtures + "/claude",
-      permissionFlag: "--dangerously-skip-permissions", tmux: Rig.tmuxPath!, tmuxConf: Rig.tmuxConf)
+      permissionFlag: "--dangerously-skip-permissions", tmux: tmuxBin ?? Rig.tmuxPath!, tmuxConf: Rig.tmuxConf)
     o.socket = socket
+    o.permissionHook = hookSource
     o.home = root + "/home"
     o.tick = 0.2
     o.heartbeat = 0.5
@@ -77,10 +86,16 @@ final class WorkerRig: @unchecked Sendable {
     let e = env
     let m = WorkerManager(options: o, probe: LiveSystem(loginEnv: { e }), baseEnv: { e })
     record(m)
+    Self.noBackgroundLook(m)
     mgr?.detach()
     mgr = m
     return m
   }
+
+  /// The fake claude is a bash script, and the real process table would read its own children (a `sleep`, a subshell drawing the
+  /// screen) as background work and hold every idle park. Tests about something else see no background work; the background-work
+  /// tests (WorkerBackgroundTests) run a native-shaped fake against the real table.
+  static func noBackgroundLook(_ m: WorkerManager) { m.procTable = { [] } }
 
   var allEvents: [WorkerManager.Event] { lock.withLock { events } }
 
@@ -114,7 +129,7 @@ final class WorkerRig: @unchecked Sendable {
 
   @discardableResult
   func wait(_ timeout: Double, _ cond: () -> Bool) -> Bool {
-    let until = Date().addingTimeInterval(timeout)
+    let until = Date().addingTimeInterval(timeout * waitScale)
     while Date() < until {
       if cond() { return true }
       usleep(50_000)
@@ -125,7 +140,7 @@ final class WorkerRig: @unchecked Sendable {
   func teardown() {
     mgr?.detach()
     _ = ProcessRunner.run([Rig.tmuxPath!, "-L", socket, "kill-server"], env: env, timeout: 5)
-    unlink("/tmp/tmux-\(getuid())/\(socket)")
+    unlink(Rig.tmuxSocketPath(socket))
     for p in lock.withLock({ helpers }) where p.isRunning { kill(p.processIdentifier, SIGKILL) }
     try? FileManager.default.removeItem(atPath: root)
   }

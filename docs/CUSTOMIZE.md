@@ -27,12 +27,15 @@ an ordinary edit. Anything else in that file needs the owner. Start with [`AGENT
   and `--frieze-warn`, which every stock theme sets. `?theme=default`, or "Reset theme" on the sign-in screen, always gets back to talos.
   The agent can propose a whole custom theme (skill `talos-theme`): `config_propose` path `theme`, checked by the same
   `validateTheme`, shown on a preview card (`ThemePreview.tsx`), written to `theme` only when the owner taps Apply.
-  `talos-app theme reset` on the Mac removes it. `theme.json` in the agent folder is only a draft.
+  `talos-app theme reset` removes it, typed on the computer or run by the agent when you ask it to ("reset the theme"). `theme.json` in the agent folder is only a draft.
 
 ## A setting
 
 - The shape of the owner's settings file: `AgentConfig` in `packages/protocol/src/config.ts`. Add the field there first, with a
   default, so old files still parse.
+
+## A card kind
+
 - The one table: `CARD_KIND_TABLE` in `packages/protocol/src/models.ts`. A kind is one entry with every fact the rules
   need: who mints it (`'agent'` or `'bridge'`), its label and glyph, its icon key, whether the body is editable, whether it
   may have no destination, whether a notification may approve it, whether trust mode still needs the passkey, and whether

@@ -1,10 +1,10 @@
 // Navigation chrome: bottom bar on phones (Threads · Needs you · Settings), sidebar on tablet/desktop.
 
-import { ownValue } from '@talos-app/protocol'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { NavLink, useNavigate } from 'react-router'
+import { ownValue, type ThreadT } from '@talos-app/protocol'
+import { Fragment, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { NavLink, useLocation, useNavigate } from 'react-router'
 import { useTalos } from '../../lib/client.ts'
-import { threadChordLabel } from '../../lib/keymap.ts'
+import { numberedThreads, threadChordLabel } from '../../lib/keymap.ts'
 import { getShell } from '../../lib/native/shell.ts'
 import { freshStatus, freshStatuses } from '../../lib/threadStatus.ts'
 import { useFeature } from '../../lib/v2Client.ts'
@@ -12,6 +12,7 @@ import { cn } from '../../ui/cn.ts'
 import {
   IconBell,
   IconBook,
+  IconBug,
   IconClock,
   IconSearch,
   IconSettings,
@@ -21,10 +22,14 @@ import {
 } from '../../ui/icons.tsx'
 import { Mascot } from '../../ui/Mascot.tsx'
 import { ThreadIcon } from '../../ui/ThreadIcon.tsx'
+import { BUG_LABEL, bugPlacement } from '../bugreport/BugButton.tsx'
+import { openBugReport } from '../bugreport/store.ts'
 import { useAwaitingOwner } from '../cards/useAwaitingOwner.ts'
 import { useSchedulesDot, useSchedulesSync } from '../schedules/sync.ts'
 import { ThreadManageList } from './manage/ThreadManageList.tsx'
+import { SUB_TOGGLE_PAD, SubThreadToggle } from './SubThreadToggle.tsx'
 import { onBeforeSidebarChange, setSidebarCollapsed, toggleSidebar, useSidebarCollapsed } from './sidebarPref.ts'
+import { groupSubThreads, rolledUpUnread, useOpenSubThreads } from './subThreads.ts'
 import { ThreadRowWithSettings } from './ThreadMoreButton.tsx'
 import { ThreadSearchResults, ThreadTools, useThreadSearch } from './ThreadSearch.tsx'
 import { useAgentName, useVisibleThreads } from './useThreads.ts'
@@ -56,6 +61,7 @@ export function useUnreadTotal(): number {
 }
 
 export function BottomBar() {
+  const bugB = bugPlacement() === 'b'
   const needs = useNeedsYouCount()
   const unreadTotal = useUnreadTotal()
   const item = ({ isActive }: { isActive: boolean }) =>
@@ -112,6 +118,18 @@ export function BottomBar() {
         <IconSettings />
         Settings
       </NavLink>
+      {bugB && (
+        <button
+          type="button"
+          data-testid="bug-button"
+          data-no-capture=""
+          onClick={() => void openBugReport()}
+          className={item({ isActive: false })}
+        >
+          <IconBug />
+          {BUG_LABEL}
+        </button>
+      )}
     </nav>
   )
 }
@@ -133,6 +151,12 @@ export function Sidebar() {
   const editing = editingRaw && !collapsed
   const nav = useNavigate()
   const inbox = useTalos((s) => s.threads.find((t) => t.id === 'inbox'))
+  const openSubs = useOpenSubThreads()
+  const pathname = useLocation().pathname
+  // the thread on screen: /t/:thread, or the thread of the card on /card/:id (it shows that thread's view)
+  const cardId = /^\/card\/([^/]+)/.exec(pathname)?.[1]
+  const cardThread = useTalos((s) => (cardId ? s.cards.find((c) => c.id === cardId)?.thread_id : undefined))
+  const current = /^\/t\/([^/]+)/.exec(pathname)?.[1] ?? cardThread
   const link = ({ isActive }: { isActive: boolean }) =>
     cn(
       'flex min-h-11 items-center rounded-button text-sm transition-colors duration-[var(--dur-1)] ease-talos',
@@ -251,23 +275,36 @@ export function Sidebar() {
         {editing && !search.searching && <ThreadManageList tone="chrome" />}
         {!editing &&
           !search.searching &&
-          threads
-            .filter((t) => t.id !== 'inbox')
-            .map((t, i) => {
+          (() => {
+            const list = numberedThreads(threads) // the keyboard and the palette count in the same list
+            const at = new Map(list.map((t, i) => [t.id, i]))
+            const groups = groupSubThreads(list)
+            // the folded rail shows no sub-threads; a parent's chevron sits at the right of its own row, so no other row moves
+            const nested = !collapsed && groups.some((g) => g.subs.length > 0)
+            const threadRow = (t: ThreadT, shown: number, sub: boolean, toggle?: ReactNode) => {
+              const i = at.get(t.id) ?? 0
               const row = (
                 <NavLink
                   key={t.id}
                   to={`/t/${t.id}`}
-                  className={(st) => cn(link(st), !collapsed && 'pr-14')}
+                  className={(st) =>
+                    cn(
+                      link({ isActive: st.isActive || t.id === cardThread }),
+                      !collapsed && (sub ? 'pr-11' : toggle ? SUB_TOGGLE_PAD : 'pr-14'),
+                      sub && 'ml-8',
+                    )
+                  }
                   {...tip(t.name)}
                 >
-                  <ThreadIcon id={t.id} icon={t.icon} color={t.color} size={28} framed />
-                  <span className={collapsed ? 'sr-only' : 'truncate'}>{t.name}</span>
+                  <ThreadIcon id={t.id} icon={t.icon} color={t.color} size={sub ? 20 : 28} framed />
+                  {/* a long name is cut with an ellipsis; the full name shows on hover (the folded rail's link already has it) */}
+                  <span className={collapsed ? 'sr-only' : 'min-w-0 truncate'} title={collapsed ? undefined : t.name}>
+                    {t.name}
+                  </span>
                   {freshStatus(ownValue(statuses, t.id), Date.now())?.state === 'working' && (
                     <span className="sr-only">working</span>
                   )}
-                  {(ownValue(unread, t.id) ?? 0) > 0 &&
-                    count(ownValue(unread, t.id) ?? 0, `${ownValue(unread, t.id)} unread`)}
+                  {shown > 0 && count(shown, `${shown} unread`)}
                   {threadChordLabel(i + 1, false) && <span className="sr-only">{threadChordLabel(i + 1, false)}</span>}
                 </NavLink>
               )
@@ -275,11 +312,35 @@ export function Sidebar() {
               return collapsed ? (
                 row
               ) : (
-                <ThreadRowWithSettings key={t.id} thread={t} tone="chrome">
+                <ThreadRowWithSettings key={t.id} thread={t} tone="chrome" controls={toggle}>
                   {row}
                 </ThreadRowWithSettings>
               )
-            })}
+            }
+            return groups.map((g) => {
+              const hasSubs = g.subs.length > 0
+              // a sub-thread on screen keeps its parent open, whatever was remembered
+              const isOpen =
+                hasSubs && !collapsed && (openSubs.has(g.thread.id) || g.subs.some((x) => x.id === current))
+              const shown = rolledUpUnread(g, unread, isOpen)
+              if (!nested) return <Fragment key={g.thread.id}>{threadRow(g.thread, shown, false)}</Fragment>
+              return (
+                <div key={g.thread.id}>
+                  {threadRow(
+                    g.thread,
+                    shown,
+                    false,
+                    hasSubs ? <SubThreadToggle parent={g.thread} subs={g.subs} open={isOpen} /> : undefined,
+                  )}
+                  {isOpen && (
+                    <div id={`subthreads-${g.thread.id}`}>
+                      {g.subs.map((x) => threadRow(x, ownValue(unread, x.id) ?? 0, true))}
+                    </div>
+                  )}
+                </div>
+              )
+            })
+          })()}
         {!search.searching &&
           (() => {
             const row = (
@@ -325,6 +386,21 @@ export function Sidebar() {
             </span>
             {text('Terminal')}
           </NavLink>
+        )}
+        {bugPlacement() === 'b' && (
+          <button
+            type="button"
+            data-testid="bug-button"
+            data-no-capture=""
+            onClick={() => void openBugReport()}
+            className={cn(link({ isActive: false }), 'w-full')}
+            {...tip(BUG_LABEL)}
+          >
+            <span className="grid size-7 place-items-center">
+              <IconBug width={20} height={20} />
+            </span>
+            {text(BUG_LABEL)}
+          </button>
         )}
         <NavLink to="/settings" className={link} {...tip('Settings')}>
           <span className="grid size-7 place-items-center">

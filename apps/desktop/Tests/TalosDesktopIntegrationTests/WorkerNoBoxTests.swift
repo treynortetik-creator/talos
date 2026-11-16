@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// The pointer is typed only when Claude's input box is on the pane. `worker-blank.sh` writes the hub's ready file FIRST and keeps the
 /// pane blank (a new thread folder's MCP server can connect under the trust dialog, before the UI is up); the box is drawn when the
@@ -9,7 +10,7 @@ import TalosSupervisor
 @Suite("Pointer waits for the input box", .serialized, .enabled(if: Rig.hasTmux))
 struct WorkerNoBoxTests {
   private func rig() throws -> (WorkerRig, String) {
-    let box = NSTemporaryDirectory() + "box-\(UUID().uuidString.prefix(6))"
+    let box = TestTemp.base + "box-\(UUID().uuidString.prefix(6))"
     let r = try WorkerRig(scenario: "worker-blank.sh", extraEnv: ["FAKE_BLANK_BOX": box, "FAKE_BLANK_REPEAT": "1"])
     return (r, box)
   }
@@ -57,7 +58,7 @@ struct WorkerNoBoxTests {
     usleep(3_500_000)  // well past two more timeouts: still one
     #expect(log.all.count == 1, "once per hold, not every timeout: \(log.all)")
     #expect(log.all.first?.thread == "trip")
-    #expect(log.all.first?.text == "trip's session isn't showing its input box yet. Open Terminals \u{2192} trip to see what it's waiting on.")
+    #expect(log.all.first?.text == "This thread's session isn't showing its input box yet. Open this thread in Terminals to see what it's waiting on.")
     #expect(r.typedLines.isEmpty, "\(r.typedLines)")
     #expect(r.up("trip"), "the worker is kept, never stopped for this: \(r.why("trip"))")
     #expect(r.starts.count == 1)

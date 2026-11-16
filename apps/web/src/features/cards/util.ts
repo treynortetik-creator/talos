@@ -1,6 +1,7 @@
 // Small helpers shared by the WP7 screens (cards, home, inbox, integrations, agent config).
 import { INVISIBLE_OR_BIDI } from '@talos-app/protocol'
 import { useEffect, useState } from 'react'
+import { useTalos } from '../../lib/client.ts'
 
 /** Wall-clock `HH:MM` of an ISO timestamp in `timeZone` (the agent config's zone; UTC before the config arrives). */
 export function formatClock(iso: string, timeZone = 'UTC'): string {
@@ -68,6 +69,16 @@ export function useNow(intervalMs = 30_000): number {
     return () => clearInterval(t)
   }, [intervalMs])
   return now
+}
+
+/**
+ * `useNow` on the relay's clock: this device's time moved by what the last `ready` said about the relay's. A card's
+ * `expires_at` is the relay's and the Mac's time, so whether a card has run out (and how long it has left) is asked of
+ * this, never of the device clock, which may be minutes off.
+ */
+export function useRelayNow(intervalMs = 30_000): number {
+  const offset = useTalos((s) => s.clockOffset ?? 0)
+  return useNow(intervalMs) + offset
 }
 
 export function prefersReducedMotion(): boolean {

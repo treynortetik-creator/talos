@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.323
+▝▜██████▀  Fable 5.2 · Claude Max
+ ▝▝   ▝▝   /home/alex/proj
+
+
+❯ Run the gate and tell me what failed.
+
+⏺ Running the gate now.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  You've hit your team's shared budget
+
+  What do you want to do?
+
+    1. Stop and wait for limit to reset
+  ❯ 2. Ask your admin for more usage
+
+  Enter to confirm · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

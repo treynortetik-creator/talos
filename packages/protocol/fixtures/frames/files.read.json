@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "type": "files.read",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T44S",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T44T",
+  "thread_id": "general",
+  "path": "docs/plan.md",
+  "offset": 0,
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "KIbkSAmpzsZEqE-n1H8Rp-0jmYExyNgJZQDsVV9mOSdMlZfZEsJ4IclaMv0Nsf914j07OQaGCmbrmmcWJxVzTg"
+}

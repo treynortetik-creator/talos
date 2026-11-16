@@ -63,4 +63,21 @@ describe('chat frames', () => {
     expect(rig.client.store.getState().messages.general?.[0]?.receipt).toBe('not_delivered')
     expect(rig.client.store.getState().lastSeq).toBe(9)
   })
+
+  it("a delivered receipt carries the message's undo point; a later receipt without one, or the stored copy again, keeps it", async () => {
+    const id = newId('m')
+    rig.relay.sendToApps(
+      mkFrame('message.stored', { client_msg_id: id, message: { ...agentRow(id, 'mine'), author: 'owner', seq: 9 } }),
+    )
+    await waitFor(() => rig.client.store.getState().messages.general?.length === 1, 2000, 'stored')
+    rig.relay.sendToApps(mkFrame('receipt', { message_id: id, state: 'delivered', undo: { state: 'ready' } }))
+    await waitFor(() => rig.client.store.getState().messages.general?.[0]?.undo !== undefined, 2000, 'undo')
+    expect(rig.client.store.getState().messages.general?.[0]?.undo).toEqual({ state: 'ready' })
+    rig.relay.sendToApps(mkFrame('receipt', { message_id: id, state: 'seen' }))
+    // the stored copy again, with an undo point this build cannot read (it parses as absent): the row keeps its own
+    const unreadable = { ...agentRow(id, 'mine'), author: 'owner', seq: 9, undo: { state: 'archived' } }
+    rig.relay.sendToApps(mkFrame('message.stored', { client_msg_id: id, message: unreadable }))
+    await waitFor(() => rig.client.store.getState().messages.general?.[0]?.receipt === 'seen', 2000, 'seen')
+    expect(rig.client.store.getState().messages.general?.[0]?.undo).toEqual({ state: 'ready' })
+  })
 })

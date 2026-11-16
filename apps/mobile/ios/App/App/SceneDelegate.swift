@@ -21,7 +21,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let window else { return }
         let swap = {
             (window.rootViewController as? TalosBridgeViewController)?.retire()
-            window.rootViewController = TalosBridgeViewController()
+            // The owner was looking at a stuck page: the new one says "Reconnecting…" until its first page is up.
+            let next = TalosBridgeViewController()
+            next.startsReconnecting = true
+            window.rootViewController = next
         }
         if let root = window.rootViewController, root.presentedViewController != nil {
             root.dismiss(animated: false, completion: swap)

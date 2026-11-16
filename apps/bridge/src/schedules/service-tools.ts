@@ -52,9 +52,14 @@ export function toolRunStart(this: ScheduleService, runId: string): Promise<Tool
     // Read the approved text AT START, not what the notification carried: if the owner approved new instructions since,
     // the notification's text is no longer approved. Refuse, and offer the job again with the current text (review R4).
     const sp = await d.adapter.sessionPrompt(job.id)
+    // A SKIP before any claim gives the offer back: the runner may offer the job again if it comes due again.
+    const skip = (why: string) => {
+      this.sidecar.releaseOffer(runId, why, this.now())
+      return yes(`SKIP: ${why}`)
+    }
     if (!sp.ok) {
       if (sp.code === 'held') await this.noticeHeldById(job.id)
-      return yes(sp.code === 'held' ? 'SKIP: on hold' : 'SKIP: not runnable in a session')
+      return skip(sp.code === 'held' ? 'on hold' : 'not runnable in a session')
     }
     if (offer?.content_hash && sp.contentHash !== offer.content_hash) {
       await this.offer(job.id, offer.ds || null, offer.fire_at, offer.window_ends, offer.trigger, offer.again)
@@ -69,7 +74,7 @@ export function toolRunStart(this: ScheduleService, runId: string): Promise<Tool
       again: offer?.again ?? false,
       bridgeInstance: this.deps.instance,
     })
-    if (!r.ok) return yes(`SKIP: ${SKIP_WORDS[r.reason] ?? r.reason}`)
+    if (!r.ok) return skip(SKIP_WORDS[r.reason] ?? r.reason)
     // Past this point Chronos holds the claim and its owner file names this instance; the sidecar mirrors it (N11).
     this.sidecar.setInflight(runId, {
       id: job.id,
@@ -292,7 +297,10 @@ export function toolList(this: ScheduleService, id?: string, scope?: WorkerScope
       return yes(detailText(this.withRuns(x.detail)))
     }
     const snap = await this.safeSnapshot()
-    return yes(listText(scope ? scopedSnapshot(snap, scope, (j) => this.inScope(scope, j)) : snap))
+    const table = listText(scope ? scopedSnapshot(snap, scope, (j) => this.inScope(scope, j)) : snap)
+    // the session's own wake_me timers (also rows above, as jobs named "Wake: …"), with their notes
+    const wakes = this.wakeMe.listText(scope ? { kind: 'thread', thread: scope.thread } : { kind: 'main' })
+    return yes(`${table}\n\n${wakes}`)
   })
 }
 

@@ -14,10 +14,13 @@ import {
   ViewId,
   VoiceId,
 } from './ids.ts'
+import { MainState } from './main-state.ts'
 import { MessageRef } from './memory.ts'
+import { PageRef } from './org-pages.ts'
 import { PermissionExplain } from './permission-explain.ts'
 import { ShareContent } from './share.ts'
 import { ThreadSessionMode, ThreadSessionOpts } from './thread-sessions.ts'
+import { UndoMark } from './undo.ts'
 
 /** Thread colour palette keys the app ships (docs/THREADS.md). The schema accepts any short key; see `Thread.color`. */
 export const THREAD_COLORS = [
@@ -52,6 +55,8 @@ export const Thread = z.object({
   voice_context: z.enum(['none', 'recent']).default('recent'), // may live calls seed recent messages to the voice model (6.2)?
   archived: z.boolean().default(false),
   created_at: IsoTs,
+  /** Sub-threads (sub-threads.ts): the thread this one sits under, one level deep. A value this build can't read is none. */
+  parent_id: ThreadId.optional().catch(undefined),
   /** Option C (docs/OPTION-C.md): `dedicated` = this thread's own worker session. Absent = `shared`. */
   session: ThreadSessionMode.optional().catch(undefined),
   /** A value that is present but not readable as session settings reads as the empty MCP list, never as none: see McpAllowRead. */
@@ -148,6 +153,12 @@ export const Message = z.object({
   /** The view an echo row (author `app`, kind `text`) belongs to. */
   app_view_id: ViewId.optional(),
   /**
+   * An org page publish_page put in the thread (docs/ORG-PAGES-SPEC.md): the row is an ordinary agent text message, and
+   * an app that knows pages shows it as a page card. A value that fails to parse reads as absent, so the row stays its
+   * text, and an older app that does not know the field shows the text too.
+   */
+  page: PageRef.optional().catch(undefined),
+  /**
    * A hand-off between Talos sessions (system rows the live bridge writes). The label ("Talos → Trip lead: TASK") is data
    * here, not part of `text`, so the body cannot imitate it. An unreadable value reads as absent.
    */
@@ -160,6 +171,8 @@ export const Message = z.object({
    * the app draws it under a fixed "Heartbeat" label as a quote, never as a Talos notice. Anything but `true` reads as absent.
    */
   heartbeat: z.literal(true).optional().catch(undefined),
+  /** An owner message's undo point (undo.ts), from a bridge that can undo: the "Undo to here" action reads it. */
+  undo: UndoMark,
 })
 
 /** Icon keys a card kind may name. The app maps each key to a drawing; a key with no drawing fails its type check. */
@@ -167,6 +180,7 @@ export type CardIconKey =
   | 'mail'
   | 'chat'
   | 'rocket'
+  | 'arrow-up'
   | 'megaphone'
   | 'card-pay'
   | 'scale'
@@ -175,6 +189,7 @@ export type CardIconKey =
   | 'alert'
   | 'settings'
   | 'keyboard'
+  | 'undo'
 
 /** What the table records for one kind. Every field is required, so a new kind that leaves one out fails to compile. */
 type CardKindFacts = {
@@ -232,6 +247,19 @@ export const CARD_KIND_TABLE = {
     label: 'Deploy',
     glyph: '🚀',
     icon: 'rocket',
+    bodyEditable: false,
+    destinationOptional: false,
+    nativeApprovable: false,
+    highRiskUnderTrust: false,
+    bridgeHandled: false,
+  },
+  // Minted only by the bridge, for a git push the action rules stopped: the agent's own cards (and what it is told about
+  // them) are unchanged, and its "deploy" card for a push is still covered by an older deploy grant.
+  push: {
+    minter: 'bridge',
+    label: 'Push',
+    glyph: '⬆',
+    icon: 'arrow-up',
     bodyEditable: false,
     destinationOptional: false,
     nativeApprovable: false,
@@ -339,6 +367,18 @@ export const CARD_KIND_TABLE = {
     highRiskUnderTrust: false,
     bridgeHandled: true,
   },
+  // "undo to here": put a folder back the way an owner message's undo point saw it (apps/bridge/src/undo); relay feature undo/1
+  undo: {
+    minter: 'bridge',
+    label: 'Undo',
+    glyph: '↶',
+    icon: 'undo',
+    bodyEditable: false,
+    destinationOptional: true,
+    nativeApprovable: false, // it rewrites and may delete files: the app, with the passkey
+    highRiskUnderTrust: true,
+    bridgeHandled: true,
+  },
 } as const satisfies Record<string, CardKindFacts>
 
 export type CardKind = keyof typeof CARD_KIND_TABLE
@@ -401,7 +441,7 @@ export const Card = z.object({
   kill_label: z.string().max(32), // must name the target: "Kill draft", "Kill deploy"
   allow_edit: z.boolean().default(true),
   allow_revise: z.boolean().default(true),
-  risk: z.enum(['low', 'high']), // high = leaves the app / irreversible / spends / deletes -> step-up
+  risk: z.enum(['low', 'high']), // high = leaves the app / irreversible / spends / deletes: a label (wording, never from the lock screen); no passkey
   origin: z.enum(['chat', 'background']),
   payload: z.unknown().optional(), // agent's opaque data; <=64 KiB after JCS
   payload_hash: z.string().regex(/^sha256:[0-9a-f]{64}$/), // = payloadHash(CardBinding)
@@ -448,7 +488,20 @@ export const Card = z.object({
   supersedes: CardId.optional(),
   created_at: IsoTs,
   expires_at: IsoTs,
+  /**
+   * When the card dies on the relay's clock: `expires_at` (the Mac's clock) moved by the offset the relay measured at the
+   * bridge's hello. Set by the relay on what it sends the apps, never by the Mac, and beside the card, not in its binding or
+   * its signature: advisory, so an app shows the buttons for as long as the relay holds the card open. Absent from an older
+   * relay; a value a reader cannot read is unset, and the app falls back to `expires_at`.
+   */
+  relay_expires_at: IsoTs.optional().catch(undefined),
 })
+
+/** The card's expiry as the relay keeps it: `relay_expires_at` when the relay sent one, else `expires_at`. In ms. */
+export function cardExpiryMs(card: Pick<CardT, 'expires_at' | 'relay_expires_at'>): number {
+  const relay = card.relay_expires_at ? Date.parse(card.relay_expires_at) : Number.NaN
+  return Number.isFinite(relay) ? relay : Date.parse(card.expires_at)
+}
 
 /** What the owner approves: everything the card renders, plus the opaque payload (shown under "Details"). */
 export const CardBinding = Card.pick({
@@ -557,17 +610,40 @@ export const ThreadStatus = z.object({
   since: IsoTs,
 })
 
+/**
+ * How many feature names a features list may carry (`hello.client.features`, `ready.features`, `presence.features`).
+ * Parsers before this widening allowed `FEATURES_MAX_V1`, and refuse the whole frame over it, so a list sent to a peer
+ * that may be older stays at or under that: the bridge sends more only to a relay that lists `WIDE_FEATURES_FEATURE`, and
+ * the relay sends an app more only when the app's hello lists it.
+ */
+export const FEATURES_MAX = 64
+export const FEATURES_MAX_V1 = 20
+/** In `ready.features` and an app's `hello.client.features`: this peer reads features lists of up to `FEATURES_MAX`. */
+export const WIDE_FEATURES_FEATURE = 'features-64/1'
+export const FeatureList = z.array(z.string().max(40)).max(FEATURES_MAX)
+
 export const Presence = z.object({
   bridge_online: z.boolean(),
   last_seen: IsoTs.nullable(),
   queue_depth: z.number().int(),
   /** The connected bridge's `hello.client.features`, echoed by the relay (e.g. 'schedules/1'; docs/SCHEDULES.md S1.5). */
-  features: z.array(z.string().max(40)).max(20).optional(),
+  features: FeatureList.optional(),
+  /**
+   * Main's first-start state, from the connected bridge's last health beat (main-state.ts): `signin` is the app's "sign in
+   * on your PC" banner. Only while the bridge is online. Optional, and a word this build does not know is dropped.
+   */
+  main: MainState.optional().catch(undefined),
   /**
    * When `features` was last heard from a live bridge. While the bridge is offline the relay keeps the LAST-KNOWN list,
    * so the app shows Search and Memory as "Needs your Mac" instead of hiding them (docs/V2-FEATURES.md V1).
    */
   features_at: IsoTs.optional(),
+  /**
+   * A bridge was replaced by a newer one with the same key and has not come back since. With `bridge_online` true that is
+   * "two bridges use this key"; with it false the newer one has gone too and the older one has not rejoined yet. Absent from
+   * an older relay.
+   */
+  superseded: z.boolean().optional(),
 })
 
 /** ECDSA P-256 public key as a JWK (device keys). */

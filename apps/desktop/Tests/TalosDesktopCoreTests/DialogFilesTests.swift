@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Testing
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 /// Needs-you prompts: the files between the Mac and the bridge. `workers.json` carries the offered dialog; the bridge's answer
 /// (`dialog-answer.json`, v2, with the owner's signed proof) is read with the hardening of `agent-request.json`; the Mac's result and the
@@ -26,7 +27,7 @@ enum A2Fixtures {
 @Suite("Dialog files")
 struct DialogFilesTests {
   static func tmp() throws -> String {
-    let d = (NSTemporaryDirectory() as NSString).appendingPathComponent("dlgfiles-\(UUID().uuidString.prefix(8))")
+    let d = (TestTemp.base as NSString).appendingPathComponent("dlgfiles-\(UUID().uuidString.prefix(8))")
     try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true)
     return d
   }
@@ -292,5 +293,59 @@ struct DialogFilesTests {
     sup["main_dialog"] = d
     o["supervisor"] = sup
     #expect(try #require(WorkersFile.decode(try JSONSerialization.data(withJSONObject: o))).supervisor.main_dialog == nil)
+  }
+
+  /// The Mac's list of signed taps it has acted on: what it wrote reads back, only the newest are kept, and a link or a file that does
+  /// not fit reads as an empty list.
+  @Test func theUsedProofsListReadsBackKeepsTheNewestAndRefusesALink() throws {
+    let dir = try Self.tmp()
+    let path = dir + "/" + DialogProofsUsed.fileName
+    let many = (0..<(DialogProofsUsed.keep + 10)).map { "d\($0)|sig" }
+    try DialogProofsUsed.encode(many).write(to: URL(fileURLWithPath: path))
+    #expect(DialogProofsUsed.read(path: path) == Array(many.suffix(DialogProofsUsed.keep)))
+    try Data("{\"v\":2,\"used\":[\"a|b\"]}".utf8).write(to: URL(fileURLWithPath: path))
+    #expect(DialogProofsUsed.read(path: path).isEmpty)
+    let link = dir + "/link.json"
+    try DialogProofsUsed.encode(["a|b"]).write(to: URL(fileURLWithPath: dir + "/real.json"))
+    symlink(dir + "/real.json", link)
+    #expect(DialogProofsUsed.read(path: link).isEmpty)
+    #expect(DialogProofsUsed.read(path: dir + "/none.json").isEmpty)
+  }
+
+  /// Review R1-1: a session that fills the used file with junk cannot push a real tap out of the app's own list (the app's memory never
+  /// takes what the file holds), and a tap from an earlier run already in the file stays there while there is room.
+  @Test func junkInTheUsedFileNeverEvictsTheAppsOwnTaps() throws {
+    let dir = try Self.tmp()
+    let path = dir + "/" + DialogProofsUsed.fileName
+    try DialogProofsUsed.encode(["old|run"]).write(to: URL(fileURLWithPath: path))
+    var memory = DialogProofsUsed.record("real|1", memory: [], path: path) { true }.memory
+    #expect(memory == ["real|1"])
+    #expect(DialogProofsUsed.read(path: path) == ["old|run", "real|1"], "the earlier run's tap is kept while there is room")
+    try DialogProofsUsed.encode((0..<DialogProofsUsed.keep).map { "junk|\($0)" }).write(to: URL(fileURLWithPath: path))
+    memory = DialogProofsUsed.record("real|2", memory: memory, path: path) { true }.memory
+    #expect(memory == ["real|1", "real|2"], "\(memory)")
+    #expect(DialogProofsUsed.contains("real|1", memory: memory, path: path), "still used after the file was flooded")
+    let file = DialogProofsUsed.read(path: path)
+    #expect(file.count == DialogProofsUsed.keep && file.suffix(2) == ["real|1", "real|2"], "the app's own come first in the file too")
+  }
+
+  /// A tap is the text the owner's device signed, not how its signature is spelled: a copy whose signature is written another way is the
+  /// same tap, and another tap (signed anew) is not.
+  @Test func aUsedTapIsKnownByWhatWasSignedNotBySignatureSpelling() {
+    let a = DialogProof(signed: "{\"ts\":\"2026-11-10T00:00:00Z\"}", osig: "AAAA", deviceId: "d1", binding: "{}")
+    var respelled = a
+    respelled.osig = "AAAB"
+    var other = a
+    other.signed = "{\"ts\":\"2026-11-10T00:00:01Z\"}"
+    #expect(DialogProofsUsed.key(dialogId: "dlg", proof: a) == DialogProofsUsed.key(dialogId: "dlg", proof: respelled))
+    #expect(DialogProofsUsed.key(dialogId: "dlg", proof: a) != DialogProofsUsed.key(dialogId: "dlg", proof: other))
+    #expect(DialogProofsUsed.key(dialogId: "dlg", proof: a) != DialogProofsUsed.key(dialogId: "dlg2", proof: a))
+  }
+
+  /// The Mac's file name is the protocol's, so the bridge's guard keeps tools off the same file the Mac reads.
+  @Test func theUsedProofsFileIsTheProtocolsWorkerFile() throws {
+    let ts = try String(contentsOf: A2Fixtures.dir.appendingPathComponent("../../src/thread-sessions.ts").standardized, encoding: .utf8)
+    #expect(ts.contains("dialogProofsUsed: '\(DialogProofsUsed.fileName)'"))
+    #expect(ts.contains("mainDialogProofsUsed: '\(DialogProofsUsed.mainFileName)'"))
   }
 }

@@ -44,37 +44,26 @@ describe('applyMergePatch (RFC 7386 appendix A vectors)', () => {
 describe('checkConfigPatch', () => {
   it('accepts every top-level entry of the allowlist', () => {
     for (const k of CONFIG_PATCH_ALLOWLIST.filter((e) => !e.includes('.'))) {
-      // trust_mode is a boolean: an object there is refused on purpose (trust-toggle.test.ts)
-      expect(checkConfigPatch({ [k]: k === 'trust_mode' ? false : {} }), k).toMatchObject({
-        ok: true,
-        touchesWorkEnabled: false,
-      })
+      // trust_mode is a boolean and bug_webhook_url a string: an object there is refused on purpose (trust-toggle.test.ts)
+      const v = k === 'trust_mode' ? false : k === 'bug_webhook_url' ? 'https://hooks.example.com/t' : {}
+      expect(checkConfigPatch({ [k]: v }), k).toMatchObject({ ok: true })
     }
-    expect(checkConfigPatch({ quiet_window: null, timezone: 'UTC', default_thread: 'general' })).toMatchObject({
-      ok: true,
-    })
   })
   it('accepts only the listed leaves under work', () => {
     expect(checkConfigPatch({ mirror: { telegram: 'on' } })).toEqual({ ok: false, path: 'mirror' })
-    expect(checkConfigPatch({ work: { thread: 'work' } })).toEqual({ ok: true, touchesWorkEnabled: false })
-    expect(checkConfigPatch({ work: { label: 'x' } })).toEqual({ ok: true, touchesWorkEnabled: false })
-    expect(checkConfigPatch({ work: { ask_note: 'x' } })).toEqual({ ok: true, touchesWorkEnabled: false })
+    expect(checkConfigPatch({ work: { thread: 'work' } })).toEqual({ ok: true })
+    expect(checkConfigPatch({ work: { label: 'x' } })).toEqual({ ok: true })
+    expect(checkConfigPatch({ work: { ask_note: 'x' } })).toEqual({ ok: true })
     // a key that is still Mac-only
     expect(checkConfigPatch({ work: { surprise: 1 } })).toEqual({ ok: false, path: 'work.surprise' })
   })
-  it('work.retention is allowed but asks for the same step-up as turning a work system on', () => {
-    expect(checkConfigPatch({ work: { retention: 'buffer' } })).toEqual({ ok: true, touchesWorkEnabled: true })
-    expect(checkConfigPatch({ work: { label: 'x', retention: 'passthrough' } })).toEqual({
-      ok: true,
-      touchesWorkEnabled: true,
-    })
+  it('work.retention and work.enabled are plain patches since 2026-11-14 (no work step-up)', () => {
+    expect(checkConfigPatch({ work: { retention: 'buffer' } })).toEqual({ ok: true })
+    expect(checkConfigPatch({ work: { label: 'x', retention: 'passthrough' } })).toEqual({ ok: true })
   })
-  it('reports work.enabled so the caller can demand step-up config:work', () => {
-    expect(checkConfigPatch({ work: { enabled: ['slack'] } })).toEqual({ ok: true, touchesWorkEnabled: true })
-    expect(checkConfigPatch({ work: { enabled: null, thread: 'x' } })).toMatchObject({
-      ok: true,
-      touchesWorkEnabled: true,
-    })
+  it('work.enabled is checked against the known ids, and asks for nothing more', () => {
+    expect(checkConfigPatch({ work: { enabled: ['slack'] } })).toEqual({ ok: true })
+    expect(checkConfigPatch({ work: { enabled: null, thread: 'x' } })).toEqual({ ok: true })
   })
   it('forbids version, rev, unknown keys and deleting a leaf-only section', () => {
     for (const k of ['version', 'rev', 'nope']) expect(checkConfigPatch({ [k]: 1 })).toEqual({ ok: false, path: k })

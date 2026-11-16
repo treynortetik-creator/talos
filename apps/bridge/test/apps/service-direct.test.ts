@@ -162,7 +162,8 @@ describe('app-only tool, read-only: no card, no gesture, no agent', () => {
     }
   })
   it('the 61st call in a minute is rate_limited; the limit is the direct one, not the agent one', async () => {
-    const { a, v } = await boot()
+    // a fake clock that never moves: 61 round trips on a loaded machine can take long enough to roll a real minute
+    const { a, v } = await boot({ clock: fakeClock(T0) })
     let done = 0
     for (let i = 0; i < 61; i++) {
       const f = await a.call(v.viewId, 'peek', {}, { user_gesture: false })
@@ -171,7 +172,7 @@ describe('app-only tool, read-only: no card, no gesture, no agent', () => {
       else expect(r.error?.code).toBe('rate_limited')
     }
     expect(done).toBe(60)
-  })
+  }, 60_000)
   it('an idle session is closed after five minutes (fake clock) and opened again on the next call', async () => {
     const clock = fakeClock(T0)
     const { a, connector, v } = await boot({ clock })

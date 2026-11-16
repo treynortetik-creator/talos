@@ -42,7 +42,13 @@ frame without `osig` and `relay`, ECDSA P-256, checked by the Mac against the pi
   grow that table. Same bytes again, on any
   socket: `error{ref, code:'sig_invalid', message:'That request was already used.'}`, no data, no agent notice.
 - Clock skew: a frame whose signature verifies but whose `ts` is outside the window gets `error{ref, code:'stale'}` "This
-  device's clock is off..." and NO forged-signature notice to the agent or the owner (it is still refused and logged). The
+  device's clock is off..." and NO forged-signature notice to the agent or the owner (it is still refused and logged). A
+  frame signed more than 2 minutes in the Mac's future says whose clock and by about how much (`clockOffMessage`,
+  `apps/bridge/src/inbound-shared.ts`): "This device's clock is about 3 min fast" when its `ts` is also past the relay's
+  `received_at`, "Your Mac's clock is about 5 min slow" when the device and the relay agree and only the Mac differs. The
+  relay's stamp is unsigned and only picks the words. A refused `card.resolve` is put back to pending on the relay for
+  every device, whatever the code, unless the Mac says the card itself is closed (`card_not_pending`, `card_expired`, `permission_closed`);
+  the tapping socket gets the Mac's `error` as it is (`rollbackRejectedResolve`, `apps/relay/src/core/hub-cards.ts`). The
   app avoids it: it learns the relay's time from each `ready` frame's `ts` and signs owner frames with that corrected time
   (offsets under 30 s are ignored, and an offset is clamped to one hour). The Mac checks `ts` against its own clock, so the
   window keeps its width, but the relay picks where in it a signature falls: a relay that lies about the time can hold a
@@ -101,6 +107,14 @@ with its stored frame when it is 7 days old. Just before that sweep the relay re
   so `ready.not_delivered` (the last 200 ids, for 7 days) tells a device that was away. `Message.receipt` accepts the new
   value; an unknown receipt word reads as no receipt, never as a bad message. The row says it did not reach the agent and offers
   Edit and Delete (a voice note: Delete only).
+- A message or voice note the Mac **refuses** (`error{ref}` from the bridge for a frame the relay had already acked: an
+  unknown thread, a signing time outside the window) gets the same `not_delivered` receipt at once, plus one
+  `author:'system'` row in its thread with the Mac's code and words (`refusedMessageNote`), stored and sent to every
+  device. The row's id is `m_<id of the error frame>`; the sender's own app, which still receives the `error`, writes the
+  same row under the same id, so a relay that only forwards the error still leaves the sender with a failed row and a
+  reason. Once per message (`rf:<message id>` in the seen ids). The bridge marks such a frame consumed only once its
+  refusal went out on a live socket; otherwise the relay replays the frame and it is refused again. A replay of a frame
+  the bridge has already refused gets the refusal again (by its stored code) before the `consumed` ack.
 - Card decision or settings change: a plain `author:'system'` row (`message.stored`) in the card's thread, or the default
   thread. There is no row of the owner's to put a receipt on. A card decision whose card the Mac did decide (its
   `card.update` carried a resolution) gets no row and no day-6 warning, whatever became of the ack. The retention sweep keeps a decided
@@ -147,6 +161,19 @@ with its stored frame when it is 7 days old. Just before that sweep the relay re
   the window starts instead (the hour before its expiry would be quiet). The web push carries `renotify` (the reminder shares
   its card's tag; without it the browser would replace the unseen first banner silently). The "already reminded" flag is `core_state.card_reminded:<card id>`, so a
   relay restart repeats nothing. Sent by `core/card-reminder.ts`, not by the hub.
+- **`session_waiting`.** A thread's session, or Main's own (`workers.status` `main_needs_you`, from the Mac app's
+  `main-restart-check.json` while it is fresh; its push opens the default thread and a pending card there covers it; the
+  Mac writes `resets_at` for Main's usage limit too, so it gets the same soon-reset skip and shorter life), that
+  has waited on the owner (a dialog at the Mac, a usage limit, sign-in: `workers.status` `needs_you`) for 10 minutes (`SESSION_WAIT_PUSH_MS`) gets one push, "A session in {thread} is waiting on
+  you", that opens the thread. Several that come due in the same look are one push, "{n} sessions are waiting on you", opening
+  Home. Once per wait: `core_state.session_waited:<thread>:<since>`, so a relay restart repeats nothing and a new wait is a new
+  notice. Not while the Mac's supervisor is not reporting, not for a thread with a pending card (the card already pushed), not
+  for a usage limit that resets within 10 minutes, not for a thread set to "off". A needs-you push for per-thread rules; the
+  master switch and the quiet window apply, and a push held back is retried while the wait lasts (it is not counted in the
+  quiet summary). Every service refusing it is retried after 1, 2, 4 and 8 minutes, five sends in all. Fixed text only; the
+  web push carries `renotify` (it shares its thread's tag with the reply banner before it). Its kind is `card` with no card
+  id: high urgency, time-sensitive on iPhone, and the Open category only. Sent by
+  `core/session-wait.ts`.
 - **`quiet_summary`.** The quiet window drops chat and card pushes. The relay counts what it dropped (`core_state.quiet_held`:
   a reply count per thread and the ids of the cards) and, once the window is over, sends one push such as "3 replies, 1 card
   waiting". A reply the owner read before the window ended is not counted (the count is capped by each thread's unread now),
@@ -214,6 +241,15 @@ capabilities ride elsewhere (the agents panel's in `AgentsSnapshot.can_stop`).
 `worker_unavailable`, `worker_cap`, `usage_governor`, `worker_folder_claimed`, `needs_mac` ([OPTION-C.md](OPTION-C.md)).
 WebSocket close codes: 4400 bad frame, 4401 unauthorized, 4403 bad origin, 4408 handshake timeout, 4409 superseded,
 4413 frame too large, 4429 rate limited.
+
+**Two bridges, one key.** The relay keeps one bridge socket. A second authed `hello` replaces the first, which is closed with
+4409. A bridge that was replaced asks back in with `hello.standby: true`, only when the relay's
+`ready.features` listed `bridge-standby/1` (an older relay would ignore the flag and replace the live bridge). While another
+bridge holds the slot the relay closes the standby socket with 4409 and changes nothing; with the slot empty it is an
+ordinary hello. `presence.superseded` (and `GET /api/status` `bridge.superseded`) is true from the first standby hello the
+relay turns away (a replaced bridge that is still alive, so two bridges really share the key; a bridge that only redialled
+over its own dead socket never asks again) until the next hello that finds the slot empty, so the app can say "bridge superseded" while it is offline and
+"another bridge connected" while it is not. The relay logs one warning when the mark is first set.
 
 When a session has ended, the 401 body (`{ "error": "unauthorized", "reason": ... }`) and the 4401 close reason carry
 why, when the relay knows: `expired` (idle or past its limit), `revoked`, `logged_out`, `logged_out_everywhere` or

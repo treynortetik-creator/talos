@@ -8,11 +8,11 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   type CardT,
+  cardExpiryMs,
   EXPLAIN_FAILED_TEXT,
   type ExplainShown,
   explainChip,
   explainShown,
-  PERMISSION_HIDDEN_WARNING,
   PERMISSION_MAYBE_ANSWERED,
   PERMISSION_MAYBE_ANSWERED_MS,
   PERMISSION_TOO_LONG_BODY,
@@ -47,15 +47,19 @@ type Props = {
   onDeny: () => void
 }
 
+/** The placeholder an older bridge put in a too-long card's body (before 2026-11-13). */
+const LEGACY_TOO_LONG_BODY = 'This call is too long to show here whole. Approve or deny it at the Mac.'
+
 export function PermissionCardLive(props: Props) {
   const { card, header, titleId, rootRef, pulse, highlighted, hash, now, busy, error, timeZone, onDeny } = props
   const allowable = permissionCardAllowsPrimary(card)
   const [open, setOpen] = useState(Boolean(highlighted) && allowable)
   const summary = card.fields.find((f) => f.key === 'summary')
   const maybeAnswered = now - Date.parse(card.created_at) >= PERMISSION_MAYBE_ANSWERED_MS
-  const reason = card.warning ?? (allowable ? null : PERMISSION_HIDDEN_WARNING)
+  const reason = card.warning ?? (allowable ? null : "This card can't approve the call.")
   const body = card.body ?? ''
-  const showable = body !== '' && body !== PERMISSION_TOO_LONG_BODY
+  // an older bridge's too-long card carries a placeholder sentence, not the call: never shown as if it were the call
+  const showable = body !== '' && body !== PERMISSION_TOO_LONG_BODY && body !== LEGACY_TOO_LONG_BODY
   const preview = [...body].length > PREVIEW_CHARS ? `${[...body].slice(0, PREVIEW_CHARS).join('')}…` : body
   const shown = explainShown(card.explain, card.created_at, now)
   const mismatch = shown.kind === 'ready' && shown.explain.mismatch
@@ -126,14 +130,7 @@ export function PermissionCardLive(props: Props) {
           {call}
         </details>
       )}
-      {summary && !allowable ? (
-        <div data-testid="permission-summary" className="mt-3 text-sm">
-          <p className="text-xs font-semibold uppercase tracking-[var(--tracking-caps)] text-text-2">{summary.label}</p>
-          <p className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere] break-all text-text">
-            {revealHidden(summary.value)}
-          </p>
-        </div>
-      ) : null}
+      {summary && !allowable ? <SummaryBlock label={summary.label} value={summary.value} /> : null}
       {reason ? (
         <p role="status" className="mt-3 flex items-start gap-1.5 text-sm text-warn">
           <IconAlert width={16} height={16} className="mt-0.5 shrink-0" />
@@ -162,7 +159,7 @@ export function PermissionCardLive(props: Props) {
         ) : null}
       </div>
       <p className="mt-2 font-mono text-xs text-text-2" data-testid="card-expiry">
-        Expires {formatClock(card.expires_at, timeZone)} if untouched
+        Expires {formatClock(new Date(cardExpiryMs(card)).toISOString(), timeZone)} if untouched
       </p>
       {open && allowable ? (
         <ApprovalSheet {...props} summaryValue={summary?.value} onClose={() => setOpen(false)} />
@@ -202,6 +199,23 @@ function ExplainBlock({ shown }: { shown: ExplainShown }) {
             {revealHidden(shown.explain.sentence)}
           </p>
         </div>
+      )}
+    </div>
+  )
+}
+
+// A call Claude gave no description for (empty, or only spaces) says so, never a bare heading. The protocol already shows a
+// line break or tab as a mark (⏎ ⇥) and an invisible character as [U+XXXX], so any other value has something to show.
+const NO_DESCRIPTION_TEXT = 'No description given'
+function SummaryBlock({ label, value }: { label: string; value: string }) {
+  const blank = /^ *$/.test(value)
+  return (
+    <div data-testid="permission-summary" className="mt-3 text-sm">
+      <p className="text-xs font-semibold uppercase tracking-[var(--tracking-caps)] text-text-2">{label}</p>
+      {blank ? (
+        <p className="mt-1 italic text-text-2">{NO_DESCRIPTION_TEXT}</p>
+      ) : (
+        <p className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere] break-all text-text">{revealHidden(value)}</p>
       )}
     </div>
   )
@@ -283,7 +297,8 @@ function ApprovalSheet({
       window.removeEventListener('resize', measure)
     }
   }, [scrollEl, titleEl, tailEl, body, vv.width])
-  const canAllow = seen && !zoomed && !sideways
+  // running off the side is a hint, not a refusal: the call scrolls sideways, and a tap still approves it
+  const canAllow = seen && !zoomed
   return (
     <DialogPrimitive.Root open onOpenChange={(o) => !o && onClose()}>
       <DialogPrimitive.Portal>
@@ -322,6 +337,13 @@ function ApprovalSheet({
             aria-label="The whole call"
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-3 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]"
           >
+            {card.warning ? (
+              // what is not shown (or an older Claude Code), where Allow is tapped: a note, never a refusal
+              <p data-testid="approval-note" role="status" className="mb-2 flex items-start gap-1.5 text-sm text-warn">
+                <IconAlert width={16} height={16} className="mt-0.5 shrink-0" />
+                {revealHidden(card.warning)}
+              </p>
+            ) : null}
             <ExplainBlock shown={shown} />
             <p className="mt-2 text-xs font-semibold uppercase tracking-[var(--tracking-caps)] text-text-2">The call</p>
             <pre
@@ -330,31 +352,22 @@ function ApprovalSheet({
             >
               {revealHidden(body)}
             </pre>
-            {summaryValue !== undefined ? (
-              <div data-testid="permission-summary" className="mt-3 text-sm">
-                <p className="text-xs font-semibold uppercase tracking-[var(--tracking-caps)] text-text-2">
-                  Claude's summary
-                </p>
-                <p className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere] break-all text-text">
-                  {revealHidden(summaryValue)}
-                </p>
-              </div>
-            ) : null}
+            {summaryValue !== undefined ? <SummaryBlock label="Claude's summary" value={summaryValue} /> : null}
             <div ref={setEndEl} data-testid="approval-end" aria-hidden className="h-px" />
           </section>
           <div className="border-t border-line pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]">
             <TailLine body={body} elRef={setTailEl} />
-            {sideways ? (
-              <p data-testid="approval-hint" className="mt-2 text-sm text-text-2">
-                Part of this call runs off the side of the screen, so it can't be approved here; answer at the Mac.
-              </p>
-            ) : !seen ? (
+            {!seen ? (
               <p data-testid="approval-hint" className="mt-2 text-sm text-text-2">
                 Scroll to the end of the call to enable Allow.
               </p>
             ) : zoomed ? (
               <p data-testid="approval-hint" className="mt-2 text-sm text-text-2">
                 Zoom back out to enable Allow.
+              </p>
+            ) : sideways ? (
+              <p data-testid="approval-hint" className="mt-2 text-sm text-text-2">
+                Part of this call runs off the side of the screen: scroll sideways to see all of it.
               </p>
             ) : null}
             {error ? (
@@ -373,7 +386,6 @@ function ApprovalSheet({
                 onClick={onAllow}
               >
                 {mismatch ? 'Allow anyway' : card.primary_label}
-                {card.risk === 'high' ? <span className="sr-only"> (asks you to confirm with Face ID)</span> : null}
               </Button>
             </div>
           </div>

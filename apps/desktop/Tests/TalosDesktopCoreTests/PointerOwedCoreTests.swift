@@ -56,6 +56,10 @@ struct PointerOwedConstantsTests {
     #expect(try value("CLAIM_DEADLINE_MS") / 1000 == PointerTyper.claimDeadline)
     #expect(try value("CLAIM_DEADLINE_COLD_MS") / 1000 == PointerTyper.claimDeadlineCold)
     #expect(ts.contains("export const WORKER_POINTER_TEXT = '\(PointerTyper.text)'"))
+    // the longest a message waits for its claim is a hand-off's, in the bridge
+    let handoff = try String(
+      contentsOf: here.appendingPathComponent("../../../../apps/bridge/src/worker/handoff.ts").standardized, encoding: .utf8)
+    #expect(handoff.contains("export const HANDOFF_CLAIM_MS = \(Int(PointerTyper.longestClaim / 60)) * 60_000"), "the hand-off window moved")
   }
 
   private func screen(_ box: [String]) -> [String] {
@@ -76,5 +80,17 @@ struct PointerOwedConstantsTests {
     #expect(PointerTyper.boxText(rows: screen(["\u{276F}\u{00A0}Talos: new message"])) != PointerTyper.text)
     #expect(PointerTyper.boxText(rows: screen(["\u{276F}\u{00A0} "])) == "")
     #expect(PointerTyper.boxText(rows: ["no box here"]) == nil)
+  }
+
+  /// `#{pane_in_mode}` as the pointer typer reads it: `0` is no mode, `1` is a mode, and anything else was not read. Only a `0`
+  /// lets a key through, so nothing but `0` may come out as false.
+  @Test func thePaneModeIsReadStrictly() {
+    #expect(TmuxCommands.parseInMode("0\n") == false)
+    #expect(TmuxCommands.parseInMode("1\n") == true)
+    #expect(TmuxCommands.parseInMode("0") == false)
+    #expect(TmuxCommands.parseInMode(" 1 \n") == true)
+    for unread in ["", "\n", "00", "01", "10", "2", "-0", "0x", "yes", "0\n0\n", "0\n1\n", "#{pane_in_mode}", "no such pane"] {
+      #expect(TmuxCommands.parseInMode(unread) == nil, "\(unread.debugDescription)")
+    }
   }
 }

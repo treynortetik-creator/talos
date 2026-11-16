@@ -1,0 +1,14 @@
+{
+  "name": "talos-local",
+  "description": "The Talos kit releases installed on this machine.",
+  "owner": {
+    "name": "Talos"
+  },
+  "plugins": [
+    {
+      "name": "talos",
+      "source": "./current/talos-kit",
+      "description": "The Talos zone: memory hooks, safety guards, skills, agents and helper scripts for a Talos agent."
+    }
+  ]
+}

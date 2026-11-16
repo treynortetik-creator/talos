@@ -41,9 +41,16 @@
       "ct": "lWFkvU0RRE6fkr7z1SEKY_VBEl2eKXevQS1_JecSbDh2XOTz8tXnnNl2OGlz57V_TSRF7UYPafx0f_KaX08Wjyq38TtQA56L2IGrZnDU3RxR5iQq42TnD2JsvDI6cG9vQzgI-vsAEYKtzRQhfVAObSTZMByQbXZnjXvz3mHrzFj4tXMKMEl67NPmNnlD2Hw44I-EyFXkuUp7NYTv4RcHn18_k0-Adq1OcNlZzleOcF8smEIjpGPqZIj5qXTfrOr0z7YrKwvRswvVNeHlz7tA5taEWuW9UMRZhXRO4wlIJVz27bGjz88xwpLB1QH5FtNU_evgN6l4qFdjlJXoN7swWtVUxLl2hfZu1NuZZgjP2KRcOa77grspFpVhQzjcm8vq_g"
     },
     "notice": "Archive old drafts?\nMoves 12 drafts to Archive\nOnly drafts older than 90 days.\nButton: Archive",
-    "shown": "sha256:62449315a5c67acaca8ba9093f531ef22ec8357c1f09fad1dc5d7b06b7eff942",
+    "shown": "sha256:d252aa61cdcd280f7b50b32369c1c7e3be4630a75d8c8ef6dad5aae4feb7953d",
     "payload_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "subtitle": "General"
+    "subtitle": "General",
+    "title": "Talos"
+  },
+  "shown_wide": {
+    "title": "Talos",
+    "subtitle": "Café ✓ 🚀",
+    "body": "Déjà vu — 3 drafts",
+    "shown": "sha256:3c02798ffbfcc8f10d40e4873a29a7b88e0e41f0255b5e3a1b65b3cc98801f0a"
   },
   "act": {
     "id": "01JBF3V7Q8K2M4N6P8R0S2T4V6",

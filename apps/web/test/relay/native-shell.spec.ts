@@ -32,7 +32,7 @@ test.describe('desktop shell', () => {
     const { link } = harness.armEnroll()
     await page.goto(link)
     await expect(page.getByRole('heading', { name: 'Set up Talos on this device' })).toBeVisible()
-    await expect(page.getByText('Your Mac asks you to confirm this device.')).toBeVisible()
+    await expect(page.getByText('your computer asks you to confirm this device.')).toBeVisible()
     await page.getByRole('button', { name: 'Continue', exact: true }).click()
     await expect(page.getByTestId('fingerprint')).toBeVisible()
     await waitUntil(() => harness.devices.size === 1, 'device registered')
@@ -88,7 +88,7 @@ test('a normal browser page that only defines the handler (no UA suffix) stays o
   const { link } = harness.armEnroll()
   await page.goto(link)
   await expect(
-    page.getByText('You will create a passkey, then your Mac asks you to confirm this device.'),
+    page.getByText('You will create a passkey, then your computer asks you to confirm this device.'),
   ).toBeVisible()
   expect(await page.evaluate(() => 'talosNative' in window)).toBe(false)
 })

@@ -46,14 +46,22 @@ async function approvedConfigCard(): Promise<string> {
 }
 
 test('the Schedules start-up sweep never takes a settings card (it would say "Check it in Schedules")', async () => {
-  h = await startSched({ relay: { relayFeatures: ['schedules/1', CONFIG_PROPOSE_FEATURE] } })
+  // the lock on: the owner's ask makes a card (this is about a card cut off by a restart)
+  h = await startSched({
+    relay: { relayFeatures: ['schedules/1', CONFIG_PROPOSE_FEATURE] },
+    config: (c) => ({ ...c, settings_lock: true }),
+  })
   const id = await approvedConfigCard()
   await (h.bridge.ctx.schedules as unknown as { failStuckCards(): Promise<void> }).failStuckCards()
   expect(h.bridge.ctx.ledger.get(id)?.state).toBe('resolved')
 })
 
 test('with the scheduler on, an approved settings card cut off by a restart fails in settings words, not schedule words', async () => {
-  h = await startSched({ relay: { relayFeatures: ['schedules/1', CONFIG_PROPOSE_FEATURE] } })
+  // the lock on: the owner's ask makes a card (this is about a card cut off by a restart)
+  h = await startSched({
+    relay: { relayFeatures: ['schedules/1', CONFIG_PROPOSE_FEATURE] },
+    config: (c) => ({ ...c, settings_lock: true }),
+  })
   const id = await approvedConfigCard()
   h = await restartBridge(h)
   await eventually(() => expect(h.bridge.ctx.ledger.get(id)?.state).toBe('failed'), 10_000)

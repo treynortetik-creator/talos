@@ -48,10 +48,13 @@ if [ -z "$RELAY_URL" ] && [ ! -f "$HOME_DIR/bridge.env" ]; then
   echo "--relay-url is required on the first install" >&2
   exit 2
 fi
-command -v bun >/dev/null 2>&1 || { echo "bun is not installed (need >= 1.3.11): https://bun.sh" >&2; exit 1; }
+command -v bun >/dev/null 2>&1 || { echo "bun is not installed: curl -fsSL https://bun.sh/install | bash (Talos needs Bun 1.4.4 or newer)" >&2; exit 1; }
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CLI=(bun run "$BRIDGE_DIR/src/cli.ts")
+# too old: the words and the way to upgrade come from src/bun-floor.ts, before anything is written (an empty version, from a
+# bun that printed none, makes it check the running bun itself)
+bun --no-env-file "$BRIDGE_DIR/src/bun-floor.ts" "$(bun --version 2>/dev/null)" || exit 1
+CLI=(bun --no-env-file run "$BRIDGE_DIR/src/cli.ts")
 export TALOS_APP_HOME="$HOME_DIR"
 # The account's real home (from the user database), not $HOME: a run with a fake HOME must not pass for the real default.
 REAL_HOME="$(eval "printf '%s' ~$(id -un)" 2>/dev/null || true)"
@@ -198,7 +201,7 @@ echo
 case "$WRAP_STATE" in
   written)
     echo "put a talos-app command at $WRAP_DIR/talos-app"
-    if "$WRAP_DIR/talos-app" help >/dev/null 2>&1; then echo "checked: $WRAP_DIR/talos-app runs"; else echo "WARNING: $WRAP_DIR/talos-app did not run; try: bun run $BRIDGE_DIR/src/cli.ts help" >&2; fi
+    if "$WRAP_DIR/talos-app" help >/dev/null 2>&1; then echo "checked: $WRAP_DIR/talos-app runs"; else echo "WARNING: $WRAP_DIR/talos-app did not run; try: bun --no-env-file run $BRIDGE_DIR/src/cli.ts help" >&2; fi
     if [ "$WRAP_ON_PATH" = 1 ]; then
       FOUND="$(command -v talos-app || true)"
       if [ -n "$FOUND" ] && [ "$FOUND" != "$WRAP_DIR/talos-app" ]; then
@@ -217,20 +220,20 @@ case "$WRAP_STATE" in
       echo "WARNING: $WRAP_DIR/talos-app already points at a different TALOS_APP_HOME ($WRAP_OLD_HOME), so it was left alone." >&2
     fi
     echo "NOT changed: your talos-app command. This install uses $HOME_DIR from $BRIDGE_DIR. To repoint the command here, run this again with --replace-wrapper."
-    echo "Run the CLI for this install with: TALOS_APP_HOME=$(shq "$HOME_DIR") bun run $BRIDGE_DIR/src/cli.ts <command>"
+    echo "Run the CLI for this install with: TALOS_APP_HOME=$(shq "$HOME_DIR") bun --no-env-file run $BRIDGE_DIR/src/cli.ts <command>"
     ;;
   unwritable)
     echo "NOT installed: could not write $WRAP_DIR/talos-app (is $WRAP_DIR writable?). Everything else was set up."
-    echo "Run the CLI with: TALOS_APP_HOME=$(shq "$HOME_DIR") bun run $BRIDGE_DIR/src/cli.ts <command>   or pass --bin-dir <a folder you can write to> and run this again."
+    echo "Run the CLI with: TALOS_APP_HOME=$(shq "$HOME_DIR") bun --no-env-file run $BRIDGE_DIR/src/cli.ts <command>   or pass --bin-dir <a folder you can write to> and run this again."
     ;;
   blocked)
     echo "NOT installed: $WRAP_DIR/talos-app already exists and was not written by this script (left alone)."
-    echo "Run the CLI with: TALOS_APP_HOME=$(shq "$HOME_DIR") bun run $BRIDGE_DIR/src/cli.ts <command>   or pass --bin-dir <another folder> and run this again."
+    echo "Run the CLI with: TALOS_APP_HOME=$(shq "$HOME_DIR") bun --no-env-file run $BRIDGE_DIR/src/cli.ts <command>   or pass --bin-dir <another folder> and run this again."
     ;;
 esac
 
 # When the wrapper is not there (blocked or unwritable), the steps below use the long form so they still work.
-if [ "$WRAP_STATE" = written ]; then TA="talos-app"; else TA="TALOS_APP_HOME=$(shq "$HOME_DIR") bun run $BRIDGE_DIR/src/cli.ts"; fi
+if [ "$WRAP_STATE" = written ]; then TA="talos-app"; else TA="TALOS_APP_HOME=$(shq "$HOME_DIR") bun --no-env-file run $BRIDGE_DIR/src/cli.ts"; fi
 cat <<MSG
 
 Next:

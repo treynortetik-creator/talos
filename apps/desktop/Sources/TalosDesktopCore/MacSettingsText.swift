@@ -14,12 +14,16 @@ public enum MacSettingsText {
   public static let generalPath = "Mac settings \u{2192} General"
   public static let permissionsPath = "Mac settings \u{2192} Permissions"
 
+  public static let autoUpdateTitle = "Update Talos automatically"
+  public static let autoUpdateHelp =
+    "Installs each new signed release by itself, only while no session is working, and says so in your default thread. Off: Talos never looks for one."
+
   public enum Setting: String, CaseIterable, Sendable {
     case agentFolder, launchCommand, host, notifyThread
     case autoRestart, autoConfirmRestart, startSessionOnLaunch, openTerminalOnDialog
     case relayAddress, talosAppCommand
     case composeHotkey
-    case startAtLogin, dockIcon, keepAwake, companion, openWindowAtLaunch
+    case startAtLogin, dockIcon, keepAwake, companion, openWindowAtLaunch, autoUpdate
   }
 
   /// When a change takes effect. Never empty: a setting that applies at once says "Applies now."
@@ -41,6 +45,7 @@ public enum MacSettingsText {
     case .keepAwake: return "Applies now."
     case .companion: return "Applies now."
     case .openWindowAtLaunch: return "Applies the next time Talos starts."
+    case .autoUpdate: return "Applies now. Off stops a check or a waiting update; an update already being put in place finishes."
     }
   }
 

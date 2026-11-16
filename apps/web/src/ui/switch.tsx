@@ -6,8 +6,8 @@ export function Switch({ className, ...props }: ComponentProps<typeof SwitchPrim
   return (
     <SwitchPrimitive.Root
       className={cn(
-        // 48 x 28 drawn, 48 x 44 to the finger: the ::before pads the hit area without moving anything.
-        "relative inline-flex h-7 w-12 shrink-0 before:absolute before:inset-x-0 before:-inset-y-[9px] before:content-[''] items-center rounded-pill border border-line bg-surface-2 transition-colors duration-[var(--dur-1)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus data-[state=checked]:bg-accent",
+        // A switch that cannot be used looks it (as a Button does). 48 x 28 drawn, 48 x 44 to the finger: the ::before pads the hit area without moving anything.
+        "relative inline-flex h-7 w-12 shrink-0 before:absolute before:inset-x-0 before:-inset-y-[9px] before:content-[''] items-center rounded-pill border border-line bg-surface-2 transition-colors duration-[var(--dur-1)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus data-[state=checked]:bg-accent disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       {...props}

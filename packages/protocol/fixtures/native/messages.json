@@ -660,6 +660,146 @@
         ],
         "additionalProperties": false
       }
+    },
+    "shell_pane": {
+      "sample": {
+        "type": "shell_pane",
+        "thread_id": "general",
+        "rect": {
+          "x": 760,
+          "y": 420,
+          "width": 520,
+          "height": 360
+        }
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "shell_pane"
+          },
+          "thread_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          },
+          "rect": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20000
+                  },
+                  "y": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20000
+                  },
+                  "width": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20000
+                  },
+                  "height": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20000
+                  }
+                },
+                "required": [
+                  "x",
+                  "y",
+                  "width",
+                  "height"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cwd": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^\\/[^\\u0000-\\u001f\\u007f]*$"
+          }
+        },
+        "required": [
+          "type",
+          "thread_id",
+          "rect"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "shell_pane_close": {
+      "sample": {
+        "type": "shell_pane_close",
+        "thread_id": "general"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "shell_pane_close"
+          },
+          "thread_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          }
+        },
+        "required": [
+          "type",
+          "thread_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "capture_ack": {
+      "sample": {
+        "type": "capture_ack",
+        "req": "r12",
+        "ok": false,
+        "reason": "not_signed_in"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "capture_ack"
+          },
+          "req": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,32}$"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "not_signed_in",
+              "bad_image",
+              "no_thread"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "req",
+          "ok"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "native_to_web": {
@@ -1062,6 +1202,81 @@
           "type",
           "req",
           "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "capture_drop": {
+      "sample": {
+        "type": "capture_drop",
+        "req": "r12",
+        "thread_id": null,
+        "mime": "image/png",
+        "data_b64": "iVBORw0KGgo=",
+        "width": 1280,
+        "height": 800,
+        "mode": "region"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "capture_drop"
+          },
+          "req": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,32}$"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,31}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime": {
+            "type": "string",
+            "const": "image/png"
+          },
+          "data_b64": {
+            "type": "string",
+            "maxLength": 11184812,
+            "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2560
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2560
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "full",
+              "window",
+              "region"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "req",
+          "thread_id",
+          "mime",
+          "data_b64",
+          "width",
+          "height",
+          "mode"
         ],
         "additionalProperties": false
       }

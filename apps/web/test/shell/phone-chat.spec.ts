@@ -75,6 +75,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await open(page)
       await seed(page, 30)
       await page.getByRole('button', { name: 'Attach' }).click()
+      await expect(page.getByRole('dialog', { name: 'Attach' })).toBeVisible() // the menu is announced by name
       const chooser = page.waitForEvent('filechooser')
       await page.getByTestId('attach-photos').click()
       await (await chooser).setFiles({ name: 'IMG_8114.png', mimeType: 'image/png', buffer: Buffer.from('x') })

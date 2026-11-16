@@ -5,11 +5,11 @@ import { expect, test } from '../helpers/fixtures.ts'
 import { agentReply, newId, openSignedIn } from '../helpers/util.ts'
 
 type H = { relay: { sendToApps(f: Record<string, unknown>): void } }
-/** Waits for `ready` (the Mac-offline banner from FakeRelay's presence), then marks the Mac online. */
+/** Waits for `ready` (the offline banner from FakeRelay's presence: no bridge, so no host and "your computer"), then marks it online. */
 async function online(h: H, page: import('@playwright/test').Page) {
-  await expect(page.getByText(/Your Mac is offline/)).toBeVisible()
+  await expect(page.getByText(/Your computer is offline/)).toBeVisible()
   h.relay.sendToApps(mkFrame('presence', { bridge_online: true, last_seen: new Date().toISOString(), queue_depth: 0 }))
-  await expect(page.getByText(/Your Mac is offline/)).toHaveCount(0)
+  await expect(page.getByText(/Your computer is offline/)).toHaveCount(0)
 }
 
 // F-UX1 (HIGH): opening the installed app with no network leaves the splash mascot up forever.

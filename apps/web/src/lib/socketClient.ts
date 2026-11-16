@@ -25,8 +25,12 @@ import { createSocketRequests } from './socket-requests.ts'
 import { createSocketState } from './socket-state.ts'
 import type { SocketClient, SocketClientOptions } from './socket-types.ts'
 import { createSocketUpload } from './socket-upload.ts'
+import { createSocketAgentsMd } from './socketAgentsMd.ts'
+import { createSocketBugs } from './socketBugs.ts'
+import { createSocketFiles } from './socketFiles.ts'
 import { createSocketFolders } from './socketFolders.ts'
 import { createSocketMemory } from './socketMemory.ts'
+import { createSocketMemoryFolders } from './socketMemoryFolders.ts'
 import { createSocketSchedules, NO_ANSWER_MS } from './socketSchedules.ts'
 import { createSocketSearch } from './socketSearch.ts'
 import { createSocketSpeak } from './socketSpeak.ts'
@@ -107,6 +111,17 @@ export function createSocketClient(opts: SocketClientOptions): SocketClient {
   const memory = createSocketMemory({ ask: (frame, answer) => c.askRead(frame, answer) as never })
   const speak = createSocketSpeak({ ask: (frame) => c.askRead(frame, 'speak.result') })
   const folders = createSocketFolders({ ask: (frame) => c.askRead(frame, 'fs.listing') })
+  const files = createSocketFiles({
+    ask: (frame, answer, ms) => c.askRead(frame, answer, ms),
+    knownThread: (id) => store.getState().threads.some((t) => t.id === id),
+  })
+  const agentsMd = createSocketAgentsMd({ ask: (frame) => c.askRead(frame, 'agents_md.file') })
+  const memoryFolders = createSocketMemoryFolders({ ask: (frame) => c.askRead(frame, 'memory.folders_result') })
+  const bugs = createSocketBugs({
+    ask: (frame) => c.askRead(frame, 'bug.context_result'),
+    ensureKey: () => c.ensureKey(),
+    signedTs: () => c.signedTs(),
+  })
 
   const search = createSocketSearch({
     sendAndWait: (frame, ms) => c.sendAndWait(frame, ms),
@@ -124,6 +139,10 @@ export function createSocketClient(opts: SocketClientOptions): SocketClient {
     memory,
     speak,
     folders,
+    files,
+    agentsMd,
+    memoryFolders,
+    bugs,
     store,
     meta,
     api,

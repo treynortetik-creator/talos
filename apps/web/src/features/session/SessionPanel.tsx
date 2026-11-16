@@ -16,12 +16,16 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { useStore } from 'zustand'
 import { useTalos } from '../../lib/client.ts'
+import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { cn } from '../../ui/cn.ts'
 import { Badge, Button, Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/index.ts'
 import { StatusDot } from '../../ui/StatusDot.tsx'
 import { AgentsList, OfflineBadge, useAgentsView } from '../agents/AgentsList.tsx'
 import { chipLabel, EMPTY_TEXT } from '../agents/logic.ts'
+import { useWriteBlock } from '../settings/offline.ts'
+import { PendingWakes } from '../thread-sessions/PendingWakes.tsx'
 import { useWorkersStatus, WORKER_STATE_TEXT } from '../thread-sessions/store.ts'
+import { connectionRefusalOf } from '../threads/manage/useThreadPatch.ts'
 import {
   CTX_LAST_KNOWN_TEXT,
   compactTokens,
@@ -33,6 +37,7 @@ import {
   resetWords,
   routeBadge,
   titleCase,
+  usageAge,
   usedPct,
   WARN_USED_PCT,
 } from './logic.ts'
@@ -48,6 +53,7 @@ function Meter({
   detail,
   tone = 'accent',
   stale,
+  aged,
   testId,
 }: {
   label: string
@@ -58,17 +64,21 @@ function Meter({
   tone?: 'accent' | 'warn'
   /** A last known reading from a session that is not running: dimmed. */
   stale?: boolean
+  /** A reading taken a while ago: the figure in the quieter text colour and the bar faded, the words still readable. */
+  aged?: boolean
   testId: string
 }) {
   return (
     <div
       data-testid={testId}
-      {...(stale ? { 'data-stale': 'true' } : {})}
+      {...(stale || aged ? { 'data-stale': 'true' } : {})}
       className={cn('flex flex-col gap-1.5', stale && 'opacity-60')}
     >
-      <div className="flex items-baseline justify-between gap-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
         <span className="text-sm font-medium">{label}</span>
-        <span className={cn('font-mono text-sm', value === undefined ? 'text-text-2' : 'text-text')}>{text}</span>
+        <span className={cn('font-mono text-sm', value === undefined || aged ? 'text-text-2' : 'text-text')}>
+          {text}
+        </span>
       </div>
       <div
         role="progressbar"
@@ -80,7 +90,7 @@ function Meter({
       >
         {value !== undefined && (
           <div
-            className={cn('h-full rounded-pill', tone === 'warn' ? 'bg-warn' : 'bg-accent')}
+            className={cn('h-full rounded-pill', tone === 'warn' ? 'bg-warn' : 'bg-accent', aged && 'opacity-50')}
             style={{ width: `${value}%` }}
           />
         )}
@@ -101,7 +111,9 @@ function SectionTitle({ id, children }: { id: string; children: React.ReactNode 
 
 function Context({ state, threadId, live }: { state: SessionStateT | undefined; threadId: string; live: boolean }) {
   const ctl = useSessionController()
-  const busyCtl = useStore(ctl.store, (s) => Object.keys(s.pending).length > 0)
+  // a control can't be sent while this device is not connected or the Mac is offline: greyed (settings/offline.ts)
+  const blocked = useWriteBlock() !== null
+  const busyCtl = useStore(ctl.store, (s) => Object.keys(s.pending).length > 0) || blocked
   // The thread's own session's context when it has one, never main's (docs/OPTION-C.md 9.3)
   const { kind, ctx } = useThreadContext(threadId)
   // Compact runs on main, so it is offered only where main is what the numbers describe
@@ -150,6 +162,9 @@ function Usage({ state, now }: { state: SessionStateT | undefined; now: number }
   const all = pooled ? ' · all sessions' : ''
   const week = usedPct(state, 'seven_day')
   const high = (n: number | undefined) => n !== undefined && n >= WARN_USED_PCT
+  // `as_of` is the Mac's time: measured on the relay's clock (as card expiry is), not this device's, which may be minutes off
+  const offset = useTalos((s) => s.clockOffset ?? 0)
+  const age = usageAge(state, 'seven_day', now + offset)
   return (
     <section aria-labelledby="session-usage-h" className="flex flex-col gap-3" data-testid="session-usage">
       <SectionTitle id="session-usage-h">Usage</SectionTitle>
@@ -157,9 +172,10 @@ function Usage({ state, now }: { state: SessionStateT | undefined; now: number }
         testId="meter-week"
         label={`Weekly usage${all}`}
         value={week}
-        text={week === undefined ? 'No reading yet' : `${week}% used`}
+        text={week === undefined ? 'No reading yet' : `${week}% used${age.words ? `, ${age.words}` : ''}`}
         tone={high(week) ? 'warn' : 'accent'}
         detail={week === undefined ? undefined : resetWords(resetsAt(state, 'seven_day'), now)}
+        {...(week !== undefined && age.dim ? { aged: true } : {})}
       />
     </section>
   )
@@ -186,10 +202,11 @@ function BusyWord({ state }: { state: SessionStateT }) {
 // ---- outcome line -------------------------------------------------------------------------------------------------
 
 function OutcomeLine({ outcome, waiting }: { outcome: Outcome | undefined; waiting: boolean }) {
+  const host = useHost()
   return (
     <div aria-live="polite" data-testid="session-outcome" className="min-h-5 text-sm">
       {waiting ? (
-        <p className="m-0 text-text-2">Waiting for the Mac…</p>
+        <p className="m-0 text-text-2">{placeWords('Waiting for the Mac…', host)}</p>
       ) : outcome ? (
         <p
           className={cn(
@@ -198,7 +215,7 @@ function OutcomeLine({ outcome, waiting }: { outcome: Outcome | undefined; waiti
           )}
           data-kind={outcome.kind}
         >
-          {outcome.text}
+          {placeWords(outcome.kind === 'error' ? (connectionRefusalOf(outcome) ?? outcome.text) : outcome.text, host)}
         </p>
       ) : null}
     </div>
@@ -222,7 +239,9 @@ function Controls({
   threadId: string
 }) {
   const ctl = useSessionController()
-  const busyCtl = useStore(ctl.store, (s) => Object.keys(s.pending).length > 0)
+  // a control can't be sent while this device is not connected or the Mac is offline: greyed (settings/offline.ts)
+  const blocked = useWriteBlock() !== null
+  const busyCtl = useStore(ctl.store, (s) => Object.keys(s.pending).length > 0) || blocked
   const [menu, setMenu] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   const caps = state.capabilities
@@ -265,6 +284,7 @@ function Controls({
           <p className="m-0 text-sm">Start a new conversation? Your threads stay; Claude forgets this chat.</p>
           <div className="flex gap-2">
             <Button
+              disabled={busyCtl}
               onClick={() => {
                 setConfirmClear(false)
                 void ctl.clear(threadId)
@@ -304,12 +324,13 @@ function Controls({
                         type="button"
                         role="radio"
                         aria-checked={current}
+                        disabled={busyCtl}
                         onClick={() => {
                           setMenu(false)
                           void ctl.command(threadId, 'model', v)
                         }}
                         className={cn(
-                          'flex min-h-11 w-full items-center justify-between gap-3 rounded-button px-4 text-left text-sm hover:bg-surface-2',
+                          'flex min-h-11 w-full items-center justify-between gap-3 rounded-button px-4 text-left text-sm hover:bg-surface-2 disabled:opacity-50',
                           current && 'bg-surface-2 font-semibold',
                         )}
                       >
@@ -582,6 +603,8 @@ export function SessionPanel({ threadId, inline }: { threadId: string; inline?: 
 
       <AgentsSection threadId={threadId} />
 
+      <PendingWakes threadId={threadId} />
+
       {state && (state.version || surfaces.length > 0) && (
         <p className="m-0 text-xs text-text-2" data-testid="session-facts">
           {state.version ? `Claude Code ${state.version}` : null}
@@ -595,7 +618,7 @@ export function SessionPanel({ threadId, inline }: { threadId: string; inline?: 
 
       {inline ? (
         <Tabs defaultValue="commands">
-          <TabsList className="flex w-full">
+          <TabsList className="flex w-full flex-wrap">
             <TabsTrigger value="commands">Commands</TabsTrigger>
             <TabsTrigger value="mcp">MCP servers</TabsTrigger>
             <TabsTrigger value="plugins">Plugins</TabsTrigger>

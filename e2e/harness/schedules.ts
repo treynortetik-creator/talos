@@ -179,9 +179,12 @@ export class ChronosMac extends ChronosBox {
     return s.schedules.find((j) => j.id === id)
   }
 
-  /** Everything the bridge needs to use this Chronos. */
+  /**
+   * Everything the bridge needs to use this Chronos. Its runner and refresh loops look every 5 s instead of 60 s and 30 s: the
+   * same loops, so a job that comes due is offered by the live loop as in production, without the test waiting a minute for it.
+   */
   bridgeEnv(): Record<string, string> {
-    return { TALOS_APP_CHRONOS_BIN: this.bin }
+    return { TALOS_APP_CHRONOS_BIN: this.bin, TALOS_APP_SCHEDULE_RUNNER_S: '5', TALOS_APP_SCHEDULE_REFRESH_S: '5' }
   }
 
   logs(): string {

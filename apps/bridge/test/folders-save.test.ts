@@ -2,7 +2,7 @@
 // Claude folder, ...) or inside one, whether the owner typed it, chose it in the app's browser, or the Mac's open panel returned
 // it. One list (folderRefusedRoots), one sentence (FOLDER_WORDING.refused). Temp home, made-up folders.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type AgentConfigT, FOLDER_WORDING } from '@talos-app/protocol'
@@ -56,7 +56,11 @@ describe('a thread folder may not be a refused root', () => {
 
   test('a spelling in another case, or a link that leads into a refused root, is refused', () => {
     symlinkSync(join(home, '.ssh'), join(home, 'Projects', 'shortcut'))
-    expect(checkWorkerFolder(join(home, '.SSH', 'keys'), roots)).toBe(FOLDER_WORDING.refused)
+    // On a case-insensitive disk (the macOS default) `.SSH` IS `.ssh`; on a case-sensitive one it is another folder.
+    const caseInsensitive = existsSync(join(home, '.SSH'))
+    const other = checkWorkerFolder(join(home, '.SSH', 'keys'), roots)
+    if (caseInsensitive) expect(other).toBe(FOLDER_WORDING.refused)
+    else expect(other).not.toBe(FOLDER_WORDING.refused)
     expect(checkWorkerFolder(join(home, 'Projects', 'shortcut', 'keys'), roots)).toBe(FOLDER_WORDING.refused)
   })
 

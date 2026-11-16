@@ -25,6 +25,13 @@ body {
     outline: 2px solid var(--focus);
     outline-offset: 2px;
   }
+  /* A field that cannot be used looks it, as a disabled Button or Switch does (a utility class still wins). */
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 }
 button,
 a {
@@ -428,4 +435,10 @@ html[data-kb] .kb-hide {
 /* The scroller ends at the keyboard and sticky bars (Settings Save) sit on it: a revealed field stops above them. */
 html[data-kb] :is(input, textarea, select, [contenteditable]):not(.composer-box) {
   scroll-margin-bottom: 5rem;
+}
+
+/* a Markdown file's images (sibling attachments only) stay inside the page */
+.prose-talos img {
+  max-width: 100%;
+  height: auto;
 }

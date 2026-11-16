@@ -65,18 +65,23 @@ if (!mustRun)
     'companion-art: Pillow/numpy/scipy not found and the art is unchanged, so its checks are skipped (see the file header)',
   )
 
-const unit = (): Promise<{ status: number | null; stderr: string }> =>
+/** Runs python with `args`, asynchronously: a slow run (a loaded machine) must not block the worker past the test's timeout. */
+const pyAsync = (...args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> =>
   new Promise((resolve) => {
-    // async, not spawnSync: a slow run must not block the worker thread past the test's own timeout
-    const p = spawn(python, ['-W', 'ignore', '-m', 'unittest', 'discover', '-s', tools, '-p', 'test_atlas.py'], {
-      cwd: root,
-    })
+    const p = spawn(python, args, { cwd: root })
+    let stdout = ''
     let stderr = ''
+    p.stdout.on('data', (d) => {
+      stdout += d
+    })
     p.stderr.on('data', (d) => {
       stderr += d
     })
-    p.on('close', (status) => resolve({ status, stderr }))
+    p.on('close', (status) => resolve({ status, stdout, stderr }))
   })
+const unit = () => pyAsync('-W', 'ignore', '-m', 'unittest', 'discover', '-s', tools, '-p', 'test_atlas.py')
+/** The atlas checks have no wall-clock rule of their own; this only says how long a loaded machine may take. */
+const SLOW_MACHINE_MS = 180_000
 
 describe('companion art (assets/mascot/3d/tools)', () => {
   it('the python deps the checks need are installed (always asked when the art changed)', () => {
@@ -86,14 +91,14 @@ describe('companion art (assets/mascot/3d/tools)', () => {
     expect(r.status).toBe(0)
   })
 
-  runIf('check_atlas.py passes on the committed Resources/companion', () => {
-    const r = py(join(tools, 'check_atlas.py'), '--quiet')
+  runIf('check_atlas.py passes on the committed Resources/companion', { timeout: SLOW_MACHINE_MS }, async () => {
+    const r = await pyAsync(join(tools, 'check_atlas.py'), '--quiet')
     expect(r.stdout).toMatch(/\d+ passed, 0 failed/)
     expect(r.status).toBe(0)
   })
 
-  runIf('check_atlas.py fails (exit 1) on a directory with no manifest', () => {
-    const r = py(join(tools, 'check_atlas.py'), '--quiet', join(root, 'assets/mascot'))
+  runIf('check_atlas.py fails (exit 1) on a directory with no manifest', { timeout: SLOW_MACHINE_MS }, async () => {
+    const r = await pyAsync(join(tools, 'check_atlas.py'), '--quiet', join(root, 'assets/mascot'))
     expect(r.status).not.toBe(0)
   })
 

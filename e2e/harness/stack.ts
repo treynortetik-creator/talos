@@ -48,13 +48,14 @@ const shQuote = (a: string) => `'${a.replaceAll("'", `'\\''`)}'`
  * the child's exit code on). Output comes back with \r\n line ends and the typed input echoed, as a terminal shows it, and
  * stderr is mixed into it.
  *
- * Node hands a child a socket for stdin, and macOS `script` refuses a socket (tcgetattr: Operation not supported), so the
- * input goes through `cat` first, which gives `script` an ordinary pipe. The Cli closes our end when the child exits.
+ * Node hands a child a socket for stdin, and macOS `script` refuses a socket (tcgetattr: Operation not supported), so on a
+ * Mac the input goes through `cat` first, which gives `script` an ordinary pipe; the Cli closes our end when the child
+ * exits. Linux `script` takes the socket, and must: it does not exit when the child does until its stdin reaches end of
+ * file, so behind `cat` (which only ends once the Cli sees the exit) every command would hang until it was killed.
  */
 export function onPty(argv: string[]): [string, string[]] {
-  const script =
-    process.platform === 'darwin' ? ['-q', '/dev/null', ...argv] : ['-qec', argv.map(shQuote).join(' '), '/dev/null']
-  return ['/bin/bash', ['-c', 'exec script "$@" < <(exec cat)', 'bash', ...script]]
+  if (process.platform !== 'darwin') return ['script', ['-qec', argv.map(shQuote).join(' '), '/dev/null']]
+  return ['/bin/bash', ['-c', 'exec script "$@" < <(exec cat)', 'bash', '-q', '/dev/null', ...argv]]
 }
 
 /** A running `talos-app` CLI command with its output captured and stdin open. */
@@ -195,6 +196,8 @@ export async function startStack(
     VAPID_PUBLIC_KEY: vapid.publicKey,
     VAPID_PRIVATE_KEY: vapid.privateKey,
     VAPID_SUBJECT: 'mailto:owner@example.com',
+    // a scheduler alert held by quiet hours is looked at every 5 s, not every minute (the same loop; production keeps 60 s)
+    SCHEDULE_ALERT_HOLD_POLL_S: '5',
     ...opts.env,
   })
   const boot = () => mod.startRelay({ env, port, host: '127.0.0.1', webDir: WEB_DIST, clock, log: rec('info', {}) })

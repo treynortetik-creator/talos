@@ -11,6 +11,12 @@ import { mkFrame } from '@talos-app/testkit'
 import type { MemoryBrowser } from '../src/memory/service.ts'
 import { type Harness, startHarness, tempHome, waitFor } from './helpers.ts'
 
+/**
+ * How long the folder-flip fuzz runs: 8 s by default (every push), longer when TALOS_FUZZ_MS says so (a nightly run sets 60 s).
+ * Coverage grows with time, so the default is a smoke check and the long run is the real search.
+ */
+const FUZZ_MS = Number(process.env.TALOS_FUZZ_MS) > 0 ? Number(process.env.TALOS_FUZZ_MS) : 8_000
+
 let h: Harness | undefined
 const kids: Array<ReturnType<typeof Bun.spawn>> = []
 const cleanup: string[] = []
@@ -96,40 +102,47 @@ describe('re-check: fresh bypasses', () => {
   }, 40_000)
 
   // guard: 3,534 tries, no leak on a1a62ee. A triple flip between realpath(again) and stat(again) is possible in theory.
-  test('flipping an intermediate FOLDER (open sees the outside dir, realpath the real one, stat the outside one) never leaks', async () => {
-    process.env.TALOS_APP_MEMORY_WATCH = '0'
-    const agent = tmp('talos-rc-dir-')
-    const n = join(agent, 'notes')
-    put(n, 'sub/race.md', '# race\ninside\n')
-    put(agent, 'outdir/race.md', `# Outside\n${SECRET}\n`)
-    const x = await start(agent)
-    expect((await read(x, 'sub/race.md')).type).toBe('memory.file')
-    // notes/sub flips between the real folder and a symlink to agent/outdir, as fast as rename allows
-    kids.push(
-      Bun.spawn(
-        [
-          process.execPath,
-          '-e',
-          `const fs=require('fs');const n=${JSON.stringify(n)};const o=${JSON.stringify(join(agent, 'outdir'))};
+  test(
+    'flipping an intermediate FOLDER (open sees the outside dir, realpath the real one, stat the outside one) never leaks',
+    async () => {
+      process.env.TALOS_APP_MEMORY_WATCH = '0'
+      const agent = tmp('talos-rc-dir-')
+      const n = join(agent, 'notes')
+      put(n, 'sub/race.md', '# race\ninside\n')
+      put(agent, 'outdir/race.md', `# Outside\n${SECRET}\n`)
+      const x = await start(agent)
+      expect((await read(x, 'sub/race.md')).type).toBe('memory.file')
+      // notes/sub flips between the real folder and a symlink to agent/outdir. Each state is held for a random time up to a read's
+      // own length (a read through the bridge takes a few ms), so reads start on the real folder and are flipped under part way;
+      // flipping as fast as rename allows put dozens of flips inside every read, and almost no read ever began on the real folder.
+      kids.push(
+        Bun.spawn(
+          [
+            process.execPath,
+            '-e',
+            `const fs=require('fs');const n=${JSON.stringify(n)};const o=${JSON.stringify(join(agent, 'outdir'))};
            try{fs.symlinkSync(o,n+'/.l')}catch{}
-           for(;;){try{fs.renameSync(n+'/sub',n+'/.real');fs.renameSync(n+'/.l',n+'/sub');
-                       fs.renameSync(n+'/sub',n+'/.l');fs.renameSync(n+'/.real',n+'/sub')}catch{}}`,
-        ],
-        { stdout: 'ignore', stderr: 'ignore' },
-      ),
-    )
-    let leaked = 0
-    let served = 0
-    let tries = 0
-    const deadline = Date.now() + 25_000
-    for (let i = 0; i < 50_000 && Date.now() < deadline && leaked === 0; i++) {
-      tries++
-      const r = await read(x, 'sub/race.md')
-      if (r.type === 'memory.file') served++
-      if (String(r.text ?? '').includes(SECRET)) leaked++
-    }
-    console.log(`dir flip: ${tries} tries, ${served} served, leaked=${leaked}`)
-    expect(served).toBeGreaterThan(0)
-    expect(leaked).toBe(0)
-  }, 40_000)
+           const hold=(ms)=>{const end=performance.now()+Math.random()*ms;while(performance.now()<end){}};
+           for(;;){try{hold(8);fs.renameSync(n+'/sub',n+'/.real');fs.renameSync(n+'/.l',n+'/sub');
+                       hold(2);fs.renameSync(n+'/sub',n+'/.l');fs.renameSync(n+'/.real',n+'/sub')}catch{}}`,
+          ],
+          { stdout: 'ignore', stderr: 'ignore' },
+        ),
+      )
+      let leaked = 0
+      let served = 0
+      let tries = 0
+      const deadline = Date.now() + FUZZ_MS
+      for (let i = 0; i < 50_000 && Date.now() < deadline && leaked === 0; i++) {
+        tries++
+        const r = await read(x, 'sub/race.md')
+        if (r.type === 'memory.file') served++
+        if (String(r.text ?? '').includes(SECRET)) leaked++
+      }
+      console.log(`dir flip: ${tries} tries, ${served} served, leaked=${leaked}`)
+      expect(served).toBeGreaterThan(0)
+      expect(leaked).toBe(0)
+    },
+    FUZZ_MS + 15_000,
+  )
 })

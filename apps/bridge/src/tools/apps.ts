@@ -1,6 +1,6 @@
 // `app_show`, `app_result`, `list_apps` (MCP-APPS-SPEC M5.3). Registered only when the owner turned apps on.
 import { AppToolError } from '../apps/service.ts'
-import { fail, needStr, ok, str, type Tool, threadArg, threadProps } from './common.ts'
+import { fail, needStr, ok, postThreadArg, str, type Tool, threadProps } from './common.ts'
 import { NOT_FOR_WORKERS, type ToolRecord } from './define.ts'
 
 function service(ctx: Parameters<Tool['handler']>[0]) {
@@ -33,7 +33,7 @@ export const appShow: ToolRecord = {
   async handler(ctx, args) {
     try {
       const svc = service(ctx)
-      const thread = threadArg(ctx, args)
+      const thread = postThreadArg(ctx, args)
       const capture = needStr(args, 'capture_id', 100)
       const caption = str(args.caption)
       if (caption !== undefined && caption.length > 280) throw new AppToolError('caption is over 280 characters')

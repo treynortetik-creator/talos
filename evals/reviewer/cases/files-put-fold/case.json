@@ -1,0 +1,18 @@
+{
+  "id": "files-put-fold",
+  "title": "An upload named AGENTſ.md (long s) passed the instruction-file check and opened as AGENTS.md on a disk that ignores case",
+  "base": "36f4a9b651e69f6dc562b42d9e089f32488b195c",
+  "buggy": "uncommitted",
+  "fix": "f33ad64a",
+  "expect": [
+    {
+      "file": "apps/bridge/src/files/put.ts",
+      "severity": "high",
+      "must": [
+        ["fold|case|Unicode|NFKC|NFC|normali|long s|ſ|U\\+017F|lookalike|homoglyph|APFS|HFS"],
+        ["AGENTS|CLAUDE|instruction|refused name|node_modules"]
+      ],
+      "note": "The instruction-file check compares name.toLowerCase() with agents.md; a case-ignoring disk folds more (long s to s, Kelvin to k), so AGENTſ.md passes and opens as AGENTS.md."
+    }
+  ]
+}

@@ -189,11 +189,41 @@ def _onb_text(path, limit=1 << 20):
         os.close(fd)
 
 
+def wiki_dir(project_dir):
+    """The agent's wiki folder: <agent>/wiki, or <agent>/memory/wiki when .talos-version has the line `layout=2`. Strict, never a
+    guess: a UTF-8 BOM at the start is ignored; any line that starts with "layout" and then (after optional spaces) `=` or `:` is
+    a layout line, there may be at most one, and it must be exactly `layout`, optional spaces, `=`, optional spaces, `1` or `2`
+    (so `Layout=2`, `layout: 2`, `layout=zz` and a second line are all refused with SystemExit "unknown layout ...").
+    A private copy of scripts/_talos_layout.py (hooks stay standalone, like _agent_root.py); scripts/test-layout.sh checks that
+    every copy gives the same answer."""
+    import re
+    agent = os.path.abspath(project_dir)
+    path = os.path.join(agent, ".talos-version")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read(65536)
+    except OSError:
+        text = ""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    found = [ln.strip() for ln in text.splitlines() if re.match(r"layout\s*[=:]", ln.strip(), re.I)]
+    if len(found) > 1:
+        raise SystemExit("unknown layout: more than one layout line in %s; refusing to guess where the wiki is." % path)
+    if found:
+        m = re.fullmatch(r"layout\s*=\s*([12])", found[0])
+        if not m:
+            raise SystemExit("unknown layout %r in %s (expected exactly layout=1 or layout=2); refusing to guess where the wiki is."
+                             % (found[0], path))
+        if m.group(1) == "2":
+            return os.path.join(agent, "memory", "wiki")
+    return os.path.join(agent, "wiki")
+
+
 def _onb_old_agent(project_dir):
     """True for an agent that already went through the old interview, which has no onboarding.json to say so: every
     wave 1-8 reads `done` in wiki/_onboarding-progress.md, or CLAUDE.md exists and is neither the shipped placeholder
     nor a default render (so someone has tuned it). Such an agent is treated as done and never offered setup."""
-    progress = _onb_text(os.path.join(project_dir, "wiki", "_onboarding-progress.md")) or ""
+    progress = _onb_text(os.path.join(wiki_dir(project_dir), "_onboarding-progress.md")) or ""
     waves = set(re.findall(r"^\|\s*([1-8])\s*\|[^|\n]*\|\s*done\s*\|", progress, re.M))
     if len(waves) == 8:
         return True
@@ -242,11 +272,11 @@ def onboarding_block(project_dir, contained, headless, source="startup"):
             return (
                 "--- SETUP (in progress) ---\n"
                 "The owner started the optional setup interview and it stopped at wave %d. What earlier waves "
-                "captured is in wiki/_onboarding-progress.md; read it first and do not re-ask a recorded wave. "
+                "captured is in %s/_onboarding-progress.md; read it first and do not re-ask a recorded wave. "
                 "Ask once, in one line, whether to pick it up with the talos-interview skill at wave %d. If they say "
                 "yes, run python3 scripts/onboarding-state.py start. If they say no thanks, run "
                 "python3 scripts/onboarding-state.py set declined (not `set later`): this prompt has already been "
-                "shown, and it will not come back.\n" % (wave, wave)
+                "shown, and it will not come back.\n" % (wave, os.path.relpath(wiki_dir(project_dir), project_dir).replace(os.sep, "/"), wave)
                 + _ONB_ASK
             )
         if state == "later" and age is not None and age < _ONB_REOFFER_SECONDS:

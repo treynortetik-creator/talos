@@ -7,7 +7,10 @@
 // nothing is queued for the mod and no message is made. The K2 guard denies the agent a write to this file.
 import { join } from 'node:path'
 import {
+  AGENT_REQUEST_FILE,
   AgentRecoverAction,
+  type AgentRequestProofT,
+  buildAgentRequestProof,
   ErrorCode,
   type ErrorCodeT,
   type Frame,
@@ -18,6 +21,7 @@ import {
 import type { BridgeContext } from './context.ts'
 import { writeJsonAtomic } from './fsutil.ts'
 import { RESET_REFUSAL, signedBeforeReset } from './history-recover.ts'
+import { say } from './owner-words.ts'
 
 type Of<T extends Frame['type']> = Extract<Frame, { type: T }>
 type Result = { ok: boolean; code?: ErrorCodeT; text: string }
@@ -26,7 +30,46 @@ const KEEP_RESULTS = 100
 const INDEX_KEY = 'arc:index'
 const key = (controlId: string) => `arc:${controlId}`
 
-export const AGENT_REQUEST_FILE = 'agent-request.json'
+export { AGENT_REQUEST_FILE }
+
+/**
+ * Writes the request the Mac app acts on, in the one shape it reads (AgentRequest.swift): the phone's button and the
+ * `restart_main` tool both come through here, so the two can never drift. Atomic, mode 0600. Throws when the write failed.
+ * `proof` is the phone's only (`buildAgentRequestProof` of the owner's signed frame): the Mac restarts as the owner asked only when it
+ * verifies that itself. Nothing in the file says who asked; a request without a proof gets the Mac's restart check.
+ */
+export function writeAgentRequest(
+  home: string,
+  controlId: string,
+  nowMs: number,
+  from: { proof?: AgentRequestProofT; byThread?: string; why?: string } = {},
+): void {
+  const why = from.why === undefined ? '' : agentRequestWhy(from.why)
+  writeJsonAtomic(join(home, AGENT_REQUEST_FILE), {
+    v: 1,
+    control_id: controlId,
+    action: 'restart',
+    ts: nowMs,
+    ...(from.proof ? { proof: from.proof } : {}),
+    ...(from.byThread ? { by_thread: from.byThread } : {}),
+    ...(why ? { why } : {}),
+  })
+}
+
+/**
+ * `why` as the request file carries it: letters, digits, spaces and plain punctuation only (anything else becomes a space: no
+ * markup, tags, control or invisible characters), one line, at most 80 characters. The Mac app makes it plain again when it
+ * reads it (AgentRequest.plainText): the file is not proof of who wrote it.
+ */
+export function agentRequestWhy(s: string): string {
+  return s
+    .normalize('NFC')
+    .replace(/[^\p{L}\p{N} .,:;!?'()\-/]|\p{M}/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
+    .trim()
+}
 
 function stored(ctx: BridgeContext, controlId: string): Of<'agent.recover.result'> | undefined {
   const raw = ctx.store.kvGet(key(controlId))
@@ -78,8 +121,16 @@ export function resendAgentRecover(ctx: BridgeContext, controlId: string): void 
   if (s) send(ctx, s)
 }
 
-/** `finish` consumes the frame once the result is recorded. */
-export function onAgentRecover(ctx: BridgeContext, f: Of<'agent.recover'>, finish: () => void): void {
+/**
+ * `raw` is the frame as received, the object Inbound verified the owner's signature over (never the parsed `f`): the proof is made from it.
+ * `finish` consumes the frame once the result is recorded.
+ */
+export function onAgentRecover(
+  ctx: BridgeContext,
+  f: Of<'agent.recover'>,
+  raw: Record<string, unknown>,
+  finish: () => void,
+): void {
   if (stored(ctx, f.control_id)) {
     resendAgentRecover(ctx, f.control_id)
     finish()
@@ -98,18 +149,22 @@ export function onAgentRecover(ctx: BridgeContext, f: Of<'agent.recover'>, finis
     finish()
     return
   }
-  const action = parsed.data
   // The file first, then the record and the one result: a write that failed must never have said ok.
+  // `restart` is the only action that parses, so the shared writer's fixed action is this one.
   try {
-    writeJsonAtomic(join(ctx.paths.home, AGENT_REQUEST_FILE), {
-      v: 1,
-      control_id: f.control_id,
-      action,
-      ts: ctx.clock.now(),
-    })
+    // the owner's signature goes to the Mac with the request, which checks it itself (Inbound already checked it here)
+    const proof = buildAgentRequestProof(raw)
+    writeAgentRequest(ctx.paths.home, f.control_id, ctx.clock.now(), proof ? { proof } : {})
   } catch (e) {
     ctx.log.warn('agent request not written', { error: (e as Error).message })
-    record(ctx, f.control_id, { ok: false, code: 'internal', text: 'Your Mac could not be asked. Try again.' })
+    record(ctx, f.control_id, {
+      ok: false,
+      code: 'internal',
+      text: say({
+        mac: 'Your Mac could not be asked. Try again.',
+        linux: 'Your computer could not be asked. Try again.',
+      }),
+    })
     finish()
     return
   }

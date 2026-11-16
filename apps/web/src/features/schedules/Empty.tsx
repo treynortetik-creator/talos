@@ -2,10 +2,11 @@
 import type { ScheduleSnapshotT } from '@talos-app/protocol'
 import { useState } from 'react'
 import { useTalosClient } from '../../lib/client.ts'
+import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { Button } from '../../ui/index.ts'
 import { Mascot, type MascotState } from '../../ui/Mascot.tsx'
 import { copyText } from '../cards/util.ts'
-import { CHRONOS_INSTALL_CMD, CHRONOS_UPDATE_CMD, COPY, fill } from './constants.ts'
+import { CHRONOS_INSTALL_CMD, CHRONOS_LINUX_INSTALL_CMD, CHRONOS_UPDATE_CMD, COPY, fill } from './constants.ts'
 import type { EmptyKind } from './logic.ts'
 import { Ticks } from './shared.tsx'
 import { refreshSchedules } from './sync.ts'
@@ -41,6 +42,7 @@ export function EmptyState({
   onTell: () => void
 }) {
   const client = useTalosClient()
+  const host = useHost()
   const [busy, setBusy] = useState(false)
   const retry = async () => {
     setBusy(true)
@@ -53,7 +55,25 @@ export function EmptyState({
   let action: React.ReactNode = null
   switch (kind) {
     case 'not_installed':
-      title = fill(COPY.noScheduler, { agent })
+      // Off a Mac, Chronos runs jobs in a Talos thread only (no background timer yet). Linux installs it by hand; the PC's
+      // Setup installs it, so on a PC this state means Setup did not finish (Hestia and Titan, 2026-11-14)
+      if (host === 'windows') {
+        title = 'Run Talos Setup again to set up scheduled jobs.'
+        break
+      }
+      if (host === 'linux') {
+        title = 'Install Chronos to schedule jobs here: jobs that run in a Talos thread work on Linux.'
+        body = (
+          <>
+            <CodeBlock cmd={CHRONOS_LINUX_INSTALL_CMD} />
+            <p className="text-sm text-text-2">
+              <Ticks text="Then run `talos-app schedules adopt`." />
+            </p>
+          </>
+        )
+        break
+      }
+      title = placeWords(fill(COPY.noScheduler, { agent }), host)
       body = (
         <>
           <CodeBlock cmd={CHRONOS_INSTALL_CMD} />
@@ -70,7 +90,7 @@ export function EmptyState({
       break
     }
     case 'update_mac':
-      title = COPY.bridgeOld
+      title = placeWords(COPY.bridgeOld, host)
       mascot = 'worried'
       break
     case 'update_relay':
@@ -80,7 +100,11 @@ export function EmptyState({
     case 'update_app':
       title = COPY.updateApp
       mascot = 'worried'
-      body = <p className="text-sm text-text-2">Your Mac speaks a newer version of Schedules than this app does.</p>
+      body = (
+        <p className="text-sm text-text-2">
+          {placeWords('Your Mac speaks a newer version of Schedules than this app does.', host)}
+        </p>
+      )
       action = (
         <Button variant="outline" onClick={() => location.reload()}>
           Reload the app
@@ -91,7 +115,9 @@ export function EmptyState({
       title = COPY.turnedOff
       body = (
         <p className="text-sm text-text-2">
-          <Ticks text="Remove that setting on your Mac and restart your session to turn them back on." />
+          <Ticks
+            text={placeWords('Remove that setting on your Mac and restart your session to turn them back on.', host)}
+          />
         </p>
       )
       break
@@ -118,8 +144,8 @@ export function EmptyState({
       break
     case 'mac_offline':
       mascot = 'worried'
-      title = 'Your Mac is offline.'
-      body = <p className="text-sm text-text-2">Schedules show up here once your Mac is back.</p>
+      title = placeWords('Your Mac is offline.', host)
+      body = <p className="text-sm text-text-2">{placeWords('Schedules show up here once your Mac is back.', host)}</p>
       break
     default:
       mascot = 'worried'

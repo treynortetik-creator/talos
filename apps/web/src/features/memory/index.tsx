@@ -1,8 +1,9 @@
 // `/memory` (docs/V2-FEATURES.md V5.3): a read-only tree of the folders the owner chose at their Mac, a note view, and
 // search over the notes. Where you are lives in the URL (?r=root&p=folder&n=note) so Back works. P0: no offline cache.
 import type { MemoryEntryT, MemoryHitT, MemoryRootInfoT } from '@talos-app/protocol'
+import { MEMORY_GRAPH_FEATURE } from '@talos-app/protocol'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { TalosClientError, useTalosClient } from '../../lib/client.ts'
 import { shortAge } from '../../lib/format.ts'
 import { useFeature } from '../../lib/v2Client.ts'
@@ -12,6 +13,8 @@ import { ScrollRegion } from '../../ui/ScrollRegion.tsx'
 import type { MemoryScreenProps } from '../contracts.ts'
 import { HitRow } from '../search/HitRow.tsx'
 import { useAgentName } from '../threads/useThreads.ts'
+import { AgentFolder, AgentFolderList } from './AgentFolders.tsx'
+import { CLIO_TEXT } from './clioGraphLogic.ts'
 import { crumbs, errorWords, OFF_TEXT, parentOf } from './logic.ts'
 import { NoteView } from './NoteView.tsx'
 
@@ -41,11 +44,14 @@ export function MemoryScreen(_props: MemoryScreenProps) {
   const client = useTalosClient()
   const mem = client.memory
   const state = useFeature('memory/1')
+  const graphOn = useFeature(MEMORY_GRAPH_FEATURE) === 'on'
   const agent = useAgentName()
   const [sp, setSp] = useSearchParams()
   const r = sp.get('r')
   const p = sp.get('p') ?? ''
   const n = sp.get('n')
+  // a thread's folder on the Mac (AgentFolders.tsx): its own view, beside the notes
+  const af = sp.get('af')
 
   const [roots, setRoots] = useState<MemoryRootInfoT[] | null>(null)
   const [list, setList] = useState<Listing>({ roots: null, entries: [], next: null })
@@ -59,8 +65,9 @@ export function MemoryScreen(_props: MemoryScreenProps) {
   const searchGen = useRef(0)
 
   const go = useCallback(
-    (next: { r?: string | null; p?: string; n?: string | null }, replace = false) => {
+    (next: { r?: string | null; p?: string; n?: string | null; af?: string }, replace = false) => {
       const out = new URLSearchParams()
+      if (next.af) out.set('af', next.af)
       if (next.r) out.set('r', next.r)
       if (next.p) out.set('p', next.p)
       if (next.n) out.set('n', next.n)
@@ -81,13 +88,14 @@ export function MemoryScreen(_props: MemoryScreenProps) {
         if (!live) return
         setRoots(t.roots ?? [])
         // one root: go straight in
-        if (!r && t.roots?.length === 1) go({ r: t.roots[0]?.id }, true)
+        // (not while an agent folder is open: that is its own view)
+        if (!r && !af && t.roots?.length === 1) go({ r: t.roots[0]?.id }, true)
       })
       .catch((e) => live && fail(e))
     return () => {
       live = false
     }
-  }, [mem, state, r, go, fail])
+  }, [mem, state, r, af, go, fail])
 
   // a folder's first page
   useEffect(() => {
@@ -155,7 +163,8 @@ export function MemoryScreen(_props: MemoryScreenProps) {
   const label = roots?.find((x) => x.id === r)?.label ?? r ?? ''
 
   let body: React.ReactNode
-  if (state === 'off' || !mem)
+  if (af) body = <AgentFolder key={af} threadId={af} />
+  else if (state === 'off' || !mem)
     body = (
       <p className="m-0 p-4 text-text-2" data-testid="memory-unavailable">
         The memory browser isn't available on your Mac yet. Update Talos on your Mac.
@@ -225,7 +234,7 @@ export function MemoryScreen(_props: MemoryScreenProps) {
         Loading…
       </p>
     ) : roots.length === 0 ? (
-      <p className="m-0 p-4 text-text-2">No folders are shared yet. At your Mac: talos-app memory init</p>
+      <p className="m-0 p-4 text-text-2">No folders are shared yet. Pick them in Settings, Memory folders.</p>
     ) : (
       <ul className="m-0 list-none p-0" data-testid="memory-roots">
         {roots.map((x) => (
@@ -295,11 +304,15 @@ export function MemoryScreen(_props: MemoryScreenProps) {
     )
 
   const up = () => {
-    if (n) go({ r, p: parentOf(n) })
+    if (af) go({})
+    else if (n) go({ r, p: parentOf(n) })
     else if (p) go({ r, p: parentOf(p) })
     else if (roots && roots.length > 1) go({})
   }
-  const canUp = Boolean(n || p || (r && roots && roots.length > 1))
+  const canUp = Boolean(af || n || p || (r && roots && roots.length > 1))
+  // the agent folders sit under the notes' top level, whatever the notes browser says: the list of roots, or the one root's
+  // own top when it opened at once
+  const topLevel = !af && !n && q.trim() === '' && (!r || (roots?.length === 1 && !p))
 
   return (
     <section className="flex h-full min-h-0 flex-col" data-testid="memory-screen">
@@ -315,9 +328,21 @@ export function MemoryScreen(_props: MemoryScreenProps) {
               <IconBack />
             </button>
           )}
-          <h1 className="m-0 font-display text-2xl font-semibold">Memory</h1>
+          {/* the memory system is named Clio (owner, 2026-11-15); the tab and menu row stay "Memory" */}
+          <div className="flex min-w-0 flex-col">
+            <h1 className="m-0 font-display text-2xl font-semibold">Clio</h1>
+            <p className="m-0 text-sm text-text-2">Your agent's memory</p>
+          </div>
+          {graphOn && state === 'on' && !af && (
+            <Link
+              to="/memory/graph"
+              className="ml-auto inline-flex min-h-11 items-center rounded-pill border border-line px-3 text-sm hover:bg-surface-2"
+            >
+              {CLIO_TEXT.graphButton}
+            </Link>
+          )}
         </div>
-        {state === 'on' && error !== OFF_TEXT && (
+        {state === 'on' && error !== OFF_TEXT && !af && (
           <div className="relative">
             <IconSearch
               className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-2"
@@ -338,6 +363,7 @@ export function MemoryScreen(_props: MemoryScreenProps) {
       </header>
       <ScrollRegion label="Memory" className="min-h-0 flex-1 overflow-y-auto" data-testid="memory-scroll">
         {body}
+        {topLevel && <AgentFolderList onOpen={(t) => go({ af: t })} />}
       </ScrollRegion>
     </section>
   )

@@ -3,6 +3,7 @@
 import { appCsp } from '@talos-app/protocol'
 import { addPlugins, cleanupOutdatedCaches, matchPrecache, precacheAndRoute } from 'workbox-precaching'
 import { notificationForPush, safeNavigateTarget, viewingPushThread } from './features/pwa/pushLogic.ts'
+import { goesToRelay } from './features/pwa/relayPaths.ts'
 import { SHARE_TARGET_PATH } from './features/share/material.ts'
 import { handleShareTarget, idbPendingStore } from './features/share/shareTarget.ts'
 
@@ -51,7 +52,7 @@ self.addEventListener('fetch', (event) => {
     return
   }
   if (req.mode !== 'navigate') return
-  if (url.origin !== self.location.origin || /^\/(api|media|hook|bridge|ws|healthz)(\/|$)/.test(url.pathname)) return
+  if (url.origin !== self.location.origin || goesToRelay(url.pathname)) return
   // Other SPA routes: the precached shell, stamped (the precache route above answers the shell's own addresses).
   event.respondWith(
     (async () => {

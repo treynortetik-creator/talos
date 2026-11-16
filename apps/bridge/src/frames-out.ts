@@ -21,7 +21,13 @@ const env = (now: number) => ({ v: 1 as const, id: newUlid(), ts: new Date(now).
 export const replyFrame = (
   now: number,
   message: MessageT,
-  extra: { speak?: string; voice_delegation_id?: string; silent?: boolean } = {},
+  extra: {
+    speak?: string
+    voice_delegation_id?: string
+    silent?: boolean
+    settings_changed?: boolean
+    sent_always_allowed?: boolean
+  } = {},
 ): Of<'reply'> => ({
   ...env(now),
   type: 'reply',
@@ -29,6 +35,8 @@ export const replyFrame = (
   ...(extra.speak ? { speak: extra.speak } : {}),
   ...(extra.voice_delegation_id ? { voice_delegation_id: extra.voice_delegation_id } : {}),
   ...(extra.silent ? { silent: true } : {}),
+  ...(extra.settings_changed ? { settings_changed: true as const } : {}),
+  ...(extra.sent_always_allowed ? { sent_always_allowed: true as const } : {}),
 })
 
 export const ackFrame = (now: number, ref: string, stage: 'delivered' | 'consumed'): Of<'ack'> => ({
@@ -55,11 +63,17 @@ export const errorFrame = (
     : {}),
 })
 
-export const receiptFrame = (now: number, messageId: string, state: 'delivered' | 'seen'): Of<'receipt'> => ({
+export const receiptFrame = (
+  now: number,
+  messageId: string,
+  state: 'delivered' | 'seen',
+  undo?: { state: 'ready' | 'not_saved' | 'too_large' },
+): Of<'receipt'> => ({
   ...env(now),
   type: 'receipt',
   message_id: messageId,
   state,
+  ...(undo ? { undo } : {}),
 })
 
 export const statusFrame = (
@@ -164,12 +178,14 @@ export const devicePinnedFrame = (
   deviceId: string,
   ok: boolean,
   reason?: Of<'device.pinned'>['reason'],
+  first?: boolean,
 ): Of<'device.pinned'> => ({
   ...env(now),
   type: 'device.pinned',
   device_id: deviceId,
   ok,
   ...(reason ? { reason } : {}),
+  ...(first ? { first: true as const } : {}),
 })
 
 export const historyPageFrame = (
@@ -185,7 +201,21 @@ export const historyPageFrame = (
 ): Of<'history.page'> => ({ ...env(now), type: 'history.page', ...a })
 
 /** The answers to the signed v2 reads (docs/V2-FEATURES.md V1.3): routed by request_id, never stored. */
-type ReadAnswer = 'search.results' | 'memory.listing' | 'memory.file' | 'memory.results' | 'speak.result' | 'fs.listing'
+type ReadAnswer =
+  | 'search.results'
+  | 'memory.listing'
+  | 'memory.file'
+  | 'memory.results'
+  | 'memory.graph_result'
+  | 'speak.result'
+  | 'fs.listing'
+  | 'files.listing'
+  | 'files.file'
+  | 'bug.context_result'
+  | 'agents_md.file'
+  | 'files.put_result'
+  | 'files.sent_list'
+  | 'memory.folders_result'
 export const readAnswerFrame = <T extends ReadAnswer>(
   now: number,
   type: T,

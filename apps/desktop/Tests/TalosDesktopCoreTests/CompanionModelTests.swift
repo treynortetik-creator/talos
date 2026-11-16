@@ -14,9 +14,9 @@ struct Rig {
   var last: CompanionOutput?
   var log: [CompanionOutput] = []
 
-  /// 2026-10-31 09:00 in a fixed UTC-7 zone (no DST) = 16:00 UTC.
-  static let fixedUtcMinus7 = TimeZone(identifier: "Etc/GMT+7")!
-  static let start = Date(timeIntervalSince1970: 1_793_462_400)  // 2026-10-31 16:00:00 UTC
+  /// 2026-10-31 09:00 in a fixed UTC-5 zone (no DST) = 14:00 UTC.
+  static let fixedUtcMinus5 = TimeZone(identifier: "Etc/GMT+5")!
+  static let start = Date(timeIntervalSince1970: 1_793_455_200)  // 2026-10-31 14:00:00 UTC
 
   init(random: @escaping (ClosedRange<Double>) -> Double = { $0.lowerBound }) {
     model = CompanionModel(random: random)
@@ -229,8 +229,8 @@ struct CompanionClampTests {
   @Test func thirtyFakeDaysWithNoInputsShowOnlyIdleAsleepAndListedBeatsAndNoBubble() {
     var r = Rig(random: { ($0.lowerBound + $0.upperBound) / 2 })
     var calls = 0
-    // One hour steps for 30 days. Quiet window 20:30 to 04:00, in a no-DST zone.
-    r.inputs.quietWindow = QuietWindow(start: 20 * 60 + 30, end: 4 * 60, timeZone: Rig.fixedUtcMinus7)
+    // One hour steps for 30 days. Quiet window 22:00 to 06:00, in a no-DST zone.
+    r.inputs.quietWindow = QuietWindow(start: 22 * 60, end: 6 * 60, timeZone: Rig.fixedUtcMinus5)
     for _ in 0..<(30 * 24) {
       r.inputs.quiet = r.inputs.quietWindow?.isQuiet(r.wall)
       let o = r.tick(3600)
@@ -469,7 +469,7 @@ struct CompanionBeatTests {
 
 @Suite("Companion reducer: Morning, Rounds, wake")
 struct CompanionDayTests {
-  let quiet = QuietWindow(start: 20 * 60 + 30, end: 4 * 60, timeZone: Rig.fixedUtcMinus7)
+  let quiet = QuietWindow(start: 22 * 60, end: 6 * 60, timeZone: Rig.fixedUtcMinus5)
 
   @Test func morningWavesOnceADayWithTheOvernightCount() {
     var r = Rig()
@@ -523,21 +523,22 @@ struct CompanionDayTests {
   @Test func roundsSlotsAreNineOneInEachNinthOfTheWholeDayQuietHoursIncluded() {
     let slots = RoundsPlan.slots(on: Rig.start, quiet: quiet, random: { $0.lowerBound })
     #expect(slots.count == 9)
-    let minutes = minutesOfDay(slots, Rig.fixedUtcMinus7)
+    let minutes = minutesOfDay(slots, Rig.fixedUtcMinus5)
     // Nine ninths of 1440 minutes (160 each), each jittered inside its middle: 20 minutes in at the lowest.
     #expect(minutes == (0..<9).map { 160 * $0 + 20 })
-    let top = minutesOfDay(RoundsPlan.slots(on: Rig.start, quiet: quiet, random: { $0.upperBound }), Rig.fixedUtcMinus7)
+    let top = minutesOfDay(RoundsPlan.slots(on: Rig.start, quiet: quiet, random: { $0.upperBound }), Rig.fixedUtcMinus5)
     #expect(top == (0..<9).map { 160 * $0 + 139 })
-    // The quiet window is 20:30 to 04:00: Rounds no longer keep out of it.
-    let inQuiet = minutes.filter { $0 >= 20 * 60 + 30 || $0 < 4 * 60 }
-    #expect(inQuiet == [20, 180, 1300], "slots inside the quiet window: \(inQuiet)")
+    // The quiet window is 22:00 to 06:00: Rounds no longer keep out of it.
+    let inQuiet = minutes.filter { $0 >= 22 * 60 || $0 < 6 * 60 }
+    #expect(inQuiet == [20, 180, 340], "slots inside the quiet window: \(inQuiet)")
   }
 
   @Test func roundsSlotsKeepAtLeastFortyMinutesApartWhateverTheDice() {
     for seed in [0.0, 0.25, 0.5, 0.75, 1.0] {
-      for window in [quiet, nil, QuietWindow(start: 13 * 60, end: 15 * 60, timeZone: Rig.fixedUtcMinus7)] {
+      for window in [quiet, nil, QuietWindow(start: 13 * 60, end: 15 * 60, timeZone: Rig.fixedUtcMinus5)] {
         let s = RoundsPlan.slots(on: Rig.start, quiet: window, random: { $0.lowerBound + ($0.upperBound - $0.lowerBound) * seed })
-        let m = minutesOfDay(s, Rig.fixedUtcMinus7)
+        // read in the zone the day was cut in: no window cuts it in the Mac's own zone, whatever that is
+        let m = minutesOfDay(s, window?.timeZone ?? .current)
         #expect(m.count == 9)
         #expect(m == m.sorted())
         for (x, y) in zip(m, m.dropFirst()) { #expect(y - x >= 40, "\(m)") }
@@ -548,7 +549,7 @@ struct CompanionDayTests {
 
   @Test func theQuietWindowDoesNotChangeTheSlotsOnlyTheZoneTheDayIsCutIn() {
     let a = RoundsPlan.slots(on: Rig.start, quiet: quiet, random: { $0.lowerBound })
-    let b = RoundsPlan.slots(on: Rig.start, quiet: QuietWindow(start: 13 * 60, end: 15 * 60, timeZone: Rig.fixedUtcMinus7), random: { $0.lowerBound })
+    let b = RoundsPlan.slots(on: Rig.start, quiet: QuietWindow(start: 13 * 60, end: 15 * 60, timeZone: Rig.fixedUtcMinus5), random: { $0.lowerBound })
     let c = RoundsPlan.slots(on: Rig.start, quiet: nil, random: { $0.lowerBound })
     #expect(a == b)
     #expect(a.count == 9 && c.count == 9)
@@ -556,7 +557,7 @@ struct CompanionDayTests {
 
   @Test func roundsSlotsInADSTZoneStayInTheirDayOnAChangeDay() {
     let ny = TimeZone(identifier: "America/New_York")!
-    let q = QuietWindow(start: 20 * 60 + 30, end: 4 * 60, timeZone: ny)
+    let q = QuietWindow(start: 22 * 60, end: 6 * 60, timeZone: ny)
     var cal = Calendar(identifier: .gregorian)
     cal.timeZone = ny
     // Fall-back (2026-11-01, 25 hours) and spring-forward (2026-03-08, 23 hours): nine slots, all on that local day.
@@ -586,7 +587,7 @@ struct CompanionDayTests {
         _ = t.model.roundsStarted(mono: t.mono, wall: t.wall)
       }
     }
-    #expect(due == 5, "five slots remain between 09:00 and midnight: 11:00, 13:40, 16:20, 19:00 and 21:40, the last inside quiet hours")
+    #expect(due == 5, "five slots remain between 09:00 and midnight: 11:00, 13:40, 16:20, 19:00 and 21:40")
     var m = r
     m.env.micRunning = true
     for _ in 0..<(15 * 60) { let o_ = m.tick(60); #expect(o_.roundsDue == false) }
@@ -721,7 +722,7 @@ struct CompanionGateTests {
   @Test func noClampLetsABubbleABeatHelloPokeFidgetOrRoundsThrough() {
     for cause in Cause.allCases {
       var r = Rig(random: { $0.lowerBound })
-      r.inputs.quietWindow = QuietWindow(start: 20 * 60 + 30, end: 4 * 60, timeZone: Rig.fixedUtcMinus7)
+      r.inputs.quietWindow = QuietWindow(start: 22 * 60, end: 6 * 60, timeZone: Rig.fixedUtcMinus5)
       r.env.secondsSinceInput = 3
       r.tick()
       close(&r, cause)
@@ -759,13 +760,13 @@ struct CompanionGateTests {
 
   @Test func nineRoundsADayAcrossDateChangesEachInItsOwnDayQuietHoursIncluded() {
     var r = Rig(random: { $0.lowerBound })
-    let q = QuietWindow(start: 20 * 60 + 30, end: 4 * 60, timeZone: Rig.fixedUtcMinus7)
+    let q = QuietWindow(start: 22 * 60, end: 6 * 60, timeZone: Rig.fixedUtcMinus5)
     r.inputs.quietWindow = q
     r.env.secondsSinceInput = 3
     var perDay: [String: Int] = [:]
     var inQuiet = 0
     var cal = Calendar(identifier: .gregorian)
-    cal.timeZone = Rig.fixedUtcMinus7
+    cal.timeZone = Rig.fixedUtcMinus5
     for _ in 0..<(48 * 60) {
       r.inputs.quiet = q.isQuiet(r.wall)
       let o = r.tick(60)
@@ -812,7 +813,7 @@ struct CompanionGateTests {
 
 @Suite("Companion reducer: review fixes")
 struct CompanionReviewFixTests {
-  let quiet = QuietWindow(start: 20 * 60 + 30, end: 4 * 60, timeZone: Rig.fixedUtcMinus7)
+  let quiet = QuietWindow(start: 22 * 60, end: 6 * 60, timeZone: Rig.fixedUtcMinus5)
 
   /// The closest the reducer asks to be called back, over a stretch of fake time stepped one second at a time.
   private func closestAsk(_ r: inout Rig, seconds: Int) -> TimeInterval {

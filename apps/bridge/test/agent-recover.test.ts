@@ -4,7 +4,14 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { AgentRequestFile, newUlid } from '@talos-app/protocol'
+import {
+  AgentRequestFile,
+  b64urlDecode,
+  fromUtf8,
+  newUlid,
+  ownerSignedString,
+  verifyOwnerFrame,
+} from '@talos-app/protocol'
 import { mkFrame } from '@talos-app/testkit'
 import { buildGuardConfig, guardDecision } from '../src/guards/rules.ts'
 import { type Harness, sleep, startHarness, tempHome } from './helpers.ts'
@@ -71,6 +78,7 @@ describe('agent.recover at the bridge', () => {
     expect(res.ok).toBe(true)
     const file = AgentRequestFile.parse(JSON.parse(readFileSync(requestFile(hh), 'utf8')))
     expect(file).toMatchObject({ v: 1, control_id: f.control_id, action: 'restart' })
+    expect(Object.keys(JSON.parse(readFileSync(requestFile(hh), 'utf8')))).not.toContain('asked_by') // nothing says who asked
     expect(Math.abs(file.ts - Date.now())).toBeLessThan(60_000)
     expect(statSync(requestFile(hh)).mode & 0o777).toBe(0o600)
     await sleep(200)
@@ -94,6 +102,35 @@ describe('agent.recover at the bridge', () => {
     await sleep(200)
     expect(existsSync(requestFile(hh))).toBe(false)
     expect(results(hh, signed.control_id)).toHaveLength(1)
+  })
+
+  test("the phone's request carries the owner's proof: the exact bytes Inbound verified, checked by the same verifier", async () => {
+    const hh = await up()
+    // an old app's stepup_token and the relay's own stamp ride along; neither is signed, so the proof must leave both out
+    const f = await hh.app.sendAgentRecover('restart', { stepup_token: 'old-app-token' })
+    await hh.relay.expectFrame('agent.recover.result', (x) => x.control_id === f.control_id, {
+      direction: 'from_bridge',
+    })
+    const raw = JSON.parse(readFileSync(requestFile(hh), 'utf8'))
+    const file = AgentRequestFile.parse(raw)
+    const proof = file.proof
+    if (!proof) throw new Error('no proof written')
+    expect(Object.keys(raw.proof).sort()).toEqual(['device_id', 'osig', 'signed_b64url'])
+    expect(proof.device_id).toBe(f.device_id)
+    expect(proof.osig).toBe(f.osig)
+    const signed = fromUtf8(b64urlDecode(proof.signed_b64url))
+    expect(signed).toBe(ownerSignedString(f as Record<string, unknown>))
+    // the frame, rebuilt from the signed bytes and the signature, passes the bridge's own owner check (inbound.ts verifyOwner)
+    const back = { ...JSON.parse(signed), osig: proof.osig } as Record<string, unknown>
+    expect(back).toMatchObject({ type: 'agent.recover', action: 'restart', control_id: file.control_id })
+    expect(back.stepup_token).toBeUndefined()
+    const jwk = hh.bridge.ctx.devices.pinnedKey(proof.device_id)
+    if (!jwk) throw new Error('the test phone is not pinned')
+    expect(await verifyOwnerFrame(back, jwk)).toBe(true)
+    // control: one byte changed in what was signed, and the same verifier says no
+    expect(await verifyOwnerFrame({ ...back, action: 'restarT' }, jwk)).toBe(false)
+    // a real one is small: far under the Mac's 4 KB cap (AgentRequest.maxBytes)
+    expect(readFileSync(requestFile(hh)).length).toBeLessThan(1024)
   })
 
   test('the K2 guard denies an agent Write, Edit and shell write to agent-request.json (the bridge write still works)', async () => {

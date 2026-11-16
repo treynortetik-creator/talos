@@ -22,11 +22,16 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     public var confirmedCliVersion: String?
     /// See `confirmedCliVersion`: no longer written or read. The only channel that counts is `AutoConfirmGuard.talosChannel`.
     public var approvedDevChannels: [String]
+    /// The id whose conversation file the app has seen on disk (so it has had a turn: Claude Code writes the file at the first
+    /// message). `id` with a seen file that is later not found is lost, not unsaved: it is resumed, and fails as "can't be
+    /// resumed", never quietly started over under the same id. Absent until a file is seen, and in an older desktop.json.
+    public var conversationSeen: String?
 
     public init(
       id: String? = nil, previousIds: [String] = [], confirmedAt: String? = nil, confirmedCliVersion: String? = nil,
-      approvedDevChannels: [String] = []
+      approvedDevChannels: [String] = [], conversationSeen: String? = nil
     ) {
+      self.conversationSeen = conversationSeen
       self.id = id
       self.previousIds = previousIds
       self.confirmedAt = confirmedAt
@@ -40,6 +45,7 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
       case confirmedAt = "confirmed_at"
       case confirmedCliVersion = "confirmed_cli_version"
       case approvedDevChannels = "approved_dev_channels"
+      case conversationSeen = "conversation_seen"
     }
 
     public init(from decoder: Decoder) throws {
@@ -49,16 +55,19 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
       confirmedAt = try c.decodeIfPresent(String.self, forKey: .confirmedAt)
       confirmedCliVersion = try c.decodeIfPresent(String.self, forKey: .confirmedCliVersion)
       approvedDevChannels = try c.decodeIfPresent([String].self, forKey: .approvedDevChannels) ?? []
+      conversationSeen = (try? c.decodeIfPresent(String.self, forKey: .conversationSeen)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
       var c = encoder.container(keyedBy: CodingKeys.self)
-      // nulls are written explicitly so the file shows every field (the spec's 4.1 shape).
+      // nulls are written explicitly, so a NEW file shows every field (the spec's 4.1 shape). An existing file keeps its own text for
+      // every key a save did not change (`KeepUnknownJSON`), so it may still lack a null key.
       try c.encode(id, forKey: .id)
       try c.encode(previousIds, forKey: .previousIds)
       try c.encode(confirmedAt, forKey: .confirmedAt)
       try c.encode(confirmedCliVersion, forKey: .confirmedCliVersion)
       try c.encode(approvedDevChannels, forKey: .approvedDevChannels)
+      try c.encodeIfPresent(conversationSeen, forKey: .conversationSeen)  // only once set: a file that never had it keeps its shape
     }
 
     /// The owner chose [Start a new conversation]: the old id moves to `previous_ids` (last 5) and the confirmation goes.
@@ -71,6 +80,7 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
       id = nil
       confirmedAt = nil
       confirmedCliVersion = nil
+      conversationSeen = nil
     }
   }
 
@@ -105,7 +115,7 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
   /// The launch fingerprint (`launchFingerprint`: folder, resolved program, flags without the resume id, env) of the last start that got
   /// through the dev-channel dialog. The auto-accept presses Enter only while this start's fingerprint equals it; a changed launch (or none
   /// stored yet) waits for the owner, and his confirmation stores the new one. Here, not in `session`, because a new conversation
-  /// replaces the whole `session` and must not ask again. Only a verified tap on the card stores it, never an auto-accept and never a plain Enter in the pane. It is
+  /// replaces the whole `session` and must not ask again. Only the owner's click on the Mac popup stores it, never a tap on the card, an auto-accept or a plain Enter in the pane. It is
   /// SEALED: `confirmedLaunchMac` is an HMAC over it with a key in the Keychain (`LaunchTrust`), so a program that can write this file cannot make
   /// an edited launch look confirmed; the guard trusts it only while the MAC verifies. The floor under that is the constant-channel check in
   /// `AutoConfirmGuard` (only `server:talos-app` is ever answered).
@@ -118,8 +128,14 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
   public var confirmedLaunchMac: String?
   /// The version of the seal migration that has run (`LaunchTrustMigration`); absent or 0 = it has not.
   public var launchTrust: Int?
+  /// The app updates itself from signed releases (`AutoUpdate`). On for a new install (`defaults`); a desktop.json written before this
+  /// setting existed has no key and reads as OFF, so a Mac that is updated another way keeps that way until its owner switches this on.
+  public var autoUpdate: Bool
+  /// Where the updater looks for `latest.json` and the files beside it. nil or empty = `AutoUpdate.defaultFeed`. Trust never comes from
+  /// this address: only from the signature against the key pinned in the app, then Developer ID and notarization.
+  public var updateFeedUrl: String?
 
-  enum CodingKeys: String, CodingKey {
+  enum CodingKeys: String, CodingKey, CaseIterable {
     case v, host, args, env, session, hotkeys
     case agentDir = "agent_dir"
     case claudePath = "claude_path"
@@ -136,6 +152,8 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     case confirmedLaunchParts = "confirmed_launch_parts"
     case confirmedLaunchMac = "confirmed_launch_mac"
     case launchTrust = "launch_trust"
+    case autoUpdate = "auto_update"
+    case updateFeedUrl = "update_feed_url"
   }
 
   public init(
@@ -143,7 +161,7 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     session: Session, autoRestart: Bool, autoConfirmRestart: Bool, startSessionOnLaunch: Bool,
     openTerminalOnDialog: Bool, hotkeys: Hotkeys = Hotkeys(compose: "ctrl+opt+space"),
     relayUrl: String, talosAppCommand: [String] = [], notifyThread: String? = nil, keepAwakeOnAC: Bool = false,
-    openWindowAtLaunch: Bool = true
+    openWindowAtLaunch: Bool = true, autoUpdate: Bool = false
   ) {
     self.v = v
     self.host = host
@@ -162,6 +180,7 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     self.notifyThread = notifyThread
     self.keepAwakeOnAC = keepAwakeOnAC
     self.openWindowAtLaunch = openWindowAtLaunch
+    self.autoUpdate = autoUpdate
   }
 
   public init(from decoder: Decoder) throws {
@@ -190,6 +209,9 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     confirmedLaunchParts = (try? c.decodeIfPresent([String: String].self, forKey: .confirmedLaunchParts)) ?? nil
     confirmedLaunchMac = (try? c.decodeIfPresent(String.self, forKey: .confirmedLaunchMac)) ?? nil
     launchTrust = (try? c.decodeIfPresent(Int.self, forKey: .launchTrust)) ?? nil
+    // absent (a file from before the setting) or unreadable: OFF, never the new-install default
+    autoUpdate = ((try? c.decodeIfPresent(Bool.self, forKey: .autoUpdate)) ?? nil) ?? false
+    updateFeedUrl = (try? c.decodeIfPresent(String.self, forKey: .updateFeedUrl)) ?? nil
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -215,6 +237,8 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     try c.encodeIfPresent(confirmedLaunchParts, forKey: .confirmedLaunchParts)
     try c.encodeIfPresent(confirmedLaunchMac, forKey: .confirmedLaunchMac)
     try c.encodeIfPresent(launchTrust, forKey: .launchTrust)
+    try c.encode(autoUpdate, forKey: .autoUpdate)
+    try c.encodeIfPresent(updateFeedUrl, forKey: .updateFeedUrl)
   }
 
   public static let defaults = DesktopConfig(
@@ -230,7 +254,9 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     startSessionOnLaunch: true,
     openTerminalOnDialog: true,
     hotkeys: Hotkeys(compose: "ctrl+opt+space"),
-    relayUrl: RelayConfig.placeholder)
+    relayUrl: RelayConfig.placeholder,
+    // a new install updates itself; an existing file without the key reads as off (`init(from:)`)
+    autoUpdate: true)
 
   public func encoded() throws -> Data {
     let e = JSONEncoder()
@@ -309,8 +335,110 @@ public enum ConfigFile {
     return try DesktopConfig.decode(data)
   }
 
-  public static func save(_ config: DesktopConfig, to path: String) throws {
-    try AtomicFile.write(try config.encoded(), to: path, mode: 0o600)
+  /// Writes `config` into the file as it is now: what this build does not know (a key a newer build added, at any depth) and
+  /// what it could not read (a value it fell back from) stays as the owner left it. Only what this save changed is written.
+  /// A file this build cannot decode at all (not JSON, or a value of the wrong kind) is moved to `desktop.json.unreadable-<UTC stamp>`
+  /// first, the newest three kept, and that path is returned, so the caller can say where it went; nothing is lost either way.
+  @discardableResult
+  public static func save(_ config: DesktopConfig, to path: String) throws -> String? {
+    try save(config, to: path) { try AtomicFile.write($0, to: $1, mode: 0o600) }
+  }
+
+  /// The write is a parameter so a test can make it fail after the file was moved aside.
+  @discardableResult
+  static func save(_ config: DesktopConfig, to path: String, write: (Data, String) throws -> Void) throws -> String? {
+    let existing = FileManager.default.contents(atPath: path)
+    var movedTo: String?
+    if let existing, !existing.isEmpty, (try? DesktopConfig.decode(existing)) == nil {
+      movedTo = try setAside(path)
+    }
+    do {
+      try write(try KeepUnknownJSON.encoded(config, overFile: existing), path)
+    } catch {
+      // Nothing was written: put the unreadable file back, so a restart in this window reads what the owner had, not defaults.
+      if let movedTo, !FileManager.default.fileExists(atPath: path) { try? FileManager.default.moveItem(atPath: movedTo, toPath: path) }
+      throw error
+    }
+    if let movedTo { pruneUnreadableCopies(of: path, keeping: movedTo) }  // after the write, so a failure here never costs the new file
+    return movedTo
+  }
+
+  static let unreadableCopiesKept = 3
+
+  private static func setAside(_ path: String) throws -> String {
+    let fm = FileManager.default
+    let dir = (path as NSString).deletingLastPathComponent
+    let name = (path as NSString).lastPathComponent + ".unreadable-"
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.timeZone = TimeZone(identifier: "UTC")
+    f.dateFormat = "yyyyMMdd'T'HHmmssSSS'Z'"
+    var target = dir + "/" + name + f.string(from: Date())
+    while fm.fileExists(atPath: target) { target += "x" }  // the same millisecond twice: still a new name, and it sorts after
+    try fm.moveItem(atPath: path, toPath: target)
+    return target
+  }
+
+  /// The newest three by name (the name is the UTC stamp). The copy just made is never removed, whatever the clock says.
+  private static func pruneUnreadableCopies(of path: String, keeping fresh: String) {
+    let fm = FileManager.default
+    let dir = (path as NSString).deletingLastPathComponent
+    let name = (path as NSString).lastPathComponent + ".unreadable-"
+    let freshName = (fresh as NSString).lastPathComponent
+    let others = ((try? fm.contentsOfDirectory(atPath: dir)) ?? []).filter { $0.hasPrefix(name) && $0 != freshName }.sorted()
+    for old in others.dropLast(unreadableCopiesKept - 1) { try? fm.removeItem(atPath: dir + "/" + old) }
+  }
+}
+
+/// The one mechanism for "round-trip what the model does not know": a three-way merge of the file as it is (`raw`), what this build
+/// makes of that file (`old`, its decode encoded again) and what it is about to write (`new`). A key whose `old` and `new` agree
+/// keeps its raw text; a key the save changed takes the new value or, when `new` has none, is removed; keys only `raw` has stay.
+public enum KeepUnknownJSON {
+  public static func encoded(_ config: DesktopConfig, overFile existing: Data?) throws -> Data {
+    let fresh = try config.encoded()
+    guard let existing, let raw = object(existing), let new = object(fresh) else { return fresh }
+    let options: JSONSerialization.WritingOptions = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
+    if let old = (try? DesktopConfig.decode(existing)).flatMap({ (try? $0.encoded()).flatMap(object) }) {
+      var out = merge(raw: raw, old: old, new: new)
+      // A reset means reset: when the session that was there is replaced by another one or by none (a new conversation), the old
+      // record goes whole, and so do the keys a newer build kept in it. Setting the first id on a session that had none is not a reset.
+      let was = (old["session"] as? [String: Any])?["id"] as? String
+      if let was, was != (new["session"] as? [String: Any])?["id"] as? String { out["session"] = new["session"] }
+      return try JSONSerialization.data(withJSONObject: out, options: options)
+    }
+    // The file cannot be decoded, so there is no "what this build made of it". Every key this build knows is then taken from `new`
+    // (one it left out is cleared, not brought back), and the two nested structs are merged key by key to keep what they do not know.
+    let known = Set(DesktopConfig.CodingKeys.allCases.map(\.rawValue))
+    return try JSONSerialization.data(
+      withJSONObject: merge(raw: raw, old: [:], new: new, forced: known, nested: ["session", "hotkeys"]), options: options)
+  }
+
+  static func merge(
+    raw: [String: Any], old: [String: Any], new: [String: Any], forced: Set<String> = [], nested: Set<String> = []
+  ) -> [String: Any] {
+    var out = raw
+    for k in Set(old.keys).union(new.keys).union(forced) where !same(old[k], new[k]) || forced.contains(k) {
+      if let n = new[k] as? [String: Any], let r = raw[k] as? [String: Any],
+        let o = old[k] as? [String: Any] ?? (nested.contains(k) ? [:] : nil)
+      {
+        out[k] = merge(raw: r, old: o, new: n, forced: nested.contains(k) ? Set(n.keys) : [])
+      } else {
+        out[k] = new[k]
+      }
+    }
+    return out
+  }
+
+  private static func same(_ a: Any?, _ b: Any?) -> Bool {
+    switch (a, b) {
+    case (nil, nil): return true
+    case (let a?, let b?): return (a as AnyObject).isEqual(b)
+    default: return false
+    }
+  }
+
+  private static func object(_ data: Data) -> [String: Any]? {
+    (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
   }
 }
 

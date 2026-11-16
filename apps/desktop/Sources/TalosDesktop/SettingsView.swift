@@ -68,7 +68,7 @@ struct SettingsView: View {
     }
     .frame(minWidth: 640, minHeight: 520)
     .onAppear {
-      cfg = model.supervisor.currentConfig()
+      cfg = model.configNow
       drafts.load(cfg)
       loadLaunch()
       loadThreads()
@@ -82,7 +82,7 @@ struct SettingsView: View {
     .onDisappear { commitDrafts() }
     // Import and Adopt rewrite desktop.json while this window is open; the boxes follow (unless he is typing in one).
     .onChange(of: model.configRevision) {
-      cfg = model.supervisor.currentConfig()
+      cfg = model.configNow
       drafts.follow(cfg)
       // Only when the config's line is not already the one on screen: our own save bumps the revision too, and reloading then
       // would wipe the "Saved" note it just set.
@@ -96,20 +96,20 @@ struct SettingsView: View {
   private func save(_ edit: @escaping @Sendable (inout DesktopConfig) -> Void) {
     guard loaded else { return }
     model.saveSetting(edit)
-    cfg = model.supervisor.currentConfig()
+    cfg = model.configNow  // the save does not wait for the supervisor: this is the config with the edit laid on
   }
 
   private func commitDrafts() {
     guard loaded else { return }
     // Against the live config, not this window's copy: an Adopt or Import since the box was typed in must not be undone.
-    let p = drafts.pending(against: model.supervisor.currentConfig())
+    let p = drafts.pending(against: model.configNow)
     if let d = p.dir { save { $0.agentDir = d } }
     if let c = p.cli { save { $0.talosAppCommand = c } }
     if let r = p.relay {
       save { $0.relayUrl = r }
       web.configure(relayUrl: r)
     }
-    drafts.saved(model.supervisor.currentConfig())
+    drafts.saved(model.configNow)
   }
 
   private func bind<T: Sendable>(_ kp: WritableKeyPath<DesktopConfig, T> & Sendable) -> Binding<T> {
@@ -117,14 +117,14 @@ struct SettingsView: View {
   }
 
   private func loadLaunch() {
-    launchLoaded = LaunchEdit.line(for: model.supervisor.currentConfig())
+    launchLoaded = LaunchEdit.line(for: model.configNow)
     launchDraft = launchLoaded
     launchError = nil
     launchSaved = false
   }
 
   private func loadThreads() {
-    let c = model.supervisor.currentConfig()
+    let c = model.configNow
     let path = ThreadChoices.configPath(
       configEnv: c.env, processEnv: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
     threads = ThreadChoices.read(FileManager.default.contents(atPath: path))
@@ -139,7 +139,7 @@ struct SettingsView: View {
     case .updated:
       launchError = nil
       launchSaved = true
-      cfg = model.supervisor.currentConfig()
+      cfg = model.configNow
       launchLoaded = LaunchEdit.line(for: cfg)
       launchDraft = launchLoaded
     case .refused(let why):
@@ -321,7 +321,7 @@ struct SettingsView: View {
           if web.pageState == .signedIn { Button("Sign out") { Task { await web.signOut() } } }
           Button("Forget this Mac…") {
             commitDrafts()
-            web.forgetThisMac(config: model.supervisor.currentConfig())
+            web.forgetThisMac(config: model.configNow)
           }
           .disabled(!web.hasRelay)
         }
@@ -369,6 +369,13 @@ struct SettingsView: View {
             get: { cfg.openWindowAtLaunch },
             set: { on in save { $0.openWindowAtLaunch = on } }))
         AppliesNote(setting: .openWindowAtLaunch)
+        Toggle(
+          MacSettingsText.autoUpdateTitle,
+          isOn: Binding(
+            get: { cfg.autoUpdate },
+            set: { on in save { $0.autoUpdate = on } }))
+        Text(MacSettingsText.autoUpdateHelp).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        AppliesNote(setting: .autoUpdate)
         Divider()
         Text("About").font(.headline)
         Text(MacAbout.versionLine(version: WebController.version, build: WebController.build))

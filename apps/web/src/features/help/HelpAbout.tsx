@@ -23,9 +23,11 @@ export function buildRows(input: {
   running: Running
   userAgent: string | undefined
   relay: string | null
+  /** The bridge's build, from the health status (absent before it has said hello). */
+  bridge?: string | null
 }): Array<{ label: string; value: string }> {
   const rows = [
-    { label: 'App build', value: input.app },
+    { label: 'Web app build', value: input.app },
     { label: 'Running in', value: input.running },
   ]
   if (input.running === 'Mac app') {
@@ -35,7 +37,8 @@ export function buildRows(input: {
     rows.push({ label: 'iPhone app', value: iosAppVersion(input.userAgent) ?? 'not reported (an older build?)' })
   }
   rows.push({ label: 'Protocol', value: `v${PROTOCOL_VERSION}` })
-  if (input.relay) rows.push({ label: 'Server', value: input.relay })
+  if (input.relay) rows.push({ label: 'Server build', value: input.relay })
+  if (input.bridge) rows.push({ label: 'Bridge build', value: input.bridge })
   return rows
 }
 
@@ -45,11 +48,13 @@ export function AboutBuild() {
   const { state, refresh } = useHealthStatus(undefined, !signedOut)
   const running = whereRunning()
   const relay = signedOut ? null : (state.status?.relay.version ?? null)
+  const bridge = signedOut ? null : (state.status?.bridge?.version ?? null)
   const rows = buildRows({
     app: import.meta.env.VITE_APP_VERSION ?? '0.0.0',
     running,
     userAgent: globalThis.navigator?.userAgent,
     relay,
+    bridge,
   })
   return (
     <div className="flex flex-col gap-2" data-testid="help-build">

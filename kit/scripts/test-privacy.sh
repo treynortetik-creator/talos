@@ -15,6 +15,7 @@
 # Usage: bash scripts/test-privacy.sh
 set -uo pipefail
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 export KIT
 python3 - <<'PY'
 import os, re, subprocess, sys

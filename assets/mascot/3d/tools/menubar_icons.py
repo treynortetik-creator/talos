@@ -17,6 +17,7 @@ import sys
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+import label_font
 from scipy import ndimage
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '..'))
@@ -26,7 +27,6 @@ STATES = ['ok', 'working', 'needs-you', 'down', 'unknown']
 LABELS = {'ok': 'ok', 'working': 'working', 'needs-you': 'needs you', 'down': 'down', 'unknown': 'unknown'}
 HEIGHT = 18  # points; the image is square
 SS = 16  # supersampling per output pixel
-FONT = '/System/Library/Fonts/Supplemental/Arial.ttf'
 
 # Where the head is in the 512 px source (the box holds crest, dome, both ear cups and the chin; the neck is below it).
 BOX = (150, 36, 356, 248)
@@ -189,8 +189,8 @@ def write(out_dir):
 
 def sheet(path, icons_dir):
     """Every state, light and dark bar, at 18 pt (1x: 18 px, 2x: 36 px) and 4x zoomed, each with its state name burned in."""
-    font = ImageFont.truetype(FONT, 14)
-    small = ImageFont.truetype(FONT, 12)
+    font = label_font.font(14)
+    small = label_font.font(12)
     bars = [('light bar', (236, 236, 236), (28, 28, 28)), ('dark bar', (46, 46, 46), (240, 240, 240))]
     rows = [('18 pt @1x (18 px)', 1, 1), ('18 pt @2x (36 px)', 2, 1), ('@1x zoomed 4x', 1, 4), ('@2x zoomed 4x', 2, 4)]
     col_w, row_h, left, top = 170, [], 150, 34

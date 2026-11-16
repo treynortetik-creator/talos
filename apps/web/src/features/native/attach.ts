@@ -1,5 +1,7 @@
 // Connects a detected shell to the running app: tells it the page is ready, mirrors the Needs-you count and the thread
 // list, and handles what the shell sends (compose, navigate, enroll_code). Every handler validates again where it matters.
+
+import { cardExpiryMs, WEB_FEATURE_CAPTURE_DROP } from '@talos-app/protocol'
 import type { TalosClient } from '../../lib/client.ts'
 import { setCompanionReplies } from '../../lib/native/companionReplies.ts'
 import { folderPicked } from '../../lib/native/folderPick.ts'
@@ -7,8 +9,10 @@ import { setMacNotifyPermission } from '../../lib/native/notifyPermission.ts'
 import type { Shell } from '../../lib/native/shell.ts'
 import { useSession } from '../auth/session.ts'
 import { useTerminalSessions } from '../terminal/sessions.ts'
+import { handleCaptureDrop } from './capture.ts'
 import { lastReplyText, startCompanionFeed } from './companion.ts'
 import { startNativeNotify } from './notify.ts'
+import { shellReadySent } from './shellReady.ts'
 
 export const NATIVE_FEATURES = [
   'notify',
@@ -19,6 +23,7 @@ export const NATIVE_FEATURES = [
   'enroll_code',
   'companion/1',
   'terminal-tabs/1',
+  WEB_FEATURE_CAPTURE_DROP,
 ] as const
 
 /** The longest name the `threads` message carries (NativeThreads): a longer one would make the shell drop the whole list. */
@@ -95,6 +100,10 @@ export function attachShell(shell: Shell, client: TalosClient, opts: { nav?: Nav
       // no sign-in needed: it only answers a request this page made, and the path still goes through the checked patch
       folderPicked(m.req, m.path, m.why)
     },
+    capture_drop(m) {
+      // Always answered (capture_ack), never thrown: the Mac app needs the reason to tell the owner, and drops the image.
+      return handleCaptureDrop(m, { client, signedIn, nav, send: (a) => bridge.send(a) })
+    },
     enroll_code(m) {
       // The code goes into the fragment like a pasted setup link; EnrollPage reads it from there.
       goto(`/enroll#${m.code}`)
@@ -107,6 +116,7 @@ export function attachShell(shell: Shell, client: TalosClient, opts: { nav?: Nav
     if (now === lastSigned) return
     lastSigned = now
     bridge.send({ type: 'ready', shell_api: 1, features: [...NATIVE_FEATURES], signed_in: now })
+    shellReadySent()
   }
 
   let lastBadge = -1
@@ -117,9 +127,7 @@ export function attachShell(shell: Shell, client: TalosClient, opts: { nav?: Nav
     ready()
     const st = client.store.getState()
     const live = useSession.getState().status === 'authed'
-    const count = live
-      ? st.cards.filter((c) => c.state === 'pending' && Date.parse(c.expires_at) > Date.now()).length
-      : 0
+    const count = live ? st.cards.filter((c) => c.state === 'pending' && cardExpiryMs(c) > Date.now()).length : 0
     if (count !== lastBadge) {
       lastBadge = count
       bridge.send({ type: 'badge', count })

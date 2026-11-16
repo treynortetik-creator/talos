@@ -1,0 +1,40 @@
+
+           Claude Code
+ ▐▛███▛█   v2.1.325
+▝▜██████▀  Fable 5.2
+ ▝▝   ▝▝   Claude Max  
+           /…/proj
+
+
+❯ Run the shell command:
+  sleep 20, in the
+  background. Then reply ok
+  and stop.
+
+  Ran 1 shell command
+
+⏺ ok
+
+✻ Cogitated for 5s · done 8:26
+  PM · 1 shell still running
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  You've used 50% of your w…
+──────────────────────────────
+❯ 
+──────────────────────────────
+  ⏸ manual mode on · 1 shell

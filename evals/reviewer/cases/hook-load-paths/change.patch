@@ -1,0 +1,2192 @@
+diff --git a/apps/bridge/test/supervisor/swift-parity.test.ts b/apps/bridge/test/supervisor/swift-parity.test.ts
+index ebcfb75f..f3a57411 100644
+--- a/apps/bridge/test/supervisor/swift-parity.test.ts
++++ b/apps/bridge/test/supervisor/swift-parity.test.ts
+@@ -109,7 +109,10 @@ describe('the MCP allow list’s fixed parts are WorkerMcp.swift’s', () => {
+ 
+ describe('the thread session’s permission hook is WorkerHook.swift’s', () => {
+   // the hook's rules, and where it comes from on the Mac (the app bundle's own copy, checked by its code signature)
+-  const hookSwift = swift('TalosDesktopCore/WorkerHook.swift') + swift('TalosDesktopCore/WorkerHookSource.swift')
++  const hookSwift =
++    swift('TalosDesktopCore/WorkerHook.swift') +
++    swift('TalosDesktopCore/WorkerHookSource.swift') +
++    swift('TalosDesktopCore/WorkerHookPython.swift')
+   const hookTs = readFileSync(join(import.meta.dir, '../../src/supervisor/worker-hook.ts'), 'utf8')
+   /** Swift's `\(name)` written as the template's `${name}`. */
+   const asTemplate = (s: string) => s.replace(/\\\((\w+)\)/g, '${$1}')
+@@ -177,15 +180,61 @@ describe('the thread session’s permission hook is WorkerHook.swift’s', () =>
+   it('the copy’s folder and the command the settings run', () => {
+     expect(workerHookDir('/h/.talos')).toBe('/h/.talos/workers/_hook')
+     expect(hookSwift).toContain('talosHome + "/workers/_hook"')
+-    // the same literal is what the Mac's own test holds WorkerHook.command to (WorkerHookTests.swift)
++    // Linux's command, as it is
+     const command = permissionHookCommand('/home/alex/.talos/workers/_hook/permission-relay.py', '/usr/bin/python3')
+     expect(command).toBe(
+       `f='/home/alex/.talos/workers/_hook/permission-relay.py'; [ -f "$f" ] || exit 0; TALOS_APP_PERM_HOOK_SOURCE=worker exec '/usr/bin/python3' -I "$f"`,
+     )
++    // The Mac's differs (review R1-1 of the Mac twin, and the Linux twin's review): the interpreter runs in an empty environment that
++    // holds only what is listed, since a thread folder's settings can set DEVELOPER_DIR (Apple's /usr/bin/python3 launcher takes its
++    // program from it), and the session's own shell only assigns and calls `exec`: the test that the copy is there runs in a second
++    // shell started clean, so an imported function named `[` cannot answer. Same copy, quoted the same way; same marker; the same
++    // isolated interpreter running the copy, and nothing when it is gone.
++    const macCommand = /return "(f=.*)"\n/.exec(swift('TalosDesktopCore/WorkerHook.swift'))?.[1] ?? ''
++    expect(macCommand.startsWith('f=\\(quote(hook.script)); exec /usr/bin/env -i ')).toBe(true)
++    expect(macCommand.endsWith(' /bin/sh -c \\(quote(cleanLine)) \\"$f\\" \\(quote(hook.python))')).toBe(true)
++    expect(hookSwift).toContain('static let cleanLine = "[ -f \\"$0\\" ] || exit 0; exec \\"$1\\" -I -S \\"$0\\""')
++    expect(hookSwift).toContain('"TALOS_APP_PERM_HOOK_SOURCE=worker"')
++    expect(hookSwift).toContain('"PATH=/usr/bin:/bin"')
++    // and the Mac's own test holds WorkerHook.command to its whole text (WorkerHookTests.swift)
+     const macTest = readFileSync(join(SRC, '../Tests/TalosDesktopCoreTests/WorkerHookTests.swift'), 'utf8')
+-    expect(macTest).toContain(`cmd == "${command.replaceAll('"', '\\"')}"`)
+-    expect(hookSwift).toContain(
+-      '"f=\\(quote(hook.script)); [ -f \\"$f\\" ] || exit 0; TALOS_APP_PERM_HOOK_SOURCE=worker exec \\(quote(hook.python)) -I \\"$f\\""',
++    expect(macTest).toContain(
++      `cmd == "f='/home/alex/.talos/workers/_hook/permission-relay.py'; exec /usr/bin/env -i HOME='/home/alex' PATH=/usr/bin:/bin LANG=en_US.UTF-8 TALOS_APP_HOME='/home/alex/.talos' TALOS_APP_WORKER_THREAD='trip' TALOS_APP_PERM_HOOK_SOURCE=worker `,
++    )
++  })
++  // The folder settings a Mac thread session's start allows are the ones its hook allows at every prompt (kit/hooks/permission-relay.py).
++  // One list for both: the Linux twin's, when it has one, joins this test.
++  it('the folder settings allow-lists are the hook script’s', () => {
++    const folder = swift('TalosDesktopCore/WorkerHookFolder.swift')
++    const relay = readFileSync(join(import.meta.dir, '../../../../kit/hooks/permission-relay.py'), 'utf8')
++    const list = (text: string, re: RegExp) =>
++      [...(re.exec(text)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort()
++    const swiftEnv = list(folder, /allowedEnv: Set<String> = \[([^\]]*)\]/)
++    const swiftKeys = list(folder, /allowedKeys: Set<String> = \[([^\]]*)\]/)
++    const swiftPerms = list(folder, /allowedPermissionKeys: Set<String> = \[([^\]]*)\]/)
++    expect(swiftEnv.length).toBe(18)
++    expect(swiftEnv).toContain('MAX_THINKING_TOKENS')
++    expect(swiftEnv).not.toContain('CLAUDE_CODE_SHELL_PREFIX')
++    expect(swiftKeys).toEqual([
++      '$schema',
++      'alwaysThinkingEnabled',
++      'claudeMdExcludes',
++      'cleanupPeriodDays',
++      'env',
++      'includeCoAuthoredBy',
++      'model',
++      'outputStyle',
++      'permissions',
++      'skillOverrides',
++    ])
++    expect(swiftPerms).toEqual(['ask', 'deny'])
++    expect(list(relay, /ALLOWED_ENV = frozenset\(\(([^)]*)\)\)/)).toEqual(swiftEnv)
++    expect(list(relay, /ALLOWED_KEYS = frozenset\(\(([^)]*)\)\)/)).toEqual(swiftKeys)
++    expect(list(relay, /ALLOWED_PERMISSION_KEYS = frozenset\(\(([^)]*)\)\)/)).toEqual(swiftPerms)
++    // the hook reads the folder only when the Mac's command names it: Linux's command does not, so Linux is unchanged
++    expect(swift('TalosDesktopCore/WorkerHook.swift')).toContain('"TALOS_APP_HOOK_CHECK_DIR=')
++    expect(readFileSync(join(import.meta.dir, '../../src/supervisor/worker-spec.ts'), 'utf8')).not.toContain(
++      'TALOS_APP_HOOK_CHECK_DIR',
+     )
+   })
+   it('the thread’s line, up to where each platform says how to restart, and the audit events', () => {
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerFence.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerFence.swift
+index 961f63c2..e7a711de 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/WorkerFence.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerFence.swift
+@@ -47,6 +47,28 @@ public enum WorkerFence {
+   /// isolation" (a worker with no key). Not part of the checked Talos-home fence (`missing`), so a spec without them still validates.
+   public static let extraDeny = ["Bash(talos-app post:*)", "Bash(*talos-app post*)", "Bash(*cli.ts post*)"]
+ 
++  /// The tools that write a file, for the settings-file deny.
++  public static let writers = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
++
++  /// A session may not edit the Claude Code settings of any folder a thread session works in (`projectFolders`: its own, the agent
++  /// folder, every other thread's) or the owner's (`configDirs`: ~/.claude and CLAUDE_CONFIG_DIR). Those files add variables and hooks
++  /// to a session, and so to the shell that runs its permission hook (WorkerHookFolder.swift). Each path in every spelling
++  /// `spellings` gives. A folder whose name Claude Code would read as a glob is left out: no rule can name it (its start is refused
++  /// by the folder check instead, which reads the files themselves).
++  public static func settingsDeny(projectFolders: [String], configDirs: [String]) -> [String] {
++    var files: [String] = []
++    for f in projectFolders where isSafe(talosHome: f) { files += spellings(f).flatMap { [$0 + "/.claude/settings.json", $0 + "/.claude/settings.local.json"] } }
++    for d in configDirs where isSafe(talosHome: d) { files += spellings(d).flatMap { [$0 + "/settings.json", $0 + "/settings.local.json"] } }
++    var out: [String] = []
++    for tool in writers {
++      for file in files where file.hasPrefix("/") {
++        let rule = "\(tool)(/\(file))"
++        if !out.contains(rule) { out.append(rule) }
++      }
++    }
++    return out
++  }
++
+   /// `settings` with `rules` added to `permissions.deny` (a union: what is there stays, nothing repeats). nil when `permissions` or its
+   /// `deny` is there in a shape that cannot be added to: it is never replaced.
+   public static func adding(deny rules: [String], to settings: [String: Any]) -> [String: Any]? {
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift
+index 5624f9d4..44251fec 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift
+@@ -35,51 +35,6 @@ public enum WorkerHook {
+   /// own approvals answer themselves. `_hook` is no thread id (ids are letters, digits and dashes).
+   public static func dir(talosHome: String) -> String { talosHome + "/workers/_hook" }
+ 
+-  /// The first python3 on `path` that is a real interpreter, from an absolute entry that is not, and does not lead, inside any of
+-  /// `fenced` (the thread's folder, the agent folder): a python3 a thread could put there would run its own approvals (R1-7). Its
+-  /// links are followed and the REAL file is returned (what the command runs). A version manager's shim (a `#!` script, or one
+-  /// whose real file is not named python3, such as mise's) is passed over, for it reads its choice from the folder it runs in,
+-  /// which is the thread's. An empty or relative entry is the thread folder at run time, so it is never used either. As the
+-  /// Linux twin's findPython3 (worker-hook.ts).
+-  public static func findPython3(path: String?, fenced: [String] = []) -> String? {
+-    let walls = fenced.filter { $0.hasPrefix("/") }.compactMap { resolved($0) }
+-    func within(_ p: String, _ folder: String) -> Bool { p == folder || p.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/") }
+-    for d in (path ?? "").split(separator: ":", omittingEmptySubsequences: false) where d.hasPrefix("/") {
+-      let p = d.hasSuffix("/") ? "\(d)python3" : "\(d)/python3"
+-      var st = stat()
+-      guard stat(p, &st) == 0, st.st_mode & S_IFMT == S_IFREG, access(p, X_OK) == 0 else { continue }
+-      guard let realDir = resolved(String(d)), let realBin = resolved(p) else { continue }
+-      if walls.contains(where: { within(realDir, $0) || within(realBin, $0) }) { continue }
+-      guard isPython3Name((realBin as NSString).lastPathComponent), !isScript(realBin) else { continue }
+-      return realBin
+-    }
+-    return nil
+-  }
+-
+-  /// `python3`, `python3.13`, `python3.13.1`: the real file's name. A shim's real file is named for its manager.
+-  static func isPython3Name(_ name: String) -> Bool {
+-    guard name.hasPrefix("python3") else { return false }
+-    let rest = name.dropFirst("python3".count)
+-    if rest.isEmpty { return true }
+-    guard rest.hasPrefix(".") else { return false }
+-    return rest.dropFirst().split(separator: ".", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isNumber } }
+-  }
+-
+-  /// A `#!` script (a pyenv or asdf shim, a wrapper): it may pick its interpreter from the folder it is run in. A file that
+-  /// cannot be read counts as one.
+-  static func isScript(_ p: String) -> Bool {
+-    guard let h = FileHandle(forReadingAtPath: p) else { return true }
+-    defer { try? h.close() }
+-    guard let head = try? h.read(upToCount: 2) else { return true }
+-    return head == Data("#!".utf8)
+-  }
+-
+-  private static func resolved(_ p: String) -> String? {
+-    guard let r = realpath(p, nil) else { return nil }
+-    defer { free(r) }
+-    return String(cString: r)
+-  }
+-
+   /// Why `script` is not a hook that can be run, or nil: an absolute path to a readable regular file (links followed).
+   static func scriptProblem(_ script: String) -> String? {
+     guard script.hasPrefix("/") else { return "the permission hook \(script) is not an absolute path" }
+@@ -116,10 +71,13 @@ public enum WorkerHook {
+ 
+   /// Why a session started with this `path` could not run the hook from `source`, or nil (the start's preflight: nothing is written).
+   /// With `talosHome`, the copy's folder is looked at too, as far as it exists: a start that `install` would refuse for it takes no slot.
+-  /// `fenced`: the starting thread's folder and the agent folder. Neither the app nor the python3 may be inside one.
+-  public static func problem(source: BundleSource, path: String?, talosHome: String? = nil, fenced: [String] = []) -> String? {
++  /// `fenced`: the starting thread's folder and the agent folder. Neither the app nor the python3 may be inside one. `python`:
++  /// where else a python3 may not be (every other thread's folder, the owner's home).
++  public static func problem(
++    source: BundleSource, path: String?, talosHome: String? = nil, fenced: [String] = [], python: PythonRules = .init()
++  ) -> String? {
+     if case .problem(let why) = source.verified(outside: fenced) { return why }
+-    if findPython3(path: path, fenced: fenced) == nil { return noPython }
++    if findPython3(path: path, fenced: fenced, rules: python) == nil { return noPython }
+     guard let talosHome, let unsafe = folderProblem(talosHome: talosHome, dir: dir(talosHome: talosHome), existingOnly: true) else { return nil }
+     return "the permission hook's folder \(unsafe)"
+   }
+@@ -132,10 +90,12 @@ public enum WorkerHook {
+ 
+   /// The hook the session runs: `source`'s script and its helper written into the fenced folder (0600, written whole), made only
+   /// of the bytes the check verified (read once, checked, then those bytes written: a swap between check and copy cannot land),
+-  /// and the python3 the session's PATH names, resolved now and written into the command. Or why not: then the start is
+-  /// refused. A source with no helper leaves none in the copy's folder either: an old one would be imported in its place.
++  /// and the python3 the session's PATH names, resolved now (at every start: one that was fine last time is checked again) and
++  /// written into the command. Or why not: then the start is refused. A source with no helper leaves none in the copy's folder
++  /// either: an old one would be imported in its place.
+   public static func install(
+-    talosHome: String, source: BundleSource, path: String?, fenced: [String] = [], resolvePython: ((String?) -> String?)? = nil
++    talosHome: String, source: BundleSource, path: String?, fenced: [String] = [], python rules: PythonRules = .init(),
++    resolvePython: ((String?) -> String?)? = nil
+   ) -> Outcome {
+     let checked: BundleSource.Verified
+     switch source.verified(outside: fenced) {
+@@ -147,7 +107,7 @@ public enum WorkerHook {
+       guard let given = resolvePython(path), given.hasPrefix("/") else { return .problem(noPython) }
+       python = given
+     } else {
+-      guard let found = findPython3(path: path, fenced: fenced) else { return .problem(noPython) }
++      guard let found = findPython3(path: path, fenced: fenced, rules: rules) else { return .problem(noPython) }
+       python = found
+     }
+     let dir = dir(talosHome: talosHome)
+@@ -173,15 +133,68 @@ public enum WorkerHook {
+     return .installed(.init(script: script, python: python), replaced: replaced)
+   }
+ 
+-  /// The hook's command: `script` run by `python` (both absolute, resolved at the start), isolated (`-I`: no PYTHON* variables, no
+-  /// user site, no script folder on the path; the hook adds its own folder for its helper), marked as the session's own copy (the
+-  /// agent folder's stays silent, so one prompt raises one card). No `command -v`: the PATH Claude Code runs hooks with can differ
+-  /// from the one checked (a folder's settings may set `env.PATH`; an empty entry is the thread folder).
+-  public static func command(_ hook: Installed) -> String {
+-    "f=\(quote(hook.script)); [ -f \"$f\" ] || exit 0; TALOS_APP_PERM_HOOK_SOURCE=worker exec \(quote(hook.python)) -I \"$f\""
++  /// What the hook's command is written for: the thread, its Talos home and the owner's home. They go into the command as text, so
++  /// the session's own environment cannot name another hub, another thread or another home for the hook.
++  /// `folder`: the session's own folder, whose Claude Code settings the hook reads again at every prompt (`TALOS_APP_HOOK_CHECK_DIR`;
++  /// WorkerHookFolder.swift has the rules), and `folderHooksCount`: whether hooks of its own count there (not in the agent folder).
++  public struct Session: Equatable, Sendable {
++    public var home: String
++    public var talosHome: String
++    public var threadId: String
++    public var folder: String?
++    public var folderHooksCount: Bool
++    public init(home: String, talosHome: String, threadId: String, folder: String? = nil, folderHooksCount: Bool = true) {
++      self.home = home
++      self.talosHome = talosHome
++      self.threadId = threadId
++      self.folder = folder
++      self.folderHooksCount = folderHooksCount
++    }
++  }
++
++  /// The home the hook runs with: the session's, when it is a folder that is there, else this account's. A HOME that is not there
++  /// costs Apple's tools seconds at every run, and the hook reads its kill switch below it.
++  public static func hookHome(_ given: String?) -> String {
++    var isDir: ObjCBool = false
++    if let h = given, h.hasPrefix("/"), FileManager.default.fileExists(atPath: h, isDirectory: &isDir), isDir.boolValue { return h }
++    return NSHomeDirectory()
++  }
++
++  /// The only variables the hook is run with that come from the session: each is a value the hook reads (the thread's proof, the
++  /// kill switch and where its file is, the wait, Claude Code's own three), never one that picks a program or a library.
++  static let passedThrough = [
++    "TALOS_APP_WORKER_NONCE", "TALOS_PERMISSION_RELAY_OFF", "TALOS_PERMISSION_HOOK_WAIT_S", "CLAUDE_PID", "CLAUDE_CODE_SESSION_ATTENDED",
++    "CLAUDE_PROJECT_DIR", "XDG_STATE_HOME", "CHRONOS_CONFIG",
++  ]
++
++  /// The shell line that runs in the clean environment: `$0` is the copy, `$1` the interpreter. Every test of the command is made
++  /// here, by a shell that started with nothing of the session's.
++  static let cleanLine = "[ -f \"$0\" ] || exit 0; exec \"$1\" -I -S \"$0\""
++
++  /// The hook's command: `script` run by `python` (both absolute, resolved at the start) in an EMPTY environment (`/usr/bin/env -i`)
++  /// that holds only what is listed here. A thread folder's `.claude/settings*.json` can set any variable for the session's hooks
++  /// (`env`), and the hook is the program that answers that thread's prompts: DEVELOPER_DIR picks the program Apple's
++  /// /usr/bin/python3 launcher runs, DYLD_* loads a library into the interpreter, PYTHON* changes what it imports, and
++  /// TALOS_APP_HOME names the hub it asks (R1-1). None of them reaches the interpreter: the home, the Talos home, the thread and
++  /// the PATH are written here as text, and the rest are the few values of `passedThrough`. `-I` and `-S` besides: no user site, no
++  /// site-packages, no `.pth` file (the hook is standard library only; it adds its own folder for its helper). Marked as the
++  /// session's own copy (the agent folder's stays silent, so one prompt raises one card). No `command -v`: the interpreter is
++  /// never looked up when the hook runs.
++  /// The shell Claude Code runs this line with has the SESSION's environment, so this part of it does nothing but assign `f` and
++  /// call `exec`, a special builtin (found before any function, so an imported `exec` or `[` function changes nothing). The test
++  /// that the copy is there, and the run, are made by a second `/bin/sh` that `env -i` starts clean (`cleanLine`).
++  /// What this cannot cover: that first shell reads SHELLOPTS and PS4 from the session (xtrace with a PS4 that runs a program), so
++  /// a start whose folder's settings set such a variable is refused before this line is ever written (WorkerHookFolder.swift).
++  public static func command(_ hook: Installed, for s: Session) -> String {
++    let fixed = [
++      "HOME=\(quote(s.home))", "PATH=/usr/bin:/bin", "LANG=en_US.UTF-8", "TALOS_APP_HOME=\(quote(s.talosHome))",
++      "TALOS_APP_WORKER_THREAD=\(quote(s.threadId))", "TALOS_APP_PERM_HOOK_SOURCE=worker",
++    ] + (s.folder.map { ["TALOS_APP_HOOK_CHECK_DIR=\(quote($0))", "TALOS_APP_HOOK_CHECK_HOOKS=\(s.folderHooksCount ? "1" : "0")"] } ?? [])
++    let passed = passedThrough.map { "\($0)=\"${\($0)-}\"" }
++    return "f=\(quote(hook.script)); exec /usr/bin/env -i \((fixed + passed).joined(separator: " ")) /bin/sh -c \(quote(cleanLine)) \"$f\" \(quote(hook.python))"
+   }
+ 
+-  /// Always quoted, as the Linux twin writes it, so the two commands are the same text for the same paths.
++  /// Always quoted, as the Linux twin quotes its paths.
+   static func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+ 
+   /// The one line the thread gets when its start is refused for this.
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerHookFolder.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerHookFolder.swift
+new file mode 100644
+index 00000000..4e637940
+--- /dev/null
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerHookFolder.swift
+@@ -0,0 +1,167 @@
++import Foundation
++
++/// What a thread folder's own Claude Code settings may carry, for its session's permission hook to be trusted. Claude Code runs the
++/// hook's command, and every Bash command, in the SESSION's environment, and the project's `.claude/settings.json` and
++/// `.claude/settings.local.json` (the folder's, and its git root's when the folder sits below one) add to that environment (`env`)
++/// and to what the session runs (`hooks`, `statusLine`, `apiKeyHelper`, `CLAUDE_CODE_SHELL_PREFIX`, which wraps every hook and
++/// command in a script of the folder's choosing). A deny-list of the dangerous ones keeps missing one, so these are allow-lists:
++///  - `env` may hold only Claude Code's own tunables (`allowedEnv`), each a plain value;
++///  - outside the agent folder, only the settings keys of `allowedKeys`, and `permissions` with only `deny` and `ask` (an `allow`
++///    there would widen the session past what the owner approved);
++///  - the agent folder's settings carry the kit's own hooks and status line by design (its permission hook stays silent in a thread
++///    session), so only their `env` is held to this there.
++/// A start whose folder's settings carry anything else is refused, and the owner is told which file and, when it is a plain name,
++/// which key (`worker_hook_missing`). The files are read at every start, and again by the hook at every prompt; a session's own edits
++/// to them are denied in its settings (`WorkerFence.settingsDeny`). The hook's own re-check stops only an honest hook: one whose
++/// shell was already steered does not run the check at all.
++/// The same lists are kit/hooks/permission-relay.py's (swift-parity.test.ts holds them equal).
++extension WorkerHook {
++  /// Claude Code's own tunables: numbers and switches, none of which names a program, a library or a folder to run from.
++  public static let allowedEnv: Set<String> = [
++    "BASH_DEFAULT_TIMEOUT_MS", "BASH_MAX_TIMEOUT_MS", "BASH_MAX_OUTPUT_LENGTH", "MAX_THINKING_TOKENS", "MAX_MCP_OUTPUT_TOKENS", "MCP_TIMEOUT",
++    "MCP_TOOL_TIMEOUT", "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
++    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "DISABLE_TELEMETRY", "DISABLE_AUTOUPDATER", "DISABLE_ERROR_REPORTING", "DISABLE_BUG_COMMAND",
++    "DISABLE_COST_WARNINGS", "DISABLE_NON_ESSENTIAL_MODEL_CALLS", "DISABLE_PROMPT_CACHING",
++  ]
++  /// The settings keys a thread folder's project settings may have (outside the agent folder).
++  public static let allowedKeys: Set<String> = [
++    "$schema", "env", "permissions", "model", "includeCoAuthoredBy", "cleanupPeriodDays", "alwaysThinkingEnabled", "outputStyle",
++    // which CLAUDE.md files and skills load: text the session reads, never a program (this repository's own settings use both)
++    "claudeMdExcludes", "skillOverrides",
++  ]
++  public static let allowedPermissionKeys: Set<String> = ["deny", "ask"]
++
++  public static let noConfig =
++    "the agent config has not been read yet, so the thread folders a thread session's permission hook is fenced from are not known"
++
++  /// A key as the owner's line may show it: a plain name, or a word that says it is not one (a key is the folder's text, and the
++  /// line goes to the phone).
++  public static func shownKey(_ k: String) -> String {
++    let plain = !k.isEmpty && k.utf8.count <= 64 && k.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "_$.-".unicodeScalars.contains($0)) }
++    return plain ? k : "a key that is not a plain name"
++  }
++
++  /// The folder holding `folder`'s git repository (the nearest folder at or above it with a `.git`), or nil.
++  public static func gitRoot(of folder: String) -> String? {
++    guard var d = resolved(folder) else { return nil }
++    while true {
++      var st = stat()
++      if lstat(d + "/.git", &st) == 0 { return d }
++      if d == "/" { return nil }
++      d = (d as NSString).deletingLastPathComponent
++    }
++  }
++
++  /// The git roots whose project settings Claude Code reads for a session in `folder`, or why they cannot be known. The nearest
++  /// folder with a `.git` (its working tree), and when that `.git` is a FILE (a linked worktree, or a submodule) the CANONICAL root
++  /// it leads to: Claude Code reads `settings.local.json` there, following `.git` -> `gitdir:` -> `commondir`. A thread can write
++  /// such a file in its own folder to name any repository, so the chain is followed here too, and a `.git` that is a link, or a
++  /// pointer that does not resolve, refuses the start.
++  public static func gitRoots(of folder: String) -> (roots: [String], problem: String?) {
++    guard let top = gitRoot(of: folder) else { return ([], nil) }
++    let dotGit = top + "/.git"
++    let broken = "the thread folder's git repository at \(dotGit) points somewhere that cannot be followed, so the settings Claude Code reads for it are not known"
++    var st = stat()
++    guard lstat(dotGit, &st) == 0 else { return ([top], broken) }
++    switch st.st_mode & S_IFMT {
++    case S_IFDIR: return ([top], nil)
++    case S_IFREG: break
++    default: return ([top], "the thread folder's \(dotGit) is a link, so the settings Claude Code reads for it are not known")
++    }
++    guard let text = readSmall(dotGit, cap: 4096).flatMap({ String(data: $0, encoding: .utf8) }),
++      let line = text.split(whereSeparator: \.isNewline).first, line.hasPrefix("gitdir:")
++    else { return ([top], broken) }
++    var gitdir = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
++    if !gitdir.hasPrefix("/") { gitdir = top + "/" + gitdir }
++    guard let realGitdir = resolved(gitdir), isDir(realGitdir) else { return ([top], broken) }
++    // a submodule's git folder has no commondir: its working tree is the canonical root
++    let commonFile = realGitdir + "/commondir"
++    guard FileManager.default.fileExists(atPath: commonFile) else { return ([top], nil) }
++    guard let ct = readSmall(commonFile, cap: 4096).flatMap({ String(data: $0, encoding: .utf8) }) else { return ([top], broken) }
++    var common = ct.trimmingCharacters(in: .whitespacesAndNewlines)
++    if !common.hasPrefix("/") { common = realGitdir + "/" + common }
++    guard let realCommon = resolved(common), isDir(realCommon) else { return ([top], broken) }
++    // the main working tree is the folder holding the common git folder (`<root>/.git`); a bare repository has none
++    guard (realCommon as NSString).lastPathComponent == ".git" else { return ([top], nil) }
++    let canonical = (realCommon as NSString).deletingLastPathComponent
++    return canonical == top ? ([top], nil) : ([top, canonical], nil)
++  }
++
++  private static func isDir(_ p: String) -> Bool {
++    var st = stat()
++    return stat(p, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR
++  }
++
++  /// The settings files' size cap: far past any real settings file, and a reader never holds a session's start on a big one.
++  public static let settingsCap = 256 * 1024
++
++  /// The bytes of `p` when it is a regular file (links followed) of at most `cap` bytes, read through one open descriptor that never
++  /// blocks; nil otherwise. A FIFO, a device (a link to /dev/zero) or a huge file at a settings path cannot hold the reader.
++  static func readSmall(_ p: String, cap: Int) -> Data? {
++    let fd = open(p, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
++    guard fd >= 0 else { return nil }
++    let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
++    var st = stat()
++    guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= cap else { return nil }
++    guard let d = try? h.read(upToCount: cap + 1), d.count <= cap else { return nil }
++    return d
++  }
++
++  /// The folders whose project settings a session in `folder` reads: it, and its git roots (`gitRoots`), or why they are not known.
++  public static func settingsFolders(_ folder: String) -> (folders: [String], problem: String?) {
++    let me = resolved(folder) ?? folder
++    let g = gitRoots(of: folder)
++    return ([me] + g.roots.filter { $0 != me }, g.problem)
++  }
++
++  /// The two project settings files Claude Code reads in `folder`.
++  public static func projectSettingsFiles(_ folder: String) -> [String] {
++    let f = folder.hasSuffix("/") ? String(folder.dropLast()) : folder
++    return [f + "/.claude/settings.json", f + "/.claude/settings.local.json"]
++  }
++
++  /// Why the start in `folder` is refused for its project settings (or its git root's), or nil. A file that is there and cannot be
++  /// read as settings is a refusal too: what it would set is not known. `isAgentFolder`: `folder` is the agent folder.
++  public static func folderSettingsProblem(folder: String, isAgentFolder: Bool) -> String? {
++    let found = settingsFolders(folder)
++    if let why = found.problem { return why }
++    for (n, f) in found.folders.enumerated() {
++      for file in projectSettingsFiles(f) {
++        if let why = fileProblem(file, kitOwned: isAgentFolder && n == 0) { return why }
++      }
++    }
++    return nil
++  }
++
++  static func fileProblem(_ file: String, kitOwned: Bool) -> String? {
++    let unknown = "the thread folder's \(file) cannot be read as settings, so what it sets for the session is not known"
++    var st = stat()
++    if lstat(file, &st) != 0 {
++      if errno == ENOENT || errno == ENOTDIR { return nil }
++      return unknown
++    }
++    guard let data = readSmall(file, cap: settingsCap) else { return unknown }
++    if data.allSatisfy({ $0 == 0x20 || $0 == 0x0A || $0 == 0x0D || $0 == 0x09 }) { return nil }  // empty: Claude Code reads nothing from it
++    guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return unknown }
++    if let env = json["env"] {
++      guard let dict = env as? [String: Any] else { return unknown }
++      for k in dict.keys.sorted() {
++        let plainValue = dict[k] is String || dict[k] is NSNumber
++        if !allowedEnv.contains(k) || !plainValue {
++          return "the thread folder's \(file) sets \(shownKey(k)) for the session, which is not one of Claude Code's own settings a thread session may change (remove it from that file's env)"
++        }
++      }
++    }
++    if kitOwned { return nil }
++    if let k = json.keys.sorted().first(where: { !allowedKeys.contains($0) }) {
++      return "the thread folder's \(file) has \(shownKey(k)), which a thread session's project settings may not carry: it can run a program beside the permission hook or widen the session (move it out of that file)"
++    }
++    if let perms = json["permissions"] {
++      guard let dict = perms as? [String: Any] else { return unknown }
++      if let k = dict.keys.sorted().first(where: { !allowedPermissionKeys.contains($0) }) {
++        return "the thread folder's \(file) has permissions.\(shownKey(k)), and a thread session's project settings may only deny or ask (move it out of that file)"
++      }
++    }
++    return nil
++  }
++}
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerHookPython.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerHookPython.swift
+new file mode 100644
+index 00000000..841d2f10
+--- /dev/null
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerHookPython.swift
+@@ -0,0 +1,132 @@
++import Foundation
++
++/// The python3 that runs a thread session's permission hook: which file it may be, and which it may never be. The hook answers the
++/// thread's approval prompts, so the program that runs it must be one no thread session can write or steer:
++///  - never inside a folder a thread session works in. Not the starting thread's and not ANY thread's (R1-2): thread B edits files
++///    in its own folder without a prompt, and a python3 there would run thread A's hook;
++///  - never inside the owner's home at all. Every thread folder is inside the home, so a python3 there (pyenv's, a venv's, conda's)
++///    could become a thread's own the day a thread is given that folder, and no start would look at it again;
++///  - never Apple's /usr/bin/python3. That file is not an interpreter: it is the `xcrun` launcher, and it runs whatever
++///    `DEVELOPER_DIR` names (R1-1). The developer tools' real interpreter is found once per start and named by its own path;
++///  - a real program (Mach-O), named python3, that not every account can write. A `#!` script or a version manager's shim reads its
++///    choice from the folder it runs in.
++/// The look is made at every start, so a python3 that was fine at the last start is held to the same rules again.
++/// The Linux twin's findPython3 (worker-hook.ts) has the first rule for its own start and the shim rule; the rest is the Mac's.
++extension WorkerHook {
++  public struct PythonRules: Sendable {
++    /// Every thread's folder (from the agent config, and of every session this app has made), besides the start's own `fenced`.
++    public var folders: [String]
++    /// The owner's home: no python3 inside it runs the hook. nil = no such rule (a test whose temp folder is inside a home).
++    public var home: String?
++    /// Where the developer tools' real python3 is looked for when the PATH has only Apple's launcher. nil = this Mac's
++    /// (`developerPythons`).
++    public var developer: [String]?
++
++    public init(folders: [String] = [], home: String? = NSHomeDirectory(), developer: [String]? = nil) {
++      self.folders = folders
++      self.home = home
++      self.developer = developer
++    }
++  }
++
++  /// The developer tools' python3, in the order `xcrun` would pick: the selected tools (`xcode-select`'s link, which only root can
++  /// change), then the Command Line Tools, then Xcode. Read from the disk, never by running `xcrun`: nothing is run to choose the
++  /// program that answers prompts.
++  public static func developerPythons(selected link: String = "/var/db/xcode_select_link") -> [String] {
++    var dirs: [String] = []
++    if let chosen = try? FileManager.default.destinationOfSymbolicLink(atPath: link), chosen.hasPrefix("/") { dirs.append(chosen) }
++    dirs += ["/Library/Developer/CommandLineTools", "/Applications/Xcode.app/Contents/Developer"]
++    return dirs.map { $0 + "/usr/bin/python3" }
++  }
++
++  /// The first python3 on `path` that the rules above allow, from an absolute entry that is not, and does not lead, inside any of
++  /// `fenced` (the starting thread's folder, the agent folder) or `rules.folders` (R1-7, R1-2). Its links are followed and the REAL
++  /// file is returned (what the command runs). An empty or relative entry is the thread folder at run time, so it is never used
++  /// either. When the PATH's only python3 is Apple's launcher, the developer tools' real interpreter is returned in its place, or
++  /// nothing when there is none (the launcher would only offer to install them).
++  public static func findPython3(path: String?, fenced: [String] = [], rules: PythonRules = .init()) -> String? {
++    let walls = (fenced + rules.folders + (rules.home.map { [$0] } ?? [])).filter { $0.hasPrefix("/") }.compactMap { resolved($0)?.lowercased() }
++    // compared without case, as the Mac's file system is: `/Home/Alex/x` and `/home/alex/x` are one folder
++    func within(_ p: String, _ folder: String) -> Bool { p == folder || p.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/") }
++    func walled(_ p: String) -> Bool { walls.contains { within(p.lowercased(), $0) } }
++    var launcherSeen = false
++    for d in (path ?? "").split(separator: ":", omittingEmptySubsequences: false) where d.hasPrefix("/") {
++      let p = d.hasSuffix("/") ? "\(d)python3" : "\(d)/python3"
++      var st = stat()
++      guard stat(p, &st) == 0, st.st_mode & S_IFMT == S_IFREG, access(p, X_OK) == 0 else { continue }
++      guard let realDir = resolved(String(d)), let realBin = resolved(p) else { continue }
++      if walled(realDir) || walled(realBin) { continue }
++      if isXcrunLauncher(realBin) {
++        launcherSeen = true
++        continue
++      }
++      guard isInterpreter(realBin) else { continue }
++      return realBin
++    }
++    guard launcherSeen else { return nil }
++    for candidate in rules.developer ?? developerPythons() where candidate.hasPrefix("/") {
++      var st = stat()
++      guard stat(candidate, &st) == 0, st.st_mode & S_IFMT == S_IFREG, access(candidate, X_OK) == 0 else { continue }
++      guard let realBin = resolved(candidate), !walled(realBin), !isXcrunLauncher(realBin), isInterpreter(realBin) else { continue }
++      return realBin
++    }
++    return nil
++  }
++
++  /// A real interpreter file: named python3, a Mach-O program (not a `#!` script, not anything else), and not writable by every
++  /// account.
++  static func isInterpreter(_ realBin: String) -> Bool {
++    var st = stat()
++    guard lstat(realBin, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_mode & 0o002 == 0 else { return false }
++    return isPython3Name((realBin as NSString).lastPathComponent) && !isScript(realBin) && isMachO(realBin)
++  }
++
++  /// `python3`, `python3.13`, `python3.13.1`: the real file's name. A shim's real file is named for its manager.
++  static func isPython3Name(_ name: String) -> Bool {
++    guard name.hasPrefix("python3") else { return false }
++    let rest = name.dropFirst("python3".count)
++    if rest.isEmpty { return true }
++    guard rest.hasPrefix(".") else { return false }
++    return rest.dropFirst().split(separator: ".", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isNumber } }
++  }
++
++  /// A `#!` script (a pyenv or asdf shim, a wrapper): it may pick its interpreter from the folder it is run in. A file that
++  /// cannot be read counts as one.
++  static func isScript(_ p: String) -> Bool {
++    guard let h = FileHandle(forReadingAtPath: p) else { return true }
++    defer { try? h.close() }
++    guard let head = try? h.read(upToCount: 2) else { return true }
++    return head == Data("#!".utf8)
++  }
++
++  /// A Mach-O program, thin or universal, by its first four bytes. A file that cannot be read is not one.
++  static func isMachO(_ p: String) -> Bool {
++    guard let h = FileHandle(forReadingAtPath: p) else { return false }
++    defer { try? h.close() }
++    guard let head = try? h.read(upToCount: 4), head.count == 4 else { return false }
++    let magics: [[UInt8]] = [
++      [0xCF, 0xFA, 0xED, 0xFE], [0xFE, 0xED, 0xFA, 0xCF], [0xCE, 0xFA, 0xED, 0xFE], [0xFE, 0xED, 0xFA, 0xCE], [0xCA, 0xFE, 0xBA, 0xBE],
++      [0xCA, 0xFE, 0xBA, 0xBF],
++    ]
++    return magics.contains(Array(head))
++  }
++
++  /// Apple's launcher for the developer tools (`/usr/bin/python3`, and `git`, `make` and the rest beside it): one small program
++  /// that asks `xcrun` for the tool of its own name, and `xcrun` takes the tools' folder from `DEVELOPER_DIR`. Known by where it is
++  /// (anything in /usr/bin) and by what it is linked to (libxcselect), so a copy of it somewhere else is known too. A file that
++  /// cannot be read counts as one.
++  static func isXcrunLauncher(_ realBin: String) -> Bool {
++    if realBin.hasPrefix("/usr/bin/") { return true }
++    guard let h = FileHandle(forReadingAtPath: realBin) else { return true }
++    defer { try? h.close() }
++    // the launcher is about 120 KB; a real interpreter is never read past this
++    guard let head = try? h.read(upToCount: 1 << 20) else { return true }
++    return head.range(of: Data("libxcselect".utf8)) != nil
++  }
++
++  static func resolved(_ p: String) -> String? {
++    guard let r = realpath(p, nil) else { return nil }
++    defer { free(r) }
++    return String(cString: r)
++  }
++}
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerHookSource.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerHookSource.swift
+index b63c3f97..b0d8744e 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/WorkerHookSource.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerHookSource.swift
+@@ -6,10 +6,16 @@ import Foundation
+ ///
+ /// Every start asks `verified()`, and gets the script's bytes only when all of this holds:
+ ///  - the script is no link, is really inside the app bundle (every link on the way resolved), a plain file with no write bit for
+-///    anyone, owned by this account or root, and the app is not inside the starting thread's folder or the agent folder;
++///    anyone, owned by this account or root, in a folder that is a real folder of this account or root which no other account can
++///    write, and the app is not inside the starting thread's folder or the agent folder;
+ ///  - the app bundle's code signature checks out (`seal`: asked once per run of the app, and the answer kept, pass or fail);
+ ///  - the file is the one that was there at that check (device, inode, modification time, size) and holds the same bytes.
+-/// The bytes handed back are the bytes that were compared, so nothing can be swapped in between the check and the copy.
++/// Each file is opened once (never through a link) and everything is asked of that one open file: what it is, whose it is, and
++/// its bytes. So the file that was checked is the file that was read, whatever is done to its name in between, and the bytes
++/// handed back are the bytes that were compared: nothing can be swapped in between the check and the copy.
++/// The folder's owner may write it (the Linux release's folders have no write bit at all): the bundle is replaced whole when the
++/// app is updated, by this account, and a folder its owner cannot write stops that. The owner's write bit is no fence anyway, for
++/// the owner can set it; the signature and the bytes kept from the check are what hold.
+ /// Tests build a folder shaped like a bundle and pass their own `seal`; nothing here reads `Bundle.main`.
+ extension WorkerHook {
+   public static let bundleFolder = "talos-hooks"
+@@ -40,6 +46,13 @@ extension WorkerHook {
+       func sameFile(_ o: Mark) -> Bool {
+         device == o.device && inode == o.inode && size == o.size && modified.tv_sec == o.modified.tv_sec && modified.tv_nsec == o.modified.tv_nsec
+       }
++      init(_ st: stat) {
++        device = UInt64(st.st_dev)
++        inode = UInt64(st.st_ino)
++        modified = st.st_mtimespec
++        changed = st.st_ctimespec
++        size = Int64(st.st_size)
++      }
+       static func == (a: Mark, b: Mark) -> Bool { a.sameFile(b) && a.changed.tv_sec == b.changed.tv_sec && a.changed.tv_nsec == b.changed.tv_nsec }
+     }
+ 
+@@ -80,11 +93,13 @@ extension WorkerHook {
+       for f in outside.filter({ $0.hasPrefix("/") }).compactMap(Self.real) where bundle == f || bundle.hasPrefix(f.hasSuffix("/") ? f : f + "/") {
+         return .problem("the Talos app \(bundle) is inside \(f), a folder a thread session works in")
+       }
+-      let helper = (real as NSString).deletingLastPathComponent + "/" + WorkerHook.helper
+-      let files: (script: Mark, helper: Mark?)
+-      switch Self.marks(script: real, helper: helper) {
++      let folder = (real as NSString).deletingLastPathComponent
++      if let why = Self.folderProblem(folder) { return .problem(why) }
++      let helper = folder + "/" + WorkerHook.helper
++      let files: Loaded
++      switch Self.load(script: real, helper: helper) {
+       case .failure(let why): return .problem(why.text)
+-      case .success(let m): files = m
++      case .success(let l): files = l
+       }
+       if let sealProblem { return .problem(sealProblem) }
+       guard let base = baseline else {
+@@ -93,18 +108,18 @@ extension WorkerHook {
+           sealProblem = why
+           return .problem(why)
+         }
+-        // read after the check, and the files must not have been touched since before it: what was sealed is what is kept
+-        guard let bytes = Self.read(real, helper: files.helper == nil ? nil : helper), case .success(let after) = Self.marks(script: real, helper: helper),
+-          after.script == files.script, after.helper == files.helper
++        // opened and read again after the check, and the files must not have been touched since before it: what was sealed is what is kept
++        guard case .success(let after) = Self.load(script: real, helper: helper), after.script.mark == files.script.mark,
++          after.helper?.mark == files.helper?.mark, after.script.bytes == files.script.bytes, after.helper?.bytes == files.helper?.bytes
+         else { return .problem(Self.changed(script)) }
+-        baseline = Baseline(path: real, script: files.script, helper: files.helper, scriptBytes: bytes.script, helperBytes: bytes.helper)
+-        return .ok(.init(path: real, script: bytes.script, helper: bytes.helper))
++        baseline = Baseline(path: real, script: after.script.mark, helper: after.helper?.mark, scriptBytes: after.script.bytes, helperBytes: after.helper?.bytes)
++        return .ok(.init(path: real, script: after.script.bytes, helper: after.helper?.bytes))
+       }
+-      guard base.path == real, base.script.sameFile(files.script), (base.helper == nil) == (files.helper == nil),
+-        base.helper.map({ b in files.helper.map { b.sameFile($0) } ?? false }) ?? true,
+-        let bytes = Self.read(real, helper: files.helper == nil ? nil : helper), bytes.script == base.scriptBytes, bytes.helper == base.helperBytes
++      guard base.path == real, base.script.sameFile(files.script.mark), (base.helper == nil) == (files.helper == nil),
++        base.helper.map({ b in files.helper.map { b.sameFile($0.mark) } ?? false }) ?? true,
++        files.script.bytes == base.scriptBytes, files.helper?.bytes == base.helperBytes
+       else { return .problem(Self.changed(script)) }
+-      return .ok(.init(path: real, script: bytes.script, helper: bytes.helper))
++      return .ok(.init(path: real, script: files.script.bytes, helper: files.helper?.bytes))
+     }
+ 
+     private static func isLink(_ p: String) -> String { "the Talos app's \(p) is a link, not part of the signed app" }
+@@ -121,19 +136,48 @@ extension WorkerHook {
+ 
+     private struct Why: Error { var text: String }
+ 
+-    /// The two files as they are now, each a plain file (no link) nobody may write to, owned by this account or root. No helper
+-    /// at all is allowed (the hook runs without it).
+-    private static func marks(script: String, helper: String) -> Result<(script: Mark, helper: Mark?), Why> {
+-      func one(_ p: String, optional: Bool) -> Result<Mark?, Why> {
+-        var st = stat()
+-        guard lstat(p, &st) == 0 else {
+-          return optional && errno == ENOENT ? .success(nil) : .failure(Why(text: "the permission hook \(p) is missing or cannot be read"))
++    /// One file as one open read it: what it was, and its bytes.
++    private struct File {
++      var mark: Mark
++      var bytes: Data
++    }
++    private typealias Loaded = (script: File, helper: File?)
++
++    /// Why the folder the hook is in is not one the app's files can be trusted in, or nil: a real folder (no link), of this account
++    /// or root, that no other account can write (R1-5). A folder others can write lets them swap the file's name for another file.
++    private static func folderProblem(_ d: String) -> String? {
++      var st = stat()
++      guard lstat(d, &st) == 0 else { return "the permission hook's folder \(d) is missing or cannot be read" }
++      guard st.st_mode & S_IFMT == S_IFDIR else { return isLink(d) }
++      guard st.st_uid == getuid() || st.st_uid == 0 else { return "the Talos app's \(d) belongs to another account" }
++      guard st.st_mode & 0o022 == 0 else { return "the Talos app's \(d) can be written by other accounts, so the app's copy is not sealed" }
++      return nil
++    }
++
++    /// The two files as they are now, each opened once and never through a link (R1-4): a plain file nobody may write to, owned by
++    /// this account or root, with the bytes that same open file holds. Asked of the open file (`fstat`), not of its name again, and
++    /// the file must be the same before and after the read. No helper at all is allowed (the hook runs without it).
++    private static func load(script: String, helper: String) -> Result<Loaded, Why> {
++      func one(_ p: String, optional: Bool) -> Result<File?, Why> {
++        let missing = Why(text: "the permission hook \(p) is missing or cannot be read")
++        // O_NONBLOCK: a FIFO put at the name must not hold the start; it is refused as not a file just below
++        let fd = open(p, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
++        guard fd >= 0 else {
++          if errno == ELOOP { return .failure(Why(text: isLink(p))) }
++          return optional && errno == ENOENT ? .success(nil) : .failure(missing)
+         }
+-        guard st.st_mode & S_IFMT != S_IFLNK else { return .failure(Why(text: isLink(p))) }
++        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
++        var st = stat()
++        guard fstat(fd, &st) == 0 else { return .failure(missing) }
+         guard st.st_mode & S_IFMT == S_IFREG else { return .failure(Why(text: "the permission hook \(p) is not a file")) }
+         guard st.st_mode & 0o222 == 0 else { return .failure(Why(text: "the Talos app's \(p) can be written, so the app's copy is not sealed")) }
+         guard st.st_uid == getuid() || st.st_uid == 0 else { return .failure(Why(text: "the Talos app's \(p) belongs to another account")) }
+-        return .success(Mark(device: UInt64(st.st_dev), inode: UInt64(st.st_ino), modified: st.st_mtimespec, changed: st.st_ctimespec, size: Int64(st.st_size)))
++        let mark = Mark(st)
++        var after = stat()
++        guard let bytes = try? handle.readToEnd() ?? Data(), fstat(fd, &after) == 0, Mark(after) == mark, Int64(bytes.count) == mark.size else {
++          return .failure(Why(text: changed(p)))
++        }
++        return .success(File(mark: mark, bytes: bytes))
+       }
+       switch (one(script, optional: false), one(helper, optional: true)) {
+       case (.failure(let w), _), (_, .failure(let w)): return .failure(w)
+@@ -142,12 +186,5 @@ extension WorkerHook {
+         return .success((s, h))
+       }
+     }
+-
+-    private static func read(_ script: String, helper: String?) -> (script: Data, helper: Data?)? {
+-      guard let s = FileManager.default.contents(atPath: script) else { return nil }
+-      guard let helper else { return (s, nil) }
+-      guard let h = FileManager.default.contents(atPath: helper) else { return nil }
+-      return (s, h)
+-    }
+   }
+ }
+diff --git a/apps/desktop/Sources/TalosDesktopCore/WorkerSpec.swift b/apps/desktop/Sources/TalosDesktopCore/WorkerSpec.swift
+index c2979b11..8b34df3a 100644
+--- a/apps/desktop/Sources/TalosDesktopCore/WorkerSpec.swift
++++ b/apps/desktop/Sources/TalosDesktopCore/WorkerSpec.swift
+@@ -118,14 +118,17 @@ public struct WorkerSpec: Equatable, Sendable {
+     public var mainArgs: [String]?
+     /// Main's `permissions.defaultMode` from the settings it reads, when its arguments name no mode (`PrivilegeCeiling.mainDefaultMode`).
+     public var mainDefaultMode: String?
++    /// Every other thread's folder: their Claude Code settings are denied to this session's edits too (`WorkerFence.settingsDeny`).
++    public var otherFolders: [String]
+ 
+     public init(
+       threadId: String, claudePath: String, baseEnv: [String: String], talosHome: String, agentDir: String,
+       permissionHook: WorkerHook.Installed, cwd: String? = nil, model: String = "inherit", effort: String? = nil, permissionFlag: String? = nil,
+       sessionId: String, resume: Bool, nonce: String, preamble: String? = nil, mcpConfigPath: String? = nil,
+       mcp: WorkerMcp.Plan? = nil, mainMcpServers: Set<String> = [], mainDenyRules: [String] = [], mainArgs: [String]? = nil,
+-      mainDefaultMode: String? = nil, parentCwd: String? = nil
++      mainDefaultMode: String? = nil, parentCwd: String? = nil, otherFolders: [String] = []
+     ) {
++      self.otherFolders = otherFolders
+       self.threadId = threadId
+       self.claudePath = claudePath
+       self.baseEnv = baseEnv
+@@ -214,9 +217,18 @@ public struct WorkerSpec: Equatable, Sendable {
+     guard let withGuards = GuardsSettings.merged(settings, talosHome: i.talosHome) else { throw BuildError.guardsUnreadable }
+     // the fence goes in AFTER the guards, as a union: the guards' file replaces `permissions` and `hooks` wholesale. Main's own deny rules
+     // come with it, so a worker is never wider than main on that axis.
+-    let fenceRules = WorkerFence.denyRules(talosHome: i.talosHome) + WorkerFence.extraDeny + i.mainDenyRules + (i.mcp?.denyRules ?? [])
++    let home = i.baseEnv["HOME"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? NSHomeDirectory()
++    let settingsDeny = WorkerFence.settingsDeny(
++      // and the git root of each, whose project settings Claude Code reads too for a folder below it
++      projectFolders: ([cwd, i.agentDir] + i.otherFolders).flatMap { [$0] + WorkerHook.gitRoots(of: $0).roots },
++      configDirs: Array(Set([home + "/.claude", WorkerMcp.claudeDir(home: home, env: i.baseEnv)])).sorted())
++    let fenceRules = WorkerFence.denyRules(talosHome: i.talosHome) + WorkerFence.extraDeny + settingsDeny + i.mainDenyRules + (i.mcp?.denyRules ?? [])
+     guard var fenced = WorkerFence.adding(deny: fenceRules, to: Self.withPermissionHook(
+-        WorkerFence.anchoring(withGuards, slashAnchor: i.talosHome + "/guards", cwdAnchor: i.agentDir), hook: i.permissionHook))
++        WorkerFence.anchoring(withGuards, slashAnchor: i.talosHome + "/guards", cwdAnchor: i.agentDir), hook: i.permissionHook,
++        // the hook's home is the session's own, as the hook read it before; its Talos home and thread are this start's, as text
++        session: .init(
++          home: WorkerHook.hookHome(home), talosHome: i.talosHome, threadId: i.threadId, folder: cwd,
++          folderHooksCount: WorkerSpec.folderKey(cwd) != WorkerSpec.folderKey(i.agentDir))))
+     else {
+       throw BuildError.fenceUnmergeable
+     }
+@@ -247,7 +259,7 @@ public struct WorkerSpec: Equatable, Sendable {
+ 
+   /// `settings` with the session's permission hook (`WorkerHook.command`) added under `hooks.PermissionRequest`, next to whatever hooks are already there (the
+   /// optional guards' PreToolUse hook). Hooks of some other shape are left exactly as they are.
+-  public static func withPermissionHook(_ settings: [String: Any], hook: WorkerHook.Installed) -> [String: Any] {
++  public static func withPermissionHook(_ settings: [String: Any], hook: WorkerHook.Installed, session: WorkerHook.Session) -> [String: Any] {
+     var out = settings
+     var hooks: [String: Any]
+     if let existing = out["hooks"] {
+@@ -258,7 +270,7 @@ public struct WorkerSpec: Equatable, Sendable {
+     }
+     var entries = (hooks["PermissionRequest"] as? [Any]) ?? []
+     entries.append([
+-      "hooks": [["type": "command", "timeout": 3600, "command": WorkerHook.command(hook)]]
++      "hooks": [["type": "command", "timeout": 3600, "command": WorkerHook.command(hook, for: session)]]
+     ])
+     hooks["PermissionRequest"] = entries
+     out["hooks"] = hooks
+diff --git a/apps/desktop/Sources/TalosSupervisor/WorkerHookSeal.swift b/apps/desktop/Sources/TalosSupervisor/WorkerHookSeal.swift
+index 1772725f..8ddb898c 100644
+--- a/apps/desktop/Sources/TalosSupervisor/WorkerHookSeal.swift
++++ b/apps/desktop/Sources/TalosSupervisor/WorkerHookSeal.swift
+@@ -23,6 +23,11 @@ extension WorkerHook {
+   ///    seal). A valid signature alone says only that somebody signed what is there: a bundle whose hook was edited and that was
+   ///    then signed again, ad hoc or with any identity, is valid, and is not this app. Asked of the running process, whose hash
+   ///    the kernel holds, so nothing on disk can answer for it.
++  ///
++  /// The answer is asked once per run and kept (`BundleSource`), so an app replaced on disk while it runs is not checked again by
++  /// this run: its hook files are then no longer the ones this run checked, every start is refused ("changed after the app's
++  /// signature was checked"), and the line says to quit and reopen Talos. Nothing here relaunches the app by itself; scripts/install.sh
++  /// quits the running app before it swaps the bundle, so an update made that way never meets this.
+   public static func sealProblem(bundlePath: String, isThisProcess: Bool) -> String? {
+     var made: SecStaticCode?
+     let status = SecStaticCodeCreateWithPath(URL(fileURLWithPath: bundlePath) as CFURL, [], &made)
+diff --git a/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift b/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift
+index 42048b31..82ac80bf 100644
+--- a/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift
++++ b/apps/desktop/Sources/TalosSupervisor/WorkerHookStart.swift
+@@ -8,25 +8,51 @@ extension WorkerManager {
+   /// The login shell has not been read yet, so the PATH may be the app's bare one: a python3 not found on it says nothing yet.
+   private var pathIsProvisional: Bool { hasLoginEnv.map { !$0() } ?? false }
+ 
++  /// Every thread's folder the agent config names (a sub-thread's too) and the folder of every session this app has made; nil
++  /// until the config has been read once (the fence fails closed: such a start is refused). Read now, at each start.
++  var threadFolders: [String]? {
++    guard let s = loadSettings() else { return nil }
++    return Array(Set(s.threads.values.compactMap(\.cwd) + rt.values.map(\.entry.cwd))).sorted()
++  }
++
++  /// Where a python3 may not be, besides the start's own folders: every thread's folder and the owner's home (R1-2: thread B edits
++  /// its own folder without a prompt, so a python3 there must never run thread A's hook).
++  private func pythonRules(_ folders: [String]) -> WorkerHook.PythonRules { .init(folders: folders, home: options.home) }
++
++  /// Why the hook cannot be trusted in `folder`, for the config not read yet or the folder's own settings, or nil.
++  private func folderProblem(_ folder: String) -> String? {
++    if threadFolders == nil { return WorkerHook.noConfig }
++    return WorkerHook.folderSettingsProblem(folder: folder, isAgentFolder: WorkerSpec.folderKey(folder) == WorkerSpec.folderKey(options.agentDir))
++  }
++
+   /// True when the start is refused: nothing was made, no slot taken and no other session parked for it. Nothing is written here.
+   /// `cwd`: the thread's folder as its settings name it (the start resolves it for good). That folder and the agent folder are
+   /// where neither the app nor a python3 may be (`WorkerHook.BundleSource`, `WorkerHook.findPython3`).
+   func refuseWithoutHook(_ id: String, cwd: String?) -> Bool {
+     guard let source = options.permissionHook else { return refuseHook(id, WorkerHook.noBundledHook) }
++    if let why = folderProblem(cwd ?? options.agentDir) { return refuseHook(id, why) }
+     let fenced = [options.agentDir] + (cwd.map { [$0] } ?? [])
+-    guard let why = WorkerHook.problem(source: source, path: baseEnv()["PATH"], talosHome: options.talosHome, fenced: fenced) else { return false }
++    let rules = pythonRules(threadFolders ?? [])
++    guard let why = WorkerHook.problem(source: source, path: baseEnv()["PATH"], talosHome: options.talosHome, fenced: fenced, python: rules)
++    else { return false }
+     if why == WorkerHook.noPython, pathIsProvisional { return false }  // `start` keeps it for a later tick
+     return refuseHook(id, why)
+   }
+ 
+   /// The copy this start's session runs and the python3 that runs it, or nil: the start was refused (or kept for a later tick while
+-  /// the login shell's PATH is not known yet), and the caller makes nothing.
++  /// the login shell's PATH is not known yet), and the caller makes nothing. The python3 and the folder's settings are looked at
++  /// again here, at every start.
+   func installHook(_ id: String, cwd: String, resume: Bool, now t: Double) -> WorkerHook.Installed? {
+     guard let source = options.permissionHook else {
+       _ = refuseHook(id, WorkerHook.noBundledHook)
+       return nil
+     }
+-    switch WorkerHook.install(talosHome: options.talosHome, source: source, path: baseEnv()["PATH"], fenced: [options.agentDir, cwd]) {
++    if let why = folderProblem(cwd) {
++      _ = refuseHook(id, why)
++      return nil
++    }
++    let rules = pythonRules(threadFolders ?? [])
++    switch WorkerHook.install(talosHome: options.talosHome, source: source, path: baseEnv()["PATH"], fenced: [options.agentDir, cwd], python: rules) {
+     case .installed(let hook, let replaced):
+       // the script that answers every thread session's prompts is not the one the last start ran: a newer app's hook
+       if replaced { audit("worker_hook_replaced thread=\(id) source=\"\(WorkerNotice.logValue(source.script ?? ""))\"") }
+@@ -42,10 +68,21 @@ extension WorkerManager {
+     }
+   }
+ 
++  /// The least time between two new reasons told to one thread.
++  static let hookNoticeGap: Double = 60
++
+   private func refuseHook(_ id: String, _ why: String) -> Bool {
+     audit("worker_hook_missing thread=\(id) why=\"\(WorkerNotice.logValue(why))\"")
+     fail(id, "start_failed", why)
+-    tell(id, slot: \.hookNote, kind: "hook missing: \(why)", WorkerHook.missingLine(why: why))
++    // a folder's settings can be edited to give a new reason at every start: a new reason is told at most once a minute (the audit
++    // has every one); the same reason is never told twice (`tell`)
++    let kind = "hook missing: \(why)"
++    let now = awake()
++    if rt[id]?.fenceKinds[\Runtime.hookNote] != kind {
++      if let last = rt[id]?.hookToldAt, now - last < Self.hookNoticeGap { return true }
++      rt[id]?.hookToldAt = now
++    }
++    tell(id, slot: \.hookNote, kind: kind, WorkerHook.missingLine(why: why))
+     return true
+   }
+ }
+diff --git a/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift b/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift
+index 345146df..44d3565e 100644
+--- a/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift
++++ b/apps/desktop/Sources/TalosSupervisor/WorkerManager.swift
+@@ -207,6 +207,8 @@ public final class WorkerManager: @unchecked Sendable {
+     var missingNote = NoticeState()
+     var refusedNote = NoticeState()
+     var ceilingNote = NoticeState(), mainSettingsNote = NoticeState(), hookNote = NoticeState()
++    /// When the thread was last told a new reason its permission hook refuses a start (awake clock): one new reason a minute at most.
++    var hookToldAt: Double?
+     var fenceKinds: [AnyHashable: String] = [:]
+     /// Whether the start now running (or the last one) was `--resume`; nil for one this copy of the app did not make.
+     var startedAsResume: Bool?
+@@ -635,7 +637,7 @@ public final class WorkerManager: @unchecked Sendable {
+           mcpConfigPath: plan == nil ? mcpConfig(id, cwd: cwd) : nil, mcp: plan,
+           mainMcpServers: WorkerMcp.visibleNames(cwd: options.agentDir, home: options.home, claudeDir: claudeDir, configDirSet: dirSet),
+           mainDenyRules: main.denyRules, mainArgs: main.permissionArgs,
+-          mainDefaultMode: main.defaultMode, parentCwd: folder.parent))
++          mainDefaultMode: main.defaultMode, parentCwd: folder.parent, otherFolders: threadFolders ?? []))
+       if let plan { try WorkerMcp.write(plan) }
+       try AtomicFile.write(Data(spec.settingsJSON.utf8), to: WorkerSpec.settingsPath(talosHome: options.talosHome, threadId: id))
+       try AtomicFile.write(Data(nonce.utf8), to: d + "/nonce", mode: 0o600)
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/GuardsSettingsTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/GuardsSettingsTests.swift
+index c42ae04b..125068a8 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/GuardsSettingsTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/GuardsSettingsTests.swift
+@@ -56,7 +56,9 @@ struct GuardsSettingsTests {
+     let plainHooks = try #require(plainObj["hooks"] as? [String: Any])
+     #expect(Set(plainHooks.keys) == ["PermissionRequest"])
+     #expect(plainHooks["PreToolUse"] == nil)
+-    #expect(((plainObj["permissions"] as? [String: Any])?["deny"] as? [String]) == WorkerFence.denyRules(talosHome: plainHome) + WorkerFence.extraDeny)
++    // and the settings-file deny: no session edits the Claude Code settings of a folder a thread session works in, or the owner's
++    let settingsDeny = WorkerFence.settingsDeny(projectFolders: ["/home/alex/agent"], configDirs: [NSHomeDirectory() + "/.claude"])
++    #expect(((plainObj["permissions"] as? [String: Any])?["deny"] as? [String]) == WorkerFence.denyRules(talosHome: plainHome) + WorkerFence.extraDeny + settingsDeny)
+     #expect(plain.settingsJSON.contains("TALOS_APP_PERM_HOOK_SOURCE=worker"))
+   }
+ 
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/MainCeilingTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/MainCeilingTests.swift
+index 90b825a3..db7b9825 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/MainCeilingTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/MainCeilingTests.swift
+@@ -32,7 +32,8 @@ struct MainCeilingRuleTests {
+     // and in the settings the worker is launched with: main's, and the guards' own copy that `anchoring` writes
+     let deny = denyList(try WorkerSpec.build(fenceInputs(t, mainDeny: rules)))
+     for whole in ["Edit(*)", "Write()", "NotebookEdit(*)", "MultiEdit()"] { #expect(deny.contains(whole), "\(whole): \(deny)") }
+-    #expect(!deny.contains { $0.hasPrefix("Edit(/\(t.agentDir)") || $0.hasPrefix("Write(/\(t.agentDir)") }, "\(deny)")
++    // (the settings-file deny names the agent folder's two Claude Code settings files: that is its own rule, not main's made narrower)
++    #expect(!deny.contains { !$0.contains("/.claude/settings") && ($0.hasPrefix("Edit(/\(t.agentDir)") || $0.hasPrefix("Write(/\(t.agentDir)")) }, "\(deny)")
+     let anchored = WorkerFence.anchoring(["permissions": ["deny": ["Edit(*)", "Write()"]]], slashAnchor: "/g", cwdAnchor: t.agentDir)
+     #expect((anchored["permissions"] as? [String: Any])?["deny"] as? [String] == ["Edit(*)", "Write()"])
+   }
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerCoreTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerCoreTests.swift
+index 922785b1..cdd75fc1 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerCoreTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerCoreTests.swift
+@@ -63,10 +63,33 @@ struct WorkerSpecTests {
+     #expect(hook?["type"] as? String == "command")
+     #expect(hook?["timeout"] as? Int == 3600)  // a backstop: Claude Code ends the hook when the prompt is answered or auto-blocked
+     let cmd = hook?["command"] as? String ?? ""
+-    #expect(cmd == WorkerHook.command(testHook), "\(cmd)")
++    // `/home/example` is not on this machine: the hook runs with this account's real home instead (Apple's tools stall on a missing one)
++    let realHome = WorkerHook.hookHome("/home/example")
++    #expect(realHome == NSHomeDirectory())
++    let session = WorkerHook.Session(home: realHome, talosHome: "/home/example/.talos", threadId: "trip", folder: "/home/example/agent", folderHooksCount: false)
++    #expect(cmd == WorkerHook.command(testHook, for: session), "\(cmd)")
++    // the hook's hub, thread, home and folder are this start's, written as text: the session's environment cannot name others (R1-1)
++    #expect(cmd.contains("exec /usr/bin/env -i HOME=\(WorkerHook.quote(realHome)) ") && cmd.contains(" TALOS_APP_HOME='/home/example/.talos' TALOS_APP_WORKER_THREAD='trip' "), "\(cmd)")
++    #expect(cmd.contains(" TALOS_APP_HOOK_CHECK_DIR='/home/example/agent' TALOS_APP_HOOK_CHECK_HOOKS=0 "), "the agent folder's kit hooks do not count: \(cmd)")
++    #expect(!cmd.contains("n0nce-0123456789abcdef"), "the thread's proof is passed through, never written into the settings")
++    // no session may edit the Claude Code settings of a folder a thread session works in, or the owner's: they add variables and
++    // hooks to the shell that runs this hook
++    var i = inputs()
++    i.cwd = "/home/example/trip"
++    i.otherFolders = ["/home/example/garden"]
++    i.baseEnv["CLAUDE_CONFIG_DIR"] = "/home/example/cfg"
++    let deny = ((jsonObject(try WorkerSpec.build(i).settingsJSON)?["permissions"] as? [String: Any])?["deny"] as? [String]) ?? []
++    for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
++      for file in [
++        "/home/example/trip/.claude/settings.json", "/home/example/trip/.claude/settings.local.json", "/home/example/agent/.claude/settings.json",
++        "/home/example/garden/.claude/settings.local.json", "/home/example/.claude/settings.json", "/home/example/cfg/settings.local.json",
++      ] {
++        #expect(deny.contains("\(tool)(/\(file))"), "\(tool) \(file): \(deny)")
++      }
++    }
+     #expect(cmd.contains(testHook.script) && cmd.contains(testHook.python))
+     // never a path guessed inside the agent folder (2026-11-11: an older agent folder has no hooks/ and the command ran nothing)
+-    #expect(!cmd.contains("/home/example/agent"), "\(cmd)")
++    #expect(!cmd.replacingOccurrences(of: "TALOS_APP_HOOK_CHECK_DIR='/home/example/agent'", with: "").contains("/home/example/agent"), "\(cmd)")
+     // still a worker: the hook did not bring a channel, a flag or the live-bridge marker with it
+     #expect(!s.args.contains("--channels") && s.env["TALOS_APP_BRIDGE"] == nil)
+     #expect(s.env["TALOS_APP_WORKER_NONCE"] == "n0nce-0123456789abcdef")  // what the hook sends as proof
+@@ -74,13 +97,14 @@ struct WorkerSpecTests {
+ 
+   @Test func theHookJoinsTheGuardsHooksInsteadOfReplacingThem() throws {
+     let guards: [String: Any] = ["PreToolUse": [["matcher": "Bash", "hooks": [["type": "command", "command": "guard"]]]]]
+-    let merged = WorkerSpec.withPermissionHook(["hooks": guards, "effortLevel": "high"], hook: testHook)
++    let session = WorkerHook.Session(home: "/home/example", talosHome: "/home/example/.talos", threadId: "trip")
++    let merged = WorkerSpec.withPermissionHook(["hooks": guards, "effortLevel": "high"], hook: testHook, session: session)
+     let hooks = merged["hooks"] as? [String: Any]
+     #expect(hooks?["PreToolUse"] != nil, "the guards' hook was lost")
+     #expect(hooks?["PermissionRequest"] != nil)
+     #expect(merged["effortLevel"] as? String == "high")
+     // hooks of an unexpected shape are left alone, never overwritten
+-    #expect((WorkerSpec.withPermissionHook(["hooks": "nonsense"], hook: testHook)["hooks"] as? String) == "nonsense")
++    #expect((WorkerSpec.withPermissionHook(["hooks": "nonsense"], hook: testHook, session: session)["hooks"] as? String) == "nonsense")
+   }
+ 
+   @Test func aWorkerNeverInheritsAnotherSessionsMarkers() throws {
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookSourceTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookSourceTests.swift
+index 544cbf25..93503a70 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookSourceTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookSourceTests.swift
+@@ -38,7 +38,7 @@ struct WorkerHookSourceTests {
+   init() throws {
+     let base = (TestTemp.base as NSString).appendingPathComponent("talos-hooksrc-\(UUID().uuidString.prefix(8))")
+     try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+-    root = (try? URL(fileURLWithPath: base).resolvingSymlinksInPath().path) ?? base
++    root = try TestTemp.real(base)  // realpath: the code answers with real paths (R1-3)
+     try FileManager.default.createDirectory(atPath: root + "/talos home", withIntermediateDirectories: true)
+     app = try FakeAppBundle(in: root, script: Data("print('hook')\n".utf8), helper: Data("HELPER = 1\n".utf8))
+   }
+@@ -116,6 +116,73 @@ struct WorkerHookSourceTests {
+     refused(source(), "the Talos app's \(app.helper) can be written, so the app's copy is not sealed")
+   }
+ 
++  /// R1-5: the folder the hook is in. One another account can write lets that account put another file under the hook's name, so
++  /// it is refused; so is one that belongs to nobody this app trusts. The owner's own write bit is how the folder is built.
++  @Test(arguments: [0o775, 0o757, 0o777] as [mode_t])
++  func aHookInAFolderOtherAccountsCanWriteIsRefused(mode: mode_t) {
++    chmod(app.hooks, mode)
++    defer { chmod(app.hooks, 0o755) }
++    refused(source(), "the Talos app's \(app.hooks) can be written by other accounts, so the app's copy is not sealed")
++    chmod(app.hooks, 0o755)
++    #expect(WorkerHook.problem(source: source(), path: path, talosHome: talosHome) == nil, "control: the folder as the build leaves it passes")
++    chmod(app.hooks, 0o555)
++    #expect(WorkerHook.problem(source: source(), path: path, talosHome: talosHome) == nil, "and one nobody can write")
++  }
++
++  /// A name that is not a file at all: a FIFO where the helper goes would hold a plain read for ever. It is refused at once.
++  @Test func aFifoUnderTheHelpersNameIsRefusedAndHoldsNothing() throws {
++    unlink(app.helper)
++    #expect(mkfifo(app.helper, 0o444) == 0)
++    let began = Date()
++    refused(source(), "the permission hook \(app.helper) is not a file")
++    #expect(Date().timeIntervalSince(began) < 5)
++  }
++
++  /// R1-4: the file that is checked is the file that is read. While one thread swaps the hook's FOLDER back and forth with another
++  /// (one step each way, so the name is never missing, and the sealed file itself is never touched: it looks the same before and
++  /// after), whose hook has a write bit and other bytes, every answer is either a refusal or the sealed file's bytes. A look at the
++  /// name, then a read of the name, then a look again hands back the other file's bytes whenever the swaps fall between them; asked
++  /// of one open file there is no "between".
++  @Test func theBytesHandedBackAreAlwaysThoseOfTheFileThatWasChecked() throws {
++    let good = Data("print('hook')\n".utf8), evil = Data("print('evil')\n".utf8)
++    let other = app.path + "/Contents/Resources/talos-hooks-other"
++    try FileManager.default.createDirectory(atPath: other, withIntermediateDirectories: true)
++    try evil.write(to: URL(fileURLWithPath: other + "/permission-relay.py"))
++    chmod(other + "/permission-relay.py", 0o644)
++    try Data("HELPER = 2\n".utf8).write(to: URL(fileURLWithPath: other + "/_talos_common.py"))
++    let stop = Mutexed(false)
++    let hooks = app.hooks
++    let swapper = Thread {
++      var swaps = 0
++      while !stop.with({ $0 }) {
++        if renamex_np(hooks, other, UInt32(RENAME_SWAP)) == 0 { swaps += 1 }
++      }
++      if swaps % 2 == 1 { _ = renamex_np(hooks, other, UInt32(RENAME_SWAP)) }  // the sealed folder back under its own name
++    }
++    swapper.start()
++    defer {
++      stop.with { $0 = true }
++      while !swapper.isFinished { usleep(1000) }
++    }
++    var ok = 0, wrong = 0
++    var refusals: [String: Int] = [:]
++    let until = Date().addingTimeInterval(3)
++    var looks = 0
++    while looks < 20000, Date() < until || ok == 0, Date() < until.addingTimeInterval(20) {
++      looks += 1
++      // a new source each time: the first look of a run, where nothing is kept from before to compare with
++      switch source().verified() {
++      case .ok(let v):
++        ok += 1
++        if v.script != good { wrong += 1 }
++      case .problem(let why): refusals[why, default: 0] += 1
++      }
++    }
++    #expect(wrong == 0, "\(wrong) of \(ok) answers handed back the bytes of a file that fails the check")
++    #expect(ok > 0, "control: the sealed file was seen at all in \(looks) looks: \(refusals)")
++    #expect(refusals.keys.contains { $0.contains("can be written") }, "control: the other file was met too: \(refusals)")
++  }
++
+   @Test func aHelperThatIsALinkIsRefused() throws {
+     unlink(app.helper)
+     try FakeAppBundle.put(Data("EVIL = 1\n".utf8), at: root + "/elsewhere.py")
+diff --git a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift
+index 77bb924d..42c21e14 100644
+--- a/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift
++++ b/apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift
+@@ -21,12 +21,18 @@ struct WorkerHookTests {
+   init() throws {
+     let base = (TestTemp.base as NSString).appendingPathComponent("talos-hook-\(UUID().uuidString.prefix(8))")
+     try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+-    root = (try? URL(fileURLWithPath: base).resolvingSymlinksInPath().path) ?? base
++    // realpath, not URL.resolvingSymlinksInPath: that one drops /private from /private/var (the default TMPDIR), and the code
++    // under test answers with real paths, which are compared whole (R1-3; see FakeAppBundle)
++    root = try TestTemp.real(base)
+     for d in [root + "/talos home", root + "/bin"] { try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true) }
+     app = try FakeAppBundle(in: root, script: Data("print('hook')\n".utf8), helper: Data("HELPER = 1\n".utf8))
+     source = .init(script: app.script, bundlePath: app.path, seal: { _ in nil })
+   }
+ 
++  let session = WorkerHook.Session(home: "/home/alex", talosHome: "/home/alex/.talos", threadId: "trip")
++  /// No home rule and no developer tools: the python3 rules of one PATH alone.
++  let bare = WorkerHook.PythonRules(home: nil, developer: [])
++
+   /// A python3 that records how it was run: its arguments, the marker, and the PYTHON* it was handed.
+   func recorder(at dir: String, log: String) throws -> String {
+     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+@@ -64,12 +70,250 @@ struct WorkerHookTests {
+   }
+ 
+   @Test func theCommandNamesTheScriptAndThePythonItWasGivenAndNothingElse() {
+-    let cmd = WorkerHook.command(.init(script: "/home/alex/.talos/workers/_hook/permission-relay.py", python: "/usr/bin/python3"))
++    let cmd = WorkerHook.command(
++      .init(script: "/home/alex/.talos/workers/_hook/permission-relay.py", python: "/opt/homebrew/Cellar/python/bin/python3.13"), for: session)
+     #expect(
+-      cmd == "f='/home/alex/.talos/workers/_hook/permission-relay.py'; [ -f \"$f\" ] || exit 0; TALOS_APP_PERM_HOOK_SOURCE=worker exec '/usr/bin/python3' -I \"$f\"")
++      cmd == "f='/home/alex/.talos/workers/_hook/permission-relay.py'; exec /usr/bin/env -i HOME='/home/alex' PATH=/usr/bin:/bin LANG=en_US.UTF-8 TALOS_APP_HOME='/home/alex/.talos' TALOS_APP_WORKER_THREAD='trip' TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_APP_WORKER_NONCE=\"${TALOS_APP_WORKER_NONCE-}\" TALOS_PERMISSION_RELAY_OFF=\"${TALOS_PERMISSION_RELAY_OFF-}\" TALOS_PERMISSION_HOOK_WAIT_S=\"${TALOS_PERMISSION_HOOK_WAIT_S-}\" CLAUDE_PID=\"${CLAUDE_PID-}\" CLAUDE_CODE_SESSION_ATTENDED=\"${CLAUDE_CODE_SESSION_ATTENDED-}\" CLAUDE_PROJECT_DIR=\"${CLAUDE_PROJECT_DIR-}\" XDG_STATE_HOME=\"${XDG_STATE_HOME-}\" CHRONOS_CONFIG=\"${CHRONOS_CONFIG-}\" /bin/sh -c '[ -f \"$0\" ] || exit 0; exec \"$1\" -I -S \"$0\"' \"$f\" '/opt/homebrew/Cellar/python/bin/python3.13'")
++    // the session's shell does nothing but assign and call `exec` (a special builtin): no `[`, no `||`, no other command
++    let outer = cmd.components(separatedBy: " /bin/sh -c ")[0]
++    #expect(!outer.contains("[ ") && !outer.contains("||") && !outer.contains("$("), "\(outer)")
+     #expect(!cmd.contains("command -v"), "the interpreter is not looked up when the hook runs")
+   }
+ 
++  /// A python3 that writes down the whole environment it was run with, one `NAME=value` a line (what the interpreter would get).
++  func envDumper(at dir: String, out: String) throws -> String {
++    try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
++    let p = dir + "/python3"
++    try "#!/bin/sh\n/usr/bin/env > '\(out)'\n".write(toFile: p, atomically: true, encoding: .utf8)
++    chmod(p, 0o755)
++    return p
++  }
++
++  /// What the interpreter was run with, less what /bin/sh (the stand-in interpreter's own shell) adds for itself.
++  func dumped(_ out: String) -> [String: String] {
++    var env: [String: String] = [:]
++    for line in ((try? String(contentsOfFile: out, encoding: .utf8)) ?? "").split(separator: "\n") {
++      guard let eq = line.firstIndex(of: "=") else { continue }
++      env[String(line[..<eq])] = String(line[line.index(after: eq)...])
++    }
++    for own in ["PWD", "OLDPWD", "SHLVL", "_"] { env[own] = nil }
++    return env
++  }
++
++  /// R1-1: a thread folder's `.claude/settings*.json` can set any variable for the session's hooks (`env`), and the hook is what
++  /// answers that thread's prompts. The REAL command line, run by /bin/sh with a hostile session environment: the interpreter gets
++  /// exactly the listed variables and nothing else. Not DEVELOPER_DIR (it picks the program Apple's python3 launcher runs), not
++  /// DYLD_* (a library loaded into the interpreter), not PYTHON* (what it imports), and not another hub, thread, home or PATH.
++  /// (macOS itself drops DYLD_* when /bin/sh starts, so that one is not what turns this red without `env -i`; the others are.)
++  @Test func aHostileSessionEnvironmentNeverReachesTheInterpreter() throws {
++    let out = root + "/env.out", evil = root + "/evil"
++    let python = try envDumper(at: root + "/py", out: out)
++    let installed = WorkerHook.install(talosHome: talosHome, source: source, path: nil, resolvePython: { _ in python })
++    guard case .installed(let hook, _) = installed else {
++      Issue.record("\(installed)")
++      return
++    }
++    let mine = WorkerHook.Session(home: root + "/owner's home", talosHome: talosHome, threadId: "trip")
++    let hostile = [
++      "DEVELOPER_DIR": evil + "/fakedev", "DYLD_INSERT_LIBRARIES": evil + "/lib.dylib", "DYLD_LIBRARY_PATH": evil, "DYLD_FRAMEWORK_PATH": evil,
++      "PYTHONPATH": evil, "PYTHONSTARTUP": evil + "/start.py", "PYTHONHOME": evil, "PYTHONINSPECT": "1", "PATH": "\(evil):/usr/bin:/bin",
++      "HOME": evil, "TALOS_APP_HOME": evil + "/hub", "TALOS_APP_WORKER_THREAD": "garden", "TALOS_APP_PERM_HOOK_SOURCE": "agent",
++      "LANG": "xx_XX", "LC_ALL": "xx_XX", "TMPDIR": evil, "BASH_ENV": evil + "/rc", "ENV": evil + "/rc", "SDKROOT": evil, "TOOLCHAINS": "evil",
++      "SOMETHING_NEW": "1",
++      // the values the hook does read from the session come through as they are
++      "TALOS_APP_WORKER_NONCE": "n0nce with a space", "CLAUDE_CODE_SESSION_ATTENDED": "1", "CLAUDE_PROJECT_DIR": root + "/thread", "CLAUDE_PID": "4242",
++    ]
++    #expect(sh(WorkerHook.command(hook, for: mine), env: hostile, cwd: root) == 0)
++    let got = dumped(out)
++    let want = [
++      "HOME": mine.home, "PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8", "TALOS_APP_HOME": talosHome, "TALOS_APP_WORKER_THREAD": "trip",
++      "TALOS_APP_PERM_HOOK_SOURCE": "worker", "TALOS_APP_WORKER_NONCE": "n0nce with a space", "TALOS_PERMISSION_RELAY_OFF": "",
++      "TALOS_PERMISSION_HOOK_WAIT_S": "", "CLAUDE_PID": "4242", "CLAUDE_CODE_SESSION_ATTENDED": "1", "CLAUDE_PROJECT_DIR": root + "/thread",
++      "XDG_STATE_HOME": "", "CHRONOS_CONFIG": "",
++    ]
++    #expect(got == want, "\(got.filter { want[$0.key] != $0.value }) / missing \(want.filter { got[$0.key] == nil }.keys)")
++    for name in ["DEVELOPER_DIR", "DYLD_INSERT_LIBRARIES", "PYTHONPATH"] { #expect(got[name] == nil, "\(name) reached the interpreter") }
++    #expect(!got.values.contains { $0.contains(evil) }, "nothing of the hostile environment is in any value")
++  }
++
++  /// The blocker of the Linux twin's review, on the Mac: Claude Code runs the command with /bin/sh in the SESSION's environment, so
++  /// the shell that reads it imports the session's functions and options before `env -i` runs. Functions named `[` and `exec` that
++  /// answer "allow", and SHELLOPTS=xtrace with a PS4 that prints an answer and an ENV file: the interpreter still runs the copy, in
++  /// the clean environment, and nothing of theirs reaches stdout (where Claude Code reads the hook's answer). The PS4 program does
++  /// run, on stderr: that is why a folder whose settings set SHELLOPTS or PS4 is refused at the start (WorkerHookFolder.swift).
++  @Test func aShellFunctionOrOptionFromTheSessionNeverAnswersForTheHook() throws {
++    let log = root + "/ran.log"
++    let python = try recorder(at: root + "/py", log: log)
++    let installed = WorkerHook.install(talosHome: talosHome, source: source, path: nil, resolvePython: { _ in python })
++    guard case .installed(let hook, _) = installed else {
++      Issue.record("\(installed)")
++      return
++    }
++    try "echo '{\"behavior\":\"allow\"}'\n".write(toFile: root + "/envrc", atomically: true, encoding: .utf8)
++    let allow = "{ echo '{\"hookSpecificOutput\":{\"decision\":{\"behavior\":\"allow\"}}}'; return 0; }"
++    let hostile = [
++      "BASH_FUNC_[%%": "() \(allow)", "BASH_FUNC_exec%%": "() \(allow)", "BASH_FUNC_test%%": "() \(allow)",
++      "SHELLOPTS": "xtrace", "PS4": "$(echo '{\"behavior\":\"allow\"}')", "ENV": root + "/envrc", "PATH": "/usr/bin:/bin",
++    ]
++    let p = Process()
++    p.executableURL = URL(fileURLWithPath: "/bin/sh")
++    p.arguments = ["-c", WorkerHook.command(hook, for: session)]
++    p.environment = hostile
++    let out = Pipe()
++    p.standardOutput = out
++    p.standardError = FileHandle.nullDevice
++    try p.run()
++    let stdout = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
++    p.waitUntilExit()
++    #expect(p.terminationStatus == 0)
++    #expect(stdout.isEmpty, "the session's shell answered for the hook: \(stdout)")
++    let ran = (try? String(contentsOfFile: log, encoding: .utf8)) ?? ""
++    #expect(ran == "\(python)|-I -S \(hook.script)|worker\n", "the copy still ran, under the interpreter: \(ran)")
++  }
++
++  /// A thread folder's own Claude Code settings: what they may carry for the session (WorkerHookFolder.swift). Allow-lists, so the
++  /// variables Hestia's review found on Linux (CLAUDE_CODE_SHELL_PREFIX wraps every hook and command; GCONV_PATH with a locale loads
++  /// a library into the first shell) are refused with no entry of their own. Claude Code's own tunables pass. Outside the agent
++  /// folder only a few plain keys, and `permissions` with deny and ask only; the agent folder's kit hooks are by design. The git
++  /// root's settings are held to the same rules for a folder below it. A key that is not a plain name is never shown as given.
++  @Test func aThreadFoldersSettingsMayCarryOnlyWhatIsAllowed() throws {
++    let repo = root + "/repo", folder = repo + "/sub/thread"
++    try FileManager.default.createDirectory(atPath: folder + "/.claude", withIntermediateDirectories: true)
++    let local = folder + "/.claude/settings.local.json"
++    func put(_ text: String, _ file: String? = nil) throws { try text.write(toFile: file ?? local, atomically: true, encoding: .utf8) }
++    func why(agent: Bool = false) -> String? { WorkerHook.folderSettingsProblem(folder: folder, isAgentFolder: agent) }
++    #expect(why() == nil, "no settings files: fine")
++    for key in [
++      "CLAUDE_CODE_SHELL_PREFIX", "GCONV_PATH", "LC_ALL", "LANGUAGE", "OUTPUT_CHARSET", "SHLVL", "PATH", "DEVELOPER_DIR", "LD_PRELOAD",
++      "DYLD_INSERT_LIBRARIES", "BASH_ENV", "BASH_FUNC_x%%", "ENV", "SHELLOPTS", "PS4", "IFS", "PYTHONPATH", "TALOS_APP_HOME", "NODE_OPTIONS", "FOO",
++    ] {
++      try put(String(decoding: try JSONSerialization.data(withJSONObject: ["env": ["MAX_THINKING_TOKENS": "1024", key: "x"]]), as: UTF8.self))
++      let shown = WorkerHook.shownKey(key)
++      #expect(
++        why() == "the thread folder's \(local) sets \(shown) for the session, which is not one of Claude Code's own settings a thread session may change (remove it from that file's env)",
++        "\(key)")
++      #expect(why(agent: true) != nil, "the agent folder's env is held to it too: \(key)")
++    }
++    #expect(WorkerHook.shownKey("BASH_FUNC_x%%") == "a key that is not a plain name")
++    try put("{\"env\":{\"x\\nworker_notice thread=y\":\"1\"}}")
++    #expect(why()?.contains("sets a key that is not a plain name for the session") == true, "\(String(describing: why()))")
++    try put("{\"env\":{\"MAX_THINKING_TOKENS\":{\"a\":1}}}")
++    #expect(why() != nil, "a tunable whose value is not a plain value")
++    try put("{\"env\":{\"MAX_THINKING_TOKENS\":\"1024\",\"BASH_MAX_TIMEOUT_MS\":600000,\"DISABLE_TELEMETRY\":true},\"permissions\":{\"deny\":[\"Bash(rm:*)\"],\"ask\":[]},\"model\":\"opus\"}")
++    #expect(why() == nil, "control: Claude Code's own tunables, deny and ask, and plain keys pass: \(String(describing: why()))")
++    for (text, key) in [
++      ("{\"hooks\":{\"PermissionRequest\":[]}}", "hooks"), ("{\"statusLine\":{\"type\":\"command\",\"command\":\"x\"}}", "statusLine"),
++      ("{\"apiKeyHelper\":\"x\"}", "apiKeyHelper"), ("{\"enableAllProjectMcpServers\":true}", "enableAllProjectMcpServers"),
++    ] {
++      try put(text)
++      #expect(
++        why() == "the thread folder's \(local) has \(key), which a thread session's project settings may not carry: it can run a program beside the permission hook or widen the session (move it out of that file)")
++    }
++    try put("{\"hooks\":{\"PreToolUse\":[]},\"statusLine\":{\"type\":\"command\",\"command\":\"x\"}}")
++    #expect(why(agent: true) == nil, "the agent folder's kit hooks and status line are by design")
++    for k in ["allow", "defaultMode", "additionalDirectories"] {
++      try put("{\"permissions\":{\"\(k)\":[]}}")
++      #expect(why() == "the thread folder's \(local) has permissions.\(k), and a thread session's project settings may only deny or ask (move it out of that file)")
++    }
++    for bad in ["{not json", "[1,2]", "{\"env\":\"PS4=x\"}", "{\"permissions\":[]}"] {
++      try put(bad)
++      #expect(why()?.contains("so what it sets for the session is not known") == true, "\(bad)")
++    }
++    try put("  \n")
++    #expect(why() == nil, "an empty file sets nothing")
++    // this repository's own project settings (a thread working in a Talos checkout reads them) pass
++    let repoSettings = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../../.claude/settings.json").standardized.path
++    #expect(WorkerHook.fileProblem(repoSettings, kitOwned: false) == nil, "\(String(describing: WorkerHook.fileProblem(repoSettings, kitOwned: false)))")
++    // the git root: a folder below a repository gets that repository's project settings too
++    try FileManager.default.createDirectory(atPath: repo + "/.git", withIntermediateDirectories: true)
++    try FileManager.default.createDirectory(atPath: repo + "/.claude", withIntermediateDirectories: true)
++    let rootFile = repo + "/.claude/settings.json"
++    #expect(WorkerHook.gitRoot(of: folder) == WorkerHook.resolved(repo))
++    #expect(WorkerHook.settingsFolders(folder).folders == [WorkerHook.resolved(folder)!, WorkerHook.resolved(repo)!])
++    try put("{\"env\":{\"CLAUDE_CODE_SHELL_PREFIX\":\"/tmp/x\"}}", rootFile)
++    #expect(why()?.contains("\(WorkerHook.resolved(repo)!)/.claude/settings.json sets CLAUDE_CODE_SHELL_PREFIX") == true, "\(String(describing: why()))")
++    #expect(why(agent: true) != nil, "the agent folder's git root is held to every rule")
++    try put("{\"hooks\":{\"PreToolUse\":[]}}", rootFile)
++    #expect(why(agent: true)?.contains("has hooks") == true, "a kit folder's git root is not the kit's")
++  }
++
++  /// Hestia's third review, B1: Claude Code reads `settings.local.json` from the CANONICAL git root, following a worktree's `.git`
++  /// file to its `gitdir` and that to its `commondir`. A thread can write such a file in its own folder to name any repository, so
++  /// the chain is followed for the check and for the deny rules; a `.git` that is a link, or a pointer that does not resolve,
++  /// refuses the start. And F4: a FIFO, a link to /dev/zero or a huge file at a settings path is refused at once, never read.
++  @Test func aFakedWorktreeLeadsToTheCanonicalRootsSettingsAndAStuckReadIsRefused() throws {
++    let victim = root + "/victim", thread = root + "/thread-wt"
++    try FileManager.default.createDirectory(atPath: victim + "/.git/worktrees/x", withIntermediateDirectories: true)
++    try FileManager.default.createDirectory(atPath: victim + "/.claude", withIntermediateDirectories: true)
++    try FileManager.default.createDirectory(atPath: thread, withIntermediateDirectories: true)
++    try "../..\n".write(toFile: victim + "/.git/worktrees/x/commondir", atomically: true, encoding: .utf8)
++    try "gitdir: \(victim)/.git/worktrees/x\n".write(toFile: thread + "/.git", atomically: true, encoding: .utf8)
++    let realVictim = WorkerHook.resolved(victim)!, realThread = WorkerHook.resolved(thread)!
++    #expect(WorkerHook.gitRoots(of: thread).roots == [realThread, realVictim], "\(WorkerHook.gitRoots(of: thread))")
++    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false) == nil, "control: a clean canonical root")
++    try "{\"env\":{\"CLAUDE_CODE_SHELL_PREFIX\":\"/tmp/x\"}}".write(toFile: victim + "/.claude/settings.local.json", atomically: true, encoding: .utf8)
++    #expect(
++      WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)?.hasPrefix("the thread folder's \(realVictim)/.claude/settings.local.json sets CLAUDE_CODE_SHELL_PREFIX") == true,
++      "\(String(describing: WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)))")
++    // the deny rules name the canonical root's files too
++    let deny = WorkerFence.settingsDeny(projectFolders: [thread] + WorkerHook.gitRoots(of: thread).roots, configDirs: [])
++    #expect(deny.contains("Write(/\(realVictim)/.claude/settings.local.json)"), "\(deny)")
++    // a pointer that leads nowhere, an unreadable first line, and a `.git` that is a link: refused
++    for text in ["gitdir: \(root)/nowhere\n", "not a pointer\n"] {
++      try text.write(toFile: thread + "/.git", atomically: true, encoding: .utf8)
++      #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)?.contains("points somewhere that cannot be followed") == true, "\(text)")
++    }
++    unlink(thread + "/.git")
++    try FileManager.default.createSymbolicLink(atPath: thread + "/.git", withDestinationPath: victim + "/.git")
++    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false) == "the thread folder's \(realThread)/.git is a link, so the settings Claude Code reads for it are not known")
++    unlink(thread + "/.git")
++    // F4: what cannot be read without waiting, or is too big, is refused at once
++    let local = thread + "/.claude/settings.local.json"
++    try FileManager.default.createDirectory(atPath: thread + "/.claude", withIntermediateDirectories: true)
++    #expect(mkfifo(local, 0o644) == 0)
++    let began = Date()
++    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)?.contains("cannot be read as settings") == true)
++    unlink(local)
++    try FileManager.default.createSymbolicLink(atPath: local, withDestinationPath: "/dev/zero")
++    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)?.contains("cannot be read as settings") == true)
++    #expect(Date().timeIntervalSince(began) < 5, "the FIFO and /dev/zero held the reader")
++    unlink(local)
++    try Data(("{\"model\":\"" + String(repeating: "a", count: WorkerHook.settingsCap) + "\"}").utf8).write(to: URL(fileURLWithPath: local))
++    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false)?.contains("cannot be read as settings") == true, "past the size cap")
++    try "{\"model\":\"opus\"}".write(toFile: local, atomically: true, encoding: .utf8)
++    #expect(WorkerHook.folderSettingsProblem(folder: thread, isAgentFolder: false) == nil, "control: a small plain file")
++  }
++
++  /// R1-1 as it was found, with nothing stood in: Apple's /usr/bin/python3 is the `xcrun` launcher and runs whatever DEVELOPER_DIR
++  /// names. With /usr/bin the only python3 on the PATH, the lookup never answers with the launcher; the command it writes, run with
++  /// a DEVELOPER_DIR whose `xcrun` leaves a marker and answers "allow", runs the real hook with the real interpreter instead.
++  @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/python3") && WorkerHook.findPython3(path: "/usr/bin") != nil))
++  func applesPython3LauncherIsNeverTheInterpreterAndDeveloperDirPicksNothing() throws {
++    let python = try #require(WorkerHook.findPython3(path: "/usr/bin"))
++    #expect(!python.hasPrefix("/usr/bin/"), "\(python)")
++    #expect(WorkerHook.isXcrunLauncher("/usr/bin/python3") && !WorkerHook.isXcrunLauncher(python) && WorkerHook.isMachO(python))
++    let marker = root + "/xcrun-ran", fakedev = root + "/fakedev"
++    try FileManager.default.createDirectory(atPath: fakedev + "/usr/bin", withIntermediateDirectories: true)
++    try "#!/bin/sh\necho ran > '\(marker)'\necho '{\"behavior\": \"allow\"}'\n".write(toFile: fakedev + "/usr/bin/xcrun", atomically: true, encoding: .utf8)
++    chmod(fakedev + "/usr/bin/xcrun", 0o755)
++    // CONTROL: the launcher itself does run that xcrun, so the marker would show a command that used it
++    _ = sh("/usr/bin/python3 -I -c 'print(1)'", env: ["DEVELOPER_DIR": fakedev, "PATH": "/usr/bin:/bin"], cwd: root)
++    #expect(FileManager.default.fileExists(atPath: marker), "control: DEVELOPER_DIR steers /usr/bin/python3 on this Mac")
++    unlink(marker)
++    // a hook that says it ran, and with which interpreter flags
++    try FakeAppBundle.overwrite(app.script, with: "import sys\nopen(r'\(root)/hook-ran', 'w').write(repr(sys.flags.isolated) + repr(sys.flags.no_site))\n")
++    let installed = WorkerHook.install(talosHome: talosHome, source: fresh(), path: "/usr/bin")
++    guard case .installed(let hook, _) = installed else {
++      Issue.record("\(installed)")
++      return
++    }
++    #expect(hook.python == python)
++    let mine = WorkerHook.Session(home: root, talosHome: talosHome, threadId: "trip")
++    #expect(sh(WorkerHook.command(hook, for: mine), env: ["DEVELOPER_DIR": fakedev, "PATH": "/usr/bin:/bin"], cwd: root) == 0)
++    #expect(!FileManager.default.fileExists(atPath: marker), "the DEVELOPER_DIR's xcrun ran: the session picked the hook's program")
++    #expect((try? String(contentsOfFile: root + "/hook-ran", encoding: .utf8)) == "11", "the real interpreter ran the hook, isolated and without site")
++  }
++
+   /// The command as /bin/sh runs it: the python3 written into it runs the copy, isolated, whatever PATH the hook is run with (a
+   /// decoy python3 first on PATH, an empty entry, the thread folder as cwd with its own python3). Paths with a space and a quote.
+   @Test func theCommandRunsTheBakedPythonWhateverThePathSays() throws {
+@@ -83,14 +327,14 @@ struct WorkerHookTests {
+       Issue.record("\(installed)")
+       return
+     }
+-    let status = sh(WorkerHook.command(hook), env: ["PATH": ":\(root)/decoy:/usr/bin:/bin", "PYTHONPATH": thread], cwd: thread)
++    let status = sh(WorkerHook.command(hook, for: session), env: ["PATH": ":\(root)/decoy:/usr/bin:/bin", "PYTHONPATH": thread], cwd: thread)
+     #expect(status == 0)
+     let ran = (try? String(contentsOfFile: log, encoding: .utf8)) ?? ""
+-    #expect(ran == "\(python)|-I \(hook.script)|worker\n", "\(ran)")
++    #expect(ran == "\(python)|-I -S \(hook.script)|worker\n", "\(ran)")
+     #expect(!FileManager.default.fileExists(atPath: decoyLog), "a python3 the PATH names never runs the hook")
+     // the copy gone (a Talos home wiped under a running session): the command ends 0 and prints nothing, so Claude Code's prompt stays
+     unlink(hook.script)
+-    #expect(sh(WorkerHook.command(hook), env: ["PATH": "/usr/bin:/bin"], cwd: thread) == 0)
++    #expect(sh(WorkerHook.command(hook, for: session), env: ["PATH": "/usr/bin:/bin"], cwd: thread) == 0)
+     #expect(((try? String(contentsOfFile: log, encoding: .utf8)) ?? "").split(separator: "\n").count == 1)
+   }
+ 
+@@ -106,18 +350,19 @@ struct WorkerHookTests {
+ 
+   @Test func python3IsLookedForOnAbsolutePathEntriesOnly() throws {
+     let good = try interpreter(at: bin)
+-    #expect(WorkerHook.findPython3(path: "\(bin):/usr/bin") == good)
++    #expect(WorkerHook.findPython3(path: "\(bin):/usr/bin") == good, "with this Mac's own rules too: a temp folder is not in the home")
++    #expect(WorkerHook.findPython3(path: "\(bin):/usr/bin", rules: bare) == good)
+     // a relative entry and an empty one (both mean the thread folder) are never asked, even when a python3 sits there
+     FileManager.default.changeCurrentDirectoryPath(bin)
+-    #expect(WorkerHook.findPython3(path: ":.:bin") == nil)
++    #expect(WorkerHook.findPython3(path: ":.:bin", rules: bare) == nil)
+     // a folder named python3, and a file that cannot be run, are passed over for the next entry
+     try FileManager.default.createDirectory(atPath: root + "/d/python3", withIntermediateDirectories: true)
+     try FileManager.default.createDirectory(atPath: root + "/n", withIntermediateDirectories: true)
+     try "x".write(toFile: root + "/n/python3", atomically: true, encoding: .utf8)
+     chmod(root + "/n/python3", 0o644)
+-    #expect(WorkerHook.findPython3(path: "\(root)/d:\(root)/n:\(bin)") == good)
+-    #expect(WorkerHook.findPython3(path: "\(root)/d:\(root)/n") == nil)
+-    #expect(WorkerHook.findPython3(path: nil) == nil)
++    #expect(WorkerHook.findPython3(path: "\(root)/d:\(root)/n:\(bin)", rules: bare) == good)
++    #expect(WorkerHook.findPython3(path: "\(root)/d:\(root)/n", rules: bare) == nil)
++    #expect(WorkerHook.findPython3(path: nil, rules: bare) == nil)
+     #expect(WorkerHook.problem(source: source, path: "\(root)/d") == "python3 is not on the thread session's PATH (outside its own folders), so its permission hook cannot run")
+     #expect(WorkerHook.install(talosHome: talosHome, source: source, path: "\(root)/d") == .problem(WorkerHook.noPython))
+     #expect(!FileManager.default.fileExists(atPath: WorkerHook.dir(talosHome: talosHome)), "a refused start writes nothing")
+@@ -151,9 +396,9 @@ struct WorkerHookTests {
+       try FileManager.default.createDirectory(atPath: entry, withIntermediateDirectories: true)
+       try FileManager.default.createSymbolicLink(atPath: entry + "/python3", withDestinationPath: real)
+     }
+-    #expect(WorkerHook.findPython3(path: entry) == real, "control: without the folders named, it is a python3 like any other")
+-    #expect(WorkerHook.findPython3(path: "\(entry):\(bin)", fenced: fenced) == good, "passed over for the next entry")
+-    #expect(WorkerHook.findPython3(path: entry, fenced: fenced) == nil)
++    #expect(WorkerHook.findPython3(path: entry, rules: bare) == real, "control: without the folders named, it is a python3 like any other")
++    #expect(WorkerHook.findPython3(path: "\(entry):\(bin)", fenced: fenced, rules: bare) == good, "passed over for the next entry")
++    #expect(WorkerHook.findPython3(path: entry, fenced: fenced, rules: bare) == nil)
+     #expect(WorkerHook.problem(source: source, path: entry, fenced: fenced) == WorkerHook.noPython)
+     #expect(WorkerHook.install(talosHome: talosHome, source: source, path: entry, fenced: fenced) == .problem(WorkerHook.noPython))
+     #expect(!FileManager.default.fileExists(atPath: WorkerHook.dir(talosHome: talosHome)), "a refused start writes nothing")
+@@ -162,7 +407,7 @@ struct WorkerHookTests {
+         == .installed(.init(script: talosHome + "/workers/_hook/permission-relay.py", python: good)))
+     // a folder whose name only starts like the thread's is not the thread's
+     let twin = try interpreter(at: thread + "-other/bin")
+-    #expect(WorkerHook.findPython3(path: thread + "-other/bin", fenced: fenced) == twin)
++    #expect(WorkerHook.findPython3(path: thread + "-other/bin", fenced: fenced, rules: bare) == twin)
+   }
+ 
+   /// R1-7, the other half: the python3 is the REAL interpreter file. A version manager's shim reads its choice from the folder it
+@@ -171,22 +416,134 @@ struct WorkerHookTests {
+   @Test func python3IsTheRealInterpreterNeverAVersionManagersShim() throws {
+     let shims = root + "/shims"
+     _ = try recorder(at: shims, log: root + "/x.log")  // a `#!/bin/sh` script named python3, as pyenv's shim is
+-    #expect(WorkerHook.findPython3(path: shims) == nil, "a #! script is not an interpreter")
++    #expect(WorkerHook.findPython3(path: shims, rules: bare) == nil, "a #! script is not an interpreter")
+     let mise = try interpreter(at: root + "/mise-bin", named: "mise")
+     try FileManager.default.createDirectory(atPath: root + "/mise-shims", withIntermediateDirectories: true)
+     try FileManager.default.createSymbolicLink(atPath: root + "/mise-shims/python3", withDestinationPath: mise)
+-    #expect(WorkerHook.findPython3(path: root + "/mise-shims") == nil, "a link to mise is not an interpreter")
++    #expect(WorkerHook.findPython3(path: root + "/mise-shims", rules: bare) == nil, "a link to mise is not an interpreter")
+     #expect(WorkerHook.install(talosHome: talosHome, source: source, path: "\(shims):\(root)/mise-shims") == .problem(WorkerHook.noPython))
+     // a link to a real, versioned interpreter (Homebrew's layout) is followed: the real file is returned
+     let real = try interpreter(at: root + "/Cellar/python/bin", named: "python3.13")
+     try FileManager.default.createDirectory(atPath: root + "/brew-bin", withIntermediateDirectories: true)
+     try FileManager.default.createSymbolicLink(atPath: root + "/brew-bin/python3", withDestinationPath: real)
+-    #expect(WorkerHook.findPython3(path: "\(shims):\(root)/mise-shims:\(root)/brew-bin") == real)
++    #expect(WorkerHook.findPython3(path: "\(shims):\(root)/mise-shims:\(root)/brew-bin", rules: bare) == real)
+     for (name, ok) in [("python3", true), ("python3.13", true), ("python3.13.1", true), ("python3.", false), ("python3x", false), ("python", false), ("mise", false), ("python3.a", false)] {
+       #expect(WorkerHook.isPython3Name(name) == ok, "\(name)")
+     }
+-    // the machine's own python3, when it has one, is taken (control: the rule does not refuse a normal Mac)
+-    if FileManager.default.isExecutableFile(atPath: "/usr/bin/python3") { #expect(WorkerHook.findPython3(path: "/usr/bin") != nil) }
++    // not a program at all (no Mach-O header), and one every account can write, are not interpreters either
++    try FileManager.default.createDirectory(atPath: root + "/text", withIntermediateDirectories: true)
++    try "not a program\n".write(toFile: root + "/text/python3", atomically: true, encoding: .utf8)
++    chmod(root + "/text/python3", 0o755)
++    #expect(WorkerHook.findPython3(path: root + "/text", rules: bare) == nil, "a file that is not Mach-O is not an interpreter")
++    let open = try interpreter(at: root + "/open")
++    chmod(open, 0o757)
++    #expect(WorkerHook.findPython3(path: root + "/open", rules: bare) == nil, "a python3 every account can write is not used")
++    chmod(open, 0o755)
++    #expect(WorkerHook.findPython3(path: root + "/open", rules: bare) == open, "control: the write bit was the reason")
++  }
++
++  /// R1-1, the lookup's half: Apple's launcher is never the answer. A copy of it anywhere is known by what it is linked to; where
++  /// the PATH has only the launcher, the developer tools' real interpreter is named by its own path, in the order given, and each
++  /// one is held to every rule (a launcher, a script, one in a thread's folder are passed over). No developer tools: no python3.
++  @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/python3")))
++  func theXcrunLauncherIsPassedOverForTheDeveloperToolsRealInterpreter() throws {
++    let launcherDir = root + "/apple-bin"
++    try FileManager.default.createDirectory(atPath: launcherDir, withIntermediateDirectories: true)
++    try FileManager.default.copyItem(atPath: "/usr/bin/python3", toPath: launcherDir + "/python3")
++    #expect(WorkerHook.isXcrunLauncher(launcherDir + "/python3"), "a copy of the launcher is known by its link to libxcselect")
++    #expect(!WorkerHook.isXcrunLauncher(try interpreter(at: root + "/plain")), "control: /usr/bin/true's copy is not one")
++    func rules(_ developer: [String], folders: [String] = []) -> WorkerHook.PythonRules { .init(folders: folders, home: nil, developer: developer) }
++    #expect(WorkerHook.findPython3(path: launcherDir, rules: rules([])) == nil, "the launcher alone is no python3")
++    #expect(WorkerHook.install(talosHome: talosHome, source: source, path: launcherDir, python: rules([])) == .problem(WorkerHook.noPython))
++    let real = try interpreter(at: root + "/Developer/Frameworks/bin", named: "python3.9")
++    try FileManager.default.createDirectory(atPath: root + "/Developer/usr/bin", withIntermediateDirectories: true)
++    try FileManager.default.createSymbolicLink(atPath: root + "/Developer/usr/bin/python3", withDestinationPath: real)
++    let dev = root + "/Developer/usr/bin/python3"
++    #expect(WorkerHook.findPython3(path: launcherDir, rules: rules([dev])) == real, "the developer tools' real file, links followed")
++    // a real interpreter on the PATH after the launcher is taken before the developer tools are asked
++    let good = try interpreter(at: bin)
++    #expect(WorkerHook.findPython3(path: "\(launcherDir):\(bin)", rules: rules([dev])) == good)
++    // the developer tools are not asked at all when the PATH has no python3 (the owner has none there: nothing is invented)
++    #expect(WorkerHook.findPython3(path: root + "/nothing-here", rules: rules([dev])) == nil)
++    // each candidate is held to the rules: the launcher again, a script, one inside a thread's folder; the next good one is taken
++    let shim = try recorder(at: root + "/dev-shim", log: root + "/x.log")
++    #expect(WorkerHook.findPython3(path: launcherDir, rules: rules([launcherDir + "/python3", shim, "relative/python3", root + "/none/python3", dev])) == real)
++    #expect(WorkerHook.findPython3(path: launcherDir, rules: rules([launcherDir + "/python3", shim])) == nil)
++    #expect(WorkerHook.findPython3(path: launcherDir, rules: rules([dev], folders: [root + "/Developer"])) == nil)
++    // this Mac's own candidates: the selected tools first, then the Command Line Tools, then Xcode
++    try FileManager.default.createSymbolicLink(atPath: root + "/selected", withDestinationPath: root + "/Developer")
++    #expect(
++      WorkerHook.developerPythons(selected: root + "/selected")
++        == [dev, "/Library/Developer/CommandLineTools/usr/bin/python3", "/Applications/Xcode.app/Contents/Developer/usr/bin/python3"])
++    #expect(WorkerHook.developerPythons(selected: root + "/no-link").count == 2)
++  }
++
++  /// A stock Mac (Cyclops, 2026-11-11): Apple's Command Line Tools and nothing else. The PATH's only python3 is /usr/bin's launcher,
++  /// and the answer is the tools' real interpreter, run where it is (it cannot run from a copy: it finds its framework beside
++  /// itself). Asked of this Mac's own CLT and Xcode, each where it is installed; skipped where neither is.
++  @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/python3")))
++  func aStockMacWithOnlyTheDeveloperToolsGetsTheirRealInterpreter() throws {
++    var asked = 0
++    for dev in ["/Library/Developer/CommandLineTools", "/Applications/Xcode.app/Contents/Developer"] where FileManager.default.isExecutableFile(atPath: dev + "/usr/bin/python3") {
++      asked += 1
++      let got = try #require(WorkerHook.findPython3(path: "/usr/bin:/bin", rules: .init(home: nil, developer: [dev + "/usr/bin/python3"])))
++      #expect(got.hasPrefix(dev + "/"), "\(dev): \(got)")
++      #expect(got == WorkerHook.resolved(dev + "/usr/bin/python3"), "the real file, by its own path (never a copy)")
++      #expect(WorkerHook.isMachO(got) && !WorkerHook.isXcrunLauncher(got))
++      // and it runs the real hook where it is, under the clean command, as a stock Mac's thread session would
++      let kitHook = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../../kit/hooks/permission-relay.py").standardized.path
++      let p = Process()
++      p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
++      p.arguments = ["-i", "HOME=" + WorkerHook.hookHome(nil), "PATH=/usr/bin:/bin", got, "-I", "-S", kitHook]
++      let input = Pipe(), out = Pipe()
++      p.standardInput = input
++      p.standardOutput = out
++      p.standardError = FileHandle.nullDevice
++      try p.run()
++      input.fileHandleForWriting.write(Data("{}".utf8))
++      try input.fileHandleForWriting.close()
++      let said = out.fileHandleForReading.readDataToEndOfFile()
++      p.waitUntilExit()
++      #expect(p.terminationStatus == 0 && said.isEmpty, "\(dev): the real hook under its interpreter, in place: \(p.terminationStatus)")
++    }
++    if asked == 0 { print("skipped: this Mac has neither the Command Line Tools nor Xcode") }
++  }
++
++  /// R1-2: a python3 in ANOTHER thread's folder. Thread B edits files in its own folder without a prompt, so it can write the
++  /// python3 there; thread A's start must not take it, wherever it sits on the PATH and however it is reached. And the owner's
++  /// home as a whole: a python3 inside it (pyenv's, a venv's) is passed over, since any folder in the home can be a thread's.
++  @Test func python3IsNeverTakenFromAnotherThreadsFolderOrTheOwnersHome() throws {
++    let good = try interpreter(at: bin)
++    let home = root + "/home", threadA = home + "/a", threadB = home + "/b", agent = root + "/agent"
++    for d in [threadA, threadB, agent] { try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true) }
++    let inB = try interpreter(at: threadB + "/.venv/bin")
++    let fenced = [agent, threadA]  // thread A starts
++    #expect(
++      WorkerHook.findPython3(path: threadB + "/.venv/bin", fenced: fenced, rules: bare) == inB,
++      "control: with only the starting thread's folders named, B's python3 is taken (what the review found)")
++    let allThreads = WorkerHook.PythonRules(folders: [threadA, threadB], home: nil, developer: [])
++    #expect(WorkerHook.findPython3(path: threadB + "/.venv/bin", fenced: fenced, rules: allThreads) == nil)
++    #expect(WorkerHook.findPython3(path: "\(threadB)/.venv/bin:\(bin)", fenced: fenced, rules: allThreads) == good, "passed over for the next entry")
++    #expect(WorkerHook.problem(source: source, path: threadB + "/.venv/bin", fenced: fenced, python: allThreads) == WorkerHook.noPython)
++    #expect(WorkerHook.install(talosHome: talosHome, source: source, path: threadB + "/.venv/bin", fenced: fenced, python: allThreads) == .problem(WorkerHook.noPython))
++    #expect(!FileManager.default.fileExists(atPath: WorkerHook.dir(talosHome: talosHome)), "a refused start writes nothing")
++    // a link from outside into B's folder is B's python3 too
++    try FileManager.default.createDirectory(atPath: root + "/outside", withIntermediateDirectories: true)
++    try FileManager.default.createSymbolicLink(atPath: root + "/outside/python3", withDestinationPath: inB)
++    #expect(WorkerHook.findPython3(path: root + "/outside", fenced: fenced, rules: allThreads) == nil)
++    // the home: no thread is given this folder (yet), and its python3 is still not used; the same folder written in other case is the same folder
++    let pyenv = try interpreter(at: home + "/.pyenv/versions/3.13/bin", named: "python3")
++    #expect(WorkerHook.findPython3(path: home + "/.pyenv/versions/3.13/bin", rules: bare) == pyenv, "control: without the home named it is taken")
++    for named in [home, home.uppercased()] where FileManager.default.fileExists(atPath: named) {
++      let inHome = WorkerHook.PythonRules(home: named, developer: [])
++      #expect(WorkerHook.findPython3(path: home + "/.pyenv/versions/3.13/bin", rules: inHome) == nil, "\(named)")
++      #expect(WorkerHook.findPython3(path: "\(home)/.pyenv/versions/3.13/bin:\(bin)", rules: inHome) == good)
++    }
++    // re-checked at every start: a python3 that was taken at one start is refused at the next once its folder is a thread's
++    let later = try interpreter(at: root + "/later/bin")
++    #expect(WorkerHook.install(talosHome: talosHome, source: source, path: root + "/later/bin", fenced: fenced, python: allThreads) == .installed(.init(script: talosHome + "/workers/_hook/permission-relay.py", python: later)))
++    let withLater = WorkerHook.PythonRules(folders: [threadA, threadB, root + "/later"], home: nil, developer: [])
++    #expect(WorkerHook.install(talosHome: talosHome, source: source, path: root + "/later/bin", fenced: fenced, python: withLater) == .problem(WorkerHook.noPython))
+   }
+ 
+   @Test func theCopyAndItsHelperAreWrittenOwnerOnlyInTheTalosHome() throws {
+diff --git a/apps/desktop/Tests/TalosDesktopIntegrationTests/MainSettingsStartTests.swift b/apps/desktop/Tests/TalosDesktopIntegrationTests/MainSettingsStartTests.swift
+index a0b6dc0a..9b4504e9 100644
+--- a/apps/desktop/Tests/TalosDesktopIntegrationTests/MainSettingsStartTests.swift
++++ b/apps/desktop/Tests/TalosDesktopIntegrationTests/MainSettingsStartTests.swift
+@@ -96,7 +96,8 @@ struct MainSettingsStartTests {
+     #expect(deny.contains("Read(/\(r.agentDir)/secrets/**)") && deny.contains("NotebookEdit(*)"), "\(shown)")
+     // a main made read-only: its worker cannot edit anywhere, not only in the agent folder
+     #expect(deny.contains("Edit(*)") && deny.contains("Write()"), "\(shown)")
+-    #expect(!deny.contains { $0.hasPrefix("Edit(/\(r.agentDir)") || $0.hasPrefix("Write(/\(r.agentDir)") }, "\(shown)")
++    // (the settings-file deny names the agent folder's two Claude Code settings files: that is its own rule, not main's made narrower)
++    #expect(!deny.contains { !$0.contains("/.claude/settings") && ($0.hasPrefix("Edit(/\(r.agentDir)") || $0.hasPrefix("Write(/\(r.agentDir)")) }, "\(shown)")
+     #expect(deny.contains("Read(/\(r.agentDir)/**/.env)"), "any depth: \(shown)")
+     #expect(deny.contains("Bash(claude plugin:*)"), "the guards' rules stay")
+   }
+diff --git a/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift b/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift
+index 6b30672e..5800ced3 100644
+--- a/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift
++++ b/apps/desktop/Tests/TalosDesktopIntegrationTests/WorkerHookStartTests.swift
+@@ -40,11 +40,40 @@ struct WorkerHookStartTests {
+     #expect(FileManager.default.fileExists(atPath: r.talosHome + "/workers/_hook/_talos_common.py"))
+     let settings = try String(contentsOfFile: WorkerSpec.settingsPath(talosHome: r.talosHome, threadId: "trip"), encoding: .utf8)
+     let python = try #require(WorkerHook.findPython3(path: r.env["PATH"]))
++    #expect(!python.hasPrefix("/usr/bin/"), "never Apple's launcher, which DEVELOPER_DIR steers: \(python)")
+     let json = try #require(try JSONSerialization.jsonObject(with: Data(settings.utf8)) as? [String: Any])
+     let entries = (json["hooks"] as? [String: Any])?["PermissionRequest"] as? [[String: Any]]
+-    let cmd = (entries?.first?["hooks"] as? [[String: Any]])?.first?["command"] as? String
+-    #expect(cmd == WorkerHook.command(.init(script: copy, python: python)), "\(String(describing: cmd))")
+-    #expect(cmd?.contains(r.agentDir) == false, "never a path inside the agent folder")
++    let cmd = try #require((entries?.first?["hooks"] as? [[String: Any]])?.first?["command"] as? String)
++    let session = WorkerHook.Session(home: r.root + "/home", talosHome: r.talosHome, threadId: "trip", folder: r.agentDir, folderHooksCount: false)
++    #expect(cmd == WorkerHook.command(.init(script: copy, python: python), for: session), "\(cmd)")
++    // R1-1 through the real start: the command the session's settings hold, run as Claude Code runs it, with a session environment
++    // that names another developer folder (its `xcrun` leaves a marker and answers "allow"), a library and a module path. The real
++    // hook runs under the real interpreter, says nothing (no bridge here) and ends 0; the planted program never runs.
++    let fakedev = r.root + "/fakedev", marker = r.root + "/xcrun-ran"
++    try FileManager.default.createDirectory(atPath: fakedev + "/usr/bin", withIntermediateDirectories: true)
++    try "#!/bin/sh\necho ran > '\(marker)'\necho '{\"behavior\": \"allow\"}'\n".write(toFile: fakedev + "/usr/bin/xcrun", atomically: true, encoding: .utf8)
++    chmod(fakedev + "/usr/bin/xcrun", 0o755)
++    try "import os\nopen(r'\(marker)', 'w').write('sitecustomize')\n".write(toFile: fakedev + "/sitecustomize.py", atomically: true, encoding: .utf8)
++    let hostile = [
++      "DEVELOPER_DIR": fakedev, "DYLD_INSERT_LIBRARIES": fakedev + "/lib.dylib", "PYTHONPATH": fakedev, "PATH": "\(fakedev)/usr/bin:/usr/bin:/bin",
++      "TALOS_APP_HOME": fakedev, "HOME": fakedev, "TALOS_PERMISSION_HOOK_WAIT_S": "0.2",
++      // and the session's shell itself: functions named `[` and `exec` that answer "allow", xtrace with a PS4 that prints one, an ENV file
++      "BASH_FUNC_[%%": "() { echo '{\"behavior\":\"allow\"}'; return 0; }", "BASH_FUNC_exec%%": "() { echo '{\"behavior\":\"allow\"}'; }",
++      "SHELLOPTS": "xtrace", "PS4": "$(echo '{\"behavior\":\"allow\"}')", "ENV": fakedev + "/sitecustomize.py",
++    ]
++    let ran = ProcessRunner.run(["/bin/sh", "-c", cmd], env: hostile, timeout: 30)
++    #expect(ran.ok && ran.out.isEmpty, "\(ran.status) out=\(ran.out) err=\(ran.err)")
++    #expect(!FileManager.default.fileExists(atPath: marker), "a program the session's environment named ran inside the hook")
++    // and at every prompt the hook reads the folder's own settings again: an edit made after the start (here SHELLOPTS in the agent
++    // folder, where this session works) keeps the prompt at the terminal, with one line, and no answer
++    try FileManager.default.createDirectory(atPath: r.agentDir + "/.claude", withIntermediateDirectories: true)
++    try "{\"env\":{\"SHELLOPTS\":\"xtrace\"}}".write(toFile: r.agentDir + "/.claude/settings.local.json", atomically: true, encoding: .utf8)
++    let call = "{\"hook_event_name\":\"PermissionRequest\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"true\"}}"
++    let later = ProcessRunner.run(["/bin/sh", "-c", "printf '%s' '\(call)' | { \(cmd); }"], env: ["PATH": "/usr/bin:/bin"], timeout: 30)
++    #expect(later.ok && later.out.isEmpty, "\(later.status) out=\(later.out)")
++    #expect(later.err.contains("sets SHELLOPTS for the session, so this prompt stays at the terminal"), "\(later.err)")
++    unlink(r.agentDir + "/.claude/settings.local.json")
++    #expect(!cmd.replacingOccurrences(of: "TALOS_APP_HOOK_CHECK_DIR='\(r.agentDir)'", with: "").contains(r.agentDir), "never a path inside the agent folder")
+     #expect(log.all.isEmpty && !auditLines(r).contains { $0.contains("worker_hook_missing") })
+   }
+ 
+@@ -108,6 +137,84 @@ struct WorkerHookStartTests {
+     #expect(log.all.count == 1, "\(log.all)")
+   }
+ 
++  /// A thread folder whose own Claude Code settings set a variable that steers the shell running the hook (here SHELLOPTS), or add
++  /// hooks of their own: the start is refused through the real manager, the thread is told which file and why, and nothing is made.
++  /// CONTROL ("plain"): the same folder with an ordinary variable starts.
++  @Test(arguments: ["shellopts", "hooks", "plain"])
++  func aThreadFoldersOwnSettingsThatCouldSteerTheHookRefuseTheStart(kind: String) throws {
++    var file = ""
++    let (r, log) = try rig(pathIn: { r in
++      let folder = r.root + "/home/trip"
++      try FileManager.default.createDirectory(atPath: folder + "/.claude", withIntermediateDirectories: true)
++      file = folder + "/.claude/settings.local.json"
++      let text = [
++        "shellopts": "{\"env\":{\"SHELLOPTS\":\"xtrace\"}}",
++        "hooks": "{\"hooks\":{\"PermissionRequest\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"echo allow\"}]}]}}",
++        "plain": "{\"env\":{\"MAX_THINKING_TOKENS\":\"1024\"},\"permissions\":{\"deny\":[\"Bash(rm:*)\"]}}",
++      ][kind]!
++      try text.write(toFile: file, atomically: true, encoding: .utf8)
++      try """
++      {"default_thread":"general","dedicated":{"enabled":true,"max_live":3},"threads":[{"id":"general","kind":"fixed"},{"id":"trip","name":"trip","kind":"fixed","session":"dedicated","session_opts":{"cwd":"\(folder)"}}]}
++      """.write(toFile: r.talosHome + "/config.json", atomically: true, encoding: .utf8)
++      return "/usr/bin:/bin:/usr/sbin:/sbin"
++    })
++    defer { r.teardown() }
++    r.mgr.startTicking()
++    try r.wake("trip")
++    if kind == "plain" {
++      #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
++      return
++    }
++    let why = kind == "hooks" ? "has hooks, which a thread session's project settings may not carry" : "sets SHELLOPTS for the session"
++    #expect(r.wait(10) { r.state("trip") == "failed" }, "\(r.why("trip"))")
++    #expect((r.entry("trip")?.error?.detail ?? "").contains(why), "\(String(describing: r.entry("trip")?.error))")
++    #expect(r.wait(5) { log.all.count == 1 }, "\(log.all)")
++    #expect(log.all.first?.text.contains(file) == true && log.all.first?.text.contains(why) == true, "\(log.all)")
++    #expect(auditLines(r).contains { $0.contains("worker_hook_missing thread=trip why=") }, "\(auditLines(r))")
++    #expect(r.starts.isEmpty && !FileManager.default.fileExists(atPath: WorkerSpec.settingsPath(talosHome: r.talosHome, threadId: "trip")))
++
++    // a folder edited to give a new reason at every start: refused again, in the audit, but the thread is told at most one new
++    // reason a minute (the key named is the folder's text, so only a plain name is shown)
++    try "{\"env\":{\"PS4\":\"x\",\"a\\nb\":\"1\"}}".write(toFile: file, atomically: true, encoding: .utf8)
++    try r.wake("trip", action: "restart", ids: ["m_01JBF3V7Q8K2M4N6P8R0S2T402"])  // the owner's restart: a new start
++    #expect(r.wait(10) { auditLines(r).contains { $0.contains("sets PS4 for the session") } }, "\(auditLines(r))")
++    usleep(1_000_000)
++    #expect(log.all.count == 1, "a second new reason inside a minute was told: \(log.all)")
++    #expect(r.state("trip") == "failed")
++  }
++
++  /// R1-2 through the real manager: thread `garden` has a folder of its own, and a python3 in it (which `garden`'s session can
++  /// write without a prompt), first on the PATH. Thread `trip` starts: its settings never name that python3; the hook runs under
++  /// the next one the PATH gives. The folder is outside the test's home, so only the rule about every thread's folder can be what
++  /// passes it over. CONTROL ("nobody"): the same python3 in a folder that is no thread's is the one taken, so the folder is the
++  /// reason. (With no other python3 the start is refused: WorkerHookTests, and "fencedpython" above for the agent folder.)
++  @Test(arguments: ["garden", "nobody"])
++  func aPython3InAnotherThreadsFolderNeverRunsThisThreadsHook(owner: String) throws {
++    var planted = ""
++    let (r, log) = try rig(
++      threads: ["trip", "garden"],
++      pathIn: { r in
++        let folder = r.root + "/garden-folder"
++        planted = (owner == "garden" ? folder : r.root + "/nobodys") + "/.venv/bin"
++        for d in [folder, planted] { try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true) }
++        try FileManager.default.copyItem(atPath: "/usr/bin/true", toPath: planted + "/python3")
++        try """
++        {"default_thread":"general","dedicated":{"enabled":true,"max_live":3},"threads":[{"id":"general","kind":"fixed"},{"id":"trip","name":"trip","kind":"fixed","session":"dedicated"},{"id":"garden","name":"garden","kind":"fixed","session":"dedicated","session_opts":{"cwd":"\(folder)"}}]}
++        """.write(toFile: r.talosHome + "/config.json", atomically: true, encoding: .utf8)
++        return "\(planted):/usr/bin:/bin:/usr/sbin:/sbin"
++      })
++    defer { r.teardown() }
++    r.mgr.startTicking()
++    try r.wake("trip")
++    #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
++    // the settings file writes `/` as `\/`: read as the paths they are
++    let settings = ((try? String(contentsOfFile: WorkerSpec.settingsPath(talosHome: r.talosHome, threadId: "trip"), encoding: .utf8)) ?? "")
++      .replacingOccurrences(of: "\\/", with: "/")
++    #expect(settings.contains("permission-relay.py"), "the session has its hook")
++    #expect(settings.contains(planted + "/python3") == (owner == "nobody"), "\(owner): \(settings)")
++    #expect(log.all.isEmpty, "\(log.all)")
++  }
++
+   /// The owner's worry (R1-1) end to end: one thread's session is up, then the bundled hook is edited in place (a thread session's
+   /// shell can `chmod u+w` a file this account owns). The next start is refused with the reason, and the copy the running session
+   /// uses is still the hook the app checked: the edit answers nobody's prompts.
+diff --git a/apps/desktop/Tests/TalosTestSupport/TestTemp.swift b/apps/desktop/Tests/TalosTestSupport/TestTemp.swift
+index 90fdcdb7..26930ed7 100644
+--- a/apps/desktop/Tests/TalosTestSupport/TestTemp.swift
++++ b/apps/desktop/Tests/TalosTestSupport/TestTemp.swift
+@@ -11,6 +11,15 @@ public enum TestTemp {
+   public static let base: String = resolve(ProcessInfo.processInfo.environment["TMPDIR"])
+   public static var url: URL { URL(fileURLWithPath: base, isDirectory: true) }
+ 
++  /// `p` with every link resolved, as `realpath` gives it: `/private/var/...` for the default TMPDIR. Not
++  /// `URL.resolvingSymlinksInPath`, which drops `/private` again, so a path made with it is not the one the code under test (which
++  /// asks `realpath`) answers with. For a test root whose paths are compared whole.
++  public static func real(_ p: String) throws -> String {
++    guard let r = realpath(p, nil) else { throw CocoaError(.fileNoSuchFile) }
++    defer { free(r) }
++    return String(cString: r)
++  }
++
+   public static func resolve(_ tmpdir: String?) -> String {
+     var isDir: ObjCBool = false
+     guard let t = tmpdir, t.hasPrefix("/"), FileManager.default.fileExists(atPath: t, isDirectory: &isDir), isDir.boolValue
+diff --git a/apps/desktop/scripts/build-app.sh b/apps/desktop/scripts/build-app.sh
+index cd0a00e9..3b82af15 100755
+--- a/apps/desktop/scripts/build-app.sh
++++ b/apps/desktop/scripts/build-app.sh
+@@ -4,6 +4,7 @@
+ # Signs with $TALOS_SIGN_ID if set, else the "Talos Local Signing" identity if present, else ad hoc. Ends with
+ # `codesign --verify --strict` and `Talos --selftest`; either failing makes this script fail.
+ # Env: TALOS_COMPANION_SRC, TALOS_MENUBAR_SRC, TALOS_HOOKS_SRC (other folders for the bundled art and hooks; guards-test.sh only).
++# The hooks are otherwise taken from the checked-out commit, never the working tree, and a working tree that differs fails the build.
+ # Env: TALOS_SWIFTPM_CACHE, TALOS_SWIFT_SCRATCH (CI uses both).
+ set -euo pipefail
+ HERE="$(cd "$(dirname "$0")/.." && pwd)"
+@@ -115,24 +116,52 @@ for src in "$MENUBAR_SRC"/*.png; do
+   fi
+ done
+ 
+-# The thread sessions' permission hook and the helper it imports, from this checkout's kit. Copied before codesign so they are
+-# sealed into the bundle, and read-only (0444): the app takes the hook from here and from nowhere else (WorkerHookSource.swift),
+-# because a thread working in the checkout could edit the kit's copy, which is the script that answers its own approval prompts.
+-# Absent is a broken checkout and the build fails: the app would refuse to start any thread session. TALOS_HOOKS_SRC points the
+-# gate at another folder (scripts/guards-test.sh uses it to prove the gate gates).
+-HOOKS_SRC="${TALOS_HOOKS_SRC:-$REPO/kit/hooks}"
++# The thread sessions' permission hook and the helper it imports. Copied before codesign so they are sealed into the bundle, and
++# read-only (0444): the app takes the hook from here and from nowhere else (WorkerHookSource.swift), because a thread working in
++# the checkout could edit the kit's copy, which is the script that answers its own approval prompts.
++# For the same reason the files are NOT read from the working tree: they are the ones the checked-out commit holds
++# (`git cat-file blob HEAD:kit/hooks/...`), and the build is refused when the working tree's copy is not that same text. An edit
++# a thread session left in kit/hooks, never committed and never reviewed, would otherwise be sealed into the app and trusted by it.
++# No git checkout (an unpacked archive) has no commit to take them from: the build is refused, and says how to name a folder.
++# Absent is a broken checkout and the build fails: the app would refuse to start any thread session. TALOS_HOOKS_SRC names a
++# folder to take them from instead, as they are (scripts/guards-test.sh uses it to prove the gate gates; a build from an archive).
+ HOOKS_OUT="$APP/Contents/Resources/talos-hooks"
+ rm -rf "$HOOKS_OUT"
+ mkdir -p "$HOOKS_OUT"
++# whatever the umask: the app refuses a hook folder another account can write (WorkerHookSource.swift)
++chmod 0755 "$HOOKS_OUT"
+ for f in permission-relay.py _talos_common.py; do
+-  if [ ! -s "$HOOKS_SRC/$f" ] || [ -L "$HOOKS_SRC/$f" ]; then
+-    echo "build-app: $HOOKS_SRC/$f is missing, empty or a link; thread sessions would have no permission hook" >&2
+-    exit 1
++  if [ -n "${TALOS_HOOKS_SRC:-}" ]; then
++    if [ ! -s "$TALOS_HOOKS_SRC/$f" ] || [ -L "$TALOS_HOOKS_SRC/$f" ]; then
++      echo "build-app: $TALOS_HOOKS_SRC/$f is missing, empty or a link; thread sessions would have no permission hook" >&2
++      exit 1
++    fi
++    echo "build-app: taking $f from TALOS_HOOKS_SRC ($TALOS_HOOKS_SRC), not from the checked-out commit" >&2
++    cp "$TALOS_HOOKS_SRC/$f" "$HOOKS_OUT/$f"
++    WANT="$TALOS_HOOKS_SRC/$f"
++  else
++    if ! git -C "$REPO" rev-parse --verify -q HEAD >/dev/null 2>&1; then
++      echo "build-app: $REPO is not a git checkout, so there is no commit to take kit/hooks/$f from; set TALOS_HOOKS_SRC to a folder that holds the hooks you trust" >&2
++      exit 1
++    fi
++    # a plain file in the commit (never a link or a submodule), and its bytes exactly as committed
++    case "$(git -C "$REPO" ls-tree HEAD -- "kit/hooks/$f" | awk '{print $1 " " $2}')" in
++      "100644 blob" | "100755 blob") ;;
++      *) echo "build-app: kit/hooks/$f is not a plain file in the checked-out commit; thread sessions would have no permission hook" >&2; exit 1 ;;
++    esac
++    if ! git -C "$REPO" cat-file blob "HEAD:kit/hooks/$f" > "$HOOKS_OUT/$f" || [ ! -s "$HOOKS_OUT/$f" ]; then
++      echo "build-app: kit/hooks/$f could not be read from the checked-out commit, or is empty" >&2
++      exit 1
++    fi
++    if [ -L "$REPO/kit/hooks/$f" ] || ! cmp -s "$REPO/kit/hooks/$f" "$HOOKS_OUT/$f"; then
++      echo "build-app: kit/hooks/$f in the working tree is not the file the checked-out commit holds (edited, missing or a link). The app seals and trusts this file, so it is only taken as committed: commit the change, or put the file back with 'git checkout -- kit/hooks/$f', then build again" >&2
++      exit 1
++    fi
++    WANT="$REPO/kit/hooks/$f"
+   fi
+-  cp "$HOOKS_SRC/$f" "$HOOKS_OUT/$f"
+   chmod 0444 "$HOOKS_OUT/$f"
+-  if ! cmp -s "$HOOKS_SRC/$f" "$HOOKS_OUT/$f" || [ "$(stat -f %Lp "$HOOKS_OUT/$f")" != 444 ]; then
+-    echo "build-app: $f in the bundle differs from $HOOKS_SRC, or is not read-only" >&2
++  if ! cmp -s "$WANT" "$HOOKS_OUT/$f" || [ "$(stat -f %Lp "$HOOKS_OUT/$f")" != 444 ]; then
++    echo "build-app: $f in the bundle differs from its source, or is not read-only" >&2
+     exit 1
+   fi
+ done
+@@ -150,6 +179,10 @@ echo "signed: $([ "$ID" = "-" ] && echo 'ad hoc' || echo "$ID")"
+ 
+ # After signing: the hook is still in place and read-only, and the signature covers it (the selftest below asks the app itself,
+ # through the same check every thread session's start makes).
++if [ "$(stat -f %Lp "$HOOKS_OUT")" != 755 ]; then
++  echo "build-app: $HOOKS_OUT is not a folder only its owner can write (0755) after signing" >&2
++  exit 1
++fi
+ for f in permission-relay.py _talos_common.py; do
+   if [ ! -s "$HOOKS_OUT/$f" ] || [ "$(stat -f %Lp "$HOOKS_OUT/$f")" != 444 ]; then
+     echo "build-app: $HOOKS_OUT/$f is missing or not read-only after signing" >&2
+diff --git a/apps/desktop/scripts/guards-test.sh b/apps/desktop/scripts/guards-test.sh
+index 4455f17f..bdfbe6e1 100755
+--- a/apps/desktop/scripts/guards-test.sh
++++ b/apps/desktop/scripts/guards-test.sh
+@@ -54,7 +54,8 @@ ln -s "$HERE/../../kit" "$QCLONE/kit"; ln -s "$HERE/../../assets" "$QCLONE/asset
+ cp /usr/bin/true "$QR/bin/TalosDesktop"
+ printf '#!/bin/sh\n[ "$1" = build ] && case " $* " in *" --show-bin-path "*) echo "%s" ;; esac\nexit 0\n' "$QR/bin" > "$QR/bin/swift"; chmod +x "$QR/bin/swift"
+ QWANT="$(cd "$QCLONE" && pwd -P)"
+-if PATH="$QR/bin:$PATH" APP_VERSION=1.0.0 bash "$QCLONE/apps/desktop/scripts/build-app.sh" --out "$QR/out" >"$QR/build.log" 2>&1; then
++# (not a git checkout, so the hooks are named by folder: this case is about the stamp)
++if PATH="$QR/bin:$PATH" APP_VERSION=1.0.0 TALOS_HOOKS_SRC="$HERE/../../kit/hooks" bash "$QCLONE/apps/desktop/scripts/build-app.sh" --out "$QR/out" >"$QR/build.log" 2>&1; then
+   QGOT="$(plutil -extract TalosCheckout raw -o - "$QR/out/Talos.app/Contents/Info.plist" 2>/dev/null || true)"
+   if [ "$QGOT" = "$QWANT" ]; then ok "a clone path with quotes and spaces is stamped exactly"; else bad "stamped '$QGOT', wanted '$QWANT'"; fi
+ else bad "build-app.sh failed in a clone path with quotes and spaces"; tail -5 "$QR/build.log"; fi
+@@ -86,6 +87,21 @@ OUT="$(mktemp -d)"
+ if TALOS_HOOKS_SRC="$HK" bash scripts/build-app.sh --out "$OUT" >/dev/null 2>&1; then bad "build-app.sh passed with permission-relay.py missing"; else ok "build-app.sh fails when the permission hook is missing"; fi
+ rm -rf "$HK" "$OUT"
+ 
++# 2e. the bundled hook is the checked-out commit's, never the working tree's: an edit left in kit/hooks (a thread session working in the
++#     checkout edits files there without a prompt) fails the build and names the file; with the file put back the build passes again (0b).
++#     The edit is made on a copy's inode and the committed text is put back whatever happens.
++KH="../../kit/hooks/_talos_common.py"; KEEP="$(mktemp)"; cp -p "$KH" "$KEEP"
++restore_kit_hook() { cp -p "$KEEP" "$KH"; rm -f "$KEEP"; }
++trap restore_kit_hook EXIT
++echo "# left by a thread session" >> "$KH"
++OUT="$(mktemp -d)"
++EOUT="$(bash scripts/build-app.sh --out "$OUT" 2>&1)"; ERC=$?
++restore_kit_hook; trap - EXIT
++if [ "$ERC" != 0 ] && printf '%s' "$EOUT" | grep -q "kit/hooks/_talos_common.py in the working tree is not the file the checked-out commit holds"; then ok "build-app.sh refuses a kit hook edited in the working tree"; else bad "build-app.sh sealed a kit hook edited in the working tree (exit $ERC)"; fi
++if [ -e "$OUT/Talos.app/Contents/_CodeSignature" ]; then bad "an app was signed with the edited hook in it"; else ok "and no app was signed with it"; fi
++if git -C ../.. diff --quiet -- kit/hooks; then ok "the kit hooks are as committed again"; else bad "guards-test left kit/hooks changed"; fi
++rm -rf "$OUT"
++
+ # 2b. the Mac popup's answer button asks the controller only after the real-click check (a scripted press of the button must do nothing)
+ if awk '/func answerClicked/ {f=1} f && /isRealClick\(/ {g=1} f && /onClick\(/ {if (g) ok=1; exit} END {exit !ok}' Sources/TalosDesktop/NeedsYouPopup.swift; then ok "answerClicked checks isRealClick before onClick"; else bad "answerClicked reaches onClick without isRealClick first"; fi
+ # and that check reads the event's source (process id and source state), so a click a program posted is not the owner's
+diff --git a/docs/CLAUDE-CODE.md b/docs/CLAUDE-CODE.md
+index 21206fd7..4cee8902 100644
+--- a/docs/CLAUDE-CODE.md
++++ b/docs/CLAUDE-CODE.md
+@@ -357,13 +357,67 @@ own session (a thread session is not a channel). Claude Code does run `Permissio
+     bundle's code signature must hold and the bundle on disk must be the app that is running (by its code directory hash, so a
+     bundle edited and then signed again does not pass; asked once per run of the app, and the answer kept); and the files must be
+     the ones that check saw, with the same bytes. An app without the hook, or one that fails, refuses the start with that reason
+-    (`build-app.sh` fails first: the app's `--selftest` makes the same check).
++    (`build-app.sh` fails first: the app's `--selftest` makes the same check). Each file is opened once, never through a link,
++    and what it is and its bytes are asked of that one open file, so the file checked is the file read. The folder they are in
++    must be a real folder of this account or root that no other account can write (its owner's own write bit stays, unlike a
++    Linux release's folders: the bundle is replaced whole on an update). `build-app.sh` takes the two files from the checked-out
++    commit (`git cat-file blob HEAD:kit/hooks/...`), never the working tree, and fails when the working tree's copy differs: an
++    edit a thread session left in `kit/hooks` is not sealed into the app. The signature check is kept for the run of the app, so
++    an app replaced on disk while it runs refuses every start until it is quit and reopened (`install.sh` quits it first).
++  - **Mac only, the command and the interpreter** (WorkerHook.swift, WorkerHookPython.swift; review of 2026-11-11). A thread
++    folder's `.claude/settings*.json` can set any variable for the session's hooks (`env`), and Apple's `/usr/bin/python3` is not
++    an interpreter but the `xcrun` launcher, which runs whatever `DEVELOPER_DIR` names. So:
++    - the command runs the interpreter under `/usr/bin/env -i` with only: `HOME`, the Talos home and the thread id (all three
++      written into the command as text at the start, not read from the session), `PATH=/usr/bin:/bin`, `LANG`, the marker, and
++      eight values passed through from the session because the hook reads them (the thread's nonce, the kill switch and its
++      wait, `CLAUDE_PID`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_PROJECT_DIR`, `XDG_STATE_HOME`, `CHRONOS_CONFIG`). No
++      `DEVELOPER_DIR`, `DYLD_*` or `PYTHON*` reaches it. The interpreter runs `-I -S` (the hook is standard library only);
++    - python3 is never `/usr/bin/python3` or a copy of that launcher. When it is the PATH's only python3, the developer tools'
++      real interpreter is named by its own path (the tools `xcode-select` has chosen, then the Command Line Tools, then Xcode),
++      read from the disk and held to every rule; with no developer tools the start is refused;
++    - python3 is never inside ANY thread's folder (every thread in the agent config and every session the app has made, not
++      only the one starting: thread B edits its own folder without a prompt), and never inside the owner's home at all (every
++      thread folder is in the home; pyenv's or a venv's python3 there is passed over for the next PATH entry). It must be a
++      Mach-O program that not every account can write. All of it is looked at again at every start.
++    - Claude Code runs the command with `/bin/sh` in the session's environment, so that shell imports the session's functions
++      and options before `env -i` runs. It therefore does nothing but assign the copy's path and call `exec` (a special builtin,
++      found before any function): the test that the copy is there and the run itself are made by a second `/bin/sh` that
++      `env -i` starts clean. An imported function named `[` or `exec` changes nothing.
++    - What a command line cannot cover is stopped at the start instead, by ALLOW-lists (a deny-list kept missing one:
++      `CLAUDE_CODE_SHELL_PREFIX` wraps every hook and Bash command in a script of the folder's choosing; on Linux, `GCONV_PATH`
++      with a locale loads a library into the first shell). The thread folder's `.claude/settings.json` and
++      `.claude/settings.local.json`, and its git roots' when the folder sits below one (Claude Code reads those too: the nearest
++      folder with a `.git`, and when that `.git` is a file, the canonical root it leads to through `gitdir:` and `commondir`; a
++      `.git` that is a link, or a pointer that does not resolve, refuses the start), may carry:
++      in `env`, only Claude Code's own tunables (`WorkerHookFolder.allowedEnv`: timeouts, token limits, `DISABLE_*` switches),
++      each a plain value; outside the agent folder, only `$schema`, `env`, `permissions`, `model`, `includeCoAuthoredBy`,
++      `cleanupPeriodDays`, `alwaysThinkingEnabled`, `outputStyle`, `claudeMdExcludes` and `skillOverrides`, with `permissions`
++      holding only `deny` and `ask`. So no `hooks`, `statusLine`, `apiKeyHelper`, MCP approvals or `permissions.allow`. The
++      agent folder's own files carry the kit's hooks and status line by design, so only their `env` is held to the list there
++      (its git root, if another, is held to all of it). Each file is read only when it is a regular file of at most 256 KB, through one descriptor that never blocks (a FIFO
++      or a link to /dev/zero there is refused at once). Anything else, or a file that cannot be read as settings, refuses the
++      start; the thread's line names the file and the key when the key is a plain name, and a thread is told at most one new
++      reason a minute (the audit has every one). The files are read again at every start, and every session's settings deny
++      Edit, Write, MultiEdit and NotebookEdit of those files in its own folder, the agent folder, every other thread's folder,
++      each one's git root, `~/.claude` and `CLAUDE_CONFIG_DIR`. A start before the agent config has been read once is refused.
++      On the Mac, `/bin/sh` is bash 3.2 as `sh`: it reads neither `ENV` nor `BASH_ENV` for a command (checked), links no
++      libintl (no message catalogue to point elsewhere) and has no `GCONV_PATH`; SHELLOPTS and PS4 do apply, which is why the
++      list is an allow-list. The lists are one: the app's and the hook script's are held equal by swift-parity.test.ts.
++      The hook reads the same files (and the git root's) again at every prompt, against the same lists. This stops only an
++      honest hook: if the session's shell was already steered, the check never runs, so the start-time refusal and the deny
++      rules are what hold. The Mac's command names the session's folder
++      (`TALOS_APP_HOOK_CHECK_DIR`, and `TALOS_APP_HOOK_CHECK_HOOKS=0` for the agent folder); on a hit the bridge is never
++      asked, nothing is printed (so Claude Code's own prompt stays at the terminal, never an allow) and one line goes to
++      stderr. Linux's command does not name the folder, so the shared hook reads nothing there. The hook runs with the
++      session's HOME when it is a folder that exists, else this account's own (Apple's tools stall for seconds on a missing
++      one). The developer tools' interpreter is run where it is installed, never copied (it finds its framework beside
++      itself), and the hook stays Python 3.9.
+ 
+   At every start the hook and its helper are copied into `$TALOS_APP_HOME/workers/_hook/` (0600: the fenced, owner-only home;
+   `workers/` and `_hook` each made one level at a time and refused when either is a link, so nothing is made through one, R1-9),
+   and the command runs that copy with the python3 the session's PATH names outside the thread's folder and the agent folder (a
+   link on PATH that leads inside either is passed over too, R1-7), resolved at the start and written in by absolute path,
+-  isolated (`python3 -I`). A hook that cannot run, or no python3, refuses the start before it takes a slot (`worker_hook_missing`
++  isolated (`python3 -I`; on the Mac `-I -S` in an emptied environment, above). A hook that cannot run, or no python3, refuses the start before it takes a slot (`worker_hook_missing`
+   in the audit, and a line in the thread), never a silent fallback to the terminal. On both, python3 is the real interpreter
+   file: a version manager's shim (a `#!` script, or a link to `mise`) is passed over, since it reads its choice from the folder
+   it runs in, and the copy is made only of the bytes the check verified. In a thread session the agent folder's copy stays silent, so one prompt
+diff --git a/kit/hooks/permission-relay.py b/kit/hooks/permission-relay.py
+index c7866a13..fb7e96ad 100755
+--- a/kit/hooks/permission-relay.py
++++ b/kit/hooks/permission-relay.py
+@@ -255,6 +255,154 @@ def ask_bridge(req, deadline, parent, watcher):
+     return d if d in ("allow", "deny") else None
+ 
+ 
++# The Mac's thread sessions name their folder here (TALOS_APP_HOOK_CHECK_DIR, written into the command by the app): its own Claude
++# Code settings, and its git root's when it sits below one, are read again at every prompt. They may carry only what the app
++# allows (env: Claude Code's own tunables; outside the agent folder, a few plain keys and permissions with deny and ask only). Any
++# other means the session may not be what it seems: the prompt stays at the terminal, the bridge is never asked, and one line says
++# why. This stops only an honest hook: one whose shell was already steered never runs this. Unset (Linux, main's own session):
++# nothing is read. The lists are the app's (WorkerHookFolder.swift; swift-parity.test.ts holds them equal).
++ALLOWED_ENV = frozenset((
++    "BASH_DEFAULT_TIMEOUT_MS", "BASH_MAX_TIMEOUT_MS", "BASH_MAX_OUTPUT_LENGTH", "MAX_THINKING_TOKENS", "MAX_MCP_OUTPUT_TOKENS", "MCP_TIMEOUT",
++    "MCP_TOOL_TIMEOUT", "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
++    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "DISABLE_TELEMETRY", "DISABLE_AUTOUPDATER", "DISABLE_ERROR_REPORTING", "DISABLE_BUG_COMMAND",
++    "DISABLE_COST_WARNINGS", "DISABLE_NON_ESSENTIAL_MODEL_CALLS", "DISABLE_PROMPT_CACHING",
++))
++ALLOWED_KEYS = frozenset((
++    "$schema", "env", "permissions", "model", "includeCoAuthoredBy", "cleanupPeriodDays", "alwaysThinkingEnabled", "outputStyle",
++    "claudeMdExcludes", "skillOverrides",
++))
++ALLOWED_PERMISSION_KEYS = frozenset(("deny", "ask"))
++
++
++def _shown(k):
++    ok = isinstance(k, str) and 0 < len(k.encode("utf-8")) <= 64 and all(c.isascii() and (c.isalnum() or c in "_$.-") for c in k)
++    return k if ok else "a key that is not a plain name"
++
++
++SETTINGS_CAP = 256 * 1024
++
++
++def _read_small(path, cap):
++    """The bytes of a regular file (links followed) of at most `cap` bytes, through one descriptor that never blocks, else None:
++    a FIFO, a device or a huge file at a settings path cannot hold the hook."""
++    try:
++        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
++    except OSError:
++        return None
++    try:
++        st = os.fstat(fd)
++        if not stat_is_reg(st.st_mode) or st.st_size > cap:
++            return None
++        data = os.read(fd, cap + 1)
++        return data if len(data) <= cap else None
++    except OSError:
++        return None
++    finally:
++        os.close(fd)
++
++
++def stat_is_reg(mode):
++    return (mode & 0o170000) == 0o100000
++
++
++def _git_roots(folder):
++    """The git roots whose settings Claude Code reads for `folder`: the nearest folder with a .git, and when that .git is a file
++    (a linked worktree) the canonical root it leads to (.git -> gitdir -> commondir). (roots, problem)."""
++    d = os.path.realpath(folder)
++    while not os.path.lexists(os.path.join(d, ".git")):
++        up = os.path.dirname(d)
++        if up == d:
++            return [], None
++        d = up
++    dot = os.path.join(d, ".git")
++    broken = "the git repository at %s points somewhere that cannot be followed" % dot
++    if os.path.islink(dot):
++        return [d], "%s is a link" % dot
++    if os.path.isdir(dot):
++        return [d], None
++    raw = _read_small(dot, 4096)
++    line = (raw or b"").decode("utf-8", "replace").splitlines()[:1]
++    if not line or not line[0].startswith("gitdir:"):
++        return [d], broken
++    gitdir = line[0][len("gitdir:"):].strip()
++    if not os.path.isabs(gitdir):
++        gitdir = os.path.join(d, gitdir)
++    gitdir = os.path.realpath(gitdir)
++    if not os.path.isdir(gitdir):
++        return [d], broken
++    common_file = os.path.join(gitdir, "commondir")
++    if not os.path.exists(common_file):
++        return [d], None
++    raw = _read_small(common_file, 4096)
++    if raw is None:
++        return [d], broken
++    common = raw.decode("utf-8", "replace").strip()
++    if not os.path.isabs(common):
++        common = os.path.join(gitdir, common)
++    common = os.path.realpath(common)
++    if not os.path.isdir(common):
++        return [d], broken
++    if os.path.basename(common) != ".git":
++        return [d], None
++    canonical = os.path.dirname(common)
++    return ([d] if canonical == d else [d, canonical]), None
++
++
++def _file_problem(path, kit_owned):
++    if not os.path.lexists(path):
++        return None
++    data = _read_small(path, SETTINGS_CAP)
++    if data is None:
++        return "%s cannot be read as settings" % path
++    if not data.strip():
++        return None
++    try:
++        obj = json.loads(data.decode("utf-8"))
++    except Exception:
++        obj = None
++    if not isinstance(obj, dict):
++        return "%s cannot be read as settings" % path
++    env = obj.get("env")
++    if env is not None:
++        if not isinstance(env, dict):
++            return "%s cannot be read as settings" % path
++        for k in sorted(env):
++            v = env[k]
++            if k not in ALLOWED_ENV or not isinstance(v, (str, int, float)):      # a bool is an int here, as it is a number in the app
++                return "%s sets %s for the session" % (path, _shown(k))
++    if kit_owned:
++        return None
++    for k in sorted(obj):
++        if k not in ALLOWED_KEYS:
++            return "%s has %s" % (path, _shown(k))
++    perms = obj.get("permissions")
++    if perms is not None:
++        if not isinstance(perms, dict):
++            return "%s cannot be read as settings" % path
++        for k in sorted(perms):
++            if k not in ALLOWED_PERMISSION_KEYS:
++                return "%s has permissions.%s" % (path, _shown(k))
++    return None
++
++
++def folder_settings_problem():
++    folder = os.environ.get("TALOS_APP_HOOK_CHECK_DIR")
++    if not folder:
++        return None
++    agent = os.environ.get("TALOS_APP_HOOK_CHECK_HOOKS") == "0"
++    me = os.path.realpath(folder)
++    roots, problem = _git_roots(folder)
++    if problem:
++        return problem
++    folders = [me] + [r for r in roots if r != me]
++    for n, f in enumerate(folders):
++        for name in ("settings.json", "settings.local.json"):
++            why = _file_problem(os.path.join(f, ".claude", name), agent and n == 0)
++            if why:
++                return why
++    return None
++
++
+ def main():
+     try:
+         call = json.loads(sys.stdin.read() or "{}")
+@@ -269,6 +417,10 @@ def main():
+             return                        # an unattended `claude -p` run: an ask stays refused (C3.1)
+         if os.environ.get("TALOS_APP_WORKER_THREAD") and os.environ.get("TALOS_APP_PERM_HOOK_SOURCE") != "worker":
+             return                        # the agent folder's copy in a thread session: the session's own copy answers
++        unsafe = folder_settings_problem()
++        if unsafe:
++            sys.stderr.write("talos permission hook: %s, so this prompt stays at the terminal (restart the thread's session once the file is fixed)\n" % unsafe)
++            return
+         parent = os.getppid()
+         deadline = time.monotonic() + wait_seconds()
+         req = build_request(call, "h_" + uuid.uuid4().hex[:24])
+diff --git a/kit/scripts/test-permission-relay.sh b/kit/scripts/test-permission-relay.sh
+index a7f07a10..5a9b0bdb 100644
+--- a/kit/scripts/test-permission-relay.sh
++++ b/kit/scripts/test-permission-relay.sh
+@@ -211,6 +211,61 @@ start_hub allow "$SB/rec-badpid"; printf 'not json' > "$TH/bridge.pid"
+ run_hook "$CALL"; sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
+ { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -e "$SB/rec-badpid" ]; } && ok "a garbled bridge.pid: nothing sent, no output" || no "garbled pidfile case wrong" "out=$OUT"
+ 
++# ---- the Mac's thread session: its folder's own settings, read again at every prompt (TALOS_APP_HOOK_CHECK_DIR) ------------------
++# A folder whose settings set a variable that steers the shell or the hook, or (outside the agent folder) add hooks: the bridge is
++# never asked, even one that would answer allow; nothing on stdout; one line on stderr. Unset, or a clean folder: the bridge decides.
++CF="$SB/thread-folder"; mkdir -p "$CF/.claude"
++check_case(){ # $1 = label, $2 = settings.local.json text, $3 = TALOS_APP_HOOK_CHECK_HOOKS, $4 = 1 when the bridge must decide
++  printf '%s' "$2" > "$CF/.claude/settings.local.json"
++  start_hub allow "$SB/rec-cf"
++  OUT="$(printf '%s' "$CALL" | TALOS_APP_HOME="$TH" TALOS_APP_HOOK_CHECK_DIR="$CF" TALOS_APP_HOOK_CHECK_HOOKS="$3" python3 "$HOOK" 2>"$SB/err")"; RC=$?; ERR="$(cat "$SB/err")"
++  sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
++  if [ "$4" = 1 ]; then
++    { [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest allow" ] && [ -e "$SB/rec-cf" ]; } && ok "control, $1: the bridge decides" || no "control, $1: the bridge did not decide" "rc=$RC out=$OUT err=$ERR"
++  else
++    { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -e "$SB/rec-cf" ] && <<<"$ERR" grep -q "so this prompt stays at the terminal"; } && ok "$1: the bridge is never asked, no answer, one line on stderr" || no "$1: the hook still asked or answered" "rc=$RC out=$OUT err=$ERR rec=$(cat "$SB/rec-cf" 2>/dev/null)"
++  fi
++}
++for key in CLAUDE_CODE_SHELL_PREFIX GCONV_PATH LC_ALL SHLVL PATH SHELLOPTS PS4 ENV IFS BASHOPTS BASH_ENV 'BASH_FUNC_[%%' LD_PRELOAD DYLD_INSERT_LIBRARIES PYTHONPATH TALOS_APP_HOME FOO; do
++  check_case "env $key" "{\"env\":{\"MAX_THINKING_TOKENS\":\"1\",\"$key\":\"x\"}}" 1 0
++done
++check_case "hooks of its own" '{"hooks":{"PermissionRequest":[{"hooks":[{"type":"command","command":"echo allow"}]}]}}' 1 0
++check_case "a status line" '{"statusLine":{"type":"command","command":"x"}}' 1 0
++check_case "an api key helper" '{"apiKeyHelper":"x"}' 1 0
++check_case "permissions.allow" '{"permissions":{"allow":["Bash(*)"]}}' 1 0
++check_case "settings that cannot be read" '{not json' 1 0
++check_case "hooks in the agent folder (they do not count there)" '{"hooks":{"PreToolUse":[]}, "env":{"MAX_THINKING_TOKENS":"1"}}' 0 1
++check_case "the agent folder's env is held to it" '{"env":{"SHELLOPTS":"xtrace"}}' 0 0
++check_case "a clean folder" '{"env":{"MAX_THINKING_TOKENS":"1024","DISABLE_TELEMETRY":"1"},"permissions":{"deny":["Bash(rm:*)"],"ask":[]},"model":"opus"}' 1 1
++# the git root: a folder below a repository gets the repository's settings too
++mkdir -p "$SB/repo/.git" "$SB/repo/.claude" "$SB/repo/sub"; rm -f "$CF/.claude/settings.local.json"
++printf '%s' '{"env":{"CLAUDE_CODE_SHELL_PREFIX":"/tmp/x"}}' > "$SB/repo/.claude/settings.json"
++CF_KEEP="$CF"; CF="$SB/repo/sub"; mkdir -p "$CF/.claude"
++check_case "the git root's settings" '' 1 0
++printf '%s' '{}' > "$SB/repo/.claude/settings.json"
++check_case "control, a clean git root" '' 1 1
++# a faked worktree: a .git FILE in the folder pointing into another repository, whose canonical root's settings Claude Code reads
++mkdir -p "$SB/victim/.git/worktrees/x" "$SB/victim/.claude" "$SB/faked"; printf '../..\n' > "$SB/victim/.git/worktrees/x/commondir"
++printf 'gitdir: %s/victim/.git/worktrees/x\n' "$SB" > "$SB/faked/.git"
++printf '%s' '{"env":{"CLAUDE_CODE_SHELL_PREFIX":"/tmp/x"}}' > "$SB/victim/.claude/settings.local.json"
++CF="$SB/faked"; mkdir -p "$CF/.claude"
++check_case "a faked worktree's canonical root" '' 1 0
++printf '%s' '{}' > "$SB/victim/.claude/settings.local.json"
++check_case "control, a clean canonical root" '' 1 1
++printf 'gitdir: %s/nowhere\n' "$SB" > "$SB/faked/.git"
++check_case "a worktree pointer that leads nowhere" '' 1 0
++rm -f "$SB/faked/.git"; ln -s "$SB/victim/.git" "$SB/faked/.git"
++check_case "a .git that is a link" '' 1 0
++rm -f "$SB/faked/.git" "$CF/.claude/settings.local.json"
++# a FIFO and a link to /dev/zero at a settings path: refused at once, never read
++mkfifo "$CF/.claude/settings.json"
++T0=$SECONDS; check_case "a FIFO at a settings path" '' 1 0; [ $((SECONDS - T0)) -lt 5 ] && ok "and the FIFO did not hold the hook" || no "the FIFO held the hook"
++rm -f "$CF/.claude/settings.json"; ln -s /dev/zero "$CF/.claude/settings.json"
++T0=$SECONDS; check_case "a link to /dev/zero at a settings path" '' 1 0; [ $((SECONDS - T0)) -lt 5 ] && ok "and /dev/zero did not hold the hook" || no "/dev/zero held the hook"
++rm -f "$CF/.claude/settings.json"
++CF="$CF_KEEP"
++rm -f "$CF/.claude/settings.local.json"
++
+ # ---- unattended runs and the double registration ----------------------------------------------------------------------------------
+ start_hub allow "$SB/rec-hl"
+ OUT="$(printf '%s' "$CALL" | CLAUDE_CODE_SESSION_ATTENDED=0 TALOS_APP_HOME="$TH" python3 "$HOOK" 2>&1)"; sleep 0.15

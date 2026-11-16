@@ -1,0 +1,1026 @@
+diff --git a/apps/bridge/src/bridge.ts b/apps/bridge/src/bridge.ts
+index 12cb40e3..b25bcf80 100644
+--- a/apps/bridge/src/bridge.ts
++++ b/apps/bridge/src/bridge.ts
+@@ -69,6 +69,7 @@ import { HttpTransport, LiveTransport } from './transport.ts'
+ import { Tripwire } from './tripwire.ts'
+ import { noteTrustFlip } from './trust.ts'
+ import { pruneTtsFiles } from './tts.ts'
++import { UndoCards } from './undo/card.ts'
+ import { UndoPoints } from './undo/points.ts'
+ import { UndoService } from './undo/service.ts'
+ import { BRIDGE_CLIENT_NAME, BRIDGE_COMMIT, BRIDGE_VERSION } from './version.ts'
+@@ -129,6 +130,7 @@ export class Bridge {
+   private superseded = false
+   /** D39: the unanswered-message report ran for this process (`ready` repeats on every reconnect). */
+   private configRecovered = false
++  private undoRecovered = false
+   private unansweredChecked = false
+   private relayRestartTold = false
+   private healthyStartNoted = false
+@@ -293,7 +295,12 @@ export class Bridge {
+         ...(opts.undo?.snapshot ? { snapshot: opts.undo.snapshot } : {}),
+       })
+       const agentDir = opts.undo && 'agentDir' in opts.undo ? opts.undo.agentDir : agentDirFromEnv(process.env)
+-      this.ctx.undo = { before: (t) => undo.before(t), mainFolder: () => agentDir }
++      this.ctx.undo = {
++        before: (t) => undo.before(t),
++        mainFolder: () => agentDir,
++        exclusive: (threads, fn) => undo.exclusive(threads, fn),
++      }
++      this.ctx.undoCards = new UndoCards(this.ctx)
+       this.hub = new HubServer(this.ctx, { store: router.store })
+     }
+     // search (docs/V2-FEATURES.md V3): the FTS5 probe decides whether `search/1` is advertised; only the live bridge reconciles
+@@ -613,6 +620,13 @@ export class Bridge {
+     ctx.schedules?.onReady(ready?.features ?? [])
+     ctx.configProposals?.setRelayFeatures(ready?.features ?? [])
+     ctx.dialogs?.setRelayFeatures(ready?.features ?? [])
++    ctx.undoCards?.setRelayFeatures(ready?.features ?? [])
++    if (!this.undoRecovered && ctx.undoCards) {
++      this.undoRecovered = true // once per process, like the settings cards below
++      void ctx.undoCards
++        .recover()
++        .catch((e) => this.log.warn('undo card recovery failed', { error: (e as Error).message }))
++    }
+     if (!this.configRecovered && ctx.configProposals) {
+       this.configRecovered = true // once per process, like the unanswered report
+       void ctx.configProposals
+diff --git a/apps/bridge/src/context.ts b/apps/bridge/src/context.ts
+index b5eaf5ac..25c454cf 100644
+--- a/apps/bridge/src/context.ts
++++ b/apps/bridge/src/context.ts
+@@ -264,6 +264,8 @@ export type BridgeContext = {
+   leads?: { unreachable(thread: string): string | undefined; deliver(): Promise<void> }
+   /** Undo points (undo/service.ts): the live main bridge only. Absent elsewhere, and no point is taken. */
+   undo?: import('./undo/route-point.ts').UndoSeam
++  /** The undo card (undo/card.ts): the live main bridge only. */
++  undoCards?: import('./undo/card.ts').UndoCards
+   /** Pushes a channel notification into the Claude session. A no-op in headless mode. */
+   emit: (n: Notification) => Promise<void>
+ }
+diff --git a/apps/bridge/src/inbound-cards.ts b/apps/bridge/src/inbound-cards.ts
+index b0d680bc..6b2e0e28 100644
+--- a/apps/bridge/src/inbound-cards.ts
++++ b/apps/bridge/src/inbound-cards.ts
+@@ -199,6 +199,15 @@ export const cardsFrames = {
+       ctx.configProposals?.onCardResolved(row, f.action, out.approved, f.card_id, f.note)
+       this.closeDecided(f.card_id, nowMs, out.resolution)
+       return this.done(it)
++    } else if (row.binding.kind === 'undo' && row.actor === 'bridge') {
++      // An undo card: the BRIDGE restores what the owner approved (undo/card.ts). Awaited, so whatever this session is sent
++      // next finds the files already back.
++      this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
++      await (ctx.undoCards?.onResolved(row, f.action, out.approved, f.card_id) ?? Promise.resolve()).catch((e) =>
++        ctx.log.warn('undo card apply failed', { card: f.card_id, error: (e as Error).message }),
++      )
++      this.closeDecided(f.card_id, nowMs, out.resolution)
++      return this.done(it)
+     } else if (row.actor === 'bridge') {
+       // A schedule card: the BRIDGE applies what the owner approved (S3.4); the agent is told, never asked to act.
+       ctx.schedules?.onCardResolved(row, f.action, out.approved, f.card_id, f.note)
+diff --git a/apps/bridge/src/inbound-lanes.ts b/apps/bridge/src/inbound-lanes.ts
+index 89b85ff3..e0f1b775 100644
+--- a/apps/bridge/src/inbound-lanes.ts
++++ b/apps/bridge/src/inbound-lanes.ts
+@@ -52,6 +52,8 @@ export function lanePlan(ctx: BridgeContext, it: Item): LanePlan {
+       const row = ctx.ledger.get((f as Of<'card.resolve'>).card_id)
+       // a settings card can change which session answers a thread: like a config patch, it waits for every lane
+       if (row?.binding.kind === 'config') return 'barrier'
++      // an undo card rewrites the files that session works on: always on its lane, never inline on the queue
++      if (row?.binding.kind === 'undo') return { keys: [sessionLane(ctx, row.thread_id)], always: true }
+       return row ? { keys: [sessionLane(ctx, row.thread_id)], always: false } : undefined
+     }
+     case 'config.patch':
+diff --git a/apps/bridge/src/schedules/service-cards.ts b/apps/bridge/src/schedules/service-cards.ts
+index 2a5a3028..f344d614 100644
+--- a/apps/bridge/src/schedules/service-cards.ts
++++ b/apps/bridge/src/schedules/service-cards.ts
+@@ -382,6 +382,7 @@ export async function failStuckCards(this: ScheduleService) {
+     if (this.ctx.apps?.isRunning(row.id)) continue // an app card whose tool this process is running right now
+     if (row.binding.kind === 'config') continue // a settings card: ConfigProposals.recover() reads the config and says what is true
+     if (row.binding.kind === 'dialog') continue // the dialog-card service settles its own cards after a restart
++    if (row.binding.kind === 'undo') continue // UndoCards.recover() says what may be true after a restart
+     if (!this.ctx.ledger.finish(row.id, false)) continue // closed by someone else meanwhile: say nothing more
+     await this.ctx.transport
+       .sendDurable(
+diff --git a/apps/bridge/src/undo/card.ts b/apps/bridge/src/undo/card.ts
+new file mode 100644
+index 00000000..1789d0e3
+--- /dev/null
++++ b/apps/bridge/src/undo/card.ts
+@@ -0,0 +1,252 @@
++// The undo card: "Undo to here" on an owner message shows a card of kind 'undo', risk high (the passkey), made and acted
++// on by the bridge. It says what comes back, that ignored files (like .env) aren't restored, that a git point is the
++// whole repository, and lists in an editable box every new file that would be deleted: only what is still in that box
++// when the owner approves goes. The card binds the message and the exact point (UndoCardPayload); on approval the bridge
++// checks the point is still that one and in the card's thread, then restores (undo-to.ts). A relay or app without
++// undo/1 gets no card. Inbound answers it in inbound-cards.ts, before the catch-all bridge-card branch.
++import {
++  bindingFrom,
++  Card,
++  type CardBinding,
++  type CardT,
++  newId,
++  payloadHash,
++  UNDO_FEATURE,
++  UndoCardPayload,
++  type UndoCardPayloadT,
++  validateCard,
++} from '@talos-app/protocol'
++import type { LedgerRow } from '../cards-ledger.ts'
++import type { BridgeContext } from '../context.ts'
++import { cardCreateFrame, cardUpdateFrame } from '../frames-out.ts'
++import { assertFrameFits } from '../transport.ts'
++import { firstWords } from '../worker/handoff.ts'
++import { type UndoPointRow, UndoPoints } from './points.ts'
++import { planRestore } from './restore.ts'
++import { undoTo } from './undo-to.ts'
++
++export const UNDO_CARD_EXPIRY_MS = 60 * 60_000
++/** Paths shown per list in the body; the delete box holds every new file that fits in a field. */
++const LIST_SHOWN = 40
++const FIELD_MAX = 19_000
++
++export type ProposeResult = { ok: true; cardId: string } | { ok: false; why: string }
++
++const NOT_READY: Record<string, string> = {
++  not_saved: 'No undo point was saved for this message.',
++  too_large: 'This folder was too large to save an undo point for.',
++}
++
++export class UndoCards {
++  private relayFeatures: readonly string[] = []
++  /** Cards whose restore runs in this process right now: recovery leaves them alone. */
++  private readonly running = new Set<string>()
++
++  constructor(private readonly ctx: BridgeContext) {}
++
++  setRelayFeatures(features: readonly string[]): void {
++    this.relayFeatures = features
++  }
++
++  private points(): UndoPoints {
++    return new UndoPoints(this.ctx.store.db)
++  }
++
++  /** Shows the undo card for one owner message's point. */
++  async propose(messageId: string): Promise<ProposeResult> {
++    const { ctx } = this
++    if (!this.relayFeatures.includes(UNDO_FEATURE))
++      return { ok: false, why: 'The relay and the app need updating before they can show an undo card.' }
++    const row = this.points().get(messageId)
++    if (!row) return { ok: false, why: 'This message has no undo point.' }
++    if (row.state !== 'ready') return { ok: false, why: NOT_READY[row.state] ?? 'This message has no undo point.' }
++    const plan = await planRestore(row, { undoDir: ctx.paths.undo })
++    if (!plan.ok) return { ok: false, why: plan.why }
++    if (!plan.rewrite.length && !plan.recreate.length && !plan.extra.length && !plan.blocked.length)
++      return { ok: false, why: 'Nothing to undo: the files already match.' }
++    const now = ctx.clock.now()
++    const words = firstWords(ctx.store.getMessage(messageId)?.text ?? '', 8) || 'this message'
++    // a name with a line break in it cannot be one line of the box: it is kept, never offered
++    const deletable = fitLines(
++      plan.extra.filter((p) => !/[\r\n]/.test(p)),
++      FIELD_MAX,
++    )
++    const list = (title: string, paths: string[]) =>
++      paths.length
++        ? `${title} (${paths.length}):\n${paths
++            .slice(0, LIST_SHOWN)
++            .map((p) => `  ${p}`)
++            .join('\n')}${paths.length > LIST_SHOWN ? `\n  and ${paths.length - LIST_SHOWN} more` : ''}`
++        : ''
++    const body = [
++      "Puts the files back the way they were before this message's turn. The chat is not rewound.",
++      plan.kind === 'git'
++        ? `This undoes the whole repository at ${plan.root}, not only this session's folder: every edit made there since then goes back, whoever made it.`
++        : `This undoes the folder ${plan.root}.`,
++      list('Comes back as it was', plan.rewrite),
++      list('Comes back (deleted since)', plan.recreate),
++      list("Can't come back: something new is in the way", plan.blocked),
++      plan.extra.length
++        ? `New since then (${plan.extra.length}): the ones left in the Delete box are deleted; take a line out to keep that file.${
++            deletable.length < plan.extra.length
++              ? ` ${plan.extra.length - deletable.length} more did not fit in the box and are kept.`
++              : ''
++          }`
++        : '',
++    ]
++      .filter(Boolean)
++      .join('\n\n')
++    const payload: UndoCardPayloadT = {
++      v: 1,
++      message_id: messageId as UndoCardPayloadT['message_id'],
++      kind: row.kind,
++      root: row.root,
++      ...(row.commit_id ? { commit_id: row.commit_id } : {}),
++      ...(row.path ? { path: row.path } : {}),
++      created_at: row.created_at,
++    }
++    const parsed = Card.safeParse({
++      id: newId('c'),
++      thread_id: row.thread_id,
++      kind: 'undo',
++      title: `Undo files to "${words}"`.slice(0, 120),
++      summary: `${plan.rewrite.length + plan.recreate.length} files come back, ${deletable.length} new files deleted`,
++      destination: [{ label: 'Folder', value: plan.root.slice(0, 500) }],
++      body: body.slice(0, 20_000),
++      body_format: 'plain',
++      fields: deletable.length
++        ? [
++            {
++              key: 'delete',
++              label: 'Delete these new files',
++              value: deletable.join('\n'),
++              editable: true,
++              multiline: true,
++            },
++          ]
++        : [],
++      attachments: [],
++      warning: "Rewrites files on your Mac; ignored files (like .env) aren't restored.",
++      primary_label: 'Undo files',
++      kill_label: 'Keep files',
++      allow_edit: deletable.length > 0,
++      allow_revise: false,
++      risk: 'high',
++      origin: 'chat',
++      payload,
++      payload_hash: `sha256:${'0'.repeat(64)}`,
++      state: 'pending',
++      created_at: new Date(now).toISOString(),
++      expires_at: new Date(now + UNDO_CARD_EXPIRY_MS).toISOString(),
++    })
++    if (!parsed.success) return { ok: false, why: `The card could not be drawn: ${parsed.error.issues[0]?.message}` }
++    const card: CardT = parsed.data
++    const issues = validateCard(card)
++    if (issues.length) return { ok: false, why: `The card could not be drawn: ${issues.join(', ')}` }
++    card.payload_hash = payloadHash(bindingFrom(card))
++    try {
++      assertFrameFits(cardCreateFrame(now, card))
++    } catch (e) {
++      return { ok: false, why: (e as Error).message }
++    }
++    ctx.ledger.create(card, 'bridge')
++    try {
++      await ctx.transport.sendDurable(cardCreateFrame(now, card))
++    } catch (e) {
++      ctx.ledger.expire(card.id)
++      ctx.expiry?.cancel(card.id)
++      return { ok: false, why: `The card could not be sent to the app: ${(e as Error).message}` }
++    }
++    ctx.expiry?.sync()
++    return { ok: true, cardId: card.id }
++  }
++
++  /** The owner's answer. Only Undo files does anything; it restores what the APPROVED binding names, nothing else. */
++  async onResolved(row: LedgerRow, action: 'primary' | 'kill' | 'revise', approved: CardBinding, cardId: string) {
++    if (action !== 'primary') return
++    const payload = UndoCardPayload.safeParse(approved.payload)
++    if (!payload.success) return this.end(cardId, false, 'The card could not be read. Nothing was changed.')
++    const point = this.points().get(payload.data.message_id)
++    const why = mismatch(point, payload.data, row.thread_id)
++    if (why) {
++      this.ctx.log.security('undo card refused at apply', { card: cardId, why })
++      return this.end(cardId, false, `${why} Nothing was changed.`)
++    }
++    const box = approved.fields.find((f) => f.key === 'delete')?.value ?? ''
++    // exact names only: a line is not trimmed, so " x" never deletes x (restore deletes only exact new-file names)
++    const deletes = box
++      .split('\n')
++      .map((l) => l.replace(/\r$/, ''))
++      .filter(Boolean)
++    this.running.add(cardId)
++    let done: Awaited<ReturnType<typeof undoTo>>
++    try {
++      done = await undoTo(this.ctx, {
++        messageId: payload.data.message_id,
++        deletes,
++        check: (now) => mismatch(now, payload.data, row.thread_id),
++      })
++    } finally {
++      this.running.delete(cardId)
++    }
++    if (!done.ok) return this.end(cardId, false, `${done.why} Nothing was changed.`)
++    const moved = done.rewritten.length + done.recreated.length
++    const left = done.blocked.length + done.failed.length
++    return this.end(
++      cardId,
++      true,
++      `${moved} ${moved === 1 ? 'file' : 'files'} back, ${done.deleted.length} deleted${left ? `, ${left} left as they are` : ''}.`,
++    )
++  }
++
++  /**
++   * A restart between the owner's approval and `end()` leaves an undo card on `resolved` with nobody to finish it. Once
++   * per process: say what may be true, never "working on it" for good.
++   */
++  async recover() {
++    for (const row of this.ctx.ledger.list('resolved')) {
++      if (row.actor !== 'bridge' || row.binding.kind !== 'undo' || row.resolution?.action !== 'primary') continue
++      if (this.running.has(row.id)) continue
++      await this.end(row.id, false, 'The bridge restarted during the undo. Some files may be back: check the folder.')
++    }
++  }
++
++  private async end(cardId: string, ok: boolean, text: string) {
++    const { ctx } = this
++    if (!ctx.ledger.finish(cardId, ok)) return // ended by someone else meanwhile: say nothing more
++    await ctx.transport
++      .sendDurable(
++        cardUpdateFrame(ctx.clock.now(), {
++          card_id: cardId,
++          state: ok ? 'done' : 'failed',
++          result: { ok, text: text.slice(0, 500), at: new Date(ctx.clock.now()).toISOString() },
++        }),
++      )
++      .catch((e) => ctx.log.warn('card.update not sent', { error: (e as Error).message }))
++  }
++}
++
++/** Why the bound point is not the one to restore now, or undefined when it is. */
++function mismatch(point: UndoPointRow | undefined, p: UndoCardPayloadT, cardThread: string): string | undefined {
++  if (point?.state !== 'ready') return 'That undo point is gone.'
++  if (point.thread_id !== cardThread) return "That undo point is not this thread's."
++  const same =
++    point.kind === p.kind &&
++    point.root === p.root &&
++    (point.commit_id ?? undefined) === p.commit_id &&
++    (point.path ?? undefined) === p.path &&
++    point.created_at === p.created_at
++  return same ? undefined : 'That undo point has changed since the card was made.'
++}
++
++/** As many lines as fit in `max` characters, joined by newlines. */
++function fitLines(lines: string[], max: number): string[] {
++  const out: string[] = []
++  let size = 0
++  for (const l of lines) {
++    if (size + l.length + 1 > max) break
++    out.push(l)
++    size += l.length + 1
++  }
++  return out
++}
+diff --git a/apps/bridge/src/undo/restore.ts b/apps/bridge/src/undo/restore.ts
+index f5b28eb8..114cdc1d 100644
+--- a/apps/bridge/src/undo/restore.ts
++++ b/apps/bridge/src/undo/restore.ts
+@@ -103,7 +103,6 @@ export async function applyRestore(row: Point, o: RestoreOpts & { deletes: reado
+           rewritten: plan.rewrite,
+           recreated: plan.recreate,
+           blocked: plan.blocked,
+-          failed: [],
+           ...(await removeApproved(plan, o.deletes, paths)),
+         }
+       })
+@@ -120,13 +119,14 @@ export async function applyRestore(row: Point, o: RestoreOpts & { deletes: reado
+         failed.push(p) // the others still come back: a half-done restore says exactly what it did
+       }
+     }
++    const removed = await removeApproved(plan, o.deletes, put)
+     return {
+       ok: true,
+       rewritten: plan.rewrite.filter((p) => put.includes(p)),
+       recreated: plan.recreate.filter((p) => put.includes(p)),
+       blocked: plan.blocked,
+-      failed,
+-      ...(await removeApproved(plan, o.deletes, put)),
++      ...removed,
++      failed: [...failed, ...removed.failed],
+     }
+   } catch (e) {
+     return { ok: false, why: (e as Error).message }
+@@ -343,7 +343,7 @@ async function removeApproved(
+   plan: Plan,
+   approved: readonly string[],
+   restored: readonly string[],
+-): Promise<{ deleted: string[]; kept: string[] }> {
++): Promise<{ deleted: string[]; kept: string[]; failed: string[] }> {
+   const extra = new Set(plan.extra)
+   const keep = new Set<string>()
+   for (const p of restored) {
+@@ -351,13 +351,19 @@ async function removeApproved(
+     if (st) keep.add(`${st.dev}:${st.ino}`)
+   }
+   const deleted: string[] = []
++  const failed: string[] = []
+   for (const p of new Set(approved)) {
+     if (!extra.has(p) || isAbsolute(p) || normalize(p) !== p || p.split('/').includes('..')) continue
+     const abs = join(plan.root, p)
+     if (!abs.startsWith(plan.root + sep) || !(await writable(plan.root, p))) continue
+     const st = await lstat(abs).catch(() => undefined)
+     if (!st || st.isDirectory() || keep.has(`${st.dev}:${st.ino}`)) continue
+-    await unlink(abs)
++    try {
++      await unlink(abs)
++    } catch {
++      failed.push(p) // the restore already ran: say which new file stayed, never "nothing was changed"
++      continue
++    }
+     deleted.push(p)
+     for (let d = dirname(abs); d !== plan.root && d.startsWith(plan.root + sep); d = dirname(d)) {
+       try {
+@@ -367,5 +373,5 @@ async function removeApproved(
+       }
+     }
+   }
+-  return { deleted, kept: plan.extra.filter((p) => !deleted.includes(p)) }
++  return { deleted, kept: plan.extra.filter((p) => !deleted.includes(p)), failed }
+ }
+diff --git a/apps/bridge/src/undo/route-point.ts b/apps/bridge/src/undo/route-point.ts
+index 2ebf3670..b6565ac6 100644
+--- a/apps/bridge/src/undo/route-point.ts
++++ b/apps/bridge/src/undo/route-point.ts
+@@ -11,6 +11,8 @@ export type UndoSeam = {
+   before(t: UndoTurn): Promise<void>
+   /** Main's agent folder; undefined when it is not known. */
+   mainFolder(): string | undefined
++  /** Runs `fn` with no point taken, recorded or pruned for these threads meanwhile (a restore). */
++  exclusive<T>(threads: readonly string[], fn: () => Promise<T>): Promise<T>
+ }
+ 
+ /**
+diff --git a/apps/bridge/src/undo/service.ts b/apps/bridge/src/undo/service.ts
+index ea4c3e78..38194d81 100644
+--- a/apps/bridge/src/undo/service.ts
++++ b/apps/bridge/src/undo/service.ts
+@@ -43,6 +43,13 @@ export class UndoService {
+ 
+   constructor(readonly deps: UndoDeps) {}
+ 
++  /** Runs `fn` on these threads' chain: no point is taken, recorded or pruned for them until it ends. */
++  exclusive<T>(threads: readonly string[], fn: () => Promise<T>): Promise<T> {
++    return new Promise<T>((resolve, reject) => {
++      void this.chain.run(threads, () => fn().then(resolve, reject))
++    })
++  }
++
+   /**
+    * Resolves once the point is recorded, or after the hold; retention runs after that, off the delivery path. Never
+    * rejects. With no folder there is nothing to wait for: it resolves at once and the rows say not_saved.
+@@ -141,7 +148,7 @@ export class UndoService {
+     // a replaced point that this one did not overwrite (another folder, or this one failed) would be left behind
+     const released = new Set<string>()
+     for (const old of before) {
+-      if (!old || old.state !== 'ready' || overwrites(s, old)) continue
++      if (old?.state !== 'ready' || overwrites(s, old)) continue
+       const key = `${old.root}\0${old.ref}\0${old.path}`
+       if (released.has(key)) continue
+       released.add(key)
+diff --git a/apps/bridge/src/undo/undo-to.ts b/apps/bridge/src/undo/undo-to.ts
+index 6f81f5f9..c65ac1b2 100644
+--- a/apps/bridge/src/undo/undo-to.ts
++++ b/apps/bridge/src/undo/undo-to.ts
+@@ -3,22 +3,39 @@
+ // itself is not rewound. Only the paths in `deletes` that are new since the point are deleted (restore.ts).
+ import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
+ import { firstWords } from '../worker/handoff.ts'
+-import { UndoPoints } from './points.ts'
++import { type UndoPointRow, UndoPoints } from './points.ts'
+ import { applyRestore, type RestoreDone } from './restore.ts'
+ 
+ export async function undoTo(
+   ctx: BridgeContext,
+-  o: { messageId: string; deletes: readonly string[] },
++  o: {
++    messageId: string
++    deletes: readonly string[]
++    /** Why the point is not the one approved, or undefined: checked again once the restore has its turn. */
++    check?: (row: UndoPointRow | undefined) => string | undefined
++  },
+ ): Promise<RestoreDone> {
+-  const row = new UndoPoints(ctx.store.db).get(o.messageId)
++  const points = new UndoPoints(ctx.store.db)
++  const row = points.get(o.messageId)
+   if (!row) return { ok: false, why: 'This message has no undo point.' }
+-  const done = await applyRestore(row, { undoDir: ctx.paths.undo, deletes: o.deletes })
++  // no point of this thread is pruned or taken while its files are copied back (a copy folder is named by thread and
++  // turn); one recorded while this waited its turn is read here, so only the approved point is ever restored
++  const restore = async (): Promise<RestoreDone> => {
++    const now = points.get(o.messageId)
++    const why = o.check?.(now)
++    if (why) return { ok: false, why }
++    if (!now) return { ok: false, why: 'This message has no undo point.' }
++    return applyRestore(now, { undoDir: ctx.paths.undo, deletes: o.deletes })
++  }
++  const done = await (ctx.undo ? ctx.undo.exclusive([row.thread_id], restore) : restore())
+   if (!done.ok) return done
+   // nothing moved (it already matched): no line, the files are as the point saw them
+   if (!done.rewritten.length && !done.recreated.length && !done.deleted.length) return done
+   const words = firstWords(ctx.store.getMessage(o.messageId)?.text ?? '', 12) || 'that message'
+   const left = done.blocked.length + done.failed.length
+-  const tail = left ? ` ${left} ${left === 1 ? 'file' : 'files'} could not come back: something new is in the way.` : ''
++  const tail = left
++    ? ` ${left} ${left === 1 ? 'file was' : 'files were'} left as ${left === 1 ? 'it is' : 'they are'}.`
++    : ''
+   try {
+     await postSystemNotice(ctx, `Files were undone back to "${words}".${tail}`, {
+       thread: threadRef(ctx, row.thread_id),
+diff --git a/apps/bridge/test/inbound-lanes.test.ts b/apps/bridge/test/inbound-lanes.test.ts
+index 9289f5c2..74242e32 100644
+--- a/apps/bridge/test/inbound-lanes.test.ts
++++ b/apps/bridge/test/inbound-lanes.test.ts
+@@ -40,4 +40,10 @@ describe('lanePlan', () => {
+   test("an integration event keeps its place behind main's messages", () => {
+     expect(lanePlan(ctx(), item({ type: 'hook.event' }))).toEqual({ keys: [MAIN_LANE], always: false, anyBusy: true })
+   })
++  test('an answer to an undo card always waits its turn on its session (it rewrites the files that session works on)', () => {
++    expect(lanePlan(ctx('undo'), item({ type: 'card.resolve', card_id: 'c_1' }))).toEqual({
++      keys: ['trip'],
++      always: true,
++    })
++  })
+ })
+diff --git a/apps/bridge/test/undo-card.test.ts b/apps/bridge/test/undo-card.test.ts
+new file mode 100644
+index 00000000..c0fba4db
+--- /dev/null
++++ b/apps/bridge/test/undo-card.test.ts
+@@ -0,0 +1,277 @@
++// The undo card (card.ts): "Undo to here" shows a card of kind 'undo', risk high (the passkey), that says what comes
++// back, that ignored files (like .env) aren't restored, that a git point is the whole repo, and lists every new file
++// that would be deleted. Only an approved card restores, once; a replay, an expired card or a card bound to another
++// thread's message restores nothing. A relay without undo/1 gets no card.
++import { afterEach, describe, expect, test } from 'bun:test'
++import { spawnSync } from 'node:child_process'
++import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { bindingFrom, type CardT, editedHash, payloadHash, UNDO_FEATURE, UndoCardPayload } from '@talos-app/protocol'
++import { UndoPoints } from '../src/undo/points.ts'
++import { snapshotFolder } from '../src/undo/snapshot.ts'
++import { type Harness, pushCardResolvePastRelay, startHarness, waitFor } from './helpers.ts'
++
++let h: Harness | undefined
++afterEach(async () => {
++  await h?.stop()
++  h = undefined
++})
++
++const gitEnv = {
++  ...process.env,
++  GIT_AUTHOR_NAME: 'Alex Example',
++  GIT_AUTHOR_EMAIL: 'alex@example.com',
++  GIT_COMMITTER_NAME: 'Alex Example',
++  GIT_COMMITTER_EMAIL: 'alex@example.com',
++}
++const git = (cwd: string, ...args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8', env: gitEnv })
++function repo(): string {
++  const r = realpathSync(mkdtempSync(join(tmpdir(), 'talos-undo-card-')))
++  git(r, 'init', '-q', '-b', 'main')
++  writeFileSync(join(r, '.gitignore'), '.env\n')
++  writeFileSync(join(r, 'a.txt'), 'a\n')
++  git(r, 'add', '-A')
++  git(r, 'commit', '-q', '-m', 'one')
++  return r
++}
++const read = (p: string) => readFileSync(p, 'utf8')
++
++async function setup(o: { features?: string[] } = {}) {
++  h = await startHarness({
++    relay: { relayFeatures: o.features ?? ['schedules/1', UNDO_FEATURE] },
++    bridge: { undo: { agentDir: undefined } },
++  })
++  const r = repo()
++  const sent = await h.app.sendMessage('general', 'tidy the readme please')
++  await h.waitNotes(1)
++  const id = sent.client_msg_id as string
++  const s = await snapshotFolder({ folder: r, thread: 'general', turn: id, undoDir: join(h.home, 'undo') })
++  new UndoPoints(h.bridge.ctx.store.db).record(
++    { message_id: id, thread_id: 'general', turn: id, snapshot: s, at: 1 },
++    { replace: true },
++  )
++  // the turn: an edit, a new file, an ignored file changed
++  writeFileSync(join(r, 'a.txt'), 'edited\n')
++  writeFileSync(join(r, 'made.txt'), 'made by the turn\n')
++  writeFileSync(join(r, 'mine.txt'), 'the owner wants this one\n')
++  writeFileSync(join(r, '.env'), 'KEY=after\n')
++  return { hh: h, r, id }
++}
++
++const undoCards = (hh: Harness) =>
++  hh.relay.frames
++    .filter(
++      (f) => f.direction === 'from_bridge' && f.raw.type === 'card.create' && (f.raw.card as CardT).kind === 'undo',
++    )
++    .map((f) => f.raw.card as CardT)
++
++async function propose(hh: Harness, id: string): Promise<CardT> {
++  const r = await hh.bridge.ctx.undoCards?.propose(id)
++  if (!r?.ok) throw new Error(`no card: ${JSON.stringify(r)}`)
++  await waitFor(() => undoCards(hh).length === 1, 4000, 'the undo card')
++  return undoCards(hh)[0] as CardT
++}
++const finished = (hh: Harness, cardId: string) =>
++  hh.relay.frames.find(
++    (f) =>
++      f.direction === 'from_bridge' &&
++      f.raw.type === 'card.update' &&
++      f.raw.card_id === cardId &&
++      (f.raw.state === 'done' || f.raw.state === 'failed'),
++  )?.raw
++
++describe('the undo card', () => {
++  test('kind undo, risk high; says what comes back, that ignored files stay, that it is the whole repo, and what goes', async () => {
++    const { hh, r, id } = await setup()
++    const card = await propose(hh, id)
++    expect(card.kind).toBe('undo')
++    expect(card.risk).toBe('high')
++    expect(card.thread_id).toBe('general')
++    expect(card.warning).toContain("ignored files (like .env) aren't restored")
++    expect(card.body).toContain('a.txt')
++    expect(card.body).toContain('whole repository')
++    expect(card.body).toContain(r)
++    const del = card.fields.find((f) => f.key === 'delete')
++    expect(del?.editable).toBe(true)
++    expect(del?.value.split('\n').sort()).toEqual(['made.txt', 'mine.txt'])
++    expect(UndoCardPayload.parse(card.payload)).toMatchObject({ message_id: id, kind: 'git', root: r })
++  })
++
++  test('approved: the files come back, only the listed new files go, and the card is done', async () => {
++    const { hh, r, id } = await setup()
++    const card = await propose(hh, id)
++    const edits = { fields: [{ key: 'delete', value: 'made.txt' }] }
++    await pushCardResolvePastRelay(hh, card, card.payload_hash, 'primary', {
++      edited: edits,
++      edited_hash: editedHash(bindingFrom(card), edits),
++    })
++    await waitFor(() => finished(hh, card.id) !== undefined, 6000, 'the card to finish')
++    expect(finished(hh, card.id)?.state).toBe('done')
++    expect(read(join(r, 'a.txt'))).toBe('a\n')
++    expect(existsSync(join(r, 'made.txt'))).toBe(false)
++    expect(read(join(r, 'mine.txt'))).toBe('the owner wants this one\n')
++    expect(read(join(r, '.env'))).toBe('KEY=after\n')
++    await waitFor(() => hh.notes.some((n) => n.content.includes('Files were undone back to')), 4000, 'the line')
++  })
++
++  test('a replayed approval restores nothing a second time', async () => {
++    const { hh, r, id } = await setup()
++    const card = await propose(hh, id)
++    const frame = await pushCardResolvePastRelay(hh, card, card.payload_hash, 'primary')
++    await waitFor(() => finished(hh, card.id) !== undefined, 6000, 'the card to finish')
++    writeFileSync(join(r, 'a.txt'), 'edited again after the undo\n')
++    hh.relay.sendToBridge(frame)
++    await pushCardResolvePastRelay(hh, card, card.payload_hash, 'primary')
++    await hh.bridge.inbound?.idle()
++    expect(read(join(r, 'a.txt'))).toBe('edited again after the undo\n')
++  })
++
++  test('kill: nothing is restored', async () => {
++    const { hh, r, id } = await setup()
++    const card = await propose(hh, id)
++    await pushCardResolvePastRelay(hh, card, card.payload_hash, 'kill')
++    await waitFor(() => hh.bridge.ctx.ledger.get(card.id)?.state !== 'pending', 4000, 'the card to close')
++    await hh.bridge.inbound?.idle()
++    expect(read(join(r, 'a.txt'))).toBe('edited\n')
++  })
++
++  test('an expired card restores nothing', async () => {
++    const { hh, r, id } = await setup()
++    const card = await propose(hh, id)
++    const past = new Date(Date.now() - 60_000).toISOString()
++    const old: CardT = { ...card, id: 'c_01JBF3V7Q8K2M4N6P8R0S9T9T8', created_at: past, expires_at: past }
++    old.payload_hash = payloadHash(bindingFrom(old))
++    hh.bridge.ctx.ledger.create(old, 'bridge')
++    await pushCardResolvePastRelay(hh, old, old.payload_hash, 'primary')
++    await waitFor(() => hh.bridge.ctx.ledger.get(old.id)?.state === 'expired', 4000, 'the card to expire')
++    await hh.bridge.inbound?.idle()
++    expect(read(join(r, 'a.txt'))).toBe('edited\n')
++  })
++
++  test("a card in one thread bound to another thread's message restores nothing", async () => {
++    const { hh, r, id } = await setup()
++    const card = await propose(hh, id)
++    const forged: CardT = { ...card, id: 'c_01JBF3V7Q8K2M4N6P8R0S9T9T7', thread_id: 'inbox' }
++    forged.payload_hash = payloadHash(bindingFrom(forged))
++    hh.bridge.ctx.ledger.create(forged, 'bridge')
++    await pushCardResolvePastRelay(hh, forged, forged.payload_hash, 'primary')
++    await waitFor(() => finished(hh, forged.id) !== undefined, 6000, 'the card to finish')
++    expect(finished(hh, forged.id)?.state).toBe('failed')
++    expect(read(join(r, 'a.txt'))).toBe('edited\n')
++  })
++
++  test('an edited box can only delete new files, by their exact name', async () => {
++    const { hh, r, id } = await setup()
++    const card = await propose(hh, id)
++    writeFileSync(join(tmpdir(), 'talos-undo-outside.txt'), 'outside\n')
++    const value = ['a.txt', '.env', '../talos-undo-outside.txt', join(r, 'made.txt'), ' mine.txt', 'made.txt '].join(
++      '\n',
++    )
++    const edits = { fields: [{ key: 'delete', value }] }
++    await pushCardResolvePastRelay(hh, card, card.payload_hash, 'primary', {
++      edited: edits,
++      edited_hash: editedHash(bindingFrom(card), edits),
++    })
++    await waitFor(() => finished(hh, card.id) !== undefined, 6000, 'the card to finish')
++    expect(read(join(r, 'a.txt'))).toBe('a\n') // restored, never deleted
++    expect(read(join(r, '.env'))).toBe('KEY=after\n')
++    expect(existsSync(join(tmpdir(), 'talos-undo-outside.txt'))).toBe(true)
++    expect(existsSync(join(r, 'made.txt'))).toBe(true)
++    expect(existsSync(join(r, 'mine.txt'))).toBe(true)
++  })
++
++  test('a point taken again for the message after the card was shown: refused', async () => {
++    const { hh, r, id } = await setup()
++    const card = await propose(hh, id)
++    const s = await snapshotFolder({ folder: r, thread: 'general', turn: id, undoDir: join(hh.home, 'undo') })
++    new UndoPoints(hh.bridge.ctx.store.db).record(
++      { message_id: id, thread_id: 'general', turn: id, snapshot: s, at: 2 },
++      { replace: true },
++    )
++    await pushCardResolvePastRelay(hh, card, card.payload_hash, 'primary')
++    await waitFor(() => finished(hh, card.id) !== undefined, 6000, 'the card to finish')
++    expect(finished(hh, card.id)?.state).toBe('failed')
++    expect(read(join(r, 'a.txt'))).toBe('edited\n')
++  })
++
++  test('a copy point taken again for the message after the card was shown: refused', async () => {
++    h = await startHarness({
++      relay: { relayFeatures: ['schedules/1', UNDO_FEATURE] },
++      bridge: { undo: { agentDir: undefined } },
++    })
++    const hh = h
++    const d = realpathSync(mkdtempSync(join(tmpdir(), 'talos-undo-card-copy-')))
++    writeFileSync(join(d, 'a.txt'), 'a\n')
++    const sent = await hh.app.sendMessage('general', 'a folder outside git')
++    await hh.waitNotes(1)
++    const id = sent.client_msg_id as string
++    const points = new UndoPoints(hh.bridge.ctx.store.db)
++    const take = async (at: number) =>
++      points.record(
++        {
++          message_id: id,
++          thread_id: 'general',
++          turn: id,
++          snapshot: await snapshotFolder({ folder: d, thread: 'general', turn: id, undoDir: join(hh.home, 'undo') }),
++          at,
++        },
++        { replace: true },
++      )
++    await take(1)
++    writeFileSync(join(d, 'a.txt'), 'edited\n')
++    const card = await propose(hh, id)
++    await take(2) // the same copy folder, now holding the edited file
++    await pushCardResolvePastRelay(hh, card, card.payload_hash, 'primary')
++    await waitFor(() => finished(hh, card.id) !== undefined, 6000, 'the card to finish')
++    expect(finished(hh, card.id)?.state).toBe('failed')
++  })
++
++  test('a point taken again while the restore waited its turn: refused, nothing restored', async () => {
++    const { hh, r, id } = await setup()
++    const card = await propose(hh, id)
++    const undo = hh.bridge.ctx.undo
++    if (!undo) throw new Error('no undo seam')
++    const real = undo.exclusive.bind(undo)
++    // a record queued on the chain ahead of the restore: it runs first
++    undo.exclusive = async (threads, fn) => {
++      const s = await snapshotFolder({ folder: r, thread: 'general', turn: id, undoDir: join(hh.home, 'undo') })
++      new UndoPoints(hh.bridge.ctx.store.db).record(
++        { message_id: id, thread_id: 'general', turn: id, snapshot: s, at: 3 },
++        { replace: true },
++      )
++      return real(threads, fn)
++    }
++    await pushCardResolvePastRelay(hh, card, card.payload_hash, 'primary')
++    await waitFor(() => finished(hh, card.id) !== undefined, 6000, 'the card to finish')
++    expect(finished(hh, card.id)?.state).toBe('failed')
++    expect(read(join(r, 'a.txt'))).toBe('edited\n')
++  })
++
++  test('a bridge that restarted while an approved undo ran: the card says so, never left working', async () => {
++    const { hh, id } = await setup()
++    const card = await propose(hh, id)
++    const out = hh.bridge.ctx.ledger.resolve(
++      { card_id: card.id, action: 'primary', payload_hash: card.payload_hash, ts: new Date().toISOString() },
++      Date.now(),
++    )
++    expect(out.ok).toBe(true) // approved, then the process died before it finished
++    await hh.bridge.ctx.undoCards?.recover()
++    await waitFor(() => finished(hh, card.id) !== undefined, 4000, 'the card to end')
++    expect(finished(hh, card.id)).toMatchObject({ state: 'failed' })
++    expect(finished(hh, card.id)?.result).toMatchObject({ text: expect.stringContaining('restarted') })
++  })
++
++  test('a relay without undo/1 gets no card', async () => {
++    const { hh, id } = await setup({ features: ['schedules/1'] })
++    const r = await hh.bridge.ctx.undoCards?.propose(id)
++    expect(r?.ok).toBe(false)
++    expect(undoCards(hh)).toHaveLength(0)
++  })
++
++  test('a message with no ready point gets no card', async () => {
++    const { hh } = await setup()
++    const r = await hh.bridge.ctx.undoCards?.propose('m_01JBF3V7Q8K2M4N6P8R0S9T9T7')
++    expect(r?.ok).toBe(false)
++  })
++})
+diff --git a/apps/bridge/test/undo-restore.test.ts b/apps/bridge/test/undo-restore.test.ts
+index 76a1caba..ec7113d3 100644
+--- a/apps/bridge/test/undo-restore.test.ts
++++ b/apps/bridge/test/undo-restore.test.ts
+@@ -6,6 +6,7 @@ import { Database } from 'bun:sqlite'
+ import { afterAll, describe, expect, test } from 'bun:test'
+ import { spawnSync } from 'node:child_process'
+ import {
++  chmodSync,
+   existsSync,
+   mkdirSync,
+   mkdtempSync,
+@@ -235,6 +236,23 @@ describe('restore: a git folder', () => {
+     expect(read(join(r, 'work', 'draft.txt'))).toBe('draft\n')
+   })
+ 
++  test('a new file that cannot be deleted is reported, and the files already restored are still reported back', async () => {
++    const r = repo()
++    const { row, undoDir } = await point(r)
++    turn(r)
++    chmodSync(join(r, 'out', 'deep'), 0o555) // new.txt inside cannot be removed
++    try {
++      const done = await applyRestore(row, { undoDir, env, deletes: ['out/deep/new.txt'] })
++      if (!done.ok) throw new Error(done.why)
++      expect(done.rewritten).toContain('a.txt')
++      expect(done.deleted).toEqual([])
++      expect(done.failed).toEqual(['out/deep/new.txt'])
++      expect(read(join(r, 'a.txt'))).toBe('a\n')
++    } finally {
++      chmodSync(join(r, 'out', 'deep'), 0o755)
++    }
++  })
++
+   test('a point whose commit is gone is refused', async () => {
+     const r = repo()
+     const { row, undoDir } = await point(r)
+diff --git a/apps/web/src/features/cards/CardView.tsx b/apps/web/src/features/cards/CardView.tsx
+index c22277a9..32933a09 100644
+--- a/apps/web/src/features/cards/CardView.tsx
++++ b/apps/web/src/features/cards/CardView.tsx
+@@ -30,6 +30,7 @@ import {
+   IconRocket,
+   IconScale,
+   IconSettings,
++  IconUndo,
+ } from '../../ui/icons.tsx'
+ import { Button, Input, Textarea } from '../../ui/index.ts'
+ import { StatusDot } from '../../ui/StatusDot.tsx'
+@@ -70,6 +71,7 @@ const ICON_BY_KEY = {
+   alert: IconAlert,
+   settings: IconSettings,
+   keyboard: IconKeyboard,
++  undo: IconUndo,
+ } satisfies Record<CardIconKey, CardIcon>
+ 
+ /** One icon per card kind, read from the kind table (CARD_KIND_TABLE), so a kind cannot lack one. */
+diff --git a/apps/web/src/features/cards/logic.ts b/apps/web/src/features/cards/logic.ts
+index 1ff4d68e..d223d15f 100644
+--- a/apps/web/src/features/cards/logic.ts
++++ b/apps/web/src/features/cards/logic.ts
+@@ -95,6 +95,7 @@ const DONE_VERB: Record<CardT['kind'], string> = {
+   app_action: 'Done',
+   config: 'Changed',
+   dialog: 'Answered',
++  undo: 'Undone',
+ }
+ const FAIL_VERB: Record<CardT['kind'], string> = {
+   email: 'send',
+@@ -109,6 +110,7 @@ const FAIL_VERB: Record<CardT['kind'], string> = {
+   app_action: 'finish',
+   config: 'change it',
+   dialog: 'answer',
++  undo: 'undo it',
+ }
+ 
+ /** The verb for a kind, or the generic card's verb for a kind this build does not know (own keys only: "constructor" is unknown). */
+diff --git a/apps/web/test/cards/kind-table.test.ts b/apps/web/test/cards/kind-table.test.ts
+index 1f9e2514..0c6b5e41 100644
+--- a/apps/web/test/cards/kind-table.test.ts
++++ b/apps/web/test/cards/kind-table.test.ts
+@@ -17,6 +17,7 @@ import {
+   IconRocket,
+   IconScale,
+   IconSettings,
++  IconUndo,
+ } from '../../src/ui/icons.tsx'
+ 
+ const draw = (I: (typeof KIND_ICON)[CardKind]) => renderToStaticMarkup(createElement(I))
+@@ -53,6 +54,7 @@ describe('card kind table', () => {
+       app_action: IconDiamond,
+       config: IconSettings,
+       dialog: IconKeyboard,
++      undo: IconUndo,
+     }
+     for (const kind of CARD_KINDS) expect(draw(KIND_ICON[kind]), kind).toBe(draw(expected[kind]))
+     // The pin only means something if the icons differ from each other (the two diamonds aside).
+diff --git a/packages/protocol/src/index.ts b/packages/protocol/src/index.ts
+index aa8ceb2d..ff76e37d 100644
+--- a/packages/protocol/src/index.ts
++++ b/packages/protocol/src/index.ts
+@@ -68,6 +68,7 @@ export * from './sub-threads.ts'
+ export * from './supervisor.ts'
+ export * from './theme.ts'
+ export * from './thread-sessions.ts'
++export * from './undo.ts'
+ export * from './untrusted.ts'
+ export * from './version.ts'
+ export * from './worker-mcp.ts'
+diff --git a/packages/protocol/src/models.ts b/packages/protocol/src/models.ts
+index 5147b5a7..7c3d6192 100644
+--- a/packages/protocol/src/models.ts
++++ b/packages/protocol/src/models.ts
+@@ -184,6 +184,7 @@ export type CardIconKey =
+   | 'alert'
+   | 'settings'
+   | 'keyboard'
++  | 'undo'
+ 
+ /** What the table records for one kind. Every field is required, so a new kind that leaves one out fails to compile. */
+ type CardKindFacts = {
+@@ -348,6 +349,18 @@ export const CARD_KIND_TABLE = {
+     highRiskUnderTrust: false,
+     bridgeHandled: true,
+   },
++  // "undo to here": put a folder back the way an owner message's undo point saw it (apps/bridge/src/undo); relay feature undo/1
++  undo: {
++    minter: 'bridge',
++    label: 'Undo',
++    glyph: '↶',
++    icon: 'undo',
++    bodyEditable: false,
++    destinationOptional: true,
++    nativeApprovable: false, // it rewrites and may delete files: the app, with the passkey
++    highRiskUnderTrust: true,
++    bridgeHandled: true,
++  },
+ } as const satisfies Record<string, CardKindFacts>
+ 
+ export type CardKind = keyof typeof CARD_KIND_TABLE
+diff --git a/packages/protocol/src/undo.ts b/packages/protocol/src/undo.ts
+new file mode 100644
+index 00000000..25b66084
+--- /dev/null
++++ b/packages/protocol/src/undo.ts
+@@ -0,0 +1,22 @@
++// "Undo to here" (apps/bridge/src/undo): put a folder back the way it was before an owner message's turn.
++import { z } from 'zod'
++import { MsgId } from './ids.ts'
++
++/** The relay and the app know the undo card (kind 'undo') and the undo frames. The bridge cards nothing without it. */
++export const UNDO_FEATURE = 'undo/1'
++
++/** What an undo card binds: the message and the exact point it restores (a commit or a copy folder). */
++export const UndoCardPayload = z.strictObject({
++  v: z.literal(1),
++  message_id: MsgId,
++  kind: z.enum(['git', 'copy']),
++  root: z.string().max(4096),
++  commit_id: z
++    .string()
++    .regex(/^[0-9a-f]{40,64}$/)
++    .optional(),
++  path: z.string().max(4096).optional(),
++  /** When the point was taken: a point taken again (the same copy folder) is not the one the card showed. */
++  created_at: z.number().int().nonnegative(),
++})
++export type UndoCardPayloadT = z.infer<typeof UndoCardPayload>
+diff --git a/packages/protocol/test/card-kind-table.test.ts b/packages/protocol/test/card-kind-table.test.ts
+index 0984ffa9..2cdda533 100644
+--- a/packages/protocol/test/card-kind-table.test.ts
++++ b/packages/protocol/test/card-kind-table.test.ts
+@@ -129,6 +129,16 @@ const OLD: Record<CardKind, Old> = {
+     destinationOptional: true,
+     nativeApprovable: false,
+   },
++  undo: {
++    ...bridge,
++    bridgeHandled: true,
++    highRiskUnderTrust: true,
++    label: 'Undo',
++    glyph: '↶',
++    bodyEditable: false,
++    destinationOptional: true,
++    nativeApprovable: false,
++  },
+ }
+ 
+ const plain = {
+diff --git a/packages/protocol/test/card-kinds-pinned.test.ts b/packages/protocol/test/card-kinds-pinned.test.ts
+index 3e4683f2..ea368495 100644
+--- a/packages/protocol/test/card-kinds-pinned.test.ts
++++ b/packages/protocol/test/card-kinds-pinned.test.ts
+@@ -8,7 +8,7 @@ describe('card kinds', () => {
+   })
+ 
+   it('lists the bridge-only kinds in order', () => {
+-    expect([...BRIDGE_ONLY_CARD_KINDS]).toEqual(['schedule', 'permission', 'app_action', 'config', 'dialog'])
++    expect([...BRIDGE_ONLY_CARD_KINDS]).toEqual(['schedule', 'permission', 'app_action', 'config', 'dialog', 'undo'])
+   })
+ 
+   it('accepts exactly these kinds on a Card, in this order', () => {
+@@ -25,6 +25,7 @@ describe('card kinds', () => {
+       'app_action',
+       'config',
+       'dialog',
++      'undo',
+     ])
+   })
+ 

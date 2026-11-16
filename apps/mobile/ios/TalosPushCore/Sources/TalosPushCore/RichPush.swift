@@ -40,6 +40,15 @@ public enum RichPush {
     /// The HKDF info string, the same bytes as SEAL_INFO.
     static let sealInfo = "talos-push/v1 aes-256-gcm"
     public static let replyMaxChars = 4000
+    /// The title of every notification whose seal opened. The extension sets it itself, whatever title the alert carried, and
+    /// it is part of `shownHash` (NOTICE_TITLE in push-rich.ts).
+    public static let noticeTitle = "Talos"
+    /// The categories that sign something on a press. Only the extension may set them, from a seal it opened.
+    static let signingCategories: Set<String> = [replyCategory, cardLowCategory]
+    /// Where the extension leaves what a press needs (`act(for:shown:userInfo:userText:)`).
+    static let richKey = "talos_rich"
+    /// The `shownHash` version an Approve is signed with (SHOWN_VERSION in push-rich.ts).
+    public static let shownVersion = "3"
 
     /// What the relay and the phone both bind a seal to: the device, the kind of push, the card (if any) and a random push id.
     public static func sealAad(deviceId: String, kind: String, cardId: String?, pushId: String) -> Data {
@@ -82,11 +91,12 @@ public enum RichPush {
         return RichContent(subtitle: s, body: body, kind: kind, threadId: t, cardId: c, risk: r, payloadHash: h)
     }
 
-    /// The hash of everything the notification displayed: the subtitle (the thread name, or none) and the body
-    /// (`shownHash` in push-rich.ts). The subtitle's UTF-8 length goes first so it cannot run into the body.
-    public static func shownHash(_ displayed: String, subtitle: String? = nil) -> String {
+    /// The hash of everything the notification displayed: the title, the subtitle (the thread name, or none) and the body
+    /// (`shownHash` in push-rich.ts). The title's and the subtitle's UTF-8 lengths go first so neither can run into the next.
+    public static func shownHash(_ displayed: String, subtitle: String? = nil, title: String = noticeTitle) -> String {
         let sub = subtitle ?? ""
-        let digest = SHA256.hash(data: Data("talos-shown/v2\n\(sub.utf8.count)\n\(sub)\n\(displayed)".utf8))
+        let digest = SHA256.hash(
+            data: Data("talos-shown/v3\n\(title.utf8.count)\n\(title)\n\(sub.utf8.count)\n\(sub)\n\(displayed)".utf8))
         return "sha256:" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
@@ -99,6 +109,56 @@ public enum RichPush {
         case "card": return c.cardId != nil && c.risk == "low" && c.payloadHash != nil ? cardLowCategory : nil
         default: return nil
         }
+    }
+
+    // MARK: what the extension delivers
+
+    /// The parts of a notification the extension reads and writes, with no UserNotifications type in it so it can be tested.
+    public struct Delivery {
+        public var title: String
+        public var subtitle: String
+        public var body: String
+        public var category: String
+        public var userInfo: [AnyHashable: Any]
+
+        public init(title: String, subtitle: String, body: String, category: String, userInfo: [AnyHashable: Any]) {
+            self.title = title
+            self.subtitle = subtitle
+            self.body = body
+            self.category = category
+            self.userInfo = userInfo
+        }
+    }
+
+    /// What the extension shows for a push Apple delivered as `inbound`, given what its seal held (nil when there was no seal
+    /// or it did not open). Button data and a Reply or Approve category come only from a seal this phone opened: whatever the
+    /// relay put there itself is dropped, so a push that did not open is plain, with no button that signs.
+    public static func deliver(_ inbound: Delivery, opened: RichContent?) -> Delivery {
+        var out = inbound
+        out.userInfo.removeValue(forKey: richKey)
+        if signingCategories.contains(out.category) { out.category = "" }
+        if var talos = out.userInfo["talos"] as? [String: Any] {
+            talos.removeValue(forKey: "enc")
+            out.userInfo["talos"] = talos
+        }
+        guard let content = opened else { return out }
+        // Everything displayed comes from the seal or is fixed here, so `shown` covers all of it.
+        out.title = noticeTitle
+        out.subtitle = content.subtitle ?? ""
+        out.body = content.body
+        // Marks this notification as holding opened words, so sign-out and "fixed phrase only" can take it off the screen.
+        out.userInfo[PushCore.textMarkerKey] = PushCore.textMarkerValue
+        if let category = category(for: content) {
+            out.category = category
+            // What the app needs to act on a button press, taken from inside the seal: where a Reply goes, which card an
+            // Approve is for and the hash of the words shown. The sealed bytes are dropped.
+            var rich: [String: String] = ["shown": shownHash(out.body, subtitle: out.subtitle, title: out.title)]
+            if let t = content.threadId { rich["t"] = t }
+            if let id = content.cardId { rich["c"] = id }
+            if let h = content.payloadHash { rich["h"] = h }
+            out.userInfo[richKey] = rich
+        }
+        return out
     }
 
     // MARK: acting
@@ -153,7 +213,9 @@ public enum RichPush {
             let dict: [String: String]
             switch self {
             case let .reply(thread, text): dict = ["a": "reply", "thread_id": thread, "text": text]
-            case let .approve(card, hash, shown): dict = ["a": "approve", "card_id": card, "payload_hash": hash, "shown": shown]
+            case let .approve(card, hash, shown):
+                // `shown_v` says this phone hashed what its own screen displayed (SHOWN_VERSION in push-rich.ts).
+                dict = ["a": "approve", "card_id": card, "payload_hash": hash, "shown": shown, "shown_v": shownVersion]
             }
             let data = (try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
             return String(decoding: data, as: UTF8.self)
@@ -205,17 +267,34 @@ public enum RichPush {
         return json["enc_pub"] as? String == encPub && json["act_pub"] as? String == actPub
     }
 
+    /// What the notification on the screen displayed when its button was pressed.
+    public struct Shown: Equatable, Sendable {
+        public let title: String
+        public let subtitle: String
+        public let body: String
+
+        public init(title: String, subtitle: String, body: String) {
+            self.title = title
+            self.subtitle = subtitle
+            self.body = body
+        }
+    }
+
     /// The action a button press asks for, from what the extension put in `userInfo["talos_rich"]` and the typed text.
-    /// nil when the notification does not carry what that button needs (so nothing is signed for a guess).
-    public static func act(for action: PushCore.QuickAction, userInfo: [AnyHashable: Any], userText: String?) -> Act? {
-        guard let rich = userInfo["talos_rich"] as? [String: String] else { return nil }
+    /// nil when the notification does not carry what that button needs (so nothing is signed for a guess). An Approve signs the
+    /// hash of what the notification on the screen displayed, `shown`, and only when it is the hash the extension stored: a
+    /// push the extension never rewrote can display one card while its data names another, and that press signs nothing.
+    public static func act(for action: PushCore.QuickAction, shown: Shown, userInfo: [AnyHashable: Any], userText: String?) -> Act? {
+        guard let rich = userInfo[richKey] as? [String: String] else { return nil }
         switch action {
         case .reply:
             guard let thread = rich["t"], let text = userText else { return nil }
             return .reply(threadId: thread, text: text)
         case .approveLow:
-            guard let card = rich["c"], let hash = rich["h"], let shown = rich["shown"] else { return nil }
-            return .approve(cardId: card, payloadHash: hash, shown: shown)
+            guard let card = rich["c"], let hash = rich["h"], let stored = rich["shown"] else { return nil }
+            let seen = shownHash(shown.body, subtitle: shown.subtitle, title: shown.title)
+            guard seen == stored else { return nil }
+            return .approve(cardId: card, payloadHash: hash, shown: seen)
         }
     }
 

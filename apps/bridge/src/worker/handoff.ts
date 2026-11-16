@@ -13,7 +13,7 @@ export type HandoffDir = 'to_lead' | 'to_main'
 export const HANDOFF_MAX_WORDS = 100
 export const HANDOFF_MAX_CHARS = 1200
 /** Hand-offs a day (midnight to midnight in the owner's timezone), each way, per lead. */
-export const HANDOFF_DAILY_LIMIT = 5
+export const HANDOFF_DAILY_LIMIT = 20
 /** TASKs main has handed a lead that it has not yet answered with a RESULT or BLOCK. */
 export const HANDOFF_OPEN_TASKS = 3
 /** A TASK that is still open after this long no longer counts against the open limit. */
@@ -122,6 +122,17 @@ function waitWords(ms: number): string {
 export function handoffSince(db: Database, sinceMs: number, now: number): boolean {
   try {
     return !!db.query('SELECT 1 FROM handoffs WHERE at > ? AND at <= ? LIMIT 1').get(sinceMs, now)
+  } catch {
+    return false // no table yet: nothing was ever handed off
+  }
+}
+
+/** True when the lead of `thread` handed main anything (its words, which may carry what it read) after `sinceMs`. */
+export function leadSpokeSince(db: Database, thread: string, sinceMs: number, now: number): boolean {
+  try {
+    return !!db
+      .query("SELECT 1 FROM handoffs WHERE lead = ? AND dir = 'to_main' AND at > ? AND at <= ? LIMIT 1")
+      .get(thread, sinceMs, now)
   } catch {
     return false // no table yet: nothing was ever handed off
   }

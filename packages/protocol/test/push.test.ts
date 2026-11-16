@@ -33,6 +33,11 @@ describe('buildPushPayload', () => {
       [{ template: 'sign_in' }, 'New sign-in to Talos'],
       [{ template: 'sign_in_unproven' }, 'Sign-in on a device that did not prove its key'],
       [{ template: 'storage_full' }, 'Relay storage is nearly full'],
+      [{ template: 'bridge_takeover', time: '14:07' }, 'Another Mac took over your Talos bridge at 14:07'],
+      [{ template: 'bridge_takeover' }, 'Another Mac took over your Talos bridge'],
+      // a time that is not HH:MM never reaches the text
+      [{ template: 'bridge_takeover', time: '14:07 <b>' }, 'Another Mac took over your Talos bridge'],
+      [{ template: 'bridge_takeover', time: '29:00' }, 'Another Mac took over your Talos bridge'],
     ]
     for (const [intent, body] of cases) {
       const p = buildPushPayload(intent, config)
@@ -69,6 +74,11 @@ describe('buildPushPayload', () => {
       buildPushPayload({ template: 'needs_you', thread_id: 'general', card_id: CARD }, config).notification.navigate,
     ).toBe(`/card/${CARD}`)
     expect(buildPushPayload({ template: 'overnight', count: 1 }, config).notification.navigate).toBe('/t/inbox')
+    // a setting the agent changed that affects alerts opens its thread, where the "Changed ... To undo" line is (on the
+    // web as in the iPhone app, which opens every thread push in its thread)
+    expect(buildPushPayload({ template: 'settings_changed', thread_id: 'general' }, config).notification.navigate).toBe(
+      '/t/general',
+    )
     // docs/V2-FEATURES.md V1.3: session_stopped opens Settings -> Health like the other health templates
     expect(buildPushPayload({ template: 'session_stopped' }, config).notification.navigate).toBe('/settings/health')
     // junk ids never become a path
@@ -213,5 +223,25 @@ describe('ApnsRegistration', () => {
     expect(ApnsRegistration.safeParse({ ...ok, extra: 1 }).success).toBe(false)
     expect(ApnsRegistration.safeParse({ ...ok, env: 'staging' }).success).toBe(false)
     expect(ApnsRegistration.safeParse({ ...ok, token: 'A'.repeat(64) }).success).toBe(false)
+  })
+})
+
+describe('session_waiting', () => {
+  it('one session: names the thread by the rule, opens it, renotifies over its reply banner, and gets through a Focus mode', () => {
+    const p = buildPushPayload({ template: 'session_waiting', thread_id: 'general' }, config)
+    expect(p.notification.body).toMatch(/^A session in .+ is waiting on you$/)
+    expect(p.notification.navigate).toBe('/t/general')
+    expect(p.notification.tag).toBe('thread:general')
+    expect(p.notification.renotify).toBe(true)
+    expect(p.talos.kind).toBe('card')
+    const apns = buildApnsBody(p)
+    expect(apns.aps['interruption-level']).toBe('time-sensitive')
+    expect(apns.aps.category).toBe(APNS_CATEGORIES.open) // no card: Open, never Approve
+  })
+  it('several sessions: one push with the count, opening Home, no thread named', () => {
+    const p = buildPushPayload({ template: 'session_waiting', count: 3 }, config)
+    expect(p.notification.body).toBe('3 sessions are waiting on you')
+    expect(p.notification.navigate).toBe('/')
+    expect(p.notification.tag).toBeUndefined()
   })
 })

@@ -1,0 +1,50 @@
+{
+  "id": "win-scripts-from-clone",
+  "title": "The Windows logon task and the owner's scripts ran from the clone, which a thread can write",
+  "base": "38cea9a54b662ad35b849a9a274e6ac49d33ed0a",
+  "buggy": "3714c08b7406482fbc27861b393fc2b64c8bef91",
+  "fix": "3c4d3509becb4059c72f55eb064054626b488600",
+  "expect": [
+    {
+      "file": ["apps/windows/install.ps1", "apps/windows/keepalive.ps1"],
+      "severity": "high",
+      "must": [
+        ["clone", "checkout", "repo", "\\$here", "writ"],
+        ["logon|scheduled task|ScheduledTask|keep-?alive|startup"]
+      ],
+      "note": "The logon task runs keepalive.ps1 from the clone, which a thread working in the clone can rewrite: code the owner's account then runs at every logon."
+    },
+    {
+      "file": "apps/windows/add-folder.ps1",
+      "lines": [20, 40],
+      "severity": "high",
+      "must": [
+        ["junction|reparse|link|symlink"],
+        ["last|only the (final|top)|part of the path|component|parent|ancestor|intermediate"]
+      ],
+      "note": "R1-4: add-folder refuses a link or junction only on the folder itself (its ReparsePoint attribute); a junction higher up the path still leads anywhere."
+    },
+    {
+      "file": ["apps/windows/add-folder.ps1", "apps/windows/distro/talos-wsl.sh"],
+      "severity": "high",
+      "must": [["8\\.3|short name|~1|trailing (dot|space)|alias|another spelling|DOS name"]],
+      "note": "R1-4: a refused folder can be named another way (an 8.3 short name like PROGRA~1, a trailing dot or space), so the name checks do not see it."
+    },
+    {
+      "file": ["apps/windows/install.ps1", "apps/windows/distro/setup-user.sh"],
+      "severity": "high",
+      "must": [
+        ["origin|remote URL|clone URL|credential|token|login|password"],
+        ["leak|copied|stored|inside the distro|log|echo|printed|written"]
+      ],
+      "note": "R1-5: the clone's origin URL, which can carry a login or token, is copied into the distro (and failures print command lines)."
+    },
+    {
+      "file": ["apps/windows/install.ps1", "apps/windows/distro/setup-user.sh"],
+      "severity": "high",
+      "must": [["/var/tmp|temp|world-writable|shared tmp"], ["root|install -D|replace|swap|race|TOCTOU|before"]],
+      "note": "R1-2: root's setup files are written to /var/tmp and installed from there as root; anyone in the distro can replace them in between."
+    }
+  ],
+  "expect_mode": "any"
+}

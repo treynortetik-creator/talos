@@ -1,0 +1,152 @@
+# The test folder prefixes scripts/tmp-sweep.sh removes from $TMPDIR once a day old: one per line, a name start ending in "-"
+# (letters, digits, "." "_" "-"; a "!" line may hold a space too). Only these are ever swept: $TMPDIR can be the machine's shared one, where the live Talos app and
+# other tools keep their own folders. A line starting with "!" is a prefix a test makes that is deliberately NOT swept (too
+# generic to be sure a folder of that name is a test's); give that test a talos- name to have its leftovers swept.
+# scripts/tmp-sweep.test.ts fails when a test makes a folder directly in the temp folder with a prefix that is on neither list.
+
+# Each run's own folder (apps/bridge/test/run-tmp.ts, vitest.run-tmp.ts). Every folder the bridge's bun tests and the root Vitest
+# projects make is inside one, so a killed run's leftovers go with it.
+tbrun-
+talos-vitest-run-
+
+# Bridge tests (inside tbrun-; listed for leftovers from runs before that folder existed, and for the contract runs, which have none)
+talos-bridge-test-
+talos-chronos-box-
+talos-apps-
+talos-apps-e2e-
+talos-launch-
+empty-home-
+hb-busy-
+hb-chain-
+hb-gh-
+hb-req-
+hb-rn-
+hb-svc-
+hb-tm-
+hb-tr-
+hb-w-
+
+# Bridge contract tests (apps/bridge/test-contract: Vitest with no run folder)
+talos-agents-contract-
+talos-contract-
+talos-sched-contract-
+
+# e2e (e2e/: Playwright, no run folder). talos-e2e-apps- is no longer made (it is inside the stack's folder now); listed for old ones.
+talos-crash-
+talos-e2e-
+talos-e2e-apps-
+talos-e2e-home-
+talos-prod-
+!files-journey-
+
+# Mac app tests (apps/desktop/Tests: TestTemp.base is $TMPDIR itself)
+talos-cfg-
+talos-cfgread-
+talos-companion-harness-
+talos-d1-
+talos-sweep-
+!talos-native-claude-v1
+!talos-native-claude-
+talos-desktop-log-
+talos-devch-ver-
+talos-dl-
+talos-dotenv-
+talos-emb-
+talos-folder-
+talos-guards-
+talos-hook-
+talos-hookapp-
+talos-hookedit-
+talos-hooksrc-
+talos-instr-
+talos-instr-probe-
+talos-lf-
+talos-list-
+talos-long-tmpdir-
+talos-mh-
+talos-mig-
+talos-mk-
+talos-nopy-
+talos-oc-
+talos-posts-
+talos-preamble-
+talos-problem-
+talos-r2-
+talos-rules-
+talos-rv-
+talos-rv-hk-
+talos-rv-world-
+talos-rv61-
+talos-screen-
+talos-scripts-
+talos-seal-
+talos-send-
+talos-shellpane-
+talos-signer-
+talos-spec-probe-
+talos-sub-
+talos-testtemp-
+talos-tr-
+talos-trust-
+talos-tsp-
+talos-u-
+talos-wle-
+talos-wlg-
+
+# Made by tests, not swept: names too generic to claim in a shared folder
+!agent-request-
+!argv-
+!au-
+!au-cfg-
+!box-
+!clr-
+!companion-art-
+!companion-corrupt-
+!companion-empty-
+!companion-gone-
+!companion-grid-
+!companion-long-antic-
+!companion-nolife-
+!companion-noloopfile-
+!companion-noloops-
+!companion-old-
+!companion-rejected-
+!companion-vanish-
+!complete-lines-
+!cu-
+!dlg-
+!dlgfiles-
+!flap-
+!gc-
+!grant-mem-
+!guards-existing-
+!k7-apphome-
+!k7-clone-
+!k7-link-
+!k7-nomod-
+!k7-partial-
+!k7-record-
+!keep-unknown-
+!keys-
+!late-
+!oc-folder-
+!new-bun-
+!old-bun-
+!onboarding-fakes-
+!owner-rules-
+!prm-
+!relaunch-
+!review-d0.
+!review-d0r.
+!rproof-
+!rproof-big-
+!rproof-used-
+!rv-oc3-r3-
+!screen-real-
+!swap-
+!tmux-lookup-
+!ul-
+!ul-end-
+!worker-usage-
+!talos relay wait.
+!talos rv d6.

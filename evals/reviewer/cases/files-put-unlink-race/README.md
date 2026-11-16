@@ -1,0 +1,3 @@
+# Undoing a stray exclusive create by path: lstat then unlink, and the racer owns the folders on that path
+
+On Linux an exclusive create through a swapped parent folder lands outside the thread's folder; 1502cd06 removes the stray file by path after an lstat check. The lstat and the unlink are two path walks through folders the racer controls, so swapping a folder between them deletes a same-named file elsewhere. Found by Fable's review of 1502cd06. Fixed in b4753fca: on Linux the create goes through a checked handle on its folder (/proc/self/fd/<dirfd>/<name>), and a stray is removed only through that handle. Not one of the cases the prompt was tuned on.

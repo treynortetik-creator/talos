@@ -13,19 +13,21 @@ test('fake mode boots into the shell with seeded threads', async ({ page }) => {
   await expect(page.getByTestId('msg-agent').getByText('echo: ping')).toBeVisible()
 })
 
-test('fake mode: thread list and Ctrl+2', async ({ page }) => {
-  await page.goto('/t/general')
-  // Ctrl+2 resolves against the loaded thread list and is a silent no-op until it arrives, so wait for the tabs
+test('fake mode: thread list and the thread number chord', async ({ page }) => {
+  // Ctrl/Cmd+N opens the Nth thread as the sidebar numbers them: the Inbox has its own row and no number (W17,
+  // docs/audits/2026-11-10-bughunt-web.md #17), so in the seed (General, Inbox) General is Ctrl+1 and there is no Ctrl+2.
+  await page.goto('/t/inbox')
+  // the chord resolves against the loaded thread list and is a silent no-op until it arrives, so wait for the tabs
   // themselves (the real precondition), not just the empty tab bar.
   const phone = isPhoneWidth(page)
   let tabs = await threadSwitcher(page)
-  await expect(tabs.locator('a[href="/t/general"]')).toHaveAttribute('aria-current', 'page')
-  await expect(tabs.locator('a[href="/t/inbox"]')).toBeVisible()
-  if (phone) await page.keyboard.press('Escape')
-  await page.keyboard.press('ControlOrMeta+2')
-  await expect(page).toHaveURL(/\/t\/inbox$/)
-  tabs = await threadSwitcher(page)
   await expect(tabs.locator('a[href="/t/inbox"]')).toHaveAttribute('aria-current', 'page')
+  await expect(tabs.locator('a[href="/t/general"]')).toBeVisible()
+  if (phone) await page.keyboard.press('Escape')
+  await page.keyboard.press('ControlOrMeta+1')
+  await expect(page).toHaveURL(/\/t\/general$/)
+  tabs = await threadSwitcher(page)
+  await expect(tabs.locator('a[href="/t/general"]')).toHaveAttribute('aria-current', 'page')
 })
 
 test('fake mode: settings sections, appearance switch', async ({ page }) => {

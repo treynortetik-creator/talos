@@ -41,12 +41,11 @@ describe('agent.recover at the relay', () => {
     const e1 = await app.expectFrame('error', (e) => e.ref === bare.id)
     expect(e1.code).toBe('bad_frame')
     expect(e1.message).toContain('needs the Mac now')
-    const stepup_token = rel.auth.core.mintStepup(o.sessionId, 'config:session')
+    const stepup_token = 'from-an-old-app' // never checked since 2026-11-14
     const withToken = await app.sendAgentRecover('restore_last_good', { stepup_token })
     expect((await app.expectFrame('error', (e) => e.ref === withToken.id)).message).toContain('needs the Mac now')
     await sleep(80)
     expect(bridge.rec.of('agent.recover', 'in')).toHaveLength(0)
-    expect(rel.auth.core.consumeStepup(stepup_token, 'config:session', o.sessionId)).toBe(true) // still unspent
   })
 
   it('the same signed frame sent twice is queued once', async () => {

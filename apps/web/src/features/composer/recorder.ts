@@ -63,35 +63,18 @@ export async function startRecorder(
   if (!mime) throw new Error('unsupported')
   audioDock.pause({ handOver: true }) // recording takes the microphone and the audio route: a clip playing in the dock waits
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  const rec = new MediaRecorder(stream, { mimeType: mime })
   const chunks: Blob[] = []
-  rec.ondataavailable = (e) => {
-    if (e.data.size > 0) chunks.push(e.data)
-  }
-
-  const Ctx =
-    window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
   const samples: number[] = []
   let ctx: AudioContext | null = null
   let timer: ReturnType<typeof setInterval> | null = null
-  if (Ctx && opts.analyse !== false) {
-    ctx = new Ctx()
-    const analyser = ctx.createAnalyser()
-    analyser.fftSize = 512
-    ctx.createMediaStreamSource(stream).connect(analyser)
-    const buf = new Uint8Array(analyser.fftSize)
-    timer = setInterval(() => {
-      if (rec.state !== 'recording') return
-      analyser.getByteTimeDomainData(buf)
-      let peak = 0
-      for (const v of buf) peak = Math.max(peak, Math.abs(v - 128) / 128)
-      samples.push(peak)
-      onLevel?.(peak)
-    }, 80)
+  const cleanup = () => {
+    if (timer) clearInterval(timer)
+    for (const t of stream.getTracks()) t.stop()
+    void ctx?.close().catch(() => {})
   }
 
   // Time comes from stamps, never from the recorder's state: a recorder that stopped by itself still has a true length.
-  let liveSince: number | null = performance.now()
+  let liveSince: number | null = null
   let accumulated = 0
   let asked = false // stop() or cancel() was called
   let selfEnded = false
@@ -100,17 +83,46 @@ export async function startRecorder(
     accumulated += performance.now() - liveSince
     liveSince = null
   }
-  rec.addEventListener('stop', () => {
-    closeSegment()
-    if (!asked) selfEnded = true
-  })
-  rec.start(250)
 
-  const cleanup = () => {
-    if (timer) clearInterval(timer)
-    for (const t of stream.getTracks()) t.stop()
-    void ctx?.close().catch(() => {})
+  let rec: MediaRecorder
+  // The microphone is held from here on. If anything below throws, nobody gets a handle to release it with, so it is
+  // released here before the error goes up.
+  try {
+    rec = new MediaRecorder(stream, { mimeType: mime })
+    const recorder = rec
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data)
+    }
+
+    const Ctx =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (Ctx && opts.analyse !== false) {
+      ctx = new Ctx()
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 512
+      ctx.createMediaStreamSource(stream).connect(analyser)
+      const buf = new Uint8Array(analyser.fftSize)
+      timer = setInterval(() => {
+        if (recorder.state !== 'recording') return
+        analyser.getByteTimeDomainData(buf)
+        let peak = 0
+        for (const v of buf) peak = Math.max(peak, Math.abs(v - 128) / 128)
+        samples.push(peak)
+        onLevel?.(peak)
+      }, 80)
+    }
+
+    recorder.addEventListener('stop', () => {
+      closeSegment()
+      if (!asked) selfEnded = true
+    })
+    liveSince = performance.now()
+    recorder.start(250)
+  } catch (e) {
+    cleanup()
+    throw e
   }
+
   const elapsedMs = () => accumulated + (liveSince === null ? 0 : performance.now() - liveSince)
 
   return {

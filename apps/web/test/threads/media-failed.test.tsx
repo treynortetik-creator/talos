@@ -184,3 +184,22 @@ describe('ImageViewer failed state (#110/#111)', () => {
     await waitFor(() => fetchFrames().length === 2, 4000, 'asked again')
   })
 })
+
+describe('a file the storage setting removed', () => {
+  it('says it was removed after N days, as a status, not as a failure (bug hunt core #19)', async () => {
+    const c = await start()
+    withholdChipTimeout()
+    const a = att('file', 'text/csv', 'old.csv')
+    render(
+      <ClientProvider client={c}>
+        <AttachmentView att={a} message={{ id: newId('m'), thread_id: 'general' } as never} onOpenImage={() => {}} />
+      </ClientProvider>,
+    )
+    await waitFor(() => fetchFrames().length === 1, 4000, 'media.fetch sent')
+    refuse(fetchFrames()[0]?.id, 'media_removed', 'Removed from this Mac after 30 days.')
+    const line = await screen.findByTestId('media-removed')
+    expect(line.textContent).toContain('old.csv was removed from your Mac after 30 days')
+    expect(screen.queryByTestId('media-failed')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+})

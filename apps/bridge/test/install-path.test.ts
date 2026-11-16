@@ -11,16 +11,18 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { tempHome } from './helpers.ts'
 
 const INSTALL = resolve(import.meta.dir, '..', 'scripts', 'install.sh')
 const BRIDGE_DIR = resolve(import.meta.dir, '..')
 
 /** A bun stand-in that execs the real bun, in a folder of our choosing (the wrapper goes next to bun). */
-function fakeBunDir(writable = true) {
+function fakeBunDir(writable = true, version?: string) {
   const dir = tempHome('talos-bunbin-')
-  writeFileSync(join(dir, 'bun'), `#!/bin/sh\nexec ${process.execPath} "$@"\n`)
+  // with a version: `bun --version` says that one, and everything else runs on the real bun
+  const say = version ? `[ "$1" = --version ] && { echo ${version}; exit 0; }\n` : ''
+  writeFileSync(join(dir, 'bun'), `#!/bin/sh\n${say}exec ${process.execPath} "$@"\n`)
   chmodSync(join(dir, 'bun'), 0o755)
   if (!writable) chmodSync(dir, 0o555)
   return dir
@@ -113,14 +115,14 @@ describe('install.sh wrapper', () => {
     expect(r.out).toContain(`${other} is not on your PATH`)
   })
 
-  test('the .mcp.json entry the Mac app reads (#118) is unchanged: bun run --cwd <bridge> --silent start', () => {
+  test('the .mcp.json entry the Mac app reads (#118): an absolute bun, then run --cwd <bridge> --silent start', () => {
     const bin = fakeBunDir()
     const r = install({ home: tempHome(), path: `${bin}:/usr/bin:/bin` })
     const mcp = JSON.parse(readFileSync(join(r.agent, '.mcp.json'), 'utf8')) as {
       mcpServers: { 'talos-app': { command: string; args: string[] } }
     }
-    expect(mcp.mcpServers['talos-app'].command).toBe('bun')
-    expect(mcp.mcpServers['talos-app'].args).toEqual(['run', '--cwd', BRIDGE_DIR, '--silent', 'start'])
+    expect(isAbsolute(mcp.mcpServers['talos-app'].command)).toBe(true)
+    expect(mcp.mcpServers['talos-app'].args).toEqual(['run', '--cwd', BRIDGE_DIR, '--silent', 'src/server.ts'])
   })
 
   test("the wrapper does not load the current folder's .env into the CLI or into the claude that `start` launches", () => {
@@ -178,7 +180,9 @@ describe('install.sh wrapper', () => {
       stderr: 'pipe',
     })
     expect(other.stdout.toString()).toContain('run talos-app init')
-  })
+    // the real install.sh, then `talos-app status` three times, each its own bun start: 13 s on Titan (WSL), past the 5 s
+    // default; it waits as long as the four runs take
+  }, 60_000)
 
   test('a folder name with an apostrophe still gives a working wrapper', () => {
     const base = tempHome("talos-o'brien-")
@@ -209,7 +213,7 @@ describe('install.sh wrapper', () => {
     expect(r.out).toContain('Next:')
     expect(r.out).toContain('BRIDGE_PUBKEY')
     // with no wrapper, the steps name a command that exists
-    expect(r.out).toContain('bun run')
+    expect(r.out).toContain('bun --no-env-file run')
     expect(r.err).not.toContain('Permission denied')
   })
 
@@ -240,9 +244,9 @@ describe('install.sh wrapper', () => {
     expect(readFileSync(join(bin, 'talos-app'), 'utf8')).toBe(before)
     expect(r.err).toContain('already points at a different TALOS_APP_HOME')
     expect(r.out).toContain('--replace-wrapper')
-    expect(r.out).toContain('bun run') // the next steps name a command that exists
+    expect(r.out).toContain('bun --no-env-file run') // the next steps name a command that exists
     // ... and that command reads THIS install's home, not the default one
-    expect(r.out).toContain(`TALOS_APP_HOME='${join(second, 'app')}' bun run`)
+    expect(r.out).toContain(`TALOS_APP_HOME='${join(second, 'app')}' bun --no-env-file run`)
     const forced = install({ home: second, path, args: ['--replace-wrapper'] })
     expect(forced.code).toBe(0)
     const after = readFileSync(join(bin, 'talos-app'), 'utf8')
@@ -315,5 +319,17 @@ describe('install.sh wrapper', () => {
     )
     expect(r.exitCode).toBe(0)
     expect(r.stderr.toString()).toContain('already points at a different TALOS_APP_HOME')
+  })
+
+  test('an older Bun is refused before anything is written, with how to upgrade', () => {
+    const bin = fakeBunDir(true, '1.3.11')
+    const home = tempHome()
+    const r = install({ home, path: `${bin}:/usr/bin:/bin`, args: ['--bin-dir', bin] })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('Bun 1.3.11 is older than 1.4.4, the oldest Talos supports.')
+    expect(r.err).toContain('macOS or Linux (or a WSL distro you set up yourself): bun upgrade')
+    expect(existsSync(join(home, 'app'))).toBe(false)
+    expect(existsSync(join(r.agent, '.mcp.json'))).toBe(false)
+    expect(existsSync(join(bin, 'talos-app'))).toBe(false)
   })
 })

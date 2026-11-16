@@ -11,17 +11,35 @@ public enum WorkerMcp {
   public static let appName = "talos-app"
   /// Servers no list can open: they drive the owner's browser and screen.
   public static let neverOpen = ["claude-in-chrome", "computer-use"]
+  /// Denied to every Talos session, list or no list: Claude Code's own screen control. Talos's screen tools replace it
+  /// (`screen_*`, through the app's screen helper), so its terminal permission dialog can never park a session.
+  public static let alwaysDenied = ["computer-use"]
 
   /// A claude.ai account connector, as Claude Code names it (`claude.ai Gmail`).
   public static func isConnector(_ name: String) -> Bool { name.lowercased().hasPrefix("claude.ai ") }
 
-  /// The prefix Claude Code gives a server's tools: anything outside letters, digits, `_` and `-` becomes `_`; a plugin's server is
-  /// `plugin_<plugin>_<server>`.
+  /// The prefix Claude Code gives a server's tools (`mcp__<prefix>__<tool>`), as its own function has it (read from the 2.1.322 binary):
+  /// every UTF-16 code unit outside ASCII letters, digits, `_` and `-` becomes `_` (so a character outside the BMP is two), and a name
+  /// that starts with `claude.ai ` then has its runs of `_` made one and a leading or trailing `_` dropped. A plugin's server
+  /// `plugin:<plugin>:<server>` comes out as `plugin_<plugin>_<server>` by the same rule. By code unit throughout, the check for the
+  /// start of the name included: Swift compares Strings by Character, and a combining mark after that space would hide it. The
+  /// bridge's `mcpToolPrefix` (packages/protocol/src/worker-mcp.ts) is the same function; the two share their test cases.
   public static func prefix(_ name: String) -> String {
-    let n = name.hasPrefix("plugin:") ? "plugin_" + name.dropFirst("plugin:".count) : name
-    return String(String.UnicodeScalarView(n.unicodeScalars.map { s in
-      (s.isASCII && (CharacterSet.alphanumerics.contains(s) || s == "_" || s == "-")) ? s : "_"
-    }))
+    let under = UInt8(ascii: "_")
+    var out = name.utf16.map { u -> UInt8 in
+      switch u {
+      case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x5F, 0x2D: return UInt8(u)
+      default: return under
+      }
+    }
+    if name.utf16.starts(with: "claude.ai ".utf16) {
+      var one: [UInt8] = []
+      for b in out where !(b == under && one.last == under) { one.append(b) }
+      if one.first == under { one.removeFirst() }
+      if one.last == under { one.removeLast() }
+      out = one
+    }
+    return String(decoding: out, as: UTF8.self)
   }
 
   public static func configPath(talosHome: String, threadId: String) -> String {
@@ -72,16 +90,14 @@ public enum WorkerMcp {
   /// Every server a session started in `cwd` could use, by name. Precedence is Claude Code's: local over user over project, so a
   /// `.mcp.json` the folder ships (which anyone can write) never shadows a definition the owner made. Plugin servers are namespaced
   /// (`plugin:<plugin>:<server>`) and cannot collide. Holds credentials: never log it.
-  static func entries(cwd: String, home: String, claudeDir: String) -> [String: Entry] {
+  static func entries(cwd: String, home: String, claudeDir: String, configDirSet: Bool = false) -> [String: Entry] {
     var out: [String: Entry] = [:]
     if let project = object(at: cwd + "/.mcp.json") {
       // both shapes: `{ "mcpServers": { … } }` and the table itself
       for (k, v) in table(project["mcpServers"] ?? project) { out[k] = Entry(def: v, scope: "project") }
     }
-    let isDefault = claudeDir == home + "/.claude"
-    let globals = isDefault ? [home + "/.claude.json", claudeDir + "/.claude.json"] : [claudeDir + "/.claude.json"]
     var local: [String: [String: Any]] = [:]
-    for file in globals {
+    for file in globalConfigFiles(home: home, claudeDir: claudeDir, configDirSet: configDirSet) {
       guard let j = object(at: file) else { continue }
       for (k, v) in table(j["mcpServers"]) { out[k] = Entry(def: v, scope: "user") }
       let projects = j["projects"] as? [String: Any]
@@ -99,17 +115,50 @@ public enum WorkerMcp {
     entries(cwd: cwd, home: home, claudeDir: claudeDir).mapValues { $0.def }
   }
 
-  /// The names a session started in `cwd` could use.
-  public static func visibleNames(cwd: String, home: String, claudeDir: String) -> Set<String> {
-    Set(entries(cwd: cwd, home: home, claudeDir: claudeDir).keys).union([appName])
+  /// The names a session started in `cwd` can really use (main's, for the ceiling, with `cwd` the agent folder): not the servers the
+  /// owner switched off for the folder (`/mcp`'s toggle, `projects[<folder>].disabledMcpServers`), and of the folder's own `.mcp.json`
+  /// only what was approved. So a worker's ceiling is never wider than what main has.
+  public static func visibleNames(cwd: String, home: String, claudeDir: String, configDirSet: Bool = false) -> Set<String> {
+    var off = Set<String>()
+    for file in globalConfigFiles(home: home, claudeDir: claudeDir, configDirSet: configDirSet) {
+      let projects = object(at: file)?["projects"] as? [String: Any]
+      for key in [cwd, real(cwd)] {
+        let list = (projects?[key] as? [String: Any])?["disabledMcpServers"] as? [Any] ?? []
+        off.formUnion(list.compactMap { $0 as? String })
+      }
+    }
+    let names = entries(cwd: cwd, home: home, claudeDir: claudeDir, configDirSet: configDirSet).filter { name, e in
+      !off.contains(name)
+        && (e.scope != "project" || projectApproved(name, cwd: cwd, home: home, claudeDir: claudeDir, configDirSet: configDirSet))
+    }.keys
+    return Set(names).union([appName])
+  }
+
+  /// Whether the environment names a config folder (`CLAUDE_CONFIG_DIR`, absolute): the same rule as `claudeDir`.
+  public static func configDirSet(env: [String: String]) -> Bool { env["CLAUDE_CONFIG_DIR"]?.hasPrefix("/") == true }
+
+  /// The global config Claude Code itself reads: `.claude.json` in `CLAUDE_CONFIG_DIR` when that is set, else in the home folder (read
+  /// from the 2.1.322 binary: `join(CLAUDE_CONFIG_DIR || homedir(), ".claude.json")`). Nothing else: with no `CLAUDE_CONFIG_DIR`, a stale
+  /// `~/.claude/.claude.json` is not Claude Code's, and must not define or approve a server. `configDirSet` tells a `CLAUDE_CONFIG_DIR`
+  /// that names `~/.claude` itself from none at all; a config folder other than `~/.claude` can only have come from the variable.
+  static func globalConfigFiles(home: String, claudeDir: String, configDirSet: Bool = false) -> [String] {
+    func trim(_ p: String) -> String {
+      var h = p
+      while h.count > 1, h.hasSuffix("/") { h.removeLast() }
+      return h
+    }
+    let h = trim(home)
+    let c = trim(claudeDir)
+    return [!configDirSet && c == h + "/.claude" ? h + "/.claude.json" : c + "/.claude.json"]
   }
 
   /// What the owner approved of the folder's `.mcp.json`. The docs name the keys (`enabledMcpjsonServers`, `enableAllProjectMcpServers`,
   /// `disabledMcpjsonServers`) and say they live in settings files; they do not say whether Claude Code also keeps them in the folder's
   /// entry in the global config, which older versions do, so both are read: the folder's entry in the global config, and the user's own
-  /// `settings.json`. The folder's own settings files are NOT read: a cloned repository can't approve its own servers. A rejection beats
-  /// an approval.
-  static func projectApproved(_ name: String, cwd: String, home: String, claudeDir: String) -> Bool {
+  /// `settings.json`. The folder's own settings files are NOT read: a cloned repository can't approve its own servers, and a thread
+  /// session outside the agent folder does not load them anyway (`--setting-sources user`), so an approval kept there is none. A
+  /// rejection beats an approval.
+  static func projectApproved(_ name: String, cwd: String, home: String, claudeDir: String, configDirSet: Bool = false) -> Bool {
     var enabled = Set<String>()
     var disabled = Set<String>()
     var all = false
@@ -119,8 +168,7 @@ public enum WorkerMcp {
       disabled.formUnion((o["disabledMcpjsonServers"] as? [String]) ?? [])
       if o["enableAllProjectMcpServers"] as? Bool == true { all = true }
     }
-    let isDefault = claudeDir == home + "/.claude"
-    for file in isDefault ? [home + "/.claude.json", claudeDir + "/.claude.json"] : [claudeDir + "/.claude.json"] {
+    for file in globalConfigFiles(home: home, claudeDir: claudeDir, configDirSet: configDirSet) {
       let projects = object(at: file)?["projects"] as? [String: Any]
       for key in [cwd, real(cwd)] { take(projects?[key] as? [String: Any]) }
     }
@@ -210,12 +258,13 @@ public enum WorkerMcp {
 
   /// The plan for a list. nil when the agent folder has no `talos-app` definition to copy: a session without it cannot read its messages.
   public static func plan(
-    allow: [String], agentDir: String, cwd: String, home: String, claudeDir: String, talosHome: String, threadId: String
+    allow: [String], agentDir: String, cwd: String, home: String, claudeDir: String, talosHome: String, threadId: String,
+    configDirSet: Bool = false
   ) -> Plan? {
     guard let agent = object(at: agentDir + "/.mcp.json"),
       let talos = table(agent["mcpServers"])[appName]
     else { return nil }
-    let cat = entries(cwd: cwd, home: home, claudeDir: claudeDir)
+    let cat = entries(cwd: cwd, home: home, claudeDir: claudeDir, configDirSet: configDirSet)
     var servers: [String: Any] = [appName: WorkerSpec.cleanMcpEntry(talos)]
     var allowed: [String] = []
     var missing: [String] = []
@@ -236,7 +285,7 @@ public enum WorkerMcp {
         continue
       }
       if entry.scope == "project" {
-        guard projectApproved(name, cwd: cwd, home: home, claudeDir: claudeDir) else {
+        guard projectApproved(name, cwd: cwd, home: home, claudeDir: claudeDir, configDirSet: configDirSet) else {
           unapproved.append(name)
           continue
         }
@@ -247,7 +296,7 @@ public enum WorkerMcp {
       allowed.append(name)
     }
     // the servers that exist for main or for this folder, less the ones the list opens
-    var known = Set(cat.keys).union(entries(cwd: agentDir, home: home, claudeDir: claudeDir).keys)
+    var known = Set(cat.keys).union(entries(cwd: agentDir, home: home, claudeDir: claudeDir, configDirSet: configDirSet).keys)
     known.subtract(allowed)
     known.remove(appName)
     var rules = known.sorted().map { "mcp__\(prefix($0))__*" }
@@ -259,11 +308,13 @@ public enum WorkerMcp {
       let p = n.split(separator: ":", omittingEmptySubsequences: false)
       return p.count >= 3 && p[0] == "plugin" ? String(p[1]) : nil
     })
-    let disabledPlugins = installedPlugins(claudeDir: claudeDir).filter { !listed.contains($0.name) }.map { $0.key }
+    let disabledPlugins = installedPlugins(claudeDir: claudeDir).filter {
+      !listed.contains($0.name) && !InstructionFiles.isPlugin(key: $0.key)
+    }.map { $0.key }
     let refusal: String? = unapproved.isEmpty
       ? nil
       : unapproved.map {
-        "`\($0)` is defined only in \(cwd)/.mcp.json and has not been approved there. Run `claude mcp add -s local \($0) …` in that folder, or approve it once in Claude Code there (start `claude` in it and answer the question), then save the thread again."
+        "`\($0)` is defined only in \(cwd)/.mcp.json and has not been approved for that folder, so this thread's session would not get it. Add it as your own for the folder: run `claude mcp add -s local \($0) …` there (or name it in enabledMcpjsonServers in your own ~/.claude/settings.json), then save the thread again. Approving it inside a Claude Code session there does not count: that answer is kept in the folder's .claude/settings.local.json, which a thread session does not load."
       }.joined(separator: " ")
     guard let data = try? JSONSerialization.data(withJSONObject: ["mcpServers": servers], options: [.sortedKeys]) else { return nil }
     return Plan(

@@ -1,0 +1,409 @@
+{
+  "about": "Shared vectors for specHash (packages/protocol/src/spec-hash.ts) and the Mac's twin: each `input`, its JCS text (RFC 8785, keys by UTF-16 code units) and its hash, \"sha256:\" + hex of the JCS text's UTF-8 bytes. `undefined_paths`: places (key and index paths) the test sets to an absent (undefined) value before hashing: a key is left out, an array item reads as null. `must_throw`: inputs specHash must refuse (`replace` puts a value JSON cannot hold at `path` first). Written by an independent Python reading of RFC 8785 (Hestia, 2026-11-14) and checked against the TS jcs.",
+  "vectors": [
+    {
+      "name": "minimal",
+      "note": "empty argv, env and files",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "env": {},
+        "files": {}
+      },
+      "jcs": "{\"argv\":[],\"env\":{},\"files\":{},\"v\":1}",
+      "hash": "sha256:bb5d7bbd1a59df1946d506a9e8c0fe3fb6ea23090f7ccc78c679f22ba5c379ee"
+    },
+    {
+      "name": "a typical thread launch",
+      "note": "the shape each supervisor builds",
+      "input": {
+        "v": 1,
+        "argv": [
+          "/usr/local/bin/claude",
+          "--settings",
+          "/home/alex/.config/talos/app/workers/trip/settings.json",
+          "--permission-mode",
+          "default"
+        ],
+        "env": {
+          "TALOS_APP_HOME": "/home/alex/.config/talos/app",
+          "TALOS_APP_WORKER_THREAD": "trip",
+          "CLAUDE_CODE_DISABLE_AUTOUPDATE": "1"
+        },
+        "files": {
+          "settings.json": "b5f0fd2244808559e4167956359085d7e7415629a5c5a6f9242f08daec2a29e6",
+          "launch.sh": "4e44dde101ddc6b1c5f956b9d980232019802d35c60015729c873827e6e9cbff"
+        }
+      },
+      "jcs": "{\"argv\":[\"/usr/local/bin/claude\",\"--settings\",\"/home/alex/.config/talos/app/workers/trip/settings.json\",\"--permission-mode\",\"default\"],\"env\":{\"CLAUDE_CODE_DISABLE_AUTOUPDATE\":\"1\",\"TALOS_APP_HOME\":\"/home/alex/.config/talos/app\",\"TALOS_APP_WORKER_THREAD\":\"trip\"},\"files\":{\"launch.sh\":\"4e44dde101ddc6b1c5f956b9d980232019802d35c60015729c873827e6e9cbff\",\"settings.json\":\"b5f0fd2244808559e4167956359085d7e7415629a5c5a6f9242f08daec2a29e6\"},\"v\":1}",
+      "hash": "sha256:1189ab60ac5c60594706f74088c2fe6b038c26bea6f312636e568aca206c2a57"
+    },
+    {
+      "name": "argv order kept",
+      "note": "the same flags in another order: another hash (arrays are never sorted)",
+      "input": {
+        "v": 1,
+        "argv": [
+          "/usr/local/bin/claude",
+          "--permission-mode",
+          "default",
+          "--settings",
+          "/home/alex/.config/talos/app/workers/trip/settings.json"
+        ],
+        "env": {
+          "TALOS_APP_HOME": "/home/alex/.config/talos/app",
+          "TALOS_APP_WORKER_THREAD": "trip",
+          "CLAUDE_CODE_DISABLE_AUTOUPDATE": "1"
+        },
+        "files": {
+          "settings.json": "b5f0fd2244808559e4167956359085d7e7415629a5c5a6f9242f08daec2a29e6",
+          "launch.sh": "4e44dde101ddc6b1c5f956b9d980232019802d35c60015729c873827e6e9cbff"
+        }
+      },
+      "jcs": "{\"argv\":[\"/usr/local/bin/claude\",\"--permission-mode\",\"default\",\"--settings\",\"/home/alex/.config/talos/app/workers/trip/settings.json\"],\"env\":{\"CLAUDE_CODE_DISABLE_AUTOUPDATE\":\"1\",\"TALOS_APP_HOME\":\"/home/alex/.config/talos/app\",\"TALOS_APP_WORKER_THREAD\":\"trip\"},\"files\":{\"launch.sh\":\"4e44dde101ddc6b1c5f956b9d980232019802d35c60015729c873827e6e9cbff\",\"settings.json\":\"b5f0fd2244808559e4167956359085d7e7415629a5c5a6f9242f08daec2a29e6\"},\"v\":1}",
+      "hash": "sha256:a5b9d98c14e8c692ea819df9d3eafe793be038abb345fdc98b62198a69b01574"
+    },
+    {
+      "name": "one env value changed",
+      "note": "a changed value restarts",
+      "input": {
+        "v": 1,
+        "argv": [
+          "/usr/local/bin/claude",
+          "--settings",
+          "/home/alex/.config/talos/app/workers/trip/settings.json",
+          "--permission-mode",
+          "default"
+        ],
+        "env": {
+          "TALOS_APP_HOME": "/home/alex/.config/talos/app",
+          "TALOS_APP_WORKER_THREAD": "trip",
+          "CLAUDE_CODE_DISABLE_AUTOUPDATE": "0"
+        },
+        "files": {
+          "settings.json": "b5f0fd2244808559e4167956359085d7e7415629a5c5a6f9242f08daec2a29e6",
+          "launch.sh": "4e44dde101ddc6b1c5f956b9d980232019802d35c60015729c873827e6e9cbff"
+        }
+      },
+      "jcs": "{\"argv\":[\"/usr/local/bin/claude\",\"--settings\",\"/home/alex/.config/talos/app/workers/trip/settings.json\",\"--permission-mode\",\"default\"],\"env\":{\"CLAUDE_CODE_DISABLE_AUTOUPDATE\":\"0\",\"TALOS_APP_HOME\":\"/home/alex/.config/talos/app\",\"TALOS_APP_WORKER_THREAD\":\"trip\"},\"files\":{\"launch.sh\":\"4e44dde101ddc6b1c5f956b9d980232019802d35c60015729c873827e6e9cbff\",\"settings.json\":\"b5f0fd2244808559e4167956359085d7e7415629a5c5a6f9242f08daec2a29e6\"},\"v\":1}",
+      "hash": "sha256:0a6c97bf703972779248ec091af6e72927b5e0c682cbe9d22dc5e166fa4832a5"
+    },
+    {
+      "name": "one file's bytes changed",
+      "note": "a changed file restarts",
+      "input": {
+        "v": 1,
+        "argv": [
+          "/usr/local/bin/claude",
+          "--settings",
+          "/home/alex/.config/talos/app/workers/trip/settings.json",
+          "--permission-mode",
+          "default"
+        ],
+        "env": {
+          "TALOS_APP_HOME": "/home/alex/.config/talos/app",
+          "TALOS_APP_WORKER_THREAD": "trip",
+          "CLAUDE_CODE_DISABLE_AUTOUPDATE": "1"
+        },
+        "files": {
+          "settings.json": "2852145abad345742ba9c0515b84f832a1a72e228242be1c276dbebd6da0374a",
+          "launch.sh": "4e44dde101ddc6b1c5f956b9d980232019802d35c60015729c873827e6e9cbff"
+        }
+      },
+      "jcs": "{\"argv\":[\"/usr/local/bin/claude\",\"--settings\",\"/home/alex/.config/talos/app/workers/trip/settings.json\",\"--permission-mode\",\"default\"],\"env\":{\"CLAUDE_CODE_DISABLE_AUTOUPDATE\":\"1\",\"TALOS_APP_HOME\":\"/home/alex/.config/talos/app\",\"TALOS_APP_WORKER_THREAD\":\"trip\"},\"files\":{\"launch.sh\":\"4e44dde101ddc6b1c5f956b9d980232019802d35c60015729c873827e6e9cbff\",\"settings.json\":\"2852145abad345742ba9c0515b84f832a1a72e228242be1c276dbebd6da0374a\"},\"v\":1}",
+      "hash": "sha256:3b5b924ab79cbdf5ac3e67c474ecff826f6c16ed6ab7354fdaa3a19b757c10e1"
+    },
+    {
+      "name": "key order by UTF-16 code units",
+      "note": "RFC 8785 3.2.3: the emoji (a surrogate pair) sorts before U+FB33, not after",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "files": {},
+        "env": {
+          "\u20ac": "Euro Sign",
+          "\r": "Carriage Return",
+          "\ufb33": "Hebrew Letter Dalet With Dagesh",
+          "1": "One",
+          "\ud83d\ude00": "Emoji: Grinning Face",
+          "\u0080": "Control",
+          "\u00f6": "Latin Small Letter O With Diaeresis"
+        }
+      },
+      "jcs": "{\"argv\":[],\"env\":{\"\\r\":\"Carriage Return\",\"1\":\"One\",\"\u0080\":\"Control\",\"\u00f6\":\"Latin Small Letter O With Diaeresis\",\"\u20ac\":\"Euro Sign\",\"\ud83d\ude00\":\"Emoji: Grinning Face\",\"\ufb33\":\"Hebrew Letter Dalet With Dagesh\"},\"files\":{},\"v\":1}",
+      "hash": "sha256:7618fd1b3014eaa27e7ad37f75e143549824e554284cd9f465f98b02dea78acd"
+    },
+    {
+      "name": "string escapes",
+      "note": "short escapes for \\b \\f \\n \\r \\t, \\u00xx lowercase for other controls, / and DEL as they are",
+      "input": {
+        "v": 1,
+        "argv": [
+          "quote \" backslash \\ slash /",
+          "nl\n tab\t cr\r bs\b ff\f",
+          "us\u001f nul\u0000 del\u007f"
+        ],
+        "env": {},
+        "files": {}
+      },
+      "jcs": "{\"argv\":[\"quote \\\" backslash \\\\ slash /\",\"nl\\n tab\\t cr\\r bs\\b ff\\f\",\"us\\u001f nul\\u0000 del\u007f\"],\"env\":{},\"files\":{},\"v\":1}",
+      "hash": "sha256:20f6a055989d116b8e1694d0b4d3df6346713453466b24ed412044e00bf79a71"
+    },
+    {
+      "name": "non-ASCII",
+      "note": "UTF-8 bytes, never \\u escapes for printable non-ASCII",
+      "input": {
+        "v": 1,
+        "argv": [
+          "Gr\u00fc\u00dfe",
+          "\u65e5\u672c\u8a9e",
+          "\ud83d\ude42 ok"
+        ],
+        "env": {
+          "NAME": "\u00d8l\u00e6"
+        },
+        "files": {
+          "caf\u00e9.json": "850f7dc43910ff890f8879c0ed26fe697c93a067ad93a7d50f466a7028a9bf4e"
+        }
+      },
+      "jcs": "{\"argv\":[\"Gr\u00fc\u00dfe\",\"\u65e5\u672c\u8a9e\",\"\ud83d\ude42 ok\"],\"env\":{\"NAME\":\"\u00d8l\u00e6\"},\"files\":{\"caf\u00e9.json\":\"850f7dc43910ff890f8879c0ed26fe697c93a067ad93a7d50f466a7028a9bf4e\"},\"v\":1}",
+      "hash": "sha256:3ec326e835e669b5bbe70f9c20e288082e517564b65a4a5414ad5bde700e075e"
+    },
+    {
+      "name": "nested arrays and objects",
+      "note": "nesting, empty arrays and objects",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "env": {},
+        "files": {},
+        "extra": {
+          "b": [
+            1,
+            [
+              2,
+              []
+            ],
+            {}
+          ],
+          "a": {
+            "z": {},
+            "y": []
+          }
+        }
+      },
+      "jcs": "{\"argv\":[],\"env\":{},\"extra\":{\"a\":{\"y\":[],\"z\":{}},\"b\":[1,[2,[]],{}]},\"files\":{},\"v\":1}",
+      "hash": "sha256:8b73b25ab210cdfc3c68e328120c6d56b22fdcb60b1d4c5ed3d2ece1d9c29a23"
+    },
+    {
+      "name": "a null",
+      "note": "null is kept and written",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "env": {},
+        "files": {},
+        "extra": null
+      },
+      "jcs": "{\"argv\":[],\"env\":{},\"extra\":null,\"files\":{},\"v\":1}",
+      "hash": "sha256:ead3e41dea8d1da79861071fcf116010f88c720655fdb4e66356bfee18206ff9"
+    },
+    {
+      "name": "an absent key is left out",
+      "note": "the input carries extra: undefined; it is omitted, so this hashes as minimal",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "env": {},
+        "files": {}
+      },
+      "undefined_paths": [
+        [
+          "extra"
+        ]
+      ],
+      "jcs": "{\"argv\":[],\"env\":{},\"files\":{},\"v\":1}",
+      "hash": "sha256:bb5d7bbd1a59df1946d506a9e8c0fe3fb6ea23090f7ccc78c679f22ba5c379ee"
+    },
+    {
+      "name": "absence below the top level",
+      "note": "the input carries env.B: undefined; it is omitted",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "env": {
+          "A": "1"
+        },
+        "files": {}
+      },
+      "undefined_paths": [
+        [
+          "env",
+          "B"
+        ]
+      ],
+      "jcs": "{\"argv\":[],\"env\":{\"A\":\"1\"},\"files\":{},\"v\":1}",
+      "hash": "sha256:611f982059274f838fb7dbdc0e84ed6fb93c57f930c824bb3eec97760d20722f"
+    },
+    {
+      "name": "an absent array item is null",
+      "note": "the input's argv[1] is undefined; JSON writes an absent array item as null",
+      "input": {
+        "v": 1,
+        "argv": [
+          "a",
+          null,
+          "c"
+        ],
+        "env": {},
+        "files": {}
+      },
+      "undefined_paths": [
+        [
+          "argv",
+          1
+        ]
+      ],
+      "jcs": "{\"argv\":[\"a\",null,\"c\"],\"env\":{},\"files\":{},\"v\":1}",
+      "hash": "sha256:095fb98a276a9672f5731e4869fd2f5e2dbb326bce4428924d08b341e630b34b"
+    },
+    {
+      "name": "a key that is the start of another",
+      "note": "a shorter key sorts first; a space and NUL sort by their code units",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "files": {},
+        "env": {
+          "ab": "2",
+          "a": "1",
+          "a b": "3",
+          "a\u0000": "4"
+        }
+      },
+      "jcs": "{\"argv\":[],\"env\":{\"a\":\"1\",\"a\\u0000\":\"4\",\"a b\":\"3\",\"ab\":\"2\"},\"files\":{},\"v\":1}",
+      "hash": "sha256:0ddffe064a5aa4b7aa4178a72b1a1e34c3d667047aaa3a238352121a6c6c6514"
+    },
+    {
+      "name": "U+FFFF against a surrogate pair",
+      "note": "by UTF-16 code units the astral key (D83D...) sorts before U+FB33 and U+FFFF; by code points it would sort last",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "files": {},
+        "env": {
+          "\uffff": "BMP last",
+          "\ud83d\ude00": "astral (D83D DE00)",
+          "\ufb33": "BMP"
+        }
+      },
+      "jcs": "{\"argv\":[],\"env\":{\"\ud83d\ude00\":\"astral (D83D DE00)\",\"\ufb33\":\"BMP\",\"\uffff\":\"BMP last\"},\"files\":{},\"v\":1}",
+      "hash": "sha256:ef7ddf9cd7573ebe8a9890faf4156615afaa6df320a77d4a15e93a04ff67c13c"
+    },
+    {
+      "name": "numbers and booleans",
+      "note": "RFC 8785 number form (-0 is 0)",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "env": {},
+        "files": {},
+        "extra": [
+          0,
+          -1,
+          1.5,
+          100,
+          -0.0,
+          true,
+          false
+        ]
+      },
+      "jcs": "{\"argv\":[],\"env\":{},\"extra\":[0,-1,1.5,100,0,true,false],\"files\":{},\"v\":1}",
+      "hash": "sha256:a535e7d344be4d15c36eeb7bda9963f742c2672e417462c29cceca80da21c629"
+    },
+    {
+      "name": "number exponent forms",
+      "note": "ECMAScript Number::toString: 1e+21, 1e-7, 5e-324, 9007199254740992, 100000000000000000000, 0.000001, 123.456, 333333333.3333333, 1e+30, 0.002",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "env": {},
+        "files": {},
+        "extra": [
+          1e+21,
+          1e-07,
+          5e-324,
+          9007199254740992.0,
+          1e+20,
+          1e-06,
+          123.456,
+          333333333.3333333,
+          1e+30,
+          0.002
+        ]
+      },
+      "jcs": "{\"argv\":[],\"env\":{},\"extra\":[1e+21,1e-7,5e-324,9007199254740992,100000000000000000000,0.000001,123.456,333333333.3333333,1e+30,0.002],\"files\":{},\"v\":1}",
+      "hash": "sha256:e808ad4714f1871c2f82920b5c719277de0bb03261b44a280b157cfa7959da87"
+    }
+  ],
+  "must_throw": [
+    {
+      "name": "a lone surrogate in a string",
+      "input": {
+        "v": 1,
+        "argv": [
+          "\ud800x"
+        ],
+        "env": {},
+        "files": {}
+      },
+      "note": "RFC 8785 cannot write it: throw"
+    },
+    {
+      "name": "a lone surrogate in a key",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "env": {
+          "\udc00": "1"
+        },
+        "files": {}
+      },
+      "note": "throw"
+    },
+    {
+      "name": "NaN",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "env": {},
+        "files": {},
+        "extra": 0
+      },
+      "replace": {
+        "path": [
+          "extra"
+        ],
+        "with": "NaN"
+      },
+      "note": "JSON has no NaN: the test puts NaN at `path`; throw"
+    },
+    {
+      "name": "an infinity",
+      "input": {
+        "v": 1,
+        "argv": [],
+        "env": {},
+        "files": {},
+        "extra": 0
+      },
+      "replace": {
+        "path": [
+          "extra"
+        ],
+        "with": "Infinity"
+      },
+      "note": "throw"
+    }
+  ]
+}

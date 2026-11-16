@@ -1,6 +1,6 @@
 // In-memory TalosClient seeded from the protocol fixtures. Seam: frozen after WP0 (WP8 may edit).
 // Used by WP4 and WP7 (`VITE_FAKE=1`) and by WP6 until the socket client lands. It behaves like a Mac that is online and,
-// importantly, as strictly as the spec: the checks WP7's acceptance tests exercise (hash, step-up, state, expiry, edit
+// importantly, as strictly as the spec: the checks WP7's acceptance tests exercise (hash, state, expiry, edit
 // rules, config allowlist, config_conflict) really reject, so those tests cannot pass vacuously.
 
 import { listSetupSpecs } from '@talos-app/integrations/catalog'
@@ -10,7 +10,10 @@ import {
   type AttachmentRefT,
   applyCardEdits,
   applyMergePatch,
+  BUG_WEBHOOK_URL_RULE,
+  type BugReportBodyT,
   bindingFrom,
+  bugWebhookUrlOk,
   Card,
   type CardT,
   checkConfigPatch,
@@ -20,6 +23,9 @@ import {
   type ErrorCodeT,
   type FrameOf,
   type FrameType,
+  HOST_LINUX_FEATURE,
+  HOST_MAC_FEATURE,
+  HOST_WINDOWS_FEATURE,
   InboxItem,
   type InboxItemT,
   type JwkP256T,
@@ -33,11 +39,14 @@ import {
   RECOVER_SENT_TEXT,
   type RouteRes,
   resolveThreadsPatch,
+  SETTINGS_LOCK_FEATURE,
   sessionFieldsIssue,
+  shownWebhookHost,
   signOwnerFrame,
+  stripDeviceHidden,
+  subThreadPatchIssue,
   textTypeOfFile,
   threadPatchIssue,
-  trustOn,
 } from '@talos-app/protocol'
 import cardFixture from '@talos-app/protocol/fixtures/frames/card.create.json'
 import inboxFixture from '@talos-app/protocol/fixtures/frames/inbox.item.json'
@@ -47,30 +56,49 @@ import {
   type CardResolveInput,
   type ClientState,
   initialClientState,
+  NoAnswerError,
+  NotSentError,
   type SendResult,
   type TalosApi,
   type TalosClient,
   TalosClientError,
   type VoiceAskArgs,
 } from './client.ts'
+import { createFakeAgentsMd, type FakeAgentsMd, type FakeAgentsMdSeed } from './fakeAgentsMd.ts'
+import { checkFields, missingRequired } from './fakeConnectionFields.ts'
+import { createFakeFilesSent } from './fakeFilesSent.ts'
+import { createFakeMemoryFolders } from './fakeMemoryFolders.ts'
 import { createFakeSchedules, type FakeSchedulesClient } from './fakeSchedules.ts'
 import { createFakeSession, type FakeAgentsMode, type FakeModMode, type FakeSession } from './fakeSession.ts'
 import {
+  createFakeFiles,
   createFakeFolders,
   createFakeMemory,
   createFakeSearch,
   createFakeSpeak,
+  type FakeFiles,
+  type FakeFilesTree,
   type FakeFolders,
   type FakeFolderTree,
 } from './fakeV2.ts'
-import { PasskeyUnavailableError, passkeyBlock } from './passkeyGate.ts'
-import type { FolderClient, MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
+import { HttpError } from './http.ts'
+import type {
+  AgentsMdClient,
+  BugReportClient,
+  FilesClient,
+  FolderClient,
+  MemoryClient,
+  SearchClient,
+  SpeakClient,
+} from './v2Client.ts'
 
 export type FakeClientOptions = {
   /** Milliseconds before the fake agent answers. 0 = next tick. */
   replyDelayMs?: number
   /** Start with the Mac offline (presence.bridge_online=false). */
   macOffline?: boolean
+  /** Which computer the fake agent runs on (lib/hostWords.ts): a Mac by default; 'none' plays an older bridge. */
+  host?: 'mac' | 'windows' | 'linux' | 'none'
   now?: () => number
   /** CC-C3: the scripted Claude Code session. 'live' (default), 'offline' (mod lapsed) or 'absent' (no mod ever). */
   mod?: FakeModMode
@@ -78,6 +106,10 @@ export type FakeClientOptions = {
   agents?: FakeAgentsMode
   /** The folders the fake Mac lists for the folder picker. Default: a small made-up home (`/Users/alex`). */
   folders?: FakeFolderTree
+  /** The thread folders the fake Mac's Files pane shows. Default: DEMO_FILES. */
+  files?: FakeFilesTree
+  /** AGENTS.md of threads that have one on the fake Mac already. */
+  agentsMd?: FakeAgentsMdSeed
 }
 
 /** Seeds: a config, two threads, one pending high-risk card, one inbox item, one agent message. */
@@ -104,6 +136,8 @@ export function seedState(): ClientState {
       last_seen: '2026-10-28T15:00:00.000Z',
       queue_depth: 0,
       features: [
+        HOST_MAC_FEATURE, // fake mode plays a Mac (lib/hostWords.ts)
+        SETTINGS_LOCK_FEATURE, // the fake bridge reads Lock Talos settings
         'schedules/1',
         'schedules/2',
         'heartbeat/1',
@@ -111,9 +145,15 @@ export function seedState(): ClientState {
         'driving/1',
         'search/1',
         'memory/1',
+        'memory-graph/1',
         'threads/2',
         'speak/1',
         'folders/1',
+        'files/1',
+        'agents-md/1',
+        'files-put/1',
+        'files-sent/1',
+        'memory-roots/1',
         'run/1',
       ],
       features_at: '2026-10-28T15:00:00.000Z',
@@ -127,6 +167,30 @@ export function seedState(): ClientState {
     inbox: [item],
     lastSeq: 1,
   }
+}
+
+/** The made-up thread folder the fake client's Files pane shows (VITE_FAKE=1 and the web tests). Generic made-up files only. */
+export const DEMO_FILES: FakeFilesTree = {
+  root: '/Users/alex/talos-agent',
+  roots: { work: '/Users/alex/Projects/atlas', daily: '/Users/alex/Projects/atlas/daily' },
+  files: {
+    'README.md':
+      '# Atlas\n\nA small made-up project for the demo.\n\n## Run it\n\n```sh\npnpm install\npnpm dev\n```\n\n- Plans live in `docs/`\n- The app is in `apps/web`\n',
+    'CHANGELOG.md': '# Changelog\n\n## 0.3.0\n\n- Stacked panes beside the chat\n- A Files pane\n',
+    'package.json':
+      '{\n  "name": "atlas",\n  "private": true,\n  "scripts": {\n    "dev": "vite",\n    "test": "vitest"\n  }\n}\n',
+    'docs/plan.md': '# Plan\n\n1. Panes\n2. Files\n3. Pages\n',
+    'docs/notes.txt': 'Plain notes.\nSecond line.\n',
+    'apps/web/src/main.ts':
+      "import { start } from './app'\n\nconst root = document.getElementById('root')\nif (root) start(root)\n",
+    'apps/web/src/app.ts': "export function start(el: HTMLElement) {\n  el.textContent = 'Hello'\n}\n",
+    'scripts/build.sh': '#!/bin/sh\nset -e\npnpm build\n',
+    'assets/logo.png': { image: true },
+    'assets/font.woff2': { binary: true },
+    '.env': 'TOKEN=not-shown',
+    '.git/config': '[core]',
+    'node_modules/x/index.js': 'module.exports = 1',
+  },
 }
 
 /** The made-up Mac the fake client lists folders from (VITE_FAKE=1 and the web tests). */
@@ -152,8 +216,13 @@ export type FakeClient = TalosClient & {
   readonly sent: Array<Record<string, unknown>>
   /** Public half of the fake device key, for verifying `sent` in tests. */
   publicJwk(): Promise<JwkP256T>
-  /** The next `patchConfig` rejects with this code (simulate `config_conflict` and friends), then behaves again. */
-  failNextPatchWith(code: ErrorCodeT, message?: string): void
+  /**
+   * The next `patchConfig` rejects with this code (simulate `config_conflict` and friends), then behaves again. `how`: as the
+   * real client refuses a change that never left the phone ('not_sent') or one whose answer the dropped socket lost ('no_answer').
+   */
+  failNextPatchWith(code: ErrorCodeT, message?: string, how?: 'not_sent' | 'no_answer'): void
+  /** This device's link to the relay, as the real client reports it (the Mac's presence is setMacOnline). */
+  setConnection(state: ClientState['connection']): void
   /** The next `sendAppRequest` rejects with this code (a relay `error{ref}`), then behaves again. */
   failNextAppRequestWith(code: ErrorCodeT): void
   /** The Mac's answer to the next `agent.recover` is a failure with this text. */
@@ -166,6 +235,15 @@ export type FakeClient = TalosClient & {
   readonly memory: MemoryClient
   readonly speak: SpeakClient
   readonly folders: FolderClient
+  readonly files: FilesClient
+  readonly agentsMd: AgentsMdClient
+  /** The fake Mac's AGENTS.md files, for tests. */
+  readonly fakeAgentsMd: FakeAgentsMd
+  /** The fake Mac's thread folders for the Files pane: fail the next call, add a file, see the calls. */
+  readonly fakeFiles: FakeFiles
+  /** The bug reporter: answers `context` from a made-up Mac and keeps what `send` was given, for tests to read. */
+  readonly bugs: BugReportClient
+  readonly bugReports: Array<{ report: BugReportBodyT; picture: { type: string; bytes: Uint8Array } }>
   /** The fake Mac's folders: fail the next listing, change a folder's contents. */
   readonly fakeFolders: FakeFolders
   /** CC-C3: scripted Claude Code session (state, inventory, control answers). */
@@ -177,6 +255,11 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
   const now = opts.now ?? Date.now
   const state = seedState()
   if (opts.macOffline) state.presence = { ...state.presence, bridge_online: false }
+  if (opts.host && opts.host !== 'mac') {
+    const other = { windows: HOST_WINDOWS_FEATURE, linux: HOST_LINUX_FEATURE, none: null }[opts.host]
+    const rest = (state.presence.features ?? []).filter((f) => f !== HOST_MAC_FEATURE)
+    state.presence = { ...state.presence, features: other ? [other, ...rest] : rest }
+  }
   const store = createStore<ClientState>(() => state)
   // Like the real client: a send is 'sent' while the socket to the relay is up, whether or not the Mac is online, and
   // 'queued' only when the socket is down.
@@ -190,10 +273,52 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
     { macOnline: () => store.getState().presence.bridge_online },
     opts.folders ?? DEMO_FOLDERS,
   )
-  const stepups = new Map<string, string>()
+  const fakeFiles = createFakeFiles(
+    { macOnline: () => store.getState().presence.bridge_online },
+    opts.files ?? DEMO_FILES,
+  )
+  // the Files sheet's list of files sent in Talos (fakeFilesSent.ts), beside the folder reads
+  fakeFiles.sent = createFakeFilesSent({
+    macOnline: () => store.getState().presence.bridge_online,
+    knownThread: (id) => store.getState().threads.some((t) => t.id === id),
+  }).sent
+  const fakeAgentsMd = createFakeAgentsMd(
+    {
+      macOnline: () => store.getState().presence.bridge_online,
+      ownFolder: (id) => {
+        const t = store.getState().config?.threads.find((x) => x.id === id)
+        return t?.session === 'dedicated' && typeof t.session_opts?.cwd === 'string'
+      },
+    },
+    opts.agentsMd,
+  )
+  const bugReports: Array<{ report: BugReportBodyT; picture: { type: string; bytes: Uint8Array } }> = []
+  const bugs: BugReportClient = {
+    async context() {
+      if (!store.getState().presence.bridge_online) throw new TalosClientError('mac_offline', 'Your Mac is away.')
+      return {
+        bridgeVersion: '0.4.2',
+        claudeCode: '2.1.312',
+        recentErrors: ['web: TypeError: x is not a function', 'relay: Error: socket closed (x2)'],
+        logs: '2026-11-10T04:00:00.000Z info     bridge up\n2026-11-10T04:00:01.000Z warn     relay slow',
+      }
+    },
+    async send(report, picture) {
+      bugReports.push({ report, picture })
+      return { id: newUlid() }
+    },
+    // like the relay: the webhook's host when the fake Mac has an address (the fake relay always has the secret), else nowhere
+    async destination() {
+      return fakeWebhookUrl
+        ? { to: 'webhook', host: shownWebhookHost(new URL(fakeWebhookUrl).hostname) }
+        : { to: 'relay' }
+    },
+  }
   const listeners = new Map<string, Set<(f: never) => void>>()
   let seq = state.lastSeq
-  let failNext: { code: ErrorCodeT; message?: string } | null = null
+  let failNext: { code: ErrorCodeT; message?: string; how?: 'not_sent' | 'no_answer' } | null = null
+  /** The bug webhook address as the fake Mac keeps it; the app is only shown its host (stripDeviceHidden). */
+  let fakeWebhookUrl: string | undefined
   let failNextApp: ErrorCodeT | null = null
   let failNextRecover: string | null = null
 
@@ -219,16 +344,12 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
     return signed
   }
 
-  const consumeStepup = (token: string | undefined, purpose: string) => {
-    if (!token) throw new TalosClientError('stepup_required', `step-up ${purpose} required`)
-    if (stepups.get(token) !== purpose)
-      throw new TalosClientError('stepup_invalid', 'step-up token is invalid for this purpose')
-    stepups.delete(token)
-  }
-
   // ---- HTTP API (in memory) ------------------------------------------------------------------------------------
   type Conn = RouteRes<'connectionGet'>
   const conns = new Map<string, Conn>()
+  /** What each connection holds besides its row (plain settings and secret field names), as the relay keeps them. */
+  const held = new Map<string, Set<string>>()
+  const specFor = async (integration: string) => (await api.catalog()).find((s) => s.id === integration)
   const deliveries = new Map<string, RouteRes<'connectionDeliveries'>>()
   const findConn = (id: string): Conn => {
     const c = conns.get(id)
@@ -244,6 +365,8 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         return [...conns.values()]
       },
       async create(body) {
+        const checked = checkFields(await specFor(body.integration), body.fields ?? {}, true)
+        if (!checked.ok) throw new HttpError(400, checked.error, { error: checked.error })
         const id = newConnectionId()
         const conn: Conn = {
           id,
@@ -256,8 +379,10 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
           last_event_at: null,
           kept_24h: 0,
           received_24h: 0,
+          ...(body.integration === 'slack' ? { identity: checked.extra.identity === 'bot' ? 'bot' : 'owner' } : {}),
         }
         conns.set(id, conn)
+        held.set(id, new Set([...Object.keys(checked.extra), ...Object.keys(checked.secrets)]))
         deliveries.set(id, [])
         return {
           ...conn,
@@ -276,6 +401,7 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
       async delete(id) {
         findConn(id)
         conns.delete(id)
+        held.delete(id)
         deliveries.delete(id)
       },
       async rotate(id) {
@@ -286,8 +412,15 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         findConn(id)
         return { ok: true, detail: 'Fake connection: nothing to test.' }
       },
-      async credentials(id) {
-        findConn(id)
+      async credentials(id, fields) {
+        const c = findConn(id)
+        const spec = await specFor(c.integration)
+        const checked = checkFields(spec, fields, false)
+        if (!checked.ok) return { ok: false, detail: checked.error }
+        const have = new Set([...(held.get(id) ?? []), ...Object.keys(checked.extra), ...Object.keys(checked.secrets)])
+        const missing = missingRequired(spec, have)
+        if (missing) return { ok: false, detail: `${missing} is missing` }
+        held.set(id, have)
         return { ok: true }
       },
       async deliveries(id) {
@@ -337,6 +470,16 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
     async sendOwnerFrame(frame) {
       const signed = await owner(frame)
       if (frame.type === 'session.control') session.handle(signed as Record<string, unknown>)
+      if (frame.type === 'undo.request')
+        // the demo has no folder to put back: it says so, as a Mac with nothing to undo would
+        queueMicrotask(() =>
+          emit('undo.request.result', {
+            control_id: frame.control_id,
+            ok: false,
+            text: 'Nothing to undo: the files already match.',
+            at: iso(),
+          }),
+        )
       if (frame.type === 'agent.recover') {
         const failed = failNextRecover
         failNextRecover = null
@@ -369,6 +512,13 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
     }),
     memory: createFakeMemory({ macOnline: () => store.getState().presence.bridge_online }),
     folders: fakeFolders,
+    files: fakeFiles,
+    fakeFiles,
+    agentsMd: fakeAgentsMd,
+    fakeAgentsMd,
+    memoryFolders: createFakeMemoryFolders({ macOnline: () => store.getState().presence.bridge_online }),
+    bugs,
+    bugReports,
     fakeFolders,
     speak: createFakeSpeak({
       messages: () => store.getState().messages,
@@ -377,8 +527,11 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
     async publicJwk() {
       return (await keyPromise).publicJwk
     },
-    failNextPatchWith(code, message) {
-      failNext = { code, ...(message ? { message } : {}) }
+    failNextPatchWith(code, message, how) {
+      failNext = { code, ...(message ? { message } : {}), ...(how ? { how } : {}) }
+    },
+    setConnection(state) {
+      set(() => ({ connection: state }))
     },
     emit(type, fields) {
       if (type === 'workers.status') lastWorkers = (fields as unknown as { status: unknown }).status
@@ -517,7 +670,6 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
       const binding = bindingFrom(card)
       if (input.payloadHash !== payloadHash(binding))
         throw new TalosClientError('card_hash_mismatch', 'the hash does not match what the card renders')
-      if (card.risk === 'high' && input.action === 'primary') consumeStepup(input.stepupToken, `card:${card.id}`)
       if (input.edited) {
         const check = checkEditAllowed(binding, input.edited)
         if (!check.ok) throw new TalosClientError(check.code, check.reason)
@@ -534,6 +686,7 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         ...(input.editedHash ? { edited_hash: input.editedHash } : {}),
         ...(input.note ? { note: input.note } : {}),
         ...(input.choice !== undefined ? { choice: input.choice } : {}),
+        ...(input.always ? { always: true } : {}),
       })
       const at = iso()
       // Like the real Mac: a killed or revised card is finished at once (nothing runs, so no result follows); only an
@@ -559,12 +712,17 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         ...(next.result ? { result: next.result } : {}),
       })
     },
-    async patchConfig(patch, popts) {
-      const cfg = store.getState().config
-      if (!cfg) throw new TalosClientError('config_conflict')
+    async patchConfig(patch) {
+      const shown = store.getState().config
+      if (!shown) throw new TalosClientError('config_conflict')
+      // the Mac's config: what the app was shown, with the webhook address the relay kept back
+      const { bug_webhook_host: _host, ...rest0 } = shown
+      const cfg: AgentConfigT = fakeWebhookUrl ? { ...rest0, bug_webhook_url: fakeWebhookUrl } : rest0
       if (failNext) {
-        const { code, message } = failNext
+        const { code, message, how } = failNext
         failNext = null
+        if (how === 'not_sent') throw new NotSentError(code, message)
+        if (how === 'no_answer') throw new NoAnswerError(code, message)
         throw new TalosClientError(code, message)
       }
       const check = checkConfigPatch(patch)
@@ -573,11 +731,10 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
           'config_field_forbidden',
           `field ${check.path || '(patch)'} cannot be changed from the app`,
         )
-      // like the relay: trust mode (the synced config) drops these two passkey steps, except turning trust mode ON, which
-      // always asks
-      if (check.touchesWorkEnabled && !trustOn(cfg)) consumeStepup(popts?.stepupToken, 'config:work')
-      if (check.stepupPurpose === 'config:session' && (check.turnsOnTrust || !trustOn(cfg)))
-        consumeStepup(popts?.stepupToken, 'config:session')
+      // like the relay: a webhook address it would never call is refused before it is saved
+      const hook = (patch as { bug_webhook_url?: unknown }).bug_webhook_url
+      if (typeof hook === 'string' && !bugWebhookUrlOk(hook))
+        throw new TalosClientError('config_field_forbidden', BUG_WEBHOOK_URL_RULE)
       // the bridge's per-thread patch semantics and patch-time rules (apps/bridge/src/config-file.ts)
       const effective = Array.isArray(patch.threads)
         ? { ...patch, threads: resolveThreadsPatch(cfg.threads, patch.threads) }
@@ -592,15 +749,20 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
       if (issue) throw new TalosClientError('bad_frame', issue)
       const sessionIssue = dedicatedPatchIssue(cfg, parsed.data)
       if (sessionIssue) throw new TalosClientError('thread_session_refused', sessionIssue)
+      // the fake Mac app always supports sub-threads (workers.json subthreads_supported)
+      const subIssue = subThreadPatchIssue(cfg, parsed.data, { macSupports: true, ownFolder: true })
+      if (subIssue) throw new TalosClientError('bad_frame', subIssue)
       await owner({
         type: 'config.patch',
         base_rev: cfg.rev,
         patch,
-        ...(popts?.stepupToken ? { stepup_token: popts.stepupToken } : {}),
       })
       // like the bridge: trust mode on is `true`, off is no key at all
       const { trust_mode: tm, ...rest } = parsed.data
-      const next: AgentConfigT = tm === true ? { ...rest, trust_mode: true } : rest
+      const saved: AgentConfigT = tm === true ? { ...rest, trust_mode: true } : rest
+      // what the relay keeps from devices it keeps from the fake app too: the webhook address comes back as its host only
+      fakeWebhookUrl = saved.bug_webhook_url
+      const next = stripDeviceHidden(saved)
       set(() => ({ config: next, threads: next.threads }))
     },
     async updateInbox(eventId, patch) {
@@ -650,14 +812,6 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         ...(meta.durationMs ? { duration_ms: meta.durationMs } : {}),
         ...(meta.waveform ? { waveform: meta.waveform } : {}),
       }
-    },
-    async stepup(purpose) {
-      // The fake refuses what the real client refuses: a shell with no passkey cannot step up (WP-I6).
-      const blocked = await passkeyBlock()
-      if (blocked) throw new PasskeyUnavailableError(blocked)
-      const token = `st_fake_${newUlid()}`
-      stepups.set(token, purpose)
-      return token
     },
     async signOwnerFrame(frame) {
       const key = await keyPromise

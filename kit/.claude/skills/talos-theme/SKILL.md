@@ -1,15 +1,17 @@
 ---
 name: talos-theme
-description: Draft a colour theme for the owner's app and propose it. Use only when the owner asks to change how the app looks (colours, corner roundness, fonts). The owner previews it on a card and taps Apply; you never apply it.
+description: Draft a colour theme for the owner's app and propose it. Use only when the owner asks to change how the app looks (colours, corner roundness, fonts). When the owner asked for it, the bridge applies it at once and tells them how to undo it; otherwise they preview it on a card.
 ---
 
 # Draft a theme
 
 Draft the theme in `theme.json` in this folder. It is a draft only: nothing reads it as the applied theme, and writing it
 changes nothing in the app. To show it to the owner, call `config_propose` with path `theme` and the whole object as the
-value, in the thread the owner asked in. The bridge checks it, and the owner sees a preview card (a thread, the composer
-and a card in your colours) with **Apply** and **Keep current**. Nothing changes until they tap Apply, even in trust mode.
-Tell the owner to tap Apply on the card; do not say it is applied until the card says Saved.
+value, in the thread the owner asked in. The bridge checks it. When the owner asked for the change (and has not locked their
+settings), the bridge applies it straight away and posts what changed and how to undo it, including "say 'reset the theme'":
+tell them it is on and that they can ask you to reset it if anything is hard to read (you run `talos-app theme reset`).
+Otherwise the owner sees a preview card (a thread, the composer and a card in your colours) with **Apply** and **Keep
+current**: tell them to tap Apply, and do not say it is applied until the card says Saved.
 
 ## The shape (every key is required, nothing else is allowed)
 

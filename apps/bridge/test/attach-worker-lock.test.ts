@@ -1,12 +1,12 @@
 // A lead's `attach` may send its own files, never one from the Talos home: media/ holds every thread's attachments in one
 // flat folder, so another thread's file would leave through this thread.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { paths } from '../src/config.ts'
 import { MediaStore } from '../src/media.ts'
-import { attach } from '../src/tools/send.ts'
+import { attach, uploadAll } from '../src/tools/send.ts'
 
 const made: string[] = []
 afterEach(() => {
@@ -33,7 +33,7 @@ const call = (s: ReturnType<typeof setup>, path: string, worker: boolean) =>
       media: s.media,
       ...(worker ? { worker: { thread: 'trip' } } : {}),
       mode: 'live',
-      config: { thread: () => ({ id: 'trip' }), threadIds: () => ['trip'] },
+      config: { thread: () => ({ id: 'trip' }), threadIds: () => ['trip'], config: { threads: [] } },
       seen: { take: () => [] },
     } as never,
     { path, thread_id: 'trip' },
@@ -55,6 +55,27 @@ describe('attach from a lead', () => {
     expect((await call(s, link, true)).isError).toBe(true)
     expect(s.puts).toEqual([])
   })
+  test('a link re-pointed after the check is judged again when the file is read, by the same rules', async () => {
+    const s = setup()
+    const link = join(s.base, 'lead', 'later.png')
+    symlinkSync(s.own, link)
+    const sent: string[] = []
+    // the first file is going up: the second name now points at another thread's file
+    const media = new MediaStore(s.p, {
+      putMedia: async (_id: string, bytes: Uint8Array) => {
+        sent.push(new TextDecoder().decode(bytes))
+        unlinkSync(link)
+        symlinkSync(s.other, link)
+      },
+    } as never)
+    const ctx = {
+      media,
+      worker: { thread: 'trip' },
+      config: { thread: () => ({ id: 'trip' }), config: { threads: [] } },
+    } as never
+    await expect(uploadAll(ctx, [s.own, link])).rejects.toThrow(/Talos|protected/i)
+    expect(sent).toEqual(['mine'])
+  })
   test("main's own attach of a media file is unchanged", () => {
     const s = setup()
     expect(() => s.media.checkUploadable(s.other)).not.toThrow()
@@ -74,7 +95,7 @@ describe('attach from a lead: the protected roots in its marker', () => {
     const marker = (v: unknown) =>
       writeFileSync(join(folder, '.talos-lead'), typeof v === 'string' ? v : JSON.stringify(v))
     marker({ thread: 'trip', protect: protectOf(s.base) })
-    const callIn = (path: string, cwd: string | undefined = folder) =>
+    const callIn = (path: string, cwd: string | undefined = folder, parentCwd?: string) =>
       attach.handler(
         {
           media: s.media,
@@ -82,6 +103,13 @@ describe('attach from a lead: the protected roots in its marker', () => {
           mode: 'live',
           config: {
             thread: () => ({ id: 'trip', ...(cwd ? { session_opts: { cwd } } : {}) }),
+            // the thread list parentThread() reads: with a parent folder, `trip` is a sub-thread of a lead called `boss`
+            config: {
+              threads: [
+                { id: 'trip', kind: 'agent', ...(parentCwd ? { parent_id: 'boss' } : {}) },
+                ...(parentCwd ? [{ id: 'boss', kind: 'agent', session_opts: { cwd: parentCwd } }] : []),
+              ],
+            },
             threadIds: () => ['trip'],
           },
           seen: { take: () => [] },
@@ -107,6 +135,55 @@ describe('attach from a lead: the protected roots in its marker', () => {
   test('letter case and the /private spelling of a root make no difference', async () => {
     const l = lead((b) => [join(b, 'AGENT').replace(/^\/private/, '')])
     expect((await l.callIn(l.secret)).isError).toBe(true)
+    expect(l.puts).toEqual([])
+  })
+  test("a marker a sub-thread's lead plants in its own folder cannot shed the parent lead's roots", async () => {
+    const l = lead()
+    const sub = join(l.folder, 'sub')
+    mkdirSync(sub)
+    // the sub-thread's lead can write in its own folder: a marker there that protects nothing of the parent's
+    writeFileSync(join(sub, '.talos-lead'), JSON.stringify({ thread: 'sub', protect: ['/nonexistent'] }))
+    const r = await l.callIn(l.secret, sub)
+    expect(r.isError).toBe(true)
+    expect(JSON.stringify(r)).toMatch(/protected|lead/i)
+    expect(l.puts).toEqual([])
+  })
+
+  test("a sub-thread with its own folder outside the lead's is held to the parent lead's marker too", async () => {
+    const l = lead()
+    const own = join(l.base, 'other')
+    mkdirSync(own)
+    // no marker at or above `other`, so before it was free to send the lead's protected file
+    const r = await l.callIn(l.secret, own, l.folder)
+    expect(r.isError).toBe(true)
+    expect(JSON.stringify(r)).toMatch(/protected|lead/i)
+    expect(l.puts).toEqual([])
+    // the same sub-thread under a parent with no marker gets nothing extra
+    const plain = join(l.base, 'plain')
+    mkdirSync(plain)
+    expect(JSON.stringify(await l.callIn(l.secret, own, plain))).not.toMatch(/protected|marker/i)
+    // a parent marker that cannot be read refuses everything, as for the lead itself
+    writeFileSync(join(l.folder, '.talos-lead'), '{not json')
+    expect((await l.callIn(l.secret, own, l.folder)).isError).toBe(true)
+  })
+
+  test('a planted marker that cannot be understood refuses everything, never opens a way out', async () => {
+    const l = lead()
+    const sub = join(l.folder, 'sub')
+    mkdirSync(sub)
+    writeFileSync(join(sub, '.talos-lead'), '{not json')
+    const r = await l.callIn(l.secret, sub)
+    expect(r.isError).toBe(true)
+    expect(l.puts).toEqual([])
+  })
+
+  test("a sub-thread whose folder is inside the lead's folder is held to the lead's marker", async () => {
+    const l = lead()
+    const sub = join(l.folder, 'sub')
+    mkdirSync(sub)
+    const r = await l.callIn(l.secret, sub)
+    expect(r.isError).toBe(true)
+    expect(JSON.stringify(r)).toMatch(/protected|lead/i)
     expect(l.puts).toEqual([])
   })
   test("a file in the lead's own folder is allowed", () => {

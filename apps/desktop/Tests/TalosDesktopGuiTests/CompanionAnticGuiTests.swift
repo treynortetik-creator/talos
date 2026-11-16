@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 
 @testable import TalosDesktop
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 /// The idle antics through the real sprite view and the real bundled art: no window, no screen, no sound. Each clip is handed to
 /// the view the way the controller hands it (an output with an animation), the keyframes the view builds are read back, and every
@@ -289,7 +290,7 @@ struct CompanionAnticGuiTests {
   /// pool (the env hook), the owner at the keyboard. A sit lasts 7.02 s and the old nap 15.62 s: this test was weaker on the sit.
   /// The caller removes the copy at `dir`.
   func longAnticFixture() throws -> (fx: CompanionFixture, dir: String) {
-    let dir = NSTemporaryDirectory() + "companion-long-antic-\(UUID().uuidString)"
+    let dir = TestTemp.base + "companion-long-antic-\(UUID().uuidString)"
     try FileManager.default.copyItem(atPath: companionFixtures, toPath: dir)
     let url = URL(fileURLWithPath: dir + "/companion.json")
     var json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
@@ -323,7 +324,7 @@ struct CompanionAnticGuiTests {
 
   @Test func aRejectedNapClipIsNamedInSettingsNotSilentlyTheStatue() throws {
     _ = NSApplication.shared
-    let dir = NSTemporaryDirectory() + "companion-rejected-\(UUID().uuidString)"
+    let dir = TestTemp.base + "companion-rejected-\(UUID().uuidString)"
     try FileManager.default.copyItem(atPath: Self.art.path, toPath: dir)
     defer { try? FileManager.default.removeItem(atPath: dir) }
     let url = URL(fileURLWithPath: dir + "/companion.json")

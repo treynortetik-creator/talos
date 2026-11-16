@@ -18,11 +18,11 @@ import json, math, os, subprocess, sys
 from multiprocessing import Pool
 import numpy as np
 from PIL import Image
+import label_font
 
 ANIM_WEBP_PX = 192          # the animated WebP is the fallback (Safari without HEVC, img tags): smaller to keep it light
 CREAM = np.array([0xF3, 0xE6, 0xCF], np.float32)
 TERRA = '#D9692B'
-FONT = '/System/Library/Fonts/Supplemental/Arial.ttf'
 
 
 def load(p):
@@ -275,7 +275,7 @@ def cmd_preview(fdir, odir, proof, meta_p=None, repeat=3):
 def cmd_contact(fdir, out, cols=6, size=300, clips=None):
     """one row per clip: `cols` evenly spaced frames, labelled"""
     from PIL import ImageDraw, ImageFont
-    font = ImageFont.truetype(FONT, 22); small = ImageFont.truetype(FONT, 16)
+    font = label_font.font(22); small = label_font.font(16)
     names = clips or sorted(d for d in os.listdir(fdir) if os.path.isdir(os.path.join(fdir, d)))
     W = 180 + cols * size; H = len(names) * (size + 10) + 10
     sheet = Image.new('RGB', (W, H), '#2a211c')

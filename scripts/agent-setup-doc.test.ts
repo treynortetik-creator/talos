@@ -138,9 +138,16 @@ describe('every ./install.sh in SETUP.md runs: --dry-run exits 0 under a tempora
   const bin = join(box, 'bin')
   mkdirSync(home)
   mkdirSync(bin)
-  // Stubs for what a CI box may lack (the real claude, the Mac toolchain); real node, pnpm, bun, git and python3 stay on PATH.
-  for (const t of ['claude', 'swift', 'xcode-select']) {
-    writeFileSync(join(bin, t), '#!/bin/sh\nexit 0\n')
+  // Stubs for what a CI box may lack (the real claude, the Mac toolchain, tmux); real node, pnpm, bun, git and python3 stay on
+  // PATH. The installer's pre-flight asks each its version, so each answers with one new enough (and nothing else).
+  const stubs: Record<string, string> = {
+    claude: 'case "$1" in --version) echo "2.1.330 (Claude Code)" ;; esac',
+    swift: 'case "$1" in --version) echo "Apple Swift version 6.2.1 (swiftlang-6.2.1)" ;; esac',
+    'xcode-select': 'case "$1" in -p) echo /Library/Developer/CommandLineTools ;; esac',
+    tmux: 'case "$1" in -V) echo "tmux 3.5a" ;; esac',
+  }
+  for (const [t, body] of Object.entries(stubs)) {
+    writeFileSync(join(bin, t), `#!/bin/sh\n${body}\nexit 0\n`)
     chmodSync(join(bin, t), 0o755)
   }
 
@@ -160,7 +167,10 @@ describe('every ./install.sh in SETUP.md runs: --dry-run exits 0 under a tempora
         env: {
           PATH: `${bin}:${process.env.PATH}`,
           HOME: home,
+          // SETUP.md is written for an Apple Silicon Mac: the MLX voice options refuse any other CPU
           TALOS_INSTALL_OS: 'Darwin',
+          TALOS_INSTALL_MEMSEARCH_DEFAULT: 'off', // a new agent's search downloads a venv and a model: not in tests
+          TALOS_FORCE_ARCH: 'arm64',
           GIT_CONFIG_GLOBAL: '/dev/null',
         },
       })

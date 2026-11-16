@@ -25,6 +25,9 @@ export type BridgeEnv = {
   chronosConfig: string | undefined
   /** Every adapter call is killed after this long (S2.4). */
   schedulerTimeoutMs: number
+  /** How often the live bridge's schedule runner and refresh loops look (S3.2): never slower than the defaults, never under 5 s. */
+  scheduleRunnerMs: number
+  scheduleRefreshMs: number
   /** TEST BUILDS ONLY: passed to Chronos as CHRONOS_NOW. A production environment that sees it refuses to start. */
   chronosNow: string | undefined
   /** Directories searched for `chronos` (step 3 of discovery); from PATH. */
@@ -118,6 +121,23 @@ function historyDays(value: string | undefined): number {
   return Number.isInteger(n) && n >= 0 && n <= 36_500 ? n : 90
 }
 
+/**
+ * A kill switch (flags.json, scripts/flags.test.ts): on only when its value is exactly `1`; unset, empty or anything else is
+ * off, which is today's behaviour. The first source with a non-empty value decides, so a caller states its precedence by the
+ * order (`[merged]` after loadEnv's merge; `[file, process]` where bridge.env must win); `fallback` only when none has one.
+ */
+export function flag(
+  name: string,
+  sources: Array<Record<string, string | undefined> | undefined>,
+  fallback = false,
+): boolean {
+  for (const s of sources) {
+    const v = s?.[name]
+    if (v !== undefined && v !== '') return v === '1'
+  }
+  return fallback
+}
+
 export function loadEnv(processEnv: Record<string, string | undefined> = process.env): BridgeEnv {
   const home = processEnv.TALOS_APP_HOME || defaultHome()
   const merged: Record<string, string | undefined> = { ...readEnvFile(join(home, 'bridge.env')) }
@@ -126,7 +146,7 @@ export function loadEnv(processEnv: Record<string, string | undefined> = process
   return {
     home,
     relayUrl: merged.TALOS_APP_RELAY_URL?.replace(/\/+$/, ''),
-    live: merged.TALOS_APP_BRIDGE === '1',
+    live: flag('TALOS_APP_BRIDGE', [merged]),
     sttCmd,
     sttLongCmd: parseArgv(merged.TALOS_APP_STT_LONG_CMD) ?? sttCmd,
     sttLongAfterS: num(merged.TALOS_APP_STT_LONG_AFTER_S, 30),
@@ -148,6 +168,9 @@ export function loadEnv(processEnv: Record<string, string | undefined> = process
       (merged.TALOS_APP_CHRONOS_AUTODISCOVER ?? process.env.TALOS_APP_CHRONOS_AUTODISCOVER) !== 'off',
     chronosConfig: merged.TALOS_APP_CHRONOS_CONFIG || undefined,
     schedulerTimeoutMs: Math.round(num(merged.TALOS_APP_SCHEDULER_TIMEOUT_S, 15) * 1000),
+    // The browser suite's real bridge runs these faster, so a job that comes due is offered within seconds, not a minute later
+    scheduleRunnerMs: Math.round(Math.min(60, Math.max(5, num(merged.TALOS_APP_SCHEDULE_RUNNER_S, 60))) * 1000),
+    scheduleRefreshMs: Math.round(Math.min(30, Math.max(5, num(merged.TALOS_APP_SCHEDULE_REFRESH_S, 30))) * 1000),
     chronosNow: merged.TALOS_APP_CHRONOS_NOW || undefined,
     pathDirs: (merged.PATH ?? '').split(':').filter(Boolean),
     userHome: merged.HOME || homedir(),
@@ -165,7 +188,7 @@ export function loadEnv(processEnv: Record<string, string | undefined> = process
     workerNonce: processEnv.TALOS_APP_WORKER_NONCE || undefined,
     alertNtfyUrl: merged.TALOS_APP_ALERT_NTFY_URL?.trim() || undefined,
     explainer: merged.TALOS_EXPLAINER?.trim() || undefined,
-    apps: merged.TALOS_APP_APPS === '1',
+    apps: flag('TALOS_APP_APPS', [merged]),
   }
 }
 
@@ -188,13 +211,24 @@ export function paths(home: string, inboxRoot: string = join(homedir(), '.talos-
     envFile: join(home, 'bridge.env'),
     /** The Talos mod's shared secret (docs/CLAUDE-CODE.md C2.3): 0600, rewritten by the live bridge, read by the mod. */
     modKey: join(home, 'mod.key'),
-    /** Option C: the live bridge's local socket for worker sessions (docs/OPTION-C.md). */
-    hubSock: join(home, 'hub.sock'),
+    /**
+     * Option C: the live bridge's local socket for worker sessions (docs/OPTION-C.md), in its own 0700 folder. Not in home
+     * itself: on Linux, Bun cannot fs.watch a folder that holds a unix socket (ENXIO, and the watch ends), and the bridge
+     * watches home for config edits; with the socket there every edit waited for the 10 s poll (found on Titan, WSL).
+     */
+    hubDir: join(home, 'run'),
+    hubSock: join(home, 'run', 'hub.sock'),
+    /** Where it was before: a client falls back to it for one release, so a bridge not yet restarted is still reached. */
+    hubSockLegacy: join(home, 'hub.sock'),
     log: join(home, 'bridge.log'),
     /** The live bridge's content-free health file (DESKTOP-SPEC 6.2): read by the Mac menu bar and `talos-app status`. */
     status: join(home, 'status.json'),
+    /** The relay's last `ready.features`, so a restart's first hello is the one it takes (relay-features-memo.ts). */
+    relayFeatures: join(home, 'relay-features.json'),
     /** The versions the live bridge started cleanly from, newest first; `talos-app rollback` reads it. */
     goodStarts: join(home, 'good-starts.json'),
+    /** Undo points' copies of folders that are not git (undo/snapshot.ts). */
+    undo: join(home, 'undo'),
   }
 }
 export type BridgePaths = ReturnType<typeof paths>

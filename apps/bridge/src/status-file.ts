@@ -4,7 +4,7 @@
 //
 // Only the LIVE bridge writes it. A worker or a headless process (`talos-app post`, `codex run`) never constructs a
 // StatusWriter, so it cannot overwrite the live file. A bridge that was superseded (4409) writes one last `superseded`
-// snapshot and stops, and even that write is skipped when a newer, living bridge has already written its own file.
+// snapshot and pauses until it rejoins, and even that write is skipped when a newer, living bridge has already written its own file.
 import { existsSync } from 'node:fs'
 import type { Clock } from './clock.ts'
 import { readJsonFile, writeJsonAtomic } from './fsutil.ts'
@@ -20,6 +20,8 @@ export type BridgeStatusFile = {
   mode: StatusMode
   relay: { connected: boolean; last_connect_at: string | null; last_close_code: number | null }
   queue_depth: number
+  /** The oldest owner message this session was told about and has not touched yet (ISO), null for none (packages/protocol supervisor.ts, MAIN_START). */
+  unseen_oldest_at: string | null
   /** What the owner saved. */
   permission_relay: boolean
   /** What this session told Claude Code at start. Differs from `permission_relay` after a switch: on needs a restart. */
@@ -29,8 +31,20 @@ export type BridgeStatusFile = {
   /** The session this bridge runs under carries CLAUDE_CODE_CHILD_SESSION, so Claude Code is not saving its transcript. */
   /** true: the session carries the marker. 'unknown': this Mac does not show process environments, so it could not be checked. */
   claude_session_marker_inherited: boolean | 'unknown'
+  /**
+   * The usage governor now (router/governor.ts): what the Linux supervisor's restart-on-update queue holds on (it restarts
+   * only while this is `ok` or `off` in a live, fresh file). Null from a bridge that predates it, or one that could not read it.
+   */
+  governor: GovernorStateT | null
+  /**
+   * When the owner's newest message arrived (its own `ts`, ISO), null for none yet. Only that it changed is ever read: the Mac
+   * app's updater postpones a pending update when the owner writes during its 2-minute notice. Never the message, its thread or id.
+   */
+  last_owner_at: string | null
   updated_at: string
 }
+export const GOVERNOR_STATES = ['ok', 'paused', 'park_all', 'off', 'unknown'] as const
+export type GovernorStateT = (typeof GOVERNOR_STATES)[number]
 
 /** The keys a reader may rely on (a test pins them). Nothing else is ever written. */
 export const STATUS_KEYS = [
@@ -41,10 +55,13 @@ export const STATUS_KEYS = [
   'mode',
   'relay',
   'queue_depth',
+  'unseen_oldest_at',
   'permission_relay',
   'permission_relay_declared',
   'bridge_commit',
   'claude_session_marker_inherited',
+  'governor',
+  'last_owner_at',
   'updated_at',
 ] as const
 export const STATUS_RELAY_KEYS = ['connected', 'last_connect_at', 'last_close_code'] as const
@@ -55,8 +72,8 @@ export const STATUS_FRESH_MS = 45_000
 
 export type StatusSnapshot = Pick<
   BridgeStatusFile,
-  'mode' | 'relay' | 'queue_depth' | 'permission_relay' | 'permission_relay_declared'
->
+  'mode' | 'relay' | 'queue_depth' | 'unseen_oldest_at' | 'permission_relay' | 'permission_relay_declared'
+> & { governor?: GovernorStateT | null; last_owner_at?: string | null }
 
 const defaultAlive = (pid: number) => {
   try {
@@ -88,6 +105,11 @@ export function parseStatusFile(raw: unknown): BridgeStatusFile | undefined {
       last_close_code: typeof relay.last_close_code === 'number' ? relay.last_close_code : null,
     },
     queue_depth: typeof o.queue_depth === 'number' ? o.queue_depth : 0,
+    // an older bridge never wrote it: null, which a reader takes as "nothing known", never as a stalled session
+    unseen_oldest_at:
+      typeof o.unseen_oldest_at === 'string' && !Number.isNaN(Date.parse(o.unseen_oldest_at))
+        ? o.unseen_oldest_at
+        : null,
     permission_relay: o.permission_relay === true,
     // an older bridge never wrote it: it declared whatever it had configured
     permission_relay_declared:
@@ -100,6 +122,11 @@ export function parseStatusFile(raw: unknown): BridgeStatusFile | undefined {
         : o.claude_session_marker_inherited === false || o.claude_session_marker_inherited === undefined
           ? false
           : 'unknown',
+    // an older bridge never wrote it (and a value this build does not know is not trusted): null, which the queue holds on
+    governor: (GOVERNOR_STATES as readonly unknown[]).includes(o.governor) ? (o.governor as GovernorStateT) : null,
+    // an older bridge never wrote it: null, "nothing known"
+    last_owner_at:
+      typeof o.last_owner_at === 'string' && !Number.isNaN(Date.parse(o.last_owner_at)) ? o.last_owner_at : null,
     updated_at: o.updated_at,
   }
 }
@@ -176,12 +203,19 @@ export class StatusWriter {
     this.write(false)
   }
 
-  /** The bridge lost its live role (4409): one last `superseded` snapshot, then never again. */
+  /** The bridge lost its live role (4409): one last `superseded` snapshot, then no writes until `resume`. */
   supersede() {
     if (this.done) return
     this.stopTimer()
     this.done = true
     this.writeNow('superseded')
+  }
+
+  /** The bridge took its place again after `supersede`: writes and the heartbeat start over. */
+  resume() {
+    if (!this.done) return
+    this.done = false
+    this.start()
   }
 
   stop() {
@@ -230,10 +264,13 @@ export class StatusWriter {
         mode,
         relay: body.relay,
         queue_depth: body.queue_depth,
+        unseen_oldest_at: body.unseen_oldest_at,
         permission_relay: body.permission_relay,
         permission_relay_declared: body.permission_relay_declared,
         bridge_commit: this.o.commit ?? null,
         claude_session_marker_inherited: this.o.sessionMarkerInherited ?? false,
+        governor: body.governor ?? null,
+        last_owner_at: body.last_owner_at ?? null,
         updated_at: new Date(this.o.clock.now()).toISOString(),
       }
       writeJsonAtomic(this.o.path, file, 0o600)

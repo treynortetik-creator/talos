@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 // The top menu, Help, sign-in help, the Blocked text, the Settings text boxes and the Quit & Reopen helper
 // (fix/mac-settings-menu, from the owner's first real Mac run, 2026-11-01).
@@ -205,7 +206,7 @@ struct ReopenNoteTests {
 struct RelaunchWatchdogTests {
   /// A fake `open` that writes the app path it was given into a marker file.
   func rig() throws -> (dir: URL, opener: String, marker: URL) {
-    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("relaunch-\(UUID().uuidString)")
+    let dir = TestTemp.url.appendingPathComponent("relaunch-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let marker = dir.appendingPathComponent("opened")
     let opener = dir.appendingPathComponent("fake-open.sh")

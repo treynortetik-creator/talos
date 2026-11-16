@@ -1,7 +1,8 @@
 // Durable outbox to the bridge, supersede and session-stopped alarms, push rules, derived queued status (fake clock).
-import { newId } from '@talos-app/protocol'
+import { newId, newUlid, signChallenge } from '@talos-app/protocol'
 import { type FakeBridge, fakeClock, sleep, waitFor } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_AGENT_CONFIG } from '../../src/core/default-config.ts'
 import { startTestRelay, type TestRelay } from './harness.ts'
 import { advance, kit, newConn, silentBridge, sub } from './helpers.ts'
 
@@ -121,6 +122,184 @@ describe('alarms', () => {
     await waitFor(() => first.closeCode !== null, WAIT_MS, 'first bridge closed')
     expect(first.closeCode).toBe(4409)
     expect(second.connected).toBe(true)
+  })
+
+  /** A bridge socket from `ip` that signs in, driven through the hub so the address can be chosen. */
+  async function bridgeFrom(r: TestRelay, c: ReturnType<typeof clock>, ip: string, standby = false) {
+    const sent: Array<Record<string, unknown>> = []
+    const closes: number[] = []
+    const conn = {
+      send: (text: string) => void sent.push(JSON.parse(text)),
+      close: (code: number) => void closes.push(code),
+      terminate: () => void closes.push(-1),
+    }
+    const sock = r.runtime.hub.attachBridge(conn, { ip, relayHost: 'relay.example.com' })
+    sock.onMessage(
+      JSON.stringify({
+        v: 1,
+        type: 'hello',
+        id: newUlid(),
+        ts: new Date(c.now()).toISOString(),
+        role: 'bridge',
+        key_id: r.bridgeKey.keyId,
+        sig: await signChallenge(r.bridgeKey.privateKey, sent[0] as never),
+        client: { name: 'bridge', version: '1', ...(standby ? { features: [] } : {}) },
+        agent_config_rev: 0,
+        ...(standby ? { standby: true } : {}),
+      }),
+    )
+    // a standby is turned away while another bridge holds the slot, and signs in when it finds the slot empty
+    if (standby)
+      await waitFor(
+        () => closes.includes(4409) || sent.some((f) => f.type === 'ready'),
+        WAIT_MS,
+        `the standby from ${ip} answered`,
+      )
+    else await waitFor(() => sent.some((f) => f.type === 'ready'), WAIT_MS, `the bridge from ${ip} signed in`)
+    return { closes, sock }
+  }
+  /** The owner's bridge sends its config, as a real one does after it signs in. */
+  async function syncConfig(
+    r: TestRelay,
+    c: ReturnType<typeof clock>,
+    sock: { onMessage: (t: string) => void },
+    patch: Partial<typeof DEFAULT_AGENT_CONFIG>,
+  ) {
+    sock.onMessage(
+      JSON.stringify({
+        v: 1,
+        type: 'config.sync',
+        id: newUlid(),
+        ts: new Date(c.now()).toISOString(),
+        config: { ...DEFAULT_AGENT_CONFIG, ...patch, rev: 2 },
+        rev: 2,
+      }),
+    )
+    await waitFor(() => r.runtime.hub.agentConfig()?.rev === 2, WAIT_MS, 'the config synced')
+  }
+  const takeovers = (r: TestRelay) =>
+    r.transport.sent.filter((s) => s.payload.notification.body.startsWith('Another Mac took over your Talos bridge'))
+
+  it('a replaced bridge that is still alive on another address pushes the owner at once, with the time in their zone', async () => {
+    const c = fakeClock('2026-11-10T21:07:30.000Z')
+    relay = await startTestRelay({ clock: c })
+    relay.runtime.store.putSub(sub())
+    const mine = await bridgeFrom(relay, c, '198.51.100.5')
+    await syncConfig(relay, c, mine.sock, { timezone: 'Asia/Tokyo' })
+    await bridgeFrom(relay, c, '203.0.113.9')
+    expect(mine.closes).toContain(4409)
+    await sleep(50)
+    expect(takeovers(relay)).toHaveLength(0) // a replace alone proves nothing
+    c.advance(60_000) // the time is the replace's, not the standby's
+    await bridgeFrom(relay, c, '198.51.100.5', true) // the owner's Mac, still running, asks to come back
+    await waitFor(() => takeovers(relay as TestRelay).length === 1, WAIT_MS, 'the takeover push')
+    expect(takeovers(relay)[0]?.payload.notification.body).toBe('Another Mac took over your Talos bridge at 06:07')
+  })
+
+  it('a Mac that redials over its own dead socket from a new address is not a takeover', async () => {
+    const c = clock()
+    relay = await startTestRelay({ clock: c })
+    relay.runtime.store.putSub(sub())
+    await bridgeFrom(relay, c, '198.51.100.5') // its socket died silently; the relay has not noticed yet
+    await bridgeFrom(relay, c, '203.0.113.9') // the same Mac after a VPN or Wi-Fi change; no standby follows
+    await sleep(50)
+    expect(takeovers(relay)).toHaveLength(0)
+  })
+
+  it('a bridge that takes the slot and leaves before the owner asks back is still reported', async () => {
+    const c = clock()
+    relay = await startTestRelay({ clock: c })
+    relay.runtime.store.putSub(sub())
+    await bridgeFrom(relay, c, '198.51.100.5')
+    const thief = await bridgeFrom(relay, c, '203.0.113.9') // takes ready and the backlog
+    thief.sock.onClose()
+    await bridgeFrom(relay, c, '198.51.100.5', true) // finds the slot empty and signs in again
+    await waitFor(() => takeovers(relay as TestRelay).length === 1, WAIT_MS, 'the takeover push')
+  })
+
+  it('a standby long after the last replace is not a takeover', async () => {
+    const c = clock()
+    relay = await startTestRelay({ clock: c })
+    relay.runtime.store.putSub(sub())
+    await bridgeFrom(relay, c, '198.51.100.5')
+    const other = await bridgeFrom(relay, c, '203.0.113.9')
+    other.sock.onClose()
+    c.advance(11 * 60_000)
+    await bridgeFrom(relay, c, '198.51.100.5', true)
+    await sleep(50)
+    expect(takeovers(relay)).toHaveLength(0)
+  })
+
+  it('a standby from the same address is not a takeover', async () => {
+    const c = clock()
+    relay = await startTestRelay({ clock: c })
+    relay.runtime.store.putSub(sub())
+    await bridgeFrom(relay, c, '198.51.100.5')
+    await bridgeFrom(relay, c, '198.51.100.5')
+    await bridgeFrom(relay, c, '198.51.100.5', true)
+    await sleep(50)
+    expect(takeovers(relay)).toHaveLength(0)
+  })
+
+  it('a takeover before any config arrives says no time rather than a wrong one', async () => {
+    const c = clock()
+    relay = await startTestRelay({ clock: c })
+    relay.runtime.store.putSub(sub())
+    await bridgeFrom(relay, c, '198.51.100.5')
+    await bridgeFrom(relay, c, '203.0.113.9')
+    await bridgeFrom(relay, c, '198.51.100.5', true)
+    await waitFor(() => takeovers(relay as TestRelay).length === 1, WAIT_MS, 'the takeover push')
+    expect(takeovers(relay)[0]?.payload.notification.body).toBe('Another Mac took over your Talos bridge')
+  })
+
+  it('a time zone that cannot be read gives no time', async () => {
+    const c = clock()
+    relay = await startTestRelay({ clock: c })
+    relay.runtime.store.putSub(sub())
+    await bridgeFrom(relay, c, '198.51.100.5')
+    const hub = relay.runtime.hub as unknown as { agentConfig: () => unknown }
+    const real = hub.agentConfig.bind(hub)
+    hub.agentConfig = () => ({ ...(real() as object), ...DEFAULT_AGENT_CONFIG, timezone: 'Not/AZone' })
+    await bridgeFrom(relay, c, '203.0.113.9')
+    await bridgeFrom(relay, c, '198.51.100.5', true)
+    await waitFor(() => takeovers(relay as TestRelay).length === 1, WAIT_MS, 'the takeover push')
+    expect(takeovers(relay)[0]?.payload.notification.body).toBe('Another Mac took over your Talos bridge')
+  })
+
+  it('takeover pushes come at most once in 10 minutes', async () => {
+    const c = clock()
+    relay = await startTestRelay({ clock: c })
+    relay.runtime.store.putSub(sub())
+    await bridgeFrom(relay, c, '198.51.100.5')
+    await bridgeFrom(relay, c, '203.0.113.9')
+    await bridgeFrom(relay, c, '198.51.100.5', true)
+    await waitFor(() => takeovers(relay as TestRelay).length === 1, WAIT_MS, 'the first takeover push')
+    // the same takeover asks again every minute: told once
+    c.advance(60_000)
+    await bridgeFrom(relay, c, '198.51.100.5', true)
+    // a second takeover 5 minutes in: still within the 10
+    c.advance(4 * 60_000)
+    await bridgeFrom(relay, c, '203.0.113.9')
+    await bridgeFrom(relay, c, '198.51.100.5', true)
+    await sleep(50)
+    expect(takeovers(relay)).toHaveLength(1)
+    // another one after 10 minutes is told
+    c.advance(6 * 60_000)
+    await bridgeFrom(relay, c, '203.0.113.9')
+    await bridgeFrom(relay, c, '198.51.100.5', true)
+    await waitFor(() => takeovers(relay as TestRelay).length === 2, WAIT_MS, 'the takeover push after 10 minutes')
+  })
+
+  it('a takeover push is heard even with notifications switched off', async () => {
+    const c = clock()
+    relay = await startTestRelay({ clock: c })
+    relay.runtime.store.putSub(sub())
+    const owner = await bridgeFrom(relay, c, '198.51.100.5')
+    await syncConfig(relay, c, owner.sock, { notifications: { master: false, show_thread_names: 'fixed_only' } })
+    expect(relay.runtime.hub.agentConfig()?.notifications.master).toBe(false)
+    await bridgeFrom(relay, c, '203.0.113.9')
+    await bridgeFrom(relay, c, '198.51.100.5', true)
+    await waitFor(() => takeovers(relay as TestRelay).length === 1, WAIT_MS, 'the takeover push')
   })
 
   it('supersedes three times in an hour raise one push intent', async () => {

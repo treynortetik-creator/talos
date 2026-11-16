@@ -21,6 +21,8 @@
     "test:browser": "pnpm --filter @talos-app/protocol test:browser",
     "test:e2e": "pnpm -r --workspace-concurrency=1 --if-present test:e2e",
     "drive": "node e2e/drive.ts",
+    "test:sandbox": "TALOS_SANDBOX_E2E=1 vitest run --project scripts scripts/sandbox.test.ts",
+    "sandbox": "node --experimental-transform-types --disable-warning=ExperimentalWarning e2e/sandbox.ts",
     "check:personal": "bash scripts/check-no-personal.sh",
     "notices:check": "node scripts/third-party-web.ts --check",
     "capture:schedules": "bun run apps/bridge/scripts/capture-schedules.ts",

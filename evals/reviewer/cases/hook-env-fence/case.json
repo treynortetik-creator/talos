@@ -1,0 +1,22 @@
+{
+  "id": "hook-env-fence",
+  "title": "The thread session's permission hook ran in its inherited environment, under a python a thread could pick",
+  "base": "de4f7b3c8320916b104238dc46c7d0abfff260e1",
+  "buggy": "2a3799608e606098d9c91e80ff68fd70dc355ed2",
+  "fix": "f37e129a310282203d422670632da4aee2e4fc78",
+  "expect": [
+    {
+      "file": [
+        "apps/desktop/Sources/TalosDesktopCore/WorkerHook.swift",
+        "apps/desktop/Sources/TalosDesktopCore/WorkerSpec.swift",
+        "apps/desktop/Sources/TalosDesktopCore/WorkerHookSource.swift"
+      ],
+      "severity": "high",
+      "must": [
+        ["environment", "\\benv\\b", "inherit", "DEVELOPER_DIR", "PYTHONPATH|PYTHON[A-Z]*", "PATH"],
+        ["hook", "python", "interpreter"]
+      ],
+      "note": "The hook command runs with the session's inherited environment, so a thread can steer which python runs it or what it loads (/usr/bin/python3 is Apple's xcrun launcher, which runs whatever DEVELOPER_DIR names)."
+    }
+  ]
+}

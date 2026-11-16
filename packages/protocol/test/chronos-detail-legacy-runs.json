@@ -18,7 +18,7 @@
     "model": null,
     "notify": "failure",
     "triggers_count": 0,
-    "next_run": "2026-11-03T07:35:00-07:00",
+    "next_run": "2026-11-03T07:35:00-05:00",
     "today": "pending",
     "ds": "2026-11-03",
     "window_ends": null,
@@ -39,7 +39,7 @@
   "prompt": "Do the example job.",
   "prompt_truncated": false,
   "guard": null,
-  "next_runs": ["2026-11-03T07:35:00-07:00", "2026-11-04T07:35:00-07:00", "2026-11-05T07:35:00-07:00"],
+  "next_runs": ["2026-11-03T07:35:00-05:00", "2026-11-04T07:35:00-05:00", "2026-11-05T07:35:00-05:00"],
   "runs": [
     {
       "run_id": null,

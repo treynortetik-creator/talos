@@ -14,6 +14,7 @@ import {
 } from '@talos-app/protocol'
 import { errorFrame, scheduleAckFrame, scheduleDetailFrame, schedulesSnapshotFrame } from '../frames-out.ts'
 import { runNowProblem, TEST_REQUIRED_FIELD } from '../heartbeat/tested.ts'
+import { say } from '../owner-words.ts'
 import type { ClosedAdapter } from './closed-adapter.ts'
 import { type Discovered, localZone } from './discovery.ts'
 import { proposerKey } from './kv-prune.ts'
@@ -26,7 +27,15 @@ export function handleOwnerFrame(this: ScheduleService, f: Frame): Promise<void>
   // Chronos call. Its sources run on the tester's own runner.
   if (f.type === 'heartbeat.test') {
     if (this.stale(f)) this.err('stale', 'That request is too old. Try again.', f.id)
-    else if (this.stopped) this.err('scheduler_unavailable', 'This Mac is not running schedules right now.', f.id)
+    else if (this.stopped)
+      this.err(
+        'scheduler_unavailable',
+        say({
+          mac: 'This Mac is not running schedules right now.',
+          linux: 'This computer is not running schedules right now.',
+        }),
+        f.id,
+      )
     else this.tester.handle(f)
     return Promise.resolve()
   }
@@ -128,7 +137,12 @@ export function withRuns(this: ScheduleService, detail: ScheduleDetailT): Schedu
 export function readOnly(this: ScheduleService, d: Discovered, snap: ScheduleSnapshotT | null): string | null {
   if (d.state !== 'ready') return (d.adapter as ClosedAdapter).agentText()
   if (!this.managed(snap))
-    return 'Talos does not manage this scheduler yet. At the Mac run `talos-app schedules adopt`, then restart your session.'
+    return say({
+      mac: 'Talos does not manage this scheduler yet. At the Mac run `talos-app schedules adopt`, then restart your session.',
+      linux:
+        'Talos does not manage this scheduler yet. On this computer run `talos-app schedules adopt`, then restart your session.',
+      windows: "Talos does not manage this scheduler yet, and it can't take it over on a Windows PC yet.",
+    })
   return null
 }
 

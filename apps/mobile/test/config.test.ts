@@ -88,6 +88,14 @@ describe('capacitor config', () => {
     expect(plugin).toMatch(/notifyOthersOnDeactivation/)
   })
 
+  it('the snapshot plugin (Report a bug) is gated like every other and registered', () => {
+    const plugin = readFileSync(new URL('ios/App/App/Plugins/TalosSnapshot.swift', ROOT), 'utf8')
+    expect(plugin).toMatch(/guard TalosPluginGate\.allows\(bridge\) else \{ return call\.reject\(/)
+    expect(plugin).toMatch(/jsName = "TalosSnapshot"/)
+    const vc = readFileSync(new URL('ios/App/App/TalosBridgeViewController.swift', ROOT), 'utf8')
+    expect(vc).toMatch(/registerPluginInstance\(TalosSnapshotPlugin\(\)\)/)
+  })
+
   it('ships the haptics plugin', () => {
     const spm = readFileSync(new URL('ios/App/CapApp-SPM/Package.swift', ROOT), 'utf8')
     expect(spm).toMatch(/CapacitorHaptics/)
@@ -179,15 +187,10 @@ describe('capacitor config', () => {
     expect(body).toMatch(
       /NativeKeyStore\.clearAll\(\)\s*removeDelivered\(\s*pick: \{ delivered in\s*PushCore\.identifiersShowingText\(/,
     )
+    // the marker is set by what the extension delivers (RichPush.deliver; RichPushTests checks it on every opened seal)
     const ext = withoutComments(readFileSync(new URL('ios/TalosPushExtension/NotificationService.swift', ROOT), 'utf8'))
-    // the marker goes on every notification whose body was replaced, not only those with buttons
-    const bodySet = ext.indexOf('out.body = content.body')
-    const marker = ext.indexOf('info[PushCore.textMarkerKey] = PushCore.textMarkerValue')
-    expect(bodySet).toBeGreaterThan(-1)
-    expect(marker).toBeGreaterThan(bodySet)
-    expect(marker).toBeLessThan(ext.indexOf('if let category'))
-    // and what carries the marker is what is delivered
-    expect(ext.indexOf('out.userInfo = info')).toBeGreaterThan(marker)
+    expect(ext).toMatch(/RichPush\.deliver\(/)
+    expect(ext).toMatch(/out\.userInfo = d\.userInfo/)
   })
 
   it('the categories the app registers are the ones the relay sends', () => {

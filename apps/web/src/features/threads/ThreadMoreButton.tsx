@@ -50,6 +50,7 @@ export function ThreadRowWithSettings({
   className,
   wrap,
   onOpenSettings,
+  controls,
   children,
 }: {
   thread: ThreadT
@@ -59,6 +60,8 @@ export function ThreadRowWithSettings({
   onOpenSettings?: (thread: ThreadT) => void
   /** Wraps the link and the button (the Threads list puts its press and swipe menu around both). */
   wrap?: (inner: ReactNode) => ReactNode
+  /** More controls at the right end, left of the "..." (a parent's sub-thread chevron): in the group, so hovering them keeps it. */
+  controls?: ReactNode
   children: ReactNode
 }) {
   const [open, setOpen] = useState(false)
@@ -66,6 +69,7 @@ export function ThreadRowWithSettings({
   const inner = (
     <div className={cn('group relative', className)}>
       {children}
+      {controls}
       <ThreadMoreButton
         ref={btn}
         thread={thread}

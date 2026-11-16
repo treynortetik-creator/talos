@@ -54,29 +54,41 @@ rules:
     why: "Its health check starts every configured MCP server, including a second copy of a channel server. Use /mcp inside a session."
 
   # ---- ask ----
-  - id: push-to-main
+  # no kind on purpose (Pantheon 2026-11-15): a public repository or a deleted one can't be taken back, so "Always allow
+  # publishing" never covers it; every one is a card. Listed before every rule with a kind, and the bridge also
+  # refuses a kind to any call a no-kind rule matches (Delphi 2026-11-15), so a chained command never slips one through.
+  - id: github-repo-public-or-delete
     decision: ask
     tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*git\s+(?:-C\s+\S+\s+)?push\b[^;&|\n]*(?<![\w/.-])(?:main|master)(?![\w.-])'
-    why: "Pushing to the main branch usually deploys or publishes."
-
-  - id: deploy-or-publish
-    decision: ask
-    tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*(?:vercel\s+(?:deploy|--prod)|netlify\s+deploy|railway\s+(?:up|deploy|redeploy)|fly(?:ctl)?\s+deploy|wrangler\s+(?:deploy|publish)|firebase\s+deploy|heroku\s+(?:release|deploy)|terraform\s+apply|kubectl\s+(?:apply|delete)|(?:npm|pnpm|yarn)\s+publish|twine\s+upload|cargo\s+publish|gem\s+push|docker\s+push)\b'
-    why: "Deploys and package publishes reach other people and are hard to take back."
-
-  - id: github-release-or-public
-    decision: ask
-    tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*gh\s+(?:release\s+(?:create|delete|edit)|repo\s+(?:edit\b[^\n;&|]*--visibility[\s=]+public|create\b[^\n;&|]*--public|delete)|api\b[^\n;&|]*(?:private=false|visibility=public))'
-    why: "Releases, a public repository and a repository delete are one-way doors. Use the talos-go-public skill for the gate."
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*gh\s+(?:repo\s+(?:edit\b[^\n;&|]*--visibility[\s=]+public|create\b[^\n;&|]*--public|delete)|api\b[^\n;&|]*(?:private=false|visibility=public))'
+    why: "A public repository and a repository delete are one-way doors. Use the talos-go-public skill for the gate."
 
   - id: github-account
     decision: ask
     tool: Bash
     command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*gh\s+auth\s+(?:switch|login|refresh|logout)\b'
     why: "gh keeps one account for the whole machine; switching it changes who every other repository pushes as."
+
+  - id: push-to-main
+    decision: ask
+    kind: push
+    tool: Bash
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*git\s+(?:-C\s+\S+\s+)?push\b[^;&|\n]*(?<![\w/.-])(?:main|master)(?![\w.-])'
+    why: "Pushing to the main branch usually deploys or publishes."
+
+  - id: deploy-or-publish
+    decision: ask
+    kind: deploy
+    tool: Bash
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*(?:vercel\s+(?:deploy|--prod)|netlify\s+deploy|railway\s+(?:up|deploy|redeploy)|fly(?:ctl)?\s+deploy|wrangler\s+(?:deploy|publish)|firebase\s+deploy|heroku\s+(?:release|deploy)|terraform\s+apply|kubectl\s+(?:apply|delete)|(?:npm|pnpm|yarn)\s+publish|twine\s+upload|cargo\s+publish|gem\s+push|docker\s+push)\b'
+    why: "Deploys and package publishes reach other people and are hard to take back."
+
+  - id: github-release-or-public
+    decision: ask
+    kind: publish
+    tool: Bash
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*gh\s+release\s+(?:create|delete|edit)'
+    why: "A release reaches everyone who watches the repository."
 
   # The Talos app's own reply and scheduling tools: exactly these five, nothing broader. Any other mcp__talos-app__ tool
   # (a send_x, say) still falls through to the connector rule below.
@@ -87,5 +99,6 @@ rules:
 
   - id: send-or-publish-via-connector
     decision: ask
+    kind: send
     tool: 'mcp__.*__[A-Za-z_]*(?:send|reply|forward|publish|share|trash|delete|schedule|post_)[A-Za-z_]*'
     why: "Sending, sharing, deleting or posting through a connected account acts as you and reaches other people."

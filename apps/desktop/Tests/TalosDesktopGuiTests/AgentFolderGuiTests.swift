@@ -5,6 +5,7 @@ import Testing
 import TalosDesktopCore
 
 @testable import TalosDesktop
+import TalosTestSupport
 
 // The checklist's Agent folder row, end to end with the real controller on a scratch HOME, real temp folders, and the real bridge
 // CLI through the real pty for Adopt. Create runs a stub install.sh in a scratch clone (the real one is pinned by
@@ -47,7 +48,7 @@ private let stubInstall = """
     notempty) echo "FAILED at \\"2/7 Agent folder\\": $dir exists, is not empty and is not a Talos agent. Nothing was touched." >&2; exit 1 ;;
     synced) echo "refusing: $dir looks like cloud-synced storage. Two processes editing memory/ mid-sync corrupts it." >&2
             echo "FAILED at \\"4/7\\": the kit installer failed before copying anything (its output is above)." >&2; exit 1 ;;
-    prereq) printf 'Cannot continue. Missing:\\n  - bun: install Bun 1.3 or newer: https://example.com/bun\\nInstall what is listed, then run ./install.sh again. Nothing was changed.\\n' >&2; exit 3 ;;
+    prereq) printf 'Cannot continue. Missing:\\n  - bun: install Bun 1.4.4 or newer: https://example.com/bun\\nInstall what is listed, then run ./install.sh again. Nothing was changed.\\n' >&2; exit 3 ;;
     partway) mkdir -p "$dir"; echo half > "$dir/CLAUDE.md"
              echo "FAILED at \\"4/7\\": The kit copy stopped part-way. $dir now holds a partial copy. Move it aside (for example: mv $dir $dir.partial) and run ./install.sh again." >&2; exit 1 ;;
   esac
@@ -69,13 +70,13 @@ private final class World {
     TmuxWorld.hookBundle()
     try #require(SupervisorController.configPath.hasPrefix(TmuxWorld.root), "refusing to build a controller on the real config")
     try? FileManager.default.removeItem(atPath: SupervisorController.configPath)
-    appHome = NSTemporaryDirectory() + "k7-apphome-" + UUID().uuidString
+    appHome = TestTemp.base + "k7-apphome-" + UUID().uuidString
     try FileManager.default.createDirectory(atPath: appHome, withIntermediateDirectories: true)
     if realClone {
       clone = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent().deletingLastPathComponent().path
     } else {
-      clone = NSTemporaryDirectory() + "k7-clone-" + UUID().uuidString
+      clone = TestTemp.base + "k7-clone-" + UUID().uuidString
       write(clone + "/install.sh", stubInstall)
       write(clone + "/apps/bridge/src/cli.ts", "")
       write(clone + "/plugins/talos-app-mod/plugin.json", "{}")
@@ -103,7 +104,7 @@ private final class World {
     chmod(dir, 0o700)
     try? FileManager.default.removeItem(atPath: SupervisorController.configPath)
     try? FileManager.default.removeItem(atPath: appHome)
-    if clone.hasPrefix(NSTemporaryDirectory()) { try? FileManager.default.removeItem(atPath: clone) }
+    if clone.hasPrefix(TestTemp.base) { try? FileManager.default.removeItem(atPath: clone) }
     try? FileManager.default.removeItem(atPath: home + "/agents")
   }
 
@@ -464,6 +465,7 @@ struct AgentFolderChooseGuiTests {
     w.model.saveSetting { $0.args = ["--mine"] }
     w.flow.path = b
     await w.flow.choose()
+    w.model.supervisor.drain()  // a folder change does not hold the main thread: the file has it once the supervisor's queue has run
     #expect(w.started.count == 1, "only the first choice started a session")
     #expect(w.disk?.agentDir.hasSuffix("/agents/b") == true && w.disk?.args == ["--mine"])
     #expect(w.doneText?.contains("next time the agent starts") == true)
@@ -532,13 +534,13 @@ struct AgentFolderCloneAndKeepGuiTests {
     defer { w.cleanUp() }
     write(w.agent("mine") + "/CLAUDE.md", "mine")
     write(w.agent("have") + "/.mcp.json", w.talosMcp)
-    let partial = NSTemporaryDirectory() + "k7-partial-" + UUID().uuidString
+    let partial = TestTemp.base + "k7-partial-" + UUID().uuidString
     write(partial + "/install.sh", "#!/bin/bash\n")
     write(partial + "/plugins/talos-app-mod/plugin.json", "{}")  // no bridge
-    let noMod = NSTemporaryDirectory() + "k7-nomod-" + UUID().uuidString
+    let noMod = TestTemp.base + "k7-nomod-" + UUID().uuidString
     write(noMod + "/install.sh", "#!/bin/bash\n")
     write(noMod + "/apps/bridge/src/cli.ts", "")  // no mod
-    let link = NSTemporaryDirectory() + "k7-link-" + UUID().uuidString
+    let link = TestTemp.base + "k7-link-" + UUID().uuidString
     try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: w.clone)
     defer { for p in [partial, noMod, link] { try? FileManager.default.removeItem(atPath: p) } }
     for repo in [partial, noMod, link, w.agent("mine") + "/CLAUDE.md"] {
@@ -595,9 +597,11 @@ struct AgentFolderCloneAndKeepGuiTests {
     }
     w.flow.path = w.agent("a") + "/"
     await w.flow.choose()
+    w.model.supervisor.drain()
     #expect(w.disk?.session.id != nil && w.disk?.session.confirmedAt != nil, "the same folder keeps them")
     w.flow.path = w.agent("b")
     await w.flow.choose()
+    w.model.supervisor.drain()
     #expect(w.disk?.session.id == nil && w.disk?.session.confirmedAt == nil, "another folder starts clean")
   }
 }
@@ -632,4 +636,143 @@ struct ImportStartsGuiTests {
       .appendingPathComponent("Sources/TalosDesktop/App.swift")
     #expect(try String(contentsOf: src, encoding: .utf8).contains("model.importCommand(command, thenStart: true)"))
   }
+}
+
+/// A prebuilt app carries no clone of its own: `install.sh --from-release` records one in a file any program of the owner's can write.
+/// A record a session wrote is refused when it names a folder sessions work in, and a good one is used only after the owner's yes on
+/// the clone card, bound to the path the card showed.
+@MainActor
+@Suite("Agent folder: a prebuilt app's recorded clone", .serialized, .guiExclusive, .enabled(if: guiTestsEnabled))
+struct AgentFolderRecordedCloneGuiTests {
+  /// The path with every link resolved (the scratch folder is reached through /var, a link): what install.sh records (pwd -P).
+  static func real(_ p: String) -> String {
+    guard let r = realpath(p, nil) else { return p }
+    defer { free(r) }
+    return String(cString: r)
+  }
+
+  final class Box: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v: String?
+    init(_ v: String?) { self.v = v }
+    var value: String? {
+      get { lock.withLock { v } }
+      set { lock.withLock { v = newValue } }
+    }
+  }
+
+  fileprivate func flow(_ w: World, recorded: Box, acceptance: MemoryCloneAcceptance, unsafe avoid: [String]?, stamped: String? = nil) -> AgentFolderFlow {
+    let record = TestTemp.base + "k7-record-" + UUID().uuidString
+    FileManager.default.createFile(atPath: record, contents: Data("x\n".utf8))
+    let appHome = w.appHome
+    var deps = AgentFolderFlow.Deps(repoRoot: { stamped })
+    deps.recordedRoot = { recorded.value }
+    deps.recordFile = record
+    deps.acceptance = acceptance
+    if let list = avoid {
+      let folders: @Sendable () -> [String] = { list }
+      deps.unsafeFolders = folders
+    }
+    deps.environment = {
+      var e = ProcessInfo.processInfo.environment
+      e["TALOS_APP_HOME"] = appHome
+      e["STUB_MODE"] = "ok"
+      return e
+    }
+    let f = AgentFolderFlow(model: w.model, deps: deps)
+    f.signedIn = true
+    return f
+  }
+
+  fileprivate func ran(_ w: World) -> Bool { FileManager.default.fileExists(atPath: w.clone + "/args.log") }
+
+  @Test func aRecordNamingATempOrAgentFolderCloneIsRefusedAndNothingRuns() async throws {
+    let w = try World()
+    defer { w.cleanUp() }
+    // the app's own list of session folders (the temp roots among them): the scratch clone is under the temp folder
+    let f = flow(w, recorded: Box(Self.real(w.clone)), acceptance: MemoryCloneAcceptance(), unsafe: nil)
+    f.path = w.agent("new")
+    await f.create()
+    let why = try #require(w.failedText(f), "a refusal")
+    #expect(why.contains("agent sessions work in"), "\(why)")
+    #expect(!ran(w) && !w.model.configured && w.started.count == 0)
+    // a clone inside the agent folder
+    let inAgent = Self.real(w.home) + "/agents/mine/clone"
+    for (p, t) in ["install.sh": "#!/bin/bash\n", "apps/bridge/src/cli.ts": "", "plugins/talos-app-mod/plugin.json": "{}"] {
+      write(inAgent + "/" + p, t)
+    }
+    let g = flow(w, recorded: Box(inAgent), acceptance: MemoryCloneAcceptance(), unsafe: [Self.real(w.home) + "/agents/mine"])
+    g.path = w.agent("new")
+    await g.create()
+    #expect(w.failedText(g)?.contains("agent sessions work in") == true, "\(String(describing: w.failedText(g)))")
+    #expect(!FileManager.default.fileExists(atPath: inAgent + "/args.log"))
+    // already "accepted" changes nothing: the rules come first
+    let h = flow(w, recorded: Box(inAgent), acceptance: MemoryCloneAcceptance(inAgent), unsafe: [Self.real(w.home) + "/agents/mine"])
+    h.path = w.agent("new")
+    await h.adopt()
+    #expect(w.failedText(h) != nil && !w.model.configured)
+  }
+
+  @Test func aGoodRecordIsUsedOnlyAfterTheOwnersYesOnTheCard() async throws {
+    let w = try World()
+    defer { w.cleanUp() }
+    let accepted = MemoryCloneAcceptance()
+    let f = flow(w, recorded: Box(Self.real(w.clone)), acceptance: accepted, unsafe: [Self.real(w.home) + "/agents"])
+    f.path = w.agent("new")
+    await f.create()
+    #expect(f.step == .confirmClone(clone: Self.real(w.clone), then: .create))
+    #expect(!ran(w), "nothing runs before the yes")
+    f.cancel()
+    #expect(f.step == .idle && !ran(w) && accepted.accepted() == nil)
+    await f.create()
+    await f.useClone()
+    #expect(ran(w) && w.model.configured, "the yes runs what the owner pressed")
+    #expect(accepted.accepted() == Self.real(w.clone))
+    // the next time: no card
+    try? FileManager.default.removeItem(atPath: w.clone + "/args.log")
+    f.path = w.agent("second")
+    await f.create()
+    #expect(ran(w))
+  }
+
+  @Test func theYesBindsThePathTheCardShowed() async throws {
+    let w = try World()
+    defer { w.cleanUp() }
+    let recorded = Box(Self.real(w.clone))
+    let accepted = MemoryCloneAcceptance()
+    let f = flow(w, recorded: recorded, acceptance: accepted, unsafe: [Self.real(w.home) + "/agents"])
+    f.path = w.agent("new")
+    await f.create()
+    #expect(f.step == .confirmClone(clone: Self.real(w.clone), then: .create))
+    recorded.value = Self.real(w.clone) + "-other"  // a session rewrote the record while the card was open
+    await f.useClone()
+    #expect(w.failedText(f)?.contains("changed while this card was open") == true)
+    #expect(!ran(w) && accepted.accepted() == nil && !w.model.configured)
+  }
+
+  @Test func aYesThatCannotBeRememberedRunsNothing() async throws {
+    let w = try World()
+    defer { w.cleanUp() }
+    let accepted = MemoryCloneAcceptance()
+    accepted.failing = true
+    let f = flow(w, recorded: Box(Self.real(w.clone)), acceptance: accepted, unsafe: [Self.real(w.home) + "/agents"])
+    f.path = w.agent("new")
+    await f.create()
+    await f.useClone()
+    #expect(w.failedText(f)?.contains("Keychain") == true)
+    #expect(!ran(w) && !w.model.configured)
+  }
+
+  @Test func aStampedCloneNeedsNoCard() async throws {
+    let w = try World()
+    defer { w.cleanUp() }
+    let f = flow(w, recorded: Box("/home/alex/elsewhere"), acceptance: MemoryCloneAcceptance(), unsafe: nil, stamped: w.clone)
+    f.path = w.agent("new")
+    await f.create()
+    #expect(ran(w) && w.model.configured, "a local build's own clone is part of its signature")
+  }
+}
+
+extension World {
+  fileprivate func failedText(_ f: AgentFolderFlow) -> String? { if case .failed(let t) = f.step { return t } else { return nil } }
 }

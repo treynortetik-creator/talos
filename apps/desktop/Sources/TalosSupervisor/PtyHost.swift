@@ -28,6 +28,12 @@ public enum SendOutcome: Equatable, Sendable {
   case failed
   /// The call timed out: the bytes may or may not have landed. A caller that must never send twice treats it as sent.
   case unknown
+  /// The key guard sent nothing (`KeyGuard`: the pane shows something other than what the sender meant to press, or could not be read).
+  /// Like `failed`, no key went; a caller that owes the owner a message says why. Hosts never return it: only `Supervisor.sendKey` does.
+  case refused
+
+  /// No key went (failed or refused). `unknown` is not here: it may have landed.
+  public var notSent: Bool { self == .failed || self == .refused }
 }
 
 public enum HostKind: String, Sendable {
@@ -62,6 +68,9 @@ public protocol PtyHost: AnyObject, Sendable {
   /// One of the three keys a tap on a dialog may send (`DialogKey`), by name, so the pane gets the bytes its own cursor-key mode wants.
   @discardableResult
   func sendDialogKey(_ key: DialogKey) -> SendOutcome
+  /// Escape, for the computer-use permission dialog only (`ComputerUseDismiss`).
+  @discardableResult
+  func sendEscape() -> SendOutcome
   /// Bottom-anchored screen text. nil when the screen could not be read (a failed or timed-out capture): that says nothing
   /// about what is on it, and a caller must not take it for an empty screen.
   func visibleRows() -> [String]?
@@ -97,6 +106,8 @@ extension PtyHost {
     case .enter: return send(keys: [0x0d])
     }
   }
+  /// An app-owned pty: the one byte. Claude reads a lone ESC as the Escape key once nothing follows it.
+  public func sendEscape() -> SendOutcome { send(keys: [0x1b]) }
   public func clientActivity() -> Double? { nil }
   public func clientActivities() -> [Double]? { [] }
 }

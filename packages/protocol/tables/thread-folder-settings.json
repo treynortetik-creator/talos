@@ -1,0 +1,68 @@
+{
+  "about": "What the project settings a thread session loads (.claude/settings.json and settings.local.json in its folder and that folder's repo roots) may carry. One table for Linux (packages/protocol/src/thread-folder-settings.ts) and the Mac (WorkerHookFolder.swift) and the hook (kit/hooks/permission-relay.py), held equal by apps/bridge/test/supervisor/swift-parity.test.ts: edit them together. refusedFrontmatterKeys: the frontmatter keys a skill, command or agent file (.claude/{skills,commands,agents}/**/*.md) in those folders may not carry.",
+  "version": 1,
+  "allowedEnv": [
+    "BASH_DEFAULT_TIMEOUT_MS",
+    "BASH_MAX_TIMEOUT_MS",
+    "BASH_MAX_OUTPUT_LENGTH",
+    "MAX_THINKING_TOKENS",
+    "MAX_MCP_OUTPUT_TOKENS",
+    "MCP_TIMEOUT",
+    "MCP_TOOL_TIMEOUT",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR",
+    "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    "DISABLE_TELEMETRY",
+    "DISABLE_AUTOUPDATER",
+    "DISABLE_ERROR_REPORTING",
+    "DISABLE_BUG_COMMAND",
+    "DISABLE_COST_WARNINGS",
+    "DISABLE_NON_ESSENTIAL_MODEL_CALLS",
+    "DISABLE_PROMPT_CACHING"
+  ],
+  "allowedKeys": [
+    "$schema",
+    "env",
+    "permissions",
+    "model",
+    "includeCoAuthoredBy",
+    "alwaysThinkingEnabled",
+    "outputStyle",
+    "claudeMdExcludes",
+    "skillOverrides"
+  ],
+  "allowedPermissionKeys": ["deny", "ask", "defaultMode"],
+  "refusedFrontmatterKeys": ["hooks", "allowed-tools", "mcpServers", "permissionMode"],
+  "instructionFiles": {
+    "about": "What a thread session outside the agent folder is handed in place of the project memory it does not load (--setting-sources=user): in each folder from the owner's home folder down to the session's folder (just that folder when it is not below home), parent first, these files in this order, as the instructionFiles mode names them (claude: the CLAUDE.md files, agents: the AGENTS.md files). A `*` matches the .md files below that folder, by name, at most 64 and 4 folders deep. Plain files only, never through a link; at most fileCap bytes each and totalCap in all; an @import is not followed. Never through a link anywhere on the way, never a name with a control character or < >, never a file of the config folder (Claude Code loads those itself as user memory).",
+    "perFolder": [
+      {
+        "path": "CLAUDE.md",
+        "mode": "claude"
+      },
+      {
+        "path": ".claude/CLAUDE.md",
+        "mode": "claude"
+      },
+      {
+        "path": ".claude/rules/*.md",
+        "mode": "claude"
+      },
+      {
+        "path": "CLAUDE.local.md",
+        "mode": "claude"
+      },
+      {
+        "path": "AGENTS.md",
+        "mode": "agents"
+      },
+      {
+        "path": ".claude/AGENTS.md",
+        "mode": "agents"
+      }
+    ],
+    "fileCap": 65536,
+    "totalCap": 262144
+  }
+}

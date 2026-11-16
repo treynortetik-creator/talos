@@ -1,0 +1,21 @@
+{
+  "input": {
+    "wake": {
+      "v": 1,
+      "thread_id": "trip",
+      "message_ids": [
+        "m_01JBF3V7Q8K2M4N6P8R0S2T401"
+      ],
+      "at": "2026-11-13T12:00:00.000Z",
+      "reason": "card_action",
+      "action": "pointer"
+    },
+    "now": 1794571200000,
+    "recentTaken": [],
+    "threadIdle": true
+  },
+  "output": {
+    "take": true,
+    "counted": false
+  }
+}

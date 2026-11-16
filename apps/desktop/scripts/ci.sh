@@ -2,16 +2,32 @@
 # Everything the desktop job runs, in order: unit tests, packed release app (signed, verified, selftest), guard tests.
 # Used by scripts/ci-local.sh (job_desktop) and runnable by hand.
 set -euo pipefail
+# Heavy work: it runs under the machine's one heavy lock (scripts/heavy-lock.sh), unless it already runs inside the lock's holder
+# or inside a CI job (every ci-local exports TALOS_CI_SLOT_RUN=1, and its desktop job holds the lock; an older ci-local says so
+# only that way). Then this same script again, with every argument exactly as given.
+HEAVY_LOCK="$(dirname "$0")/../../../scripts/heavy-lock.sh"
+if [ -f "$HEAVY_LOCK" ] && [ "${TALOS_CI_SLOT_RUN:-}" != 1 ] && ! bash "$HEAVY_LOCK" held; then
+  exec bash "$HEAVY_LOCK" run "desktop ci.sh" -- bash "$0" "$@"
+fi
+# Then the desktop mutex, inside the heavy lock (the order CI's desktop job takes them in): one Swift desktop suite on the machine
+# at a time, whoever runs it (two at once exhaust the ptys and tmux fails to fork). Inside a CI job its desktop job holds it.
+if [ -f "$HEAVY_LOCK" ] && [ "${TALOS_CI_SLOT_RUN:-}" != 1 ] && ! bash "$HEAVY_LOCK" held desktop; then
+  exec bash "$HEAVY_LOCK" desktop "desktop ci.sh" -- bash "$0" "$@"
+fi
 cd "$(dirname "$0")/.."
 OUT="${1:-.build/ci-app}"
+STAMP="$(bash scripts/tests-green-stamp.sh || true)"  # the tree the suite runs on, taken before it runs
 if [ "${TALOS_GUI_TESTS:-0}" = 1 ]; then
   # A logged-in session that allows windows: the window-opening suites run one process each (gui-tests.sh fails a process that ends
   # early), and the main run keeps the gate off so nothing runs twice.
-  TALOS_GUI_TESTS=0 bash scripts/test.sh
+  TALOS_GUI_TESTS=0 bash ../../scripts/ci-swift-retry.sh bash scripts/test.sh
   bash scripts/gui-tests.sh
 else
-  bash scripts/test.sh
+  # In CI (CI_FLAKE_FILE set) a failed test runs once more, alone; by hand ci-swift-retry.sh just runs test.sh.
+  bash ../../scripts/ci-swift-retry.sh bash scripts/test.sh
 fi
+# green on this tree: guards-test.sh's control reuses it instead of running the whole suite again
+export TALOS_DESKTOP_TESTS_GREEN="$STAMP"
 # The tests that starve the dispatch pool run alone, so they cannot fail the suites beside them.
 bash scripts/starvation-tests.sh
 bash scripts/gui-tests-test.sh
@@ -20,6 +36,12 @@ bash scripts/build-app.sh --release --out "$OUT"
 TALOS_BUILT_APP="$OUT/Talos.app" bash scripts/test.sh --filter BuiltAppArt
 bash scripts/guards-test.sh
 bash scripts/install-test.sh "$OUT/Talos.app"
+# The prebuilt-app security cases need a signature through Apple's certificates. They run ONLY with an identity named explicitly in
+# TALOS_TEST_APPLE_SIGN_ID (the owner's own Talos identity); nothing here picks one from the keychain, because the first match on a
+# Mac can belong to someone else (an employer's certificate must never sign anything for Talos). Unset: the test prints a loud
+# SKIPPED line with the count, and CI never touches an identity (scripts/ci-local/jobs-swift.sh signs everything ad hoc).
+bash scripts/release-install-test.sh "$OUT/Talos.app"
 bash scripts/review-d6-install-test.sh
+bash scripts/relay-wait-test.sh
 [ ! -f scripts/review-d0-test.sh ] || bash scripts/review-d0-test.sh
 [ ! -f scripts/review-d0-recheck-test.sh ] || bash scripts/review-d0-recheck-test.sh

@@ -2,11 +2,12 @@
 // produces against the real Chronos CLI today, and every captured card.create equals composeScheduleCard() of the same
 // inputs (the capture script asserts that for each card it records, reading the inputs from Chronos itself).
 import { describe, expect, test } from 'bun:test'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { bindingFrom, parseFrame, payloadHash } from '@talos-app/protocol'
-import { CAPTURE_DIR, capture, diffAgainstDisk } from '../../scripts/capture-schedules.ts'
-import { longTimeouts } from './harness.ts'
+import { CAPTURE_DIR, diffAgainstDisk, FLOW_NAMES, indexOf } from '../../scripts/capture-schedules.ts'
+import { ChronosBox, longTimeouts, MON_0700_EDT } from './harness.ts'
 
 longTimeouts()
 
@@ -74,8 +75,52 @@ describe('capture:schedules', () => {
     expect(all).not.toMatch(/\/Users\/|\/home\/|\/private\/var|\/tmp\//)
   })
 
-  test('capture:schedules --check passes: re-running the capture reproduces the committed files', async () => {
-    const { files } = await capture() // throws if any card.create differs from composeScheduleCard() of the same inputs
-    expect(diffAgainstDisk(files)).toEqual([])
-  }, 600_000)
+  // Re-running each scenario against the real bridge and Chronos is capture-flows-*.test.ts: one test per scenario, in three
+  // files so they run side by side. What is left here is the index the full capture writes, which only describes them.
+  // What a full `capture:schedules --check` checks besides each scenario's own file (capture-flows-*), so CI needs no run of it.
+  test('no stale capture: every committed scenario file is one a scenario still makes', () => {
+    const files = readdirSync(CAPTURE_DIR).filter((f) => f.endsWith('.json')) // captured/search and memory are others'
+    expect(files.sort()).toEqual(['index.json', ...FLOW_NAMES.map((n) => `${n}.json`)].sort())
+  })
+
+  test('the --check comparison names a missing, a changed and a stale file (it is what fails the step)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'talos-capture-diff-'))
+    writeFileSync(join(dir, 'a.json'), 'same\n')
+    writeFileSync(join(dir, 'b.json'), 'old\n')
+    writeFileSync(join(dir, 'gone.json'), 'x\n')
+    const files = { 'a.json': 'same\n', 'b.json': 'new\n', 'c.json': 'x\n' }
+    expect(diffAgainstDisk(files, dir).sort()).toEqual(['b.json (differs)', 'c.json (missing)', 'gone.json (stale)'])
+    // a part of the capture (--only) says nothing about the files it did not make
+    expect(diffAgainstDisk(files, dir, { part: true }).sort()).toEqual(['b.json (differs)', 'c.json (missing)'])
+  })
+
+  test('capture:schedules --check --only <one scenario> exits 0 and says its file matches', () => {
+    const r = Bun.spawnSync(
+      [
+        'bun',
+        join(import.meta.dir, '../../scripts/capture-schedules.ts'),
+        '--check',
+        '--only',
+        FLOW_NAMES[0] as string,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    )
+    expect({ code: r.exitCode, out: r.stdout.toString().trim() }).toEqual({
+      code: 0,
+      out: 'capture:schedules --check: 1 files match.',
+    })
+  }, 120_000)
+
+  test('index.json is what a full capture writes for the committed scenarios: every one, in order, with its counts', () => {
+    const scenarios = Object.fromEntries(
+      FLOW_NAMES.map((n) => [`${n}.json`, readFileSync(join(CAPTURE_DIR, `${n}.json`), 'utf8')]),
+    )
+    const box = new ChronosBox(MON_0700_EDT)
+    try {
+      const chronos = box.cli(['--version']).out.trim()
+      expect(readFileSync(join(CAPTURE_DIR, 'index.json'), 'utf8')).toBe(indexOf(scenarios, chronos))
+    } finally {
+      box.dispose()
+    }
+  })
 })

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// Terminal prompts in a worker's pane reach the owner (Option C smoke O5): the worker is flagged needs-you, its thread gets
 /// one plain line, and a pointer held back by the owner's draft says so. Real private tmux server; a fake home folder; the owner's
@@ -62,7 +63,7 @@ struct WorkerDialogTests {
     #expect(log.all.count == 1, "\(log.all)")
     let n = try #require(log.all.first)
     #expect(n.thread == "trip")
-    #expect(n.text == "OC Test's session is waiting on a 'trust this folder' prompt; open Terminals \u{2192} OC Test on the Mac to answer.")
+    #expect(n.text == "This thread's session is waiting on a 'trust this folder' prompt; open this thread in Terminals on the Mac to answer.")
     // it stays up for the owner to answer, and nothing was typed
     #expect(r.state("trip") == "starting", "\(r.why("trip"))")
     #expect(r.typedLines.isEmpty)
@@ -90,7 +91,7 @@ struct WorkerDialogTests {
 
   /// A dialog that comes up on a worker that is already live (a folder or setting changed under it) is flagged the same way.
   @Test func aDialogOnALiveWorkerIsFlaggedToo() throws {
-    let trigger = NSTemporaryDirectory() + "dlg-\(UUID().uuidString.prefix(6))"
+    let trigger = TestTemp.base + "dlg-\(UUID().uuidString.prefix(6))"
     let r = try WorkerRig(scenario: "worker-real.sh", extraEnv: ["FAKE_REAL_START": "empty", "FAKE_REAL_SWITCH": trigger, "FAKE_REAL_THEN": "trust-dialog"])
     defer {
       r.teardown()
@@ -134,6 +135,7 @@ struct WorkerDialogTests {
     try r.wake("trip")
     #expect(r.wait(10) { r.state("trip") == "failed" }, "\(r.why("trip"))")
     #expect(r.entry("trip")?.error?.code == "needs_mac")
+    #expect(r.entry("trip")?.stopped_why == "crash", "the stop records why (R1-3): \(String(describing: r.entry("trip")?.stopped_why))")
     #expect(r.typedLines.isEmpty)
     #expect(r.mgr.needsYou().isEmpty, "a stopped worker waits on nobody")
     #expect(log.all.count == 1)
@@ -178,7 +180,7 @@ struct WorkerDialogTests {
 
   /// R1-6: a worker waiting on the owner is not parked for being quiet.
   @Test func aNeedsYouWorkerIsNotIdleParked() throws {
-    let trigger = NSTemporaryDirectory() + "dlg-\(UUID().uuidString.prefix(6))"
+    let trigger = TestTemp.base + "dlg-\(UUID().uuidString.prefix(6))"
     let r = try WorkerRig(scenario: "worker-real.sh", extraEnv: ["FAKE_REAL_START": "empty", "FAKE_REAL_SWITCH": trigger, "FAKE_REAL_THEN": "trust-dialog"])
     defer {
       r.teardown()
@@ -190,6 +192,11 @@ struct WorkerDialogTests {
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
+    // the wake's pointer is in and sent before the dialog comes: a line still being typed when the dialog takes the screen is never
+    // seen in the box, and is held (never typed a second time) until its claim deadline, which would hold the park too
+    // Not `enterCheckDone` here: its wait (about 2 s) is the idle time, so the worker would park before the dialog came. A notice
+    // that the Enter may have answered the dialog is harmless to this test, which counts no notices.
+    #expect(r.wait(10) { r.typedLines.count == 1 }, "\(r.typedLines)")
     FileManager.default.createFile(atPath: trigger, contents: nil)
     #expect(r.wait(10) { r.mgr.needsYou()["trip"] != nil })
     // well past the idle time, and past the busy window: still up
@@ -230,13 +237,13 @@ struct WorkerDialogTests {
     #expect(r.wait(5) { log.all.count == 1 })
     usleep(2_500_000)
     #expect(log.all.count == 1, "\(log.all)")
-    #expect(log.all.first?.text == "trip's session is waiting on a prompt, \"Which way?\"; open Terminals \u{2192} trip on the Mac to answer.")
+    #expect(log.all.first?.text == "This thread's session is waiting on a prompt; open this thread in Terminals on the Mac to answer.")
     #expect(r.typedLines.isEmpty, "nothing is typed into the menu")
   }
 
   /// R1-3: a login dialog flags a running worker too (control for the false-positive cases).
   @Test func aLoginDialogOnARunningWorkerFlags() throws {
-    let trigger = NSTemporaryDirectory() + "dlg-\(UUID().uuidString.prefix(6))"
+    let trigger = TestTemp.base + "dlg-\(UUID().uuidString.prefix(6))"
     let r = try WorkerRig(scenario: "worker-trust.sh", extraEnv: ["FAKE_TRUST_LATE": trigger, "FAKE_TRUST_LOGIN": "1"])  // SYNTHETIC login dialog: no real capture
     defer {
       r.teardown()
@@ -254,7 +261,7 @@ struct WorkerDialogTests {
 
   /// R1-3: a dialog that is not holding still (output scrolling, a spinner) is not flagged until it does.
   @Test func aDialogThatHasNotHeldStillIsNotFlaggedYet() throws {
-    let trigger = NSTemporaryDirectory() + "dlg-\(UUID().uuidString.prefix(6))"
+    let trigger = TestTemp.base + "dlg-\(UUID().uuidString.prefix(6))"
     let r = try WorkerRig(scenario: "worker-real.sh", extraEnv: ["FAKE_REAL_START": "empty", "FAKE_REAL_SWITCH": trigger, "FAKE_REAL_THEN": "trust-dialog"])
     defer {
       r.teardown()
@@ -274,7 +281,7 @@ struct WorkerDialogTests {
 
   /// R1-3: a dialog that comes and goes is announced once per kind in the debounce window, however often it comes back.
   @Test func aDialogThatFlapsIsAnnouncedOncePerKindPerWindow() throws {
-    let trigger = NSTemporaryDirectory() + "flap-\(UUID().uuidString.prefix(6))"
+    let trigger = TestTemp.base + "flap-\(UUID().uuidString.prefix(6))"
     let r = try WorkerRig(scenario: "worker-trust.sh", extraEnv: ["FAKE_TRUST_FLAP": trigger])
     defer {
       r.teardown()
@@ -285,6 +292,12 @@ struct WorkerDialogTests {
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(10) { r.up("trip") })
+    // the wake's pointer delivered first: an Enter with the dialog coming up right after it is flagged as one that may have answered it
+    // (EnterDetection), a notice of its own kind that this test is not about
+    #expect(r.wait(10) { r.typedLines.count == 1 }, "\(r.typedLines)")
+    // and its Enter check done (`enterCheckDone`, PromptRelayTests): the key arriving is not the check having read the pane
+    #expect(r.enterCheckDone("trip"), "\(r.allEvents)")
+    #expect(log.all.isEmpty, "a notice before the dialog: \(log.all)")
     FileManager.default.createFile(atPath: trigger, contents: nil)
     let flagged = { r.allEvents.filter { if case .needsYou = $0 { return true } else { return false } }.count }
     #expect(r.wait(20) { flagged() >= 3 }, "the dialog came back \(flagged()) times")
@@ -342,7 +355,7 @@ struct WorkerDialogTests {
   /// R1-5, R2-3, R2-5: the owner's draft in the REAL input box (`❯` + U+00A0) holds the pointer with no client attached; after
   /// the wait the thread is told once and the worker shows Needs you; clearing the box lets the pointer go.
   @Test func aRealDraftHoldsThePointerTellsTheThreadOnceThenReleases() throws {
-    let clear = NSTemporaryDirectory() + "clr-\(UUID().uuidString.prefix(6))"
+    let clear = TestTemp.base + "clr-\(UUID().uuidString.prefix(6))"
     let r = try WorkerRig(
       scenario: "worker-real.sh",
       extraEnv: ["FAKE_REAL_START": "draft", "FAKE_REAL_SWITCH": clear, "FAKE_REAL_THEN": "empty-input"])
@@ -361,7 +374,7 @@ struct WorkerDialogTests {
     #expect(r.typedLines.isEmpty, "typed onto a draft: \(r.typedLines)")
     #expect(r.tmuxCmd(["list-clients"]).out.isEmpty, "no client was attached")
     #expect(log.all.count == 1, "\(log.all)")
-    #expect(log.all.first?.text == "trip's session has unsent text in its input box; your message has probably gone to the main session. Open Terminals to finish or clear it.")
+    #expect(log.all.first?.text == "This thread's session has unsent text in its input box; your message has probably gone to the main session. Open this thread in Terminals to finish or clear it.")
     FileManager.default.createFile(atPath: clear, contents: nil)
     #expect(r.wait(10) { r.typedLines.count == 1 }, "the pointer goes once the box is clear")
     #expect(r.wait(5) { r.mgr.needsYou().isEmpty })

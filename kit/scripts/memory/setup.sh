@@ -1,7 +1,7 @@
 #!/bin/bash
 # setup.sh: turn on semantic memory search for this agent. OPT-IN; grep search works without it.
 #
-#   bash scripts/memory/setup.sh [--agent-dir DIR] [--embed-model base|small] [--dry-run] [--no-index] [--no-job]
+#   bash scripts/memory/setup.sh [--agent-dir DIR] [--embed-model auto|base|small] [--dry-run] [--no-index] [--no-job]
 #
 # What it does, in order (each step is skipped if it is already done):
 #   1. finds a Python 3.10+ (the semantic packages need it; Apple's python3 is 3.9):
@@ -18,8 +18,11 @@
 #      scripts/memory/refresh-index.sh, no Claude involved, so it spends no plan usage. Session start and the
 #      morning brief also refresh the index. --no-job skips this.
 #
-#   --embed-model base   BAAI/bge-base-en-v1.5, about 210 MB download, 768 dimensions (default)
-#   --embed-model small  BAAI/bge-small-en-v1.5, about 67 MB, 384 dimensions (small Macs, impatient people)
+#   --embed-model auto   (default) small when this computer has less than 15 GiB of memory, base otherwise. Measured on
+#                        a WSL distro: indexing peaks at about 1.5 GB with small and 2.6 GB with base, and the indexer
+#                        stops itself at 4 GB; WSL gives its distro half of the PC's memory, so an 8 GB PC sees 4 GB.
+#   --embed-model base   BAAI/bge-base-en-v1.5, about 210 MB download, 768 dimensions
+#   --embed-model small  BAAI/bge-small-en-v1.5, about 67 MB, 384 dimensions (small computers, impatient people)
 #   --dry-run            print exactly what would happen and create nothing
 #   --no-index           build the venv and model but do not run the first index
 #   --rerank             ALSO download the opt-in reranker model for `recall.py --rerank` (about 571 MB; see fetch-reranker.sh)
@@ -30,7 +33,7 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 AGENT_DIR="$(python3 "$HERE/../_agent_root.py" "$0" 2 2>/dev/null)" || AGENT_DIR="$(cd "$HERE/../.." && pwd)"   # the agent folder, not the plugin release
-MODEL=base; RERANK=0; DRY=0; DO_INDEX=1; DO_JOB=1; PLAN_LABEL=""; VENV_ONLY=0
+MODEL=auto; RERANK=0; DRY=0; DO_INDEX=1; DO_JOB=1; PLAN_LABEL=""; VENV_ONLY=0
 PKGS="fastembed==0.8.0 sqlite-vec==0.1.9 apsw==3.53.1.0"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -46,10 +49,24 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
+# auto: the memory THIS system sees (inside WSL, the distro's share of the PC's). TALOS_MEM_BYTES stands in for it in tests.
+MODEL_WHY=""
+if [ "$MODEL" = auto ]; then
+  _mem="${TALOS_MEM_BYTES:-}"
+  if [ -z "$_mem" ]; then
+    if [ -r /proc/meminfo ]; then _mem="$(awk '/^MemTotal:/ { printf "%.0f", $2 * 1024 }' /proc/meminfo)"
+    else _mem="$(sysctl -n hw.memsize 2>/dev/null || true)"; fi
+  fi
+  case "$_mem" in ''|*[!0-9]*) MODEL=small; MODEL_WHY=" (auto: this computer's memory could not be read, so the small one)" ;;
+    *) _gib=$(( _mem >> 30 ))
+       if [ "$_gib" -lt 15 ]; then MODEL=small; else MODEL=base; fi
+       MODEL_WHY=" (auto: $_gib GiB of memory here; small under 15 GiB)" ;;
+  esac
+fi
 case "$MODEL" in
   base)  MODEL_NAME="BAAI/bge-base-en-v1.5";  MODEL_MB=210; DIM=768 ;;
   small) MODEL_NAME="BAAI/bge-small-en-v1.5"; MODEL_MB=67;  DIM=384 ;;
-  *) echo "--embed-model must be base or small" >&2; exit 2 ;;
+  *) echo "--embed-model must be auto, base or small" >&2; exit 2 ;;
 esac
 [ -f "$AGENT_DIR/scripts/memory/mem_index.py" ] || { echo "$AGENT_DIR does not look like a Talos agent folder (no scripts/memory/mem_index.py)" >&2; exit 1; }
 
@@ -87,7 +104,7 @@ step "Semantic memory search: plan"
 say "   agent folder:  ${PLAN_LABEL:-$AGENT_DIR}"
 say "   venv:          $VENV   (shared by every agent; about 160 MB)"
 say "   packages:      $PKGS"
-say "   model:         $MODEL_NAME  ($MODEL, about ${MODEL_MB} MB, ${DIM} dimensions, MIT licence)"
+say "   model:         $MODEL_NAME  ($MODEL, about ${MODEL_MB} MB, ${DIM} dimensions, MIT licence)$MODEL_WHY"
 say "   model cache:   $DATA/models/fastembed"
 say "   index:         ${PLAN_LABEL:-$AGENT_DIR}/.index/memory.db   (first index: about 1-3 minutes for ~500 notes)"
 if [ -n "$PYSRC" ]; then

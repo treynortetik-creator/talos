@@ -293,7 +293,7 @@ describe('expired', () => {
     it('sits above the one fallback line, which says what to do at the Mac', async () => {
       const card = dialogCard(trustDialog(), { state: 'expired' })
       const client = setupThread({ cards: [card] })
-      const line = dialogFallbackLine('trust', 'General')
+      const line = dialogFallbackLine('trust', { kind: 'mac' })
       client.store.setState((s) => ({
         ...s,
         messages: {

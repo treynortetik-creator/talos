@@ -170,6 +170,15 @@ describe('previousOwnerAt (the real store)', () => {
     expect(s.previousOwnerAt('general', T(10))).toBe(T(0))
   })
 
+  test('asked again and again with writes between: the early return never leaves its statement mid-step', () => {
+    const s = fresh()
+    for (let i = 0; i < 6; i++) s.addMessage(row({ id: `o${i}`, created_at: T(i) }))
+    for (let k = 0; k < 10; k++) {
+      expect(s.previousOwnerAt('general', T(100))).toBe(T(5 + k))
+      s.addMessage(row({ id: `n${k}`, created_at: T(6 + k) }))
+    }
+  })
+
   test('only share rows before it: there is no previous owner message', () => {
     const s = fresh()
     s.addMessage(row({ id: 'sh1', created_at: T(1), via: 'share', text: 'look' }))
@@ -312,7 +321,8 @@ describe('which notes carry since_last', () => {
   test('a config card decision has local_time and no since_last', async () => {
     h = await startHarness({
       relay: { relayFeatures: ['schedules/1', CONFIG_PROPOSE_FEATURE] },
-      config: (c) => ({ ...c, timezone: 'UTC' }),
+      // the lock on, so the asked-for change is a card whose decision this test reads
+      config: (c) => ({ ...c, timezone: 'UTC', settings_lock: true }),
     })
     await h.app.sendMessage('general', 'please change my settings', { ts: iso(Date.now() - 20 * 60_000) })
     await h.waitNotes(1)

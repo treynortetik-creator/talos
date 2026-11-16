@@ -1,9 +1,9 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`talos-app doctor text prints exactly these lines for a healthy setup 1`] = `
-"ok    bun version: <bun> (needs >= 1.3.11)
+"ok    bun version: <bun> (needs 1.4.4 or newer)
 ok    MCP SDK version: <sdk> (must be 1.x, never 2.x)
-ok    .mcp.json entry: command bun, points at this checkout
+ok    .mcp.json entry: command <bun-path>, points at this checkout
 ok    home dir mode: 700 (want 700)
 ok    bridge.key mode: 600 (want 600)
 ok    config.json mode: 600 (want 600)
@@ -28,7 +28,7 @@ If you have run \`talos-app rotate\`, also set BRIDGE_PUBKEY_FORCE=1 for that on
 `;
 
 exports[`talos-app doctor text prints these lines, and exits 1, when the relay is down and nothing is set up 1`] = `
-"ok    bun version: <bun> (needs >= 1.3.11)
+"ok    bun version: <bun> (needs 1.4.4 or newer)
 ok    MCP SDK version: <sdk> (must be 1.x, never 2.x)
 FAIL  .mcp.json entry: no talos-app server in <agent>/.mcp.json (run apps/bridge/scripts/install.sh)
 ok    home dir mode: 700 (want 700)

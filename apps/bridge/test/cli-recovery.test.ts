@@ -216,8 +216,11 @@ describe('D54 talos-app start', () => {
     )
     expect(code).toBe(7) // the child's exit code is ours
     expect(calls).toHaveLength(1)
+    // Claude Code's own computer use off, in the one --settings, first (review R1-4)
     expect(calls[0]?.cmd).toEqual([
       '/opt/bin/claude',
+      '--settings',
+      '{"deniedMcpServers":[{"serverName":"computer-use"}]}',
       '--model',
       'opus',
       '--continue',
@@ -246,14 +249,19 @@ describe('D54 talos-app start', () => {
       })
       return { cmd: calls[0] as string[], err: c.err.join('\n') }
     }
+    const launch = join(home, 'guards', 'main-launch.json')
     const plain = await run(['--model', 'opus'])
-    expect(plain.cmd.slice(-2)).toEqual(['--settings', settings])
+    expect(plain.cmd.slice(1, 3)).toEqual(['--settings', launch])
+    expect(JSON.parse(readFileSync(launch, 'utf8')).deniedMcpServers).toEqual([{ serverName: 'computer-use' }])
     expect(plain.err).toBe('')
-    const own = await run(['--settings', '/mine.json'])
-    expect(own.cmd.filter((a) => a === '--settings')).toHaveLength(1)
+    const own = await run(['--settings', 'mine.json'])
+    // theirs untouched (Claude runs in the agent folder, so a relative path means that folder), the deny right before it
+    expect(own.cmd.slice(1, 5)).toEqual(['--disallowedTools', 'mcp__computer-use', '--settings', 'mine.json'])
     expect(own.err).toContain('NOT active')
+    expect(own.err).not.toContain("Claude Code's own computer use is NOT turned off")
     rmSync(settings)
-    expect((await run([])).cmd).not.toContain('--settings')
+    const none = (await run([])).cmd
+    expect(none.slice(1, 3)).toEqual(['--settings', '{"deniedMcpServers":[{"serverName":"computer-use"}]}'])
   })
 
   test('a real child process gets the env and the cwd (a fake claude on PATH)', async () => {
@@ -275,7 +283,9 @@ describe('D54 talos-app start', () => {
     expect(seen[0]).toBe('1')
     expect(seen[1]).toBe('legacy')
     expect(statSync(seen[2] as string).ino).toBe(statSync(dir).ino) // macOS /var is a symlink: compare the folders
-    expect(seen[3]).toBe('--x --dangerously-load-development-channels server:talos-app')
+    expect(seen[3]).toBe(
+      '--settings {"deniedMcpServers":[{"serverName":"computer-use"}]} --x --dangerously-load-development-channels server:talos-app',
+    )
   })
 
   test('no .mcp.json entry: says to run install.sh and starts nothing', async () => {

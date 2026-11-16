@@ -21,8 +21,8 @@ describe('relay env', () => {
       MEDIA_MAX_MB: 50,
       MEDIA_UPLOADS_PER_HOUR: 60,
       MEDIA_DAILY_MAX_MB: 200,
-      SESSION_TTL_DAYS: 30,
-      SESSION_IDLE_DAYS: 14,
+      SESSION_TTL_DAYS: 90,
+      SESSION_IDLE_DAYS: 90,
       VOLUME_SOFT_CAP_MB: 800,
       TRUST_PROXY_HOPS: 1,
       WORK_INTEGRATIONS: 'allow',
@@ -50,7 +50,7 @@ describe('relay env', () => {
       SESSION_IDLE_DAYS: 45,
     })
     expect(() => loadEnv({ ...base, SESSION_TTL_DAYS: '10', SESSION_IDLE_DAYS: '11' })).toThrow(/SESSION_IDLE_DAYS/)
-    expect(() => loadEnv({ ...base, SESSION_IDLE_DAYS: '31' })).toThrow(/SESSION_IDLE_DAYS/) // the default TTL is 30
+    expect(() => loadEnv({ ...base, SESSION_IDLE_DAYS: '91' })).toThrow(/SESSION_IDLE_DAYS/) // the default TTL is 90 (2026-11-14)
     expect(loadEnv({ ...base, SESSION_TTL_DAYS: '14', SESSION_IDLE_DAYS: '14' }).SESSION_IDLE_DAYS).toBe(14)
     for (const bad of [
       { MEDIA_UPLOADS_PER_HOUR: '0' },

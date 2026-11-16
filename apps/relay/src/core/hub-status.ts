@@ -13,6 +13,8 @@ export type StatusDeps = {
 
 export class StatusTimers {
   private queuedTimers = new Map<string, { handle: unknown; threadId: string }>()
+  /** Per thread, the messages whose 30 s ran out unseen: the ones a derived `queued` row is standing for. */
+  private waitingUnseen = new Map<string, Set<string>>()
   constructor(
     private d: HubDeps,
     private deps: StatusDeps,
@@ -24,7 +26,7 @@ export class StatusTimers {
     if (!ev) return
     const msgId = String(ev.client_msg_id)
     const threadId = String(ev.thread_id)
-    this.clearQueuedTimer(msgId)
+    this.dropTimer(msgId)
     const handle = this.d.clock.setTimeout(() => {
       this.queuedTimers.delete(msgId)
       if (!this.deps.bridgeOnline()) return
@@ -37,17 +39,34 @@ export class StatusTimers {
         since: new Date(this.d.clock.now()).toISOString(),
       }
       this.d.store.setStatus(status, true)
+      const waiting = this.waitingUnseen.get(threadId) ?? new Set<string>()
+      waiting.add(msgId)
+      this.waitingUnseen.set(threadId, waiting)
       this.deps.fanOut(mkFrame(this.d.clock, 'status', status))
     }, QUEUED_AFTER_MS)
     this.queuedTimers.set(msgId, { handle, threadId })
   }
+  /**
+   * The message is settled: the agent has seen it, or the Mac refused it. Its timer stops, and if its 30 s had already
+   * run out, the derived `queued` row it caused goes idle once no other message in the thread is still waiting unseen.
+   * Without this a `seen` that came after the 30 s left "Busy with another task" standing until the Mac disconnected.
+   */
   clearQueuedTimer(msgId: string): void {
+    this.dropTimer(msgId)
+    for (const [threadId, waiting] of this.waitingUnseen) {
+      if (!waiting.delete(msgId)) continue
+      if (waiting.size === 0) this.clearDerivedQueued(threadId)
+      return
+    }
+  }
+  private dropTimer(msgId: string): void {
     const t = this.queuedTimers.get(msgId)
     if (t) this.d.clock.clearTimeout(t.handle)
     this.queuedTimers.delete(msgId)
   }
   /** A reply means the message was handled: a derived `queued` row (ours, not the bridge's) goes idle. */
   clearDerivedQueued(threadId: string): void {
+    this.waitingUnseen.delete(threadId)
     const cur = this.d.store.getStatus(threadId)
     if (!cur || !cur.derived || cur.state !== 'queued') return
     this.setIdle(threadId)
@@ -78,10 +97,13 @@ export class StatusTimers {
       else if (s.state === 'queued' && this.d.store.getStatus(s.thread_id)?.derived) this.setIdle(s.thread_id)
     }
   }
+  /** The Mac spoke for the thread itself (a `status` frame, a reply): its word replaces anything derived here. */
   clearThreadQueued(threadId: string): void {
-    for (const [id, t] of this.queuedTimers) if (t.threadId === threadId) this.clearQueuedTimer(id)
+    for (const [id, t] of this.queuedTimers) if (t.threadId === threadId) this.dropTimer(id)
+    this.waitingUnseen.delete(threadId)
   }
   clearQueuedTimers(): void {
-    for (const id of [...this.queuedTimers.keys()]) this.clearQueuedTimer(id)
+    for (const id of [...this.queuedTimers.keys()]) this.dropTimer(id)
+    this.waitingUnseen.clear()
   }
 }

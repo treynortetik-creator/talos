@@ -10,10 +10,12 @@
 # Everything runs in a throwaway agent folder with a throwaway HOME / XDG; nothing touches your real state.
 export PYTHONDONTWRITEBYTECODE=1
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 SB="$(mktemp -d)" || exit 2
 case "$SB" in /*/*) ;; *) echo "suspicious temp dir '$SB'" >&2; exit 2 ;; esac
 trap 'rm -rf "$SB"' EXIT
 export HOME="$SB/home" XDG_STATE_HOME="$SB/state" XDG_CONFIG_HOME="$SB/cfg"; mkdir -p "$HOME"
+talos_test_sandbox "$SB"
 unset CHRONOS_RUN TALOS_UNATTENDED CHRONOS_CONFIG
 export KIT SB
 python3 - <<'PY'
@@ -155,6 +157,10 @@ def score(cases):
             print("  ok   %-52s %d ptr%s" % (label, len(got), "  (missed %s)" % ",".join(sorted(os.path.basename(m) for m in missed)) if missed else ""))
 
 
+# "Ready" is a project AND an English word; telling the two apart needs the system dictionary (not on every Linux)
+HAS_DICT = os.path.exists("/usr/share/dict/words")
+if not HAS_DICT:
+    print("skip ordinary word that is a project: no /usr/share/dict/words on this system (Arch: the words package)")
 print("memory-reflex.py -- made-up wiki (exact-name resolution, wrong pointers forbidden)")
 score([
     ("full name", "What did Dana Ruiz say about the renewal?", [DANA]),
@@ -168,7 +174,7 @@ score([
     ("project, lowercase coined name", "quasarfin needs a new owner this week", [QF]),
     ("project + person", "Draft the Orrery Platform update for Dana Ruiz", [ORRERY, DANA]),
     ("org", "Acme Corp renewal came up again", [ACME]),
-    ("ordinary word that is a project", "Ready when you are, give me a minute", []),
+    *([("ordinary word that is a project", "Ready when you are, give me a minute", [])] if HAS_DICT else []),
     ("ordinary word as sentence opener", "Grant them access tomorrow", []),
     ("ordinary word, real person full name", "Let's grant access to Grant Ellis", [GRANT]),
     ("outsider with a known surname", "Thomas Edison invented the bulb", []),
@@ -239,8 +245,15 @@ logp = os.path.join(sd, "reflex-log.jsonl")
 logtxt = open(logp).read() if os.path.exists(logp) else ""
 check("the log records pointers, never the prompt text", logtxt and "said so" not in logtxt and "Quarterly Budget" not in logtxt)
 srt = sorted(timings)
-check("speed: median under 150 ms, worst under 600 ms (%d runs; median %.0f ms, worst %.0f ms)" % (len(srt), srt[len(srt) // 2], srt[-1]),
-      srt[len(srt) // 2] < 150 and srt[-1] < 600)
+# The budget is slack for this machine, so it scales as every test budget does (TALOS_TEST_TIME_FACTOR: the gate sets 3 on a
+# small Mac, where this ran 64 ms alone and 164-234 ms beside the rest of the gate's tests); 1 elsewhere.
+try:
+    tf = max(1.0, float(os.environ.get("TALOS_TEST_TIME_FACTOR") or 1))
+except ValueError:
+    tf = 1.0
+med_cap, worst_cap = 150 * tf, 600 * tf
+check("speed: median under %.0f ms, worst under %.0f ms (%d runs; median %.0f ms, worst %.0f ms)" % (med_cap, worst_cap, len(srt), srt[len(srt) // 2], srt[-1]),
+      srt[len(srt) // 2] < med_cap and srt[-1] < worst_cap)
 
 print("  memory-reflex: %d cases, %d ideal pointers, %d missed, %d wrong" % (tot["cases"], tot["ideal"], tot["missed"], tot["wrong"]))
 check("ZERO wrong pointers across the whole suite", tot["wrong"] == 0)

@@ -50,10 +50,23 @@ public enum LoginShellEnv {
     return nil
   }
 
+  /// What a worker launch sets for itself (`WorkerSpec`): the claude.ai connectors switch and the no-channel state dirs. Leaked into the app's
+  /// environment (`install.sh` run from a thread session) they would reach Main. The owner's own state dirs stay; `desktop.json` can set
+  /// any of them on purpose, after this.
+  static func isWorkerChannelSwitch(_ name: String, _ value: String) -> Bool {
+    if workerSwitchAlways.contains(name) { return true }
+    return workerSwitchNoChannel.contains(name) && value.hasSuffix(noChannelSuffix)
+  }
+  /// The names `isWorkerChannelSwitch` drops whatever their value, those it drops only with the no-channel folder's value, and that value's
+  /// end. The launch spec hashes these lists (`WorkerEnvStripRules`): they are the rule, not a copy of it.
+  public static let workerSwitchAlways: Set<String> = ["ENABLE_CLAUDEAI_MCP_SERVERS"]
+  public static let workerSwitchNoChannel: Set<String> = ["TELEGRAM_STATE_DIR", "IMESSAGE_STATE_DIR"]
+  public static let noChannelSuffix = "/workers/_nochannel"
+
   /// shell env − denylist − inherited Claude Code markers (`ClaudeEnvScrub`), then `overrides` (desktop.json `env`) on
   /// top, then TERM and COLORTERM. THE one place every launch path builds the agent's environment.
   public static func build(shellEnv: [String: String], overrides: [String: String]) -> [String: String] {
-    var env = ClaudeEnvScrub.scrub(shellEnv.filter { !denylist.contains($0.key) })
+    var env = ClaudeEnvScrub.scrub(shellEnv.filter { !denylist.contains($0.key) && !isWorkerChannelSwitch($0.key, $0.value) })
     for (k, v) in overrides where !ClaudeEnvScrub.isSessionMarker(k) { env[k] = v }
     env["TERM"] = "xterm-256color"
     env["COLORTERM"] = "truecolor"

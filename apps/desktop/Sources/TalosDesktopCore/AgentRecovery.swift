@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// When the Mac app restarts the agent or puts back the last good setup, and what it tells the owner. Pure: the supervisor reads
@@ -89,6 +90,41 @@ public enum AgentRecovery {
     }
   }
 
+  /// Who a request is from, by its proof alone: nothing else in the file can say (any program running as the owner can write it).
+  public enum Asker: Equatable, Sendable {
+    /// The owner's proof verified (`RestartProofCheck`). `usedKey` is recorded as used, and `signedMs` raises the replay mark, the moment
+    /// the request is decided, whatever the decision.
+    case owner(usedKey: String, signedMs: Double)
+    /// No proof: a session's `restart_main`, or the phone's button through a bridge older than the proof. Gets the restart check.
+    case agent
+    /// A proof the owner's device really signed for this request, not seen before, that this app still does not take as the owner's word
+    /// (`RestartProofCheck.Unaccepted`: its signed time, or a form this version does not know): an agent's request, with a line to the
+    /// owner naming why. Its key is still recorded as used.
+    case clockOff(usedKey: String, RestartProofCheck.Unaccepted)
+    /// A proof that claims the owner and does not verify, at this step: refused whatever the restart check says.
+    case badProof(RestartProofCheck.Step)
+
+    public var isOwner: Bool { if case .owner = self { return true } else { return false } }
+  }
+
+  public static func asker(
+    _ r: AgentRequest, nowMs: Double, launchedAtMs: Double = 0, markMs: Double = 0, pinnedKey: (String) -> P256.Signing.PublicKey?,
+    isUsed: (String) -> Bool
+  ) -> Asker {
+    switch r.proof {
+    case .none: return .agent
+    case .malformed: return .badProof(.shape)
+    case .present(let p):
+      switch RestartProofCheck.verify(
+        p, controlId: r.controlId, nowMs: nowMs, launchedAtMs: launchedAtMs, markMs: markMs, pinnedKey: pinnedKey, isUsed: isUsed)
+      {
+      case .ok(_, let key, let ms): return .owner(usedKey: key, signedMs: ms)
+      case .outOfTime(let key, _, let why): return .clockOff(usedKey: key, why)
+      case .no(let step): return .badProof(step)
+      }
+    }
+  }
+
   /// `crashLoopStopped`: the supervisor stopped restarting because `CrashLoop` said the cap was hit. `bridgeDownFor` is seconds
   /// the supervisor has watched the bridge down (see `BridgeWatch`); `restoredOnce` is the latch that keeps the automatic restore
   /// to one. `ownerStopped`: the owner pressed Stop at the Mac. `sinceLastRequest`: seconds since a request was last acted on.
@@ -104,7 +140,7 @@ public enum AgentRecovery {
       if r.controlId == lastHandledId || r.isStale(nowMs: nowMs) || r.ts < launchedAtMs { return .discard }
       // Product decision, one line to flip: while the owner's Stop stands, the phone's request is ignored.
       if ownerStopped { return .refuse(.ownerStopped) }
-      if let since = sinceLastRequest, since < requestMinGap { return .refuse(.tooSoon) }
+      if isTooSoon(sinceLastRequest: sinceLastRequest) { return .refuse(.tooSoon) }
       return .restart(controlId: r.controlId)
     case .absent: break
     }
@@ -112,6 +148,12 @@ public enum AgentRecovery {
     if crashLoopStopped { return .restore(.crashLoop) }
     if bridgeDownFor >= bridgeDownLimit { return .restore(.bridgeDown) }
     return .none
+  }
+
+  /// A request this soon after the last one acted on is refused (`decide`'s rule, and the restart check's `too_soon`: one place).
+  public static func isTooSoon(sinceLastRequest: Double?) -> Bool {
+    guard let since = sinceLastRequest else { return false }
+    return since < requestMinGap
   }
 
   /// How the bridge looks from its status file, nil when that cannot be told: no file, or a stamp from the future (a skewed or

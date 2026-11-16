@@ -20,7 +20,7 @@ export function checkResolve(store: Store, clock: Clock, frame: FrameOf<'card.re
   if (!card) return { ok: false, code: 'card_not_pending', message: 'unknown card' }
   if (card.state === 'expired') return { ok: false, code: 'card_expired', message: 'card expired' }
   if (card.state !== 'pending') return { ok: false, code: 'card_not_pending', message: `card is ${card.state}` }
-  if (Date.parse(card.expires_at) <= clock.now()) {
+  if ((store.cardExpiresAt(card.id) ?? Date.parse(card.expires_at)) <= clock.now()) {
     return { ok: false, code: 'card_expired', message: 'card expired', expired: card }
   }
   if (frame.payload_hash !== card.payload_hash) {

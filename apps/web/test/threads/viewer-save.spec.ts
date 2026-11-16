@@ -33,12 +33,14 @@ async function openViewer(page: Page, headStatus = 200, headDelayMs = 0) {
 test('the viewer offers Download / Share: a thumb tall, inside the screen, and saves the file under its own name', async ({
   page,
 }, info) => {
-  await page.addInitScript(() => {
-    if (matchMedia('(pointer: coarse)').matches) {
+  // The phones get a working Web Share. Decided here from the project, not in the page with matchMedia: at document start
+  // Linux WebKit does not match (pointer: coarse) yet (it does a moment later), so the stub was left out and the app,
+  // rightly, offered Download.
+  if (info.project.name !== 'desktop')
+    await page.addInitScript(() => {
       Object.defineProperty(navigator, 'canShare', { configurable: true, value: () => true })
       Object.defineProperty(navigator, 'share', { configurable: true, value: async () => {} })
-    }
-  })
+    })
   await openViewer(page)
   const save = page.getByTestId('viewer-save')
   await expect(save).toHaveText(info.project.name === 'desktop' ? 'Download' : 'Share')

@@ -17,6 +17,7 @@
 export PYTHONDONTWRITEBYTECODE=1
 set -uo pipefail
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
@@ -25,6 +26,7 @@ SB="$(mktemp -d)" || exit 2
 SB="$(cd "$SB" && pwd -P)" || exit 2      # macOS: $TMPDIR is under /var, a link to /private/var; every path below must be the real one
 case "$SB" in /*/*) ;; *) echo "suspicious temp dir '$SB'" >&2; exit 2 ;; esac
 trap 'chmod -R u+w "$SB" 2>/dev/null; rm -rf "$SB"' EXIT
+HOME="$SB/home" talos_test_sandbox "$SB"
 # macOS ships no `timeout` (GNU coreutils has one). Without it every `timeout N claude ...` below fails with 127 before claude
 # starts and writes no debug log. A real one is kept; otherwise a perl stand-in goes on PATH (an executable: `env` calls it too).
 if ! command -v timeout >/dev/null 2>&1; then
@@ -226,7 +228,7 @@ out="$(cd "$LB" && python3 "$(vendor_release "$TALOS_VENDOR_DIR/kit")/scripts/ta
 # the old upgrade path must not write through the links into the shared release
 out="$(bash "$KIT/scripts/upgrade.sh" --into "$A" --dry-run 2>&1)"; rc=$?
 { [ "$rc" = 2 ] && <<<"$out" grep -q 'link into a Talos plugin release'; } && ok "upgrade.sh refuses an agent whose hooks/ and scripts/ are links into a release (it would write into the shared release)" || no "upgrade.sh did not refuse (rc=$rc)" "$out"
-python3 "$KIT/scripts/settings-merge.py" --agent-dir "$A" 2>&1 | grep -q 'is already registered' && ok "settings-merge.py works on a plugin agent as on any other: its settings.json registers the hooks, so it finds nothing to add" || no "settings-merge.py output for a plugin agent" "$(python3 "$KIT/scripts/settings-merge.py" --agent-dir "$A" 2>&1 | head -4)"
+python3 "$KIT/scripts/settings-merge.py" --agent-dir "$A" 2>&1 | grep 'is already registered' >/dev/null && ok "settings-merge.py works on a plugin agent as on any other: its settings.json registers the hooks, so it finds nothing to add" || no "settings-merge.py output for a plugin agent" "$(python3 "$KIT/scripts/settings-merge.py" --agent-dir "$A" 2>&1 | head -4)"
 
 # the runner checks the zone rule and the contract (and these checks fail when the runner is broken: see the mutations below)
 fresh_home h3c; python3 "$KIT/scripts/plugin-release.py" build --vendor "$TALOS_VENDOR_DIR/kit" --activate >/dev/null 2>&1
@@ -505,6 +507,15 @@ python3 "$KIT/scripts/plugin-release.py" activate --vendor "$V4" --version 1.0.0
 python3 "$KIT/scripts/plugin-release.py" build --source "$SB/kitB" --vendor "$V4" >/dev/null 2>&1 && ok "building the same release again (same content) is a no-op" || no "rebuild of an identical release failed"
 printf 'changed\n' >> "$SB/kitB/hooks/agent-log.py"; python3 "$KIT/scripts/plugin-release.py" build --source "$SB/kitB" --vendor "$V4" >/dev/null 2>&1 && no "a release was overwritten with different content" || ok "a release is immutable: the same version with different content is refused"
 CLAUDE="$(command -v claude || true)"
+CL_SKIP="the claude CLI is not installed here"
+# The real-session checks test how the Claude Code Talos supports loads a local-folder plugin (SETUP.md: 2.1.304 or newer).
+# An older claude loads a fresh home's marketplace differently, so what it does is no evidence either way: skip, and say why.
+CL_MIN=2.1.304
+CL_VER="$([ -n "$CLAUDE" ] && "$CLAUDE" --version 2>/dev/null | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+if [ -n "$CLAUDE" ] && [ -n "$CL_VER" ] && [ "$(printf '%s\n%s\n' "$CL_MIN" "$CL_VER" | sort -V | head -1)" != "$CL_MIN" ]; then
+  CL_SKIP="claude $CL_VER at $CLAUDE is older than $CL_MIN, the oldest Claude Code Talos supports"
+  CLAUDE=""
+fi
 if [ -n "$CLAUDE" ]; then
   # The real thing: a session in an agent folder whose settings.json names the vendor as a local-folder marketplace. Claude Code
   # loads a relative-path plugin of such a marketplace in place, through the `current` symlink. A dead API address is fine: the
@@ -612,8 +623,33 @@ PY
   v="$(HOME="$SB/claude4" claude plugin validate "$TALOS_VENDOR_DIR/kit" 2>&1)"; rc=$?
   { [ "$rc" = 0 ] && <<<"$v" grep -q 'Validation passed'; } && ok "[claude] claude plugin validate passes on the marketplace folder (its one warning: the source goes through the current symlink, which validation never follows)" || no "[claude] marketplace validate failed (rc=$rc)" "$(printf '%s' "$v" | tail -5)"
 else
-  echo "  skip claude plugin validate and the real-session checks (the claude CLI is not installed here)"
+  echo "  skip claude plugin validate and the real-session checks ($CL_SKIP)"
 fi
+# ================================================================ a Talos distro: the marketplace path is root's kit, as written
+# root's managed settings allow only the path /opt/talos-app/kit as written (Titan's measurement 2: a link to it, or the home vendor,
+# is blocked). A box with root's marker (_rooted.py, the supervisor's rule: a plain file nobody else can write, in a folder nobody
+# else can write; the test's own uid stands for root under TALOS_KIT_TEST=1) gets exactly that path.
+fresh_home hr; MKD="$HOME/talos-wsl"; MK="$MKD/marker"; A="$HOME/agent"; V="$TALOS_VENDOR_DIR/kit"
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-chronos 2>&1)" || no "install for the rooted case failed" "$(printf '%s' "$out" | tail -3)"
+REL="$(vendor_release "$V")"
+mk_entry(){ python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["extraKnownMarketplaces"]["talos-local"]["source"]["path"])' "$A/.claude/settings.json"; }
+check_start(){ TALOS_KIT_TEST=1 TALOS_KIT_ROOTED_MARKER="$MK" python3 "$REL/scripts/release-check.py" start --release "$REL" --agent "$A" --vendor "$V" 2>&1; }
+[ "$(mk_entry)" = "$V" ] && ok "no Talos distro: install names the home vendor, as before" || no "no Talos distro: not the home vendor" "$(mk_entry)"
+out="$(check_start)"; rc=$?; { [ "$rc" = 0 ] && ! <<<"$out" grep -q FAIL; } && ok "release-check start passes with no marker (home vendor)" || no "release-check start did not pass with no marker" "rc=$rc $out"
+mkdir -p "$MKD"; chmod 0755 "$MKD"; : > "$MK"; chmod 0644 "$MK"
+out="$(check_start)"; <<<"$out" grep -q "does not name root's kit" && ok "a Talos distro: release-check refuses settings that name the home vendor" || no "a Talos distro: the home vendor passed release-check" "$out"
+OLD="$(vendor_release "$V")"
+out="$(TALOS_KIT_TEST=1 TALOS_KIT_ROOTED_MARKER="$MK" python3 "$KIT/scripts/plugin-settings.py" reconcile --agent "$A" --old-release "$OLD" --new-release "$OLD" 2>&1)"
+[ "$(mk_entry)" = /opt/talos-app/kit ] && ok "a Talos distro: reconcile (every update) moves an older home entry to root's kit" || no "reconcile left the home entry" "$(mk_entry) $out"
+out="$(check_start)"; rc=$?; { [ "$rc" = 0 ] && ! <<<"$out" grep -q FAIL; } && ok "a Talos distro: release-check passes settings naming root's kit (root's copy is the supervisor's to check)" || no "a Talos distro: release-check did not pass root's entry" "rc=$rc $out"
+chmod 0777 "$MKD"
+out="$(check_start)"; <<<"$out" grep -q "is not root's own folder" && ok "a marker folder others can write: release-check stops" || no "a writable marker folder passed" "$out"
+out="$(TALOS_KIT_TEST=1 TALOS_KIT_ROOTED_MARKER="$MK" python3 "$KIT/scripts/plugin-settings.py" reconcile --agent "$A" --old-release "$OLD" --new-release "$OLD" 2>&1)"; rc=$?
+{ [ "$rc" != 0 ] && <<<"$out" grep -q "Update the kit"; } && ok "a marker folder others can write: plugin-settings writes nothing and says what to do" || no "plugin-settings ran on a bad marker" "rc=$rc $out"
+chmod 0755 "$MKD"
+# the env seam is a test's only: without TALOS_KIT_TEST=1 the shipped path /etc/talos-wsl is read, whatever the variable says
+out="$(TALOS_KIT_ROOTED_MARKER="$MK" python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import _rooted; print(_rooted._where()[0])' "$KIT/scripts")"
+[ "$out" = /etc/talos-wsl/marker ] && ok "TALOS_KIT_ROOTED_MARKER alone moves nothing (only with TALOS_KIT_TEST=1)" || no "the env alone moved the marker" "$out"
 export HOME="$REALHOME"
 echo "  plugin: PASS $PASS FAIL $FAIL"
 [ "$FAIL" -eq 0 ]

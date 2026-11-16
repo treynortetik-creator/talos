@@ -36,9 +36,9 @@ describe('CommandsList', () => {
     expect(COMMAND_EFFECTS).toEqual(['read', 'writes_home', 'writes_agent_dir', 'network', 'changes_app'])
   })
 
-  test('who is derived from agent_may_run and needs_terminal', () => {
-    expect(commandWho({ agent_may_run: true })).toBe('agent')
-    expect(commandWho({ agent_may_run: false })).toBe('owner')
-    expect(commandWho({ agent_may_run: false, needs_terminal: true })).toBe('owner_terminal')
+  test("who: agent unless a row says internal; a terminal row is the owner's at a terminal", () => {
+    expect(commandWho({})).toBe('agent')
+    expect(commandWho({ who: 'internal' })).toBe('internal')
+    expect(commandWho({ needs_terminal: true })).toBe('owner_terminal')
   })
 })

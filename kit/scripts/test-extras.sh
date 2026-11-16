@@ -5,6 +5,7 @@
 set -uo pipefail
 export PYTHONPATH= PYTHONDONTWRITEBYTECODE=1
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
@@ -12,6 +13,7 @@ SB="$(mktemp -d)" || exit 2
 case "$SB" in /*/*) ;; *) echo "suspicious temp dir '$SB'" >&2; exit 2 ;; esac
 trap 'rm -rf "$SB"' EXIT
 REALHOME="$HOME"; export HOME="$SB/home"; mkdir -p "$HOME/bin"
+talos_test_sandbox "$SB"
 export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
 A="$SB/agent"; mkdir -p "$A/scripts" "$A/memory"
 cp "$KIT"/scripts/*.py "$KIT"/scripts/*.sh "$A/scripts/" 2>/dev/null

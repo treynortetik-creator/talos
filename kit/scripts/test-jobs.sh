@@ -14,6 +14,7 @@
 export PYTHONDONTWRITEBYTECODE=1
 set -uo pipefail
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$KIT/scripts/_test-env.sh"
 TJ="$KIT/scripts/talos-jobs.py"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
@@ -23,6 +24,7 @@ SB="$(mktemp -d)" || exit 2
 case "$SB" in /*/*) ;; *) echo "suspicious temp dir '$SB'" >&2; exit 2 ;; esac
 trap 'rm -rf "$SB"' EXIT
 export HOME="$SB/home"; mkdir -p "$HOME/.config/chronos"
+talos_test_sandbox "$SB"
 export CHRONOS_CONFIG="$HOME/.config/chronos/config.json"
 printf '{\n "workspace": "%s",\n "jobs_file": "~/.config/chronos/jobs.json",\n "jobs_dir": "~/.config/chronos/jobs"\n}\n' "$SB/agent" > "$CHRONOS_CONFIG"
 mkdir -p "$SB/agent/.claude"
@@ -35,12 +37,15 @@ JF="$HOME/.config/chronos/jobs.json"; JD="$HOME/.config/chronos/jobs"
 # The Chronos that LAUNCHD runs, as Talos reads it: the tick plist names <runtime>/bin/chronos-tick.sh, and the version comes from
 # <runtime>/lib/chronoslib.py. (Not from the clone Talos made: that can be newer than what is actually installed.)
 export CHRONOS_LAUNCHAGENTS_DIR="$HOME/Library/LaunchAgents"; mkdir -p "$CHRONOS_LAUNCHAGENTS_DIR"
+export CHRONOS_SYSTEMD_DIR="$HOME/.config/systemd/user"; mkdir -p "$CHRONOS_SYSTEMD_DIR"
 mkplist(){ # $1 = runtime dir, $2 = version ("" = leave no lib file)
   mkdir -p "$1/lib" "$1/bin"; rm -f "$1/lib/chronoslib.py"; [ -n "$2" ] && printf 'VERSION = "%s"\n' "$2" > "$1/lib/chronoslib.py"
   python3 - "$CHRONOS_LAUNCHAGENTS_DIR/io.github.chronos.tick.plist" "$1" <<'PY'
 import plistlib,sys
 plistlib.dump({"Label":"io.github.chronos.tick","ProgramArguments":["/bin/bash",sys.argv[2]+"/bin/chronos-tick.sh"]},open(sys.argv[1],"wb"))
 PY
+  # on Linux the tick is Chronos's systemd user timer: its service names the same script (what Chronos's install.sh writes)
+  printf '[Service]\nType=oneshot\nExecStart=/bin/bash "%s/bin/chronos-tick.sh"\nKillMode=process\n' "$1" > "$CHRONOS_SYSTEMD_DIR/chronos-tick.service"
 }
 mkplist "$SB/rt" 0.2.2
 
@@ -59,7 +64,7 @@ mkbad; python3 - "$SB/bad/jobs/jobs.json" <<'PY'
 import json,sys; p=sys.argv[1]; d=json.load(open(p)); d[1]["id"]="Bad_ID"; d[2]["time"]="25:99"; json.dump(d,open(p,"w"))
 PY
 python3 "$TJ" validate --kit-dir "$SB/bad" >/dev/null 2>&1 && no "validator accepted a bad id / time" || ok "validator rejects a bad id and a bad time"
-mkbad; printf 'do the thing in /%s/someone/agent\n{{TALOS_HOME}}\n' Users > "$SB/bad/jobs/talos-weekly-snapshot/prompt.md"
+mkbad; printf 'do the thing in /%s/someone/agent\n{{TALOS_HOME}}\n' Users > "$SB/bad/jobs/talos-state-sweep/prompt.md"
 python3 "$TJ" validate --kit-dir "$SB/bad" >/dev/null 2>&1 && no "validator accepted an absolute home path in a prompt" || ok "validator rejects an absolute user path in a prompt"
 
 mkbad; python3 - "$SB/bad/jobs/jobs.json" <<'PY'
@@ -70,10 +75,11 @@ mkbad; python3 - "$SB/bad/jobs/jobs.json" <<'PY'
 import json,sys; p=sys.argv[1]; d=json.load(open(p)); d[1]["model"]="haiku"; json.dump(d,open(p,"w"))
 PY
 python3 "$TJ" validate --kit-dir "$SB/bad" >/dev/null 2>&1 && no "validator accepted a shipped job pinned to haiku" || ok "validator rejects a shipped job pinned to haiku (Sonnet is the floor)"
-python3 - "$KIT/jobs/jobs.json" <<'PY' && ok "the lint, snapshot and sweep jobs pin model sonnet; the brief inherits the default; the index job is a command job with no model" || no "shipped model pins are wrong"
+python3 - "$KIT/jobs/jobs.json" <<'PY' && ok "the sweep job pins model sonnet; the brief inherits the default; the index, wiki-check and snapshot jobs are command jobs with no model" || no "shipped model pins are wrong"
 import json,sys
 by={j["id"]:j for j in json.load(open(sys.argv[1]))}
-assert all(by[i].get("model")=="sonnet" for i in ("talos-weekly-wiki-lint","talos-weekly-snapshot","talos-state-sweep"))
+assert by["talos-state-sweep"].get("model")=="sonnet"
+assert all(by[i].get("kind")=="command" and "model" not in by[i] for i in ("talos-memory-index","talos-weekly-wiki-lint","talos-weekly-snapshot"))
 assert not by["talos-morning-brief"].get("model")
 m=by["talos-memory-index"]
 assert m["kind"]=="command" and "model" not in m and m["command"].startswith("bash {{TALOS_HOME}}/scripts/memory/refresh-index.sh")
@@ -149,7 +155,7 @@ python3 "$TJ" hook-add --agent-dir "$SB/agent" --chronos-dir "$SB/fakechronos" >
 python3 "$TJ" hook-add --agent-dir "$SB/agent" --chronos-dir "$SB/fakechronos" >/dev/null 2>&1
 c=$(grep -c 'chronos-session-start.py' "$SB/agent/.claude/settings.json")
 [ "$c" = 1 ] && ok "hook-add registers the Chronos hook exactly once" || no "Chronos hook registered $c times"
-( cd "$SB/agent" && mkdir -p scripts && cp "$KIT/scripts/_check_hook_registration.py" scripts/ && python3 scripts/_check_hook_registration.py | grep -q '^OK' ) \
+( cd "$SB/agent" && mkdir -p scripts && cp "$KIT/scripts/_check_hook_registration.py" scripts/ && python3 scripts/_check_hook_registration.py | grep '^OK' >/dev/null ) \
   && ok "the Talos hook registration check still passes with the Chronos hook alongside" || no "adding the Chronos hook broke the registration check"
 python3 "$TJ" hook-remove --agent-dir "$SB/agent" >/dev/null 2>&1
 { ! grep -q 'chronos-session-start.py' "$SB/agent/.claude/settings.json" && grep -q 'pre-tool-guard.py' "$SB/agent/.claude/settings.json" && grep -q 'session-start.py' "$SB/agent/.claude/settings.json"; } \
@@ -183,16 +189,16 @@ out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; n
   && ok "on Chronos 0.2.0 the command job and every restricted job are skipped with a message (nothing registers silently unrestricted)" || no "old-Chronos gate wrong (jobs=$n)" "$out"
 <<<"$out" grep -q 'git -C ~/.local/share/talos/chronos fetch' && <<<"$out" grep -q 'reinstall-chronos' && ok "the message says how to update the Chronos clone (detached: fetch + checkout the pin, or --reinstall-chronos), not 'git pull'" || no "update help missing or says git pull" "$out"
 out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" --full-access 2>&1)"; n=$(cnt)
-{ [ "$n" = 5 ] && python3 - "$JF" <<'PY'
+{ [ "$n" = 3 ] && python3 - "$JF" <<'PY'
 import json,sys
 d={j["id"]:j for j in json.load(open(sys.argv[1]))}
-assert all(d[i]["restricted"] is False and "allowed_tools" not in d[i] for i in ("talos-morning-brief","talos-weekly-wiki-lint","talos-weekly-snapshot","talos-state-sweep"))
+assert all(d[i]["restricted"] is False and "allowed_tools" not in d[i] for i in ("talos-morning-brief","talos-state-sweep"))
 PY
 } && ok "--full-access registers the Claude jobs on an old Chronos, recording restricted:false and no tool list (the explicit opt-out)" || no "--full-access registration wrong (jobs=$n)" "$out"
 python3 "$TJ" unregister >/dev/null 2>&1
 mkplist "$SB/rt" 0.2.1
 python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" >/dev/null 2>&1; n=$(cnt)
-[ "$n" = 5 ] && ok "on Chronos 0.2.1 only the five command jobs register (restricted jobs wait for 0.2.2)" || no "0.2.1 registered $n jobs (want 5)"
+[ "$n" = 7 ] && ok "on Chronos 0.2.1 only the seven command jobs register (restricted jobs wait for 0.2.2)" || no "0.2.1 registered $n jobs (want 7)"
 python3 "$TJ" unregister >/dev/null 2>&1
 mkplist "$SB/rt" 0.2.2
 python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" >/dev/null 2>&1; n=$(cnt)
@@ -206,33 +212,71 @@ python3 "$TJ" unregister >/dev/null 2>&1
 mkdir -p "$HOME/.config/talos" "$SB/clone022/lib"; printf 'VERSION = "0.2.2"\n' > "$SB/clone022/lib/chronoslib.py"; printf '%s\n' "$SB/clone022" > "$HOME/.config/talos/chronos-dir"
 mkplist "$SB/rt" 0.2.1
 out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; n=$(cnt)
-{ [ "$n" = 5 ] && <<<"$out" grep -q 'SKIPPED talos-state-sweep' && <<<"$out" grep -q "$SB/rt"; } && ok "a pinned 0.2.2 CLONE does not fool Talos: the version comes from the runtime launchd runs (0.2.1), so restricted jobs are skipped and the message names that runtime" || no "Talos trusted the clone's version" "$out"
+{ [ "$n" = 7 ] && <<<"$out" grep -q 'SKIPPED talos-state-sweep' && <<<"$out" grep -q "$SB/rt"; } && ok "a pinned 0.2.2 CLONE does not fool Talos: the version comes from the runtime launchd runs (0.2.1), so restricted jobs are skipped and the message names that runtime" || no "Talos trusted the clone's version" "$out"
 python3 "$TJ" unregister >/dev/null 2>&1
 # unknown: no plist at all, an unreadable runtime, a plist that names no tick script, a runtime with no VERSION
+UNIT="$CHRONOS_SYSTEMD_DIR/chronos-tick.service"
 for case in noplist noruntime badplist noversion; do
-  rm -f "$CHRONOS_LAUNCHAGENTS_DIR/io.github.chronos.tick.plist"
+  rm -f "$CHRONOS_LAUNCHAGENTS_DIR/io.github.chronos.tick.plist" "$UNIT"
   case "$case" in
     noplist) ;;
     noruntime) python3 - "$CHRONOS_LAUNCHAGENTS_DIR/io.github.chronos.tick.plist" "$SB/does-not-exist" <<'PY'
 import plistlib,sys
 plistlib.dump({"ProgramArguments":["/bin/bash",sys.argv[2]+"/bin/chronos-tick.sh"]},open(sys.argv[1],"wb"))
 PY
+      printf '[Service]\nExecStart=/bin/bash "%s/bin/chronos-tick.sh"\n' "$SB/does-not-exist" > "$UNIT"
       ;;
-    badplist) printf 'not a plist' > "$CHRONOS_LAUNCHAGENTS_DIR/io.github.chronos.tick.plist" ;;
+    badplist) printf 'not a plist' > "$CHRONOS_LAUNCHAGENTS_DIR/io.github.chronos.tick.plist"; printf 'not a unit\n' > "$UNIT" ;;
     noversion) mkplist "$SB/rt" ""; printf '# no version here\n' > "$SB/rt/lib/chronoslib.py" ;;
   esac
   out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; n=$(cnt)
-  { [ "$n" = 5 ] && <<<"$out" grep -q 'SKIPPED talos-morning-brief' && <<<"$out" grep -q 'cannot tell which Chronos'; } && ok "unknown Chronos version ($case): restricted jobs are refused, not assumed fine" || no "unknown version ($case) accepted (jobs=$n)" "$out"
+  { [ "$n" = 7 ] && <<<"$out" grep -q 'SKIPPED talos-morning-brief' && <<<"$out" grep -q 'cannot tell which Chronos'; } && ok "unknown Chronos version ($case): restricted jobs are refused, not assumed fine" || no "unknown version ($case) accepted (jobs=$n)" "$out"
   python3 "$TJ" unregister >/dev/null 2>&1
 done
 rm -f "$HOME/.config/talos/chronos-dir"
 mkplist "$SB/rt" 0.2.2
 python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" >/dev/null 2>&1
-rm -f "$CHRONOS_LAUNCHAGENTS_DIR/io.github.chronos.tick.plist"
+rm -f "$CHRONOS_LAUNCHAGENTS_DIR/io.github.chronos.tick.plist" "$UNIT"
 python3 "$TJ" enable talos-state-sweep >/dev/null 2>&1 && no "enable accepted a restricted job with an unknown Chronos" || ok "enable refuses a restricted job when the Chronos version cannot be determined"
 python3 "$TJ" harden --agent-dir "$SB/agent" --kit-dir "$KIT" >/dev/null 2>&1; [ $? -ne 0 ] && ok "harden refuses when the Chronos version cannot be determined" || no "harden ran with an unknown Chronos"
 python3 "$TJ" unregister >/dev/null 2>&1
 mkplist "$SB/rt" 0.2.2
+
+# 8c2. off a Mac (only Chronos's systemd timer runs the tick): a restricted job is refused whatever the version, as the bridge
+# refuses it there; --full-access registers; the unit's LAST ExecStart names the runtime, a path with a space included
+rm -f "$CHRONOS_LAUNCHAGENTS_DIR/io.github.chronos.tick.plist"
+out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; n=$(cnt)
+{ <<<"$out" grep -q "don't run on this computer yet" && ! <<<"$out" grep -q 'cannot tell which Chronos'; } && ok "systemd tick only: restricted jobs are refused off a Mac, in words, whatever the version" || no "restricted jobs accepted off a Mac (jobs=$n)" "$out"
+python3 "$TJ" unregister >/dev/null 2>&1
+out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" --full-access 2>&1)"; n=$(cnt)
+[ "$n" -gt 5 ] && ok "systemd tick only: --full-access registers the Claude jobs too ($n)" || no "--full-access off a Mac registered $n" "$out"
+python3 "$TJ" unregister >/dev/null 2>&1
+mkdir -p "$SB/r t/lib" "$SB/old/lib"; printf 'VERSION = "0.5.1"\n' > "$SB/r t/lib/chronoslib.py"; printf 'VERSION = "0.1.0"\n' > "$SB/old/lib/chronoslib.py"
+printf '[Service]\nExecStart=/bin/bash "%s/bin/chronos-tick.sh"\nExecStart=/bin/bash "%s/bin/chronos-tick.sh"\n' "$SB/old" "$SB/r t" > "$UNIT"
+v="$(cd "$(dirname "$TJ")" && python3 -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("tj", sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.installed_chronos()[0])' "$TJ")"
+[ "$v" = "(0, 5, 1)" ] && ok "the last ExecStart wins, and a runtime path with a space is read" || no "ExecStart parsing gave $v"
+mkplist "$SB/rt" 0.2.2
+
+# 8c2. weekly-wiki-check.sh, the command the wiki-lint job runs (no Claude): clean on a tidy wiki, says what needs attention
+# on a broken one, changes nothing, and fails only for a folder that is no agent
+W="$SB/wcheck"; mkdir -p "$W/scripts" "$W/wiki" "$W/memory"
+cp "$KIT/scripts/weekly-wiki-check.sh" "$KIT/scripts/wiki-lint.py" "$KIT/scripts/_agent_root.py" "$W/scripts/"
+# a new agent's wiki, written here: $KIT/wiki is the kit's starter only in the kit repo; in an agent folder (where the
+# install gate runs this suite) it holds the owner's own notes, and this check must not depend on them
+printf '# Index\n\n## Start here\n*(empty on purpose)*\n' > "$W/wiki/_index.md"
+printf '# Wiki\n\nNotes go here.\n' > "$W/wiki/README.md"
+: > "$W/.talos-version"
+out="$(CLAUDE_PROJECT_DIR="$W" bash "$W/scripts/weekly-wiki-check.sh" 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && <<<"$out" head -1 | grep -q '^clean: nothing has been written to the wiki yet'; } && ok "weekly-wiki-check.sh on a new agent's wiki (no notes yet) says clean first, exit 0" || no "wiki check on a clean wiki wrong (rc=$rc)" "$out"
+printf -- '---\ntitle: A\ntype: note\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\nSee [[nowhere-at-all]] and [[nor-here]].\n' > "$W/wiki/a.md"
+before="$(find "$W" -type f -exec sha256sum {} + 2>/dev/null || find "$W" -type f -exec shasum -a 256 {} +)"
+out="$(CLAUDE_PROJECT_DIR="$W" bash "$W/scripts/weekly-wiki-check.sh" 2>&1)"; rc=$?
+after="$(find "$W" -type f -exec sha256sum {} + 2>/dev/null || find "$W" -type f -exec shasum -a 256 {} +)"
+{ [ "$rc" = 0 ] && <<<"$out" head -1 | grep -q '^needs attention: the wiki lint found problems' && <<<"$out" grep -q 'nowhere-at-all' && [ "$before" = "$after" ]; } \
+  && ok "a broken link: the first line says what needs attention, the lint output names it, and no file changed" || no "wiki check on a broken wiki wrong (rc=$rc)" "$out"
+rm -rf "$W/wiki"
+out="$(CLAUDE_PROJECT_DIR="$W" bash "$W/scripts/weekly-wiki-check.sh" 2>&1)"; rc=$?
+{ [ "$rc" = 1 ] && <<<"$out" grep -q 'not a Talos agent folder'; } && ok "a folder with no wiki/ is refused with exit 1 (the job fails and notifies)" || no "wiki check on a non-agent folder wrong (rc=$rc)" "$out"
 
 # 8d. refresh-index.sh, the command the job runs: a clear failure without the venv, the indexer (quietly) with it
 mkdir -p "$SB/agent/scripts/memory"; cp "$KIT/scripts/memory/refresh-index.sh" "$SB/agent/scripts/memory/"
@@ -245,14 +289,27 @@ out="$(bash "$SB/agent/scripts/memory/refresh-index.sh" 2>&1)"; rc=$?
 : > "$XDG_DATA_HOME/talos/venv/.talos-memory-ok"
 out="$(bash "$SB/agent/scripts/memory/refresh-index.sh" 2>&1)"; rc=$?
 { [ "$rc" = 0 ] && grep -q "FAKE-PY $SB/agent/scripts/memory/mem_index.py --quiet" "$SB/index.calls"; } && ok "refresh-index.sh runs mem_index.py --quiet with the shared venv's python and passes its exit code through" || no "refresh-index.sh did not run the indexer (rc=$rc)" "$out"
+# with the reranker model downloaded, the job also times one rerank (no --force) and still passes the indexer's exit code through
+: > "$SB/index.calls"; mkdir -p "$SB/model/onnx"; : > "$SB/model/tokenizer.json"; : > "$SB/model/onnx/model_int8.onnx"
+out="$(TALOS_RERANK_MODEL_DIR="$SB/model" bash "$SB/agent/scripts/memory/refresh-index.sh" 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && grep -q "FAKE-PY $SB/agent/scripts/memory/mem_rerank.py --probe $SB/agent\$" "$SB/index.calls" && ! grep -q -- '--force' "$SB/index.calls"; } && ok "refresh-index.sh with the reranker model downloaded runs the probe after the indexer, without --force" || no "refresh-index.sh did not run the probe (rc=$rc)" "$(cat "$SB/index.calls")"
+# an indexer that fails: the probe does not run, its error is the last line, and the exit code is non-zero
+: > "$SB/index.calls"; cp "$XDG_DATA_HOME/talos/venv/bin/python" "$SB/good-python"
+printf '#!/bin/bash\necho "FAKE-PY $*" >> "%s/index.calls"\ncase "$*" in *mem_index.py*) echo "indexer error: boom"; exit 1 ;; esac\n' "$SB" > "$XDG_DATA_HOME/talos/venv/bin/python"
+out="$(TALOS_RERANK_MODEL_DIR="$SB/model" bash "$SB/agent/scripts/memory/refresh-index.sh" 2>&1)"; rc=$?
+{ [ "$rc" != 0 ] && ! grep -q 'mem_rerank.py' "$SB/index.calls" && [ "$(printf '%s\n' "$out" | tail -1)" = "indexer error: boom" ]; } && ok "refresh-index.sh with a failing indexer: no probe, the indexer's error is the last line, exit non-zero" || no "failing indexer wrong (rc=$rc)" "$out"
+cp "$SB/good-python" "$XDG_DATA_HOME/talos/venv/bin/python"
+: > "$SB/index.calls"
+out="$(TALOS_RERANK_MODEL_DIR="$SB/nomodel" bash "$SB/agent/scripts/memory/refresh-index.sh" 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && ! grep -q 'mem_rerank.py' "$SB/index.calls"; } && ok "refresh-index.sh without the reranker model does not run the probe" || no "probe ran without a model (rc=$rc)"
 unset XDG_DATA_HOME
 
 # 8e. RESTRICTED BY DEFAULT (1.1.2-cli): the shipped Claude jobs carry a tool list, rendered for this agent folder
 python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" >/dev/null 2>&1
-python3 - "$JF" "$SB/agent" <<'PY' && ok "the four Claude jobs register restricted, with their tool list rendered for the agent folder" || no "restricted registration wrong"
+python3 - "$JF" "$SB/agent" <<'PY' && ok "the restricted Claude jobs register restricted, with their tool list rendered for the agent folder" || no "restricted registration wrong"
 import json,sys
 d={j["id"]:j for j in json.load(open(sys.argv[1]))}; A=sys.argv[2]
-for i in ("talos-morning-brief","talos-weekly-wiki-lint","talos-weekly-snapshot","talos-state-sweep"):
+for i in ("talos-morning-brief","talos-state-sweep"):
     j=d[i]; assert j["restricted"] is True and j["allowed_tools"], i
     assert not any("{{" in t for t in j["allowed_tools"]), j["allowed_tools"]
     assert "Bash" not in j["allowed_tools"], "bare Bash"          # no unrestricted shell, ever
@@ -264,7 +321,7 @@ for i in ("talos-morning-brief","talos-weekly-wiki-lint","talos-weekly-snapshot"
         if t.startswith("Edit("): assert t.startswith(("Edit(/"+A+"/", "Edit(/"+__import__("os").path.realpath(A)+"/")), t                   # scoped inside the agent folder (or its resolved spelling)
 assert "restricted" not in d["talos-memory-index"] and d["talos-memory-index"]["kind"]=="command"
 assert "Edit(/%s/memory/briefs/**)" % A in d["talos-morning-brief"]["allowed_tools"]
-assert not any(t.startswith("Edit") for t in d["talos-state-sweep"]["allowed_tools"]+d["talos-weekly-wiki-lint"]["allowed_tools"]+d["talos-weekly-snapshot"]["allowed_tools"]), "a read-only job has a write tool"
+assert not any(t.startswith("Edit") for t in d["talos-state-sweep"]["allowed_tools"]), "a read-only job has a write tool"
 dc = d["talos-dream-cycle"]
 assert dc["restricted"] is True and dc["enabled"] is False and dc["notify"] == "failure", "dream cycle must ship disabled, restricted, failure-only notify"
 RA = __import__("os").path.realpath(A)
@@ -276,7 +333,7 @@ for w in ("am", "mid", "pm", "eve"):
     assert j["kind"] == "command" and j["enabled"] is False and "restricted" not in j and "--job " + w in j["command"] and A in j["command"], w
 PY
 list="$(python3 "$TJ" list 2>&1)"
-{ [ "$(printf '%s' "$list" | grep -c RESTRICTED)" = 5 ] && printf '%s' "$list" | grep 'talos-memory-index' | grep -q command; } && ok "list shows RESTRICTED for the five Claude jobs and command for the index job and the watch jobs" || no "list does not show access" "$list"
+{ [ "$(printf '%s' "$list" | grep -c RESTRICTED)" = 3 ] && printf '%s' "$list" | grep 'talos-memory-index' | grep -q command && printf '%s' "$list" | grep 'talos-weekly-wiki-lint' | grep -q command && printf '%s' "$list" | grep 'talos-weekly-snapshot' | grep -q command; } && ok "list shows RESTRICTED for the three Claude jobs and command for the index, wiki-check, snapshot and watch jobs" || no "list does not show access" "$list"
 # the chosen tool lists must be accepted by Chronos's own validator when a Chronos is around (real check below, section 9)
 # a restricted tool list must cover every command each prompt tells the job to run (validate checks it; prove the check bites)
 mkbad; python3 - "$SB/bad/jobs/jobs.json" <<'PY'
@@ -342,7 +399,7 @@ python3 "$TJ" unregister >/dev/null 2>&1
 # 8h. harden: jobs registered by Talos 1.1.1 become restricted; an untouched prompt is replaced, an edited one is kept
 mkdir -p "$SB/old111/jobs"
 git -C "$KIT" rev-parse --git-dir >/dev/null 2>&1 && git -C "$KIT" cat-file -e 1f01d8b:jobs/jobs.json 2>/dev/null && {
-  for f in jobs.json talos-morning-brief/prompt.md talos-morning-brief/guard.md talos-state-sweep/prompt.md talos-state-sweep/guard.md talos-weekly-snapshot/prompt.md talos-weekly-snapshot/guard.md talos-weekly-wiki-lint/prompt.md talos-weekly-wiki-lint/guard.md; do
+  for f in jobs.json talos-morning-brief/prompt.md talos-morning-brief/guard.md talos-state-sweep/prompt.md talos-state-sweep/guard.md; do
     mkdir -p "$SB/old111/jobs/$(dirname "$f")"; git -C "$KIT" show "1f01d8b:jobs/$f" > "$SB/old111/jobs/$f"; done
   python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$SB/old111" --full-access >/dev/null 2>&1
   # a 1.1.1 registration has no restricted key at all: emulate it
@@ -353,16 +410,16 @@ for j in d:
     if j["id"]=="talos-state-sweep": j["in_session"]=True       # a 1.1.1 user may have armed this job in live sessions
 json.dump(d,open(p,"w"))
 PY
-  echo "MY OWN EDIT" >> "$JD/talos-weekly-snapshot/prompt.md"
+  echo "MY OWN EDIT" >> "$JD/talos-state-sweep/prompt.md"
   out="$(python3 "$TJ" harden --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"
   python3 - "$JF" <<'PY' && ok "harden makes every 1.1.1 Claude job restricted with the shipped tool list" || no "harden did not restrict" "$out"
 import json,sys
 d={j["id"]:j for j in json.load(open(sys.argv[1]))}
-assert all(d[i]["restricted"] is True and d[i]["allowed_tools"] for i in ("talos-morning-brief","talos-weekly-wiki-lint","talos-weekly-snapshot","talos-state-sweep"))
+assert all(d[i]["restricted"] is True and d[i]["allowed_tools"] for i in ("talos-morning-brief","talos-state-sweep"))
 assert "restricted" not in d["talos-memory-index"]
 PY
   grep -q 'RESTRICTED' "$JD/talos-state-sweep/prompt.md" && ok "harden replaces a 1.1.1 prompt the user never edited" || no "harden did not update an untouched prompt"
-  { grep -q 'MY OWN EDIT' "$JD/talos-weekly-snapshot/prompt.md" && <<<"$out" grep -q 'prompt.md KEPT'; } && ok "harden keeps a prompt the user edited, and says so" || no "harden overwrote or hid an edited prompt" "$out"
+  { grep -q 'MY OWN EDIT' "$JD/talos-state-sweep/prompt.md" && <<<"$out" grep -q 'prompt.md KEPT'; } && ok "harden keeps a prompt the user edited, and says so" || no "harden overwrote or hid an edited prompt" "$out"
   python3 - "$JF" "$TJ" <<'PY' && ok "harden switches in_session OFF on a job that had it (restricted + in_session is invalid: Chronos would skip it and the UI would refuse to save it) and every hardened job validates" || no "harden left restricted + in_session, or an invalid job" "$out"
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("tj", sys.argv[2]); tj = importlib.util.module_from_spec(spec); spec.loader.exec_module(tj)
@@ -446,7 +503,7 @@ python3 "$TJ" unregister >/dev/null 2>&1
 if [ -n "${TALOS_TEST_CHRONOS:-}" ] && [ -x "$TALOS_TEST_CHRONOS/bin/chronos" ]; then
   python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" >/dev/null 2>&1
   CH="$TALOS_TEST_CHRONOS/bin/chronos"
-  for id in talos-morning-brief talos-weekly-wiki-lint talos-weekly-snapshot talos-state-sweep; do
+  for id in talos-morning-brief talos-state-sweep; do
     p="$(python3 "$CH" prompt "$id" 2026-10-05 2>&1)"
     if <<<"$p" grep -q 'Never start background tasks' && <<<"$p" grep -q 'FOREGROUND ONLY' && <<<"$p" grep -q "$SB/agent"; then
       ok "real Chronos builds the $id prompt: preamble + locked guard + task, agent path present"
@@ -454,11 +511,11 @@ if [ -n "${TALOS_TEST_CHRONOS:-}" ] && [ -x "$TALOS_TEST_CHRONOS/bin/chronos" ];
   done
   # the command job, end to end through the real run script: no claude, the indexer is a fake python in a fake venv
   CHVER="$(python3 "$CH" --version 2>&1)"
-  if python3 "$CH" field talos-memory-index kind 2>/dev/null | grep -q '^command$'; then
+  if python3 "$CH" field talos-memory-index kind 2>/dev/null | grep '^command$' >/dev/null; then
     ok "real Chronos reads talos-memory-index as a command job ($CHVER)"
     python3 "$CH" prompt talos-memory-index 2026-10-05 >/dev/null 2>&1 && no "real Chronos built a prompt for a command job" || ok "real Chronos has no prompt for it (nothing is sent to Claude)"
     python3 "$TJ" enable talos-memory-index >/dev/null 2>&1
-    CHRONOS_NOW=2026-10-05T07:00 python3 "$CH" due 2>&1 | grep -q '^talos-memory-index|2026-10-05' && ok "real Chronos says the index job is due at 07:00 although it has no prompt.md" || no "command job not due"
+    CHRONOS_NOW=2026-10-05T07:00 python3 "$CH" due 2>&1 | grep '^talos-memory-index|2026-10-05' >/dev/null && ok "real Chronos says the index job is due at 07:00 although it has no prompt.md" || no "command job not due"
     export XDG_DATA_HOME="$SB/data2"; mkdir -p "$XDG_DATA_HOME/talos/venv/bin" "$SB/agent/scripts/memory"; : > "$XDG_DATA_HOME/talos/venv/.talos-memory-ok"
     cp "$KIT/scripts/memory/refresh-index.sh" "$SB/agent/scripts/memory/"; rm -f "$SB/index.calls"
     printf '#!/bin/bash\necho "FAKE-PY $*" >> "%s/index.calls"\necho "indexed 3 files"\n' "$SB" > "$XDG_DATA_HOME/talos/venv/bin/python"; chmod +x "$XDG_DATA_HOME/talos/venv/bin/python"
@@ -472,16 +529,16 @@ PY
     unset XDG_DATA_HOME
   else echo "  skip real-Chronos command-job checks (this Chronos predates 0.2.1)"; fi
   # Chronos 0.2 honours the per-job `model` key (0.1 has no jobenv command and ignores it)
-  env_out="$(python3 "$CH" jobenv talos-weekly-snapshot 2>&1)"
+  env_out="$(python3 "$CH" jobenv talos-state-sweep 2>&1)"
   if <<<"$env_out" grep -q 'CH_JOB_MODEL'; then
-    <<<"$env_out" grep -q "CH_JOB_MODEL=.\?sonnet" && ok "real Chronos reads the shipped per-job model (the snapshot job runs with --model sonnet)" || no "real Chronos did not pick up model: sonnet" "$env_out"
+    <<<"$env_out" grep -q "CH_JOB_MODEL=.\?sonnet" && ok "real Chronos reads the shipped per-job model (the state sweep runs with --model sonnet)" || no "real Chronos did not pick up model: sonnet" "$env_out"
     <<<"$(python3 "$CH" jobenv talos-morning-brief 2>&1)" grep -q "CH_JOB_MODEL=''\|CH_JOB_MODEL=$" && ok "real Chronos: the morning brief pins no model (inherits your default)" || no "brief model not empty" "$(python3 "$CH" jobenv talos-morning-brief 2>&1 | head -3)"
   else echo "  skip per-job model check (this Chronos predates 0.2)"; fi
   # Chronos 0.2.2: the restriction is real. Chronos validates allowed_tools and silently falls back to a SAFE default list if
   # one entry is malformed, so assert that OUR rules came through verbatim (they validated) and that the built-ins stay narrow.
   jenv="$(python3 "$CH" jobenv talos-morning-brief 2>&1)"
   if <<<"$jenv" grep -q 'CH_RESTRICTED'; then
-    for id in talos-morning-brief talos-weekly-wiki-lint talos-weekly-snapshot talos-state-sweep; do
+    for id in talos-morning-brief talos-state-sweep; do
       jenv="$(python3 "$CH" jobenv "$id" 2>&1)"
       want="$(python3 - "$JF" "$id" <<'PY'
 import json,sys
@@ -491,7 +548,7 @@ PY
       { <<<"$jenv" grep -q '^CH_RESTRICTED=1$' && <<<"$jenv" grep -qF "CH_EV_ALLOWED='$want'" && <<<"$jenv" grep -q '^CH_EV_MCP=strict$' \
         && ! printf '%s' "$jenv" | grep '^CH_EV_TOOLS=' | grep -Eq 'WebFetch|WebSearch|Task|Agent'; } \
         && ok "real Chronos 0.2.2 runs $id restricted: our tool list validates as written, no web tools, no MCP server loads" || no "real Chronos did not adopt the restriction for $id" "$jenv"
-      python3 "$CH" prompt "$id" 2026-10-05 2>&1 | grep -q 'This job is RESTRICTED. Your tools are limited to:' && ok "real Chronos tells $id its tool list in the prompt" || no "prompt for $id does not state the restriction"
+      python3 "$CH" prompt "$id" 2026-10-05 2>&1 | grep 'This job is RESTRICTED. Your tools are limited to:' >/dev/null && ok "real Chronos tells $id its tool list in the prompt" || no "prompt for $id does not state the restriction"
     done
   else echo "  skip restricted-job checks (this Chronos predates 0.2.2)"; fi
   python3 "$TJ" enable talos-morning-brief >/dev/null 2>&1

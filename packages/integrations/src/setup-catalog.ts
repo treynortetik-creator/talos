@@ -49,7 +49,8 @@ export function listSetupSpecs(): SetupSpecT[] {
   return Object.values(setupCatalog)
 }
 
-export { slackManifestUrl } from './slack/manifest.ts'
+export { slackBotManifestUrl, slackManifestUrl } from './slack/manifest.ts'
+export { slackBot } from './slack/setup.ts'
 
 export type ScriptVars = { hookUrl: string; claimCode: string }
 

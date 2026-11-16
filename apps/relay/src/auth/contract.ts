@@ -8,14 +8,6 @@ import type { AppEnv } from '../services.ts'
 
 export type Session = { sessionId: string; deviceId: string | null }
 
-export type StepupPurpose =
-  | `card:${string}`
-  | 'config:work'
-  | 'config:session'
-  | 'device:revoke'
-  | 'session:control'
-  | 'permission:allow'
-
 export type BridgeAuthResult = { ok: true; keyId: string } | { ok: false; reason: string }
 
 export interface AuthContract {
@@ -23,8 +15,6 @@ export interface AuthContract {
   requireSession: MiddlewareHandler<AppEnv>
   /** Origin === PUBLIC_ORIGIN, X-Talos-CSRF: 1, JSON (or the media content type) on non-GET /api/*. */
   requireCsrf: MiddlewareHandler<AppEnv>
-  /** A fresh single-use step-up token for this purpose, bound to the session. */
-  requireStepup(purpose: StepupPurpose | ((c: Context<AppEnv>) => StepupPurpose)): MiddlewareHandler<AppEnv>
   /**
    * Verifies the bridge's `hello` against the challenge it was sent (Ed25519, key from env or rotation table; `key_id`
    * must equal the first 16 hex of sha256(raw key)). `ip` feeds the "5 failed hellos in 10 min block the IP for 1 h" rule.
@@ -40,12 +30,6 @@ export interface AuthContract {
    * Test implementations may omit it (never refused).
    */
   bridgeAuthRefusedAt?(): number | null
-  /**
-   * Checks and burns a step-up token carried INSIDE a WebSocket frame (`card.resolve`, `config.patch`), where HTTP
-   * middleware cannot run. True only if the token is unexpired, unused, bound to this session and minted for exactly
-   * `purpose`. Single use: a second call with the same token is false.
-   */
-  consumeStepupToken(args: { token: string; purpose: StepupPurpose; session: Session | null }): Promise<boolean>
   /**
    * Guard for the `/ws` upgrade, run before upgrading: a valid session cookie AND `Origin === PUBLIC_ORIGIN`. Returns the
    * session, or a ready 401 / 403 Response. No CSRF header (browsers cannot set one on an upgrade).
@@ -104,9 +88,7 @@ const deny: MiddlewareHandler<AppEnv> = async (c) => c.json({ error: 'unauthoriz
 const denyAll: AuthContract = {
   requireSession: deny,
   requireCsrf: deny,
-  requireStepup: () => deny,
   verifyBridgeHello: async () => ({ ok: false, reason: 'auth not installed' }),
-  consumeStepupToken: async () => false,
   guardWsUpgrade: async (c) => c.json({ error: 'unauthorized' }, 401),
   verifyBridgeHttp: async () => ({ ok: false, reason: 'auth not installed' }),
   rateLimit: () => async (_c, next) => next(),
@@ -135,12 +117,8 @@ export function isTestAuthInstalled(): boolean {
 
 export const requireSession: MiddlewareHandler<AppEnv> = (c, next) => impl.requireSession(c, next)
 export const requireCsrf: MiddlewareHandler<AppEnv> = (c, next) => impl.requireCsrf(c, next)
-/** @public The step-up guard modules import; part of the frozen auth seam. */
-export const requireStepup: AuthContract['requireStepup'] = (purpose) => (c, next) =>
-  impl.requireStepup(purpose)(c, next)
 export const verifyBridgeHello: AuthContract['verifyBridgeHello'] = (a) => impl.verifyBridgeHello(a)
 export const bridgeAuthRefusedAt = (): number | null => impl.bridgeAuthRefusedAt?.() ?? null
-export const consumeStepupToken: AuthContract['consumeStepupToken'] = (a) => impl.consumeStepupToken(a)
 export const guardWsUpgrade: AuthContract['guardWsUpgrade'] = (c) => impl.guardWsUpgrade(c)
 export const verifyBridgeHttp: AuthContract['verifyBridgeHttp'] = (c, body) => impl.verifyBridgeHttp(c, body)
 export const preflightBridgeHttp = (c: Context<AppEnv>): BridgeAuthResult =>

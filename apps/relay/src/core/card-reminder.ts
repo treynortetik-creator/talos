@@ -12,8 +12,9 @@
 //    are 7 h 45 of every 24 on the default window, so this is common, not rare.
 //  * Timers are the injected clock's, cleared by `stop()` (the runtime calls it), so nothing fires on a closed database.
 import { type AgentConfigT, isQuiet, type PushIntent } from '@talos-app/protocol'
-import type { Clock, Logger } from '../services.ts'
+import type { Clock, Logger, RichPushInput } from '../services.ts'
 import { DEFAULT_AGENT_CONFIG } from './default-config.ts'
+import { cardRich } from './hub-helpers.ts'
 import type { PushCounts } from './push.ts'
 import type { Store } from './store.ts'
 
@@ -23,6 +24,27 @@ export const REMINDER_TICK_MS = 60_000
 /** Pushes every service refused: tried this many times, then given up on. */
 const MAX_TRIES = 5
 const PREFIX = 'card_reminded:'
+/**
+ * A card's first "Needs you" push that every service refused (a 429 or 5xx, a timeout, an Apple connection being replaced):
+ * `<tries so far>:<next try at, ms>`. The reminder tick tries again while the card is open, backing off 1, 2, 4 and 8
+ * minutes, MAX_TRIES sends in all; a short card (an app card lives 10 minutes) gets no expiry reminder, so this is its only
+ * second chance.
+ */
+const OWED_PREFIX = 'needs_you_owed:'
+const owedBackoffMs = (tries: number) => 60_000 * 2 ** (tries - 1)
+
+/**
+ * Whether a "Needs you" push still owes the owner one: every send was refused, or every phone was (a browser left open on the
+ * Mac that took it does not tell the owner on their phone).
+ */
+export function needsYouRefused(res: PushCounts | null | undefined): boolean {
+  return res != null && ((res.sent > 0 && res.ok === 0) || (res.native.sent > 0 && res.native.ok === 0))
+}
+
+/** The hub's first "Needs you" push for `cardId` was refused (needsYouRefused): the reminder tick owes the owner another. */
+export function markNeedsYouOwed(store: Store, cardId: string, now: number): void {
+  store.setState(`${OWED_PREFIX}${cardId}`, `1:${now + owedBackoffMs(1)}`)
+}
 /** How far before the window starts an early reminder goes out: clear of the boundary and of the one-minute tick. */
 const BEFORE_QUIET_MS = 600_000
 
@@ -30,7 +52,7 @@ export type CardReminderDeps = {
   store: Store
   clock: Clock
   log: Logger
-  push: { notifyCounted(intent: PushIntent): Promise<PushCounts | null> }
+  push: { notifyCounted(intent: PushIntent, opts?: { rich?: RichPushInput }): Promise<PushCounts | null> }
   config: () => AgentConfigT | null
 }
 
@@ -100,11 +122,30 @@ export class CardReminder {
     const cfgKey = `${JSON.stringify(cfg.quiet_window)}|${cfg.timezone}`
     // A flag for a card that is no longer pending is dead weight (decided, superseded, swept).
     const pending = new Set(store.allPendingCards().map((c) => c.id))
-    for (const key of store.stateKeys(PREFIX)) if (!pending.has(key.slice(PREFIX.length))) store.deleteState(key)
+    for (const prefix of [PREFIX, OWED_PREFIX])
+      for (const key of store.stateKeys(prefix)) if (!pending.has(key.slice(prefix.length))) store.deleteState(key)
 
     for (const card of store.openCards(now)) {
       if (this.stopped) return
-      const expires = Date.parse(card.expires_at)
+      const key = `${OWED_PREFIX}${card.id}`
+      const flag = store.getState(key)
+      if (!flag) continue
+      const [tries = MAX_TRIES, at = 0] = flag.split(':').map(Number)
+      if (now < at) continue
+      const res = await this.d.push.notifyCounted(
+        { template: 'needs_you', thread_id: card.thread_id, card_id: card.id, expires_at: card.expires_at },
+        { rich: cardRich(card) },
+      )
+      // refused again: back off, or give up after MAX_TRIES sends; accepted, held back by a rule (the quiet summary covers
+      // it) or nobody to send to: no longer owed
+      if (needsYouRefused(res) && tries + 1 < MAX_TRIES)
+        store.setState(key, `${tries + 1}:${now + owedBackoffMs(tries + 1)}`)
+      else store.deleteState(key)
+    }
+
+    for (const card of store.openCards(now)) {
+      if (this.stopped) return
+      const expires = store.cardExpiresAt(card.id) ?? Date.parse(card.expires_at)
       const created = Date.parse(card.created_at)
       if (!Number.isFinite(expires) || !Number.isFinite(created)) continue
       if (expires - created < REMIND_MIN_LIFETIME_MS) continue

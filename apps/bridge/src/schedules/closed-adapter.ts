@@ -12,12 +12,27 @@ import type {
   SessionPromptResult,
   ValidateResult,
 } from '@talos-app/protocol'
+import { say } from '../owner-words.ts'
 import { issueFor } from './chronos-adapter.ts'
 
 export type ClosedKind = 'off' | 'not_installed' | 'unsupported'
 
 export const NO_SCHEDULER_TEXT =
   "No scheduler is installed on this Mac. Tell the owner they can install Chronos from the Schedules tab. Don't create cron, launchd or in-session timer jobs yourself."
+
+/**
+ * The same refusal off a Mac (Titan, Pantheon-approved): Chronos runs on launchd only, so its install is a dead end there. The
+ * Mac's sentence, NO_SCHEDULER_TEXT, is byte for byte as before.
+ */
+export const noSchedulerText = (): string =>
+  say({
+    mac: NO_SCHEDULER_TEXT,
+    linux:
+      "No scheduler is installed on this computer. Tell the owner they can install Chronos (its install.sh runs on Linux), then run `talos-app schedules adopt` so Talos runs its jobs; jobs that run in a Talos thread work there, jobs that run by themselves in the background don't yet. Don't create cron or in-session timer jobs yourself.",
+    // Setup installs Chronos on the Windows PC (the Windows kit), so its absence there is a broken install
+    windows:
+      "No scheduler is installed on this PC. Tell the owner to run Talos Setup again, which installs it. Don't create cron or in-session timer jobs yourself.",
+  })
 
 export const UNANSWERED_TEXT =
   "The scheduler didn't answer in time (the Mac may be busy). Talos will ask again shortly. Tell the owner to try again in a minute."
@@ -38,10 +53,11 @@ export class ClosedAdapter implements SchedulerAdapter {
 
   /** What the agent is told when it asks for the scheduler. */
   agentText(): string {
-    if (this.kind === 'off') return 'Schedules are turned off on this Mac.'
+    if (this.kind === 'off')
+      return say({ mac: 'Schedules are turned off on this Mac.', linux: 'Schedules are turned off on this computer.' })
     if (this.kind === 'unsupported') return `${unsupportedText(this.info.version)} Tell the owner.`
     if (this.info.unanswered) return UNANSWERED_TEXT
-    return NO_SCHEDULER_TEXT
+    return noSchedulerText()
   }
 
   async detect() {
@@ -58,7 +74,19 @@ export class ClosedAdapter implements SchedulerAdapter {
     if (this.kind === 'not_installed' && this.info.unanswered)
       issues.push(issueFor('adapter_timeout', at, null, UNANSWERED_TEXT))
     else if (this.kind === 'not_installed')
-      issues.push(issueFor('not_installed', at, null, 'No scheduler is installed on this Mac.'))
+      issues.push(
+        issueFor(
+          'not_installed',
+          at,
+          null,
+          say({
+            mac: 'No scheduler is installed on this Mac.',
+            linux:
+              'No scheduler is installed on this computer. Install Chronos with its install.sh, then run `talos-app schedules adopt`.',
+            windows: 'No scheduler is installed on this PC. Run Talos Setup again to install it.',
+          }),
+        ),
+      )
     if (this.kind === 'unsupported')
       issues.push(issueFor('version_unsupported', at, null, unsupportedText(this.info.version)))
     return {

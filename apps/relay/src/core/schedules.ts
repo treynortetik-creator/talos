@@ -30,6 +30,8 @@ export interface ScheduleHost {
   store: Store
   clock: Clock
   log: Logger
+  /** How often a held alert is looked at again (SCHEDULE_ALERT_HOLD_POLL_S); default HOLD_POLL_MS. */
+  holdPollMs?: number
   bridgeOnline(): boolean
   sendBridge(raw: Record<string, unknown>): void
   /** True when the live bridge listed `feature` in its hello. */
@@ -232,7 +234,7 @@ export class ScheduleRouter {
       this.holdTimer = null
       if (this.stopped) return
       if (this.h.quietNow()) {
-        this.holdTimer = this.h.clock.setTimeout(poll, HOLD_POLL_MS)
+        this.holdTimer = this.h.clock.setTimeout(poll, this.h.holdPollMs ?? HOLD_POLL_MS)
         this.h.track(this.holdTimer)
         return
       }
@@ -240,7 +242,7 @@ export class ScheduleRouter {
       this.held.clear()
       if (!this.h.anyVisible()) for (const template of templates) this.h.notify({ template })
     }
-    this.holdTimer = this.h.clock.setTimeout(poll, HOLD_POLL_MS)
+    this.holdTimer = this.h.clock.setTimeout(poll, this.h.holdPollMs ?? HOLD_POLL_MS)
     this.h.track(this.holdTimer)
   }
 

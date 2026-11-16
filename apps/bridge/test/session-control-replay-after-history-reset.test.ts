@@ -15,6 +15,10 @@ import { pgidOf } from '../src/hub/server.ts'
 import { nullLogger } from '../src/log.ts'
 import { advanceSteps, type Harness, sleep, startHarness, tempHome, waitFor } from './helpers.ts'
 import { signingLink } from './mod-sign.ts'
+import { durableSqlite } from './sqlite-durable.ts'
+
+// this file damages history.sqlite on purpose and reopens it: SQLite syncs as the product runs (sqlite-test-seam.ts)
+durableSqlite()
 
 let h: Harness | undefined
 let b2: Bridge | undefined

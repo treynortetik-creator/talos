@@ -158,6 +158,11 @@ struct WorkerUnknownPointer {
 
 @Suite("Option C unknowns: is it gone", .serialized, .enabled(if: Rig.hasTmux))
 struct WorkerUnknownGone {
+  /// How long telling a killed worker from a slow tmux may take. The tick asks tmux twice (the pane, then the session), and each call
+  /// may run its whole `callTimeout` plus the runner's TERM, KILL and pipe-reader grace (2 s each) before it gives up. A call that timed
+  /// out says nothing, so it is never read as gone. Under load that is longer than a few seconds, and parking sooner would be the bug.
+  private func goneLimit(_ r: WorkerRig) -> Double { 2 * (r.mgr.options.callTimeout + 6) + 1 }
+
   /// Real tmux output, not a shim: the wording `saysGone` depends on.
   @Test func aKilledSessionIsGone() throws {
     let r = try WorkerRig(scenario: scenario)
@@ -168,7 +173,7 @@ struct WorkerUnknownGone {
     #expect(r.wait(8) { r.up("trip") })
     let pid = try #require(r.entry("trip")?.pane_pid)
     #expect(r.tmuxCmd(["kill-session", "-t", "=t-trip"]).ok)
-    #expect(r.wait(5) { r.state("trip") == "parked" }, "\(String(describing: r.state("trip")))")
+    #expect(r.wait(goneLimit(r)) { r.state("trip") == "parked" }, "\(String(describing: r.state("trip")))")
     #expect(r.entry("trip")?.restarts.count == 1)
     #expect(r.wait(5) { !ProcessInspect.groupAlive(pid) })
   }
@@ -181,7 +186,7 @@ struct WorkerUnknownGone {
     try r.wake("trip")
     #expect(r.wait(8) { r.up("trip") })
     #expect(r.tmuxCmd(["kill-server"]).ok)
-    #expect(r.wait(5) { r.state("trip") == "parked" }, "\(String(describing: r.state("trip")))")
+    #expect(r.wait(goneLimit(r)) { r.state("trip") == "parked" }, "\(String(describing: r.state("trip")))")
   }
 
   /// tmux unreachable and the group empty: the kernel settles it, or a dead worker would read as live for ever.
@@ -242,8 +247,11 @@ struct WorkerUnknownGone {
     r.mgr.startTicking()
     try r.fault("capture-pane", "hold")
     try r.wake("trip")
-    usleep(1_500_000)
+    // The start takes longer under load: wait for its pane, then give the idle park its window, and whole ticks after it.
+    #expect(r.wait(8) { (r.entry("trip")?.pane_pid ?? 0) > 1 }, "the worker never started: \(r.why("trip"))")
     let pid = try #require(r.entry("trip")?.pane_pid)
+    usleep(1_500_000)
+    for _ in 0..<2 { r.mgr.tickOnce() }
     #expect(r.state("trip") == "starting")
     r.clearFault("capture-pane")
     #expect(r.wait(5) { r.state("trip") == "parked" }, "control: idle parks once the screen can be read")
@@ -258,7 +266,10 @@ struct WorkerUnknownGone {
     try r.fault("capture-pane", "hold")
     r.mgr.startTicking()
     try r.wake("trip")
+    // The start takes longer under load: wait for its pane, then let the ready timeout pass, and whole ticks after it.
+    #expect(r.wait(8) { (r.entry("trip")?.pane_pid ?? 0) > 1 }, "the worker never started: \(r.why("trip"))")
     usleep(1_200_000)
+    for _ in 0..<2 { r.mgr.tickOnce() }
     #expect(r.state("trip") == "starting", "\(String(describing: r.entry("trip")?.error))")
     r.clearFault("capture-pane")
     #expect(r.wait(3) { r.state("trip") == "failed" }, "control: the timeout still works")
@@ -877,8 +888,10 @@ struct WorkerStopLimit {
     #expect(signals(r).isEmpty)
   }
 
-  /// After a relaunch a `stopping` worker might be the governor's, so nothing arms until the next tap.
-  @Test func aRelaunchArmsNothingUntilTheNextTap() throws {
+  /// After a relaunch a `stopping` worker might be the governor's and the tap's limit is gone with the copy that took it, so the wait
+  /// had no end until the next tap. It has its own now (WorkerAdoptedStopTests): 600 s from when the stop was asked for, and a later
+  /// tap does not move it.
+  @Test func aRelaunchGivesAnAdoptedStopItsOwnLimit() throws {
     let r = try noisy()
     defer { r.teardown() }
     let c = Clocks()
@@ -890,15 +903,20 @@ struct WorkerStopLimit {
     r.manager(busyWindow: 2.5, now: { c.now }, awake: { c.awake })
     r.mgr.startTicking()
     #expect(r.wait(3) { r.state("trip") == "stopping" })
-    c.jumpAwake(100_000)
-    usleep(800_000)
-    #expect(signals(r).isEmpty, "armed on adopt")
+    r.mgr.tickOnce()  // the adopting tick has run: its limit counts from the awake clock as it was then
+    c.jumpAwake(500)
+    r.mgr.tickOnce()
+    #expect(signals(r).isEmpty && r.state("trip") == "stopping", "cut before the adopted limit")
     try r.wakeFile("trip", action: "park", reason: "control")
     // The tap arms the limit from the awake clock AT THE MOMENT THE TICK READS IT, so the clock may only jump once it has.
     // A fixed sleep guessed that a loaded Mac reads it within 400 ms; when the tick came later, the limit was armed after
     // the jump, 900 s further on, and nothing was ever signalled. The wake file being taken is the real signal, and
     // `tickOnce()` queues behind the tick that took it, so the arming has run when it returns.
     #expect(r.wait(10) { !FileManager.default.fileExists(atPath: r.talosHome + "/workers/trip/wake") }, "the tap was taken")
+    r.mgr.tickOnce()
+    #expect(signals(r).isEmpty && r.state("trip") == "stopping", "the tap cut the turn")
+    c.jumpAwake(150)  // 650 s since the adoption: past the adopted limit, far short of a tap's own 900 s
+    #expect(r.wait(10) { r.mgr.tickOnce(); return !signals(r).isEmpty }, "the adopted limit never ended the turn")
     r.mgr.tickOnce()
     c.jumpAwake(901)
     #expect(r.wait(3) { !signals(r).isEmpty }, "control: a tap after the relaunch arms it")
@@ -937,6 +955,8 @@ struct WorkerStopLimit {
     defer { r.teardown() }
     let c = Clocks()
     _ = try hungTurn(r, c)
+    // "busy" comes from the noise; the pointer can be typed after it under load, so it is in before the log below starts
+    #expect(r.wait(5) { r.allEvents.contains(.pointer(thread: "trip")) }, "\(r.allEvents)")
     let seen = EventLog()
     r.mgr.onEvent = { seen.add($0) }
     try r.wakeFile("trip", action: "park", reason: "control")

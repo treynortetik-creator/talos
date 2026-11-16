@@ -1,0 +1,15 @@
+{
+  "id": "gate-push-ungated",
+  "title": "gate.sh --push stamped the tree after the gate and pushed HEAD, so a commit made while the gate ran went out ungated",
+  "base": "3ca3b5ee182f47228e09ca0ad75f63d8b882a964",
+  "buggy": "uncommitted",
+  "fix": "52d6b427",
+  "expect": [
+    {
+      "file": "scripts/gate-push.sh",
+      "severity": "high",
+      "must": [["HEAD|commit|tree"], ["during|while|after the gate|meanwhile|race|later|ungated|not gated|stamp"]],
+      "note": "The stamp records HEAD's tree after the gate and the push sends HEAD, so a commit made while the gate ran is pushed with a stamp that says it passed."
+    }
+  ]
+}

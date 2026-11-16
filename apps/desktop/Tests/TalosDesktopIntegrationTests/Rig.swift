@@ -2,6 +2,7 @@ import Foundation
 import SwiftTerm
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// The real monotonic clock plus a jump the test adds, so "the start has waited two minutes" does not take two minutes. It only
 /// ever moves forward; everything else on the supervisor's clock (backoffs, grace periods) keeps running in real time.
@@ -27,6 +28,26 @@ final class Rig: @unchecked Sendable {
     let here = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     return here.deletingLastPathComponent().appendingPathComponent("Fixtures/fake-claude").path
   }()
+  /// The repo's own kit hook: what an installed app names as the thread sessions' permission hook source.
+  static let kitHook: String = {
+    let here = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    return here.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("kit/hooks/permission-relay.py").path
+  }()
+  /// What an installed app names as that hook's source: a folder shaped like the app bundle holding the kit hook and its helper,
+  /// read-only, with a signature check that passes. Made once per test run and removed when it ends.
+  static let hookBundle: FakeAppBundle = {
+    atexit { try? FileManager.default.removeItem(atPath: Rig.hookBundleBase) }
+    let kit = (kitHook as NSString).deletingLastPathComponent
+    return try! FakeAppBundle(
+      in: hookBundleBase, script: FileManager.default.contents(atPath: kitHook)!, helper: FileManager.default.contents(atPath: kit + "/_talos_common.py"))
+  }()
+  private static let hookBundleBase = (TestTemp.base as NSString).appendingPathComponent("talos-hookapp-\(getpid())")
+  static let hookSource = WorkerHook.BundleSource(script: hookBundle.script, bundlePath: hookBundle.path, seal: { _ in nil })
+  /// A source whose hook is not there (an agent folder's, as on 2026-11-11).
+  static var missingHook: WorkerHook.BundleSource {
+    .init(script: "/home/alex/agent/hooks/permission-relay.py", bundlePath: "/home/alex/Talos.app", seal: { _ in nil })
+  }
   static let tmuxConf: String = {
     let here = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     return here.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/tmux.conf").path
@@ -39,12 +60,19 @@ final class Rig: @unchecked Sendable {
     return nil
   }()
   static var hasTmux: Bool { tmuxPath != nil }
+  /// Where tmux puts a `-L name` socket: /tmp/tmux-<uid>/, since the host clears TMUX_TMPDIR. It stays off the rig's temp
+  /// folder on purpose: unix socket paths are limited to 104 bytes on macOS, and TMPDIR (CI's is under ~/.cache) can be long.
+  static func tmuxSocketPath(_ name: String) -> String { "/tmp/tmux-\(getuid())/\(name)" }
 
   static let sessionId = "11111111-2222-4333-8444-555555555555"
 
   let kind: HostKind
   /// Extra variables in the owner's login-shell env (a polluted one in the env-strip tests).
   let loginExtra: [String: String]
+  /// `false`: the login shell's env cannot be read (it timed out), so the supervisor falls back to the app's own environment.
+  let loginReadable: Bool
+  /// Main's bridge check (`Supervisor.Options.checksBridge`).
+  let checksBridge: Bool
   let createdAt = Date().timeIntervalSince1970
   let root: String
   let home: String
@@ -73,6 +101,10 @@ final class Rig: @unchecked Sendable {
   /// How often the tmux host's own poll reads the pane (it takes a capture each time, from its own thread). A test that logs tmux verbs
   /// sets this before `makeSupervisor()` so the poll cannot land between two verbs it is ordering.
   var hostPollInterval = 0.2
+  /// Wraps the real host the next `makeSupervisor()` builds (a fault put in front of it; everything else goes to the real one).
+  var wrapHost: ((PtyHost) -> PtyHost)?
+  /// Changes to the supervisor's options, applied by `makeSupervisor`. Every rig's guards refresh finds the fake bun only, never a real one.
+  var tuneOptions: ((inout Supervisor.Options) -> Void)?
   private(set) var host: PtyHost!
   private(set) var sup: Supervisor!
   private var events: [Supervisor.Event] = []
@@ -86,17 +118,42 @@ final class Rig: @unchecked Sendable {
     return String(cString: r)
   }
 
+  /// The quick timings a rig runs with unless a test brings its own.
+  static func defaultTimings() -> Supervisor.Timings {
+    var t = Supervisor.Timings()
+    t.tick = 0.2
+    t.agentsPoll = 0.5
+    t.backoff = Backoff(steps: [0.3, 0.5, 0.5, 0.5, 0.5], jitter: 0)
+    t.dialogStall = 2
+    t.stopGrace = 3
+    return t
+  }
+
+  /// A session missing from the agent list counts as stuck after `hangPolls` polls. The fast `agentsPoll` leaves that at 1 s, and a pane
+  /// that has exited is still "alive" to the supervisor until the host's own poll reports the exit, which takes seconds on a loaded Mac:
+  /// the agent list then misses it twice and raises a needs-you for a crash that is about to restart. A test that crashes the agent and
+  /// expects no needs-you uses this (10 s, as the product's 20 s is to its 1 s host poll).
+  static func crashTolerantTimings() -> Supervisor.Timings {
+    var t = defaultTimings()
+    t.hangPolls = 20
+    return t
+  }
+
   var botPidPath: String { home + "/.claude/channels/telegram/bot.pid" }
   var bridgePidPath: String { talosHome + "/bridge.pid" }
+  /// Where main's tmux host writes each launch file.
+  var launchDir: String { LaunchFile.dir(talosHome: talosHome) }
 
   init(
     _ kind: HostKind, scenario: String, env extra: [String: String] = [:], timings: Supervisor.Timings? = nil,
     session: DesktopConfig.Session? = nil, loginExtra: [String: String] = [:], launchConfirmed: Bool = true,
-    configure: (inout DesktopConfig) -> Void = { _ in }
+    loginReadable: Bool = true, checksBridge: Bool = false, configure: (inout DesktopConfig) -> Void = { _ in }
   ) throws {
     self.kind = kind
     self.loginExtra = loginExtra
-    let base = (NSTemporaryDirectory() as NSString).appendingPathComponent("talos-d1-\(UUID().uuidString.prefix(8))")
+    self.loginReadable = loginReadable
+    self.checksBridge = checksBridge
+    let base = (TestTemp.base as NSString).appendingPathComponent("talos-d1-\(UUID().uuidString.prefix(8))")
     try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
     root = Rig.realPath(base)
     home = root + "/home"
@@ -116,15 +173,7 @@ final class Rig: @unchecked Sendable {
     try "{\"agent\":{\"name\":\"Testagent\"},\"default_thread\":\"general\"}".write(
       toFile: talosHome + "/config.json", atomically: true, encoding: .utf8)
 
-    var t = timings ?? Supervisor.Timings()
-    if timings == nil {
-      t.tick = 0.2
-      t.agentsPoll = 0.5
-      t.backoff = Backoff(steps: [0.3, 0.5, 0.5, 0.5, 0.5], jitter: 0)
-      t.dialogStall = 2
-      t.stopGrace = 3
-    }
-    self.timings = t
+    self.timings = timings ?? Rig.defaultTimings()
 
     var c = DesktopConfig.defaults
     c.agentDir = agentDir
@@ -135,7 +184,7 @@ final class Rig: @unchecked Sendable {
     c.env = [
       "FAKE_SCENARIO": scenario, "FAKE_AGENTS_DIR": agentsDir, "FAKE_STATE_DIR": stateDir, "FAKE_LOG": log,
       "FAKE_BRIDGE_PID_FILE": bridgePidPath, "FAKE_HOLDER_LOG": holderLog, "FAKE_POST_LOG": postLog,
-      "FAKE_MAX_LIFETIME": "120", "TALOS_APP_HOME": talosHome,
+      "FAKE_MAX_LIFETIME": "120", "TALOS_APP_HOME": talosHome, "FAKE_TRANSCRIPTS": "1",
     ].merging(extra) { _, b in b }
     c.talosAppCommand = [Rig.fixtures + "/talos-app"]
     if let session { c.session = session }
@@ -148,14 +197,23 @@ final class Rig: @unchecked Sendable {
       c.launchTrust = LaunchTrustMigration.version  // sealed in the current format: the migration leaves it
     }
     seededLaunch = c.confirmedLaunch
+    // A session the config already names is one with a saved conversation (the owner has used it): `--resume` is right for it.
+    if let id = c.session.id { try saveTranscript(id) }
     try ConfigFile.save(c, to: configPath)
     makeSupervisor()
+  }
+
+  /// A saved conversation for `id` in this rig's agent folder, where Claude Code would keep it (`SessionTranscript`).
+  func saveTranscript(_ id: String) throws {
+    let path = SessionTranscript.path(sessionId: id, folder: agentDir, claudeDir: home + "/.claude")
+    try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    try Data("{\"type\":\"user\"}\n".utf8).write(to: URL(fileURLWithPath: path))
   }
 
   var loginEnv: [String: String] {
     [
       "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": home, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8",
-      "TMPDIR": NSTemporaryDirectory(), "SHLVL": "3", "TERM_PROGRAM": "Apple_Terminal",
+      "TMPDIR": TestTemp.base, "SHLVL": "3", "TERM_PROGRAM": "Apple_Terminal",
     ].merging(loginExtra) { _, b in b }
   }
 
@@ -163,19 +221,22 @@ final class Rig: @unchecked Sendable {
   @discardableResult
   func makeSupervisor() -> Supervisor {
     let env = loginEnv
-    let probe = RecordingProbe(LiveSystem(loginEnv: { env }))
+    let readable = loginReadable
+    let probe = RecordingProbe(LiveSystem(loginEnv: { readable ? env : nil }))
     agentsProbe = probe
-    let h: PtyHost
+    var h: PtyHost
     switch kind {
     case .tmux:
       h = TmuxPtyHost(
-        commands: TmuxCommands(tmux: tmuxBin ?? Rig.tmuxPath!, socket: socket, configPath: Rig.tmuxConf), baseEnv: env,
-        pollInterval: hostPollInterval)
+        commands: TmuxCommands(tmux: tmuxBin ?? Rig.tmuxPath!, socket: socket, configPath: Rig.tmuxConf), launchDir: launchDir,
+        baseEnv: env, pollInterval: hostPollInterval)
     case .direct:
       h = SwiftTermPtyHost()
     }
+    if let wrap = wrapHost { h = wrap(h) }
     var o = Supervisor.Options(name: "agent", configPath: configPath, home: home, talosAppHome: talosHome, auditLogPath: auditPath)
     o.takeoverCheck = true
+    o.checksBridge = checksBridge
     o.launchTrust = trust
     let jump = clock
     o.wallClock = { jump.wallMs() }
@@ -185,6 +246,8 @@ final class Rig: @unchecked Sendable {
       runs.increment()
       Thread.detachNewThread(work)
     }
+    o.guardsBunCandidates = [Rig.fixtures + "/fake-bun"]
+    tuneOptions?(&o)
     let s = Supervisor(options: o, host: h, probe: probe, clock: clock, timings: timings, random: { 0 })
     s.onEvent = { [weak self] e in self?.lock.withLock { self?.events.append(e) } }
     host = h
@@ -202,10 +265,10 @@ final class Rig: @unchecked Sendable {
     if cold { sup.start() }
   }
 
-  /// Polls `cond` every 50 ms until it holds or `timeout` passes.
+  /// Polls `cond` every 50 ms until it holds or `timeout` passes (times `waitScale`).
   @discardableResult
   func wait(_ timeout: Double, _ cond: () -> Bool) -> Bool {
-    let until = Date().addingTimeInterval(timeout)
+    let until = Date().addingTimeInterval(timeout * waitScale)
     while Date() < until {
       if cond() { return true }
       usleep(50_000)
@@ -327,7 +390,7 @@ final class Rig: @unchecked Sendable {
       // Only our own test server, by its private socket name.
       _ = ProcessRunner.run([t, "-L", socket, "kill-server"], env: loginEnv, timeout: 5)
       // tmux 3.8 leaves the socket file behind; remove ours (the server behind it is gone).
-      unlink("/tmp/tmux-\(getuid())/\(socket)")
+      unlink(Rig.tmuxSocketPath(socket))
     } else if let pid = host?.childPid, ProcessInspect.alive(pid), ProcessInspect.basic(pid)?.pgid == pid {
       killpg(pid, SIGKILL)  // the owned pty child this test started (its own group)
     }
@@ -399,6 +462,13 @@ final class RecordingProbe: SystemProbe, @unchecked Sendable {
   func postOutcome(command: [String], thread: String, text: String, env: [String: String]) -> PostOutcome {
     base.postOutcome(command: command, thread: thread, text: text, env: env)
   }
+  private var _sent: [URLRequest] = []
+  /// The Mac's own signed rows (`SystemPost`), recorded and never sent: no test reaches a network.
+  var sent: [URLRequest] { lock.withLock { _sent } }
+  func send(_ request: URLRequest) -> PostOutcome {
+    lock.withLock { _sent.append(request) }
+    return .sent
+  }
 }
 
 final class RunCounter: @unchecked Sendable {
@@ -443,3 +513,12 @@ extension LocalProcess {
     return true
   }
 }
+
+/// Every `wait` in these tests waits for something that should happen, and returns as soon as it does, so a longer limit only
+/// costs time when a test is failing anyway. CI runs these beside other suites on a loaded Mac, where a worker that parks in
+/// 1 s on a quiet one can take several, so each limit is stretched by this factor. TALOS_TEST_WAIT_SCALE overrides it (1 = as
+/// written). Checks that something does NOT happen use fixed windows (`staysUp`, `usleep`) and are not stretched.
+let waitScale: Double = {
+  guard let s = ProcessInfo.processInfo.environment["TALOS_TEST_WAIT_SCALE"], let v = Double(s), v > 0 else { return 3 }
+  return v
+}()

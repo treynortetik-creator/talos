@@ -1,0 +1,7 @@
+#!/bin/bash
+# Fake `talos-app` whose `post` waits (up to 30 s) for $FAKE_STATE_DIR/release-post, so a test can see a post still running.
+printf "%s\n" "$*" >> "${FAKE_POST_LOG:-/dev/null}"
+case "$1" in post)
+  for _ in $(seq 300); do [ -e "$FAKE_STATE_DIR/release-post" ] && break; sleep 0.1; done ;;
+esac
+exit 0

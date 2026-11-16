@@ -1,6 +1,7 @@
 // Pure helpers for the session sheet, the header chip and the `/` picker (docs/CLAUDE-CODE.md C4.5). No policy lives here:
 // routes, grammars and model rules come from @talos-app/protocol.
 import type { InventoryCommandT, SessionStateT } from '@talos-app/protocol'
+import { dayForm } from '../../lib/format.ts'
 import type { ContextKind, ThreadContext } from './threadContext.ts'
 
 /** Fresh = the bridge heartbeats every 10 s; three missed beats and the mod counts as gone. */
@@ -42,6 +43,35 @@ export function resetsAt(state: SessionStateT | undefined, kind: 'seven_day'): s
   return state?.rate_limits.find((r) => r.kind === kind)?.resets_at
 }
 
+/** A reading older than this says how old it is; one older than USAGE_DIM_AFTER_MS is dimmed too. */
+export const USAGE_AGE_AFTER_MS = 2 * 60_000
+export const USAGE_DIM_AFTER_MS = 15 * 60_000
+
+/**
+ * How old the weekly reading is (`as_of`, the Mac's time; `nowMs` should be the relay's clock, as for card expiry). `words` is
+ * "as of 3 min ago" once older than two minutes, undefined before; `dim` past fifteen. No `as_of` (an older Mac): neither. A time
+ * ahead of `nowMs` (clocks a little apart) is fresh.
+ */
+export function usageAge(
+  state: SessionStateT | undefined,
+  kind: 'seven_day',
+  nowMs: number,
+): { words?: string; dim: boolean } {
+  const iso = state?.rate_limits.find((r) => r.kind === kind)?.as_of
+  const t = iso === undefined ? Number.NaN : Date.parse(iso)
+  if (!Number.isFinite(t)) return { dim: false }
+  const age = Math.max(0, nowMs - t)
+  if (age <= USAGE_AGE_AFTER_MS) return { dim: false }
+  const min = Math.floor(age / 60_000)
+  const words =
+    min < 60
+      ? `as of ${min} min ago`
+      : min < 48 * 60
+        ? `as of ${Math.floor(min / 60)} h ago`
+        : `as of ${Math.floor(min / 1440)} d ago`
+  return { words, dim: age > USAGE_DIM_AFTER_MS }
+}
+
 export function contextUsed(
   state: SessionStateT | undefined,
 ): { used: number; tokens?: number; window?: number } | undefined {
@@ -63,18 +93,19 @@ export function compactTokens(n: number): string {
   return String(n)
 }
 
-/** "resets 4:10 PM" (same day), "resets Mon" (within the week), "resets Nov 3"; '' when there is no time. */
+/**
+ * "resets 4:10 PM" (today), "resets Mon" (within six calendar days), "resets Nov 3"; '' when there is no time. Calendar
+ * days (lib/format.ts dayForm), not 7 × 24 h: a reset next Wednesday an hour earlier is "Nov 4", never "Wed" on a Wednesday.
+ */
 export function resetWords(iso: string | undefined, nowMs: number): string {
   if (!iso) return ''
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return ''
   const d = new Date(t)
-  const n = new Date(nowMs)
-  if (d.toDateString() === n.toDateString())
-    return `resets ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
-  const diff = t - nowMs
-  if (diff > 0 && diff < 7 * 86_400_000) return `resets ${d.toLocaleDateString([], { weekday: 'short' })}`
-  return `resets ${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+  const form = dayForm(t, nowMs)
+  if (form === 'today') return `resets ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+  if (form === 'weekday' && t > nowMs) return `resets ${d.toLocaleDateString([], { weekday: 'short' })}`
+  return `resets ${d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(form === 'year' ? { year: 'numeric' } : {}) })}`
 }
 
 /** What the chip and the panel say for a thread session that is not running and has no reading. */
@@ -83,7 +114,7 @@ export const CTX_NOT_RUNNING_TEXT = 'not running'
 export const CTX_LAST_KNOWN_TEXT = 'last known'
 
 /**
- * The header chip: what you need without opening the sheet. Weekly comes from `state` (main's, account-wide); the context
+ * The header chip: what you need without opening the sheet. Weekly comes from `state` (main's, carrying the newest reading of any session); the context
  * comes from `view` when the open thread has a session of its own, otherwise from `state` too.
  */
 export function chipParts(

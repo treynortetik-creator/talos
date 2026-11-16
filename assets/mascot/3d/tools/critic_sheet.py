@@ -8,10 +8,10 @@ writes <out_dir>/board-<name>.png (full figure, reference left | render right) a
 import os, sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+import label_font
 sys.path.insert(0, os.path.dirname(__file__))
 from refmask import figure_mask
 
-FONT = '/System/Library/Fonts/Supplemental/Arial.ttf'
 TERRA = (0xD9, 0x69, 0x2B, 255)
 PAIRS = {'ref-pleased': 'talos-pleased-source.png', 'ref-beaming': 'talos-beaming-source.png', 'ref-worried': 'talos-worried-source.png'}
 
@@ -34,7 +34,7 @@ def aligned(render_p, ref_p):
 
 
 def label(im, text):
-    d = ImageDraw.Draw(im); f = ImageFont.truetype(FONT, 34)
+    d = ImageDraw.Draw(im); f = label_font.font(34)
     d.rectangle((0, 0, im.size[0], 50), fill=(20, 17, 16)); d.text((16, 7), text, font=f, fill=(243, 230, 207))
     return im
 

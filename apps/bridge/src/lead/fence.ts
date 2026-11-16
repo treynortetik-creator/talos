@@ -18,7 +18,7 @@ export const LEAD_SECRET_PATHS = ['.ssh', '.config/gh', '.aws', '.npmrc', '.netr
 export { claudeConfigDir }
 
 /** Claude Code's global config file(s): `<claudeDir>/.claude.json`, and `~/.claude.json` too when the folder is the default one. */
-function claudeJsonFiles(home: string, claudeDir: string): string[] {
+export function claudeJsonFiles(home: string, claudeDir: string): string[] {
   const h = trim(home)
   const c = trim(claudeDir)
   return c === join(h, '.claude') ? [join(h, '.claude.json'), join(c, '.claude.json')] : [join(c, '.claude.json')]

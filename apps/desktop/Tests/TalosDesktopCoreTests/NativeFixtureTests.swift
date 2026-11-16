@@ -24,7 +24,7 @@ struct NativeFixtureTests {
     #expect(
       Set(w.keys) == [
         "ready", "notify", "badge", "open_external", "haptic", "threads", "pair_status", "companion_state", "companion_reply",
-        "terminal_view", "terminal_resume", "terminal_leave", "pick_folder",
+        "terminal_view", "terminal_resume", "terminal_leave", "pick_folder", "shell_pane", "shell_pane_close", "capture_ack",
       ])
     for (type, entry) in w {
       let sample = try #require((entry as? [String: Any])?["sample"])
@@ -37,7 +37,7 @@ struct NativeFixtureTests {
     #expect(
       Set(n.keys) == [
         "navigate", "compose", "voice_note", "enroll_code", "companion_reply_request", "companion_replies", "notify_permission",
-        "terminal_sessions", "terminal_resume_result", "terminal_select", "folder_picked",
+        "terminal_sessions", "terminal_resume_result", "terminal_select", "folder_picked", "capture_drop",
       ])
     let cases: [(String, NativeToWeb)] = [
       ("compose", .compose(threadId: "general", text: "Hello from the shell.")),
@@ -75,8 +75,19 @@ struct NativeFixtureTests {
       ["type": "notify", "title": "T", "body": "b", "navigate": "/\t/evil.example"],
       ["type": "badge", "count": 1, "extra": true],
       ["type": "eval", "js": "1"],
+      ["type": "capture_ack", "req": "r12", "ok": false, "reason": "busy"],
+      ["type": "capture_ack", "req": "r12", "ok": "yes"],
+      ["type": "capture_ack", "req": "has space", "ok": true],
+      ["type": "capture_ack", "req": "r12", "ok": true, "extra": 1],
     ]
     for m in bad { #expect(WebToNative.decode(m) == nil, "\(m) must be refused") }
+  }
+
+  @Test func captureAckDecodes() {
+    #expect(WebToNative.decode(["type": "capture_ack", "req": "r12", "ok": true]) == .captureAck(req: "r12", ok: true, reason: nil))
+    #expect(
+      WebToNative.decode(["type": "capture_ack", "req": "r12", "ok": false, "reason": "no_thread"])
+        == .captureAck(req: "r12", ok: false, reason: "no_thread"))
   }
 
   /// The two `companion_state` entries of scripts/native-fixtures.ts MUST_REJECT. They are not on the list above because a bad

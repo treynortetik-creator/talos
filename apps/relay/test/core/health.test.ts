@@ -134,6 +134,65 @@ describe('V2.3 bridge rule', () => {
     await vi.waitFor(() => expect(bodies(r)).toHaveLength(2), { timeout: 10_000 })
   })
 
+  it('a "stopped" push every service refused is not heard: the Mac coming back sends no "back" (bug hunt R15)', async () => {
+    const clock = fakeClock(START)
+    const { r, connectBridge, bridge } = await world({ clock, visible: true })
+    const real = r.transport.send.bind(r.transport)
+    const tried: string[] = []
+    r.transport.send = async (sub, payload, o) => {
+      tried.push(payload.notification.body)
+      if (payload.notification.body.includes('Mac session stopped')) return { ok: false, gone: false }
+      return real(sub, payload, o)
+    }
+    await gone(bridge)
+    await advance(clock, 6 * 60_000)
+    await waitFor(() => tried.length >= 1, 3000, 'the refused session_stopped')
+    await connectBridge()
+    await waitFor(() => r.relay.services.bus.bridgeOnline(), 3000, 'the bridge back')
+    await advance(clock, 30_000)
+    await sleep(200)
+    expect(tried.some((b) => b.includes('Mac is back'))).toBe(false)
+  })
+
+  it('a "stopped" push that only ran out of time may have been delivered: "back" still follows', async () => {
+    const clock = fakeClock(START)
+    const { r, connectBridge, bridge } = await world({ clock, visible: true })
+    const real = r.transport.send.bind(r.transport)
+    const bodiesTried: string[] = []
+    r.transport.send = (sub, payload, o) => {
+      bodiesTried.push(payload.notification.body)
+      if (payload.notification.body.includes('Mac session stopped')) return new Promise(() => {}) // never answers
+      return real(sub, payload, o)
+    }
+    await gone(bridge)
+    await advance(clock, 6 * 60_000)
+    await waitFor(() => bodiesTried.length >= 1, 3000, 'the stopped push sent')
+    await advance(clock, 40_000) // past the send deadline
+    await connectBridge()
+    await waitFor(() => r.relay.services.bus.bridgeOnline(), 3000, 'the bridge back')
+    await advance(clock, 30_000)
+    await waitFor(() => bodiesTried.some((b) => b.includes('Mac is back')), 5000, 'the back push')
+  })
+
+  it('with ntfy alone (no push subscription), a "stopped" ntfy took is heard: "back" follows', async () => {
+    const clock = fakeClock(START)
+    const { r, connectBridge, bridge } = await world({
+      clock,
+      visible: true,
+      subs: false,
+      ntfy: true,
+      env: { ALERT_NTFY_URL: 'https://ntfy.example.com/topic' },
+    })
+    await gone(bridge)
+    await advance(clock, 6 * 60_000)
+    await waitFor(() => (sink?.hits.length ?? 0) === 1, 5000, 'the stopped ntfy')
+    await connectBridge()
+    await waitFor(() => r.relay.services.bus.bridgeOnline(), 3000, 'the bridge back')
+    await advance(clock, 30_000)
+    await waitFor(() => (sink?.hits.length ?? 0) === 2, 5000, 'the back ntfy')
+    expect(sink?.hits[1]?.body).toContain('Mac is back')
+  })
+
   it('gone inside the quiet window: nothing in the window, one push when it ends if still gone', async () => {
     const clock = fakeClock('2026-10-29T06:50:00.000Z')
     const { r, app, bridge } = await world({ clock, visible: false })

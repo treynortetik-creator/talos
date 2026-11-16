@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// The checklist's Agent folder row: Create a new agent, Adopt a Claude Code folder you already use, or Choose a Talos agent
 /// folder you have. The pure pieces: what to run, what a result means, and which folders Choose refuses. The app runs the
@@ -37,11 +38,85 @@ public enum AgentFolderSetup {
     return servers["talos-app"] != nil
   }
 
+  /// The clone `install.sh --from-release` recorded for a prebuilt app (which carries no `TalosCheckout`): the first line of
+  /// `<supportDir>/checkout`. nil when there is none. Any program running as the owner can write that file, so what it names is
+  /// only a candidate: `recordedCloneProblem` judges it, and the owner confirms it once (`AgentFolderFlow`) before it is used.
+  public static func recordedCheckout(supportDir: String) -> String? {
+    guard let d = FileManager.default.contents(atPath: supportDir + "/checkout"),
+      let text = String(data: d, encoding: .utf8)
+    else { return nil }
+    let line = text.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? ""
+    return line.isEmpty ? nil : line
+  }
+
+  /// Why a recorded clone may not be used; nil when it may. The same rules as the guard refresh's checkout (Supervisor
+  /// `sessionFolders`): never inside a folder a session works in or can write freely (`unsafe`: the Talos home, the agent folder,
+  /// each thread's folder, the temp roots, and the app's own support folder), no link anywhere in its path, and the folder and the
+  /// files Talos runs from it owned by this user and writable by no one else. The record file itself is held to the last rule.
+  public static func recordedCloneProblem(_ repo: String, recordFile: String, unsafe folders: [String], uid: uid_t = getuid()) -> String? {
+    let lead = "The clone recorded for Talos (\(repo)) can't be used:"
+    let tail = "In Terminal, cd to your own clone of the Talos repo and run its apps/desktop/scripts/install.sh again."
+    if let why = ownedProblem(recordFile, uid: uid) { return "The record of Talos's clone (\(recordFile)) \(why). \(tail)" }
+    guard repo.hasPrefix("/") else { return "\(lead) it is not a full path. \(tail)" }
+    let trimmed = repo.count > 1 && repo.hasSuffix("/") ? String(repo.dropLast()) : repo
+    guard let real = Self.realPath(trimmed) else { return "\(lead) it isn't on this Mac. \(tail)" }
+    guard real == trimmed else { return "\(lead) a part of its path is a link (it leads to \(real)). \(tail)" }
+    var roots: [String] = []
+    for u in folders where u.hasPrefix("/") {
+      for v in [u, Self.realPath(u) ?? u] {
+        roots.append(v)
+        if v.hasPrefix("/private/") { roots.append(String(v.dropFirst("/private".count))) } else { roots.append("/private" + v) }
+      }
+    }
+    if let hit = roots.first(where: { GuardsRefresh.isUnder(real, [$0]) || GuardsRefresh.isUnder($0, [real]) }) {
+      return "\(lead) it is in or around \(hit), a folder agent sessions work in. \(tail)"
+    }
+    for f in [real, real + "/install.sh", real + "/plugins/talos-app-mod", real + "/apps/bridge/src/cli.ts"] {
+      if let why = ownedProblem(f, uid: uid) { return "\(lead) \(f) \(why). \(tail)" }
+    }
+    return nil
+  }
+
+  /// The folders a recorded clone may not be in or around: the Talos home, the agent folder, each thread's own folder (from the
+  /// home's config.json), the app's support folder, and the temp roots. The same set the supervisor keeps its checkout out of.
+  public static func sessionFolders(talosHome: String, agentDir: String, configJSON: Data?, supportDir: String) -> [String] {
+    var out = [talosHome, agentDir, supportDir]
+    if let d = configJSON { out += DedicatedSettings.parse(d).threads.values.compactMap(\.cwd) }
+    return out.filter { $0.hasPrefix("/") } + GuardsRefresh.tmpRoots
+  }
+
+  /// Why a path Talos trusts fails "a real file or folder (not a link), owned by this user, writable by no one else"; nil when it passes.
+  static func ownedProblem(_ path: String, uid: uid_t) -> String? {
+    var st = stat()
+    guard lstat(path, &st) == 0 else { return "is missing" }
+    if (st.st_mode & S_IFMT) == S_IFLNK { return "is a link" }
+    if st.st_uid != uid { return "belongs to another user" }
+    if st.st_mode & 0o022 != 0 { return "can be written by other users" }
+    return nil
+  }
+
+  static func realPath(_ p: String) -> String? {
+    guard let r = realpath(p, nil) else { return nil }
+    defer { free(r) }
+    return String(cString: r)
+  }
+
   /// Why the clone this app was built from can't be used, in plain words; nil when it is whole.
   public static func cloneProblem(_ repo: String) -> String? {
     let fm = FileManager.default
     let tail = "Rebuild Talos from a whole clone (apps/desktop/scripts/build-app.sh), or run ./install.sh in Terminal."
     var isDir: ObjCBool = false
+    // The path build-app.sh stamped is not on this Mac at all: most likely the app was built on another Mac (its clone path
+    // travels in Info.plist). Said as that, since "find" suggests looking for something that was never here.
+    if repo.hasPrefix("/"), !fm.fileExists(atPath: repo) {
+      return "This Talos was built from \(repo), which isn't on this Mac. Rebuild it from your own clone: in Terminal, "
+        + "cd to your clone of the Talos repo and run bash apps/desktop/scripts/build-app.sh --release, then "
+        + "bash apps/desktop/scripts/install.sh (or run ./install.sh there)."
+    }
+    if repo.isEmpty {
+      return "Talos doesn't know which clone of the Talos repo to use. In Terminal, cd to your clone and run "
+        + "bash apps/desktop/scripts/install.sh again (with the same --from-release line for a prebuilt Talos): it records the clone."
+    }
     guard repo.hasPrefix("/"), fm.fileExists(atPath: repo, isDirectory: &isDir), isDir.boolValue else {
       return "Talos can't find the clone it was built from\(repo.isEmpty ? "" : " (\(repo))"). \(tail)"
     }
@@ -126,5 +201,51 @@ public enum AgentFolderSetup {
       ?? Substring(output.trimmingCharacters(in: .whitespacesAndNewlines))
     if status == 3 { return .needsConfirm(said.replacingOccurrences(of: " Run again with --repoint to point it here.", with: "")) }
     return .failed(said.isEmpty ? "talos-app adopt stopped (exit \(status)) without saying why." : String(said))
+  }
+}
+
+/// The recorded clone the owner said yes to, last. Create, Adopt and Choose use a recorded clone (`AgentFolderSetup.recordedCheckout`)
+/// only when it is this one; another one puts a card in front of the owner first (`AgentFolderFlow`).
+public protocol CloneAcceptance: Sendable {
+  func accepted() -> String?
+  /// Remembers `path` as accepted; false when it could not be stored (then the owner is asked again next time, never skipped).
+  @discardableResult func accept(_ path: String) -> Bool
+}
+
+/// For tests: in memory. `failing` plays a store that cannot be written.
+public final class MemoryCloneAcceptance: CloneAcceptance, @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: String?
+  public var failing = false
+  public init(_ value: String? = nil) { self.value = value }
+  public func accepted() -> String? { lock.withLock { value } }
+  public func accept(_ path: String) -> Bool {
+    lock.withLock {
+      guard !failing else { return false }
+      value = path
+      return true
+    }
+  }
+}
+
+/// The app's: one Keychain item (this device only, no prompt ever), kept per signer when the signer changes (`SignerScopedItem`), so
+/// a file a session writes can never stand in for the owner's yes. Unreadable reads as "not accepted": the owner is asked.
+public struct KeychainCloneAcceptance: CloneAcceptance, @unchecked Sendable {
+  public static let service = "com.talos.app.accepted-clone"
+  let scoped: SignerScopedItem
+  public init(service: String = KeychainCloneAcceptance.service, keychain: SecKeychain? = nil, signer: String? = SignerKey.current()) {
+    scoped = SignerScopedItem(service: service, account: "v1", keychain: keychain, signer: signer)
+  }
+  public func accepted() -> String? {
+    let (_, d, s) = scoped.resolve()
+    guard s == errSecSuccess, let d else { return nil }
+    return String(data: d, encoding: .utf8)
+  }
+  public func accept(_ path: String) -> Bool {
+    let (item, _, s) = scoped.resolve()
+    let data = Data(path.utf8)
+    if s == errSecSuccess { return item.update(data) == errSecSuccess }
+    guard s == errSecItemNotFound else { return false }
+    return item.add(data) == errSecSuccess
   }
 }

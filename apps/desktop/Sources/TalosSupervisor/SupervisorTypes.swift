@@ -9,6 +9,9 @@ extension Supervisor {
     public var backoff = Backoff()
     public var cleanupWait: Double = 10
     public var stopGrace: Double = 5
+    /// After our Enter, the warning still on screen this long means the Enter did not take: the one `noNotice` stop. A missing channels
+    /// notice is never a stop (Claude Code 2.1.322 prints none on a resumed start). Also: a start that never showed the warning counts as
+    /// running once Claude's input box is up and this long has passed since the spawn.
     public var noticeWait: Double = 15
     /// How long a start may stay in `.starting` (neither the dev-channel dialog nor the registration notice recognised on
     /// screen) before the owner is told. Far longer than a slow start needs; it only ends a wait that would never end.
@@ -31,6 +34,20 @@ extension Supervisor {
     /// `confirmWindow`. They do not spend `confirmCap`, which is the crash loop's: three resets in an hour must not make the fourth wait
     /// for a human, and must not turn one real crash into a "crash loop". Ten an hour still stops a runaway self-restart.
     public var coldConfirmCap: Int = 10
+    /// How long after the warning is answered Main's bridge has to show a live status (`status.json`) before the owner is told.
+    public var bridgeWait: Double = 60
+    /// An exit this soon after the spawn with the CLI's resume error on screen is a failed `--resume`. Later, the same words on
+    /// screen are conversation (a transcript that quotes them) and the exit is a crash, also for a start still on its warning. The
+    /// contract's `MAIN_RESTART.resume_error_within_s` (one number for every platform; 10 s was too tight on a loaded machine).
+    public var resumeMissingWindow: Double = MainRestartContract.resumeErrorWithinS
+    /// The contract's `MAIN_RESTART.cannot_launch_tries`: tries of a restart after a crash that cannot launch at all, before it gives up.
+    public var cannotLaunchTries: Int = MainRestartContract.cannotLaunchTries
+    /// The contract's `MAIN_RESTART.clean_exits_per_hour` (packages/protocol/src/supervisor.ts; `ConfigFileReadTests.theCleanExitCapIsTheContractsNumber` reads the
+    /// number from that file, so this cannot drift from it): more exits with code 0 than this within `cleanExitWindow` stop Main.
+    public var cleanExitsPerHour: Int = MainRestartContract.cleanExitsPerHour
+    public var cleanExitWindow: Double = 3600
+    /// `main-restart-check.json` is rewritten this often (`MainRestartCheck.writeEvery`, the contract's 5 s), on the tick.
+    public var restartCheckEvery: Double = MainRestartCheck.writeEvery
     public init() {}
   }
 
@@ -47,6 +64,9 @@ extension Supervisor {
     public var launchTrust: LaunchTrust = MemoryLaunchTrust()
     /// Run the takeover check (4.2) before every start. Option C workers keep it on too.
     public var takeoverCheck: Bool = true
+    /// Main's Talos bridge must show a live `status.json` within `Timings.bridgeWait` of the warning being answered, or the owner is told.
+    /// Off unless the app turns it on: a supervisor with no bridge behind it (tests, a thread session) has nothing to check.
+    public var checksBridge: Bool = false
     /// Process groups owned by sibling supervisors (Option C: main whitelists its workers' panes, OPTION-C-SPEC 4.4).
     public var siblingGroups: (@Sendable () -> Set<Int32>)?
     /// Unix milliseconds. A request's `ts` is wall-clock time, which the monotonic clock cannot be compared with; tests move this.
@@ -58,6 +78,13 @@ extension Supervisor {
     /// for as long as every core is held by a blocked one. The work reports back to the supervisor queue with `sync`. A test
     /// replaces this to see that both go through it.
     public var background: @Sendable (@escaping @Sendable () -> Void) -> Void = { work in Thread.detachNewThread(work) }
+    /// The app already found `desktop.json` unreadable (it chose the host from the defaults then): this supervisor starts and saves
+    /// nothing, even if the file reads fine a moment later. The supervisor also checks for itself.
+    public var configKnownUnreadable = false
+    /// Where the guards' refresh looks for bun (nil: `GuardsRefresh.bunCandidates`); a test points it at its own.
+    public var guardsBunCandidates: [String]?
+    /// Temp folders a bun or a checkout is never pinned in (`GuardsRefresh.tmpRoots`); a test whose fixtures live in one empties it.
+    public var guardsTmpRoots: [String] = GuardsRefresh.tmpRoots
     public init(name: String, configPath: String, home: String, talosAppHome: String? = nil, auditLogPath: String? = nil) {
       self.name = name
       self.configPath = configPath
@@ -73,6 +100,9 @@ extension Supervisor {
     case resumeMissing(String)
     case noNotice
     case crashedNoAutoRestart
+    /// The contract's `clean_exit_loop`: more than `Timings.cleanExitsPerHour` exits with code 0 in an hour. Not a crash loop
+    /// (nothing is restored), but nothing restarts it either.
+    case cleanExitLoop
     case startFailed(String)
   }
 
@@ -100,6 +130,15 @@ extension Supervisor {
     case stuck
     /// Launched, but after `startWait` neither the dev-channel dialog nor the registration notice is on screen.
     case startStalled
+    /// Main is running but its Talos bridge (the talos-app MCP server) has not written a live status after the window; the reason
+    /// is the last line of Claude Code's MCP log for that server, when it could be read.
+    case bridgeNotLive(String?)
+    /// Main's bridge was live and has reported no relay connection for `MainRestartContract.relayDownS` (the contract's
+    /// `bridge_not_live` once live); the last close code it reported, if any (MainWatch.swift).
+    case relayUnreachable(Int?)
+    /// Main was told about an owner message and has not acted on it, with its pane silent since (the contract's `stuck` by
+    /// `unseen_s`). Never restarted for it.
+    case notReading
   }
 
   public enum Event: Equatable, Sendable {
@@ -125,6 +164,8 @@ extension Supervisor {
     case devCardOffered(dialogId: String)
     /// The owner's tap on that card was verified and the Mac pressed the key for it (`choice` is the card's button, 0 = the confirm).
     case devCardAnswered(dialogId: String, choice: Int)
+    /// A start or a settings change was refused because `desktop.json` is there and cannot be read.
+    case configUnreadable
   }
 
   public enum StartKind: String, Equatable, Sendable {
@@ -151,6 +192,12 @@ extension Supervisor {
     public var devDialog: DialogOffer?
     /// The Mac told the phone, for this start, that Main waits at the Mac (`postDevWaitingToPhone`): the popup's footer says so only then.
     public var devPhoneTold = false
+    /// Main's Talos bridge was seen live (`status.json`, from this start's child) in this start. The setup screen's "done" waits for it.
+    public var bridgeLive = false
+    /// `desktop.json` is there and could not be read when the app started: nothing is started and nothing is saved in this run.
+    public var configUnreadable = false
+    /// The mode the main session, as launched, runs in that no thread session can be held to (`MainNarrowed`); nil when in none.
+    public var mainNarrowed: String?
   }
 
   struct Holder: Equatable {
@@ -173,6 +220,9 @@ extension Supervisor {
     var expectsDevDialog: Bool
     /// The channels this start's argv passed with `--dangerously-load-development-channels`: the only ones the warning may show.
     var launchedChannels: [String] = []
+    /// The mode this start runs in that narrows it beyond a thread session's reach (`MainNarrowed`): by the arguments and environment
+    /// it was given, or, for a pane found running, by its real arguments. No thread session starts while it is in one.
+    var narrowed: String?
     /// `Options.awake` at the spawn (stops while the Mac sleeps): the 60 s window of the auto-accept counts from here.
     var awakeStartedAt: Double = 0
     /// The last reason the guard gave for not answering the warning (the log says it once per reason).
@@ -182,9 +232,23 @@ extension Supervisor {
     var devDialogSeen: DialogMatcher.DevChannels?
     var confirmsSent = 0
     var confirmSentAt: Double?
-    var noticeSeen = false
+    /// The dev-channels warning of this start was answered (see `markAnswered`), or there was none to answer.
+    var dialogAnswered = false
+    /// `Options.wallClock` at the spawn: a bridge status stamped before it belongs to an earlier start.
+    var startedWallMs: Double = 0
+    /// Main's bridge: when the warning was answered (the clock the window counts from), and whether it has been seen live in this start.
+    var answeredAt: Double?
+    var bridgeSeenLive = false
+    /// The bridge alarm as raised, kept so it can come back when a dialog that took the one `needsYou` slot is answered.
+    var bridgeAlarm: NeedsYou?
+    /// Main's live bridge off the relay, and Main not reading its messages (SupervisorMainWatch.swift).
+    var mainWatch = MainWatch()
     var holders: [Holder] = []
     var notifiedScreens: Set<String> = []
+    /// The pane's last output as the host last reported it (a wall time), and when on the supervisor's clock that report last changed.
+    /// The dialog stall is timed from the second, so a Mac clock set forward cannot raise it early nor one set back hold it off.
+    var outputSeen: Date?
+    var outputChangedAt: Double = 0
     var agentsMisses = 0
     var reportedSessionId: String?
     /// The cold-start or refused-restart question the owner was told about the dev-channel dialog. A warning about another dialog
@@ -197,6 +261,8 @@ extension Supervisor {
     var promptChecked = false
     /// The refused development-channels warning as a card for the owner, and what has been taken from it (SupervisorDevCard.swift).
     var devCard = DevCard()
+    /// This start is the restart after an exit with code 0: its auto-answer counts with the cold starts', not the crash loop's.
+    var afterCleanExit = false
   }
 
   struct Cleanup {

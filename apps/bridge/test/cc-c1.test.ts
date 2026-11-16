@@ -8,10 +8,12 @@ import { join, resolve } from 'node:path'
 import {
   type CardT,
   type JwkP256T,
-  PERMISSION_HIDDEN_WARNING,
   PERMISSION_OLD_CLIENT_WARNING,
+  PERMISSION_REPEAT_WARNING,
   type PermissionRequestT,
   permissionCardAllowsPrimary,
+  permissionHiddenReasons,
+  permissionHiddenWarning,
 } from '@talos-app/protocol'
 import {
   FakeApp,
@@ -134,7 +136,7 @@ describe('C3.1-C3.3 the relay through the real stdio server', () => {
     expect(card.body?.replace(/\n/g, '')).toBe(fx.params.input_preview)
     expect(card.body_format).toBe('plain')
     expect(card.fields[0]?.value).toBe(fx.params.description)
-    expect(card.risk).toBe('high')
+    expect(card.risk).toBe('low')
     expect(card.origin).toBe('background')
     expect(card.warning).toBeUndefined()
     expect(permissionCardAllowsPrimary(card)).toBe(true)
@@ -182,31 +184,29 @@ describe('C3.1-C3.3 the relay through the real stdio server', () => {
     })
   })
 
-  test('the redacted fixture gets no Allow (the mask also hits key names)', async () => {
+  test('the redacted fixture keeps Allow, with the note naming the mask (it also hits key names)', async () => {
     const r = await rig()
     const fx = permissionFixture('redacted')
     await r.claude.openPermission(fx.params)
     const card = await cardFor(r, fx.params.request_id)
-    expect(permissionCardAllowsPrimary(card)).toBe(false)
+    expect(card.warning).toBe(permissionHiddenWarning(permissionHiddenReasons(fx.params)))
+    expect(card.warning).toContain('[REDACTED]')
+    expect(permissionCardAllowsPrimary(card)).toBe(true)
   })
 
   for (const name of ['elided', 'unserializable', 'legacy_cut']) {
-    test(`${name}: no Allow, a forged PRIMARY is refused with permission_hidden, Deny still works`, async () => {
+    test(`${name}: Allow kept with the exact note naming the hidden part, and an owner-signed Allow sends allow`, async () => {
       const r = await rig()
       const fx = permissionFixture(name)
       await r.claude.openPermission(fx.params)
       const card = await cardFor(r, fx.params.request_id)
-      expect(card.warning).toBe(PERMISSION_HIDDEN_WARNING)
-      expect(permissionCardAllowsPrimary(card)).toBe(false)
-      const f = await resolvePastRelay(r, card, card.payload_hash)
-      const err = await r.relay.expectFrame('error', (e) => e.ref === f.id, { direction: 'from_bridge' })
-      expect(err.code).toBe('permission_hidden')
-      await sleep(150)
-      expect(r.claude.permissionVerdicts).toHaveLength(0)
-      expect(r.claude.permissionState(fx.params.request_id)).toBe('open')
-      await r.app.resolveCard(card, 'kill', card.payload_hash)
+      const reasons = permissionHiddenReasons(fx.params)
+      expect(reasons.length).toBeGreaterThan(0)
+      expect(card.warning).toBe(permissionHiddenWarning(reasons))
+      expect(permissionCardAllowsPrimary(card)).toBe(true)
+      await r.app.resolveCard(card, 'primary', card.payload_hash)
       expect(await r.claude.waitForVerdict(fx.params.request_id)).toMatchObject({
-        behavior: 'deny',
+        behavior: 'allow',
         outcome: 'applied',
       })
     })
@@ -230,19 +230,15 @@ describe('C3.1-C3.3 the relay through the real stdio server', () => {
   })
 
   for (const version of ['2.1.210', '2.0.0', '0.0.0']) {
-    test(`Claude Code ${version} (below the 2.1.211 floor): deny-only with the old-client warning`, async () => {
+    test(`Claude Code ${version} (below the floor): Allow kept with the old-client note, and Allow sends allow`, async () => {
       const r = await rig({ version })
       const fx = permissionFixture('plain_bash')
       await r.claude.openPermission(fx.params)
       const card = await cardFor(r, fx.params.request_id)
       expect(card.warning).toBe(PERMISSION_OLD_CLIENT_WARNING)
-      const f = await r.app.resolveCard(card, 'primary', card.payload_hash, {
-        stepup_token: r.relay.mintStepup(`card:${card.id}`),
-      })
-      expect((await r.relay.expectFrame('error', (e) => e.ref === f.id, { direction: 'from_bridge' })).code).toBe(
-        'permission_hidden',
-      )
-      expect(r.claude.permissionVerdicts).toHaveLength(0)
+      expect(permissionCardAllowsPrimary(card)).toBe(true)
+      await r.app.resolveCard(card, 'primary', card.payload_hash)
+      expect(await r.claude.waitForVerdict(fx.params.request_id)).toMatchObject({ behavior: 'allow' })
     })
   }
 
@@ -260,7 +256,7 @@ describe('C3.1-C3.3 the relay through the real stdio server', () => {
       .filter((f) => f.type === 'card.create' && f.card.kind === 'permission')
       .map((f) => (f as { card: CardT }).card)
       .find((c) => c.id !== first.id) as CardT
-    expect(second.warning).toBeDefined()
+    expect(second.warning).toBe(PERMISSION_REPEAT_WARNING)
     expect(permissionCardAllowsPrimary(second)).toBe(false)
     // the first card's id is poisoned too: Claude Code drops every verdict for it, so none may be sent
     const f = await r.app.resolveCard(first, 'primary', first.payload_hash, {

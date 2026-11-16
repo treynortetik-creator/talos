@@ -15,6 +15,8 @@ export const mediaAppUrl = (id: string) => `/media/${id}/app`
  */
 const CACHE_GEN = 'c=2'
 const bust = (url: string, r?: number) => `${url}?${CACHE_GEN}${r ? `&r=${r}` : ''}`
+/** A media URL as every link and probe must carry it (the cache-buster above). */
+export const mediaHref = (url: string): string => bust(url)
 
 /**
  * How long we wait for the Mac to send an old file back, before the file's size is known: the base. A Mac that has
@@ -32,11 +34,22 @@ export const AUTO_REHYDRATE_MAX_BYTES = 5 * 1024 * 1024
  * The Mac (or the relay: it is offline) refused a `media.fetch` for this file. The socket client re-emits the `error` frame
  * with the `media_id` of the ask, so the chip fails now instead of after its timeout. Does nothing on a client without it.
  */
-function onMediaFetchFailed(client: TalosClient, mediaId: string, cb: () => void): () => void {
+function onMediaFetchFailed(client: TalosClient, mediaId: string, cb: (removed: boolean) => void): () => void {
   return client.onFrame('error', (f) => {
-    if ((f as { media_id?: unknown }).media_id === mediaId) cb()
+    if ((f as { media_id?: unknown }).media_id !== mediaId) return
+    // removed under the owner's storage setting: remembered with its day count, and said as that, not as a failure
+    const removed = (f as { code?: unknown }).code === 'media_removed'
+    if (removed) {
+      const days = /after (\d+) days/.exec(String((f as { message?: unknown }).message ?? ''))?.[1]
+      removedAfter.set(mediaId, days ? Number(days) : null)
+    }
+    cb(removed)
   })
 }
+
+/** Files the Mac removed under the owner's storage setting, with the setting's day count when it said it. */
+const removedAfter = new Map<string, number | null>()
+export const removedAfterDays = (mediaId: string): number | null | undefined => removedAfter.get(mediaId)
 
 /** Asks the Mac for a file past the relay buffer. Does nothing on a client that cannot (the fake one). */
 function askMac(client: unknown, mediaId: string): void {
@@ -52,10 +65,18 @@ function askMac(client: unknown, mediaId: string): void {
 export function useMediaSrc(
   att: AttachmentRefT,
   timeoutMs: number = fetchTimeoutFor(att.size),
-): { src: string; onError: () => void; failed: boolean; state: 'ok' | 'fetching' | 'failed'; retry: () => void } {
+): {
+  src: string
+  onError: () => void
+  failed: boolean
+  state: 'ok' | 'fetching' | 'failed' | 'removed'
+  retry: () => void
+} {
   const client = useTalosClient()
   const [gen, setGen] = useState(0)
-  const [state, setState] = useState<'ok' | 'fetching' | 'failed'>('ok')
+  const [state, setState] = useState<'ok' | 'fetching' | 'failed' | 'removed'>(() =>
+    removedAfter.has(att.media_id) ? 'removed' : 'ok',
+  )
   const asked = useRef(false)
   const sentBack = useRef(false)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -78,10 +99,10 @@ export function useMediaSrc(
       setState('ok')
       setGen((b) => b + 1)
     })
-    const offFail = onMediaFetchFailed(client, att.media_id, () => {
+    const offFail = onMediaFetchFailed(client, att.media_id, (removed) => {
       if (!asked.current) return
       clear()
-      setState('failed')
+      setState(removed ? 'removed' : 'failed')
     })
     return () => {
       off()
@@ -108,7 +129,7 @@ export function useMediaSrc(
   return { src: bust(mediaUrl(att.media_id), gen), onError, failed: state !== 'ok', state, retry }
 }
 
-export type GateState = 'checking' | 'ready' | 'gone' | 'fetching' | 'failed'
+export type GateState = 'checking' | 'ready' | 'gone' | 'fetching' | 'failed' | 'removed'
 
 /**
  * For attachments the browser loads without telling us how it went (a download link, a sandboxed page): probe the URL with
@@ -148,10 +169,10 @@ export function useMediaGate(
       setState('checking')
       setAttempt((a) => a + 1)
     })
-    const offFail = onMediaFetchFailed(client, att.media_id, () => {
+    const offFail = onMediaFetchFailed(client, att.media_id, (removed) => {
       if (!asked.current) return
       clear()
-      setState('failed')
+      setState(removed ? 'removed' : 'failed')
     })
     return () => {
       off()

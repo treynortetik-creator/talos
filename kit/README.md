@@ -55,7 +55,7 @@ cd talos
 cd ~/talos-agent && claude
 ```
 
-Opt-in flags, each explained below: `--with-memory-search` (semantic search), `--with-reranker`, `--with-voice` (a neural
+Opt-in flags, each explained below: `--with-memory-search` (semantic search), `--with-reranker` (`--reranker-auto` is the root installer's default: the same, skipped under 3 GiB of memory), `--with-voice` (a neural
 voice), `--with-qwen-voice`, `--with-parakeet`, `--with-diarize` (the suggested local models,
 [`setup/local-models.md`](setup/local-models.md)), `--with-vault DIR` (a private personal vault), `--global-pointer`
 (point every Claude Code session at the agent's memory), `--notify talos|macos` (needs `--with-chronos`). Chronos is off unless you
@@ -200,14 +200,16 @@ no key, or when a key has no ledger entry, and it lists expired rows of the Obse
 a graduation-log row. (The design follows what a long-running reference agent learned the hard way: every rule it
 wrote as a paragraph recurred, and only trigger-, number- and script-shaped rules held.)
 
-## Memory search (optional)
+## Memory search (on by default for a new agent)
 
 Out of the box the agent finds things with `scripts/recall.py` (every query term, ranked, over `wiki/`, `memory/`
 and `.learnings/`) and `scripts/wiki-search.sh` (exact terms), then walks the `[[links]]`. For meaning-based
-search, so that "car repair" finds a note about brake pads, turn on the semantic arm:
+search, so that "car repair" finds a note about brake pads, there is a semantic arm. The root `./install.sh` sets it
+up for a NEW agent by default (`--no-memory-search` skips it; the model is chosen by memory, small under 15 GiB); an
+agent from before that default, or one whose setup failed, adds it with:
 
 ```bash
-./install.sh --with-memory-search [--embed-model small]    # or, later: bash scripts/memory/setup.sh
+bash scripts/memory/setup.sh [--embed-model small]    # `talos-app doctor` says when it is not set up
 ```
 
 It builds one shared Python 3.10+ venv (about 160 MB), downloads a local embedding model (about 210 MB, or 67 MB
@@ -373,7 +375,7 @@ memory and a boot file in its **own folder outside the agent folder** (for examp
 the main agent's rules, memory or hooks.
 
 ```bash
-talos-app lead init trip --folder ~/leads/trip --agent-dir ~/talos-agent    # type it in Terminal; agents cannot run it
+talos-app lead init trip --folder ~/leads/trip --agent-dir ~/talos-agent    # type it, or ask the agent (it runs it when you asked)
                                                                          # --agent-dir defaults from TALOS_AGENT_DIR; --protect <dir> adds a root
 talos-app lead check ~/leads/trip --agent-dir ~/talos-agent                 # sizes and fence, safe to script
 ```
@@ -469,8 +471,9 @@ launchd (every 5 min) -> Chronos tick -> claim the job -> claude -p in Chronos's
    (then it leaves your Chronos alone, and warns if that Chronos's workspace is a different folder, because
    scheduled runs start in the workspace and only load an agent's `CLAUDE.md` and hooks from there;
    `--set-chronos-workspace` repoints it, `--reinstall-chronos` runs Chronos's installer again);
-3. registers ten jobs from [`jobs/`](jobs/) in your Chronos `jobs.json`, **all disabled** (`--with-memory-search`
-   enables `talos-memory-index`), each Claude job with a `prompt.md` and a locked `guard.md` (the index job and the four
+3. registers ten jobs from [`jobs/`](jobs/) in your Chronos `jobs.json`. The weekly wiki check and the weekly snapshot are
+   **on** (plain commands, no Claude usage; `--with-memory-search` also turns on `talos-memory-index`); every Claude job is
+   **off**, each with a `prompt.md` and a locked `guard.md` (the index job, the wiki check, the snapshot and the four
    check-ins are plain commands), with your agent folder's path filled in. Existing jobs and any
    prompt you edited are never overwritten;
 4. registers Chronos's SessionStart hook in the agent's `.claude/settings.json`, so your next interactive
@@ -480,8 +483,8 @@ launchd (every 5 min) -> Chronos tick -> claim the job -> claude -p in Chronos's
 | Job | When | What it does |
 |---|---|---|
 | `talos-morning-brief` | weekdays 07:03 | brief from your wiki and any read-only tools you name; files at most five facts back |
-| `talos-weekly-wiki-lint` | Monday 08:17 | runs the linter and the deep-dive selector; reports, fixes nothing |
-| `talos-weekly-snapshot` | Friday 16:11 | `scripts/weekly-snapshot.sh`: stages `memory`, `wiki`, `.learnings` and makes one local commit |
+| `talos-weekly-wiki-lint` | Monday 08:17 | `scripts/weekly-wiki-check.sh`, a plain command (no Claude usage): the linter, the config lint and the deep-dive selector; reports, fixes nothing. **On** from install |
+| `talos-weekly-snapshot` | Friday 16:11 | `scripts/weekly-snapshot.sh`, a plain command (no Claude usage): stages `memory`, `wiki`, `.learnings` and makes one local commit. **On** from install |
 | `talos-memory-index` | daily 06:41 | refreshes the semantic search index. A plain command (needs Chronos 0.2.1): no Claude session, no usage. Only useful after `scripts/memory/setup.sh`, which enables it |
 | `talos-state-sweep` | weekdays 16:37 | read-only check of `memory/STATE.md`: size, rows that look finished, stale rows, dates coming up |
 | `talos-dream-cycle` | daily 02:30 | restricted Claude job: finds links, contradictions and stale facts in what changed, quote-verifies them by script, adds at most 15 `## Related` links and queues the rest in `memory/dream/QUEUE.md`. Sends nothing. [`setup/dream-cycle.md`](setup/dream-cycle.md) |
@@ -500,9 +503,9 @@ python3 scripts/talos-jobs.py list
   list instead of `--dangerously-skip-permissions`. Every Claude job Talos ships is restricted. Chronos older than
   0.2.2 ignores the key, so `talos-jobs.py` refuses to register or enable a restricted job on one. See
   [Scheduled jobs are restricted by default](#scheduled-jobs-are-restricted-by-default).
-- **Command jobs (0.2.1).** `talos-memory-index` and the four `talos-watch-*` check-ins are plain shell commands on a
+- **Command jobs (0.2.1).** `talos-memory-index`, `talos-weekly-wiki-lint`, `talos-weekly-snapshot` and the four `talos-watch-*` check-ins are plain shell commands on a
   schedule, not Claude runs, so they cost no plan usage. An older Chronos cannot run it; `talos-jobs.py register` then skips it and says so.
-- **Per-job `model`.** The lint, snapshot, state-sweep and dream-cycle jobs pin `sonnet` (mechanical work; Sonnet is the floor, the
+- **Per-job `model`.** The state-sweep and dream-cycle jobs pin `sonnet` (mechanical work; Sonnet is the floor, the
   kit never ships a job pinned to Haiku). The brief inherits your default. A Chronos 0.1 ignores the key.
 - **Event triggers.** A job can also start on a new file in a folder, a matching Gmail message (through an adapter
   you configure), a GitHub pull request, issue or release, or a local webhook. Talos ships none. They are
@@ -571,8 +574,10 @@ Read this before you connect Talos to your mail, chat or calendar.
   never / ask / allow table (`hooks/action-rules.yaml` plus your own `~/.config/talos/action-rules.yaml`, read first).
   `never` is refused; `ask` shows Claude Code's permission prompt, and is refused when no one is there. It only knows the
   calls you list, matches command *text* like the pre-tool guard does, and its one-use approval command
-  (`action-rules.py approve`) is honour-system: an agent with a shell could run it, which is why the live path is the
-  native prompt, not the approval file.
+  (`action-rules.py approve`), when Talos is installed, puts an "Allow once" card with the exact call on the owner's phone:
+  only his tap approves, for that one call, and the approval lives in the bridge, not in a file. The starter rules for
+  deploys, pushes to main, releases and connector sends carry a kind: a kind he always allows in Talos goes through with a quiet line in the thread
+  (the bridge decides the kind from its own copy of the starter rules, never from your rules file). Without the Talos app it is honour-system, which is why the live path is the native prompt, not the approval file.
 - **Fail-closed when unattended.** The four safety guards allow on an internal error in a live session (a broken
   guard must never wedge a conversation) but **block** in a headless scheduled run, where nobody would notice the
   guard had stopped guarding. The settings template wraps each guard the same way, so a deleted script, a missing
@@ -640,8 +645,6 @@ that crashed blocked the run):
 | Job | What it may do |
 |---|---|
 | `talos-morning-brief` | read and search inside the agent folder; edit and create files only under `memory/briefs/` and `wiki/`; run exactly `refresh-index.sh`, `wiki-lint.py wiki --extra-dir memory` and `date` |
-| `talos-weekly-wiki-lint` | read and search inside the agent folder; **no write tool**; run exactly the index refresh, the lint, the deep-dive selector, the config lint and `date` |
-| `talos-weekly-snapshot` | read and search inside the agent folder; **no write tool**; run exactly `scripts/weekly-snapshot.sh` (named paths only, one local commit; it contains no push, pull, fetch, reset, clean or sweeping add) |
 | `talos-state-sweep` | read and search inside the agent folder; **no write tool**; run exactly `state-sweep.py` and `date` |
 | `talos-dream-cycle` | read and search inside the agent folder; edit and create files only under `memory/dream/` (never `wiki/`: the apply script, not the model, adds at most 15 `## Related` links); run exactly `date` and the five `scripts/dream/*.py` steps with no arguments |
 | `talos-memory-index`, `talos-watch-*` | plain command jobs: each runs one fixed script, no Claude, nothing to restrict (the check-ins send one short message through your own notify command, and only when a bar is crossed) |
@@ -690,9 +693,9 @@ as `Bash(git commit:*)` allows every `git commit` flag.
 **The opt-out (off by default, your call).** If you want a job to keep the old full-access behaviour:
 
 ```bash
-python3 scripts/talos-jobs.py access talos-weekly-snapshot --full --agent-dir ~/talos-agent        # one job
+python3 scripts/talos-jobs.py access talos-state-sweep --full --agent-dir ~/talos-agent            # one job
 ./install.sh --full-access-jobs ...                                                              # at install time
-python3 scripts/talos-jobs.py access talos-weekly-snapshot --restricted --agent-dir ~/talos-agent  # and back
+python3 scripts/talos-jobs.py access talos-state-sweep --restricted --agent-dir ~/talos-agent      # and back
 ```
 
 `list` shows `RESTRICTED` or `FULL ACCESS` for each job. A full-access job runs with prompts skipped and can do

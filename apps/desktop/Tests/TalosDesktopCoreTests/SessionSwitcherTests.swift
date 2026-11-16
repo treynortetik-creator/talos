@@ -147,10 +147,10 @@ struct SessionSwitcherTests {
 
   @Test func theNoticeNamesThePromptAndWhereToAnswerAndIsNotScreenText() {
     #expect(
-      WorkerNotice.line(threadName: "OC Test", screen: .trust)
-        == "OC Test's session is waiting on a 'trust this folder' prompt; open Terminals \u{2192} OC Test on the Mac to answer.")
-    #expect(WorkerNotice.line(threadName: "x\u{1B}[31m\n", screen: .mcpConsent).contains("\u{1B}") == false)
-    #expect(WorkerNotice.line(threadName: "\u{7}", screen: .loginExpired).hasPrefix("A thread's session"))
+      WorkerNotice.line(screen: .trust)
+        == "This thread's session is waiting on a 'trust this folder' prompt; open this thread in Terminals on the Mac to answer.")
+    // no thread name goes into the line, so there is nothing of the owner's config to clean
+    #expect(WorkerNotice.line(screen: .loginExpired).hasPrefix("This thread's session"))
     #expect(WorkerNotice.promptName(.unknownSelection) == "an unknown question")
   }
 
@@ -158,7 +158,7 @@ struct SessionSwitcherTests {
   @Test func theLoginPromptIsNamedSignIn() {
     #expect(WorkerNotice.promptName(.loginExpired) == "sign in")
     #expect(
-      WorkerNotice.line(threadName: "OC Test", screen: .loginExpired)
-        == "OC Test's session is waiting on a 'sign in' prompt; open Terminals \u{2192} OC Test on the Mac to answer.")
+      WorkerNotice.line(screen: .loginExpired)
+        == "This thread's session is waiting on a 'sign in' prompt; open this thread in Terminals on the Mac to answer.")
   }
 }

@@ -58,23 +58,24 @@ describe('commands honesty', () => {
     }
   })
 
-  test('every needs_terminal row has agent_may_run false', () => {
-    for (const c of COMMANDS) if (c.needs_terminal) expect(c.agent_may_run, c.name).toBe(false)
+  test("a needs_terminal row carries no other label (it is the owner's at a terminal)", () => {
+    for (const c of COMMANDS) if (c.needs_terminal) expect(c.who, c.name).toBeUndefined()
   })
 
   test('WORKER_COMMANDS_OK is a subset of the agent_may_run rows (hook and guard-hook are Claude Code entries, named here)', () => {
     const rows = new Map(COMMANDS.map((c) => [c.name, c]))
+    const agentRow = (c: (typeof COMMANDS)[number] | undefined) => !!c && !c.needs_terminal && c.who !== 'internal'
     const ENTRIES = new Set(['hook', 'guard-hook'])
     for (const entry of WORKER_COMMANDS_OK) {
       if (ENTRIES.has(entry)) continue
-      expect(rows.get(entry)?.agent_may_run, `${entry} must be an agent_may_run row`).toBe(true)
+      expect(agentRow(rows.get(entry)), `${entry} must be an agent row`).toBe(true)
     }
     expect(WORKER_COMMANDS_OK).toContain('events')
     // the second list (a thread whose owner turned ops_read on): each entry's first word is an agent_may_run row, and the
     // list never overlaps the first one
     for (const entry of WORKER_OPS_READ_OK) {
       const first = entry.split(' ')[0] as string
-      expect(rows.get(first)?.agent_may_run, `${entry}: ${first} must be an agent_may_run row`).toBe(true)
+      expect(agentRow(rows.get(first)), `${entry}: ${first} must be an agent row`).toBe(true)
       expect(WORKER_COMMANDS_OK, entry).not.toContain(entry)
     }
     expect(refusedForWorkers(['events', '--json'])).toBe(false)

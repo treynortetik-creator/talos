@@ -14,7 +14,9 @@ import {
   BRIDGE_TOOLS,
   CONFIG_BRIDGE_TOOLS,
   MOD_BRIDGE_TOOLS,
+  PAGE_BRIDGE_TOOLS,
   SCHEDULE_BRIDGE_TOOLS,
+  SCREEN_BRIDGE_TOOLS,
 } from '../src/tools/table.ts'
 import { stopRelay, tempHome } from './helpers.ts'
 
@@ -212,7 +214,11 @@ describe('stdio server', () => {
         ...CONFIG_BRIDGE_TOOLS,
         ...ATTACHMENT_BRIDGE_TOOLS,
         ...MOD_BRIDGE_TOOLS,
+        ...PAGE_BRIDGE_TOOLS,
         'handoff',
+        'thread_session',
+        'restart_main',
+        ...SCREEN_BRIDGE_TOOLS,
       ].sort(),
     )
     for (const t of tools) expect(t.inputSchema.type).toBe('object')
@@ -313,7 +319,7 @@ describe('stdio server', () => {
     await waitFor(() => !r.relay.bridgeConnected, 3000, 'socket closed')
   })
 
-  test('a second live bridge started in another home with the same key supersedes the first, which goes headless and does not flap', async () => {
+  test('a second live bridge started in another home with the same key supersedes the first, which asks back in as a standby and does not flap', async () => {
     const r = await rig({ autoReply: false })
     await r.relay.expectFrame('ready', () => true, { direction: 'to_bridge' })
     // another home, so the PID-file takeover does not stop the first process: this is the "same key somewhere else" case
@@ -330,8 +336,11 @@ describe('stdio server', () => {
       const note = await r.claude.waitForNotification((x) => x.meta.kind === 'system', 6000)
       expect(note.content).toContain('Another bridge connected')
       await sleep(1500)
-      const hellos = r.relay.frames.filter((f) => f.direction === 'from_bridge' && f.frame.type === 'hello').length
-      expect(hellos).toBe(2) // no reconnect storm from the superseded one
+      const hellos = r.relay.frames.filter((f) => f.direction === 'from_bridge' && f.frame.type === 'hello')
+      // two real hellos; the superseded one only asks as a standby, on a growing backoff, and never takes the slot
+      expect(hellos.filter((f) => !(f.frame as { standby?: boolean }).standby)).toHaveLength(2)
+      expect(hellos.length).toBeLessThanOrEqual(4)
+      expect(r.relay.bridgeConnected).toBe(true)
     } finally {
       await second.stop().catch(() => {})
     }

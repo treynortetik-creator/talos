@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.325
+▝▜██████▀  Fable 5.2 · Claude Max  
+ ▝▝   ▝▝   /home/alex/proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+
+❯ Run the shell command: sleep 90. Then reply done.
+
+  Ran 2 shell commands
+
+⏺ Foreground sleep is blocked, so it's running in the background. I'll say done when it finishes.
+
+✻ Cooked for 9s · done 7:39 PM · 1 shell still running
+
+❯ first queued note
+
+⏺ Got it. Sleep's still running, no "done" yet.
+
+✻ Cogitated for 3s · done 7:40 PM · 1 shell still running
+
+❯ second queued note
+
+⏺ Noted. Still waiting on the damn sleep.
+
+✻ Cogitated for 2s · done 7:40 PM · 1 shell still running
+
+❯ Write a 1500-word story about a lighthouse keeper, as plain prose. Use no tools.
+
+❯ first queued note
+  ctrl+x ctrl+s to send now
+
+
+
+✻ Pondering… (6s · thinking)
+  ⎿  Tip: Use Plan Mode to prepare for a complex request before making changes. Press shift+tab twice to enable.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Press up to edit queued messages
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · 1 shell · esc to interrupt · ↓ to manage

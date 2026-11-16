@@ -122,6 +122,56 @@ describe('catch-up past one page', () => {
   })
 })
 
+describe('a live frame while catch-up pages are still coming', () => {
+  const helloSeqs = () =>
+    relay.frames.filter((f) => f.direction === 'from_app' && f.raw.type === 'hello').map((f) => f.raw.last_seq)
+
+  /** Page 1 of a longer catch-up (seq 2..201), sent by hand so the test decides what arrives before page 2. */
+  async function firstPageOnly() {
+    await online()
+    await client.sendMessage({ threadId: 'general', text: 'first' })
+    await waitFor(() => client.store.getState().lastSeq === 1, 2000, 'first seq')
+    relay.sendToApps(
+      mkFrame('catchup.batch', { from_seq: 2, to_seq: 201, frames: [agentReply(201, 'page one')], more: true }),
+    )
+    await waitFor(() => catchupRequests().includes(201), 2000, 'asked for page two')
+  }
+
+  it('is shown, but the next hello still starts at the last page that was fetched', async () => {
+    await firstPageOnly()
+    relay.sendToApps(agentReply(451, 'live, above the pages not fetched yet'))
+    await waitFor(
+      () => (client.store.getState().messages.general ?? []).some((m) => m.seq === 451),
+      2000,
+      'the live reply is in the thread',
+    )
+    expect(client.store.getState().lastSeq).toBe(201)
+
+    // The link drops before page two: the reconnect must ask from 201, or seq 202..450 are never sent.
+    relay.dropApps()
+    await waitFor(() => helloSeqs().length === 2, 4000, 'second hello')
+    expect(helloSeqs()[1]).toBe(201)
+  })
+
+  it('counts once the last page has filled the gap below it', async () => {
+    await firstPageOnly()
+    relay.sendToApps(agentReply(451, 'live'))
+    await waitFor(() => (client.store.getState().messages.general ?? []).some((m) => m.seq === 451), 2000, 'live row')
+    // a middle page keeps it held: the gap above this page is still open
+    relay.sendToApps(
+      mkFrame('catchup.batch', { from_seq: 202, to_seq: 401, frames: [agentReply(401, 'page two')], more: true }),
+    )
+    await waitFor(() => client.store.getState().lastSeq === 401, 2000, 'page two')
+    relay.sendToApps(
+      mkFrame('catchup.batch', { from_seq: 402, to_seq: 450, frames: [agentReply(450, 'page three')], more: false }),
+    )
+    await waitFor(() => client.store.getState().lastSeq === 451, 2000, 'the held live seq is taken')
+    // and from here a live frame moves it at once, as before
+    relay.sendToApps(agentReply(452, 'after'))
+    await waitFor(() => client.store.getState().lastSeq === 452, 2000, 'live again')
+  })
+})
+
 describe('stored owner frames in a catch-up batch', () => {
   it('come back as owner messages with their seq, also when they sit on a later page', async () => {
     await seedWhileAway((first) => {

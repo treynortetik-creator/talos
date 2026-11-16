@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.32
+▝▜██████▀  Fable 5.2 · Claude 
+ ▝▝   ▝▝   /home/alex/proj
+
+
+
+  You've hit your Fable
+  limit · resets 4pm
+
+  What do you want to do?
+
+  ❯ 1. Stop and wait for
+  limit to reset
+    2. Wait here, then
+  continue automatically
+  when the limit resets
+    3. Switch to usage
+  credits
+
+  Enter to confirm · Esc
+  to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,4 +1,4 @@
-// WP2: relay auth and security. Passkeys, sessions, CSRF, step-up, the device registry, bridge enrollment and key
+// WP2: relay auth and security. Passkeys (sign-in only), sessions, CSRF, the device registry, bridge enrollment and key
 // rotation, rate limits. `register` installs the AuthContract implementation the other modules code against.
 import { Buffer } from 'node:buffer'
 import {
@@ -55,10 +55,6 @@ const csrf = (c: Context<AppEnv>, next: () => Promise<void>) => auth(c).requireC
 const session = (c: Context<AppEnv>, next: () => Promise<void>) => auth(c).requireSession(c, next)
 // Pairing routes accept a session whose device is not pinned yet (the passkey exists, the Mac has not said y).
 const sessionAny = (c: Context<AppEnv>, next: () => Promise<void>) => auth(c).requireSessionAny(c, next)
-const stepup =
-  (purpose: Parameters<ReturnType<typeof implFor>['requireStepup']>[0]) =>
-  (c: Context<AppEnv>, next: () => Promise<void>) =>
-    auth(c).requireStepup(purpose)(c, next)
 
 async function body<S extends z.ZodType>(c: Context<AppEnv>, schema: S): Promise<z.infer<S> | null> {
   let raw: unknown
@@ -365,61 +361,6 @@ routes.post('/api/auth/device/prove', csrf, session, rate('prove'), async (c) =>
   return c.json({ ok: true })
 })
 
-// ---- step-up --------------------------------------------------------------------------------------------------
-
-routes.post('/api/auth/stepup/options', rate('stepup'), csrf, session, async (c) => {
-  const { core, services } = state(c)
-  const sess = sessionFor(state(c), c)
-  const b = await body(c, R.stepupOptions.req)
-  if (!sess || !b) return c.json({ error: 'bad_request' }, 400)
-  const row = core.db.prepare('select credential_id from auth_sessions where id = ?').pluck().get(sess.sessionId) as
-    | string
-    | null
-  const cred = row ? core.credential(row) : null
-  const options = await generateAuthenticationOptions({
-    rpID: services.env.RP_ID,
-    userVerification: 'required',
-    ...(cred
-      ? { allowCredentials: [{ id: cred.credentialId, ...(cred.transports ? { transports: cred.transports } : {}) }] }
-      : {}),
-  })
-  core.putChallenge('stepup', options.challenge, sess.sessionId, b.purpose)
-  return c.json(options)
-})
-
-routes.post('/api/auth/stepup/verify', rate('stepup'), csrf, session, async (c) => {
-  const { core, services } = state(c)
-  const sess = sessionFor(state(c), c)
-  const b = await body(c, R.stepupVerify.req)
-  if (!sess || !b) return c.json({ error: 'bad_request' }, 400)
-  const bound = core.db.prepare('select credential_id from auth_sessions where id = ?').pluck().get(sess.sessionId) as
-    | string
-    | null
-  const response = b.response as { id?: unknown }
-  const cred = typeof response.id === 'string' ? core.credential(response.id) : null
-  if (!cred || (bound && cred.credentialId !== bound)) return c.json({ error: 'stepup_invalid' }, 403)
-  try {
-    const v = await verifyAuthenticationResponse({
-      response: b.response as never,
-      expectedChallenge: (ch) => core.consumeChallenge('stepup', ch, sess.sessionId, b.purpose),
-      expectedOrigin: services.env.PUBLIC_ORIGIN,
-      expectedRPID: services.env.RP_ID,
-      credential: {
-        id: cred.credentialId,
-        publicKey: cred.publicKey as never,
-        counter: cred.counter,
-        ...(cred.transports ? { transports: cred.transports } : {}),
-      },
-      requireUserVerification: true,
-    })
-    if (!v.verified) return c.json({ error: 'stepup_invalid' }, 403)
-    core.touchCredential(cred.credentialId, v.authenticationInfo.newCounter)
-  } catch {
-    return c.json({ error: 'stepup_invalid' }, 403)
-  }
-  return c.json({ stepup_token: core.mintStepup(sess.sessionId, b.purpose) })
-})
-
 // ---- session ----------------------------------------------------------------------------------------------------
 
 routes.post('/api/auth/logout', rate('auth'), csrf, sessionAny, (c) => {
@@ -452,6 +393,21 @@ routes.post('/api/auth/logout-all', rate('auth'), csrf, session, (c) => {
   return c.body(null, 204)
 })
 
+/**
+ * Devices the bridge pinned as the agent's first, on an agent never set up (device.pinned `first`): /api/me says so for an
+ * hour, because the app that paired may hear the pin only there (its socket was down, or it finished on /api/me). Kept in
+ * memory: a redeploy within that hour forgets it, and the app still has the live frame and its own record.
+ */
+const firstPins = new Map<string, number>()
+const FIRST_RUN_MS = 3_600_000
+function firstRun(deviceId: string, now: number): boolean {
+  const at = firstPins.get(deviceId)
+  if (at === undefined) return false
+  if (now - at < FIRST_RUN_MS) return true
+  firstPins.delete(deviceId)
+  return false
+}
+
 routes.get('/api/me', sessionAny, (c) => {
   const { core, services } = state(c)
   const sess = sessionFor(state(c), c)
@@ -459,6 +415,7 @@ routes.get('/api/me', sessionAny, (c) => {
   return c.json({
     ...(device && !device.revoked ? { device_id: device.id } : {}),
     device_pinned: Boolean(device?.pinned && !device.revoked),
+    ...(device && !device.revoked && firstRun(device.id, services.clock.now()) ? { first_run: true as const } : {}),
     has_passkey: core.hasPasskey,
     rp_id: services.env.RP_ID,
     version: VERSION,
@@ -496,7 +453,7 @@ routes.post(
   session,
   smallBodyGuard(),
   csrf,
-  stepup('device:revoke'),
+  // no passkey step-up (2026-11-14): a signed-in session and the app's confirm sheet; an old app's stepup_token is ignored
   async (c) => {
     const { core, services } = state(c)
     const id = c.req.param('id') ?? ''
@@ -570,8 +527,11 @@ routes.post('/bridge/rotate', ...bridgeBodyGuard, async (c) => {
   }
   if (!(await verifyRotation(b.new_pubkey, b.ts, b.sig_new))) return c.json({ error: 'unauthorized' }, 401)
   if (services.env.BRIDGE_PUBKEY_FORCE) return c.json({ error: 'rotation_disabled' }, 409)
-  // Only the ACTIVE key may rotate; a previous key inside its grace window authenticates but cannot rotate.
   const current = core.activeKey()
+  // A retry of a rotation this relay already made (its 200 was lost on the way back): the new key is already the active one.
+  // Nothing changes, so any key that authenticates (the old one inside its grace window, or the new one itself) is told so.
+  if (current && current.publicKeyB64 === b.new_pubkey) return c.json({ ok: true, key_id: current.keyId })
+  // Only the ACTIVE key may rotate; a previous key inside its grace window authenticates but cannot rotate.
   if (!current || current.keyId !== a.keyId) return c.json({ error: 'unauthorized' }, 401)
   return c.json({ ok: true, key_id: core.rotateBridgeKey(current, b.new_pubkey) })
 })
@@ -606,6 +566,11 @@ export function register(services: RelayServices): void {
   services.bus.onBridgeFrame('device.pinned', async (f) => {
     const d = st.core.device(f.device_id)
     if (!d || d.revoked) return
+    if (f.ok && f.first) {
+      const now = services.clock.now()
+      for (const [id, at] of firstPins) if (now - at >= FIRST_RUN_MS) firstPins.delete(id)
+      firstPins.set(d.id, now)
+    }
     if (f.ok) st.core.setPinned(d.id, true)
     else st.core.declineDevice(d.id)
     // The hub already stored this durable bridge frame, fanned it out to the apps and sent the "New device pinned" push;

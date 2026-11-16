@@ -10,7 +10,14 @@ const TEXT_MAX = 32_000
 const TITLE_MAX = 300
 
 export type SharedFile = { name: string; type: string; size: number; blob: Blob }
-export type SharedMaterial = { title?: string; text?: string; url?: string; files: SharedFile[] }
+export type SharedMaterial = {
+  title?: string
+  text?: string
+  url?: string
+  files: SharedFile[]
+  /** Files past the per-share limit that the share target did not keep. */
+  leftOut?: number
+}
 
 const clean = (v: string | null | undefined): string | undefined => {
   const t = v?.trim()
@@ -62,6 +69,12 @@ export function normalizeMaterial(m: SharedMaterial): Normalized {
   if (text && text.length > TEXT_MAX) {
     text = text.slice(0, TEXT_MAX)
     notes.push('The shared text was trimmed to 32,000 characters.')
+  }
+  if (m.leftOut && m.leftOut > 0) {
+    const kept = m.files.length
+    notes.push(
+      `${m.leftOut} more ${m.leftOut === 1 ? 'file was' : 'files were'} left out: a share carries at most ${kept} ${kept === 1 ? 'file' : 'files'}.`,
+    )
   }
   let title = clean(m.title)
   if (title && title.length > TITLE_MAX) title = title.slice(0, TITLE_MAX)

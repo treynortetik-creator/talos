@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 
 @testable import TalosDesktop
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 /// Draws the real sprite view with the real bundled art, no window and no screen: the view's layer tree rendered into a bitmap on a
 /// transparent background. The figure and the glow must be there, the app icon fallback must not be. Set `TALOS_RENDER_OUT` to
@@ -82,7 +83,7 @@ struct CompanionRenderGuiTests {
 
   /// The real art as an older build shipped it: no loops sheet and no loop clips. A copy in a temp folder; the caller removes it.
   static func artWithoutLoops() throws -> URL {
-    let tmp = URL(fileURLWithPath: NSTemporaryDirectory() + "companion-noloops-\(UUID().uuidString)", isDirectory: true)
+    let tmp = URL(fileURLWithPath: TestTemp.base + "companion-noloops-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.copyItem(at: art, to: tmp)
     var m = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: tmp.appendingPathComponent("companion.json"))) as? [String: Any])
     var clips = m["clips"] as! [String: Any]
@@ -274,7 +275,7 @@ struct CompanionRenderGuiTests {
 
   @Test func aSheetThatVanishesAfterEnableFallsBackAndTheOwnerIsToldWhichFile() throws {
     _ = NSApplication.shared
-    let tmp = URL(fileURLWithPath: NSTemporaryDirectory() + "companion-vanish-\(UUID().uuidString)", isDirectory: true)
+    let tmp = URL(fileURLWithPath: TestTemp.base + "companion-vanish-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.copyItem(at: Self.art, to: tmp)
     defer { try? FileManager.default.removeItem(at: tmp) }
     let atlas = try LoadedAtlas.load(directory: tmp, scale: 2, mini: false).get()

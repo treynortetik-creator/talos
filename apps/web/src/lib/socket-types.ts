@@ -48,6 +48,8 @@ export type SocketClientOptions = {
   isVisible?: () => boolean
   /** How long a queued voice note waits before its upload is tried again (default 10 s). */
   voiceRetryMs?: number
+  /** How long a socket let go of may still deliver an inbox answer before its changes go out again (default 2 s). */
+  inboxAnswerGraceMs?: number
   isOnline?: () => boolean
   now?: () => number
   /** Persisted render cache cap per thread. */
@@ -91,3 +93,5 @@ export type Pending = {
 
 // Inbox Done/Snooze not yet acknowledged by the relay, newest per item; kept across reloads and sent on every `ready`.
 export type InboxPatch = { state?: 'new' | 'read' | 'snoozed' | 'done'; snoozeUntil?: string }
+/** How the relay answered a queued inbox change: took it, could not save it (try again), or refused it for good. */
+export type InboxOutcome = 'acked' | 'retry' | 'refused'

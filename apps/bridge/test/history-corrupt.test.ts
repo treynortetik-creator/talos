@@ -26,6 +26,10 @@ import { openHistory } from '../src/history-store.ts'
 import { nullLogger } from '../src/log.ts'
 import { WorkerStore } from '../src/worker/store.ts'
 import { type Harness, sleep, startHarness, stopRelay, tempHome, waitFor } from './helpers.ts'
+import { durableSqlite } from './sqlite-durable.ts'
+
+// this file's point is what survives a kill or a crash mid-write: SQLite syncs as the product runs (sqlite-test-seam.ts)
+durableSqlite()
 
 let h: Harness | undefined
 afterEach(async () => {
@@ -33,15 +37,25 @@ afterEach(async () => {
   h = undefined
 })
 
-/** A real history.sqlite with enough rows to span several pages, checkpointed so the main file holds them all. */
+/**
+ * A real history.sqlite with enough rows to span several pages, checkpointed so the main file holds them all. Built once per
+ * process (each caller gets its own copy of the bytes), in one transaction: 600 separate commits cost an fsync each, ~10 s on
+ * a Linux disk.
+ */
+let realBytes: Buffer | undefined
 function realHistoryBytes(): Buffer {
-  const dir = tempHome('talos-hist-src-')
-  const path = join(dir, 'history.sqlite')
-  const s = openHistory(path)
-  for (let i = 0; i < 600; i++) s.kvSet(`k${i}`, 'v'.repeat(300))
-  s.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
-  s.close()
-  return readFileSync(path)
+  if (!realBytes) {
+    const dir = tempHome('talos-hist-src-')
+    const path = join(dir, 'history.sqlite')
+    const s = openHistory(path)
+    s.db.exec('BEGIN')
+    for (let i = 0; i < 600; i++) s.kvSet(`k${i}`, 'v'.repeat(300))
+    s.db.exec('COMMIT')
+    s.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    s.close()
+    realBytes = readFileSync(path)
+  }
+  return Buffer.from(realBytes)
 }
 
 const damage: Record<string, () => Buffer> = {
@@ -179,7 +193,20 @@ const message = (i: number): MessageT => ({
  * A real, healthy history: 2000 messages (indexed for search), seen ids, worker routes, three indexed files, and a free list
  * (a big table made and dropped), checkpointed so the main file holds everything.
  */
+/**
+ * A healthy history at `path`: 2000 messages, seen ids, routes, search files. Built for real once per process, then copied:
+ * the same bytes for every test, without 2000 indexed inserts each time (tens of them per file).
+ */
+let healthyBytes: Buffer | undefined
 function buildHealthy(path: string) {
+  if (!healthyBytes) {
+    const tmp = join(tempHome('talos-hist-healthy-'), 'history.sqlite')
+    buildHealthyOnce(tmp)
+    healthyBytes = readFileSync(tmp)
+  }
+  writeFileSync(path, healthyBytes)
+}
+function buildHealthyOnce(path: string) {
   const s = openHistory(path)
   new WorkerStore(s.db)
   s.db.exec('BEGIN')
@@ -230,36 +257,104 @@ function checkOutcome(path: string): { rows?: string[]; code?: string } {
   }
 }
 
-/**
- * Garbles 40 bytes inside one data page of the search index, leaving the page itself well formed, until the check answers the
- * way `accept` wants. Returns that answer.
- */
-function garbleSearchIndex(path: string, accept: (o: { rows?: string[]; code?: string }) => boolean) {
+/** What `quick_check` and then FTS5's own `integrity-check` of the search index do on this file (the check is rolled back). */
+function indexCheckOutcome(path: string): { rows?: string[]; code?: string; fts?: string } {
+  const outcome: { rows?: string[]; code?: string; fts?: string } = checkOutcome(path)
   const db = new Database(path)
-  const pages = (
-    db.query("SELECT pageno AS p FROM dbstat WHERE name = 'msg_fts_data' AND pagetype = 'leaf'").all() as Array<{
-      p: number
-    }>
-  ).map((r) => r.p)
-  db.close()
+  try {
+    db.exec('BEGIN')
+    db.run("INSERT INTO msg_fts(msg_fts) VALUES('integrity-check')")
+    outcome.fts = 'ok'
+  } catch (e) {
+    outcome.fts = (e as { code?: string }).code ?? 'unknown'
+  } finally {
+    if (db.inTransaction) db.exec('ROLLBACK')
+    db.close()
+  }
+  return outcome
+}
+
+/**
+ * Garbles 40 bytes inside one block of the search index until the check answers the way `accept` wants, and returns that
+ * answer. The damage is by structure, not by file offset: each block of FTS5's own data table (`msg_fts_data`, the segment
+ * blocks, ids above the averages (1) and structure (10) records) is read through SQL, its bytes are found in the file by
+ * content, and only those payload bytes are overwritten, so every page header and cell stays well formed and the damage is
+ * in the search index alone. (Writing at fixed page offsets assumed one SQLite's page layout: on a newer one, Bun's bundled
+ * 3.51+ on Linux or 3.54 here, the bytes landed in the b-tree. SQL cannot write the block itself: Bun opens databases in
+ * defensive mode, where FTS5's shadow tables "may not be modified".) Each try is put back unless it is the damage wanted.
+ */
+function garbleSearchIndex<O extends { rows?: string[]; code?: string }>(
+  path: string,
+  accept: (o: O) => boolean,
+  check: (path: string) => O = checkOutcome as (path: string) => O,
+  offsets: number[] = [200, 2000],
+): O {
+  const blocks = (() => {
+    const db = new Database(path)
+    try {
+      return (
+        db.query('SELECT block AS b FROM msg_fts_data WHERE id > 10 ORDER BY id').all() as Array<{ b: Uint8Array }>
+      ).map((r) => Buffer.from(r.b))
+    } finally {
+      db.close()
+    }
+  })()
+  const file = readFileSync(path)
   const fd = openSync(path, 'r+')
   try {
-    for (const page of pages)
-      for (const offset of [200, 2000]) {
-        const at = (page - 1) * PAGE + offset
+    for (const block of blocks)
+      for (const want of offsets) {
+        if (block.length < 128) continue
+        const at = Math.min(want, block.length - 64)
+        // 64 bytes of the block, found once in the file: where its payload lies, whatever page it is on
+        const needle = block.subarray(at, at + 64)
+        const pos = file.indexOf(needle)
+        if (pos < 0 || file.indexOf(needle, pos + 1) >= 0) continue
         const was = Buffer.alloc(40)
-        readSync(fd, was, 0, 40, at)
-        writeSync(fd, Buffer.alloc(40, 0xff), 0, 40, at)
-        const outcome = checkOutcome(path)
+        readSync(fd, was, 0, 40, pos)
+        writeSync(fd, Buffer.alloc(40, 0xff), 0, 40, pos)
+        const outcome = check(path)
         if (accept(outcome)) return outcome
-        writeSync(fd, was, 0, 40, at)
+        writeSync(fd, was, 0, 40, pos)
       }
   } finally {
     closeSync(fd)
   }
-  throw new Error('no search page could be damaged in that way')
+  throw new Error('no search block could be damaged in that way')
 }
-const FTS_ONLY = ['malformed inverted index for FTS5 table main.msg_fts']
+/**
+ * quick_check's answer when the damage is in the search index and nowhere else: every line names the FTS5 index msg_fts. SQLite
+ * words it differently by version (3.44-3.50: "malformed inverted index for FTS5 table main.msg_fts"; newer, e.g. 3.54:
+ * 'fts5: corruption found reading blob N from table "msg_fts"'), so the lines are matched by what they name, not their words.
+ * The bridge itself never reads these lines (history-recover.ts drops the search tables and checks again).
+ */
+const ftsOnly = (rows: readonly string[] | undefined): boolean =>
+  Array.isArray(rows) &&
+  rows.length > 0 &&
+  rows.every((r) => /\bmsg_fts\b/.test(r) && /fts5/i.test(r) && !/\bmessages\b/.test(r))
+/**
+ * `PRAGMA quick_check` checks FTS5 tables from SQLite 3.44.0 on. Bun uses the system SQLite on macOS, and macOS 15 ships 3.43.2:
+ * there a damaged search index answers `ok`, so these cases cannot make the damage they test (garbleSearchIndex finds no page).
+ * They are skipped there, by name of the condition, and run wherever the SQLite is newer (Linux, a newer macOS).
+ */
+const sqliteVersion = (() => {
+  const db = new Database(':memory:')
+  try {
+    return (db.query('SELECT sqlite_version() AS v').get() as { v: string }).v
+  } finally {
+    db.close()
+  }
+})()
+const atLeast = (v: string, min: string) => {
+  const a = v.split('.').map(Number)
+  const b = min.split('.').map(Number)
+  for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0)
+  return true
+}
+const FTS5_IN_QUICK_CHECK = atLeast(sqliteVersion, '3.44.0')
+const ftsTest = FTS5_IN_QUICK_CHECK ? test : test.skip
+/** The search index's own check runs only where quick_check does not cover FTS5 (before 3.44.0): its seam is reached only there. */
+const indexCheckTest = FTS5_IN_QUICK_CHECK ? test.skip : test
 const freeTrunk = (path: string) => readFileSync(path).readUInt32BE(32)
 
 const noticeText = (x: Harness) => {
@@ -343,12 +438,12 @@ describe('what is moved and what is not', () => {
     })
   }
 
-  test('damage inside the search index alone rebuilds search, moves nothing and loses no message', async () => {
+  ftsTest('damage inside the search index alone rebuilds search, moves nothing and loses no message', async () => {
     const home = tempHome('talos-hist-')
     const path = join(home, 'history.sqlite')
     buildHealthy(path)
-    const outcome = garbleSearchIndex(path, (o) => JSON.stringify(o.rows) === JSON.stringify(FTS_ONLY))
-    expect(outcome.rows).toEqual(FTS_ONLY) // the check names the search index and nothing else
+    const outcome = garbleSearchIndex(path, (o) => ftsOnly(o.rows))
+    expect(ftsOnly(outcome.rows)).toBe(true) // the check names the search index and nothing else
     h = await startHarness({ home })
     expect(quarantined(home)).toHaveLength(0)
     expect(count(h, 'messages')).toBe(2000)
@@ -367,31 +462,36 @@ describe('what is moved and what is not', () => {
     expect(ownerNotices(h)).toHaveLength(0)
   })
 
-  test('search damage that cannot be dropped counts as any other damage: the file is kept aside', async () => {
+  // Not skipped anywhere: the damage is made, and found, the same way on every SQLite version.
+  test('search damage that quick_check does not see (SQLite before 3.44) is found by the index check, and only search is rebuilt', async () => {
     const home = tempHome('talos-hist-')
     const path = join(home, 'history.sqlite')
     buildHealthy(path)
-    smashPage(path, rootOf(path, 'msg_fts_data'))
-    h = await startHarness({ home })
-    expect(quarantined(home)).toHaveLength(1)
-    await waitFor(() => ownerNotices(h as Harness).length === 1, 5000, 'the owner notice')
-  })
-
-  test('garbled search data that makes the check itself throw (not "corrupt") rebuilds search and moves nothing', async () => {
-    const home = tempHome('talos-hist-')
-    const path = join(home, 'history.sqlite')
-    buildHealthy(path)
+    const before = new Database(path)
+    const messagesBefore = before.query('SELECT * FROM messages ORDER BY rowid').all()
+    before.close()
     const outcome = garbleSearchIndex(
       path,
-      (o) => o.code !== undefined && !['SQLITE_NOTADB', 'SQLITE_CORRUPT'].includes(o.code),
+      // the file is sound apart from the search index (a newer quick_check names it, an older one says ok), and the index check fails
+      (o) => (JSON.stringify(o.rows) === '["ok"]' || ftsOnly(o.rows)) && o.fts === 'SQLITE_CORRUPT_VTAB',
+      indexCheckOutcome,
+      [200, 2000, PAGE - 600, PAGE - 200],
     )
-    expect(outcome.code).toBeDefined()
-    const plain = openHistory(path) // an ordinary open of this file works: the messages are fine
-    expect((plain.db.query('SELECT COUNT(*) AS n FROM messages').get() as { n: number }).n).toBe(2000)
-    plain.close()
+    if (!FTS5_IN_QUICK_CHECK) expect(outcome.rows).toEqual(['ok']) // the gap this check closes, proven on this SQLite
+    const garbled = new Database(path)
+    expect(garbled.query('SELECT * FROM messages ORDER BY rowid').all()).toEqual(messagesBefore) // the damage is search only
+    garbled.close()
+    // the start's own check repairs it (not a later weekly rebuild): it says so, and leaves the rebuild queued
+    const warned: string[] = []
+    const opened = openHistoryOrKeepAside(path, { ...nullLogger, warn: (m: string) => warned.push(m) }, NOW, {})
+    expect(opened.keptAs).toBeUndefined()
+    expect(warned).toContain('search tables were damaged; dropped, a rebuild is queued')
+    expect(opened.store.kvGet('search_dirty')).toBe('1')
+    opened.store.close()
     h = await startHarness({ home })
     expect(quarantined(home)).toHaveLength(0)
     expect(count(h, 'messages')).toBe(2000)
+    expect(h.bridge.ctx.store.hasSeen('seen-0')).toBe(true)
     const search = h.bridge.ctx.search as unknown as { tick(): boolean }
     await waitFor(
       () => {
@@ -402,40 +502,358 @@ describe('what is moved and what is not', () => {
       'the search rebuild',
     )
     expect(count(h, 'msg_fts')).toBe(2000)
+    expect(() => h?.bridge.ctx.store.db.run("INSERT INTO msg_fts(msg_fts) VALUES('integrity-check')")).not.toThrow()
     expect(ownerNotices(h)).toHaveLength(0)
   })
 
-  test('the search rebuild mark is set in the same transaction as the drop, so a crash cannot leave search empty and unqueued', () => {
+  test('search damage that cannot be dropped counts as any other damage: the file is kept aside', async () => {
     const home = tempHome('talos-hist-')
     const path = join(home, 'history.sqlite')
     buildHealthy(path)
-    garbleSearchIndex(path, (o) => JSON.stringify(o.rows) === JSON.stringify(FTS_ONLY))
-    expect(dropSearchTables(path)).toBe(true)
-    // read the file without openHistory: the drop and the mark are all that happened
-    const db = new Database(path)
-    try {
-      expect(db.query("SELECT 1 FROM sqlite_master WHERE name = 'msg_fts'").get()).toBeNull()
-      expect((db.query("SELECT value FROM kv WHERE key = 'search_dirty'").get() as { value: string }).value).toBe('1')
-    } finally {
+    smashPage(path, rootOf(path, 'msg_fts_data'))
+    h = await startHarness({ home })
+    expect(quarantined(home)).toHaveLength(1)
+    await waitFor(() => ownerNotices(h as Harness).length === 1, 5000, 'the owner notice')
+  })
+
+  ftsTest(
+    'garbled search data that makes the check itself throw (not "corrupt") rebuilds search and moves nothing',
+    async () => {
+      const home = tempHome('talos-hist-')
+      const path = join(home, 'history.sqlite')
+      buildHealthy(path)
+      const outcome = garbleSearchIndex(
+        path,
+        (o) => o.code !== undefined && !['SQLITE_NOTADB', 'SQLITE_CORRUPT'].includes(o.code),
+      )
+      expect(outcome.code).toBeDefined()
+      const plain = openHistory(path) // an ordinary open of this file works: the messages are fine
+      expect((plain.db.query('SELECT COUNT(*) AS n FROM messages').get() as { n: number }).n).toBe(2000)
+      plain.close()
+      h = await startHarness({ home })
+      expect(quarantined(home)).toHaveLength(0)
+      expect(count(h, 'messages')).toBe(2000)
+      const search = h.bridge.ctx.search as unknown as { tick(): boolean }
+      await waitFor(
+        () => {
+          search.tick()
+          return !h?.bridge.ctx.store.kvGet('search_dirty')
+        },
+        10_000,
+        'the search rebuild',
+      )
+      expect(count(h, 'msg_fts')).toBe(2000)
+      expect(ownerNotices(h)).toHaveLength(0)
+    },
+  )
+
+  ftsTest(
+    'the search rebuild mark is set in the same transaction as the drop, so a crash cannot leave search empty and unqueued',
+    () => {
+      const home = tempHome('talos-hist-')
+      const path = join(home, 'history.sqlite')
+      buildHealthy(path)
+      garbleSearchIndex(path, (o) => ftsOnly(o.rows))
+      expect(dropSearchTables(path)).toBe(true)
+      // read the file without openHistory: the drop and the mark are all that happened
+      const db = new Database(path)
+      try {
+        expect(db.query("SELECT 1 FROM sqlite_master WHERE name = 'msg_fts'").get()).toBeNull()
+        expect((db.query("SELECT value FROM kv WHERE key = 'search_dirty'").get() as { value: string }).value).toBe('1')
+      } finally {
+        db.close()
+      }
+    },
+  )
+
+  ftsTest(
+    'if the rebuild mark cannot be written, the drop is undone: search is never left empty with no rebuild queued',
+    () => {
+      const home = tempHome('talos-hist-')
+      const path = join(home, 'history.sqlite')
+      buildHealthy(path)
+      garbleSearchIndex(path, (o) => ftsOnly(o.rows))
+      const db = new Database(path)
+      db.exec('DROP TABLE kv') // the mark has nowhere to go
       db.close()
+      expect(dropSearchTables(path)).toBe(false)
+      const after = new Database(path)
+      try {
+        expect(after.query("SELECT 1 FROM sqlite_master WHERE name = 'msg_fts'").get()).not.toBeNull() // still there
+      } finally {
+        after.close()
+      }
+    },
+  )
+
+  // SQLite's errors as Bun throws them: `errno` always (the extended code), `code` only for codes it names. A plain SQLITE_ERROR
+  // has errno 1 and NO code.
+  const sqliteError = (errno: number, code?: string) =>
+    Object.assign(new Error(code ?? `errno ${errno}`), { errno }, code ? { code } : {})
+  const E = {
+    plain: () => sqliteError(1),
+    perm: () => sqliteError(3, 'SQLITE_PERM'),
+    busy: () => sqliteError(5, 'SQLITE_BUSY'),
+    locked: () => sqliteError(6, 'SQLITE_LOCKED'),
+    nomem: () => sqliteError(7, 'SQLITE_NOMEM'),
+    readonly: () => sqliteError(8, 'SQLITE_READONLY'),
+    ioerr: () => sqliteError(10, 'SQLITE_IOERR'),
+    ioerrVnode: () => sqliteError(10 | (27 << 8), 'SQLITE_IOERR_VNODE'),
+    corrupt: () => sqliteError(11, 'SQLITE_CORRUPT'),
+    corruptVtab: () => sqliteError(11 | (1 << 8), 'SQLITE_CORRUPT_VTAB'),
+    full: () => sqliteError(13, 'SQLITE_FULL'),
+    cantopen: () => sqliteError(14, 'SQLITE_CANTOPEN'),
+    protocol: () => sqliteError(15, 'SQLITE_PROTOCOL'),
+    auth: () => sqliteError(23, 'SQLITE_AUTH'),
+    notadb: () => sqliteError(26, 'SQLITE_NOTADB'),
+    notSqlite: () => new TypeError('not from SQLite'),
+    // a file-system error as Bun throws it: a negative errno, and a code that is not SQLite's
+    fsEacces: () => Object.assign(new Error('EACCES: permission denied'), { errno: -13, code: 'EACCES' }),
+    fsEio: () => Object.assign(new Error('EIO: i/o error'), { errno: -5, code: 'EIO' }),
+    misuse: () => sqliteError(21, 'SQLITE_MISUSE'),
+    schema: () => sqliteError(17, 'SQLITE_SCHEMA'),
+    interrupt: () => sqliteError(9, 'SQLITE_INTERRUPT'),
+  } as const
+  type Kind = keyof typeof E | 'ok' | 'not ok'
+
+  /** The start check's query, answering `kinds` in turn; records each call. */
+  function query(kinds: Kind[]) {
+    const seen: Kind[] = []
+    let i = 0
+    return {
+      seen,
+      quickCheck: () => {
+        const k = kinds[Math.min(i++, kinds.length - 1)] as Kind
+        seen.push(k)
+        if (k === 'ok') return [{ quick_check: 'ok' }]
+        if (k === 'not ok') return [{ quick_check: '*** in database main ***' }]
+        throw E[k]()
+      },
+    }
+  }
+  const fresh = () => {
+    const home = tempHome('talos-hist-')
+    const path = join(home, 'history.sqlite')
+    buildHealthy(path)
+    return { home, path, before: readFileSync(path) }
+  }
+  const noWait = () => {}
+
+  test('an error that says nothing about the content never moves a healthy file: the start is refused and the bytes stay', () => {
+    for (const k of [
+      'perm',
+      'readonly',
+      'ioerr',
+      'ioerrVnode',
+      'full',
+      'cantopen',
+      'protocol',
+      'auth',
+      'busy',
+      'locked',
+      'notSqlite',
+      'fsEacces',
+      'fsEio',
+      'misuse',
+      'schema',
+      'interrupt',
+    ] as const) {
+      const f = fresh()
+      let repairs = 0
+      const hooks = { quickCheck: query([k]).quickCheck, sleep: noWait, dropSearch: () => (repairs++, true) }
+      expect(() => openHistoryOrKeepAside(f.path, nullLogger, NOW, hooks), k).toThrow()
+      expect(repairs, k).toBe(0)
+      expect(quarantined(f.home), k).toHaveLength(0)
+      expect(readFileSync(f.path).equals(f.before), k).toBe(true)
     }
   })
 
-  test('if the rebuild mark cannot be written, the drop is undone: search is never left empty with no rebuild queued', () => {
-    const home = tempHome('talos-hist-')
-    const path = join(home, 'history.sqlite')
-    buildHealthy(path)
-    garbleSearchIndex(path, (o) => JSON.stringify(o.rows) === JSON.stringify(FTS_ONLY))
-    const db = new Database(path)
-    db.exec('DROP TABLE kv') // the mark has nowhere to go
-    db.close()
-    expect(dropSearchTables(path)).toBe(false)
-    const after = new Database(path)
-    try {
-      expect(after.query("SELECT 1 FROM sqlite_master WHERE name = 'msg_fts'").get()).not.toBeNull() // still there
-    } finally {
-      after.close()
+  test('a refused start says why, with the code, and that the history was left alone (the Mac shows this line)', () => {
+    for (const [k, code] of [
+      ['readonly', 'SQLITE_READONLY'],
+      ['plainPerm', 'SQLITE_PERM'],
+      ['fsEacces', 'not a SQLite error'],
+    ] as const) {
+      const f = fresh()
+      const kind = k === 'plainPerm' ? 'perm' : k
+      expect(
+        () => openHistoryOrKeepAside(f.path, nullLogger, NOW, { quickCheck: query([kind]).quickCheck, sleep: noWait }),
+        k,
+      ).toThrow(new RegExp(`could not be checked \\(${code}: .*\\); it was left as it is`))
     }
+    // a code Bun does not name (errno only) is named from the number
+    const f = fresh()
+    const unnamed = () => {
+      throw Object.assign(new Error('attempt to write a readonly database'), { errno: 8 | (1 << 8) })
+    }
+    expect(() => openHistoryOrKeepAside(f.path, nullLogger, NOW, { quickCheck: unnamed, sleep: noWait })).toThrow(
+      /\(SQLITE_READONLY: attempt/,
+    )
+  })
+
+  test('a passing error (busy, locked, I/O, a WAL lock, memory) is tried again after a short wait; others are refused at once', () => {
+    for (const k of ['busy', 'locked', 'ioerr', 'protocol', 'nomem'] as const) {
+      const f = fresh()
+      const waits: number[] = []
+      const q = query([k, k, 'ok'])
+      const opened = openHistoryOrKeepAside(f.path, nullLogger, NOW, {
+        quickCheck: q.quickCheck,
+        sleep: (ms) => waits.push(ms),
+      })
+      expect(q.seen, k).toEqual([k, k, 'ok'])
+      expect(waits, k).toEqual([250, 1000])
+      expect(opened.keptAs, k).toBeUndefined()
+      opened.store.close()
+    }
+    const f = fresh()
+    const q = query(['perm', 'ok'])
+    expect(() => openHistoryOrKeepAside(f.path, nullLogger, NOW, { quickCheck: q.quickCheck, sleep: noWait })).toThrow()
+    expect(q.seen).toEqual(['perm'])
+  })
+
+  test('content errors (corrupt, not a database, a plain SQL error, out of memory every time) go to the repair, then aside', () => {
+    for (const k of ['corrupt', 'corruptVtab', 'notadb', 'plain', 'nomem', 'not ok'] as const) {
+      // the repair fixes it (damage only in search): the history opens as it is, nothing moved
+      let f = fresh()
+      let opened = openHistoryOrKeepAside(f.path, nullLogger, NOW, {
+        quickCheck: query([k]).quickCheck,
+        sleep: noWait,
+        dropSearch: () => true,
+      })
+      expect(opened.keptAs, k).toBeUndefined()
+      opened.store.close()
+      // the repair cannot fix it: the file is kept aside and the bridge starts, never refused for good
+      f = fresh()
+      opened = openHistoryOrKeepAside(f.path, nullLogger, NOW, {
+        quickCheck: query([k]).quickCheck,
+        sleep: noWait,
+        dropSearch: () => false,
+      })
+      expect(opened.keptAs, k).toBeDefined()
+      opened.store.close()
+    }
+  })
+
+  indexCheckTest(
+    'the search index check: only a corrupt answer is damage; a passing error or one not about the file refuses; others skip it',
+    () => {
+      const run = (k: Kind, dropSearch: () => boolean = () => true) => {
+        const f = fresh()
+        let repairs = 0
+        const seen: Kind[] = []
+        const hooks = {
+          sleep: noWait,
+          dropSearch: () => (repairs++, dropSearch()),
+          ftsCheck: () => {
+            seen.push(k)
+            if (k !== 'ok') throw E[k as keyof typeof E]()
+          },
+        }
+        let opened: ReturnType<typeof openHistoryOrKeepAside> | undefined
+        let threw: unknown
+        try {
+          opened = openHistoryOrKeepAside(f.path, nullLogger, NOW, hooks)
+        } catch (e) {
+          threw = e
+        }
+        const out = {
+          threw,
+          repairs,
+          keptAs: opened?.keptAs,
+          moved: quarantined(f.home).length,
+          seen,
+          same: readFileSync(f.path).equals(f.before),
+        }
+        opened?.store.close()
+        return out
+      }
+      // the index answers that it is damaged: the search repair runs, and nothing is moved when it works
+      for (const k of ['corrupt', 'corruptVtab'] as const) {
+        const r = run(k)
+        expect([r.threw, r.repairs, r.keptAs, r.moved], k).toEqual([undefined, 1, undefined, 0])
+      }
+      // out of memory every time is read as the content, as from quick_check
+      expect(run('nomem').repairs).toBe(1)
+      // a passing error is tried again (three checks in all), then the start is refused; not about the file: refused at once
+      for (const k of ['busy', 'locked', 'ioerr', 'ioerrVnode', 'protocol'] as const) {
+        const r = run(k)
+        expect([r.threw !== undefined, r.repairs, r.moved, r.same, r.seen.length], k).toEqual([true, 0, 0, true, 3])
+      }
+      for (const k of [
+        'perm',
+        'readonly',
+        'cantopen',
+        'auth',
+        'full',
+        'interrupt',
+        'schema',
+        'misuse',
+        'notSqlite',
+        'fsEacces',
+        'fsEio',
+      ] as const) {
+        const r = run(k)
+        expect([r.threw !== undefined, r.repairs, r.moved, r.same, r.seen.length], k).toEqual([true, 0, 0, true, 1])
+      }
+      // anything else says nothing about the file (this SQLite has no FTS5: 'no such module', a plain error): the step is skipped
+      // and the file, which quick_check found sound, opens as it is. Never a repair, never a move.
+      for (const k of ['plain', 'notadb', 'ok'] as const) {
+        const r = run(k, () => false)
+        expect([r.threw, r.repairs, r.keptAs, r.moved], k).toEqual([undefined, 0, undefined, 0])
+      }
+    },
+  )
+
+  indexCheckTest(
+    'the search index check runs in a transaction that is rolled back, waiting out a short write elsewhere',
+    () => {
+      const f = fresh()
+      const inside: unknown[] = []
+      const opened = openHistoryOrKeepAside(f.path, nullLogger, NOW, {
+        sleep: noWait,
+        ftsCheck: (db) => {
+          inside.push(db.inTransaction, (db.query('PRAGMA busy_timeout').get() as { timeout: number }).timeout)
+          db.run('CREATE TABLE written_by_the_check (x)') // anything the step wrote is rolled back
+          db.run("INSERT INTO msg_fts(msg_fts) VALUES('integrity-check')")
+        },
+      })
+      try {
+        expect(inside).toEqual([true, 2000])
+        expect(
+          opened.store.db.query("SELECT name FROM sqlite_master WHERE name = 'written_by_the_check'").all(),
+        ).toEqual([])
+      } finally {
+        opened.store.close()
+      }
+    },
+  )
+
+  test('a file that checked out is never moved for what comes after the check: a failing open refuses the start', () => {
+    for (const k of ['plain', 'corrupt', 'fsEacces'] as const) {
+      const f = fresh()
+      const openExisting = () => {
+        throw E[k]() // a migration bug on an older file, or anything else after the verdict
+      }
+      expect(
+        () =>
+          openHistoryOrKeepAside(f.path, nullLogger, NOW, {
+            quickCheck: query(['ok']).quickCheck,
+            sleep: noWait,
+            openExisting,
+          }),
+        k,
+      ).toThrow()
+      expect(quarantined(f.home), k).toHaveLength(0)
+      expect(readFileSync(f.path).equals(f.before), k).toBe(true)
+    }
+  })
+
+  test('a lock that ends in a can-not-tell error after the retries still refuses, and moves nothing', () => {
+    const f = fresh()
+    const q = query(['busy', 'busy', 'ioerr'])
+    expect(() => openHistoryOrKeepAside(f.path, nullLogger, NOW, { quickCheck: q.quickCheck, sleep: noWait })).toThrow()
+    expect(q.seen).toEqual(['busy', 'busy', 'ioerr'])
+    expect(quarantined(f.home)).toHaveLength(0)
   })
 
   test('a healthy file under a real lock (busy) is not damage: nothing is moved and the start is refused', () => {
@@ -456,11 +874,54 @@ describe('what is moved and what is not', () => {
     expect(readFileSync(path).equals(before)).toBe(true)
   })
 
-  test('a drop that finds the file busy refuses the start instead of moving the file', () => {
+  test('a held -wal link left by a start that crashed is removed, and never put back beside the kept-aside file', () => {
+    const home = tempHome('talos-hist-')
+    const path = join(home, 'history.sqlite')
+    writeFileSync(path, Buffer.from('not a database. '.repeat(400)))
+    writeFileSync(`${path}-wal.held`, Buffer.from('a crashed start left this '.repeat(100)))
+    // the Linux path (the only one that ever takes such links)
+    const { store, keptAs } = openHistoryOrKeepAside(path, nullLogger, NOW, { platform: 'linux' })
+    store.close()
+    expect(keptAs).toBeDefined()
+    expect(readdirSync(home).filter((f) => f.endsWith('.held'))).toEqual([])
+    expect(existsSync(join(home, `${keptAs}-wal`))).toBe(false)
+  })
+
+  test('the -wal and -shm are held only on Linux, and only for a file a read-only check did not find healthy', () => {
+    const home = tempHome('talos-hist-')
+    const path = join(home, 'history.sqlite')
+    const good = openHistory(path)
+    good.close()
+    const writer = new Database(path)
+    writer.exec('PRAGMA journal_mode = WAL')
+    writer.exec("INSERT INTO kv (key, value) VALUES ('live', '1')")
+    try {
+      // a healthy database another connection holds open, with its -wal: never linked, on any platform
+      let holds = 0
+      const opened = openHistoryOrKeepAside(path, nullLogger, NOW, { platform: 'linux', onHold: () => holds++ })
+      opened.store.close()
+      expect(opened.keptAs).toBeUndefined()
+      expect(holds).toBe(0)
+    } finally {
+      writer.close()
+    }
+    const bad = join(home, 'bad.sqlite')
+    writeFileSync(bad, Buffer.from('not a database. '.repeat(400)))
+    let linux = 0
+    openHistoryOrKeepAside(bad, nullLogger, NOW, { platform: 'linux', onHold: () => linux++ }).store.close()
+    expect(linux).toBe(1)
+    const bad2 = join(home, 'bad2.sqlite')
+    writeFileSync(bad2, Buffer.from('not a database. '.repeat(400)))
+    let mac = 0
+    openHistoryOrKeepAside(bad2, nullLogger, NOW, { platform: 'darwin', onHold: () => mac++ }).store.close()
+    expect(mac).toBe(0)
+  })
+
+  ftsTest('a drop that finds the file busy refuses the start instead of moving the file', () => {
     const home = tempHome('talos-hist-')
     const path = join(home, 'history.sqlite')
     buildHealthy(path)
-    garbleSearchIndex(path, (o) => JSON.stringify(o.rows) === JSON.stringify(FTS_ONLY))
+    garbleSearchIndex(path, (o) => ftsOnly(o.rows))
     const before = readFileSync(path)
     const writer = new Database(path)
     writer.exec('BEGIN IMMEDIATE') // reads still work, a second writer is told "locked"
@@ -471,6 +932,7 @@ describe('what is moved and what is not', () => {
       writer.close()
     }
     expect(quarantined(home)).toHaveLength(0)
+    expect(readdirSync(home).filter((f) => f.endsWith('.held'))).toEqual([])
     expect(readFileSync(path).equals(before)).toBe(true)
   })
 

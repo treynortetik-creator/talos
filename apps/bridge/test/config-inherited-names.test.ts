@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadExampleConfig } from '@talos-app/testkit'
 import { ConfigFile } from '../src/config-file.ts'
-import { type Harness, startHarness, tempHome } from './helpers.ts'
+import { approveLatestConfigCard, CARD_RELAY, type Harness, startHarness, tempHome } from './helpers.ts'
 
 // Thread ids that every object already has (`constructor`) are not made any more, but one that was stored
 // before the rule must keep working: the bridge starts, config.sync carries it, the owner can edit and archive it.
@@ -38,12 +38,14 @@ describe('a thread id stored before the rule', () => {
   })
 
   test('the bridge starts on it, syncs it, and the agent can use and archive it', async () => {
-    h = await startHarness({ config: withStored })
+    h = await startHarness({ config: withStored, relay: CARD_RELAY })
     const sync = await h.relay.expectFrame('config.sync', () => true, { direction: 'from_bridge' })
     expect(sync.config.threads.map((t) => t.id)).toContain('constructor')
     const listed = JSON.parse(text(await h.bridge.callTool('list_threads', {})))
     expect(listed.threads.map((t: { id: string }) => t.id)).toContain('constructor')
     expect((await h.bridge.callTool('archive_thread', { thread_id: 'constructor' })).isError).toBeFalsy()
+    await approveLatestConfigCard(h)
+    expect(h.bridge.ctx.config.thread('constructor')?.archived).toBe(true)
   })
 
   test('the owner can still edit it with a patch that keeps it', async () => {
@@ -77,7 +79,7 @@ describe('a NEW thread id that is an inherited name', () => {
   })
 
   test('create_thread with an explicit id refuses it, and a name that slugs to one to <name>_thread', async () => {
-    h = await startHarness()
+    h = await startHarness({ relay: CARD_RELAY })
     const r = await h.bridge.callTool('create_thread', { name: 'x', id: 'constructor' })
     expect(r.isError).toBe(true)
     expect(text(r)).toContain('constructor')

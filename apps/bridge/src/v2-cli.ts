@@ -13,6 +13,7 @@ import { ensureDir, writeFileAtomic } from './fsutil.ts'
 import { openHistory } from './history-store.ts'
 import { loadBridgeKey } from './keys.ts'
 import { cmdMemory } from './memory/cli.ts'
+import { say } from './owner-words.ts'
 import { RelayHttp } from './relay-http.ts'
 import { indexerFor } from './search/install.ts'
 import {
@@ -31,8 +32,6 @@ type IO = {
   now?: () => number
 }
 
-const OWNER: Record<string, string> = { search: 'WP-V2', memory: 'WP-V5', share: 'WP-V4' }
-
 /** Returns the exit code. */
 export async function cmdV2(
   cmd: 'search' | 'memory' | 'share',
@@ -50,7 +49,13 @@ export async function cmdV2(
     io.err(`talos-app share${sub ? ` ${sub}` : ''}: unknown.\n${SHARE_USAGE}`)
     return 2
   }
-  io.err(`talos-app ${cmd}${sub ? ` ${sub}` : ''}: not available in this build yet (${OWNER[cmd]}).`)
+  if (cmd === 'search') {
+    io.err(
+      `talos-app search${sub ? ` ${sub}` : ''}: unknown.\nusage: talos-app search reindex   (rebuilds the message search index)`,
+    )
+    return 2
+  }
+  io.err(`talos-app ${cmd}${sub ? ` ${sub}` : ''}: not available in this build yet.`)
   return 2
 }
 
@@ -58,14 +63,24 @@ export async function cmdV2(
 async function searchReindex(env: BridgeEnv, io: IO): Promise<number> {
   const p = pathsOf(env.home)
   if (!existsSync(p.historyDb)) {
-    io.err('talos-app search reindex: no history on this Mac yet.')
+    io.err(
+      say({
+        mac: 'talos-app search reindex: no history on this Mac yet.',
+        linux: 'talos-app search reindex: no history on this computer yet.',
+      }),
+    )
     return 1
   }
   const store = openHistory(p.historyDb)
   try {
     const ix = indexerFor(store)
     if (!ix) {
-      io.err("talos-app search reindex: this Mac's SQLite has no FTS5; search and the memory browser are off.")
+      io.err(
+        say({
+          mac: "talos-app search reindex: this Mac's SQLite has no FTS5; search and the memory browser are off.",
+          linux: "talos-app search reindex: this computer's SQLite has no FTS5; search and the memory browser are off.",
+        }),
+      )
       return 1
     }
     const n = await ix.rebuildAll()
@@ -140,8 +155,14 @@ async function shareShortcut(env: BridgeEnv, args: string[], io: IO, deps: CliDe
   if (!deviceId) {
     io.err(
       values.device
-        ? `talos-app share shortcut: ${values.device} is not a pinned device on this Mac.`
-        : 'talos-app share shortcut: no pinned device on this Mac. Enroll Talos on your phone first.',
+        ? say({
+            mac: `talos-app share shortcut: ${values.device} is not a pinned device on this Mac.`,
+            linux: `talos-app share shortcut: ${values.device} is not a pinned device on this computer.`,
+          })
+        : say({
+            mac: 'talos-app share shortcut: no pinned device on this Mac. Enroll Talos on your phone first.',
+            linux: 'talos-app share shortcut: no pinned device on this computer. Enroll Talos on your phone first.',
+          }),
     )
     return 1
   }

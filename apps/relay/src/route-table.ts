@@ -1,4 +1,4 @@
-// Default-deny for the guarded URL spaces. Every route a module registers under /api, /bridge, /hook, /media or /.well-known
+// Default-deny for the guarded URL spaces. Every route a module registers under /api, /bridge, /hook, /media, /p (org pages) or /.well-known
 // must appear in the protocol's route table (`packages/protocol/src/http.ts`, spec 3.8) with the same method and path.
 // `buildApp` runs this at boot, so a route added without a table entry (and therefore without a declared auth mode)
 // stops the relay from starting instead of shipping open.
@@ -6,7 +6,7 @@ import { ROUTE_LIST } from '@talos-app/protocol'
 import type { Hono } from 'hono'
 import type { AppEnv } from './services.ts'
 
-const GUARDED = /^\/(api|bridge|hook|media|\.well-known)(\/|$)/
+const GUARDED = /^\/(api|bridge|hook|media|p|\.well-known)(\/|$)/
 const norm = (p: string) => p.replace(/:[A-Za-z_]+/g, ':p')
 
 /** Guarded routes the app registers that the route table does not list, as "METHOD /path". Empty = default-deny holds. */

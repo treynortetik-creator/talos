@@ -35,6 +35,7 @@ export type ActionSpec =
         | 'sessionPanel'
         | 'sidebar'
         | 'call'
+        | 'bugReport'
         | 'close'
     }
 
@@ -104,6 +105,7 @@ export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   e('findInThread', 'Search this thread', 'Threads', { code: 'KeyF' }, { kind: 'ui', name: 'findInThread' }),
   e('sessionPanel', 'Session panel', 'Panels', { code: 'Period' }, { kind: 'ui', name: 'sessionPanel' }),
   e('sidebar', 'Fold or unfold the sidebar', 'Panels', { code: 'Backslash' }, { kind: 'ui', name: 'sidebar' }),
+  e('reportBug', 'Report a bug', 'App', null, { kind: 'ui', name: 'bugReport' }),
   e('call', 'Start a call', 'App', { code: 'KeyK', shift: true, metaOnly: true }, { kind: 'ui', name: 'call' }),
   e('close', 'Close', 'App', { code: 'Escape', mod: false }, { kind: 'ui', name: 'close' }, { repeat: true }),
 ]
@@ -184,6 +186,14 @@ export function resolveKeymapChecked(
 }
 
 /** The chord that opens thread number `n` (1 to 9), written for a person; '' past nine. */
+/**
+ * The threads Ctrl/Cmd+1..9 number, in order: the list as drawn, without the Inbox (it has its own row). The one list the
+ * sidebar, the keyboard and the palette all count in, so the chord a row announces is the chord that opens it.
+ */
+export function numberedThreads<T extends { id: string }>(threads: readonly T[]): T[] {
+  return threads.filter((t) => t.id !== 'inbox')
+}
+
 export function threadChordLabel(n: number, mac: boolean): string {
   return chordLabel(DEFAULT_KEYMAP.find((x) => x.id === `thread${n}`)?.chord ?? null, mac)
 }

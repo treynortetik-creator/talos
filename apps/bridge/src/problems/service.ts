@@ -20,6 +20,7 @@ import {
 import type { Clock } from '../clock.ts'
 import { readJsonFile, writeJsonAtomic } from '../fsutil.ts'
 import type { ErrorTap, Logger } from '../log.ts'
+import { say } from '../owner-words.ts'
 import { type FileOutcome, fileProblem, problemDirs } from './store.ts'
 
 /** Log lines the tap leaves alone: the rejection handler reports with a stack through `recordError` itself. */
@@ -97,8 +98,10 @@ export class ProblemService {
    * good) and 'retry' when it must stay with the relay (the disk write failed).
    */
   async onItem(problem: ProblemT): Promise<'done' | 'retry'> {
-    // The Mac knows its own version; the sender cannot, and a report that came through the relay never carries it.
-    problem = { ...problem, versions: { ...problem.versions, bridge: this.d.bridgeVersion.slice(0, 40) } }
+    // The Mac knows its own version; the sender cannot, and a report that came through the relay never carries it. A report
+    // from another install keeps that install's own versions: this Mac's would be wrong there.
+    if (problem.source !== 'install')
+      problem = { ...problem, versions: { ...problem.versions, bridge: this.d.bridgeVersion.slice(0, 40) } }
     let shot: { bytes: Uint8Array } | 'unavailable' | undefined
     if (problem.screenshot) {
       try {
@@ -130,7 +133,12 @@ export class ProblemService {
       this.bump('full')
       return 'done'
     }
-    if (out.result === 'filed') await this.announce(out.fingerprint, problem.source, out.count)
+    if (out.result === 'filed')
+      await this.announce(
+        out.fingerprint,
+        problem.source === 'install' ? `another install (${problem.install})` : problem.source,
+        out.count,
+      )
     await this.maybeDailyNotice()
     return 'done'
   }
@@ -236,7 +244,7 @@ export class ProblemService {
       s.dropped.full ? `${s.dropped.full} not stored (the problem folder is full of open problems)` : '',
       s.dropped.failed ? `${s.dropped.failed} could not be written` : '',
       limited
-        ? `${limited} not filed (the hourly limit of ${PROBLEM_LIMITS.perSession} errors from the Mac itself)`
+        ? `${limited} not filed (the hourly limit of ${PROBLEM_LIMITS.perSession} errors from ${say({ mac: 'the Mac', linux: 'this computer' })} itself)`
         : '',
     ].filter(Boolean)
     try {

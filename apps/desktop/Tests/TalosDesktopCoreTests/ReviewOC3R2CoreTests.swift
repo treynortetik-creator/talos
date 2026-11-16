@@ -1,12 +1,13 @@
 import Foundation
 import Testing
 import TalosDesktopCore
+import TalosTestSupport
 
 /// Re-review of PR #68 at 0b5c05c. Tests named FINDING fail until the finding is fixed; the others are controls.
 @Suite("Review OC3 R2 core", .serialized)
 struct ReviewOC3R2CoreTests {
   private func tempHome() throws -> String {
-    let t = (NSTemporaryDirectory() as NSString).appendingPathComponent("talos-r2-\(UUID().uuidString.prefix(8))")
+    let t = (TestTemp.base as NSString).appendingPathComponent("talos-r2-\(UUID().uuidString.prefix(8))")
     try FileManager.default.createDirectory(atPath: t, withIntermediateDirectories: true)
     let p = realpath(t, nil)!
     defer { free(p) }

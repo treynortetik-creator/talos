@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -25,6 +26,7 @@ import { pgidOf } from '../src/hub/server.ts'
 import { nullLogger } from '../src/log.ts'
 import {
   copyToInbox,
+  INBOX_MARKER,
   InboxError,
   inboxPath,
   inboxSeam,
@@ -34,7 +36,7 @@ import {
   removeGoneInboxes,
   removeInbox,
 } from '../src/worker/inbox.ts'
-import { type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+import { approveLatestConfigCard, CARD_RELAY, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
 
 const NONCE = 'test-nonce-0123456789abcdef'
 const made: string[] = []
@@ -76,7 +78,8 @@ describe('copyToInbox: the unit', () => {
     expect(mode(inboxPath(s.root, 'trip'))).toBe(0o700)
     expect(mode(s.root)).toBe(0o700)
     expect(existsSync(join(s.media, 'md_one.png'))).toBe(true) // main's copy stays
-    expect(readdirSync(inboxPath(s.root, 'trip'))).toEqual(['md_one.png']) // no temp file left behind
+    // no temp file left behind; the marker says Talos made this folder
+    expect(readdirSync(inboxPath(s.root, 'trip')).sort()).toEqual([INBOX_MARKER, 'md_one.png'])
   })
   test('a root that is looser than 0700 is tightened', () => {
     const s = setup()
@@ -210,6 +213,7 @@ describe('copyToInbox: the unit', () => {
       const s = setup()
       const dir = inboxPath(s.root, 'trip')
       mkdirSync(dir, { recursive: true, mode: 0o700 })
+      writeFileSync(join(dir, INBOX_MARKER), '') // a folder Talos made: only those are pruned
       writeFileSync(join(dir, 'old.png'), 'x')
       utimesSync(join(dir, 'old.png'), new Date(0), new Date(0))
       const target = tmp('ib-target-')
@@ -229,10 +233,13 @@ describe('copyToInbox: the unit', () => {
 })
 
 describe('pruneInbox: bounded by age and size', () => {
+  /** What a folder holds besides the marker, which a prune always keeps. */
+  const kept = (dir: string) => readdirSync(dir).filter((n) => n !== INBOX_MARKER)
   function inbox(files: Array<{ name: string; size: number; ageMs: number }>, now: number) {
     const root = join(tmp('ib-prune-'), '.talos-inbox')
     const dir = inboxPath(root, 'trip')
     mkdirSync(dir, { recursive: true, mode: 0o700 })
+    writeFileSync(join(dir, INBOX_MARKER), '') // a folder Talos made: only those are pruned
     for (const f of files) {
       const p = join(dir, f.name)
       writeFileSync(p, Buffer.alloc(f.size))
@@ -251,7 +258,7 @@ describe('pruneInbox: bounded by age and size', () => {
       now,
     )
     pruneInbox(s.root, 'trip', now, { maxAgeMs: 5_000, maxBytes: 1e9 })
-    expect(readdirSync(s.dir)).toEqual(['new.png'])
+    expect(kept(s.dir)).toEqual(['new.png'])
   })
   test('over the size limit the oldest go first until it fits', () => {
     const now = Date.now()
@@ -264,7 +271,7 @@ describe('pruneInbox: bounded by age and size', () => {
       now,
     )
     pruneInbox(s.root, 'trip', now, { maxAgeMs: 1e9, maxBytes: 90 })
-    expect(readdirSync(s.dir).sort()).toEqual(['b.bin', 'c.bin'])
+    expect(kept(s.dir).sort()).toEqual(['b.bin', 'c.bin'])
   })
   test('a link in the inbox is removed itself, its target is left alone; a missing inbox is fine', () => {
     const now = Date.now()
@@ -273,7 +280,7 @@ describe('pruneInbox: bounded by age and size', () => {
     writeFileSync(victim, 'keep')
     symlinkSync(victim, join(s.dir, 'l.png'))
     pruneInbox(s.root, 'trip', now)
-    expect(readdirSync(s.dir)).toEqual([])
+    expect(kept(s.dir)).toEqual([])
     expect(readFileSync(victim, 'utf8')).toBe('keep')
     expect(() => pruneInbox(join(tmp('ib-none-'), '.talos-inbox'), 'trip', now)).not.toThrow()
   })
@@ -281,14 +288,15 @@ describe('pruneInbox: bounded by age and size', () => {
     const now = Date.now()
     const s = inbox([{ name: 'old.png', size: 1, ageMs: 9_000 }], now)
     mkdirSync(join(s.root, 'garden'), { mode: 0o700 })
+    writeFileSync(join(s.root, 'garden', INBOX_MARKER), '')
     writeFileSync(join(s.root, 'garden', 'old.png'), 'x')
     utimesSync(join(s.root, 'garden', 'old.png'), new Date(0), new Date(0))
     mkdirSync(join(s.root, 'NotAThread'))
     writeFileSync(join(s.root, 'NotAThread', 'old.png'), 'x')
     utimesSync(join(s.root, 'NotAThread', 'old.png'), new Date(0), new Date(0))
     pruneInboxes(s.root, now, { maxAgeMs: 5_000, maxBytes: 1e9 })
-    expect(readdirSync(s.dir)).toEqual([])
-    expect(readdirSync(join(s.root, 'garden'))).toEqual([])
+    expect(kept(s.dir)).toEqual([])
+    expect(kept(join(s.root, 'garden'))).toEqual([])
     expect(readdirSync(join(s.root, 'NotAThread'))).toEqual(['old.png'])
   })
 })
@@ -298,6 +306,7 @@ describe('removing the inbox of a thread that is gone', () => {
     const root = join(tmp('ib-gone-'), '.talos-inbox')
     for (const t of threads) {
       mkdirSync(inboxPath(root, t), { recursive: true, mode: 0o700 })
+      writeFileSync(join(inboxPath(root, t), INBOX_MARKER), '') // as a folder Talos made carries it
       writeFileSync(join(inboxPath(root, t), 'f.png'), 'x')
     }
     return root
@@ -307,13 +316,13 @@ describe('removing the inbox of a thread that is gone', () => {
     removeInbox(root, 'trip')
     expect(readdirSync(root)).toEqual(['garden'])
   })
-  test('removeInbox never follows a link: a link is removed, the target stays', () => {
+  test("removeInbox never follows a link: a link where the folder would be is not Talos's, so it and its target stay", () => {
     const root = inboxes('garden')
     const target = tmp('ib-target-')
     writeFileSync(join(target, 'keep.txt'), 'keep')
     symlinkSync(target, join(root, 'trip'))
     removeInbox(root, 'trip')
-    expect(existsSync(join(root, 'trip'))).toBe(false)
+    expect(lstatSync(join(root, 'trip')).isSymbolicLink()).toBe(true)
     expect(readFileSync(join(target, 'keep.txt'), 'utf8')).toBe('keep')
   })
   test('removeGoneInboxes keeps live threads and removes archived, removed and unknown ones', () => {
@@ -345,6 +354,7 @@ let inboxRoot = ''
 async function hub(extraThreads: unknown[] = []) {
   inboxRoot = join(tmp('ib-root-'), '.talos-inbox')
   h = await startHarness({
+    relay: CARD_RELAY,
     env: { TALOS_INBOX_ROOT: inboxRoot },
     config: ((c: Record<string, unknown> & { threads: unknown[] }) => ({
       ...c,
@@ -357,7 +367,7 @@ async function hub(extraThreads: unknown[] = []) {
       dedicated: { enabled: true },
     })) as never,
   })
-  await waitFor(() => existsSync(join(h?.home as string, 'hub.sock')))
+  await waitFor(() => existsSync(join(h?.home as string, 'run', 'hub.sock')))
   const now = new Date().toISOString()
   writeFileSync(
     join(h.home, 'workers.json'),
@@ -450,6 +460,7 @@ describe('a thread that is archived or deleted loses its inbox', () => {
   function seed(thread: string) {
     const dir = join(inboxRoot, thread)
     mkdirSync(dir, { recursive: true, mode: 0o700 })
+    writeFileSync(join(dir, INBOX_MARKER), '') // as a folder Talos made carries it
     writeFileSync(join(dir, 'f.png'), 'x')
     return dir
   }
@@ -459,6 +470,8 @@ describe('a thread that is archived or deleted loses its inbox', () => {
     const kept = seed('trip')
     const r = await hh.bridge.callTool('archive_thread', { thread_id: 'scratch' })
     expect(r.isError).toBeFalsy()
+    expect(existsSync(gone)).toBe(true) // only a card so far
+    await approveLatestConfigCard(hh)
     await waitFor(() => !existsSync(gone))
     expect(existsSync(kept)).toBe(true)
   })

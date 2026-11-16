@@ -17,14 +17,30 @@ final class AgentFolderFlow: ObservableObject {
     /// A kit 1.x folder: the update path, shown and run (as a preview) only on yes.
     case offerUpgrade(dir: String, version: String, command: String, note: String)
     case upgradePreview(text: String, command: String, note: String)
+    /// A prebuilt app's recorded clone that the owner has not said yes to: shown with its path; Use this clone or Cancel. The yes
+    /// binds this path: if the record names another one by then, nothing runs.
+    case confirmClone(clone: String, then: CloneAction)
     case done(String)
     case failed(String)
   }
 
+  /// What the owner pressed that needed the clone, to run once the clone card is answered.
+  enum CloneAction: Equatable { case create, adopt, choose }
+
   /// What the flow needs from the world. The defaults are the app's own; tests hand in a scratch clone and environment.
   struct Deps: Sendable {
-    /// The clone this Talos was built from (`build-app.sh` stamps it). It holds install.sh, the bridge and the mod.
+    /// The clone this Talos was built from (`build-app.sh` stamps it, inside the app's signature). It holds install.sh, the bridge
+    /// and the mod. A prebuilt app has none: then `recordedRoot`.
     var repoRoot: @Sendable () -> String? = { Bundle.main.object(forInfoDictionaryKey: "TalosCheckout") as? String }
+    /// The clone `install.sh --from-release` recorded, read fresh each time. Any program of the owner's can write the record, so it
+    /// is judged (`AgentFolderSetup.recordedCloneProblem`) and the owner confirms it before it is used.
+    var recordedRoot: @Sendable () -> String? = { AgentFolderSetup.recordedCheckout(supportDir: SupervisorController.supportDir) }
+    var recordFile: String = SupervisorController.supportDir + "/checkout"
+    /// The recorded clone the owner said yes to.
+    var acceptance: any CloneAcceptance = KeychainCloneAcceptance()
+    /// Folders a recorded clone may not be in. nil: `AgentFolderSetup.sessionFolders` (the Talos home, the agent folder, each
+    /// thread's folder, the temp roots and the app's own support folder).
+    var unsafeFolders: (@Sendable () -> [String])? = nil
     /// The environment the tools run in: the login shell's, as the checklist's other checks use. Blocks; called off the main thread.
     var environment: @Sendable () -> [String: String] = {
       LoginShellEnv.build(shellEnv: LiveSystem().loginShellEnv() ?? ProcessInfo.processInfo.environment, overrides: [:])
@@ -52,7 +68,7 @@ final class AgentFolderFlow: ObservableObject {
   /// A new agent from this clone's install.sh. The installer refuses a folder that is not empty and not a Talos agent, and a
   /// synced folder; it warns about Desktop, Documents and Downloads. A Talos agent that is already there is not touched.
   func create() async {
-    guard let (dir, repo) = target() else { return }
+    guard let (dir, repo) = target(for: .create) else { return }
     step = .working("Creating your agent in \(dir). This can take a few minutes.")
     let env = deps.environment
     let outcome = await Task.detached { Self.runInstall(repo: repo, dir: dir, env: env()) }.value
@@ -65,7 +81,7 @@ final class AgentFolderFlow: ObservableObject {
   /// Connect a Claude Code folder you already use: `talos-app adopt`, run through the pty human-only commands need. First the
   /// dry run, which becomes the card; the owner's yes runs it for real.
   func adopt() async {
-    guard let (dir, repo) = target(mustExist: true) else { return }
+    guard let (dir, repo) = target(mustExist: true, for: .adopt) else { return }
     step = .working("Reading \(dir)…")
     switch await runAdopt(repo: repo, dir: dir, mode: .dryRun) {
     case .done(let text): step = .confirmAdopt(dir: dir, plan: text, repoint: false)
@@ -77,7 +93,7 @@ final class AgentFolderFlow: ObservableObject {
   /// A Talos agent folder that is already set up. Nothing is written to it. A folder wired to another clone or another home is
   /// judged by the same dry run Adopt shows, and sent to Adopt, which asks before pointing it here.
   func choose() async {
-    guard let repo = cloneRoot() else { return }
+    guard let repo = cloneRoot(for: .choose) else { return }
     let cfg = model.supervisor.currentConfig()
     switch AgentFolderSetup.choose(path, home: NSHomeDirectory(), currentAgentDir: model.configured ? cfg.agentDir : nil) {
     case .refused(let why): step = .failed(why)
@@ -102,7 +118,7 @@ final class AgentFolderFlow: ObservableObject {
     case .confirmRepoint(let d, _): (dir, repoint) = (d, true)
     default: return
     }
-    guard let repo = cloneRoot() else { return }
+    guard let repo = cloneRoot(for: .adopt) else { return }
     step = .working("Connecting \(dir)…")
     switch await runAdopt(repo: repo, dir: dir, mode: repoint ? .repoint : .connect) {
     case .done: finish(dir, repo: repo, kitUpdate: true)
@@ -115,7 +131,7 @@ final class AgentFolderFlow: ObservableObject {
 
   /// Yes to the kit update card: run the update as a preview. It changes nothing; the real update is a command for Terminal.
   func showUpgrade() async {
-    guard case .offerUpgrade(let dir, _, let command, let note) = step, let repo = cloneRoot() else { return }
+    guard case .offerUpgrade(let dir, _, let command, let note) = step, let repo = cloneRoot(for: .adopt) else { return }
     step = .working("Reading what the update would change…")
     let env = deps.environment
     let text = await Task.detached { () -> String in
@@ -132,18 +148,66 @@ final class AgentFolderFlow: ObservableObject {
 
   // MARK: shared
 
-  /// The clone Talos was built from, once it is whole. Create, Adopt and Choose all ask here; a partial one is said plainly.
-  private func cloneRoot() -> String? {
-    let r = deps.repoRoot() ?? ""
-    if let why = AgentFolderSetup.cloneProblem(r) {
+  /// The clone Talos runs scripts from, once it is whole. Create, Adopt and Choose all ask here; a partial one is said plainly. The
+  /// stamped clone is part of the signed app. A recorded one must pass the session-folder and ownership rules, and must be the one
+  /// the owner said yes to; another puts the clone card up instead (and `useClone` runs `action` after the yes).
+  private func cloneRoot(for action: CloneAction) -> String? {
+    if let stamped = deps.repoRoot(), !stamped.isEmpty {
+      if let why = AgentFolderSetup.cloneProblem(stamped) {
+        step = .failed(why)
+        return nil
+      }
+      return stamped
+    }
+    let recorded = deps.recordedRoot() ?? ""
+    if let why = recordedProblem(recorded) {
       step = .failed(why)
       return nil
     }
-    return r
+    if deps.acceptance.accepted() != recorded {
+      step = .confirmClone(clone: recorded, then: action)
+      return nil
+    }
+    return recorded
+  }
+
+  private func recordedProblem(_ recorded: String) -> String? {
+    if recorded.isEmpty { return AgentFolderSetup.cloneProblem("") }
+    let avoid =
+      deps.unsafeFolders?()
+      ?? AgentFolderSetup.sessionFolders(
+        talosHome: model.workersHome, agentDir: model.supervisor.currentConfig().expandedAgentDir(home: NSHomeDirectory()),
+        configJSON: FileManager.default.contents(atPath: model.workersHome + "/config.json"), supportDir: SupervisorController.supportDir)
+    return AgentFolderSetup.recordedCloneProblem(recorded, recordFile: deps.recordFile, unsafe: avoid)
+      ?? AgentFolderSetup.cloneProblem(recorded)
+  }
+
+  /// Use this clone, on the clone card: remembered only if the record still names the clone that was shown and it still passes,
+  /// then what the owner pressed runs.
+  func useClone() async {
+    guard case .confirmClone(let shown, let action) = step else { return }
+    let now = deps.recordedRoot() ?? ""
+    guard now == shown else {
+      step = .failed("The recorded clone changed while this card was open (it now says \(now.isEmpty ? "nothing" : now)). Nothing ran.")
+      return
+    }
+    if let why = recordedProblem(shown) {
+      step = .failed(why)
+      return
+    }
+    guard deps.acceptance.accept(shown) else {
+      step = .failed("Talos couldn't remember this clone in the Keychain, so nothing ran. Try again; if it keeps failing, check that the login keychain is unlocked.")
+      return
+    }
+    switch action {
+    case .create: await create()
+    case .adopt: await adopt()
+    case .choose: await choose()
+    }
   }
 
   /// The folder box as an absolute path, and the clone. A failure is already on the card.
-  private func target(mustExist: Bool = false) -> (dir: String, repo: String)? {
+  private func target(mustExist: Bool = false, for action: CloneAction) -> (dir: String, repo: String)? {
     let home = NSHomeDirectory()
     let dir = PathUtil.expandTilde(path.trimmingCharacters(in: .whitespaces), home: home)
     if dir.isEmpty || !dir.hasPrefix("/") {
@@ -157,7 +221,7 @@ final class AgentFolderFlow: ObservableObject {
         return nil
       }
     }
-    guard let repo = cloneRoot() else { return nil }
+    guard let repo = cloneRoot(for: action) else { return nil }
     return (dir, repo)
   }
 

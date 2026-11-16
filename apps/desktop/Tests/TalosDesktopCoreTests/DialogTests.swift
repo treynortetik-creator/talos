@@ -70,15 +70,6 @@ struct DialogMatcherTests {
     #expect(DialogMatcher.classify(["No session found with ID 1234"]) == .resumeMissing)
   }
 
-  @Test func theNotice() {
-    let n =
-      " Channels (experimental) messages from server:talos-app inject directly in this session · restart without --dangerously-load-development-channels to stop"
-    #expect(DialogMatcher.noticeSeen([n]))
-    // Wrapped across two rows by a narrow pane.
-    #expect(DialogMatcher.noticeSeen([" Channels (experimental) messages from server:talos-app inject", "directly in this session · …"]))
-    #expect(!DialogMatcher.noticeSeen([" inject directly in this session", " Channels (experimental) messages from x"]))
-  }
-
   @Test func versions() {
     #expect(CLIVersion.parse("2.1.312 (Claude Code)") == CLIVersion(2, 1, 312))
     #expect(CLIVersion.parse("garbage") == nil)
@@ -178,5 +169,20 @@ struct AutoConfirmGuardTests {
     #expect(AutoConfirmGuard.channels(inArgv: ["--channels", "plugin:x@y"]).isEmpty, "--channels is another flag")
     #expect(AutoConfirmGuard.channels(inArgv: ["--resume", "id"]).isEmpty)
     #expect(AutoConfirmGuard.channels(inArgv: [flag]).isEmpty)
+  }
+}
+
+@Suite("The development-channels warning really on screen")
+struct LiveDevChannelsTests {
+  let warning = [
+    " WARNING: Loading development channels", "", " Channels: server:talos-app", "", " ❯ 1. I am using this for local development",
+    "   2. Exit", "", " Enter to confirm · Esc to cancel",
+  ]
+  @Test func theRealWarningIsLive() { #expect(DialogMatcher.liveDevChannels(warning)) }
+  @Test func theSameWordsQuotedAboveTheInputBoxAreNot() {
+    let rule = String(repeating: "─", count: 40)
+    let box = [rule, "❯\u{00A0} ", rule, "  ⏵⏵ auto mode on (shift+tab to cycle)"]
+    #expect(!DialogMatcher.liveDevChannels(["● It printed:"] + warning + [""] + box))
+    #expect(!DialogMatcher.liveDevChannels([" > hi", " ● Run /login", " ● Yes, I trust this folder"] + box))
   }
 }

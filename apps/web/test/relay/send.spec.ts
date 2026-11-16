@@ -73,12 +73,12 @@ test('offline send queues, then the identical signed bytes deliver exactly once 
 
 test('a frame held for an unpinned device is not sent until the Mac pins it', async ({ page, context, harness }) => {
   const dev = await openSignedIn(harness, page, context, '/t/general', { pinned: false })
-  await expect(page.getByText('Waiting for your Mac to confirm this device.').first()).toBeVisible()
+  await expect(page.getByText('Waiting for your computer to confirm this device.').first()).toBeVisible()
   await page.getByLabel('Message', { exact: true }).fill('hold me')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await page.waitForTimeout(400)
   expect(frameOfType(harness, 'message')).toHaveLength(0)
   harness.pinDevice(dev.deviceId, true)
   await waitUntil(() => frameOfType(harness, 'message').length === 1, 'held frame delivered after pin')
-  await expect(page.getByText('Waiting for your Mac to confirm this device.')).toHaveCount(0)
+  await expect(page.getByText('Waiting for your computer to confirm this device.')).toHaveCount(0)
 })

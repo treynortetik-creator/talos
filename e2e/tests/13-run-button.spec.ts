@@ -59,7 +59,7 @@ async function twoDevices(stack: Stack, page: Page, context: BrowserContext, bro
   return pageB
 }
 
-test('13. Run: one tap hands the agent exactly that script once; a second tap and a second device get the plain refusal', async ({
+test('13. Run: one tap hands the agent exactly that script; Run again and a second device each run it again', async ({
   stack,
   page,
   context,
@@ -85,29 +85,18 @@ test('13. Run: one tap hands the agent exactly that script once; a second tap an
   expect(signed[0]?.json.text).toBe(RUN_LINE)
   expect(signed[0]?.json.run_block).toEqual({ message_id: expect.stringMatching(/^m_/), index: 0 })
 
-  // Second tap of the same block: the app cannot send it again from this screen, so reload it, which shows Run again
-  // (the Mac, not the screen, is the guard) and tap once more.
-  await page.reload()
-  await openThread(page, 'General')
-  const again = page.getByTestId('msg-agent').filter({ hasText: 'Cleanup for Alex Example' })
-  await again.getByTestId('run-button').click()
-  const refusal = 'That Run was not run: that block was already tried.'
-  const refusals = (p: Page) => p.getByRole('status').filter({ hasText: refusal })
-  await expect(refusals(page)).toHaveCount(1)
+  // Run again on the same screen: a fresh tap, its own signed message, runs it again (owner, 2026-11-15, audit 14)
+  await blockA.getByTestId('run-button').filter({ hasText: 'Run again' }).click()
+  await waitUntil(() => runNotes(stack).length === 2, 'the second Run at the agent')
 
-  // The same block from the second device: refused with the same plain line.
+  // The same block from the second device: its own tap, its own Run.
   await blockB.getByTestId('run-button').click()
-  // The thread is shared, so each device ends up with both refusals: the first device's and its own.
-  await expect(refusals(pageB)).toHaveCount(2)
-  await expect(refusals(page)).toHaveCount(2)
+  await waitUntil(() => runNotes(stack).length === 3, 'the second device’s Run at the agent')
 
-  // The agent heard of the Run exactly once, and hears nothing of the refusals.
-  expect(runNotes(stack)).toHaveLength(1)
+  // Three taps, three Runs, no refusal; nothing of the script in the Mac's log.
   expect(
     stack.claude.notifications.filter((n) => typeof n.content === 'string' && n.content.includes('was not run')),
   ).toHaveLength(0)
-  // Both refusals are on the Mac's record, with no script text in the log.
-  await waitUntil(() => (stack.bridgeLog().match(/run refused/g) ?? []).length >= 2, 'both refusals in the bridge log')
   expect(stack.bridgeLog()).not.toContain('hello from Alex Example')
 })
 

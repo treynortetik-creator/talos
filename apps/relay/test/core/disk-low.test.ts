@@ -16,7 +16,7 @@ import { advance, kit } from './helpers.ts'
 
 vi.setConfig({ testTimeout: 30_000 })
 const SUB = { endpoint: 'https://push.example.com/send/disk', keys: { p256dh: 'a', auth: 'b' } }
-const START = '2026-10-31T15:00:00.000Z' // 08:00 in the UTC-7 zone; UTC is the default timezone, no quiet window
+const START = '2026-10-31T15:00:00.000Z' // UTC is the default timezone, no quiet window
 const GB = 1024 ** 3
 
 let relay: TestRelay | null = null
@@ -138,5 +138,17 @@ describe('D11 disk_low', () => {
     expect(RelayProblem.options).toEqual(['storage_full', 'no_alert_path'])
     expect(MacProblem.options).toEqual(['bridge_offline', 'mod_quiet'])
     expect(HealthStatus.parse(raw).beat?.disk_free_bytes).toBe(1 * GB)
+  })
+})
+
+describe('Settings -> About: the bridge build in /api/status', () => {
+  it("is the version of the bridge's last beat, and an older parser still reads the status", async () => {
+    const clock = fakeClock(START)
+    const { r, bridge } = await world(clock)
+    await beat(bridge, 50 * GB)
+    const s = HealthStatus.parse(await status(r))
+    expect(s.bridge.version).toBe('0.4.1')
+    const older = HealthStatus.extend({ bridge: HealthStatus.shape.bridge.omit({ version: true }) })
+    expect(older.safeParse(await status(r)).success).toBe(true) // the key is optional, the object not strict
   })
 })

@@ -38,10 +38,19 @@ while [ $# -gt 0 ]; do
 done
 [ "$PURGE_APP" = 1 ] && [ ! -t 0 ] && { echo "--purge-app needs a real terminal (stdin is not one); refusing. Nothing was removed." >&2; exit 1; }
 # Ask FIRST, before any change: a wrong answer must leave jobs, hooks, pointers and settings exactly as they were.
+ans=""
 if [ "$PURGE_APP" = 1 ]; then
   read -r -p "--purge-app deletes the Talos app's data in ${XDG_CONFIG_HOME:-$HOME/.config}/talos (app/, action-rules.yaml, brand.json) on top of the kit's files. Type 'purge-app': " ans
   [ "$ans" = purge-app ] || { echo "aborted; nothing removed."; exit 1; }
 fi
+if [ "$PURGE" = 1 ] && [ "$YES" != 1 ]; then
+  ans=""
+  read -r -p "--purge-chronos deletes ~/.chronos and ~/.config/chronos, including jobs that are not Talos's. Type 'purge': " ans
+  [ "$ans" = purge ] || { echo "aborted; nothing removed."; exit 1; }
+fi
+# Every step's status is looked at: a step that fails is named at the end, and the run exits 1, never "Done."
+FAILED=()
+failed() { FAILED+=("$1"); echo "  FAILED: $1" >&2; }
 # Default to the folder install.sh recorded; fall back to the historical default.
 if [ -z "$AGENT_DIR" ]; then
   _rec="${XDG_CONFIG_HOME:-$HOME/.config}/talos/agent-dir"
@@ -57,24 +66,28 @@ REMEMBERED=""
 [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/talos/chronos-dir" ] && REMEMBERED="$(head -1 "${XDG_CONFIG_HOME:-$HOME/.config}/talos/chronos-dir")"
 
 echo "== Talos jobs"
-if [ -f "$CFG" ]; then "$PY" "$KIT/scripts/talos-jobs.py" unregister; else echo "  no Chronos config at $CFG; nothing to unregister"; fi
+JOBS_OK=1
+if [ -f "$CFG" ]; then
+  "$PY" "$KIT/scripts/talos-jobs.py" unregister || { JOBS_OK=0; failed "unregistering the talos-* jobs from Chronos (they are still registered)"; }
+else echo "  no Chronos config at $CFG; nothing to unregister"; fi
 
 echo "== Chronos session hook"
 EDITED_SETTINGS=0
 if [ -d "$AGENT_DIR/.claude" ]; then
-  _hm="$("$PY" "$KIT/scripts/talos-jobs.py" hook-remove --agent-dir "$AGENT_DIR")"
+  _hm="$("$PY" "$KIT/scripts/talos-jobs.py" hook-remove --agent-dir "$AGENT_DIR")" || failed "removing the Chronos SessionStart hook from $AGENT_DIR/.claude/settings.json"
   [ -z "$_hm" ] || printf '%s\n' "$_hm"
   case "$_hm" in *"removed the Chronos SessionStart hook"*) EDITED_SETTINGS=1 ;; esac
 else echo "  no $AGENT_DIR/.claude; skipped"; fi
 
 echo "== Global pointer"
-"$PY" "$KIT/scripts/global-pointer.py" remove
+"$PY" "$KIT/scripts/global-pointer.py" remove || failed "removing the global pointer"
 
 echo "== Talos config"
 TCFG="${XDG_CONFIG_HOME:-$HOME/.config}/talos"
 # Chronos's `notify` may point at a wrapper inside the folder we are about to delete. chronos-notify swallows
 # the failure, so every OTHER job's alert would silently stop. Clear it first, only if it is ours.
-if [ -f "$CFG" ]; then
+# Only once the jobs are gone: jobs still registered keep their alerts.
+if [ -f "$CFG" ] && [ "$JOBS_OK" = 1 ]; then
   TCFGP="$TCFG" CFGP="$CFG" "$PY" - <<'PYEOF'
 import json, os
 p = os.environ["CFGP"]; tcfg = os.environ["TCFGP"].rstrip("/") + "/"
@@ -97,38 +110,41 @@ fi
 # notify.env, notify.env.example, telegram.json and telegram-mirror.on are legacy files from older kit versions.
 KIT_NAMES=" agent-dir chronos-dir vault-dir notify talos-app-bin notify-errors.log notify.env notify.env.example telegram.json telegram-mirror.on "
 APP_NAMES=" app action-rules.yaml brand.json "
-if [ -d "$TCFG" ]; then
-  KEPT_APP=""; KEPT_OTHER=""
+if [ "$JOBS_OK" != 1 ]; then
+  # the jobs that are still registered run the notify wrapper and read the records kept here: they stay until the jobs go
+  echo "  kept: the talos-* jobs are still registered and use these files; fix the problem above and run this again"
+elif [ -d "$TCFG" ]; then
+  KEPT_APP=(); KEPT_OTHER=()
   # find prints NUL-separated names so an odd file name cannot split into several entries
   while IFS= read -r -d '' _e; do
     _n="${_e##*/}"
     case "$KIT_NAMES" in
-      *" $_n "*) rm -rf "$_e" && echo "  removed $_n" ;;
+      *" $_n "*) if rm -rf "$_e"; then echo "  removed $_n"; else failed "deleting $_e"; fi ;;
       *) case "$APP_NAMES" in
            *" $_n "*)
-             if [ "$PURGE_APP" = 1 ]; then rm -rf "$_e" && echo "  removed $_n (the app's data)"
-             else KEPT_APP="$KEPT_APP $_n"; fi ;;
-           *) KEPT_OTHER="$KEPT_OTHER $_n" ;;
+             if [ "$PURGE_APP" = 1 ]; then
+               if rm -rf "$_e"; then echo "  removed $_n (the app's data)"; else failed "deleting $_e"; fi
+             else KEPT_APP+=("$_n"); fi ;;
+           *) KEPT_OTHER+=("$_n") ;;
          esac ;;
     esac
   done < <(find "$TCFG" -mindepth 1 -maxdepth 1 -print0)
-  for _n in $KEPT_APP; do echo "  kept $_n (the Talos app's data; --purge-app removes it)"; done
-  for _n in $KEPT_OTHER; do echo "  kept $_n (not the kit's) -- delete it by hand if you want it gone: $TCFG/$_n"; done
+  # arrays, quoted: a name with a space is one name, and a name like `*` is never expanded
+  for _n in ${KEPT_APP[@]+"${KEPT_APP[@]}"}; do echo "  kept $_n (the Talos app's data; --purge-app removes it)"; done
+  for _n in ${KEPT_OTHER[@]+"${KEPT_OTHER[@]}"}; do echo "  kept $_n (not the kit's) -- delete it by hand if you want it gone: $TCFG/$_n"; done
   rmdir "$TCFG" 2>/dev/null && echo "  $TCFG was empty and is removed"
 else echo "  none"; fi
 
 if [ "$RM_CHRONOS" = 1 ]; then
   echo "== Chronos"
-  if [ "$PURGE" = 1 ] && [ "$YES" != 1 ]; then
-    read -r -p "--purge-chronos deletes ~/.chronos and ~/.config/chronos, including jobs that are not Talos's. Type 'purge': " ans
-    [ "$ans" = purge ] || { echo "aborted before touching Chronos."; exit 1; }
-  fi
+  # (the --purge-chronos question was asked first, before any change)
   CH=""
   for d in "$REMEMBERED" "$VENDOR/chronos"; do [ -n "$d" ] && [ -x "$d/uninstall.sh" ] && { CH="$d"; break; }; done
   if [ -n "$CH" ]; then
-    if [ "$PURGE" = 1 ]; then "$CH/uninstall.sh" --purge --yes; else "$CH/uninstall.sh"; fi
+    if [ "$PURGE" = 1 ]; then "$CH/uninstall.sh" --purge --yes || failed "Chronos's uninstaller ($CH/uninstall.sh --purge)"
+    else "$CH/uninstall.sh" || failed "Chronos's uninstaller ($CH/uninstall.sh)"; fi
   else
-    echo "  could not find a Chronos checkout with uninstall.sh; run its ./uninstall.sh yourself."
+    failed "removing Chronos: no Chronos checkout with uninstall.sh was found; run its ./uninstall.sh yourself"
   fi
 fi
 
@@ -136,16 +152,28 @@ if [ "$RM_MEM" = 1 ]; then
   echo "== Semantic memory search"
   _data="${XDG_DATA_HOME:-$HOME/.local/share}/talos"
   for d in venv models; do
-    if [ -d "$_data/$d" ]; then rm -rf "$_data/$d" && echo "  removed $_data/$d"; else echo "  no $_data/$d"; fi
+    if [ ! -d "$_data/$d" ]; then echo "  no $_data/$d"
+    elif rm -rf "$_data/$d"; then echo "  removed $_data/$d"; else failed "deleting $_data/$d"; fi
   done
   echo "  (the per-agent index, <agent folder>/.index/, stays with the agent folder and can be deleted by hand)"
 fi
 
-if [ "$KEEP_CLONE" != 1 ] && [ -d "$VENDOR/chronos" ]; then
-  if [ "$RM_CHRONOS" = 1 ] || [ ! -f "$CFG" ]; then rm -rf "$VENDOR/chronos" && echo "removed the pinned Chronos clone at $VENDOR/chronos"; rmdir "$VENDOR" 2>/dev/null || true
+if [ "$KEEP_CLONE" != 1 ] && [ -d "$VENDOR/chronos" ] && [ ${#FAILED[@]} -gt 0 ]; then
+  # Chronos (its launchd agents, or the jobs still registered) may still run from it: kept until a run that fails nothing
+  echo "kept the Chronos clone at $VENDOR/chronos (a step above failed)"
+elif [ "$KEEP_CLONE" != 1 ] && [ -d "$VENDOR/chronos" ]; then
+  if [ "$RM_CHRONOS" = 1 ] || [ ! -f "$CFG" ]; then
+    if rm -rf "$VENDOR/chronos"; then echo "removed the pinned Chronos clone at $VENDOR/chronos"; else failed "deleting $VENDOR/chronos"; fi
+    rmdir "$VENDOR" 2>/dev/null || true
   else echo "kept the Chronos clone at $VENDOR/chronos (Chronos is still installed; pass --remove-chronos to remove both)"; fi
 fi
 echo
+if [ ${#FAILED[@]} -gt 0 ]; then
+  echo "Not done: these steps failed (their messages are above):" >&2
+  for _f in "${FAILED[@]}"; do echo "  - $_f" >&2; done
+  echo "Your agent folder ($AGENT_DIR) is yours and nothing in it was deleted$([ "$EDITED_SETTINGS" = 1 ] && echo "; the Chronos hook entry was removed from its .claude/settings.json"). Fix the problem and run this again." >&2
+  exit 1
+fi
 if [ "$EDITED_SETTINGS" = 1 ]; then
   echo "Done. Your agent folder ($AGENT_DIR) is yours and nothing in it was deleted."
   echo "The one change inside it: the Chronos hook entry was removed from $AGENT_DIR/.claude/settings.json."

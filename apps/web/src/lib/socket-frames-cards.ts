@@ -49,13 +49,16 @@ export function onAppUpdate(ctx: FrameContext, frame: FrameOf<'app.update'>): vo
 }
 
 export function onInboxItem(ctx: FrameContext, frame: FrameOf<'inbox.item'>, isCatchup: boolean): void {
-  const { store, set, bumpSeq, bumpUnread } = ctx
+  const { store, set, bumpSeq, bumpUnread, noteUnreadSeq } = ctx
   const known = store.getState().inbox.some((i) => i.id === frame.item.id)
   set((s) => ({ inbox: [frame.item, ...s.inbox.filter((i) => i.id !== frame.item.id)] }))
   bumpSeq(frame)
   // The relay counts a new inbox item as unread in its thread; so does the phone, live, or the app icon would jump
   // between the relay's number (in each push) and this one.
-  if (!isCatchup && !known) bumpUnread(frame.item.thread)
+  if (!known) {
+    if (isCatchup) noteUnreadSeq(frame.item.thread, frame.relay?.seq)
+    else bumpUnread(frame.item.thread, frame.relay?.seq)
+  }
   return
 }
 

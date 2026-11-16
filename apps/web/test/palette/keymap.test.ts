@@ -1,7 +1,7 @@
 // The one keymap table: shipped defaults, a pure resolver that lets the owner's overrides sit beside them, and no chord
 // literals anywhere else in the app.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   chordLabel,
@@ -127,7 +127,7 @@ describe('no chord literals outside the table', () => {
     for (const n of readdirSync(d)) {
       const p = join(d, n)
       if (statSync(p).isDirectory()) walk(p)
-      else if (/\.tsx?$/.test(n)) files.push(p)
+      else if (/\.tsx?$/.test(n)) files.push(p.split(sep).join('/')) // `/` whatever the OS, as the filter spells it
     }
   }
   walk(SRC)

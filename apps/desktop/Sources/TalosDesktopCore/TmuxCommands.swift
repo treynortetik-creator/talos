@@ -49,15 +49,11 @@ public struct TmuxCommands: Equatable, Sendable {
   public var sessionTarget: String { "=\(session)" }
   public var paneTarget: String { paneId ?? "=\(session):" }
 
-  static func envFlags(_ env: [String: String]) -> [String] {
-    env.keys.sorted().flatMap { ["-e", literalArg("\($0)=\(env[$0] ?? "")")] }
-  }
-
   /// tmux ends a command at an argv element that ends in `;` (or is just `;`) and starts the next command after it, so an
   /// agent argument like `be brief;` ran nothing ("unknown command") and the rest of the list was read as commands. One
   /// backslash before that last `;` is removed by tmux and the element arrives as typed (OBSERVED, tmux 3.8, private socket:
   /// `be brief;`, `;`, `a;;`, `$HOME;` and one ending in a backslash and `;` all arrive exactly; `;` inside an element is
-  /// left alone). Every element a user can influence goes through this: the agent's argv, env values, the folder, typed text.
+  /// left alone). Every element a user can influence goes through this: the agent's argv, the folder, typed text.
   /// The `;` that separates two commands of one list (respawn then clear-history, if-shell then send-keys) is NOT passed here.
   public static func literalArg(_ element: String) -> String {
     guard element.hasSuffix(";") else { return element }
@@ -87,37 +83,26 @@ public struct TmuxCommands: Equatable, Sendable {
   /// `##` is a literal `#`.
   public static func literalPath(_ path: String) -> String { path.replacingOccurrences(of: "#", with: "##") }
 
-  public func newSession(argv: [String], env: [String: String], cwd: String, cols: Int = 120, rows: Int = 40)
-    -> [String]
-  {
+  /// No pane command takes an environment: a pane runs `LaunchFile.tmuxArgv`, and its variables are in that file. `-e` would
+  /// put every value in tmux's argv, where `ps` shows it, and on a server's first session in the server's global environment.
+  public func newSession(argv: [String], cwd: String, cols: Int = 120, rows: Int = 40) -> [String] {
     base + [
       "new-session", "-d", "-P", "-F", "#{pane_id}", "-s", session, "-x", String(cols), "-y", String(rows), "-c",
       Self.literalArg(Self.literalPath(cwd)),
-    ] + Self.envFlags(env) + ["--"] + argv.map(Self.literalArg)
+    ] + ["--"] + argv.map(Self.literalArg)
   }
 
   /// A fresh window for the agent when our pane is gone but the session still holds someone else's pane.
-  public func newWindow(argv: [String], env: [String: String], cwd: String) -> [String] {
+  public func newWindow(argv: [String], cwd: String) -> [String] {
     base + ["new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "\(sessionTarget):", "-c", Self.literalArg(Self.literalPath(cwd))]
-      + Self.envFlags(env) + ["--"] + argv.map(Self.literalArg)
-  }
-
-  /// The tmux server's own environment (`global`) or the session's. A server started by a polluted process carries
-  /// that process's variables into every pane, and `-e` on a new pane can only add.
-  public func showEnvironment(global: Bool) -> [String] {
-    base + ["show-environment"] + (global ? ["-g"] : ["-t", sessionTarget])
-  }
-
-  /// Marks `name` removed, so panes started afterwards do not get it.
-  public func removeEnvironment(_ name: String, global: Bool) -> [String] {
-    base + ["set-environment"] + (global ? ["-g"] : ["-t", sessionTarget]) + ["-r", name]
+      + ["--"] + argv.map(Self.literalArg)
   }
 
   /// Respawns the pane and clears its history in the same tmux invocation. The two run back to back inside the server, before
   /// the new child can print: a separate `clear-history` after this one could run after a child that exits at once had printed
   /// its last line, and wipe it (OBSERVED, tmux 3.8: the line was in history once "Pane is dead" scrolled it there).
-  public func respawnPane(argv: [String], env: [String: String], cwd: String) -> [String] {
-    base + ["respawn-pane", "-k", "-t", paneTarget, "-c", Self.literalArg(Self.literalPath(cwd))] + Self.envFlags(env)
+  public func respawnPane(argv: [String], cwd: String) -> [String] {
+    base + ["respawn-pane", "-k", "-t", paneTarget, "-c", Self.literalArg(Self.literalPath(cwd))]
       + ["--"] + argv.map(Self.literalArg) + [";", "clear-history", "-t", paneTarget]
   }
 
@@ -169,6 +154,49 @@ public struct TmuxCommands: Equatable, Sendable {
   public func sendBackspaces(_ n: Int) -> [String] { base + ["send-keys", "-t", paneTarget] + Array(repeating: "BSpace", count: n) }
   public func sendEnter() -> [String] { base + ["send-keys", "-t", paneTarget, "Enter"] }
 
+  /// What a `…UnlessInMode` send prints, and all it prints: `inModeMarker` when the pane was in a mode and nothing was sent,
+  /// `sentMarker` after the keys went. Anything else (nothing at all, both, other words) is a send nobody can vouch for.
+  public static let inModeMarker = "talos-in-mode"
+  public static let sentMarker = "talos-sent"
+
+  /// The check of the pane's mode and the send as ONE tmux invocation: `if-shell -F '#{pane_in_mode}'` runs the send only when the pane
+  /// is in no mode, and prints `inModeMarker` instead when it is in one. tmux runs the whole list without returning to its event loop,
+  /// so a wheel-up cannot land between the check and the keys (as two invocations, `paneInMode` then `send-keys`, it could, and the
+  /// keys went to copy mode as its commands). Unlike `sendBytesLeavingMode` this never leaves the mode: the owner scrolled back to
+  /// read, and what is owed waits. The send is one string for tmux's own parser, so each word is quoted for it (`commandWord`); the
+  /// `sentMarker` is printed by a second command of that string, which tmux runs only if the send did not fail.
+  func unlessInMode(_ send: [String]) -> [String] {
+    base + [
+      "if-shell", "-F", "-t", paneTarget, "#{pane_in_mode}", "display-message -p \(Self.inModeMarker)",
+      send.map(Self.commandWord).joined(separator: " ") + " ; display-message -p \(Self.sentMarker)",
+    ]
+  }
+
+  /// One word of a command string as tmux's parser reads it back, whatever is in it: plain when it is only letters, digits and
+  /// `_-%=:.`, else in single quotes (nothing is special inside them) with each `'` written as `'\''`.
+  public static func commandWord(_ s: String) -> String {
+    let plain = !s.isEmpty && s.unicodeScalars.allSatisfy { c in
+      c.isASCII && (CharacterSet.alphanumerics.contains(c) || "_-%=:.".unicodeScalars.contains(c))
+    }
+    return plain ? s : "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+  }
+
+  public func sendLiteralUnlessInMode(_ text: String) -> [String] { unlessInMode(["send-keys", "-t", paneTarget, "-l", "--", text]) }
+  public func sendEnterUnlessInMode() -> [String] { unlessInMode(["send-keys", "-t", paneTarget, "Enter"]) }
+  public func sendBackspacesUnlessInMode(_ n: Int) -> [String] {
+    unlessInMode(["send-keys", "-t", paneTarget] + Array(repeating: "BSpace", count: n))
+  }
+
+  /// What a `…UnlessInMode` send that ran said: true when the keys went (`sentMarker` alone), false when the pane was in a mode
+  /// (`inModeMarker` alone), nil for anything else. Only true counts as sent.
+  public static func parseModeSend(_ out: String) -> Bool? {
+    switch out.trimmingCharacters(in: .whitespacesAndNewlines) {
+    case sentMarker: return true
+    case inModeMarker: return false
+    default: return nil
+    }
+  }
+
   /// One of the three keys a tap on a dialog may send, by tmux key NAME (tmux turns it into the bytes the pane's own cursor-key mode wants:
   /// Claude's Select runs with application cursor keys, so raw bytes would be the wrong ones). The type admits Up, Down and Enter and nothing
   /// else: no text, no digit, no raw byte. It leaves copy mode first, in the same invocation (see `sendBytesLeavingMode`).
@@ -176,6 +204,12 @@ public struct TmuxCommands: Equatable, Sendable {
     base + [
       "if-shell", "-F", "-t", paneTarget, "#{pane_in_mode}", "send-keys -t \(paneTarget) -X cancel", ";", "send-keys", "-t", paneTarget, key.rawValue,
     ]
+  }
+
+  /// Escape, by key name, for the computer-use permission dialog (`ComputerUseDismiss`): the only key sent to it. Leaves copy mode first,
+  /// in the same invocation, as `sendDialogKey` does.
+  public func sendEscape() -> [String] {
+    base + ["if-shell", "-F", "-t", paneTarget, "#{pane_in_mode}", "send-keys -t \(paneTarget) -X cancel", ";", "send-keys", "-t", paneTarget, "Escape"]
   }
 
   public func clearHistory() -> [String] { base + ["clear-history", "-t", paneTarget] }
@@ -201,6 +235,16 @@ public struct TmuxCommands: Equatable, Sendable {
       times.append(t)
     }
     return times
+  }
+
+  /// `paneInMode` output → false for `0` (no mode), true for `1`, nil for anything else: a value that was not read is not "no
+  /// mode", and only "no mode" lets the pointer typer send a key.
+  public static func parseInMode(_ out: String) -> Bool? {
+    switch out.trimmingCharacters(in: .whitespacesAndNewlines) {
+    case "0": return false
+    case "1": return true
+    default: return nil
+    }
   }
 
   /// A failed `has-session` means the session is gone only when tmux itself says so: it answered "no such session", or

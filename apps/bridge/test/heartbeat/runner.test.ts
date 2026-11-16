@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fakeClock } from '@talos-app/testkit'
+import { fakeClock, t } from '@talos-app/testkit'
 import {
   type HeartbeatWake,
   type RunnerDeps,
@@ -13,6 +13,7 @@ import {
   sourceLimitMs,
 } from '../../src/heartbeat/runner.ts'
 import { storeFile } from '../../src/heartbeat/store.ts'
+import { killHeldPipes } from '../held-pipe.ts'
 import { type Harness, startHarness, waitFor } from '../helpers.ts'
 import {
   cmd,
@@ -790,15 +791,23 @@ describe('review fixes', () => {
     })
   })
 
-  test('R1-8: a child the source left running with its pipes closed does not outlive a clean exit', async () => {
-    await start()
-    const pidFile = join(dir, 'child.pid')
-    const src = script(dir, 'bg', `sleep 300 >/dev/null 2>&1 </dev/null &\necho $! > '${pidFile}'\necho '${ok([])}'`)
-    const out = await k.run(config([cmd('bg', src)]))
-    expect(out.result.outcome).toBe('silent')
-    const pid = Number(readFileSync(pidFile, 'utf8'))
-    await waitFor(() => !alive(pid), 3000, 'the leftover child to be killed')
-  })
+  test(
+    'R1-8: a child the source left running with its pipes closed does not outlive a clean exit',
+    async () => {
+      await start()
+      const pidFile = join(dir, 'child.pid')
+      const src = script(dir, 'bg', `sleep 300 >/dev/null 2>&1 </dev/null &\necho $! > '${pidFile}'\necho '${ok([])}'`)
+      try {
+        const out = await k.run(config([cmd('bg', src)]))
+        expect(out.result.outcome).toBe('silent')
+        const pid = Number(readFileSync(pidFile, 'utf8'))
+        await waitFor(() => !alive(pid), t(8000), 'the leftover child to be ended') // ps (up to 5 s) and a grace, after the run
+      } finally {
+        killHeldPipes([pidFile]) // only if the test failed: our own leftover, by its pid
+      }
+    },
+    t(20_000),
+  ) // over bun's 5 s default on a loaded Mac, so the finally above always runs
 
   test('R1-9: a source error is escaped once, as written', async () => {
     await start()
@@ -977,7 +986,10 @@ describe('the store', () => {
     await k.run(cfg)
     await k.run(cfg)
     expect(JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8')).cursor).toEqual({ n: 1 })
-    clock.advance(73 * 3600_000)
+    // 73 h off, as a Mac that was asleep: the clock moves and each overdue timer fires once. Stepping through the 73 h fired
+    // every 1 s and 5 s timer of the live bridge in turn (~350,000 of them, ~5 s of real time, the whole of bun's 5 s limit).
+    clock.set(clock.now() + 73 * 3600_000)
+    clock.advance(0)
     await k.run(cfg, { coldAfterMs: 3 * 24 * 3600_000 })
     const req = JSON.parse(readFileSync(join(dir, 'c.stdin'), 'utf8'))
     expect(req.cursor).toBeNull()
@@ -1126,7 +1138,9 @@ describe('the group of a running source is recorded in the store', () => {
     const rec = during.running.rec
     expect(rec.pgid).toBe(Number(readFileSync(pidFile, 'utf8')))
     expect(rec.command).toContain(src)
-    expect(rec.lstart).toMatch(/\d{4}$/) // the start time ps shows, so a reused pid can be told apart
+    // the start time (ps's text ending in the year on macOS, the /proc token ending in its tick count on Linux), so a reused
+    // pid can be told apart
+    expect(rec.lstart).toMatch(/\d{4}$/)
     expect(k.store().running).toEqual({})
   })
 

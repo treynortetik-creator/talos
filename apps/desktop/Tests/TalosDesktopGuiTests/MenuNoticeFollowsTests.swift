@@ -37,6 +37,7 @@ struct MenuNoticeFollowsTests {
   @Test func everyQuestionIsDescribedByTheSameWordsAsTheTerminalsRow() {
     let all: [Supervisor.NeedsYou] = [
       .dialog("folder trust"), .confirmColdStart, .restartNotConfirmed(.channelsMismatch), .stuck, .startStalled,
+      .bridgeNotLive("its config.json is damaged"), .relayUnreachable(1006), .relayUnreachable(nil), .notReading,
     ]
     let old = eventNotice(.dialog("login"))
     for n in all { #expect(shown(old, sentBy: old, now: n) == eventNotice(n), "\(n)") }

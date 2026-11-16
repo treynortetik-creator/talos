@@ -10,6 +10,7 @@ import { EventRow } from '../../src/features/inbox/EventRow.tsx'
 import { InboxScreen } from '../../src/features/inbox/InboxScreen.tsx'
 import { UndoStrip } from '../../src/features/inbox/undo.tsx'
 import { ItemSheet } from '../../src/features/threads/ItemSheet.tsx'
+import { createHttp } from '../../src/lib/http.ts'
 import { makeItem, renderWith, setup } from '../cards/helpers.tsx'
 
 function swipe(el: HTMLElement, dx: number) {
@@ -256,14 +257,18 @@ describe('Done view (real mode: GET /api/inbox?state=done)', () => {
     expect(screen.queryByTestId('done-error')).toBeNull()
   })
 
+  // Driven by the restore's own looks at the Done list, never by timing: the restore gets its own http (no other screen or test
+  // shares it, so nothing else counts as a look), only `?state=done` is answered, and the relay "applies" the change on the
+  // restore's 2nd look, so the 1st still shows the item. (It once counted every fetch, a Done list still mounted by an earlier
+  // test's screen included, and flaked under load when those landed in between.)
   it('Restore puts the item back in the store even though a refresh had dropped it, and refetches only after the relay applied it', async () => {
     const client = setup() // the store does not hold the item: a list refresh dropped it
     let relayApplied = false
-    let doneFetches = 0
-    vi.stubGlobal('fetch', async () => {
-      doneFetches += 1
-      // The relay applies the restore on the 3rd look at the Done list.
-      if (doneFetches >= 3) relayApplied = true
+    let looks = 0
+    const http = createHttp(async (u) => {
+      if (!String(u).includes('state=done')) return new Response('{}', { status: 404 })
+      looks += 1
+      if (looks >= 2) relayApplied = true
       return Response.json(feed(relayApplied ? [] : [doneItem]))
     })
     const refetch = vi.spyOn(client.api, 'inbox')
@@ -272,12 +277,9 @@ describe('Done view (real mode: GET /api/inbox?state=done)', () => {
       refetchedAfterApplied = relayApplied
       return { items: [], counts: { priority: 0, other: 0 } }
     })
-    renderWith(<InboxScreen />, client)
-    await userEvent.click(screen.getByRole('tab', { name: 'Done' }))
-    await screen.findByText('Relay says done')
-    refetch.mockClear()
-    await restoreInboxItem(client, doneItem, { pollMs: 5 })
+    await restoreInboxItem(client, doneItem, { pollMs: 0, http })
     expect(stateOf(client, doneItem.id)).toBe('read') // back in the store, not lost to a no-op update
+    expect(looks).toBe(2) // it looked, saw the item still done, and looked again
     expect(refetch).toHaveBeenCalledTimes(1)
     expect(refetch).toHaveBeenCalledWith('other') // the low-priority item's tab
     expect(refetchedAfterApplied).toBe(true) // not before the relay had applied it

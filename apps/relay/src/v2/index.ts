@@ -4,6 +4,9 @@
 //   - share (WP-V4): mounted from core/share.ts.
 import { Hono } from 'hono'
 import { requireCsrf, requireSession } from '../auth/contract.ts'
+import { bugInboxRoutes } from '../core/bug-inbox.ts'
+import { bugReportRoutes } from '../core/bug-reports.ts'
+import { pageRoutes } from '../core/pages.ts'
 import { problemRoutes } from '../core/problems.ts'
 import { runtimeOf } from '../core/runtime.ts'
 import { shareRoutes } from '../core/share.ts'
@@ -30,3 +33,10 @@ routes.route('/', shareRoutes)
 
 // Problem reports (docs/ERRORS.md): core/problems.ts
 routes.route('/', problemRoutes)
+
+// In-app bug reports: core/bug-reports.ts
+routes.route('/', bugReportRoutes)
+routes.route('/', bugInboxRoutes)
+
+// Org pages, phase 1 (docs/ORG-PAGES-SPEC.md): core/pages.ts
+routes.route('/', pageRoutes)

@@ -8,6 +8,7 @@ import { TalosClientError, useTalosClient } from '../../lib/client.ts'
 import { getStockTheme, pickStockTheme, setStockTheme, useStockTheme } from '../../lib/theme.ts'
 import { Button } from '../../ui/index.ts'
 import { friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
+import { NOT_CONNECTED_LINE, useWriteBlock } from './offline.ts'
 
 const SAVED_OFFLINE = 'Saved. It applies on your other devices when your Mac is back.'
 const LABEL: Record<StockThemeId, string> = { talos: 'Talos', paper: 'Paper', hearth: 'Hearth' }
@@ -31,8 +32,11 @@ function Swatch({ id }: { id: StockThemeId }) {
   )
 }
 
-export function ThemePicker({ readOnly }: { readOnly: boolean }) {
+export function ThemePicker({ readOnly: readOnlyProp }: { readOnly: boolean }) {
   const client = useTalosClient()
+  // not connected, a pick cannot be sent; the Mac offline it still can (the relay keeps it), so only the link greys it
+  const notConnected = useWriteBlock() === 'link'
+  const readOnly = readOnlyProp || notConnected
   const current = useStockTheme()
   const [note, setNote] = useState<{ kind: 'saved' | 'error'; text: string } | null>(null)
   const choose = async (id: StockThemeId) => {
@@ -53,6 +57,7 @@ export function ThemePicker({ readOnly }: { readOnly: boolean }) {
   return (
     <div className="flex flex-col gap-2">
       <h3 className="m-0 mt-2 text-base font-medium">Colour theme</h3>
+      {notConnected && <p className="m-0 text-sm text-text-2">{NOT_CONNECTED_LINE}</p>}
       <div role="radiogroup" aria-label="Colour theme" className="flex flex-wrap gap-2">
         {STOCK_THEME_IDS.map((id) => (
           <Button

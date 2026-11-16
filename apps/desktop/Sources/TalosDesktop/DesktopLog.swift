@@ -19,7 +19,24 @@ enum DesktopLog {
     }
   }
 
-  static func resetForTest() { lock.withLock { lastTabs = nil } }
+  nonisolated(unsafe) private static var lastScreen: String?
+
+  /// Logs `screen-socket: <state>` when it differs from the last one logged: whether the screen helper's socket is up, and why
+  /// not. Paths and error text only, never a request.
+  static func screen(_ state: String) {
+    lock.withLock {
+      guard state != lastScreen else { return }
+      lastScreen = state
+      append("\(ISO8601DateFormatter().string(from: Date())) screen-socket: \(state)\n")
+    }
+  }
+
+  static func resetForTest() {
+    lock.withLock {
+      lastTabs = nil
+      lastScreen = nil
+    }
+  }
 
   private static func append(_ line: String) {
     let file = pathOverride ?? path

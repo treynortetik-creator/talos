@@ -2,6 +2,8 @@
 // from origin/main (43e9a58d) before the settings table grew its schema, label and reader columns. The same patches, loads
 // and unknown fields run against the code now and must give the same answers: the same refusal code and words, the same
 // value written, and the same fate for a field the bridge does not know (a newer peer's), on disk and in memory.
+// One answer changed on purpose (2026-11, standing rule 1): a field the bridge does not know now STAYS on disk (disk_top_key,
+// disk_agent_key are true); in memory it is still not read.
 // Refresh only on purpose: WRITE_GOLDEN=1 bun test apps/bridge/test/settings-parity.test.ts
 import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'

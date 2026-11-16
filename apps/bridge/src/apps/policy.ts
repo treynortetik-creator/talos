@@ -1,6 +1,7 @@
 // Authorising an app's tool call (M4.3) and the rate limits (M4.6). `decideCall` runs steps 2 to 8 in order; the first
 // failure answers `app.response failed`. Step 1 (signature, freshness, replay) is the inbound pipeline's.
 import type { AppErrorCodeT, CatalogToolT } from '@talos-app/protocol'
+import { appsFix } from '../owner-words.ts'
 import {
   type AppCatalogT,
   type CatalogResourceT,
@@ -121,7 +122,7 @@ export async function decideCall(c: DecideCtx, r: CallReq): Promise<Decision> {
   const server = c.catalog ? findServer(c.catalog, view.server, view.source) : undefined
   const resource = server?.resources.find((x) => x.uri === view.resource_uri)
   if (!server || !resource || resource.state !== 'approved' || resource.approval_key !== view.approval_key)
-    return fail('approval_changed', 'This app changed since it was approved. Run talos-app apps scan on the Mac.', {
+    return fail('approval_changed', `This app changed since it was approved. ${appsFix()}`, {
       revoke: 'server',
     })
   // 5 (looked up early so the direct path knows its budget): tool of this server, or another catalogued server's

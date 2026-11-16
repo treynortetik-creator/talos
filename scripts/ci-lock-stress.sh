@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Stresses the lock code of a copy of ci-local.sh and counts rounds where two LIVE processes believed they held one lock.
-# Compare two versions: `git show <sha>:scripts/ci-local.sh > /tmp/old.sh`, then run this on each, beside real load.
+# Compare two versions: `git show <sha>:scripts/ci-local.sh > /tmp/old.sh`, then run this on each, beside real load. A
+# ci-local.sh that sources scripts/ci-local/ needs that folder beside the copy (`git archive <sha> scripts/ci-local.sh
+# scripts/ci-local | tar -x -C /tmp/old`), or it stops at once.
 #
 #   scripts/ci-lock-stress.sh <copy of ci-local.sh> [rounds]     # exit 0 only if no round had two live holders
 #

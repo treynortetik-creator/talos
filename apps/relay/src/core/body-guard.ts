@@ -227,13 +227,16 @@ export const DEFAULT_BODY_CAP = 64 * 1024
 
 /**
  * Routes that carry big bodies and cap them themselves, with their own limit and an identity check in the right order:
- * media upload (/api/media, /bridge/media), share (/api/share, and /share-target which reads nothing), the Mac's frame post (/bridge/post, 256 KiB) and
+ * media upload (/api/media, /bridge/media), an org page (/bridge/pages, 10 MiB), share (/api/share, and /share-target which reads nothing), the Mac's frame post (/bridge/post, 256 KiB) and
  * the hook receiver (/hook, 1 MB, read by hand). Everything else gets `DEFAULT_BODY_CAP`.
  */
 export function ownsItsBodyCap(pathname: string, method: string): boolean {
   if (pathname === '/api/media') return true
   if (pathname === '/api/dictate') return true
+  if (pathname === '/api/bug-reports') return true
+  if (pathname === '/api/bug-inbox') return true
   if (pathname.startsWith('/bridge/media/')) return true
+  if (pathname === '/bridge/pages') return true
   if (pathname === '/api/share' && method === 'POST') return true
   // The share-target POST never reads its body: it answers 303 to the page that explains the share was lost. A capped
   // 413 here would show the owner bare JSON instead of that page.

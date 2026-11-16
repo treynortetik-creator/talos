@@ -78,8 +78,9 @@ export function buildHome(
       at: statusOf(t.id)?.since ?? t.created_at,
     }))
 
+  // an archived thread is in no list, so it is not working or up next on Home either
   const working: HomeRow[] = s.threads
-    .filter((t) => stateOf(t.id) === 'working')
+    .filter((t) => !t.archived && stateOf(t.id) === 'working')
     .map((t) => ({
       kind: 'thread',
       id: t.id,
@@ -99,7 +100,7 @@ export function buildHome(
 
   const upNext: HomeRow[] = [
     ...s.threads
-      .filter((t) => stateOf(t.id) === 'queued')
+      .filter((t) => !t.archived && stateOf(t.id) === 'queued')
       .map(
         (t): HomeRow => ({
           kind: 'thread',

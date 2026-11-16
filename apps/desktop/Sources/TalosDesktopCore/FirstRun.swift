@@ -18,11 +18,16 @@ public enum FirstRun {
     public var setupDone: Bool?
     /// Why the agent folder desktop.json names can't be used (`AgentFolderCheck`), once setup is done. nil = fine.
     public var agentFolderProblem: String?
+    /// The programs as found, by absolute path (`claude`, `bun`, `tmux`), shown under their rows. Empty = not shown.
+    public var paths: [String: String]
+    /// `bun --version`, parsed. nil = not read.
+    public var bunVersion: String?
 
     public init(
       claudeVersion: String? = nil, authSignedIn: Bool? = nil, bunPath: String? = nil, tmuxVersionOutput: String? = nil,
       bridgeEnvPresent: Bool = false, agentDir: String = "~/talos-agent", agentDirTrusted: Bool? = nil, home: String,
-      talosAppFound: Bool? = nil, setupDone: Bool? = nil, agentFolderProblem: String? = nil
+      talosAppFound: Bool? = nil, setupDone: Bool? = nil, agentFolderProblem: String? = nil,
+      paths: [String: String] = [:], bunVersion: String? = nil
     ) {
       self.claudeVersion = claudeVersion
       self.authSignedIn = authSignedIn
@@ -35,6 +40,8 @@ public enum FirstRun {
       self.talosAppFound = talosAppFound
       self.setupDone = setupDone
       self.agentFolderProblem = agentFolderProblem
+      self.paths = paths
+      self.bunVersion = bunVersion
     }
   }
 
@@ -49,10 +56,18 @@ public enum FirstRun {
     public var id: String
     public var title: String
     public var state: State
+    /// A second line under the title (the program's absolute path). nil = none.
+    public var detail: String?
     public var isOK: Bool { state == .ok }
   }
 
   public static func rows(_ i: Inputs) -> [Row] {
+    var r = baseRows(i)
+    for k in r.indices where r[k].isOK { r[k].detail = i.paths[r[k].id] }
+    return r
+  }
+
+  private static func baseRows(_ i: Inputs) -> [Row] {
     var r: [Row] = []
     // The one step that makes the setup. Named, first, and the other rows never point back at a pane that can't help yet.
     if let done = i.setupDone {
@@ -74,13 +89,13 @@ public enum FirstRun {
     switch i.authSignedIn {
     case .some(true): r.append(Row(id: "auth", title: "Claude signed in", state: .ok))
     case .some(false):
-      r.append(Row(id: "auth", title: "Claude signed in", state: .fix("Not signed in. Run claude in Terminal, type /login, then press Check again.")))
+      r.append(Row(id: "auth", title: "Claude signed in", state: .fix(OnboardingText.signInAuthRow)))
     case .none:
-      r.append(Row(id: "auth", title: "Claude signed in", state: .unknown("Couldn't check. If the agent asks you to sign in, run claude in Terminal and type /login.")))
+      r.append(Row(id: "auth", title: "Claude signed in", state: .unknown("Couldn't check. Press Sign in to Claude below, or Check again.")))
     }
     r.append(
       i.bunPath != nil
-        ? Row(id: "bun", title: "bun", state: .ok)
+        ? Row(id: "bun", title: i.bunVersion.map { "bun \($0)" } ?? "bun", state: .ok)
         : Row(id: "bun", title: "bun", state: .fix("Not found. The Talos bridge runs on bun; install it from bun.sh.")))
     if let found = i.talosAppFound {
       r.append(

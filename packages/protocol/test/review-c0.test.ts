@@ -72,11 +72,10 @@ describe('what stays when the config-side step-up goes (SETTINGS-MAP O3)', () =>
     }
     expect(SessionControlFrame.safeParse({ ...control, stepup: assertion }).success).toBe(true)
   })
-  it('permission_relay keeps its config:session step-up; the removed fields are config_field_forbidden', () => {
-    expect(checkConfigPatch({ permission_relay: true })).toMatchObject({ ok: true, stepupPurpose: 'config:session' })
+  it('permission_relay is a plain patch now (no step-up, 2026-11-14); the removed fields are config_field_forbidden', () => {
+    expect(checkConfigPatch({ permission_relay: true })).toEqual({ ok: true })
     expect(checkConfigPatch({ permission_stepup: 'high' })).toEqual({ ok: false, path: 'permission_stepup' })
     expect(checkConfigPatch({ sessions_view: true })).toEqual({ ok: false, path: 'sessions_view' })
-    // a patch that mixes an allowed field with a removed one is refused whole
     expect(checkConfigPatch({ agent: { name: 'x' }, permission_stepup: 'off' }).ok).toBe(false)
   })
 })

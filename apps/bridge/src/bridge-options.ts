@@ -22,12 +22,20 @@ export type BridgeOptions = {
   chronosNow?: () => string | undefined
   /** Default true. The capture step turns fs.watch off so its output is deterministic. */
   scheduleWatch?: boolean
+  /** Test seam: opens the scheduler's file watches (default a real fs.watch); a test fires the change itself. */
+  scheduleWatchFn?: (path: string, onChange: () => void) => { close(): void }
   /** MCP apps test seam: Keychain runner, direct connector, switch, tick. Production passes nothing. */
   apps?: Partial<AppServiceDeps>
   /** Tests: swap the read-aloud synthesis or its timing. */
   speak?: SpeakOptions
   /** Tests: the folders the picker may list (a temp home). Production passes nothing: the owner's real home. */
   folders?: Partial<import('./folders/service.ts').FolderDeps>
+  /** The tests' stand-ins for the Files pane's folder rule, refused roots and limits. */
+  files?: Partial<import('./files/service.ts').FilesDeps>
+  /** The AGENTS.md editor's deps over the live ones (tests: a thread's own folder without a config and agent folder). */
+  agentsMd?: Partial<import('./files/agents-md.ts').AgentsMdDeps>
+  /** The upload service's deps over the live ones (tests: a fake fetch of the media). */
+  filesPut?: Partial<import('./files/put.ts').FilesPutDeps>
   /** Test seam (O6): the relay-silence watch's tick, threshold and fetch. Production passes nothing. */
   relaySilence?: { tickMs?: number; silenceMs?: number; fetchFn?: typeof fetch }
   /** Test seam: how long discovery waits for `chronos api version` (ms). */
@@ -40,6 +48,11 @@ export type BridgeOptions = {
   ) => import('./schedules/adapter.ts').SchedulerAdapter
   /** Test seam: the shared-files poll interval in ms (default 10 s). */
   pollMs?: number
+  /** Test seam: main's agent folder for undo points and the first-device setup check (production reads TALOS_AGENT_DIR), and the snapshot itself. */
+  undo?: {
+    agentDir?: string | undefined
+    snapshot?: import('./undo/service.ts').UndoDeps['snapshot']
+  }
   /** Called once per process, the first time the relay says `ready`: this start is healthy (server.ts records the version for `talos-app rollback`). */
   onHealthyStart?: () => void
 }

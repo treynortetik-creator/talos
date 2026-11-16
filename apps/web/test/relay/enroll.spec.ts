@@ -40,7 +40,7 @@ test('enroll (both halves) shows the same four words as the Mac, then signs in w
   await expect(page.getByTestId('fingerprint')).toHaveText(fingerprintWords(deviceId).join(' '))
   // The relay handed the Mac a device.enrolled frame carrying the binding.
   expect(harness.relay.frames.some((f) => f.direction === 'to_bridge' && f.raw.type === 'device.enrolled')).toBe(true)
-  await expect(page.getByText('Waiting for your Mac to confirm this device.')).toBeVisible()
+  await expect(page.getByText('Waiting for your computer to confirm this device.')).toBeVisible()
 
   // The Mac says y.
   harness.pinDevice(deviceId, true)
@@ -59,8 +59,8 @@ test('enroll (both halves) shows the same four words as the Mac, then signs in w
     page.getByRole('navigation', { name: 'Main' }).or(page.getByRole('complementary', { name: 'Sidebar' })),
   ).toBeVisible()
   // Audit D2: the sign-in named this device's key, so the Mac's earlier y still counts. The app does not drop back to
-  // "Waiting for your Mac" for a confirmation nobody will ask for.
-  await expect(page.getByText('Waiting for your Mac to confirm this device.')).toHaveCount(0)
+  // "Waiting for your computer" for a confirmation nobody will ask for.
+  await expect(page.getByText('Waiting for your computer to confirm this device.')).toHaveCount(0)
   expect(await page.evaluate(async () => (await (await fetch('/api/me')).json()).device_id)).toBe(deviceId)
 })
 
@@ -73,7 +73,7 @@ test('the Mac refusing the device is reported', async ({ page, context, harness 
   const [deviceId] = [...harness.devices.keys()]
   await waitUntil(() => harness.relay.appCount > 0, 'app socket') // the answer arrives over the socket
   harness.pinDevice(deviceId as string, false, 'declined')
-  await expect(page.getByRole('heading', { name: 'Your Mac said no to this device' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Your computer said no to this device' })).toBeVisible()
 })
 
 test('the Mac never answers: after the wait the phone says what to check, and a late y still finishes setup (D56)', async ({
@@ -86,12 +86,12 @@ test('the Mac never answers: after the wait the phone says what to check, and a 
   const { link } = harness.armEnroll()
   await page.goto(link)
   await page.getByRole('button', { name: /^Continue/ }).click()
-  await expect(page.getByText('Waiting for your Mac to confirm this device.')).toBeVisible()
+  await expect(page.getByText('Waiting for your computer to confirm this device.')).toBeVisible()
   await waitUntil(() => harness.devices.size === 1, 'device registered')
   const [deviceId] = [...harness.devices.keys()]
   await waitUntil(() => harness.relay.appCount > 0, 'app socket')
   await page.clock.fastForward(95_000)
-  await expect(page.getByRole('heading', { name: 'Your Mac has not answered' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Your computer has not answered' })).toBeVisible()
   await expect(page.getByText('talos-app enroll --confirm')).toBeVisible()
   // phone width: nothing spills sideways
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(
@@ -107,7 +107,7 @@ test('an unknown or expired code says so and registers nothing', async ({ page, 
   const stale = newEnrollCode() // well-formed, but the Mac never registered it
   await page.goto(`${harness.url}/enroll#${stale}`)
   await page.getByRole('button', { name: /^Continue/ }).click()
-  await expect(page.getByText(/This link expired\. Run/)).toBeVisible()
+  await expect(page.getByText(/This link expired\. Start pairing again/)).toBeVisible()
   expect(harness.devices.size).toBe(0)
 })
 

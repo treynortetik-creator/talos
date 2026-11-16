@@ -1,6 +1,7 @@
 // What the owner approves (M5.1): the manifest behind the approval key, the diff shown when it changes, the labels that
 // are refused, and the approval screen text. Pure functions; the terminal I/O lives in scan.ts.
 import { type AppCspT, type ApprovalManifestT, approvalKey, type CatalogToolT } from '@talos-app/protocol'
+import { say } from '../owner-words.ts'
 import { runsWithoutTap } from './catalog.ts'
 
 /** Labels containing any of these (and the agent's own name) are refused at scan: they could imitate Talos UI (M4.7). */
@@ -162,7 +163,11 @@ export function directLines(d: DirectLine): string {
     case 'static':
       return `App-only buttons, and the label check before each no-tap call, use Talos's own session with ${d.url ?? 'the server'}, with the same headers; state the agent's session holds on the server isn't shared. Talos keeps a copy of this server's settings, headers included, in your login Keychain.`
     case 'oauth':
-      return 'This server needs its own sign-in for Talos: run talos-app apps login <server> on this Mac.'
+      return say({
+        mac: 'This server needs its own sign-in for Talos: run talos-app apps login <server> on this Mac.',
+        linux: 'This server needs its own sign-in for Talos: run talos-app apps login <server> on this computer.',
+        windows: "This server needs its own sign-in for Talos, and MCP apps can't be set up on a Windows PC yet.",
+      })
     case 'stdio_app_only':
       return "App-only buttons won't work for this app yet: Claude Code doesn't share this local server's launch settings with Talos."
     case 'stdio_no_tap':

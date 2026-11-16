@@ -1,7 +1,7 @@
 // Bughunt: the real stack (built relay, real bridge behind FakeClaude) driven by a browserless phone through the real
 // HTTP and WebSocket seams. Tests marked BUG fail on main at 7cd80ce and describe the behaviour the spec requires.
 import { expect, test } from '@playwright/test'
-import { apiGet, apiPost, enrollNodePhone, loginWith, stepup } from '../harness/bughunt-node-app.ts'
+import { apiGet, apiPost, enrollNodePhone, loginWith } from '../harness/bughunt-node-app.ts'
 import { type Stack, startStack, waitUntil } from '../harness/stack.ts'
 
 let stack: Stack
@@ -94,11 +94,10 @@ test('BUG E: a revoked device loses its live socket; it cannot keep reading repl
   b.app.ws?.on('error', () => {})
   const sent = await b.app.sendMessage('general', 'before the theft')
   await b.app.expectFrame('ack', (f) => f.ref === sent.id)
-  // The owner revokes the stolen phone from phone A, with Face ID (step-up device:revoke).
-  const token = await stepup(stack, a.passkey, a.cookie, 'device:revoke')
+  // The owner revokes the stolen phone from phone A (its confirm sheet in the app; no Face ID since 2026-11-14).
   const r = await fetch(`${stack.origin}/api/devices/${b.device.deviceId}/revoke`, {
     method: 'POST',
-    headers: { origin: stack.origin, 'x-talos-csrf': '1', cookie: a.cookie, 'x-talos-stepup': token },
+    headers: { origin: stack.origin, 'x-talos-csrf': '1', cookie: a.cookie },
   })
   expect(r.status).toBe(204)
   expect((await apiGet(stack, '/api/me', b.cookie)).status).toBe(401) // the HTTP session is gone...
@@ -139,10 +138,14 @@ test('BUG F: pinning a device sends exactly one "New device pinned" push', async
   expect(sub.status).toBe(204)
   const base = stack.relayLog.length
   await enrollNodePhone(stack, { label: 'b', passkey: a.passkey })
+  // The relay logs one line per push it sends (ok or not), once the send settles: here, once the lookup of the made-up
+  // push.example.com fails. That is milliseconds on a Mac and 10-20 s on Titan's WSL (its DNS search domain), so wait for
+  // the first line (up to the relay's 30 s send deadline), then hold 1.5 s for a second one. One pin is one push.
+  const pinnedPushes = () =>
+    stack.relayLog
+      .slice(base)
+      .filter((l) => l.includes('"msg":"push sent"') && l.includes('"template":"device_pinned"')).length
+  await waitUntil(() => pinnedPushes() >= 1, 'the relay to send the "New device pinned" push', 35_000)
   await new Promise((r) => setTimeout(r, 1500))
-  // The relay logs one line per push it sends (ok or not). One pin should be one "New device pinned" push.
-  const pinnedPushes = stack.relayLog
-    .slice(base)
-    .filter((l) => l.includes('"msg":"push sent"') && l.includes('"template":"device_pinned"')).length
-  expect(pinnedPushes).toBe(1)
+  expect(pinnedPushes()).toBe(1)
 })

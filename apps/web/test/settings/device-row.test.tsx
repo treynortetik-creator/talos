@@ -139,11 +139,15 @@ describe("Account: Revoke on this browser's own row", () => {
     expect(close).toHaveBeenCalledTimes(1)
   })
 
-  it("another device's row is revoked straight away, with no sign-out", async () => {
+  it("another device's row asks first (a revoke can't be undone), then revokes it with no sign-out here", async () => {
     mount([dev(A, 'Phone'), dev(B, 'Laptop')], me(undefined), A)
     await own('Laptop')
+    expect(await screen.findByText('Revoke Laptop?')).toBeTruthy()
+    expect(revokeCalls().length).toBe(0)
+    // the sheet's button names the device it revokes, never "this device"
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Revoke Laptop' }))
     await waitFor(() => expect(revokeCalls().length).toBe(1))
-    expect(screen.queryByText('Revoke this device?')).toBeNull()
+    expect(String(revokeCalls()[0]?.[0])).toContain(B)
     expect(useSession.getState().status).toBe('authed')
   })
 })

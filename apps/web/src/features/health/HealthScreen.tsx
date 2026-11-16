@@ -3,13 +3,16 @@ import { PROTOCOL_VERSION, SCHEDULES_FEATURE } from '@talos-app/protocol'
 import { useEffect, useState } from 'react'
 import { useTalos } from '../../lib/client.ts'
 import { ago } from '../../lib/format.ts'
+import { computerLabel, useHost } from '../../lib/hostWords.ts'
 import { createHttp, HttpError } from '../../lib/http.ts'
+import { useShownConnection } from '../../lib/linkShown.ts'
 import { useFeature } from '../../lib/v2Client.ts'
 import { cn } from '../../ui/cn.ts'
 import { Button } from '../../ui/index.ts'
 import { Mascot } from '../../ui/Mascot.tsx'
 import { StatusDot } from '../../ui/StatusDot.tsx'
 import { ReportProblem } from '../problems/ReportProblem.tsx'
+import { NOT_CONNECTED_LINE } from '../settings/offline.ts'
 import { gatherDiagnosticsText } from './gather.ts'
 import { limitsLine } from './limits.ts'
 import { PermissionRelaySwitch } from './PermissionRelaySwitch.tsx'
@@ -42,25 +45,42 @@ function Row({ row }: { row: HealthRow }) {
 /** The Mac, the server and the queue between them: the page that used to be Settings -> Connection (audit D5). */
 function ConnectionBlock() {
   const presence = useTalos((s) => s.presence)
-  const connection = useTalos((s) => s.connection)
+  const connection = useShownConnection() // a short drop shows nothing (lib/linkShown.ts)
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [])
-  const mac = presence.bridge_online ? 'Mac online' : 'Mac offline'
+  // not connected, what this device last heard about the Mac is not current: it does not say the Mac is offline
+  const host = useHost()
+  const word = computerLabel(host)
+  const mac =
+    connection !== 'online'
+      ? `${word}: not known until connected`
+      : presence.bridge_online
+        ? `${word} online`
+        : `${word} offline`
   const seen = presence.last_seen ? ` · last seen ${ago(presence.last_seen, now)}` : ''
   const line = 'flex min-h-11 items-center justify-between gap-3 border-b border-line px-4 py-2 text-sm'
   return (
     <div data-testid="connection-block" className="flex flex-col">
+      {connection !== 'online' ? (
+        // what follows is the relay's last report, from before this device lost its connection: say so, don't present it as now
+        <p role="status" data-testid="health-not-connected" className="m-0 mb-2 text-sm text-text-2">
+          {NOT_CONNECTED_LINE} The status below is from before.
+        </p>
+      ) : null}
       <h3 className="m-0 mb-1 text-base font-medium">Connection</h3>
       <div className={line}>
-        <span>Mac</span>
+        <span>{word}</span>
         <span
           data-testid="mac-status"
-          className={cn('inline-flex items-center gap-1.5', presence.bridge_online ? 'text-ok' : 'text-text-2')}
+          className={cn(
+            'inline-flex items-center gap-1.5',
+            presence.bridge_online && connection === 'online' ? 'text-ok' : 'text-text-2',
+          )}
         >
-          <StatusDot shape={presence.bridge_online ? 'solid' : 'ring'} />
+          <StatusDot shape={presence.bridge_online && connection === 'online' ? 'solid' : 'ring'} />
           {mac}
           {seen}
         </span>
@@ -99,6 +119,7 @@ export function HealthScreen() {
   const { state, refresh } = useHealthStatus()
   const schedules = useFeature(SCHEDULES_FEATURE)
   const cached = useTalos((s) => s.schedules.snapshot?.health.state ?? null)
+  const host = useHost()
   const [test, setTest] = useState<{ kind: 'idle' | 'sending' | 'sent' | 'failed'; text: string }>({
     kind: 'idle',
     text: '',
@@ -122,13 +143,15 @@ export function HealthScreen() {
   }
 
   const status = state.status
-  const rows = status ? healthRows(status, { scheduler: schedules === 'off' ? undefined : { state: cached } }) : []
+  const rows = status
+    ? healthRows(status, { scheduler: schedules === 'off' ? undefined : { state: cached }, host })
+    : []
   const copyDiagnostics = async () => {
     const text = gatherDiagnosticsText({
       rows,
       at: status?.at ?? null,
       relay: status?.relay.version ?? null,
-      notes: status ? healthNotes(status) : [],
+      notes: status ? healthNotes(status, host) : [],
     })
     try {
       await navigator.clipboard.writeText(text)
@@ -137,7 +160,7 @@ export function HealthScreen() {
       setCopied('failed')
     }
   }
-  const notes = status ? healthNotes(status) : []
+  const notes = status ? healthNotes(status, host) : []
 
   return (
     <section className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4" aria-labelledby="health-h">

@@ -46,6 +46,15 @@ final class RichPushTests: XCTestCase {
         XCTAssertEqual(c.subtitle, a["subtitle"] as? String)
         XCTAssertEqual(RichPush.shownHash(c.body, subtitle: c.subtitle), a["shown"] as? String)
         XCTAssertNotEqual(RichPush.shownHash(c.body), a["shown"] as? String)
+        // the title is part of it too, and it is the one the extension sets
+        XCTAssertEqual(RichPush.noticeTitle, a["title"] as? String)
+        XCTAssertEqual(RichPush.shownHash(c.body, subtitle: c.subtitle, title: RichPush.noticeTitle), a["shown"] as? String)
+        XCTAssertNotEqual(RichPush.shownHash(c.body, subtitle: c.subtitle, title: "Approve this"), a["shown"] as? String)
+    }
+
+    func testTheShownHashCountsBytesAsTheRelayAndTheMacDo() throws {
+        let w = try vectors()["shown_wide"] as! [String: String]
+        XCTAssertEqual(RichPush.shownHash(w["body"]!, subtitle: w["subtitle"], title: w["title"]!), w["shown"])
     }
 
     func testARefusedSealLeavesTheFixedPhrase() throws {
@@ -142,7 +151,7 @@ final class RichPushTests: XCTestCase {
             .approve(cardId: a["card_id"] as! String, payloadHash: a["payload_hash"] as! String, shown: RichPush.shownHash(a["notice"] as! String, subtitle: a["subtitle"] as? String)),
             grantJson: grant, id: RichPush.newActId(), now: now, key: key)
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(f["body"]!.utf8)) as? [String: String])
-        XCTAssertEqual(body, ["a": "approve", "card_id": a["card_id"] as! String, "payload_hash": a["payload_hash"] as! String, "shown": a["shown"] as! String])
+        XCTAssertEqual(body, ["a": "approve", "card_id": a["card_id"] as! String, "payload_hash": a["payload_hash"] as! String, "shown": a["shown"] as! String, "shown_v": "3"])
     }
 
     func testNothingIsSignedForAnExpiredGrantAMissingScopeABlankOrOversizeReply() throws {
@@ -186,19 +195,90 @@ final class RichPushTests: XCTestCase {
 
     // MARK: a button press
 
+    private static let anyShown = RichPush.Shown(title: "Talos", subtitle: "", body: "x")
+
     func testAReplyNeedsTheThreadFromTheSealAndTheTypedText() {
         let info: [AnyHashable: Any] = ["talos_rich": ["t": "general", "shown": "sha256:x"]]
-        XCTAssertEqual(RichPush.act(for: .reply, userInfo: info, userText: "ok"), .reply(threadId: "general", text: "ok"))
-        XCTAssertNil(RichPush.act(for: .reply, userInfo: info, userText: nil))
-        XCTAssertNil(RichPush.act(for: .reply, userInfo: ["talos_rich": ["shown": "x"]], userText: "ok"))
-        XCTAssertNil(RichPush.act(for: .reply, userInfo: ["talos": ["thread_id": "general"]], userText: "ok"), "the plain payload names a thread, but only the seal may choose where a Reply goes")
+        XCTAssertEqual(RichPush.act(for: .reply, shown: Self.anyShown, userInfo: info, userText: "ok"), .reply(threadId: "general", text: "ok"))
+        XCTAssertNil(RichPush.act(for: .reply, shown: Self.anyShown, userInfo: info, userText: nil))
+        XCTAssertNil(RichPush.act(for: .reply, shown: Self.anyShown, userInfo: ["talos_rich": ["shown": "x"]], userText: "ok"))
+        XCTAssertNil(RichPush.act(for: .reply, shown: Self.anyShown, userInfo: ["talos": ["thread_id": "general"]], userText: "ok"), "the plain payload names a thread, but only the seal may choose where a Reply goes")
     }
 
     func testAnApproveNeedsTheCardTheHashAndTheShownTextFromTheSeal() {
-        let info: [AnyHashable: Any] = ["talos_rich": ["c": "c_1", "h": "sha256:h", "shown": "sha256:s"]]
-        XCTAssertEqual(RichPush.act(for: .approveLow, userInfo: info, userText: nil), .approve(cardId: "c_1", payloadHash: "sha256:h", shown: "sha256:s"))
-        XCTAssertNil(RichPush.act(for: .approveLow, userInfo: ["talos_rich": ["c": "c_1", "shown": "s"]], userText: nil))
-        XCTAssertNil(RichPush.act(for: .approveLow, userInfo: ["talos": ["card_id": "c_1"]], userText: nil), "the card id in the plain payload is not enough to approve")
+        let s = RichPush.shownHash(Self.anyShown.body, subtitle: Self.anyShown.subtitle, title: Self.anyShown.title)
+        let info: [AnyHashable: Any] = ["talos_rich": ["c": "c_1", "h": "sha256:h", "shown": s]]
+        XCTAssertEqual(RichPush.act(for: .approveLow, shown: Self.anyShown, userInfo: info, userText: nil), .approve(cardId: "c_1", payloadHash: "sha256:h", shown: s))
+        XCTAssertNil(RichPush.act(for: .approveLow, shown: Self.anyShown, userInfo: ["talos_rich": ["c": "c_1", "shown": "s"]], userText: nil))
+        XCTAssertNil(RichPush.act(for: .approveLow, shown: Self.anyShown, userInfo: ["talos": ["card_id": "c_1"]], userText: nil), "the card id in the plain payload is not enough to approve")
+    }
+
+    func testAnApproveIsRefusedWhenWhatWasDisplayedIsNotTheCardItCarries() {
+        // A push the extension never rewrote (no seal, or no mutable-content): it displays one card but carries another
+        // card's id, hash and that card's correct shown hash. Pressing Approve must sign nothing.
+        let other = RichPush.shownHash("Archive 3 old drafts", subtitle: "General")
+        let forged: [AnyHashable: Any] = ["talos_rich": ["c": "c_other", "h": "sha256:other", "shown": other]]
+        let displayed = RichPush.Shown(title: "Talos", subtitle: "General", body: "Rename the notes folder")
+        XCTAssertNil(RichPush.act(for: .approveLow, shown: displayed, userInfo: forged, userText: nil))
+        // the same fields under the words they belong to are signed, with the hash of what was displayed
+        let honest = RichPush.Shown(title: "Talos", subtitle: "General", body: "Archive 3 old drafts")
+        XCTAssertEqual(RichPush.act(for: .approveLow, shown: honest, userInfo: forged, userText: nil),
+                       .approve(cardId: "c_other", payloadHash: "sha256:other", shown: other))
+    }
+
+    func testAnApproveIsRefusedWhenOnlyTheTitleDiffersFromWhatTheExtensionShowed() {
+        let body = "Archive 3 old drafts"
+        let info: [AnyHashable: Any] = ["talos_rich": ["c": "c_1", "h": "sha256:h", "shown": RichPush.shownHash(body, subtitle: "General")]]
+        XCTAssertNotNil(RichPush.act(for: .approveLow, shown: RichPush.Shown(title: "Talos", subtitle: "General", body: body), userInfo: info, userText: nil))
+        let retitled = RichPush.Shown(title: "Approve: pay the invoice", subtitle: "General", body: body)
+        XCTAssertNil(RichPush.act(for: .approveLow, shown: retitled, userInfo: info, userText: nil))
+    }
+
+    // MARK: what the extension delivers
+
+    private func inbound(category: String = "TALOS_CARD", rich: [String: String]? = nil) -> RichPush.Delivery {
+        var info: [AnyHashable: Any] = ["talos": ["v": 1, "kind": "card", "card_id": "c_1", "navigate": "/card/c_1"]]
+        if let rich { info["talos_rich"] = rich }
+        return RichPush.Delivery(title: "Talos", subtitle: "", body: "A card needs you", category: category, userInfo: info)
+    }
+
+    private let highRiskCard = RichContent(subtitle: nil, body: "Send the report", kind: "card", threadId: "general", cardId: "c_1", risk: "high", payloadHash: nil)
+
+    func testTheExtensionDropsButtonDataItDidNotMakeFromASeal() {
+        let forged = ["c": "c_other", "h": "sha256:other", "shown": "sha256:x", "t": "general"]
+        // no seal, or one that did not open
+        XCTAssertNil(RichPush.deliver(inbound(rich: forged), opened: nil).userInfo["talos_rich"])
+        // a seal that opened but offers no button keeps none of the relay's either
+        XCTAssertNil(RichPush.deliver(inbound(rich: forged), opened: highRiskCard).userInfo["talos_rich"])
+    }
+
+    func testTheExtensionResetsAReplyOrApproveCategoryItDidNotSet() {
+        for category in [RichPush.replyCategory, RichPush.cardLowCategory] {
+            XCTAssertEqual(RichPush.deliver(inbound(category: category), opened: nil).category, "", category)
+            XCTAssertEqual(RichPush.deliver(inbound(category: category), opened: highRiskCard).category, "", category)
+        }
+        // the relay's own categories only open the app, so they stay
+        XCTAssertEqual(RichPush.deliver(inbound(category: "TALOS_CARD"), opened: nil).category, "TALOS_CARD")
+        XCTAssertEqual(RichPush.deliver(inbound(category: "TALOS_OPEN"), opened: highRiskCard).category, "TALOS_OPEN")
+    }
+
+    func testAnOpenedSealSetsEverythingDisplayedAndTheHashAPressChecks() {
+        let card = RichContent(subtitle: nil, body: "Archive 3 old drafts", kind: "card", threadId: "general", cardId: "c_1", risk: "low", payloadHash: "sha256:h")
+        var sent = inbound(category: "TALOS_CARD")
+        sent.title = "Approve: pay the invoice"
+        sent.subtitle = "Payroll"
+        let d = RichPush.deliver(sent, opened: card)
+        // the relay's title and subtitle are not what is displayed
+        XCTAssertEqual(d.title, RichPush.noticeTitle)
+        XCTAssertEqual(d.subtitle, "")
+        XCTAssertEqual(d.body, "Archive 3 old drafts")
+        XCTAssertEqual(d.category, RichPush.cardLowCategory)
+        XCTAssertEqual(d.userInfo[PushCore.textMarkerKey] as? String, PushCore.textMarkerValue)
+        XCTAssertNil((d.userInfo["talos"] as? [String: Any])?["enc"])
+        // a press on exactly that notification signs it
+        let shown = RichPush.Shown(title: d.title, subtitle: d.subtitle, body: d.body)
+        XCTAssertEqual(RichPush.act(for: .approveLow, shown: shown, userInfo: d.userInfo, userText: nil),
+                       .approve(cardId: "c_1", payloadHash: "sha256:h", shown: RichPush.shownHash("Archive 3 old drafts")))
     }
 
     func testEveryAnswerIsEitherDoneRetriedOrToldToTheOwner() {

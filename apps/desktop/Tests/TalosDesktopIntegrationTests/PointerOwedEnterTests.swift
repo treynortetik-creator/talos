@@ -132,25 +132,138 @@ struct PointerOwedEnterTests {
     #expect(r.emptyEnters.isEmpty, "an Enter went into an empty box: \(r.emptyEnters)")
   }
 
-  /// A line that never reached the screen at all (Claude dropped the keys): after a few seconds the box is read as empty, the line
-  /// is typed again and sent; the Enter is never sent onto the empty box before that.
-  @Test func aLineThatNeverReachedTheScreenIsTypedAgain() throws {
+  /// A line that never reached the screen at all (Claude dropped the keys, or a menu kept the focus with an empty box drawn under it):
+  /// `screenLag` after the typing it is held as never seen, NEVER typed a second time on top and never followed by an Enter, and the
+  /// thread is told once, in its own words (the Linux typer's Fable R5-1). Once the box shows the line after all, its Enter goes.
+  @Test func aLineThatNeverReachedTheScreenIsHeldNeverTypedAgainAndSaid() throws {
     let r = try WorkerRig(scenario: scenario)
     defer { r.teardown() }
     r.echoBox()
     let letIn = r.root + "/let-in"
     r.env["FAKE_RV_SWALLOW_UNTIL"] = letIn
-    r.firstCopy("quit").startTicking()
+    let m = r.firstCopy("quit")
+    let log = NoticeLog()
+    r.trackNotices(log, on: m)
+    m.tune { $0.draftNoticeAfter = 1 }
+    m.startTicking()
     try r.wake("trip")
     #expect(r.wait(10) { r.up("trip") })
-    usleep(1_200_000)  // typed, and dropped
+    #expect(r.wait(WorkerManager.screenLag + 10) { m.needsYou()["trip"] == WorkerNotice.unseenKind }, "\(m.needsYou()) \(r.why("trip"))")
+    #expect(r.wait(5) { log.all.count == 1 }, "\(log.all)")
+    #expect(log.all.first?.text == WorkerNotice.unseenLine())
+    usleep(3_000_000)  // more ticks, held
     #expect(r.typedLines.isEmpty && r.boxIsEmpty, "\(r.typedLines)\n\(r.screen())")
-    #expect(r.emptyEnters.isEmpty)
+    #expect(r.emptyEnters.isEmpty, "an Enter went into an empty box: \(r.emptyEnters)")
+    #expect(log.all.count == 1, "said once: \(log.all)")
+    // the fake now lets keys in: nothing more is typed, so the box stays empty and the message stays with main
     FileManager.default.createFile(atPath: letIn, contents: nil)
-    #expect(r.wait(15) { r.typedLines.count == 1 }, "the dropped line was never typed again: \(r.typedLines) \(r.why("trip"))")
+    usleep(3_000_000)
+    #expect(r.typedLines.isEmpty && r.boxIsEmpty, "typed a second time: \(r.typedLines)\n\(r.screen())")
+  }
+
+  /// An Enter that went and left our line in the box (`EnterDetection`): the pane read right after and `laterDelay` on still shows the
+  /// line, so the Enter may have gone somewhere else (a select that opened as it went). Flagged in the audit by classes alone, the thread
+  /// told once in the agreed words, the pointer held as Needs you, and NEVER a second Enter; at its claim deadline it is dropped with no
+  /// second line. The shim reports the Enter as sent and lets nothing reach the pane.
+  @Test func anEnterThatLeavesOurLineInTheBoxIsFlaggedHeldAndNeverSentAgain() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    r.echoBox()
+    let shim = try r.faultShim()
+    let c = OwedClock()
+    let m = r.manager(tmux: shim, readyTimeout: WorkerRig.owedReadyTimeout, now: { c.now })
+    let audit = r.root + "/audit.log"
+    m.tune { $0.auditLogPath = audit }
+    let log = NoticeLog()
+    r.trackNotices(log, on: m)
+    try r.fault("Enter", "swallow")
+    m.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(20) { m.needsYou()["trip"] == WorkerNotice.enterUncertainKind }, "\(m.needsYou()) \(r.why("trip"))")
+    #expect(r.wait(5) { log.all.map(\.text) == [WorkerNotice.enterUncertainLine()] }, "\(log.all)")
+    #expect(r.swallowed("Enter") == 1)
+    let flagged = r.lines(audit).filter { $0.contains(EnterDetection.auditEvent) }
+    #expect(flagged.count == 1 && flagged[0].hasSuffix("thread=trip pre=box_ours after=box_ours later=box_ours latest=box_ours why=line_still_in_box"), "\(flagged)")
+    usleep(2_500_000)  // more ticks: held, never entered again, said once
+    #expect(r.swallowed("Enter") == 1, "a second Enter: \(r.swallowed("Enter"))")
+    #expect(log.all.count == 1 && r.typedLines.isEmpty, "\(log.all) \(r.typedLines)")
+    #expect(r.owed().until != nil, "still owed while held: \(r.owed())")
+    c.jump(PointerTyper.claimDeadlineCold + 30)
+    #expect(r.wait(10) { r.owed().until == nil }, "not dropped at the deadline: \(r.owed())")
+    // settled as a late pointer is: no client attached, so our own line is taken out of the box
+    #expect(r.wait(10) { r.boxIsEmpty }, "our line left in the box: \(r.screen())")
+    usleep(1_500_000)
+    #expect(log.all.count == 1 && r.swallowed("Enter") == 1, "\(log.all) \(r.swallowed("Enter"))")
+    #expect(m.needsYou()["trip"] == nil, "\(m.needsYou())")
+  }
+
+  /// One flagged Enter never holds the messages after it: a new wake is a fresh pointer, typed and entered as any is (Fable R2-1).
+  @Test func aNewMessageAfterAFlaggedEnterIsAFreshPointer() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    r.echoBox()
+    let shim = try r.faultShim()
+    let m = r.manager(tmux: shim, readyTimeout: WorkerRig.owedReadyTimeout)
+    try r.fault("Enter", "swallow")
+    m.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(20) { m.needsYou()["trip"] == WorkerNotice.enterUncertainKind }, "\(m.needsYou()) \(r.why("trip"))")
+    r.clearFault("Enter")
+    r.ownerClears()  // the old line out of the box (as Claude would have it after a real Enter)
+    try r.wake("trip", ids: ["m_01JBF3V7Q8K2M4N6P8R0S2T402"])
+    #expect(r.wait(15) { r.typedLines.count == 1 }, "the new message's pointer never went in: \(r.typedLines) \(r.screen())")
     #expect(r.typedLines.first == line, "\(r.typedLines)")
-    usleep(800_000)
-    #expect(r.typedLines.count == 1, "\(r.typedLines)")
+    #expect(r.wait(10) { m.needsYou()["trip"] == nil && r.owed().until == nil }, "\(m.needsYou()) \(r.owed())")
+    #expect(r.swallowed("Enter") == 1)
+  }
+
+  /// A flagged Enter's hold outlives the app: `enter_uncertain` is in workers.json, and the copy that comes back holds the pointer too
+  /// (Needs you, never an Enter), and drops it at its deadline.
+  @Test func aFlaggedEnterIsStillHeldAfterARelaunch() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    r.echoBox()
+    let shim = try r.faultShim()
+    let c = OwedClock()
+    let m = r.manager(tmux: shim, readyTimeout: WorkerRig.owedReadyTimeout, now: { c.now })
+    try r.fault("Enter", "swallow")
+    m.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(20) { m.needsYou()["trip"] == WorkerNotice.enterUncertainKind }, "\(m.needsYou()) \(r.why("trip"))")
+    #expect(r.wait(10) { r.fileOnDisk?.threads["trip"]?.enter_uncertain == true }, "not in workers.json")
+    r.appGone("crash")
+    let back = r.comeBack(clock: c, tmux: shim)
+    #expect(r.wait(10) { back.needsYou()["trip"] == WorkerNotice.enterUncertainKind }, "\(back.needsYou())")
+    usleep(2_500_000)
+    #expect(r.swallowed("Enter") == 1, "entered again after the relaunch: \(r.swallowed("Enter"))")
+    c.jump(PointerTyper.claimDeadlineCold + 30)
+    #expect(r.wait(10) { r.owed().until == nil }, "not dropped at the deadline: \(r.owed())")
+    #expect(r.swallowed("Enter") == 1)
+  }
+
+  /// The same, with the hold's wait longer than the claim deadline: at the deadline the hub has given the message to main, so the pointer
+  /// is dropped then (nothing owed any more, Needs you over) and the thread is told at that moment, once; nothing is typed, ever.
+  @Test func aNeverSeenLineIsDroppedAtItsDeadlineAndSaidThen() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    r.echoBox()
+    r.env["FAKE_RV_SWALLOW_UNTIL"] = r.root + "/never"
+    let c = OwedClock()
+    let m = r.manager(readyTimeout: WorkerRig.owedReadyTimeout, now: { c.now })
+    let log = NoticeLog()
+    r.trackNotices(log, on: m)
+    m.tune { $0.draftNoticeAfter = 600 }
+    m.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(10) { r.up("trip") })
+    usleep(UInt32((WorkerManager.screenLag + 2) * 1_000_000))  // typed, never seen, held
+    #expect(r.owed().until != nil && log.all.isEmpty, "\(r.owed()) \(log.all)")
+    c.jump(PointerTyper.claimDeadlineCold + 30)
+    #expect(r.wait(10) { r.owed().until == nil }, "not dropped at the deadline: \(r.owed())")
+    #expect(r.wait(5) { log.all.map(\.text) == [WorkerNotice.unseenLine()] }, "\(log.all)")
+    usleep(2_000_000)
+    #expect(log.all.count == 1 && r.typedLines.isEmpty && r.emptyEnters.isEmpty, "\(log.all) \(r.typedLines)")
+    #expect(m.needsYou()["trip"] == nil, "\(m.needsYou())")
   }
 
   /// The colour read decides whether the text in the box is real or a dim suggestion, so it is read once, with the text, right before
@@ -175,9 +288,9 @@ struct PointerOwedEnterTests {
     #expect(r.emptyEnters.isEmpty, "\(r.emptyEnters)")
   }
 
-  /// The screen draws our text later than `screenLag` and the keys were only buffered, not dropped: the line is retyped ONCE (the
-  /// cap cannot tell the two apart), both copies land, the box reads as the owner's draft and holds it, and it never repeats.
-  @Test func aLineTheScreenDrawsAfterTheCapIsRetypedAtMostOnce() throws {
+  /// The screen draws our text later than `screenLag` (the keys were only buffered): it is held as never seen meanwhile and never typed
+  /// again, so one copy lands; once the box shows exactly our line, its Enter goes, once.
+  @Test func aLineTheScreenDrawsAfterTheLagIsTypedOnceAndSentOnce() throws {
     let r = try WorkerRig(scenario: scenario)
     defer { r.teardown() }
     r.echoBox()
@@ -185,9 +298,9 @@ struct PointerOwedEnterTests {
     r.firstCopy("quit").startTicking()
     try r.wake("trip")
     func copies() -> Int { r.screen().components(separatedBy: "Talos:").count - 1 }
-    #expect(r.wait(20) { copies() == 2 }, "\(copies()) copies on the screen:\n\(r.screen())")
-    usleep(7_000_000)  // more than one more cap
-    #expect(copies() == 2, "typed again after the one retype: \(copies()) copies\n\(r.screen())")
-    #expect(r.typedLines.isEmpty && r.emptyEnters.isEmpty, "\(r.typedLines) \(r.emptyEnters)")
+    #expect(r.wait(25) { r.typedLines.count == 1 }, "\(copies()) copies on the screen:\n\(r.screen())")
+    #expect(r.typedLines == [line], "typed a second time on top: \(r.typedLines)")
+    usleep(3_000_000)
+    #expect(r.typedLines == [line] && r.emptyEnters.isEmpty, "\(r.typedLines) \(r.emptyEnters)")
   }
 }

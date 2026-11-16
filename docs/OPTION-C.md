@@ -35,6 +35,8 @@ thread, option B in [CLAUDE-CODE.md](CLAUDE-CODE.md) C8).
   edits, and a change that only turns things off (`dedicated: {enabled: false}`, a thread back to shared) is never
   refused. Archiving a thread, by the owner or by the agent's `archive_thread`, turns its session back to shared
   (`clearArchivedSessions`). Refusals answer `thread_session_refused` with the reason.
+  The agent switches a thread's session with a `config_propose` card (`threads.<id>.session`, always a card, even in trust mode,
+  docs/bridge.md); a thread session may propose that for its own thread only, through the hub (`rpc config_propose`).
 - The Mac checks a thread folder before saving it: absolute, no `.`/`..`, under `$HOME`, an existing directory, and not
   inside `~/.claude` or `$TALOS_APP_HOME`, checked again after resolving symlinks (`apps/bridge/src/worker/patch-check.ts`).
   This runs only when the folder changes, so the supervisor (WP-OC3) re-runs the same check before every start: the
@@ -42,10 +44,10 @@ thread, option B in [CLAUDE-CODE.md](CLAUDE-CODE.md) C8).
 
 ### Frames
 
-| Frame                                                                                  | Direction                    | Notes                                                                                                                                                                                       |
-| -------------------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `thread.session.control {control_id, thread_id, action: park\|resume\|restart\|fresh}` | app → relay → bridge, signed | like `session.control`: durable until its result is recorded; answered with `session.control.result` under the same `control_id`                                                            |
-| `workers.status {status}`                                                              | bridge → relay → app         | `supported`, `supervisor_online`, per-thread `state`/`model`/`cwd`/`last_turn_at`/`parked_at`/`error`, governor state. Not durable; the relay keeps the last one for `ready.workers_status` |
+| Frame                                                                                  | Direction                    | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `thread.session.control {control_id, thread_id, action: park\|resume\|restart\|fresh}` | app → relay → bridge, signed | like `session.control`: durable until its result is recorded; answered with `session.control.result` under the same `control_id`                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `workers.status {status}`                                                              | bridge → relay → app         | `supported`, `supervisor_online`, per-thread `state`/`model`/`cwd`/`last_turn_at`/`parked_at`/`error` (+`error_at`), and for the app's status line `needs_you {kind, since, step?, resets_at?}` (kind: a known prompt name from `WORKER_NEEDS_YOU_KINDS`, else "a prompt"; `step` from `needsYouStep`), `stopped_why`, `started_at`, `turn_started_at`, `restarts_1h`; never `error.detail`. Governor state. `main_needs_you`: Main's own wait from `main-restart-check.json` while it is fresh, the same shape. Not durable; the relay keeps the last one for `ready.workers_status` |
 
 New error codes: `worker_unavailable`, `worker_cap`, `usage_governor`, `worker_folder_claimed`, `needs_mac`,
 `thread_session_refused`. A fallback notification to main carries meta `routed="fallback"` and `reason=<code>`.
@@ -70,14 +72,14 @@ last `workers.status` for `ready.workers_status`, and each thread session's last
 
 ### Files shared by the bridge and the supervisor
 
-| File                                                | Writer                                                 | Schema                                                                                                                                                                                                                      |
-| --------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `$TALOS_APP_HOME/workers.json`                      | supervisor only (atomic, 0600, heartbeat every 5 s)    | `WorkersFile`; a torn or unknown-version file parses to `null` and the hub treats the supervisor as down; one entry's failure code that this build does not know reads as `unknown` for that entry and never costs the file |
-| `$TALOS_APP_HOME/workers/<thread>/wake`             | hub                                                    | `WakeFile`: message ids only, never content                                                                                                                                                                                 |
-| `$TALOS_APP_HOME/workers/<thread>/nonce`            | supervisor, before each start (0600)                   | the same value goes in the worker's env as `TALOS_APP_WORKER_NONCE`; the hub refuses a `hello` without it                                                                                                                   |
-| `$TALOS_APP_HOME/workers/<thread>/ready`            | hub, on a good `hello`                                 | `WorkerReady`; the supervisor's start is done when it appears                                                                                                                                                               |
-| `~/.talos-inbox/<thread>/` (outside the Talos home) | hub (0600 files in 0700 folders, never through a link) | the owner's files for that thread, copied from `media/` as the message is routed; `read_inbound` returns these paths; removed after 7 days or past 1 GiB, and with the thread                                               |
-| `hub.sock` lines                                    | both                                                   | `HubWorkerLine` (`hello`, `out`, `mod`, `rpc`), `HubHubLine` (`welcome`, `ack`, `refused`, `controls`, `rpc_result`); `mod` and `controls` are P1 (WP-OC5); `rpc` carries the four Schedules tools ("Thread schedules")     |
+| File                                                | Writer                                                 | Schema                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$TALOS_APP_HOME/workers.json`                      | supervisor only (atomic, 0600, heartbeat every 5 s)    | `WorkersFile`; a torn or unknown-version file parses to `null` and the hub treats the supervisor as down; one entry's failure code that this build does not know reads as `unknown` for that entry and never costs the file. Optional per entry: `needs_you {kind, since}`, `stopped_why`, `turn_started_at` (below, "Main controls a thread's session"); a value that does not fit is none for that entry |
+| `$TALOS_APP_HOME/workers/<thread>/wake`             | hub                                                    | `WakeFile`: message ids only, never content                                                                                                                                                                                                                                                                                                                                                                |
+| `$TALOS_APP_HOME/workers/<thread>/nonce`            | supervisor, before each start (0600)                   | the same value goes in the worker's env as `TALOS_APP_WORKER_NONCE`; the hub refuses a `hello` without it                                                                                                                                                                                                                                                                                                  |
+| `$TALOS_APP_HOME/workers/<thread>/ready`            | hub, on a good `hello`                                 | `WorkerReady`; the supervisor's start is done when it appears                                                                                                                                                                                                                                                                                                                                              |
+| `~/.talos-inbox/<thread>/` (outside the Talos home) | hub (0600 files in 0700 folders, never through a link) | the owner's files for that thread, copied from `media/` as the message is routed; `read_inbound` returns these paths; removed after 7 days or past 1 GiB, and with the thread                                                                                                                                                                                                                              |
+| `hub.sock` lines                                    | both                                                   | `HubWorkerLine` (`hello`, `out`, `mod`, `rpc`), `HubHubLine` (`welcome`, `ack`, `refused`, `controls`, `rpc_result`); `mod` and `controls` are P1 (WP-OC5); `rpc` carries the four Schedules tools ("Thread schedules")                                                                                                                                                                                    |
 
 Fixtures for all three: `packages/protocol/fixtures/option-c/`. Shared constants: `WORKER_POINTER_TEXT`,
 `WORKER_FORBIDDEN_ARGS` (`--channels`, `--dangerously-load-development-channels`, `-p`, `--bg`),
@@ -85,17 +87,17 @@ Fixtures for all three: `packages/protocol/fixtures/option-c/`. Shared constants
 
 ## The bridge (WP-OC1 and WP-OC2, PR #65)
 
-| Piece            | File                                              | What                                                                                                                                                                                                                                                                                                                                                                                                |
-| ---------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Worker mode      | `src/server.ts`, `src/instructions.ts`            | `TALOS_APP_WORKER_THREAD` set: never live (exit 2 with `TALOS_APP_BRIDGE=1` or a bad id), no channel capability, no permission relay, `WORKER_INSTRUCTIONS`                                                                                                                                                                                                                                         |
-| Tools            | `src/tools/index.ts`, `src/tools/read-inbound.ts` | `WORKER_BRIDGE_TOOLS` only; `reply`, `attach`, `card`, `set_status` refuse any other thread and name only the worker's own; `card_result` only for its own cards                                                                                                                                                                                                                                    |
-| Worker transport | `src/worker/transport.ts`, `src/hub/client.ts`    | hub up: every frame goes to the hub and waits for its ack; hub down: `reply`/`card.create` over `POST /bridge/post`, nothing else                                                                                                                                                                                                                                                                   |
-| Hub socket       | `src/hub/server.ts`                               | live bridge only; `hello` needs a fresh `workers.json` entry, the nonce, and a pid in the recorded pane's process group (`ps -o pgid=`); `out` frames are re-parsed, size-checked and thread-checked (`reply`, `card.create`, `card.update`, `status`, `receipt` only, no permission cards), then sent and mirrored by the hub                                                                      |
-| Router           | `src/router/router.ts`                            | wraps the live bridge's notification emit. Owner `text`/`file`/`voice_note` in a dedicated thread, and `card_action` on a card that thread's worker raised, are held as `worker_routes` rows and named in the wake file. A `schedule_run` for a job of that thread is held the same way (see "Thread schedules"); voice calls, hooks, digests, heartbeat wakes, shares and `backlog` stay with main |
-| Claims           | `src/worker/store.ts`                             | `inbound_claims` (`INSERT OR IGNORE`): the worker's `read_inbound` or the hub's deadline, whoever is first. Deadlines are re-armed after a bridge restart                                                                                                                                                                                                                                           |
-| Governor         | `src/router/governor.ts`                          | from main's rate limits (`five_hour`, `seven_day`); no reading = `unknown`, never blocks. Paused: parked threads fall back with `usage_governor`, live workers keep their pointers. Park-all: a `park` wake for every live worker, once per crossing                                                                                                                                                |
-| Controls         | `src/router/controls.ts`                          | `thread.session.control` → a wake with that action; the result is a `session.control.result`, stored and replayed like `session.control`                                                                                                                                                                                                                                                            |
-| Status           | `Bridge.optionCTick()` (every poll)               | `workers.status` when it changes, and on every `ready`                                                                                                                                                                                                                                                                                                                                              |
+| Piece            | File                                              | What                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker mode      | `src/server.ts`, `src/instructions.ts`            | `TALOS_APP_WORKER_THREAD` set: never live (exit 2 with `TALOS_APP_BRIDGE=1` or a bad id), no channel capability, no permission relay, `WORKER_INSTRUCTIONS`                                                                                                                                                                                                                                                                                         |
+| Tools            | `src/tools/index.ts`, `src/tools/read-inbound.ts` | `WORKER_BRIDGE_TOOLS` only; `reply`, `attach`, `card`, `set_status` refuse any other thread and name only the worker's own; `card_result` only for its own cards                                                                                                                                                                                                                                                                                    |
+| Worker transport | `src/worker/transport.ts`, `src/hub/client.ts`    | hub up: every frame goes to the hub and waits for its ack; hub down: `reply`/`card.create` over `POST /bridge/post`, nothing else                                                                                                                                                                                                                                                                                                                   |
+| Hub socket       | `src/hub/server.ts`                               | live bridge only; `hello` needs a fresh `workers.json` entry, the nonce, and a pid in the recorded pane's process group (`ps -o pgid=`); `out` frames are re-parsed, size-checked and thread-checked (`reply`, `card.create`, `card.update`, `status`, `receipt` only, no permission cards), then sent and mirrored by the hub                                                                                                                      |
+| Router           | `src/router/router.ts`                            | wraps the live bridge's notification emit. Owner `text`/`file`/`voice_note` in a dedicated thread, and `card_action` on a card that thread's worker raised, are held as `worker_routes` rows and named in the wake file. A `schedule_run` for a job of that thread is held the same way (see "Thread schedules"); voice calls, hooks, digests, heartbeat wakes, shares and `backlog` stay with main                                                 |
+| Claims           | `src/worker/store.ts`                             | `inbound_claims` (`INSERT OR IGNORE`): the worker's `read_inbound` or the hub's deadline, whoever is first. Deadlines are re-armed after a bridge restart                                                                                                                                                                                                                                                                                           |
+| Governor         | `src/router/governor.ts`                          | from the newest reading per limit kind of any session on the Mac (main's mod, each worker's status line via `workers/<id>/usage.json`; `src/router/usage-pool.ts`), a window past its reset dropped; a reading older than 30 min, or none, = `unknown`, never blocks. Paused: parked threads fall back with `usage_governor`, live workers keep their pointers. Park-all: a `park` wake for every live worker, again 30 s later while it stays live |
+| Controls         | `src/router/controls.ts`                          | `thread.session.control` → a wake with that action; the result is a `session.control.result`, stored and replayed like `session.control`                                                                                                                                                                                                                                                                                                            |
+| Status           | `Bridge.optionCTick()` (every poll)               | `workers.status` when it changes, and on every `ready`                                                                                                                                                                                                                                                                                                                                                                                              |
 
 Rules the reviews added:
 
@@ -129,13 +131,16 @@ Routing table (as built):
 | `WorkerManager` | `TalosSupervisor/WorkerManager.swift`     | the 1 s tick: heartbeat `workers.json` every 5 s, take wakes (rename, then read), start / resume / park / restart / fresh, type pointers, watch for dialogs, `No session found` and crashes, park idle workers, re-adopt live ones after an app relaunch                      |
 | App             | `TalosDesktop/SupervisorController.swift` | runs the manager with the tmux host only; main's TakeoverCheck whitelists the worker process groups                                                                                                                                                                           |
 
-How a worker is launched: `tmux -L talos new-session -d -s t-<id> -c <realpath> -- /bin/sh workers/<id>/launch.sh`. The
-script (0600, deleted once the worker connects) is one line: `exec /usr/bin/env -i <the WorkerSpec env> <claude> <args>`.
-`env -i` replaces the environment wholesale, so nothing in the tmux server's global environment (a token,
-`TALOS_APP_BRIDGE`) can reach a worker; a file rather than tmux arguments because tmux caps a command at about 16 KB and
-treats an argument ending in `;` as a separator. `-c` escapes `#`, since tmux expands it as a format: the folder checked is
+How a worker is launched: `tmux -L talos new-session -d -s t-<id> -c <realpath> -- /usr/bin/env -i /bin/sh
+workers/<id>/launch.sh` (`LaunchFile`, the same as main). The file (0600, created new in a 0700 folder) removes itself as
+its first line, then sets the WorkerSpec env with one `export NAME='value'` each and `exec`s claude with its args, every
+element single-quoted. `env -i` replaces the environment wholesale, so nothing in the tmux server's global environment (a
+token, `TALOS_APP_BRIDGE`) can reach a worker, and nothing is ever set on the server. `export` is a shell builtin, so no
+value (the worker's nonce among them) is ever in an argv where `ps` would show it; a file rather than tmux arguments also
+because tmux caps a command at about 16 KB and treats an argument ending in `;` as a separator. `-c` escapes `#`, since tmux expands it as a format: the folder checked is
 the folder used. Args: the owner's permission flag, `--settings workers/<id>/settings.json` (Telegram and iMessage plugins
-off, `effortLevel`), `--name talos-<id>`, `--model` unless `inherit`, `--append-system-prompt` (the agent folder's
+off, `effortLevel`, and a `statusLine` that records the session's plan-usage reading in `workers/<id>/usage.json`:
+protocol `usage-readings.ts`, the Mac's `WorkerUsage.swift`), `--name talos-<id>`, `--model` unless `inherit`, `--append-system-prompt` (the agent folder's
 `threads/<id>/WORKER.md`, else a built-in preamble), `--mcp-config workers/<id>/mcp.json` for a folder outside the agent
 folder (only the `talos-app` entry, with any Telegram, iMessage or bridge env removed), then `--session-id <new uuid>` or
 `--resume <id>`.
@@ -154,7 +159,8 @@ Rules as built:
   the screen, unchanged for 5 s. The worker's own question menu is not one. The shapes come from real Claude Code 2.1.318
   captures (`apps/desktop/Tests/Fixtures/real-2.1.318`). A start waiting on such a dialog does not run out the 90 s ready timer. The worker is flagged needs-you (memory only, `WorkerManager.needsYou()`; the Terminals window shows the
   badge), and its own thread gets one plain line through `talos-app post` (the same signed path main's notices use): which
-  prompt, and "open Terminals → <thread> on the Mac to answer". One line per dialog, and at most one per thread per kind of dialog in 10 minutes (kept in `workers/<id>/notice.json`, so a
+  prompt, and "open this thread in Terminals on the Mac to answer". The line is a system row, read as Talos speaking, so it says
+  "This thread's session" and never the thread's name (a name is something an agent's card or a hand edit can set). One line per dialog, and at most one per thread per kind of dialog in 10 minutes (kept in `workers/<id>/notice.json`, so a
   relaunch with the same dialog still open says nothing more; a record whose dialog is gone is closed at the first settled
   look after a relaunch and at every start). A clear failure of the post is tried three times and then shown
   in the Mac menu; a timeout is not retried, since `talos-app post` has no message key and it may have been sent. While starting, the pane is kept for the owner and the 90 s timer waits; a dialog nobody
@@ -170,10 +176,19 @@ Rules as built:
   A worker goes live when the hub's `ready` file appears, which can be before Claude has drawn its screen, so a blank pane, a banner
   without a box, or a dialog caught half drawn gets nothing typed: the pointer waits (an Enter owed after the text went in waits the
   same way). What the owner sees: a draft held for 2 minutes (`draftNoticeAfter`), or no input box for `readyTimeout` (90 s, counted
-  from when the pointer is due), puts ONE line in the thread ("<thread>'s session isn't showing its input box yet. Open Terminals →
-  <thread> to see what it's waiting on.") and shows the thread as **Needs you** in the Terminals window until it clears. The worker is
+  from when the pointer is due), puts ONE line in the thread ("This thread's session isn't showing its input box yet. Open this thread in
+  Terminals to see what it's waiting on.") and shows the thread as **Needs you** in the Terminals window until it clears. The worker is
   never stopped for this and is not idle-parked while the pointer waits. When the box appears the pointer is typed as usual and the
-  hold is forgotten, its record in `notice.json` deleted, so a later hold tells the thread again. A worker's screen is a conversation,
+  hold is forgotten, its record in `notice.json` deleted, so a later hold tells the thread again. A pane the owner scrolled back
+  (tmux's copy mode) takes keys as commands of the mode, so nothing is typed, entered or cleared while it is in one: every send is an
+  `if-shell -F '#{pane_in_mode}'` that sends only in no mode (`TmuxCommands.unlessInMode`), one tmux invocation, so a scroll cannot
+  land between a check and the keys; it prints `talos-sent` after the keys went and `talos-in-mode` when it held them, and only the
+  first counts as sent. That hold is told too: once the pointer's claim deadline has
+  passed (the hub has given the message to main), or after `draftNoticeAfter`, ONE line per hold (a hold on a pointer already past
+  its deadline keeps quiet for `noticeDebounce` after the first, so scrolling in and out does not repeat it) ("This thread's session is scrolled
+  back, so Talos can't type into it; …press q to return to the prompt.") and **Needs you** ("scrolled back") until the mode is left.
+  A pointer the mode held back keeps its deadline from then on, like one read back after a relaunch: out of the mode and past it, the
+  line is dropped (or taken out of the box), never typed for a message main already has. A worker's screen is a conversation,
   so a dialog needs its shape (`DialogMatcher.workerScreen`): a selection cursor, or a line that is the login message, not one that
   quotes it.
 - **One copy runs workers**: the holder of `flock` on `$TALOS_APP_HOME/workers.lock`. A second copy of the app stays passive
@@ -184,8 +199,13 @@ Rules as built:
   switch off) waits 15 minutes from the first tap, on the awake clock. Then SIGTERM to the worker's own group, SIGKILL after
   the grace, and the queued action runs (`stop_limit`). The session id is kept and an unanswered message gets its row. A
   tap on a worker already `stopping` arms it, so a tap can rescue a governor's stop. The governor never does this, and
-  nothing is typed to break the turn. The limit is memory only: after a relaunch a `stopping` worker has none until the
-  next tap, because it might be the governor's.
+  nothing is typed to break the turn. The tap's limit is memory only, so a worker found `stopping` after a relaunch gets one of
+  its own: whose stop it was is not in the file, and the wait would otherwise have no end. It is 10 minutes (`adoptedStopLimit`;
+  the governor has no limit to use instead) from when the stop was asked for, which the entry now carries as `stopping_since`
+  (written while `stopping`; a time in the future counts as now, a file without one counts from the relaunch; and whatever the file
+  says, the turn gets at least `adoptedStopFloor`, 2 minutes, from the relaunch, since the file can be edited while the app is down and
+  the time away is wall clock). At the limit the turn
+  is ended as an owner's stop would end it, and the thread gets one line saying its turn was cut and the conversation is kept.
 - **Parked means gone**: `parked` waits for the whole process group, with SIGKILL after the grace, so a child that ignored
   SIGTERM can't outlive it; a crash kills what's left of the group too.
 - **An unknown is a no-op.** A tmux read that fails is not an empty screen, a quiet pane or a dead worker: nothing is
@@ -194,8 +214,13 @@ Rules as built:
   restart with a new tmux server), or when the kernel says its group is empty. Unknown busy counts as busy. A failed
   `capture-pane` or `list-clients` means no typing. A failed read during adopt keeps the worker as the file has it and
   leaves its wakes in place until it can be read. A failed read during a start holds the start.
-- **Clock jumps**: a turn, the ready wait and the park grace are timed on an awake clock that stops in sleep and never
-  jumps, so waking the Mac can't look like a quiet pane or a wait long over.
+- **Clock jumps**: a turn, the ready wait, the park grace and the idle time are timed on an awake clock that stops in sleep and
+  never jumps, so waking the Mac, or a wall clock that is set, can't look like a quiet pane, an idle session or a wait long over.
+  The wall clock is kept for `workers.json` only. The key times tmux reports for its clients are wall times: they are put on the
+  awake clock as the clocks read when they are looked at, and when the wall clock is seen to have moved more than 2 s against the
+  awake one (each tick, and again where the keys are read; `wall_clock_jump` in the log) every session counts as active then, so
+  none is parked within a whole idle time of a jump, or of a sleep with the app running (time away while the app is not running
+  counts as idle at the relaunch, from the file's times). The cap ranks by the awake clock too.
 - **What arrives on the way out** runs when the worker is gone, however it went (a crash included): a message resumes it,
   `restart` and `fresh` happen then, and neither stays armed for a later park.
 - **Relaunch**: `starting` stays `starting`, the idle clock and the crash count carry on, and a worker pane with channels on
@@ -213,12 +238,51 @@ Rules as built:
   `last_active_at` (optional, written with the heartbeat while the worker has a pane, absent once parked; a value that is not a
   time reads as none, and a bridge that doesn't know the key ignores it). A relaunch seeds the clock from the latest of that,
   the last pointer and the start (never later than now), not from the pane's last output.
-- **Cap**: a start at `max_live` parks the longest-idle non-busy worker; with all busy the wake is held up to 2 min and
+  **Background work holds the park** (`WorkerBackground.swift`, after the 2026-11-15 loss of a session's `sleep` waker): when the
+  park is due, the process table is read, and any live process under claude other than its MCP servers and its own helpers
+  (caffeinate) keeps the session up: a shell claude started (the Bash tool, a command run in the background included) and
+  everything under it. It is the app updater's rule (`BackgroundWork.offenders`). Claude Code's native install runs as a file
+  named for its version (`2.1.325`), so claude is also known by that name with `claude` as its argv[0]. A table that can't be
+  read holds the park too. The log says so once per hold: `worker_idle_held thread=<id> bg=<n|unknown>`. A sub-agent runs
+  inside claude and can't be seen by itself, only while a command it started runs.
+- **Cap**: a start at `max_live` parks the longest-idle non-busy worker with no background work; only when every quiet one
+  has some is the longest idle of those parked (and its thread told, below). With all busy the wake is held up to 2 min and
   then dropped (the hub's deadline hands the message to main). `parking` and `stopping` workers hold a slot, and a lowered
   cap parks the excess as they go idle, not counting the ones already on their way out.
+- **Every park is logged**, once, when it is decided: `worker_parked thread=<id> why=<idle|cap|crash|update|governor|control|
+  switched_off|stop_limit|owner|restart|...> idle_s=<awake seconds since the last activity> bg=<n|unknown>`. A park that cut
+  background work posts one line in that thread: "Parked while <n> background task(s) were running: <first command, 60
+  chars>." After a crash the count is `unknown` and no line is posted: the CLI starts each Bash tool shell detached (its own
+  process group and session, an empty environment), so once claude is gone nothing proves whose a shell was.
+- **Long waits** in a thread session use a Talos schedule (`schedule_propose`: it runs in that session and wakes it when it
+  is parked) or a background process, never only an in-process timer: a parked session has no process for a timer to fire in.
+- **Messages from other sessions** do not wake a parked one. Claude Code's `SendMessage` reaches a peer over its socket
+  (`/tmp/cc-socks/<pid>.sock`, listed in `~/.claude/sessions/<pid>.json`); a parked session has no process, so no socket and no
+  entry, and a send by name fails at the sender before anything reaches a path the supervisor could watch. The route that
+  wakes is the Talos `handoff` tool: the hub writes the lead's wake file, as for an owner message. Not built, and what it
+  would take: each thread session launched with a fixed `--messaging-socket-path` of its own (the CLI has the flag), so its
+  address outlives one process; the supervisor listening on that path while the session is parked and taking any connection
+  as a wake (the send itself still fails, and the sender must send again once the session is up); and senders using that
+  `uds:<path>` address, because a name is looked up in the CLI's live list, which only the CLI writes. Whether the CLI accepts
+  a socket outside `/tmp/cc-socks` as a peer address was not checked (its address check has a list of allowed folders).
 - **Crash** while live → `parked` (the transcript is on disk; the next message resumes). 5 exits in 15 min →
   `crash_loop`. The CLI's resume error on a line of its own (`No conversation found with session ID`, or `No session found
   with ID`) during a start → `resume_missing`, id kept; `fresh` moves it to `previous_ids` (last 5).
+- **A session nobody has typed in** has no saved conversation (Claude Code writes `<config dir>/projects/<folder>/<id>.jsonl`
+  after the first message or an `/exit`), and `--resume` of it would be refused. Main's rule applies (`SessionTranscript`,
+  docs/desktop.md): before a resume the file is looked for in the session's own `CLAUDE_CONFIG_DIR` (else `~/.claude`), under
+  the folder's own name first and then under any name. None, for a session that never had a turn → the start uses
+  `--session-id` with the same id (log: `session_not_saved thread=<id> session=<id>`). A session a message was typed into has
+  a conversation, so a file that is not found is lost (deleted, another config folder), not unsaved: it is resumed and ends
+  `resume_missing`, never quietly empty under the same id. "Had a turn" is `turn_session == session_id` in `workers.json`
+  (optional; the id a message was last typed into, or the id last retired; the bridge only tolerates it); in a file without
+  the key, `last_turn_at` being set. Two refusals of a start are mended and are not counted as crashes:
+  "Session ID ... is already in use" (the session is saved after all: it is resumed at once, and that id is resumed from then
+  on while the app runs; log `session_in_use_resume`), and a resume refused for a file that holds only meta and slash-command
+  lines (nothing to resume: the id goes to `previous_ids` and a new conversation starts; log `session_empty_new_id`). The new
+  id is given once: if the next start is refused the same way before any start has connected, the thread stops as
+  `resume_missing`. A real conversation whose resume fails still stops as `resume_missing`, and an id that is not a UUID is
+  never looked up.
 - **Crash after a claim**: `read_inbound` has already told the phone `seen` and the deadline stood down. When the run that
   claimed a message has definitely ended with nothing said since (`parked`, `failed`, `off`, or a newer `started_at`), the
   hub posts one row in the thread. A stale heartbeat, an unknown state or a missing entry posts nothing. Kept in
@@ -269,16 +333,25 @@ The contract is "Needs-you prompts" below (`packages/protocol/src/dialog-files.t
   and nothing dim. A folder or server name wrapped over rows, or cut with an ellipsis, is `subject: null`, never a half. The plural MCP
   dialog, duplicate labels, a row past 62 characters (a label that long may wrap, and its continuation row would read as one more option:
   the longest real row is 56) and any extra row are not read at all, and a dialog that is not read is not offered: it keeps the thread
-  line at once. Login is a kind only (its screen is the input box with `Not logged in · Run /login`). Labels and subjects are compared
-  character for character, by unicode scalars, not as Swift's `==` does.
+  line at once. So does a trust or MCP dialog whose subject is `null`: with nothing to tell it from another dialog of its kind, a card
+  for it could be answered onto a lookalike that took its place, so it is never offered (not in `workers.json`, not in the popup).
+  Login is a kind only (its screen is the input box with `Not logged in · Run /login`), and is offered without a subject because its
+  card sends no key. Labels and subjects are compared character for character, by unicode scalars, not as Swift's `==` does.
 - **The card wait.** A dialog is offered when its screen has held still (`dialogSettle`). The thread line waits `cardAckWait` (15 s) from
   the Mac's first sighting for `dialog-card.json` naming that dialog in any status; with one there the Mac never posts the line for it. No
   worker is stopped for a dialog but a STARTING one after `dialogLimit` (900 s), as before.
-- **One sighting, one id.** The id lives in the worker's `workers.json` entry, so a relaunch finds it; but a record read back from disk is
-  never pressed on. An agent can edit that file while the app is down, so an answer waits until THIS process has seen the dialog on the screen
-  hold still, and the offer then has to equal the screen's own read (else it is a new sighting under a new id). The next settled sighting also
+- **One sighting, one id.** The id lives in the worker's `workers.json` entry for the bridge to read. A record read back from disk after a
+  relaunch is never pressed on and never kept: an agent can edit that file while the app is down, and the app was not looking at the pane
+  while it was away (the dialog can have been answered there and another that reads alike be in its place), so what THIS process first
+  sees hold still is a new sighting under a new id, however exactly it equals the record. The card for the old id then applies to nothing
+  (a tap for it gets `unverified`) and the bridge makes a card for the new one. The next settled sighting also
   gets a new id after ANY Enter the Mac sent, and after any change of the screen under an offer this process had verified (the owner's Enter
   in the pane, a second server's dialog that looks the same, even a cursor move), so an old card never applies to the next dialog.
+  And from the moment the screen is seen to change until that next sighting, no answer for the old id presses anything: a verified tap
+  gets `nothing_pressed` / `screen_changed` (and is used up), a popup click "the screen changed". The dialog on the pane then may read
+  exactly as the offered one did and still be another. Known gap: a dialog answered in the pane and replaced, between two looks one
+  tick apart, by one that reads the same down to the cursor row leaves no frame to see; only the typing guard (`clientQuiet`, 30 s
+  after the owner's key) stands in the way of an old card there.
 - **Keys.** `TmuxCommands.sendDialogKey` takes a `DialogKey` (Up, Down, Enter) and sends it by tmux key name, leaving copy mode in the same
   invocation. `DialogAnswer` plans arrows then Enter from the CURRENT cursor row of a fresh read and never relies on the Select wrapping
   at its ends (it does wrap). The loop reads again after each arrow and needs the highlighted row exactly one step on; Enter goes only
@@ -343,12 +416,13 @@ the "Thread sessions ▸" menu.
 
 ## The app (WP-OC4)
 
-| Piece                      | File                                                                       | What                                                                                                                                                                                                                                                         |
-| -------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Store                      | `apps/web/src/features/thread-sessions/store.ts`                           | the last `workers.status` (also from `ready.workers_status`); `useThreadSessionView(id)` = offered / unsupported / dedicated / worker; park, resume, restart, fresh as signed `thread.session.control`, answered by `session.control.result`                 |
-| Own session                | `OwnSession.tsx`, in the thread settings sheet (`manage/ThreadEditor.tsx`) | the switch, shown only when `dedicated.enabled`, `workers.status.supported`, and `canBeDedicated` (never the default thread, General, Inbox); the cost note; the worker's state ("Live", "Parked 14:02", a failure in words); Park now, Restart, Start fresh |
-| Settings → Thread sessions | `ThreadSessionsSection.tsx`                                                | the master switch (off by default; `config.patch {dedicated: {enabled}}`, no step-up), one row per dedicated thread (parked ones too), the "Saving limits" banner when the governor pauses                                                                   |
-| Session sheet              | `features/session/SessionPanel.tsx`, `store.ts`                            | the weekly bar says "all sessions" once thread sessions are allowed; a thread-scoped `session.state` never replaces main's                                                                                                                                   |
+| Piece                      | File                                                                       | What                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Store                      | `apps/web/src/features/thread-sessions/store.ts`                           | the last `workers.status` (also from `ready.workers_status`); `useThreadSessionView(id)` = offered / unsupported / dedicated / worker; park, resume, restart, fresh as signed `thread.session.control`, answered by `session.control.result`                                                                                                                                                                                                                 |
+| Own session                | `OwnSession.tsx`, in the thread settings sheet (`manage/ThreadEditor.tsx`) | the switch, shown only when `dedicated.enabled`, `workers.status.supported`, and `canBeDedicated` (never the default thread, General, Inbox); the cost note; the worker's state ("Live", "Parked 14:02", a failure in words); Park now, Restart, Start fresh                                                                                                                                                                                                 |
+| Status line                | `thread-sessions/words.ts`, `useSessionWords.ts`, `SessionStatus.tsx`      | what the session is doing in words (`sessionWords`): waiting on the owner and for what (a permission card, a usage limit with its reset, a prompt at the Mac with the step), working since when (amber after 2 h in one turn), parked and why, failed, Mac offline. The Threads screen row shows it instead of the last message unless the session is plain idle; the thread header's pill opens a sheet with the sentence, the step and "Open the request". |
+| Settings → Thread sessions | `ThreadSessionsSection.tsx`                                                | the master switch (off by default; `config.patch {dedicated: {enabled}}`, no step-up), one row per dedicated thread (parked ones too), the "Saving limits" banner when the governor pauses                                                                                                                                                                                                                                                                   |
+| Session sheet              | `features/session/SessionPanel.tsx`, `store.ts`                            | the weekly bar says "all sessions" once thread sessions are allowed and shows the newest reading of any session, with "as of N min ago" past 2 min and dimmed past 15 (`rate_limits[].as_of`, sent only to a relay listing `usage-as-of/1`); a thread-scoped `session.state` never replaces main's                                                                                                                                                           |
 
 Rules the reviews added: the switch also needs `thread-sessions/1` in `presence.features`; the store starts at the app
 root, because `ready.workers_status` arrives once; a `ready` without it clears the status (an older Mac or relay); the
@@ -369,8 +443,35 @@ Args: `thread_id`, `type` (`TASK`, `RESULT`, `BLOCK`), `text` (100 words at most
 - The receiver gets `kind=handoff trust=agent`, never `owner`. A lead reads it with `read_inbound`; a parked lead is woken by the usual wake file. A hand-off has no deadline and no fallback to main while it waits. Main receives a lead's hand-off on the next poll tick. Delivery is three remembered steps (row posted, route added, delivered), so a crash or failure between them resumes without a double post.
 - A hand-off is an agent's word, not the owner's: one recorded after the owner spoke cancels the owner's words for every owner-asked check (`config_propose`, schedule origin), like a share does.
 - A TASK the lead has not claimed in 15 minutes (it would not start, a wake is held, it needs the Mac, it is crash-looping) comes back to main as a plain "The Trip lead didn't pick this up (TASK "<first words>"): <reason>" row and note (labelled as from the bridge, "Talos (the bridge)"; with a warm lead the reason is just "not picked up within 15 minutes"), and its slot is freed. A thread switched back to shared does the same for its pending TASK.
-- Budget, in the `handoffs` table of `history.sqlite`: 5 a day each way per lead, counted from the last midnight in the owner's configured timezone (the refusal says when it resets; rows dated in the future don't count). At most 3 open TASKs per lead; a TASK stops being open only on the lead's `RESULT`/`BLOCK` (each closes the oldest still-open, non-expired TASK), when the thread goes back to shared, and after 24 h; a reply or card in the thread closes nothing, because main and the lead share the author `agent`. At the cap the refusal lists the open TASKs (first words and age) so main can wait or ask. A hand-off is retried until delivered, however late: there is no give-up. A `RESULT`/`BLOCK` needs an open TASK to close, and main's TASK within 10 minutes of that lead's RESULT is refused ("that looks like a reply to its RESULT"), so nothing replies to a RESULT.
+- Budget, in the `handoffs` table of `history.sqlite`: 20 a day each way per lead (5 until Pantheon 2026-11-15), counted from the last midnight in the owner's configured timezone (the refusal says when it resets; rows dated in the future don't count). At most 3 open TASKs per lead; a TASK stops being open only on the lead's `RESULT`/`BLOCK` (each closes the oldest still-open, non-expired TASK), when the thread goes back to shared, and after 24 h; a reply or card in the thread closes nothing, because main and the lead share the author `agent`. At the cap the refusal lists the open TASKs (first words and age) so main can wait or ask. A hand-off is retried until delivered, however late: there is no give-up. A `RESULT`/`BLOCK` needs an open TASK to close, and main's TASK within 10 minutes of that lead's RESULT is refused ("that looks like a reply to its RESULT"), so nothing replies to a RESULT.
 - A lead's `RESULT`/`BLOCK` counts as its answer, so a session that ends after it gets no "stopped before it answered" row.
+
+## Main controls a thread's session
+
+The `thread_session` tool (`apps/bridge/src/tools/sessions.ts`) lets the main session look after a thread's own session that is asleep, parked or stuck. Main only and live only: a thread session (a lead included) is never given it, and a headless job is refused. Args: `action` (`status`, `wake`, `restart`), `thread_id`, `why`.
+
+- `status`, for one thread or every dedicated one: `state`, a one-line `summary`, `turn_started_at` (while a turn runs), `last_turn_at` (the end of the last finished turn), `last_active_at` (when the Mac wrote it), `parked_at`, `restarts`, and `stopped_why`.
+  - `state` is `needs_you` while the entry's `needs_you` is set (a dialog or prompt on the pane); `session_state` then keeps the supervisor's own state, and `summary` reads "waiting on <kind> since <time>". Main can `restart` such a session at once.
+  - `summary` otherwise reads "in a turn since <time>", "running, between turns; the last one ended <time>", "parked: idle since <time>" (or the cap, the owner, a crash, interrupted, a restart, plan limits), or "failed: <code>". Times are in the config's time zone, with the day when it is not today.
+  - `stopped_why`: the entry's `error` (code, detail, at) when there is one, `null` while the session runs, otherwise the reason the supervisor stored (`idle`, `cap`, `owner`, `crash`, `interrupted`, `restart`, `governor`; one this bridge does not know reads `unknown`), or `"not recorded"` from a supervisor that writes none.
+  - `restarts`: the crash restarts the supervisor recorded (`by: "crash"`) and the restarts Main asked for through this tool (`by: "main"`, with its `why`, from `main_restarts`), oldest first, the newest 10. The owner's own button is in neither list.
+  - A thread with no entry reads `state: null`, "no session yet (never started)"; asked for by id, a thread without its own session reads `state: null`, "answered by Main, no session of its own".
+  - It also says when the supervisor heartbeat is stale (the Mac app is not running), and lists an entry the hub cannot read as `unreadable`.
+  - Who writes the fields: both supervisors write all three (the Linux one in `supervisor/worker-status.ts`), and move `last_turn_at` when a turn ends (the pane goes quiet after a pointer, a park waiting for the turn included). The owner's stop always records `owner`, whatever reason was there before. `needs_you.kind` is always Talos's own words (a dialog's name from a fixed list, a prompt's title from the detector's fixed table), never screen text.
+  - Known on both sides, not yet fixed: adoption records `interrupted` over a reason already recorded (a session the owner was stopping that exits while the supervisor restarts reads "off: interrupted"); an idle live session found gone after a supervisor restart gets no reason; a park because Main's own launch narrowed (`main_narrowed`) or a sub-thread's settings would now be refused (`sub_refused`) reads as the owner's, since the protocol's `stopped_why` has no words for them yet.
+- `wake` writes a `resume` wake; `restart` writes a `restart` wake (same conversation). Both go through the same check as the owner's button (`router/session-control.ts`): not dedicated, the Mac app not running, an unreadable saved session and the usage governor refuse alike (trust mode's pass-through and its warning included). The default thread is refused by name. A busy session restarts when its turn ends, or after 15 minutes if it does not (the owner's stop limit, `WORKER_TIMING.owner_stop_s`; the Mac's `stopLimit`), as the button's does.
+- Restart applies an instruction edit now: a session reads its thread's instruction files (and the release's preamble and settings) when it starts, so a change to them reaches a running session at its next restart. After an update, the supervisor does that itself (restart-on-update, `dedicated.restart_on_update`, on by default): right after it starts and whenever the release it runs changes, each running session whose launch spec differs from the one it launched with (`spec_hash`: a new release, its own instruction files changed, or the guards re-pinned by the refresh at Main's start after a bun upgrade, which the Mac counts as a release change) is restarted once for that spec, resuming its conversation, one at a time, only while it is quiet (no turn, no draft in its box, no key in an attached client lately, nothing waiting on the owner), and held while the usage governor is not ok. The owner gets one line in the default thread: "Updated or instructions changed: restarted A, B; C restarts when its turn ends; D failed; E was not restarted (it did not start again)." (Linux: `supervisor/update-restart.ts`; the line's shared cases: `apps/desktop/Tests/Fixtures/update-restart-line.json`.) A session started in the agent folder picks up an edit to that folder's instruction files at its next restart; restart it to apply the edit now. To see, without changing anything, what an update would restart: `talos-app update-check --dry` on Linux (`Talos --update-check` on the Mac) prints one line per running thread session, `<thread id>  <state>` (unchanged, spec changed, instructions changed, no record, busy (would wait), or unknown (dry plan refused)), then a count, and nothing else: no file text, path, hash, environment or display name. It writes, audits and locks nothing. "Instructions changed" means only the instructions a session outside the agent folder is handed changed; each start records their digest (`WorkerLaunched.instructions_hash`) beside its spec hash. The report plans with Main's environment as a restarted supervisor rebuilds it (from the login shell), so for a Main started with an environment since changed it can say more than the running supervisor would restart.
+- What an update would restart, read-only: on the Mac, `Talos.app/Contents/MacOS/Talos --update-check` (Linux: `talos-app update-check --dry`) prints one line per running session, `<thread id>  <state>` (unchanged, spec changed, instructions changed, no record, busy (would wait), unknown (dry plan refused)), then a count. It runs the update check's own dry plan and prints nothing else: no file text, paths, hashes, environment or names. It starts nothing, writes nothing, takes no lock and runs no tmux; exit 0 whatever it finds. "instructions changed" means only the instruction files handed to a session outside the agent folder changed (`launched.instructions_hash`); a session started in the agent folder picks up an edit to that folder's instruction files at its next restart; restart it to apply the edit now.
+- `wake` looks at the published state first, because a resume wake does nothing to a running session: on a `starting`, `live` or `busy` session it is refused ("already running"), and on a `failed` one too (the Mac does not start a failed session on a resume; restart clears the failure). Both write no wake file and post nothing. On `parking` or `stopping` it is passed on: both supervisors start the session again once it has stopped, and the answer says so.
+- No `fresh` and no `park`: each is refused in a sentence. A fresh conversation stays the owner's button.
+- `why` is required, 1 to 80 characters after trim. It is made one safe line (as hand-off text is) and posted in that thread as a system row: "Main woke this thread's session: <why>" or "Main restarted this thread's session: <why>". The bridge log gets the thread, action and why.
+- At most 3 restarts per thread in any rolling hour, counted in the `main_restarts` table of `history.sqlite`, so the count holds across a bridge restart; the refusal says when the next is allowed. A wake is not counted, a refused restart uses nothing, and the owner's button is never counted here (the reader's gap and cap below count every caller). Restarts dated up to an hour ahead still count (a clock set back gains nothing); one dated further ahead is ignored.
+- The wake file carries `by: "main"` (the owner's button writes `by: "owner"`), for the log. Both supervisors ignore a key they do not know: the TypeScript one parses with a plain zod object (unknown keys stripped), and the Mac decodes named keys only.
+- Same-uid code can write a wake file, so the reader is the place of record for control wakes (`packages/protocol/src/wake-decision.ts`, vectors in `packages/protocol/fixtures/wake-decision/`, which the Swift reader runs too). A control wake older than 5 minutes by its own `at`, or dated over 5 s ahead, is refused as stale; that, and the reader taking the file by renaming it aside, is what keeps an old wake from being carried out again. There is no replay counter: against code running as the owner's user it adds nothing, and one pinned ahead by a wrong clock locked every control out. A `counter` key in a file written by an earlier build is tolerated and ignored.
+- `restart` and `fresh` are held to the reader's own per-thread limits, counted for every caller (the owner's button included, since the file cannot prove who wrote it): 20 seconds apart, 12 an hour, out of a person's reach but a stop for a loop. Main's own restart rules (120 s and 3 an hour for `restart_main`, the 3-an-hour ledger for `thread_session`) are separate and unchanged. `fresh` is refused while the session is in a turn; a `restart` of a busy session waits for the turn and its notice says so. `park` and `resume` are never capped: a governor park is refused only when stale. Every control carried out, and every refusal except a wake dated ahead, posts one line in the thread. Pointer wakes keep their own rules.
+- The reader keeps `workers/<thread>/wake-state.json` (`WakeState`: the restarts and fresh starts it carried out, by the wake's `at` and action). The bridge checks the same rules before it writes a `restart` or `fresh` wake (`router/session-control.ts`, so the owner's button and Main's `thread_session` both pass through it) and answers in the reader's words (`rate_limited`) instead of "Restarting…"; a `fresh` for a session that workers.json shows `busy` is refused the same way (`worker_unavailable`). It counts what the reader took plus the capped wake still waiting in the file, so a double tap is refused up front; with no reader state, it counts its own record of the capped wakes it wrote (`workers/<thread>/wake-written.json`), which also counts any the reader then refused. That record is written after the wake: a failure there is logged and never stops a wake. Both files are on the guards' deny list.
+- Governor park-all writes a `park` wake for each live thread and writes it again if the thread is still live 30 s later, or at once if the clock has gone back past when it was written: a park the reader refused (stale) or dropped is never left for good.
+- Refusal notices are not rate-limited. Code running as the owner's user could fill a thread with them by writing wake files, but such code can already post, kill and delete as the owner; a limit here would mostly hide the owner's own refused taps.
 
 ## Leads
 
@@ -379,8 +480,8 @@ folder (`~/leads/<lane>/`), so it does not inherit the main agent's rules. The k
 ("Thread leads"); this is the bridge side.
 
 - `talos-app lead init <thread-id> --folder <dir> [--agent-dir <dir>] [--protect <dir>]... [--mcp a,b] [--sandbox | --light]`
-  (`apps/bridge/src/lead`, owner terminal only, like `memory init` and `apps scan`: `terminalOnly` refuses it from an agent
-  or a pipe). `--agent-dir` defaults from `TALOS_AGENT_DIR` and must be a real agent folder (a `.talos-version` or a
+  (`apps/bridge/src/lead`). Typed in a terminal it is the owner's; run by the agent it needs the owner to have asked (in that
+  thread or the default one) and "Lock Talos settings" off (`on-request-cli.ts`). `--agent-dir` defaults from `TALOS_AGENT_DIR` and must be a real agent folder (a `.talos-version` or a
   `CLAUDE.md` in it), so a typo is refused instead of fenced. Before the first byte is written it refuses the default thread,
   system threads and archived ones (`canBeDedicated`), a folder that fails the thread-folder rules (inside `~/.claude`, the
   Talos home, outside `$HOME`, also through a symlinked parent), a folder inside or around any protected root, a non-empty
@@ -399,11 +500,15 @@ folder (`~/leads/<lane>/`), so it does not inherit the main agent's rules. The k
   `permissions.allow`, and owner user settings (`<claude dir>/settings.json`) that weaken the sandbox. Both profiles are
   valid. It always prints what the profile does not stop (below), and flags a claude.ai connector on the thread's allow list (the
   list itself is applied by the Mac app, so it checks no MCP deny against it). Nothing runs it at session start; this is the owner's check. Agents may run it.
+- A thread's instructions are the `AGENTS.md` (and `CLAUDE.md`) in its folder. Agents edit them with their normal file tools, with no card and no separate enforcement: a lead edits its own, and a parent lead may edit a sub-thread's, since that folder is inside its own, unless the sub-thread keeps an existing folder of its own outside the parent's (then the sub-thread does not get the parent's instructions; docs/THREADS.md, "Sub-threads", Folders). The owner sees every change in the folder itself, and in git where the folder is a repository.
 - Templates are `kit/templates/lead/`. The Stop hook blocks once per stop and fails open on empty or invalid input; see the kit page.
 
 ## Reading the problem folder from a thread
 
-A thread session is refused every `talos-app` command not on `WORKER_COMMANDS_OK` (`apps/bridge/src/worker/cli-refusal.ts`).
+A thread session is refused every `talos-app` command not on `WORKER_COMMANDS_OK` or `WORKER_READ_OK`
+(`apps/bridge/src/worker/cli-refusal.ts`). `WORKER_READ_OK` (Pantheon 2026-11-15) lets every lead read `status`, `doctor` and
+`logs`; `logs` shows a thread session only the lines that name its own thread (`thread` or `thread_id`), and nothing when its
+thread can't be told (no variable, a marker without one, or the two disagreeing). Like the rest of this fence it is a speed bump, not a lock: outside a lead's folder the variable is not checked against anything, so a session that sets `TALOS_APP_WORKER_THREAD` to another thread reads that thread's lines, and one that unsets it reads as the main session (the same gap as every other worker refusal, above).
 A scheduled triage job that runs inside a thread needs `talos-app errors list` and `errors show`, so there is a per-thread opt-in,
 `threads[].session_opts.ops_read` (boolean, default off). With it on for that thread, and only that thread, the fence also lets
 `errors list` and `errors show` through, from a second list, `WORKER_OPS_READ_OK`, that is consulted only with the flag on and
@@ -472,7 +577,7 @@ they do not stop a program that opens the file itself (`sqlite3`, `python`, `nod
 
 **The inbox.** A file the owner sends to a dedicated thread is copied by the bridge, as it routes the message, from `media/`
 (one flat folder for every thread, inside the Talos home) to `~/.talos-inbox/<thread>/` (`apps/bridge/src/worker/inbox.ts`; the
-root is `TALOS_INBOX_ROOT` when set, which every test sets), and the path `read_inbound` returns is the copy. It lives outside the
+root is `TALOS_INBOX_ROOT` when set, which every test sets), and the path `read_inbound` returns is the copy. A thread folder the bridge makes holds a `.talos-inbox-folder` marker; only a folder with that marker is pruned (7 days, 1 GiB), and when the thread is archived or deleted only such a folder is removed (its plain files, never a folder inside it), so anything else under the root is left alone. It lives outside the
 Talos home on purpose, so the home deny can stay whole: there is no deny on the inbox and no carve-out (a `!` pattern in a deny
 list is read relative to the current folder and cannot reopen a folder that is blocked as a whole). **That means every other
 thread session can read every thread's inbox:** the light fence denies roots, and the inbox is not one; Bash and the file tools
@@ -493,7 +598,8 @@ thread's (decided after the real path is resolved); `attach` still refuses anyth
 (`workerRefusal`): `reply`, `attach`, `card`, `set_status`, `schedule_propose`, `handoff` and `read_thread` name the thread's own id or
 are refused (a missing id too); `card` and `card_result` act only on cards this session raised; `list_threads` lists the
 own thread only; `read_inbound` returns this thread's messages only; the schedule tools go to the main bridge over the hub socket,
-which scopes them to the thread it proved. `test/worker-tool-lock.test.ts` names every worker tool and how it is held, and
+which scopes them to the thread it proved; `restart_main` takes no thread id, touches no thread's rows and is refused unless
+the session is still its thread's lead (it asks the Mac app to restart Main, `docs/bridge.md`). `test/worker-tool-lock.test.ts` names every worker tool and how it is held, and
 fails when a worker-visible tool is not in its table. The CLI is an allow list: a thread session (`TALOS_APP_WORKER_THREAD` or
 `TALOS_SESSION_ROLE=worker` set, or a `.talos-lead` marker in the current folder or any parent) may run only `hook`, `guard-hook`,
 `commands`, `events`, `subagent-tee`, `lead check`, `codex check` and the usage text; every other command is refused, `restore-last-good`,
@@ -526,7 +632,9 @@ local scope (only the owner writes `~/.claude.json`), or from the folder's `.mcp
 (`enabledMcpjsonServers`, or `enableAllProjectMcpServers`, in the folder's entry of `~/.claude.json` or in the user's own
 `~/.claude/settings.json`; a `disabledMcpjsonServers` entry beats both; the folder's own settings files are not read, since a cloned
 repository cannot approve its own servers). An unapproved one is not launched: the worker goes `failed` on the `mcp` axis and the
-thread is told how to fix it (`claude mcp add -s local <name> ...` in that folder, or approve it once in Claude Code there). Each
+thread is told how to fix it (`claude mcp add -s local <name> ...` in that folder, or `enabledMcpjsonServers` in his own
+`~/.claude/settings.json`; an approval answered inside Claude Code there is kept in the folder's `settings.local.json`, which a thread
+session does not load, so it does not count). Each
 own-folder server a session is started with is written to the app log (`supervisor.log`) with its scope. A plugin server gets
 `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PROJECT_DIR}` (the thread folder) filled in and `CLAUDE_PLUGIN_ROOT` set in its environment;
 one that uses `${CLAUDE_PLUGIN_DATA}` is left out, because the app cannot name that folder. A channel plugin (`plugin:telegram:...`,
@@ -558,31 +666,69 @@ lower case: the lead fence's spelling), with no exception and no `!` rule. It is
 in, as a union: the guards' file replaces `permissions` and `hooks` wholesale, and the fence is never lost to it. The "Open claude here"
 session in the Terminals window gets the same fence, and is not offered without a Talos home to fence. The home is fenced in the
 spelling given, in lower case, and where it really is (a symbolic link in the path), and a home with `( ) * ? [ ] { }` in it is refused. A spec whose settings lack the
-fence is refused before it runs (`validate`). **What it does not stop:** a worker's Bash can still read the home with `sqlite3`,
+fence is refused before it runs (`validate`). **On Linux** (apps/bridge/src/supervisor/worker-spec.ts) names are exact, so the
+fence is the spelling given and the real path, without the lower-case copies. A home or a thread folder on a file system that
+ignores letter case (a Windows drive under WSL, casefold ext4) is refused instead, as is a home with `\`, a trailing space or an
+empty, `.` or `..` part. There, `validate` checks the finished spec against what the supervisor knows: the Talos home and Main's
+ceiling, never the spec's own fields. It also checks that the one `--settings` is the worker settings file it checked. **What it does not stop:** a worker's Bash can still read the home with `sqlite3`,
 `python` or `grep -r`, because only a sandbox stops a program that opens the file itself, and a non-lead worker has none. Leads keep
 their sandbox (or, in the light profile, the same honest limit).
+
+**The developer switch (owner ruling 2026-11-15).** `dev.thread_fence` in config.json (Settings → Developer, protocol `dev.ts`
+`DEV_ROWS`) turns the Talos home deny above off: the supervisor reads it at every start, on Linux `worker-config.ts` `threadFenceOn`
+and on the Mac `WorkerFence.threadFenceOn` (off ONLY for exactly `"dev": { "thread_fence": false }`, the JSON literal false; anything
+else, `0`, `"false"` or an unreadable file included, is on), and with it off the
+session's settings carry no Talos-home deny and `validate` (told by the supervisor's own read, never the spec) asks for none. The
+session and its sub-agents (one process, one `--settings`) get the same access Main has, and no more (Pantheon's scope ruling of the
+owner's words "accessing files or areas that main can access"). Everything else that
+fences a session stays: Main's own deny rules (the ceiling), the guards, the edit-only deny on every session's settings and hooks
+(and the Talos home's whole `workers` folder, closed to the file-tool writers: the permission hook's copy in `workers/_hook` and each
+session's settings, MCP config, nonce and launch file; every session gets it and `validate` asks for it with the fence on or off), and
+a lead's own fence from its folder (the Talos home, the personal vault and the credential folders: `lead/fence.ts`), which a lead's
+session keeps whatever this switch says. On or off, the supervisor's own files for the sessions stay closed to the file tools
+(`workerFilesDenyRules`: Edit, Write and NotebookEdit on `<home>/workers/**`: the permission hook copy, each session's
+`--settings`, its mcp.json, its nonce and folder check), and `validate` requires that deny: a session that could edit them could make
+its own hook answer "allow", which Main cannot do (Delphi's review). A fresh install has it on. It takes effect at each session's next start (the spec hash
+moves, so a session restarted on update starts with the new settings), the start is audited `worker_thread_fence_off`, and the
+owner is told in the default thread whenever it flips (`trust.ts` `noteFenceFlip`). Through the agent, turning it OFF is always a
+one-tap card, even when he asked in his own words (the two-hour window can't tell he asked for this: Delphi's review); turning it
+back ON is made at once when he asked. A thread session can never name it.
 
 **A live change.** On each tick the Mac compares what a running session was started with (`WorkerEntry.launched`: `cwd`, `model`,
 `effort`, `mcp_allow`, written at every start) with the config. If they differ and the difference has stood for 30 seconds (two edits
 in a row are one restart, with the final config; an edit put back restarts nothing), the session is restarted the way Restart is: it
 goes through `stopping`, so a turn in progress is never cut, however long it runs (a saved setting does not arm the 15-minute limit a tap
 on Restart has). A new **folder** starts a
-fresh conversation (the old id moves to `previous_ids`) and the thread is told `Started a new conversation in <folder>.` once; a new
+fresh conversation (the old id moves to `previous_ids`) and the thread is told `Started a new conversation in this thread's new folder.` once (the folder is not named, and the MCP
+servers a launch left out are named in quotes: both are the owner's settings in a system row); a new
 model, effort or MCP list resumes the same conversation. An entry with no `launched` (written by an older build) is never restarted;
 the next start records it. The sheet says "Saving restarts the session when its current turn ends."
 
 **The privilege ceiling at launch.** A thread session never starts wider than the main session, on three axes, checked on the finished
 spec and refused one by one: the permission mode (bypass is wider than the default, which is wider than plan; main's is its own launch
 flag, the worker's is its command line, else `permissions.defaultMode` in its settings). Main's REAL mode is worked out from its launch
-arguments (`--dangerously-skip-permissions`, `--permission-mode X`) and, when they name none, from the settings it reads (the guards'
-file, the agent folder's local and shared settings, the user's; `auto` and `bypassPermissions` do not take effect in the project files),
+arguments (`--dangerously-skip-permissions`, `--permission-mode X`) and, when they name none, from the settings it reads (its own
+`--settings` first, when its arguments carry one, else the guards' file; then the agent folder's local and shared settings, the user's;
+`auto` and `bypassPermissions` do not take effect in the project files). A mode name Claude Code does not know is never guessed at:
+for main it counts as `plan`, the narrowest. Main's arguments are read as Claude Code reads them (nothing after `--`, never another
+flag's value), a source its `--setting-sources` leaves out is not read (`--restricted` loads none), and Claude Code's managed settings
+(`/Library/Application Support/ClaudeCode`) count: the mode is the narrowest of every managed document's and that chain's, managed deny
+rules join the ceiling, and where bypass is ruled out (`disableBypassPermissionsMode`, `--restricted`) main's bypass flags do not count
+and its workers get none. Not read yet, so the ceiling can be wider than main there: `CLAUDE_CODE_RESTRICTED` in main's environment,
+main's `--managed-settings` flag, `--disallowedTools`, a deny rule under an agent folder whose own name has glob characters, and
+arguments changed in Talos Settings while the main session still runs under the old ones; and a worker is not itself started with
+main's `--restricted` or `--setting-sources`, so it still loads the user's and its folder's allow rules,
 and it is written into the worker's `--settings` as `permissions.defaultMode`, which outranks the thread folder's own settings: a folder
 asking for `acceptEdits` cannot widen the session. When main runs in the built-in default, which the app cannot read, nothing is written
 and nothing is invented, the MCP servers (every listed server must be one
 main can use itself: defined in user scope, in the agent folder or by an enabled plugin; a server defined only in the thread folder is
-refused), and the deny rules (the worker's must include every one main has: the guards' file and the agent folder's project settings,
-which the build copies into the worker's settings, each made absolute where it was defined: the kit's `Read(./.env)` stays the AGENT
-folder's `.env`, and does not become a deny on the worker's own). A refused spec is not launched: the worker goes `failed` with the error code
+refused), and the deny rules (the worker's must include every one main has: the guards' file, the agent folder's project settings and
+main's own `--settings`, which the build copies into the worker's settings, each made absolute where it was defined: the kit's
+`Read(./.env)` stays the AGENT folder's `.env`, at any depth below it as for main, and does not become a deny on the worker's own. A
+whole-tool deny, `Edit(*)` or `Write()`, stays whole: a main made read-only has read-only workers in every folder). When main's own
+`--settings` cannot be read (missing, not a regular file, not JSON, a `deny` that is not a list), neither its mode nor its deny rules are
+known and nothing is guessed: the start is refused (`start_failed`) before it takes a slot, with a `worker_start_refused` audit line,
+and the thread is told once, naming the file and the fix; once the file reads, the next Restart works. A refused spec is not launched: the worker goes `failed` with the error code
 `mode_escalation_denied` and `error.axis` `permission_mode`, `mcp` or `deny_rules`, a plain sentence in `error.detail`, and the thread is
 told once. Messages go to the main session meanwhile, as for any failed worker; saving a narrower setting and pressing Restart tries again.
 
@@ -641,13 +787,147 @@ jobs fire in main exactly as before.
   A per-agent `WORKER.md` or the desktop supervisor's built-in preamble that says workers do not own schedules should be
   changed to match (the supervisor's text is in `apps/desktop`).
 
+## Wake me
+
+An agent (main, or a thread's own session) that has to wait more than about 25 minutes sets a one-shot timer with a note to
+itself, `wake_me`, and stops: its session can then be parked, so a long wait holds no computer. In-process timers
+(`ScheduleWakeup`, `CronCreate`, `sleep`, a polling loop) die with a park, which is why the tool text points agents here.
+Asked for by the owner on 2026-11-15; the rules below are the build lead's.
+
+- **The tool.** `wake_me {at | in_minutes, note}`; `wake_me {cancel: id}` cancels one of the caller's own. `at` is a local
+  time in the scheduler's zone or an ISO time with an offset; it is rounded up to the minute (never early). A local time the
+  clocks skip is refused; one that happens twice is the first, and the agent is told. The note is one line of at most 280
+  characters once hidden, control and bidi characters are shown as visible escapes (`visibleMetaText`).
+- **Whose.** A thread session's wake is set over the hub (`rpc` `wake_me`) for the thread its connection proved, never one the
+  request names; main's are main's own and show in the default thread. A session cancels only its own; the owner any.
+- **How it is kept.** Each wake is a one-shot (`once`) session job in the scheduler, id `talos-wake-` and 12 characters,
+  catch-up 1440 minutes, written by the bridge with no card: it only wakes the session that set it. Its name and prompt are
+  fixed ("Talos wake-up", `WAKE_JOB_PROMPT`); the note lives only in the bridge's own row, so a bridge that does not know
+  wakes would offer an empty placeholder, never the agent's words, as an owner job. The bridge's own row (`wake_me` in history.sqlite, `apps/bridge/src/wake-me`) is the proof that a job is a wake: a job
+  in that id range with no row is never delivered, and is deleted. No card can create or edit a job in that range.
+- **Firing.** When the runner finds a wake due it is never offered as a `schedule_run`. The row moves pending → firing (one
+  conditional update, so two ticks or a tick and a Cancel cannot both act), the note goes out as `kind=wake`, `trust=agent`,
+  `wake_id`, `wake_for` (`main` or `thread`): "You asked to be woken: <note>". Then the job and the row are deleted. The
+  router sends a thread's wake to that thread's session (held like an owner message: a wake file starts a parked session, a
+  live one gets a pointer), main's to main. A thread's wake is never main's: when its session can't take it (the thread went
+  shared, was archived or deleted, or the claim deadline passed) it is dropped. The owner gets "A wake set by the "<thread>"
+  thread's session was dropped: <reason>." in that thread, and main a `wake_for=dropped`, `trust=agent` note quoting the note
+  as that session's words; that note cancels the owner's earlier ask in the default thread, where it lands.
+- **Rate.** A session whose wakes fired 6 times in the last hour or 48 in the last day is paused: a new `wake_me` is refused
+  with a `Warning:` saying until when, a wake that comes due meanwhile is dropped, and the owner gets one line per pause
+  ("… keeps waking itself; its wakes are paused until …").
+- **Never the owner.** The note is the agent's own earlier words. Like outside text, a wake firing in a thread cancels the
+  owner's earlier ask there (`noteOutsideText`), so `ownerAskedIn` (config_propose's asked path, `thread_session`, the
+  on-request start) is never satisfied by it or carried through it.
+- **Missed and crashed.** Each runner tick sweeps: a row whose scheduler window passed (the Mac slept through it, Talos was
+  off) is sent late and says so; a row left mid-send by a crash is sent again (a crash can repeat a wake, never lose one); a
+  row whose job the owner deleted in Schedules is dropped.
+- **Limits.** More than 7 days ahead, or more than 20 pending for one session, still sets it with a `Warning:` line. Over 366
+  days, and over 100 pending across all sessions (wakes stay within half of the 200 jobs a scheduler snapshot lists), are
+  refused. With no scheduler, or one Talos does not manage, it is refused in words.
+- **Seen.** `workers.status` carries each dedicated thread's pending wakes (`threads[].wakes`, `wakes_total`) and main's
+  (`main_wakes`, `main_wakes_total`), soonest first, at most 20 each, read row by row. The Session panel lists the wakes of
+  the session that answers the thread, with time, note and Cancel (`thread.session.control` `cancel_wake` with `wake_id`).
+  `schedules_list` ends with the caller's pending wakes. The wake jobs also show in Schedules as "Talos wake-up".
+- **Limits of this design.** Wakes ride the session runner, so they fire only while the bridge is live and connected to the
+  relay, about a minute after their time; a Mac that is asleep wakes them late, never early.
+
 ## Needs-you prompts
 
 A thread session's Claude Code pane can stop on a dialog only the owner may answer. For three known dialogs the owner now
 answers with a tap, on the iPhone, the web app or the Mac app, instead of in Terminals. **In scope:** folder trust (`trust`), MCP
 server consent (`mcp_consent`) and login (`login`). **Not in scope:** the bypass-permissions disclaimer and any dialog Talos does not
-recognise; they keep the thread line "…is waiting on a '<prompt>' prompt; open Terminals → <name> on the Mac to answer." There is no
+recognise; they keep the thread line "This thread's session is waiting on a '<prompt>' prompt; open this thread in Terminals on the Mac to answer." (on Linux: "…; attach on <machine> to answer: talos-app supervise attach <id>") There is no
 Face ID or step-up: the tap is the approval. The first answer wins; every other face shows "Answered on <device>".
+
+**The computer-use permission dialog** (`Computer Use needs macOS permissions`, from a computer-use tool's `request_access` while macOS
+has not allowed the program) is neither: it is never offered as a card, because Enter on its first row opens System Settings on the
+Mac. The Mac supervisor dismisses it with Escape, which grants nothing, for Main and for thread sessions alike
+(`DialogMatcher.computerUseBlock`, `ComputerUseDismiss`; real screens in `apps/desktop/Tests/Fixtures/real-2.1.322`):
+
+- only on an exact match of the whole dialog (title, both permission rows, the three options in order with one cursor, the footer as
+  the last row), re-read just before the key; never any other key;
+- once per appearance (a dialog still there after its Escape gets no second key), and at most 3 an hour per session; past that, or
+  10 s after an Escape that did not take, it is left on screen and the thread gets a line that names Esc as the one key to press and
+  never says "answer"; Main's menu line says the same, and Terminals is never brought forward onto this dialog (whatever "open the
+  terminal when the agent needs you" says);
+- the log says `dialog_dismissed kind=computer_use_permissions` (and `dialog_dismiss_limit` once at the limit);
+- the session is `needs_you` (workers.json, or Main's `needs_you` in `main-restart-check.json`) while the dialog is up;
+- the thread (Main's: the default thread) gets one fixed line, at most once an hour: "This session tried to use the screen, but macOS
+  has not allowed it. Nothing is stuck: the session carried on without it. Screen control for sessions is being rebuilt; there is
+  nothing you need to grant right now."
+
+The session sees its tool call fail and carries on (captured: the model said the permissions are not granted, and the turn ended).
+
+**Claude Code's usage-limit screen** ("You've hit your … limit", then options to stop and wait, to wait and go on by itself, and to
+go on with usage credits) gets NO key from Talos, ever: no Enter, no digit, no arrow, no Escape, because one of its options spends
+money (`UsageLimitScreen`, `DialogMatcher.takesNoKeys`). No real capture exists yet (how to take one safely, with no key pressed:
+`docs/CAPTURE-USAGE-LIMIT.md`): the match is built from the CLI's own strings
+(`apps/desktop/Tests/Fixtures/synthetic/usage-limit*.txt`), loose on the words ("hit your" or "reached your", "limit", "usage
+credits") and strict on the shape (numbered options from 1 below the headline, one cursor on them, nothing under them but a footer).
+
+- every key sender checks it on the rows it is about to press into: the dev-warning auto-accept, the dev card and its popup, the tap
+  answerer and the popup, the pointer typer, and the computer-use Escape; it is never offered as a card;
+- the session is `needs_you` with kind `usage limit` (workers.json, or Main's `needs_you` in `main-restart-check.json`) while it is up;
+  `thread_session status` and `restart_main check` give the step (`needsYouStep`) instead of "answer it";
+- Terminals is not brought forward for it;
+- the thread (Main's: the default thread) gets one line per appearance, at most one an hour, naming the model (from a fixed list, or
+  "this session's model"), when it resets if the screen says (rebuilt from numbers and a time zone the system knows), and "press Esc in
+  the pane, then /model <another model>"; the log says `usage_limit_seen` with `line=yes` or `line=held_hourly`.
+
+On Linux (the supervisor in `apps/bridge/src/supervisor/`, `usage-limit.ts`, ported from `UsageLimitScreen` with its tests) the same
+screen is its own kind for every reader (`liveDialog`, `classify`: `usage_limit`; the prompt detector and the tap reader see none):
+
+- every key Talos sends goes through `TmuxPtyHost`, which reads the coloured pane first and allows the key only for what the sender
+  states it means to press (`key-guard.ts`, an allowlist): typing Talos's line into Claude's own input box when it is live,
+  empty, and has only Claude Code's status rows under it (`box-frame.ts`; the Enter and Backspaces when it holds exactly that
+  line, drawn as Claude Code draws typed text), or a key for a named dialog when that kind's exact reader matches the live region
+  (the option reader for trust and MCP consent, the same one first-start answers by). Nothing goes to this menu anywhere on the
+  pane, to a select Talos cannot name, to an unreadable pane, or with no intent; a refused pointer is told to the thread once,
+  after the hold wait, and the audit's `worker_pointer_held` says why (the guard's code, and the row under the box that is not one
+  of Claude Code's); a first-start key refused three times on one screen leaves the start waiting on that screen, said once;
+- what the key guard reads is the screen, and the screen can be drawn by anything that prints there: a status line a hostile
+  settings file sets could draw a whole rule/`❯`/rule frame holding Talos's line under the real box (the Enter is gated on the
+  LAST such frame), or a dialog's rows. Thread sessions run with Talos's own status line (the usage recorder, whose one row the
+  guard knows), so their screen holds only what Claude Code and Talos draw; same-uid code or a hostile `--settings` is outside
+  what the guard can tell apart, as the guards' stated boundary says (SECURITY.md);
+- the menu is recognised with or without a rule above it, as the Mac reads it; it is a menu QUOTED in the conversation only when
+  Claude's input box is live below it (its frame, only status rows under it) and the menu's rows sit above that box's top rule;
+- a thread session is `needs_you` with kind `usage limit` and, when the reset can be read, `resets_at` (the next such moment after
+  now, in the screen's time zone when the system knows it, else the supervisor's own); a start onto the screen is never failed
+  `needs_mac` (nobody is meant to answer it), and its line is the Mac's words with the attach command for the pane, at most one an
+  hour across appearances and restarts (the notice records' window for that kind);
+- Main's needs-you is `usage_limit` with the model and the reset, raised at once (no stall to wait out), its notice the same words,
+  and Main dropping out of `claude agents` on that screen is not called stuck; `main-restart-check.json` carries it as
+  `needs_you` (`usage limit`, with `resets_at`).
+
+**Main's restart on request, on Linux** (`main-request.ts`, `main-restart-check.ts`, `restart-proof.ts`, wired in
+`restart-wiring.ts`; the Mac's AgentRecovery, MainRestartCheck and RestartProof, ported). The supervisor holding the lock writes
+`main-restart-check.json` as the Mac does (every 5 s, at once on a change; sorted keys, 0600, atomic) and acts on
+`agent-request.json`:
+
+- the request is renamed to `agent-request.json.taken`, read (no link, a regular file of at most 4096 bytes) and deleted BEFORE
+  anything is decided, so it is acted on at most once, a crash included (a `.taken` left behind is discarded unread at the next
+  start); a request older than 5 minutes, more than 1 ahead, dated before this supervisor started, or with a control_id already
+  handled is discarded;
+- the owner's proof (the phone's signed Restart agent) is checked as the Mac checks it (devices.json, the `talos-owner/v1`
+  signature, the canonical frame, the used list and the mark, `restart-proofs-used.json` and `restart-proof-mark.json`, 0600).
+  On an unmanaged install the proof separates the owner from an agent acting through the guards, not from arbitrary code running
+  as the same user (which can pin its own key in `devices.json`; SECURITY.md), and the tap is accepted up to 2 minutes ahead
+  of this clock, as on the Mac. The proofs used, the newest signed time, the 2-minute gaps, the hourly count, the last handled request and
+  the line spacing outlive a restart of the supervisor (`restart-actor.json`, 0600, denied to sessions by the guards; code that
+  kills the supervisor and rewrites it is outside what this stops). His tap skips the restart check, as on the Mac: only his Stop, his own 2-minute gap and the usage-limit menu (a restart lands
+  on it again) refuse it. If the restart then waits at a screen that needs someone at the keyboard (the startup warning on a
+  launch root has not approved), that is said at once in the default thread and `last` is `stalled` with its label. A proof
+  that claims the owner and does not verify is refused, one fixed line;
+- any other request (a session's `restart_main`, a proof whose time this computer does not take) is checked again when it is
+  read: the reasons (the protocol's list, as Linux knows them: root's launch approval and its channels, claude found, auto-confirm,
+  anyone attached to Main's pane, the takeover check, the owner's Stop, the 2-minute gap, the saved id, and `restart_limit`: 3
+  acted on per rolling hour), and any screen Main waits on the owner at (`last.detail` names it). A session's `why` is never in
+  the supervisor's own line;
+- the restart is a quiet stop and a cold start, followed to `came_back` (Main running, nothing waiting) or `stalled` (a dialog,
+  the takeover check, a start that could not be made); the phone lines are at most one of each kind per 2 minutes, one post in
+  flight, in this computer's words (the bridge's `restart_main` sentences pick "the Mac" or "this computer" by platform).
 
 ### The flow
 
@@ -713,6 +993,8 @@ card's binding)**, strict fields, `control_id` of `[A-Za-z0-9_-]{1,64}` acted on
 | `dialog-card.json` (bridge → Mac)                      | `{ v:1, dialog_id, card_id, thread_id, status: waiting\|answered\|closed\|expired, by?, label?, at }`. Written when the card is made and rewritten when it changes. **The Mac posts its old thread line only when no such file naming this dialog appears within 15 s of first seeing it** (`DIALOG_CARD_WAIT_MS`: one whole 10 s poll plus the write; the bridge normally makes the card within a second of `workers.json` changing). An old bridge, a relay without `needs-you/1` or a bridge that is down never writes it, so those get today's behaviour. While a file for the dialog exists the Mac posts no line for it; the bridge posts the expiry line. **Display only**: a forged one can only hide the Mac's fallback line |
 | `dialog-answer.json` (bridge → Mac)                    | `{ v:2, dialog_id, choice\|action:'open', label, by, at, control_id, proof }`, strict, at most 16 KiB. `choice`, `action`, `label` and `by` are for display and logging only. `proof = { signed, osig, device_id, binding }`: see "How the Mac verifies an answer". The Mac acts once per `dialog_id`, deletes the file, and always writes `dialog-result.json`                                                                                                                                                                                                                                                                                                                                                                       |
 | `dialog-result.json` (Mac → bridge)                    | strict: `{ v:1, dialog_id, control_id?, source: card\|mac, outcome: pressed\|nothing_pressed\|opened, choice?, label?, reason?, at }`. `source:'card'` answers one bridge answer (`control_id` required; `pressed` carries `choice` and the `label` the screen showed; `nothing_pressed` carries `reason`: `screen_changed`, `already_answered` or `unverified`). `source:'mac'` is a popup press (no `control_id`; `pressed` or `opened`). The bridge deletes the file once used                                                                                                                                                                                                                                                     |
+| `dialog-proofs-used.json` (Mac only)                   | `{ v:1, used: string[] }`, the newest 64. Each entry is `<dialog_id>\|<sha256 of proof.signed>`, for every proof that checked out, written before any key is sent. A copy of a tap (the same signed text, however its signature is spelled) is answered `already_answered`, after a relaunch too. The bridge never reads it; its guard keeps tools off it                                                                                                                                                                                                                                                                                                                                                                             |
+| `main-dialog-proofs-used.json` (Mac only)              | The same list for Main's development-channels card, beside `main-dialog-answer.json` in the default thread's folder, kept apart from a worker's on that thread                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 The bridge looks at the result file every second while a dialog card is open (and at every 10 s poll).
 There is **no`dialog-claim.json`**: the Mac popup presses by itself and reports with a `source:'mac'` result.

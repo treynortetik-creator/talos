@@ -5,6 +5,8 @@
 // storage, no parent access, no forms, popups, modals, downloads or top navigation), `referrerpolicy="no-referrer"`
 // and no `allow` (no camera, microphone, geolocation, clipboard, payment, fullscreen). Never add `allow-same-origin`:
 // test/apps/sandbox-lint.test.ts fails on it anywhere in apps/web/src.
+
+import { PAGE_SANDBOX_ATTR } from '@talos-app/protocol'
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
@@ -14,11 +16,20 @@ import {
   useRef,
   useState,
 } from 'react'
+import { coarsePointer } from '../lib/native.ts'
+
+/** Any touch screen (an iPad with a trackpad reports a fine pointer, yet a finger still swipes its fullscreen away). */
+const touchScreen = () =>
+  coarsePointer() ||
+  (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
+  (typeof matchMedia === 'function' && matchMedia('(any-pointer: coarse)').matches)
+
 import { cn } from './cn.ts'
 import { installFrameFocusGuard } from './frameFocusGuard.ts'
 import { IconClose, IconLink } from './icons.tsx'
 
-export const SANDBOX_ATTR = 'allow-scripts'
+// the one value, shared with the relay's page policy (@talos-app/protocol csp.ts): script only, never allow-same-origin
+export const SANDBOX_ATTR = PAGE_SANDBOX_ATTR
 
 export type SandboxedFrameProps = {
   title: string
@@ -92,7 +103,8 @@ export const OVERLAY_BOX_CLASS =
 
 /**
  * What an overlay does while it is open: focuses the close control, locks page scroll, asks the browser for real element
- * fullscreen on the box (iOS Safari has none, so the fixed box is the fallback and always the layout), closes when
+ * fullscreen on the box with a mouse (never on a touch screen, where WebKit's swipe-down would close it; the fixed box is
+ * always the layout), closes when
  * fullscreen is left by any route, and returns `onKeyDown` (Escape closes, Tab stays inside the bar's controls).
  * Element fullscreen on the box never reloads the frame inside it.
  */
@@ -124,8 +136,12 @@ export function useFrameOverlay({
     }
     document.addEventListener('fullscreenchange', onFs)
     // Desktop browsers only grant this with transient activation; without it the fixed box is the whole effect.
+    // Never on a touch screen: iOS WebKit's element fullscreen shows "Swipe down to exit" and leaves on a swipe down,
+    // which closed a long page on every scroll (the owner, 2026-11-14). There the fixed box, with Close at its top
+    // right, is the whole effect, and no gesture closes it.
     const activated = navigator.userActivation ? navigator.userActivation.isActive : true
-    if (activated && el && typeof el.requestFullscreen === 'function') el.requestFullscreen().catch(() => {})
+    if (activated && !touchScreen() && el && typeof el.requestFullscreen === 'function')
+      el.requestFullscreen().catch(() => {})
     return () => {
       document.removeEventListener('fullscreenchange', onFs)
       document.body.style.overflow = prev
@@ -206,11 +222,11 @@ export function FrameOverlay({
           ref={closeBtn}
           type="button"
           aria-label="Close"
+          title="Close"
           onClick={onClose}
-          className="flex min-h-11 items-center gap-1.5 rounded-pill px-2"
+          className="grid size-11 shrink-0 place-items-center rounded-pill text-text hover:bg-surface"
         >
-          <IconClose width={16} height={16} />
-          <span>Close</span>
+          <IconClose width={22} height={22} />
         </button>
       </div>
       {children}

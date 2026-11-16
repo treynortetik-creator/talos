@@ -3,6 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import { spawn } from 'node:child_process'
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -48,13 +49,56 @@ describe('CC-C1 review: install-ask-rules never loosens the file (F4)', () => {
   test('a symlinked settings file (dotfiles) is edited through the link, not replaced by a copy', async () => {
     const agent = tmp()
     const dotfiles = tmp('cc-c1-dotfiles-')
-    const real = join(dotfiles, 'claude-settings.json')
+    mkdirSync(join(dotfiles, '.claude'))
+    const real = join(dotfiles, '.claude', 'settings.json') // ~/dotfiles/.claude/settings.json
     writeFileSync(real, JSON.stringify({ model: 'opus' }))
     mkdirSync(join(agent, '.claude'))
     symlinkSync(real, settings(agent))
     expect(await runCli(['install-ask-rules', '--agent-dir', agent], cliIO('y').io)).toBe(0)
     expect(lstatSync(settings(agent)).isSymbolicLink()).toBe(true)
     expect(JSON.parse(readFileSync(real, 'utf8')).permissions?.ask).toContain('Bash(git push *)')
+  })
+})
+
+describe('install-ask-rules never follows an agent-made link into the Claude config or the Talos home', () => {
+  // the agent can make links in its own folder; the owner's command must never become a write the agent may not make
+  const run = (agent: string, claudeDir: string, home: string) =>
+    runCli(['install-ask-rules', '--agent-dir', agent, '--claude-dir', claudeDir], cliIO('y').io, {
+      TALOS_APP_HOME: home,
+    })
+
+  test('.claude/settings.json linked to the user settings is refused, and the user file is unchanged', async () => {
+    const agent = tmp()
+    const claudeDir = tmp('cc-c1-claude-')
+    const home = tmp('cc-c1-home-')
+    const user = join(claudeDir, 'settings.json')
+    writeFileSync(user, JSON.stringify({ model: 'opus' }))
+    mkdirSync(join(agent, '.claude'))
+    symlinkSync(user, settings(agent))
+    expect(await run(agent, claudeDir, home)).not.toBe(0)
+    expect(readFileSync(user, 'utf8')).toBe(JSON.stringify({ model: 'opus' }))
+  })
+
+  test('.claude/settings.json linked to a JSON file that is not a .claude settings file (another repo) is refused', async () => {
+    // a file that parses as JSON, so only the link rule stands between it and being rewritten
+    const agent = tmp()
+    const repo = tmp('cc-c1-repo-')
+    const pkg = join(repo, 'package.json')
+    writeFileSync(pkg, JSON.stringify({ name: 'other' }))
+    mkdirSync(join(agent, '.claude'))
+    symlinkSync(pkg, settings(agent))
+    expect(await run(agent, tmp('cc-c1-claude-'), tmp('cc-c1-home-'))).not.toBe(0)
+    expect(readFileSync(pkg, 'utf8')).toBe(JSON.stringify({ name: 'other' }))
+  })
+
+  test('a .claude folder linked into the Talos home is refused, even with no settings file there yet', async () => {
+    const agent = tmp()
+    const claudeDir = tmp('cc-c1-claude-')
+    const home = tmp('cc-c1-home-')
+    mkdirSync(join(home, 'guards'))
+    symlinkSync(join(home, 'guards'), join(agent, '.claude'))
+    expect(await run(agent, claudeDir, home)).not.toBe(0)
+    expect(existsSync(join(home, 'guards', 'settings.json'))).toBe(false)
   })
 })
 

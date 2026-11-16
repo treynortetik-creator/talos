@@ -26,6 +26,9 @@ public enum PermissionsModel {
     case triggerPrompt
     /// Only the owner can add Talos in System Settings; the URL opens the right pane.
     case openSettings(String)
+    /// Screen control (screen helper lane 4): a Grant button that asks macOS itself, beside the pane's URL. The row's tick
+    /// comes from the live test of the screen helper (`ScreenSetupModel`), not from the grant alone.
+    case grant(String)
     case none
   }
 
@@ -79,6 +82,8 @@ public enum PermissionsModel {
   public static func stateNote(kind: Kind, state: State, action: Action) -> String? {
     switch (kind, state) {
     case (_, .granted): return nil
+    case (.accessibility, _): return ScreenSetupText.missing(.accessibility)
+    case (.screenRecording, _): return ScreenSetupText.missing(.screenRecording)
     case (.notifications, .missing):
       return "Denied. macOS blocks every Talos banner, including crash and health banners, and Talos can't turn that back on. Open System Settings \u{2192} Notifications \u{2192} Talos and allow them."
     case (.notifications, .askedOnFirstUse): return "Not asked yet. macOS asks the first time a banner would show."
@@ -113,12 +118,12 @@ public enum PermissionsModel {
       .openSettings(settingsBase + "Privacy_AllFiles")
     ),
     (
-      .accessibility, "Accessibility", "Computer use clicks and types.",
-      .openSettings(settingsBase + "Privacy_Accessibility")
+      .accessibility, "Accessibility", "Screen control: your agent clicks and types for you, only in apps you allowed.",
+      .grant(settingsBase + "Privacy_Accessibility")
     ),
     (
-      .screenRecording, "Screen & System Audio Recording", "Computer use takes screenshots.",
-      .openSettings(settingsBase + "Privacy_ScreenCapture")
+      .screenRecording, "Screen & System Audio Recording", "Screen control: your agent sees the screen, only the apps you allowed.",
+      .grant(settingsBase + "Privacy_ScreenCapture")
     ),
     (.automation, "Automation", "Scripts that drive Mail, Calendar, Finder, Terminal and other apps.", .triggerPrompt),
     (.microphone, "Microphone", "Anything the agent records.", .none),

@@ -1,0 +1,40 @@
+✻ Cooked for 9s · done 7:39 PM
+  · 1 shell still running
+
+❯ first queued note
+
+⏺ Got it. Sleep's still
+  running, no "done" yet.
+
+✻ Cogitated for 3s · done 7:40
+  PM · 1 shell still running
+
+❯ second queued note
+
+⏺ Noted. Still waiting on the
+  damn sleep.
+
+✻ Cogitated for 2s · done 7:40
+  PM · 1 shell still running
+
+❯ Write a 1500-word story
+  about a lighthouse keeper,
+  as plain prose. Use no
+  tools.
+
+❯ first queued note
+
+❯ second queued note
+  ctrl+x ctrl+s to send now
+
+· Pondering… (thinking)
+  ⎿  Tip: Use Plan Mode to
+     prepare for a complex
+     request before making
+     changes. Press shift+tab
+     twice to enable.
+  Ctrl+Y to paste deleted t…
+──────────────────────────────
+❯ a draft not sent
+──────────────────────────────
+  ⏸ manual mode on · 1 shell

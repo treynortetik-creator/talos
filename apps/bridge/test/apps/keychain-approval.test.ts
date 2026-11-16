@@ -24,12 +24,22 @@ const ACCT = `${'a'.repeat(16)}/config`
 
 describe('the real Keychain runner (against a spawn spy; the real Keychain is never touched)', () => {
   it('writes through `security -i` with the value on STDIN, never in argv', async () => {
-    const s = spy()
+    const store = new Map<string, string>()
+    const s = spy((c) => {
+      const m = c.stdin ? /-a (\S+) -w (\S+)\n/.exec(c.stdin) : null
+      if (m) {
+        store.set(m[1] as string, m[2] as string)
+        return { code: 0, stdout: '' }
+      }
+      const v = store.get(c.argv[c.argv.indexOf('-a') + 1] as string)
+      return v ? { code: 0, stdout: `${v}\n` } : { code: 44, stdout: '' }
+    })
     const secret = 'Bearer s3cr3t-value-123'
     await securityRunner(s.spawn).write(ACCT, secret)
-    expect(s.calls.length).toBe(1)
-    expect(s.calls[0]?.argv).toEqual(['/usr/bin/security', '-i'])
-    const line = s.calls[0]?.stdin ?? ''
+    const writes = s.calls.filter((c) => c.stdin !== undefined)
+    expect(writes.length).toBe(1)
+    expect(writes[0]?.argv).toEqual(['/usr/bin/security', '-i'])
+    const line = writes[0]?.stdin ?? ''
     expect(line).toStartWith(`add-generic-password -U -s talos-app.direct -a ${ACCT} -w v1.`)
     expect(line.endsWith('\n')).toBe(true)
     expect(JSON.stringify(s.calls.map((c) => c.argv))).not.toContain('s3cr3t')

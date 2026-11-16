@@ -110,11 +110,10 @@ struct PointerTyperInputBoxTests {
     #expect(!PointerTyper.mayType(screen: .none, lastClientActivity: 80, now: 100, draftPresent: false, boxVisible: false))
   }
 
-  @Test func theNoBoxNoticeIsOneLineWithTheArrowAndTheThreadName() {
+  @Test func theNoBoxNoticeIsOneLineWithoutTheThreadName() {
     #expect(
-      WorkerNotice.noBoxLine(threadName: "trip")
-        == "trip's session isn't showing its input box yet. Open Terminals \u{2192} trip to see what it's waiting on.")
-    #expect(WorkerNotice.noBoxLine(threadName: "").hasPrefix("A thread's session"))
+      WorkerNotice.noBoxLine()
+        == "This thread's session isn't showing its input box yet. Open this thread in Terminals to see what it's waiting on.")
   }
 }
 

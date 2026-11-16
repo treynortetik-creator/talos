@@ -2,14 +2,15 @@ import Foundation
 import Testing
 
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 @Suite("Agent folder: Create, Adopt, Choose")
 struct AgentFolderSetupTests {
   /// A scratch HOME that is removed when the test is done.
   final class Scratch {
     let root: String
-    init() {
-      root = NSTemporaryDirectory() + "k7-" + UUID().uuidString
+    init(base: String = TestTemp.base) {
+      root = base + "k7-" + UUID().uuidString
       try? FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
     }
     deinit { try? FileManager.default.removeItem(atPath: root) }
@@ -162,6 +163,113 @@ struct AgentFolderSetupTests {
     #expect(AgentFolderSetup.cloneProblem("") != nil)
   }
 
+  @Test func aCloneFromAnotherMacSaysWhereItWasBuiltAndToRebuild() throws {
+    // build-app.sh stamps the builder's clone into Info.plist; an app copied from another Mac carries a path that isn't here
+    // (a scratch path that was never made: one under /home can stall on macOS, where /home is an automount)
+    let s = Scratch()
+    let elsewhere = s.root + "/another-mac/talos-app"
+    let why = try #require(AgentFolderSetup.cloneProblem(elsewhere))
+    #expect(why.contains("built from \(elsewhere)"), "\(why)")
+    #expect(why.contains("isn't on this Mac"), "\(why)")
+    #expect(why.contains("your own clone") && why.contains("build-app.sh --release"), "\(why)")
+    // a path that is there but is not a folder is a different problem, and keeps its own words
+    let file = s.folder("f2", files: ["x": "1"]) + "/x"
+    #expect(AgentFolderSetup.cloneProblem(file)?.contains("isn't on this Mac") == false)
+  }
+
+  // MARK: a prebuilt app (release-app.sh): no clone in Info.plist, install.sh records the one on this Mac
+
+  @Test func aPrebuiltAppReadsTheCloneInstallShRecorded() throws {
+    let s = Scratch()
+    let support = s.folder("support")
+    let clone = Self.clone(s, "her-clone")
+    #expect(AgentFolderSetup.recordedCheckout(supportDir: support) == nil)
+    let why = try #require(AgentFolderSetup.cloneProblem(""))
+    #expect(why.contains("apps/desktop/scripts/install.sh") && why.contains("records the clone"), "\(why)")
+    // what install.sh writes: the path and a newline
+    FileManager.default.createFile(atPath: support + "/checkout", contents: Data((clone + "\n").utf8))
+    #expect(AgentFolderSetup.recordedCheckout(supportDir: support) == clone)
+    // an empty file is no clone (never "" passed on as a path)
+    FileManager.default.createFile(atPath: support + "/checkout", contents: Data("\n".utf8))
+    #expect(AgentFolderSetup.recordedCheckout(supportDir: support) == nil)
+  }
+
+  /// The record can be written by any program of the owner's, an agent session included: what it names gets the guard refresh's rules.
+  @Test func aRecordedCloneInASessionFolderOrWithALinkOrLooseModesIsRefused() throws {
+    let s = Scratch()
+    let record = s.folder("support") + "/checkout"
+    FileManager.default.createFile(atPath: record, contents: Data("x\n".utf8))
+    let clone = Self.real(Self.clone(s, "good"))
+    let agent = Self.real(s.folder("agent"))
+    // control: a whole clone outside every session folder, owned by this user, writable by no one else
+    #expect(AgentFolderSetup.recordedCloneProblem(clone, recordFile: record, unsafe: [agent]) == nil)
+    // in the agent folder (a session wrote the clone and the record)
+    let inAgent = Self.real(Self.clone(s, "agent/clone"))
+    #expect(AgentFolderSetup.recordedCloneProblem(inAgent, recordFile: record, unsafe: [agent])?.contains("agent sessions work in") == true)
+    // under a temp root: a clone under /private/tmp itself, not the scratch folder: a CI runner's TMPDIR can be outside the
+    // app's temp roots (Lemnos: ~/.cache/talos-ci/tmp), and the rule under test is "a clone in a temp folder is refused"
+    let tmp = Scratch(base: "/private/tmp/")
+    let underTmp = Self.real(Self.clone(tmp, "good"))
+    #expect(AgentFolderSetup.recordedCloneProblem(underTmp, recordFile: record, unsafe: GuardsRefresh.tmpRoots)?.contains("agent sessions work in") == true)
+    // a folder that holds a session folder (the clone is the home around the Talos home)
+    #expect(AgentFolderSetup.recordedCloneProblem(clone, recordFile: record, unsafe: [clone + "/inner"]) != nil)
+    // a link anywhere in the path, and a link at the clone itself
+    try FileManager.default.createSymbolicLink(atPath: s.root + "/via", withDestinationPath: s.root)
+    #expect(AgentFolderSetup.recordedCloneProblem(s.root + "/via/good", recordFile: record, unsafe: [agent])?.contains("link") == true)
+    try FileManager.default.createSymbolicLink(atPath: s.root + "/linked", withDestinationPath: clone)
+    #expect(AgentFolderSetup.recordedCloneProblem(Self.real(s.root) + "/linked", recordFile: record, unsafe: [agent])?.contains("link") == true)
+    // a relative path, and one that is not there
+    #expect(AgentFolderSetup.recordedCloneProblem("good", recordFile: record, unsafe: []) != nil)
+    #expect(AgentFolderSetup.recordedCloneProblem(clone + "-gone", recordFile: record, unsafe: []) != nil)
+    // modes: the folder or what Talos runs from it writable by others; a linked install.sh
+    chmod(clone, 0o777)
+    #expect(AgentFolderSetup.recordedCloneProblem(clone, recordFile: record, unsafe: [])?.contains("written by other users") == true)
+    chmod(clone, 0o755)
+    chmod(clone + "/install.sh", 0o664)
+    #expect(AgentFolderSetup.recordedCloneProblem(clone, recordFile: record, unsafe: [])?.contains("install.sh") == true)
+    chmod(clone + "/install.sh", 0o644)
+    try FileManager.default.removeItem(atPath: clone + "/install.sh")
+    let elsewhere = s.folder("x", files: ["install.sh": "#!/bin/bash\n"]) + "/install.sh"
+    try FileManager.default.createSymbolicLink(atPath: clone + "/install.sh", withDestinationPath: elsewhere)
+    #expect(AgentFolderSetup.recordedCloneProblem(clone, recordFile: record, unsafe: [])?.contains("is a link") == true)
+    try FileManager.default.removeItem(atPath: clone + "/install.sh")
+    FileManager.default.createFile(atPath: clone + "/install.sh", contents: Data("#!/bin/bash\n".utf8))
+    #expect(AgentFolderSetup.recordedCloneProblem(clone, recordFile: record, unsafe: []) == nil)
+    // another user's: the same clone judged for another uid
+    #expect(AgentFolderSetup.recordedCloneProblem(clone, recordFile: record, unsafe: [], uid: getuid() + 1)?.contains("another user") == true)
+    // the record itself: writable by others, or a link
+    chmod(record, 0o666)
+    #expect(AgentFolderSetup.recordedCloneProblem(clone, recordFile: record, unsafe: [])?.contains("record of Talos's clone") == true)
+    chmod(record, 0o644)
+    let linkedRecord = s.root + "/record-link"
+    try FileManager.default.createSymbolicLink(atPath: linkedRecord, withDestinationPath: record)
+    #expect(AgentFolderSetup.recordedCloneProblem(clone, recordFile: linkedRecord, unsafe: [])?.contains("is a link") == true)
+  }
+
+  @Test func theFoldersARecordedCloneMayNotBeInAreTheSessionFoldersAndTempRoots() throws {
+    let cfg = #"{"dedicated":{"enabled":true},"threads":[{"id":"trip","kind":"fixed","session":"dedicated","session_opts":{"cwd":"/home/alex/trip"}}]}"#
+    let f = AgentFolderSetup.sessionFolders(
+      talosHome: "/home/alex/.config/talos/app", agentDir: "/home/alex/agent", configJSON: Data(cfg.utf8),
+      supportDir: "/home/alex/Library/Application Support/Talos")
+    for want in ["/home/alex/.config/talos/app", "/home/alex/agent", "/home/alex/trip", "/home/alex/Library/Application Support/Talos"]
+    { #expect(f.contains(want), "\(want)") }
+    for root in GuardsRefresh.tmpRoots { #expect(f.contains(root), "\(root)") }
+    // a config.json that cannot be read still leaves the rest
+    #expect(AgentFolderSetup.sessionFolders(talosHome: "/h", agentDir: "", configJSON: Data("{".utf8), supportDir: "/s").contains("/h"))
+  }
+
+  @Test func installShWritesTheFileTheAppReads() throws {
+    let desktop = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let install = try String(contentsOf: desktop.appendingPathComponent("scripts/install.sh"), encoding: .utf8)
+    let controller = try String(
+      contentsOf: desktop.appendingPathComponent("Sources/TalosDesktop/SupervisorController.swift"), encoding: .utf8)
+    let flow = try String(contentsOf: desktop.appendingPathComponent("Sources/TalosDesktop/AgentFolderFlow.swift"), encoding: .utf8)
+    #expect(install.contains(#"SUPPORT="$HOME/Library/Application Support/Talos""#))
+    #expect(install.contains(#"mv -f "$SUPPORT/.checkout.$$" "$SUPPORT/checkout""#))
+    #expect(controller.contains(#"static let supportDir = NSHomeDirectory() + "/Library/Application Support/Talos""#))
+    #expect(flow.contains("supportDir: SupervisorController.supportDir"))
+  }
+
   @Test func chooseSendsAFolderWithoutTalosToAdopt() {
     let s = Scratch()
     let plain = s.folder("plain", files: ["CLAUDE.md": "mine"])
@@ -189,7 +297,7 @@ struct AgentFolderSetupTests {
     #expect(!notEmpty.contains("run ./install.sh again"))
     let synced = text(1, "refusing: /h/Dropbox/a looks like cloud-synced storage. Two processes editing memory/ mid-sync corrupts it.\nFAILED at \"4/7\": the kit installer failed before copying anything (its output is above).")
     #expect(synced.contains("cloud-synced storage"))
-    let missing = text(3, "\nCannot continue. Missing:\n  - bun: install Bun 1.3 or newer: https://example.com/bun\n  - git: install git (macOS: xcode-select --install)\nInstall what is listed, then run ./install.sh again. Nothing was changed.")
+    let missing = text(3, "\nCannot continue. Missing:\n  - bun: install Bun 1.4.4 or newer: https://example.com/bun\n  - git: install git (macOS: xcode-select --install)\nInstall what is listed, then run ./install.sh again. Nothing was changed.")
     #expect(missing.contains("bun: install Bun") && missing.contains("git: install git") && missing.contains("press Create again"))
     #expect(missing.contains("Nothing was changed"))
     let partway = text(1, "\nFAILED at \"4/7\": The kit copy stopped part-way. /h/a now holds a partial copy. Move it aside (for example: mv /h/a /h/a.partial) and run ./install.sh again.")

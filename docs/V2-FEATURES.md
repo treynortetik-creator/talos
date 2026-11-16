@@ -87,8 +87,15 @@
   `presence.features_at`. The app shows Search and Memory as "Needs your Mac" instead of hiding them, and Memory's
   offline cache stays reachable. That echo is WP-S2's (SCHEDULES S4.5). V0 lists it under `## Requests` and builds it
   itself if S2 hasn't merged.
-- **Cap.** `features` is `.max(20)` (`frames.ts:82,107`). Today's lists (schedules, Claude Code, MCP Apps and these)
-  fit; the next addendum must count.
+- **Cap.** A features list is `FeatureList`, `.max(FEATURES_MAX)` = 64 (`models.ts`). Builds before that took
+  `FEATURES_MAX_V1` = 20 and refuse the whole frame over it, so a list sent to a peer that may be older stays at 20 or
+  fewer: the relay's `ready.features` always, `presence.features` to an app unless the app's hello lists
+  `features-64/1`. A bridge hello is the exception: every relay since 5367f571 takes 64, so with no word from the relay a
+  bridge sends its whole list first and dials once. A dial past 20 that ends before `ready` (a 4401, or any close after the
+  hello went out: a proxy's 1006, the handshake timeout) sends the 20 any relay takes next, at most once per start. After
+  that the relay's last `ready` decides, kept across restarts (`relay-features.json`, for the same relay URL only; a 4401
+  keeps the empty list, so the next start sends 20 first). A second dial drops the socket the apps see, and what an app had
+  asked on it goes unanswered, so the whole list must fit one hello: `test/features-budget.test.ts` fails past 64.
 
 ### V1.1 Ids and primitives (adds to 3.2; `ids.ts`)
 

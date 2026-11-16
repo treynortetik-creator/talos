@@ -14,10 +14,11 @@ import {
 } from '../src/index.ts'
 
 describe('ops_read in the settings table', () => {
-  test('its row is Mac-only, high risk, off by default and not an agent setting', () => {
-    expect(THREAD_SESSION_OPT_ROWS.ops_read).toMatchObject({ phone: false, agent: false, risk: 'high', default: false })
-    expect(AGENT_SETTING_PATHS.some((p) => p.includes('ops_read') || p === ('threads' as string))).toBe(false)
-    expect(AGENT_CONFIG_REFUSED as readonly string[]).toContain('threads')
+  test('its row is Mac-only (risk mac), off by default and not an agent setting', () => {
+    expect(THREAD_SESSION_OPT_ROWS.ops_read).toMatchObject({ phone: false, agent: false, risk: 'mac', default: false })
+    expect(AGENT_SETTING_PATHS.some((p) => p.includes('ops_read'))).toBe(false)
+    // the agent may propose a thread's own fields (app-control), never this option: it is refused by its full path
+    expect(AGENT_CONFIG_REFUSED as readonly string[]).toContain('threads.session_opts.ops_read')
     expect(PHONE_PATCH_ENTRIES.some((p) => p.includes('ops_read'))).toBe(false)
   })
   test('the registry views list it, so a risk table built from them sees it', () => {

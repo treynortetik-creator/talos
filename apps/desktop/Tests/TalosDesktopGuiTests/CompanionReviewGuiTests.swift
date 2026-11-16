@@ -437,7 +437,7 @@ struct CompanionReviewGuiTests {
     _ = NSApplication.shared
     let fx = CompanionFixture(enabled: true)
     defer { fx.done() }
-    let q = QuietWindow.read(Data(#"{"quiet_window":{"start":"20:30","end":"04:00"},"timezone":"Etc/GMT+7"}"#.utf8))
+    let q = QuietWindow.read(Data(#"{"quiet_window":{"start":"22:00","end":"06:00"},"timezone":"Etc/GMT+5"}"#.utf8))
     fx.inputs.quietWindow = q
     fx.inputs.quiet = true
     fx.inputs.collected = 4
@@ -516,11 +516,11 @@ struct CompanionReviewGuiTests {
       sc.now = saved
       sc.setQuietForTest(nil)
     }
-    let q = QuietWindow.read(Data(#"{"quiet_window":{"start":"20:30","end":"04:00"},"timezone":"Etc/GMT+7"}"#.utf8))
+    let q = QuietWindow.read(Data(#"{"quiet_window":{"start":"22:00","end":"06:00"},"timezone":"Etc/GMT+5"}"#.utf8))
     sc.setQuietForTest(q)
-    sc.now = { Date(timeIntervalSince1970: 1_793_462_400) }  // 09:00 UTC-7
+    sc.now = { Date(timeIntervalSince1970: 1_793_455_200) }  // 09:00 UTC-5
     #expect(sc.companionInputsNow.quiet == false)
-    sc.now = { Date(timeIntervalSince1970: 1_793_462_400 + 18 * 3600) }  // 03:00 the next day: inside the window
+    sc.now = { Date(timeIntervalSince1970: 1_793_455_200 + 18 * 3600) }  // 03:00 the next day: inside the window
     #expect(sc.companionInputsNow.quiet == true, "a wake at 03:30 must not read the value from before the lid closed")
     #expect(sc.companionInputsNow.collected == sc.collected)
     #expect(sc.companionInputsNow.quietWindow == q)

@@ -22,7 +22,7 @@ updater cannot leave a second one starting under an orphaned migration). Then:
           into releases/.tmp-<pid>, checked against its own content hash.
   selftest  the new release's `release-check.py release` runs on the staged copy. --dry-run stops after this and prints the
           new version, the release notes, the pending migrations, the hook changes and the app and relay notes; it deletes the stage.
-  journal the staged release is made read-only and renamed into releases/<version>; update-journal.json records from, to and the
+  journal the staged release is renamed into releases/<version>, then made read-only; update-journal.json records from, to and the
           migration marker; settings.json is copied aside so a failed update can put back the exact bytes.
   swap    `current` moves with one rename of a fresh link over it.
   files   the Talos files that live inside the agent folder (agent-files/ in the release) are copied in, each by atomic replace.
@@ -46,6 +46,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -60,7 +61,7 @@ from _update_fetch import fetch_bytes  # noqa: E402
 from _update_trust import cmd_trust_key, combined_allowed  # noqa: E402
 from _update_common import (FAILED, HALF, NAMESPACE, OK, PLUGIN_DIR, PR, PRINCIPAL, USAGE, Interrupted, Stop,  # noqa: E402
                             atomic_write, die_point, load_script, owner_terminal_only, resolve_agent, resolve_vendor, rm_tree,
-                            run_group, say, take_lock, unique_bak, warn, app_home)
+                            run_group, say, take_lock, unique_bak, warn, app_home, vendor_choice_check)
 
 KEEP = 3
 MAX_BUNDLE = 200 * 1024 * 1024
@@ -467,7 +468,9 @@ def journal_dir_of(journal):
 
 # --------------------------------------------------------------------------- update
 def cmd_update(a):
-    owner_terminal_only("update")
+    # no terminal check (owner ruling 2026-11-14): the agent runs `talos update` when the owner asks; releases are signature-checked,
+    # so it can only move to a kit someone the owner trusts signed. Adding a signer (trust-key) stays the owner's, at a terminal.
+    vendor_choice_check(a, "update")
     agent = resolve_agent(a.agent)
     vendor = resolve_vendor(a.vendor)
     fd = take_lock(vendor)
@@ -559,10 +562,13 @@ def cmd_update(a):
             if PR.content_sha(existing) != PR.content_sha(new_rel):
                 raise Stop("release %s already exists under releases/ with different content. A release is immutable; remove it yourself if "
                            "you are sure, then run this again. Nothing was changed." % version)
+            # sealed again: a run killed between its rename and its seal left this release writable
+            PR.make_read_only(os.path.dirname(existing))
             rm_tree(stage)
         else:
-            PR.make_read_only(stage)
+            # rename first, then seal (see plugin-release.py build): a read-only directory cannot be renamed on stock APFS
             os.rename(stage, os.path.dirname(existing))
+            PR.make_read_only(os.path.dirname(existing))
         jd = os.path.join(vendor, "update-journal.d")
         rm_tree(jd)
         os.makedirs(jd, mode=0o700)
@@ -774,14 +780,19 @@ def prune_releases(vendor, current, previous):
     for v in vs:
         if v not in keep:
             trash = os.path.join(vendor, "releases", ".trash-%s-%d" % (v, os.getpid()))
-            os.rename(os.path.join(vendor, "releases", v), trash)
+            old = os.path.join(vendor, "releases", v)
+            # a sealed release's own folder must be writable to be renamed on stock APFS; rm_tree unseals the rest
+            os.chmod(old, os.stat(old).st_mode | stat.S_IWUSR)
+            os.rename(old, trash)
             rm_tree(trash)
             say("  removed old release %s (the newest %d are kept)" % (v, KEEP))
 
 
 # --------------------------------------------------------------------------- rollback and restore commands
 def cmd_rollback(a):
-    owner_terminal_only("rollback")
+    # no terminal check (owner ruling 2026-11-14): the agent runs `talos rollback` when the owner asks; releases are signature-checked,
+    # so it can only move to a kit someone the owner trusts signed. Adding a signer (trust-key) stays the owner's, at a terminal.
+    vendor_choice_check(a, "rollback")
     agent = resolve_agent(a.agent)
     vendor = resolve_vendor(a.vendor)
     fd = take_lock(vendor)
@@ -835,7 +846,9 @@ def last_good_version(agent, rel):
 
 
 def cmd_restore(a):
-    owner_terminal_only("restore")
+    # no terminal check (owner ruling 2026-11-14): the agent runs `talos restore` when the owner asks; releases are signature-checked,
+    # so it can only move to a kit someone the owner trusts signed. Adding a signer (trust-key) stays the owner's, at a terminal.
+    vendor_choice_check(a, "restore")
     agent = resolve_agent(a.agent)
     vendor = resolve_vendor(a.vendor)
     raw = a.file

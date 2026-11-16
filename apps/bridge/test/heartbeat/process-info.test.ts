@@ -13,6 +13,9 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
+/** Above Linux's highest pid_max: no such process, so only the fake ps answers for it (on Linux /proc is read too). */
+const NO_PID = 4_194_305
+
 /** Puts a `ps` first on PATH that runs `body` (sh). */
 function fakePs(body: string) {
   const d = mkdtempSync(join(tmpdir(), 'ps-'))
@@ -45,22 +48,26 @@ describe('processInfo', () => {
 
   test('a slow ps does not stop the event loop', async () => {
     fakePs('sleep 0.6; echo "Mon Jan  1 00:00:00 2001 /bin/sleep 1"')
-    const p = processInfo(4242)
+    // A long timeout: this test is about the loop staying free, not the 2 s default (on a loaded CI Mac the fake ps ran past it).
+    const p = processInfo(NO_PID, { timeoutMs: 10_000 })
     const ticks = await ticksDuring(p)
-    expect(await p).toEqual({ lstart: 'Mon Jan  1 00:00:00 2001', command: '/bin/sleep 1' })
+    // on Linux the start comes from /proc, which knows no such pid: no answer, never the fake ps's text
+    const answer =
+      process.platform === 'linux' ? 'unknown' : { lstart: 'Mon Jan  1 00:00:00 2001', command: '/bin/sleep 1' }
+    expect(await p).toEqual(answer)
     expect(ticks).toBeGreaterThanOrEqual(10) // 0.6 s of 20 ms ticks: a blocked loop gets none
   })
 
   test('a ps that never answers is unknown after the timeout, not gone', async () => {
     fakePs('exec sleep 30')
     const t0 = Date.now()
-    expect(await processInfo(4242, { timeoutMs: 300 })).toBe('unknown')
+    expect(await processInfo(NO_PID, { timeoutMs: 300 })).toBe('unknown')
     expect(Date.now() - t0).toBeLessThan(3000)
   })
 
   test('a ps that cannot run at all is unknown', async () => {
     process.env.PATH = '/nonexistent-dir'
-    expect(await processInfo(4242)).toBe('unknown')
+    expect(await processInfo(NO_PID)).toBe('unknown')
   })
 
   test('starting a source with a slow ps does not stall the loop, and the source still gets its input', async () => {

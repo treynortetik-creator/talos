@@ -126,6 +126,18 @@ describe('failure report', () => {
     expect(r).not.toContain('check 5\n')
   })
 
+  it("keeps the deeper lines that say why under a FAIL above the tail (self-test.sh's 8-space `|` lines)", () => {
+    const out = [
+      '  FAIL upgrade.sh exited 1 on a dirty install',
+      '        | PROTECTED FILES WERE CHANGED. This is a bug in the upgrade, not in your folder:',
+      '        |     DELETED  .git/objects/7f/81897c',
+      ...Array.from({ length: 60 }, (_, i) => `check ${i}`),
+    ].join('\n')
+    const r = failureReport(out)
+    expect(r).toContain('        | PROTECTED FILES WERE CHANGED')
+    expect(r).toContain('        |     DELETED  .git/objects/7f/81897c')
+  })
+
   it('does not repeat a FAIL line that is already in the tail', () => {
     const r = failureReport(['  ok   a', '  FAIL b', '       why b'].join('\n'))
     expect(r.split('\n').filter((l) => l.includes('FAIL b'))).toHaveLength(1)

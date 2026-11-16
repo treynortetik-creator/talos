@@ -1,0 +1,2117 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index c4126a6c..ee376b46 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,14 @@
+ # Changelog
+ 
++## A thread's instructions in its settings
++
++- A thread with its own session and folder has an Instructions section in its settings: Edit AGENTS.md opens the file from that
++  folder, and Save writes it back. The thread's next session reads it, beside CLAUDE.md.
++- If the file changed on your Mac since you opened it (the agent may keep its own instructions), Save says so and Reload shows the
++  new text, so nothing is lost. A change made outside Settings shows as a diff against your last save, and the next session start
++  says so once, as a quiet line in the thread.
++- The shared agent folder is not editable here: a thread needs a folder of its own to have instructions of its own.
++
+ ## Mac: your own shell in the Terminal pane
+ 
+ - The Mac app can lay your own login shell over the Terminal pane beside a thread. It starts in the folder of a thread that has
+diff --git a/apps/bridge/src/bridge-options.ts b/apps/bridge/src/bridge-options.ts
+index 0fd39957..387935f0 100644
+--- a/apps/bridge/src/bridge-options.ts
++++ b/apps/bridge/src/bridge-options.ts
+@@ -32,6 +32,8 @@ export type BridgeOptions = {
+   folders?: Partial<import('./folders/service.ts').FolderDeps>
+   /** The tests' stand-ins for the Files pane's folder rule, refused roots and limits. */
+   files?: Partial<import('./files/service.ts').FilesDeps>
++  /** The AGENTS.md editor's deps over the live ones (tests: a thread's own folder without a config and agent folder). */
++  agentsMd?: Partial<import('./files/agents-md.ts').AgentsMdDeps>
+   /** Test seam (O6): the relay-silence watch's tick, threshold and fetch. Production passes nothing. */
+   relaySilence?: { tickMs?: number; silenceMs?: number; fetchFn?: typeof fetch }
+   /** Test seam: how long discovery waits for `chronos api version` (ms). */
+diff --git a/apps/bridge/src/bridge.ts b/apps/bridge/src/bridge.ts
+index 896389d7..614f81c3 100644
+--- a/apps/bridge/src/bridge.ts
++++ b/apps/bridge/src/bridge.ts
+@@ -29,8 +29,9 @@ import {
+ import { DeviceStore } from './devices.ts'
+ import { DialogCards } from './dialog-card.ts'
+ import { Enrollment } from './enrollment.ts'
++import { AgentsMdService } from './files/agents-md.ts'
+ import { FilesService } from './files/service.ts'
+-import { filesDeps } from './files/wiring.ts'
++import { agentsMdDeps, filesDeps } from './files/wiring.ts'
+ import { FolderService, folderDeps } from './folders/service.ts'
+ import { configSyncFrame, sessionAgentsFrame, sessionInventoryFrame, sessionStateFrame } from './frames-out.ts'
+ import { quietWatch } from './fs-watch.ts'
+@@ -329,11 +330,18 @@ export class Bridge {
+     // the folder picker: folder names under home for the owner's signed device (never in a thread session's process)
+     if (live && !worker) this.ctx.folders = new FolderService(folderDeps(env.home, process.env, opts.folders))
+     // the Files pane: a read-only look at a thread's folder for the owner's signed device (never in a thread session's process)
+-    if (live && !worker)
+-      this.ctx.files = new FilesService({
++    if (live && !worker) {
++      const files = new FilesService({
+         ...filesDeps({ talosHome: env.home, config: () => this.ctx.config.config, media: this.ctx.media }),
+         ...(opts.files ?? {}),
+       })
++      this.ctx.files = files
++      // the thread's AGENTS.md in its settings, inside the same fence (a thread with a folder of its own only)
++      this.ctx.agentsMd = new AgentsMdService({
++        ...agentsMdDeps({ talosHome: env.home, config: () => this.ctx.config.config, files }),
++        ...(opts.agentsMd ?? {}),
++      })
++    }
+     // the bug reporter's read: versions, filed errors and the cleaned log tail, for the owner's signed device only
+     if (live && !worker)
+       this.ctx.bugContext = new BugContextService({
+diff --git a/apps/bridge/src/context.ts b/apps/bridge/src/context.ts
+index 25c454cf..e5ec2034 100644
+--- a/apps/bridge/src/context.ts
++++ b/apps/bridge/src/context.ts
+@@ -249,6 +249,8 @@ export type BridgeContext = {
+   folders?: FolderServiceSeam
+   /** The Files pane's fenced list and read of a thread's folder (live main bridge only); absent = `files.*` answers a fixed error. */
+   files?: FilesServiceSeam
++  /** The thread's AGENTS.md in its settings (src/files/agents-md.ts; live main bridge only); absent = `agents_md.*` answers a fixed error. */
++  agentsMd?: import('./files/agents-md.ts').AgentsMdService
+   /** The bug reporter's read of versions, filed errors and the cleaned log tail (live main bridge only); absent = `bug.context` answers a fixed error. */
+   bugContext?: BugContextSeam
+   /** MCP apps (docs/APPS.md): present on a live bridge; it answers app requests with a fixed refusal while the feature is off. */
+diff --git a/apps/bridge/src/files/agents-md.ts b/apps/bridge/src/files/agents-md.ts
+new file mode 100644
+index 00000000..3bc28460
+--- /dev/null
++++ b/apps/bridge/src/files/agents-md.ts
+@@ -0,0 +1,234 @@
++// The thread's instructions (AGENTS.md) in its settings: read and saved by the owner's signed device, for a thread with a
++// folder of its own. Claude Code loads AGENTS.md beside CLAUDE.md in thread sessions (worker-policy.ts withInstructionFiles),
++// so a save here changes how that thread's next sessions behave.
++//
++// - The folder is the thread's own (a dedicated thread whose folder is not the shared agent folder: a save there would be
++//   Main's instructions too), fenced as the Files pane fences it (FilesService.fencedName).
++// - AGENTS.md is read through one no-follow handle: a link, a hard link to another file or anything not a plain file is not
++//   read or replaced. Over AGENTS_MD_MAX_BYTES it is shown as too large, never cut, and cannot be saved over from here.
++// - A save is refused unless the file is still the one the editor loaded (`base_sha`), so a change made meanwhile, by the
++//   agent or at the Mac, is never lost. It is written to a new file in the same folder and renamed over AGENTS.md, so a
++//   reader never sees half of it. One save per thread at a time.
++// - The Mac keeps, under <talos home>/threads/<id>/: agents-md.prev (the text before the last save), agents-md.saved (the
++//   text of the last save made here) and agents-md.told (the sha a session start last said had changed). The agent may
++//   edit its own instructions: a change made outside Settings is never refused. Settings shows it as a diff against the
++//   last save, and the next session start says so once in the thread, as a quiet line that never holds the start.
++import { createHash, randomBytes } from 'node:crypto'
++import {
++  closeSync,
++  constants,
++  fchmodSync,
++  fstatSync,
++  fsyncSync,
++  lstatSync,
++  mkdirSync,
++  readFileSync,
++  renameSync,
++  rmSync,
++  writeFileSync,
++  writeSync,
++} from 'node:fs'
++import { join } from 'node:path'
++import { AGENTS_MD_DIFF_MAX, AGENTS_MD_MAX_BYTES, AGENTS_MD_WORDING, type FrameOf, lineDiff } from '@talos-app/protocol'
++import { openResolvedNoFollow } from '../safe-open.ts'
++import { ReadError } from '../v2-seams.ts'
++
++export const AGENTS_MD = 'AGENTS.md'
++
++type Envelope = 'v' | 'id' | 'ts' | 'type' | 'relay' | 'request_id'
++export type AgentsMdFileBody = Omit<FrameOf<'agents_md.file'>, Envelope>
++
++export type AgentsMdDeps = {
++  /** The thread's own folder, or null when it has none (a shared thread, or a dedicated one in the agent folder). */
++  ownFolder(threadId: string): string | null
++  /** The thread's folder and AGENTS.md in it, fenced as the Files pane fences them; throws a ReadError refusal. */
++  fenced(threadId: string): Promise<{ root: string; path: string }>
++  /** Where the Mac keeps this thread's records: <talos home>/threads/<id>. */
++  stateDir(threadId: string): string
++}
++
++type Current = { exists: false } | { exists: true; tooLarge: true } | { exists: true; tooLarge: false; bytes: Buffer }
++
++const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
++const code = (e: unknown) => (e as { code?: string } | null)?.code
++
++export class AgentsMdService {
++  readonly available = true
++  private readonly queue = new Map<string, Promise<unknown>>()
++
++  constructor(private readonly d: AgentsMdDeps) {}
++
++  async read(f: Pick<FrameOf<'agents_md.read'>, 'thread_id'>): Promise<AgentsMdFileBody> {
++    const { path } = await this.folder(f.thread_id)
++    return this.body(f.thread_id, current(path))
++  }
++
++  async write(f: Pick<FrameOf<'agents_md.write'>, 'thread_id' | 'text' | 'base_sha'>): Promise<AgentsMdFileBody> {
++    const bytes = Buffer.from(f.text, 'utf8')
++    if (bytes.length > AGENTS_MD_MAX_BYTES) throw new ReadError('too_large', AGENTS_MD_WORDING.tooLarge)
++    return this.oneAtATime(f.thread_id, async () => {
++      const { root, path } = await this.folder(f.thread_id)
++      const now = current(path)
++      if (now.exists && now.tooLarge) throw new ReadError('too_large', AGENTS_MD_WORDING.tooLarge)
++      const nowSha = now.exists ? sha256(now.bytes) : null
++      if (nowSha !== f.base_sha) throw new ReadError('stale', AGENTS_MD_WORDING.conflict)
++      const dir = this.d.stateDir(f.thread_id)
++      try {
++        mkdirSync(dir, { recursive: true, mode: 0o700 })
++        if (now.exists) replaceFile(join(dir, 'agents-md.prev'), now.bytes)
++      } catch {
++        throw new ReadError('internal', AGENTS_MD_WORDING.saveFailed)
++      }
++      writeInPlace(root, path, bytes, now.exists ? modeOf(path) : 0o644)
++      // the record of this save: what Settings diffs against, and no "changed outside Settings" line for it
++      const sha = sha256(bytes)
++      try {
++        replaceFile(join(dir, 'agents-md.saved'), bytes)
++        replaceFile(join(dir, 'agents-md.told'), Buffer.from(`${sha}\n`))
++      } catch {
++        // saved, but not recorded: the next look may call this save a change made outside Settings, which is only a line
++      }
++      return { thread_id: f.thread_id, exists: true, sha, text: f.text, saved: true }
++    })
++  }
++
++  /**
++   * At a thread session's start: true, once per change, when AGENTS.md is not what Settings last saved there. False when
++   * Settings never saved it, the thread has no folder of its own, or anything cannot be read: this never holds a start.
++   */
++  async changedOutside(threadId: string): Promise<boolean> {
++    try {
++      if (!this.d.ownFolder(threadId)) return false
++      const dir = this.d.stateDir(threadId)
++      const saved = readOptional(join(dir, 'agents-md.saved'))
++      if (saved === null) return false
++      const { path } = await this.d.fenced(threadId)
++      const now = current(path)
++      const nowSha = !now.exists ? 'none' : now.tooLarge ? 'too-large' : sha256(now.bytes)
++      if (nowSha === sha256(saved)) return false
++      if (readOptional(join(dir, 'agents-md.told'))?.toString('utf8').trim() === nowSha) return false
++      replaceFile(join(dir, 'agents-md.told'), Buffer.from(`${nowSha}\n`))
++      return true
++    } catch {
++      return false
++    }
++  }
++
++  /** The thread's folder and AGENTS.md path, or the refusal that says why there is none to edit. */
++  private async folder(threadId: string): Promise<{ root: string; path: string }> {
++    if (!this.d.ownFolder(threadId)) throw new ReadError('bad_frame', AGENTS_MD_WORDING.shared)
++    return this.d.fenced(threadId)
++  }
++
++  private body(threadId: string, now: Current): AgentsMdFileBody {
++    if (!now.exists) return { thread_id: threadId, exists: false, sha: null, ...this.outside(threadId, '') }
++    if (now.tooLarge) return { thread_id: threadId, exists: true, sha: null, too_large: true }
++    const text = now.bytes.toString('utf8')
++    return { thread_id: threadId, exists: true, sha: sha256(now.bytes), text, ...this.outside(threadId, text) }
++  }
++
++  /** The change since the last save made here, when there was one and the file is not that any more. */
++  private outside(threadId: string, text: string): { outside_diff?: string } {
++    const saved = readOptional(join(this.d.stateDir(threadId), 'agents-md.saved'))
++    if (saved === null) return {}
++    const diff = lineDiff(saved.toString('utf8'), text)
++    if (!diff) return {}
++    return { outside_diff: diff.length > AGENTS_MD_DIFF_MAX ? `${diff.slice(0, AGENTS_MD_DIFF_MAX)}\n… (cut)` : diff }
++  }
++
++  private oneAtATime<T>(threadId: string, work: () => Promise<T>): Promise<T> {
++    const before = this.queue.get(threadId) ?? Promise.resolve()
++    const run = before.then(work, work)
++    const settled = run.then(
++      () => undefined,
++      () => undefined,
++    )
++    this.queue.set(threadId, settled)
++    void settled.then(() => {
++      if (this.queue.get(threadId) === settled) this.queue.delete(threadId)
++    })
++    return run
++  }
++}
++
++/** AGENTS.md as it is now, through one handle that follows no link anywhere in the path. */
++function current(path: string): Current {
++  let st: ReturnType<typeof lstatSync>
++  try {
++    st = lstatSync(path)
++  } catch (e) {
++    if (code(e) === 'ENOENT') return { exists: false }
++    throw new ReadError('bad_frame', AGENTS_MD_WORDING.refused)
++  }
++  if (st.isSymbolicLink()) throw new ReadError('bad_frame', AGENTS_MD_WORDING.link)
++  if (!st.isFile()) throw new ReadError('bad_frame', AGENTS_MD_WORDING.refused)
++  let fd: number
++  try {
++    fd = openResolvedNoFollow(path, constants.O_NONBLOCK)
++  } catch (e) {
++    if (code(e) === 'ENOENT') return { exists: false } // gone between the look and the open
++    throw new ReadError('bad_frame', AGENTS_MD_WORDING.refused)
++  }
++  try {
++    const h = fstatSync(fd)
++    // a second name for this file elsewhere would let a save here write a file outside the folder
++    if (!h.isFile() || h.nlink !== 1) throw new ReadError('bad_frame', AGENTS_MD_WORDING.refused)
++    if (h.size > AGENTS_MD_MAX_BYTES) return { exists: true, tooLarge: true }
++    const bytes = readFileSync(fd)
++    if (bytes.length > AGENTS_MD_MAX_BYTES) return { exists: true, tooLarge: true }
++    return { exists: true, tooLarge: false, bytes }
++  } finally {
++    closeSync(fd)
++  }
++}
++
++function modeOf(path: string): number {
++  try {
++    return lstatSync(path).mode & 0o777
++  } catch {
++    return 0o644
++  }
++}
++
++/**
++ * Writes `bytes` to a new file beside AGENTS.md (created, never an existing one, no link followed anywhere in its path),
++ * flushes it, then renames it over AGENTS.md. A failure leaves AGENTS.md as it was and removes the new file.
++ */
++function writeInPlace(root: string, path: string, bytes: Buffer, mode: number): void {
++  const tmp = join(root, `.AGENTS.md.talos-${randomBytes(6).toString('hex')}`)
++  let fd: number | undefined
++  try {
++    // read-write, not write-only: the handle check reads where it points (/dev/fd/N), which a write-only handle may not
++    fd = openResolvedNoFollow(tmp, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL)
++    fchmodSync(fd, mode)
++    for (let off = 0; off < bytes.length; ) off += writeSync(fd, bytes, off, bytes.length - off)
++    fsyncSync(fd)
++    closeSync(fd)
++    fd = undefined
++    renameSync(tmp, path)
++  } catch {
++    if (fd !== undefined) closeSync(fd)
++    rmSync(tmp, { force: true })
++    throw new ReadError('internal', AGENTS_MD_WORDING.saveFailed)
++  }
++}
++
++/** One of the Mac's own records: a new file renamed over the old one. */
++function replaceFile(path: string, bytes: Buffer): void {
++  const tmp = `${path}.${randomBytes(4).toString('hex')}.tmp`
++  try {
++    writeFileSync(tmp, bytes, { mode: 0o600, flag: 'wx' })
++    renameSync(tmp, path)
++  } catch (e) {
++    rmSync(tmp, { force: true })
++    throw e
++  }
++}
++
++function readOptional(path: string): Buffer | null {
++  try {
++    return readFileSync(path)
++  } catch {
++    return null
++  }
++}
+diff --git a/apps/bridge/src/files/service.ts b/apps/bridge/src/files/service.ts
+index 2b97972f..f697e924 100644
+--- a/apps/bridge/src/files/service.ts
++++ b/apps/bridge/src/files/service.ts
+@@ -277,6 +277,18 @@ export class FilesService {
+     if (lead.some((r) => within(p, r))) this.refuse()
+   }
+ 
++  /**
++   * The thread's folder and `name` directly in it, fenced as the pane fences a listing of that folder: not hidden, refused
++   * or lead-protected (for AGENTS.md, src/files/agents-md.ts). `name` need not exist; nothing is opened here.
++   */
++  async fencedName(threadId: string, name: string): Promise<{ root: string; path: string }> {
++    const root = await this.rootOf(threadId)
++    if (name.includes('/') || hiddenName(name)) this.refuse()
++    const path = join(root, name)
++    this.inside(root, path, await this.leadRoots(root))
++    return { root, path }
++  }
++
+   /** The real path of `path` inside the thread's folder, or a refusal. */
+   private async resolve(root: string, path: unknown): Promise<{ parts: string[]; real: string }> {
+     if (typeof path !== 'string' || CONTROL.test(path) || path.includes('�')) return this.refuse()
+diff --git a/apps/bridge/src/files/wiring.ts b/apps/bridge/src/files/wiring.ts
+index f50d53e4..1ee9a978 100644
+--- a/apps/bridge/src/files/wiring.ts
++++ b/apps/bridge/src/files/wiring.ts
+@@ -1,12 +1,15 @@
+ // Which folder the Files pane shows for a thread, and what it never shows: the Mac's own rules, never the app's.
++import { realpathSync } from 'node:fs'
+ import { homedir } from 'node:os'
+ import { join } from 'node:path'
+ import { claudeConfigDir } from '../claude-dir.ts'
+-import { FOLDER_EXTRA_REFUSED } from '../folders/service.ts'
++import { FOLDER_EXTRA_REFUSED, foldPath } from '../folders/service.ts'
+ import { agentDirFromEnv } from '../last-good.ts'
+ import { LEAD_SECRET_PATHS } from '../lead/fence.ts'
+ import { dedicatedThreads } from '../supervisor/workers-wiring.ts'
+-import type { FilesDeps } from './service.ts'
++import type { AgentsMdDeps } from './agents-md.ts'
++import { AGENTS_MD } from './agents-md.ts'
++import type { FilesDeps, FilesService } from './service.ts'
+ 
+ /**
+  * The folder a thread's session works in, so the one its Files pane shows: a thread with its own session works in its own
+@@ -62,3 +65,36 @@ export function filesDeps(o: {
+     media: o.media,
+   }
+ }
++
++/**
++ * The folder a thread's AGENTS.md editor works in: a dedicated thread's own folder, never the shared agent folder (a save
++ * there would be Main's and every shared thread's instructions too). Compared as the disk resolves both.
++ */
++export function agentsMdFolderFor(config: unknown, agentDir: string | undefined, threadId: string): string | null {
++  const own = dedicatedThreads(config, agentDir ?? '')?.find((w) => w.id === threadId)
++  if (!own?.cwd) return null
++  const real = (p: string) => {
++    try {
++      return foldPath(realpathSync(p))
++    } catch {
++      return foldPath(p)
++    }
++  }
++  if (agentDir && real(own.cwd) === real(agentDir)) return null
++  return own.cwd
++}
++
++/** What a live main bridge edits AGENTS.md with: the Files pane's fence, and the Mac's records under its home. */
++export function agentsMdDeps(o: {
++  talosHome: string
++  config: () => unknown
++  files: Pick<FilesService, 'fencedName'>
++  env?: Record<string, string | undefined>
++}): AgentsMdDeps {
++  const agentDir = agentDirFromEnv(o.env ?? process.env)
++  return {
++    ownFolder: (id) => agentsMdFolderFor(o.config(), agentDir, id),
++    fenced: (id) => o.files.fencedName(id, AGENTS_MD),
++    stateDir: (id) => join(o.talosHome, 'threads', id),
++  }
++}
+diff --git a/apps/bridge/src/frames-out.ts b/apps/bridge/src/frames-out.ts
+index b7eefad9..db73523d 100644
+--- a/apps/bridge/src/frames-out.ts
++++ b/apps/bridge/src/frames-out.ts
+@@ -195,6 +195,7 @@ type ReadAnswer =
+   | 'files.listing'
+   | 'files.file'
+   | 'bug.context_result'
++  | 'agents_md.file'
+ export const readAnswerFrame = <T extends ReadAnswer>(
+   now: number,
+   type: T,
+diff --git a/apps/bridge/src/handshake.ts b/apps/bridge/src/handshake.ts
+index cce92fe7..9f1eaeae 100644
+--- a/apps/bridge/src/handshake.ts
++++ b/apps/bridge/src/handshake.ts
+@@ -1,5 +1,6 @@
+ // Bridge side of the WebSocket handshake (spec 3.4, 5.4): challenge -> hello (Ed25519 over the challenge string).
+ import {
++  AGENTS_MD_FEATURE,
+   DRIVING_FEATURE,
+   FILES_FEATURE,
+   FOLDERS_FEATURE,
+@@ -38,6 +39,8 @@ export function bridgeFeatures(svc: {
+   folders?: { available: boolean } | undefined
+   /** The Files pane (src/files): present on a live main bridge, which is the one that answers `files.*`. */
+   files?: { available: boolean } | undefined
++  /** The thread's AGENTS.md in its settings (src/files/agents-md.ts): present beside the Files pane, on a live main bridge. */
++  agentsMd?: { available: boolean } | undefined
+   /** Problem reports (docs/ERRORS.md): present on a live bridge, which is the one that files them. */
+   problems?: unknown
+   /** Sub-threads: advertised only while the Mac app reports it checks a sub-thread's folder (workers.json). */
+@@ -62,6 +65,7 @@ export function bridgeFeatures(svc: {
+     ...(svc.problems ? [PROBLEMS_FEATURE] : []),
+     ...(svc.folders?.available ? [FOLDERS_FEATURE] : []),
+     ...(svc.files?.available ? [FILES_FEATURE] : []),
++    ...(svc.agentsMd?.available ? [AGENTS_MD_FEATURE] : []),
+     ...(svc.config?.subthreadsSupported?.() ? [SUBTHREADS_FEATURE] : []),
+   ]
+ }
+diff --git a/apps/bridge/src/inbound-reads.ts b/apps/bridge/src/inbound-reads.ts
+index bd00442b..6f72f4f8 100644
+--- a/apps/bridge/src/inbound-reads.ts
++++ b/apps/bridge/src/inbound-reads.ts
+@@ -2,6 +2,7 @@
+ // Handlers of the Inbound class (inbound.ts), which forwards to them. Dispatch and the first trust checks are in inbound.ts;
+ // some handlers here run their own seen-id, age or card-state checks, so read both when auditing trust.
+ import {
++  AGENTS_MD_WORDING,
+   APP_REQUEST_MAX_AGE_MS,
+   type ErrorCodeT,
+   FILES_WORDING,
+@@ -223,6 +224,15 @@ export const readsFrames = {
+           else out = readAnswerFrame(now(), 'files.file', f.request_id, await fi.read(f))
+           break
+         }
++        case 'agents_md.read':
++        case 'agents_md.write': {
++          // the thread's AGENTS.md (src/files/agents-md.ts): its own folder only, a save only over the file it was loaded from
++          const am = ctx.agentsMd
++          if (!am?.available) return fail('internal', AGENTS_MD_WORDING.notReady)
++          const body = f.type === 'agents_md.read' ? await am.read(f) : await am.write(f)
++          out = readAnswerFrame(now(), 'agents_md.file', f.request_id, body)
++          break
++        }
+         case 'bug.context': {
+           // versions, filed errors and the cleaned log tail for the bug reporter (src/bug-context/service.ts)
+           const bc = ctx.bugContext
+diff --git a/apps/bridge/src/router/router.ts b/apps/bridge/src/router/router.ts
+index 328fa10d..a75d1f55 100644
+--- a/apps/bridge/src/router/router.ts
++++ b/apps/bridge/src/router/router.ts
+@@ -4,6 +4,7 @@
+ // worker fetches it with `read_inbound`. If nobody claims it in time, the hub claims it for main and main answers, with a
+ // system row saying so. A message is never pushed to both: main is told only after the hub's own claim succeeds.
+ import {
++  AGENTS_MD_WORDING,
+   CLAIM_DEADLINE_COLD_MS,
+   CLAIM_DEADLINE_MS,
+   dedicatedSettings,
+@@ -86,6 +87,8 @@ export class ThreadRouter {
+   private parkAllSent = false
+   private relayListsFeature = false
+   private readonly contextFeed: WorkerContextFeed
++  /** The session id last seen per thread, so a session that started since is noticed once (its AGENTS.md line). */
++  private readonly sessionsSeen = new Map<string, string>()
+   private readonly workerFeatures: (thread: string) => readonly string[] | undefined
+   private readonly onCardUndelivered: (cardId: string, told?: false | 'unknown') => void
+ 
+@@ -550,6 +553,7 @@ export class ThreadRouter {
+     const now = ctx.clock.now()
+     const g = this.governor()
+     const file = this.workers.read()
++    this.noteSessionStarts(file)
+     this.releaseSwitchedOff()
+     for (const lead of this.handoffs.openLeads())
+       if (threadSessionMode(ctx.config.config, lead) !== 'dedicated') this.handoffs.closeLead(lead)
+@@ -586,6 +590,29 @@ export class ThreadRouter {
+       this.contextFeed.tick(file, (t) => threadSessionMode(ctx.config.config, t) === 'dedicated', sendState)
+   }
+ 
++  /**
++   * A thread session that started since the last look (a session id not seen before; after a bridge restart, each live one
++   * once): when its AGENTS.md was changed outside Settings, one quiet line in its thread. Never waited on, never holds it.
++   */
++  private noteSessionStarts(file: WorkersFileT | null): void {
++    const { ctx } = this
++    const am = ctx.agentsMd
++    if (!am || !file) return
++    for (const [thread, e] of Object.entries(file.threads)) {
++      if (!e.session_id || this.sessionsSeen.get(thread) === e.session_id) continue
++      this.sessionsSeen.set(thread, e.session_id)
++      if (!ctx.config.thread(thread) || threadSessionMode(ctx.config.config, thread) !== 'dedicated') continue
++      void am
++        .changedOutside(thread)
++        .then((changed) =>
++          changed
++            ? postSystemNotice(ctx, AGENTS_MD_WORDING.changedOutside, { thread: threadRef(ctx, thread) })
++            : undefined,
++        )
++        .catch((err) => ctx.log.warn('AGENTS.md start line not posted', { thread, error: (err as Error).message }))
++    }
++  }
++
+   /** Forget the last status so the next tick sends it again (after `ready`). */
+   resendStatus(): void {
+     this.lastStatusKey = ''
+diff --git a/apps/bridge/test/agents-md-bridge.test.ts b/apps/bridge/test/agents-md-bridge.test.ts
+new file mode 100644
+index 00000000..41e0af9f
+--- /dev/null
++++ b/apps/bridge/test/agents-md-bridge.test.ts
+@@ -0,0 +1,134 @@
++// The thread's AGENTS.md through the real Bridge: a signed `agents_md.read` / `agents_md.write` from a (fake) app over the
++// (fake) relay reaches the service and the file comes back for the same request_id; a save over a changed file is the one
++// conflict sentence; the same signed save sent again is refused. At a thread session's start, a change made outside
++// Settings is one quiet system line in that thread, once.
++import { afterEach, describe, expect, test } from 'bun:test'
++import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
++import { join } from 'node:path'
++import { AGENTS_MD_WORDING, newUlid } from '@talos-app/protocol'
++import { mkFrame } from '@talos-app/testkit'
++import { pgidOf } from '../src/hub/server.ts'
++import { type Harness, startHarness, waitFor } from './helpers.ts'
++
++let h: Harness | undefined
++afterEach(async () => {
++  await h?.stop()
++  h = undefined
++})
++
++// /tmp, not TMPDIR: a CI run's TMPDIR is under ~/.cache, and a folder inside a hidden folder is refused by design
++const fresh = () => {
++  const top = realpathSync(mkdtempSync(join(realpathSync('/tmp'), 'talos-agentsmd-bridge-')))
++  const folder = join(top, 'trip')
++  mkdirSync(folder)
++  return folder
++}
++const trip = {
++  id: 'trip',
++  name: 'Trip',
++  kind: 'fixed',
++  order: 5,
++  notify: 'all',
++  voice_context: 'recent',
++  archived: false,
++  created_at: '2026-10-28T00:00:00.000Z',
++  session: 'dedicated',
++}
++
++async function start(folder: string) {
++  h = await startHarness({
++    config: ((c: Record<string, unknown> & { threads: unknown[] }) => ({
++      ...c,
++      threads: [...c.threads, { ...trip, session_opts: { cwd: folder } }],
++      dedicated: { enabled: true },
++    })) as never,
++    bridge: {
++      files: { rootFor: (id) => (id === 'trip' ? folder : null) },
++      agentsMd: { ownFolder: (id) => (id === 'trip' ? folder : null) },
++    },
++  })
++  return h
++}
++const ask = async (x: Harness, type: 'agents_md.read' | 'agents_md.write', body: Record<string, unknown> = {}) => {
++  const f = await x.app.sign({ ...mkFrame(type), request_id: newUlid(), thread_id: 'trip', ...body })
++  x.app.send(f)
++  return f
++}
++const answer = async (x: Harness, f: Record<string, unknown>) => {
++  await waitFor(
++    () => x.app.rec.frames.some((r) => r.direction === 'in' && r.raw.request_id === f.request_id),
++    5000,
++    'agents_md.file',
++  )
++  return x.app.rec.frames.find((r) => r.direction === 'in' && r.raw.request_id === f.request_id)?.raw as Record<
++    string,
++    unknown
++  >
++}
++const errorFor = async (x: Harness, f: Record<string, unknown>) => {
++  await waitFor(
++    () => x.app.rec.frames.some((r) => r.direction === 'in' && r.raw.type === 'error' && r.raw.ref === f.id),
++    5000,
++    'error',
++  )
++  return x.app.rec.frames.find((r) => r.direction === 'in' && r.raw.type === 'error' && r.raw.ref === f.id)
++    ?.raw as Record<string, unknown>
++}
++
++describe('agents_md.* through the real Bridge', () => {
++  test('a signed read and save come back for the same request; a save over a changed file is refused', async () => {
++    const folder = fresh()
++    const x = await start(folder)
++    const r = await answer(x, await ask(x, 'agents_md.read'))
++    expect(r).toMatchObject({ type: 'agents_md.file', thread_id: 'trip', exists: false, sha: null })
++    const w = await answer(x, await ask(x, 'agents_md.write', { text: '# Trip\n', base_sha: null }))
++    expect(w).toMatchObject({ type: 'agents_md.file', exists: true, text: '# Trip\n', saved: true })
++    expect(readFileSync(join(folder, 'AGENTS.md'), 'utf8')).toBe('# Trip\n')
++    // the editor still holds "none": the file it would overwrite is not that any more
++    const stale = await ask(x, 'agents_md.write', { text: 'other\n', base_sha: null })
++    expect((await errorFor(x, stale)).message).toBe(AGENTS_MD_WORDING.conflict)
++    expect(readFileSync(join(folder, 'AGENTS.md'), 'utf8')).toBe('# Trip\n')
++  })
++
++  test('the same signed save sent twice is refused the second time, and saves nothing more', async () => {
++    const folder = fresh()
++    const x = await start(folder)
++    const f = await ask(x, 'agents_md.write', { text: 'one\n', base_sha: null })
++    await answer(x, f)
++    writeFileSync(join(folder, 'AGENTS.md'), 'changed at the Mac\n')
++    x.app.send(f)
++    expect((await errorFor(x, f)).message).toBe('That request was already used.')
++    expect(readFileSync(join(folder, 'AGENTS.md'), 'utf8')).toBe('changed at the Mac\n')
++  })
++
++  test('a thread session that starts after a change made outside Settings gets one quiet line, once', async () => {
++    const folder = fresh()
++    const x = await start(folder)
++    await answer(x, await ask(x, 'agents_md.write', { text: 'from settings\n', base_sha: null }))
++    writeFileSync(join(folder, 'AGENTS.md'), 'from settings\nand a line the agent added\n')
++    const lines = () =>
++      x.bridge.ctx.store
++        .page({ thread_id: 'trip', limit: 50 })
++        .messages.filter((m) => m.author === 'system' && m.text === AGENTS_MD_WORDING.changedOutside)
++    const session = (id: string) =>
++      writeFileSync(
++        join(x.home, 'workers.json'),
++        JSON.stringify({
++          v: 1,
++          supervisor: { pid: 1, heartbeat_at: new Date().toISOString(), workers_supported: true },
++          threads: {
++            trip: { state: 'live', session_id: id, tmux: 't-trip', pane_pid: pgidOf(process.pid), cwd: folder },
++          },
++        }),
++      )
++    session('6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c41')
++    x.bridge.optionCTick()
++    await waitFor(() => lines().length === 1, 5000, 'the start line')
++    // the same session again, and a new one with the file unchanged: nothing more
++    x.bridge.optionCTick()
++    session('7a2d3b0f-5c4e-4d9f-8b82-3e6f9a1c4d52')
++    x.bridge.optionCTick()
++    await Bun.sleep(50)
++    expect(lines()).toHaveLength(1)
++  })
++})
+diff --git a/apps/bridge/test/agents-md.test.ts b/apps/bridge/test/agents-md.test.ts
+new file mode 100644
+index 00000000..b4b17310
+--- /dev/null
++++ b/apps/bridge/test/agents-md.test.ts
+@@ -0,0 +1,229 @@
++// The thread's AGENTS.md in its settings (src/files/agents-md.ts): read and saved inside the Files pane's fence, a save only
++// over the file the editor loaded, the Mac's own records of each save, and a change made outside Settings shown, never
++// refused. Every case runs in a temp folder with made-up text.
++import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
++import { createHash } from 'node:crypto'
++import {
++  existsSync,
++  linkSync,
++  mkdirSync,
++  mkdtempSync,
++  readdirSync,
++  readFileSync,
++  realpathSync,
++  rmSync,
++  statSync,
++  symlinkSync,
++  writeFileSync,
++} from 'node:fs'
++import { join } from 'node:path'
++import { AGENTS_MD_MAX_BYTES, AGENTS_MD_WORDING } from '@talos-app/protocol'
++import { AgentsMdService } from '../src/files/agents-md.ts'
++import { FilesService } from '../src/files/service.ts'
++import { agentsMdFolderFor } from '../src/files/wiring.ts'
++import { ReadError } from '../src/v2-seams.ts'
++
++/** /tmp, not TMPDIR: a CI run's TMPDIR sits under a hidden folder, which the fence refuses by design. */
++const base = () => realpathSync('/tmp')
++const T = 'trip'
++const sha = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
++
++let top: string
++let root: string
++let home: string
++let own: string | null
++let svc: AgentsMdService
++
++const make = () =>
++  new AgentsMdService({
++    ownFolder: (id) => (id === T ? own : null),
++    fenced: (id) => files.fencedName(id, 'AGENTS.md'),
++    stateDir: (id) => join(home, 'threads', id),
++  })
++let files: FilesService
++const fail = async (p: Promise<unknown>) => {
++  const e = await p.then(
++    () => null,
++    (x: unknown) => x,
++  )
++  expect(e).toBeInstanceOf(ReadError)
++  return e as ReadError
++}
++const md = () => join(root, 'AGENTS.md')
++
++beforeEach(() => {
++  top = realpathSync(mkdtempSync(join(base(), 'talos-agentsmd-')))
++  root = join(top, 'trip')
++  home = join(top, 'talos-home')
++  mkdirSync(root)
++  mkdirSync(home)
++  own = root
++  files = new FilesService({
++    rootFor: (id) => (id === T ? root : null),
++    refused: [home],
++    media: { uploadBytes: async () => ({}) as never },
++  })
++  svc = make()
++})
++afterEach(() => rmSync(top, { recursive: true, force: true }))
++
++describe('reading and saving', () => {
++  test('no AGENTS.md yet: a save against "none" creates it, and the answer is the file as saved', async () => {
++    expect(await svc.read({ thread_id: T })).toEqual({ thread_id: T, exists: false, sha: null })
++    const text = '# Trip\n\nKeep the packing list in packing.md.\n'
++    const saved = await svc.write({ thread_id: T, text, base_sha: null })
++    expect(saved).toEqual({ thread_id: T, exists: true, sha: sha(text), text, saved: true })
++    expect(readFileSync(md(), 'utf8')).toBe(text)
++    expect(await svc.read({ thread_id: T })).toEqual({ thread_id: T, exists: true, sha: sha(text), text })
++    // nothing of the write is left beside it
++    expect(readdirSync(root)).toEqual(['AGENTS.md'])
++  })
++
++  test('a save keeps the text before it in agents-md.prev, and its own text as the last save; the mode stays', async () => {
++    writeFileSync(md(), 'first\n', { mode: 0o640 })
++    await svc.write({ thread_id: T, text: 'second\n', base_sha: sha('first\n') })
++    const dir = join(home, 'threads', T)
++    expect(readFileSync(join(dir, 'agents-md.prev'), 'utf8')).toBe('first\n')
++    expect(readFileSync(join(dir, 'agents-md.saved'), 'utf8')).toBe('second\n')
++    expect(statSync(md()).mode & 0o777).toBe(0o640)
++    expect(statSync(dir).mode & 0o777).toBe(0o700)
++  })
++
++  test('a save over a file that changed since it was loaded is refused, and the change made meanwhile is kept', async () => {
++    writeFileSync(md(), 'loaded\n')
++    const loaded = await svc.read({ thread_id: T })
++    writeFileSync(md(), 'the agent added a line\n')
++    const e = await fail(svc.write({ thread_id: T, text: 'mine\n', base_sha: loaded.sha }))
++    expect(e.code).toBe('stale')
++    expect(e.message).toBe(AGENTS_MD_WORDING.conflict)
++    expect(readFileSync(md(), 'utf8')).toBe('the agent added a line\n')
++    // "there was none" is a base too: a file that appeared since is not overwritten
++    rmSync(md())
++    const none = await svc.read({ thread_id: T })
++    writeFileSync(md(), 'appeared\n')
++    expect((await fail(svc.write({ thread_id: T, text: 'mine\n', base_sha: none.sha }))).code).toBe('stale')
++  })
++
++  test('two saves from the same load: one is saved, the other is told the file changed', async () => {
++    writeFileSync(md(), 'v1\n')
++    const b = sha('v1\n')
++    const [x, y] = await Promise.allSettled([
++      svc.write({ thread_id: T, text: 'from the phone\n', base_sha: b }),
++      svc.write({ thread_id: T, text: 'from the laptop\n', base_sha: b }),
++    ])
++    expect([x.status, y.status].sort()).toEqual(['fulfilled', 'rejected'])
++    expect(['from the phone\n', 'from the laptop\n']).toContain(readFileSync(md(), 'utf8'))
++  })
++
++  test('over 64 KB: shown as too large, never cut, and not saved over; a save of more than 64 KB is refused', async () => {
++    writeFileSync(md(), 'x'.repeat(AGENTS_MD_MAX_BYTES + 1))
++    expect(await svc.read({ thread_id: T })).toEqual({ thread_id: T, exists: true, sha: null, too_large: true })
++    expect((await fail(svc.write({ thread_id: T, text: 'short\n', base_sha: null }))).code).toBe('too_large')
++    rmSync(md())
++    const e = await fail(svc.write({ thread_id: T, text: 'é'.repeat(AGENTS_MD_MAX_BYTES / 2 + 1), base_sha: null }))
++    expect(e.message).toBe(AGENTS_MD_WORDING.tooLarge)
++    expect(existsSync(md())).toBe(false)
++  })
++})
++
++describe('the fence', () => {
++  test('a thread with no folder of its own (shared, or dedicated in the agent folder) has no editor', async () => {
++    own = null
++    expect((await fail(svc.read({ thread_id: T }))).message).toBe(AGENTS_MD_WORDING.shared)
++    expect((await fail(svc.write({ thread_id: T, text: 'x', base_sha: null }))).message).toBe(AGENTS_MD_WORDING.shared)
++    const agentDir = join(top, 'agent')
++    mkdirSync(agentDir)
++    const config = (cwd?: string) => ({
++      default_thread: 'general',
++      dedicated: { enabled: true },
++      threads: [
++        { id: 'general', kind: 'fixed' },
++        { id: T, kind: 'fixed', session: 'dedicated', ...(cwd ? { session_opts: { cwd } } : {}) },
++        { id: 'shared', kind: 'fixed' },
++      ],
++    })
++    expect(agentsMdFolderFor(config(root), agentDir, T)).toBe(root)
++    expect(agentsMdFolderFor(config(), agentDir, T)).toBeNull() // dedicated, but in the agent folder: Main's file
++    expect(agentsMdFolderFor(config(agentDir), agentDir, T)).toBeNull()
++    expect(agentsMdFolderFor(config(root), agentDir, 'shared')).toBeNull()
++    expect(agentsMdFolderFor(config(root), agentDir, 'general')).toBeNull()
++  })
++
++  test('AGENTS.md as a link is not read or replaced; the file it points at is untouched', async () => {
++    const elsewhere = join(top, 'elsewhere.md')
++    writeFileSync(elsewhere, 'SECRET\n')
++    symlinkSync(elsewhere, md())
++    expect((await fail(svc.read({ thread_id: T }))).message).toBe(AGENTS_MD_WORDING.link)
++    expect((await fail(svc.write({ thread_id: T, text: 'x', base_sha: null }))).message).toBe(AGENTS_MD_WORDING.link)
++    expect(readFileSync(elsewhere, 'utf8')).toBe('SECRET\n')
++  })
++
++  test('AGENTS.md with a second name outside the folder (a hard link) is refused: a save must not reach that file', async () => {
++    const elsewhere = join(top, 'elsewhere.md')
++    writeFileSync(elsewhere, 'SECRET\n')
++    linkSync(elsewhere, md())
++    expect((await fail(svc.read({ thread_id: T }))).message).toBe(AGENTS_MD_WORDING.refused)
++    expect((await fail(svc.write({ thread_id: T, text: 'x', base_sha: sha('SECRET\n') }))).code).toBe('bad_frame')
++    expect(readFileSync(elsewhere, 'utf8')).toBe('SECRET\n')
++  })
++
++  test('a folder inside a hidden or refused place, or an AGENTS.md a lead marker protects, is refused', async () => {
++    const hidden = join(top, '.config', 'trip')
++    mkdirSync(hidden, { recursive: true })
++    own = hidden
++    files = new FilesService({
++      rootFor: () => hidden,
++      refused: [home],
++      media: { uploadBytes: async () => ({}) as never },
++    })
++    svc = make()
++    expect((await fail(svc.read({ thread_id: T }))).code).toBe('bad_frame')
++    expect((await fail(svc.write({ thread_id: T, text: 'x', base_sha: null }))).code).toBe('bad_frame')
++    expect(existsSync(join(hidden, 'AGENTS.md'))).toBe(false)
++
++    own = root
++    files = new FilesService({
++      rootFor: () => root,
++      refused: [home],
++      media: { uploadBytes: async () => ({}) as never },
++    })
++    svc = make()
++    writeFileSync(join(root, '.talos-lead'), JSON.stringify({ protect: [md()] }))
++    expect((await fail(svc.write({ thread_id: T, text: 'x', base_sha: null }))).code).toBe('bad_frame')
++    expect(existsSync(md())).toBe(false)
++  })
++})
++
++describe('a change made outside Settings', () => {
++  test('is never refused: Settings shows it as a diff against the last save, until the next save', async () => {
++    await svc.write({ thread_id: T, text: 'one\ntwo\n', base_sha: null })
++    writeFileSync(md(), 'one\ntwo\nthree, from the agent\n')
++    const r = await svc.read({ thread_id: T })
++    expect(r.text).toBe('one\ntwo\nthree, from the agent\n')
++    expect(r.outside_diff).toContain('+three, from the agent')
++    // a save over it (it was loaded, so its sha is the base) ends the diff
++    const s = await svc.write({ thread_id: T, text: r.text as string, base_sha: r.sha })
++    expect(s.outside_diff).toBeUndefined()
++    expect((await svc.read({ thread_id: T })).outside_diff).toBeUndefined()
++  })
++
++  test('a session start says so once per change, and never for a save made in Settings or a file Settings never saved', async () => {
++    writeFileSync(md(), 'written by hand\n')
++    expect(await svc.changedOutside(T)).toBe(false) // Settings never saved it: nothing to compare with
++    await svc.write({ thread_id: T, text: 'from settings\n', base_sha: sha('written by hand\n') })
++    expect(await svc.changedOutside(T)).toBe(false)
++    writeFileSync(md(), 'changed by the agent\n')
++    expect(await svc.changedOutside(T)).toBe(true)
++    expect(await svc.changedOutside(T)).toBe(false) // once
++    writeFileSync(md(), 'changed again\n')
++    expect(await svc.changedOutside(T)).toBe(true)
++    rmSync(md())
++    expect(await svc.changedOutside(T)).toBe(true) // deleted is a change too
++    // a thread with no folder of its own, or a fence refusal, is a quiet false: it never holds a start
++    own = null
++    expect(await svc.changedOutside(T)).toBe(false)
++    own = root
++    symlinkSync(join(top, 'nowhere'), md())
++    expect(await svc.changedOutside(T)).toBe(false)
++  })
++})
+diff --git a/apps/relay/src/core/hub-app-frames.ts b/apps/relay/src/core/hub-app-frames.ts
+index cb86788a..f6c17fae 100644
+--- a/apps/relay/src/core/hub-app-frames.ts
++++ b/apps/relay/src/core/hub-app-frames.ts
+@@ -142,6 +142,9 @@ export const appFrames = {
+       case 'files.list':
+       case 'files.read':
+       case 'bug.context':
++      // the thread's AGENTS.md (frames-agents-md.ts): the save too goes to the Mac and back, never stored or replayed
++      case 'agents_md.read':
++      case 'agents_md.write':
+         if (!this.ownerDeviceOk(a, frame.device_id, frame.id)) return
+         return this.ephemeral.onRequest(a.id, frame, raw)
+       // MCP Apps (spec M3.4): signed, never stored or replayed, answered to this socket only
+diff --git a/apps/relay/src/core/hub-bridge-frames.ts b/apps/relay/src/core/hub-bridge-frames.ts
+index 61848983..bf1bcd55 100644
+--- a/apps/relay/src/core/hub-bridge-frames.ts
++++ b/apps/relay/src/core/hub-bridge-frames.ts
+@@ -108,6 +108,7 @@ export const bridgeFrames = {
+       case 'files.listing':
+       case 'files.file':
+       case 'bug.context_result':
++      case 'agents_md.file':
+         return this.ephemeral.onResponse(frame, raw)
+       case 'health.beat':
+         // WP-V1 (core/health.ts) reads it through a bridge handler; the relay keeps the last one (V2.3, rule 1)
+diff --git a/apps/relay/src/core/hub.ts b/apps/relay/src/core/hub.ts
+index e2af8635..06ee81f0 100644
+--- a/apps/relay/src/core/hub.ts
++++ b/apps/relay/src/core/hub.ts
+@@ -166,7 +166,7 @@ export class Hub implements Bus {
+             ? 'speak'
+             : t === 'fs.list'
+               ? 'folders'
+-              : t === 'files.list' || t === 'files.read'
++              : t === 'files.list' || t === 'files.read' || t === 'agents_md.read' || t === 'agents_md.write'
+                 ? 'files'
+                 : t === 'bug.context'
+                   ? 'bug_context'
+diff --git a/apps/relay/test/core/agents-md-relay.test.ts b/apps/relay/test/core/agents-md-relay.test.ts
+new file mode 100644
+index 00000000..8e172958
+--- /dev/null
++++ b/apps/relay/test/core/agents-md-relay.test.ts
+@@ -0,0 +1,86 @@
++// The thread's AGENTS.md through the real relay: a signed `agents_md.read` / `agents_md.write` goes to the Mac and the file
++// comes back to the asking socket only. The relay stores none of it: a device that connects later, or the Mac reconnecting,
++// is handed nothing of the save. With the Mac away the asker is told at once.
++import { newUlid } from '@talos-app/protocol'
++import { mkFrame, sleep } from '@talos-app/testkit'
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { startTestRelay, type TestRelay } from './harness.ts'
++import { kit } from './helpers.ts'
++
++vi.setConfig({ testTimeout: 30_000 })
++
++let relay: TestRelay | null = null
++afterEach(async () => {
++  await relay?.stop()
++  relay = null
++})
++
++const TEXT = '# Trip\n\nzq-marker-agents-md-41\n'
++const file = (requestId: unknown) => ({
++  ...mkFrame('agents_md.file'),
++  request_id: requestId,
++  thread_id: 'general',
++  exists: true,
++  sha: 'b'.repeat(64),
++  text: TEXT,
++  saved: true,
++})
++
++describe('agents_md.* through the real relay', () => {
++  it('a save goes to the Mac and its answer reaches the asker only; nothing of it is kept or replayed', async () => {
++    relay = await startTestRelay()
++    const k = kit(relay)
++    const app = await k.connectedApp()
++    const other = await k.connectedApp()
++    const pinned = { [app.device.deviceId]: app.device.publicJwk }
++    const bridge = await k.bridge({ pinnedDevices: pinned, autoReply: false }).connect()
++    const save = await app.sign({
++      ...mkFrame('agents_md.write'),
++      request_id: newUlid(),
++      thread_id: 'general',
++      text: TEXT,
++      base_sha: null,
++    })
++    app.send(save)
++    await bridge.expectFrame('agents_md.write', (x) => x.id === save.id, { direction: 'in' })
++    bridge.send(file(save.request_id))
++    const got = await app.expectFrame('agents_md.file', (x) => x.request_id === save.request_id, { direction: 'in' })
++    expect(got.text).toBe(TEXT)
++    const read = await app.sign({ ...mkFrame('agents_md.read'), request_id: newUlid(), thread_id: 'general' })
++    app.send(read)
++    await bridge.expectFrame('agents_md.read', (x) => x.id === read.id, { direction: 'in' })
++    await sleep(200)
++    const seen = (frames: Array<{ raw: unknown }>) => JSON.stringify(frames.map((f) => f.raw))
++    expect(seen(other.rec.frames)).not.toContain('zq-marker-agents-md-41')
++    // a device that connects now, and the Mac reconnecting, are handed nothing of it
++    const later = await k.connectedApp()
++    await bridge.close()
++    const again = await k.bridge({ pinnedDevices: pinned, autoReply: false }).connect()
++    await sleep(300)
++    expect(seen(later.rec.frames)).not.toContain('zq-marker-agents-md-41')
++    expect(again.rec.frames.some((f) => f.raw.type === 'agents_md.write')).toBe(false)
++    await app.close()
++    await other.close()
++    await later.close()
++    await again.close()
++  })
++
++  it('with the Mac away, the asker gets mac_offline at once', async () => {
++    relay = await startTestRelay()
++    const k = kit(relay)
++    const app = await k.connectedApp()
++    const save = await app.sign({
++      ...mkFrame('agents_md.write'),
++      request_id: newUlid(),
++      thread_id: 'general',
++      text: TEXT,
++      base_sha: null,
++    })
++    app.send(save)
++    const err = await app.expectFrame('error', ((x: { ref?: string }) => x.ref === save.id) as never, {
++      direction: 'in',
++    })
++    expect((err as unknown as { code: string }).code).toBe('mac_offline')
++    await app.close()
++  })
++})
+diff --git a/apps/web/src/features/thread-sessions/Instructions.tsx b/apps/web/src/features/thread-sessions/Instructions.tsx
+new file mode 100644
+index 00000000..3d64c386
+--- /dev/null
++++ b/apps/web/src/features/thread-sessions/Instructions.tsx
+@@ -0,0 +1,160 @@
++// The thread's instructions (AGENTS.md in its own folder), in its settings. Shown for a thread with its own session, on a
++// Mac that answers `agents_md.*` (agents-md/1). Claude Code loads AGENTS.md beside CLAUDE.md in thread sessions, so a save
++// shapes the thread's next sessions. Loaded on Edit, not each time the sheet opens. A save goes over the file it was loaded
++// from only: when the file changed meanwhile (the agent may edit its own instructions) the Mac refuses and the owner reloads.
++// A change made outside Settings is shown as a diff against the last save from here, never refused.
++import { AGENTS_MD_FEATURE, AGENTS_MD_WORDING, type ThreadT } from '@talos-app/protocol'
++import { useId, useState } from 'react'
++import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
++import { useFeature } from '../../lib/v2Client.ts'
++import { Button, Textarea } from '../../ui/index.ts'
++
++export const INSTRUCTIONS_TEXT = {
++  title: 'Instructions',
++  about: "AGENTS.md in this thread's folder. Its sessions read it when they start.",
++  edit: 'Edit AGENTS.md',
++  none: 'No AGENTS.md yet. What you write here becomes this thread’s AGENTS.md.',
++  noFolder: 'Pick a folder for this thread’s session to give it its own instructions.',
++  saved: 'Saved. The thread’s next session reads it.',
++  reload: 'Reload',
++  save: 'Save instructions',
++  close: 'Close',
++  outside: 'Changed outside Settings since your last save here.',
++  viewDiff: 'View the diff',
++  failed: "Your Mac didn't answer. Try again.",
++} as const
++
++type Loaded = { sha: string | null; text: string; outsideDiff?: string }
++
++export function Instructions({ thread }: { thread: ThreadT }) {
++  const am = useTalosClient().agentsMd
++  const on = useFeature(AGENTS_MD_FEATURE) !== 'off'
++  const macOnline = useTalos((s) => s.presence.bridge_online)
++  const id = useId()
++  const [loaded, setLoaded] = useState<Loaded | null>(null)
++  const [draft, setDraft] = useState('')
++  const [busy, setBusy] = useState(false)
++  const [note, setNote] = useState<{ text: string; tone: 'ok' | 'error'; stale?: boolean } | null>(null)
++  const [tooLarge, setTooLarge] = useState(false)
++  if (!am || !on || thread.session !== 'dedicated') return null
++  const hasFolder = typeof thread.session_opts?.cwd === 'string' && thread.session_opts.cwd !== ''
++
++  const say = (e: unknown, stale = false) =>
++    setNote({
++      text: e instanceof TalosClientError && e.message ? e.message : INSTRUCTIONS_TEXT.failed,
++      tone: 'error',
++      stale,
++    })
++  const load = async () => {
++    setBusy(true)
++    setNote(null)
++    try {
++      const f = await am.read(thread.id)
++      setTooLarge(f.tooLarge)
++      if (!f.tooLarge) {
++        setLoaded({ sha: f.sha, text: f.text ?? '', ...(f.outsideDiff ? { outsideDiff: f.outsideDiff } : {}) })
++        setDraft(f.text ?? '')
++      }
++    } catch (e) {
++      say(e)
++    } finally {
++      setBusy(false)
++    }
++  }
++  const save = async () => {
++    if (!loaded) return
++    setBusy(true)
++    setNote(null)
++    try {
++      const f = await am.write(thread.id, draft, loaded.sha)
++      setLoaded({ sha: f.sha, text: f.text ?? draft })
++      setNote({ text: INSTRUCTIONS_TEXT.saved, tone: 'ok' })
++    } catch (e) {
++      say(e, e instanceof TalosClientError && e.code === 'stale')
++    } finally {
++      setBusy(false)
++    }
++  }
++
++  return (
++    <section className="mt-2 border-t border-line px-2 pt-2" aria-labelledby={`${id}-t`} data-testid="instructions">
++      <h3 id={`${id}-t`} className="m-0 text-sm font-medium">
++        {INSTRUCTIONS_TEXT.title}
++      </h3>
++      <p className="m-0 text-xs text-text-2">{INSTRUCTIONS_TEXT.about}</p>
++      {!hasFolder ? (
++        <p className="m-0 pt-1 text-xs text-text-2" data-testid="instructions-no-folder">
++          {INSTRUCTIONS_TEXT.noFolder}
++        </p>
++      ) : tooLarge ? (
++        <p className="m-0 pt-1 text-xs text-text-2">{AGENTS_MD_WORDING.tooLarge}</p>
++      ) : !loaded ? (
++        <div className="pt-1">
++          <Button variant="ghost" disabled={!macOnline || busy} onClick={() => void load()}>
++            {INSTRUCTIONS_TEXT.edit}
++          </Button>
++        </div>
++      ) : (
++        <div className="flex flex-col gap-2 pt-1">
++          {loaded.outsideDiff && (
++            <div className="rounded-button border border-line p-2 text-xs" data-testid="instructions-outside">
++              <p className="m-0">{INSTRUCTIONS_TEXT.outside}</p>
++              <details>
++                <summary className="min-h-11 cursor-pointer content-center">{INSTRUCTIONS_TEXT.viewDiff}</summary>
++                <pre className="m-0 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-xs">
++                  {loaded.outsideDiff}
++                </pre>
++              </details>
++            </div>
++          )}
++          {loaded.sha === null && draft === '' && <p className="m-0 text-xs text-text-2">{INSTRUCTIONS_TEXT.none}</p>}
++          <label htmlFor={`${id}-md`} className="sr-only">
++            AGENTS.md
++          </label>
++          <Textarea
++            id={`${id}-md`}
++            value={draft}
++            onChange={(e) => setDraft(e.target.value)}
++            rows={12}
++            spellCheck={false}
++            className="font-mono text-sm"
++            data-testid="instructions-text"
++          />
++          <div className="flex flex-wrap items-center gap-2">
++            <Button
++              disabled={!macOnline || busy || draft === loaded.text}
++              onClick={() => void save()}
++              data-testid="instructions-save"
++            >
++              {INSTRUCTIONS_TEXT.save}
++            </Button>
++            <Button
++              variant="ghost"
++              disabled={busy}
++              onClick={() => {
++                setLoaded(null)
++                setNote(null)
++              }}
++            >
++              {INSTRUCTIONS_TEXT.close}
++            </Button>
++          </div>
++        </div>
++      )}
++      {note && (
++        <p
++          role={note.tone === 'error' ? 'alert' : 'status'}
++          className={note.tone === 'error' ? 'm-0 pt-1 text-xs text-danger' : 'm-0 pt-1 text-xs text-text-2'}
++          data-testid="instructions-note"
++        >
++          {note.text}{' '}
++          {note.stale && (
++            <Button variant="ghost" disabled={busy} onClick={() => void load()}>
++              {INSTRUCTIONS_TEXT.reload}
++            </Button>
++          )}
++        </p>
++      )}
++    </section>
++  )
++}
+diff --git a/apps/web/src/features/threads/manage/ThreadEditor.tsx b/apps/web/src/features/threads/manage/ThreadEditor.tsx
+index e3176986..6963bec6 100644
+--- a/apps/web/src/features/threads/manage/ThreadEditor.tsx
++++ b/apps/web/src/features/threads/manage/ThreadEditor.tsx
+@@ -21,6 +21,7 @@ import { ART_ICONS, ART_LABEL, INK, searchIcons, THREAD_COLOR } from '../../../u
+ import { newThread } from '../../agent-config/patch.ts'
+ import { useAwaitingOwner } from '../../cards/useAwaitingOwner.ts'
+ import { useMediaQuery } from '../../settings/useMedia.ts'
++import { Instructions } from '../../thread-sessions/Instructions.tsx'
+ import { OwnSession } from '../../thread-sessions/OwnSession.tsx'
+ import { NOTIFY_LABEL, setDescription, useDescription } from '../threadMeta.ts'
+ import { useAgentName } from '../useThreads.ts'
+@@ -384,6 +385,7 @@ function EditorBody({
+ 
+       {/* Option C (docs/OPTION-C.md 9.2): hidden unless the owner allowed thread sessions and this thread may have one */}
+       {!creating && live && <OwnSession thread={live} />}
++      {!creating && live && <Instructions thread={live} />}
+ 
+       {!macOnline && <p className="m-0 text-xs text-text-2">Changes need your Mac online.</p>}
+       {full && <p className="m-0 text-xs text-text-2">You have the maximum of {MAX_THREADS} threads.</p>}
+diff --git a/apps/web/src/lib/client.ts b/apps/web/src/lib/client.ts
+index 873de591..e682776f 100644
+--- a/apps/web/src/lib/client.ts
++++ b/apps/web/src/lib/client.ts
+@@ -22,7 +22,15 @@ import type {
+ import { createContext, createElement, type ReactNode, useContext } from 'react'
+ import { type StoreApi, useStore } from 'zustand'
+ import { initialSchedulesSlice, type SchedulesClient, type SchedulesSlice } from './schedulesClient.ts'
+-import type { BugReportClient, FilesClient, FolderClient, MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
++import type {
++  AgentsMdClient,
++  BugReportClient,
++  FilesClient,
++  FolderClient,
++  MemoryClient,
++  SearchClient,
++  SpeakClient,
++} from './v2Client.ts'
+ 
+ /** Rejections the relay or the Mac would send as `error{code}`; clients and the fake throw this. */
+ /** `onProgress` gets 0..1 as bytes go out; `signal` cancels the upload. Both optional. */
+@@ -208,6 +216,8 @@ export interface TalosClient {
+   readonly folders?: FolderClient
+   /** The Files pane: a read-only look at a thread's folder on the Mac. Absent on a client that cannot ask the Mac. */
+   readonly files?: FilesClient
++  /** The thread's AGENTS.md in its settings, on the Mac. Absent on a client that cannot ask the Mac. */
++  readonly agentsMd?: AgentsMdClient
+   /** The bug reporter (Mac's versions and logs, and the signed post to the relay). Absent in a fake that does not model it. */
+   readonly bugs?: BugReportClient
+   /**
+diff --git a/apps/web/src/lib/fakeAgentsMd.ts b/apps/web/src/lib/fakeAgentsMd.ts
+new file mode 100644
+index 00000000..b21fd599
+--- /dev/null
++++ b/apps/web/src/lib/fakeAgentsMd.ts
+@@ -0,0 +1,90 @@
++// The thread settings' AGENTS.md on a fake Mac (VITE_FAKE=1 and the web tests): the real Mac's rules in small. A thread with
++// a folder of its own has one; any other thread is refused with the Mac's sentence. A save over a file that changed since it
++// was loaded is refused. A change made "at the Mac" (`changeOnMac`) shows as a diff against the last save from Settings.
++import { AGENTS_MD_MAX_BYTES, AGENTS_MD_WORDING, lineDiff } from '@talos-app/protocol'
++import { TalosClientError } from './client.ts'
++import type { AgentsMdClient, AgentsMdFile } from './v2Client.ts'
++
++export type FakeAgentsMdSeed = {
++  /** AGENTS.md of the threads that have one already, by thread id. */
++  files?: Record<string, string>
++}
++
++export type FakeAgentsMd = AgentsMdClient & {
++  /** The file changes on the Mac, as when the agent edits its own instructions. */
++  changeOnMac(threadId: string, text: string | null): void
++  /** The next call rejects with this sentence, then behaves again. */
++  failNextWith(message: string): void
++  /** What the fake Mac holds now, for tests. */
++  onMac(threadId: string): string | null | undefined
++  readonly calls: Array<{ op: 'read' | 'write'; threadId: string; text?: string; baseSha?: string | null }>
++}
++
++async function sha256(text: string): Promise<string> {
++  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
++  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')
++}
++
++export function createFakeAgentsMd(
++  deps: {
++    macOnline: () => boolean
++    /** The thread has a folder of its own (a dedicated thread with a folder set), by the config the fake Mac holds. */
++    ownFolder: (threadId: string) => boolean
++  },
++  seed: FakeAgentsMdSeed = {},
++): FakeAgentsMd {
++  const files = new Map<string, string | null>(Object.entries(seed.files ?? {}))
++  const saved = new Map<string, string>()
++  const calls: FakeAgentsMd['calls'] = []
++  let failNext: string | null = null
++  const gate = (threadId: string) => {
++    if (!deps.macOnline()) throw new TalosClientError('mac_offline')
++    if (failNext !== null) {
++      const message = failNext
++      failNext = null
++      throw new TalosClientError('bad_frame', message)
++    }
++    if (!deps.ownFolder(threadId)) throw new TalosClientError('bad_frame', AGENTS_MD_WORDING.shared)
++  }
++  const answer = async (threadId: string, isSave: boolean): Promise<AgentsMdFile> => {
++    const text = files.get(threadId) ?? null
++    const last = saved.get(threadId)
++    const diff = last !== undefined ? lineDiff(last, text ?? '') : ''
++    return {
++      threadId,
++      exists: text !== null,
++      sha: text === null ? null : await sha256(text),
++      ...(text !== null ? { text } : {}),
++      tooLarge: false,
++      ...(diff ? { outsideDiff: diff } : {}),
++      saved: isSave,
++    }
++  }
++  return {
++    calls,
++    changeOnMac(threadId, text) {
++      files.set(threadId, text)
++    },
++    failNextWith(message) {
++      failNext = message
++    },
++    onMac: (threadId) => files.get(threadId),
++    async read(threadId) {
++      calls.push({ op: 'read', threadId })
++      gate(threadId)
++      return answer(threadId, false)
++    },
++    async write(threadId, text, baseSha) {
++      calls.push({ op: 'write', threadId, text, baseSha })
++      gate(threadId)
++      if (new TextEncoder().encode(text).length > AGENTS_MD_MAX_BYTES)
++        throw new TalosClientError('too_large', AGENTS_MD_WORDING.tooLarge)
++      const now = files.get(threadId) ?? null
++      if ((now === null ? null : await sha256(now)) !== baseSha)
++        throw new TalosClientError('stale', AGENTS_MD_WORDING.conflict)
++      files.set(threadId, text)
++      saved.set(threadId, text)
++      return answer(threadId, true)
++    },
++  }
++}
+diff --git a/apps/web/src/lib/fakeClient.ts b/apps/web/src/lib/fakeClient.ts
+index 841e8dc9..91ff0ed2 100644
+--- a/apps/web/src/lib/fakeClient.ts
++++ b/apps/web/src/lib/fakeClient.ts
+@@ -58,6 +58,7 @@ import {
+   TalosClientError,
+   type VoiceAskArgs,
+ } from './client.ts'
++import { createFakeAgentsMd, type FakeAgentsMd, type FakeAgentsMdSeed } from './fakeAgentsMd.ts'
+ import { createFakeSchedules, type FakeSchedulesClient } from './fakeSchedules.ts'
+ import { createFakeSession, type FakeAgentsMode, type FakeModMode, type FakeSession } from './fakeSession.ts'
+ import {
+@@ -72,7 +73,15 @@ import {
+   type FakeFolderTree,
+ } from './fakeV2.ts'
+ import { PasskeyUnavailableError, passkeyBlock } from './passkeyGate.ts'
+-import type { BugReportClient, FilesClient, FolderClient, MemoryClient, SearchClient, SpeakClient } from './v2Client.ts'
++import type {
++  AgentsMdClient,
++  BugReportClient,
++  FilesClient,
++  FolderClient,
++  MemoryClient,
++  SearchClient,
++  SpeakClient,
++} from './v2Client.ts'
+ 
+ export type FakeClientOptions = {
+   /** Milliseconds before the fake agent answers. 0 = next tick. */
+@@ -88,6 +97,8 @@ export type FakeClientOptions = {
+   folders?: FakeFolderTree
+   /** The thread folders the fake Mac's Files pane shows. Default: DEMO_FILES. */
+   files?: FakeFilesTree
++  /** AGENTS.md of threads that have one on the fake Mac already. */
++  agentsMd?: FakeAgentsMdSeed
+ }
+ 
+ /** Seeds: a config, two threads, one pending high-risk card, one inbox item, one agent message. */
+@@ -125,6 +136,7 @@ export function seedState(): ClientState {
+         'speak/1',
+         'folders/1',
+         'files/1',
++        'agents-md/1',
+         'run/1',
+       ],
+       features_at: '2026-10-28T15:00:00.000Z',
+@@ -202,6 +214,9 @@ export type FakeClient = TalosClient & {
+   readonly speak: SpeakClient
+   readonly folders: FolderClient
+   readonly files: FilesClient
++  readonly agentsMd: AgentsMdClient
++  /** The fake Mac's AGENTS.md files, for tests. */
++  readonly fakeAgentsMd: FakeAgentsMd
+   /** The fake Mac's thread folders for the Files pane: fail the next call, add a file, see the calls. */
+   readonly fakeFiles: FakeFiles
+   /** The bug reporter: answers `context` from a made-up Mac and keeps what `send` was given, for tests to read. */
+@@ -235,6 +250,16 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
+     { macOnline: () => store.getState().presence.bridge_online },
+     opts.files ?? DEMO_FILES,
+   )
++  const fakeAgentsMd = createFakeAgentsMd(
++    {
++      macOnline: () => store.getState().presence.bridge_online,
++      ownFolder: (id) => {
++        const t = store.getState().config?.threads.find((x) => x.id === id)
++        return t?.session === 'dedicated' && typeof t.session_opts?.cwd === 'string'
++      },
++    },
++    opts.agentsMd,
++  )
+   const bugReports: Array<{ report: BugReportBodyT; picture: { type: string; bytes: Uint8Array } }> = []
+   const bugs: BugReportClient = {
+     async context() {
+@@ -434,6 +459,8 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
+     folders: fakeFolders,
+     files: fakeFiles,
+     fakeFiles,
++    agentsMd: fakeAgentsMd,
++    fakeAgentsMd,
+     bugs,
+     bugReports,
+     fakeFolders,
+diff --git a/apps/web/src/lib/socket-ctx.ts b/apps/web/src/lib/socket-ctx.ts
+index 226f874c..8357d1c7 100644
+--- a/apps/web/src/lib/socket-ctx.ts
++++ b/apps/web/src/lib/socket-ctx.ts
+@@ -236,7 +236,8 @@ export type SocketCtx = {
+       | 'fs.listing'
+       | 'files.listing'
+       | 'files.file'
+-      | 'bug.context_result',
++      | 'bug.context_result'
++      | 'agents_md.file',
+     timeoutMs?: number,
+   ) => Promise<Record<string, unknown>>
+   // socket-upload.ts
+diff --git a/apps/web/src/lib/socket-requests.ts b/apps/web/src/lib/socket-requests.ts
+index 6566c2ce..56cf221a 100644
+--- a/apps/web/src/lib/socket-requests.ts
++++ b/apps/web/src/lib/socket-requests.ts
+@@ -149,7 +149,8 @@ export function createSocketRequests(c: SocketCtx) {
+       | 'fs.listing'
+       | 'files.listing'
+       | 'files.file'
+-      | 'bug.context_result',
++      | 'bug.context_result'
++      | 'agents_md.file',
+     timeoutMs = 20_000,
+   ): Promise<Record<string, unknown>> {
+     if (!c.canSend()) throw new TalosClientError('mac_offline', "You're offline.")
+diff --git a/apps/web/src/lib/socketAgentsMd.ts b/apps/web/src/lib/socketAgentsMd.ts
+new file mode 100644
+index 00000000..0930ab24
+--- /dev/null
++++ b/apps/web/src/lib/socketAgentsMd.ts
+@@ -0,0 +1,59 @@
++// The socket AgentsMdClient: one signed `agents_md.read` or `agents_md.write`, the answer routed back by `request_id`. A
++// refusal from the relay or the Mac is an `error{ref}` and rejects with `TalosClientError` (askRead in socket-requests.ts).
++//
++// The relay carries the answer and can write anything into it, so the app checks it against what it asked: it must be for
++// the thread asked, a sha must be one, and the text must fit the cap. Anything else is refused, never shown or saved over.
++import { AGENTS_MD_DIFF_MAX, AGENTS_MD_MAX_BYTES, AGENTS_MD_WORDING, newUlid } from '@talos-app/protocol'
++import { TalosClientError } from './client.ts'
++import type { AgentsMdClient, AgentsMdFile } from './v2Client.ts'
++
++export type SocketAgentsMdDeps = {
++  /** Signs and sends `frame`, resolves with the `agents_md.file` that carries its `request_id`. */
++  ask(frame: Record<string, unknown>): Promise<Record<string, unknown>>
++}
++
++const SHA = /^[0-9a-f]{64}$/
++const refuse = (): never => {
++  throw new TalosClientError('bad_frame', AGENTS_MD_WORDING.refused)
++}
++
++export function toAgentsMdFile(f: Record<string, unknown>, threadId: string): AgentsMdFile {
++  if (f.thread_id !== threadId || typeof f.exists !== 'boolean') refuse()
++  if (f.sha !== null && !(typeof f.sha === 'string' && SHA.test(f.sha))) refuse()
++  if (f.text !== undefined && (typeof f.text !== 'string' || f.text.length > AGENTS_MD_MAX_BYTES)) refuse()
++  const tooLarge = f.too_large === true
++  // an editor needs a sha to save over a file that is there, and text to show
++  if (f.exists === true && !tooLarge && (f.sha === null || typeof f.text !== 'string')) refuse()
++  return {
++    threadId,
++    exists: f.exists as boolean,
++    sha: f.exists === true && !tooLarge ? (f.sha as string) : null,
++    ...(typeof f.text === 'string' && !tooLarge ? { text: f.text } : {}),
++    tooLarge,
++    ...(typeof f.outside_diff === 'string' && f.outside_diff !== ''
++      ? { outsideDiff: f.outside_diff.slice(0, AGENTS_MD_DIFF_MAX + 200) }
++      : {}),
++    saved: f.saved === true,
++  }
++}
++
++export function createSocketAgentsMd(d: SocketAgentsMdDeps): AgentsMdClient {
++  return {
++    async read(threadId) {
++      return toAgentsMdFile(
++        await d.ask({ type: 'agents_md.read', request_id: newUlid(), thread_id: threadId }),
++        threadId,
++      )
++    },
++    async write(threadId, text, baseSha) {
++      const f = await d.ask({
++        type: 'agents_md.write',
++        request_id: newUlid(),
++        thread_id: threadId,
++        text,
++        base_sha: baseSha,
++      })
++      return toAgentsMdFile(f, threadId)
++    },
++  }
++}
+diff --git a/apps/web/src/lib/socketClient.ts b/apps/web/src/lib/socketClient.ts
+index f8ed2c8f..8a4f02db 100644
+--- a/apps/web/src/lib/socketClient.ts
++++ b/apps/web/src/lib/socketClient.ts
+@@ -25,6 +25,7 @@ import { createSocketRequests } from './socket-requests.ts'
+ import { createSocketState } from './socket-state.ts'
+ import type { SocketClient, SocketClientOptions } from './socket-types.ts'
+ import { createSocketUpload } from './socket-upload.ts'
++import { createSocketAgentsMd } from './socketAgentsMd.ts'
+ import { createSocketBugs } from './socketBugs.ts'
+ import { createSocketFiles } from './socketFiles.ts'
+ import { createSocketFolders } from './socketFolders.ts'
+@@ -110,6 +111,7 @@ export function createSocketClient(opts: SocketClientOptions): SocketClient {
+   const speak = createSocketSpeak({ ask: (frame) => c.askRead(frame, 'speak.result') })
+   const folders = createSocketFolders({ ask: (frame) => c.askRead(frame, 'fs.listing') })
+   const files = createSocketFiles({ ask: (frame, answer) => c.askRead(frame, answer) })
++  const agentsMd = createSocketAgentsMd({ ask: (frame) => c.askRead(frame, 'agents_md.file') })
+   const bugs = createSocketBugs({
+     ask: (frame) => c.askRead(frame, 'bug.context_result'),
+     ensureKey: () => c.ensureKey(),
+@@ -133,6 +135,7 @@ export function createSocketClient(opts: SocketClientOptions): SocketClient {
+     speak,
+     folders,
+     files,
++    agentsMd,
+     bugs,
+     store,
+     meta,
+diff --git a/apps/web/src/lib/v2Client.ts b/apps/web/src/lib/v2Client.ts
+index d6b77c53..5925d536 100644
+--- a/apps/web/src/lib/v2Client.ts
++++ b/apps/web/src/lib/v2Client.ts
+@@ -145,6 +145,27 @@ export interface FilesClient {
+   read(threadId: string, path: string, offset: number): Promise<FilesFile>
+ }
+ 
++/** The thread's AGENTS.md as the Mac has it (`agents_md.file`). */
++export type AgentsMdFile = {
++  threadId: string
++  exists: boolean
++  /** The sha256 of the file (null: none, or too large): what a save says it was loaded from. */
++  sha: string | null
++  text?: string
++  tooLarge: boolean
++  /** The change since the last save made in Settings, when the file was changed elsewhere (a unified diff). */
++  outsideDiff?: string
++  saved: boolean
++}
++
++/** The thread's instructions in its settings. Both reject with `TalosClientError` (the Mac's sentence, `mac_offline`, ...). */
++export interface AgentsMdClient {
++  /** `agents_md.read` -> `agents_md.file`. */
++  read(threadId: string): Promise<AgentsMdFile>
++  /** `agents_md.write` -> `agents_md.file`: saves `text` over the file loaded as `baseSha` (null: there was none). */
++  write(threadId: string, text: string, baseSha: string | null): Promise<AgentsMdFile>
++}
++
+ /** What the Mac knows for a bug report (`bug.context` -> `bug.context_result`): its own versions, the errors it filed, the cleaned log. */
+ export type BugContext = {
+   bridgeVersion: string
+diff --git a/apps/web/test/thread-sessions/agents-md-client.test.ts b/apps/web/test/thread-sessions/agents-md-client.test.ts
+new file mode 100644
+index 00000000..68c26d38
+--- /dev/null
++++ b/apps/web/test/thread-sessions/agents-md-client.test.ts
+@@ -0,0 +1,66 @@
++// The Instructions editor's client side: the relay carries the Mac's answer and could write anything into it, so an answer
++// for another thread, a sha that is not one, an over-cap text or a file with no sha to save over is refused, never shown or
++// saved over. The save sends the sha the editor loaded.
++import { AGENTS_MD_MAX_BYTES, AGENTS_MD_WORDING } from '@talos-app/protocol'
++import { describe, expect, it } from 'vitest'
++import { TalosClientError } from '../../src/lib/client.ts'
++import { createSocketAgentsMd, toAgentsMdFile } from '../../src/lib/socketAgentsMd.ts'
++
++const SHA = 'a'.repeat(64)
++const refused = (f: Record<string, unknown>) => {
++  try {
++    toAgentsMdFile(f, 'work')
++  } catch (e) {
++    expect(e).toBeInstanceOf(TalosClientError)
++    return (e as TalosClientError).message
++  }
++  return 'accepted'
++}
++
++describe('socket AGENTS.md client', () => {
++  it('takes the file as the Mac sent it for the thread asked', () => {
++    expect(
++      toAgentsMdFile({ thread_id: 'work', exists: true, sha: SHA, text: '# W\n', outside_diff: '@@ -1 +1 @@' }, 'work'),
++    ).toEqual({
++      threadId: 'work',
++      exists: true,
++      sha: SHA,
++      text: '# W\n',
++      tooLarge: false,
++      outsideDiff: '@@ -1 +1 @@',
++      saved: false,
++    })
++    expect(toAgentsMdFile({ thread_id: 'work', exists: false, sha: null }, 'work')).toMatchObject({
++      exists: false,
++      sha: null,
++    })
++    expect(toAgentsMdFile({ thread_id: 'work', exists: true, sha: null, too_large: true }, 'work')).toMatchObject({
++      tooLarge: true,
++      sha: null,
++    })
++  })
++
++  it('refuses an answer for another thread, a bad sha, an over-cap text, or a file with nothing to save over', () => {
++    expect(refused({ thread_id: 'general', exists: false, sha: null })).toBe(AGENTS_MD_WORDING.refused)
++    expect(refused({ thread_id: 'work', exists: true, sha: 'nope', text: 'x' })).toBe(AGENTS_MD_WORDING.refused)
++    expect(refused({ thread_id: 'work', exists: true, sha: SHA, text: 'x'.repeat(AGENTS_MD_MAX_BYTES + 1) })).toBe(
++      AGENTS_MD_WORDING.refused,
++    )
++    expect(refused({ thread_id: 'work', exists: true, sha: null, text: 'x' })).toBe(AGENTS_MD_WORDING.refused)
++    expect(refused({ thread_id: 'work', exists: true, sha: SHA })).toBe(AGENTS_MD_WORDING.refused)
++    expect(refused({ thread_id: 'work', sha: null })).toBe(AGENTS_MD_WORDING.refused)
++  })
++
++  it('a save sends the text and the sha the editor loaded', async () => {
++    const asked: Array<Record<string, unknown>> = []
++    const c = createSocketAgentsMd({
++      ask: async (f) => {
++        asked.push(f)
++        return { thread_id: 'work', exists: true, sha: SHA, text: f.text, saved: true }
++      },
++    })
++    await c.write('work', 'new\n', null)
++    expect(asked[0]).toMatchObject({ type: 'agents_md.write', thread_id: 'work', text: 'new\n', base_sha: null })
++    expect(typeof asked[0]?.request_id).toBe('string')
++  })
++})
+diff --git a/apps/web/test/thread-sessions/instructions.spec.ts b/apps/web/test/thread-sessions/instructions.spec.ts
+new file mode 100644
+index 00000000..1e00a19f
+--- /dev/null
++++ b/apps/web/test/thread-sessions/instructions.spec.ts
+@@ -0,0 +1,138 @@
++// The Instructions section of thread settings (AGENTS.md in the thread's own folder) in a real browser (fake mode,
++// VITE_FAKE=1), on the desktop, iPhone and Pixel projects: Edit loads the file, Save writes it, a save over a file that
++// changed on the Mac meanwhile is refused with Reload, and the reload shows that change as a diff. A thread without its own
++// session has no section; one with no folder yet says how to get one. Phone widths must not scroll sideways.
++import { expect, type Page, test } from '@playwright/test'
++import { AGENTS_MD_WORDING } from '@talos-app/protocol'
++import { expectAxeClean } from '../cards/e2e.ts'
++import { isPhoneWidth, openPhoneMenu } from '../helpers/phone.ts'
++
++test.use({ bypassCSP: true, serviceWorkers: 'block' })
++
++type Talos = {
++  store: {
++    getState: () => { config: { threads: Array<Record<string, unknown>> } }
++    setState: (f: (s: never) => never) => void
++  }
++  patchConfig: (p: Record<string, unknown>) => Promise<void>
++  emit: (type: string, fields: Record<string, unknown>) => void
++  fakeAgentsMd: { changeOnMac(id: string, text: string | null): void; onMac(id: string): string | null | undefined }
++}
++
++/** Adds Work with its own session (and, unless `folder` is false, its own folder), then opens its settings. */
++async function open(page: Page, o: { folder?: boolean; session?: boolean } = {}) {
++  await page.goto('/t/general')
++  await page.waitForFunction(() => Boolean((window as unknown as { __talos?: unknown }).__talos))
++  await page.evaluate(
++    async ({ folder, session }) => {
++      const c = (window as unknown as { __talos: Talos }).__talos
++      const cur = c.store.getState().config.threads.filter((t) => t.id !== 'work')
++      await c.patchConfig({
++        threads: [
++          ...cur,
++          {
++            id: 'work',
++            name: 'Work',
++            kind: 'fixed',
++            order: 2,
++            notify: 'all',
++            voice_context: 'recent',
++            archived: false,
++            created_at: '2026-10-28T00:00:00.000Z',
++            ...(session ? { session: 'dedicated' } : {}),
++            ...(session && folder ? { session_opts: { cwd: '/Users/alex/Projects/atlas' } } : {}),
++          },
++        ],
++        dedicated: { enabled: true },
++      })
++      c.store.setState(((s: { presence: { features?: string[] } }) => ({
++        presence: { ...s.presence, features: [...(s.presence.features ?? []), 'thread-sessions/1'] },
++      })) as never)
++      c.emit('workers.status', {
++        status: {
++          supported: true,
++          supervisor_online: true,
++          threads: [{ thread_id: 'work', state: 'live' }],
++          governor: { state: 'ok' },
++          at: new Date().toISOString(),
++        },
++      })
++    },
++    { folder: o.folder !== false, session: o.session !== false },
++  )
++  if (isPhoneWidth(page)) {
++    await openPhoneMenu(page)
++    await page.getByTestId('phone-menu').getByRole('button', { name: 'Thread settings for Work', exact: true }).click()
++  } else {
++    await page
++      .getByRole('complementary', { name: 'Sidebar' })
++      .getByRole('button', { name: 'Thread settings for Work', exact: true })
++      .click({ force: true })
++  }
++  await expect(page.getByTestId('thread-settings')).toBeVisible()
++}
++const section = (page: Page) => page.getByTestId('instructions')
++const onMac = (page: Page) =>
++  page.evaluate(() => (window as unknown as { __talos: Talos }).__talos.fakeAgentsMd.onMac('work'))
++const noSideScroll = async (page: Page) =>
++  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
++
++test('Edit loads AGENTS.md, Save writes it to the thread folder on the Mac', async ({ page }) => {
++  await open(page)
++  const s = section(page)
++  await s.scrollIntoViewIfNeeded()
++  await expect(s.getByRole('heading', { name: 'Instructions' })).toBeVisible()
++  await s.getByRole('button', { name: 'Edit AGENTS.md' }).click()
++  const box = s.getByTestId('instructions-text')
++  await expect(box).toHaveValue('')
++  await expect(s.getByText('No AGENTS.md yet.', { exact: false })).toBeVisible()
++  const save = s.getByTestId('instructions-save')
++  await expect(save).toBeDisabled() // nothing changed yet
++  await box.fill('# Atlas\n\nRun the tests before you say done.\n')
++  await save.click()
++  await expect(s.getByTestId('instructions-note')).toHaveText('Saved. The thread’s next session reads it.')
++  expect(await onMac(page)).toBe('# Atlas\n\nRun the tests before you say done.\n')
++  const b = await save.boundingBox()
++  expect(b?.height ?? 0).toBeGreaterThanOrEqual(44) // thumb-sized
++  await noSideScroll(page)
++  await expectAxeClean(page)
++})
++
++test('a save over a file changed on the Mac meanwhile is refused; Reload shows the change as a diff', async ({
++  page,
++}) => {
++  await open(page)
++  const s = section(page)
++  await s.scrollIntoViewIfNeeded()
++  await s.getByRole('button', { name: 'Edit AGENTS.md' }).click()
++  await s.getByTestId('instructions-text').fill('mine\n')
++  await s.getByTestId('instructions-save').click()
++  await expect(s.getByTestId('instructions-note')).toContainText('Saved.')
++  // the agent edits its own instructions on the Mac, while this editor still holds the save
++  await page.evaluate(() =>
++    (window as unknown as { __talos: Talos }).__talos.fakeAgentsMd.changeOnMac('work', 'mine\nand the agent’s line\n'),
++  )
++  await s.getByTestId('instructions-text').fill('mine, edited\n')
++  await s.getByTestId('instructions-save').click()
++  await expect(s.getByRole('alert')).toContainText(AGENTS_MD_WORDING.conflict)
++  expect(await onMac(page)).toBe('mine\nand the agent’s line\n') // the change made meanwhile is kept
++  await s.getByRole('button', { name: 'Reload' }).click()
++  await expect(s.getByTestId('instructions-text')).toHaveValue('mine\nand the agent’s line\n')
++  const outside = s.getByTestId('instructions-outside')
++  await expect(outside).toContainText('Changed outside Settings')
++  await outside.getByText('View the diff').click()
++  await expect(outside.locator('pre')).toContainText('+and the agent’s line')
++  await noSideScroll(page)
++})
++
++test('a thread with its own session but no folder yet says how to get one; a shared thread has no section', async ({
++  page,
++}) => {
++  await open(page, { folder: false })
++  await expect(section(page).getByTestId('instructions-no-folder')).toBeVisible()
++  await expect(section(page).getByRole('button', { name: 'Edit AGENTS.md' })).toHaveCount(0)
++  await page.keyboard.press('Escape')
++  await open(page, { session: false })
++  await expect(page.getByTestId('thread-settings')).toBeVisible()
++  await expect(section(page)).toHaveCount(0)
++})
+diff --git a/docs/SECURITY.md b/docs/SECURITY.md
+index ad1a972e..90786502 100644
+--- a/docs/SECURITY.md
++++ b/docs/SECURITY.md
+@@ -720,6 +720,31 @@ before it shipped; each finding of that review has a test in `apps/bridge/test/f
+   back between the checks before and after can have a few names and sizes of that place listed (never its contents: a read goes through the
+   fenced handle). That needs write access inside the thread's folder, which that thread's own session has anyway.
+ 
++## A thread's instructions (AGENTS.md, an owner edit)
++
++Thread settings can edit `AGENTS.md` in the folder of a thread with its own session (`packages/protocol/src/frames-agents-md.ts`,
++`apps/bridge/src/files/agents-md.ts`). Claude Code loads it beside `CLAUDE.md` in thread sessions (`withInstructionFiles`), so a save shapes
++that thread's next sessions: it is a prompt-injection surface, and it is treated as one.
++
++- **Who may save.** A pinned, unrevoked owner device, a signature over the raw frame, fresh and once (`agents_md.read` and `agents_md.write`
++  run on the same read queue as the Files pane, `inbound-reads.ts`). The owner's call: no passkey step per save, and no card even in trust
++  mode. The same signed save sent again is refused. It is no agent tool and in no agent instruction; only a live main bridge answers.
++- **Nothing kept on the way.** The relay routes the request to the Mac and the answer to the asking socket only, by request id and answer
++  type; it stores none of it and replays none of it to another device or to the Mac reconnecting (`apps/relay/test/core/agents-md-relay.test.ts`).
++- **Which folder.** A dedicated thread's own folder only, by the supervisor's rules (`agentsMdFolderFor`). Never the shared agent folder,
++  even for a dedicated thread that runs in it: a save there would be Main's and every shared thread's instructions too. Inside the Files
++  pane's fence (`FilesService.fencedName`): not in a hidden or refused place, and not what a `.talos-lead` marker protects.
++- **The file.** Read through one handle with no link followed anywhere in its path, a regular file with one name: a link, or a hard link to
++  a file elsewhere, is neither read nor replaced. At most 64 KB; a larger file is shown as too large and cannot be saved over from here. A
++  save is written to a new file in the same folder (created, never an existing one) and renamed over `AGENTS.md`, and only when the file is
++  still the one the editor loaded (`base_sha`): a change made meanwhile is refused, never lost.
++- **The agent may edit it too.** Its agents are expected to keep their own instruction files, so nothing refuses an edit made outside
++  Settings. The Mac keeps, under `<talos home>/threads/<id>/`, the text before each save (`agents-md.prev`) and the text of the last save
++  (`agents-md.saved`). Settings shows a change made elsewhere as a diff against that save, and the next start of that thread's session posts
++  one quiet system line in the thread (it never holds the start, and says so once per change).
++- **What the app trusts.** The answer must be for the thread asked, with a real sha and text within the cap, or it is refused, never shown
++  or saved over (`apps/web/src/lib/socketAgentsMd.ts`).
++
+ ## The bug report webhook address (an owner setting)
+ 
+ Where the relay announces a new bug report (`bug_webhook_url`, a Standard Webhooks call signed with the relay's
+diff --git a/packages/protocol/fixtures/frames/agents_md.file.json b/packages/protocol/fixtures/frames/agents_md.file.json
+new file mode 100644
+index 00000000..752c5fd4
+--- /dev/null
++++ b/packages/protocol/fixtures/frames/agents_md.file.json
+@@ -0,0 +1,12 @@
++{
++  "v": 1,
++  "type": "agents_md.file",
++  "id": "01JBF3V7Q8K2M4N6P8R0S2T454",
++  "ts": "2026-10-28T15:32:10.120Z",
++  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T453",
++  "thread_id": "general",
++  "exists": true,
++  "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
++  "text": "# Trip\n\nKeep the packing list in packing.md.\n",
++  "saved": true
++}
+diff --git a/packages/protocol/fixtures/frames/agents_md.read.json b/packages/protocol/fixtures/frames/agents_md.read.json
+new file mode 100644
+index 00000000..916bf3cf
+--- /dev/null
++++ b/packages/protocol/fixtures/frames/agents_md.read.json
+@@ -0,0 +1,10 @@
++{
++  "v": 1,
++  "type": "agents_md.read",
++  "id": "01JBF3V7Q8K2M4N6P8R0S2T450",
++  "ts": "2026-10-28T15:32:10.120Z",
++  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T451",
++  "thread_id": "general",
++  "device_id": "d_rjxnk4xufxem5xago5zd",
++  "osig": "Zz0EtTWoblfD58y-eNVW0ctBFCN1jyF4RVEFfA5xOOZjSa_QaqMlv42CFdhBvkylK6sPKBo5Mf_4ydQW8wOLkQ"
++}
+diff --git a/packages/protocol/fixtures/frames/agents_md.write.json b/packages/protocol/fixtures/frames/agents_md.write.json
+new file mode 100644
+index 00000000..45db85cf
+--- /dev/null
++++ b/packages/protocol/fixtures/frames/agents_md.write.json
+@@ -0,0 +1,12 @@
++{
++  "v": 1,
++  "type": "agents_md.write",
++  "id": "01JBF3V7Q8K2M4N6P8R0S2T452",
++  "ts": "2026-10-28T15:32:10.120Z",
++  "request_id": "01JBF3V7Q8K2M4N6P8R0S2T453",
++  "thread_id": "general",
++  "text": "# Trip\n\nKeep the packing list in packing.md.\n",
++  "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
++  "device_id": "d_rjxnk4xufxem5xago5zd",
++  "osig": "ne4ujQCSjL6hbsGQfRE3uzZeEOp6235tVsT8UIpeHoxndxktSpeXTYIjzqXeGv24dQFuYhQQa7wEdbsq3qXxWQ"
++}
+diff --git a/packages/protocol/scripts/fixtures-reads.ts b/packages/protocol/scripts/fixtures-reads.ts
+index 058d6162..e1f0bd84 100644
+--- a/packages/protocol/scripts/fixtures-reads.ts
++++ b/packages/protocol/scripts/fixtures-reads.ts
+@@ -114,5 +114,30 @@ export function readFixtures({ env, ulid, msgId, mdId, owner, SHA }: FixtureHelp
+     recent_errors: ['web: TypeError: x is not a function'],
+     logs: '2026-11-10T04:00:00.000Z info     bridge up',
+   }
++
++  // the thread's AGENTS.md in its settings: a read, a save against the sha the editor loaded, the file as the Mac has it
++  signed['agents_md.read'] = {
++    ...env('agents_md.read', 160),
++    request_id: ulid(161),
++    thread_id: 'general',
++    ...owner,
++  }
++  signed['agents_md.write'] = {
++    ...env('agents_md.write', 162),
++    request_id: ulid(163),
++    thread_id: 'general',
++    text: '# Trip\n\nKeep the packing list in packing.md.\n',
++    base_sha: 'a'.repeat(64),
++    ...owner,
++  }
++  unsigned['agents_md.file'] = {
++    ...env('agents_md.file', 164),
++    request_id: ulid(163),
++    thread_id: 'general',
++    exists: true,
++    sha: 'b'.repeat(64),
++    text: '# Trip\n\nKeep the packing list in packing.md.\n',
++    saved: true,
++  }
+   return { unsigned, signed }
+ }
+diff --git a/packages/protocol/src/frames-agents-md.ts b/packages/protocol/src/frames-agents-md.ts
+new file mode 100644
+index 00000000..6c600ce7
+--- /dev/null
++++ b/packages/protocol/src/frames-agents-md.ts
+@@ -0,0 +1,66 @@
++// The thread's instructions (AGENTS.md) in its settings: read and saved by the owner's signed device, through the Mac only.
++// Split out of frames.ts, which re-exports them. Both are signed requests answered on the bridge's read queue, so the relay
++// never stores or replays the text: it goes to the Mac and back to the asking socket, nowhere else.
++import { z } from 'zod'
++import { frame, ownerFrame } from './frame-base.ts'
++import { ThreadId, Ulid } from './ids.ts'
++
++/** The Mac answers `agents_md.*` (a live main bridge): thread settings show the Instructions editor only then. */
++export const AGENTS_MD_FEATURE = 'agents-md/1'
++/** The most AGENTS.md text Settings reads or saves, in UTF-8 bytes. A larger file is shown as too large, never cut. */
++export const AGENTS_MD_MAX_BYTES = 64 * 1024
++/** The most of the "changed outside Settings" diff one answer carries, in characters. */
++export const AGENTS_MD_DIFF_MAX = 16 * 1024
++
++const Sha256Hex = z.string().regex(/^[0-9a-f]{64}$/)
++
++/** What the Mac says, in one place. */
++export const AGENTS_MD_WORDING = {
++  notReady: 'Your Mac is not ready to show instructions.',
++  shared:
++    "This thread runs in the shared agent folder, so its instructions are Main's too. Give it its own folder to give it its own instructions.",
++  noFolder: "This thread's folder isn't there any more.",
++  refused: "Talos can't edit AGENTS.md in this thread's folder.",
++  link: 'AGENTS.md in this folder is a link. Edit it at your Mac.',
++  tooLarge: 'AGENTS.md is larger than 64 KB. Edit it at your Mac.',
++  conflict: 'AGENTS.md changed since you opened it. Reload to see the new text, then make your change again.',
++  saveFailed: "Your Mac couldn't save AGENTS.md.",
++  /** The quiet thread line at the next session start after a change made outside Settings. */
++  changedOutside: 'AGENTS.md was changed outside Settings. View the diff in thread settings, under Instructions.',
++} as const
++
++/** The thread's AGENTS.md, as the Mac has it. Answered by `agents_md.file`. */
++export const AgentsMdReadFrame = ownerFrame('agents_md.read', {
++  request_id: Ulid,
++  thread_id: ThreadId,
++})
++
++/**
++ * Saves `text` as the thread's AGENTS.md. `base_sha` is the sha256 of the file the editor loaded (null: there was none); the
++ * Mac refuses when the file is not that any more, so a change made meanwhile is never lost. Answered by `agents_md.file`.
++ */
++export const AgentsMdWriteFrame = ownerFrame('agents_md.write', {
++  request_id: Ulid,
++  thread_id: ThreadId,
++  text: z.string().max(AGENTS_MD_MAX_BYTES),
++  base_sha: Sha256Hex.nullable(),
++})
++
++/**
++ * The file now: `exists` false (and `sha` null) when there is none; `too_large` when it is over AGENTS_MD_MAX_BYTES (no
++ * `text` then). `outside_diff`: the change since the last save made from Settings, when the file was changed elsewhere
++ * (a unified diff, cut at AGENTS_MD_DIFF_MAX). `saved`: this answers a write that was saved.
++ */
++export const AgentsMdFileFrame = frame('agents_md.file', {
++  request_id: Ulid,
++  thread_id: ThreadId,
++  exists: z.boolean(),
++  sha: Sha256Hex.nullable(),
++  text: z.string().max(AGENTS_MD_MAX_BYTES).optional(),
++  too_large: z.boolean().optional(),
++  outside_diff: z
++    .string()
++    .max(AGENTS_MD_DIFF_MAX + 200)
++    .optional(),
++  saved: z.boolean().optional(),
++})
+diff --git a/packages/protocol/src/frames.ts b/packages/protocol/src/frames.ts
+index af2196fa..f264556b 100644
+--- a/packages/protocol/src/frames.ts
++++ b/packages/protocol/src/frames.ts
+@@ -7,6 +7,7 @@ import { MAX_FRAME_BYTES, MAX_FRAME_BYTES_UNAUTH, WireErrorCode } from './errors
+ import { FILES_KINDS, FILES_LIST_MAX, FilesEntry, FilesPath } from './files.ts'
+ import { FOLDER_LIST_MAX, FOLDER_PATH_MAX, FsEntry, FsListPath } from './folders.ts'
+ import { frame, Osig, ownerFrame } from './frame-base.ts'
++import { AgentsMdFileFrame, AgentsMdReadFrame, AgentsMdWriteFrame } from './frames-agents-md.ts'
+ import { CardCreateFrame, CardResolveFrame, CardUpdateFrame } from './frames-cards.ts'
+ import { MAX_QUERY_CHARS, MAX_QUERY_TERMS } from './fts-query.ts'
+ import { HealthBeat } from './health.ts'
+@@ -74,7 +75,7 @@ import { MAX_THREAD_SESSION_STATES, ThreadSessionStateItem, WorkersStatus } from
+ // Sha256Ref lives in ids.ts (exported; SCHEDULES S2.1) so schedules.ts can use it without an import cycle.
+ // The envelope builders are in frame-base.ts and the card frames in frames-cards.ts; both are part of this module's exports.
+ export { Osig, RelayMeta } from './frame-base.ts'
+-export { CardCreateFrame, CardResolveFrame, CardUpdateFrame }
++export { AgentsMdFileFrame, AgentsMdReadFrame, AgentsMdWriteFrame, CardCreateFrame, CardResolveFrame, CardUpdateFrame }
+ 
+ // ---- connection ------------------------------------------------------------------------------------------------
+ 
+@@ -947,7 +948,10 @@ export const AppUpdateFrame = frame('app.update', {
+ export const APP_OWNER_FRAME_TYPES = ['app.request'] as const
+ export const APP_BRIDGE_FRAME_TYPES = ['app.response', 'app.update'] as const
+ 
+-/** The nine signed read frames (app -> relay -> bridge), each answered on the bridge's readQueue. */
++/**
++ * The signed request frames (app -> relay -> bridge), each answered on the bridge's readQueue and never stored by the relay.
++ * All read, except `agents_md.write`, which saves the thread's AGENTS.md (frames-agents-md.ts).
++ */
+ export const V2_READ_OWNER_FRAME_TYPES = [
+   'search.query',
+   'memory.tree',
+@@ -958,8 +962,10 @@ export const V2_READ_OWNER_FRAME_TYPES = [
+   'files.list',
+   'files.read',
+   'bug.context',
++  'agents_md.read',
++  'agents_md.write',
+ ] as const
+-/** The nine bridge -> relay -> app answers, routed to the asking socket only. */
++/** The bridge -> relay -> app answers, routed to the asking socket only. */
+ export const V2_READ_RESPONSE_FRAME_TYPES = [
+   'search.results',
+   'memory.listing',
+@@ -970,6 +976,7 @@ export const V2_READ_RESPONSE_FRAME_TYPES = [
+   'files.listing',
+   'files.file',
+   'bug.context_result',
++  'agents_md.file',
+ ] as const
+ /** Which answer each signed read expects (core/ephemeral.ts drops any other type for that request_id). */
+ export const V2_READ_RESPONSE_FOR = {
+@@ -982,6 +989,8 @@ export const V2_READ_RESPONSE_FOR = {
+   'files.list': 'files.listing',
+   'files.read': 'files.file',
+   'bug.context': 'bug.context_result',
++  'agents_md.read': 'agents_md.file',
++  'agents_md.write': 'agents_md.file',
+ } as const satisfies Record<(typeof V2_READ_OWNER_FRAME_TYPES)[number], (typeof V2_READ_RESPONSE_FRAME_TYPES)[number]>
+ 
+ // ---- registry ---------------------------------------------------------------------------------------------------
+@@ -1073,6 +1082,9 @@ export const frameSchemas = {
+   'files.file': FilesFileFrame,
+   'bug.context': BugContextFrame,
+   'bug.context_result': BugContextResultFrame,
++  'agents_md.read': AgentsMdReadFrame,
++  'agents_md.write': AgentsMdWriteFrame,
++  'agents_md.file': AgentsMdFileFrame,
+   'share.item': ShareItemFrame,
+   'problem.item': ProblemItemFrame,
+   'native.act': NativeActWire,
+diff --git a/packages/protocol/src/index.ts b/packages/protocol/src/index.ts
+index ff76e37d..af3d70bc 100644
+--- a/packages/protocol/src/index.ts
++++ b/packages/protocol/src/index.ts
+@@ -25,6 +25,12 @@ export * from './files.ts'
+ export * from './fingerprint.ts'
+ export * from './folders.ts'
+ export * from './frames.ts'
++export {
++  AGENTS_MD_DIFF_MAX,
++  AGENTS_MD_FEATURE,
++  AGENTS_MD_MAX_BYTES,
++  AGENTS_MD_WORDING,
++} from './frames-agents-md.ts'
+ export * from './fts-query.ts'
+ export * from './hash.ts'
+ export * from './health.ts'
+diff --git a/packages/testkit/src/fake-bridge.ts b/packages/testkit/src/fake-bridge.ts
+index 62462652..3cc10abb 100644
+--- a/packages/testkit/src/fake-bridge.ts
++++ b/packages/testkit/src/fake-bridge.ts
+@@ -142,6 +142,15 @@ const EMPTY_READ: Record<FakeReadType, (f: Record<string, unknown>) => Record<st
+     truncated: false,
+   }),
+   'bug.context': () => ({ bridge_version: '0.0.0', claude_code: null, recent_errors: [], logs: '' }),
++  // a thread with no AGENTS.md yet; a save answers the text it was given
++  'agents_md.read': (f) => ({ thread_id: f.thread_id, exists: false, sha: null }),
++  'agents_md.write': (f) => ({
++    thread_id: f.thread_id,
++    exists: true,
++    sha: '0'.repeat(64),
++    text: f.text,
++    saved: true,
++  }),
+ }
+ 
+ const OWNER_TYPES = new Set(['message', 'voice_note', 'card.resolve', 'voice.ask'])
+diff --git a/packages/testkit/src/fake-relay.ts b/packages/testkit/src/fake-relay.ts
+index 463da14d..7188f6ba 100644
+--- a/packages/testkit/src/fake-relay.ts
++++ b/packages/testkit/src/fake-relay.ts
+@@ -483,7 +483,8 @@ export class FakeRelay {
+       case 'fs.listing':
+       case 'files.listing':
+       case 'files.file':
+-      case 'bug.context_result': {
++      case 'bug.context_result':
++      case 'agents_md.file': {
+         const p = this.readReqs.get(frame.request_id)
+         if (!p || p.want !== frame.type) return // unknown, expired or the wrong answer type: dropped
+         this.readReqs.delete(frame.request_id)

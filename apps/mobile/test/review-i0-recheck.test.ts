@@ -16,6 +16,7 @@ describe('the Capacitor CLI can load capacitor.config.ts', () => {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 60_000,
+      shell: process.platform === 'win32', // npx is npx.cmd there, which only a shell runs
     })
     expect(out).not.toMatch(/Parsing capacitor\.config\.ts failed/)
     expect(out).toMatch(/"url":\s*"https:\/\/relay\.example\.test"/)

@@ -14,10 +14,9 @@ public enum DialogMatcher {
     public static let devExit = "Exit"
     /// The selection cursor in front of the focused option (SMOKE S3 confirms the rendering).
     public static let pointer: Character = "❯"
-    /// The registration notice once channels are live: "Channels (experimental) messages from <…> inject directly in
-    /// this session · restart without <flag> to stop".
-    public static let noticeStart = "Channels (experimental) messages from"
-    public static let noticeEnd = "inject directly in this session"
+    // (There is no matcher for the "Channels (experimental) messages from <…> inject directly in this session" notice: Claude Code
+    // 2.1.322 prints none on a resumed start, even with its MCP server connected. A start is answered when the warning is gone
+    // and live when its bridge says so: `SupervisorBridge.swift`.)
     public static let resumeMissing = "No session found with ID"
     /// What `--resume <id>` itself prints in the CLI (read from 2.1.314); `resumeMissing` is the other path's wording.
     public static let resumeMissingConversation = "No conversation found with session ID"
@@ -25,6 +24,13 @@ public enum DialogMatcher {
     public static let mcpConsent = ["New MCP server found in this project", "new MCP servers found in this project"]
     public static let bypass = "WARNING: Claude Code running in Bypass Permissions mode"
     public static let login = ["Please run /login", "Run /login", "Not logged in", "OAuth token has expired"]
+    /// The computer-use permission dialog (real 2.1.322, Tests/Fixtures/real-2.1.322/computer-use-permissions.txt): its title, the two
+    /// permission rows (each may read granted or not), its three UNNUMBERED options in this order (the cursor starts on the first, and
+    /// Enter there opens System Settings on the owner's Mac) and its footer. The one key Talos ever sends it is Escape.
+    public static let computerUseTitle = "Computer Use needs macOS permissions"
+    public static let computerUseRows = ["Accessibility: ", "Screen Recording: "]
+    public static let computerUseOptions = ["Open System Settings → Accessibility", "Open System Settings → Screen Recording", "Try again"]
+    public static let selectFooter = "Enter to confirm · Esc to cancel"
   }
 
   public struct DevChannels: Equatable, Sendable {
@@ -43,6 +49,10 @@ public enum DialogMatcher {
     case mcpConsent
     case bypassDisclaimer
     case loginExpired
+    /// The computer-use permission dialog: dismissed with Escape, never answered (ComputerUseDismiss).
+    case computerUsePermissions
+    /// Claude Code's usage-limit screen: never a key of any kind (one option spends usage credits; UsageLimitScreen).
+    case usageLimit(UsageLimitScreen.Info)
     case resumeMissing
     /// A selection cursor in front of a numbered option we don't know.
     case unknownSelection
@@ -57,12 +67,39 @@ public enum DialogMatcher {
       case .mcpConsent: return "MCP server consent"
       case .bypassDisclaimer: return "bypass-permissions disclaimer"
       case .loginExpired: return "login expired"
+      case .computerUsePermissions: return "computer-use permissions"
+      case .usageLimit: return UsageLimitScreen.kind
       case .resumeMissing: return "conversation not found"
       case .unknownSelection: return "an unknown question"
       case .none: return "nothing"
       }
     }
+
+    /// A dialog the owner must never be asked to answer: its first row's Enter does something on the Mac (computer use: System Settings)
+    /// or spends money (the usage-limit screen). Nothing raises Terminals for it and no line about it says "answer"; the most Talos ever
+    /// sends it is Escape (computer use only: the usage-limit screen gets no key at all).
+    public var answerless: Bool {
+      switch self {
+      case .computerUsePermissions, .usageLimit: return true
+      default: return false
+      }
+    }
+
+    /// `answerless` by a needs-you label (`label`, which Main's `.dialog` carries).
+    public static func answerless(label: String) -> Bool {
+      label == Screen.computerUsePermissions.label || label == UsageLimitScreen.kind
+    }
+
+    /// No key of any kind may go to this screen: not Enter, not a digit, not an arrow, not Escape.
+    public var takesNoKeys: Bool {
+      if case .usageLimit = self { return true }
+      return false
+    }
   }
+
+  /// The one check every key sender makes on the rows it is about to press into: true when the usage-limit screen is on them, so the key
+  /// is not sent (`UsageLimitScreen`). The dev-warning auto-accept, the dev card and its popup, the tap answerer and the pointer typer.
+  public static func takesNoKeys(_ rows: [String]) -> Bool { UsageLimitScreen.read(rows) != nil }
 
   /// Strips borders and padding a dialog box may draw around a row.
   public static func clean(_ row: String) -> String {
@@ -92,10 +129,36 @@ public enum DialogMatcher {
     return String(s).trimmingCharacters(in: .whitespaces)
   }
 
+  /// The computer-use permission dialog, matched on its whole shape at the bottom of the screen, or nil: the last row with text is its
+  /// footer, the last frame rule above it opens it, and between them, in order and nothing else, the title, the two permission rows, the
+  /// dialog's own text, and its three options with the one `❯` cursor on one of them. Returns the dialog's rows (cleaned, blank rows out),
+  /// which is what a re-read before Escape must find again.
+  public static func computerUseBlock(_ rows: [String], region: Int = 24) -> [String]? {
+    var tail = rows
+    while let l = tail.last, l.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { tail.removeLast() }
+    guard let footer = tail.last, clean(footer) == Strings.selectFooter else { return nil }
+    let bottom = Array(tail.suffix(region))
+    guard let rule = bottom.lastIndex(where: { isFrameRule($0) }), rule < bottom.count - 1 else { return nil }
+    let block = bottom[(rule + 1)...].map(clean).filter { !$0.isEmpty }
+    // title, two permission rows, at least one row of text, three options, the footer
+    guard block.count >= 8, block[0] == Strings.computerUseTitle, block.last == Strings.selectFooter else { return nil }
+    for (i, prefix) in Strings.computerUseRows.enumerated() {
+      guard block[1 + i].hasPrefix(prefix), block[1 + i].count > prefix.count else { return nil }
+    }
+    let options = Array(block[(block.count - 4)..<(block.count - 1)])
+    guard options.map({ isHighlighted($0) ? label(ofHighlighted: $0) : $0 }) == Strings.computerUseOptions else { return nil }
+    guard block.filter(isHighlighted).count == 1, options.contains(where: isHighlighted) else { return nil }
+    let text = block[3..<(block.count - 4)]
+    guard !text.isEmpty, !text.contains(where: { Strings.computerUseOptions.contains($0) || $0 == Strings.computerUseTitle }) else { return nil }
+    return block
+  }
+
   public static func classify(_ rows: [String]) -> Screen {
     let cleaned = rows.map(clean)
     let joined = cleaned.joined(separator: "\n")
     if joined.contains(Strings.resumeMissing) || joined.contains(Strings.resumeMissingConversation) { return .resumeMissing }
+    if computerUseBlock(rows) != nil { return .computerUsePermissions }
+    if let u = UsageLimitScreen.read(rows) { return .usageLimit(u) }
 
     let titles = cleaned.filter { $0.contains(Strings.devTitle) }.count
     // The dialog is on screen only with its selection: a title alone is what an answered dialog leaves behind (or a line
@@ -159,6 +222,20 @@ public enum DialogMatcher {
     }
   }
 
+  /// The development-channels warning is really on the screen (not quoted in a conversation): its footer is the last row that has text, with
+  /// nothing below it (a conversation ends in Claude's input box), and above it, in the bottom `region` rows, the title, the `Channels:` line
+  /// and one selection cursor, read as the warning. Real 2.1.312 capture: Tests/Fixtures/real-dev-channels.
+  public static func liveDevChannels(_ rows: [String], region: Int = 24) -> Bool {
+    var tail = rows
+    while let l = tail.last, l.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { tail.removeLast() }
+    guard let last = tail.last, clean(last).hasPrefix("Enter to confirm") || clean(last).contains("Esc to cancel") else { return false }
+    let bottom = Array(tail.suffix(region))
+    guard let title = bottom.lastIndex(where: { clean($0).contains(Strings.devTitle) }) else { return false }
+    let block = Array(bottom[title...])
+    guard case .devChannels = classify(block) else { return false }
+    return block.map(clean).filter { $0.first == Strings.pointer }.count == 1
+  }
+
   /// A rule row of a dialog's frame: the line Claude draws above it (`────────`), or a box edge (`╭──────╮`).
   static func isFrameRule(_ row: String) -> Bool {
     let box: Set<Character> = ["─", "━", "╭", "╮", "╰", "╯", "┌", "┐", "└", "┘", "═"]
@@ -175,6 +252,8 @@ public enum DialogMatcher {
   /// of it in the bottom `region` rows. The worker's own question menu is not a dialog (its words are the worker's), and neither
   /// is the input box (rule, `❯` row, rule: no cursor below the last rule).
   public static func liveDialog(_ rows: [String], region: Int = 24) -> Screen {
+    if computerUseBlock(rows, region: region) != nil { return .computerUsePermissions }
+    if let u = UsageLimitScreen.read(rows, region: region) { return .usageLimit(u) }
     var tail = rows
     while let l = tail.last, l.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { tail.removeLast() }
     let bottom = Array(tail.suffix(region))
@@ -202,14 +281,6 @@ public enum DialogMatcher {
         || row.contains(Strings.bypass) || Strings.login.contains(where: { row.hasPrefix($0) || row.contains("\u{00B7} \($0)") })
     }
     return phraseRows.isEmpty ? .none : s
-  }
-
-  /// The registration notice is on screen (channels are live: the dialog was answered).
-  public static func noticeSeen(_ rows: [String]) -> Bool {
-    // Joined with spaces: a narrow pane may wrap the notice across rows.
-    let joined = rows.map(clean).joined(separator: " ")
-    guard let start = joined.range(of: Strings.noticeStart) else { return false }
-    return joined[start.upperBound...].contains(Strings.noticeEnd)
   }
 
   private static func mentionsResumeError(_ row: String) -> Bool {

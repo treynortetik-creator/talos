@@ -1,0 +1,15 @@
+{
+  "id": "pages-p-reserved",
+  "title": "/p/:id was mounted after the web app's catch-all and /p was not reserved, so page links got index.html",
+  "base": "9f67d10958de25ed75042aea6bd4ac2a3721c65a",
+  "buggy": "bf525533e8594e94ac2816674ac51a4a2d6e0047",
+  "fix": "316f1a28e03d50c4064dac4ed50cff9c45375dc8",
+  "expect": [
+    {
+      "file": "apps/relay/src/core/index.ts",
+      "severity": "high",
+      "must": [["RESERVED|reserved|catch-?all|fallback|index\\.html|SPA|order"], ["/p\\b|/p/|page"]],
+      "note": "/p/:id is mounted after the web app's catch-all and RESERVED does not list p, so with a web folder every page link gets index.html (200) instead of the page route."
+    }
+  ]
+}

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TalosDesktopCore
 import TalosSupervisor
+import TalosTestSupport
 
 /// PR #68, third review. The owned pty's direct write (`SwiftTermPtyHost.send`). Every child here ends on its own and is
 /// started by the test; nothing else is touched. Run: bash apps/desktop/scripts/test.sh --filter ReviewOC3R3
@@ -17,7 +18,7 @@ private final class Flag: @unchecked Sendable {
 @Suite("Review OC3 R3 owned pty", .serialized)
 struct ReviewOC3R3Pty {
   private func outPath(_ name: String) -> String {
-    NSTemporaryDirectory() + "rv-oc3-r3-\(getpid())-\(UUID().uuidString.prefix(8))-\(name)"
+    TestTemp.base + "rv-oc3-r3-\(getpid())-\(UUID().uuidString.prefix(8))-\(name)"
   }
 
   private func start(_ script: String, arg: String) throws -> SwiftTermPtyHost {

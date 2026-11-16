@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import TalosDesktopCore
+import TalosTestSupport
 
 /// The lead fence, Mac half (docs/OPTION-C.md "Leads and the fence"), the pure half: the Talos-home deny on every dedicated worker's
 /// settings, the MCP allow list at launch, the privilege ceiling and the rule for a live change. Fictional folders and servers only.
@@ -15,7 +16,7 @@ final class FenceTree {
   var talosHome: String { root + "/talos-home" }
 
   init() throws {
-    root = (NSTemporaryDirectory() as NSString).appendingPathComponent("talos-lf-\(UUID().uuidString.prefix(8))")
+    root = (TestTemp.base as NSString).appendingPathComponent("talos-lf-\(UUID().uuidString.prefix(8))")
     for d in [home, claudeDir, agentDir, cwd, talosHome + "/guards"] {
       try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true)
     }
@@ -78,13 +79,16 @@ final class FenceTree {
 
 let fenceSid = "6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c41"
 
+/// The hook a spec built in a test names: nothing runs it.
+let testHook = WorkerHook.Installed(script: "/home/alex/.talos/workers/_hook/permission-relay.py", python: "/usr/bin/python3")
+
 func fenceInputs(
   _ t: FenceTree, flag: String? = "--dangerously-skip-permissions", mcp: WorkerMcp.Plan? = nil, mainMcp: Set<String> = [],
   mainDeny: [String] = [], resume: Bool = false, mainArgs: [String]? = nil, mainMode: String? = nil
 ) -> WorkerSpec.Inputs {
   .init(
     threadId: "trip", claudePath: "/usr/local/bin/claude", baseEnv: ["PATH": "/usr/bin:/bin", "HOME": t.home],
-    talosHome: t.talosHome, agentDir: t.agentDir, cwd: t.cwd, model: "inherit", effort: nil, permissionFlag: flag,
+    talosHome: t.talosHome, agentDir: t.agentDir, permissionHook: testHook, cwd: t.cwd, model: "inherit", effort: nil, permissionFlag: flag,
     sessionId: fenceSid, resume: resume, nonce: "n0nce-0123456789abcdef", preamble: "Be the trip thread.", mcp: mcp,
     mainMcpServers: mainMcp, mainDenyRules: mainDeny, mainArgs: mainArgs, mainDefaultMode: mainMode)
 }
@@ -270,7 +274,7 @@ struct WorkerMcpTests {
   /// The whole argv of a fresh session with a list: the same for a user server, a project server and a missing one.
   func listArgv(_ t: FenceTree) -> [String] {
     [
-      "--dangerously-skip-permissions", "--settings", settings(t), "--name", "talos-trip", "--append-system-prompt",
+      "--dangerously-skip-permissions", "--settings", settings(t), "--setting-sources", "user", "--system-prompt-snapshot=off", "--name", "talos-trip", "--append-system-prompt",
       "Be the trip thread.", "--strict-mcp-config", "--mcp-config", mcpFile(t), "--no-chrome", "--session-id", fenceSid,
     ]
   }
@@ -283,11 +287,18 @@ struct WorkerMcpTests {
     let spec = try WorkerSpec.build(fenceInputs(t))
     #expect(
       spec.args == [
-        "--dangerously-skip-permissions", "--settings", settings(t), "--name", "talos-trip", "--append-system-prompt",
+        "--dangerously-skip-permissions", "--settings", settings(t), "--setting-sources", "user", "--system-prompt-snapshot=off", "--name", "talos-trip", "--append-system-prompt",
         "Be the trip thread.", "--session-id", fenceSid,
       ])
     let obj = try #require(jsonObject(spec.settingsJSON))
-    for key in ["disableClaudeAiConnectors", "deniedMcpServers"] { #expect(obj[key] == nil, "\(key)") }
+    #expect(obj["disableClaudeAiConnectors"] == nil)
+    // the one change from before the list: Claude Code's own computer use is off, list or no list
+    #expect((obj["deniedMcpServers"] as? [[String: String]]) == [["serverName": "computer-use"]])
+    var stripped = spec
+    var o = obj
+    o["deniedMcpServers"] = [[String: String]]()
+    stripped.settingsJSON = String(decoding: try JSONSerialization.data(withJSONObject: o), as: UTF8.self)
+    #expect(throws: WorkerSpec.BuildError.forbiddenEnv("deniedMcpServers")) { try stripped.validate() }
     #expect(spec.env["ENABLE_CLAUDEAI_MCP_SERVERS"] == nil)
     #expect(!denyList(spec).contains { $0.hasPrefix("mcp__") })
   }
@@ -300,7 +311,7 @@ struct WorkerMcpTests {
     let spec = try WorkerSpec.build(fenceInputs(t, mcp: plan, resume: true))
     #expect(
       spec.args == [
-        "--dangerously-skip-permissions", "--settings", settings(t), "--name", "talos-trip", "--append-system-prompt",
+        "--dangerously-skip-permissions", "--settings", settings(t), "--setting-sources", "user", "--system-prompt-snapshot=off", "--name", "talos-trip", "--append-system-prompt",
         "Be the trip thread.", "--strict-mcp-config", "--mcp-config", mcpFile(t), "--no-chrome", "--resume", fenceSid,
       ])
     #expect(plan.configPath == mcpFile(t))
@@ -348,7 +359,7 @@ struct WorkerMcpTests {
     #expect(!deny.contains("mcp__talos-app__*"))
     #expect(spec.env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false")
     try spec.validate()
-    #expect(!spec.settingsJSON.contains(FenceTree.secret) && !spec.launchScript().contains(FenceTree.secret))
+    #expect(try !spec.settingsJSON.contains(FenceTree.secret) && !spec.launchScript().contains(FenceTree.secret))
   }
 
   @Test func anApprovedProjectServerComesFromTheThreadFoldersMcpJson() throws {
@@ -387,7 +398,7 @@ struct WorkerMcpTests {
     let text = d?.detail ?? ""
     #expect(text.contains("local-db"))
     #expect(text.contains("claude mcp add -s local local-db"))
-    #expect(text.contains("approve it once in Claude Code"))
+    #expect(text.contains("claude mcp add -s local") && text.contains("does not count"), "the approval Claude Code keeps in the folder is not loaded")
     #expect(!text.contains("db-mcp"), "never a value from the definition")
     // approved, it launches; rejected in the owner's record, it is refused again even when everything is approved
     try t.standardServers(approve: ["local-db"])
@@ -464,7 +475,7 @@ struct WorkerMcpTests {
     // the one line the thread gets names it and never a value
     let line = LaunchChange.missingServersLine(["nope"])
     #expect(line.contains("nope") && !line.contains(FenceTree.secret))
-    #expect(line == "These MCP servers on this thread's list were not found, so the session started without them: nope.")
+    #expect(line == "These MCP servers on this thread's list were not found, so the session started without them: \"nope\".")
   }
 
   @Test func aPluginServerIsCopiedFromItsInstallFolderWhenThePluginIsEnabled() throws {
@@ -619,6 +630,61 @@ struct WorkerMcpTests {
     #expect(WorkerMcp.prefix("my server.v2") == "my_server_v2")
   }
 
+  /// Claude Code's own function, read from the 2.1.322 binary: every UTF-16 code unit outside ASCII letters, digits, `_` and `-`
+  /// becomes `_`, and a name that starts with `claude.ai ` then has its runs of `_` made one and a leading or trailing `_` dropped.
+  /// The cases are the bridge's (apps/bridge/test/supervisor/swift-parity.test.ts, `mcpToolPrefix`), so both sides name a
+  /// server's tools the way the program that names them does. Its lone-surrogate case (`x\uD800y`) cannot be held in a Swift String, so
+  /// it is not here; a config file with such a key is not read by Foundation at all, which is its own gap and not this function's.
+  @Test func theToolPrefixIsClaudeCodesOwnFunction() {
+    #expect(WorkerMcp.prefix("talos-app") == "talos-app")
+    #expect(WorkerMcp.prefix("claude.ai Gmail") == "claude_ai_Gmail")
+    #expect(WorkerMcp.prefix("claude.ai  Google  Drive!") == "claude_ai_Google_Drive")
+    #expect(WorkerMcp.prefix("plugin:figma:desktop") == "plugin_figma_desktop")
+    #expect(WorkerMcp.prefix("ünïcode srv") == "_n_code_srv")
+    #expect(WorkerMcp.prefix("mail\u{1F4E7}") == "mail__")  // outside the BMP: two code units, two `_`
+    #expect(WorkerMcp.prefix("") == "")
+  }
+
+  /// The edges of the same function that the bridge's cases leave out.
+  @Test func theToolPrefixCollapsesOnlyForConnectorNamesAndCountsCodeUnits() {
+    // only a name that starts with exactly `claude.ai ` is collapsed and trimmed: any other keeps every `_`
+    #expect(WorkerMcp.prefix("my  server!") == "my__server_")
+    #expect(WorkerMcp.prefix("_a__b_") == "_a__b_")
+    #expect(WorkerMcp.prefix("Claude.ai  Gmail") == "Claude_ai__Gmail")  // the check is case-sensitive, as `startsWith` is
+    #expect(WorkerMcp.prefix("claude.ai") == "claude_ai")
+    #expect(WorkerMcp.prefix("claude.ai ") == "claude_ai")
+    #expect(WorkerMcp.prefix("claude.ai __x__") == "claude_ai_x")
+    #expect(WorkerMcp.prefix("claude.ai \u{1F4E7}\u{1F4E7}") == "claude_ai")
+    // a combining mark after the space makes one Character of the two: the check goes by code unit, as JavaScript's does
+    #expect(WorkerMcp.prefix("claude.ai \u{0301}x") == "claude_ai_x")
+    #expect(WorkerMcp.prefix("e\u{0301}") == "e_")  // one Character, two code units
+    #expect(WorkerMcp.prefix("\u{1F468}\u{200D}\u{1F469}") == "_____")  // one Character, five code units
+    // non-ASCII letters and digits are not letters and digits here
+    #expect(WorkerMcp.prefix("ａ１٣é") == "____")
+    #expect(WorkerMcp.prefix("a\tb\nc") == "a_b_c")
+  }
+
+  /// Where the prefix is used: the deny rules of a session with an allow list. A server the owner has but did not list is denied
+  /// under the name Claude Code gives its tools; a rule built from any other spelling denies nothing.
+  @Test func anUnlistedServersDenyRuleUsesClaudeCodesPrefix() throws {
+    let t = try FenceTree()
+    defer { t.cleanup() }
+    try t.write(t.agentDir + "/.mcp.json", ["mcpServers": ["talos-app": ["command": "bun", "args": ["server.ts"]]]])
+    try t.write(
+      t.home + "/.claude.json",
+      [
+        "mcpServers": [
+          "github": ["command": "gh-mcp"], "mail\u{1F4E7}": ["command": "mail-mcp"], "my notes.v2": ["command": "notes-mcp"],
+        ]
+      ])
+    let plan = try #require(t.plan(["github"]))
+    let main = WorkerMcp.visibleNames(cwd: t.agentDir, home: t.home, claudeDir: t.claudeDir)
+    let deny = denyList(try WorkerSpec.build(fenceInputs(t, mcp: plan, mainMcp: main)))
+    #expect(deny.contains("mcp__mail____*"), "\(deny)")
+    #expect(!deny.contains("mcp__mail___*"), "one `_` for a character Claude Code counts as two: \(deny)")
+    #expect(deny.contains("mcp__my_notes_v2__*"), "\(deny)")
+  }
+
   @Test func theAllowListIsReadTheWayTheProtocolReadsIt() {
     func opts(_ json: String) -> [String]? {
       let cfg = #"{"default_thread":"daily","dedicated":{"enabled":true},"threads":[{"id":"trip","kind":"fixed","session":"dedicated","session_opts":\#(json)}]}"#
@@ -743,7 +809,8 @@ struct PrivilegeCeilingTests {
     defer { t.cleanup() }
     try t.standardServers()
     let main = WorkerMcp.visibleNames(cwd: t.agentDir, home: t.home, claudeDir: t.claudeDir)
-    #expect(main.contains("github") && main.contains("agent-only") && !main.contains("local-db") && !main.contains("scoped"))
+    // `agent-only` is in the agent folder's own .mcp.json and was never approved: main cannot use it, so it is not in main's ceiling
+    #expect(main.contains("github") && !main.contains("agent-only") && !main.contains("local-db") && !main.contains("scoped"))
     // the owner's local-scope server for the thread folder: allowed though main cannot see it
     let own = try #require(t.plan(["github", "scoped"]))
     #expect((try? WorkerSpec.build(fenceInputs(t, mcp: own, mainMcp: main))) != nil)
@@ -790,9 +857,9 @@ struct PrivilegeCeilingTests {
   @Test func aRelativeRuleIsMadeAbsoluteWhereItWasDefined() {
     let a = "/home/alex/agent"
     func abs(_ r: String, slash: String = a, cwd: String = a) -> String { PrivilegeCeiling.absolutize(r, slashAnchor: slash, cwdAnchor: cwd) }
-    #expect(abs("Read(./.env)") == "Read(//home/alex/agent/.env)")
-    #expect(abs("Read(.env)") == "Read(//home/alex/agent/.env)")
-    #expect(abs("Read(*.env)") == "Read(//home/alex/agent/*.env)")
+    #expect(abs("Read(./.env)") == "Read(//home/alex/agent/**/.env)")
+    #expect(abs("Read(.env)") == "Read(//home/alex/agent/**/.env)", "no slash in it: any depth below the folder")
+    #expect(abs("Read(*.env)") == "Read(//home/alex/agent/**/*.env)")
     #expect(abs("Edit(**/secrets/**)") == "Edit(//home/alex/agent/**/secrets/**)")
     #expect(abs("Edit(/src/**)") == "Edit(//home/alex/agent/src/**)")
     #expect(abs("Read(/keys)", slash: "/home/alex/.talos/guards") == "Read(//home/alex/.talos/guards/keys)", "a file passed with --settings anchors at its folder")
@@ -808,12 +875,12 @@ struct PrivilegeCeilingTests {
     try t.installGuards(#"{"permissions":{"deny":["Read(.private)","Read(/g-secret)"]}}"#)
     let rules = PrivilegeCeiling.mainDenyRules(agentDir: t.agentDir, talosHome: t.talosHome)
     #expect(Set(rules) == Set([
-      "Read(/\(t.agentDir)/.env)", "Edit(/\(t.agentDir)/vault/**)", "Bash(rm:*)", "Read(/\(t.agentDir)/.private)",
+      "Read(/\(t.agentDir)/**/.env)", "Edit(/\(t.agentDir)/vault/**)", "Bash(rm:*)", "Read(/\(t.agentDir)/**/.private)",
       "Read(/\(t.talosHome)/guards/g-secret)",
     ]), "\(rules)")
     let spec = try WorkerSpec.build(fenceInputs(t, mainDeny: rules))
     let deny = denyList(spec)
-    #expect(deny.contains("Read(/\(t.agentDir)/.env)"), "the agent folder's .env is still protected")
+    #expect(deny.contains("Read(/\(t.agentDir)/**/.env)"), "the agent folder's .env is still protected, at any depth")
     #expect(!deny.contains("Read(./.env)") && !deny.contains("Read(.private)") && !deny.contains("Edit(/vault/**)"), "no rule that would land on the worker's own folder")
     #expect(!deny.contains { $0.hasPrefix("Read(/\(t.cwd)") }, "nothing on the worker's folder")
     try spec.validate()
@@ -899,7 +966,7 @@ struct LaunchChangeTests {
   }
 
   @Test func theLinesTheThreadGetsArePlain() {
-    #expect(LaunchChange.folderLine("/home/example/garden") == "Started a new conversation in /home/example/garden.")
+    #expect(LaunchChange.folderLine() == "Started a new conversation in this thread's new folder.")
     let line = LaunchChange.ceilingLine(.init(axis: .mcp, detail: "local-db"))
     #expect(line.contains("local-db"))
     #expect(!line.contains("{") && !line.contains("mode_escalation_denied"))

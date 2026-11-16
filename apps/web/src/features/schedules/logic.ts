@@ -9,6 +9,7 @@ import type {
   ScheduleT,
 } from '@talos-app/protocol'
 import { dateOfRunKey, runsInSession, safeLine, type WorkerStatusItemT } from '@talos-app/protocol'
+import { dayForm } from '../../lib/format.ts'
 import { COPY, FAILED_DOT_WINDOW_MS } from './constants.ts'
 
 export const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
@@ -18,6 +19,17 @@ export type Weekday = (typeof WEEKDAYS)[number]
 export function runKeyLabel(ds: string): string {
   const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})(\d{2})$/.exec(ds)
   return m ? `${m[1]} ${m[2]}:${m[3]}` : ds
+}
+
+/**
+ * The time of one of today's runs, for a list of today's runs: when it started, else its slot's "09:45". A date-only key
+ * ("2026-10-28") has no time: it says "today", where cutting the label to its last five characters gave "10-28", which read
+ * as a clock time.
+ */
+export function runTimeToday(r: { ds: string; started_at?: string | null }, time: (iso: string) => string): string {
+  if (r.started_at) return time(r.started_at)
+  const slot = /T(\d{2})(\d{2})$/.exec(r.ds)
+  return slot ? `${slot[1]}:${slot[2]}` : 'today'
 }
 
 export type Tone = 'ok' | 'danger' | 'accent' | 'warn' | 'muted'
@@ -62,8 +74,37 @@ export function whenLabel(iso: string, nowMs: number, tz: string): string {
   if (diff === 0) return `today ${t}`
   if (diff === 1) return `tomorrow ${t}`
   if (diff > 1 && diff < 7) return `${fmt({ weekday: 'short' }, tz, Date.parse(iso))} ${t}`
-  return `${fmt({ month: 'short', day: 'numeric' }, tz, Date.parse(iso))}, ${t}`
+  return `${dateIn(Date.parse(iso), nowMs, tz)}, ${t}`
 }
+
+/** "Oct 9", or "Oct 9, 2025" when it is not this year (in `tz`). */
+function dateIn(ms: number, nowMs: number, tz: string): string {
+  const year = dayForm(ms, nowMs, tz) === 'year'
+  return fmt({ month: 'short', day: 'numeric', ...(year ? { year: 'numeric' } : {}) }, tz, ms)
+}
+
+/**
+ * A time that has passed (a run, the list's age) by the one rule (lib/format.ts dayForm) in the scheduler's zone: "9:00 AM"
+ * today, "yesterday 7:31 AM", "Mon 7:31 AM", "Oct 21, 9:00 AM", "Oct 21, 2025, 9:00 AM". A bare clock time only ever means
+ * today: last night's run no longer reads as a time still ahead.
+ */
+export function timeOnDay(iso: string, nowMs: number, tz: string): string {
+  const ms = Date.parse(iso)
+  const t = formatTime(iso, tz)
+  switch (dayForm(ms, nowMs, tz)) {
+    case 'today':
+      return t
+    case 'yesterday':
+      return `yesterday ${t}`
+    case 'weekday':
+      return `${fmt({ weekday: 'short' }, tz, ms)} ${t}`
+    default:
+      return `${dateIn(ms, nowMs, tz)}, ${t}`
+  }
+}
+
+/** A last run the row shows as "Failed": every finished status but ok and skipped (timed_out, launch_stalled, …). */
+const failedRun = (status: string) => status !== 'ok' && status !== 'running' && status !== 'skipped'
 
 /** "Tue Oct 6, 7:30 AM" in `tz`, with the zone only when it is not the device's. */
 export function dateTimeLabel(iso: string, tz: string, deviceTz: string | null | undefined): string {
@@ -91,7 +132,8 @@ export function rowStatus(
   s: ScheduleT,
   o: { nowMs: number; tz: string; macOnline: boolean; ownerTz?: string | null },
 ): RowStatus {
-  const when = (iso: string | undefined) => (iso ? `${formatTime(iso, o.tz)}${zoneSuffix(iso, o.tz, o.ownerTz)}` : null)
+  const when = (iso: string | undefined) =>
+    iso ? `${timeOnDay(iso, o.nowMs, o.tz)}${zoneSuffix(iso, o.tz, o.ownerTz)}` : null
   const mk = (glyph: string, word: string, tone: Tone, time: string | null = null, running = false): RowStatus => ({
     glyph,
     word,
@@ -120,7 +162,7 @@ export function rowStatus(
     default: {
       const r = s.last_run
       if (r && (r.status === 'ok' || r.status === 'running')) return mk('✓', 'Ran', 'ok', when(r.started_at))
-      if (r && r.status !== 'skipped') return mk('✕', 'Failed', 'danger', when(r.started_at))
+      if (r && failedRun(r.status)) return mk('✕', 'Failed', 'danger', when(r.started_at))
       return mk('○', 'Pending', 'muted')
     }
   }
@@ -410,6 +452,7 @@ const ORDER: Array<HealthIssueT['code'] | 'no_session'> = [
   'run_hung',
   'adapter_timeout',
   'held_jobs',
+  'cannot_run_here',
   'registry_synced_folder',
   'legacy_both_runner',
   'missed_recently',
@@ -422,16 +465,18 @@ const ORDER: Array<HealthIssueT['code'] | 'no_session'> = [
 export function fixParts(fix: string | null): { intro: string | null; steps: string[] } {
   if (!fix) return { intro: null, steps: [] }
   const text = fix.trim()
-  const marks = [...text.matchAll(/(?:^|\s)(\d+)[.)]\s+/g)]
-  if (marks.length >= 2 || (marks.length === 1 && marks[0]?.[1] === '1')) {
-    const first = marks[0]?.index ?? 0
-    const intro = text.slice(0, first).trim()
-    const steps = text
-      .slice(first)
-      .split(/(?:^|\s)\d+[.)]\s+/)
-      .map((x) => x.trim())
-      .filter(Boolean)
-    return { intro: intro || null, steps }
+  // step numbers count 1, 2, 3…: any other number before a ". " ("wait 10. Then…", "at 3. Retry") is text, not a step
+  const all = [...text.matchAll(/(?:^|\s)(\d+)[.)]\s+/g)]
+  const marks: RegExpMatchArray[] = []
+  for (const m of all) if (Number(m[1]) === marks.length + 1) marks.push(m)
+  if (marks.length >= 1) {
+    const at = (m: RegExpMatchArray) => (m.index ?? 0) + (m[0].startsWith(m[1] as string) ? 0 : 1)
+    const intro = text.slice(0, at(marks[0] as RegExpMatchArray)).trim()
+    const steps = marks.map((m, i) => {
+      const next = marks[i + 1]
+      return text.slice((m.index ?? 0) + m[0].length, next ? at(next) : undefined).trim()
+    })
+    return { intro: intro || null, steps: steps.filter(Boolean) }
   }
   const lines = text
     .split(/\n+/)
@@ -547,7 +592,9 @@ export function navDot(snap: ScheduleSnapshotT | null, nowMs: number): boolean {
   return snap.schedules.some(
     (s) =>
       (s.today === 'waiting' && s.wait_reason === 'no_session') ||
-      (s.last_run?.status === 'failed' &&
+      // every status the row shows as "Failed", not only `failed` (timed_out, launch_stalled, session_ended, …)
+      (s.last_run != null &&
+        failedRun(s.last_run.status) &&
         s.last_run.started_at !== undefined &&
         nowMs - Date.parse(s.last_run.started_at) < FAILED_DOT_WINDOW_MS) ||
       s.today === 'stalled',

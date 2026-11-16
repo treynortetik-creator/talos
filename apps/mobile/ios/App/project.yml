@@ -196,7 +196,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
         SKIP_INSTALL: YES
   # Opens the seal on an iPhone push (docs/IOS-PUSH.md "Message text and quick actions"). Keychain sharing only; it needs no paid
-  # capability of its own, and it falls back to the push exactly as Apple delivered it when anything is missing.
+  # capability of its own, and when anything is missing it delivers the fixed phrase Apple sent, with no button that signs.
   TalosPushExtension:
     type: app-extension
     platform: iOS

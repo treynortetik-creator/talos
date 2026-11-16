@@ -149,7 +149,9 @@ function deviceNotices(was: Entry, now: Entry): string[] {
   const out: string[] = []
   const ids = [...new Set([...Object.keys(was.fields), ...Object.keys(now.fields)])].sort()
   for (const k of ids) {
-    if (was.fields[k] === now.fields[k]) continue
+    // Only a device's own field is a device. "(file)" stands for a devices.json that was missing or unreadable (the
+    // baseline of a fresh install): the first pairing replaces it, and that is no device being removed.
+    if (!k.startsWith('devices:') || was.fields[k] === now.fields[k]) continue
     const id = k.replace(/^devices:/, '')
     const nm = now.meta?.[id] ?? was.meta?.[id]
     const who = `'${nm?.n ?? '(unknown)'}' (${id})`

@@ -11,9 +11,8 @@ export type CardViewProps = {
   /** Pulse the card for 1.2 s (deep link from a push). */
   highlighted?: boolean
   /**
-   * Opened from a push's Approve button (armed in memory by the native shell). Never approves by itself: a live high-risk card starts its normal
-   * primary flow, which still needs the Face ID confirmation before anything is sent; any other card only gets focus on
-   * its primary button. Expired, altered or already decided cards ignore it.
+   * Opened from a push's Approve button (armed in memory by the native shell). Never approves by itself: a live card only gets focus on its
+   * primary button and waits for the owner's tap in the app. Expired, altered or already decided cards ignore it.
    */
   armPrimary?: boolean
   /** Inline in a timeline (true) or in the right-hand detail panel (false). */
@@ -43,8 +42,10 @@ export type CallScreenProps = {
 }
 
 export type SettingsSectionProps = {
-  /** The Mac is offline, so config edits are read-only. */
+  /** Config edits are read-only: the Mac is offline, or this device is reconnecting to the relay. */
   readOnly: boolean
+  /** Why it is read-only: 'mac' (the Mac is offline; the default) or 'reconnecting' (the screen says so once, at the top). */
+  readOnlyWhy?: 'mac' | 'reconnecting'
 }
 
 export type SettingsSectionDef = {

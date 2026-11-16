@@ -122,7 +122,10 @@ export type Run = {
   stop(): void
 }
 
-export async function startRun(opts: { pinned?: boolean } = {}): Promise<Run> {
+/** `storage`: the device's storage, to load a page again on what an earlier run saved (a reload, a newer build). */
+export async function startRun(
+  opts: { pinned?: boolean; storage?: ReturnType<typeof createMemoryStorage> } = {},
+): Promise<Run> {
   counter = 0
   ScriptedSocket.all = []
   ScriptedSocket.log = []
@@ -130,7 +133,7 @@ export async function startRun(opts: { pinned?: boolean } = {}): Promise<Run> {
   vi.setSystemTime(new Date(START_ISO))
   trackCrypto()
   const client = createSocketClient({
-    storage: createMemoryStorage(),
+    storage: opts.storage ?? createMemoryStorage(),
     WebSocketImpl: ScriptedSocket as unknown as typeof WebSocket,
     wsUrl: 'wss://relay.example.com/ws',
     backoff: { baseMs: 1000, maxMs: 4000, random: () => 0.5 },

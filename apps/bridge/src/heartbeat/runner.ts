@@ -755,6 +755,7 @@ export class HeartbeatRunner {
           stdin: JSON.stringify(req),
           timeoutMs: limitMs,
           signal: own.signal,
+          log: (line) => ctx.log.debug(`heartbeat source ${cfg.id}: ${line}`),
           ...(file
             ? {
                 onStart: (p) =>

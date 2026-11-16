@@ -1,7 +1,13 @@
 // WP-C1 (docs/CLAUDE-CODE.md C3.2): the permission card. The raw call comes first and is never cut by the app, Claude's
-// own summary comes after it, Allow exists only when the whole call is on screen, and an old card says it may already
-// have been answered at the Mac.
-import { composePermissionCard, PERMISSION_HIDDEN_WARNING, PERMISSION_OLD_CLIENT_WARNING } from '@talos-app/protocol'
+// own summary comes after it, Allow unlocks once the end of the call has been on screen, a card that does not show all of its
+// call keeps Allow with a note saying what is missing (only a repeated id has none), and an old card says it may already have
+// been answered at the Mac.
+import {
+  composePermissionCard,
+  PERMISSION_OLD_CLIENT_WARNING,
+  PERMISSION_REPEAT_WARNING,
+  permissionHiddenWarning,
+} from '@talos-app/protocol'
 import { permissionFixtures } from '@talos-app/testkit'
 import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -61,13 +67,21 @@ describe('the compact card in the thread', () => {
     expect(approvalIsOpen()).toBe(false)
   })
 
-  it('a card with no Allow (a part Claude Code hid) keeps the whole call in its scrolling box and has no way into the sheet', () => {
-    const c = make({ input_preview: '{"command": "cat <<EOF \u22ef 4812 code points elided \u22ef EOF"}' })
+  it('a card with no Allow (a repeated id) keeps the whole call in its scrolling box and has no way into the sheet', () => {
+    const c = make({}, { repeated: true })
     renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
     expect(screen.getByTestId('permission-call').className).toContain('max-h-80')
     expect(screen.queryByTestId('permission-open')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Review to allow' })).toBeNull()
-    expect(screen.getByText(PERMISSION_HIDDEN_WARNING)).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toContain(PERMISSION_REPEAT_WARNING)
+  })
+
+  it('a card with a part Claude Code hid keeps its way into the sheet, with the note naming what is not shown', () => {
+    const c = make({ input_preview: '{"command": "cat <<EOF \u22ef 4812 code points elided \u22ef EOF"}' })
+    renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
+    expect(screen.getByRole('button', { name: 'Review to allow' })).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toContain(permissionHiddenWarning(['elided']))
+    expect(screen.getByRole('status').textContent).not.toMatch(/at the Mac/)
   })
 
   it('has no Edit, no menu and no "tell Talos what to change"', () => {
@@ -152,16 +166,15 @@ describe('the full-screen approval sheet', () => {
     Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined })
   })
 
-  it('Allow from the sheet takes a step-up, then sends a primary resolve with the same hash', async () => {
+  it('Allow from the sheet needs nothing more (a permission card is risk low) and sends a primary resolve with the same hash', async () => {
     const c = make()
     const client = setup({ cards: [c] })
-    const stepup = vi.spyOn(client, 'stepup')
     renderWith(<LiveCard id={c.id} />, client)
     await open()
     await waitFor(() => expect(allowBtn().disabled).toBe(false)) // a body that fits needs no scroll
     await userEvent.click(allowBtn())
     await waitFor(() => expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true))
-    expect(stepup).toHaveBeenCalledWith(`card:${c.id}`)
+    expect(c.risk).toBe('low')
     expect(client.sent.at(-1)).toMatchObject({
       type: 'card.resolve',
       card_id: c.id,
@@ -231,7 +244,7 @@ describe('nothing may run off the side of the sheet', () => {
   })
 
   for (const which of ['the scroll area', 'the title', 'the tail'] as const) {
-    it(`if ${which} still sticks out sideways (scrollWidth over clientWidth), Allow stays off and says so`, async () => {
+    it(`if ${which} still sticks out sideways (scrollWidth over clientWidth), Allow stays on and the hint says to scroll sideways`, async () => {
       const c = make()
       renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
       const sheet = await open()
@@ -245,12 +258,17 @@ describe('nothing may run off the side of the sheet', () => {
       const sw = vi.spyOn(el, 'scrollWidth', 'get').mockReturnValue(3394)
       const cw = vi.spyOn(el, 'clientWidth', 'get').mockReturnValue(393)
       act(() => window.dispatchEvent(new Event('resize'))) // re-checked on resize
-      await waitFor(() => expect(allowBtn().disabled).toBe(true))
-      expect(within(sheet).getByTestId('approval-hint').textContent).toContain('runs off the side')
+      await waitFor(() =>
+        expect(within(sheet).getByTestId('approval-hint').textContent).toBe(
+          'Part of this call runs off the side of the screen: scroll sideways to see all of it.',
+        ),
+      )
+      expect(allowBtn().disabled).toBe(false) // a hint, not a refusal
       sw.mockRestore()
       cw.mockRestore()
       act(() => window.dispatchEvent(new Event('resize')))
-      await waitFor(() => expect(allowBtn().disabled).toBe(false)) // and back on once it fits again
+      await waitFor(() => expect(within(sheet).queryByTestId('approval-hint')).toBeNull()) // and gone once it fits again
+      expect(allowBtn().disabled).toBe(false)
     })
   }
 })
@@ -352,22 +370,24 @@ describe('the scroll-through gate: Allow unlocks once the owner has seen every l
   })
 })
 
-describe('Allow only for a call that can be shown whole (every fixture)', () => {
+describe('Allow on every card but a repeated id (every fixture)', () => {
   for (const fx of permissionFixtures) {
     it(`${fx.name}: ${fx.allow ? 'a way to Allow (the sheet)' : 'Deny only'}`, () => {
       const c = make(fx.params, { card_id: 'c_01JBF3V7Q8K2M4N6P8R0S2T4E1', ...(fx.repeated ? { repeated: true } : {}) })
       renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
       expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy()
       expect(screen.queryByRole('button', { name: 'Review to allow' }) !== null).toBe(fx.allow)
-      if (!fx.allow) expect(screen.getByRole('status').textContent).toMatch(/at the Mac/)
+      if (fx.repeated) expect(screen.getByRole('status').textContent).toContain(PERMISSION_REPEAT_WARNING)
+      else if (fx.hidden.length > 0)
+        expect(screen.getByRole('status').textContent).toContain(permissionHiddenWarning(fx.hidden))
     })
   }
 
-  it('an old Claude Code (below 2.1.211) says so and has no way to Allow', () => {
+  it('an old Claude Code (below 2.1.234) says so and keeps the way to Allow', () => {
     const c = make({}, { client_version: '2.1.210' })
     renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
     expect(screen.getByText(PERMISSION_OLD_CLIENT_WARNING)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Review to allow' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Review to allow' })).toBeTruthy()
   })
 
   it('a tampered card (body changed after hashing) is not offered at all', () => {
@@ -397,5 +417,47 @@ describe('"May already be answered at the Mac"', () => {
     expect(screen.getByText('May already be answered at the Mac')).toBeTruthy()
     // Allow and Deny stay: the line is a hint, the bridge decides
     expect(within(screen.getByRole('article')).getByRole('button', { name: 'Deny' })).toBeTruthy()
+  })
+})
+
+// A call with no description (a Bash call Claude gave none for): never a bare "Claude's summary" heading with nothing under
+// it (the owner's phone, 2026-11-12 19:04, a long heredoc). Blank means empty or only spaces. The protocol already shows a
+// line break or a tab as a mark (⏎ ⇥), and an invisible character as [U+XXXX]: those are shown, not replaced.
+describe('a call with no description', () => {
+  const HEREDOC = `{"command": "cat > /tmp/t/run.sh <<'EOF'\\n${'echo step\\n'.repeat(300)}EOF\\nbash /tmp/t/run.sh"}`
+  for (const [name, description, input_preview] of [
+    ['empty', '', undefined],
+    ['only spaces', '   ', undefined],
+    ['empty, on a long heredoc', '', HEREDOC],
+  ] as const) {
+    it(`${name}: the sheet says "No description given" under the heading`, async () => {
+      const c = make({ description, ...(input_preview ? { input_preview } : {}) })
+      renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
+      const s = within(await open()).getByTestId('permission-summary')
+      expect(s.textContent).toBe("Claude's summaryNo description given")
+    })
+    it(`${name}: a card without Allow says it in the thread too`, () => {
+      const c = make({ description, ...(input_preview ? { input_preview } : {}) }, { repeated: true })
+      renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
+      expect(screen.getByTestId('permission-summary').textContent).toBe("Claude's summaryNo description given")
+    })
+  }
+  it('line breaks and tabs are not blank: their marks are shown, not replaced', async () => {
+    const c = make({ description: '\n\t \n' })
+    renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
+    const s = within(await open()).getByTestId('permission-summary')
+    expect(s.textContent).toBe("Claude's summary\u23ce\u21e5 \u23ce")
+  })
+  it('an invisible character is not blank: it is shown, not replaced', async () => {
+    const c = make({ description: '​' })
+    renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
+    const s = within(await open()).getByTestId('permission-summary')
+    expect(s.textContent).not.toContain('No description given')
+    expect(s.textContent).toContain('U+200B')
+  })
+  it('a real description is shown as before', async () => {
+    const c = make({ description: 'Run the tests' })
+    renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
+    expect(within(await open()).getByTestId('permission-summary').textContent).toBe("Claude's summaryRun the tests")
   })
 })

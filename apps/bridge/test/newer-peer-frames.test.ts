@@ -47,7 +47,21 @@ describe('a relay frame this bridge cannot read because it is newer', () => {
     expect(h.relay.bridgeConnected).toBe(true)
   })
 
-  test('a known type with an enum value this build lacks counts as newer too (an error frame with a new code)', async () => {
+  test('a known type with an enum value this build lacks counts as newer too (a speaker a newer phone knows)', async () => {
+    // A frame that does not parse for one unlisted enum value (an unlisted error code parses since O5: the next test).
+    const lines = await start()
+    const f = structuredClone(fixtures['voice.ended']) as Record<string, unknown> & {
+      transcript: Array<{ who: string }>
+    }
+    ;(f.transcript[0] as { who: string }).who = 'brand_new_speaker'
+    h.relay.sendToBridge({ ...f, id: newUlid() }, { durable: false })
+    await eventually(() => expect(systemRows()).toHaveLength(1))
+    expect(warnsFor(lines, 'voice.ended')).toHaveLength(1)
+  })
+
+  test('an error with a code this build lacks is delivered as internal and still counts as newer', async () => {
+    // Protocol audit O5: the frame parses (code read as 'internal', the words kept), and the unlisted code is still the
+    // "update Talos" sign: one owner line, one log line.
     const lines = await start()
     h.relay.sendToBridge(
       { v: 1, type: 'error', id: newUlid(), ts: new Date().toISOString(), code: 'brand_new_code', message: 'm' },
@@ -55,6 +69,9 @@ describe('a relay frame this bridge cannot read because it is newer', () => {
     )
     await eventually(() => expect(systemRows()).toHaveLength(1))
     expect(warnsFor(lines, 'error')).toHaveLength(1)
+    // delivered, not refused: the bridge never answers it with a bad_frame of its own
+    await sleep(200)
+    expect(h.relay.rec.of('error', 'from_bridge').filter((f) => f.code === 'bad_frame')).toHaveLength(0)
   })
 
   test('a frame that is only broken, or has a hostile type name, gets no owner line and the name is never repeated', async () => {

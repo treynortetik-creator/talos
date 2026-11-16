@@ -1,12 +1,10 @@
 // Settings -> Work systems: the words the app uses for them (`work.label`, `work.ask_note`) and whether their events are
-// kept on the relay (`work.retention`). Wording saves with the button; retention changes what the relay holds, so it asks
-// for the same passkey tap as turning a work system on (unless trust mode is on and the relay agrees).
+// kept on the relay (`work.retention`). Wording saves with the button; retention saves as soon as it is
+// picked. Both are ordinary owner-signed config.patch changes.
 import { useId, useState } from 'react'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
-import { passkeyErrorCopy } from '../../lib/passkeyGate.ts'
-import { withStepup } from '../../lib/stepup.ts'
 import { Button, Input } from '../../ui/index.ts'
-import { friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
+import { connectionRefusal, friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
 
 export function WorkWording({ readOnly }: { readOnly: boolean }) {
   const client = useTalosClient()
@@ -23,21 +21,17 @@ export function WorkWording({ readOnly }: { readOnly: boolean }) {
   const dirty = shownLabel !== work.label || shownNote !== work.ask_note
 
   // Controls stay enabled while a save runs (a disabled control drops keyboard focus on some phones); a second save waits.
-  const run = async (patch: Record<string, unknown>, tap: boolean) => {
+  const run = async (patch: Record<string, unknown>) => {
     if (busy) return false
     setErr(null)
     setSaved(false)
     setBusy(true)
     try {
-      if (tap)
-        await withStepup(client, client.store.getState().config, 'config:work', (token) =>
-          client.patchConfig({ work: patch }, token ? { stepupToken: token } : {}),
-        )
-      else await client.patchConfig({ work: patch })
+      await client.patchConfig({ work: patch })
       setSaved(true)
       return true
     } catch (e) {
-      setErr(passkeyErrorCopy(e) ?? friendlyPatchError(e))
+      setErr(connectionRefusal(e) ?? friendlyPatchError(e))
       return false
     } finally {
       setBusy(false)
@@ -46,7 +40,7 @@ export function WorkWording({ readOnly }: { readOnly: boolean }) {
   const saveWords = async () => {
     const l = shownLabel.trim()
     if (!l) return setErr('The name can’t be empty.')
-    if (await run({ label: l, ask_note: shownNote.trim() }, false)) {
+    if (await run({ label: l, ask_note: shownNote.trim() })) {
       setLabel(null)
       setNote(null)
     }
@@ -92,7 +86,7 @@ export function WorkWording({ readOnly }: { readOnly: boolean }) {
         id={ids.keep}
         value={work.retention}
         disabled={readOnly}
-        onChange={(e) => void run({ retention: e.target.value }, true)}
+        onChange={(e) => void run({ retention: e.target.value })}
         className="min-h-11 rounded-button border border-line bg-surface px-3 text-text disabled:opacity-50"
       >
         <option value="passthrough">Pass through: nothing kept once delivered</option>

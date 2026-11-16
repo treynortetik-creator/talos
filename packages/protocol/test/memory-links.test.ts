@@ -116,12 +116,15 @@ describe('cost stays proportional to size', () => {
   type Reading = { ok: boolean; why: string }
   /** One reading of a shape: CPU time at two sizes against the prose reference taken just before. */
   const read = (make: (n: number) => string): Reading => {
+    cpu(make(SMALL)) // warm this shape's paths first, so a JIT step is not charged to either figure
     const refS = best(prose(SMALL), 2)
     const small = Math.max(best(make(SMALL), 2), refS)
     const refB = best(prose(BIG), 2)
     const bigText = make(BIG)
     expect(bigText.length).toBeGreaterThan(BIG * 0.95)
-    const big = best(bigText, 1)
+    // the best of three, like every other figure: one sample of the big input was the whole noise (a GC pause or a busy core
+    // landing on it), and a quadratic scan is slow on every try
+    const big = best(bigText, 3)
     const detail = `small ${small.toFixed(1)} ms, big ${big.toFixed(1)} ms, prose ${refB.toFixed(1)} ms`
     if (big > small * GROWTH)
       return { ok: false, why: `grew ${(big / small).toFixed(1)}x for 8x the input (${detail})` }

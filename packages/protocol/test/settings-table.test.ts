@@ -19,10 +19,10 @@ import {
 const paths = Object.keys(SETTINGS_TABLE) as SettingPath[]
 
 describe('the settings table', () => {
-  it('trust_mode: the owner may write it from the app (the passkey rule is on turning it on), the agent never', () => {
+  it('trust_mode: the owner may write it from the app (a signed tap, no passkey), the agent never', () => {
     expect(SETTINGS_TABLE.trust_mode.phone).toBe('leaf')
     expect(SETTINGS_TABLE.trust_mode.agent).toBe(false)
-    expect(SETTINGS_TABLE.trust_mode.stepupOnTrue).toBe('config:session')
+    expect('stepupOnTrue' in SETTINGS_TABLE.trust_mode).toBe(false)
   })
 
   it('a setting with no row does not typecheck', () => {
@@ -89,26 +89,19 @@ describe('rules the table keeps so no row is silently ignored', () => {
 
   it('(a) a row beside a section row must be a section row too', () => {
     const t = copy()
-    t['owner.extra'] = { phone: false, agent: false, default: 'x' } // owner is open to the phone as a whole section
+    t['owner.extra'] = { phone: false, agent: false, risk: 'low', default: 'x' } // owner is open to the phone as a whole section
     expect(problems(t).join('\n')).toMatch(/owner\.extra/)
     const u = copy()
     ;(u['agent.voice'] as Record<string, unknown>).phone = 'leaf'
     expect(problems(u).join('\n')).toMatch(/agent\.voice/)
   })
 
-  it('(b) config:session only on a top-level row', () => {
-    const t = copy()
-    ;(t['work.label'] as Record<string, unknown>).stepup = 'config:session'
-    expect(problems(t).join('\n')).toMatch(/work\.label/)
+  it('(b) no row asks for a passkey step-up (2026-11-14)', () => {
+    for (const [p, r] of Object.entries(SETTINGS_TABLE)) expect('stepup' in r, p).toBe(false)
   })
 
-  it('(c) config:work only on a dotted leaf row', () => {
-    const top = copy()
-    ;(top.timezone as Record<string, unknown>).stepup = 'config:work'
-    expect(problems(top).join('\n')).toMatch(/timezone/)
-    const whole = copy()
-    ;(whole['agent.name'] as Record<string, unknown>).stepup = 'config:work' // a whole-section row
-    expect(problems(whole).join('\n')).toMatch(/agent\.name/)
+  it('(c) the table problems list has nothing to say about step-up rules', () => {
+    expect(problems(copy()).join('\n')).not.toMatch(/stepup|config:session|config:work/)
   })
 
   it('(d) phoneOffOnly only on a top-level row', () => {
@@ -118,7 +111,7 @@ describe('rules the table keeps so no row is silently ignored', () => {
   })
 
   it('the same four are type errors on a typed row', () => {
-    const ok = { phone: 'leaf', agent: false, default: undefined } as const
+    const ok = { phone: 'leaf', agent: false, risk: 'low', default: undefined } as const
     // @ts-expect-error config:session on a dotted path would be dropped
     const a: SettingRow<'work.label'> = { ...ok, stepup: 'config:session' }
     // @ts-expect-error config:work on a top-level row would be ignored
@@ -168,10 +161,10 @@ describe('the agent column: a setting the agent may propose carries everything t
 
   it('the words the agent is told are built from the rows, in row order', () => {
     expect(AGENT_SETTINGS_PHRASE).toBe(
-      "agent name, live-call voice, the owner's name, timezone, quiet hours, voice-note replies and the app theme",
+      "agent name, live-call voice, live-call persona, the owner's name, threads, the default thread, timezone, quiet hours, notifications on or off, thread names in notifications, voice-note replies, driving mode, the work section name, the work note, the model list, the memory browser, how long attachments are kept, which kinds of sending are always allowed, the thread fence (developer), the notes lookup for thread sessions (developer), the settings lock (on only), thread sessions and the app theme",
     )
     expect(AGENT_VALUE_HINTS.startsWith('agent.name (1-32 chars), agent.voice (one of meridian, marin')).toBe(true)
-    expect(AGENT_VALUE_HINTS.endsWith('even in trust mode)')).toBe(true)
+    expect(AGENT_VALUE_HINTS.endsWith('else a card with a preview)')).toBe(true)
   })
 
   it('the spec quotes the same list of settings the agent is told', () => {

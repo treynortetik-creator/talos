@@ -10,6 +10,7 @@ import {
   type Frame,
   HEARTBEAT_OWNER_FRAME_TYPES,
   looksSigned,
+  newerInParsed,
   OWNER_FRAME_TYPES,
   SCHEDULE_OWNER_FRAME_TYPES,
   SESSION_CONSUMABLE_FRAME_TYPES,
@@ -25,14 +26,18 @@ import { MAX_FUTURE_MS } from './history-store.ts'
 import { cardsFrames } from './inbound-cards.ts'
 import { configFrames } from './inbound-config.ts'
 import { eventsFrames } from './inbound-events.ts'
+import { backlogLanes, lanePlan, sessionLane } from './inbound-lanes.ts'
 import { messagesFrames } from './inbound-messages.ts'
 import { readsFrames } from './inbound-reads.ts'
 import { runsFrames } from './inbound-runs.ts'
 import { scheduleFrames } from './inbound-schedule.ts'
-import { CLOCK_OFF_MESSAGE, type Item, type Of, type OwnerCheck } from './inbound-shared.ts'
+import { CLOCK_OFF_MESSAGE, clockOffMessage, type Item, type Of, type OwnerCheck } from './inbound-shared.ts'
+import { KeyedChain } from './keyed-chain.ts'
 import { systemNotification } from './notify.ts'
+import { say } from './owner-words.ts'
 import { onThreadSessionControl } from './router/controls.ts'
 import { LiveTransport } from './transport.ts'
+import { onUndoRequest, resendUndoRequest } from './undo/request.ts'
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/
 // session.control is consumable here ("consumed" = its result was recorded, C2.5); session.spawn is WP-C7's, not yet.
@@ -42,6 +47,7 @@ const CONSUMABLE = new Set<string>([
   ...SESSION_CONSUMABLE_FRAME_TYPES.filter((t) => t === 'session.control'),
   'thread.session.control',
   'agent.recover',
+  'undo.request',
 ])
 const SCHEDULE_OWNER = new Set<string>([...SCHEDULE_OWNER_FRAME_TYPES, ...HEARTBEAT_OWNER_FRAME_TYPES])
 const V2_READ = new Set<string>(V2_READ_OWNER_FRAME_TYPES)
@@ -52,13 +58,24 @@ const V2_READ = new Set<string>(V2_READ_OWNER_FRAME_TYPES)
  */
 const EPHEMERAL_READ = new Set<string>([...V2_READ_OWNER_FRAME_TYPES, 'history.request', 'media.fetch'])
 const OTHER_DURABLE = new Set(['config.patch', 'device.enrolled', 'device.revoked'])
+/**
+ * Frames the owner already believes went through when the Mac refuses them: the relay acked the message (the app shows
+ * "sent") or answered the notification tap with "done". Their refusal is only final once the relay has it.
+ */
+const REFUSAL_MUST_ARRIVE = new Set<string>(['native.act', 'message', 'voice_note'])
 const MAX_AGE_MS = 8 * 24 * 3600_000
+/** "Undo to here" is asked for and answered at once (the relay holds it 5 minutes): a request held longer is refused. */
+const UNDO_REQUEST_MAX_AGE_MS = 10 * 60_000
 
 export const BACKLOG_AFTER_MS = 15 * 60_000
 /** Most frame types from a newer peer that one process announces; a peer can invent names without limit. */
 const MAX_NEWER_NOTICES = 5
-const NEWER_NOTICE =
-  "The relay or your phone is newer than this Mac's Talos: it sent a newer kind of message that this Mac cannot read. Update Talos on this Mac to see everything."
+const NEWER_NOTICE = () =>
+  say({
+    mac: "The relay or your phone is newer than this Mac's Talos: it sent a newer kind of message that this Mac cannot read. Update Talos on this Mac to see everything.",
+    linux:
+      "The relay or your phone is newer than this computer's Talos: it sent a newer kind of message that this computer cannot read. Update Talos on this computer to see everything.",
+  })
 const SIG_NOTICE_LIMIT = 5
 const SIG_NOTICE_WINDOW_MS = 10 * 60_000
 
@@ -73,6 +90,8 @@ export class Inbound {
   /** Signed MCP-app requests (MCP-APPS-SPEC M4.3): their own queue, so a slow app never delays chat. */
   appQueue: Promise<void> = Promise.resolve()
   inflight = new Set<string>()
+  /** Per-session lanes for frames that must wait behind an owner message's undo point (inbound-lanes.ts). */
+  private readonly lanes = new KeyedChain()
   private collecting = false
   private collected: Item[] = []
   private settleTimer: unknown = null
@@ -88,9 +107,19 @@ export class Inbound {
     private readonly opts: InboundOptions = {},
   ) {}
 
-  /** Resolves when everything queued so far has been processed (tests, shutdown). */
-  idle(): Promise<void> {
-    return this.queue
+  /** An owner message found inside another frame (a notification Reply): on its session's lane, like any message. */
+  queueOnLane(it: Item, thread: string, fn: () => Promise<void>): void {
+    void this.lanes.run([sessionLane(this.ctx, thread)], () => this.guard(it, fn, [it]))
+  }
+
+  /** Resolves when everything queued so far has been processed, on the queue and on every lane (tests). */
+  async idle(): Promise<void> {
+    for (;;) {
+      const q = this.queue
+      await q
+      await this.lanes.idle()
+      if (q === this.queue) return
+    }
   }
 
   // ---- entry points ------------------------------------------------------------------------------------------
@@ -161,19 +190,29 @@ export class Inbound {
    * A signed or owner-originated frame never gets it: a refused one of those is a security matter with its own alarms. The
    * notice does not repeat the frame's type: that is the peer's text, and it is in the log for anyone who needs it.
    */
-  private noteNewer(raw: Record<string, unknown> | undefined) {
+  private noteNewer(raw: Record<string, unknown> | undefined, why = classifyUnparsed(raw, 'relay_to_bridge')) {
     const { ctx } = this
     if (looksSigned(raw) || (OWNER_FRAME_TYPES as readonly string[]).includes(String(raw?.type))) return
-    const why = classifyUnparsed(raw, 'relay_to_bridge')
     if (why.kind === 'broken' || this.newerTold.has(why.type) || this.newerTold.size >= MAX_NEWER_NOTICES) return
     this.newerTold.add(why.type)
-    void postSystemNotice(ctx, NEWER_NOTICE, {
+    void postSystemNotice(ctx, NEWER_NOTICE(), {
       thread: ctx.config.thread('inbox') ? threadRef(ctx, 'inbox') : defaultThreadRef(ctx),
     }).catch((e) => ctx.log.warn('newer-peer notice not posted', { error: (e as Error).message }))
   }
 
   onFrame(raw: Record<string, unknown>, frame: Frame) {
     const { ctx } = this
+    // Parsed, but with an error code this build does not list: handled below as 'internal' (protocol audit O5), and still
+    // logged and noted like any part of a frame this build could not read, because it is the "update Talos" sign.
+    const newer = newerInParsed(raw)
+    if (newer.kind !== 'broken') {
+      ctx.log.warn('relay frame did not parse', {
+        id: frame.id,
+        type: frame.type,
+        message: 'an error code this build does not list; read as internal',
+      })
+      this.noteNewer(raw, newer)
+    }
     if (SCHEDULE_OWNER.has(frame.type)) return this.onScheduleFrame({ raw, frame, receivedAt: ctx.clock.now() })
     if (V2_READ.has(frame.type)) return this.onReadFrame({ raw, frame, receivedAt: ctx.clock.now() })
     if (frame.type === 'history.request') return this.onHistoryFrame({ raw, frame, receivedAt: ctx.clock.now() })
@@ -206,7 +245,9 @@ export class Inbound {
         if (frame.type === 'session.control' || frame.type === 'thread.session.control')
           ctx.session.resend(frame.control_id) // the stored result, not a second run
         if (frame.type === 'agent.recover') resendAgentRecover(ctx, frame.control_id)
-        if (frame.type === 'native.act' && !this.resendRefusal(frame.id)) return // not sent: no ack, so the relay replays it again
+        if (frame.type === 'undo.request') resendUndoRequest(ctx, frame.control_id)
+        // not sent: no ack, so the relay replays it again
+        if (REFUSAL_MUST_ARRIVE.has(frame.type) && !this.resendRefusal(frame.id, frame.type)) return
         this.ack(frame.id, consumable ? 'consumed' : 'delivered')
         return
       }
@@ -285,10 +326,25 @@ export class Inbound {
       }
       if (backlog.length < 2) backlog = []
     }
-    if (backlog.length) await this.guard(backlog[0] as Item, () => this.handleBacklog(backlog), backlog)
+    // The backlog is told first, before anything else in the replay (hook events after it read in order). It waits on
+    // its sessions' lanes like any message, and the queue waits for it: up to the 5 s undo hold per backlog part, plus
+    // lane work still running from before. A replay with a backlog only comes on a reconnect.
+    if (backlog.length)
+      await this.lanes.run(backlogLanes(this.ctx, backlog), () =>
+        this.guard(backlog[0] as Item, () => this.handleBacklog(backlog), backlog),
+      )
     for (const it of items) {
       if (backlog.includes(it)) continue
-      await this.guard(it, () => this.processOne(it), [it])
+      const job = () => this.guard(it, () => this.processOne(it), [it])
+      const plan = lanePlan(this.ctx, it)
+      if (plan === 'barrier') {
+        await this.lanes.idle()
+        await job()
+      } else if (plan) {
+        const keys = plan.anyBusy ? [...new Set([...plan.keys, ...this.lanes.busyKeys()])] : plan.keys
+        if (plan.always || keys.some((k) => this.lanes.busy(k))) void this.lanes.run(keys, job)
+        else await job()
+      } else await job()
     }
   }
 
@@ -339,23 +395,29 @@ export class Inbound {
   }
 
   /**
-   * A replayed notification tap this Mac already refused. The first refusal may have gone out on a socket that died, and the
-   * relay told the phone "done", so the stored outcome is sent again (the relay turns it into the failed-tap push). Returns
-   * false when the refusal could not be sent now; the caller then does not ack and the relay replays the tap once more.
+   * A replayed notification tap, message or voice note this Mac already refused. A send only says the frame was handed to
+   * the socket: the first refusal, and the `consumed` after it, may have died with that socket (the relay replaying the
+   * frame is the sign), while the relay told the phone "done" or the app shows "sent". So the stored outcome is sent
+   * again; the relay turns it into the failed-tap push, or into the message's failed row, once however often it hears it.
+   * Returns false when the refusal could not be sent now; the caller then does not ack and the relay replays once more.
    */
-  private resendRefusal(id: string): boolean {
+  private resendRefusal(id: string, type: string): boolean {
     const { ctx } = this
     const outcome = ctx.store.seenOutcome(id)
     if (!outcome?.startsWith('rejected:')) return true
     const parsed = ErrorCode.safeParse(outcome.slice('rejected:'.length))
-    return ctx.transport.sendEphemeral(
-      errorFrame(
-        ctx.clock.now(),
-        parsed.success ? parsed.data : 'internal',
-        'That tap did not go through. Open Talos to check.',
-        id,
-      ),
-    )
+    const code = parsed.success ? parsed.data : 'internal'
+    // only the code was kept, so the words are rebuilt from it
+    const words =
+      type === 'native.act'
+        ? 'That tap did not go through. Open Talos to check.'
+        : code === 'stale'
+          ? CLOCK_OFF_MESSAGE
+          : say({
+              mac: 'Your Mac refused it when it first arrived.',
+              linux: 'Your computer refused it when it first arrived.',
+            })
+    return ctx.transport.sendEphemeral(errorFrame(ctx.clock.now(), code, words, id))
   }
 
   /** error{ref, code} to the relay, then consumed, so the frame does not sit in the replay buffer for a week. */
@@ -367,11 +429,12 @@ export class Inbound {
     fields?: Array<{ path: string; message: string }>,
   ) {
     const sent = this.ctx.transport.sendEphemeral(errorFrame(this.ctx.clock.now(), code, message, it.frame.id, fields))
-    if (!sent && it.frame.type === 'native.act') {
-      // The relay told the phone "done" when it queued this tap, so the refusal must not be lost with the socket. Do not mark
-      // the id seen and do not say `consumed`: the relay keeps the frame and sends it again on the next hello, and the
-      // refusal is decided again and sent then.
-      this.ctx.log.warn('refusal of a notification tap not sent; the relay will replay the tap', {
+    if (!sent && REFUSAL_MUST_ARRIVE.has(it.frame.type)) {
+      // The relay told the phone "done" when it queued this tap, or acked this message and the app shows it as sent, so
+      // the refusal must not be lost with the socket. Do not mark the id seen and do not say `consumed`: the relay keeps
+      // the frame and sends it again on the next hello, and the refusal is decided again and sent then.
+      this.ctx.log.warn('refusal not sent; the relay will replay the frame', {
+        type: it.frame.type,
         id: it.frame.id,
         code,
       })
@@ -421,7 +484,10 @@ export class Inbound {
       ctx.transport.sendEphemeral(errorFrame(ctx.clock.now(), code, message, it.frame.id))
       this.inflight.delete(it.frame.id)
     }
-    if (why.reason === 'stale_ts') return refuse('stale', CLOCK_OFF_MESSAGE)
+    if (why.reason === 'stale_ts') {
+      const stamp = Date.parse((it.raw.relay as { received_at?: string } | undefined)?.received_at ?? '')
+      return refuse('stale', clockOffMessage(Date.parse(it.frame.ts), ctx.clock.now(), stamp))
+    }
     refuse('sig_invalid', 'signature check failed')
     const now = ctx.clock.now()
     this.sigNotices = this.sigNotices.filter((t) => now - t < SIG_NOTICE_WINDOW_MS)
@@ -450,11 +516,14 @@ export class Inbound {
       case 'session.control':
       case 'thread.session.control':
       case 'agent.recover':
+      case 'undo.request':
       case 'config.patch': {
-        const owner = it.owner ?? (await this.verifyOwner(it))
+        const owner =
+          it.owner ?? (await this.verifyOwner(it, f.type === 'undo.request' ? UNDO_REQUEST_MAX_AGE_MS : MAX_AGE_MS))
         if (!owner.ok) return this.ownerFailed(it, owner)
         if (f.type === 'thread.session.control') return onThreadSessionControl(this.ctx, f, () => this.done(it))
-        if (f.type === 'agent.recover') return onAgentRecover(this.ctx, f, () => this.done(it))
+        if (f.type === 'agent.recover') return onAgentRecover(this.ctx, f, it.raw, () => this.done(it))
+        if (f.type === 'undo.request') return onUndoRequest(this.ctx, f, () => this.done(it))
         if (f.type === 'message') return this.onMessage(it, f)
         if (f.type === 'voice_note') return this.onVoiceNote(it, f)
         if (f.type === 'card.resolve') return this.onCardResolve(it, f)
@@ -566,6 +635,9 @@ export class Inbound {
 
   afterOwnerNotify(...args: Parameters<typeof messagesFrames.afterOwnerNotify>) {
     return messagesFrames.afterOwnerNotify.apply(this, args)
+  }
+  replyContext(...args: Parameters<typeof messagesFrames.replyContext>) {
+    return messagesFrames.replyContext.apply(this, args)
   }
 
   voiceNoteContent(...args: Parameters<typeof messagesFrames.voiceNoteContent>) {

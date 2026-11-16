@@ -8,6 +8,7 @@ import {
   newUlid,
   PROBLEM_LIMITS,
   PROBLEMS_FEATURE,
+  PROBLEMS_INSTALL_FEATURE,
   type ProblemT,
   problemFingerprint,
   sanitizeExternal,
@@ -243,7 +244,9 @@ describe('problem.item on a live bridge', () => {
   test('problems/1 is advertised by a live bridge', async () => {
     h = await startHarness()
     expect(bridgeFeatures(h.bridge.ctx)).toContain(PROBLEMS_FEATURE)
+    expect(bridgeFeatures(h.bridge.ctx)).toContain(PROBLEMS_INSTALL_FEATURE)
     expect(bridgeFeatures({})).not.toContain(PROBLEMS_FEATURE)
+    expect(bridgeFeatures({})).not.toContain(PROBLEMS_INSTALL_FEATURE)
   })
 })
 
@@ -301,7 +304,7 @@ function service(
     home,
     clock,
     log,
-    timezone: () => 'Etc/GMT+7',
+    timezone: () => 'Etc/GMT+5',
     bridgeVersion: '0.0.0-test',
     notice: async (t) => void notices.push(t),
     ...over,
@@ -327,14 +330,14 @@ describe('limits, with warnings', () => {
 
   test('the daily line posts once after midnight in the owner zone, not before, and not twice', async () => {
     const home = tempHome()
-    // 23:30 in a fixed UTC-7 zone (no DST) is 06:30 UTC the next day
-    const clock = fakeClock('2026-11-02T06:30:00.000Z')
+    // 23:30 in a fixed UTC-5 zone (no DST) is 04:30 UTC the next day
+    const clock = fakeClock('2026-11-02T04:30:00.000Z')
     const { svc, notices } = service(home, clock)
     for (let i = 0; i < 7; i++) await svc.onItem(problem({ message: `distinct failure number ${'w'.repeat(i + 1)}` }))
     expect(notices).toHaveLength(5)
-    clock.advance(20 * 60_000) // 23:50 UTC-7: still the same day
+    clock.advance(20 * 60_000) // 23:50 UTC-5: still the same day
     expect(await svc.maybeDailyNotice()).toBe(false)
-    clock.advance(20 * 60_000) // 00:10 UTC-7: a new day
+    clock.advance(20 * 60_000) // 00:10 UTC-5: a new day
     expect(await svc.maybeDailyNotice()).toBe(true)
     expect(notices).toHaveLength(6)
     expect(notices[5]).toMatch(/2 not announced/)
@@ -533,8 +536,8 @@ describe('what the Mac keeps of a report', () => {
     await svc.onItem(problem({ at: '2026-11-02T10:00:00Z', message: 'offsets' }))
     const f = open(home)[0] as string
     expect(readOpen(home, f).first_seen).toBe('2026-11-02T10:00:00.000Z')
-    // 04:00 at -07:00 is 11:00Z: LATER than 10:00Z, though it sorts earlier as text
-    await svc.onItem(problem({ at: '2026-11-02T04:00:00-07:00', message: 'offsets' }))
+    // 06:00 at -05:00 is 11:00Z: LATER than 10:00Z, though it sorts earlier as text
+    await svc.onItem(problem({ at: '2026-11-02T06:00:00-05:00', message: 'offsets' }))
     expect(readOpen(home, f).first_seen).toBe('2026-11-02T10:00:00.000Z')
     expect(readOpen(home, f).last_seen).toBe('2026-11-02T11:00:00.000Z')
   })
@@ -673,5 +676,137 @@ describe('talos-app errors', () => {
     expect(all.length).toBeLessThanOrEqual(2)
     expect(all.reduce((n, l) => n + (l.problem?.count ?? 0), 0)).toBe(2)
     chmodSync(home, 0o700)
+  })
+})
+
+describe('a report from another install (the bug inbox)', () => {
+  function io() {
+    const out: string[] = []
+    const err: string[] = []
+    return {
+      out,
+      err,
+      io: {
+        out: (l: string) => out.push(l),
+        err: (l: string) => err.push(l),
+        prompt: async () => '',
+        sleep: async () => {},
+        now: () => 0,
+      },
+    }
+  }
+  const env = (home: string) => loadEnv({ TALOS_APP_HOME: home })
+  const theirs = (over: Partial<ProblemT> = {}): ProblemT =>
+    problem({
+      source: 'install',
+      install: 'beta1',
+      kind: 'owner',
+      name: 'bug report',
+      message: 'The send button did nothing',
+      frames: [],
+      versions: { app: '1.4.0', bridge: '1.4.0', relay: '1.4.0' },
+      routes: [],
+      attached: {
+        what_went_wrong: 'The send button did nothing',
+        expected: 'The message to go',
+        errors: ['TypeError: x is not a function'],
+        logs: 'line one\nline two',
+        messages: [{ role: 'you', text: `a message she chose to send ${CANARY}` }],
+        thread_id: 'general',
+        screen: 'thread',
+      },
+      ...over,
+    })
+
+  test('is filed with its install and what it carried, keeps its own versions, and says whose it is', async () => {
+    const home = tempHome()
+    const { svc, notices } = service(home)
+    expect(await svc.onItem(theirs())).toBe('done')
+    const files = open(home)
+    expect(files).toHaveLength(1)
+    const rec = readOpen(home, files[0] as string)
+    expect(rec).toMatchObject({ trust: 'external', source: 'install', install: 'beta1', kind: 'owner' })
+    expect(rec.versions_seen).toEqual([{ app: '1.4.0', bridge: '1.4.0', relay: '1.4.0' }]) // not this Mac's 0.0.0-test
+    expect(rec.attached.logs).toBe('line one\nline two')
+    expect(notices[0]).toContain('from another install (beta1)')
+  })
+
+  test("errors list marks it as another install's; errors show prints what it carried", async () => {
+    const home = tempHome()
+    const { svc } = service(home)
+    await svc.onItem(problem())
+    await svc.onItem(theirs())
+    const a = io()
+    expect(cmdErrors(env(home), ['list'], a.io)).toBe(0)
+    const lines = a.out.slice(1)
+    expect(lines.filter((l) => l.includes('install:beta1 from another install'))).toHaveLength(1)
+    expect(lines.filter((l) => l.includes('web/auto'))).toHaveLength(1) // the owner's own stays as it was
+    const fp = lines.find((l) => l.includes('install:beta1'))?.slice(0, 12) as string
+    const s = io()
+    expect(cmdErrors(env(home), ['show', fp], s.io)).toBe(0)
+    const shown = JSON.parse(s.out.slice(1).join('\n'))
+    expect(shown.attached.expected).toBe('The message to go')
+    expect(shown.attached.messages[0].text).toContain(CANARY)
+  })
+
+  test("list and show print the owner's local time beside UTC (a neutral zone, fixtures rule)", async () => {
+    const home = tempHome()
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ timezone: 'Etc/GMT+5' }))
+    const clock = fakeClock('2026-11-05T10:00:00.000Z')
+    const { svc } = service(home, clock)
+    await svc.onItem(problem({ at: '2026-11-02T08:00:00.000Z' }))
+    const a = io()
+    expect(cmdErrors(env(home), ['list'], a.io)).toBe(0)
+    expect(a.out.join('\n')).toContain('last 2026-11-02T08:00:00.000Z (local 2026-11-02T03:00:00-05:00)')
+    const fp = (open(home)[0] as string).slice(0, 12)
+    const s = io()
+    expect(cmdErrors(env(home), ['show', fp], s.io)).toBe(0)
+    const shown = JSON.parse(s.out.slice(1).join('\n'))
+    expect(shown.last_seen).toBe('2026-11-02T08:00:00.000Z')
+    expect(shown.last_seen_local).toBe('2026-11-02T03:00:00-05:00')
+    expect(shown.first_seen_local).toBe('2026-11-02T03:00:00-05:00')
+  })
+
+  test('a thread session sees the error lines only: her words, log and messages are withheld', async () => {
+    const home = tempHome()
+    const { svc } = service(home)
+    await svc.onItem(theirs())
+    const fp = (open(home)[0] as string).slice(0, 12)
+    const s = io()
+    expect(cmdErrors(env(home), ['show', fp], s.io, true)).toBe(0)
+    const l = io()
+    expect(cmdErrors(env(home), ['list'], l.io, true)).toBe(0)
+    expect(l.out.join('\n')).toContain('install:beta1 from another install')
+    expect(l.out.join('\n')).not.toContain('The send button did nothing')
+    const text = s.out.join('\n')
+    expect(text).not.toContain('The send button did nothing')
+    expect(text).not.toContain(CANARY)
+    expect(text).not.toContain('line one')
+    expect(text).not.toContain('The message to go')
+    expect(text).toContain('TypeError: x is not a function')
+  })
+
+  test('is scrubbed again on the Mac: a token in what it carried does not reach the file', async () => {
+    const home = tempHome()
+    const { svc } = service(home)
+    const key = `sk-${'A1b2C3d4'.repeat(6)}`
+    await svc.onItem(
+      theirs({
+        attached: { what_went_wrong: `pasted api_key=${key}`, errors: [`token=${key}`], logs: `Bearer ${key}` },
+      }),
+    )
+    const raw = readFileSync(join(problemDirs(home).open, open(home)[0] as string), 'utf8')
+    expect(raw).not.toContain(key)
+  })
+
+  test('past the folder cap it is refused like an automatic report: other people cannot fill this Mac', async () => {
+    const home = tempHome()
+    const { svc } = service(home)
+    for (let i = 0; i < PROBLEM_LIMITS.files; i++)
+      await svc.onItem(problem({ name: `E${'x'.repeat(i % 25)} ${'y'.repeat(Math.floor(i / 25))}` })) // distinct fingerprints
+    expect(open(home)).toHaveLength(PROBLEM_LIMITS.files)
+    expect(await svc.onItem(theirs())).toBe('done')
+    expect(open(home)).toHaveLength(PROBLEM_LIMITS.files)
+    expect(open(home).map((f) => readOpen(home, f).source)).not.toContain('install')
   })
 })

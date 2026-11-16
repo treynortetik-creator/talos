@@ -4,7 +4,7 @@ import TalosDesktopCore
 /// Main's development-channels warning on the Mac's own Needs-you popup. Main's bridge is Main's child (an MCP server of its claude process),
 /// so while Main sits on this warning no bridge runs and no card can be posted: the popup is the path. A REAL click on "I am using this for
 /// local development" is the same press as a verified card tap (`pressDevChoice`: a fresh look at the screen, the typing guard, at most one
-/// arrow, one Enter) and seals the launch (`recordStartConfirmed(ownerConfirmed:)`, the key made if there is none). "Exit" presses Exit and
+/// arrow, one Enter) and, unlike the card tap, seals the launch (`recordStartConfirmed(ownerConfirmed:)`, the key made if there is none). "Exit" presses Exit and
 /// stores nothing. A click reaches here only from the popup button's action (`NeedsYouPopupView.isRealClick`, then the controller): no file, URL
 /// scheme, AppleScript or notification asks for it, and a pane Enter still seals nothing.
 public final class MainAndWorkersPopupSource: NeedsYouPopupSource, @unchecked Sendable {
@@ -58,7 +58,7 @@ extension Supervisor {
     guard l.devCard.pressedFor != offer.id, l.confirmsSent <= l.devCard.confirmsAtOffer else { return .nothing(.alreadyAnswered(by: nil)) }
     guard case .choose(let choice, let label) = action else { return .nothing(.notOffered) }
     guard offer.options.indices.contains(choice), ExactText.equal(offer.options[choice], label) else { return .nothing(.screenChanged) }
-    let o = pressDevChoice(choice, label, offer, via: "popup", launch: &l)
+    let o = pressDevChoice(choice, label, offer, via: "popup", seals: true, launch: &l)
     launch = l
     guard o.outcome == .pressed else {
       switch o.blocked {

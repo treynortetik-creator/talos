@@ -265,18 +265,44 @@ const words = async (p: Promise<unknown>) => (await p.catch((x: unknown) => x)) 
 
 describe('the listing never blocks the bridge', () => {
   test('a big folder is read in turns: other work runs while it is being listed', async () => {
-    for (let i = 0; i < 3000; i++) dir('big', `d${i}`)
-    let ticks = 0
-    let done = false
-    const spin = () => {
-      if (done) return
-      ticks++
-      setImmediate(spin)
+    // The order is made certain, not timed: the folder's entries come through an opendir held after the tenth, so the listing is
+    // mid-folder for as long as the test likes. Other work must run then, with the listing still unanswered, and once released
+    // every entry still arrives. (Timed, by counting setImmediate turns during a real 3000-entry read, it lost under a full run
+    // on 2 cores: the read finished before the check phase came round. Bun's async opendir does yield: 20,000 entries in about
+    // 25 ms, with no stretch over 7 ms without a turn, idle or loaded, measured on Hestia.)
+    for (let i = 0; i < 50; i++) dir('big', `d${i}`)
+    let release!: () => void
+    const held = new Promise<void>((r) => {
+      release = r
+    })
+    let read = 0
+    const fs = {
+      ...real,
+      opendir: async (p: string) => {
+        const d = await real.opendir(p)
+        return {
+          async *[Symbol.asyncIterator]() {
+            for await (const e of d) {
+              if (read++ === 10) await held
+              yield e
+            }
+          },
+        }
+      },
     }
-    setImmediate(spin)
-    await svc.list({ path: join(home, 'big'), hidden: false })
-    done = true
-    expect(ticks).toBeGreaterThan(0)
+    const slow = new FolderService(deps({ fs }))
+    let answered = false
+    const listing = slow.list({ path: join(home, 'big'), hidden: false }).then((r) => {
+      answered = true
+      return r
+    })
+    await new Promise((r) => setImmediate(r)) // other work runs while the listing is held mid-folder
+    while (read < 11) await new Promise((r) => setImmediate(r)) // until the listing is at the held entry
+    expect(answered).toBe(false)
+    release()
+    const r = await listing
+    expect(answered).toBe(true)
+    expect(r.entries.length).toBe(50)
   })
 
   test('a folder that never opens is answered "slow to open" at the time cap, not waited for', async () => {

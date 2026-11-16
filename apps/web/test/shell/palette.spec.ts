@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, type Page, test } from '@playwright/test'
 import { expectAxeClean } from '../cards/e2e.ts'
+import { openPalette, pressWhenListening } from '../helpers/keys.ts'
 
 const wide = (page: Page) => (page.viewportSize()?.width ?? 0) >= 768
 const SHOTS = process.env.SHOT_DIR
@@ -23,8 +24,7 @@ test.describe('desktop', () => {
     await page.goto('/threads')
     const before = page.getByTestId('sidebar-toggle')
     await before.focus()
-    await page.keyboard.press('ControlOrMeta+k')
-    await expect(palette(page)).toBeVisible()
+    await openPalette(page)
     await expect(box(page)).toBeFocused()
     await expect(page.getByRole('option').first()).toBeVisible()
     await page.keyboard.press('Escape')
@@ -44,8 +44,7 @@ test.describe('desktop', () => {
     const msg = page.getByLabel('Message', { exact: true })
     await msg.click()
     await msg.pressSequentially('keep me')
-    await page.keyboard.press('ControlOrMeta+k')
-    await expect(palette(page)).toBeVisible()
+    await openPalette(page)
     await page.keyboard.press('Escape')
     await expect(msg).toBeFocused()
     await expect(msg).toHaveValue('keep me')
@@ -55,8 +54,7 @@ test.describe('desktop', () => {
     // the seeded card's expiry is an absolute time: pin "now" to the day it was written for (the clock keeps running)
     await page.clock.install({ time: new Date('2026-10-28T16:00:00.000Z') })
     await page.goto('/threads')
-    await page.keyboard.press('ControlOrMeta+j')
-    await expect(palette(page)).toBeVisible()
+    await pressWhenListening(page, 'ControlOrMeta+j', () => palette(page).isVisible())
     const first = page.getByRole('option').first()
     await expect(first).toBeVisible()
     await page.keyboard.press('Enter')
@@ -69,7 +67,7 @@ test.describe('desktop', () => {
 
   test('Ctrl+K inside the New thread editor does not wipe what was typed', async ({ page }) => {
     await page.goto('/threads')
-    await page.keyboard.press('ControlOrMeta+k')
+    await openPalette(page)
     await box(page).fill('New thread')
     await page.keyboard.press('Enter')
     const name = page.getByRole('dialog').getByRole('textbox').first()
@@ -83,7 +81,7 @@ test.describe('desktop', () => {
 
   test('a plain word then Enter searches; it never sends a / command', async ({ page }) => {
     await page.goto('/t/general')
-    await page.keyboard.press('ControlOrMeta+k')
+    await openPalette(page)
     await box(page).fill('deploy')
     await page.keyboard.press('Enter')
     await expect(page).toHaveURL(/\/search\?q=deploy/)
@@ -91,7 +89,7 @@ test.describe('desktop', () => {
 
   test('Ctrl+/ opens the shortcut list in Settings', async ({ page }) => {
     await page.goto('/threads')
-    await page.keyboard.press('ControlOrMeta+/')
+    await pressWhenListening(page, 'ControlOrMeta+/', async () => /\/settings\/shortcuts/.test(page.url()))
     await expect(page).toHaveURL(/\/settings\/shortcuts/)
     await expect(page.getByRole('heading', { name: 'Keyboard shortcuts' })).toBeVisible()
     for (const scheme of ['light', 'dark'] as const) {
@@ -104,8 +102,7 @@ test.describe('desktop', () => {
     test(`axe clean (${scheme})`, async ({ page }) => {
       await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' })
       await page.goto('/threads')
-      await page.keyboard.press('ControlOrMeta+k')
-      await expect(palette(page)).toBeVisible()
+      await openPalette(page)
       await shot(page, `palette-desktop-${scheme}`)
       await expectAxeClean(page)
     })
@@ -133,6 +130,8 @@ test.describe('phone', () => {
 
   test('a pull down from the top of the thread list opens it; a normal scroll never does', async ({ page }) => {
     await page.goto('/threads')
+    // the touches go to #main: wait until the app has drawn it (a loaded machine is still rendering after goto returns)
+    await expect(page.locator('#main')).toBeAttached()
     const touch = (type: string, y: number) =>
       page.evaluate(
         ([t, yy]) => {

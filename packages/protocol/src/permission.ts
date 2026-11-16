@@ -3,10 +3,12 @@
 // verdict only after a signed PRIMARY/KILL passes the ledger checks.
 //
 // Binding: the four request fields, verbatim, are the card's payload, so payload_hash covers all of them. The card shows
-// input_preview first, as plain text, never cut; "Claude's summary" (the model's own words) comes after it. If any part
-// of the call is hidden (elided middle, unserializable value, legacy cut, too long to show whole) or the id repeated,
-// the card has no Allow: only Deny, and "Approve at the Mac". permissionCardAllowsPrimary() re-derives that from the
-// card itself, so the app and the bridge reach the same answer and a tampered card never shows Allow.
+// input_preview first, as plain text, never cut; "Claude's summary" (the model's own words) comes after it. A tap approves
+// (the owner's rule, 2026-11-13): no step-up, whatever the tool. If part of the call is hidden (elided middle,
+// unserializable value, a cut, masked values, too long to show whole) or Claude Code is older than the floor, the card keeps
+// Allow and says what is not shown. The one card with no Allow is a repeated request id: an answer could reach the wrong
+// prompt. permissionCardAllowsPrimary() re-derives all of that from the card itself, so the app and the bridge reach the
+// same answer and a card changed on the way never shows Allow for something it does not show.
 import { z } from 'zod'
 import { jcs, payloadHash } from './canonical.ts'
 import { MAX_CARD_PAYLOAD_BYTES } from './card-edits.ts'
@@ -40,8 +42,16 @@ export const PERMISSION_CARD_TTL_S = 604_800
 /** Without the mod, a card this old adds "May already be answered at the Mac" (C3.4). */
 export const PERMISSION_MAYBE_ANSWERED_MS = 60_000
 
-export const PERMISSION_HIDDEN_WARNING = 'Part of this call is hidden. Approve at the Mac.'
-export const PERMISSION_REPEAT_WARNING = 'This prompt can only be answered at the Mac.'
+/** The start of the note on a card that does not show all of its call (the parts that are not shown follow). */
+export const PERMISSION_HIDDEN_PREFIX = 'Not all of this call is shown: '
+/** Kept for older imports: the prefix is the start of every hidden note (permissionHiddenWarning). */
+export const PERMISSION_HIDDEN_WARNING = PERMISSION_HIDDEN_PREFIX
+/**
+ * The one refusal left on a permission card (the owner's rule, 2026-11-13: a tap approves, from anywhere): Claude Code sent
+ * an id it had used before, so a verdict from here could answer the wrong prompt.
+ */
+export const PERMISSION_REPEAT_WARNING =
+  "Claude Code used this prompt's id before, so an answer from here could reach the wrong prompt. The prompt is still open at the Mac."
 /** The pinned "ends with:" line under every permission card's call. */
 export const PERMISSION_TAIL_CHARS = 120
 /**
@@ -49,7 +59,8 @@ export const PERMISSION_TAIL_CHARS = 120
  * line-break glyph) shows Open, which goes to the full-screen approval sheet where the owner scrolls through all of it.
  */
 export const PERMISSION_NOTICE_MAX_CHARS = 150
-export const PERMISSION_TOO_LONG_BODY = 'This call is too long to show here whole. Approve or deny it at the Mac.'
+/** Kept for older imports; a too-long card now shows the start of its call, with the hidden note saying so. */
+export const PERMISSION_TOO_LONG_BODY = 'This call is too long to show here whole; the start is shown.'
 export const PERMISSION_MAYBE_ANSWERED = 'May already be answered at the Mac'
 
 /** Longest input_preview / description a card shows whole (Card.body and CardField.value caps). */
@@ -71,7 +82,7 @@ export const PERMISSION_MIN_CLIENT_VERSION = '2.1.234'
  * One line on the card when another channel loaded in the same session (another channel plugin, say) can also answer the
  * prompt. A note, not a refusal: Allow stays (the owner chose this setup). Only this exact shape is accepted beside Allow.
  */
-const OTHER_CHANNEL_NOTE = /^[A-Za-z0-9][A-Za-z0-9 ,/_-]{0,78} can also approve this\.$/
+export const PERMISSION_OTHER_CHANNEL_NOTE = /^[A-Za-z0-9][A-Za-z0-9 ,/_-]{0,78} can also approve this\.$/
 export const permissionOtherChannelNote = (names: readonly string[]): string =>
   `${
     names
@@ -79,7 +90,19 @@ export const permissionOtherChannelNote = (names: readonly string[]): string =>
       .filter(Boolean)
       .join(', ') || 'Another channel'
   } can also approve this.`
-export const PERMISSION_OLD_CLIENT_WARNING = "This Claude Code can't show the call safely. Approve at the Mac."
+export const PERMISSION_OLD_CLIENT_WARNING =
+  'This Claude Code is older than 2.1.234, so a hidden part of the call may not be marked. Check it before you allow.'
+
+const HIDDEN_WORDS: Record<PermissionHiddenReason, string> = {
+  elided: 'Claude Code shortened part of it (⋯)',
+  unserializable: "a value Claude Code couldn't turn into text",
+  truncated: 'its end is cut off (…)',
+  redacted: 'values Claude Code masked ([REDACTED])',
+  too_long: 'it is too long to show whole, so the start is shown',
+}
+/** The note on a card whose call is not shown whole: what is missing, and that Allow still approves the call itself. */
+export const permissionHiddenWarning = (reasons: readonly PermissionHiddenReason[]): string =>
+  `${PERMISSION_HIDDEN_PREFIX}${reasons.map((r) => HIDDEN_WORDS[r]).join('; ')}. Allow approves the call as Claude Code holds it.`
 
 /**
  * Characters that make text render differently from its bytes: C0/C1 controls (the relay folds whitespace, so even a
@@ -184,10 +207,13 @@ export function permissionHiddenReasons(r: PermissionRequestT): PermissionHidden
   return out
 }
 
-const LOW_RISK_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'])
-/** `low` only for a short read-only list; Bash, Write, Edit, NotebookEdit, MCP tools and anything unknown are `high`. */
-export function permissionRisk(toolName: string): 'low' | 'high' {
-  return LOW_RISK_TOOLS.has(toolName) ? 'low' : 'high'
+/**
+ * Always `low`, whatever the tool (the owner's rule, 2026-11-13): a tap approves a permission prompt, in the app and from the
+ * notification, with no passkey or Face ID. `high` is what asks for a step-up everywhere (relay, app, notification), so a
+ * permission card never carries it. Cards that send as him, spend or delete keep their own risk; this is tool permission only.
+ */
+export function permissionRisk(_toolName: string): 'low' | 'high' {
+  return 'low'
 }
 
 export function permissionTitle(toolName: string): string {
@@ -212,7 +238,7 @@ export type ComposePermissionCardInput = {
   repeated?: boolean
   /**
    * Claude Code's version from the MCP handshake (`initialize` clientInfo.version). Missing, unreadable or below
-   * PERMISSION_MIN_CLIENT_VERSION: the card is deny-only.
+   * PERMISSION_MIN_CLIENT_VERSION: the card keeps Allow with a note (PERMISSION_OLD_CLIENT_WARNING).
    */
   client_version?: string
   /** Names of other loaded channels that can also answer a permission prompt; adds a one-line note, keeps Allow. */
@@ -239,7 +265,11 @@ export function composePermissionCard(input: ComposePermissionCardInput): CardT 
     title: shownTitle(r.tool_name),
     destination: [],
     // Invisible and bidi characters are shown as [U+XXXX] and the card stays Allow-able: the owner sees every character.
-    body: tooLong ? PERMISSION_TOO_LONG_BODY : permissionVisibleText(r.input_preview),
+    // Too long to show whole: the start of it, with the hidden note saying so.
+    // (cut by code point: a cut inside a surrogate pair would leave a lone surrogate, which the canonical JSON refuses)
+    body: tooLong
+      ? [...permissionVisibleText(r.input_preview)].slice(0, MAX_SHOWN).join('')
+      : permissionVisibleText(r.input_preview),
     body_format: 'plain',
     fields: tooLong
       ? []
@@ -259,7 +289,7 @@ export function composePermissionCard(input: ComposePermissionCardInput): CardT 
     allow_revise: false,
     risk: permissionRisk(r.tool_name),
     origin: 'background',
-    // Too long to show whole: the payload carries the id only (deny-only), so nothing can bind to a call nobody saw.
+    // Too long to bind whole: the payload carries the id; the bridge keeps its own copy of the call and answers that one.
     payload: tooLong ? { request_id: r.request_id, oversize: true } : bindFields(r),
     payload_hash: `sha256:${'0'.repeat(64)}`,
     state: 'pending',
@@ -268,9 +298,10 @@ export function composePermissionCard(input: ComposePermissionCardInput): CardT 
   }
   // Beside the card, outside the binding: bindingFrom() does not pick it, so the hash below is the same with or without it.
   if (input.explain) card.explain = { status: 'pending' }
-  if (hidden.length > 0) card.warning = PERMISSION_HIDDEN_WARNING
+  // the one refusal first; then what is not shown, or an older Claude Code: notes, Allow stays
+  if (input.repeated) card.warning = PERMISSION_REPEAT_WARNING
+  else if (hidden.length > 0) card.warning = permissionHiddenWarning(hidden)
   else if (!permissionClientVerified(input.client_version)) card.warning = PERMISSION_OLD_CLIENT_WARNING
-  else if (input.repeated) card.warning = PERMISSION_REPEAT_WARNING
   else if (input.other_channels && input.other_channels.length > 0)
     card.warning = permissionOtherChannelNote(input.other_channels)
   card.payload_hash = payloadHash(bindingFrom(card))
@@ -290,8 +321,9 @@ export function permissionRequestOf(card: Pick<CardT, 'kind' | 'payload'>): Perm
 }
 
 /**
- * True only when the card shows the whole bound call exactly as composePermissionCard() renders it, nothing is hidden
- * and nothing warns. The app shows Allow iff this is true; the bridge sends `allow` iff this is true for its ledger copy.
+ * True when the card is exactly what composePermissionCard() renders for its bound call (or, too long to bind, its id with
+ * the too-long note), with only a note that keeps Allow: another channel, an older Claude Code, or what part is not shown.
+ * False for a repeated id. The app shows Allow iff this is true; the bridge sends `allow` iff this is true for its ledger copy.
  */
 export type PermissionAllowView = Pick<
   CardT,
@@ -314,17 +346,47 @@ export type PermissionAllowView = Pick<
   attachments: readonly unknown[]
 }
 
+/** A note that keeps Allow: another channel, an older Claude Code, or what part of the call is not shown. */
+const noteKeepsAllow = (w: string | undefined, hidden: readonly PermissionHiddenReason[]): boolean =>
+  w === undefined
+    ? hidden.length === 0
+    : hidden.length > 0
+      ? w === permissionHiddenWarning(hidden)
+      : PERMISSION_OTHER_CHANNEL_NOTE.test(w) || w === PERMISSION_OLD_CLIENT_WARNING
+
 export function permissionCardAllowsPrimary(card: PermissionAllowView): boolean {
   try {
     if (card.state !== 'pending') return false
+    if (card.warning === PERMISSION_REPEAT_WARNING) return false
+    // too long to bind whole: the payload is the id; the note must say what is not shown, and nothing else may be on it
+    const p = card.payload as Record<string, unknown> | null
+    if (card.kind === 'permission' && p && typeof p === 'object' && p.oversize === true) {
+      return (
+        Object.keys(p).sort().join(',') === 'oversize,request_id' &&
+        PermissionRequestId.safeParse(p.request_id).success &&
+        typeof card.warning === 'string' &&
+        card.warning.startsWith(PERMISSION_HIDDEN_PREFIX) &&
+        card.warning.includes(HIDDEN_WORDS.too_long) &&
+        (card.risk === 'low' || card.risk === 'high') &&
+        card.summary === undefined &&
+        card.body_format === 'plain' &&
+        card.fields.length === 0 &&
+        card.allow_edit === false &&
+        card.allow_revise === false &&
+        card.attachments.length === 0 &&
+        card.destination.length === 0 &&
+        card.primary_label === 'Allow'
+      )
+    }
     const r = permissionRequestOf(card)
     if (!r) return false
-    if (permissionHiddenReasons(r).length > 0) return false
+    const hidden = permissionHiddenReasons(r)
     const f = card.fields
     return (
       card.title === shownTitle(r.tool_name) &&
       card.summary === undefined &&
-      card.risk === permissionRisk(r.tool_name) &&
+      // either risk: it never changes what the card shows, and an older bridge's cards still say `high` (they then ask for a step-up)
+      (card.risk === 'low' || card.risk === 'high') &&
       card.body === permissionVisibleText(r.input_preview) &&
       card.body_format === 'plain' &&
       f.length === 1 &&
@@ -334,7 +396,7 @@ export function permissionCardAllowsPrimary(card: PermissionAllowView): boolean 
       f[0]?.editable === false &&
       card.allow_edit === false &&
       card.allow_revise === false &&
-      (card.warning === undefined || OTHER_CHANNEL_NOTE.test(card.warning)) &&
+      noteKeepsAllow(card.warning, hidden) &&
       card.attachments.length === 0 &&
       card.destination.length === 0 &&
       card.primary_label === 'Allow'

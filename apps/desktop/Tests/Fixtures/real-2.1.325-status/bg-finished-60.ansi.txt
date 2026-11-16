@@ -1,0 +1,40 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.325[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mFable 5.2 · Claude Max  [39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/…xxxxxxxxxxxxxxxxxxxxxxx[39m
+
+
+[38;5;246m[48;5;237m❯ [38;5;231mRun the shell command: sleep 20, in the background. Then [39m
+  [38;5;231mreply ok and stop.[39m
+
+[49m  [38;5;246mRan [1m1[0m[38;5;246m shell command [39m
+
+[38;5;231m⏺[39m ok
+
+[38;5;246m✻[39m [38;5;246mCogitated for 5s · done 8:26 PM[39m
+
+[38;5;114m⏺[39m Background command "Sleep for 20 seconds" completed (exit
+code 0)
+
+[38;5;231m⏺[39m Sleep finished, exit 0.
+
+[38;5;246m✻[39m [38;5;246mWorked for 2s · done 8:26 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[38;5;244m────────────────────────────────────────────────────────────
+[39m❯ 
+[38;5;244m────────────────────────────────────────────────────────────
+[39m  [38;5;246m⏸ manual mode on · ? for shortcuts[39m

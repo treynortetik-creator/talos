@@ -77,6 +77,7 @@ describe('the Help page', () => {
       'Fix it',
       'Keyboard shortcuts',
       'What cannot be done',
+      'Report a bug',
       'About',
     ])
     expect(screen.getByTestId('help-count').textContent).toBe('')
@@ -169,7 +170,7 @@ describe('About: the build lines in each state', () => {
     stubStatus(() => new Promise<Response>(() => {}))
     open()
     expect(await screen.findByTestId('help-build-loading')).toBeTruthy()
-    expect(screen.getByTestId('help-build').textContent).toContain('App build')
+    expect(screen.getByTestId('help-build').textContent).toContain('Web app build')
     expect(screen.queryByTestId('help-build-failed')).toBeNull()
   })
 
@@ -189,7 +190,7 @@ describe('About: the build lines in each state', () => {
     stubStatus(async () => json({ nonsense: true }))
     open()
     expect(await screen.findByTestId('help-build-failed')).toBeTruthy()
-    expect(screen.getByTestId('help-build').textContent).not.toContain('Server')
+    expect(screen.getByTestId('help-build').textContent).not.toContain('Server build')
   })
 
   it('reads the Mac app, the iPhone app and an old frame without breaking the others', () => {
@@ -203,14 +204,14 @@ describe('About: the build lines in each state', () => {
     const odd = buildRows({ ...base, running: 'Mac app', userAgent: 'Mozilla/5.0 TalosDesktop/<script>' })
     expect(odd).toContainEqual({ label: 'Mac app version', value: 'not reported (an older Mac app?)' })
     expect(buildRows({ ...base, running: 'Browser', userAgent: undefined }).map((r) => r.label)).toEqual([
-      'App build',
+      'Web app build',
       'Running in',
       'Protocol',
-      'Server',
+      'Server build',
     ])
     expect(
       buildRows({ ...base, relay: null, running: 'Browser', userAgent: undefined }).map((r) => r.label),
-    ).not.toContain('Server')
+    ).not.toContain('Server build')
   })
 })
 
@@ -298,7 +299,7 @@ describe('signed out', () => {
       expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
       act(() => vi.advanceTimersByTime(POLL_MS * 4))
       expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/api/status'))).toHaveLength(0)
-      expect(screen.getByTestId('help-build').textContent).not.toContain('Server')
+      expect(screen.getByTestId('help-build').textContent).not.toContain('Server build')
     } finally {
       vi.useRealTimers()
     }

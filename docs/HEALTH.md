@@ -106,4 +106,5 @@ The screen asks the relay for `GET /api/status` every 30 seconds while it is vis
 An earlier design had a GitHub Actions workflow call the relay every hour, to catch the one failure the relay cannot
 report about itself: the relay being down. That is **dropped** for now (no `/api/health`, no `HEALTH_TOKEN`, no
 "your hourly health check stopped" push). If you want that coverage today, point any uptime monitor at the relay's
-public `GET /healthz` (it answers `{ "ok": true }` and exposes nothing else).
+public `GET /healthz` (it answers `{ "ok": true, "version", "session_wait": { "running", "after_ms", "tick_ms" } }`:
+that the once-per-wait push watcher runs, and its two fixed times; nothing about any thread, wait or person).
