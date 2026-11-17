@@ -76,6 +76,7 @@ describe('the owner’s switch for thread sessions', () => {
     setWorkersOn(() => false)
     expect(build().workers_supported).toBe(false)
     expect(build().subthreads_supported).toBe(true) // as the Mac says it: sub-thread routing and config need no session
+    expect(build().subthreads_shared_folder).toBe(true) // and runs a sub-thread in its parent's folder, as the Mac does
     expect(build().subthreads_own_folder).toBe(true) // and keeps an own folder outside its parent's, as the Mac does (c24c01f8)
   })
 })

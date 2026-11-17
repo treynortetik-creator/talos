@@ -352,6 +352,32 @@ describe('pre-push hook', () => {
     expect(r.calls()).toEqual([TYPECHECK, LINT, SIZE, 'pnpm exec vitest run', 'bun run scripts/test-parallel.ts'])
   })
 
+  // the installer tests with a corepack pnpm first on PATH: a step of the plan for a change that plans root-install.test.ts, and a
+  // Mac's (the stand-in script writes down that it ran; uname says which machine this is)
+  const corepackPush = (os: string) => {
+    const r = setup()
+    r.install()
+    r.stub(join(r.T, 'bin/uname'), `[ "$1" = -s ] && { echo ${os}; exit 0; }\nexec /usr/bin/uname "$@"`)
+    r.change({
+      'scripts/corepack-install-tests.sh': '#!/bin/sh\necho "corepack-install" >> "$CALLS"\n',
+      'scripts/root-install.test.ts': 'x\n',
+    })
+    return { r, p: r.push() }
+  }
+
+  it('a change that plans the root installer test also runs it with a corepack pnpm first on PATH, on a Mac', () => {
+    const { r, p } = corepackPush('Darwin')
+    expect(p.code, p.err).toBe(0)
+    expect(r.calls().at(-1)).toBe('corepack-install')
+  })
+
+  it('and off a Mac says it skipped that step, and does not need corepack', () => {
+    const { r, p } = corepackPush('Linux')
+    expect(p.code, p.err).toBe(0)
+    expect(r.calls()).not.toContain('corepack-install')
+    expect(p.err).toContain('skipped, they run on a Mac only')
+  })
+
   it('a second push runs only the suites of what is new since the first', () => {
     const r = setup()
     r.install()

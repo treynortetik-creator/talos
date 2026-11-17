@@ -64,7 +64,7 @@ node scripts/size-report.ts      # line counts by area, the files and functions 
 (`scripts/ci-local.sh`) runs the same jobs on a Mac, or in the cloud through the manual `.github/workflows/ci.yml` workflow; do not edit that file unless your task
 is about CI. Before a push, `scripts/gate.sh` runs the type check, Biome, the personal-data check, the size budget and the tests
 of what you changed (`--full` runs every suite); it refuses on any failure. The pre-push hook (`scripts/pre-push.sh`) runs it.
-Stress loops and evals: `scripts/heavy-lock.sh run <name> -- <cmd>` (one heavy lock per machine).
+Stress loops and evals: `scripts/heavy-lock.sh run <name> -- <cmd>` (heavy lock: a few slots).
 
 ## Size rules
 

@@ -18,6 +18,7 @@
     "format": "biome format --write .",
     "test": "vitest run",
     "test:bun": "pnpm --filter @talos-app/bridge test",
+    "test:corepack-install": "bash scripts/corepack-install-tests.sh",
     "test:browser": "pnpm --filter @talos-app/protocol test:browser",
     "test:e2e": "pnpm -r --workspace-concurrency=1 --if-present test:e2e",
     "drive": "node e2e/drive.ts",

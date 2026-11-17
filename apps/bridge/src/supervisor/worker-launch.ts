@@ -247,3 +247,16 @@ export function folderOf(t: WorkerThread, real: ((cwd: string) => string | null)
   if (r !== null || !t.sub?.ownCwd || t.parentCwd === null) return r
   return subThreadTarget(t.cwd, t.parentCwd)
 }
+
+/**
+ * Are `a` and `b` one family for the folder claim: a parent and a dedicated sub-thread of its that shares its folder, or two such
+ * sub-threads of one parent? The folder claimed is then the parent's effective folder (a sharing sub-thread's `cwd` is that
+ * folder); a sub-thread with a subfolder of its own, a pair of different parents, and any unrelated pair are not.
+ */
+export function inOneFamily(a: WorkerThread, known: readonly WorkerThread[], otherId: string): boolean {
+  const b = known.find((x) => x.id === otherId)
+  if (!b || a.id === b.id) return false
+  const pa = a.sub?.shares && !a.sub.refusal ? a.sub.parentId : undefined
+  const pb = b.sub?.shares && !b.sub.refusal ? b.sub.parentId : undefined
+  return (pa !== undefined && (pa === b.id || pa === pb)) || (pb !== undefined && pb === a.id)
+}

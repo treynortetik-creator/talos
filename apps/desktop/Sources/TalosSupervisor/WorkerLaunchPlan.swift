@@ -116,7 +116,7 @@ extension WorkerManager {
     // the folder, as `startFolder` resolves it, made nowhere: a sub-thread's own folder must already be there
     var wanted = s.cwd ?? options.agentDir
     var parent: String?
-    if let sub = s.sub {
+    if let sub = s.sub, !sub.shares {
       guard sub.ownCwd, let p = sub.parentCwd else { return .refused("sub-thread folder: it has none of its own inside its parent's") }
       if p != options.agentDir, let why = WorkerSpec.folderProblem(p, home: options.home, talosHome: options.talosHome) {
         return .refused("sub-thread folder: the parent's folder: \(why)")

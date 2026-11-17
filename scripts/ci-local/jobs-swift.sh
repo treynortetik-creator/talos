@@ -78,9 +78,20 @@ job_mobile() {
     return 0
   fi
   [ -d apps/mobile/ios/App ] || { echo "skipped (commit has no iPhone shell)" | tee -a "$log"; SKIPPED+=(mobile); SKIP_WHY="commit has no iPhone shell"; return 0; }
+  # The JS steps hold one of CI's slots. The Swift steps hold the desktop mutex and no slot (a slot inside it made the desktop job wait behind check's quiet group: 809 s became 2233 s): two Swift
+  # jobs (of one run or two) never run at once (they share the SwiftPM cache, the simulator and the ptys), and one that waits for the
+  # mutex holds no slot, so it never holds back check's suites. The desktop job does the same around ci.sh.
+  ci_mutex "$LOCKS" suites mobile_js_steps "$log" || return 1
+  ci_mutex "$LOCKS" desktop mobile_swift_steps "$log"
+}
+mobile_js_steps() { # mobile_js_steps <log>: setup, typecheck and the Vitest of the iPhone shell
+  local log="$1"
   setup_ok "$log" &&
   run "$log" pnpm --filter @talos-app/mobile typecheck &&
-  run "$log" pnpm --filter @talos-app/mobile test || return 1
+  run "$log" pnpm --filter @talos-app/mobile test
+}
+mobile_swift_steps() { # mobile_swift_steps <log>: the Swift packages, the generated project and the simulator build and tests
+  local log="$1"
   mkdir -p "$CACHE/swiftpm"
   local pkg
   # ci-swift-retry.sh: a failed test runs once more, alone (--filter); a pass then is "passed on retry"

@@ -173,3 +173,35 @@ describe('Under: a sub-thread that keeps its own folder', () => {
     expect(screen.queryByTestId('thread-under-own-folder')).toBeNull()
   })
 })
+
+describe("Under: a sub-thread that works in its parent's folder", () => {
+  const dedicated = { session: 'dedicated' as const }
+  const opts = (cwd?: string) => ({ session_opts: { ...(cwd ? { cwd } : {}), model: 'inherit', idle_park_min: 30 } })
+  const shared = [
+    T('boss', 'Boss', { ...dedicated, ...opts('/home/alex/agent') }),
+    T('none', 'None', { parent_id: 'boss', ...dedicated, ...opts() }),
+    T('same', 'Same', { parent_id: 'boss', ...dedicated, ...opts('/home/alex/agent/') }),
+    T('inner', 'Inner', { parent_id: 'boss', ...dedicated, ...opts('/home/alex/agent/inner') }),
+  ]
+  const line = (id: string) =>
+    `thread "${id}" and its parent "boss" work in the same folder; they can edit the same files`
+
+  it('says so once, for that thread only (no folder, or the same one)', () => {
+    expect(ownFolderNote(shared, shared[1] as ThreadT)).toBe(line('none'))
+    expect(ownFolderNote(shared, shared[2] as ThreadT)).toBe(line('same'))
+    expect(ownFolderNote(shared, shared[3] as ThreadT)).toBeNull()
+    expect(ownFolderNote(shared, shared[0] as ThreadT)).toBeNull()
+  })
+
+  it('shows under the picker in thread settings', () => {
+    const c = client()
+    const cur = c.store.getState().config as AgentConfigT
+    const next = AgentConfig.parse({ ...cur, threads: [...cur.threads, ...shared] })
+    c.store.setState({ config: next, threads: next.threads })
+    open(c, 'none')
+    expect(screen.getByTestId('thread-under-own-folder').textContent).toBe(line('none'))
+    cleanup()
+    open(c, 'inner')
+    expect(screen.queryByTestId('thread-under-own-folder')).toBeNull()
+  })
+})

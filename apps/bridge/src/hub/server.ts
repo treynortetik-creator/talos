@@ -12,6 +12,7 @@ import {
   HUB_RPC_MAX_TEXT,
   type HubAskRuleT,
   type HubPermT,
+  type HubRuleNoticeT,
   type HubRuleTakeT,
   HubWorkerLine,
   MAX_FRAME_BYTES,
@@ -19,6 +20,7 @@ import {
   supervisorFresh,
   threadSessionMode,
 } from '@talos-app/protocol'
+import { inspectRuleFile, ruleFileNotice, ruleKillSwitchPath } from '../action-rule-asks.ts'
 import { settingsReadText } from '../config-propose/settings-read.ts'
 import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { workerScheduleTool } from '../schedules/worker-scope.ts'
@@ -205,6 +207,7 @@ export class HubServer {
     const msg = m.data
     if (msg.t === 'perm') return this.onPerm(c, msg)
     if (msg.t === 'ask_rule' || msg.t === 'rule_take') return this.onRule(c, msg)
+    if (msg.t === 'rule_notice') return this.onRuleNotice(c, msg)
     if (msg.t === 'hello') {
       if (c.thread) return // one hello per connection
       const why = this.checkHello(msg)
@@ -430,6 +433,57 @@ export class HubServer {
       msg.wait_ms ?? 110_000,
     )
     if (!ac.signal.aborted) answer(r.decision, r.reason)
+  }
+
+  /** The (file, content) pairs the owner was told about: one notice each until the file changes (a restart forgets; the hook asks again then). */
+  private readonly ruleFilesTold = new Set<string>()
+  /** When notices were posted: at most 3 an hour, however many files change. */
+  private ruleNoticeAt: number[] = []
+
+  /**
+   * The kit's action-rules hook says it could not read a rule file and is asking (denying, unattended) about every call. That is
+   * only a request to LOOK: this reads the named rule file itself (the agent's starter file or the owner's own, never a path from
+   * the hook), hashes it itself, and posts only if `action-rules.py test` finds it broken. Then ONE line to the owner's thread per
+   * file and content, at most 3 an hour, in words written here from what this found (the line is its own too), never the hook's own
+   * text. Proof of who asks is as for `perm`; every answer is `none` (nothing here approves anything). `told` only once the line
+   * is posted; `failed` when it could not be (the hook asks again later).
+   */
+  private async onRuleNotice(c: Conn, msg: HubRuleNoticeT) {
+    const answer = (reason: string) => {
+      this.write(c, { t: 'rule_result', id: msg.id, decision: 'none', reason: reason.slice(0, 120) })
+      c.sock.end()
+    }
+    if (c.perm || c.thread) return
+    if (this.ctx.mode !== 'live') return answer('not_live')
+    const refused = this.proveAsker(msg, 'action rule notice')
+    if (refused) return answer(refused)
+    const seen = await inspectRuleFile(msg.file)
+    if (seen.state === 'unknown') return answer('unknown')
+    if (seen.state === 'fine') return answer('fine')
+    const now = this.ctx.clock.now()
+    const key = `${msg.file}:${seen.hash}`
+    if (this.ruleFilesTold.has(key)) return answer('dup')
+    this.ruleNoticeAt = this.ruleNoticeAt.filter((t) => now - t < 3_600_000)
+    if (this.ruleNoticeAt.length >= 3) return answer('capped')
+    if (this.ruleFilesTold.size >= 200) this.ruleFilesTold.clear()
+    this.ruleFilesTold.add(key) // taken before the post, so a second notice at the same moment is a dup
+    this.ruleNoticeAt.push(now)
+    const offPath = ruleKillSwitchPath() // the kit's switch for THIS agent folder, worked out here, not taken from the hook
+    const text = ruleFileNotice({
+      file: msg.file,
+      ...(seen.line !== undefined ? { line: seen.line } : {}),
+      ...(msg.unattended !== undefined ? { unattended: msg.unattended } : {}),
+      ...(offPath ? { offPath } : {}),
+    })
+    try {
+      await postSystemNotice(this.ctx, text)
+    } catch (e) {
+      this.ruleFilesTold.delete(key) // not posted: the hook is told so, and tries again
+      this.ruleNoticeAt.pop()
+      this.ctx.log.warn('hub: rule file notice not posted', { error: (e as Error).message })
+      return answer('failed')
+    }
+    answer('told')
   }
 
   /** Per thread: the reason last told, and when lines were posted (one line per reason, at most 3 an hour). */

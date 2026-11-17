@@ -1,5 +1,6 @@
 // scripts/export-public.sh: writes the tracked files minus a fixed EXCLUDE list into a new folder. The tests build a small real git
 // repository (no fake git), run the real script against it, and read the written folder back from disk.
+// gate-reads: scripts/export-public.sh
 import { execFileSync, spawnSync } from 'node:child_process'
 import {
   chmodSync,

@@ -95,7 +95,7 @@ if [ -z "${GATE_PUSH_LEASE_S:-}" ]; then
 fi
 
 say() { printf 'gate-push: %s\n' "$*" >&2; }
-HANDOFF_REF="" HANDOFF_SHA="" BACK_TO="" # --from: the handoff branch being landed, and the branch this checkout goes back to
+HANDOFF_REF="" HANDOFF_SHA="" STAMPED_IDS="" BACK_TO="" # --from: the handoff branch being landed, and the branch this checkout goes back to
 handoff_back() { [ -z "$BACK_TO" ] || git -c core.hooksPath=/dev/null checkout -q "$BACK_TO" 2>/dev/null || say "could not go back to $BACK_TO"; }
 refuse() {
   say "REFUSED: $*"
@@ -112,6 +112,30 @@ gate_sha() {
   { cat scripts/gate.sh; find scripts/gate -type f 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do cat "$f"; done; } | sha256_of
 }
 rebasing() { [ -d "$GIT_DIR_ABS/rebase-merge" ] || [ -d "$GIT_DIR_ABS/rebase-apply" ]; }
+
+# patch_ids <range>: the commit count of the range, then each commit's `git patch-id --stable` id, oldest first; nothing and a
+# failure when git cannot say. No diff driver, textconv or external diff runs (a handoff's .gitattributes is not code to run here).
+patch_ids() {
+  local n ids
+  n="$(git rev-list --count "$1")" || return 1
+  ids="$(git log --reverse --no-merges --no-color --no-notes --no-ext-diff --no-textconv -p "$1" | git patch-id --stable | cut -d' ' -f1)" || return 1
+  printf '%s\n%s\n' "$n" "$ids"
+}
+# stamp_ok <tip sha>: 0 when the remote holds refs/personal-ok/<tip>, fetched into refs/personal-ok-remote/<tip>, as an annotated
+# tag (git cat-file -t: tag) whose peeled commit is exactly <tip>. Otherwise 1, and one phrase on stdout for the refusal when a
+# stamp exists but is not right (nothing printed when there is none).
+stamp_ok() {
+  local sha="$1" ref typ peeled
+  ref="refs/personal-ok-remote/$sha"
+  printf '%s\n' "$sha" | grep -Eqx '[0-9a-f]{40}' || return 1
+  git update-ref -d "$ref" >/dev/null 2>&1
+  GIT_TERMINAL_PROMPT=0 git fetch -q --no-tags "$REMOTE" "+refs/personal-ok/$sha:$ref" </dev/null >/dev/null 2>&1 || return 1
+  typ="$(git cat-file -t "$ref" 2>/dev/null)"
+  [ "$typ" = tag ] || { echo "its personal-ok stamp is not an annotated tag"; return 1; }
+  peeled="$(git rev-parse --verify -q "$ref^{commit}" 2>/dev/null)"
+  [ "$peeled" = "$sha" ] || { echo "its personal-ok stamp is not for this exact commit"; return 1; }
+  return 0
+}
 
 # ---- the lease ------------------------------------------------------------------------------------------------------------
 LEASE=""       # the lease commit this run holds
@@ -557,7 +581,8 @@ race_mode() {
 
 # ---- the rebase-clean pass (docs/CI-MACHINES.md, "Rebase-clean pass") -----------------------------------------------------
 # When race_mode says full, one more look: a clean rebase (rebase_onto stops on a conflict), no new main commit touching a file of
-# this change, and none touching a gate input (scripts/gate-inputs.txt, the one list) means the passing gate stands: only the cheap
+# this change, and none touching a gate-wide input (scripts/gate-wide-inputs.txt: the gate itself and the build and test config; any
+# other gate input refuses only on a shared file) means the passing gate stands: only the cheap
 # checks run, and the push says so, in its output and in <cache>/logs/rebase-pass.tsv with the main commits it skipped a full gate
 # over, so a later red main can be traced to it. Anything else is a refusal: the full gate, as before, waiting behind CI like any
 # gate however often it is refused (only a checked red-main gate goes ahead of CI).
@@ -570,10 +595,12 @@ pass_log() { # pass_log <pass|pass-words|refused|excused> <sha> <commits> <detai
 }
 rebase_clean() { # rebase_clean <old> <new>, after the rebase onto <new>: 0 when the pass applies; prints why, either way
   local old="$1" new="$2" mine theirs pats f rc left n words
-  # The list as it was on <old>, the main the gate passed on: neither a new main commit nor this change can loosen it for this
-  # push (any edit to it is under scripts/, an input by that list).
-  pats="$(git show "$old:scripts/gate-inputs.txt" 2>/dev/null | grep -v '^#' | grep -v '^[[:space:]]*$')"
-  [ -n "$pats" ] || { echo "no gate-inputs list (scripts/gate-inputs.txt) on the main the gate passed on: fails closed"; return 1; }
+  # The GATE-WIDE list (scripts/gate-wide-inputs.txt: the gate itself and the build and test config, the part of the gate inputs
+  # that changes how every test runs) as it was on <old>, the main the gate passed on: neither a new main commit nor this change
+  # can loosen it for this push (an edit to it is itself gate-wide). Any other gate input (another script, a scripts/*.test.ts, a
+  # workflow) refuses only on a file this change shares, which the loop below already checks.
+  pats="$(git show "$old:scripts/gate-wide-inputs.txt" 2>/dev/null | grep -v '^#' | grep -v '^[[:space:]]*$')"
+  [ -n "$pats" ] || { echo "no gate-wide list (scripts/gate-wide-inputs.txt) on the main the gate passed on: fails closed"; return 1; }
   mine="$(changed_names "$new" HEAD)" && [ -n "$mine" ] ||
     { echo "cannot list this change"; return 1; }
   theirs="$(changed_names "$old" "$new")" && [ -n "$theirs" ] ||
@@ -608,8 +635,8 @@ rebase_clean() { # rebase_clean <old> <new>, after the rebase onto <new>: 0 when
   done
   f="$(printf '%s\n' "$theirs" | tr '\n' '\000' | path_fold inputs <(printf '%s\n' "$pats"))"
   rc=$?
-  [ "$rc" = 0 ] || [ "$rc" = 1 ] || { echo "the gate-inputs list could not be read or matched: fails closed"; return 1; }
-  [ "$rc" != 0 ] || { echo "$(first_touch "$old" "$new" "$f") changes $f, a gate input"; return 1; }
+  [ "$rc" = 0 ] || [ "$rc" = 1 ] || { echo "the gate-wide list could not be read or matched: fails closed"; return 1; }
+  [ "$rc" != 0 ] || { echo "$(first_touch "$old" "$new" "$f") changes $f, a gate-wide input"; return 1; }
   n="$(git rev-list --count "$old..$new" 2>/dev/null || echo '?')"
   if [ "${#words[@]}" -gt 0 ]; then
     # the gate's own rules say which tests read them (gate.sh --readers: by name, by a gate-reads pattern, the bridge suite's
@@ -621,10 +648,87 @@ rebase_clean() { # rebase_clean <old> <new>, after the rebase onto <new>: 0 when
       echo "$(first_touch "$old" "$new" "${f##* <- }") changes ${f##* <- }, a file of this change that a test reads (${f% <- *})"
       return 1
     fi
-    echo "$n main commit(s), none touching a gate input; shared with this change only words no test reads: $(printf '%s, ' "${words[@]}" | sed 's/, $//')"
+    echo "$n main commit(s), none touching a gate-wide input; shared with this change only words no test reads: $(printf '%s, ' "${words[@]}" | sed 's/, $//')"
     return 0
   fi
-  echo "$n main commit(s), none touching a file of this change or a gate input"
+  echo "$n main commit(s), none touching a file of this change or a gate-wide input"
+}
+
+# pass_readers <old> <new>, after the rebase onto <new>, for a gate that stands (the rebase-clean pass, or race_mode's cheap): the
+# tests that read files of this change or of the new main commits still run (a doc test that cites relay test names met a rename
+# only in CI: a code file's readers are planned for no code change). gate.sh --readers is asked about each side apart and every
+# test either names runs (vitest, under the lease's renewer). Refused, to the full gate: a reader in apps/bridge or apps/relay or a
+# marked Playwright spec (heavy lock); both sides reaching the bridge suite (a "whole bridge suite" line, or a changed bridge test)
+# with no bridge test run on the two together; a failing test; a list that cannot be had, or more than GATE_PUSH_READERS_MAX files.
+# spec_readers <old> <file>...: "<spec> <- <file>" (the first) for a Playwright spec (*.spec.ts) with a `// gate-reads: <pattern>...`
+# line (the guards' mark: case patterns, * matches /) that matches a file. --readers cannot report a spec (it searches *.test.ts, and
+# a spec names no path of the code it drives), so a spec that must re-run when a file changes carries the mark. Marks are the union
+# of those on <old> and on HEAD, so neither side can drop one and loosen its own push. Exit 0: one is read (printed); 1: none;
+# 2: git could not say (a failing git grep, an unreadable spec), which the caller refuses on.
+spec_readers() {
+  local old="$1" rev out rc sp path text f p
+  shift
+  for rev in "$old" HEAD; do
+    out="$(git grep -lE '^// gate-reads:' "$rev" -- '*.spec.ts' 2>/dev/null)"
+    rc=$?
+    [ "$rc" = 0 ] || [ "$rc" = 1 ] || return 2 # 1 is "no match"; anything else is git failing, never "no spec"
+    while IFS= read -r sp; do # "<rev>:<path>"
+      [ -n "$sp" ] || continue
+      path="${sp#*:}"
+      text="$(git show "$sp" 2>/dev/null)" || return 2
+      for p in $(printf '%s\n' "$text" | sed -n 's#^// gate-reads:##p'); do
+        for f in "$@"; do
+          # shellcheck disable=SC2254 # $p unquoted on purpose: it is the pattern
+          case "$f" in $p) printf '%s <- %s\n' "$path" "$f"; return 0 ;; esac
+        done
+      done
+    done <<<"$out"
+  done
+  return 1
+}
+READERS_MAX="${GATE_PUSH_READERS_MAX:-150}"
+readers_of() { # readers_of <file>...: gate.sh --readers' answer, asked twice at most (a search killed under load answers the second time)
+  local o
+  o="$(bash scripts/gate.sh --readers "$@" 2>/dev/null)" || { sleep 2; o="$(bash scripts/gate.sh --readers "$@" 2>/dev/null)"; } || return 1
+  printf '%s\n' "$o"
+}
+pass_readers() {
+  local mine theirs mf=() tf=() all f out_m out_t tests=() t bm=0 bt=0 rc
+  mine="$(changed_names "$2" HEAD)" && theirs="$(changed_names "$1" "$2")" ||
+    { echo "cannot list this change or the new commits, so which tests read their files cannot be told: fails closed"; return 1; }
+  while IFS= read -r f; do [ -n "$f" ] && mf+=("$f"); done < <(printf '%s\n' "$mine" | LC_ALL=C sort -u)
+  while IFS= read -r f; do [ -n "$f" ] && tf+=("$f"); done < <(printf '%s\n' "$theirs" | LC_ALL=C sort -u)
+  [ "${#mf[@]}" -gt 0 ] && [ "${#tf[@]}" -gt 0 ] || { echo "no file to ask the readers about: fails closed"; return 1; }
+  all="$(printf '%s\n%s\n' "$mine" "$theirs" | LC_ALL=C sort -u | grep -c .)"
+  [ "$all" -le "$READERS_MAX" ] ||
+    { echo "$all files in this change and the new main commits: too many to ask which tests read them (more than $READERS_MAX)"; return 1; }
+  out_m="$(readers_of "${mf[@]}")" && out_t="$(readers_of "${tf[@]}")" ||
+    { echo "which tests read these files could not be told (gate.sh --readers failed): fails closed"; return 1; }
+  grep -q '^the whole bridge suite <- ' <<<"$out_m" && bm=1
+  grep -q '^the whole bridge suite <- ' <<<"$out_t" && bt=1
+  # a changed bridge test runs itself, so --readers says nothing of the suite for it; it is still the bridge
+  for f in "${mf[@]}"; do case "$f" in apps/bridge/test/*.test.ts) bm=1 ;; esac; done
+  for f in "${tf[@]}"; do case "$f" in apps/bridge/test/*.test.ts) bt=1 ;; esac; done
+  [ "$bm" = 0 ] || [ "$bt" = 0 ] || { echo "both this change and main's new commits reach the bridge suite: the full gate runs it on the two together"; return 1; }
+  # a Playwright spec that reads a file of either side (its own mark) runs only under the heavy lock, in CI's browser jobs
+  set -f
+  t="$(spec_readers "$1" "${mf[@]}" "${tf[@]}")"
+  rc=$?
+  set +f
+  [ "$rc" != 2 ] || { echo "which Playwright specs read these files could not be told (git grep failed): fails closed"; return 1; }
+  [ -z "$t" ] || { echo "${t%% <- *} (a Playwright spec) reads ${t##* <- }, a file of this change or of the new main commits, and needs the heavy lock: the pass does not apply"; return 1; }
+  while IFS= read -r t; do [ -n "$t" ] && tests+=("$t"); done < <(printf '%s\n%s\n' "$out_m" "$out_t" | sed -n 's/ <- .*$//p' | grep -vx 'the whole bridge suite' | LC_ALL=C sort -u)
+  [ "${#tests[@]}" -gt 0 ] || { echo "no test reads them"; return 0; }
+  for t in "${tests[@]}"; do
+    case "$t" in apps/bridge/* | apps/relay/*)
+      echo "$t reads files of this change or of the new main commits and needs the heavy lock: the pass does not apply"
+      return 1
+      ;;
+    esac
+  done
+  pnpm exec vitest run "${tests[@]}" >&2 </dev/null ||
+    { echo "a test that reads files of this change or of the new main commits failed ($(printf '%s, ' "${tests[@]}" | sed 's/, $//'))"; return 1; }
+  echo "${#tests[@]} test(s) that read them passed"
 }
 
 ROUTE_HINT="Push a plain branch instead; the landing machine reads the scripts/ diff itself and lands it by cherry-pick (that read is the trust step)."
@@ -676,13 +780,24 @@ if [ -n "$FROM" ]; then
   HANDOFF_REF="refs/heads/${FROM#"$REMOTE"/}"
   git fetch -q "$REMOTE" "+$HANDOFF_REF:refs/remotes/$FROM" || refuse "cannot fetch $FROM"
   BACK_TO="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
-  # the handing machine may have scanned with the generic rules only: landing is where the private list must run
+  HANDOFF_SHA="$(git rev-parse "refs/remotes/$FROM")"
+  # the handing machine may have scanned with the generic rules only: landing is where the private list must run. A machine
+  # without it (Lemnos, Titan: by design, and it never goes to them) lands the handoff only on Delphi's personal-ok stamp
+  # (stamp_ok), and then only while the rebase keeps every commit's patch-id (patch_ids, checked in rebase_onto).
   common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
   if [ ! -f scripts/personal-denylist.txt ] && { [ -z "$common" ] || [ ! -f "$(dirname "$common")/scripts/personal-denylist.txt" ]; } &&
     [ -z "${CHECK_EXTRA_RULES:-}" ]; then
-    refuse "landing a handoff needs the private list (scripts/personal-denylist.txt): this machine has none, so another one lands it"
+    # The stamp, from the remote only: refs/personal-ok/<tip> is an ANNOTATED TAG object (not a branch, not a lightweight tag),
+    # and `git rev-parse <tag>^{commit}` is the tip, all 40 hex. The private-list machine's stamp script (check-ref-personal.sh over
+    # merge-base..tip, every commit's files and message; stamps only on exit 0) scans the tip with the private list and pushes
+    # it. Fetched into a ref of this machine's own, refs/personal-ok-remote/<tip>, after any ref of that name is dropped: a local
+    # ref (someone may have made one by hand) is never read as the stamp.
+    why="$(stamp_ok "$HANDOFF_SHA")" ||
+      refuse "landing a handoff needs the private list (scripts/personal-denylist.txt): this machine has none${why:+ and $why}, so another one lands it"
+    STAMPED_IDS="$(patch_ids "$(git merge-base "$TRACK" "$HANDOFF_SHA" 2>/dev/null || echo "$TRACK")..$HANDOFF_SHA")" && [ -n "$STAMPED_IDS" ] ||
+      refuse "landing a handoff needs the private list (scripts/personal-denylist.txt): this machine has none, and the patch-ids of $FROM could not be read, so another one lands it"
+    say "no private list here: landing $FROM on Delphi's personal-ok stamp (${HANDOFF_SHA:0:7}); the rebase must keep every patch-id"
   fi
-  HANDOFF_SHA="$(git rev-parse "refs/remotes/$FROM")"
   # The push path itself is never handed off: the landing machine would check it with the handoff's own versions. "The push
   # path" is the one list, scripts/gate-inputs.txt (everything the gate sources, runs or reads its verdict from), as main has
   # it (never the handoff's copy), matched folded (path-fold.sh): a new "Scripts/x.sh" or a Kelvin-sign "pac<K>age.json" is
@@ -723,6 +838,11 @@ rebase_onto() { # rebase_onto <sha>: or stop, with the rebase taken back. No git
     git -c core.hooksPath=/dev/null rebase --abort >/dev/null 2>&1
     refuse "the rebase onto $REMOTE/$BRANCH failed (a conflict, or a file in the way): rebase by hand, then push again"
   fi
+  # a stamped handoff (no private list here): Delphi scanned these exact commits, so the rebase must have replayed each one with
+  # the same patch-id, in order and in number (a commit that changed under it, or was dropped as already applied, was not
+  # scanned as it now is). The same check after every rebase, the requeue rebase in the lease loop included.
+  [ -z "$STAMPED_IDS" ] || [ "$(patch_ids "$1..HEAD")" = "$STAMPED_IDS" ] ||
+    refuse "the rebase changed the stamped commits; a machine with the private list lands it"
   # a handoff, rebased: the belt. Whatever the checks above missed, the tree the gate is about to run may differ from main in
   # no gate input (main's list, names folded): git's own compare of the two trees.
   [ -z "$FROM" ] || why="$(handoff_belt "$1")" || refuse "after the rebase, $FROM differs from $REMOTE/$BRANCH in $why: it is not landed. $ROUTE_HINT"
@@ -811,6 +931,19 @@ while :; do
       else
         pass_log refused "$sha" "$(git log --abbrev=7 --format=%h "$old..$new" 2>/dev/null | paste -sd, -)" "$clean"
         why="$why; the rebase-clean pass is refused: $clean"
+      fi
+    fi
+    # a gate that stands (the pass, or cheap): the tests that read this change's and the new commits' files still run
+    if [ "$mode" = cheap ] || [ "$mode" = pass ]; then
+      renewer_start
+      rd="$(pass_readers "$old" "$new")"
+      rdrc=$?
+      renewer_stop # no lease_renew here: the cheap checks below start their own renewer, and the renewal before the push follows
+      if [ "$rdrc" != 0 ]; then
+        pass_log refused "$sha" "$(git log --abbrev=7 --format=%h "$old..$new" 2>/dev/null | paste -sd, -)" "$rd"
+        why="full: the readers of the combined files refuse it: $rd"
+        mode=full
+        PASS_WORDS=""
       fi
     fi
     if [ "$mode" != cheap ] && [ "$mode" != pass ]; then # anything not plainly cheap, an empty or garbled answer too, runs again

@@ -1,6 +1,7 @@
 // A file's real path, resolved by walking it (src/real-file.ts): a file keeps the name it was found by. On macOS a file's realpath
 // can come back as another of its hard-linked names, so each check here gives a file a second name, uses that name
 // concurrently, and asks again and again. On Linux these pass either way.
+// gate-reads: apps/bridge/src/*
 import { afterEach, describe, expect, it } from 'bun:test'
 import {
   chmodSync,
@@ -320,11 +321,18 @@ const FOLDER_ONLY: Record<string, string[]> = {
     'return realpathSync(p)',
   ],
   'apps/cli.ts': ["import { readFileSync, realpathSync } from 'node:fs'", 'return realpathSync(p)'],
+  // the deepest existing parent FOLDER of an edited path, to tell whether it sits under a Claude agents/skills/commands folder
+  'permission/frontmatter-risk.ts': [
+    "import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs'",
+    'return join(realpathSync(dir), ...rest)',
+  ],
   // the agent folder and the folder a gazetteer was built for (memory.json agent_dir, gazetteer `repo`): folders only
   'memory/reflex.ts': [
     "import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'",
     'return realpathSync(p)',
   ],
+  // the agent folder (TALOS_AGENT_DIR), to name the kit's state folder the way the kit does (from the real path): a folder only
+  'action-rule-asks.ts': ["import { readFileSync, realpathSync } from 'node:fs'", 'real = realpathSync(dir)'],
   'cli-main.ts': [
     "import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'",
     'return realpathSync(p)',

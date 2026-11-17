@@ -1,5 +1,9 @@
 // The public export leaves some files out (scripts/export-public.sh EXCLUDE). A doc a stranger follows to set Talos up must not
 // send them to one of those files: they would land on a path that is not in the public repository (audit gap 16).
+// gate-reads: scripts/export-public.sh README.md SETUP.md CLAUDE.md AGENTS.md apps/mobile/README.md plugins/talos-app-mod/README.md
+// gate-reads: docs/SETUP.md docs/ios.md docs/IOS-PUSH.md docs/desktop.md docs/bridge.md docs/deploy-railway.md docs/voice.md docs/iphone-checklist.md
+// gate-reads: docs/OPTION-C.md docs/ARCHITECTURE.md docs/MEMORY.md docs/SCHEDULES.md docs/HEARTBEAT.md
+// gate-reads: kit/START-HERE.md kit/README.md kit/BOOTSTRAP.md kit/UPGRADE.md kit/UNINSTALL.md kit/setup/*.md
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'

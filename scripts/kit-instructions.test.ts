@@ -6,6 +6,7 @@
 //   claudeMdExcludes   array of globs (picomatch in the CLI; node's path.matchesGlob agrees for these patterns) against absolute CLAUDE.md paths (`**` does not cross a dot folder, hence the dot-ancestor variants); honoured in project settings.
 //   skillOverrides     object keyed by skill NAME, value "off" hides the skill from the model and the / menu.
 //   Nothing excludes a nested .claude/agents folder or a nested skills folder by path: that is a residual risk, pinned below.
+// gate-reads: .claude/settings.json CLAUDE.md kit/*CLAUDE.md kit/.claude/* scripts/check-no-personal.sh scripts/denylist.generic.txt
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

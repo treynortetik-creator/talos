@@ -3,6 +3,7 @@
 // user standing in for root and for talos. The supervisor's own check (apps/bridge/src/supervisor/rooted-kit.ts and
 // worker-hook.ts releaseHook) is run over what kit.py leaves, so both sides are held to one another, and to the shared
 // fixtures in packages/protocol/fixtures.
+// gate-reads: install.sh kit/* scripts/* apps/windows/distro/*
 import { spawnSync } from 'node:child_process'
 import {
   chmodSync,

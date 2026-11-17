@@ -549,6 +549,23 @@ for g in append-only-guard.py check-vault.py; do
   rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
   { [ "$ru" = 2 ] && [ "$rl" = 2 ]; } && ok "$g: if the alarm's verdict cannot be written (stdout closed) both an unattended and a live run exit 2 (block)" || no "$g alarm with a closed stdout: unattended rc=$ru, live rc=$rl (want 2 and 2)"
 done
+# action-rules with its SHIPPED rule file unreadable (this folder has none): it must not answer {} (allow everything); like the timeout it
+# ASKS in a live session and DENIES when unattended, both exit 0, naming the file and no command text, one line in the unreadable log
+AR='{"tool_name":"Bash","cwd":"/srv/app","tool_input":{"command":"npm publish"}}'
+rm -f "$SD"/action-rules-unreadable.jsonl
+ar_live="$(printf '%s' "$AR" | ( cd "$A" && python3 hooks/action-rules.py check 2>/dev/null ))"; ar_rl=$?
+ar_un="$(printf '%s' "$AR" | ( cd "$A" && CHRONOS_RUN=1 python3 hooks/action-rules.py check 2>/dev/null ))"; ar_ru=$?
+{ [ "$ar_rl" = 0 ] && [ "$ar_ru" = 0 ] && <<<"$ar_live" grep -q '"permissionDecision": "ask"' && denied "$ar_un" \
+  && <<<"$ar_live$ar_un" grep -q 'action-rules.yaml' && ! <<<"$ar_live$ar_un" grep -q 'npm publish'; } \
+  && ok "action-rules: a missing shipped rule file ASKS in a live session and DENIES when unattended (exit 0 both), never allows; names the file, not the command" \
+  || no "action-rules with no shipped file did not ask/deny" "live=[$ar_live] un=[$ar_un]"
+python3 - "$SD/action-rules-unreadable.jsonl" <<'PY' && ok "action-rules: an unreadable shipped file is logged (file shipped, path, error, UTC time, unattended; no command text)" || no "action-rules-unreadable.jsonl is missing or wrong"
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1])]
+assert len(rows) == 2 and all(r["file"] == "shipped" and r["path"].endswith("action-rules.yaml") and r["error"] and r["at"].endswith("Z") for r in rows), rows
+assert sorted(r["unattended"] for r in rows) == [False, True] and "npm publish" not in json.dumps(rows), rows
+PY
+rm -f "$SD"/action-rules-unreadable.jsonl
 # timeline-guard hung inside wiki-lint.py (it executes that file)
 mkdir -p "$A/wiki/people"; printf -- '---\ntitle: x\ntype: person\nupdated: 2026-10-01\ntags: [a]\n---\nbody\n\n<!-- TIMELINE:APPEND-ONLY -->\n' > "$A/wiki/people/tl2.md"
 cp "$A/scripts/wiki-lint.py" "$SB/wiki-lint.keep" 2>/dev/null || true

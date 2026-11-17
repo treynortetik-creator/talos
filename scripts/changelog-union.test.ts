@@ -1,5 +1,6 @@
 // CHANGELOG.md merges as a union (.gitattributes): two landings that each add an entry at the top no longer conflict when
 // gate-push rebases one onto the other. Each such conflict cost a full re-gate (8 landings bounced on 2026-11-15).
+// gate-reads: .gitattributes biome.json
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

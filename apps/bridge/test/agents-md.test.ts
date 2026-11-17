@@ -155,6 +155,27 @@ describe('the fence', () => {
     expect(agentsMdFolderFor(config(root), agentDir, 'general')).toBeNull()
   })
 
+  test("a sub-thread in its parent's folder (none of its own, or the same) has no editor: it uses the parent's file", () => {
+    const agentDir = join(top, 'agent')
+    mkdirSync(agentDir, { recursive: true })
+    const inside = join(root, 'child')
+    mkdirSync(inside, { recursive: true })
+    const config = (cwd?: string) => ({
+      default_thread: 'general',
+      dedicated: { enabled: true },
+      threads: [
+        { id: 'general', kind: 'fixed' },
+        { id: 'boss', kind: 'fixed', session: 'dedicated', session_opts: { cwd: root } },
+        { id: T, kind: 'fixed', session: 'dedicated', parent_id: 'boss', ...(cwd ? { session_opts: { cwd } } : {}) },
+      ],
+    })
+    expect(agentsMdFolderFor(config(), agentDir, T)).toBeNull() // none: it runs in boss's folder
+    expect(agentsMdFolderFor(config(root), agentDir, T)).toBeNull() // the same folder
+    expect(agentsMdFolderFor(config(`${root}/`), agentDir, T)).toBeNull()
+    expect(agentsMdFolderFor(config(inside), agentDir, T)).toBe(inside) // its own folder inside: its own file, as before
+    expect(agentsMdFolderFor(config(root), agentDir, 'boss')).toBe(root) // the parent edits its own
+  })
+
   test('AGENTS.md as a link is not read or replaced; the file it points at is untouched', async () => {
     const elsewhere = join(top, 'elsewhere.md')
     writeFileSync(elsewhere, 'SECRET\n')

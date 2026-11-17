@@ -1,5 +1,6 @@
 // docs/SECURITY.md must describe setup-code sign-in (native Mac and iPhone shells, WP-N0) the way the relay really behaves.
 // Each claim below is pinned to a relay test, so the wording cannot drift from the code without one of the two going red.
+// gate-reads: docs/SECURITY.md apps/relay/test/auth/*.test.ts apps/web/test/auth-leftover-session.test.ts apps/bridge/test/v6fu-review.test.ts
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

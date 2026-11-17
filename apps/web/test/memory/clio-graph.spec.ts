@@ -3,10 +3,15 @@
 // only here. The graph fills the content area, zooms with the wheel, and a chosen note slides a panel in from the right.
 import { expect, type Page, test } from '@playwright/test'
 
+// the notes are read only once the layout has stopped (200 ticks or 15 s) and the first fit is done: on a CI machine under
+// load that alone can take most of the default 30 s
+test.describe.configure({ timeout: 90_000 })
+
 type Hooks = {
   __clioGraphCamera?: () => number
   __clioGraphNodeScreen?: (i: number) => { x: number; y: number } | null
   __clioGraphPointers?: () => number[]
+  __clioGraphFitted?: () => boolean
 }
 
 async function openGraph(page: Page) {
@@ -15,12 +20,14 @@ async function openGraph(page: Page) {
   await expect.poll(() => page.evaluate(() => (window as Hooks).__clioGraphCamera !== undefined)).toBe(true)
 }
 
-/** Where a note is on screen once the layout has settled and the first fit is done (three reads in a row agree). */
+/** Where a note is on screen once the layout has stopped, the first fit is done, and three reads in a row agree (on a
+ * starved machine a frame can take longer than the reads, so agreeing reads alone could be the layout still crawling). */
 async function settledNode(page: Page, i: number) {
   const seen: string[] = []
   await expect
     .poll(
       async () => {
+        if (!(await page.evaluate(() => (window as Hooks).__clioGraphFitted?.() === true))) return false
         const p = await page.evaluate((k) => (window as Hooks).__clioGraphNodeScreen?.(k) ?? null, i)
         seen.push(JSON.stringify(p && { x: Math.round(p.x), y: Math.round(p.y) }))
         const last = seen.slice(-3)
@@ -83,6 +90,7 @@ test('the graph fills the content area, with no page scroll and no Pause button'
 
 test('the wheel zooms the graph', async ({ page }, info) => {
   test.skip(info.project.name.startsWith('iphone') || info.project.name === 'pixel', 'a wheel is a desktop input')
+  await page.emulateMedia({ reducedMotion: 'reduce' }) // no turn: the notes hold still once the first fit is done
   await openGraph(page)
   await settledNode(page, 0) // the layout and its first framing are done: nothing else moves the camera
   const box = await page.getByTestId('clio-graph').locator('canvas').boundingBox()
@@ -183,6 +191,26 @@ async function openCanvasSpot(page: Page) {
     return null
   })
 }
+
+test('a tap or click the orbit controls take is still heard by the graph', async ({ page }, info) => {
+  // the controls capture each press they take to their own element: on anything but the canvas the release went past the
+  // graph library, and a tap on a note its drag check missed did nothing (pixel, CI under load, 2026-11-16)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await openGraph(page)
+  await settledNode(page, 0)
+  const spot = await openCanvasSpot(page)
+  expect(spot).not.toBeNull()
+  if (!spot) return
+  await page.evaluate(() => {
+    const w = window as unknown as { __ups: number }
+    w.__ups = 0
+    document.querySelector('canvas')?.addEventListener('pointerup', () => w.__ups++)
+  })
+  if (info.project.name.startsWith('iphone') || info.project.name === 'pixel')
+    await page.touchscreen.tap(spot.x, spot.y)
+  else await page.mouse.click(spot.x, spot.y)
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __ups: number }).__ups)).toBe(1)
+})
 
 const STRAYS: { name: string; send: string }[] = [
   {

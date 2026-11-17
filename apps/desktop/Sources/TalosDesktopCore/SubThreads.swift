@@ -156,8 +156,11 @@ public enum SubThreads {
     public var parentId: String
     /// The live parent's own folder; nil when the sub-thread cannot start (see `refusal`).
     public var parentCwd: String?
-    /// The sub-thread sets its own folder: it must be strictly inside the parent's (and is made when missing).
+    /// The sub-thread sets a folder of its own, not the parent's: strictly inside the parent's (made when missing), or an existing one outside.
     public var ownCwd: Bool
+    /// It runs in its parent's folder (the agent folder when the parent has none): it names none, or the parent's own (`subthreads_shared_folder`).
+    /// Then nothing is made, fenced or parked for it, and `Workers.swift` hands on the parent's folder as its `cwd` with no `parentCwd`.
+    public var shares: Bool = false
     public var inherited: [String]
     public var dropped: [String]
     /// The sub-thread's own `model` and `effort` settings that were not valid, by name, with the value: the session took its parent's instead.
@@ -167,22 +170,30 @@ public enum SubThreads {
   }
 
   /// nil for a thread with no `parent_id` (a `parent_id` that cannot be read is a sub-thread with no live parent, never "not a sub-thread").
-  /// A dedicated sub-thread always has a folder of its own inside its parent's folder: it never shares the parent's.
+  /// A dedicated sub-thread has a folder of its own inside its parent's, or none, or the parent's own: with none or the same it `shares`
+  /// the parent's folder.
   public static func launch(_ t: [String: Any], in threads: [[String: Any]]) -> Launch? {
     guard let raw = t["parent_id"], !(raw is NSNull) else { return nil }
     let mine = own(t)
     let eff = effective(t, in: threads)
     var parentCwd: String?
     var refusal: String?
+    var shares = false
     if let bad = mine.cwdUnreadable {
       refusal = "the sub-thread's folder setting can't be read (\(bad)): it must be a path"
-    } else if mine.cwd == nil {
-      refusal = "a sub-thread's own session needs a folder of its own inside its parent's folder: it has none, and a session never shares its parent's folder"
     } else {
       switch link(t, in: threads) {
       case .live(let p):
-        parentCwd = own(p).cwd
-        if parentCwd == nil { refusal = "the parent thread has no folder: give the parent a folder first" }
+        let up = own(p)
+        parentCwd = up.cwd
+        if let bad = up.cwdUnreadable {
+          // a parent whose folder setting cannot be read is refused itself: a child must not fall back to the agent folder (Main's)
+          refusal = "the parent thread's folder setting can't be read (\(bad)): fix it, so the sub-thread has a folder to follow"
+        } else if let cwd = mine.cwd {
+          if let parentCwd { shares = sameFolder(cwd, parentCwd) } else { refusal = "the parent thread has no folder: give the parent a folder first" }
+        } else {
+          shares = true
+        }
       case .orphan(let why):
         refusal = "\(why), so the sub-thread's folder has nothing to be inside"
       case .none, .broken:
@@ -190,7 +201,30 @@ public enum SubThreads {
       }
     }
     return Launch(
-      parentId: raw as? String ?? "", parentCwd: parentCwd, ownCwd: mine.cwd != nil, inherited: eff.inherited, dropped: eff.dropped,
-      unreadable: mine.unreadable, refusal: refusal)
+      parentId: raw as? String ?? "", parentCwd: parentCwd, ownCwd: mine.cwd != nil && !shares, shares: shares, inherited: eff.inherited,
+      dropped: eff.dropped, unreadable: mine.unreadable, refusal: refusal)
+  }
+
+  /// The same folder, written the same way: equal once trailing slashes go, and neither has a `.` or `..` segment. A link to it, or a path
+  /// that only resolves to it, is not: that goes through the strict folder check and is refused there.
+  static func sameFolder(_ child: String, _ parent: String) -> Bool {
+    func trimmed(_ p: String) -> String {
+      var t = p
+      while t.count > 1, t.hasSuffix("/") { t.removeLast() }
+      return t
+    }
+    guard child.hasPrefix("/"), parent.hasPrefix("/"), !child.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else { return false }
+    return trimmed(child) == trimmed(parent)
+  }
+
+  /// Are two thread sessions one family for the folder claim: a parent and a dedicated sub-thread of its that shares its folder, or two such
+  /// sub-threads of one parent? The folder claimed is then the parent's effective one (a sharing sub-thread's `cwd` is that folder).
+  /// A sub-thread with a subfolder of its own, two threads of different parents, and any unrelated pair are not.
+  public static func sameFamily(_ a: ThreadSessionSettings, _ b: ThreadSessionSettings?) -> Bool {
+    guard let b, a.threadId != b.threadId else { return false }
+    let pa = a.sub.flatMap { $0.shares && $0.refusal == nil ? $0.parentId : nil }
+    let pb = b.sub.flatMap { $0.shares && $0.refusal == nil ? $0.parentId : nil }
+    if let pa, pa == b.threadId || pa == pb { return true }
+    return pb == a.threadId
   }
 }

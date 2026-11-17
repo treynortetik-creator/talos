@@ -80,6 +80,8 @@ export type CreateOptions = {
 }
 
 const SWEEP_MS = 3_600_000
+/** How often the own-device bug reports the Mac has not filed are looked at again. */
+const RECONCILE_MS = 300_000
 
 export function createRelayServices(opts: CreateOptions): RelayServices {
   const { env } = opts
@@ -187,6 +189,20 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
       armSweep()
     }, SWEEP_MS)
   }
+  // Own-device bug reports the Mac has not filed and that have no live queue entry are queued again (bug-reports.ts), so a
+  // queue failure, or an entry that expired while the Mac was away, heals without a restart.
+  let reconcileTimer: unknown = null
+  const runReconcile = () =>
+    void backfillOwnReports(services).catch((e) =>
+      log.warn({ err: e instanceof Error ? e.name : 'error' }, 'bug report backfill failed'),
+    )
+  const armReconcile = () => {
+    if (stopped) return
+    reconcileTimer = clock.setTimeout(() => {
+      runReconcile()
+      armReconcile()
+    }, RECONCILE_MS)
+  }
   let lastCapWarn = 0
   const volumeBytes = () =>
     store.totalMediaBytes() + fileSize(join(env.DATA_DIR, 'relay.sqlite')) + bugReportBytes({ db }) + pagesBytes({ db })
@@ -248,10 +264,9 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
       cardReminder.start()
       sessionWait.start()
       quietSummary.start()
-      // reports stored before they were queued to the Mac (or whose queueing failed) go once now, the hub being up
-      void backfillOwnReports(services).catch((e) =>
-        log.warn({ err: e instanceof Error ? e.name : 'error' }, 'bug report backfill failed'),
-      )
+      // reports stored before they were queued to the Mac (or whose queueing failed) go now, the hub being up, and every few minutes
+      runReconcile()
+      armReconcile()
       runSweep()
       armSweep()
     },
@@ -261,6 +276,7 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
     stop() {
       stopped = true
       if (sweepTimer) clock.clearTimeout(sweepTimer)
+      if (reconcileTimer) clock.clearTimeout(reconcileTimer)
       for (const fn of stoppers.splice(0)) fn()
       cardReminder.stop()
       sessionWait.stop()

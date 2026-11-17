@@ -100,6 +100,15 @@ export const RUNNER_VARS = [
   'CI_TEST_RESULTS_ROOT',
   // check-titan's forced "not tested" (a manual dispatch): a test's ci-local copy must not inherit it
   'CI_CHECK_PART_REFUSE',
+  // the settle step (docs/CI-MACHINES.md): asked for by ci-runner.sh for a main push run, the push's time from the workflow, and the
+  // close job's note that Lemnos stood aside: a test's own copy of ci-local.sh must not wait for a quiet head because the shell had them
+  'CI_SETTLE',
+  'CI_PUSHED_AT',
+  'SUPERSEDED',
+  'TALOS_CI_SETTLE_S',
+  'TALOS_CI_SETTLE_MAX_S',
+  'TALOS_CI_SETTLE_POLL_S',
+  'TALOS_CI_SETTLE_STALE_S',
 ] as const
 
 export function cleanEnv(): Record<string, string> {
@@ -112,6 +121,13 @@ export function cleanEnv(): Record<string, string> {
 /** scripts/ci-local/ (the parts scripts/ci-local.sh sources in place) copied into `scriptsDir`, beside a copy of ci-local.sh. */
 export function copyCiLocalParts(scriptsDir: string): void {
   cpSync(join(dirname(fileURLToPath(import.meta.url)), 'ci-local'), join(scriptsDir, 'ci-local'), { recursive: true })
+}
+
+/** scripts/ci-runner/main-queue.sh (the part ci-runner.sh sources for run, fallback, settled, superseded and dispatch-wait) copied beside a copy of ci-runner.sh. */
+export function copyRunnerMainQueue(scriptsDir: string): void {
+  const dir = join(scriptsDir, 'ci-runner')
+  mkdirSync(dir, { recursive: true })
+  cpSync(join(dirname(fileURLToPath(import.meta.url)), 'ci-runner', 'main-queue.sh'), join(dir, 'main-queue.sh'))
 }
 
 /**

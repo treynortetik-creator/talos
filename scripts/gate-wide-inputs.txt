@@ -1,0 +1,55 @@
+# The GATE-WIDE inputs: the part of scripts/gate-inputs.txt that changes how EVERY test runs. gate-push.sh's rebase-clean pass
+# (the gate passed, main moved, the rebase was clean) reads only this list for a new main commit: one that touches a path
+# matching a line here makes the full gate run again. Any other gate input (another script, a *.test.ts under scripts/, a
+# workflow) refuses only on a file this change shares with it, which the pass checks first, and then it stands (CI runs every suite
+# after the push). Read from the main the gate passed on, never from the change or the new commits, and fail closed: a list that
+# is missing, empty or unreadable refuses the pass. The handoff checks and handoff_belt do NOT read this list: they use the whole
+# of scripts/gate-inputs.txt (scripts/gate-inputs.test.ts checks that every line here is also a gate input).
+# One extended regex per line, matched against the whole repository path; lines starting with # are comments. Paths are matched
+# folded as a Mac's disk compares them (scripts/path-fold.sh), and every line is case-blind.
+# the gate itself: what runs every step, and the two lists that decide what is judged against what
+^scripts/gate\.sh$
+^scripts/gate-push\.sh$
+^scripts/gate/
+^scripts/gate-inputs\.txt$
+^scripts/gate-wide-inputs\.txt$
+^scripts/pre-push\.sh$
+^\.githooks/
+# every script the gate sources or runs, and the lists and log readers it reads: what each step is and how a failure is judged
+# (gate.sh and gate-push.sh source or run them; scripts/ci-affected.sh is not read by the gate, so it is not here)
+^scripts/(gate-fast|path-fold|talos-machine|check-no-personal|check-ref-personal|heavy-lock|old-client|tmp-sweep)\.sh$
+^scripts/gate-excuse\.
+^scripts/ci-alert-tests\.pl$
+^scripts/web-bundle-manifest\.mjs$
+^scripts/test-env-clean\.ts$
+^scripts/tmp-sweep-prefixes\.txt$
+^scripts/ci-local/locks\.sh$
+^scripts/gate-fast-keepout\.txt$
+^scripts/denylist\.generic\.txt$
+# the size step (gate.sh runs scripts/size-budget.test.ts) and the bridge suite's runner (gate.sh runs it from apps/bridge)
+^scripts/size-(budget\.test\.ts|budget\.json|report\.ts)$
+^apps/bridge/scripts/test-parallel\.ts$
+# build and test config: packages, the lockfile, the workspace, TypeScript, biome, and every runner's config
+(^|/)package\.json$
+^pnpm-lock\.yaml$
+^pnpm-workspace\.yaml$
+(^|/)tsconfig[^/]*$
+(^|/)biome\.jsonc?$
+(^|/)vitest\.[^/]*(config|workspace)\.[^/]+$
+^vitest\.run-tmp\.ts$
+(^|/)vite\.[^/]+\.[cm]?ts$
+(^|/)playwright\.config\.[^/]+$
+^\.nvmrc$
+^\.npmrc$
+(^|/)\.pnpmfile\.cjs$
+(^|/)bunfig\.toml$
+# the runners' setup files, and the bridge suite's preload with the two test-only files it loads
+(^|/)(global-setup|setup-clock)\.ts$
+^apps/bridge/test/(preload|run-tmp|fake-claude)\.ts$
+^apps/web/test/helpers/pw-port\.ts$
+# Swift packages, git attributes, and the .gitignore files biome lints with
+(^|/)Package\.(swift|resolved)$
+(^|/)\.gitattributes$
+(^|/)\.gitignore$
+# the paths the guards protect
+^docs/protected-paths\.txt$

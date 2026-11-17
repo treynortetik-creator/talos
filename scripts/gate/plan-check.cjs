@@ -272,6 +272,7 @@ for (const f of changed) {
     else if (f.startsWith('apps/mobile/')) want.VPROJ.push('mobile')
   }
   if (!CODE(f) && !f.startsWith('e2e/')) folder.push(...namers(f))
+  else if (glob('*.test.ts', '*.test.tsx', '*.spec.ts', 'install.sh')(f)) folder.push(...namers(f)) // a test file, and install.sh, are read by name too
   folder.push(...guardsReading(f))
   want.WEB.push(...webFor(f))
   want.WEBKIT.push(...webOwn(f))
@@ -305,6 +306,9 @@ if (want.WEB.length > max) {
   want.WEBKIT = []
 }
 
+// the installer's core tests again with a corepack pnpm first on PATH: whenever the plan runs the root installer's test
+want.COREPACK = [want.VIT.includes('scripts/root-install.test.ts') ? '1' : '0']
+
 // --fast: fastPlan (scripts/gate-fast.sh, FAST_CHECK_JS, run ahead of this script) gives the bridge tests, or null for the full
 // gate. Without that file both counts say full.
 want.FAST = ['0']
@@ -337,7 +341,19 @@ if (process.argv[2] === '1' && typeof fastPlan === 'function') {
     })
 }
 
-const got = { VIT: [], BUN: [], E2E: [], VPROJ: [], WEB: [], WEBKIT: [], BUN_ALL: [], E2E_ALL: [], OLD: [], FAST: [] }
+const got = {
+  VIT: [],
+  BUN: [],
+  E2E: [],
+  VPROJ: [],
+  WEB: [],
+  WEBKIT: [],
+  BUN_ALL: [],
+  E2E_ALL: [],
+  OLD: [],
+  FAST: [],
+  COREPACK: [],
+}
 for (const rec of fs.readFileSync(0).toString('latin1').split('\0')) {
   if (rec === '') continue
   const i = rec.indexOf('\x1f')

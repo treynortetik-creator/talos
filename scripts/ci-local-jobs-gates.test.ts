@@ -236,6 +236,34 @@ describe('ci-local.sh gates', () => {
     expect(r.log('check')).toContain(`warning: ${words}`)
   })
 
+  // the installer tests with a corepack pnpm first on PATH (KIT-8): a Mac's step (uname says Darwin), in the loud suites hold
+  const uname = (os: string) => ({ uname: `[ "$1" = -s ] && { echo ${os}; exit 0; }\nexec /usr/bin/uname "$@"` })
+  it('check: a failing corepack variant fails the run, on a Mac', async () => {
+    const r = repo('', uname('Darwin'))
+    const run = r.start([...noStatus, '--jobs', 'check'], { FAIL_ON: 'test:corepack-install' })
+    expect(await run.done).toBe(1)
+    expect(run.out()).toContain('✗ check')
+  })
+
+  it('check: the corepack variant runs after the suites that run side by side, in the same hold of the suites lock', async () => {
+    const r = repo('', uname('Darwin'))
+    expect(await r.start([...noStatus, '--jobs', 'check']).done).toBe(0)
+    expect(r.calledLines().filter((l) => l.includes('test:corepack-install'))).toHaveLength(1)
+    const log = r.log('check')
+    expect(log.indexOf('+ step_corepack_install')).toBeGreaterThan(log.indexOf('+ step_vitest'))
+    // one hold for the loud group: the corepack step is inside loud_suites, not behind a second take of the mutex
+    expect(log).toMatch(/ci_mutex .* suites loud_suites/)
+    expect(log).not.toMatch(/ci_mutex .* suites step_corepack_install/)
+  })
+
+  it('check: the corepack variant is skipped, and said so, off a Mac (Titan runs the whole check on Linux)', async () => {
+    const r = repo('', uname('Linux'))
+    const run = r.start([...noStatus, '--jobs', 'check'])
+    expect(await run.done).toBe(0)
+    expect(r.calledLines().some((l) => l.includes('test:corepack-install'))).toBe(false)
+    expect(r.log('check')).toContain('with a corepack pnpm skipped: they run on a Mac only')
+  })
+
   it('a failing audit does not stop the suites, and a failing suite does not skip the audit', async () => {
     const a = repo()
     expect(await a.start([...noStatus, '--jobs', 'check'], { FAIL_ON: 'audit --prod' }).done).toBe(0)

@@ -225,15 +225,15 @@ export class Bridge {
     }
     const http = new RelayHttp(env.relayUrl ?? '', getKey, opts.fetchFn)
     const macWorkers = new WorkersReader(p.home)
-    const macFlag = (key: 'subthreads_supported' | 'subthreads_own_folder') => {
+    const macFlag = (key: 'subthreads_supported' | 'subthreads_own_folder' | 'subthreads_shared_folder') => {
       const f = macWorkers.read()
       return supervisorFresh(f, this.clock.now()) && f?.supervisor[key] === true
     }
     const config = new ConfigFile(p.configJson, {
       log: this.log,
-      // a Mac app that quit leaves its last workers.json behind: support counts only while its heartbeat is fresh
       subthreadsSupported: () => macFlag('subthreads_supported'),
       subthreadsOwnFolder: () => macFlag('subthreads_own_folder'),
+      subthreadsSharedFolder: () => macFlag('subthreads_shared_folder'),
     })
     config.load()
     // only the live main bridge may move a damaged history aside; any other process leaves the file to it

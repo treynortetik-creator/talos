@@ -7,6 +7,8 @@
 // frame, a closed or repeated id all end with NO verdict, so the prompt stays open at the Mac. The only
 // message this module ever sends to Claude Code with `allow` is the one at the end of `onResolved`, and only on the path
 // where permissionVerdictFor() said so.
+
+import { join } from 'node:path'
 import {
   type CardT,
   composePermissionCard,
@@ -28,6 +30,7 @@ import { cardCreateFrame, cardUpdateFrame } from '../frames-out.ts'
 import { say } from '../owner-words.ts'
 import { assertFrameFits } from '../transport.ts'
 import { type Explainer, type ExplainRequest, explainRequestOf, explainToCard } from './explainer.ts'
+import { agentFileWarning } from './frontmatter-risk.ts'
 import { renderHookCall } from './hook-render.ts'
 
 export type VerdictSender = (verdict: PermissionVerdictT) => Promise<void>
@@ -53,6 +56,11 @@ const HOOK_RELAY_GRACE_MS = 1_500
  */
 const HOOK_MAX_WAIT_MS = 3_700_000
 const HOOK_MAX_OPEN = 16
+/** What a card shows of the description whole (protocol permission.ts MAX_SHOWN). */
+const MAX_CARD_DESCRIPTION = 19_000
+/** What the session is told when a change to agent files is too long for a card (the hub keeps the first 120 characters). */
+export const TOO_LONG_AGENT_CHANGE =
+  'This change to a Claude agent, skill or command file is too long to show the owner on a card, and it changes settings the owner must see. Make it as smaller edits.'
 const RECENT_RELAY_MS = 15_000
 const ID_LETTERS = 'abcdefghijkmnopqrstuvwxyz' // a-z without `l`, like PermissionRequestId
 
@@ -519,13 +527,25 @@ export class PermissionRelay {
       req.thread === undefined && req.pid !== undefined
         ? `[asked by pid ${req.pid}${req.cwd ? ` in ${req.cwd}` : ''}]`
         : ''
+    // an edit of an agent, skill or command file (or a command naming one): the card says first what it could change, in the
+    // description, which the card shows whole
+    const found = agentFileWarning(req.tool_name, req.tool_input, req.cwd, [
+      ...(ctx.env.claudeConfigDir ? [ctx.env.claudeConfigDir] : []),
+      join(ctx.env.userHome, '.claude'),
+    ])
+    const careful = found.length > 0 ? `Careful: ${found.join('; ')}. ` : ''
+    const shown = [call.description, who].filter(Boolean).join(' ')
     const request = {
       request_id: requestId,
       tool_name: req.tool_name,
-      description: [call.description, who].filter(Boolean).join(' '),
+      description: careful ? [...`${careful}${shown}`].slice(0, MAX_CARD_DESCRIPTION).join('') : shown,
       input_preview: call.preview,
     }
     if (!PermissionRequestParams.safeParse(request).success) return none('unreadable')
+    // A call too long to show whole drops the description from its card, and the warning with it. A change that needs the warning
+    // gets no card: it is refused, so the session makes smaller edits the owner can read.
+    if (found.length > 0 && permissionHiddenReasons(request).includes('too_long'))
+      return { decision: 'deny', reason: TOO_LONG_AGENT_CHANGE }
     const nowMs = ctx.clock.now()
     // The hook's call is rendered here from the raw input, whole, so Claude Code's own cut-and-redact markers do not apply:
     // the version floor that guards a relayed preview is met by construction.

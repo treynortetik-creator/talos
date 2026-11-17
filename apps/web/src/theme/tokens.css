@@ -15,7 +15,8 @@
   --ink-2: #5ab0f2;
   --ink-3: #f2f2f2;
 
-  --font-display: "Cinzel Variable", "Cinzel", Georgia, serif; /* wordmark, thread headers, empty-state titles */
+  --font-display: "Cinzel Variable", "Cinzel", Georgia, serif; /* headers, empty-state titles; a theme may change it */
+  --font-brand: "Cinzel Variable", "Cinzel", Georgia, serif; /* the TΛLOS wordmark: the brand, so no theme changes it */
   --font-ui: "Inter Variable", "Inter", system-ui, sans-serif; /* UI and body */
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace; /* timestamps, status pills, ids */
 
@@ -229,14 +230,18 @@
   --color-chrome-hover: var(--chrome-hover);
   --color-chrome-active: var(--chrome-active);
   --color-chrome-accent-text: var(--chrome-accent-text);
-  --font-display: var(--font-display);
   --font-sans: var(--font-ui);
+  --ease-talos: var(--ease);
+}
+/* Utilities whose token already has the theme name (font-display, rounded-card, ...): "reference" makes the utility and
+   emits no variable, since an emitted --font-display: var(--font-display) would point at itself. */
+@theme inline reference {
+  --font-display: var(--font-display);
   --font-mono: var(--font-mono);
   --radius-card: var(--radius-card);
   --radius-bubble: var(--radius-bubble);
   --radius-button: var(--radius-button);
   --radius-pill: var(--radius-pill);
-  --ease-talos: var(--ease);
 }
 
 /* Phone: the top-level screens (Threads, Needs you, Settings) open under a black-figure band with a terracotta meander,

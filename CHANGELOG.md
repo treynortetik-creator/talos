@@ -3,6 +3,12 @@
 ## The Mac app says version 0.1.3
 
 - The app's version (About, the self-test, the update check) now matches the release tag: 0.1.3, the release with the bridge stop and park message-loss fixes.
+## Threads can change your Claude agents, skills and commands once you allow it
+
+- With the thread fence off, a thread can now change your Claude agents, skills and commands after you allow it on a card; the card warns you when the change would let the agent approve its own actions, use other tools or switch models. Settings files and hooks stay closed to threads.
+## A bug report from your own device is not lost on its way to your Mac
+
+- The relay now keeps a report until your Mac has filed it, not only until the Mac has taken it, and sends it again if filing failed. If the screenshot cannot be fetched, the Mac asks again (five tries) before it files the report without it, and says why. A report whose queue entry expired while the Mac was away is queued again, and `talos-app errors requeue-bug-report <id>` sends one report again.
 
 ## The Mac app says version 0.1.2
 
@@ -32,10 +38,15 @@
 ## The downloadable app no longer carries the builder's user name
 
 - A release build used to hold about 1,400 build paths (`/Users/<name>/...`) in its binary. Release builds now map the checkout and home folder to neutral names and leave out the linker's debug map, and `release-app.sh` refuses to notarize any app whose Mach-O files still hold a home-folder or checkout path (`scripts/path-leak-check.sh`; test: `scripts/path-leak-test.sh`).
+## A thread can sit under another thread that works in the same folder
+
+- You can now put a thread under another one even when both work in the same folder (or the thread has no folder of its own): drag it, or pick it under "Under" in its settings. Before, this was refused with "a sub-thread's folder must be inside its parent's folder". The thread now runs in its parent's folder and follows it when it moves. You see one warning, "this thread and its parent work in the same folder; they can edit the same files". It needs the Talos app on your Mac updated (or the Linux supervisor); on an older one the old refusal stays.
+- The parent and its sub-threads that share its folder may run side by side, which no other two threads in one folder may. The sub-thread uses its parent's instructions, so its own Instructions editor is off.
 
 ## Passwords in always-allowed commands are no longer kept
 
 - The record of always-allowed commands (and the line in your thread) now hides a password or key a command carries: `curl -u user:pass`, `?api_key=...` or `?token=...` in a link, `--password`, a `X-Api-Key` header. The same cleanup now covers bug reports and logs.
+- With the thread fence off, a thread's own session can read bug reports (`talos-app errors list` / `show`) in full, as the main session does.
 
 ## Always-allowed actions no longer buzz your phone
 

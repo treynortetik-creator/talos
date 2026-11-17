@@ -57,6 +57,8 @@ function machine() {
     HOME: cache,
     TZ: 'UTC',
     TALOS_CI_CACHE: cache,
+    TALOS_HEAVY_SLOTS: '1', // the lock as it was; the test below that is about the slots says 3
+    TALOS_CI_SLOTS: '1', // CI has slot 1 alone, as the tests here were written
     HEAVY_GUARD_TEST: '1', // the probe overrides below count only with this
     HEAVY_LOCK_POLL: '0.1',
     TALOS_HEAVY_GUARD: join(cache, 'no-guard'),
@@ -574,6 +576,31 @@ describe('heavy-guard.sh status', () => {
     // over the age limit: none of ours is that old
     expect(m.g(['status'], { HEAVY_GUARD_STRAY_MIN: '600' }).stdout.split('possible strays')[1]).not.toContain(tag)
     for (const k of [stray, server, testServer]) expect(k.exitCode).toBe(null) // listed, never stopped
+  })
+
+  it('a holder in any slot of the heavy lock is no stray, and status names every slot', async () => {
+    const m = machine()
+    const tag = `t${process.pid}x${Date.now()}`
+    const hold = (n: number) => {
+      const h = spawn(
+        BASH,
+        [HL, 'run', `held${n}`, '--', 'perl', '-e', 'exec {"sleep"} $ARGV[0], "30"', `vitest-held${n}-${tag}`],
+        { env: { ...m.env, TALOS_HEAVY_SLOTS: '3' } },
+      )
+      kids.push(h)
+      return h
+    }
+    const a = hold(1)
+    await m.until(() => existsSync(join(m.cache, 'locks', 'mutex-suites-2', 'owner')))
+    const b = hold(2)
+    await m.until(() => existsSync(join(m.cache, 'locks', 'mutex-suites-3', 'owner')))
+    await m.until(() => spawnSync('ps', ['-A', '-o', 'args=']).stdout.toString().includes(`vitest-held2-${tag}`))
+    const s = m.g(['status'], { HEAVY_GUARD_STRAY_MIN: '0', TALOS_HEAVY_SLOTS: '3' })
+    const [head, out] = s.stdout.split('possible strays')
+    expect(head).toMatch(new RegExp(`slot 2: held by pid ${a.pid} \\(held1: `))
+    expect(head).toMatch(new RegExp(`slot 3: held by pid ${b.pid} \\(held2: `))
+    expect(out).not.toContain(`vitest-held1-${tag}`)
+    expect(out).not.toContain(`vitest-held2-${tag}`) // slot 3's command is the lock's own work too
   })
 })
 

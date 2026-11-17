@@ -76,6 +76,8 @@ export function filesDeps(o: {
 export function agentsMdFolderFor(config: unknown, agentDir: string | undefined, threadId: string): string | null {
   const own = dedicatedThreads(config, agentDir ?? '')?.find((w) => w.id === threadId)
   if (!own?.cwd) return null
+  // a sub-thread that works in its parent's folder (none of its own, or the same) uses the parent's file: it must not edit it
+  if (own.sub && !own.sub.ownCwd) return null
   // for folders only: a file's real path goes through realFileSync (real-file.ts), as realpath can name a hard-linked file by another of its names
   const real = (p: string) => {
     try {

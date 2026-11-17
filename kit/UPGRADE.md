@@ -407,7 +407,7 @@ What needs a person, because it touches what the upgrade never writes:
    Chronos cannot run and says so. Enable one only after reading its page: `setup/dream-cycle.md`, `setup/quiet-checkins.md`.
 3. **Your rules.** The starter `hooks/action-rules.yaml` is code and is replaced on upgrade. Put your own rules in
    `~/.config/talos/action-rules.yaml` (read first, first match wins, so it can also override a starter rule); upgrades never
-   touch that file. Check both parse: `python3 hooks/action-rules.py test`.
+   touch that file. Check both parse: `python3 hooks/action-rules.py test`. A file the hook cannot read (a typo, a bad regex) makes it ask about every call (deny, unattended) until it is fixed.
 4. **CLAUDE.md is yours and is not changed.** The new template adds `[R-39]` (do not route around an action rule) and tightens
    `[R-38]` (hands-free audio always travels with the full text). To adopt them, diff `templates/CLAUDE.md.tmpl` against
    your `CLAUDE.md`, copy the two lines, add the matching entries from `templates/rules-ledger.md.tmpl` to

@@ -1,6 +1,7 @@
 // The installers' bug-hunt findings of 2026-11-10 (docs/audits/2026-11-10-bughunt-triage.md, package P-C1): ./install.sh and
 // kit/install.sh. Each test states the correct behaviour.
 // Same sandbox as root-install.test.ts: a temp HOME, a private PATH of real tools plus stubs, TALOS_INSTALL_OS=Darwin.
+// gate-reads: install.sh kit/* scripts/*
 import { spawnSync } from 'node:child_process'
 import {
   appendFileSync,

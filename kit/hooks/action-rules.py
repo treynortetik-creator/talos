@@ -41,7 +41,15 @@ ROLES (argv[1])
   test             parse the rule files and report errors (exit 1 on any)
 
 LOG: <state>/action-rules.jsonl (rule id, tool, decision; never the command text).
-Kill switch: action-rules.off. This is a safety guard: it fails OPEN in a live session and CLOSED when unattended.
+Kill switch: action-rules.off. This is a safety guard: an internal error fails OPEN in a live session and CLOSED when unattended.
+A RULE FILE MUST BE READABLE, the shipped one and yours alike. If hooks/action-rules.yaml (or your file) does not parse, is read
+differently by PyYAML and the built-in reader, has content but no `rules:` list, or holds a rule that is not valid (a decision that
+is not never|ask|allow, a regex that does not compile, no id; the shipped file also refuses an unknown field, and must exist and
+have at least one rule), `check` ASKS in a live session and DENIES when unattended, like a guard timeout, and never allows (a
+silent allow-all would turn every never and ask rule off). The reason names the file and the line to fix; a line goes to
+<state>/action-rules-unreadable.jsonl (`talos-app doctor` shows it) and, with the Talos app, ONE notice goes to the owner's
+thread per file and content. Switched OFF (action-rules.off, TALOS_ACTION_RULES_OFF=1, or the hook not registered) none of this
+runs: the kill switch is checked before any rule file is read.
 Python 3.9, standard library only. A tiny built-in reader handles the YAML subset used here; PyYAML is used if present.
 """
 import json
@@ -82,21 +90,82 @@ def _unquote(v):
     return v.strip()
 
 
+def _has_content(text):
+    return any(l.strip() and not l.lstrip().startswith("#") for l in text.splitlines())
+
+
+def _short(v, n=40):
+    return " ".join(str(v).split())[:n]
+
+
 def parse_rules(text):
-    """Parse the `rules:` list: `- key: value` items, scalars plain / 'single' / "double" quoted. No anchors, no
-    flow style, no multi-line scalars. Returns a list of dicts; raises ValueError with a line number on a bad line."""
+    """Parse the `rules:` list. Returns a list of dicts; raises ValueError on a file it cannot read. A file with no content (blank or
+    comments) has no rules; any other file must be a mapping with a `rules:` list (`rule:` or a bare list is an error: every rule of
+    yours would silently be off). PyYAML is used when it is installed AND the built-in reader (below) must read the same rules: a
+    stock Mac (no PyYAML) and a Linux box (PyYAML) have to agree, so a quoting or typing bug is loud everywhere (2026-11-16: a bare '
+    in a single-quoted value turned every rule off on Linux while the Mac passed). Text PyYAML rejects, or reads differently, is an
+    error, not a fallback. Anything a yaml module raises (SystemExit included, never KeyboardInterrupt) is such an error: an exit
+    from a planted module must not end this hook with a silent allow."""
+    if not _has_content(text):
+        return []
     try:
         import yaml  # optional
-        d = yaml.safe_load(text) or {}
-        rules = d.get("rules") if isinstance(d, dict) else None
-        if rules is None:
-            return []
-        if not isinstance(rules, list) or not all(isinstance(r, dict) for r in rules):
-            raise ValueError("`rules:` must be a list of mappings")
-        return [{str(k): ("" if v is None else str(v)) for k, v in r.items()} for r in rules]
     except ImportError:
-        pass
-    rules, cur, seen_rules = [], None, False
+        return _builtin(text)[0]
+    except KeyboardInterrupt:
+        raise
+    except BaseException as e:
+        raise ValueError("PyYAML could not be loaded (%s)" % type(e).__name__)
+    try:
+        d = yaml.safe_load(text)
+    except KeyboardInterrupt:
+        raise
+    except BaseException as e:
+        err = " ".join(str(e).split())[:300] or type(e).__name__
+        try:
+            _builtin(text)
+        except ValueError:
+            raise ValueError("PyYAML cannot read it: %s" % err)
+        raise ValueError("PyYAML rejects it although the built-in reader accepts it, and the two must agree: %s" % err)
+    if not isinstance(d, dict) or "rules" not in d:
+        what = "a mapping with the keys %s" % ", ".join(_short(k, 20) for k in list(d)[:5]) if isinstance(d, dict) else "a %s" % type(d).__name__
+        raise _shape_error(text, "it must be a mapping with a `rules:` list, and PyYAML reads %s" % what)
+    rules = d["rules"] if d["rules"] is not None else []
+    if not isinstance(rules, list) or not all(isinstance(r, dict) for r in rules):
+        raise _shape_error(text, "`rules:` must be a list of mappings")
+    theirs = [{str(k): ("" if v is None else str(v)) for k, v in r.items()} for r in rules]
+    try:
+        mine, lines = _builtin(text)
+    except ValueError as e:
+        raise ValueError("PyYAML reads it but the built-in reader cannot, and the two must agree: %s" % e)
+    if len(theirs) != len(mine):
+        raise ValueError("PyYAML finds %d rule(s) and the built-in reader %d, and the two must agree" % (len(theirs), len(mine)))
+    for i, (a, b) in enumerate(zip(theirs, mine)):
+        if a == b:
+            continue
+        for k in sorted(set(a) | set(b)):
+            if a.get(k) != b.get(k):
+                at = lines[i].get(k) or lines[i].get("_rule")
+                raise ValueError("line %s: rule %d, field '%s': PyYAML reads %r and the built-in reader %r, and the two must agree"
+                                 % (at, i + 1, k, _short(a.get(k)), _short(b.get(k))))
+    return theirs
+
+
+def _shape_error(text, msg):
+    """A file PyYAML reads but whose shape is wrong (`rules:` a string, say): the built-in reader's error when it has one, since it
+    names the line (PyYAML's shape check cannot), so a Linux box with PyYAML and a stock Mac report the same line."""
+    try:
+        _builtin(text)
+    except ValueError as e:
+        return e
+    return ValueError(msg)
+
+
+def _builtin(text):
+    """The built-in reader: `- key: value` items under `rules:`, scalars plain / 'single' / "double" quoted. No anchors, no
+    flow style, no multi-line scalars. Returns (rules, lines): lines[i] maps each field of rule i to its line (and `_rule` to the
+    rule's first line). Raises ValueError with a line number on a bad line, or when there is content but no `rules:`."""
+    rules, lines, cur, seen_rules = [], [], None, False
     for n, raw in enumerate(text.splitlines(), 1):
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
@@ -109,32 +178,101 @@ def parse_rules(text):
                 raise ValueError("line %d: a rule before `rules:`" % n)
             cur = {m.group(1): _unquote(m.group(2))}
             rules.append(cur)
+            lines.append({"_rule": n, m.group(1): n})
             continue
         m = re.match(r"^\s+([A-Za-z_][\w-]*):\s*(.*)$", raw)
         if m and cur is not None:
             cur[m.group(1)] = _unquote(m.group(2))
+            lines[-1][m.group(1)] = n
             continue
         raise ValueError("line %d: cannot read %r (the reader supports `- key: value` items under `rules:`)" % (n, raw.strip()[:60]))
-    return rules
+    if not seen_rules:
+        raise ValueError("line 1: no `rules:` list (the file must start its rules with `rules:`)")
+    return rules, lines
 
 
-def load_file(path):
+class RulesUnreadable(Exception):
+    """A rule file cannot be used: `which` is "shipped" or "user", `path` the file, `line` the line to fix when the message names one.
+    The message says what is wrong (never command text)."""
+
+    def __init__(self, which, path, msg):
+        Exception.__init__(self, msg)
+        self.which, self.path = which, path
+        found = re.findall(r"line (\d+)", msg)
+        self.line = int(found[-1]) if found else None
+
+
+KNOWN_FIELDS = ("id", "decision", "tool", "command", "path", "why", "kind")
+
+
+def load_file(path, strict=False):
+    """The rules of one file ([] when it does not exist), every rule checked: a valid decision, an id, a tool, command or path, and
+    regexes that compile. `strict` (the shipped file) also refuses a field the hook does not know. Raises ValueError otherwise."""
     try:
         if os.path.getsize(path) > MAX_FILE:
             raise ValueError("%s is larger than %d bytes" % (path, MAX_FILE))
         with open(path, encoding="utf-8") as fh:
-            return parse_rules(fh.read())
+            text = fh.read()
     except FileNotFoundError:
         return []
-
-
-def load_rules():
-    """Your rules first, then the shipped starter set. A bad rule file raises (the caller decides what failing means)."""
-    return load_file(USER_RULES) + load_file(SHIPPED)
+    rules = parse_rules(text)
+    for i, r in enumerate(rules):
+        label = "rule %d%s" % (i + 1, " '%s'" % _short(r["id"]) if r.get("id") else "")
+        problem = None
+        if not r.get("id"):
+            problem = "needs an id"
+        elif r.get("decision") not in DECISIONS:
+            problem = "decision must be never, ask or allow, not %r" % _short(r.get("decision", ""))
+        elif not (r.get("tool") or r.get("command") or r.get("path")):
+            problem = "needs a tool, command or path"
+        else:
+            for k in ("tool", "command", "path"):
+                if r.get(k):
+                    try:
+                        re.compile(r[k])
+                    except re.error as e:
+                        problem = "%s is not a valid regex (%s)" % (k, e)
+                        break
+        if problem is None and strict:
+            unknown = [k for k in r if k not in KNOWN_FIELDS]
+            if unknown:
+                problem = "unknown field %r" % unknown[0]
+        if problem:
+            at = next((n for n, l in enumerate(text.splitlines(), 1) if r.get("id") and re.match(r"^\s*-\s+id:", l) and _unquote(l.split(":", 1)[1]) == r["id"]), None)
+            raise ValueError("%s%s: %s" % (label, " (line %d)" % at if at else "", problem))
+    return rules
 
 
 def valid_rule(r):
     return r.get("decision") in DECISIONS and bool(r.get("id")) and bool(r.get("tool") or r.get("command") or r.get("path"))
+
+
+def _msg(e):
+    return " ".join(str(e).split())[:300] or type(e).__name__
+
+
+def load_shipped():
+    """The starter rules, or RulesUnreadable: missing, unparsable (either reader, or the two disagree), no rules, or any rule that
+    is not valid (strict: a bad decision, a bad regex, an unknown field)."""
+    try:
+        if not os.path.exists(SHIPPED):
+            raise ValueError("the file is missing")
+        rules = load_file(SHIPPED, strict=True)
+    except Exception as e:
+        raise RulesUnreadable("shipped", SHIPPED, _msg(e))
+    if not rules:
+        raise RulesUnreadable("shipped", SHIPPED, "it has no rules")
+    return rules
+
+
+def load_rules():
+    """Your rules first, then the shipped starter set. EITHER file unreadable raises RulesUnreadable: the caller must not let the call
+    through (a loud stop is safe; silently losing your never rules, or the shipped floor, is the failure this exists to prevent)."""
+    try:
+        mine = load_file(USER_RULES)
+    except Exception as e:
+        raise RulesUnreadable("user", USER_RULES, _msg(e))
+    return mine + load_shipped()
 
 
 # --------------------------------------------------------------------------- matching
@@ -199,6 +337,44 @@ def take_approval(rid):
     return d
 
 
+# --------------------------------------------------------------------------- telling the owner
+NOTICE_RETRY_S = 300   # a notice the bridge did not take (it is not running) is tried again after this long
+
+
+def tell_owner(e):
+    """With the Talos app, ONE plain notice to the owner's thread the first time a bad rule file makes this hook ask or deny, over
+    the hub the hook already uses for approvals. The bridge writes the words: this sends only which file, the line, a hash of the
+    file's content and whether the run is unattended (no text of the file or of a command). Sent once until the content changes.
+    Never raises, and runs after the verdict is written."""
+    try:
+        home, problem = app_home()
+        if not home or problem:
+            return                                # no app: nothing to tell, the prompt itself reaches the owner
+        import hashlib
+        try:
+            with open(e.path, "rb") as fh:
+                digest = hashlib.sha256(fh.read(MAX_FILE + 1)).hexdigest()
+        except OSError:
+            digest = hashlib.sha256(b"missing").hexdigest()
+        p = os.path.join(C.state_dir(), "action-rules-notified.json")
+        seen = C.load_json(p)
+        seen = seen if isinstance(seen, dict) else {}
+        rec = seen.get(e.which) if isinstance(seen.get(e.which), dict) else {}
+        if rec.get("hash") == digest and (rec.get("sent") or time.time() - float(rec.get("tried", 0)) < NOTICE_RETRY_S):
+            return
+        seen[e.which] = {"hash": digest, "sent": False, "tried": time.time()}
+        C.save_json(p, seen)                      # claimed first: a second call at the same moment does not send a second notice
+        req = {"t": "rule_notice", "file": e.which, "hash": digest, "unattended": C.unattended()}
+        if e.line:
+            req["line"] = e.line
+        got = hub_request(home, req, 3.0)
+        if got is not None and got.get("reason") in ("told", "dup"):
+            seen[e.which]["sent"] = True
+            C.save_json(p, seen)
+    except Exception:
+        pass
+
+
 # --------------------------------------------------------------------------- the hook
 def verdict(decision, reason):
     print(C.pretool_json(decision, reason))
@@ -222,7 +398,13 @@ def check():
     # ONE pass in file order (yours first, then the starter set): a never denies at once; the first ask is remembered and the
     # scan goes on, so a later never still wins; an allow returns only when no ask has been seen before it; at the end a
     # remembered ask asks. So an earlier ask beats a later allow, and your allow listed before a never still carves it out.
-    rules = [r for r in load_rules() if valid_rule(r)]
+    try:
+        rules = [r for r in load_rules() if valid_rule(r)]
+    except RulesUnreadable as e:     # a rule file (the shipped floor, or yours) cannot be read: ask (live) or deny (unattended), never allow
+        C.guard_unreadable("action-rules", e.path, e, e.which)
+        # guard_unreadable has written the verdict and re-armed the timeout as a plain exit 0 (so nothing below can hang past it)
+        tell_owner(e)                # after the verdict, so a slow bridge never delays it
+        return
     pending = None
     for r in rules:
         try:
@@ -520,7 +702,7 @@ def selftest():
     bad = 0
     for label, p in (("your rules", USER_RULES), ("starter rules", SHIPPED)):
         try:
-            rules = load_file(p)
+            rules = load_shipped() if p == SHIPPED else load_file(p)
         except Exception as e:
             print("FAIL %s (%s): %s" % (label, p, e))
             bad += 1

@@ -1,5 +1,6 @@
 // scripts/claude-code-doc.ts turns the Claude Code integration design spec into docs/CLAUDE-CODE.md: the front matter
 // and the private appendix go, and it refuses to write anything that still mentions the appendix or a private path.
+// gate-reads: scripts/claude-code-doc.ts docs/CLAUDE-CODE.md
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

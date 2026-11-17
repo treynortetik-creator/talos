@@ -2,17 +2,17 @@
 # Everything the desktop job runs, in order: unit tests, packed release app (signed, verified, selftest), guard tests.
 # Used by scripts/ci-local.sh (job_desktop) and runnable by hand.
 set -euo pipefail
-# Heavy work: it runs under the machine's one heavy lock (scripts/heavy-lock.sh), unless it already runs inside the lock's holder
-# or inside a CI job (every ci-local exports TALOS_CI_SLOT_RUN=1, and its desktop job holds the lock; an older ci-local says so
-# only that way). Then this same script again, with every argument exactly as given.
+# The desktop mutex first (scripts/heavy-lock.sh desktop, the one CI's desktop job holds): one Swift desktop suite on the machine at a
+# time, whoever runs it (two at once exhaust the ptys and tmux fails to fork). It comes before the heavy lock, so a waiter for the mutex
+# holds no slot, and a hand run and a CI job (which holds only the mutex) never wait for each other on a machine with one slot. Inside a CI job its desktop job holds it. Then this same script again, with every argument exactly as given.
 HEAVY_LOCK="$(dirname "$0")/../../../scripts/heavy-lock.sh"
-if [ -f "$HEAVY_LOCK" ] && [ "${TALOS_CI_SLOT_RUN:-}" != 1 ] && ! bash "$HEAVY_LOCK" held; then
-  exec bash "$HEAVY_LOCK" run "desktop ci.sh" -- bash "$0" "$@"
-fi
-# Then the desktop mutex, inside the heavy lock (the order CI's desktop job takes them in): one Swift desktop suite on the machine
-# at a time, whoever runs it (two at once exhaust the ptys and tmux fails to fork). Inside a CI job its desktop job holds it.
 if [ -f "$HEAVY_LOCK" ] && [ "${TALOS_CI_SLOT_RUN:-}" != 1 ] && ! bash "$HEAVY_LOCK" held desktop; then
   exec bash "$HEAVY_LOCK" desktop "desktop ci.sh" -- bash "$0" "$@"
+fi
+# Then the machine's heavy lock (scripts/heavy-lock.sh), inside the mutex: unless it already runs inside the lock's holder or inside a CI
+# job (every ci-local exports TALOS_CI_SLOT_RUN=1, and its desktop job holds a slot; an older ci-local says so only that way).
+if [ -f "$HEAVY_LOCK" ] && [ "${TALOS_CI_SLOT_RUN:-}" != 1 ] && ! bash "$HEAVY_LOCK" held; then
+  exec bash "$HEAVY_LOCK" run "desktop ci.sh" -- bash "$0" "$@"
 fi
 cd "$(dirname "$0")/.."
 OUT="${1:-.build/ci-app}"

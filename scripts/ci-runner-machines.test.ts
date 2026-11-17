@@ -8,7 +8,7 @@ import { tmpdir, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { copyCiLocalParts, systemPathWithout } from './ci-test-env'
+import { copyCiLocalParts, copyRunnerMainQueue, systemPathWithout } from './ci-test-env'
 import { fakeTool } from './fake-tool'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -47,6 +47,7 @@ function setup(tools: Record<string, string> = {}) {
   for (const f of ['ci-runner.sh', 'ci-local.sh'])
     if (existsSync(join(here, f))) writeFileSync(join(clone, 'scripts', f), readFileSync(join(here, f), 'utf8'))
   copyCiLocalParts(join(clone, 'scripts')) // the parts ci-local.sh sources in place
+  copyRunnerMainQueue(join(clone, 'scripts')) // the part ci-runner.sh sources for run and fallback
   mkdirSync(join(clone, '.github/workflows'), { recursive: true }) // the bun pin is read from ci.yml
   const ciYml = readFileSync(join(here, '../.github/workflows/ci.yml'), 'utf8')
   writeFileSync(join(clone, '.github/workflows/ci.yml'), ciYml)
@@ -954,6 +955,7 @@ describe('ci-runner.sh run on a part or report-only machine', () => {
       GITHUB_SHA: s.real,
       CI_PLAN_SHA: s.real,
       CI_RUN_JOBS: 'vitest',
+      TALOS_CI_SCHEDULE_QUIET_HOURS: 'off', // the time of day decides nothing here
     })
     expect(s.called()).toContain(`args: --ref ${s.real} --sha ${s.real} --full --jobs vitest\n`)
   })
@@ -1252,7 +1254,7 @@ exit 0`,
   it('on the nightly and a dispatch a taken job runs --full, and the nightly keeps its long fuzz', () => {
     const s = setup()
     s.jobs(['titan\tqueued'])
-    s.run('fallback', env(s, { GITHUB_EVENT_NAME: 'schedule' }))
+    s.run('fallback', env(s, { GITHUB_EVENT_NAME: 'schedule', TALOS_CI_SCHEDULE_QUIET_HOURS: 'off' }))
     expect(s.called()).toContain(`--sha ${s.real} --full --jobs image,browser\n`)
     expect(s.called()).toContain('TALOS_FUZZ_MS=60000\n')
   })

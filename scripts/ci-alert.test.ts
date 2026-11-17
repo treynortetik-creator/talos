@@ -296,6 +296,31 @@ describe('ci-runner.sh alert: one message when main goes red, one when it is gre
     expect(s.alerts()).toEqual([])
   })
 
+  it('a commit a run stood aside from (report-ci/superseded, nothing under local-ci/) is no verdict: no red, no "green again", the streak is unchanged', () => {
+    const s = setup()
+    const c1 = s.commit('base')
+    s.green(c1)
+    s.alert(c1)
+    const c2 = s.commit('breaks')
+    s.red(c2, ['check'])
+    s.alert(c2)
+    expect(s.alerts()).toHaveLength(1) // main is RED at c2
+    const c3 = s.commit('superseded by c4')
+    writeFileSync(
+      join(s.T, 'status', c3),
+      "report-ci/superseded\tsuccess\tnot tested: superseded by 1234567; CI tests main's newest commit\t2026-11-16T10:00:00Z\n",
+    )
+    const r = s.alert(c3)
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('has no verdict')
+    expect(s.alerts()).toHaveLength(1) // nothing new: not "green again", not another red
+    // the streak is as c2 left it: the next real result continues it
+    const c4 = s.commit('fixed')
+    s.green(c4)
+    s.alert(c4)
+    expect(s.alerts().some((f) => f.endsWith('-green.txt'))).toBe(true)
+  })
+
   it('only real failures: not a passing test with FAIL in its name, not Swift Testing\u2019s issue, suite or run \u2718 lines; colours stripped', () => {
     const s = setup()
     const c1 = s.commit('base')

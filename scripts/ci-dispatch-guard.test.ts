@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
+import { copyRunnerMainQueue } from './ci-test-env'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const ymlPath = join(here, '../.github/workflows/ci-runner.yml')
@@ -40,6 +41,7 @@ function setup() {
   git('init', '-q', '-b', 'main')
   mkdirSync(join(T, 'scripts'))
   cpSync(join(here, 'ci-runner.sh'), join(T, 'scripts/ci-runner.sh'))
+  copyRunnerMainQueue(join(T, 'scripts'))
   const commit = (n: string) => {
     writeFileSync(join(T, 'f'), `${n}\n`)
     git('add', '-A')

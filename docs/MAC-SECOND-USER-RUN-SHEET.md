@@ -92,7 +92,7 @@ the best reading, and step G lists how to find out.
      first (`mv`): macOS asks for access to those folders after every Claude Code update, and the ask blocks background runs.
      `./install.sh` refuses such a folder in step D unless given `--allow-protected-folder` or `--allow-synced-folder`, the
      same flags the kit installer takes.
-5. **[HER] Clone the public Talos repo** outside Desktop, Documents and Downloads, for example `git clone <public repo> ~/talos`.
+5. **[HER] Clone the public Talos repo** outside Desktop, Documents and Downloads, for example `git clone --branch mac-v0.1.3 <public repo> ~/talos`. The tag pins the tested build: a later public export to main must not change what she installs.
    - If macOS shows **"The git command requires the command line developer tools. Would you like to install the tools
      now?"**: the Command Line Tools are not there. Click **Not Now** and wait for IT (section A, question 3). With admin,
      **Install** works too (15 to 40 minutes; it looks frozen; do not cancel).

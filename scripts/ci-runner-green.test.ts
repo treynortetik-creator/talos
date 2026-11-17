@@ -220,6 +220,24 @@ describe('ci-runner.sh green: fast-forward refs/heads/green to a six-green commi
     expect(s.statusReads()).toBe(cls === 'red' ? 1 : 3) // red is final at once; not final yet is read again, 3 reads in all
   })
 
+  it('a commit a run stood aside from (report-ci/superseded only) has no verdict: green stays where it is', () => {
+    const s = setup()
+    const c1 = s.commit('base')
+    const c2 = s.commit('two')
+    s.setGreen(c1)
+    writeFileSync(
+      join(s.T, 'status', c2),
+      `report-ci/superseded\tsuccess\tnot tested: superseded by 1234567; CI tests main's newest commit\t${s.BOT}\t${s.URL}\n`,
+    )
+    s.runInfo('100', '.github/workflows/ci-runner.yml', 'push', c2)
+    const r = s.run(c2)
+    expect(r.code, r.out).toBe(0)
+    expect(s.remoteGreen()).toBe(c1)
+    expect(r.out).toContain('verdict is none')
+    expect(s.tsv()[0]?.slice(1)).toEqual([c2, c1, 'unchanged: verdict none'])
+    expect(s.alerts()).toEqual([]) // an unmoved green is no alert: only a refused move is
+  })
+
   it('a status that lands a moment late: the re-read sees green and moves it', () => {
     const s = setup()
     const c1 = s.commit('base')

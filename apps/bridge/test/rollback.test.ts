@@ -1,5 +1,6 @@
 // `talos-app rollback` and the record of healthy starts it depends on. Real git in a throwaway repository; pnpm is a
 // recorder. Nothing here touches the checkout this test runs from or any installed Talos.
+// gate-reads: apps/bridge/src/*
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import {
@@ -19,7 +20,7 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import type { Duplex } from 'node:stream'
-import { loadExampleConfig } from '@talos-app/testkit'
+import { loadExampleConfig, t } from '@talos-app/testkit'
 import { runCli } from '../src/cli.ts'
 import { GOOD_STARTS_KEEP, readGoodStarts, recordHealthyStart } from '../src/good-starts.ts'
 import { createLogger } from '../src/log.ts'
@@ -144,22 +145,27 @@ describe('recording a healthy start', () => {
     expect((statSync(goodFile(home)).mode & 0o777).toString(8)).toBe('600')
   })
 
-  test('keeps only the newest few', () => {
-    const w = world()
-    const home = tempHome()
-    for (let i = 0; i < GOOD_STARTS_KEEP + 3; i++) {
-      const sha = w.commit(`c${i}`)
-      recordHealthyStart({
-        file: goodFile(home),
-        repoDir: w.dir,
-        started: sha.slice(0, 7),
-        now: () => `2026-02-${String(i + 1).padStart(2, '0')}T00:00:00.000Z`,
-      })
-    }
-    const kept = readGoodStarts(goodFile(home))
-    expect(kept).toHaveLength(GOOD_STARTS_KEEP)
-    expect(kept[0]?.commit).toBe(w.head())
-  })
+  // a loop of real git commits: bun's 5 s default ran out under load, and this runs on every fast-gate bridge src change
+  test(
+    'keeps only the newest few',
+    () => {
+      const w = world()
+      const home = tempHome()
+      for (let i = 0; i < GOOD_STARTS_KEEP + 3; i++) {
+        const sha = w.commit(`c${i}`)
+        recordHealthyStart({
+          file: goodFile(home),
+          repoDir: w.dir,
+          started: sha.slice(0, 7),
+          now: () => `2026-02-${String(i + 1).padStart(2, '0')}T00:00:00.000Z`,
+        })
+      }
+      const kept = readGoodStarts(goodFile(home))
+      expect(kept).toHaveLength(GOOD_STARTS_KEEP)
+      expect(kept[0]?.commit).toBe(w.head())
+    },
+    t(30_000),
+  )
 
   test('records nothing when the running code is not a commit: edited files, a moved checkout, or no git commit known', () => {
     const w = world()

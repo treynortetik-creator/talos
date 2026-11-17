@@ -16,7 +16,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { loadExampleConfig } from '@talos-app/testkit'
+import { loadExampleConfig, tmuxTestPrefix } from '@talos-app/testkit'
 import { openHistory } from '../../src/history-store.ts'
 import {
   cmdSupervise,
@@ -177,7 +177,7 @@ describe('the rest', () => {
       const dir = mkdtempSync(join(tmpdir(), 'tmux-conf-'))
       const conf = join(dir, 'tmux.conf')
       writeFileSync(conf, TMUX_CONF)
-      const sock = `talos-conf-check-${process.pid}`
+      const sock = `${tmuxTestPrefix()}-conf-check-${process.pid}`
       const tmux = (...a: string[]) => Bun.spawnSync(['tmux', '-L', sock, ...a], { stdout: 'pipe', stderr: 'pipe' })
       try {
         expect(tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'x', 'sleep 30').exitCode).toBe(0)
@@ -490,7 +490,7 @@ describe('supervise restart-thread and attach', () => {
     writeFileSync(join(w.home, 'config.json'), JSON.stringify(cfg))
     const c = io()
     const before = process.env.TALOS_SUPERVISOR_TMUX_SOCKET
-    process.env.TALOS_SUPERVISOR_TMUX_SOCKET = `talos-none-${process.pid}` // a socket with no server: nothing is running
+    process.env.TALOS_SUPERVISOR_TMUX_SOCKET = `${tmuxTestPrefix()}-none-${process.pid}` // a socket with no server: nothing is running
     try {
       expect(await cmdSupervise(w.env, ['threads', '--json'], c.io)).toBe(0)
     } finally {
@@ -511,7 +511,7 @@ describe('supervise restart-thread and attach', () => {
   })
   it.skipIf(!Bun.which('tmux'))('threads --json says running for a thread whose tmux session is there', async () => {
     const w = world()
-    const socket = `talos-thr-${process.pid}`
+    const socket = `${tmuxTestPrefix()}-thr-${process.pid}`
     const tmux = Bun.which('tmux') as string
     const before = process.env.TALOS_SUPERVISOR_TMUX_SOCKET
     process.env.TALOS_SUPERVISOR_TMUX_SOCKET = socket
@@ -532,7 +532,7 @@ describe('supervise restart-thread and attach', () => {
     async () => {
       const w = world()
       const before = process.env.TALOS_SUPERVISOR_TMUX_SOCKET
-      process.env.TALOS_SUPERVISOR_TMUX_SOCKET = `talos-none-${process.pid}`
+      process.env.TALOS_SUPERVISOR_TMUX_SOCKET = `${tmuxTestPrefix()}-none-${process.pid}`
       try {
         let c = io()
         expect(await cmdSupervise(w.env, ['attach', 'trip', '--window'], c.io)).toBe(1)

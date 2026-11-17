@@ -29,6 +29,7 @@ import { activeNow, monoOf, NEW_BUSY_WATCH, noteScreen, seedLastActive } from '.
 import {
   folderMoved,
   folderOf,
+  inOneFamily,
   lastFolder,
   launchCheck,
   launchedRecord,
@@ -491,7 +492,8 @@ export class WorkerManager {
           (o) =>
             o.id !== w.id &&
             folderKey(o.entry.cwd) === folderKey(t.cwd) &&
-            ['starting', 'live', 'busy', 'parking', 'stopping'].includes(o.entry.state),
+            ['starting', 'live', 'busy', 'parking', 'stopping'].includes(o.entry.state) &&
+            !inOneFamily(t, this.known, o.id), // a parent and its folder-sharing sub-threads are one family
         )
     if (other) return this.fail(w, 'folder_claimed', `the session of ${other.id} works in ${t.cwd}`)
     // a fresh start someone asked for and the cap held stays fresh, whoever asks for the start that finally runs (the pointer's)

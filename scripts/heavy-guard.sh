@@ -239,12 +239,15 @@ alive() { # alive <pid>: 0 alive, 1 gone, 2 cannot tell. It looks, never signals
   bounded env LC_ALL=C ps -p "$$" -o pid= > /dev/null && return 1 # ps works (it sees this shell), so that pid is gone
   return 2
 }
-lock_holder() { # the pid holding the heavy lock, if it is alive (or cannot be told from alive); nothing otherwise
-  local p
-  p="$(sed -n 1p "$LOCK_DIR/owner" 2>/dev/null)"
-  is_int "$p" || return 0
-  alive "$p"
-  [ $? = 1 ] || printf '%s' "$p"
+lock_holder() { # the pids holding the heavy lock (every slot of it), each alive or not to be told from alive, space apart; nothing otherwise
+  local p l out=""
+  for l in "$LOCK_DIR" "$LOCK_DIR"-[0-9]*; do
+    p="$(sed -n 1p "$l/owner" 2>/dev/null)"
+    is_int "$p" || continue
+    alive "$p"
+    [ $? = 1 ] || out="$out${out:+ }$p"
+  done
+  printf '%s' "$out"
 }
 # lock_settling: 0 when the heavy lock changed hands less than SETTLE seconds ago. A take and a release (ci_lock_release
 # renames mutex-suites away, then removes it) both change the locks folder, so its mtime is at or after the last release; any
@@ -579,7 +582,7 @@ STRAYS='
     my ($pid, $pg, $pp, $et, $cpu, $rss, $cmd) = $l =~ /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.*)$/ or next;
     push @{$kids{$pp}}, $pid; push @p, [$pid, $pg, $et, $cpu, $rss, $cmd];
   }
-  my %skip; my @todo = grep { /^\d+$/ && $_ > 0 } ($holder, $self);
+  my %skip; my @todo = grep { /^\d+$/ && $_ > 0 } (split(/\s+/, $holder), $self);
   push @todo, map { $_->[0] } grep { $g{$_->[1]} } @p;
   while (defined(my $x = shift @todo)) { next if $skip{$x}++; push @todo, @{$kids{$x} || []} }
   my $n = 0;
@@ -670,7 +673,7 @@ EOF
   holder="$(lock_holder)" groups=""
   if [ -n "$holder" ]; then
     for r in "$CACHE/runs"/*; do
-      [ "$(sed -n 1p "$r/owner" 2>/dev/null)" = "$holder" ] || continue
+      case " $holder " in *" $(sed -n 1p "$r/owner" 2>/dev/null) "*) ;; *) continue ;; esac
       groups="$groups $(cut -d' ' -f1 "$r/groups" 2>/dev/null | tr '\n' ' ')"
     done
   fi

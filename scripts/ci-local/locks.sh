@@ -156,20 +156,26 @@ ci_attempt_final() { awk -F'\t' '$1 == "success" || $1 == "failure" || $1 == "er
 ci_post_status() { # ci_post_status <slug> <sha> <job> <state> <description> [url]
   # A post that fails says so on stderr (the job log), with why. It does not fail the run: a lost final post leaves its pending,
   # which sweep (or the next run's settle) closes as an error: no verdict, never a wrong green.
-  local url=() ctx err rc why
+  local url=() ctx err rc why st="$4" desc="$5"
   ctx="$(ci_context "$3")"
   [ -z "${6:-}" ] || url=(-f "target_url=$6")
   if ! command -v gh >/dev/null 2>&1; then echo "ci-local: status not posted: $ctx (no gh on PATH)" >&2; return 1; fi
-  err="$(gh api -X POST "repos/$1/statuses/$2" -f state="$4" -f context="$ctx" -f description="$5" ${url[@]+"${url[@]}"} 2>&1 >/dev/null)"
+  # An attempt that stood aside (its settle step marked the commit report-ci/superseded) grades nothing: a part of it that is still
+  # working (Titan's image, under local-ci/) must not post a pass or a failure for a commit CI chose not to test, which a verdict
+  # would read, red included. Its answer is an error that says "not tested:", which no verdict reads as red or green.
+  case "$st:$ctx" in success:local-ci/* | failure:local-ci/*)
+    ! ci_stood_aside "$1" "$2" || { st=error desc="not tested: superseded by a newer push (settle); nothing is graded for this commit"; } ;;
+  esac
+  err="$(gh api -X POST "repos/$1/statuses/$2" -f state="$st" -f context="$ctx" -f description="$desc" ${url[@]+"${url[@]}"} 2>&1 >/dev/null)"
   rc=$?
   if [ "$rc" = 0 ]; then
     # A final answer GitHub took is written down for the sweep that ends a workflow job (ci-runner.sh sweep): its read of the
     # commit's statuses can lag this post, and must not close what this run already answered. CI_SHA_FILE is in RUNNER_TEMP,
     # one per job; a hand run has none. Commit, context and link, all three: settling a dead run's status (another link) or a
     # late watchdog of an earlier job on this runner must never hide this run's own pending from the sweep.
-    [ "$4" = pending ] || [ -z "${CI_SHA_FILE:-}" ] || printf '%s\t%s\t%s\n' "$2" "$ctx" "${6:-}" >> "${CI_SHA_FILE}.reported" 2>/dev/null || true
+    [ "$st" = pending ] || [ -z "${CI_SHA_FILE:-}" ] || printf '%s\t%s\t%s\n' "$2" "$ctx" "${6:-}" >> "${CI_SHA_FILE}.reported" 2>/dev/null || true
     # a red or not-tested answer: the workflow uploads this job's full logs (ci-runner.sh logs)
-    case "$4" in failure | error) [ -z "${CI_SHA_FILE:-}" ] || printf '%s\t%s\n' "$ctx" "$4" >> "${CI_SHA_FILE}.red" 2>/dev/null || true ;; esac
+    case "$st" in failure | error) [ -z "${CI_SHA_FILE:-}" ] || printf '%s\t%s\n' "$ctx" "$st" >> "${CI_SHA_FILE}.red" 2>/dev/null || true ;; esac
     return 0
   fi
   case "$err" in
@@ -252,7 +258,7 @@ ci_end_run() { # ci_end_run <record dir> [locks dir] [own]: stop everything a ru
   # what makes the directory ours to empty.
   # chmod first: a test that leaves a read-only folder behind (a real kit release is read-only by design) must not jam every
   # later run on this slot.
-  [ ! -s "$rec/tmp" ] || case "$(cat "$rec/tmp")" in */talos-ci-s[0-9]*) chmod -R u+w "$(cat "$rec/tmp")" 2>/dev/null; rm -rf "$(cat "$rec/tmp")" ;; esac
+  [ ! -s "$rec/tmp" ] || case "$(cat "$rec/tmp")" in */talos-ci-s[0-9]* | */talos-hv-s[0-9]*) chmod -R u+w "$(cat "$rec/tmp")" 2>/dev/null; rm -rf "$(cat "$rec/tmp")" ;; esac
   [ -z "${2:-}" ] || [ ! -s "$rec/owner" ] || ci_release_owned "$2" "$(cat "$rec/owner")"
   rm -rf "$rec"
 }
@@ -459,6 +465,117 @@ ci_mutex_nested() { # ci_mutex_nested <lock>: 0 if the caller runs inside the lo
   case "$TALOS_HELD_LOCKS" in *"<$1=$key>"*) ;; *) return 1 ;; esac
   ci_owner_alive "$(ci_owner "$1")"
 }
+# The suites mutex is N wide: N is how many heavy holds (CI's suites, gates, evals) run at once. Slot 1 IS locks/mutex-suites, what
+# every older copy of these scripts takes. With N of 2 or more the first K slots (1..K) are CI's: ci-local's jobs take them, so the
+# jobs of one run (check's suites, the Swift jobs) overlap, up to K at once, and CI never waits behind a builder's gate (a gate runs
+# 30-60 min, and CI is only ever served first among those who wait); a gate, a loop or an eval (heavy-lock.sh) takes slots K+1..N
+# (locks/mutex-suites-<K+1> ... -N) and never a CI slot. K is TALOS_CI_SLOTS, else the first line of <cache>/ci-slots, else 2 (at
+# most N-1). With N of 1 there is one slot and everyone shares it, CI first: the lock as it always was. During a rollout an older
+# gate (its copy of these scripts) still takes slot 1 and CI waits for it, as before; that ends as worktrees rebase. N is
+# TALOS_HEAVY_SLOTS, else the first line of <cache>/heavy-slots (a machine-local file, so the number changes with no code change),
+# else 4 (two CI's, two builders'); at most 8.
+ci_heavy_slots() { # ci_heavy_slots <cache dir>
+  local n="${TALOS_HEAVY_SLOTS:-}"
+  case "$n" in '' | *[!0-9]* | 0) n="$(head -1 "$1/heavy-slots" 2>/dev/null | tr -d ' \t\r')" ;; esac
+  case "$n" in '' | *[!0-9]* | 0) n=4 ;; esac
+  n=$((10#$n))
+  [ "$n" -le 8 ] || n=8
+  echo "$n"
+}
+ci_ci_slots() { # ci_ci_slots <cache dir> <slots>: K, how many of the slots are CI's (1 when there is just one slot, which all share)
+  local n="${TALOS_CI_SLOTS:-}" s="$2"
+  [ "$s" -ge 2 ] || { echo 1; return; }
+  case "$n" in '' | *[!0-9]* | 0) n="$(head -1 "$1/ci-slots" 2>/dev/null | tr -d ' \t\r')" ;; esac
+  case "$n" in '' | *[!0-9]* | 0) n=2 ;; esac
+  n=$((10#$n))
+  [ "$n" -le $((s - 1)) ] || n=$((s - 1))
+  echo "$n"
+}
+ci_in_list() { local x="$1" y; shift; for y in "$@"; do [ "$y" = "$x" ] && return 0; done; return 1; } # ci_in_list <item> <list...>
+ci_suites_lock() { if [ "$2" = 1 ]; then echo "$1/mutex-suites"; else echo "$1/mutex-suites-$2"; fi; } # ci_suites_lock <locks dir> <slot>
+ci_suites_nested() { # ci_suites_nested <locks dir>: 0 if the caller runs inside the holder of any slot of the suites mutex
+  local l
+  for l in "$1/mutex-suites" "$1"/mutex-suites-[0-9]*; do
+    [ -d "$l" ] && ci_mutex_nested "$l" && return 0
+  done
+  return 1
+}
+# CI's quiet group (the contract and schedules suites, which give a real bridge and the real Chronos CLI 3 s to answer) marks itself
+# while it runs, in <locks>/quiet-group: its owner text, which counts only while that is still slot 1's living owner. While it is
+# marked no NEW gate hold starts (a gate waiting for slots 2..N holds back, keeping its place); gates that run already finish.
+ci_quiet_active() { # ci_quiet_active <locks dir>
+  local m="$1/quiet-group" o
+  [ -f "$m" ] || return 1
+  o="$(ci_owner "$1/mutex-suites")"
+  [ -n "$o" ] && [ "$(cat "$m" 2>/dev/null)" = "$o" ] && ci_owner_alive "$o"
+}
+ci_gate_slots_busy() { # ci_gate_slots_busy <locks dir>: how many of the gates' slots (above CI's) have a living holder
+  local l n=0 k o c
+  c="$(ci_ci_slots "$(dirname "$1")" "$(ci_heavy_slots "$(dirname "$1")")")"
+  for l in "$1"/mutex-suites-[0-9]*; do
+    k="${l##*/mutex-suites-}"
+    case "$k" in '' | *[!0-9]*) continue ;; esac
+    [ "$k" -gt "$c" ] || continue
+    o="$(ci_owner "$l")"
+    { [ -n "$o" ] && ci_owner_alive "$o"; } && n=$((n + 1))
+  done
+  echo "$n"
+}
+CI_QUIET_T0="" CI_QUIET_BUSY0="" CI_QUIET_FLAKE0=0
+ci_flake_lines() { if [ -n "${CI_FLAKE_FILE:-}" ] && [ -f "$CI_FLAKE_FILE" ]; then wc -l < "$CI_FLAKE_FILE" | tr -d ' '; else echo 0; fi; }
+ci_quiet_begin() { # ci_quiet_begin <locks dir>: the quiet group starts (in the suites hold this run has)
+  ci_me > "$1/quiet-group" 2>/dev/null
+  CI_QUIET_T0="$(date +%s)" CI_QUIET_BUSY0="$(ci_gate_slots_busy "$1")" CI_QUIET_FLAKE0="$(ci_flake_lines)"
+}
+ci_quiet_end() { # ci_quiet_end <locks dir> <exit code>: it ends: the marker goes, and one row in <cache>/logs/quiet-group.tsv: UTC time,
+  # the commit, pass or fail, seconds, the files that failed and passed on retry meanwhile (CI_FLAKE_FILE), and the gate slots busy at
+  # the start and at the end, to read what the gates cost it
+  local rc="$2" res=pass
+  [ "$(cat "$1/quiet-group" 2>/dev/null)" != "$(ci_me)" ] || rm -f "$1/quiet-group"
+  [ "$rc" = 0 ] || res=fail
+  mkdir -p "$1/../logs" 2>/dev/null &&
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "${SHORT:-?}" "$res" "$(($(date +%s) - ${CI_QUIET_T0:-$(date +%s)}))" \
+      "$(($(ci_flake_lines) - CI_QUIET_FLAKE0))" "${CI_QUIET_BUSY0:-?}" "$(ci_gate_slots_busy "$1")" >> "$1/../logs/quiet-group.tsv" 2>/dev/null
+  return 0
+}
+ci_slots_busy() { # ci_slots_busy <lock dir...>: how many of these slots have a living holder
+  local l o n=0
+  for l in "$@"; do
+    o="$(ci_owner "$l")"
+    { [ -n "$o" ] && ci_owner_alive "$o"; } && n=$((n + 1))
+  done
+  echo "$n"
+}
+ci_active() { # ci_active <locks dir> <K> <queue dir>: 0 while a CI job holds one of CI's slots 1..K, or waits for one
+  local k o t
+  for ((k = 1; k <= $2; k++)); do
+    o="$(ci_owner "$(ci_suites_lock "$1" "$k")")"
+    { [ -n "$o" ] && ci_owner_alive "$o"; } && return 0
+  done
+  while IFS= read -r t; do
+    [ -n "$t" ] && [ "$(ci_ticket_kind "$t")" = ci ] && return 0
+  done <<ORDER
+$(ci_queue_order "$3" "$3/none")
+ORDER
+  return 1
+}
+# What a CI hold of one of several CI slots gets of its own, as a gate's slot does (heavy-lock.sh, hl_slot_env): the slot's preview port
+# (4973 + 10 * (slot - 1), TALOS_CI_HOLD_PW_PORT moves it: a range of its own, never the builders' 4173 nor the run slots' 4873 and up)
+# and tmux socket prefix, and TALOS_HEAVY_SLOT; set for the hold and put back after (the shell goes on to other holds). Its temp folder
+# is its job's own (ci-local.sh, job_tmp).
+CI_ENV_SAVE=()
+ci_hold_env_push() { # ci_hold_env_push <slot>
+  CI_ENV_SAVE=("${PW_PORT-__unset__}" "${TALOS_HEAVY_SLOT-__unset__}" "${TALOS_TEST_TMUX_PREFIX-__unset__}")
+  export TALOS_HEAVY_SLOT="$1" PW_PORT=$((${TALOS_CI_HOLD_PW_PORT:-4973} + ($1 - 1) * 10)) TALOS_TEST_TMUX_PREFIX="talos-test-s$1"
+}
+ci_hold_env_pop() {
+  local i=0 v name
+  for name in PW_PORT TALOS_HEAVY_SLOT TALOS_TEST_TMUX_PREFIX; do
+    v="${CI_ENV_SAVE[i]}"
+    if [ "$v" = __unset__ ]; then unset "$name"; else export "$name=$v"; fi
+    i=$((i + 1))
+  done
+}
 ci_since() { perl -MPOSIX=strftime -e 'my @s = stat shift; print @s ? strftime("%H:%M:%S", localtime $s[9]) : "?"' "$1"; }
 # The order waiters go in: CI first, always (main's verdict comes before anyone's push), then everything else (push gates, builder
 # gates, heavy-lock.sh runs), first come first served within each. A holder is never stopped for anyone: this is only who goes
@@ -494,27 +611,41 @@ ci_queue_order() { # ci_queue_order <queue dir> <this ticket>: the living ticket
   done
   printf '%s' "$jump$ci$rest"
 }
-ci_first_in_line() { # ci_first_in_line <queue dir> <ticket>: 0 when this ticket goes next (ci_queue_order)
-  [ -f "$2" ] || return 0
-  [ "$(ci_queue_order "$1" "$2" | head -1)" = "$2" ]
+ci_class_order() { # ci_class_order <queue dir> <this ticket>: ci_queue_order, of the tickets that want the same slots as the caller:
+  # CI_QCLASS=ci (a ci-local ticket, which takes slot 1 only) the CI tickets, gate (everything else, which takes slots 2..N) the
+  # others; unset, all of them (one slot: everyone shares it)
+  local t
+  ci_queue_order "$1" "$2" | while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    case "${CI_QCLASS:-}" in
+      ci) [ "$(ci_ticket_kind "$t")" = ci ] || continue ;;
+      gate) [ "$(ci_ticket_kind "$t")" != ci ] || continue ;;
+    esac
+    printf '%s\n' "$t"
+  done
 }
-ci_wait_line() { # ci_wait_line <label> <lock> <queue dir> <ticket>: "waiting for <label>, held by pid N (<what>, since
-  # HH:MM:SS); K ahead"
-  local label="$1" owner pid ahead=0 t
-  shift
+ci_first_in_line() { # ci_first_in_line <queue dir> <ticket>: 0 when this ticket goes next (ci_class_order)
+  [ -f "$2" ] || return 0
+  [ "$(ci_class_order "$1" "$2" | head -1)" = "$2" ]
+}
+ci_wait_line() { # ci_wait_line <label> <queue dir> <ticket> <lock...>: "waiting for <label>, held by pid N (<what>, since
+  # HH:MM:SS); K ahead"; with several slots, every holder: "held by pid N (...) and pid M (...)"
+  local label="$1" q="$2" tk="$3" owner pid ahead=0 t l held=""
+  shift 3
   while IFS= read -r t; do
-    [ "$t" = "$3" ] && break
+    [ "$t" = "$tk" ] && break
     ahead=$((ahead + 1))
   done <<ORDER
-$(ci_queue_order "$2" "$3")
+$(ci_class_order "$q" "$tk")
 ORDER
-  owner="$(ci_owner "$1")"
-  pid="$(printf '%s\n' "$owner" | sed -n 1p)"
-  if [ -n "$pid" ]; then
-    printf 'waiting for %s, held by pid %s (%s, since %s)' "$label" "$pid" "$(head -1 "$1/what" 2>/dev/null)" "$(ci_since "$1/owner")"
-  else
-    printf 'waiting for %s' "$label"
-  fi
+  for l in "$@"; do
+    owner="$(ci_owner "$l")"
+    pid="$(printf '%s\n' "$owner" | sed -n 1p)"
+    [ -n "$pid" ] || continue
+    held="$held${held:+ and }pid $pid ($(head -1 "$l/what" 2>/dev/null), since $(ci_since "$l/owner"))"
+  done
+  printf 'waiting for %s' "$label"
+  [ -z "$held" ] || printf ', held by %s' "$held"
   [ "$ahead" = 0 ] || printf '; %s ahead' "$ahead"
 }
 # The guard: one hook, called before a heavy job starts (Delphi's load and memory guard goes here). An executable at
@@ -647,9 +778,10 @@ ci_shared_drop() { # the name cleared (a holder that writes none reads as unknow
 ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-wide mutex, for a resource a slot can't own
   # CI_MUTEX_WHAT says what the holder runs (status and the waiting line show it); CI_MUTEX_JOB is the name the guard is given.
   local lock="$1/mutex-$2" name="$2" q="$1.queue/$2" deadline said="" line t rc what label held asked locks="$1" free_since="" grace="${CI_DEFER_GRACE:-15}" owner go
+  local slotlocks=("$lock") nslots=1 nci=1 k got l free m mine=() all excl="" busy CI_QCLASS="" env_saved=""
   shift 2
   label="the $name mutex"
-  [ "$name" = suites ] && label="the heavy lock"
+  [ "$name" != suites ] || label="the heavy lock"
   what="${CI_MUTEX_WHAT:-slot ${CI_SLOT:-?}}"
   local jump="" kind=ci
   # a gate's one jump ahead of queued CI (ci_queue_order): never for a CI slot, never for another mutex; the wait log shows it
@@ -660,7 +792,7 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
     kind=run
     [ "$name" = suites ] && [ -n "${HEAVY_LOCK_PUSH:-}" ] && kind=push
   fi
-  if ci_mutex_nested "$lock"; then "$@"; return; fi
+  if [ "$name" = suites ]; then ci_suites_nested "$locks" && { "$@"; return; }; elif ci_mutex_nested "$lock"; then "$@"; return; fi
   mkdir -p "$(dirname "$lock")" "$q" || return 1
   ci_self
   t="$q/$(perl -MTime::HiRes=time -e 'printf "%017.6f", time').$CI_SELF_PID.$RANDOM"
@@ -668,20 +800,46 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
   printf '%s\n' "$CI_SELF_PID" "$(ci_proc_start "$CI_SELF_PID")" "$CI_NONCE" "$what" "$jump" "$kind" > "$t.part" && mv -f "$t.part" "$t" || return 1
   asked=$(date +%s)
   deadline=$(($(date +%s) + CI_LOCK_TIMEOUT))
+  [ "$CI_LOCK_TIMEOUT" != 0 ] || deadline=$(($(date +%s) + 315360000)) # 0 = wait as long as it takes (heavy-lock.sh: a push gate)
   case "$grace" in '' | *[!0-9]*) grace=15 ;; esac
   local shared_ci=""
   [ "$name" = suites ] && [ "$kind" = ci ] && ci_shared_wanted && shared_ci=1
+  # CI_MUTEX_EXCLUSIVE=1 (ci_mutex_all: ci-local's quiet group, which fails beside anything else): every one of CI's slots, so no
+  # other CI job runs beside it, and (ci_quiet_active) no new gate starts
+  [ "$name" = suites ] && [ "$kind" = ci ] && excl="${CI_MUTEX_EXCLUSIVE:-}"
   while :; do
+    if [ "$name" = suites ]; then # the number of slots is read on every look: a change of the machine's heavy-slots file counts at once
+      # With 2 slots or more: a ci-local job (kind ci) has CI's slots 1..K and nothing else, anyone else slots K+1..N, and a waiter
+      # goes in turn among those who want the same slots (CI_QCLASS), so CI never waits for a gate and a gate never waits for CI.
+      # One slot: shared.
+      nslots="$(ci_heavy_slots "$(dirname "$locks")")"
+      nci="$(ci_ci_slots "$(dirname "$locks")" "$nslots")"
+      slotlocks=() CI_QCLASS=""
+      if [ "$nslots" -lt 2 ]; then slotlocks=("$lock")
+      elif [ "$kind" = ci ]; then
+        CI_QCLASS=ci
+        for ((k = 1; k <= nci; k++)); do slotlocks+=("$(ci_suites_lock "$locks" "$k")"); done
+      else
+        CI_QCLASS=gate
+        for ((k = nci + 1; k <= nslots; k++)); do slotlocks+=("$(ci_suites_lock "$locks" "$k")"); done
+      fi
+    fi
     [ -z "$shared_ci" ] || ci_shared_mark # a CI run waiting here waits for the shared lock too: requests on the other side hold off
     # Liveness: a waiter that defers (not first in line) still takes a lock left free, with no living holder, for CI_DEFER_GRACE
     # seconds (default 15, three of ci-local's 5 s polls, so a waiter first in line has had its turn). Otherwise a waiter running
     # other lock code (main's plain first come first served, mid-changeover, or a branch's gate) and this one can each wait for
     # the other while the lock sits free.
     go=""
+    # An exclusive waiter (the quiet group) takes slots only when it is first in line, never through this path: two runs' quiet
+    # groups could each take one of CI's slots here, and wait for the other's until the timeout.
     if ci_first_in_line "$q" "$t"; then go=1
-    else
-      owner="$(ci_owner "$lock")"
-      if [ -n "$owner" ] && ci_owner_alive "$owner"; then free_since=""
+    elif [ -z "$excl" ]; then
+      free=""
+      for l in "${slotlocks[@]}"; do # a slot with no living holder (the mutex has several: any one will do)
+        owner="$(ci_owner "$l")"
+        { [ -n "$owner" ] && ci_owner_alive "$owner"; } || free=1
+      done
+      if [ -z "$free" ]; then free_since=""
       else
         [ -n "$free_since" ] || free_since=$(date +%s)
         [ $(($(date +%s) - free_since)) -lt "$grace" ] || go=1
@@ -689,15 +847,30 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
     fi
     if [ -n "$go" ]; then
       if [ "$name" = suites ] && ! ci_guard "${CI_MUTEX_JOB:-$what}" "$lock"; then line="the guard says not now ($CI_GUARD_SAYS)"
-      elif ci_lock_try "$lock" "$what"; then break
-      else line="$(ci_wait_line "$label" "$lock" "$q" "$t")"; fi
+      elif [ "$CI_QCLASS" = gate ] && ci_quiet_active "$locks"; then
+        line="waiting for $label: CI's quiet group (the contract and schedules suites) holds CI's slots, and no new gate starts until it ends"
+      elif [ "$CI_QCLASS" = gate ] && busy="$(ci_slots_busy "${slotlocks[@]}")" && [ "$busy" -ge 2 ] && ci_active "$locks" "$nci" "$q"; then
+        line="waiting for $label: CI runs, and at most two gates run beside it"
+      else
+        for l in "${slotlocks[@]}"; do # the first free slot, in order; an exclusive hold takes every one it finds free
+          ci_in_list "$l" ${mine[@]+"${mine[@]}"} && continue
+          ci_lock_try "$l" "$what" || continue
+          mine+=("$l")
+          [ -n "$excl" ] || break
+        done
+        all=1
+        for l in "${slotlocks[@]}"; do ci_in_list "$l" ${mine[@]+"${mine[@]}"} || all=""; done
+        if [ ${#mine[@]} -gt 0 ] && { [ -z "$excl" ] || [ -n "$all" ]; }; then break; fi
+        line="$(ci_wait_line "$label" "$q" "$t" "${slotlocks[@]}")"
+      fi
     else
-      line="$(ci_wait_line "$label" "$lock" "$q" "$t")"
+      line="$(ci_wait_line "$label" "$q" "$t" "${slotlocks[@]}")"
     fi
     [ "$line" = "$said" ] || { echo "${CI_MSG:-ci-local}: $line" >&2; said="$line"; }
     if [ "$(date +%s)" -ge "$deadline" ]; then
       rm -f "$t"
       CI_TICKET=""
+      for m in ${mine[@]+"${mine[@]}"}; do ci_lock_release "$m"; done # an exclusive hold's slots taken so far
       [ -z "$shared_ci" ] || ci_shared_unmark
       echo "${CI_MSG:-ci-local}: timed out waiting for $label" >&2
       ci_wait_log "$locks" "$name" "$what" "$asked" "timed out" "$kind"
@@ -708,8 +881,15 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
   rm -f "$t" # the queue folder stays: removing it could race a waiter that has just made it and is writing its ticket
   CI_TICKET=""
   ci_wait_log "$locks" "$name" "$what" "$asked" got "$kind"
+  lock="${mine[0]}"
+  got=1
+  case "$lock" in *mutex-suites-[0-9]*) got="${lock##*-}" ;; esac
+  CI_LOCK_HELD="$lock" CI_HEAVY_SLOT="$got" # which slot this hold has (heavy-lock.sh gives its command that slot's own ports and folders)
   held="${TALOS_HELD_LOCKS:-}"
-  export TALOS_HELD_LOCKS="$held<$lock=$(ci_held_key "$lock")>"
+  for m in "${mine[@]}"; do export TALOS_HELD_LOCKS="${TALOS_HELD_LOCKS:-}<$m=$(ci_held_key "$m")>"; done
+  # CI's jobs overlap (K slots): each hold has its own preview port and tmux names, as a gate's slot does (its temp folder is its
+  # job's own, job_tmp)
+  if [ "$name" = suites ] && [ "$kind" = ci ] && [ "$nslots" -ge 2 ] && [ "$nci" -ge 2 ]; then ci_hold_env_push "$got"; env_saved=1; fi
   # the hostile nightly (ci-local.sh sources scripts/ci-local/hostile.sh): CPU load beside each hold of the heavy lock, only then
   local load=()
   [ "$name" != suites ] || ! declare -F ci_hostile_with_load >/dev/null || load=(ci_hostile_with_load "$locks")
@@ -727,6 +907,8 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
     rc=$?
   fi
   if [ -n "$held" ]; then TALOS_HELD_LOCKS="$held"; else unset TALOS_HELD_LOCKS; fi
-  ci_lock_release "$lock"
+  [ -z "$env_saved" ] || ci_hold_env_pop "$env_saved"
+  for m in "${mine[@]}"; do ci_lock_release "$m"; done
   return $rc
 }
+ci_mutex_all() { CI_MUTEX_EXCLUSIVE=1 ci_mutex "$@"; } # ci_mutex_all <locks dir> suites <cmd...>: the same, holding all of CI's slots (the quiet group runs alone among CI)

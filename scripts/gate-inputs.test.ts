@@ -211,3 +211,131 @@ describe('scripts/gate-inputs.txt as the handoff checks read it (path-fold.sh)',
     }
   })
 })
+
+// scripts/gate-wide-inputs.txt: the part of the list that changes how every test runs. The rebase-clean pass refuses a new main commit
+// only for these (any other gate input refuses only on a file this change shares); the handoff checks keep the whole list above.
+const WIDE = join(here, 'gate-wide-inputs.txt')
+const widePatterns = () =>
+  readFileSync(WIDE, 'utf8')
+    .split('\n')
+    .filter((l) => l.trim() !== '' && !l.startsWith('#'))
+const wide = (paths: string[]) => {
+  const r = spawnSync('bash', ['-c', `grep -E -i -f <(grep -v '^#' "$1" | grep -v '^[[:space:]]*$')`, 'x', WIDE], {
+    input: `${paths.join('\n')}\n`,
+    env: gateTestEnv(),
+    encoding: 'utf8',
+  })
+  expect(r.status === 0 || r.status === 1, r.stderr).toBe(true)
+  return r.stdout.split('\n').filter(Boolean)
+}
+
+describe('scripts/gate-wide-inputs.txt: the gate itself and the build and test config', () => {
+  it('is there, and every line is a pattern grep -E takes and the case-blind regex path-fold.sh makes', () => {
+    expect(widePatterns().length).toBeGreaterThan(10)
+    for (const p of widePatterns()) {
+      expect(spawnSync('grep', ['-E', p], { input: '', env: gateTestEnv() }).status, p).not.toBe(2)
+      expect(() => new RegExp(p, 'iu'), p).not.toThrow()
+    }
+  })
+
+  it('holds the gate itself and the config that changes how every test runs', () => {
+    const must = [
+      'scripts/gate.sh',
+      'scripts/gate-push.sh',
+      'scripts/gate/plan.sh',
+      'scripts/gate-inputs.txt',
+      'scripts/gate-wide-inputs.txt',
+      'scripts/pre-push.sh',
+      // every script the gate sources or runs, and the lists and readers it reads
+      'scripts/gate-fast.sh',
+      'scripts/gate-fast-keepout.txt',
+      'scripts/path-fold.sh',
+      'scripts/talos-machine.sh',
+      'scripts/check-no-personal.sh',
+      'scripts/check-ref-personal.sh',
+      'scripts/denylist.generic.txt',
+      'scripts/gate-excuse.sh',
+      'scripts/gate-excuse.pl',
+      'scripts/ci-alert-tests.pl',
+      'scripts/heavy-lock.sh',
+      'scripts/ci-local/locks.sh',
+      'scripts/old-client.sh',
+      'scripts/web-bundle-manifest.mjs',
+      'scripts/tmp-sweep.sh',
+      'scripts/tmp-sweep-prefixes.txt',
+      'scripts/test-env-clean.ts', // the setup file of the whole scripts project (vitest.config.ts)
+      'scripts/size-budget.test.ts',
+      'scripts/size-budget.json',
+      'scripts/size-report.ts',
+      'apps/bridge/scripts/test-parallel.ts',
+      '.githooks/pre-push',
+      'package.json',
+      'apps/web/package.json',
+      'pnpm-lock.yaml',
+      'pnpm-workspace.yaml',
+      'tsconfig.base.json',
+      'apps/bridge/tsconfig.json',
+      'biome.json',
+      'biome.jsonc',
+      'vitest.config.ts',
+      'apps/web/vite.config.ts',
+      'e2e/playwright.config.ts',
+      '.nvmrc',
+      '.npmrc',
+      '.pnpmfile.cjs',
+      'bunfig.toml',
+      'apps/web/test/setup-clock.ts',
+      'e2e/harness/global-setup.ts',
+      'apps/bridge/test/preload.ts',
+      'apps/bridge/test/run-tmp.ts',
+      'apps/bridge/test/fake-claude.ts',
+      'apps/web/test/helpers/pw-port.ts',
+      'apps/desktop/Package.swift',
+      'apps/desktop/Package.resolved',
+      '.gitattributes',
+      '.gitignore',
+      'apps/web/.gitignore',
+      'docs/protected-paths.txt',
+    ]
+    expect(wide(must)).toEqual(must)
+  })
+
+  it('other gate inputs, product code and words are not gate-wide', () => {
+    expect(
+      wide([
+        'scripts/some-other.test.ts',
+        'scripts/new-tool.sh',
+        'scripts/ci-affected.sh', // the gate does not read it
+        'apps/bridge/scripts/install.sh',
+        'apps/bridge/scripts/capture-memory.ts',
+        '.github/workflows/ci-runner.yml',
+        'apps/web/src/a.ts',
+        'docs/CI-MACHINES.md',
+        'myscripts/gate.sh',
+      ]),
+    ).toEqual([])
+  })
+
+  it('every gate-wide path is also a gate input: it is never outside the whole list', () => {
+    const sample = [
+      'scripts/gate.sh',
+      'scripts/gate/plan.sh',
+      'scripts/gate-wide-inputs.txt',
+      '.githooks/pre-push',
+      'apps/web/package.json',
+      'tsconfig.json',
+      'vitest.config.ts',
+      'apps/bridge/test/preload.ts',
+      'docs/protected-paths.txt',
+      '.gitignore',
+    ]
+    expect(wide(sample)).toEqual(sample)
+    expect(inputs(sample)).toEqual(sample)
+  })
+
+  it('gate-push.sh reads it for the rebase-clean pass and fails closed without it', () => {
+    const gp = readFileSync(join(here, 'gate-push.sh'), 'utf8')
+    expect(gp).toContain('scripts/gate-wide-inputs.txt')
+    expect(gp).toMatch(/no gate-wide list/)
+  })
+})

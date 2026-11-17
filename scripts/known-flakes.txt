@@ -1,0 +1,15 @@
+# Known flaky tests (scripts/gate-flakes.sh). A gate test step that fails ONLY on tests listed here runs each of them once more,
+# alone; when every one passes alone the step passes, and says so. Any other failure, an expired entry, or a listed test that
+# fails alone too refuses as it always did. The gate reads this list from the base it measures the change against (main as
+# fetched), never from the working tree: a change cannot add its own flake, and a new entry counts after it lands on main.
+# One line per test, four fields separated by a TAB:
+#   <path from the repository top> TAB <test name as the runner prints it: "describe > test"> TAB <owner> TAB <until YYYY-MM-DD>
+# The owner is a name, the one who is fixing the test. The entry stops counting after its until date (the gate says "expired"
+# and refuses), so a flake is fixed or its entry is renewed in a reviewed change. Evidence stays in <cache>/logs/flakes.tsv;
+# each rerun is logged in <cache>/logs/flake-reruns.tsv. Lines starting with # and empty lines are ignored.
+# Not a flake, never listed: undo-delivery's "a bridge that stops while the message waits gets it again on restart" is a real
+# message-loss bug (it must refuse until fixed). A change that edits a listed test, or reaches it or the code it names, gets no rerun.
+apps/bridge/test/enroll.test.ts	enrollment (Mac side) > after y the live bridge pins from the file watch, without a manual poll and before its 10 s fallback poll	Lemnos	2026-11-23
+scripts/test-parallel.test.ts	test-parallel > a file that hangs inside one call is killed with its children, named, and the other files still run	Lemnos	2026-11-23
+scripts/cpu-burn.test.ts	cpu-burn.sh: burners never outlive it > a normal end and a failing command both stop every burner	Lemnos	2026-11-23
+scripts/cpu-burn.test.ts	cpu-burn.sh: burners never outlive it > a TERM stops the command and every burner (exit 143)	Lemnos	2026-11-23

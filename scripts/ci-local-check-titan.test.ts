@@ -95,6 +95,13 @@ function repo(omit: string[] = []) {
   const tool = (name: string, body: string) => fakeTool(bin, name, `#!/bin/bash\n${body}\n`)
   tool('gh', GH)
   tool('pnpm', TOOL('pnpm'))
+  tool('uname', '[ "$1" = -s ] && { echo Darwin; exit 0; }\nexec /usr/bin/uname "$@"') // a Mac: the corepack variant runs on a Mac only
+  // and a Mac that has not slept: a woken-at time of 1970 (before any run). Without it, on Linux the faked Darwin has no
+  // kern.waketime, which a Mac counts as slept, and the check's status gains ", with warnings" (check-titan red at 94710fe)
+  tool(
+    'sysctl',
+    '[ "$1" = -n ] && [ "$2" = kern.waketime ] && { echo "{ sec = 1, usec = 0 } Thu Jan  1 00:00:01 1970"; exit 0; }\nPATH=/usr/sbin:/sbin:/usr/bin:/bin exec sysctl "$@"',
+  )
   tool('bun', `[ "$1" = --version ] && { echo 1.4.4; exit 0; }\n${TOOL('bun')}`) // a version question is not a call
   const env: Record<string, string> = {
     ...cleanEnv(),
@@ -161,10 +168,13 @@ const checkRun = ['--ref', 'HEAD', '--jobs', 'check']
 const setupCall = (l: string) => /^pnpm (install|build)\b/.test(l) || l.startsWith('pnpm exec playwright')
 const bunSubsetCall = (l: string) => / --jobs 1 .*--only test\/(keychain|schedules\/agent)\.test\.ts$/.test(l)
 const subsetCall = (l: string) => bunSubsetCall(l) || / --passWithNoTests /.test(l)
+// the installer tests with a corepack pnpm first on PATH: once in today's check, and once at the end of the macOS subset (here, on
+// a Mac), so it is counted on its own (ci-local-jobs-gates.test.ts: it fails the check job) and not among check's steps
+const COREPACK = 'pnpm test:corepack-install'
 const checkSteps = (r: ReturnType<typeof repo>) =>
   r
     .calls()
-    .filter((l) => !setupCall(l) && !subsetCall(l))
+    .filter((l) => !setupCall(l) && !subsetCall(l) && l !== COREPACK)
     .map((l) => l.replaceAll(r.T, '<T>')) // each repo is its own temp dir
     .map((l) => (l.includes('/ci-test-results.ts ') ? 'bun ci-test-results.ts' : l)) // its run dir and commit differ too
     .sort()
@@ -260,6 +270,7 @@ describe('check with CI_CHECK_PART: the macOS subset here, Titan folded in, toda
     expect(steps.some((l) => l.startsWith('pnpm test --maxWorkers=2'))).toBe(true)
     expect(steps.some((l) => /bun run .* --skip test\/schedules\//.test(l))).toBe(true)
     expect(subset(r)).toEqual([])
+    expect(r.calls().filter((l) => l === COREPACK)).toEqual([COREPACK]) // today's check runs it once
     expect(r.gh()).not.toContain('/jobs')
     expect(r.posts('local-ci/check')).toEqual([
       expect.stringMatching(/state=success .*description=passed on \S+ in \d+s$/),
@@ -274,6 +285,7 @@ describe('check with CI_CHECK_PART: the macOS subset here, Titan folded in, toda
     expect(await run.done, run.out()).toBe(0)
     expect(subset(r)).toEqual(MACOS)
     expect(checkSteps(r)).toEqual(FOLDED)
+    expect(r.calls().filter((l) => l === COREPACK)).toEqual([COREPACK]) // the subset's end: a Mac's pnpm
     expect(r.posts('local-ci/check')).toEqual([
       expect.stringMatching(/state=success .*\(check on check-titan, macOS-only tests here\)/),
     ])

@@ -15,7 +15,9 @@
 #            --full (no job is skipped for lack of affected files; a run with --jobs or --no-status never skips either)
 #            --no-status (don't post to GitHub) · --keep (keep the scratch worktree) · --reap (stop what dead runs left, then exit)
 #   env for a run on a shared runner (all optional; docs/CI-LOCAL.md, "On the self-hosted runner"): CI_REPO=owner/name (skip `gh repo view`),
-#        CI_STATUS_WHERE (the words in a status, default this machine's own name), CI_STATUS_URL (its link), CI_SHA_FILE (the sha tested,
+#        CI_SETTLE=1 (ci-runner.sh sets it for a main push run only: wait for a quiet head first, scripts/ci-local/settle.sh;
+#        TALOS_CI_SETTLE_S, TALOS_CI_SETTLE_MAX_S, TALOS_CI_SETTLE_POLL_S, TALOS_CI_SETTLE_STALE_S; CI_PUSHED_AT: when the head was
+#        pushed), CI_STATUS_WHERE (the words in a status, default this machine's own name), CI_STATUS_URL (its link), CI_SHA_FILE (the sha tested,
 #        written here), CI_WT_BASE (where scratch worktrees go), CI_SLEEP_GUARD=1 (fail jobs of a run the Mac slept through; default is a warning)
 #
 # Up to CI_SLOTS runs go at once. Each holds a slot (~/.cache/talos-ci/locks/slot-N) and gets its own scratch worktree,
@@ -34,7 +36,7 @@ umask 022
 # The parts of this script live in scripts/ci-local/ beside it and are sourced below (the jobs' before any wait). All of them are checked here,
 # first: a copy of ci-local.sh without them stops before it does anything (it never half-runs).
 CI_LOCAL_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci-local"
-for _ci_part in locks machine jobs-check jobs-mod-browser jobs-image jobs-swift; do
+for _ci_part in locks machine settle jobs-check jobs-mod-browser jobs-image jobs-swift; do
   [ -r "$CI_LOCAL_LIB/$_ci_part.sh" ] || { echo "ci-local: $CI_LOCAL_LIB/$_ci_part.sh is missing: ci-local.sh needs the scripts/ci-local/ folder beside it" >&2; exit 64; }
   # a part that does not parse would stop the run half-way through, where it is sourced: stop here instead
   bash -n "$CI_LOCAL_LIB/$_ci_part.sh" || { echo "ci-local: $CI_LOCAL_LIB/$_ci_part.sh does not parse" >&2; exit 64; }
@@ -86,6 +88,8 @@ CI_HELD="" CI_SLOT="" CI_MARKER=""
 . "$CI_LOCAL_LIB/locks.sh"
 
 . "$CI_LOCAL_LIB/machine.sh"
+
+. "$CI_LOCAL_LIB/settle.sh"
 
 # Sourced (the tests do this): stop here, with only the functions above defined.
 if (return 0 2>/dev/null); then return 0; fi
@@ -243,7 +247,7 @@ WHERE="$(ci_where)" # what a status says it ran on: the machine's own name (CI_S
 # These are for this script only. Left exported they reach every job: the test suites run ci-local.sh copies of their own (a fake
 # repo, a fake gh) and would post to the real repository's commit, write the real CI_SHA_FILE and say "ci-runner". Like TALOS_CI_CACHE
 # above they stay readable here and in the subshells, and no child process gets them.
-export -n CI_REPO CI_STATUS_WHERE CI_STATUS_URL CI_SHA_FILE CI_WT_BASE CI_SLEEP_GUARD TALOS_CI_FORCE_DESKTOP CI_ATTEMPT_URL CI_STATUS_PREFIX CI_REMOTE_JOBS CI_SHARD_TOOLS CI_FALLBACK_NOTES CI_BROWSER_E2E_PART CI_BROWSER_E2E_WAIT CI_PART_E2E_WORKERS CI_BROWSER_E2E_SHADOW CI_CHECK_PART CI_CHECK_WAIT CI_NIGHTLY CI_HOSTILE
+export -n CI_REPO CI_STATUS_WHERE CI_STATUS_URL CI_SHA_FILE CI_WT_BASE CI_SLEEP_GUARD TALOS_CI_FORCE_DESKTOP CI_ATTEMPT_URL CI_STATUS_PREFIX CI_REMOTE_JOBS CI_SHARD_TOOLS CI_FALLBACK_NOTES CI_BROWSER_E2E_PART CI_BROWSER_E2E_WAIT CI_PART_E2E_WORKERS CI_BROWSER_E2E_SHADOW CI_CHECK_PART CI_CHECK_WAIT CI_NIGHTLY CI_HOSTILE CI_SETTLE CI_PUSHED_AT
 case "${CI_RUN_ID:-}" in *[!0-9]*) echo "ci-local: CI_RUN_ID is a run number, not '$CI_RUN_ID'" >&2; exit 64 ;; esac
 # CI_BROWSER_E2E_PART=<machine> (CI_TITAN_BROWSER=e2e, docs/CI-MACHINES.md, "The e2e packages on Titan"): every e2e package but
 # the web one runs on that machine as ci-part/browser-e2e, so this run's browser job runs protocol and web only and folds that
@@ -271,6 +275,30 @@ if [ -n "${CI_CHECK_PART:-}" ] && { [ "$STATUS" != 1 ] || [ -z "${CI_RUN_ID:-}" 
   ! printf '%s' "${CI_ATTEMPT_URL:-}" | grep -Eqx "https?://[^[:space:]]+/runs/${CI_RUN_ID}/attempts/[0-9]+#"; }; then
   echo "ci-local: CI_CHECK_PART given, but no CI_CHECK_WAIT or no way to read the part; check runs here"
   CI_CHECK_PART=""
+fi
+
+# The settle step (scripts/ci-local/settle.sh): a push run of main (ci-runner.sh sets CI_SETTLE=1 for that run alone) waits here, before
+# a slot, a record or a job, for main's head to stay the same; a head that is no longer this run's sha is a newer push's to test.
+# Never the nightly or the hostile nightly, whatever sets it.
+if [ "${CI_SETTLE:-}" = 1 ] && [ -z "${CI_NIGHTLY:-}${CI_HOSTILE:-}" ]; then
+  ci_settle_check || exit 64
+  CI_SETTLE_NEWER=""
+  ci_settle "$CACHE/settle-chain" "$SHA"
+  if [ $? = 10 ]; then
+    # the mark first: unmarked, the skip would look like "untested and fine", so a mark that GitHub will not take means a run
+    if [ "$STATUS" != 1 ] || ci_post_status "$SLUG" "$SHA" report-ci/superseded success "not tested: superseded by ${CI_SETTLE_NEWER:0:7}; CI tests main's newest commit" "${CI_STATUS_URL:-}"; then
+      echo "ci-local: settle: ${SHA:0:7} is superseded by ${CI_SETTLE_NEWER:0:7}; that run tests it. Nothing tested here."
+      [ -z "${CI_SHA_FILE:-}" ] || printf '%s\n' "$CI_SETTLE_NEWER" > "$CI_SHA_FILE.superseded" # for the workflow's later steps (ci-runner.sh settled)
+      exit 0
+    fi
+    echo "ci-local: settle: ${SHA:0:7} could not be marked superseded on GitHub; testing it"
+  fi
+fi
+# A part machine of an attempt whose Lemnos run stood aside (it started with Lemnos, before the decision): nothing to test, nothing to post.
+# (One that is already working is cancelled by the workflow, and posts no pass or failure meanwhile: ci_post_status.)
+if [ "$STATUS" = 1 ] && [ -n "${CI_ATTEMPT_URL:-}" ] && ci_stood_aside "$SLUG" "$SHA"; then
+  echo "ci-local: settle: this attempt stood aside for a newer push (report-ci/superseded on ${SHA:0:7}); nothing tested, nothing posted here"
+  exit 0
 fi
 
 post() { # post <job> <state> <description>
@@ -717,9 +745,11 @@ start_jobs() { # start_jobs <job...>: these jobs, one after another, as one back
     [ "${CI_HOSTILE:-}" != 1 ] || ci_hostile_env # the hostile nightly's clock shift and time zone, for the jobs only
     for j in "$@"; do
       case "$j" in
-        desktop | mobile) # a build wants every core: after this run's quiet suites, and never beside anyone's
+        desktop | mobile) # a build wants every core: after this run's quiet suites. The jobs of a run overlap now (one slot of CI's each,
+          # up to TALOS_CI_SLOTS), but two Swift jobs never do, whichever runs they are of: each takes the desktop mutex, and no slot
+          # inside it, around its Swift steps (job_desktop around ci.sh, job_mobile around its steps), never a slot while it waits
           wait_for_job check quiet-done
-          ci_mutex "$LOCKS" suites run_job "$j" ;;
+          run_job "$j" ;;
         *) run_job "$j" ;;
       esac
     done

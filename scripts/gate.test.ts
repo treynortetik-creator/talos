@@ -392,6 +392,51 @@ describe('gate.sh picks the suites from the changed paths', () => {
     expect(r.plan('--base', before)).toEqual([...CHECKS, 'vitest', '\tscripts/scan.test.ts', 'vitest-project', '\tweb'])
   })
 
+  it('a changed or deleted test file runs the tests that open it by name: a doc test cites the titles of relay tests (bc69061a)', () => {
+    const r = repo()
+    r.put('apps/relay/test/auth/pair-fixture.test.ts', "it('minted', () => {})\n")
+    r.put(
+      'scripts/security-doc.test.ts',
+      "const relayTest = (n: string) => read(join(root, 'apps/relay/test/auth', n))\nrelayTest('pair-fixture.test.ts')\n",
+    )
+    r.put('scripts/other-doc.test.ts', "relayTest('another.test.ts')\n") // names a different test
+    r.git('add', '-A')
+    r.git('commit', '-qm', 'tests')
+    const tests = r.git('rev-parse', 'HEAD')
+    r.commit({ 'apps/relay/test/auth/pair-fixture.test.ts': "it('minted, renamed', () => {})\n" })
+    const p = spawnSync('bash', ['scripts/gate.sh', '--plan', '--base', tests], { cwd: r.T, env, encoding: 'utf8' })
+    expect(p.stdout.trim().split('\n')).toEqual([
+      ...CHECKS,
+      'vitest',
+      '\tapps/relay/test/auth/pair-fixture.test.ts',
+      '\tscripts/security-doc.test.ts',
+    ])
+    expect(p.stderr).toContain('scripts/security-doc.test.ts <- apps/relay/test/auth/pair-fixture.test.ts (names it)')
+    // a deleted test: the doc test still cites it, so it runs (and goes red)
+    const before = r.git('rev-parse', 'HEAD')
+    r.git('rm', '-q', 'apps/relay/test/auth/pair-fixture.test.ts')
+    r.git('commit', '-qm', 'rm')
+    expect(r.plan('--base', before)).toEqual([
+      ...CHECKS,
+      'vitest',
+      '\tscripts/security-doc.test.ts',
+      'vitest-project',
+      '\trelay',
+    ])
+  })
+
+  it('install.sh is read by name too, a deleted one included: the tests that name it run', () => {
+    const r = repo()
+    r.put('install.sh', '#!/bin/sh\n')
+    r.put('scripts/uses-install.test.ts', "const s = join(root, 'install.sh')\n")
+    r.git('add', '-A')
+    r.git('commit', '-qm', 'tests')
+    const before = r.git('rev-parse', 'HEAD')
+    r.git('rm', '-q', 'install.sh')
+    r.git('commit', '-qm', 'rm')
+    expect(r.plan('--base', before)).toEqual([...CHECKS, 'vitest', '\tscripts/uses-install.test.ts'])
+  })
+
   it("the repository's guards over test files run when a test file they read changes: the ci-requires guard for a bridge test", () => {
     const r = repo()
     // the guards as they are in this repository, so what each declares is what is checked
@@ -459,6 +504,7 @@ describe('gate.sh picks the suites from the changed paths', () => {
       '\tscripts/ci-affected.test.ts',
       titan,
       '\tscripts/root-install.test.ts',
+      'corepack-install',
     ])
     // deleted: the ci-requires guard still runs (its list of exceptions names files that must exist)
     const base = r.git('rev-parse', 'HEAD')

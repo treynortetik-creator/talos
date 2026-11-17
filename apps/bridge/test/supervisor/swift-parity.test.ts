@@ -13,6 +13,7 @@ import {
   CLAIM_DEADLINE_COLD_MS,
   CLAIM_DEADLINE_MS,
   DIALOG_CARD_WAIT_MS,
+  folderSame,
   MAIN_RESTART_CHECK_FILE,
   MAIN_RESTART_CHECK_MAX_BYTES,
   MAIN_RESTART_CHECK_STALE_MS,
@@ -40,12 +41,14 @@ import {
   workerMcpConfigPath,
   workerUsagePath,
 } from '@talos-app/protocol'
-
 import { LAUNCH_SPEC_EXCLUDED_ENV, STRIP_RULES_ENTRY } from '../../src/supervisor/launch-spec.ts'
 import { UPDATE_KEYS_QUIET_S, UPDATE_RELEASE_POLL_S } from '../../src/supervisor/update-restart.ts'
 import { installWorkerHook, NO_PYTHON, workerHookDir } from '../../src/supervisor/worker-hook.ts'
+import { inOneFamily } from '../../src/supervisor/worker-launch.ts'
 import { lines as noticeLines, TOOL_PROMPT_HOLD_MAX_S } from '../../src/supervisor/worker-notices.ts'
 import { HOOK_CLEAN_LINE, HOOK_LANG, HOOK_PASS_ENV, permissionHookCommand } from '../../src/supervisor/worker-spec.ts'
+import { subLaunch } from '../../src/supervisor/worker-subthreads.ts'
+import type { WorkerThread } from '../../src/supervisor/worker-types.ts'
 
 const SRC = join(import.meta.dir, '../../../desktop/Sources')
 const swift = (rel: string) => readFileSync(join(SRC, rel), 'utf8')
@@ -408,5 +411,88 @@ describe('restart on update: the Mac’s queue and launch spec say what the Linu
       'packages/protocol/fixtures/spec-hash/vectors.json',
     )
     expect(existsSync(join(SRC, '../../../packages/protocol/fixtures/spec-hash/vectors.json'))).toBe(true)
+  })
+})
+
+describe('a sub-thread in its parent’s folder is SubThreads.swift’s', () => {
+  const text = swift('TalosDesktopCore/SubThreads.swift')
+  const thread = (id: string, o: Record<string, unknown> = {}) => ({ id, kind: 'fixed', session: 'dedicated', ...o })
+
+  it('the same-folder rule: both absolute, no . or .. in the child, trailing slashes ignored', () => {
+    // the cases the Swift test (SubThreadsTests) runs too
+    const table: Array<[string, string, boolean]> = [
+      ['/home/alex/p', '/home/alex/p', true],
+      ['/home/alex/p/', '/home/alex/p', true],
+      ['/home/alex/p', '/home/alex/p/', true],
+      ['/home/alex/p/../p', '/home/alex/p', false],
+      ['/home/alex/./p', '/home/alex/p', false],
+      ['/home/alex/p2', '/home/alex/p', false],
+      ['/home/alex/P', '/home/alex/p', false],
+      ['p', 'p', false],
+      ['/home/alex/p', 'home/alex/p', false],
+    ]
+    for (const [child, parent, same] of table)
+      expect([child, parent, folderSame(child, parent)]).toEqual([child, parent, same])
+    expect(text).toContain(
+      'guard child.hasPrefix("/"), parent.hasPrefix("/"), !child.split(separator: "/").contains(where: { $0 == "." || $0 == ".." })',
+    )
+    expect(text).toContain('while t.count > 1, t.hasSuffix("/") { t.removeLast() }')
+  })
+
+  it('the refusals a sub-thread meets are the same words', () => {
+    const all = [
+      thread('bad', { session_opts: { cwd: 42 } }),
+      thread('s', { parent_id: 'bad' }),
+      thread('none'),
+      thread('t', { parent_id: 'none', session_opts: { cwd: '/home/alex/x' } }),
+      thread('o', { parent_id: 'gone' }),
+    ]
+    const said = (i: number) => subLaunch(all[i] as Record<string, unknown>, all)?.refusal as string
+    expect(text).toContain(said(1).replace('(42)', '(\\(bad))'))
+    expect(text).toContain(said(3))
+    expect(text).toContain(said(4).replace('the parent thread is not there any more', '\\(why)'))
+  })
+
+  it('the family: a parent and a folder-sharing child, two such siblings; nobody else', () => {
+    const kid = (id: string, parentId: string, shares = true): WorkerThread =>
+      ({
+        id,
+        cwd: '/home/alex/p',
+        model: 'inherit',
+        effort: null,
+        parentCwd: null,
+        sub: { parentId, ownCwd: !shares, shares, refusal: null, unreadable: {} },
+      }) as WorkerThread
+    const plain = (id: string): WorkerThread => ({
+      id,
+      cwd: '/home/alex/p',
+      model: 'inherit',
+      effort: null,
+      parentCwd: null,
+    })
+    const known = [
+      plain('p'),
+      kid('a', 'p'),
+      kid('b', 'p'),
+      kid('sub', 'p', false),
+      kid('sub2', 'p', false),
+      plain('q'),
+      kid('c', 'q'),
+      plain('x'),
+    ]
+    const fam = (a: string, b: string) => inOneFamily(known.find((t) => t.id === a) as WorkerThread, known, b)
+    expect([fam('a', 'p'), fam('p', 'a'), fam('a', 'b'), fam('b', 'a')]).toEqual([true, true, true, true])
+    expect([
+      fam('sub', 'sub2'),
+      fam('sub', 'p'),
+      fam('p', 'sub'),
+      fam('c', 'a'),
+      fam('a', 'c'),
+      fam('x', 'p'),
+      fam('x', 'a'),
+      fam('a', 'a'),
+    ]).toEqual(Array(8).fill(false))
+    // the Swift family test reads the same table; both ignore a child that is refused
+    expect(text).toContain('$0.shares && $0.refusal == nil ? $0.parentId : nil')
   })
 })

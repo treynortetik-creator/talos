@@ -1,3 +1,4 @@
+// gate-reads: examples/config.default.json examples/config.five-threads.json docs/SPEC.md
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import defaultConfig from '../../../examples/config.default.json' with { type: 'json' }

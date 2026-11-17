@@ -459,7 +459,7 @@ public final class WorkerManager: @unchecked Sendable {
       updateRestartTick(settings: settings, fresh: fresh)
       retryMainSettingsNotes()
     }
-    clearFolderClaims()
+    clearFolderClaims(settings ?? .off)
     if mainDialogFeed.changed() { dirty = true }  // Main's card appears (or goes) within the tick
     // abs: after the clock goes back, a heartbeat must not wait for it to catch up
     if abs(t - lastHeartbeat) >= options.heartbeat || dirty {
@@ -489,7 +489,8 @@ public final class WorkerManager: @unchecked Sendable {
     return WorkersFile(
       supervisor: .init(
         pid: getpid(), heartbeat_at: ISOTime.string(now()), workers_supported: true, main_pane_pid: mainPanePid(),
-        main_dialog: mainDialogFeed.current(), subthreads_supported: true, subthreads_own_folder: true),
+        main_dialog: mainDialogFeed.current(), subthreads_supported: true, subthreads_own_folder: true,
+        subthreads_shared_folder: true),
       threads: threads)
   }
 
@@ -529,7 +530,7 @@ public final class WorkerManager: @unchecked Sendable {
     // before the folder claim, so the owner sees the field, not "another session works in <agent folder>"
     if let why = unreadFolderRefusal(id, s) { return fail(id, "start_failed", why) }
     let cwd = s.cwd ?? options.agentDir
-    if cwd != options.agentDir, folderClaimed(cwd, by: id) {
+    if cwd != options.agentDir, folderClaimed(cwd, by: id, s, settings) {
       fail(id, "folder_claimed", "another thread session works in \(cwd)")
       return
     }
@@ -552,15 +553,20 @@ public final class WorkerManager: @unchecked Sendable {
     rt[id]?.heldResume = resume
   }
 
-  private func folderClaimed(_ cwd: String, by id: String) -> Bool {
+  /// Another session holds the folder, unless it is in the same family: a parent and the dedicated sub-threads that share its folder, and two of
+  /// those siblings, may work in it together (the config held now decides). Every other pair is claimed.
+  private func folderClaimed(_ cwd: String, by id: String, _ s: ThreadSessionSettings, _ settings: DedicatedSettings) -> Bool {
     let key = WorkerSpec.folderKey(cwd)
-    return rt.contains { $0.key != id && Self.holding.contains($0.value.entry.state) && WorkerSpec.folderKey($0.value.entry.cwd) == key }
+    return rt.contains {
+      $0.key != id && Self.holding.contains($0.value.entry.state) && WorkerSpec.folderKey($0.value.entry.cwd) == key
+        && !SubThreads.sameFamily(s, settings.threads[$0.key])
+    }
   }
 
   /// `folder_claimed` is a moment, not a fault: it clears when the other worker has gone, so the next message starts.
-  private func clearFolderClaims() {
+  private func clearFolderClaims(_ settings: DedicatedSettings) {
     for (id, r) in rt where r.entry.state == "failed" && r.entry.error?.code == "folder_claimed" {
-      if !folderClaimed(r.entry.cwd, by: id) {
+      if !folderClaimed(r.entry.cwd, by: id, settings.threads[id] ?? ThreadSessionSettings(threadId: id), settings) {
         rt[id]?.entry.state = "parked"
         rt[id]?.entry.error = nil
         dirty = true

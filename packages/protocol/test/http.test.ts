@@ -59,6 +59,7 @@ const SPEC_ROUTES = [
   'GET /bridge/digest',
   'POST /bridge/enroll',
   'POST /bridge/rotate',
+  'POST /bridge/bug-reports/:id/requeue',
   'POST /bridge/devices/:id/revoke',
   'GET /.well-known/apple-app-site-association',
   // docs/V2-FEATURES.md V1.4
@@ -190,5 +191,17 @@ describe('http route table', () => {
       path: '/bridge/share/tokens/:id',
       auth: 'bridge-sig',
     })
+  })
+  it('bridge bug report requeue: POST /bridge/bug-reports/:id/requeue, bridge-sig only (no session route)', () => {
+    expect(routes.bridgeBugReportRequeue).toMatchObject({
+      method: 'POST',
+      path: '/bridge/bug-reports/:id/requeue',
+      auth: 'bridge-sig',
+    })
+    expect(
+      Object.values(routes)
+        .filter((r) => r.path.includes('requeue'))
+        .map((r) => r.auth),
+    ).toEqual(['bridge-sig'])
   })
 })

@@ -2,6 +2,10 @@
 // Each test asserts that a doc and the source agree, and names the finding of the bug hunt it came from
 // (docs/audits/2026-11-10-bughunt-cli-docs.md); the docs were fixed to agree, and these keep them agreeing. Sources are
 // read as text so nothing here starts a process or needs the network.
+// gate-reads: README.md docs/SETUP.md docs/CUSTOMIZE.md docs/SECURITY.md docs/THREADS.md docs/desktop.md docs/OPTION-C.md .env.example install.sh
+// gate-reads: apps/bridge/scripts/install.sh apps/bridge/src/cli-main.ts apps/bridge/src/talos.ts apps/bridge/src/folders/service.ts vitest.config.ts
+// gate-reads: apps/web/src/features/agent-config/AgentSettingsSection.tsx apps/web/src/lib/socket-client-owner.ts
+// gate-reads: apps/relay/src/index.ts apps/relay/src/version.ts apps/relay/src/env.ts
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

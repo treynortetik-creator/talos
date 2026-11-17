@@ -245,7 +245,7 @@ function makeScene(el: HTMLDivElement, r: SceneRefs): () => void {
   g.cooldownTicks(200).onEngineStop(() => {
     if (fitted) return
     fitted = true
-    g.zoomToFit(400, 40)
+    g.zoomToFit(reduced() ? 0 : 400, 40) // reduced motion: the frame jumps into place, no glide
   })
   g.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
   engine.current = g
@@ -275,10 +275,12 @@ function makeScene(el: HTMLDivElement, r: SceneRefs): () => void {
     __clioGraphCamera?: () => number
     __clioGraphNodeScreen?: (i: number) => { x: number; y: number } | null
     __clioGraphPointers?: () => number[]
+    __clioGraphFitted?: () => boolean
   }
   if (import.meta.env.VITE_FAKE === '1') {
     hooks.__clioGraphCamera = () => g.camera().position.distanceTo(c.target)
     hooks.__clioGraphPointers = () => [...(c as unknown as PointerState)._pointers]
+    hooks.__clioGraphFitted = () => fitted
     hooks.__clioGraphNodeScreen = (i) => {
       const n = (g.graphData().nodes as GNode[]).find((m) => m.id === i)
       if (!n || n.x === undefined) return null
@@ -298,6 +300,8 @@ function makeScene(el: HTMLDivElement, r: SceneRefs): () => void {
     if (import.meta.env.VITE_FAKE === '1') {
       hooks.__clioGraphCamera = undefined
       hooks.__clioGraphNodeScreen = undefined
+      hooks.__clioGraphPointers = undefined
+      hooks.__clioGraphFitted = undefined
     }
     for (const m of discs.values()) {
       m.map?.dispose()
@@ -693,6 +697,8 @@ type PointerState = {
  * never saw go down, so a held mouse pointer is left alone and read. So: a release, cancel or move of a pointer the controls
  * do not hold is ignored, a release never leaves a lone pointer without a position, and every new press first drops the
  * held pointers without one (a mouse or pen press whose release was missed: one device cannot press twice).
+ * The controls go back on the canvas they came on: they capture each press to that element, and the library hears a click
+ * only on a release inside its own scene, so on any outer element every tap or click the controls took was lost.
  */
 function guardPointers(c: OrbitControls, el: HTMLElement): () => void {
   const pc = c as unknown as PointerState
@@ -706,6 +712,8 @@ function guardPointers(c: OrbitControls, el: HTMLElement): () => void {
   }
   const up = pc._onPointerUp
   const move = pc._onPointerMove
+  const canvas = c.domElement
+  if (!canvas) return () => {}
   c.disconnect() // the listeners hold the old functions: swap them while nothing listens
   pc._onPointerUp = (e) => {
     if (!held(e.pointerId)) return
@@ -716,7 +724,7 @@ function guardPointers(c: OrbitControls, el: HTMLElement): () => void {
   pc._onPointerMove = (e) => {
     if (held(e.pointerId)) move(e)
   }
-  c.connect(el)
+  c.connect(canvas)
   const dropStale = () => {
     for (const id of [...pc._pointers]) if (pc._pointerPositions[id] === undefined) drop(id)
   }

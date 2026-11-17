@@ -389,6 +389,8 @@ export interface SupervisorCapabilities {
   subthreads_supported: boolean
   /** A dedicated sub-thread may keep its own existing folder outside its parent's. Absent reads as false. */
   subthreads_own_folder: boolean
+  /** A dedicated sub-thread may run in its parent's folder (no folder, or the same one). Absent reads as false. */
+  subthreads_shared_folder: boolean
 }
 /** Reads one capability the way the bridge must: only a literal `true` counts. */
 export const capabilityOn = (supervisor: unknown, name: keyof SupervisorCapabilities): boolean =>

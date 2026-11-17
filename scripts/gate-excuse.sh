@@ -64,11 +64,16 @@ excuse_check() {
   echo "$n test(s), all failing on main at ${sha:0:7} (its newest finished CI verdict), none reached directly by this change: $(printf '%s' "$ok" | cut -f1 | paste -sd';' - | sed 's/;/; /g')"
 }
 
-# tstep <name> <command...>: a test step. As step, unless gate.sh --push asked for excuses: then its output is kept (and shown as
-# it runs), and a failure that excuse_check excuses lets the gate go on, saying which tests and why.
+# tstep <name> <command...>: a test step. As step, unless there is something to do with a failure: gate.sh --push asked for excuses
+# (GATE_EXCUSE_MAIN and GATE_EXCUSE_OUT), or the known-flakes list is here (scripts/gate-flakes.sh). Then its output is kept (and
+# shown as it runs), and a failure is read first by flake_rerun (only known flaky tests failed and each passes alone: the step
+# passes), then by excuse_check (only tests failing on main already: excused, the gate goes on), each saying which tests and why.
+# Otherwise it refuses as always, with what each found added.
 tstep() {
-  local name="$1" t log rc why
-  if [ -z "${GATE_EXCUSE_MAIN:-}" ] || [ -z "${GATE_EXCUSE_OUT:-}" ]; then
+  local name="$1" t log rc why="" excusing=1 flaking=0
+  { [ -n "${GATE_EXCUSE_MAIN:-}" ] && [ -n "${GATE_EXCUSE_OUT:-}" ]; } || excusing=0
+  ! declare -F flake_rerun >/dev/null || ! flake_ready || flaking=1
+  if [ "$excusing" = 0 ] && [ "$flaking" = 0 ]; then
     step "$@"
     return
   fi
@@ -83,11 +88,21 @@ tstep() {
     say "$name ok ($((SECONDS - t)) s)"
     return 0
   fi
-  if why="$(excuse_check "$log")"; then
+  FLAKE_WHY=""
+  if [ "$flaking" = 1 ] && flake_rerun "$log" "$name"; then
+    rm -f "$log"
+    return 0
+  fi
+  if [ "$excusing" = 1 ] && why="$(excuse_check "$log")"; then
     rm -f "$log"
     say "$name failed, EXCUSED: $why"
     return 0
   fi
   rm -f "$log"
-  refuse "$name failed (above); not excused: $why"
+  [ "$excusing" = 1 ] && why="; not excused: $why" || why=""
+  refuse "$name failed (above)$why${FLAKE_WHY:+; $FLAKE_WHY}"
 }
+
+# rstep <name> <command...>: a test step that is never excused as red on main (vitest related picks a test because it imports a
+# changed file), only reread as known flaky tests.
+rstep() { GATE_EXCUSE_MAIN="" GATE_EXCUSE_OUT="" tstep "$@"; }

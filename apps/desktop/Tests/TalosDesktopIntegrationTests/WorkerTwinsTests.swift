@@ -313,17 +313,42 @@ struct WorkerTwinsSubParkTests {
     #expect(r.wait(15) { r.state("sub") == "parked" }, "\(r.why("sub"))")
   }
 
-  /// 7, the fence park: the parent moved onto the sub-thread's own (unchanged) folder, which is no longer inside the parent's but
-  /// the parent's own. (An existing folder merely outside it is the sub-thread's own folder and is not parked.)
-  @Test func aSubThreadWhoseFolderIsNoLongerInsideItsParentsIsParkedAndItsNextStartIsRefusedByTheFence() throws {
+  /// The parent moved onto the sub-thread's own (unchanged) folder: that is now the parent's own folder, which the sub-thread shares
+  /// (subthreads_shared_folder), so it is neither parked as "outside" nor refused. (An existing folder merely outside the parent's is the
+  /// sub-thread's own folder and is not parked either.)
+  @Test func aSubThreadWhoseFolderBecomesItsParentsOwnIsNotParkedItNowSharesIt() throws {
     let r = try running()
     defer { r.teardown() }
     try r.subConfig(parentOpts: #"{"cwd":"\#(r.home)/par/s"}"#, subCwd: r.home + "/par/s")
-    #expect(r.wait(15) { r.state("sub") == "parked" }, "it ran on in its parent's own folder: \(r.why("sub"))")
-    #expect(r.auditLines.contains { $0.contains("worker_sub_refused thread=sub") })
+    // well past the settle time, and the park a refusal would have caused
+    #expect(!r.wait(8) { r.state("sub") != "live" && r.state("sub") != "busy" }, "it ran on, shared: \(r.why("sub"))")
+    #expect(!r.auditLines.contains { $0.contains("worker_sub_refused thread=sub") })
+    #expect(r.starts.count == 1)
+  }
+
+  /// A child that shares its parent's folder, running, whose parent's folder setting then cannot be read: refused and parked after the
+  /// settle time, never restarted as a folder move into the agent folder (Main's).
+  @Test func aSharedFolderChildWhoseParentsFolderSettingBecomesUnreadableIsParkedNotMovedToTheAgentFolder() throws {
+    let (r, _) = try WorkerRig.twins(projects: ["par"], settle: 1)
+    defer { r.teardown() }
+    func write(_ parentOpts: String) throws {
+      try """
+      {"default_thread":"general","dedicated":{"enabled":true,"max_live":3},"threads":[{"id":"general","kind":"fixed"},
+      {"id":"par","kind":"fixed","session":"dedicated","session_opts":\(parentOpts)},
+      {"id":"sub","kind":"fixed","session":"dedicated","parent_id":"par"}]}
+      """.write(toFile: r.talosHome + "/config.json", atomically: true, encoding: .utf8)
+    }
+    try write(#"{"cwd":"\#(r.home)/par"}"#)
+    r.mgr.startTicking()
+    try r.wake("sub")
+    #expect(r.wait(10) { r.up("sub") }, "\(r.why("sub"))")
+    #expect(r.entry("sub")?.launched?.cwd == r.home + "/par")
+    try write(#"{"cwd":42}"#)
+    #expect(r.wait(15) { r.state("sub") == "parked" }, "it ran on: \(r.why("sub"))")
+    #expect(r.starts.count == 1, "no restart into another folder")
     try r.wake("sub")
     #expect(r.wait(10) { r.state("sub") == "failed" }, "\(r.why("sub"))")
-    #expect(r.entry("sub")?.error?.detail?.contains("sub-thread folder") == true, "\(String(describing: r.entry("sub")?.error))")
+    #expect(r.entry("sub")?.error?.detail?.contains("folder setting can't be read") == true, "\(String(describing: r.entry("sub")?.error))")
     #expect(r.starts.count == 1)
   }
 

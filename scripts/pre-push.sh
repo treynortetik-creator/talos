@@ -182,8 +182,8 @@ while read -r _lref lsha rref rsha; do
       echo "pre-push: REFUSED: a handoff branch is refs/heads/handoff/<machine>/<name> (letters, digits and . _ -)" >&2
       exit 1
     fi
-    # no private list here: the generic rules run (a hit still refuses), and the landing machine, which must have the list
-    # (gate-push.sh --from refuses without one), scans it with the private list too
+    # no private list here: the generic rules run (a hit still refuses), and the landing machine scans it with the private list
+    # too (gate-push.sh --from refuses without one, unless Delphi's personal-ok stamp for this exact tip is on the remote)
     common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
     if [ ! -f scripts/personal-denylist.txt ] && { [ -z "$common" ] || [ ! -f "$(dirname "$common")/scripts/personal-denylist.txt" ]; } &&
       [ -z "${CHECK_EXTRA_RULES:-}" ]; then

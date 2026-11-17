@@ -15,6 +15,22 @@ step_vitest() {
   TALOS_KIT_FULL_SELF_TEST="$FULL" pnpm test --maxWorkers="$CI_WORKERS" ${skip[@]+"${skip[@]}"} \
     --retry=1 --reporter=default --reporter="$ROOT/scripts/ci-flake-vitest.ts" --reporter="$ROOT/scripts/ci-test-results-vitest.ts" "$@"
 }
+# The installer's core tests once more with a corepack pnpm first on PATH (scripts/corepack-install-tests.sh, as `pnpm
+# test:corepack-install`), as a Mac set up by SETUP.md has it: its own step, because a harness fault that only a corepack pnpm
+# shows (KIT-8, red at 05676ca3) passed on every CI machine, whose pnpm is not corepack's. Left out with the install tests
+# themselves when nothing they run changed (KIT_SKIP), and runs on a Mac only (the pnpm a user's Mac has; Titan's Linux check does not
+# double it, nor need a Node with corepack); on a Mac without corepack it fails ("corepack missing"), never skips.
+step_corepack_install() {
+  if [ "${KIT_SKIP:-0}" = 1 ]; then
+    echo "ci-local: the install tests with a corepack pnpm skipped: nothing they run changed since the last green commit"
+    return 0
+  fi
+  if [ "$(uname -s)" != Darwin ]; then
+    echo "ci-local: the install tests with a corepack pnpm skipped: they run on a Mac only"
+    return 0
+  fi
+  pnpm test:corepack-install
+}
 # The two halves of the bridge suite (test-parallel.ts). A commit forked before that runner existed has only the plain one, so
 # the first half does nothing and the second runs all of it.
 BUN_RUNNER=apps/bridge/scripts/test-parallel.ts SLOW_PREFIX=test/schedules/
@@ -31,18 +47,22 @@ step_contract() { pnpm --filter @talos-app/bridge test:contract --reporter=defau
 
 # One thing at a time where a test waits on real time. The contract suite and the schedules tests give a real bridge and the real
 # Chronos CLI 3 seconds to answer, and every way of running them beside anything else failed on some run (docs/CI-LOCAL.md has
-# the list). So each group, and each Swift job, holds the `suites` mutex: one at a time on this Mac, across all runs.
+# the list). So each group, and each Swift job, holds the `suites` mutex: one at a time across all CI runs (slot 1), and while the quiet group runs no new gate starts (scripts/ci-local/locks.sh, ci_quiet_active).
 # Each hold of the suites mutex leaves a marker when it was had (suites-quiet, suites-loud), and quiet-ok when the quiet group
 # passed: check as a part tells "not tested" (a hold not had in time) from a red (job_check).
 quiet_suites() {
   : > "$RESULTS/suites-quiet"
+  ci_quiet_begin "$LOCKS" # no new gate starts while this runs (ci_mutex); its end is a row in logs/quiet-group.tsv
   run "$1" step_contract && run "$1" step_bun_schedules
   local rc=$?
+  ci_quiet_end "$LOCKS" "$rc"
   [ "$rc" != 0 ] || : > "$RESULTS/quiet-ok"
   : > "$RESULTS/quiet-done"
   return $rc
 }
-loud_suites() { : > "$RESULTS/suites-loud"; together "$1" step_bun_rest step_vitest; }
+# the corepack variant is in the same hold (a second take of the mutex that was not had in time would read as a red), after the
+# suites that run side by side
+loud_suites() { : > "$RESULTS/suites-loud"; together "$1" step_bun_rest step_vitest && run "$1" step_corepack_install; }
 
 # The parts of check that run on another machine (docs/CI-MACHINES.md, "check in three places"), posted as ci-part/<job> and
 # folded into local-ci/check by the machine that runs check; and the report-only Linux job (report-ci/linux, Hestia). Each is a
@@ -238,7 +258,7 @@ quiet_and_parts() { # under the suites mutex: the quiet group, then the first lo
     for p in bridge-shard-1 bridge-shard-2; do printf '%s\n' ${here[@]+"${here[@]}"} | grep -qx "$p" || here+=("$p"); done
   fi
   printf '%s\n' ${here[@]+"${here[@]}"} > "$RESULTS/parts-taken"
-  parts_here "$log" ${here[@]+"${here[@]}"}
+  parts_here "$log" ${here[@]+"${here[@]}"} && run "$log" step_corepack_install
 }
 parts_second_look() { # without the mutex: wait for the parts still working, take the late ones, then fold the answers in
   local log="$1" deadline late=() p m st where="" bad=""
@@ -273,9 +293,9 @@ parts_second_look() { # without the mutex: wait for the parts still working, tak
 suites_then_audit() {
   local log="$1" rc=0
   if [ -f "$RESULTS/parts-wanted" ]; then
-    { run "$log" ci_mutex "$LOCKS" suites quiet_and_parts "$log" && parts_second_look "$log"; } || rc=1
+    { run "$log" ci_mutex_all "$LOCKS" suites quiet_and_parts "$log" && parts_second_look "$log"; } || rc=1
   else
-    { run "$log" ci_mutex "$LOCKS" suites quiet_suites "$log" &&
+    { run "$log" ci_mutex_all "$LOCKS" suites quiet_suites "$log" &&
       run "$log" ci_mutex "$LOCKS" suites loud_suites "$log"; } || rc=1
   fi
   warn_step check "$log" "a high or critical advisory, or the registry did not answer" pnpm audit --prod --audit-level high
@@ -308,6 +328,7 @@ step_macos_subset() { # each file through check's own runner (scripts/ci-local/m
   [ -z "$vitest" ] || step_vitest --passWithNoTests $vitest || rc=1
   # shellcheck disable=SC2086
   [ -z "$contract" ] || step_contract --passWithNoTests $contract || rc=1
+  step_corepack_install || rc=1 # here, on a Mac: the pnpm a user's Mac has
   return $rc
 }
 others_done() { # every other job of this run has ended (its result is there, or its group is gone)
@@ -321,7 +342,7 @@ others_done() { # every other job of this run has ended (its result is there, or
 check_with_part() {
   local log="$1" m="$CI_CHECK_PART" deadline=0 first st why poll="${CI_PART_POLL:-30}"
   : > "$RESULTS/quiet-done"
-  if ! run "$log" ci_mutex "$LOCKS" suites step_macos_subset; then
+  if ! run "$log" ci_mutex_all "$LOCKS" suites step_macos_subset; then
     echo "the macOS-only tests failed here (or their lock was not had in time); see the log" > "$RESULTS/check.why"
     check_tests_file "$log" "check:$m"
     return 1

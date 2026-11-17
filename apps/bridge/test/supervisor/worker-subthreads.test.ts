@@ -185,8 +185,15 @@ describe('sub-threads: effective options', () => {
       parentId: 'p',
     })
     const inh = launch(all[2] as Raw, all)
-    expect(inh).toMatchObject({ ownCwd: false, inherited: ['cwd'] }) // the options still inherit the folder
-    expect(inh.refusal).toContain('folder of its own') // but a session never shares the parent's folder
+    // no folder of its own: it runs in the parent's (subthreads_shared_folder), so nothing is made or fenced
+    expect(inh).toMatchObject({
+      ownCwd: false,
+      shares: true,
+      refusal: null,
+      inherited: ['cwd'],
+      parentCwd: '/home/alex/p',
+    })
+    expect(launch(all[1] as Raw, all).shares).toBe(false)
     expect(launch(all[3] as Raw, all).refusal).not.toBeNull()
     expect(launch(all[4] as Raw, all).refusal).not.toBeNull()
   })
@@ -207,7 +214,7 @@ describe('sub-threads: effective options', () => {
     }
     // null is not set: no folder of its own
     const unset = [thread('p', { opts: { cwd: '/home/alex/p' } }), thread('s', { parent: 'p', opts: { cwd: null } })]
-    expect(launch(unset[1] as Raw, unset).refusal).toContain('folder of its own')
+    expect(launch(unset[1] as Raw, unset)).toMatchObject({ refusal: null, shares: true })
     const notObject = [thread('p', { opts: { cwd: '/home/alex/p' } }), thread('s', { parent: 'p', opts: 'oops' })]
     expect(eff('s', notObject).cwd).toBeUndefined()
     expect(launch(notObject[1] as Raw, notObject).refusal).toContain('oops')
@@ -262,6 +269,41 @@ describe('sub-threads: effective options', () => {
     expect(l.parentCwd).toBeNull()
     expect(launch(all[1] as Raw, all).refusal).toBeNull() // a sub of a top-level thread is fine
   })
+  it("a folder equal to the parent's (a trailing slash too) is the shared folder, treated as no folder at all", () => {
+    for (const cwd of ['/home/alex/p', '/home/alex/p/']) {
+      const all = [thread('p', { opts: { cwd: '/home/alex/p' } }), thread('s', { parent: 'p', opts: { cwd } })]
+      expect(launch(all[1] as Raw, all)).toMatchObject({ shares: true, ownCwd: false, refusal: null })
+    }
+    // a path that only looks the same, or climbs out and back, is not: it stays under the old strict rules
+    for (const cwd of ['/home/alex/p/../p', '/home/alex/./p', '/home/alex/p2', '/home/alex/P']) {
+      const all = [thread('p', { opts: { cwd: '/home/alex/p' } }), thread('s', { parent: 'p', opts: { cwd } })]
+      expect(launch(all[1] as Raw, all)).toMatchObject({ shares: false, ownCwd: true })
+    }
+  })
+  it('no folder under a parent with none runs in the agent folder; an orphan with no folder is still refused', () => {
+    const all = [thread('p'), thread('s', { parent: 'p' })]
+    expect(launch(all[1] as Raw, all)).toMatchObject({ shares: true, parentCwd: null, refusal: null })
+    const orphan = [thread('s', { parent: 'gone' })]
+    expect(launch(orphan[0] as Raw, orphan).refusal).not.toBeNull()
+    expect(launch(orphan[0] as Raw, orphan).shares).toBe(false)
+  })
+  it('a parent whose folder setting cannot be read refuses a child with no folder too, never the agent folder', () => {
+    for (const parentOpts of [{ cwd: 42 }, 'oops', { cwd: ['a'] }]) {
+      for (const childOpts of [undefined, { cwd: '/home/alex/p' }, { cwd: '/home/alex/p/s' }]) {
+        const all = [
+          thread('p', { opts: parentOpts }),
+          thread('s', { parent: 'p', ...(childOpts ? { opts: childOpts } : {}) }),
+        ]
+        const l = launch(all[1] as Raw, all)
+        expect([JSON.stringify(parentOpts), JSON.stringify(childOpts), l.shares, l.refusal]).toEqual([
+          JSON.stringify(parentOpts),
+          JSON.stringify(childOpts),
+          false,
+          expect.stringContaining("parent thread's folder setting can't be read"),
+        ])
+      }
+    }
+  })
   it('a parent with no folder of its own means its subs are refused', () => {
     const all = [thread('p'), thread('s', { parent: 'p', opts: { cwd: '/home/alex/p/s' } })]
     expect(launch(all[1] as Raw, all).refusal).toContain('give the parent a folder first')
@@ -269,6 +311,6 @@ describe('sub-threads: effective options', () => {
       thread('p', { opts: { cwd: 7 } }),
       thread('s', { parent: 'p', opts: { cwd: '/home/alex/p/s' } }),
     ]
-    expect(launch(junkParent[1] as Raw, junkParent).refusal).toContain('give the parent a folder first')
+    expect(launch(junkParent[1] as Raw, junkParent).refusal).toContain("folder setting can't be read")
   })
 })

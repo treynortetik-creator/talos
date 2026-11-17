@@ -1,6 +1,7 @@
 // scripts/publish-public.sh: the fresh public snapshot up to the push and never past it. Each test builds a small source
 // repository holding copies of the scripts (they find each other next to themselves) and a local bare "public" repository,
 // so nothing here touches a real remote. The private list is a rule file in the source's scripts/ folder, never tracked.
+// gate-reads: scripts/publish-public.sh scripts/export-public.sh scripts/check-no-personal.sh scripts/denylist.generic.txt
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

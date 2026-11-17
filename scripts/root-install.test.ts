@@ -1,6 +1,7 @@
 // The root ./install.sh: dry run, real run, refusals, the Mac app step, reruns and verify-install. The harness (a private PATH
 // of real tools and stubs, a sandbox HOME) is root-install-harness.ts; the suite is split over the root-install*.test.ts files
 // so vitest runs them side by side.
+// gate-reads: install.sh kit/* scripts/*
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'

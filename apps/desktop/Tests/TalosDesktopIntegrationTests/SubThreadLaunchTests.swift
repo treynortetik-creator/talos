@@ -46,7 +46,7 @@ struct SubThreadLaunchTests {
   }
 
   @Test func aSubWhoseFolderLeadsOutOfItsParentDoesNotStartAndNothingIsMade() throws {
-    for path in ["/par/../esc/x", "/other/x", "/par"] {
+    for path in ["/par/../esc/x", "/other/x"] {
       let r = try rig { #"{"cwd":"\#($0)\#(path)"}"# }
       defer { r.teardown() }
       try r.wake("sub")
@@ -130,20 +130,55 @@ struct SubThreadLaunchTests {
     #expect(r.starts.isEmpty, "not started in the parent's folder either")
   }
 
-  @Test func aSubWithNoFolderOfItsOwnIsAConfigErrorEvenWhileItsParentRuns() throws {
+  @Test func aSubWithNoFolderOfItsOwnRunsInItsParentsFolderBesideTheParent() throws {
     let r = try rig { _ in "{}" }
     defer { r.teardown() }
     try r.wake("par")
     #expect(r.wait(10) { r.up("par") }, "\(r.why("par"))")
     try r.wake("sub")
-    #expect(r.wait(10) { r.state("sub") == "failed" }, "\(r.why("sub"))")
-    #expect(r.entry("sub")?.error?.code == "start_failed", "not folder_claimed: \(String(describing: r.entry("sub")?.error))")
-    #expect(r.entry("sub")?.error?.detail?.contains("folder of its own") == true)
-    #expect(r.starts.count == 1, "only the parent started")
+    #expect(r.wait(10) { r.up("sub") }, "not folder_claimed: \(r.why("sub"))")
+    #expect(r.wait(3) { r.entry("sub")?.launched != nil })
+    #expect(r.entry("sub")?.launched?.cwd == r.home + "/par")
+    #expect(r.starts.count == 2, "the parent and the child both started")
+    // it stays up well past the settle time: a running shared-folder child is not judged "outside" and parked
+    #expect(!r.wait(2) { !r.up("sub") }, "\(r.why("sub"))")
+  }
+
+  @Test func aSubNamingItsParentsOwnFolderIsTheSameAsOneWithNone() throws {
+    for name in ["par", "par/"] {
+      let r = try rig { _ in "{}" }
+      defer { r.teardown() }
+      try config(r, subOpts: #"{"cwd":"\#(r.home)/\#(name)"}"#)
+      try r.wake("par")
+      #expect(r.wait(10) { r.up("par") }, "\(name): \(r.why("par"))")
+      try r.wake("sub")
+      #expect(r.wait(10) { r.up("sub") }, "\(name): \(r.why("sub"))")
+      #expect(r.entry("sub")?.launched?.cwd == r.home + "/par", "\(name)")
+      #expect(r.starts.count == 2, "\(name)")
+    }
+  }
+
+  @Test func anUnrelatedThreadInTheSameFolderIsStillRefusedAsFolderClaimed() throws {
+    let r = try rig { _ in "{}" }
+    defer { r.teardown() }
+    // a third thread, no parent, naming the parent's folder: not in the family
+    try """
+    {"default_thread":"general","dedicated":{"enabled":true,"max_live":3},"threads":[{"id":"general","kind":"fixed"},
+    {"id":"par","kind":"fixed","session":"dedicated","session_opts":{"cwd":"\(r.home)/par"}},
+    {"id":"sub","kind":"fixed","session":"dedicated","parent_id":"par","session_opts":{}},
+    {"id":"stray","kind":"fixed","session":"dedicated","session_opts":{"cwd":"\(r.home)/par"}}]}
+    """.write(toFile: r.talosHome + "/config.json", atomically: true, encoding: .utf8)
+    try r.wake("par")
+    #expect(r.wait(10) { r.up("par") }, "\(r.why("par"))")
+    try r.wake("sub")
+    #expect(r.wait(10) { r.up("sub") }, "\(r.why("sub"))")
+    try r.wake("stray")
+    #expect(r.wait(10) { r.state("stray") == "failed" }, "\(r.why("stray"))")
+    #expect(r.entry("stray")?.error?.code == "folder_claimed")
   }
 
   @Test func aSubWhoseFolderIsItsParentsFolderIsRefusedUpFrontNotAsFolderClaimed() throws {
-    for name in ["par", "parlink", "par/../par"] {
+    for name in ["parlink", "par/../par"] {
       let r = try rig { _ in "{}" }
       defer { r.teardown() }
       try FileManager.default.createSymbolicLink(atPath: r.home + "/parlink", withDestinationPath: r.home + "/par")

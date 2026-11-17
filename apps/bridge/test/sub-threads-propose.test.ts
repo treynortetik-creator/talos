@@ -34,7 +34,7 @@ const cards = (x: Harness) =>
     .map((r) => r.raw.card as CardT)
 
 /** The Mac app's workers.json, saying whether it checks sub-thread folders (without it no sub-thread may change). */
-function macSays(home: string, subthreads: boolean, ownFolder = false) {
+function macSays(home: string, subthreads: boolean, ownFolder = false, sharedFolder = false) {
   writeFileSync(
     join(home, 'workers.json'),
     JSON.stringify({
@@ -45,13 +45,14 @@ function macSays(home: string, subthreads: boolean, ownFolder = false) {
         workers_supported: true,
         subthreads_supported: subthreads,
         ...(ownFolder ? { subthreads_own_folder: true } : {}),
+        ...(sharedFolder ? { subthreads_shared_folder: true } : {}),
       },
       threads: {},
     }),
   )
 }
 
-async function start(o: { trust?: boolean; mac?: boolean; lock?: boolean; own?: boolean } = {}) {
+async function start(o: { trust?: boolean; mac?: boolean; lock?: boolean; own?: boolean; shared?: boolean } = {}) {
   h = await startHarness({
     relay: RELAY,
     config: ((c: Record<string, unknown> & { threads: unknown[] }) => ({
@@ -66,10 +67,12 @@ async function start(o: { trust?: boolean; mac?: boolean; lock?: boolean; own?: 
         thread('visas', 'Visas', { parent_id: 'trip' }),
         thread('boss', 'Boss', { session: 'dedicated', session_opts: { cwd: '/home/alex/agent' } }),
         thread('repo', 'Repo', { session: 'dedicated', session_opts: { cwd: '/home/alex/repo' } }),
+        thread('same', 'Same', { session: 'dedicated', session_opts: { cwd: '/home/alex/agent' } }),
+        thread('bare', 'Bare', { session: 'dedicated' }),
       ],
     })) as never,
   })
-  macSays(h.home, o.mac !== false, o.own === true)
+  macSays(h.home, o.mac !== false, o.own === true, o.shared === true)
   return h
 }
 
@@ -170,4 +173,33 @@ describe('threads.<id>.parent through config_propose', () => {
       'thread "repo" keeps its own folder, so it does not get "boss"\'s instructions; the parent\'s privacy rules still apply',
     )
   })
+
+  // the owner's bug: two threads that work in one folder could not be put one under the other
+  test.each([
+    ['the same folder as the parent', 'same'],
+    ['no folder at all', 'bare'],
+  ])('a dedicated thread with %s: refused while the supervisor lacks the capability', async (_what, id) => {
+    const x = await start({ trust: true, own: true })
+    await ownerAsks(x, `put ${id} under Boss`)
+    const r = await propose(x, [{ path: `threads.${id}.parent`, value: 'boss' }])
+    expect(r.isError).toBe(true)
+    expect(parentOf(x, id)).toBeUndefined()
+  })
+
+  test.each([
+    ['the same folder as the parent', 'same'],
+    ['no folder at all', 'bare'],
+  ])(
+    'a dedicated thread with %s: made with the capability, and the owner sees the shared-folder warning',
+    async (_what, id) => {
+      const x = await start({ trust: true, own: true, shared: true })
+      await ownerAsks(x, `put ${id} under Boss`)
+      const r = await propose(x, [{ path: `threads.${id}.parent`, value: 'boss' }])
+      expect(r.isError, text(r)).toBeFalsy()
+      expect(parentOf(x, id)).toBe('boss')
+      expect(text(r)).toContain(
+        `thread "${id}" and its parent "boss" work in the same folder; they can edit the same files`,
+      )
+    },
+  )
 })

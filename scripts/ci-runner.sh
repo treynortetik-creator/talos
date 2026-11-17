@@ -394,6 +394,8 @@ ci_cache_dir() {
   printf '%s\n' "$c"
 }
 
+# ---------- a scheduled run's own skips: in scripts/ci-runner/schedule.sh (ci_schedule_skip) ----------
+
 # ---------- run ----------
 # ci_pr_gone: exit 0 (and says so) when this PR run has nothing to test any more, so nothing is tested or posted.
 ci_pr_gone() {
@@ -414,7 +416,9 @@ ci_pr_gone() {
 }
 ci_run() {
   local cache local_ci="${CI_LOCAL_SCRIPT:-$HERE/ci-local.sh}" args sha
+  unset CI_SETTLE # asked for below, by a main push run alone
   ci_guard || return 1
+  if [ "${GITHUB_EVENT_NAME:-}" = schedule ] && . "$HERE/ci-runner/schedule.sh" && ci_schedule_skip; then return 0; fi # skipped (scripts/ci-runner/schedule.sh)
   ci_split_checks run || return 1
   # No run splits browser with the browser-mac part any more (phase C revised): so never with CI_BROWSER_E2E_PART either, which
   # ci-local.sh refuses. The e2e part's knobs are Lemnos's own run's (plan), its workers the part's.
@@ -432,6 +436,7 @@ ci_run() {
     # The sha the push made main, not the branch name: a second push while this one waits or runs must not change what is tested
     # (the workflow's concurrency keeps only the newest waiting run, and that run has its own sha).
     args=(--ref "$GITHUB_SHA")
+    ! ci_settle_want || export CI_SETTLE=1
     # No force flags: ci-local.sh runs the desktop and mobile jobs for any commit already on origin/main (its own merge-base).
     # An exported flag would reach every job and the tests they run.
   elif [ "${GITHUB_EVENT_NAME:-}" = schedule ]; then
@@ -508,7 +513,9 @@ ci_exec_local() {
 ci_fallback() {
   local spec m list j st final take="" waiting started deadline now cache local_ci="${CI_LOCAL_SCRIPT:-$HERE/ci-local.sh}" jobs sha
   local notes="" why
+  if [ "${GITHUB_EVENT_NAME:-}" = schedule ] && . "$HERE/ci-runner/schedule.sh" && ci_schedule_skip; then return 0; fi # skipped (scripts/ci-runner/schedule.sh)
   [ -n "${CI_FALLBACK:-}" ] || { echo "ci-runner: fallback: nothing was handed to another machine"; return 0; }
+  [ "$(ci_settled)" != superseded=true ] || { echo "ci-runner: fallback: this run stood aside for a newer push (settle); nothing is taken over"; return 0; }
   for spec in $CI_FALLBACK; do
     case "$spec" in
       *[!a-z0-9:,-]* | :* | *: | *, | *,,* | *:*:*) echo "ci-runner: fallback: '$spec' is not <machine>:<job,...>" >&2; return 1 ;;
@@ -853,111 +860,6 @@ LIST
   return 0
 }
 
-# ---------- superseded: the commits of main this push's run makes CI skip ----------
-# GitHub keeps one run waiting in the main concurrency group and cancels the older waiting one, so a busy hour tests some commits
-# of main and not others. A push run marks each commit between its own and the last one with any local-ci status (20 at most)
-# report-ci/superseded, success with "not tested: superseded by <sha7>; CI tests main's newest commit": the verdict ignores
-# report-ci/*, and a skip never looks like "untested and fine". A commit already marked is left alone. Push runs only.
-ci_superseded_mark() {
-  local repo="${GITHUB_REPOSITORY:-}" sha="${CI_PLAN_SHA:-${GITHUB_SHA:-}}" c rows marked=0
-  [ "${GITHUB_EVENT_NAME:-}" = push ] || { echo "ci-runner: superseded: not a push run; nothing to mark"; return 0; }
-  [ -n "$repo" ] && [ -n "$sha" ] || { echo "ci-runner: superseded: needs GITHUB_REPOSITORY and the commit"; return 0; }
-  for c in $(git rev-list --first-parent -n 21 "$sha" 2>/dev/null | tail -n +2); do
-    rows="$(gh api --paginate "repos/$repo/commits/$c/status?per_page=100" --jq '.statuses[] | [.context, .state] | @tsv' </dev/null 2>/dev/null)" ||
-      { echo "ci-runner: superseded: the statuses of ${c:0:7} could not be read; stopped"; break; }
-    ! printf '%s\n' "$rows" | grep -q '^local-ci/' || break # tested (or being tested): the walk ends here
-    ! printf '%s\n' "$rows" | grep -q '^report-ci/superseded' || continue
-    gh api -X POST "repos/$repo/statuses/$c" -f state=success -f context=report-ci/superseded \
-      -f description="not tested: superseded by ${sha:0:7}; CI tests main's newest commit" </dev/null >/dev/null 2>&1 &&
-      marked=$((marked + 1))
-  done
-  echo "ci-runner: superseded: $marked commit(s) of main marked as not tested"
-  return 0
-}
-
-# ---------- dispatch-wait: a dispatch never runs beside a newer push run of main that contains its commit ----------
-# docs/CI-MACHINES.md, "Lemnos guards". A dispatch for S waits while a push run of a newer main commit containing S has its Lemnos
-# job running (not one with no runner yet: this job holds a runner while it waits); a verdict there closes S as superseded
-# (report-ci/superseded, "not tested:"), unless run_anyway. GitHub unreadable, or CI_DISPATCH_MAX_WAIT (7200 s) gone: it runs.
-ci_contains() { git -C "$ROOT" merge-base --is-ancestor "$2" "$1" 2>/dev/null; } # ci_contains <newer> <sha>: is sha in newer's history
-ci_dispatch_wait() {
-  local repo="${GITHUB_REPOSITORY:-}" out="${GITHUB_OUTPUT:-/dev/null}" sha rows id h st waited="" going verdict="" cls deadline poll
-  local anyway="$(lower "${INPUT_RUN_ANYWAY:-false}")"
-  if [ "${GITHUB_EVENT_NAME:-}" != workflow_dispatch ] || [ "${CI_HOSTILE:-}" = 1 ]; then
-    echo "ci-runner: dispatch-wait: not a dispatch (or a hostile one, which is never superseded); nothing to wait for"
-    echo "superseded=false" >>"$out"
-    return 0
-  fi
-  sha="${CI_PLAN_SHA:-}"
-  [ -n "$sha" ] || sha="$(git -C "$ROOT" rev-parse --verify -q "${INPUT_REF:-}^{commit}" 2>/dev/null ||
-    git -C "$ROOT" rev-parse --verify -q "origin/${INPUT_REF:-}^{commit}" 2>/dev/null)"
-  if [ -z "$sha" ] || [ -z "$repo" ]; then
-    echo "ci-runner: dispatch-wait: no commit or repository to look for; the dispatch runs"
-    echo "superseded=false" >>"$out"
-    return 0
-  fi
-  poll="${CI_DISPATCH_POLL:-60}" deadline="${CI_DISPATCH_MAX_WAIT:-7200}"
-  printf '%s' "$poll" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || poll=60
-  case "$deadline" in '' | *[!0-9]*) deadline=7200 ;; esac
-  deadline=$(($(date +%s) + 10#$deadline))
-  while :; do
-    if ! rows="$(gh api "repos/$repo/actions/workflows/ci-runner.yml/runs?event=push&branch=main&per_page=30" \
-      --jq '.workflow_runs[] | select(.status != "completed") | [.id, .head_sha] | @tsv' </dev/null 2>/dev/null)"; then
-      echo "ci-runner: dispatch-wait: could not list the push runs of main; the dispatch runs"
-      break
-    fi
-    going=""
-    while IFS=$'\t' read -r id h; do
-      [ -n "$id" ] && [ -n "$h" ] && [ "$h" != "$sha" ] || continue
-      # a commit newer than this checkout is fetched, quietly; one that still cannot be read is not waited on
-      git -C "$ROOT" cat-file -e "$h^{commit}" 2>/dev/null || ci_git_net "$ROOT" fetch -q origin main >/dev/null 2>&1 || true
-      ci_contains "$h" "$sha" || continue
-      st="$(gh api "repos/$repo/actions/runs/$id/jobs?per_page=100" --jq '.jobs[] | select(.name == "local-ci on ci-runner") | .status' </dev/null 2>/dev/null | head -1)"
-      if [ "$st" != in_progress ]; then
-        echo "ci-runner: dispatch-wait: the push run of ${h:0:7} contains ${sha:0:7}, but its Lemnos job is not running (${st:-unknown}; not started on a runner yet, or done): not waiting on it"
-        continue
-      fi
-      going="$going $h"
-      case " $waited " in *" $h "*) ;; *) waited="$waited $h"
-        echo "ci-runner: dispatch-wait: waiting behind the push run of ${h:0:7} (it contains ${sha:0:7}): a dispatch never runs beside it" ;; esac
-    done <<ROWS
-$rows
-ROWS
-    [ -n "$going" ] || break
-    if [ "$(date +%s)" -ge "$deadline" ]; then
-      echo "ci-runner: dispatch-wait: waited the most it may (CI_DISPATCH_MAX_WAIT ${CI_DISPATCH_MAX_WAIT:-7200} s); the dispatch runs"
-      echo "superseded=false" >>"$out"
-      return 0
-    fi
-    sleep "$poll"
-  done
-  for h in $waited; do
-    rows="$(gh api --paginate "repos/$repo/commits/$h/status?per_page=100" --jq '.statuses[] | [.context, .state, .description] | @tsv' </dev/null 2>/dev/null)" || continue
-    cls="$(printf '%s\n' "$rows" | ci_classify)"
-    case "${cls%%$'\t'*}" in green | red) verdict="$h ${cls%%$'\t'*}" ;; esac
-  done
-  if [ -z "$verdict" ]; then
-    [ -z "$waited" ] || echo "ci-runner: dispatch-wait: the run it waited behind gave no verdict; the dispatch runs"
-    echo "superseded=false" >>"$out"
-    return 0
-  fi
-  h="${verdict%% *}"
-  case "$anyway" in true | 1 | yes | on)
-    echo "ci-runner: dispatch-wait: ${h:0:7} has a verdict (${verdict#* }), but this dispatch asked for run_anyway: it runs"
-    echo "superseded=false" >>"$out"; return 0 ;;
-  esac
-  # unmarked, a skip would look like "untested and fine": when the mark cannot be posted, the dispatch runs instead
-  if ! gh api -X POST "repos/$repo/statuses/$sha" -f state=success -f context=report-ci/superseded \
-    -f description="not tested: superseded by ${h:0:7}, whose push run gave main a verdict; dispatch with run_anyway to test it" </dev/null >/dev/null 2>&1; then
-    echo "ci-runner: dispatch-wait: ${h:0:7} gave a verdict, but ${sha:0:7} could not be marked superseded on GitHub; the dispatch runs"
-    echo "superseded=false" >>"$out"
-    return 0
-  fi
-  echo "ci-runner: dispatch-wait: ${h:0:7} contains ${sha:0:7} and its run gave main a verdict (${verdict#* }): this dispatch is closed as superseded, not tested"
-  echo "superseded=true" >>"$out"
-  return 0
-}
-
 # Sourced (the tests do this): only the functions above.
 if (return 0 2>/dev/null); then return 0; fi
 
@@ -965,9 +867,10 @@ case "${1:-}" in
   guard) ci_guard ;;
   tools) ci_tools "$ROOT" ;;
   size) ci_size_env ;;
-  run) ci_run ;;
+  run) . "$HERE/ci-runner/main-queue.sh" && ci_run ;;
   plan) ci_plan ;;
-  fallback) ci_fallback ;;
+  fallback) . "$HERE/ci-runner/main-queue.sh" && ci_fallback ;;
+  settled) . "$HERE/ci-runner/main-queue.sh" && ci_settled ;;
   preflight) ci_preflight ;;
   sweep) ci_sweep ;;
   logs) . "$HERE/ci-runner/logs.sh" && ci_logs ;;
@@ -976,8 +879,8 @@ case "${1:-}" in
   untested) . "$HERE/ci-runner/alert.sh" && { ci_untested; ci_report_alert; } ;;
   e2e-shadow) . "$HERE/ci-runner/e2e-shadow.sh" && ci_e2e_shadow ;;
   check-shadow) . "$HERE/ci-runner/e2e-shadow.sh" && . "$HERE/ci-runner/check-shadow.sh" && ci_check_shadow ;;
-  superseded) ci_superseded_mark ;;
-  dispatch-wait) ci_dispatch_wait ;;
+  superseded) . "$HERE/ci-runner/main-queue.sh" && ci_superseded_mark ;;
+  dispatch-wait) . "$HERE/ci-runner/main-queue.sh" && ci_dispatch_wait ;;
   green) . "$HERE/ci-runner/green.sh" && ci_green ;;
   *) sed -n '2,36p' "$0"; exit 64 ;;
 esac

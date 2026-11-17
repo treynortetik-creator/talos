@@ -1,8 +1,9 @@
 # The gate's own inputs: the ONE list (scripts/gate-inputs.test.ts checks it), of every file the gate sources, runs, or reads its
 # verdict from. Read in three places, always from main's copy and never from the change being judged:
 #   - gate-push.sh's rebase-clean pass (the gate passed, main moved, the rebase was clean, and no new main commit touches a file
-#     of this change) pushes after the cheap checks only when no new main commit touches a path matching a line here; otherwise
-#     the full gate runs again (docs/CI-MACHINES.md);
+#     of this change) pushes after the cheap checks only when no new main commit touches a GATE-WIDE input: the part of this list
+#     in scripts/gate-wide-inputs.txt (the gate itself and the build and test config). Any other line here refuses that pass only
+#     on a file this change shares; otherwise the full gate runs again (docs/CI-MACHINES.md);
 #   - a handoff (refs/heads/handoff/<machine>/<name>) that changes a path matching a line here is refused, by the pre-push hook
 #     when it is pushed and by gate.sh --push --from when it is landed: the landing machine would run the handoff's own gate.
 # One extended regex per line, matched against the whole repository path; lines starting with # are comments. Paths are matched

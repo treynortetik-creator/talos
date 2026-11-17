@@ -96,6 +96,12 @@ const connect = async (r: TestRelay, features: string[]) => {
 const items = (b: FakeBridge) =>
   b.notified.filter((f) => f.type === 'problem.item') as unknown as Array<{ id: string; problem: ProblemT }>
 const settle = () => new Promise((res) => setTimeout(res, 250))
+const deliveryId = (r: TestRelay, id: string) =>
+  (
+    r.relay.services.db.prepare('select bridge_frame_id f from core_bug_reports where report_id = ?').get(id) as {
+      f: string
+    }
+  ).f
 const queuedAt = (r: TestRelay, id: string) =>
   (
     r.relay.services.db.prepare('select bridge_queued_at q from core_bug_reports where report_id = ?').get(id) as {
@@ -112,8 +118,8 @@ describe('queued to the relay own bridge', () => {
     await mac.waitNotified('problem.item')
     const [item] = items(mac)
     const p = item?.problem as ProblemT
-    expect(item?.id).toBe(body.id)
-    expect(p).toMatchObject({ id: body.id, source: 'web', kind: 'owner', device: 'browser' })
+    expect(item?.id).toBe(deliveryId(r, body.id))
+    expect(p).toMatchObject({ id: deliveryId(r, body.id), source: 'web', kind: 'owner', device: 'browser' })
     expect(p.install).toBeUndefined()
     expect(p.attached).toBeUndefined()
     expect(p.message).toContain(TEXT)
@@ -156,7 +162,7 @@ describe('queued to the relay own bridge', () => {
     await mac.waitNotified('problem.item')
     await settle()
     expect(items(mac)).toHaveLength(1)
-    expect(items(mac)[0]?.id).toBe(body.id)
+    expect(items(mac)[0]?.id).toBe(deliveryId(r, body.id))
   })
 
   it('a Mac without problems/1 holds it; a hello with it delivers', async () => {
@@ -169,7 +175,7 @@ describe('queued to the relay own bridge', () => {
     await old.close()
     const fresh = await connect(r, [PROBLEMS_FEATURE])
     await fresh.waitNotified('problem.item')
-    expect(items(fresh)[0]?.id).toBe(body.id)
+    expect(items(fresh)[0]?.id).toBe(deliveryId(r, body.id))
   })
 
   it('a failed queueing leaves the mark empty, and the backfill queues it', async () => {
@@ -204,7 +210,7 @@ describe('the startup backfill', () => {
     expect(items(mac)).toEqual([])
     expect(await backfillOwnReports(s)).toBe(1)
     await mac.waitNotified('problem.item')
-    expect(items(mac)[0]?.id).toBe(body.id)
+    expect(items(mac)[0]?.id).toBe(deliveryId(r, body.id))
     expect(queuedAt(r, body.id)).not.toBeNull()
     expect(await backfillOwnReports(s)).toBe(0)
     await settle()
@@ -223,7 +229,7 @@ describe('the startup backfill', () => {
     rmSync(join(r.dir, 'bug-reports', `${gone.id}.json.bin`))
     expect(await backfillOwnReports(s)).toBe(1)
     await mac.waitNotified('problem.item')
-    expect(items(mac)[0]?.id).toBe(kept.id)
+    expect(items(mac)[0]?.id).toBe(deliveryId(r, kept.id))
     expect(queuedAt(r, gone.id)).toBeNull()
   })
 })

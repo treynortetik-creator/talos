@@ -471,6 +471,8 @@ export const WorkersFile = z.object({
     subthreads_supported: z.boolean().default(false).catch(false),
     /** This Mac app also starts a dedicated sub-thread in an existing folder outside its parent's; without it that is refused. */
     subthreads_own_folder: z.boolean().default(false).catch(false),
+    /** This supervisor also starts a dedicated sub-thread with no folder, or its parent's own, in the parent's folder; without it that is refused. */
+    subthreads_shared_folder: z.boolean().default(false).catch(false),
     /** The pane pid of main's session (diagnostics). */
     main_pane_pid: z.number().int().nonnegative().default(0),
     /** Main's own dialog on its pane right now (the development-channels warning), published here because Main has no thread entry. A value that does not fit reads as none. */
@@ -710,6 +712,23 @@ export const HubAskRule = z.looseObject({
 export type HubAskRuleT = z.infer<typeof HubAskRule>
 export const HubRuleTake = z.looseObject({ t: z.literal('rule_take'), ...HubRuleCall })
 export type HubRuleTakeT = z.infer<typeof HubRuleTake>
+/**
+ * hook → hub: a rule file of the kit's action rules could not be read, so the hook is asking (denying, unattended) about every call
+ * until it is fixed. The bridge posts ONE plain notice to the owner's thread per file and content hash; it writes the words itself
+ * from these fields, so nothing a session sends is ever shown as text. Proof of who asks is the same as `perm`.
+ */
+export const HubRuleNotice = z.looseObject({
+  t: z.literal('rule_notice'),
+  id: z.string().min(1).max(64),
+  thread_id: ThreadId.optional(),
+  pid: z.number().int().positive().optional(),
+  nonce: z.string().min(16).max(64).optional(),
+  file: z.enum(['shipped', 'user']),
+  line: z.number().int().min(1).max(1_000_000).optional(),
+  hash: z.string().regex(/^[0-9a-f]{64}$/),
+  unattended: z.boolean().optional(),
+})
+export type HubRuleNoticeT = z.infer<typeof HubRuleNotice>
 export const HubWorkerLine = z.discriminatedUnion('t', [
   HubHello,
   HubOut,
@@ -718,6 +737,7 @@ export const HubWorkerLine = z.discriminatedUnion('t', [
   HubPerm,
   HubAskRule,
   HubRuleTake,
+  HubRuleNotice,
 ])
 export type HubWorkerLineT = z.infer<typeof HubWorkerLine>
 

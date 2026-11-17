@@ -82,6 +82,7 @@ Repeats of a filed problem change the count and `last_seen`, and `first_seen` to
 talos-app errors list [--closed|--all]
 talos-app errors show <id>      # the start of the id, 4+ hex characters; two matches are refused, never guessed
 talos-app errors close <id>     # moves it (and its screenshot) to closed/; a repeat later opens a fresh file
+talos-app errors requeue-bug-report <report id>   # asks the relay to send one of your own device's bug reports again (signed with this Mac's key)
 ```
 
 A thread's own session is refused `talos-app errors` unless the owner turned on `session_opts.ops_read` for that thread; then it may

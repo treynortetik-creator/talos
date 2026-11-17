@@ -54,6 +54,8 @@ a {
 
 /* ---- wordmark: TΛLOS, the lambda is Cinzel's own V flipped vertically ---- */
 .wordmark {
+  font-family: var(--font-brand); /* not --font-display: a theme (paper is Inter) may change that one */
+  font-weight: 900;
   color: currentColor;
   letter-spacing: 0.06em;
   line-height: 1;

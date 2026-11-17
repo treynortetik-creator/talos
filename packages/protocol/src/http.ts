@@ -727,6 +727,16 @@ export const routes = {
     res: BugReportDestination,
     note: 'where a new bug report goes after this relay keeps it, for the reporter to say so: relay (nowhere else), team (the BUG_TEAM_INBOX_URL of this deploy) or webhook (the host of bug_webhook_url, never the address). Only a target the relay would really call counts: both need BUG_WEBHOOK_SECRET',
   },
+  bridgeBugReportRequeue: {
+    id: 'bridgeBugReportRequeue',
+    method: 'POST',
+    path: '/bridge/bug-reports/:id/requeue',
+    auth: 'bridge-sig',
+    owner: 'WP-V1',
+    req: Empty,
+    res: z.object({ ok: z.literal(true), id: z.string(), already_queued: z.boolean().optional() }),
+    note: '`talos-app errors requeue-bug-report <id>`: queues one stored own-device bug report to the Mac again as a new problem.item frame (a new frame id, the same problem id, the picture re-attached), so a report the Mac lost or filed without its picture can be repaired. a report the Mac has not filed that is still queued answers already_queued and makes nothing new; 404 not_found | files_missing, 500 queue_failed; signed bridge HTTP only',
+  },
   bugInbox: {
     id: 'bugInbox',
     method: 'POST',

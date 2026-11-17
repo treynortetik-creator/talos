@@ -784,3 +784,167 @@ describe('a Swift test file is fast, so a bridge test that reads one says so wit
     expect(missing).toEqual([])
   })
 })
+
+describe('gate.sh plans every test that reads a changed file (90eda966 and bc69061a went red on main with tests no gate planned)', () => {
+  const root = join(here, '..')
+  const real = (f: string) => readFileSync(join(root, f), 'utf8')
+  // the plan for what changed after `base` (the commit of the tests), through both counts
+  const planAfter = (r: ReturnType<typeof repo>, base: string, ...a: string[]) => {
+    const p = spawnSync('bash', ['scripts/gate.sh', '--plan', '--base', base, ...a], {
+      cwd: r.T,
+      env,
+      encoding: 'utf8',
+    })
+    expect(p.stderr).not.toContain('plan-check:')
+    expect(p.status, p.stderr).toBe(0)
+    return p.stdout.trim().split('\n')
+  }
+  // the repository's own tests in the temp repo: what each marks is what is checked
+  const withTests = (files: string[]) => {
+    const r = repo()
+    for (const f of files) r.put(f, real(f))
+    r.git('add', '-A')
+    r.git('commit', '-qm', 'tests')
+    return { r, base: r.git('rev-parse', 'HEAD') }
+  }
+  // the names are put together here, so no test file's name is written out whole in this file: a test that names another
+  // test file is planned whenever that one changes (this one would run on every change to the readers below)
+  const tests = (dir: string, ...names: string[]) => names.map((n) => `${dir}/${n}.test.ts`)
+  const CORE = tests('scripts', 'install-bughunt', 'kit-update', 'root-install', 'uninstall-bughunt')
+  const AUTH_TEST = `apps/relay/test/auth/${['enroll', 'session'].join('-')}.test.ts`
+
+  it('a changed bridge source file runs real-file.test.ts, which walks all of src without naming a file (90eda966)', () => {
+    const { r, base } = withTests(tests('apps/bridge/test', 'real-file'))
+    r.commit({ 'apps/bridge/src/memory/cli.ts': 'export const x = 1\n' })
+    expect(planAfter(r, base, '--fast')).toEqual([
+      'fast',
+      ...CHECKS,
+      'bun',
+      `\t${tests('apps/bridge/test', 'real-file')[0]}`,
+    ])
+  })
+
+  it('a changed relay test runs the doc test that cites its titles, in the fast gate too (bc69061a)', () => {
+    const { r, base } = withTests(tests('scripts', 'security-setup-code-doc'))
+    r.commit({ [AUTH_TEST]: "it('x', () => {})\n" })
+    expect(planAfter(r, base, '--fast')).toEqual([
+      'fast',
+      ...CHECKS,
+      'vitest',
+      `\t${AUTH_TEST}`,
+      `\t${tests('scripts', 'security-setup-code-doc')[0]}`,
+    ])
+  })
+
+  it('touching scripts/foo.sh runs the core installer tests, and not the rest of root-install*', () => {
+    const { r, base } = withTests([...CORE, ...tests('scripts', 'root-install-v1', 'kit-tests')])
+    r.commit({ 'scripts/foo.sh': '#!/bin/sh\n' })
+    // and the same tests once more with a corepack pnpm first on PATH (KIT-8: a harness fault only a corepack pnpm shows)
+    expect(planAfter(r, base)).toEqual([...CHECKS, 'vitest', ...CORE.map((t) => `\t${t}`), 'corepack-install'])
+    const fast = planAfter(r, base, '--fast')
+    expect(fast[0]).toMatch(/^full-gate: .*gate input/)
+    expect(fast).toEqual(expect.arrayContaining([...CORE.map((t) => `\t${t}`), 'corepack-install']))
+  })
+
+  it('install.sh and a file under kit/ run them too', () => {
+    for (const f of ['install.sh', 'kit/hooks/session-start.py']) {
+      const { r, base } = withTests(CORE)
+      r.commit({ [f]: '#\n' })
+      expect(planAfter(r, base), f).toEqual(expect.arrayContaining([...CORE.map((t) => `\t${t}`), 'corepack-install']))
+    }
+  })
+
+  it('the corepack step with no corepack on PATH fails loudly ("corepack missing"), and never skips', () => {
+    const bin = mkdtempSync(join(tmpdir(), 'no-corepack-'))
+    dirs.push(bin)
+    for (const tool of ['bash', 'dirname']) {
+      const at = spawnSync('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim()
+      symlinkSync(at, join(bin, tool))
+    }
+    const r = spawnSync(join(bin, 'bash'), [join(root, 'scripts/corepack-install-tests.sh')], {
+      env: { PATH: bin },
+      encoding: 'utf8',
+    })
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('corepack missing')
+  })
+
+  it('the corepack step fails loudly when the pnpm shim corepack made is not a corepack one', () => {
+    const bin = mkdtempSync(join(tmpdir(), 'fake-corepack-'))
+    dirs.push(bin)
+    for (const tool of ['bash', 'dirname', 'mktemp', 'rm', 'node', 'chmod']) {
+      const at = spawnSync('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim()
+      symlinkSync(at, join(bin, tool))
+    }
+    // a corepack that makes a plain script, whose real path has no "corepack" in it: Homebrew's pnpm, say
+    writeFileSync(join(bin, 'corepack'), '#!/bin/bash\nprintf "#!/bin/sh\\n" > "$3/pnpm"\nchmod +x "$3/pnpm"\n', {
+      mode: 0o755,
+    })
+    const r = spawnSync(join(bin, 'bash'), [join(root, 'scripts/corepack-install-tests.sh')], {
+      env: { PATH: bin },
+      encoding: 'utf8',
+    })
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain("is not corepack's")
+  })
+
+  it('a change under apps/web only does not run the installer tests', () => {
+    const { r, base } = withTests(CORE)
+    r.commit({ 'apps/web/src/a.ts': 'y\n' })
+    expect(planAfter(r, base, '--fast')).toEqual(['fast', ...CHECKS, 'vitest', '\tapps/web/src/a.ts']) // no corepack-install
+  })
+})
+
+describe('the cross-file readers say what they read with // gate-reads: (the plan finds a guard by that line, and nothing else)', () => {
+  const root = join(here, '..')
+  const marks = (f: string) =>
+    [...readFileSync(join(root, f), 'utf8').matchAll(/^\/\/ gate-reads:(.*)$/gm)]
+      .flatMap((m) => (m[1] ?? '').trim().split(/\s+/))
+      .filter(Boolean)
+  // a reader of other files that no import follows: a doc test, a source scan, a shell harness. Left out on purpose:
+  // gate-inputs.test (a gate input, so every change to what it reads is the full gate), size-budget (every gate runs it) and
+  // last-good.test (it reads nothing it does not import)
+  // each test file is [folder, name]: the names are put together, so this file never writes a test file's name out whole
+  const READERS = [
+    ['apps/bridge/test', 'real-file', 'rollback', 'talos', 'real-claude-permission-hook'],
+    ['apps/relay/test/share', 'doc'],
+    ['apps/relay/test', 'deploy-watch'],
+    ['apps/web/test/help', 'help-truth'],
+    ['packages/protocol/test', 'settings-table'],
+    [
+      'scripts',
+      'security-setup-code-doc',
+      'apps-doc',
+      'setup-doc',
+      'setup-docs-public',
+      'bughunt-docs',
+      'third-party-notices',
+      'agent-setup-doc',
+      'v2-features-doc',
+      'claude-code-doc',
+      'check-private-docs',
+      'kit-onboarding',
+      'kit-default-agent',
+      'kit-instructions',
+      'kit-source',
+      'changelog-union',
+      'export-public',
+      'publish-public',
+      'root-install',
+      'install-bughunt',
+      'uninstall-bughunt',
+      'kit-update',
+    ],
+  ].flatMap(([dir, ...names]) => names.map((n) => `${dir}/${n}.test.ts`))
+
+  it('each one of them has a line', () => {
+    expect(READERS.filter((f) => marks(f).length === 0)).toEqual([])
+  })
+
+  it('a path a line names (no * or ?) is a file that exists: a rename must not leave a guard reading nothing', () => {
+    const gone: string[] = []
+    for (const f of READERS)
+      for (const p of marks(f)) if (!/[*?]/.test(p) && !existsSync(join(root, p))) gone.push(`${f}: ${p}`)
+    expect(gone).toEqual([])
+  })
+})

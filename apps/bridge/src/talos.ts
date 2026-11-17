@@ -112,8 +112,8 @@ export const COMMANDS: readonly CommandInfo[] = [
   },
   {
     name: 'errors',
-    args: 'list [--closed|--all] | show <id> | close <id>',
-    summary: 'List, show and close error reports',
+    args: 'list [--closed|--all] | show <id> | close <id> | requeue-bug-report <report id>',
+    summary: 'List, show and close error reports; send one bug report from your own device again',
   },
   { name: 'search reindex', summary: 'Rebuild the search index' },
   {

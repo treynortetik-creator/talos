@@ -176,6 +176,7 @@ function pushSetup(quote: boolean) {
       'check-no-personal.sh',
       'denylist.generic.txt',
       'gate-inputs.txt',
+      'gate-wide-inputs.txt',
     ]) {
       mkdirSync(join(dir, 'scripts'), { recursive: true })
       cpSync(join(here, f), join(dir, 'scripts', f))
@@ -229,7 +230,7 @@ describe('gate-push.sh: the race decisions and the landing check read every name
       const r = pushSetup(quote)
       const { old, now } = r.raced({ 'apps/web/src/b.ts': 'y\n' }, { 'apps/x\ty/package.json': '{}\n' })
       const p = r.print('GATE_PUSH_PRINT_CLEAN', old, now)
-      expect(p.stdout).toContain('apps/x\ty/package.json, a gate input')
+      expect(p.stdout).toContain('apps/x\ty/package.json, a gate-wide input')
       expect(p.stdout).toContain('rc=1')
     },
   )
@@ -600,14 +601,21 @@ describe('the rebase-clean pass matches names folded', () => {
     return { old, now }
   }
 
-  it('a new main commit to Scripts/x.sh (or a long-s scripts/) is a gate input: the pass is refused', () => {
-    for (const f of ['Scripts/x.sh', `${LONG_S}cripts/x.sh`, `apps/new/pac${KELVIN}age.json`]) {
+  it('a new main commit to Scripts/gate.sh (or a long-s scripts/) is a gate-wide input: the pass is refused', () => {
+    for (const f of ['Scripts/gate.sh', `${LONG_S}cripts/gate.sh`, `apps/new/pac${KELVIN}age.json`]) {
       const r = pushSetup(true)
       const { old, now } = racedPlumbed(r, { 'apps/web/src/b.ts': 'y\n' }, { [f]: 'x\n' })
       const p = r.print('GATE_PUSH_PRINT_CLEAN', old, now)
-      expect(p.stdout, f).toContain(`changes ${f}, a gate input`)
+      expect(p.stdout, f).toContain(`changes ${f}, a gate-wide input`)
       expect(p.stdout, f).toContain('rc=1')
     }
+  })
+
+  it('a new main commit to another gate input spelled by folding (Scripts/x.sh) is not gate-wide: the pass', () => {
+    const r = pushSetup(true)
+    const { old, now } = racedPlumbed(r, { 'apps/web/src/b.ts': 'y\n' }, { 'Scripts/x.sh': 'x\n' })
+    const p = r.print('GATE_PUSH_PRINT_CLEAN', old, now)
+    expect(p.stdout).toContain('rc=0')
   })
 
   it('an é composed (NFC) in this change and decomposed (NFD) in a new main commit is the same file', () => {
@@ -625,7 +633,7 @@ describe('the rebase-clean pass matches names folded', () => {
     const r = pushSetup(true)
     const { old, now } = racedPlumbed(r, { 'apps/web/src/b.ts': 'y\n' }, { 'apps/web/src/c.ts': 'x\n' })
     const p = r.print('GATE_PUSH_PRINT_CLEAN', old, now)
-    expect(p.stdout).toContain('none touching a file of this change or a gate input')
+    expect(p.stdout).toContain('none touching a file of this change or a gate-wide input')
     expect(p.stdout).toContain('rc=0')
   })
 })

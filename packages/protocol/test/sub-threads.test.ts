@@ -7,6 +7,7 @@ import {
   type AgentConfigT,
   effectiveSessionOpts,
   folderInside,
+  folderSame,
   leadPostThreads,
   leadReadThreads,
   leadThreadFor,
@@ -88,6 +89,11 @@ describe('workers.json subthreads_supported', () => {
   })
   it('is on when the Mac app says so', () => {
     expect(parseWorkersFile(file({ subthreads_supported: true }))?.supervisor.subthreads_supported).toBe(true)
+  })
+  it('subthreads_shared_folder is off when absent or unreadable, on only for a literal true', () => {
+    expect(parseWorkersFile(file({ subthreads_own_folder: true }))?.supervisor.subthreads_shared_folder).toBe(false)
+    expect(parseWorkersFile(file({ subthreads_shared_folder: 1 }))?.supervisor.subthreads_shared_folder).toBe(false)
+    expect(parseWorkersFile(file({ subthreads_shared_folder: true }))?.supervisor.subthreads_shared_folder).toBe(true)
   })
   it('subthreads_own_folder is off when absent or unreadable, on only for a literal true', () => {
     expect(parseWorkersFile(file({ subthreads_supported: true }))?.supervisor.subthreads_own_folder).toBe(false)
@@ -327,6 +333,78 @@ describe('a sub-thread with its own folder outside its parent', () => {
   it('still narrows the MCP list to the parent', () => {
     const wider = withThreads([project, { ...own, session_opts: { ...own.session_opts, mcp_allow: ['gmail'] } }])
     expect(subThreadPatchIssue(base, wider, supports)).toMatch(/"gmail"/)
+  })
+})
+
+describe("a dedicated sub-thread in its parent's folder (subthreads_shared_folder)", () => {
+  const base = withThreads([project, { id: 'docs', name: 'Docs' }])
+  const shares = { macSupports: true, ownFolder: true, sharedFolder: true }
+  const dedicated = (session_opts?: Record<string, unknown>) =>
+    withThreads([project, { ...docs, session: 'dedicated', ...(session_opts ? { session_opts } : {}) }])
+  const line = 'thread "docs" and its parent "project" work in the same folder; they can edit the same files'
+
+  it('may have no folder, or the very same one (a trailing slash too), when the supervisor says so', () => {
+    expect(subThreadPatchIssue(base, dedicated(), shares)).toBeNull()
+    for (const cwd of ['/home/alex/code', '/home/alex/code/'])
+      expect(subThreadPatchIssue(base, dedicated({ cwd }), shares)).toBeNull()
+  })
+  it('keeps the old refusals without the capability', () => {
+    const old = { macSupports: true, ownFolder: true }
+    expect(subThreadPatchIssue(base, dedicated(), old)).toMatch(/needs its own folder/)
+    expect(subThreadPatchIssue(base, dedicated({ cwd: '/home/alex/code' }), old)).toMatch(/inside its parent/)
+    expect(subThreadPatchIssue(base, dedicated(), { macSupports: true, sharedFolder: false })).toMatch(/own folder/)
+  })
+  it('allows a no-folder child under a parent with no folder, but not a child folder under one', () => {
+    const none = { id: 'project', name: 'Project' }
+    expect(subThreadPatchIssue(base, withThreads([none, { ...docs, session: 'dedicated' }]), shares)).toBeNull()
+    expect(
+      subThreadPatchIssue(
+        base,
+        withThreads([none, { ...docs, session: 'dedicated', session_opts: { cwd: '/home/alex/code/docs' } }]),
+        shares,
+      ),
+    ).toMatch(/give "project" a folder/)
+  })
+  it('leaves the other folders as they were: inside is fine, outside needs its own existing folder, siblings are refused', () => {
+    expect(subThreadPatchIssue(base, dedicated({ cwd: '/home/alex/code/docs' }), shares)).toBeNull()
+    expect(subThreadPatchIssue(base, dedicated({ cwd: '/home/alex/talos-repo' }), shares)).toBeNull() // own folder, 998b660c
+    expect(
+      subThreadPatchIssue(base, dedicated({ cwd: '/home/alex/talos-repo' }), { macSupports: true, sharedFolder: true }),
+    ).toMatch(/inside its parent/)
+    for (const cwd of ['/home/alex/code/../code', '/home/alex/./code'])
+      expect(subThreadPatchIssue(base, dedicated({ cwd }), { ...shares, ownFolder: false })).toMatch(
+        /inside its parent/,
+      )
+  })
+  it('folderSame wants both paths absolute, and no . or .. in the child (the Mac says the same)', () => {
+    expect(folderSame('/a/b', '/a/b/')).toBe(true)
+    expect(folderSame('a/b', 'a/b')).toBe(false)
+    expect(folderSame('/a/b', 'a/b')).toBe(false)
+    expect(folderSame('/a/./b', '/a/b')).toBe(false)
+    expect(folderSame('/a/../a/b', '/a/b')).toBe(false)
+  })
+  it("is for a dedicated sub-thread only: one sharing its parent's session still may not name the same folder", () => {
+    const shared = withThreads([project, { ...docs, session_opts: { cwd: '/home/alex/code' } }])
+    expect(subThreadPatchIssue(base, shared, shares)).toMatch(/inside its parent/)
+  })
+  it('still narrows the MCP list to the parent', () => {
+    expect(subThreadPatchIssue(base, dedicated({ mcp_allow: ['gmail'] }), shares)).toMatch(/"gmail"/)
+  })
+  it('warns once for a dedicated child with no folder or the same folder, and not for one inside or own', () => {
+    expect(subThreadWarnings(dedicated())).toEqual([line])
+    expect(subThreadWarnings(dedicated({ cwd: '/home/alex/code/' }))).toEqual([line])
+    expect(subThreadWarnings(dedicated({ cwd: '/home/alex/code/docs' }))).toEqual([])
+    expect(subThreadWarnings(withThreads([project, docs]))).toEqual([]) // shares the parent's session: nothing new
+    expect(subThreadWarnings(withThreads([project, { ...docs, session: 'dedicated', archived: true }]))).toEqual([])
+    // no parent folder at all: both run in the agent folder, which is still the same folder
+    expect(
+      subThreadWarnings(
+        withThreads([
+          { id: 'project', name: 'Project' },
+          { ...docs, session: 'dedicated' },
+        ]),
+      ),
+    ).toEqual([line])
   })
 })
 

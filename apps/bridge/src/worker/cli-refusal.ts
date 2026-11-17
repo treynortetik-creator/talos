@@ -29,6 +29,7 @@ export const WORKER_COMMANDS_OK: readonly string[] = [
  * What a thread session may ALSO run when the owner turned `session_opts.ops_read` on for that thread: read the problem
  * folder, nothing else (`errors close` and every other command stay refused). A second list on purpose, consulted only with
  * the flag on and never merged into the first. `errors show` and `errors list` print less to such a caller (problems/cli.ts).
+ * Also allowed when the owner turned the thread fence off (Settings -> Developer): then a thread reads them as Main does.
  */
 export const WORKER_OPS_READ_OK: readonly string[] = ['errors list', 'errors show']
 /**
@@ -106,6 +107,21 @@ function opsReadOn(thread: string | undefined, raw: Record<string, string | unde
   }
 }
 
+/** Did the owner turn the developer thread fence off (`dev.thread_fence` exactly `false` in config.json)? Any doubt is no. */
+export function fenceOffFor(raw: Record<string, string | undefined>): boolean {
+  // read here, not through supervisor/worker-config.ts: this file is on the CLI's early-exit path, which must load with the
+  // packages missing (rollback, subagent-tee). Same rule as threadFenceOn: off only for exactly `"dev": { "thread_fence": false }`.
+  try {
+    const home = raw.TALOS_APP_HOME || defaultHome()
+    const cfg = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+      dev?: { thread_fence?: unknown }
+    } | null
+    return cfg?.dev?.thread_fence === false
+  } catch {
+    return false
+  }
+}
+
 /**
  * Is this a thread session (the supervisor's variables, or a lead folder's marker)? Decided without the config, so what a thread
  * is shown never depends on a file read that can change between the fence and the output: it fails closed.
@@ -135,7 +151,7 @@ export function workerCliRefusal(
   if (!refusedForWorkers(argv)) return undefined
   const caller = threadCaller(raw, cwd)
   if (!caller) return undefined
-  if (!refusedForWorkers(argv, true) && opsReadOn(caller.thread, raw)) return undefined
+  if (!refusedForWorkers(argv, true) && (opsReadOn(caller.thread, raw) || fenceOffFor(raw))) return undefined
   const name = argv
     .slice(0, 2)
     .filter((a) => !a.startsWith('-'))

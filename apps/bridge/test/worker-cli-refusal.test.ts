@@ -2,10 +2,11 @@
 // `inbox*` read or write across threads. The supervisor sets TALOS_APP_WORKER_THREAD and TALOS_SESSION_ROLE=worker, and
 // a `.talos-lead` marker in the current folder or any parent refuses too, so unsetting the variables does not help.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runCli } from '../src/cli.ts'
+import { problemDirs } from '../src/problems/store.ts'
 import { COMMANDS, runTalos } from '../src/talos.ts'
 import { refusedForWorkers, WORKER_COMMANDS_OK, WORKER_READ_OK, workerCliRefusal } from '../src/worker/cli-refusal.ts'
 
@@ -276,5 +277,151 @@ describe('status, doctor and logs from a lead', () => {
   test('the main session still sees every line', async () => {
     const r = await logs({})
     for (const l of ['trip line', 'garden line', 'no thread line', 'trip card']) expect(r.out).toContain(l)
+  })
+})
+
+// Owner 2026-11-16: with the developer thread fence off (`dev.thread_fence: false`), a thread session reads the problem
+// reports exactly as Main does; `errors close` and every other refused command stay refused.
+describe('the thread fence off: a thread reads the problem reports as Main does', () => {
+  const FP = '56'.repeat(16)
+  const NOTE = 'owner typed this note about a private message'
+  const asThread = { TALOS_APP_WORKER_THREAD: 't1', TALOS_SESSION_ROLE: 'worker' }
+  /** A Talos home with config `cfg` (a string is written as is), thread t1 (ops_read as given) and one stored report. */
+  function fenceHome(cfg: unknown, opsRead?: boolean) {
+    const h = mkdtempSync(join(realpathSync(tmpdir()), 'fo-home-'))
+    made.push(h)
+    const body =
+      typeof cfg === 'string'
+        ? cfg
+        : JSON.stringify({
+            ...(cfg as object),
+            threads: [{ id: 't1', session_opts: opsRead === undefined ? {} : { ops_read: opsRead } }],
+          })
+    writeFileSync(join(h, 'config.json'), body)
+    const d = problemDirs(h)
+    mkdirSync(d.open, { recursive: true })
+    writeFileSync(join(d.open, 'shot.png'), 'x')
+    writeFileSync(
+      join(d.open, `${FP}.json`),
+      JSON.stringify({
+        v: 1,
+        trust: 'external',
+        fingerprint: FP,
+        source: 'install',
+        kind: 'owner',
+        name: 'TypeError',
+        message: 'another install said this',
+        frames: [{ fn: 'f', file: `${h}/a.ts`, line: 1 }],
+        device: 'browser',
+        routes: [],
+        steps: NOTE,
+        screenshot_file: 'shot.png',
+        versions_seen: [],
+        count: 1,
+        first_seen: 'x',
+        last_seen: 'x',
+        truncated: false,
+        ids: [],
+      }),
+    )
+    return h
+  }
+  async function go(argv: string[], env: Record<string, string>, h: string, cwd = plain()) {
+    const out: string[] = []
+    const err: string[] = []
+    const io = {
+      out: (l: string) => out.push(l),
+      err: (l: string) => err.push(l),
+      prompt: async () => 'n',
+      sleep: async () => {},
+      now: () => Date.now(),
+    }
+    const code = await runCli(argv, io, { TALOS_APP_HOME: h, ...env }, { cwd })
+    return { code, out: out.join('\n'), err: err.join('\n') }
+  }
+  const OFF = { dev: { thread_fence: false } }
+  const REFUSED = /not available in/
+
+  test('errors list and errors show print what Main gets, byte for byte', async () => {
+    const h = fenceHome(OFF)
+    for (const argv of [
+      ['errors', 'list'],
+      ['errors', 'show', '5656'],
+    ]) {
+      const t = await go(argv, asThread, h)
+      const m = await go(argv, {}, h)
+      expect(t.code, argv.join(' ')).toBe(0)
+      expect(t.out).toBe(m.out)
+    }
+    const shown = (await go(['errors', 'show', '5656'], asThread, h)).out
+    expect(shown).toContain(NOTE)
+    expect(shown).toContain('another install said this')
+    expect(shown).toContain('screenshot_path')
+    expect(shown).toContain(h)
+    expect(shown).not.toContain('[withheld')
+  })
+  test('the same through a .talos-lead marker, with no variables', async () => {
+    const h = fenceHome(OFF)
+    const root = plain()
+    writeFileSync(join(root, '.talos-lead'), '{"thread":"t1"}')
+    const r = await go(['errors', 'show', '5656'], {}, h, root)
+    expect(r.code).toBe(0)
+    expect(r.out).toContain(NOTE)
+    expect(r.out).not.toContain('[withheld')
+    expect((await go(['errors', 'list'], {}, h, root)).code).toBe(0)
+  })
+  test('errors close is refused to a thread, by the variables and by the marker, and the report stays open', async () => {
+    const h = fenceHome(OFF)
+    const root = plain()
+    writeFileSync(join(root, '.talos-lead'), '{"thread":"t1"}')
+    for (const [env, cwd] of [
+      [asThread, plain()],
+      [{}, root],
+    ] as const) {
+      const r = await go(['errors', 'close', '5656'], env, h, cwd)
+      expect(r.code).toBe(1)
+      expect(r.err).toMatch(REFUSED)
+    }
+    expect(readdirSync(problemDirs(h).open)).toContain(`${FP}.json`)
+    expect((await go(['errors', 'list'], asThread, h)).out).toContain('open')
+  })
+  test('a thread that reaches cmdErrors close any other way is still told no (the case guard in cli-main)', async () => {
+    const h = fenceHome(OFF)
+    const r = await go(['errors', 'close', '5656'], asThread, h)
+    expect(r.code).toBe(1)
+    expect(readdirSync(problemDirs(h).open)).toContain(`${FP}.json`)
+  })
+  test('logs and status are unchanged; a command that was refused is still refused', async () => {
+    const h = fenceHome(OFF)
+    for (const argv of [['logs'], ['status']]) expect(workerCliRefusal(argv, asThread, plain())).toBeUndefined()
+    for (const argv of [['report'], ['trust'], ['schedules'], ['memory'], ['errors', 'purge'], ['errors']]) {
+      const r = await go(argv, asThread, h)
+      expect(r.code, argv.join(' ')).toBe(1)
+      expect(r.err, argv.join(' ')).toMatch(REFUSED)
+    }
+  })
+  test('the fence on in any form (true, a string, missing, junk, no file) refuses errors list as before', async () => {
+    for (const cfg of [{ dev: { thread_fence: true } }, { dev: { thread_fence: 'false' } }, {}, '{ nope']) {
+      const h = fenceHome(cfg)
+      for (const argv of [
+        ['errors', 'list'],
+        ['errors', 'show', '5656'],
+      ]) {
+        const r = await go(argv, asThread, h)
+        expect(r.code, JSON.stringify(cfg)).toBe(1)
+        expect(r.err).toMatch(REFUSED)
+      }
+    }
+    const bare = mkdtempSync(join(realpathSync(tmpdir()), 'fo-none-'))
+    made.push(bare)
+    expect((await go(['errors', 'list'], asThread, bare)).code).toBe(1)
+  })
+  test('ops_read on with the fence on: the reduced output, unchanged', async () => {
+    const h = fenceHome({ dev: { thread_fence: true } }, true)
+    const r = await go(['errors', 'show', '5656'], asThread, h)
+    expect(r.code).toBe(0)
+    expect(r.out).toContain('[withheld')
+    expect(r.out).not.toContain(NOTE)
+    expect(r.out).not.toContain('screenshot_path')
   })
 })

@@ -49,7 +49,7 @@ import { cmdTheme } from './theme-cli.ts'
 import { cmdTrust } from './trust-cli.ts'
 import { cmdV2 } from './v2-cli.ts'
 import { BRIDGE_COMMIT, BRIDGE_VERSION, commitReport, resolveVersion, versionSkew } from './version.ts'
-import { isThreadCaller, threadOfCaller, workerCliRefusal } from './worker/cli-refusal.ts'
+import { fenceOffFor, isThreadCaller, threadOfCaller, workerCliRefusal } from './worker/cli-refusal.ts'
 
 export type CliIO = {
   /** False when stdin or stdout is not a terminal. Absent (a test's io) counts as a terminal. */
@@ -1178,8 +1178,18 @@ export async function runCli(
         return mainTee(rest) // normally dispatched by cli.ts before this module loads (docs/SUBAGENTS.md 5.2)
       case 'events':
         return cmdEvents(rest, io)
-      case 'errors':
-        return (await import('./problems/cli.ts')).cmdErrors(env, rest, io, isThreadCaller(raw, deps.cwd))
+      case 'errors': {
+        // With the fence off a thread reads as Main does (owner 2026-11-16): the full output. It still never closes a report.
+        const threadCaller = isThreadCaller(raw, deps.cwd)
+        if (threadCaller && rest[0] !== 'list' && rest[0] !== 'show') {
+          io.err('talos-app: a thread session may only run errors list and errors show')
+          return 1
+        }
+        // the one subcommand that talks to the relay (a thread's own session was refused above)
+        if (rest[0] === 'requeue-bug-report')
+          return (await import('./problems/cli.ts')).cmdRequeueBugReport(rest.slice(1), io, await httpFor(env))
+        return (await import('./problems/cli.ts')).cmdErrors(env, rest, io, threadCaller && !fenceOffFor(raw))
+      }
       case 'search':
       case 'memory':
       case 'share':

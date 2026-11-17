@@ -2617,6 +2617,67 @@ describe('a sub-thread’s start (P3d5, part B)', () => {
   })
 })
 
+describe('a sub-thread that shares its parent’s folder (subthreads_shared_folder)', () => {
+  const WORK: WorkerThread = { ...TRIP, id: 'work', cwd: '/home/alex/work' }
+  const kid = (id: string, o: Partial<WorkerThread> = {}, parentId = 'work'): WorkerThread => ({
+    ...TRIP,
+    id,
+    cwd: WORK.cwd,
+    parentCwd: null,
+    sub: { parentId, ownCwd: false, shares: true, refusal: null, unreadable: {} },
+    ...o,
+  })
+  it('starts beside its parent in the same folder, and so do its siblings: one family, no folder_claimed', async () => {
+    const x = setup({ threads: [WORK, kid('bug'), kid('fix')] })
+    await live(x, 'work')
+    await x.m.start('bug')
+    expect(x.m.state('bug')).toBe('starting')
+    await x.m.start('fix')
+    expect(x.m.state('fix')).toBe('starting')
+  })
+  it('and the parent may start after its child', async () => {
+    const x = setup({ threads: [WORK, kid('bug')] })
+    await live(x, 'bug')
+    await x.m.start('work')
+    expect(x.m.state('work')).toBe('starting')
+  })
+  it('still claimed against everyone else: an unrelated thread, a child of another parent, a sibling with the same subfolder', async () => {
+    const other: WorkerThread = { ...TRIP, id: 'other', cwd: WORK.cwd }
+    const x = setup({ threads: [WORK, kid('bug'), other] })
+    await live(x, 'work')
+    await x.m.start('other')
+    expect(x.m.entry('other')?.error?.code).toBe('folder_claimed')
+    // a child of ANOTHER parent that names this folder is no sibling
+    const stray = kid('stray', {}, 'elsewhere')
+    const y = setup({ threads: [WORK, stray] })
+    await live(y, 'work')
+    await y.m.start('stray')
+    expect(y.m.entry('stray')?.error?.code).toBe('folder_claimed')
+    // two children with the same SUBfolder (their own, not shared) are claimed against each other
+    const d = realpathSync(mkdtempSync(join(tmpdir(), 'talos-fam-')))
+    dirs.push(d)
+    const own = (id: string): WorkerThread => ({
+      ...TRIP,
+      id,
+      cwd: join(d, 'same'),
+      parentCwd: d,
+      sub: { parentId: 'work', ownCwd: true, refusal: null, unreadable: {} },
+    })
+    const z = setup({ threads: [{ ...WORK, cwd: d }, own('a'), own('b')] })
+    await live(z, 'a')
+    await z.m.start('b')
+    expect(z.m.entry('b')?.error?.code).toBe('folder_claimed')
+  })
+  it('a running one is never parked as outside: no parent folder is judged against it', async () => {
+    const x = setup({ threads: [WORK, kid('bug')] })
+    await live(x, 'work')
+    await live(x, 'bug')
+    for (let i = 0; i < WORKER_TIMING.launch_change_settle_s + 5; i++) await x.tick()
+    expect(x.m.state('bug')).toBe('live')
+    expect(x.m.state('work')).toBe('live')
+  })
+})
+
 describe('a sub-thread moved to a subfolder not made yet (P3d5, part B review)', () => {
   const world = () => {
     const d = realpathSync(mkdtempSync(join(tmpdir(), 'talos-subm-')))
@@ -2753,6 +2814,43 @@ describe('a running sub-thread whose start would now be refused (its parent arch
     await x.tick(SETTLE)
     expect(x.m.state('trip')).toBe('live')
     expect(x.audit.some(([e]) => e === 'worker_sub_refused')).toBe(false)
+  })
+})
+
+describe('a running sub-thread that shares its parent’s folder, whose parent’s folder setting becomes unreadable', () => {
+  const SETTLE = WORKER_TIMING.launch_change_settle_s
+  const shared: WorkerThread = {
+    ...TRIP,
+    cwd: '/home/alex/work',
+    parentCwd: null,
+    sub: { parentId: 'work', ownCwd: false, shares: true, refusal: null, unreadable: {} },
+  }
+  // what the planner now reads: refused, and its folder would fall to the agent folder
+  const refused: WorkerThread = {
+    ...shared,
+    cwd: '/home/alex/agent',
+    sub: {
+      parentId: 'work',
+      ownCwd: false,
+      refusal: "the parent thread's folder setting can't be read (42)",
+      unreadable: {},
+    },
+  }
+  it('is parked once the refusal has stood, never restarted as a folder move into the agent folder', async () => {
+    const threads = [shared]
+    const x = setup({ threads, saved: () => true })
+    await live(x)
+    threads[0] = refused
+    await x.tick()
+    await x.tick(SETTLE + 3)
+    expect(x.m.state('trip')).toMatch(/^(stopping|parking)$/)
+    await x.tick()
+    x.host().exit(0)
+    await x.tick()
+    expect(x.m.state('trip')).toBe('parked') // not 'starting': nothing launched in Main's folder
+    expect(x.plans).toHaveLength(1) // only the first start was ever planned: nothing launched in Main's folder
+    await x.m.start('trip')
+    expect(x.m.entry('trip')?.error?.detail).toContain("folder setting can't be read")
   })
 })
 

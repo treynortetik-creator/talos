@@ -6,11 +6,13 @@
 // Sandbox: a private tmux server (`-L talos-test-permhook-<random>`, never the live `talos` one), a temp HOME and
 // CLAUDE_CONFIG_DIR, a throwaway agent folder, and a local stand-in for the model API that answers with one scripted
 // Bash call. Nothing is sent to a real model, no real Talos home is touched, and the tmux server is stopped by name.
+// gate-reads: kit/hooks/* kit/templates/dot-claude/settings.json
 import { afterAll, afterEach, describe, expect, test } from 'bun:test'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { type CardT, permissionCardAllowsPrimary } from '@talos-app/protocol'
+import { tmuxTestPrefix } from '@talos-app/testkit'
 import { installWorkerHook, releaseHook } from '../src/supervisor/worker-hook.ts'
 import { INSTRUCTION_FILES_MODE } from '../src/supervisor/worker-policy.ts'
 import { withPermissionHook } from '../src/supervisor/worker-spec.ts'
@@ -267,7 +269,7 @@ function launch(
       JSON.stringify({ hooks: { PermissionRequest: template.hooks.PermissionRequest } }),
     )
   }
-  const sock = `talos-test-permhook-${Math.random().toString(36).slice(2, 8)}`
+  const sock = `${tmuxTestPrefix()}-permhook-${Math.random().toString(36).slice(2, 8)}`
   const envWords = Object.entries({
     PATH: process.env.PATH ?? '',
     HOME: home,
@@ -710,7 +712,7 @@ async function folderConfigLoads(user: boolean) {
       },
     }),
   )
-  const sock = `talos-test-permhook-${Math.random().toString(36).slice(2, 8)}`
+  const sock = `${tmuxTestPrefix()}-permhook-${Math.random().toString(36).slice(2, 8)}`
   const envWords = Object.entries({
     PATH: '/usr/bin:/bin',
     HOME: home,

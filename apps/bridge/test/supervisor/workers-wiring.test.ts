@@ -8,6 +8,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -153,10 +154,20 @@ describe('the dedicated threads', () => {
       sub: { parentId: 'work', ownCwd: true, refusal: null, unreadable: {} },
     })
     expect(list.find((t) => t.id === 'work')?.sub).toBeUndefined()
-    // no folder of its own: refused, never its parent's folder (a session never shares it)
+    // no folder of its own: it runs in its parent's (subthreads_shared_folder), and is judged against nothing
     const shared = { ...bug, session_opts: { mcp_allow: ['notion'] } }
     const s = dedicatedThreads(config([work, shared]), '/home/alex/agent')?.find((t) => t.id === 'bug')
-    expect(s?.sub?.refusal).toContain('folder of its own')
+    expect(s).toMatchObject({
+      cwd: '/home/alex/work',
+      parentCwd: null,
+      sub: { parentId: 'work', ownCwd: false, shares: true, refusal: null },
+    })
+    // the parent's own folder, named outright, is the same thing; a parent with none gives the agent folder
+    const same = dedicatedThreads(config([work, { ...bug, session_opts: { cwd: '/home/alex/work/' } }]), '/a')
+    expect(same?.find((t) => t.id === 'bug')).toMatchObject({ cwd: '/home/alex/work', sub: { shares: true } })
+    const bare = { id: 'bare', kind: 'user', session: 'dedicated' }
+    const agent = dedicatedThreads(config([bare, { ...shared, parent_id: 'bare' }]), '/home/alex/agent')
+    expect(agent?.find((t) => t.id === 'bug')).toMatchObject({ cwd: '/home/alex/agent', parentCwd: null })
     // a parent_id that cannot be read fails closed: a sub-thread with the empty list, refused
     const broken = { ...bug, parent_id: 7 }
     const b = dedicatedThreads(config([work, broken]), '/home/alex/agent')?.find((t) => t.id === 'bug')
@@ -202,7 +213,7 @@ describe('the dedicated threads', () => {
 })
 
 describe('the developer thread fence (owner ruling 2026-11-15)', () => {
-  function planWith(threadFence?: () => boolean, asLead = false) {
+  function planWith(threadFence?: () => boolean, asLead = false, setup?: (userHome: string) => void) {
     const root = tmp()
     const userHome = join(root, 'home')
     const agentDir = join(userHome, 'agent')
@@ -210,6 +221,7 @@ describe('the developer thread fence (owner ruling 2026-11-15)', () => {
     const trip = join(userHome, 'trip')
     for (const d of [agentDir, talosHome, trip, join(userHome, '.claude')]) mkdirSync(d, { recursive: true })
     writeFileSync(join(agentDir, '.mcp.json'), JSON.stringify({ mcpServers: { 'talos-app': {} } }))
+    setup?.(userHome)
     // a lead's own fence in its folder, as `talos-app lead init` writes it (lead/settings.ts): the Talos home, the vault and the
     // credential folders among its roots
     const lead = leadSettings({
@@ -252,13 +264,66 @@ describe('the developer thread fence (owner ruling 2026-11-15)', () => {
       baseEnv: { PATH: '/usr/bin', HOME: userHome, TALOS_APP_BRIDGE: '1' },
     })
     if ('refused' in p) throw new Error(p.refused.detail)
-    const deny = (
+    const perms = (
       JSON.parse(readFileSync(join(talosHome, 'workers', 'trip', 'settings.json'), 'utf8')) as {
-        permissions: { deny: string[] }
+        permissions: { deny: string[]; ask?: string[] }
       }
-    ).permissions.deny
-    return { deny, talosHome, userHome, leadDeny, events, specHash: p.specHash }
+    ).permissions
+    const deny = perms.deny
+    const ask = perms.ask ?? []
+    return { deny, ask, talosHome, userHome, leadDeny, events, specHash: p.specHash }
   }
+  onCaseExactTmp('a hook script in a skills folder stays denied with the fence on or off', () => {
+    const setup = (userHome: string) => {
+      const c = join(userHome, '.claude')
+      mkdirSync(join(c, 'skills', 'h'), { recursive: true })
+      writeFileSync(
+        join(c, 'settings.json'),
+        JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: `sh ${c}/skills/h/run.sh` }] }] } }),
+      )
+    }
+    for (const f of [undefined, () => false]) {
+      const w = planWith(f, false, setup)
+      const rule = `Write(/${join(w.userHome, '.claude', 'skills', 'h', 'run.sh')})`
+      expect(w.deny).toContain(rule)
+      expect(w.ask).not.toContain(rule)
+    }
+  })
+  onCaseExactTmp('on: the config folder’s agents and skills are denied, not asked', () => {
+    const w = planWith()
+    const c = `/${join(w.userHome, '.claude')}`
+    expect(w.deny).toContain(`Edit(${c}/agents/**)`)
+    expect(w.deny).toContain(`Write(${c}/skills/**)`)
+    expect(w.ask.some((r) => r.includes('/.claude/agents/'))).toBe(false)
+    expect(w.ask.some((r) => r.includes('/.claude/skills/'))).toBe(false)
+  })
+  onCaseExactTmp(
+    'off: agents, skills and the like ask by card; settings, hooks, plugins and .claude.json stay denied',
+    () => {
+      const w = planWith(() => false)
+      const c = `/${join(w.userHome, '.claude')}`
+      for (const r of [
+        `Edit(${c}/agents/**)`,
+        `Write(${c}/skills/**)`,
+        `Edit(${c}/commands/**)`,
+        `Edit(${c}/CLAUDE.md)`,
+      ]) {
+        expect(w.ask).toContain(r)
+        expect(w.deny).not.toContain(r)
+      }
+      for (const r of [
+        `Edit(${c}/settings.json)`,
+        `Write(${c}/settings.local.json)`,
+        `Write(${c}/hooks/**)`,
+        `Edit(${c}/plugins/**)`,
+        `Edit(/${join(w.userHome, '.claude.json')})`,
+      ]) {
+        expect(w.deny).toContain(r)
+        expect(w.ask).not.toContain(r)
+      }
+      for (const r of WORKER_EXTRA_DENY) expect(w.deny).toContain(r)
+    },
+  )
   onCaseExactTmp('on (the default, and when config says true): the Talos-home deny is in the session settings', () => {
     for (const f of [undefined, () => true]) {
       const w = planWith(f)
@@ -599,6 +664,37 @@ describe('a start’s plan', () => {
       rmSync(join(w.trip, '.claude', 'settings.json'))
       const inside = w.planSub(subOf(join(w.trip, 'bug'), w.trip))
       if ('refused' in inside) throw new Error(inside.refused.detail)
+    },
+  )
+  onCaseExactTmp(
+    'a sub-thread that shares its parent’s folder: launched there like any thread, nothing made, the folder’s own rules carried',
+    () => {
+      const w = world()
+      mkdirSync(join(w.trip, '.claude'), { recursive: true })
+      writeFileSync(
+        join(w.trip, '.claude', 'settings.json'),
+        JSON.stringify({ permissions: { deny: ['Read(./private/**)'] } }),
+      )
+      const shared: WorkerThread = {
+        id: 'trip',
+        cwd: w.trip,
+        model: 'inherit',
+        effort: null,
+        parentCwd: null,
+        sub: { parentId: 'work', ownCwd: false, shares: true, refusal: null, unreadable: {} },
+      }
+      const before = readdirSync(w.trip)
+      const p = w.planSub(shared)
+      if ('refused' in p) throw new Error(p.refused.detail)
+      expect(p.launch.cwd).toBe(w.trip)
+      expect(JSON.parse(p.settingsJSON).permissions.deny).toContain(`Read(/${w.trip}/private/**)`)
+      expect(readdirSync(w.trip)).toEqual(before) // nothing made
+      // the same thread without the flag is still the old refusal: a folder of its own is needed
+      const old = { ...shared, sub: { parentId: 'work', ownCwd: false, refusal: null, unreadable: {} } }
+      expect(w.planSub({ ...old, parentCwd: w.trip })).toMatchObject({ refused: { code: 'start_failed' } })
+      // and a refusal from the rules still stands for one that shares
+      const refused = { ...shared, sub: { ...shared.sub, refusal: 'no parent' } }
+      expect(w.planSub(refused as WorkerThread)).toMatchObject({ refused: { detail: 'no parent' } })
     },
   )
   onCaseExactTmp('a sub-thread the rules refuse is refused by the planner too, with their reason', () => {

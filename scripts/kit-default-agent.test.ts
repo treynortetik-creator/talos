@@ -1,3 +1,4 @@
+// gate-reads: kit/templates/CLAUDE.md.tmpl kit/CLAUDE.md kit/.claude/rules/talos-defaults.md kit/.upgradeignore kit/scripts/render-default.py AGENTS.md CLAUDE.md
 import { createHash } from 'node:crypto'
 // K5b: a new agent works right away. The template says "the owner" (so a rename needs no rewrite), has no setup-first section 0,
 // and the floor rules ship as a Talos-owned file. The shell test kit/scripts/test-default-agent.sh (run by kit-tests.test.ts)

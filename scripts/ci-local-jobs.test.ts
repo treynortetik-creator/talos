@@ -760,14 +760,15 @@ exit 0`
       const r = setup([], ['delphi\tin_progress', 'cyclops\tin_progress'])
       const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], env(parts, '3'))
       expect(await run.done, run.out()).toBe(0)
-      // Each poll reads the run's jobs once: the status reads are one per poll, plus the run's own five, whatever the parts.
-      // Those five: before posting pending, one per job (check, and the report-ci/fast that comes with it); right before each
-      // job's final post, one per job; and one for check's parts right before check is posted.
+      // Each poll reads the run's jobs once: the status reads are one per poll, plus the run's own seven, whatever the parts.
+      // Those seven: before posting pending, one per job (check, and the report-ci/fast that comes with it); right before each
+      // job's final post, one per job; one for check's parts right before check is posted; and two for the settle step's note
+      // that this attempt stood aside (docs/CI-MACHINES.md): one when the run starts, one right before check's pass or failure.
       const log = readFileSync(r.env.GH_LOG as string, 'utf8').split('\n')
       const polls = log.filter((l) => l.includes('/actions/runs/9/jobs')).length
       const statusReads = log.filter((l) => l.includes('/statuses?')).length
       expect(polls).toBeGreaterThanOrEqual(3)
-      expect(statusReads).toBe(polls + 5)
+      expect(statusReads).toBe(polls + 7)
     })
 
   it('a part still working after CI_PART_WAIT is taken: it runs here, after the wait', async () => {

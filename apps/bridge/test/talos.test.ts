@@ -1,3 +1,4 @@
+// gate-reads: apps/bridge/src/cli-main.ts apps/bridge/src/talos.ts kit/*
 import { afterEach, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import {

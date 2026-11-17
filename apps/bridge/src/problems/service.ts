@@ -23,6 +23,12 @@ import type { ErrorTap, Logger } from '../log.ts'
 import { say } from '../owner-words.ts'
 import { type FileOutcome, fileProblem, problemDirs } from './store.ts'
 
+/**
+ * How many times a report whose picture cannot be fetched is kept for the relay to send again before it is filed without the
+ * picture (and says why). The picture is part of the report: a one-off failure must not cost the owner his screenshot.
+ */
+export const SCREENSHOT_TRIES = 5
+
 /** Log lines the tap leaves alone: the rejection handler reports with a stack through `recordError` itself. */
 const OWN_LINES = new Set(['problem not filed', 'problem notice not sent'])
 
@@ -66,6 +72,8 @@ export class ProblemService {
   private busy = false
   private lastLocal = new Map<string, number>()
   private budget = new RollingLimit()
+  /** Failed picture fetches by problem id, in this process: a restart gives a report a fresh set of tries. */
+  private shotFails = new Map<string, number>()
   private timer: unknown = null
   /** Own errors the hourly cap held back since the last daily line. Kept in memory: a hot path must not write a file. */
   private limited = 0
@@ -95,7 +103,8 @@ export class ProblemService {
 
   /**
    * Files one problem. Returns 'done' when the frame may be answered `consumed` (filed, merged, a replay, or refused for
-   * good) and 'retry' when it must stay with the relay (the disk write failed).
+   * good) and 'retry' when it must stay with the relay: the disk write failed, or the report's picture could not be fetched
+   * (up to SCREENSHOT_TRIES times; after that the report is filed without it, with the reason).
    */
   async onItem(problem: ProblemT): Promise<'done' | 'retry'> {
     // The Mac knows its own version; the sender cannot, and a report that came through the relay never carries it. A report
@@ -103,15 +112,33 @@ export class ProblemService {
     if (problem.source !== 'install')
       problem = { ...problem, versions: { ...problem.versions, bridge: this.d.bridgeVersion.slice(0, 40) } }
     let shot: { bytes: Uint8Array } | 'unavailable' | undefined
+    let shotWhy: string | undefined
     if (problem.screenshot) {
       try {
         if (!this.d.fetchScreenshot) throw new Error('no media store')
         const got = await this.d.fetchScreenshot(problem.screenshot)
         shot = { bytes: new Uint8Array(readFileSync(got.path)) }
+        this.shotFails.delete(problem.id)
       } catch (e) {
-        // The report matters more than its picture: file it, and say the picture did not make it.
-        this.d.log.warn('problem screenshot not fetched', { error: (e as Error).message })
+        const fails = (this.shotFails.get(problem.id) ?? 0) + 1
+        if (fails < SCREENSHOT_TRIES) {
+          // Not filed, not consumed: the relay sends it again. A filed copy without its picture is never completed later.
+          this.shotFails.set(problem.id, fails)
+          if (this.shotFails.size > 200) this.shotFails.delete(this.shotFails.keys().next().value as string)
+          this.d.log.warn('problem screenshot not fetched; kept for another try', {
+            error: (e as Error).message,
+            tries: fails,
+          })
+          return 'retry'
+        }
+        // The report matters more than its picture: file it, and say the picture did not make it, and why.
+        this.shotFails.delete(problem.id)
+        this.d.log.warn('problem screenshot not fetched; filed without it', {
+          error: (e as Error).message,
+          tries: fails,
+        })
         shot = 'unavailable'
+        shotWhy = `the picture could not be fetched in ${fails} tries`
       }
     }
     let out: FileOutcome
@@ -120,6 +147,7 @@ export class ProblemService {
         nowIso: new Date(this.d.clock.now()).toISOString(),
         paths: { ...(this.d.userHome ? { userHome: this.d.userHome } : {}), appHome: this.d.home },
         ...(shot ? { screenshot: shot } : {}),
+        ...(shotWhy ? { screenshotWhy: shotWhy } : {}),
       })
     } catch (e) {
       this.d.log.warn('problem not filed', { error: (e as Error).message })
@@ -133,6 +161,8 @@ export class ProblemService {
       this.bump('full')
       return 'done'
     }
+    if (out.result === 'repaired')
+      this.d.log.info('problem picture added to a report filed without it', { fingerprint: out.fingerprint })
     if (out.result === 'filed')
       await this.announce(
         out.fingerprint,

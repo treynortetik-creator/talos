@@ -1,5 +1,6 @@
 // Passkey registration, sign-in, step-up and the two-half enrollment against an in-process relay, in Chromium with a
 // CDP virtual authenticator (spec 9, WP2 acceptance). The page under test is a ~30-line harness served by the test.
+// gate-reads: apps/relay/src/* apps/relay/test/auth/helpers.ts packages/protocol/src/*
 import { createServer } from 'node:net'
 import { serve } from '@hono/node-server'
 import { type Browser, type BrowserContext, expect, type Page, test } from '@playwright/test'

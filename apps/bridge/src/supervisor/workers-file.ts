@@ -63,6 +63,8 @@ export function buildWorkersFile(o: {
       subthreads_supported: true,
       // and, as on the Mac (c24c01f8), a dedicated sub-thread may keep its own existing folder outside its parent's
       subthreads_own_folder: true,
+      // and one with no folder, or its parent's own, runs in the parent's folder (the agent folder when it has none)
+      subthreads_shared_folder: true,
       main_pane_pid: o.mainPanePid,
     },
     threads,

@@ -297,12 +297,12 @@ export class Store {
     return rows.map((r) => ({ ...r, frame: this.openEvent({ frame_id: r.fid, body: r.body }) }))
   }
 
-  /** Not-yet-delivered frames whose retry time has come. */
+  /** Frames whose retry time has come: not yet delivered, or a bug report the Mac took but has not filed (held-problems.ts). */
   outboxDue(now: number): Array<OutboxRow & { frame: StoredFrame }> {
     const rows = this.db
       .prepare(
         `select o.*, e.body, e.frame_id fid from core_outbox o join core_events e on e.seq = o.seq
-         where o.delivered = 0 and o.next_try_at <= ? and o.expires_at > ? order by o.seq`,
+         where (o.delivered = 0 or o.type = 'problem.item') and o.next_try_at <= ? and o.expires_at > ? order by o.seq`,
       )
       .all(now, now) as Array<OutboxRow & { body: Buffer; fid: string }>
     return rows.map((r) => ({ ...r, frame: this.openEvent({ frame_id: r.fid, body: r.body }) }))

@@ -23,6 +23,7 @@ import {
   type ErrorCodeT,
   type FrameOf,
   type FrameType,
+  folderSame,
   HOST_LINUX_FEATURE,
   HOST_MAC_FEATURE,
   HOST_WINDOWS_FEATURE,
@@ -295,7 +296,11 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
       macOnline: () => store.getState().presence.bridge_online,
       ownFolder: (id) => {
         const t = store.getState().config?.threads.find((x) => x.id === id)
-        return t?.session === 'dedicated' && typeof t.session_opts?.cwd === 'string'
+        const cwd = t?.session_opts?.cwd
+        // a sub-thread in its parent's folder (the same one) uses the parent's file, as the bridge's agentsMdFolderFor says
+        const parentCwd = store.getState().config?.threads.find((x) => x.id === t?.parent_id)?.session_opts?.cwd
+        if (typeof cwd === 'string' && typeof parentCwd === 'string' && folderSame(cwd, parentCwd)) return false
+        return t?.session === 'dedicated' && typeof cwd === 'string'
       },
     },
     opts.agentsMd,
@@ -766,8 +771,8 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
       if (issue) throw new TalosClientError('bad_frame', issue)
       const sessionIssue = dedicatedPatchIssue(cfg, parsed.data)
       if (sessionIssue) throw new TalosClientError('thread_session_refused', sessionIssue)
-      // the fake Mac app always supports sub-threads (workers.json subthreads_supported)
-      const subIssue = subThreadPatchIssue(cfg, parsed.data, { macSupports: true, ownFolder: true })
+      // the fake Mac app always supports sub-threads, an own folder outside, and a shared one (workers.json subthreads_*)
+      const subIssue = subThreadPatchIssue(cfg, parsed.data, { macSupports: true, ownFolder: true, sharedFolder: true })
       if (subIssue) throw new TalosClientError('bad_frame', subIssue)
       await owner({
         type: 'config.patch',

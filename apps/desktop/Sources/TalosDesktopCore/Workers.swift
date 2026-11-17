@@ -15,20 +15,23 @@ public struct WorkersFile: Codable, Equatable, Sendable {
     public var subthreads_supported: Bool
     /// This build also starts a dedicated sub-thread in an existing folder outside its parent's. Written only when true; absent reads false.
     public var subthreads_own_folder: Bool
+    /// This build also starts a dedicated sub-thread with no folder, or its parent's own, in the parent's folder. Written only when true.
+    public var subthreads_shared_folder: Bool
     public var main_pane_pid: Int32
     /// Main's own dialog on its pane (the development-channels warning), published here because Main has no thread entry. The bridge makes
     /// a card from it for the default thread. A value that does not fit reads as none.
     public var main_dialog: DialogOffer?
-    enum CodingKeys: String, CodingKey { case pid, heartbeat_at, workers_supported, subthreads_supported, subthreads_own_folder, main_pane_pid, main_dialog }
+    enum CodingKeys: String, CodingKey { case pid, heartbeat_at, workers_supported, subthreads_supported, subthreads_own_folder, subthreads_shared_folder, main_pane_pid, main_dialog }
     public init(
       pid: Int32, heartbeat_at: String, workers_supported: Bool, main_pane_pid: Int32, main_dialog: DialogOffer? = nil,
-      subthreads_supported: Bool = false, subthreads_own_folder: Bool = false
+      subthreads_supported: Bool = false, subthreads_own_folder: Bool = false, subthreads_shared_folder: Bool = false
     ) {
       self.pid = pid
       self.heartbeat_at = heartbeat_at
       self.workers_supported = workers_supported
       self.subthreads_supported = subthreads_supported
       self.subthreads_own_folder = subthreads_own_folder
+      self.subthreads_shared_folder = subthreads_shared_folder
       self.main_pane_pid = main_pane_pid
       self.main_dialog = main_dialog
     }
@@ -39,6 +42,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       workers_supported = try c.decodeIfPresent(Bool.self, forKey: .workers_supported) ?? false
       subthreads_supported = ((try? c.decodeIfPresent(Bool.self, forKey: .subthreads_supported)) ?? nil) ?? false
       subthreads_own_folder = ((try? c.decodeIfPresent(Bool.self, forKey: .subthreads_own_folder)) ?? nil) ?? false
+      subthreads_shared_folder = ((try? c.decodeIfPresent(Bool.self, forKey: .subthreads_shared_folder)) ?? nil) ?? false
       main_pane_pid = try c.decodeIfPresent(Int32.self, forKey: .main_pane_pid) ?? 0
       main_dialog = ((try? c.decodeIfPresent(DialogOffer.self, forKey: .main_dialog)) ?? nil).flatMap { $0.isValid ? $0 : nil }
     }
@@ -50,6 +54,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       try c.encode(workers_supported, forKey: .workers_supported)
       if subthreads_supported { try c.encode(true, forKey: .subthreads_supported) }
       if subthreads_own_folder { try c.encode(true, forKey: .subthreads_own_folder) }
+      if subthreads_shared_folder { try c.encode(true, forKey: .subthreads_shared_folder) }
       try c.encode(main_pane_pid, forKey: .main_pane_pid)
       try c.encodeIfPresent(main_dialog, forKey: .main_dialog)
     }
@@ -540,12 +545,18 @@ public struct DedicatedSettings: Equatable, Sendable {
       // the folder, model, effort and MCP list are the effective ones (a sub-thread inherits what it does not set); the idle time never is
       let eff = SubThreads.effective(t, in: all)
       let idle = SubThreads.idleParkMin(t)
-      let sub = SubThreads.launch(t, in: all)
-      // a sub-thread's folder is its own (never its parent's: it never shares it), and its model and effort are the effective ones; a plain
-      // thread's are what it sets, so a value that is not valid still fails the launch
+      var sub = SubThreads.launch(t, in: all)
+      // a sub-thread's folder is its own (inside its parent's, or an existing one outside), or its parent's (none, or the same: it follows the
+      // parent when that moves, and is judged against nothing), and its model and effort are the effective ones; a plain thread's are what it
+      // sets, so a value that is not valid still fails the launch
       let raw = t["session_opts"] as? [String: Any] ?? [:]
+      var cwd = sub == nil ? eff.cwd : SubThreads.own(t).cwd
+      if sub?.shares == true {
+        cwd = sub?.parentCwd
+        sub?.parentCwd = nil
+      }
       out[id] = ThreadSessionSettings(
-        threadId: id, cwd: sub == nil ? eff.cwd : SubThreads.own(t).cwd, model: (sub == nil ? raw["model"] as? String : eff.model) ?? "inherit",
+        threadId: id, cwd: cwd, model: (sub == nil ? raw["model"] as? String : eff.model) ?? "inherit",
         effort: sub == nil ? raw["effort"] as? String : eff.effort, idleParkMin: idle, mcpAllow: eff.mcpAllow, sub: sub,
         optsUnread: sub == nil ? ThreadSessionSettings.unreadOpts(t) : [])
     }

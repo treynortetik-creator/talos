@@ -158,6 +158,50 @@ def guard_failed(name, err):
         print("{}")
 
 
+def log_unreadable(name, which, path, err):
+    """One line to <state>/<name>-unreadable.jsonl for `talos-app doctor`: which rule file ("shipped" or "user"), where, and
+    what is wrong with it. Never the command or tool input."""
+    log_jsonl("%s-unreadable.jsonl" % name, {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "file": which, "path": path,
+                                             "error": " ".join(str(err).split())[:300], "unattended": unattended()})
+
+
+POST_VERDICT_BUDGET_S = 5   # what is left for anything done after a verdict is written (a log line, a notice) before the hook just exits
+
+
+def exit_after_verdict(code=0, seconds=POST_VERDICT_BUDGET_S):
+    """Call right after a verdict is written and flushed. The hook's own timeout stays armed (a hung state folder or hub would
+    otherwise outlive Claude Code's hook timeout, which can discard the verdict), but it must not write a SECOND verdict: SIGALRM
+    becomes a plain exit with `code` (the verdict stays), re-armed to `seconds`, at most TALOS_GUARD_TIMEOUT_S."""
+    try:
+        import signal
+        signal.signal(signal.SIGALRM, lambda _s, _f: os._exit(code))
+        signal.alarm(max(1, min(seconds, int(os.environ.get("TALOS_GUARD_TIMEOUT_S") or seconds))))
+    except Exception:
+        pass
+
+
+def guard_unreadable(name, path, err, which="shipped"):
+    """A SAFETY GUARD cannot read a file its rules come from (`which`: the "shipped" file or the owner's "user" file). Allowing
+    would turn every rule off without a sound, so, like a guard timeout: ASK in a live session, DENY when unattended (same output,
+    exit 0; if the verdict cannot be written, exit 2, which blocks). The reason names the file and the error (which carries the
+    line to fix), never the command. Logged AFTER the verdict, so a hung state folder cannot delay it."""
+    detail = " ".join(str(err).split())[:300]
+    fix = "Fix the line named, or move that file aside" if which == "user" else "Reinstall or upgrade the kit"
+    if unattended():
+        msg = pretool_json("deny", "Talos %s cannot read its rules (%s: %s) and this run is unattended, so the action is blocked "
+                           "rather than allowed unchecked. %s." % (name, path, detail, fix))
+    else:
+        msg = pretool_json("ask", "Talos %s cannot read its rules (%s: %s), so it asks instead of letting this through, and keeps "
+                           "asking until that file is fixed. %s; it is logged for `talos-app doctor`." % (name, path, detail, fix))
+    try:
+        sys.stdout.write(msg + "\n")
+        sys.stdout.flush()
+    except Exception:
+        os._exit(2)
+    exit_after_verdict(0)    # before the log write: a hung state folder must not bring a second verdict
+    log_unreadable(name, which, path, err)
+
+
 def arm_guard_timeout(name, seconds=None):
     """Call FIRST in a safety guard. A hook that outlives Claude Code's own hook timeout is a NON-blocking error, so a guard
     that hangs (a stuck read, a runaway import) would let the action through. This alarm fires well before that: a timeout
@@ -183,6 +227,7 @@ def arm_guard_timeout(name, seconds=None):
                 code = 0
             except Exception:
                 pass
+            exit_after_verdict(code)    # before the log write: a hung state folder must not bring a second verdict (or a hang)
             try:                    # logged AFTER the verdict, so a hung state folder cannot delay it
                 log_jsonl("guard-timeouts.jsonl", {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "hook": name,
                                                    "seconds": secs, "unattended": unattended()})

@@ -1,6 +1,10 @@
 // SETUP.md is the one guide a stranger's agent follows (audit gaps 1, 2, 5, 8, 11). Every command it names has to exist and accept
 // the flags it shows, so this reads the document and checks each one against the real file: the root installer is run with
 // --dry-run under a temporary HOME, `talos-app <sub>` against the CLI's own command list, script paths against the tree.
+// gate-reads: SETUP.md README.md CLAUDE.md AGENTS.md docs/SETUP.md install.sh kit/START-HERE.md kit/README.md kit/install.sh
+// gate-reads: kit/scripts/stt.sh kit/scripts/talos-jobs.py kit/scripts/upgrade.sh kit/scripts/verify-install.sh kit/scripts/voice/setup.sh
+// gate-reads: apps/bridge/scripts/install.sh apps/desktop/scripts/build-app.sh apps/desktop/scripts/make-signing-identity.sh
+// gate-reads: apps/bridge/src/cli-main.ts apps/bridge/src/adopt.ts apps/bridge/src/schedules/cli.ts apps/bridge/src/rollback.ts
 import { spawnSync } from 'node:child_process'
 import {
   accessSync,

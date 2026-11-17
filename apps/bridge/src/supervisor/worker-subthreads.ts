@@ -7,7 +7,7 @@
 // `parent_id` that cannot be read all count as no parent (the sub-thread keeps its own list, and with none gets the empty list).
 // `ops_read` and `idle_park_min` are never inherited. The permission ceiling is Main's, never the parent's (workers-wiring.ts).
 // Pure: nothing here reads the disk.
-import { McpAllowList, ThreadId, WorkerEffort, WorkerModel } from '@talos-app/protocol'
+import { folderSame, McpAllowList, ThreadId, WorkerEffort, WorkerModel } from '@talos-app/protocol'
 
 type Raw = Record<string, unknown>
 
@@ -31,8 +31,10 @@ export type SubLaunch = {
   parentId: string
   /** The live parent's own folder; null when the sub-thread cannot start (see `refusal`). */
   parentCwd: string | null
-  /** The sub-thread sets its own folder: it must be strictly inside the parent's (and is made when missing). */
+  /** The sub-thread sets its own folder, not the parent's: it must be inside the parent's (made when missing) or an existing one outside. */
   ownCwd: boolean
+  /** It runs in its parent's folder (the agent folder when the parent has none): it names none, or the parent's own. */
+  shares: boolean
   inherited: string[]
   dropped: string[]
   /** The sub-thread's own model and effort settings that were not valid, by name, with the value. */
@@ -166,7 +168,8 @@ export function effectiveOpts(t: Raw, threads: readonly Raw[]): SubOpts {
 
 /**
  * Null for a thread with no parent_id (one that cannot be read is a sub-thread with no live parent, never "not a sub-thread").
- * A dedicated sub-thread always has a folder of its own inside its parent's folder: it never shares the parent's.
+ * A dedicated sub-thread has a folder of its own inside its parent's, or none, or the parent's own: with none or the same it
+ * `shares` the parent's folder (`subthreads_shared_folder`), so a session there is never made, fenced or judged "outside".
  */
 export function subLaunch(t: Raw, threads: readonly Raw[]): SubLaunch | null {
   const raw = t.parent_id
@@ -175,16 +178,20 @@ export function subLaunch(t: Raw, threads: readonly Raw[]): SubLaunch | null {
   const eff = effectiveOpts(t, threads)
   let parentCwd: string | null = null
   let refusal: string | null = null
+  let shares = false
   if (mine.cwdUnreadable !== undefined) {
     refusal = `the sub-thread's folder setting can't be read (${mine.cwdUnreadable}): it must be a path`
-  } else if (mine.cwd === undefined) {
-    refusal =
-      "a sub-thread's own session needs a folder of its own inside its parent's folder: it has none, and a session never shares its parent's folder"
   } else {
     const l = link(t, threads)
     if (l.kind === 'live') {
-      parentCwd = ownOpts(l.parent).cwd ?? null
-      if (parentCwd === null) refusal = 'the parent thread has no folder: give the parent a folder first'
+      const up = ownOpts(l.parent)
+      parentCwd = up.cwd ?? null
+      // a parent whose folder setting cannot be read is refused itself: a child must not fall back to the agent folder (Main's)
+      if (up.cwdUnreadable !== undefined)
+        refusal = `the parent thread's folder setting can't be read (${up.cwdUnreadable}): fix it, so the sub-thread has a folder to follow`
+      else if (mine.cwd === undefined) shares = true
+      else if (parentCwd === null) refusal = 'the parent thread has no folder: give the parent a folder first'
+      else shares = folderSame(mine.cwd, parentCwd)
     } else if (l.kind === 'orphan') {
       refusal = `${l.why}, so the sub-thread's folder has nothing to be inside`
     } else {
@@ -194,7 +201,8 @@ export function subLaunch(t: Raw, threads: readonly Raw[]): SubLaunch | null {
   return {
     parentId: typeof raw === 'string' ? raw : '',
     parentCwd,
-    ownCwd: mine.cwd !== undefined,
+    ownCwd: mine.cwd !== undefined && !shares,
+    shares,
     inherited: eff.inherited,
     dropped: eff.dropped,
     unreadable: mine.unreadable,

@@ -12,7 +12,8 @@ scripts/ci-local.sh --pr 39 --jobs check,browser --no-status
 
 The script is in parts: `scripts/ci-local.sh` (the options, the run itself, and the results) sources, in place, the files in
 `scripts/ci-local/`: `locks.sh` (locks, run records, statuses, reaping, slots, the suites mutex), `machine.sh` (sleep and wake,
-slot environment, network git, time limits, the iOS simulator), and one file per job group: `jobs-check.sh`,
+slot environment, network git, time limits, the iOS simulator), `settle.sh` (a main push run waits for a quiet head before any slot:
+docs/CI-MACHINES.md, "A main run waits for a quiet head"), and one file per job group: `jobs-check.sh`,
 `jobs-mod-browser.sh`, `jobs-image.sh`, `jobs-swift.sh`. A copy of `ci-local.sh` needs the `ci-local/` folder beside it; without
 it the script stops at once (exit 64). The desktop gate (`ci-desktop-gate.sh`) watches the folder as it watches the script. The parts are read before any wait, so a run keeps
 the job code it started with; the helpers it runs later (`ci-affected.sh`, `ci-desktop-gate.sh`, `ci-flake-vitest.ts`,
@@ -119,8 +120,14 @@ trigger are what keep it from doing that. Tests: `scripts/ci-affected.test.ts`.
    --audit-level high`), which also only warns, because an advisory or a registry outage says nothing about this commit's code.
    A step that warns adds a `warning:` line to the log, a `!` line to the run's output and "with warnings" to the job's status,
    which still counts as a pass. The one-day wait before pnpm picks a new package version stays in force.
-4. **The `suites` mutex:** the quiet group, the loud group and each Swift job hold it, one at a time on this Mac, across all
-   runs. The e2e suite and the web specs don't take it, so they can still sit beside another run's suites.
+4. **The `suites` mutex:** the quiet group, the loud group and each Swift job hold one of CI's slots (the first K of the lock's
+   slots, `TALOS_CI_SLOTS`, default 2: see "Heavy slots" below), so the jobs of a run overlap, up to K at once (check's loud group
+   beside the desktop job, say). The quiet group holds all K, so nothing else of CI runs beside it. Two Swift jobs still never
+   overlap, whichever runs they are of: each takes the desktop mutex, and no slot, around its Swift steps (the desktop
+   job around `ci.sh`, the mobile job around its Swift packages and Xcode steps; its typecheck and Vitest hold a slot of their
+   own). A slot inside the mutex made the desktop job wait behind check's quiet group and loud suites (809 s became 2,233 s), and the
+   Swift jobs need no slot of their own: the mutex already keeps them one at a time. Gates have the slots above CI's.
+   The e2e suite and the web specs don't take the mutex, so they can still sit beside another run's suites.
 5. **Inside `browser`:** `pnpm test:e2e` as ever (relay, web specs, e2e suite), with the e2e suite on `ci_e2e_workers` workers: a worker is a relay, a bridge and a Chromium (about 3 cores and 6 GB), so it is the smaller of cores × 0.3 and GB ÷ 6, between 1 and 8. That is 3 on a 10-core Mac, which also runs builders (what it always ran) and 5 on 18 cores and 128 GB. Each test starts its own relay on its own port inside its worker, and the relay's auth state is per process, so workers share nothing; `E2E_WORKERS` in the environment still wins.
 
 ### A job can't outlive its run
@@ -255,7 +262,19 @@ gates waited a median 19 minutes for the heavy lock behind CI, and any bridge ch
 - the test files whose own quoted relative paths name a changed `apps/bridge/src` or `apps/bridge/test` file (`'../src/x.ts'`
   in an import, an export from, a dynamic import, a require or a spawned path). Direct importers only, written with the
   extension, as every bridge import is;
-- the guards that read a changed file (`// gate-reads:`).
+- the guards that read a changed file (`// gate-reads:`). A test that opens a file it does not import (a doc test, a scan of
+  `apps/bridge/src`, an installer test) marks what it reads with that line, so a change to the file plans the test. The fast
+  gate also plans, for a changed test file, the tests that name it (a doc test cites the titles of other tests), and the core
+  installer tests (`root-install`, `install-bughunt`, `uninstall-bughunt`, `kit-update`: about a minute) for any change to
+  `install.sh`, `kit/` or `scripts/`.
+  Whenever the root installer's test is planned, the plan has one more step, `corepack-install`
+  (`scripts/corepack-install-tests.sh`, `pnpm test:corepack-install`): `root-install`, `install-bughunt` and `uninstall-bughunt`
+  again with a corepack pnpm first on `PATH`, as a Mac set up by `SETUP.md` has it (shims in a temp folder made for the run, with
+  `corepack enable --install-directory`; the machine's own corepack and `PATH` are untouched, and the folder is removed). A
+  harness fault that only a corepack pnpm shows reached main (KIT-8, 2026-11-16), because no CI machine has one first on `PATH`.
+  No corepack fails the step ("corepack missing"); it never skips. CI's check job runs it as its own step, after the suites
+  (`step_corepack_install`, left out with the install tests when `KIT_SKIP` says nothing they run changed), and the macOS-only
+  subset that Lemnos runs for check on Titan ends with it.
 
 Its personal-data step scans this change only: the changed files as they are on disk and the messages of its commits
 (`base..HEAD`), with the same rules, the private list included, so a hit refuses exactly as before. The full gate scans the
@@ -442,20 +461,75 @@ that step only, and the rest of the run goes on in parallel:
 
 ### The heavy lock and its guard
 
-The `suites` mutex is also the machine's one heavy-work lock for everything outside a CI run: `scripts/heavy-lock.sh run
+The `suites` mutex is also the machine's heavy-work lock for everything outside a CI run: `scripts/heavy-lock.sh run
 <name> -- <cmd>` queues the gate's suites, the desktop Swift suites, stress loops and evals on it (`heavy-lock.sh status`
-shows the holder and the queue, in the order it goes, each waiter with its kind). Who goes next: CI's suites first (a ci-local
-slot's ticket, kind `ci`), then everything else, first come first served within each; a holder is never stopped for anyone. A
+shows each slot's holder and the queue, in the order it goes, each waiter with its kind). It is **N slots wide**, so N heavy
+holds run at once. Who goes next, with one slot: CI's suites first (a ci-local
+slot's ticket, kind `ci`), then everything else, first come first served within each; with more, CI has its own slot ("Heavy
+slots" below) and the rest go in turn in theirs; a holder is never stopped for anyone. A
 push gate (the gate `gate-push.sh` runs; kind `push`) and a builder's own `heavy-lock.sh run` (a whole suite, `cpu-burn.sh`, a
 stress loop; kind `run`) never go before CI, however long they wait; the same holds for the desktop mutex. The one exception
 is a `jump` ticket: a checked `gate.sh --push --red-main` gate.
 
 A gate's wait behind CI is bounded by CI's arrivals: CI comes from pushes (to `main`, PRs), reruns and the nightly, and a push
 needs a gate, so gates that wait trigger no more CI and the oldest goes once CI already queued is done. `HEAVY_LOCK_TIMEOUT`
-(default 3600 s) caps a wait behind a stream of reruns or other machines' pushes: the gate then refuses, saying it could not
-get the heavy lock (exit 75). During a changeover a waiter on the old lock code may still let a late push gate go first. (A
+(default 3600 s) caps a wait for anything but a push: the waiter then refuses, saying it could not get the heavy lock (exit
+75). **A push gate (`HEAVY_LOCK_PUSH`, set by `gate-push.sh`) waits up to 14400 s (four hours)** and keeps its place in the queue: a
+push that waited behind a long queue and then timed out at an hour threw away its gate and its rebase. An explicit `HEAVY_LOCK_TIMEOUT`
+still applies to it, and an explicit `0` means no limit for anyone. During a changeover a waiter on the old lock code may still let a late push gate go first. (A
 30-minute cap that let a waiting push gate go before CI was removed: four late gates in a row once left `main` with no verdict
 for 2 h.) A ticket is CI only by its kind line, which only ci-local writes; a `heavy-lock.sh run` named `slot 1` is not CI.
+
+**Heavy slots.** The number of slots is `TALOS_HEAVY_SLOTS` in the environment, else the first line of
+`~/.cache/talos-ci/heavy-slots` (or `$TALOS_CI_CACHE/heavy-slots`), else **4**; `1` is the one-lock behaviour exactly, and 8 is
+the most. The file is machine-local, so changing the number needs no code change and no restart: a waiter reads it on each
+look (a holder keeps the slot it has). **The first K slots are CI's** (`TALOS_CI_SLOTS`, else the first line of `~/.cache/talos-ci/ci-slots`, else **2**, never more
+than N - 1). Slot 1 **is** `locks/mutex-suites`. A ci-local job takes one of slots 1..K and no other, so **CI never waits behind a
+gate** (a gate runs 30 to 60 minutes, and "CI first" only orders who waits: it cannot take the lock from a gate already running;
+on 2026-11-16 CI's waits for the lock averaged 1,039 s), and the jobs of one run **overlap**, up to K at once: they used to take
+the one slot after another (a job once waited 1,629 s at a load of 4 to 7 on 18 cores). Each CI hold has its slot's own
+`PW_PORT` (4973 + 10 * (slot - 1), `TALOS_CI_HOLD_PW_PORT` moves it: a range of its own, never the builders' 4173 and up nor the
+run slots' 4873 and up), tmux socket prefix and `TALOS_HEAVY_SLOT`, as a gate's slot does (its temp folder is its job's own,
+`job_tmp`), and the environment is put back when it ends. A gate, a loop or an eval (`heavy-lock.sh run`) takes slots K+1..N (`locks/mutex-suites-<k>`),
+the first free one. By default that is CI's two and two for builders, so at most two gates run beside CI (while a run is active
+the cap is two whatever N is). Each class has its own line: CI's jobs in turn (slots 1..K), the gates in turn (a checked
+`--red-main` jump first, then first come first served), and a waiter of one class never holds back the other. With **one slot** everyone shares it, CI first, as it always did. A dead holder in any slot is taken over
+like slot 1's. **During the rollout** a checkout whose scripts are older still runs its gate in `mutex-suites`, i.e. slot 1,
+and CI waits for it as before; that goes away as worktrees rebase. **CI's quiet group** (the contract and schedules suites, which give a real bridge and the real Chronos CLI 3 s to answer and
+failed beside anything else) **holds all K of CI's slots** (`ci_mutex_all`: it takes the slots as it finds them free, but only
+while it is first in line among CI, never through the free-slot grace, or two runs' quiet groups could hold one slot each and wait
+for each other's until the timeout; it runs when it has them all), so no other CI job runs beside it, and **no new gate hold starts while it runs** (a gate that waits keeps its place; gates that run already
+finish); its end is a row in `~/.cache/talos-ci/logs/quiet-group.tsv` (UTC time, commit, pass or fail, seconds, files that failed
+and passed on retry, gate slots busy at its start and at its end), to read what the gates cost it. `TALOS_HEAVY_SLOTS=1` in one
+process's environment, while the machine's file or the default says 4, puts that process in CI's slot 1 and out of the rule: it
+shares the slot with CI, the old way. The desktop mutex (`heavy-lock.sh desktop`, `locks/mutex-desktop`) stays one:
+Swift desktop suites never run two at a time. No gate holds it (`gate.sh` runs no Swift suite); a builder's own
+`apps/desktop/scripts/test.sh` or `ci.sh` does, for as long as it runs, and CI's desktop job waits behind that, CI first among
+the waiters. Titan's shared flock (`CI_SHARED_LOCK`) still serialises across the distros; set
+`TALOS_HEAVY_SLOTS=1` there.
+
+Each slot's command is given its own copies of everything the suites share, all from `TALOS_HEAVY_SLOT=<k>`:
+
+| What                     | Slot k                                                                                       | Where it is used                           |
+| ------------------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `PW_PORT`                | 4173 + 10 * (k - 1) (`TALOS_HEAVY_PW_PORT` moves the base)                                   | the web specs' `vite preview` server       |
+| `TALOS_TEST_TMUX_PREFIX` | `talos-test-s<k>`; every tmux `-L` a test makes starts with it; never `talos`                | the bridge tests that run a real tmux      |
+| `TMPDIR`                 | `<cache>/tmp/talos-hv-s<k>` (`TALOS_HEAVY_TMP` moves the base), with more than one slot only | every `mkdtemp`, the run folders, hub.sock |
+
+Playwright starts its web server in a process group of its own, so killing a stopped holder's group does not reach it, and an
+orphan keeps the slot's port. A stopped holder is therefore asked to stop with INT first (what Playwright tears its server down
+on), then TERM, then KILL; and a hold stops an orphaned `vite preview` on its slot's port, at its start and at its end. The tree is `sh -c "vite build
+&& pnpm exec vite preview"`, then pnpm, then node, and when the run goes only that shell (the group's leader) is re-parented to pid 1,
+so an orphan is told by its **group's leader** (gone, or with pid 1 for parent), and only when its command is `vite preview` with
+`--port <the slot's port>` whole and its working folder is in a Talos checkout (this repository's worktrees): another project's
+preview is never stopped. A server whose run lives (a run by hand on 4173) is never touched: the hold says on stderr who has the port, and the
+gate's web specs step refuses, naming the pid, instead of a spec failing on a port that is taken.
+
+The folder is emptied when the hold starts and removed when it ends (or by the waiter that takes the slot from a dead holder).
+CI's own slots keep their own ports (`ci_slot_env`: 4873 and up) and `talos-ci-s<n>` folders, which a heavy slot never uses, and a
+CI run's suites keep CI's (a ci-local job gets none of this). The first gate slot is 2, so a gate's preview port is 4183 and up;
+with one slot it is 4173, the port a plain run uses, and `TMPDIR` is untouched. The relay, bridge hub and e2e harness servers bind port 0 and have no fixed port. Check pty headroom before raising
+`TALOS_HEAVY_SLOTS`: `sysctl kern.tty.ptmx_max` (511 here) against the peak one gate uses (`ls /dev/ttys* | wc -l` while it runs).
 
 A waiter that is not first in line still takes the lock once it has sat free, with no living holder, for `CI_DEFER_GRACE`
 seconds (default 15): a waiter running other lock code (main's old first come first served during a changeover, or a branch's

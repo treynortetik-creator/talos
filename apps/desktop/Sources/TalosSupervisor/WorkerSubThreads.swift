@@ -32,10 +32,10 @@ extension WorkerManager {
           return nil
         }
         parent = p
-      } else {
+      } else if !sub.shares {
         fail(id, "start_failed", "sub-thread folder: it has none of its own inside its parent's")
         return nil
-      }
+      }  // one that shares its parent's folder is a thread in that folder like any other: nothing is made or checked against the parent
     }
     // the worker runs in the resolved folder
     let cwd = realpath(wanted, nil).map { p -> String in

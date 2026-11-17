@@ -2,6 +2,7 @@
 // (railway.json build.watchPatterns; Pantheon 2026-11-15: 82 deploys in a day, each one a visible "disconnected"). The risk
 // of a watch list is the opposite: a file the Dockerfile copies that no pattern covers, so a real relay change never ships.
 // This test reads the Dockerfile's build-context COPY sources and requires a pattern for each.
+// gate-reads: railway.json apps/relay/Dockerfile
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

@@ -1,6 +1,8 @@
 // The setup docs make promises the code has to keep (audit D54, D57, D60): no alias instructions, every command a doc tells
 // you to run exists in the CLI, every "off" state the Health page can show has a how-to, and the README reaches every app's
 // page. Reads the source text only; nothing here starts a process.
+// gate-reads: README.md docs/SETUP.md docs/bridge.md docs/desktop.md docs/ios.md apps/bridge/scripts/install.sh apps/bridge/src/cli-main.ts
+// gate-reads: apps/desktop/Sources/TalosDesktop/Pairing.swift apps/web/src/features/health/rows.ts packages/protocol/src/schedules.ts
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

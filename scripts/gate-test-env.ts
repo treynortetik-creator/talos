@@ -25,6 +25,8 @@ const NAMES = new Set([
   'LEASE_PROBE',
   'SLOW',
   'FAIL',
+  'READERS_FAIL',
+  'GATE_PUSH_READERS_MAX',
 ])
 
 /** True for a name the gate scripts or the tests' fakes read, which a test must never inherit. */

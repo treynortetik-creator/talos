@@ -119,6 +119,28 @@ export function folderInside(child: string, parent: string): boolean {
   return c.startsWith(`${p}/`)
 }
 
+/**
+ * Lexical "the same folder": equal once trailing slashes go, neither with a `.` or `..` segment. A separate rule from
+ * `folderInside`, which stays strict; the supervisor re-checks on resolved paths.
+ */
+export function folderSame(child: string, parent: string): boolean {
+  const c = child.replace(/\/+$/, '')
+  // absolute on both sides, as the Mac's SubThreads.sameFolder; no `.` or `..` segment in the child
+  if (!child.startsWith('/') || !parent.startsWith('/')) return false
+  return c.split('/').every((seg) => seg !== '.' && seg !== '..') && c === parent.replace(/\/+$/, '')
+}
+
+/**
+ * A dedicated sub-thread that runs in its parent's folder: it names none, or the parent's own. With no folder on the
+ * parent either, both run in the agent folder, which is the same folder too.
+ */
+function sharesParentFolder(t: SubThreadLike, parent: SubThreadLike | undefined): boolean {
+  if (t.session !== 'dedicated') return false
+  const cwd = t.session_opts?.cwd
+  const parentCwd = parent?.session_opts?.cwd
+  return !cwd || (!!parentCwd && folderSame(cwd, parentCwd))
+}
+
 const sameList = (a: readonly string[] | undefined, b: readonly string[] | undefined) =>
   a === b || (a !== undefined && b !== undefined && a.length === b.length && a.every((x, i) => x === b[i]))
 
@@ -179,6 +201,8 @@ export function subThreadWarnings(after: SubConfigLike): string[] {
       out.push(
         `thread "${t.id}" keeps its own folder, so it does not get "${parent.id}"'s instructions; the parent's privacy rules still apply`,
       )
+    else if (parent && sharesParentFolder(t, parent))
+      out.push(`thread "${t.id}" and its parent "${parent.id}" work in the same folder; they can edit the same files`)
   }
   return out
 }
@@ -216,7 +240,7 @@ function touched(
 export function subThreadPatchIssue(
   before: SubConfigLike,
   after: SubConfigLike,
-  opts: { macSupports: boolean; ownFolder?: boolean },
+  opts: { macSupports: boolean; ownFolder?: boolean; sharedFolder?: boolean },
 ): string | null {
   const find = (c: SubConfigLike, id: string | undefined) => (id ? c.threads.find((x) => x.id === id) : undefined)
   for (const t of after.threads) {
@@ -243,11 +267,23 @@ export function subThreadPatchIssue(
       return `${label} has sub-threads of its own, so it can't be a sub-thread; sub-threads go one level deep`
     const cwd = t.session_opts?.cwd
     const parentCwd = parent.session_opts?.cwd
+    // with `subthreads_shared_folder` a dedicated sub-thread may name no folder (it runs in its parent's, or the agent's)
+    // or the parent's own; a folder under a parent with none is still refused
+    const shares = opts.sharedFolder === true && t.session === 'dedicated'
     if (t.session === 'dedicated') {
-      if (!cwd) return `${label}: a sub-thread with its own session needs its own folder inside its parent's folder`
-      if (!parentCwd) return `${label}: give "${parent.id}" a folder first; a sub-thread's folder goes inside it`
+      if (!cwd && !shares)
+        return `${label}: a sub-thread with its own session needs its own folder inside its parent's folder`
+      if (cwd && !parentCwd) return `${label}: give "${parent.id}" a folder first; a sub-thread's folder goes inside it`
+      if (!parentCwd && !shares)
+        return `${label}: give "${parent.id}" a folder first; a sub-thread's folder goes inside it`
     }
-    if (cwd && parentCwd && !folderInside(cwd, parentCwd) && !(opts.ownFolder === true && keepsOwnFolder(t, parent)))
+    if (
+      cwd &&
+      parentCwd &&
+      !folderInside(cwd, parentCwd) &&
+      !(shares && folderSame(cwd, parentCwd)) &&
+      !(opts.ownFolder === true && keepsOwnFolder(t, parent))
+    )
       return `${label}: a sub-thread's folder must be inside its parent's folder`
     const mine = t.session_opts?.mcp_allow
     const theirs = parent.session_opts?.mcp_allow

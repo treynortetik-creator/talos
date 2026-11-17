@@ -65,9 +65,17 @@ export type WorkerThread = {
   optsUnread?: UnreadOpt[]
   /**
    * A sub-thread (a parent_id, P3d5): what its start needs beyond its effective options (worker-subthreads.ts). Its folder is its
-   * own, its model, effort and MCP list the effective ones; `parentCwd` is the live parent's folder it must be strictly inside.
+   * own (inside its parent's, or an existing one outside), its model, effort and MCP list the effective ones; `parentCwd` is the
+   * live parent's folder it is judged against. `shares`: it runs in its parent's folder (`cwd` is that folder, `parentCwd` null,
+   * `ownCwd` false): nothing is made, fenced or parked for it, and it is exempt from `folder_claimed` against its family only.
    */
-  sub?: { parentId: string; ownCwd: boolean; refusal: string | null; unreadable: Record<string, string> }
+  sub?: {
+    parentId: string
+    ownCwd: boolean
+    shares?: boolean
+    refusal: string | null
+    unreadable: Record<string, string>
+  }
 }
 
 /** The launch of one start, built and checked by worker-spec.ts (buildWorkerSpec, validateSpec); or why it may not start. */

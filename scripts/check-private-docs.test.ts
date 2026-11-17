@@ -1,6 +1,7 @@
 // check-no-personal.sh, private-document mode: no line of a private appendix (the "## Appendix P" section of a design
 // doc kept outside the repo) may appear anywhere in the repo. The docs are named by CHECK_PRIVATE_DOCS or by the
 // gitignored scripts/private-docs.txt, so their paths and contents never land in git.
+// gate-reads: scripts/check-no-personal.sh scripts/denylist.generic.txt docs/SCHEDULES.md docs/CLAUDE-CODE.md
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

@@ -694,6 +694,11 @@ owner is told in the default thread whenever it flips (`trust.ts` `noteFenceFlip
 one-tap card, even when he asked in his own words (the two-hour window can't tell he asked for this: Delphi's review); turning it
 back ON is made at once when he asked. A thread session can never name it.
 
+With the fence off, a thread's edits to `~/.claude`'s agents, skills, commands, CLAUDE.md, rules, output styles, workflows and routines
+ask the owner by card (`worker-policy.ts` `CONFIG_ASK_WHEN_FENCE_OFF`, written as `ask` rules; the card warns when the change touches a
+frontmatter key that would let the agent approve its own actions, use other tools or switch models: `permission/frontmatter-risk.ts`);
+the settings files, hooks, plugins and `.claude.json` stay closed to every thread (`CONFIG_ALWAYS_DENIED`), fence on or off.
+
 **A live change.** On each tick the Mac compares what a running session was started with (`WorkerEntry.launched`: `cwd`, `model`,
 `effort`, `mcp_allow`, written at every start) with the config. If they differ and the difference has stood for 30 seconds (two edits
 in a row are one restart, with the final config; an edit put back restarts nothing), the session is restarted the way Restart is: it

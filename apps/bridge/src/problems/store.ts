@@ -13,6 +13,10 @@ import {
   scrubProblem,
 } from '@talos-app/protocol'
 import { ensureDir, readJsonFile, writeFileAtomic, writeJsonAtomic } from '../fsutil.ts'
+
+/** A problem is answered `consumed` and the relay forgets it once it is written: the write must have reached the disk (file and folder). */
+const DURABLE = { durable: true } as const
+
 import { redact } from '../redact.ts'
 
 export const PROBLEMS_DIR = 'problems'
@@ -40,6 +44,8 @@ export type StoredProblem = {
   /** Sits beside this file, same fingerprint. */
   screenshot_file?: string
   screenshot_unavailable?: true
+  /** Why: set with `screenshot_unavailable` when the picture could not be fetched. */
+  screenshot_unavailable_reason?: string
   versions_seen: ProblemT['versions'][]
   count: number
   first_seen: string
@@ -54,7 +60,7 @@ export type StoredProblem = {
 }
 
 export type FileOutcome =
-  | { result: 'filed' | 'merged' | 'duplicate'; fingerprint: string; count: number; path: string }
+  | { result: 'filed' | 'merged' | 'duplicate' | 'repaired'; fingerprint: string; count: number; path: string }
   | { result: 'refused'; fingerprint: string; reason: 'full' }
 
 /** Scrubs once more on the Mac (the relay is not trusted) and takes out the home folders this machine uses. */
@@ -174,6 +180,8 @@ export function fileProblem(
     nowIso: string
     paths: { userHome?: string; appHome?: string }
     screenshot?: { bytes: Uint8Array } | 'unavailable'
+    /** With `screenshot: 'unavailable'`: why, kept in the file. */
+    screenshotWhy?: string
   },
 ): FileOutcome {
   const clean = cleanProblem(problem, o.paths)
@@ -190,7 +198,23 @@ export function fileProblem(
   const path = join(d.open, `${fingerprint}.json`)
   const existing = readJsonFile<StoredProblem>(path)
   if (existing && existing.v === 1) {
-    if (existing.ids.includes(clean.id)) return { result: 'duplicate', fingerprint, count: existing.count, path }
+    if (existing.ids.includes(clean.id)) {
+      // The same report again. A copy filed without its picture takes the picture when this one has it (a report sent again
+      // after the picture could not be fetched); a complete copy stays as it is.
+      const again = o.screenshot
+      // Only the same report: an owner fingerprint is a hash of the id alone, so the words must match too.
+      const sameReport =
+        existing.message === clean.message && existing.steps === clean.steps && existing.source === clean.source
+      if (existing.screenshot_unavailable && sameReport && again && again !== 'unavailable') {
+        const file = `${fingerprint}.${EXT[clean.screenshot?.mime ?? ''] ?? 'img'}`
+        // The picture goes first: a report that names a file must never be on disk without it.
+        writeFileAtomic(join(d.open, file), again.bytes, 0o600, DURABLE)
+        const { screenshot_unavailable: _u, screenshot_unavailable_reason: _r, ...rest } = existing
+        writeJsonAtomic(path, { ...rest, screenshot_file: file }, 0o600, DURABLE)
+        return { result: 'repaired', fingerprint, count: existing.count, path }
+      }
+      return { result: 'duplicate', fingerprint, count: existing.count, path }
+    }
     const seen = existing.versions_seen
     const sameVersion = seen.some((v) => JSON.stringify(v) === JSON.stringify(clean.versions))
     const next: StoredProblem = {
@@ -202,8 +226,16 @@ export function fileProblem(
       versions_seen: sameVersion ? seen : [...seen, clean.versions].slice(-VERSIONS_KEPT),
       truncated: existing.truncated || clean.truncated,
     }
-    writeJsonAtomic(path, next)
+    writeJsonAtomic(path, next, 0o600, DURABLE)
     return { result: 'merged', fingerprint, count: next.count, path }
+  }
+  // An owner report that was closed is still that report: the relay sends one again after a deploy, an operator requeues one,
+  // and the Mac's own seen-id memory only reaches back 8 days. It is answered as a duplicate, never opened as a new problem.
+  if (clean.kind === 'owner') {
+    const closedPath = join(d.closed, `${fingerprint}.json`)
+    const closed = readJsonFile<StoredProblem>(closedPath)
+    if (closed && closed.v === 1 && closed.ids.includes(clean.id))
+      return { result: 'duplicate', fingerprint, count: closed.count, path: closedPath }
   }
   const shot = o.screenshot
   const shotBytes = shot && shot !== 'unavailable' ? shot.bytes.length : 0
@@ -233,15 +265,17 @@ export function fileProblem(
     ...(clean.install !== undefined ? { install: clean.install } : {}),
     ...(clean.attached !== undefined ? { attached: clean.attached } : {}),
   }
-  if (shot === 'unavailable') rec.screenshot_unavailable = true
-  else if (shot) {
+  if (shot === 'unavailable') {
+    rec.screenshot_unavailable = true
+    if (o.screenshotWhy) rec.screenshot_unavailable_reason = o.screenshotWhy
+  } else if (shot) {
     const ext = EXT[clean.screenshot?.mime ?? ''] ?? 'img'
     const file = `${fingerprint}.${ext}`
     // The picture goes first: a report that names a file must never be on disk without it.
-    writeFileAtomic(join(d.open, file), shot.bytes)
+    writeFileAtomic(join(d.open, file), shot.bytes, 0o600, DURABLE)
     rec.screenshot_file = file
   }
-  writeJsonAtomic(path, rec)
+  writeJsonAtomic(path, rec, 0o600, DURABLE)
   return { result: 'filed', fingerprint, count: 1, path }
 }
 

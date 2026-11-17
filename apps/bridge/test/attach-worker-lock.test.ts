@@ -95,7 +95,7 @@ describe('attach from a lead: the protected roots in its marker', () => {
     const marker = (v: unknown) =>
       writeFileSync(join(folder, '.talos-lead'), typeof v === 'string' ? v : JSON.stringify(v))
     marker({ thread: 'trip', protect: protectOf(s.base) })
-    const callIn = (path: string, cwd: string | undefined = folder, parentCwd?: string) =>
+    const callIn = (path: string, cwd: string | null = folder, parentCwd?: string) =>
       attach.handler(
         {
           media: s.media,
@@ -106,7 +106,12 @@ describe('attach from a lead: the protected roots in its marker', () => {
             // the thread list parentThread() reads: with a parent folder, `trip` is a sub-thread of a lead called `boss`
             config: {
               threads: [
-                { id: 'trip', kind: 'agent', ...(parentCwd ? { parent_id: 'boss' } : {}) },
+                {
+                  id: 'trip',
+                  kind: 'agent',
+                  ...(cwd ? { session_opts: { cwd } } : {}),
+                  ...(parentCwd ? { parent_id: 'boss' } : {}),
+                },
                 ...(parentCwd ? [{ id: 'boss', kind: 'agent', session_opts: { cwd: parentCwd } }] : []),
               ],
             },
@@ -165,6 +170,21 @@ describe('attach from a lead: the protected roots in its marker', () => {
     // a parent marker that cannot be read refuses everything, as for the lead itself
     writeFileSync(join(l.folder, '.talos-lead'), '{not json')
     expect((await l.callIn(l.secret, own, l.folder)).isError).toBe(true)
+  })
+
+  test("a sub-thread with no folder of its own works in its parent lead's folder, so the lead's marker binds it (the effective folder)", async () => {
+    const l = lead()
+    // no folder of its own: before, the lead fence looked at the thread's own settings, found none, and let the file out
+    const r = await l.callIn(l.secret, null, l.folder)
+    expect(r.isError).toBe(true)
+    expect(JSON.stringify(r)).toMatch(/protected|lead/i)
+    expect(l.puts).toEqual([])
+    // and the same folder named outright is held the same way
+    expect((await l.callIn(l.secret, l.folder, l.folder)).isError).toBe(true)
+    // a parent with no marker gets nothing extra for it
+    const plain = join(l.base, 'plain')
+    mkdirSync(plain)
+    expect(JSON.stringify(await l.callIn(l.secret, null, plain))).not.toMatch(/protected|marker/i)
   })
 
   test('a planted marker that cannot be understood refuses everything, never opens a way out', async () => {

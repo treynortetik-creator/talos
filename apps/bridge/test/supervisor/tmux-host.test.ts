@@ -20,6 +20,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { PtyExit, PtyLaunch } from '@talos-app/protocol'
+import { tmuxTestPrefix } from '@talos-app/testkit'
 import { groupAlive, type ProcIdentity, runTool, signalOwnGroup, systemIdentity } from '../../src/supervisor/proc.ts'
 import {
   isEmptyPaneRow,
@@ -101,7 +102,7 @@ afterEach(() => {
 })
 
 function host(session = 'agent', pollMs = 100, over: Partial<ConstructorParameters<typeof TmuxPtyHost>[0]> = {}) {
-  const socket = over.socket ?? `talos-test-${process.pid}-${n++}`
+  const socket = over.socket ?? `${tmuxTestPrefix()}-${process.pid}-${n++}`
   if (!sockets.includes(socket)) sockets.push(socket)
   const h = new TmuxPtyHost({
     tmux: TMUX,

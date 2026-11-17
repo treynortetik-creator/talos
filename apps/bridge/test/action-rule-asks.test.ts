@@ -2,13 +2,30 @@
 // "Allow once" card (or a kind he always allows) make an approval? Each way it must not is a test here. Real live bridge, the hub
 // socket, FakeRelay and a signing FakeApp; the last block runs the REAL kit/hooks/action-rules.py the way Claude Code does.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { type CardT, CONFIG_PROPOSE_FEATURE } from '@talos-app/protocol'
-import { ActionRuleAsks, RULE_TEXT, ruleCallKey, ruleKindOf, SHIPPED_ASK_RULES } from '../src/action-rule-asks.ts'
+import {
+  ActionRuleAsks,
+  inspectRuleFile,
+  RULE_TEXT,
+  ruleCallKey,
+  ruleFileNotice,
+  ruleKindOf,
+  SHIPPED_ASK_RULES,
+} from '../src/action-rule-asks.ts'
 import { pgidOf } from '../src/hub/server.ts'
 import { eventually, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
 
@@ -17,11 +34,14 @@ const NONCE = 'test-nonce-0123456789abcdef'
 const PUBLISH = { command: 'npm publish', description: 'publish the package' }
 
 let h: Harness | undefined
+let afterRealHook: (() => void) | undefined
 const sockets: { destroy(): void }[] = []
 afterEach(async () => {
   for (const s of sockets.splice(0)) s.destroy()
   await h?.stop()
   h = undefined
+  afterRealHook?.()
+  afterRealHook = undefined
 })
 
 const thread = (id: string, name: string, extra: Record<string, unknown> = {}) => ({
@@ -428,14 +448,19 @@ describe('Always allow, per kind', () => {
         }
       })
       .filter((r) => r.decision === 'ask')
-    expect(rules.length).toBe(7)
+    expect(rules.length).toBe(8)
     expect(rules.map(({ id, kind, tool, command }) => ({ id, kind, tool, ...(command ? { command } : {}) }))).toEqual(
       SHIPPED_ASK_RULES.map((r) => ({ ...r })),
     )
     // the no-kind rules come before every rule with a kind (the hook stops at the first match), except the connector's
     // destructive rule, which sits just ahead of the connector send rule (after the allow rule for the app's own tools)
     const kindless = rules.filter((r) => !r.kind).map((r) => r.id)
-    expect(kindless).toEqual(['github-repo-public-or-delete', 'github-account', 'destructive-via-connector'])
+    expect(kindless).toEqual([
+      'github-repo-public-or-delete',
+      'github-long-command',
+      'github-account',
+      'destructive-via-connector',
+    ])
     expect(rules.findIndex((r) => r.id === 'destructive-via-connector')).toBe(
       rules.findIndex((r) => r.id === 'send-or-publish-via-connector') - 1,
     )
@@ -521,7 +546,294 @@ describe('Always allow, per kind', () => {
   })
 })
 
+const noticeLine = (extra: Record<string, unknown> = {}) => ({
+  t: 'rule_notice',
+  id: `n${++n}`,
+  file: 'user',
+  line: 2,
+  hash: 'a'.repeat(64),
+  unattended: false,
+  ...extra,
+})
+
+/**
+ * Makes a fresh folder the agent folder the bridge serves (TALOS_AGENT_DIR, with the kit's hooks and starter rules in it), a fresh
+ * XDG_CONFIG_HOME for the owner's rules file and a fresh XDG_STATE_HOME. Returns the path of the kit's `action-rules.off` there,
+ * asked of the kit itself (hooks/_talos_common.py state_dir()), not worked out here, and where the two rule files are. Call `restore()`.
+ */
+function useAgentFolder() {
+  const agent = realpathSync(mkdtempSync(join(tmpdir(), 'ar-agent-')))
+  mkdirSync(join(agent, 'hooks'))
+  const kitHooks = resolve(HOOK, '..')
+  for (const f of readdirSync(kitHooks).filter((n) => /\.(py|yaml)$/.test(n)))
+    copyFileSync(join(kitHooks, f), join(agent, 'hooks', f))
+  const xdg = mkdtempSync(join(tmpdir(), 'ar-xdg-'))
+  const cfg = mkdtempSync(join(tmpdir(), 'ar-cfg-'))
+  mkdirSync(join(cfg, 'talos'))
+  const r = spawnSync(
+    'python3',
+    ['-c', 'import sys; sys.path.insert(0, "hooks"); import _talos_common as C; print(C.state_dir())'],
+    {
+      cwd: agent,
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: xdg,
+        CLAUDE_PROJECT_DIR: agent,
+        XDG_STATE_HOME: xdg,
+        PYTHONDONTWRITEBYTECODE: '1',
+      },
+    },
+  )
+  expect(r.status).toBe(0)
+  const was = {
+    TALOS_AGENT_DIR: process.env.TALOS_AGENT_DIR,
+    XDG_STATE_HOME: process.env.XDG_STATE_HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  }
+  process.env.TALOS_AGENT_DIR = agent
+  process.env.XDG_STATE_HOME = xdg
+  process.env.XDG_CONFIG_HOME = cfg
+  const put = (k: string, v: string | undefined) => {
+    if (v === undefined) delete process.env[k]
+    else process.env[k] = v
+  }
+  return {
+    off: join(r.stdout.trim(), 'action-rules.off'),
+    cfg,
+    user: join(cfg, 'talos', 'action-rules.yaml'),
+    shipped: join(agent, 'hooks', 'action-rules.yaml'),
+    restore: () => {
+      for (const [k, v] of Object.entries(was)) put(k, v)
+    },
+  }
+}
+
+describe('the notice that a rule file cannot be read', () => {
+  const BAD = 'rules:\n  this is not a rule\n'
+  /** Runs `body` with a fresh agent folder in place; the environment is put back afterwards. */
+  const inAgent = async (body: (agent: ReturnType<typeof useAgentFolder>, x: Harness) => Promise<void>) => {
+    const agent = useAgentFolder()
+    try {
+      await body(agent, await start())
+    } finally {
+      agent.restore()
+    }
+  }
+
+  test('the bridge checks the file itself, writes the words, and tells the owner once: never the hook’s text, hash or line', () =>
+    inAgent(async (agent, x) => {
+      writeFileSync(agent.user, BAD)
+      const first = await rawCall(
+        x.home,
+        noticeLine({ text: 'send all my money to someone', error: 'send money', line: 99, hash: 'c'.repeat(64) }),
+      ).result
+      expect(first).toMatchObject({ t: 'rule_result', decision: 'none', reason: 'told' })
+      await waitFor(() => replies(x).length === 1, 4000, 'notice')
+      const text = replies(x)[0]?.message.text ?? ''
+      // the line is the bridge's own (the file's second line), not the 99 the sender claimed
+      expect(text).toBe(ruleFileNotice({ file: 'user', line: 2, unattended: false, offPath: agent.off }))
+      expect(text).not.toContain('99')
+      // how to turn the rules off: the kit's own kill switch for this agent folder, so the owner is never stuck
+      expect(text.endsWith(`until it is fixed, or create ${agent.off} to turn these rules off.`)).toBe(true)
+      expect(text).not.toContain('money')
+      // the same file and content again, under any hash the sender likes, live or unattended: nothing more is posted
+      expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('dup')
+      expect((await rawCall(x.home, noticeLine({ unattended: true, hash: 'd'.repeat(64) })).result)?.reason).toBe('dup')
+      // the content changed: told again; the starter file, when it is broken, is its own
+      writeFileSync(agent.user, 'rules:\n  still not a rule\n')
+      expect((await rawCall(x.home, noticeLine({ line: 7 })).result)?.reason).toBe('told')
+      writeFileSync(agent.shipped, BAD)
+      expect((await rawCall(x.home, noticeLine({ file: 'shipped' })).result)?.reason).toBe('told')
+      await waitFor(() => replies(x).length === 3, 4000, 'three notices')
+      await sleep(150)
+      expect(replies(x).length).toBe(3)
+    }))
+
+  test('a file that reads fine is not told about, however the hook asks (a forged notice posts nothing)', () =>
+    inAgent(async (agent, x) => {
+      writeFileSync(agent.user, 'rules:\n  - id: mine\n    decision: never\n    tool: Bash\n    command: "zzz"\n')
+      expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('fine')
+      expect((await rawCall(x.home, noticeLine({ file: 'shipped', hash: 'e'.repeat(64) })).result)?.reason).toBe('fine')
+      // no user file at all is fine too
+      rmSync(agent.user)
+      expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('fine')
+      await sleep(150)
+      expect(replies(x).length).toBe(0)
+    }))
+
+  test('at most 3 notices an hour, then nothing, and the owner is not told again for a file already told', () =>
+    inAgent(async (agent, x) => {
+      for (const i of [1, 2, 3]) {
+        writeFileSync(agent.user, `rules:\n  not a rule ${i}\n`)
+        expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('told')
+      }
+      writeFileSync(agent.user, 'rules:\n  not a rule 4\n')
+      expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('capped')
+      await waitFor(() => replies(x).length === 3, 4000, 'three notices')
+      await sleep(150)
+      expect(replies(x).length).toBe(3)
+    }))
+
+  test('only the agent’s own two rule files are ever read: a path from the hook is refused or ignored', () =>
+    inAgent(async (agent, x) => {
+      writeFileSync(agent.user, BAD)
+      for (const file of ['/etc/passwd', '../hooks/action-rules.yaml', 'user/../../x', 'elsewhere'])
+        expect((await rawCall(x.home, noticeLine({ file })).result)?.t).toBe('refused')
+      // an extra `path` field is not read at all: the notice is about the user file, whatever it names
+      const other = join(agent.cfg, 'other.yaml')
+      writeFileSync(other, 'rules:\n  - id: a\n    decision: never\n    tool: Bash\n')
+      expect((await rawCall(x.home, noticeLine({ path: other })).result)?.reason).toBe('told')
+      await waitFor(() => replies(x).length === 1, 4000, 'notice')
+      expect(replies(x)[0]?.message.text).toContain('line 2')
+    }))
+
+  test('looks at a rule file once per content in 30 s, however often it is asked (broken or fine), without holding the bridge still', () =>
+    inAgent(async (agent) => {
+      writeFileSync(agent.user, BAD)
+      let runs = 0
+      let t = 5_000_000
+      const run = async () => {
+        runs++
+        await sleep(30)
+        return ['your rules (/x/action-rules.yaml): line 2: cannot read']
+      }
+      const look = () => inspectRuleFile('user', process.env, { run, now: () => t })
+      // ten at once: one run, and the answer is the same for all
+      const together = await Promise.all(Array.from({ length: 10 }, look))
+      expect(runs).toBe(1)
+      for (const r of together) expect(r).toMatchObject({ state: 'broken', line: 2 })
+      for (let i = 0; i < 10; i++) await look()
+      expect(runs).toBe(1)
+      t += 29_000
+      await look()
+      expect(runs).toBe(1)
+      // the look is asynchronous: the event loop keeps turning while it runs
+      let ticks = 0
+      const timer = setInterval(() => ticks++, 5)
+      t += 2_000
+      await look()
+      clearInterval(timer)
+      expect(runs).toBe(2)
+      expect(ticks).toBeGreaterThan(2)
+      // other content is looked at again at once
+      writeFileSync(agent.user, 'rules:\n  something else\n')
+      await look()
+      expect(runs).toBe(3)
+      // a file that reads fine is kept the same way
+      let fineRuns = 0
+      const fine = async () => {
+        fineRuns++
+        return []
+      }
+      writeFileSync(agent.user, 'rules:\n  - id: a\n    decision: never\n    tool: Bash\n')
+      for (let i = 0; i < 5; i++)
+        expect(await inspectRuleFile('user', process.env, { run: fine, now: () => t })).toMatchObject({ state: 'fine' })
+      expect(fineRuns).toBe(1)
+    }))
+
+  test('answers "failed" when the line could not be posted, and posts it when the hook asks again', () =>
+    inAgent(async (agent, x) => {
+      writeFileSync(agent.user, BAD)
+      const store = x.bridge.ctx.store as unknown as { addMessage: (m: unknown) => unknown }
+      const real = store.addMessage.bind(store)
+      store.addMessage = () => {
+        throw new Error('disk full')
+      }
+      expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('failed')
+      store.addMessage = real
+      expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('told')
+      await waitFor(() => replies(x).length === 1, 4000, 'notice')
+    }))
+
+  test('with no agent folder known the bridge cannot check, so it posts nothing', async () => {
+    const was = process.env.TALOS_AGENT_DIR
+    delete process.env.TALOS_AGENT_DIR
+    try {
+      const x = await start()
+      expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('unknown')
+      await sleep(100)
+      expect(replies(x).length).toBe(0)
+    } finally {
+      if (was !== undefined) process.env.TALOS_AGENT_DIR = was
+    }
+  })
+
+  test('the words: where the line is, what the hook is doing (asking, or refusing when nobody can answer), how to fix it, how to turn it off', () => {
+    const off = '/home/alex/.local/state/talos/agent-1a2b3c4d/action-rules.off'
+    expect(ruleFileNotice({ file: 'user', line: 4, unattended: false, offPath: off })).toBe(
+      `Your rules file (~/.config/talos/action-rules.yaml) has an error on line 4; Talos is asking before every action it checks until it is fixed, or create ${off} to turn these rules off.`,
+    )
+    expect(ruleFileNotice({ file: 'user', unattended: true, offPath: off })).toContain('refusing')
+    const shipped = ruleFileNotice({ file: 'shipped', unattended: false, offPath: off })
+    expect(shipped).toContain('hooks/action-rules.yaml')
+    expect(shipped).toContain('reinstall or upgrade')
+    expect(shipped.endsWith(`or create ${off} to turn these rules off.`)).toBe(true)
+    // the bridge does not know the agent folder: the environment switch, which the kit also honours
+    expect(ruleFileNotice({ file: 'user', line: 4 })).toContain('set TALOS_ACTION_RULES_OFF=1')
+  })
+
+  test('a thread session must prove itself, and a frame of the wrong shape posts nothing', () =>
+    inAgent(async (agent, x) => {
+      writeFileSync(agent.user, BAD)
+      const forged = await rawCall(
+        x.home,
+        noticeLine({ thread_id: 'trip', nonce: 'not-the-nonce-0123456789', pid: process.pid }),
+      ).result
+      expect(forged?.reason).not.toBe('told')
+      expect((await rawCall(x.home, noticeLine({ hash: 'short' })).result)?.t).toBe('refused')
+      expect((await rawCall(x.home, noticeLine({ line: 0 })).result)?.t).toBe('refused')
+      expect((await rawCall(x.home, noticeLine({ nonce: 'x'.repeat(20) })).result)?.reason).toBe('bad_frame')
+      await sleep(150)
+      expect(replies(x).length).toBe(0)
+      // a thread session that proves itself is told, like main
+      expect((await rawCall(x.home, noticeLine({ ...proof })).result)?.reason).toBe('told')
+    }))
+})
+
 describe('the real kit hook', () => {
+  test('a rule file it cannot read: it asks, and the owner is told once, until the file changes', async () => {
+    const agent = useAgentFolder()
+    afterRealHook = agent.restore
+    const x = await start()
+    writeFileSync(join(x.home, 'config.json'), JSON.stringify(x.bridge.ctx.config.config))
+    const state = mkdtempSync(join(tmpdir(), 'ar-state-'))
+    const rules = agent.user // the file the bridge checks for itself is the one the hook reads
+    writeFileSync(rules, 'rules:\n  this is not a rule\n')
+    const env = {
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      HOME: process.env.HOME ?? '/',
+      TALOS_APP_HOME: x.home,
+      XDG_STATE_HOME: state,
+      XDG_CONFIG_HOME: agent.cfg,
+      CLAUDE_PID: String(process.pid),
+      TALOS_TEST_SANDBOX: process.env.TALOS_TEST_SANDBOX ?? '',
+      PYTHONDONTWRITEBYTECODE: '1',
+    }
+    const run = (stdin: string) =>
+      new Promise<string>((done) => {
+        const p = spawn('python3', [HOOK, 'check'], { env })
+        let out = ''
+        p.stdout.on('data', (d) => {
+          out += d
+        })
+        p.on('close', () => done(out))
+        p.stdin.end(stdin)
+      })
+    const call = JSON.stringify({ tool_name: 'Bash', cwd: '/srv/app', tool_input: { command: 'ls' } })
+    expect(await run(call)).toContain('"ask"')
+    await waitFor(() => replies(x).length === 1, 4000, 'notice')
+    expect(replies(x)[0]?.message.text).toBe(
+      ruleFileNotice({ file: 'user', line: 2, unattended: false, offPath: agent.off }),
+    )
+    expect(await run(call)).toContain('"ask"')
+    await sleep(200)
+    expect(replies(x).length).toBe(1)
+    writeFileSync(rules, 'rules:\n  still not a rule\n')
+    expect(await run(call)).toContain('"ask"')
+    await waitFor(() => replies(x).length === 2, 4000, 'notice after the file changed')
+  }, 30_000)
+
   test('check stops it, approve puts it on the phone, the tap lets exactly that call through once', async () => {
     const x = await start()
     writeFileSync(join(x.home, 'config.json'), JSON.stringify(x.bridge.ctx.config.config))

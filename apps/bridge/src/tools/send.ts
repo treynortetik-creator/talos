@@ -3,6 +3,7 @@ import {
   type AttachmentRefT,
   DETAILS_IN_THREAD,
   drivingActive,
+  effectiveSessionOpts,
   type MessageT,
   newId,
   parentThread,
@@ -24,7 +25,8 @@ const MAX_FILES = 10
 /** What `checkUploadable` needs to know about a thread session: it is one, and the folder its lead marker sits in. */
 function workerOpts(ctx: BridgeContext) {
   if (!ctx.worker) return { worker: false }
-  const cwd = ctx.config.thread(ctx.worker.thread)?.session_opts?.cwd
+  // the EFFECTIVE folder: a sub-thread with none (or sharing its parent's) works in its parent's, so a lead's marker there binds it
+  const cwd = effectiveSessionOpts(ctx.config.config, ctx.worker.thread).cwd
   // a sub-thread is bound by its parent lead's markers as well as its own folder's (it may keep a folder outside the parent's)
   const parentCwd = parentThread(ctx.config.config, ctx.worker.thread)?.session_opts?.cwd
   return {

@@ -5,7 +5,7 @@
 // Standard Webhooks call tells that URL about it. Without an address of the owner's own, the Talos team's inbox this relay was
 // deployed with (`BUG_TEAM_INBOX_URL`) is used the same way, and that call carries the picture too (core/bug-inbox.ts is the
 // other end); otherwise nothing leaves this relay.
-import { createHmac } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import dns from 'node:dns'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
@@ -13,6 +13,7 @@ import https from 'node:https'
 import { join } from 'node:path'
 import {
   APNS_REGISTRATION_SKEW_MS,
+  type AttachmentRefT,
   BUG_REPORT_LIMITS,
   BUG_REPORTED_EVENT,
   type BugReportDestinationT,
@@ -33,7 +34,14 @@ import {
 } from '@talos-app/protocol'
 import type Database from 'better-sqlite3'
 import { Hono } from 'hono'
-import { getSession, requireCsrf, requireSession, takeRate } from '../auth/contract.ts'
+import {
+  getSession,
+  preflightBridgeHttp,
+  requireCsrf,
+  requireSession,
+  takeRate,
+  verifyBridgeHttp,
+} from '../auth/contract.ts'
 import type { AppEnv, Clock, CryptoService, Logger, RelayServices } from '../services.ts'
 import { idleBodyTimeout, lateRequest, limitBody, readBodyWithDeadline } from './body-guard.ts'
 import { findRuntime } from './runtime.ts'
@@ -142,22 +150,30 @@ export function loadBugReport(d: Deps, id: string): { post: StoredPost; image: B
 
 /**
  * The problem the owner's own report becomes on his Mac: `source: 'web'` (the reporter is the web page), `device` the app that
- * sent it (a browser when an older app did not say), no `install`, so it is not shown as another install's. Its id is the report id, so a retry or the startup backfill merges
+ * sent it (a browser when an older app did not say), no `install`, so it is not shown as another install's. Its id is `opts.id`
+ * (the report's own key, see `queueToBridge`), so a retry or the reconcile merges
  * and never doubles. What he typed is the message (its start) and the steps (all of it, with what he expected).
  */
-export async function ownReportProblem(services: RelayServices, post: StoredPost, image: Buffer): Promise<ProblemT> {
+export async function ownReportProblem(
+  services: RelayServices,
+  post: StoredPost,
+  image: Buffer,
+  opts: { id?: string; screenshot?: AttachmentRefT } = {},
+): Promise<ProblemT> {
   const r = post.report
   const v = r.versions
   const now = services.clock.now()
   const at = Date.parse(post.ts)
   const full = r.expected ? `${r.what_went_wrong}\n\nExpected: ${r.expected}` : r.what_went_wrong
-  const screenshot = await services.media.put({
-    bytes: image,
-    mime: post.image_type,
-    name: `bug-report.${post.image_type === 'image/png' ? 'png' : 'jpg'}`,
-  })
+  const screenshot =
+    opts.screenshot ??
+    (await services.media.put({
+      bytes: image,
+      mime: post.image_type,
+      name: `bug-report.${post.image_type === 'image/png' ? 'png' : 'jpg'}`,
+    }))
   const draft: ProblemT = {
-    id: post.id,
+    id: opts.id ?? post.id,
     source: 'web',
     kind: 'owner',
     fingerprint: '0'.repeat(32),
@@ -181,50 +197,257 @@ export async function ownReportProblem(services: RelayServices, post: StoredPost
   return Problem.parse({ ...clean, fingerprint: problemFingerprint(clean) })
 }
 
+/** Crockford base32, what a ULID is written in. */
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
 /**
- * Queues one stored report to this relay's own bridge (a durable `problem.item`: sent at once if the Mac is online, else on its
- * next hello) and marks the row. A failure leaves the mark empty, so the startup backfill tries again. Returns whether it was queued.
+ * A ULID-shaped id for a delivery (a problem id or a frame id): the time in 10 characters and 80 bits from the system's random
+ * source in 16. Not `newUlid()`: that is one monotonic sequence shared with ids a browser sees (a pong's), where ids made in the
+ * same millisecond are each the last plus one, so one seen id would give the next away.
  */
-export async function queueToBridge(services: RelayServices, post: StoredPost, image: Buffer): Promise<boolean> {
+export function deliveryId(nowMs: number): string {
+  let t = Math.max(0, Math.floor(nowMs))
+  let time = ''
+  for (let i = 0; i < 10; i++) {
+    time = CROCKFORD[t % 32] + time
+    t = Math.floor(t / 32)
+  }
+  let bits = 0n
+  for (const b of randomBytes(10)) bits = (bits << 8n) | BigInt(b)
+  let rand = ''
+  for (let i = 0; i < 16; i++) {
+    rand = CROCKFORD[Number(bits & 31n)] + rand
+    bits >>= 5n
+  }
+  return time + rand
+}
+
+/**
+ * True when `id` is a stored bug report's id, or the id one was queued under (its problem id or a frame id), for a problem of
+ * any kind: a problem a device posts under one of them would be filed as that report, or lend it a picture. The ids the relay
+ * makes are random and never shown to a device; the report id is the one a device does know.
+ */
+export function reportIdTaken(d: Pick<Deps, 'db'>, id: string): boolean {
+  return (
+    d.db
+      .prepare('select 1 from core_bug_reports where report_id = ? or bridge_problem_id = ? or bridge_frame_id = ?')
+      .get(id, id, id) !== undefined
+  )
+}
+
+/** Is `held` (a stored frame) this same report: its id, kind and source, its words and its picture's bytes. The picture's media id is new on every queueing and is not compared. */
+function sameOwnReport(held: unknown, p: ProblemT): boolean {
+  const h = (held as { problem?: Partial<ProblemT> }).problem
+  return (
+    h !== undefined &&
+    h.id === p.id &&
+    h.kind === 'owner' &&
+    h.source === p.source &&
+    h.message === p.message &&
+    h.steps === p.steps &&
+    h.screenshot?.sha256 === p.screenshot?.sha256
+  )
+}
+
+/** Another queueing of the same report committed between this one's reading its marks and its writing them: read again. */
+class Raced extends Error {}
+/** A requeue found the report still queued and unfiled, inside the transaction that would have queued it again. */
+class Coalesced extends Error {}
+
+type QueueResult = 'queued' | 'already_queued' | 'failed'
+
+/**
+ * One transaction per queueing (`alsoWrite`, with the frame and its queue entry): the marks are read again and checked, the report
+ * is marked queued, and for a `fresh` queueing (a requeue) the mark of "filed" is cleared and a report that is still queued and
+ * unfiled is left alone, so two requeues at once make one frame. A report is queued under a random id made here the first time
+ * (frame id and problem id alike) and kept in the row: it is known only to this relay, so no problem a device posts can share
+ * it. One queued before that column existed keeps its report id as problem id, because that is how the Mac already knows it.
+ */
+async function queueOnce(
+  services: RelayServices,
+  rt: NonNullable<ReturnType<typeof findRuntime>>,
+  post: StoredPost,
+  image: Buffer,
+  fresh: boolean,
+): Promise<QueueResult> {
+  const m = services.db
+    .prepare(
+      'select bridge_queued_at q, bridge_problem_id pid, bridge_frame_id fid from core_bug_reports where report_id = ?',
+    )
+    .get(post.id) as { q: number | null; pid: string | null; fid: string | null } | undefined
+  let problemId = m?.pid ?? (m?.q != null ? post.id : deliveryId(services.clock.now()))
+  let known = m?.fid ?? null
+  const screenshot = await services.media.put({
+    bytes: image,
+    mime: post.image_type,
+    name: `bug-report.${post.image_type === 'image/png' ? 'png' : 'jpg'}`,
+  })
+  let p = await ownReportProblem(services, post, image, { id: problemId, screenshot })
+  let frameId: string
+  for (;;) {
+    frameId = fresh ? deliveryId(services.clock.now()) : (known ?? problemId)
+    const held = fresh ? null : rt.store.getEventByFrameId(frameId)
+    if (!held || sameOwnReport(held, p)) break
+    // a frame of that id holds a different problem: the report is never sent as it
+    services.log.warn({ report_id: post.id }, 'bug report: a frame of its id holds another problem')
+    if (problemId !== post.id || known !== null) throw new Error('another problem holds its frame id')
+    problemId = deliveryId(services.clock.now())
+    known = null
+    p = await ownReportProblem(services, post, image, { id: problemId, screenshot })
+  }
+  await rt.hub.toBridge(
+    { type: 'problem.item', id: frameId, problem: p },
+    {
+      durable: true,
+      resume: !fresh,
+      alsoWrite: () => {
+        const cur = services.db
+          .prepare(
+            'select bridge_problem_id pid, bridge_frame_id fid, bridge_consumed_at c from core_bug_reports where report_id = ?',
+          )
+          .get(post.id) as { pid: string | null; fid: string | null; c: number | null } | undefined
+        if (!cur) throw new Error('report is gone')
+        if (cur.pid !== (m?.pid ?? null) || cur.fid !== (m?.fid ?? null)) throw new Raced()
+        if (fresh && cur.c === null) {
+          const live = services.db
+            .prepare(`select 1 from core_bug_reports r where r.report_id = ? and ${LIVE_FRAME_SQL}`)
+            .get(post.id, services.clock.now())
+          if (live !== undefined) throw new Coalesced()
+        }
+        services.db
+          .prepare(
+            `update core_bug_reports set bridge_queued_at = ?, bridge_frame_id = ?, bridge_problem_id = ?${fresh ? ', bridge_consumed_at = null' : ''} where report_id = ?`,
+          )
+          .run(services.clock.now(), frameId, problemId, post.id)
+      },
+    },
+  )
+  return 'queued'
+}
+
+async function queueReport(
+  services: RelayServices,
+  post: StoredPost,
+  image: Buffer,
+  fresh: boolean,
+): Promise<QueueResult> {
   const rt = findRuntime(services)
   if (!rt) {
     services.log.info({ report_id: post.id }, 'bug report not queued to the bridge: no runtime')
-    return false
+    return 'failed'
   }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await queueOnce(services, rt, post, image, fresh)
+    } catch (e) {
+      if (e instanceof Raced) continue
+      if (e instanceof Coalesced) return 'already_queued'
+      services.log.warn(
+        { report_id: post.id, err: e instanceof Error ? e.message.slice(0, 60) : 'error' },
+        'bug report not queued to the bridge',
+      )
+      return 'failed'
+    }
+  }
+  return 'failed'
+}
+
+/**
+ * Queues one stored report to this relay's own bridge (a durable `problem.item`: sent at once if the Mac is online, else on its
+ * next hello) and marks the row, in one transaction with the frame. A frame already stored under the id it would be queued
+ * under must hold this same report, or it is refused. `fresh` is for an operator who asks to send a report again (`requeue`): a
+ * NEW frame id for the same problem, because the Mac has seen the first frame's id and would only confirm it, and a report it
+ * filed without its picture could never be repaired. A failure leaves the mark empty, so the reconcile tries again. Returns
+ * whether it was queued.
+ */
+export async function queueToBridge(
+  services: RelayServices,
+  post: StoredPost,
+  image: Buffer,
+  opts: { fresh?: boolean } = {},
+): Promise<boolean> {
+  return (await queueReport(services, post, image, opts.fresh === true)) === 'queued'
+}
+
+/**
+ * A queue entry, not expired, for the frame the report was last queued as. A report queued before frame ids were recorded was
+ * queued under its own id; one never queued has no frame, so a frame of that id (a problem a device posted) is not its entry.
+ */
+const LIVE_FRAME_SQL = `exists (select 1 from core_outbox o join core_events e on e.seq = o.seq
+  where o.frame_id = coalesce(r.bridge_frame_id, case when r.bridge_queued_at is not null then r.report_id end)
+    and o.expires_at > ?)`
+
+let reconciling = false
+
+/**
+ * Queues every stored report the Mac has not filed and that has no live queue entry, oldest first: reports from before this
+ * path existed, one whose queueing failed, and one whose entry expired or was swept (30 days, 500 reports or 250 MiB, see
+ * held-problems.ts) before the Mac came back. "Filed" is the Mac's own `consumed` (`bridge_consumed_at`), not "queued once".
+ * Run at startup and every few minutes; a run that is still going is not started twice. Returns how many were queued.
+ */
+export async function backfillOwnReports(services: RelayServices): Promise<number> {
+  if (reconciling) return 0
+  reconciling = true
   try {
-    const p = await ownReportProblem(services, post, image)
-    // `resume`: the same report queued twice (the mark failed, a backfill raced the route) finds its own frame and is not doubled
-    await rt.hub.toBridge({ type: 'problem.item', id: p.id, problem: p }, { durable: true, resume: true })
-    services.db
-      .prepare('update core_bug_reports set bridge_queued_at = ? where report_id = ?')
-      .run(services.clock.now(), post.id)
-    return true
-  } catch (e) {
-    services.log.warn(
-      { report_id: post.id, err: e instanceof Error ? e.message.slice(0, 60) : 'error' },
-      'bug report not queued to the bridge',
-    )
-    return false
+    const deps = { db: services.db, crypto: services.crypto, clock: services.clock, dataDir: services.env.DATA_DIR }
+    const ids = services.db
+      .prepare(
+        `select report_id from core_bug_reports r where r.bridge_consumed_at is null and not ${LIVE_FRAME_SQL}
+         order by r.created_at, r.report_id`,
+      )
+      .all(services.clock.now()) as Array<{ report_id: string }>
+    let queued = 0
+    for (const { report_id: id } of ids) {
+      const got = loadBugReport(deps, id)
+      if (!got) {
+        services.log.warn({ report_id: id }, 'bug report backfill: files missing, skipped')
+        continue
+      }
+      if (await queueToBridge(services, got.post, got.image)) queued++
+    }
+    if (ids.length > 0) services.log.info({ found: ids.length, queued }, 'bug report backfill to the bridge')
+    return queued
+  } finally {
+    reconciling = false
   }
 }
 
-/** Queues every stored report not yet queued, oldest first (reports from before this path existed, and any whose queueing failed). Run once at startup. */
-export async function backfillOwnReports(services: RelayServices): Promise<number> {
+export type RequeueResult = 'queued' | 'already_queued' | 'not_found' | 'files_missing' | 'failed'
+
+/**
+ * An operator asks to send one stored report again. A report the Mac has not filed that still has a live queue entry is already
+ * on its way (the relay resends it by itself): nothing new is made, no frame and no picture copy. Anything else is queued as a
+ * new frame for the same problem.
+ */
+export async function requeueBugReport(services: RelayServices, id: string): Promise<RequeueResult> {
+  const row = services.db.prepare('select bridge_consumed_at c from core_bug_reports where report_id = ?').get(id) as
+    | { c: number | null }
+    | undefined
+  if (!row) return 'not_found'
+  const live = services.db
+    .prepare(`select 1 from core_bug_reports r where r.report_id = ? and ${LIVE_FRAME_SQL}`)
+    .get(id, services.clock.now())
+  if (row.c === null && live !== undefined) return 'already_queued'
   const deps = { db: services.db, crypto: services.crypto, clock: services.clock, dataDir: services.env.DATA_DIR }
-  const ids = services.db
-    .prepare('select report_id from core_bug_reports where bridge_queued_at is null order by created_at, report_id')
-    .all() as Array<{ report_id: string }>
-  let queued = 0
-  for (const { report_id: id } of ids) {
-    const got = loadBugReport(deps, id)
-    if (!got) {
-      services.log.warn({ report_id: id }, 'bug report backfill: files missing, skipped')
-      continue
-    }
-    if (await queueToBridge(services, got.post, got.image)) queued++
-  }
-  if (ids.length > 0) services.log.info({ found: ids.length, queued }, 'bug report backfill to the bridge')
-  return queued
+  const got = loadBugReport(deps, id)
+  if (!got) return 'files_missing'
+  return queueReport(services, got.post, got.image, true)
+}
+
+/**
+ * The Mac answered `consumed` for a frame the relay queued for a bug report: the report is filed there. Matched on the frame id
+ * the report was last queued under, one indexed update that changes nothing for any other frame, with no decryption.
+ */
+export function registerBugReports(services: RelayServices): void {
+  if (!findRuntime(services)) return
+  services.bus.onBridgeFrame('ack', (f) => {
+    if (f.stage !== 'consumed') return
+    services.db
+      .prepare(
+        'update core_bug_reports set bridge_consumed_at = ? where bridge_frame_id = ? and bridge_consumed_at is null',
+      )
+      .run(services.clock.now(), f.ref)
+  })
 }
 
 // ---- the named event ----------------------------------------------------------------------------------------------------
@@ -493,5 +716,27 @@ bugReportRoutes.post(
     })
     if (target) void sendWebhook(services, target, post, image.length)
     return c.json({ ok: true, id: post.id }, 201)
+  },
+)
+
+/** Bodies here are `{}`: 4 KiB is far above that. */
+const REQUEUE_BODY_CAP = 4096
+
+// The Mac asks the relay to send one stored report again (`talos-app errors requeue-bug-report <id>`): signed bridge HTTP, the
+// same credential as every other Mac-only action (device revoke, share tokens). Nothing of the report is in the answer.
+bugReportRoutes.post(
+  '/bridge/bug-reports/:id/requeue',
+  limitBody(() => REQUEUE_BODY_CAP),
+  idleBodyTimeout(),
+  async (c) => {
+    if (!preflightBridgeHttp(c).ok) return c.json({ error: 'unauthorized' }, 401)
+    const body = new Uint8Array(await c.req.arrayBuffer())
+    if (body.length > REQUEUE_BODY_CAP) return c.json({ error: 'too_large' }, 413)
+    if (!(await verifyBridgeHttp(c, body)).ok) return c.json({ error: 'unauthorized' }, 401)
+    const id = c.req.param('id')
+    const done = await requeueBugReport(c.get('services'), id)
+    if (done === 'not_found' || done === 'files_missing') return c.json({ error: done }, 404)
+    if (done === 'failed') return c.json({ error: 'queue_failed' }, 500)
+    return c.json({ ok: true, id, ...(done === 'already_queued' ? { already_queued: true } : {}) })
   },
 )

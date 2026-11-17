@@ -115,49 +115,113 @@ function spellings(talosHome: string): string[] {
 /** The file tools a session could change a settings file with. */
 const SETTINGS_EDIT_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] as const
 
+/** In a config folder (`~/.claude`, a CLAUDE_CONFIG_DIR) no session may edit these, fence on or off: they change a session's own permissions. */
+export const CONFIG_ALWAYS_DENIED = ['settings.json', 'settings.local.json', 'plugins/**', 'hooks/**'] as const
+/** In a config folder these are denied with the thread fence on, and ask the owner by card with it off. */
+export const CONFIG_ASK_WHEN_FENCE_OFF = [
+  'skills/**',
+  'commands/**',
+  'agents/**',
+  'CLAUDE.md',
+  'rules/**',
+  'output-styles/**',
+  'workflows/**',
+  'routines/**',
+] as const
+// the order the rules are written in (kept as it was before the split: a plan's spec hash covers it)
+const CONFIG_ORDER = [
+  'settings.json',
+  'settings.local.json',
+  'skills/**',
+  'commands/**',
+  'agents/**',
+  'plugins/**',
+  'hooks/**',
+  'CLAUDE.md',
+  'rules/**',
+  'output-styles/**',
+  'workflows/**',
+  'routines/**',
+] as const
+
 /**
  * No file-tool edit of what Claude Code reads from a folder or a config folder: each project folder's whole `.claude` (its
  * settings, skills, commands, subagents), its `.mcp.json` and its `.env*` files; each config folder's (`~/.claude`, a
- * CLAUDE_CONFIG_DIR) `settings.json`, `settings.local.json`, `skills/**`, `commands/**` and `agents/**`; and each named file
- * (`~/.claude.json`, which holds user-scope MCP servers). A layer, not the boundary: a Bash write is no file tool, and under
- * acceptEdits it goes to an owner card, so it holds only while the hook answering that card is the real one. Folders that cannot
- * be named in a rule are left out.
+ * CLAUDE_CONFIG_DIR) CONFIG_ALWAYS_DENIED and CONFIG_ASK_WHEN_FENCE_OFF paths; and each named file (`~/.claude.json`, which holds
+ * user-scope MCP servers). With the thread fence off (`fenceOff`) the CONFIG_ASK_WHEN_FENCE_OFF paths are returned as `ask` rules
+ * (the owner decides on a card) and everything else stays in `deny`; with it on they are all `deny`, as before. A layer, not the
+ * boundary: a Bash write is no file tool, and under acceptEdits it goes to an owner card, so it holds only while the hook answering
+ * that card is the real one. Folders that cannot be named in a rule are left out.
  */
+export function settingsFileRules(
+  projectFolders: readonly string[],
+  configFolders: readonly string[],
+  files: readonly string[] = [],
+  opts: { fenceOff?: boolean; home?: string } = {},
+): { deny: string[]; ask: string[] } {
+  const askPaths: readonly string[] = opts.fenceOff ? CONFIG_ASK_WHEN_FENCE_OFF : []
+  const at: Array<[string, string, boolean]> = [
+    ...projectFolders.flatMap((d) =>
+      ['.claude', '.claude/**', '.mcp.json', '.env*'].map((f): [string, string, boolean] => [d, f, false]),
+    ),
+    ...configFolders.flatMap((d) => CONFIG_ORDER.map((f): [string, string, boolean] => [d, f, askPaths.includes(f)])),
+    ...files.map((f): [string, string, boolean] => [dirname(f), basename(f), false]),
+  ]
+  const deny: string[] = []
+  const ask: string[] = []
+  for (const [dir, file, asks] of at) {
+    if (!fenceSafe(dir) || /[()\\]/.test(file)) continue
+    const into = asks ? ask : deny
+    for (const form of spellings(dir))
+      for (const tool of SETTINGS_EDIT_TOOLS) {
+        const rule = `${tool}(/${form}/${file})`
+        if (!into.includes(rule)) into.push(rule)
+      }
+  }
+  // and what each config folder's own settings run (a hook script in a skills folder is no less a script): denied fence on or off,
+  // after the rest, so a config folder with no hooks gives the same rules as before
+  const home = opts.home ?? homedir()
+  for (const dir of configFolders) {
+    if (!fenceSafe(dir)) continue
+    const scripts = new Set<string>()
+    for (const file of ['settings.json', 'settings.local.json']) {
+      const settings = readJson(join(dir, file))
+      if (!settings) continue
+      const commands: string[] = []
+      commandsOf(settings.hooks, commands)
+      commandsOf(settings.statusLine, commands)
+      for (const c of commands) for (const rel of commandScripts(c, dir, home)) scripts.add(rel)
+    }
+    for (const rel of scripts) {
+      if (rel.includes('..') || /[()\\]/.test(rel)) continue
+      for (const form of spellings(dir))
+        for (const tool of SETTINGS_EDIT_TOOLS) {
+          const rule = `${tool}(/${form}/${rel})`
+          if (!deny.includes(rule) && !ask.includes(rule)) deny.push(rule)
+        }
+    }
+  }
+  return { deny, ask }
+}
+
+/** The deny rules alone, with the thread fence on (see settingsFileRules). */
 export function settingsFileDenyRules(
   projectFolders: readonly string[],
   configFolders: readonly string[],
   files: readonly string[] = [],
+  home?: string,
 ): string[] {
-  const at = [
-    ...projectFolders.flatMap((d) => ['.claude', '.claude/**', '.mcp.json', '.env*'].map((f) => [d, f])),
-    ...configFolders.flatMap((d) =>
-      [
-        'settings.json',
-        'settings.local.json',
-        'skills/**',
-        'commands/**',
-        'agents/**',
-        'plugins/**',
-        'hooks/**',
-        'CLAUDE.md',
-        'rules/**',
-        'output-styles/**',
-        'workflows/**',
-        'routines/**',
-      ].map((f) => [d, f]),
-    ),
-    ...files.map((f) => [dirname(f), basename(f)]),
-  ] as Array<[string, string]>
-  const out: string[] = []
-  for (const [dir, file] of at) {
-    if (!fenceSafe(dir) || /[()\\]/.test(file)) continue
-    for (const form of spellings(dir))
-      for (const tool of SETTINGS_EDIT_TOOLS) {
-        const rule = `${tool}(/${form}/${file})`
-        if (!out.includes(rule)) out.push(rule)
-      }
+  return settingsFileRules(projectFolders, configFolders, files, home === undefined ? {} : { home }).deny
+}
+
+/** Every `command` string anywhere in a settings value (hooks, status line). */
+function commandsOf(v: unknown, out: string[]): void {
+  if (Array.isArray(v)) for (const x of v) commandsOf(x, out)
+  else if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    if (typeof o.command === 'string') out.push(o.command)
+    for (const x of Object.values(o)) if (x && typeof x === 'object') commandsOf(x, out)
   }
-  return out
 }
 
 /**
@@ -172,14 +236,6 @@ export function agentScriptDenyRules(agentDir: string, home: string = homedir())
   // and every .claude folder anywhere below the agent folder: Claude Code picks up a nested one's skills once a file under it
   // is touched
   const scripts = new Set<string>(['hooks/**', 'kit/hooks/**', '**/.claude/**'])
-  const commandsOf = (v: unknown, out: string[]) => {
-    if (Array.isArray(v)) for (const x of v) commandsOf(x, out)
-    else if (v && typeof v === 'object') {
-      const o = v as Record<string, unknown>
-      if (typeof o.command === 'string') out.push(o.command)
-      for (const x of Object.values(o)) if (x && typeof x === 'object') commandsOf(x, out)
-    }
-  }
   for (const file of ['settings.json', 'settings.local.json']) {
     const s = readJson(join(dir, '.claude', file))
     if (!s) continue

@@ -460,7 +460,7 @@ describe('ci-runner.sh: the hostile nightly posts under hostile-ci/ and runs onl
     const b = ghBin(`echo "$*" >> "${T}/gh"; exit 1`)
     const o = join(T, 'out')
     const r = runnerSh(
-      'ci_dispatch_wait',
+      `. "${join(here, 'ci-runner/main-queue.sh')}"\nci_dispatch_wait`,
       {
         GITHUB_EVENT_NAME: 'workflow_dispatch',
         CI_HOSTILE: '1',
@@ -542,7 +542,7 @@ describe('ci-runner.yml: the hostile nightly by its own schedule, or by hand', (
   it('the green job is for a push only, so a hostile run never moves green', () => {
     const green = yml.split('\n  green:\n')[1]?.split('\n  close:\n')[0] as string
     expect(green).toMatch(
-      /if: \$\{\{ !cancelled\(\) && github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' \}\}/,
+      /if: \$\{\{ !cancelled\(\) && github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' && needs\.ci\.outputs\.superseded != 'true' \}\}/,
     )
   })
 })

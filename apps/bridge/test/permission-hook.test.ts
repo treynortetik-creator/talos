@@ -1023,3 +1023,195 @@ describe('a thread session whose folder’s project settings changed mid-session
     expect(systemLines(x)).toHaveLength(0)
   })
 })
+
+describe('an edit of an agent, skill or command file: the card says first when it touches a key that changes what the agent may do', () => {
+  const AGENT = '---\nname: helper\ndescription: helps\nmodel: sonnet\n---\nDo the work.\n'
+  const note = (c: CardT) => c.fields.find((f) => f.key === 'summary')?.value ?? ''
+
+  test('a Write that adds hooks: the description starts with Careful and names the hook sentence', async () => {
+    const x = await start()
+    const dir = realTmp('agents-')
+    mkdirSync(join(dir, '.claude', 'agents'), { recursive: true })
+    const file = join(dir, '.claude', 'agents', 'a.md')
+    writeFileSync(file, AGENT)
+    const content = AGENT.replace('model: sonnet\n', 'model: sonnet\nhooks:\n  PreToolUse:\n    - command: ./x.sh\n')
+    rawCall(x.home, permLine({ ...workerProof, tool_name: 'Write' }, { file_path: file, content }))
+    const card = await hookCard(x)
+    expect(note(card).startsWith('Careful: ')).toBe(true)
+    expect(note(card)).toContain('this lets the agent run its own hook, which can approve its own actions')
+    expect(permissionCardAllowsPrimary(card)).toBe(true)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('an Edit of the body only: no Careful', async () => {
+    const x = await start()
+    const dir = realTmp('agents-')
+    mkdirSync(join(dir, '.claude', 'agents'), { recursive: true })
+    const file = join(dir, '.claude', 'agents', 'a.md')
+    writeFileSync(file, AGENT)
+    rawCall(
+      x.home,
+      permLine(
+        { ...workerProof, tool_name: 'Edit' },
+        { file_path: file, old_string: 'Do the work.', new_string: 'Do more.' },
+      ),
+    )
+    const card = await hookCard(x)
+    expect(note(card)).not.toContain('Careful')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('a change that needs the warning but is too long for a card: no card, a deny', async () => {
+    const x = await start()
+    const dir = realTmp('agents-')
+    mkdirSync(join(dir, '.claude', 'agents'), { recursive: true })
+    const file = join(dir, '.claude', 'agents', 'big.md')
+    const content = `---\nname: big\nhooks:\n  PreToolUse: []\n---\n${'pad '.repeat(6000)}`
+    const call = rawCall(x.home, permLine({ ...workerProof, tool_name: 'Write' }, { file_path: file, content }))
+    const r = await call.result
+    expect(r).toMatchObject({ decision: 'deny' })
+    expect(r?.reason).toContain('too long to show the owner on a card')
+    expect(permissionCards(x)).toHaveLength(0)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('the same 24 KB body with no risky change still gets the too-long card', async () => {
+    const x = await start()
+    const dir = realTmp('agents-')
+    mkdirSync(join(dir, '.claude', 'agents'), { recursive: true })
+    const file = join(dir, '.claude', 'agents', 'big.md')
+    // the file is there with the same name, so only the body changes
+    writeFileSync(file, '---\nname: big\n---\nsmall\n')
+    const content = `---\nname: big\n---\n${'pad '.repeat(6000)}`
+    rawCall(x.home, permLine({ ...workerProof, tool_name: 'Write' }, { file_path: file, content }))
+    const card = await hookCard(x)
+    expect(card.payload).toMatchObject({ oversize: true })
+    expect(card.warning).toContain('Not all of this call is shown')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('a project’s src/commands file gets a plain card', async () => {
+    const x = await start()
+    const dir = realTmp('proj-')
+    mkdirSync(join(dir, 'src', 'commands'), { recursive: true })
+    rawCall(
+      x.home,
+      permLine(
+        { ...workerProof, tool_name: 'Write' },
+        { file_path: join(dir, 'src', 'commands', 'foo.ts'), content: 'x' },
+      ),
+    )
+    expect(note(await hookCard(x))).not.toContain('Careful')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('an upper-case Agents folder under .claude: adding hooks warns', async () => {
+    const x = await start()
+    const dir = realTmp('proj-')
+    mkdirSync(join(dir, '.claude', 'Agents'), { recursive: true })
+    rawCall(
+      x.home,
+      permLine(
+        { ...workerProof, tool_name: 'Write' },
+        { file_path: join(dir, '.claude', 'Agents', 'x.md'), content: '---\nname: a\nhooks: x\n---\n' },
+      ),
+    )
+    expect(note(await hookCard(x))).toContain('Careful: this lets the agent run its own hook')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('MultiEdit, replace_all and a CRLF file with a BOM are read the way they would be written', async () => {
+    const x = await start()
+    const dir = realTmp('agents-')
+    mkdirSync(join(dir, '.claude', 'agents'), { recursive: true })
+    const file = join(dir, '.claude', 'agents', 'crlf.md')
+    writeFileSync(file, '\ufeff---\r\nname: a\r\nmodel: sonnet\r\n---\r\nsonnet sonnet\r\n')
+    // replace_all of the body word only: the model line is untouched
+    rawCall(
+      x.home,
+      permLine(
+        { ...workerProof, id: 'r1', tool_name: 'Edit' },
+        { file_path: file, old_string: 'sonnet sonnet', new_string: 'x', replace_all: true },
+      ),
+    )
+    const plain = await hookCard(x)
+    expect(note(plain)).not.toContain('Careful')
+    // MultiEdit: a body edit, then the model line
+    rawCall(
+      x.home,
+      permLine(
+        { ...workerProof, id: 'r2', tool_name: 'MultiEdit' },
+        {
+          file_path: file,
+          edits: [
+            { old_string: 'sonnet sonnet', new_string: 'y' },
+            { old_string: 'model: sonnet', new_string: 'model: opus' },
+          ],
+        },
+      ),
+    )
+    await eventually(() => {
+      const careful = permissionCards(x)
+        .map((f) => (f.frame as { card: CardT }).card)
+        .find((c) => note(c).includes('Careful'))
+      expect(careful ? note(careful) : '').toContain('this changes which model the agent runs on')
+    })
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('a Bash command naming agent files warns', async () => {
+    const x = await start()
+    rawCall(
+      x.home,
+      permLine({ ...workerProof }, { command: 'cp /tmp/a.md ~/.claude/agents/a.md', description: 'copy' }),
+    )
+    const card = await hookCard(x)
+    expect(note(card)).toContain('this command touches your Claude agent, skill or command files')
+  })
+
+  test('an Edit that changes the model line, with a relative path and the thread folder as cwd: Careful', async () => {
+    const x = await start()
+    const dir = realTmp('agents-')
+    mkdirSync(join(dir, '.claude', 'agents'), { recursive: true })
+    writeFileSync(join(dir, '.claude', 'agents', 'a.md'), AGENT)
+    rawCall(
+      x.home,
+      permLine(
+        { ...workerProof, tool_name: 'Edit', cwd: dir },
+        { file_path: '.claude/agents/a.md', old_string: 'model: sonnet', new_string: 'model: opus' },
+      ),
+    )
+    const card = await hookCard(x)
+    expect(note(card)).toContain('Careful: this changes which model the agent runs on')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('an Edit whose old_string is not in the file: unclear, flagged', async () => {
+    const x = await start()
+    const dir = realTmp('agents-')
+    mkdirSync(join(dir, '.claude', 'skills'), { recursive: true })
+    const file = join(dir, '.claude', 'skills', 's.md')
+    writeFileSync(file, AGENT)
+    rawCall(
+      x.home,
+      permLine({ ...workerProof, tool_name: 'Edit' }, { file_path: file, old_string: 'nowhere', new_string: 'x' }),
+    )
+    const card = await hookCard(x)
+    expect(note(card)).toContain("Careful: Claude can't read this file's settings block for certain")
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('a Write to a path that is not an agent, skill or command: the card is as it was', async () => {
+    const x = await start()
+    const dir = realTmp('agents-')
+    const file = join(dir, 'notes.md')
+    rawCall(
+      x.home,
+      permLine({ ...workerProof, tool_name: 'Write' }, { file_path: file, content: '---\nhooks: x\n---\n' }),
+    )
+    const card = await hookCard(x)
+    expect(note(card)).not.toContain('Careful')
+    expect(note(card)).toBe('')
+    rmSync(dir, { recursive: true, force: true })
+  })
+})

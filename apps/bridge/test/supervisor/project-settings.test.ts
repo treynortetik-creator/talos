@@ -17,7 +17,13 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { recheckSettings } from '../../src/hub/server.ts'
-import { commandScripts, settingsFileDenyRules } from '../../src/supervisor/worker-policy.ts'
+import {
+  CONFIG_ALWAYS_DENIED,
+  CONFIG_ASK_WHEN_FENCE_OFF,
+  commandScripts,
+  settingsFileDenyRules,
+  settingsFileRules,
+} from '../../src/supervisor/worker-policy.ts'
 import {
   ALLOWED_ENV,
   FIX,
@@ -372,6 +378,72 @@ describe('no file-tool edit of a settings file a session loads', () => {
       expect(rules).toContain(`${tool}(//h/.claude.json)`)
     }
     expect(rules).toHaveLength(4 * (2 * 4 + 12 + 1))
+  })
+  it('with the fence on the output is the pinned list, in order', () => {
+    const rules = settingsFileDenyRules(['/w/trip'], ['/h/.claude'], ['/h/.claude.json'])
+    const tools = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
+    const paths = [
+      '/w/trip/.claude',
+      '/w/trip/.claude/**',
+      '/w/trip/.mcp.json',
+      '/w/trip/.env*',
+      ...[
+        'settings.json',
+        'settings.local.json',
+        'skills/**',
+        'commands/**',
+        'agents/**',
+        'plugins/**',
+        'hooks/**',
+        'CLAUDE.md',
+        'rules/**',
+        'output-styles/**',
+        'workflows/**',
+        'routines/**',
+      ].map((f) => `/h/.claude/${f}`),
+      '/h/.claude.json',
+    ]
+    expect(rules).toEqual(paths.flatMap((p) => tools.map((t) => `${t}(/${p})`)))
+    expect(settingsFileRules(['/w/trip'], ['/h/.claude'], ['/h/.claude.json'], { fenceOff: false })).toEqual({
+      deny: rules,
+      ask: [],
+    })
+  })
+  it('with the fence off the ask paths move from deny to ask, nothing else', () => {
+    const on = settingsFileRules(['/w/trip'], ['/h/.claude'], ['/h/.claude.json'])
+    const off = settingsFileRules(['/w/trip'], ['/h/.claude'], ['/h/.claude.json'], { fenceOff: true })
+    expect([...off.deny, ...off.ask].sort()).toEqual([...on.deny].sort())
+    expect(off.ask).toHaveLength(4 * CONFIG_ASK_WHEN_FENCE_OFF.length)
+    for (const f of CONFIG_ALWAYS_DENIED) expect(off.deny).toContain(`Edit(//h/.claude/${f})`)
+    for (const f of CONFIG_ASK_WHEN_FENCE_OFF) expect(off.ask).toContain(`Edit(//h/.claude/${f})`)
+    expect(off.deny).toContain('Edit(//h/.claude.json)')
+    expect(off.deny).toContain('Edit(//w/trip/.claude/**)')
+  })
+  it('a script a config folder’s own settings run is denied, fence on or off, and the rest is as it was', () => {
+    const c = tmp()
+    mkdirSync(join(c, 'skills', 'h'), { recursive: true })
+    writeFileSync(
+      join(c, 'settings.json'),
+      JSON.stringify({
+        hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: `bash ${c}/skills/h/run.sh --x` }] }] },
+      }),
+    )
+    const none = tmp()
+    const tools = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
+    const script = tools.map((t) => `${t}(/${c}/skills/h/run.sh)`)
+    const base = settingsFileDenyRules([], [none], [], '/home/nobody')
+    // a config folder with no hooks: exactly the rules as before (no script rules)
+    expect(base.some((r) => r.includes('run.sh'))).toBe(false)
+    const on = settingsFileRules([], [c], [], { home: '/home/nobody' })
+    const off = settingsFileRules([], [c], [], { home: '/home/nobody', fenceOff: true })
+    for (const r of script) {
+      expect(on.deny).toContain(r)
+      expect(off.deny).toContain(r)
+      expect(off.ask).not.toContain(r)
+    }
+    // with the fence on, the script rules are the only addition to the rules of a folder with no hooks
+    const bare = settingsFileDenyRules([], [tmp()], [], '/home/nobody').length
+    expect(on.deny).toHaveLength(bare + script.length)
   })
   it('a folder no rule can name exactly (a glob character, a relative path, none): left out, never a wider rule', () => {
     expect(settingsFileDenyRules(['/w/a*b', 'rel', ''], [''])).toEqual([])

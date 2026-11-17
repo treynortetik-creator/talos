@@ -1,6 +1,7 @@
 // scripts/v2-features-doc.ts turns the v2 features design spec into docs/V2-FEATURES.md: the front matter goes, any
 // private appendix goes, the WP-V0 calls are applied, and it refuses to write anything that mentions an appendix or a
 // private path. Same pattern as claude-code-doc.test.ts.
+// gate-reads: scripts/v2-features-doc.ts docs/V2-FEATURES.md
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

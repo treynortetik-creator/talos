@@ -201,6 +201,15 @@ export class RelayHttp {
     return this.json<{ ok: true; key_id: string }>('POST', '/bridge/rotate', body)
   }
 
+  /** POST /bridge/bug-reports/:id/requeue (`errors requeue-bug-report`): the relay queues one stored own-device bug report to this Mac again. */
+  requeueBugReport(reportId: string) {
+    return this.json<{ ok: true; id: string; already_queued?: boolean }>(
+      'POST',
+      `/bridge/bug-reports/${encodeURIComponent(reportId)}/requeue`,
+      {},
+    )
+  }
+
   revokeDevice(deviceId: string) {
     // `shared_passkey` is absent from a relay older than the field: absent means unknown, not false.
     return this.json<{ ok: true; shared_passkey?: boolean }>('POST', `/bridge/devices/${deviceId}/revoke`, {})

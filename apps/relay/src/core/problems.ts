@@ -20,6 +20,7 @@ import { Hono } from 'hono'
 import { rateLimit, requireCsrf, requireSession } from '../auth/contract.ts'
 import type { AppEnv, RelayServices } from '../services.ts'
 import { VERSION } from '../version.ts'
+import { reportIdTaken } from './bug-reports.ts'
 import { registerRelayFeature } from './features.ts'
 import { findRuntime } from './runtime.ts'
 
@@ -210,6 +211,10 @@ problemRoutes.post('/api/problems', requireSession, requireCsrf, rateLimit('prob
     if (!row || row.sha256 !== p.screenshot.sha256 || row.size !== p.screenshot.size)
       return c.json({ error: 'screenshot_missing', message: 'Upload the screenshot again.' }, 400)
   }
+  // A bug report's id, and the ids it is queued under, are that report's: a problem of any kind under one of them would be filed
+  // as the same report, or lend its picture to it.
+  if (reportIdTaken({ db: services.db }, p.id))
+    return c.json({ error: 'bad_request', message: 'that id belongs to a bug report' }, 400)
   if (rt.store.getEventByFrameId(p.id)) return c.json({ ok: true, id: p.id }, 202) // a retry of one already queued
   await rt.hub.toBridge({ type: 'problem.item', id: p.id, problem: p }, { durable: true })
   return c.json({ ok: true, id: p.id }, 202)

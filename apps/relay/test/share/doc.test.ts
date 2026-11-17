@@ -1,5 +1,6 @@
 // docs/SHARE.md stays true to the code (docs/V2-FEATURES.md V4.6, "Doc test"): the Shortcut recipe uses `file`, the
 // manifest uses `files`, and both match the relay's parser. The recipe's own form is posted to a real relay.
+// gate-reads: docs/SHARE.md apps/web/public/manifest.webmanifest apps/web/src/features/share/shareTarget.ts
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

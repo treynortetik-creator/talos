@@ -93,16 +93,32 @@ cards and the bridge's own tools).
   (`effectiveSessionOpts`). Its own MCP list is cut to the parent's. Mac-only options (`ops_read`, the park timer) are never
   inherited. A sub-thread whose parent is missing or archived inherits nothing and, without a list of its own, gets no MCP
   servers.
-- **Folders.** A sub-thread's folder is strictly inside its parent's; one with its own session needs its own folder. The Mac
-  app re-checks the resolved paths before every start. One exception, only when the supervisor says
-  `supervisor.subthreads_own_folder` in workers.json (the Mac app does; Linux does not yet, and stays on the inside-only rule):
+- **Folders.** A sub-thread's folder is strictly inside its parent's; the Mac
+  app re-checks the resolved paths before every start. One with its own session may also have no folder, or the parent's own
+  (below, `subthreads_shared_folder`); without that capability it needs a folder of its own inside. One exception, only when the supervisor says
+  `supervisor.subthreads_own_folder` in workers.json (both supervisors do):
   a sub-thread with its own session may keep an existing folder outside its parent's, written as an absolute path with no
-  `.` or `..`. It is used as it is and never made, so a missing one is refused. The parent's own folder (equal) is still
-  refused, and so is a path under the parent that a link leads out of. Saving it shows one line, `thread "<id>" keeps its own
+  `.` or `..`. It is used as it is and never made, so a missing one is refused. The parent's own folder (equal) is the shared case below, and a path under the parent that a link leads out of is
+  still refused. Saving it shows one line, `thread "<id>" keeps its own
   folder, so it does not get "<parent>"'s instructions; the parent's privacy rules still apply` (`subThreadWarnings`), also under Under in the thread's settings.
   The parent's privacy rules still apply to it: the Mac adds the deny rules from the parent's folder chain (parent first) to the
   child's own, and the bridge's attach check reads the `.talos-lead` markers at or above both folders, so any refusal refuses.
   A sub-thread without its own session still runs in its parent's lane and keeps the inside rule.
+- **Sharing the parent's folder.** Only when the supervisor says `supervisor.subthreads_shared_folder` in workers.json (the Mac app
+  and the Linux supervisor both do; without it the old refusal holds, "a sub-thread's folder must be inside its parent's
+  folder"), a sub-thread with its own session may have no folder, or the same folder as its parent (compared as written, with
+  trailing slashes ignored; a path with `.` or `..` or a link to it is not "the same"). It then runs in its parent's
+  effective folder (the agent folder when the parent has none), follows it when it moves, and nothing is made or fenced for
+  it. A folder under a parent with none is still refused. Both sessions can edit the same files, so saving it shows one
+  line, `thread "<id>" and its parent "<parent>" work in the same folder; they can edit the same files`
+  (`subThreadWarnings`, also under Under in the thread's settings): a warning, not a refusal. The folder claim
+  (`folder_claimed`) is lifted for one family only: a parent and its own sub-threads that share its folder, and two such
+  siblings. Siblings that name the same subfolder, threads of different parents and any unrelated pair are still refused.
+  A parent whose folder setting cannot be read refuses its sub-threads too (never a fall back to the agent folder). A supervisor without
+  the capability that refuses such a thread gets one plain line from the bridge in that thread, once per run: "this thread can't
+  start: the Talos app on this computer is older than its settings; update it" (`old-supervisor-notice.ts`).
+  The child uses its parent's AGENTS.md, so its own Instructions editor is off (`agentsMdFolderFor`), and a lead's
+  `.talos-lead` markers in that folder bind it (`attach` reads the effective folder, not only the thread's own setting).
 - **Instructions.** A sub-thread's session reads its parent's AGENTS.md as well as its own. Claude Code loads AGENTS.md
   where it loads CLAUDE.md, from the session's folder and every folder above it, and thread sessions run with
   `instructionFiles: claude-md-and-agents-md` (`withInstructionFiles`, `InstructionFiles.swift`). Verified on 2026-11-11

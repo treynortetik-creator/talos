@@ -2,6 +2,7 @@
 // file paths, and a troubleshooting table whose codes are the real AppErrorCode members.
 //
 // Forbidden strings are assembled at run time so this file itself stays clean under the personal-data scan.
+// gate-reads: docs/APPS.md docs/SECURITY.md apps/bridge/src/apps/cli.ts apps/bridge/src/apps/switch.ts apps/bridge/src/config.ts
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

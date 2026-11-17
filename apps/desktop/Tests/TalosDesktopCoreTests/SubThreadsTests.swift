@@ -166,11 +166,69 @@ struct SubThreadEffectiveTests {
     let own = try #require(SubThreads.launch(all[1], in: all))
     #expect(own.ownCwd && own.parentCwd == "/home/alex/p" && own.refusal == nil && own.parentId == "p")
     let inh = try #require(SubThreads.launch(all[2], in: all))
-    #expect(!inh.ownCwd && inh.inherited == ["cwd"], "the options still inherit the folder")
-    #expect(inh.refusal?.contains("folder of its own") == true, "but a session never shares the parent's folder")
+    #expect(!inh.ownCwd && inh.shares && inh.inherited == ["cwd"], "no folder of its own: it runs in its parent's")
+    #expect(inh.refusal == nil && inh.parentCwd == "/home/alex/p")
+    #expect(!own.shares)
     let orphan = try #require(SubThreads.launch(all[3], in: all))
     #expect(orphan.refusal != nil, "a folder of its own with no parent folder to be inside")
     #expect(try #require(SubThreads.launch(all[4], in: all)).refusal != nil, "no folder of its own, and no parent folder either")
+  }
+
+  @Test func aFolderEqualToTheParentsIsTheSharedFolderAndOnlyThatExactSpellingIs() throws {
+    for cwd in ["/home/alex/p", "/home/alex/p/"] {
+      let all = [thread("p", opts: ["cwd": "/home/alex/p"]), thread("s", parent: "p", opts: ["cwd": cwd])]
+      let l = try #require(SubThreads.launch(all[1], in: all))
+      #expect(l.shares && !l.ownCwd && l.refusal == nil, "\(cwd)")
+    }
+    for cwd in ["/home/alex/p/../p", "/home/alex/./p", "/home/alex/p2", "/home/alex/P"] {
+      let all = [thread("p", opts: ["cwd": "/home/alex/p"]), thread("s", parent: "p", opts: ["cwd": cwd])]
+      let l = try #require(SubThreads.launch(all[1], in: all))
+      #expect(!l.shares && l.ownCwd, "\(cwd) stays under the strict folder check")
+    }
+  }
+
+  /// The same table as swift-parity.test.ts (Linux `folderSame`): the two sides must agree on every row.
+  @Test func theSameFolderRuleIsTheLinuxTables() {
+    let table: [(String, String, Bool)] = [
+      ("/home/alex/p", "/home/alex/p", true), ("/home/alex/p/", "/home/alex/p", true), ("/home/alex/p", "/home/alex/p/", true),
+      ("/home/alex/p/../p", "/home/alex/p", false), ("/home/alex/./p", "/home/alex/p", false), ("/home/alex/p2", "/home/alex/p", false),
+      ("/home/alex/P", "/home/alex/p", false), ("p", "p", false), ("/home/alex/p", "home/alex/p", false),
+    ]
+    for (child, parent, same) in table { #expect(SubThreads.sameFolder(child, parent) == same, "\(child) \(parent)") }
+  }
+
+  @Test func noFolderUnderAParentWithNoneRunsInTheAgentFolderAndAnOrphanIsStillRefused() throws {
+    let all = [thread("p"), thread("s", parent: "p")]
+    let l = try #require(SubThreads.launch(all[1], in: all))
+    #expect(l.shares && l.parentCwd == nil && l.refusal == nil)
+    let orphan = [thread("s", parent: "gone")]
+    let o = try #require(SubThreads.launch(orphan[0], in: orphan))
+    #expect(o.refusal != nil && !o.shares)
+  }
+
+  @Test func theFolderClaimIsLiftedForOneFamilyOnly() throws {
+    func settings(_ json: String) -> [String: ThreadSessionSettings] {
+      DedicatedSettings.parse(Data(json.utf8)).threads
+    }
+    let t = settings("""
+    {"default_thread":"general","dedicated":{"enabled":true,"max_live":3},"threads":[{"id":"general","kind":"fixed"},
+     {"id":"p","kind":"fixed","session":"dedicated","session_opts":{"cwd":"/home/alex/p"}},
+     {"id":"a","kind":"fixed","session":"dedicated","parent_id":"p"},
+     {"id":"b","kind":"fixed","session":"dedicated","parent_id":"p","session_opts":{"cwd":"/home/alex/p/"}},
+     {"id":"sub","kind":"fixed","session":"dedicated","parent_id":"p","session_opts":{"cwd":"/home/alex/p/sub"}},
+     {"id":"sub2","kind":"fixed","session":"dedicated","parent_id":"p","session_opts":{"cwd":"/home/alex/p/sub"}},
+     {"id":"q","kind":"fixed","session":"dedicated","session_opts":{"cwd":"/home/alex/q"}},
+     {"id":"c","kind":"fixed","session":"dedicated","parent_id":"q"},
+     {"id":"x","kind":"fixed","session":"dedicated","session_opts":{"cwd":"/home/alex/p"}}]}
+    """)
+    func fam(_ a: String, _ b: String) -> Bool { SubThreads.sameFamily(t[a]!, t[b]) }
+    #expect(fam("a", "p") && fam("p", "a"), "parent and child")
+    #expect(fam("a", "b") && fam("b", "a"), "siblings that both run in the parent's folder")
+    #expect(!fam("sub", "sub2"), "two with the same SUBfolder are claimed against each other")
+    #expect(!fam("sub", "p") && !fam("p", "sub"), "a child with a folder of its own is not in the parent's folder")
+    #expect(!fam("c", "a") && !fam("a", "c"), "children of different parents")
+    #expect(!fam("x", "p") && !fam("x", "a") && !fam("a", "x"), "an unrelated thread in the same folder")
+    #expect(!SubThreads.sameFamily(t["a"]!, t["a"]) && !SubThreads.sameFamily(t["a"]!, nil))
   }
 
   @Test func aFolderSettingThatIsNotTextIsRefusedAndNeverTakesTheParentsFolder() throws {
@@ -186,7 +244,8 @@ struct SubThreadEffectiveTests {
     }
     // null is not set: no folder of its own
     let unset = [thread("p", opts: ["cwd": "/home/alex/p"]), thread("s", parent: "p", opts: ["cwd": NSNull()])]
-    #expect(SubThreads.launch(unset[1], in: unset)?.refusal?.contains("folder of its own") == true)
+    let unsetLaunch = try #require(SubThreads.launch(unset[1], in: unset))
+    #expect(unsetLaunch.refusal == nil && unsetLaunch.shares)
     let notObject = [thread("p", opts: ["cwd": "/home/alex/p"]), thread("s", parent: "p", opts: "oops")]
     #expect(eff("s", notObject).cwd == nil)
     #expect(try #require(SubThreads.launch(notObject[1], in: notObject)).refusal?.contains("oops") == true)
@@ -252,7 +311,20 @@ struct SubThreadEffectiveTests {
     let l = try #require(SubThreads.launch(all[1], in: all))
     #expect(l.refusal?.contains("give the parent a folder first") == true, "\(String(describing: l.refusal))")
     let junkParent = [thread("p", opts: ["cwd": 7]), thread("s", parent: "p", opts: ["cwd": "/home/alex/p/s"])]
-    #expect(SubThreads.launch(junkParent[1], in: junkParent)?.refusal?.contains("give the parent a folder first") == true)
+    #expect(SubThreads.launch(junkParent[1], in: junkParent)?.refusal?.contains("folder setting can't be read") == true)
+  }
+
+  @Test func aParentWhoseFolderSettingCannotBeReadRefusesAChildWithNoFolderTooNeverTheAgentFolder() throws {
+    let parents: [Any] = [["cwd": 42], "oops", ["cwd": ["a"]]]
+    let children: [[String: Any]?] = [nil, ["cwd": "/home/alex/p"], ["cwd": "/home/alex/p/s"]]
+    for parentOpts in parents {
+      for childOpts in children {
+        let all = [thread("p", opts: parentOpts), childOpts.map { thread("s", parent: "p", opts: $0) } ?? thread("s", parent: "p")]
+        let l = try #require(SubThreads.launch(all[1], in: all))
+        #expect(!l.shares, "\(parentOpts) / \(String(describing: childOpts))")
+        #expect(l.refusal?.contains("parent thread's folder setting can't be read") == true, "\(parentOpts) / \(String(describing: childOpts)): \(String(describing: l.refusal))")
+      }
+    }
   }
 
   @Test func theLaunchSettingsOfASubAreTheEffectiveOnesAndNeverTheRawOnes() throws {
@@ -265,9 +337,9 @@ struct SubThreadEffectiveTests {
     """
     let d = DedicatedSettings.parse(Data(config.utf8))
     let s = try #require(d.threads["s"])
-    #expect(s.cwd == nil, "a sub-thread's folder is its own, never its parent's: a session already running in the parent's folder is then restarted and refused")
+    #expect(s.cwd == "/home/alex/p", "no folder of its own: it runs in its parent's, and follows it")
     #expect(s.model == "opus" && s.mcpAllow == ["b"] && s.idleParkMin == 30)
-    #expect(s.sub?.dropped == ["z"] && s.sub?.ownCwd == false)
+    #expect(s.sub?.dropped == ["z"] && s.sub?.ownCwd == false && s.sub?.shares == true && s.sub?.parentCwd == nil, "judged against nothing")
     let o = try #require(d.threads["o"])
     #expect(o.mcpAllow == [] && o.model == "haiku", "an orphan with no list: the empty list, not no list")
     #expect(d.threads["p"]?.mcpAllow == ["a", "b"] && d.threads["p"]?.sub == nil)
@@ -407,5 +479,17 @@ struct SubThreadsOwnFolderFlagTests {
     #expect(!String(decoding: try f.encoded(), as: UTF8.self).contains("subthreads_own_folder"))
     f.supervisor.subthreads_own_folder = true
     #expect(String(decoding: try f.encoded(), as: UTF8.self).contains("\"subthreads_own_folder\" : true"))
+  }
+
+  @Test func theSharedFolderFlagReadsFalseUnlessALiteralTrueAndIsWrittenOnlyWhenTrue() throws {
+    #expect(try JSONDecoder().decode(WorkersFile.self, from: file("")).supervisor.subthreads_shared_folder == false)
+    for junk in ["\"true\"", "1", "null", "[true]"] {
+      #expect(try !JSONDecoder().decode(WorkersFile.self, from: file(",\"subthreads_shared_folder\":\(junk)")).supervisor.subthreads_shared_folder, "\(junk)")
+    }
+    #expect(try JSONDecoder().decode(WorkersFile.self, from: file(",\"subthreads_shared_folder\":true")).supervisor.subthreads_shared_folder)
+    var f = WorkersFile(supervisor: .init(pid: 1, heartbeat_at: "2026-11-01T00:00:00Z", workers_supported: true, main_pane_pid: 2))
+    #expect(!String(decoding: try f.encoded(), as: UTF8.self).contains("subthreads_shared_folder"))
+    f.supervisor.subthreads_shared_folder = true
+    #expect(String(decoding: try f.encoded(), as: UTF8.self).contains("\"subthreads_shared_folder\" : true"))
   }
 }

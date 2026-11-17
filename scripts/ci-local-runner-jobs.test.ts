@@ -305,6 +305,10 @@ describe('the desktop and mobile jobs on a commit that is already on main (push,
         GITHUB_SHA: sha,
         GH_TOKEN: 't',
         CI_LOCAL_SCRIPT: wrapper,
+        // a push run of main settles first (ci-runner.sh asks, ci-local.sh waits for a quiet head): one real second here, not 300
+        TALOS_CI_SETTLE_S: '1',
+        TALOS_CI_SETTLE_MAX_S: '5',
+        TALOS_CI_SETTLE_POLL_S: '0.2',
       },
     })
     live.push(child)

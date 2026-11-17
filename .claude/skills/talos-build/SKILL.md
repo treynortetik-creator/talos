@@ -76,9 +76,9 @@ Also, where the change touches them: hostile text, size limits, checks that run 
 
 ## 3. Running things on a shared machine
 
-- **One heavy job at a time.** A Swift suite, a stress loop, an eval run or a full gate is heavy. Look at memory and load
+- **Heavy jobs go through the machine's lock (a few at a time, in slots).** A Swift suite, a stress loop, an eval run or a full gate is heavy. Look at memory and load
   first (`scripts/heavy-guard.sh status`; or `uptime`, plus `memory_pressure` on macOS or `free -m` on Linux), then run it
-  under the machine's lock: `bash scripts/heavy-lock.sh run <name> -- <cmd...>`. `heavy-lock.sh status` says who holds it.
+  under the machine's lock: `bash scripts/heavy-lock.sh run <name> -- <cmd...>`. `heavy-lock.sh status` says who holds each slot.
   The gate and the desktop test script take their locks themselves.
 - **Every time limit is a group time limit.** Wrap the command so that, at the limit, its whole process group stops, not
   just the first process:

@@ -16,12 +16,16 @@ import {
 } from '@talos-app/protocol'
 import { fakeClock } from '@talos-app/testkit'
 import { loadEnv } from '../src/config.ts'
+import { diskSync } from '../src/fsutil.ts'
 import { bridgeFeatures } from '../src/handshake.ts'
 import { installRejectionLogger } from '../src/lifecycle.ts'
 import { createLogger, nullLogger } from '../src/log.ts'
-import { cmdErrors } from '../src/problems/cli.ts'
-import { ProblemService } from '../src/problems/service.ts'
-import { listProblems, problemDirs } from '../src/problems/store.ts'
+import { OWNER_HOST_TEST } from '../src/platform.ts'
+import { cmdErrors, cmdRequeueBugReport } from '../src/problems/cli.ts'
+import { ProblemService, SCREENSHOT_TRIES } from '../src/problems/service.ts'
+import { closeProblem, listProblems, problemDirs } from '../src/problems/store.ts'
+import { RelayHttpError } from '../src/relay-http.ts'
+import { refusedForWorkers } from '../src/worker/cli-refusal.ts'
 import { type Harness, startHarness, tempHome, waitFor } from './helpers.ts'
 
 let h: Harness | undefined
@@ -162,8 +166,9 @@ describe('problem.item on a live bridge', () => {
     expect(raw).not.toMatch(/EXTERNAL\s+UNTRUSTED/i)
   })
 
-  test('an owner report keeps the steps, never merges with another, and a missing screenshot does not lose it', async () => {
+  test('an owner report keeps the steps and never merges with another; a picture that never arrives is tried again, then the report is filed without it', async () => {
     h = await startHarness()
+    const warn = spyOn(h.bridge.ctx.log, 'warn')
     const shot = {
       media_id: newId('md'),
       kind: 'image' as const,
@@ -181,14 +186,25 @@ describe('problem.item on a live bridge', () => {
       message: 'froze',
     })
     const b = problem({ kind: 'owner', steps: 'I tapped Send and it froze', name: 'Report', message: 'froze' })
-    h.relay.sendToBridge(item(a), { durable: true })
     h.relay.sendToBridge(item(b), { durable: true })
-    await waitFor(() => consumed(h as Harness, a.id) && consumed(h as Harness, b.id), 10_000, 'both')
+    await waitFor(() => consumed(h as Harness, b.id), 10_000, 'the report without a picture')
+    // the report with a picture the relay cannot give: kept (not filed, not consumed) for every try but the last
+    const tried = () => warn.mock.calls.filter((c) => String(c[0]).startsWith('problem screenshot not fetched')).length
+    for (let i = 1; i < SCREENSHOT_TRIES; i++) {
+      h.relay.sendToBridge(item(a), { durable: true }) // what the relay's own resend does
+      await waitFor(() => tried() === i, 10_000, `try ${i}`)
+      expect(consumed(h, a.id)).toBe(false)
+      expect(open(h.home)).toHaveLength(1) // only b
+    }
+    h.relay.sendToBridge(item(a), { durable: true })
+    await waitFor(() => consumed(h as Harness, a.id), 10_000, 'filed without the picture on the last try')
     const files = open(h.home)
     expect(files).toHaveLength(2)
     const recs = files.map((f) => readOpen((h as Harness).home, f))
     expect(recs.every((r) => r.count === 1 && r.steps === 'I tapped Send and it froze')).toBe(true)
-    expect(recs.filter((r) => r.screenshot_unavailable === true)).toHaveLength(1)
+    const lost = recs.filter((r) => r.screenshot_unavailable === true)
+    expect(lost).toHaveLength(1)
+    expect(lost[0].screenshot_unavailable_reason).toContain(`${SCREENSHOT_TRIES} tries`)
     await waitFor(() => systemRows(h as Harness) === 2, 5000, 'a notice for each owner report')
   })
 
@@ -676,6 +692,334 @@ describe('talos-app errors', () => {
     expect(all.length).toBeLessThanOrEqual(2)
     expect(all.reduce((n, l) => n + (l.problem?.count ?? 0), 0)).toBe(2)
     chmodSync(home, 0o700)
+  })
+})
+
+describe('a report picture that cannot be fetched is not lost', () => {
+  const PNG = Buffer.from('not-really-a-png-but-bytes')
+  const shotRef = (over: Partial<NonNullable<ProblemT['screenshot']>> = {}) => ({
+    media_id: newId('md'),
+    kind: 'image' as const,
+    role: 'attachment' as const,
+    mime: 'image/png',
+    name: 'screenshot.png',
+    size: PNG.length,
+    sha256: sha256Hex(new Uint8Array(PNG)),
+    ...over,
+  })
+  const withShot = () =>
+    problem({ kind: 'owner', steps: 'look', name: 'Report', message: 'ugly', screenshot: shotRef() })
+  /** A fetch that fails the first `failures` times, then hands out the bytes. */
+  function fetcher(home: string, failures: number) {
+    let calls = 0
+    const path = join(home, 'fetched.png')
+    return {
+      calls: () => calls,
+      fetchScreenshot: async () => {
+        calls++
+        if (calls <= failures) throw new Error('relay unreachable')
+        writeFileSync(path, PNG)
+        return { path }
+      },
+    }
+  }
+
+  test('one failed fetch is not consumed and nothing is filed; the next delivery files it with the picture, once', async () => {
+    const home = tempHome()
+    const f = fetcher(home, 1)
+    const { svc } = service(home, fakeClock(), f)
+    const p = withShot()
+    expect(await svc.onItem(p)).toBe('retry')
+    expect(open(home)).toHaveLength(0)
+    expect(await svc.onItem(p)).toBe('done')
+    const rec = readOpen(home, open(home)[0] as string)
+    expect(rec.count).toBe(1)
+    expect(rec.screenshot_unavailable).toBeUndefined()
+    expect(readFileSync(join(problemDirs(home).open, rec.screenshot_file)).equals(PNG)).toBe(true)
+    expect(await svc.onItem(p)).toBe('done') // a third delivery: a replay, nothing changes
+    expect(readOpen(home, open(home)[0] as string).count).toBe(1)
+  })
+
+  test('a picture that never comes: kept for every try but the last, then filed without it and says why', async () => {
+    const home = tempHome()
+    const f = fetcher(home, 1000)
+    const { svc, warns } = service(home, fakeClock(), f)
+    const p = withShot()
+    for (let i = 1; i < SCREENSHOT_TRIES; i++) {
+      expect(await svc.onItem(p)).toBe('retry')
+      expect(open(home)).toHaveLength(0)
+    }
+    expect(await svc.onItem(p)).toBe('done')
+    expect(f.calls()).toBe(SCREENSHOT_TRIES)
+    const rec = readOpen(home, open(home)[0] as string)
+    expect(rec).toMatchObject({ count: 1, screenshot_unavailable: true })
+    expect(rec.screenshot_unavailable_reason).toContain(`${SCREENSHOT_TRIES} tries`)
+    expect(warns.filter((w) => w.startsWith('problem screenshot not fetched'))).toHaveLength(SCREENSHOT_TRIES)
+  })
+
+  test('the tries are counted per report: another report starts its own', async () => {
+    const home = tempHome()
+    const { svc } = service(home, fakeClock(), fetcher(home, 1000))
+    const a = withShot()
+    for (let i = 1; i < SCREENSHOT_TRIES; i++) expect(await svc.onItem(a)).toBe('retry')
+    expect(await svc.onItem(withShot())).toBe('retry')
+  })
+
+  test('a copy filed without its picture takes it when the report comes again with it; a complete copy stays a duplicate', async () => {
+    const home = tempHome()
+    const lost = service(home, fakeClock(), fetcher(home, 1000))
+    const p = withShot()
+    for (let i = 1; i < SCREENSHOT_TRIES; i++) await lost.svc.onItem(p)
+    expect(await lost.svc.onItem(p)).toBe('done')
+    const file = open(home)[0] as string
+    expect(readOpen(home, file).screenshot_unavailable).toBe(true)
+    // the same report, sent again by an operator, and the picture is there this time
+    const fixed = service(home, fakeClock(), fetcher(home, 0))
+    expect(await fixed.svc.onItem(p)).toBe('done')
+    expect(open(home)).toEqual([file]) // the same problem, not a second file
+    const rec = readOpen(home, file)
+    expect(rec.count).toBe(1)
+    expect(rec.screenshot_unavailable).toBeUndefined()
+    expect(rec.screenshot_unavailable_reason).toBeUndefined()
+    const shotPath = join(problemDirs(home).open, rec.screenshot_file)
+    expect(readFileSync(shotPath).equals(PNG)).toBe(true)
+    expect(statSync(shotPath).mode & 0o777).toBe(0o600)
+    // complete now: a third copy changes nothing, not the file and not the picture
+    const before = readFileSync(join(problemDirs(home).open, file), 'utf8')
+    const other = Buffer.from('different bytes that must not replace the stored picture')
+    const third = service(home, fakeClock(), {
+      fetchScreenshot: async () => {
+        writeFileSync(join(home, 'other.png'), other)
+        return { path: join(home, 'other.png') }
+      },
+    })
+    expect(await third.svc.onItem(p)).toBe('done')
+    expect(readFileSync(join(problemDirs(home).open, file), 'utf8')).toBe(before)
+    expect(readFileSync(shotPath).equals(PNG)).toBe(true)
+  })
+
+  test('a closed owner report that comes again is a duplicate: not opened again, no notice', async () => {
+    const home = tempHome()
+    const f = fetcher(home, 0)
+    const { svc, notices } = service(home, fakeClock(), f)
+    const p = withShot()
+    expect(await svc.onItem(p)).toBe('done')
+    const fp = open(home)[0]?.replace('.json', '') as string
+    expect(notices).toHaveLength(1)
+    closeProblem(home, fp)
+    expect(open(home)).toHaveLength(0)
+    // after a deploy the relay sends every report it never saw consumed once more, and a requeue sends one on purpose
+    expect(await svc.onItem(p)).toBe('done')
+    expect(await svc.onItem({ ...p, screenshot: shotRef() })).toBe('done')
+    expect(open(home)).toHaveLength(0)
+    expect(notices).toHaveLength(1)
+    expect(listProblems(home, 'closed')).toHaveLength(1)
+  })
+
+  test('a closed report that is another report is still its own problem', async () => {
+    const home = tempHome()
+    const { svc, notices } = service(home, fakeClock(), fetcher(home, 0))
+    const a = withShot()
+    await svc.onItem(a)
+    closeProblem(home, open(home)[0]?.replace('.json', '') as string)
+    await svc.onItem(withShot())
+    expect(open(home)).toHaveLength(1)
+    expect(notices).toHaveLength(2)
+  })
+
+  test('the picture of another problem with the same id is not attached to a report that lacks one', async () => {
+    const home = tempHome()
+    const lost = service(home, fakeClock(), fetcher(home, 1000))
+    const p = withShot()
+    for (let i = 1; i < SCREENSHOT_TRIES; i++) await lost.svc.onItem(p)
+    await lost.svc.onItem(p)
+    const file = open(home)[0] as string
+    expect(readOpen(home, file).screenshot_unavailable).toBe(true)
+    // same id, so the same owner fingerprint, but other words: not the same report
+    const other = service(home, fakeClock(), fetcher(home, 0))
+    expect(await other.svc.onItem({ ...p, message: 'something else entirely', steps: 'other steps' })).toBe('done')
+    const rec = readOpen(home, file)
+    expect(rec.screenshot_unavailable).toBe(true)
+    expect(rec.screenshot_file).toBeUndefined()
+    expect(rec.message).toBe('ugly')
+  })
+
+  test('the report and its picture are flushed to disk (file and folder) before it is answered done', async () => {
+    const home = tempHome()
+    const sync = spyOn(diskSync, 'fsync')
+    const { svc } = service(home, fakeClock(), fetcher(home, 0))
+    const before = sync.mock.calls.length
+    expect(await svc.onItem(withShot())).toBe('done')
+    // the picture: its bytes and its folder; the report: its bytes and its folder
+    expect(sync.mock.calls.length - before).toBeGreaterThanOrEqual(4)
+    sync.mockRestore()
+  })
+
+  test('a short write is finished, byte for byte, before the file is renamed and flushed', async () => {
+    const home = tempHome()
+    const bytes = Uint8Array.from({ length: 1000 }, (_, i) => i % 251)
+    const sizes: number[] = []
+    const real = diskSync.write
+    const write = spyOn(diskSync, 'write').mockImplementation((fd, b, offset) => {
+      // the disk takes at most 7 bytes at a time
+      const n = real(fd, b.subarray(0, Math.min(b.length, offset + 7)), offset)
+      sizes.push(n)
+      return n
+    })
+    const { writeFileAtomic } = await import('../src/fsutil.ts')
+    writeFileAtomic(join(home, 'big.bin'), bytes, 0o600, { durable: true })
+    write.mockRestore()
+    expect(sizes.length).toBeGreaterThan(100)
+    expect(readFileSync(join(home, 'big.bin')).equals(Buffer.from(bytes))).toBe(true)
+  })
+
+  test('a write that makes no progress fails: nothing is renamed into place and no file is left', async () => {
+    const home = tempHome()
+    const write = spyOn(diskSync, 'write').mockImplementation(() => 0)
+    const sync = spyOn(diskSync, 'fsync')
+    const { writeFileAtomic } = await import('../src/fsutil.ts')
+    expect(() => writeFileAtomic(join(home, 'never.bin'), new Uint8Array(10), 0o600, { durable: true })).toThrow(
+      /short write/,
+    )
+    write.mockRestore()
+    expect(sync.mock.calls.length).toBe(0)
+    sync.mockRestore()
+    expect(readdirSync(home)).toEqual([])
+  })
+
+  test('a write that throws part-way is not answered done', async () => {
+    const home = tempHome()
+    const write = spyOn(diskSync, 'write').mockImplementation(() => {
+      throw new Error('disk full')
+    })
+    const { svc } = service(home, fakeClock())
+    expect(await svc.onItem(problem())).toBe('retry')
+    write.mockRestore()
+    expect(open(home)).toHaveLength(0)
+  })
+
+  test('a report with no picture is flushed too, and an ordinary write is not', async () => {
+    const home = tempHome()
+    const sync = spyOn(diskSync, 'fsync')
+    const { svc } = service(home, fakeClock())
+    await svc.onItem(problem())
+    expect(sync.mock.calls.length).toBeGreaterThanOrEqual(2)
+    const { writeFileAtomic } = await import('../src/fsutil.ts')
+    sync.mockClear()
+    writeFileAtomic(join(home, 'plain.txt'), 'x')
+    expect(sync.mock.calls.length).toBe(0)
+    sync.mockRestore()
+  })
+
+  test('a report filed without a picture on purpose (it had none) is not touched by a repeat', async () => {
+    const home = tempHome()
+    const { svc } = service(home, fakeClock(), fetcher(home, 0))
+    const p = problem({ kind: 'owner', steps: 'no picture', name: 'Report', message: 'none' })
+    expect(await svc.onItem(p)).toBe('done')
+    const file = open(home)[0] as string
+    const before = readFileSync(join(problemDirs(home).open, file), 'utf8')
+    expect(await svc.onItem(p)).toBe('done')
+    expect(readFileSync(join(problemDirs(home).open, file), 'utf8')).toBe(before)
+  })
+
+  test('a frame redelivered after the first filing failed is filed once and the count stays 1', async () => {
+    h = await startHarness()
+    writeFileSync(join(h.home, 'problems'), 'in the way')
+    const p = problem()
+    h.relay.sendToBridge(item(p), { durable: true })
+    await Bun.sleep(300)
+    expect(consumed(h, p.id)).toBe(false)
+    const { rmSync } = await import('node:fs')
+    rmSync(join(h.home, 'problems'))
+    h.relay.sendToBridge(item(p), { durable: true })
+    h.relay.sendToBridge(item(p), { durable: true }) // a resend that overlaps the first
+    await waitFor(() => consumed(h as Harness, p.id), 5000, 'consumed')
+    await Bun.sleep(200)
+    expect(open(h.home)).toHaveLength(1)
+    expect(readOpen(h.home, open(h.home)[0] as string).count).toBe(1)
+  })
+
+  describe('errors requeue-bug-report', () => {
+    const io = () => {
+      const out: string[] = []
+      const err: string[] = []
+      return {
+        out,
+        err,
+        io: {
+          out: (l: string) => out.push(l),
+          err: (l: string) => err.push(l),
+          prompt: async () => '',
+          sleep: async () => {},
+          now: () => 0,
+        },
+      }
+    }
+    test('asks the relay to queue the whole report id again, and says so', async () => {
+      const id = newUlid()
+      const asked: string[] = []
+      const t = io()
+      expect(
+        await cmdRequeueBugReport([id], t.io, {
+          requeueBugReport: async (x: string) => {
+            asked.push(x)
+            return { ok: true as const, id: x }
+          },
+        }),
+      ).toBe(0)
+      expect(asked).toEqual([id])
+      expect(t.out.join(' ')).toContain(id)
+    })
+    test('refuses anything that is not one whole report id, without calling the relay', async () => {
+      const t = io()
+      let called = 0
+      const http = {
+        requeueBugReport: async (x: string) => {
+          called++
+          return { ok: true as const, id: x }
+        },
+      }
+      for (const args of [[], ['abc'], [newUlid(), 'extra'], ['../../etc']])
+        expect(await cmdRequeueBugReport(args, t.io, http)).toBe(2)
+      expect(called).toBe(0)
+    })
+    test('on Linux it says this computer and on Windows this PC, never Mac; on a Mac it says this Mac', async () => {
+      const http = { requeueBugReport: async (x: string) => ({ ok: true as const, id: x }) }
+      const queued = { requeueBugReport: async (x: string) => ({ ok: true as const, id: x, already_queued: true }) }
+      try {
+        for (const [host, here] of [
+          ['linux', 'this computer'],
+          ['windows', 'this PC'],
+        ] as const) {
+          OWNER_HOST_TEST.host = host
+          for (const h of [http, queued]) {
+            const t = io()
+            expect(await cmdRequeueBugReport([newUlid()], t.io, h)).toBe(0)
+            expect(t.out.join(' ')).toContain(here)
+            expect(t.out.join(' ')).not.toMatch(/\bMac\b/)
+          }
+        }
+        OWNER_HOST_TEST.host = 'mac'
+        const t = io()
+        await cmdRequeueBugReport([newUlid()], t.io, http)
+        expect(t.out.join(' ')).toContain('this Mac')
+      } finally {
+        OWNER_HOST_TEST.host = 'mac'
+      }
+    })
+    test("a thread's own session is refused it, even with the problem folder opened to it", () => {
+      expect(refusedForWorkers(['errors', 'requeue-bug-report', newUlid()], true)).toBe(true)
+      expect(refusedForWorkers(['errors', 'requeue-bug-report', newUlid()], false)).toBe(true)
+    })
+    test("the relay's refusal is not swallowed", async () => {
+      const t = io()
+      const http = {
+        requeueBugReport: async () => {
+          throw new RelayHttpError(404, 'POST -> 404', 'not_found')
+        },
+      }
+      await expect(cmdRequeueBugReport([newUlid()], t.io, http)).rejects.toThrow()
+    })
   })
 })
 

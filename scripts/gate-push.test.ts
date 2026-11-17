@@ -10,12 +10,15 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { fakeTool } from './fake-tool'
 import { gateTestEnv } from './gate-test-env'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, '..')
-vi.setConfig({ testTimeout: 60_000 })
+// x TALOS_TEST_TIME_FACTOR: a setConfig here replaces vitest.config.ts's scaled budget, so it scales itself (two gates in one test
+// ran past a flat 60 s on a loaded Mac)
+vi.setConfig({ testTimeout: scaled(60_000), hookTimeout: scaled(60_000) })
 const dirs: string[] = []
 afterAll(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
@@ -73,6 +76,7 @@ if [ "$*" = "-s typecheck" ] && [ -n "$LEASE_PROBE" ]; then git ls-remote origin
 case "$*" in
   "exec vitest related"*) [ -n "$VITEST_OUT" ] && { printf '%s\\n' "$VITEST_OUT"; exit 1; } ;;
   "exec vitest run --project web"*) [ -n "$VPROJ_OUT" ] && { printf '%s\\n' "$VPROJ_OUT"; exit 1; } ;;
+  "exec vitest run "[!-]*) [ -n "$READERS_FAIL" ] && case "$*" in *"$READERS_FAIL"*) printf 'FAIL %s\\n' "$READERS_FAIL"; exit 1 ;; esac ;;
 esac
 exit 0`,
   )
@@ -89,6 +93,7 @@ exit 0`,
     'check-no-personal.sh',
     'denylist.generic.txt',
     'gate-inputs.txt',
+    'gate-wide-inputs.txt',
     'gate-excuse.sh',
     'gate-excuse.pl',
     'ci-alert-tests.pl',
@@ -105,6 +110,7 @@ exit 0`,
   for (const p of ['apps/web', 'apps/relay', 'packages/protocol']) put(clone, `${p}/tsconfig.json`, '{}\n')
   put(clone, 'apps/web/src/a.ts')
   put(clone, 'docs/a.md')
+  put(clone, 'apps/web/test/placeholder.test.ts', "it('x', () => {})\n") // gate.sh --readers needs some test file to search
   put(clone, '.gitignore', 'node_modules\n')
   ok(clone, 'add', '-A')
   ok(clone, 'commit', '-qm', 'base')
@@ -891,6 +897,196 @@ describe('handoff: a machine that cannot gate hands finished work to one that ca
     expect(r.git(r.origin, 'rev-parse', '--verify', '-q', 'refs/heads/handoff/hestia/x').status).toBe(0) // left for another
   })
 
+  // ---- Delphi's personal-ok stamp: an annotated tag at refs/personal-ok/<tip>, peeled to <tip>, lets a machine with no
+  // private list land a handoff, when the rebase keeps every patch-id.
+  const NEEDS_LIST = 'landing a handoff needs the private list'
+  const CHANGED = 'the rebase changed the stamped commits; a machine with the private list lands it'
+  const ten = (n3 = 'three') => `one\ntwo\n${n3}\nfour\nfive\nsix\nseven\neight\nnine\nten\n`
+  const tipOf = (r: ReturnType<typeof setup>, name: string) =>
+    r.ok(r.origin, 'rev-parse', `refs/heads/handoff/hestia/${name}`)
+  /** A stamp on the remote, made by hand in the bare origin: an annotated tag object at refs/personal-ok/<ref name>. */
+  const stamp = (r: ReturnType<typeof setup>, named: string, peeled: string) => {
+    r.ok(r.origin, 'tag', '-a', '-m', 'personal-ok', 'stamp-tmp', peeled)
+    r.ok(r.origin, 'update-ref', `refs/personal-ok/${named}`, r.ok(r.origin, 'rev-parse', 'refs/tags/stamp-tmp'))
+    r.ok(r.origin, 'tag', '-d', 'stamp-tmp')
+  }
+  /** main gets a file of ten lines, the handoff changes line 6 of it, and main then changes line 3 (inside line 6's context). */
+  const shiftedContext = (r: ReturnType<typeof setup>, name: string) => {
+    r.change(r.other, { 'apps/web/src/ctx.ts': ten() })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    const h = handOff(r, `handoff/hestia/${name}`, { 'apps/web/src/ctx.ts': ten().replace('six', 'SIX') })
+    expect(h.status, h.stderr).toBe(0)
+    r.ok(r.other, 'checkout', '-q', 'HEAD~1')
+    r.change(r.other, { 'apps/web/src/ctx.ts': ten('THREE') })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+  }
+  const landed = (r: ReturnType<typeof setup>, name: string) =>
+    r.git(r.origin, 'rev-parse', '--verify', '-q', `refs/heads/handoff/hestia/${name}`).status !== 0
+
+  it('a valid stamp (an annotated tag peeled to the exact tip) lets a machine with no private list land a handoff', () => {
+    const r = setup()
+    expect(handOff(r, 'handoff/hestia/ok', { 'apps/web/src/h.ts': 'from hestia\n' }).status).toBe(0)
+    const tip = tipOf(r, 'ok')
+    stamp(r, tip, tip)
+    r.ok(r.other, 'checkout', '-q', 'HEAD~1') // a commit lands on main meanwhile: a clean rebase
+    r.change(r.other, { 'docs/z.md': 'meanwhile\n' })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    const p = r.gatePush({}, ['--from', 'origin/handoff/hestia/ok'])
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).not.toContain(NEEDS_LIST)
+    expect(r.ok(r.origin, 'show', 'main:apps/web/src/h.ts')).toBe('from hestia')
+    expect(r.ok(r.origin, 'show', 'main:docs/z.md')).toBe('meanwhile')
+    expect(landed(r, 'ok')).toBe(true)
+    // the stamp was fetched into a ref of this machine's own
+    expect(r.ok(r.clone, 'rev-parse', `refs/personal-ok-remote/${tip}^{commit}`)).toBe(tip)
+  })
+
+  it('a stamp lands a handoff of several commits when the rebase keeps each patch-id', () => {
+    const r = setup()
+    expect(handOff(r, 'handoff/hestia/two', { 'apps/web/src/h.ts': 'one\n' }).status).toBe(0)
+    r.change(r.other, { 'apps/web/src/i.ts': 'two\n' })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:refs/heads/handoff/hestia/two')
+    const tip = tipOf(r, 'two')
+    stamp(r, tip, tip)
+    r.ok(r.other, 'checkout', '-q', 'HEAD~2')
+    r.change(r.other, { 'docs/z.md': 'meanwhile\n' })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    const p = r.gatePush({}, ['--from', 'origin/handoff/hestia/two'])
+    expect(p.code, p.err).toBe(0)
+    expect(r.ok(r.origin, 'show', 'main:apps/web/src/i.ts')).toBe('two')
+  })
+
+  it('a stamp that is not for this tip is refused: named for it but peeled elsewhere, or for another sha', () => {
+    const r = setup()
+    expect(handOff(r, 'handoff/hestia/other', { 'apps/web/src/h.ts': 'x\n' }).status).toBe(0)
+    const tip = tipOf(r, 'other')
+    const base = r.ok(r.origin, 'rev-parse', 'main')
+    stamp(r, tip, base) // the ref is named for the tip but its tag points at main
+    const a = r.gatePush({}, ['--from', 'origin/handoff/hestia/other'])
+    expect(a.code).toBe(1)
+    expect(a.err).toContain(NEEDS_LIST)
+    expect(a.err).toContain('not for this exact commit')
+    r.ok(r.origin, 'update-ref', '-d', `refs/personal-ok/${tip}`)
+    stamp(r, base, tip) // a stamp named for another sha, whose tag does peel to the tip
+    const b = r.gatePush({}, ['--from', 'origin/handoff/hestia/other'])
+    expect(b.code).toBe(1)
+    expect(b.err).toContain(NEEDS_LIST)
+    expect(landed(r, 'other')).toBe(false)
+    expect(r.ok(r.origin, 'rev-parse', 'main')).toBe(base)
+  })
+
+  it('a lightweight tag, or a stamp ref that is a commit, is refused', () => {
+    const r = setup()
+    expect(handOff(r, 'handoff/hestia/light', { 'apps/web/src/h.ts': 'x\n' }).status).toBe(0)
+    const tip = tipOf(r, 'light')
+    r.ok(r.origin, 'update-ref', `refs/personal-ok/${tip}`, tip) // a ref straight at the commit: what a lightweight tag is
+    const p = r.gatePush({}, ['--from', 'origin/handoff/hestia/light'])
+    expect(p.code).toBe(1)
+    expect(p.err).toContain(NEEDS_LIST)
+    expect(p.err).toContain('not an annotated tag')
+    expect(landed(r, 'light')).toBe(false)
+  })
+
+  it('no stamp at all still needs the private list, and a local ref of the stamp name is never trusted', () => {
+    const r = setup()
+    expect(handOff(r, 'handoff/hestia/none', { 'apps/web/src/h.ts': 'x\n' }).status).toBe(0)
+    const tip = tipOf(r, 'none')
+    // forged here by hand: a good annotated tag in this checkout's own stamp namespace, and nothing on the remote
+    r.ok(r.clone, 'fetch', '-q', 'origin', 'refs/heads/handoff/hestia/none')
+    r.ok(r.clone, 'tag', '-a', '-m', 'forged', 'forged-tmp', tip)
+    r.ok(r.clone, 'update-ref', `refs/personal-ok-remote/${tip}`, r.ok(r.clone, 'rev-parse', 'refs/tags/forged-tmp'))
+    r.ok(r.clone, 'update-ref', `refs/personal-ok/${tip}`, r.ok(r.clone, 'rev-parse', 'refs/tags/forged-tmp'))
+    const p = r.gatePush({}, ['--from', 'origin/handoff/hestia/none'])
+    expect(p.code).toBe(1)
+    expect(p.err).toContain(NEEDS_LIST)
+    expect(landed(r, 'none')).toBe(false)
+  })
+
+  it('a stamp whose rebase changes a commit patch-id (main changed a line inside its context) is refused', () => {
+    const r = setup()
+    shiftedContext(r, 'ctx')
+    const tip = tipOf(r, 'ctx')
+    stamp(r, tip, tip)
+    const before = r.ok(r.origin, 'rev-parse', 'main')
+    const p = r.gatePush({}, ['--from', 'origin/handoff/hestia/ctx'])
+    expect(p.code).toBe(1)
+    expect(p.err).toContain(CHANGED)
+    expect(r.ok(r.origin, 'rev-parse', 'main')).toBe(before)
+    expect(landed(r, 'ctx')).toBe(false)
+    expect(r.calls()).not.toContain(TYPECHECK) // refused before any gate ran
+  })
+
+  it('a stamp whose rebase drops a commit that main already has is refused', () => {
+    const r = setup()
+    expect(handOff(r, 'handoff/hestia/dup', { 'apps/web/src/h.ts': 'same\n' }).status).toBe(0)
+    const tip = tipOf(r, 'dup')
+    stamp(r, tip, tip)
+    r.ok(r.other, 'checkout', '-q', 'HEAD~1')
+    // the same change as a DIFFERENT commit: its own message, so it can't collide with the handoff's commit (same tree,
+    // parent, author and second would give the very same sha, and then the rebase drops nothing)
+    writeFileSync(join(r.other, 'apps/web/src/h.ts'), 'same\n')
+    r.ok(r.other, 'add', '-A')
+    r.ok(r.other, 'commit', '-qm', 'the same change, another commit')
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    expect(r.ok(r.other, 'rev-parse', 'HEAD').trim()).not.toBe(tip)
+    const p = r.gatePush({}, ['--from', 'origin/handoff/hestia/dup'])
+    expect(p.code).toBe(1)
+    expect(p.err).toContain(CHANGED)
+    expect(landed(r, 'dup')).toBe(false)
+  })
+
+  it('a stamp is checked again at the requeue rebase in the lease loop: main moves during the gate', () => {
+    const r = setup()
+    r.change(r.other, { 'apps/web/src/ctx.ts': ten() })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    expect(handOff(r, 'handoff/hestia/loop', { 'apps/web/src/ctx.ts': ten().replace('six', 'SIX') }).status).toBe(0)
+    const tip = tipOf(r, 'loop')
+    stamp(r, tip, tip)
+    const shift = `cd '${r.other}' && git fetch -q && git checkout -q --detach origin/main && printf '%s' '${ten('THREE')}' > apps/web/src/ctx.ts && git add -A && git commit -qm shift && git push -q --no-verify origin HEAD:main`
+    const p = r.gatePush({ ON_TYPECHECK: shift }, ['--from', 'origin/handoff/hestia/loop'])
+    expect(p.code).toBe(1)
+    expect(p.err).toContain(CHANGED)
+    expect(landed(r, 'loop')).toBe(false)
+  })
+
+  it('a stamp still lands when main moves during the gate and the rebase keeps the patch-ids', () => {
+    const r = setup()
+    expect(handOff(r, 'handoff/hestia/race', { 'apps/web/src/h.ts': 'from hestia\n' }).status).toBe(0)
+    const tip = tipOf(r, 'race')
+    stamp(r, tip, tip)
+    // other's own main holds the handoff commit: main moves from origin/main, never from there
+    const moves = `cd '${r.other}' && git fetch -q && git checkout -q --detach origin/main && echo q > docs/q.md && git add -A && git commit -qm q && git push -q --no-verify origin HEAD:main`
+    const p = r.gatePush({ ON_TYPECHECK: moves }, ['--from', 'origin/handoff/hestia/race'])
+    expect(p.code, p.err).toBe(0)
+    expect(r.ok(r.origin, 'show', 'main:apps/web/src/h.ts')).toBe('from hestia')
+    expect(r.ok(r.origin, 'show', 'main:docs/q.md')).toBe('q')
+  })
+
+  it('a machine with the private list ignores stamps: it scans as before, patch-ids or not, and fetches none', () => {
+    const r = setup()
+    shiftedContext(r, 'listed')
+    const tip = tipOf(r, 'listed')
+    r.ok(r.origin, 'update-ref', `refs/personal-ok/${tip}`, tip) // a bad stamp: it must make no difference
+    const p = r.gatePush(landing(r), ['--from', 'origin/handoff/hestia/listed'])
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).not.toContain(CHANGED)
+    expect(r.git(r.clone, 'for-each-ref', 'refs/personal-ok-remote').stdout.trim()).toBe('')
+    expect(landed(r, 'listed')).toBe(true)
+  })
+
+  it('an ordinary push, with no --from, is not held to patch-ids and needs no stamp', () => {
+    const r = setup()
+    r.change(r.other, { 'apps/web/src/ctx.ts': ten() })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    r.ok(r.clone, 'pull', '-q')
+    r.change(r.clone, { 'apps/web/src/ctx.ts': ten().replace('six', 'SIX') })
+    r.change(r.other, { 'apps/web/src/ctx.ts': ten('THREE') })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    const p = r.gatePush()
+    expect(p.code, p.err).toBe(0)
+    expect(r.ok(r.origin, 'show', 'main:apps/web/src/ctx.ts')).toBe(ten('THREE').replace('six', 'SIX').trimEnd())
+  })
+
   it('a handoff may not change the push path, at the hook or at landing', () => {
     const r = setup()
     const p = handOff(r, 'handoff/hestia/gate', { 'scripts/gate.sh': '#!/bin/sh\nexit 0\n' })
@@ -1340,7 +1536,7 @@ describe('--red-main: a fix for a red main goes first, once per machine per red,
 })
 
 // The rebase-clean pass (lead-approved): the gate passed, main moved, the rebase was clean, and no new commit touches a file of this
-// change or a gate input (scripts/gate-inputs.txt). Then only the cheap checks run, and the push says so, in its output and in
+// change or a gate-wide input (scripts/gate-wide-inputs.txt, the part of scripts/gate-inputs.txt that changes how every test runs). Then only the cheap checks run, and the push says so, in its output and in
 // <cache>/logs/rebase-pass.tsv with the main commits it skipped a full gate over. Any overlap: the full gate, as before. However
 // often it is refused, no gate of it goes ahead of queued CI: only a checked red-main gate does (HEAVY_LOCK_JUMP).
 describe('the rebase-clean pass', () => {
@@ -1395,35 +1591,360 @@ describe('the rebase-clean pass', () => {
     expect(passLog(r).map((x) => x[2])).toEqual(['refused'])
   })
 
-  it('a new commit to a gate input: refused, the full gate again', () => {
+  it.each(['.githooks/zz-extra', 'apps/web/package.json', 'apps/web/tsconfig.json'])(
+    'a new commit to a gate-wide input (.githooks/, a package.json, a tsconfig): refused, the full gate again: %s',
+    (f) => {
+      // not scripts/gate.sh itself: the other machine's commit writes plain text into the file, and the gate that runs again is it
+
+      const r = setup()
+      r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+      const p = r.gatePush({ ON_TYPECHECK: r.otherPushes(f) })
+      expect(p.code, `${f}: ${p.err}`).toBe(0)
+      expect(p.err, f).toContain(`changes ${f}, a gate-wide input`)
+      expect(
+        r.calls().filter((x) => x.startsWith('pnpm exec vitest related')),
+        f,
+      ).toHaveLength(2)
+    },
+  )
+
+  it.each(['scripts/new-gate-helper.sh', 'scripts/some-other.test.ts', '.github/workflows/ci-extra.yml'])(
+    'a new commit to another gate input (a script, a scripts/*.test.ts, a workflow) that this change does not touch: the pass: %s',
+    (f) => {
+      const r = setup()
+      r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+      const p = r.gatePush({ ON_TYPECHECK: r.otherPushes(f) })
+      expect(p.code, `${f}: ${p.err}`).toBe(0)
+      expect(p.err, f).toContain('rebase-clean pass')
+      expect(
+        r.calls().filter((x) => x.startsWith('pnpm exec vitest related')),
+        f,
+      ).toHaveLength(1) // no second full gate
+      expect(
+        passLog(r).map((x) => x[2]),
+        f,
+      ).toEqual(['pass'])
+    },
+  )
+
+  it('a new commit to a script this change also touches: still refused, the full gate again', () => {
     const r = setup()
-    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
-    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('scripts/new-gate-helper.sh') })
+    const lines = Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n')
+    r.ok(r.other, 'pull', '-q')
+    r.change(r.other, { 'scripts/helper.sh': `${lines}\n` })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    r.ok(r.clone, 'pull', '-q', '--rebase', 'origin', 'main')
+    r.change(r.clone, { 'scripts/helper.sh': `${lines.replace('line 0', 'mine')}\n` })
+    const theirs = `cd '${r.other}' && git pull -q && perl -pi -e 's/line 11/theirs/' scripts/helper.sh && git commit -qam other && git push -q origin HEAD:main`
+    const p = r.gatePush({ ON_TYPECHECK: theirs })
     expect(p.code, p.err).toBe(0)
-    expect(p.err).toContain('changes scripts/new-gate-helper.sh, a gate input')
-    expect(r.calls().filter((x) => x.startsWith('pnpm exec vitest related'))).toHaveLength(2)
+    expect(p.err).toContain('changes scripts/helper.sh, a file of this change')
+    expect(p.err).toContain('need the touched set again')
+    expect(passLog(r).map((x) => x[2])).toEqual(['refused'])
   })
 
-  it('a new main commit that loosens the list itself is judged by the list the gate passed on: refused', () => {
-    const r = setup()
-    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
-    const loosen = `cd '${r.other}' && git pull -q && printf '^nothing$\\n' > scripts/gate-inputs.txt && git commit -qam other && git push -q origin HEAD:main`
-    const p = r.gatePush({ ON_TYPECHECK: loosen })
-    expect(p.code, p.err).toBe(0)
-    expect(p.err).toContain('changes scripts/gate-inputs.txt, a gate input')
-    expect(r.calls().filter((x) => x.startsWith('pnpm exec vitest related'))).toHaveLength(2)
-  })
+  it.each(['scripts/gate-inputs.txt', 'scripts/gate-wide-inputs.txt'])(
+    'a new main commit that loosens a list is judged by the list the gate passed on: refused: %s',
+    (list) => {
+      const r = setup()
+      r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+      const loosen = `cd '${r.other}' && git pull -q && printf '^nothing$\\n' > ${list} && git commit -qam other && git push -q origin HEAD:main`
+      const p = r.gatePush({ ON_TYPECHECK: loosen })
+      expect(p.code, p.err).toBe(0)
+      expect(p.err).toContain(`changes ${list}, a gate-wide input`)
+      expect(r.calls().filter((x) => x.startsWith('pnpm exec vitest related'))).toHaveLength(2)
+    },
+  )
 
-  it('no gate-inputs list: fails closed (the full gate again)', () => {
+  it('no gate-wide list on the main the gate passed on: fails closed (the full gate again)', () => {
     const r = setup()
-    r.ok(r.clone, 'rm', '-q', 'scripts/gate-inputs.txt')
+    r.ok(r.clone, 'rm', '-q', 'scripts/gate-wide-inputs.txt')
     r.ok(r.clone, 'commit', '-qm', 'no list')
     r.ok(r.clone, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
     r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
     const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts') })
     expect(p.code, p.err).toBe(0)
-    expect(p.err).toContain('no gate-inputs list')
+    expect(p.err).toContain('no gate-wide list')
     expect(r.calls().filter((x) => x.startsWith('pnpm exec vitest related'))).toHaveLength(2)
+  })
+
+  // The readers of the combined files (this change's and the new main commits'): the pass runs every test that `gate.sh --readers`
+  // reports for them, since a code file's readers (a doc test that cites test names) are planned for no code change.
+  /** main holds a doc test that cites a relay test by file name; this change renames a test in that relay file. */
+  const citedByDoc = (r: ReturnType<typeof setup>) => {
+    r.ok(r.other, 'pull', '-q')
+    r.change(r.other, {
+      'apps/relay/test/auth/enroll.test.ts': "it('old name', () => {})\n",
+      'scripts/doc.test.ts': "const src = readFileSync(join(root, 'apps/relay/test/auth', 'enroll.test.ts'), 'utf8')\n",
+    })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    r.ok(r.clone, 'pull', '-q', '--rebase', 'origin', 'main')
+    r.change(r.clone, { 'apps/relay/test/auth/enroll.test.ts': "it('new name', () => {})\n" })
+  }
+  // the readers run as `vitest run <test files>`; the gate's own size step is `vitest run --project scripts ...`
+  const readerRuns = (r: ReturnType<typeof setup>) =>
+    r.calls().filter((x) => x.startsWith('pnpm exec vitest run ') && !x.includes('--project'))
+  const relatedRuns = (r: ReturnType<typeof setup>) => r.calls().filter((x) => x.startsWith('pnpm exec vitest related'))
+
+  it('a renamed test name a doc test cites, and an unrelated main commit: the pass runs the doc test and refuses when it fails', () => {
+    const r = setup()
+    citedByDoc(r)
+    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts'), READERS_FAIL: 'scripts/doc.test.ts' })
+    expect(p.code, p.err).toBe(0)
+    expect(readerRuns(r)).toContain('pnpm exec vitest run scripts/doc.test.ts')
+    expect(p.err).toContain('need the touched set again')
+    expect(p.err).toContain(
+      'a test that reads files of this change or of the new main commits failed (scripts/doc.test.ts)',
+    )
+    expect(relatedRuns(r)).toHaveLength(2) // the full gate again
+    expect(passLog(r).map((x) => x[2])).toEqual(['refused'])
+  })
+
+  it('the same race with the doc test passing: the pass stands, and it ran the doc test', () => {
+    const r = setup()
+    citedByDoc(r)
+    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts') })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('rebase-clean pass')
+    expect(readerRuns(r)).toEqual(['pnpm exec vitest run scripts/doc.test.ts'])
+    expect(relatedRuns(r)).toHaveLength(1)
+    expect(passLog(r).map((x) => x[2])).toEqual(['pass'])
+  })
+
+  it('no test reads any of the files: the pass stays cheap and runs no reader', () => {
+    const r = setup()
+    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts'), READERS_FAIL: 'placeholder' })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('rebase-clean pass')
+    expect(readerRuns(r)).toEqual([])
+    expect(relatedRuns(r)).toHaveLength(1)
+  })
+
+  it.each(['apps/bridge/test/guard.test.ts', 'apps/relay/test/guard.test.ts'])(
+    'a reader in the bridge or the relay needs the heavy lock: the pass does not apply, the full gate runs with the reason: %s',
+    (reader) => {
+      const r = setup()
+      r.ok(r.other, 'pull', '-q')
+      r.change(r.other, { [reader]: "const f = 'apps/web/src/b.ts'\n" })
+      r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+      r.ok(r.clone, 'pull', '-q', '--rebase', 'origin', 'main')
+      r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+      const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts') })
+      expect(p.code, p.err).toBe(0)
+      expect(p.err, reader).toContain(
+        `${reader} reads files of this change or of the new main commits and needs the heavy lock`,
+      )
+      expect(readerRuns(r), reader).toEqual([])
+      expect(
+        passLog(r).map((x) => x[2]),
+        reader,
+      ).toEqual(['refused'])
+    },
+  )
+
+  /** The bridge suite runs under bun: a stand-in that says nothing for --version and -e, and writes down a run or a test. */
+  const stubBun = (r: ReturnType<typeof setup>) =>
+    fakeTool(
+      join(r.T, 'bin'),
+      'bun',
+      '#!/bin/sh\ncase "$1" in\n  --version) echo 1.4.4 ;;\n  -e) echo 3.51.0 ;;\n  run | test) echo "bun $*" >> "$CALLS" ;;\nesac\nexit 0\n',
+    )
+
+  it("both this change and main's new commits reach the bridge suite (bridge src, and a bridge test): the full gate again", () => {
+    const r = setup()
+    stubBun(r)
+    r.change(r.clone, { 'apps/bridge/src/mine.ts': 'export const x = 1\n' })
+    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/bridge/test/theirs.test.ts') })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain("both this change and main's new commits reach the bridge suite")
+    expect(p.err).toContain('need the touched set again')
+    expect(passLog(r).map((x) => x[2])).toEqual(['refused'])
+  })
+
+  it('only this change reaches the bridge suite (bridge src; main moved in the web app): the pass stands', () => {
+    const r = setup()
+    stubBun(r)
+    r.change(r.clone, { 'apps/bridge/src/mine.ts': 'export const x = 1\n' })
+    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts') })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('rebase-clean pass')
+    expect(p.err).not.toContain('reach the bridge suite')
+    expect(passLog(r).map((x) => x[2])).toEqual(['pass'])
+  })
+
+  it('only main reaches the bridge suite (a web file here, bridge src on main): the pass stands', () => {
+    const r = setup()
+    stubBun(r)
+    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/bridge/src/theirs.ts') })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('rebase-clean pass')
+    expect(p.err).not.toContain('reach the bridge suite')
+    expect(passLog(r).map((x) => x[2])).toEqual(['pass'])
+  })
+
+  // A Playwright spec runs only in CI's browser jobs (no test file names the code it drives): it says what it reads by a
+  // `// gate-reads:` line of its own, and a pass that has a changed file on either side matching it needs the full gate.
+  it.each([
+    ['this change edits the relay', { 'apps/relay/src/auth/core.ts': 'export const a = 1\n' }, 'apps/web/src/other.ts'],
+    ['main edits the relay', { 'apps/web/src/b.ts': 'y\n' }, 'apps/relay/src/auth/core.ts'],
+  ])(
+    'a marked Playwright spec reads the relay (%s): the pass does not apply, the full gate runs with the reason',
+    (_, mine, theirs) => {
+      const r = setup()
+      r.ok(r.other, 'pull', '-q')
+      r.change(r.other, {
+        'apps/relay/test/auth/passkey-flow.spec.ts':
+          '// gate-reads: apps/relay/src/*\nimport { test } from "@playwright/test"\n',
+      })
+      r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+      r.ok(r.clone, 'pull', '-q', '--rebase', 'origin', 'main')
+      r.change(r.clone, mine)
+      const p = r.gatePush({ ON_TYPECHECK: r.otherPushes(theirs) })
+      expect(p.code, p.err).toBe(0)
+      expect(p.err).toContain(
+        `apps/relay/test/auth/passkey-flow.spec.ts (a Playwright spec) reads apps/relay/src/auth/core.ts, a file of this change or of the new main commits, and needs the heavy lock`,
+      )
+      expect(passLog(r).map((x) => x[2])).toEqual(['refused'])
+    },
+  )
+
+  it('a Playwright spec with no mark, or a mark that matches neither side: the pass stands', () => {
+    const r = setup()
+    r.ok(r.other, 'pull', '-q')
+    r.change(r.other, {
+      'apps/relay/test/auth/plain.spec.ts': 'import { test } from "@playwright/test"\n',
+      'apps/relay/test/auth/web.spec.ts':
+        '// gate-reads: apps/web/src/features/*\nimport { test } from "@playwright/test"\n',
+    })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    r.ok(r.clone, 'pull', '-q', '--rebase', 'origin', 'main')
+    r.change(r.clone, { 'apps/relay/src/auth/core.ts': 'export const a = 1\n' })
+    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts') })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('rebase-clean pass')
+    expect(passLog(r).map((x) => x[2])).toEqual(['pass'])
+  })
+
+  /** main holds a marked spec; this change edits the relay; `racing` is the shell line of the other machine's commit in the race. */
+  const markedSpec = (r: ReturnType<typeof setup>, mine: Record<string, string>) => {
+    r.ok(r.other, 'pull', '-q')
+    r.change(r.other, {
+      'apps/relay/test/auth/passkey-flow.spec.ts':
+        '// gate-reads: apps/relay/src/*\nimport { test } from "@playwright/test"\n',
+    })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    r.ok(r.clone, 'pull', '-q', '--rebase', 'origin', 'main')
+    r.change(r.clone, mine)
+  }
+  const onMain = (r: ReturnType<typeof setup>, file: string, text: string) =>
+    `cd '${r.other}' && git fetch -q && git checkout -q --detach origin/main && mkdir -p '${dirname(file)}' && printf '%s' '${text}' > '${file}' && git add -A && git commit -qm other && git push -q --no-verify origin HEAD:main`
+  const SPEC = 'apps/relay/test/auth/passkey-flow.spec.ts'
+
+  it('a spec whose mark main drops in the race is still read: the marks come from the old main too', () => {
+    const r = setup()
+    markedSpec(r, { 'apps/relay/src/auth/core.ts': 'export const a = 1\n' })
+    const p = r.gatePush({ ON_TYPECHECK: onMain(r, SPEC, 'import { test } from "@playwright/test"\n') })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('(a Playwright spec) reads apps/relay/src/auth/core.ts')
+    expect(passLog(r).map((x) => x[2])).toEqual(['refused'])
+  })
+
+  it('a spec whose mark this change drops is still read: the marks come from the old main too', () => {
+    const r = setup()
+    markedSpec(r, {
+      'apps/relay/src/auth/core.ts': 'export const a = 1\n',
+      [SPEC]: 'import { test } from "@playwright/test"\n',
+    })
+    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts') })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('(a Playwright spec) reads apps/relay/src/auth/core.ts')
+    expect(passLog(r).map((x) => x[2])).toEqual(['refused'])
+  })
+
+  it('a spec marked in the race (main adds the mark) is read from the rebased tree', () => {
+    const r = setup()
+    r.change(r.clone, { 'apps/relay/src/auth/core.ts': 'export const a = 1\n' })
+    const p = r.gatePush({
+      ON_TYPECHECK: onMain(
+        r,
+        'apps/relay/test/auth/new.spec.ts',
+        '// gate-reads: apps/relay/src/*\nimport x from "y"\n',
+      ),
+    })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('(a Playwright spec) reads apps/relay/src/auth/core.ts')
+    expect(passLog(r).map((x) => x[2])).toEqual(['refused'])
+  })
+
+  it('git failing while the spec marks are read refuses to the full gate (never a pass on "no spec")', () => {
+    const r = setup()
+    r.change(r.clone, { 'apps/relay/src/auth/core.ts': 'export const a = 1\n' })
+    // a git that fails for `grep` alone, as a bad object store would (a plain "no match" is exit 1, and fine)
+    const realGit = spawnSync('which', ['git'], { env: r.env, encoding: 'utf8' }).stdout.trim()
+    fakeTool(
+      join(r.T, 'bin'),
+      'git',
+      `#!/bin/sh\nif [ "$1" = grep ]; then echo 'fatal: cannot read the object store' >&2; exit 128; fi\nexec '${realGit}' "$@"\n`,
+    )
+    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts') })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('which Playwright specs read these files could not be told (git grep failed): fails closed')
+    expect(passLog(r).map((x) => x[2])).toEqual(['refused'])
+  })
+
+  it('the real passkey-flow spec carries a mark that matches the relay code it drives', () => {
+    const spec = readFileSync(join(repoRoot, 'apps/relay/test/auth/passkey-flow.spec.ts'), 'utf8')
+    const patterns = (spec.match(/^\/\/ gate-reads:(.*)$/m)?.[1] ?? '').trim().split(/\s+/)
+    const shell = (f: string) =>
+      spawnSync('bash', [
+        '-c',
+        `set -f; for p in ${patterns.join(' ')}; do case "$0" in $p) exit 0 ;; esac; done; exit 1`,
+        f,
+      ]).status
+    expect(shell('apps/relay/src/auth/core.ts')).toBe(0)
+    expect(shell('packages/protocol/src/enroll.ts')).toBe(0)
+    expect(shell('apps/web/src/a.ts')).toBe(1)
+  })
+
+  it('gate.sh --readers failing (no test file to search) fails closed: the full gate again, with the reason', () => {
+    const r = setup()
+    r.ok(r.clone, 'rm', '-q', 'apps/web/test/placeholder.test.ts')
+    r.ok(r.clone, 'commit', '-qm', 'no tests at all')
+    r.ok(r.clone, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts') })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('which tests read these files could not be told (gate.sh --readers failed): fails closed')
+    expect(relatedRuns(r)).toHaveLength(2)
+    expect(passLog(r).map((x) => x[2])).toEqual(['refused'])
+  })
+
+  it('too many files to ask the readers about: the full gate again, with the reason', () => {
+    const r = setup()
+    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n', 'apps/web/src/c.ts': 'y\n', 'apps/web/src/d.ts': 'y\n' })
+    const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('apps/web/src/other.ts'), GATE_PUSH_READERS_MAX: '3' })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('too many to ask which tests read them')
+    expect(relatedRuns(r)).toHaveLength(2)
+  })
+
+  it('the words-only cheap path asks the readers too: a failing reader of a new main doc runs the touched set again', () => {
+    const r = setup()
+    r.ok(r.other, 'pull', '-q')
+    r.change(r.other, {
+      'scripts/doc2.test.ts': "const t = readFileSync('docs/other.md', 'utf8')\n",
+      'docs/other.md': 'a\n',
+    })
+    r.ok(r.other, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    r.ok(r.clone, 'pull', '-q', '--rebase', 'origin', 'main')
+    r.change(r.clone, { 'docs/mine.md': 'm\n' }) // words only: this change ran no suite
+    const move = `cd '${r.other}' && git pull -q && echo b > docs/other.md && git commit -qam other && git push -q origin HEAD:main`
+    const p = r.gatePush({ ON_TYPECHECK: move, READERS_FAIL: 'scripts/doc2.test.ts' })
+    expect(p.code, p.err).toBe(0)
+    expect(readerRuns(r)).toContain('pnpm exec vitest run scripts/doc2.test.ts')
+    expect(p.err).toContain('a test that reads files of this change or of the new main commits failed')
   })
 
   it('refused again and again, no gate goes ahead of queued CI: each waits its turn, and only refusals are logged', () => {

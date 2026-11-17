@@ -93,11 +93,12 @@ describe('a held bug report outlives the buffer', () => {
     expect(Number(r.runtime.store.outboxRow(p.id)?.expires_at)).toBeGreaterThan(c.now())
   })
 
-  it('a report the Mac took is swept as before', async () => {
+  it('a report the Mac filed (consumed) is swept as before', async () => {
     const { c, r } = await world()
     const p = problem()
     await file(r, p)
-    r.runtime.store.markDelivered(p.id) // the Mac took it
+    r.runtime.store.markDelivered(p.id)
+    r.runtime.store.dropOutbox(p.id) // the Mac answered consumed: it is on its disk
     c.set(c.now() + 8 * DAY)
     r.runtime.hub.sweep()
     expect(rows(r)).toBe(0)

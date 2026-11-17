@@ -222,9 +222,16 @@ describe('the Swift test runs CI makes go through it', () => {
     expect(runs).toHaveLength(2)
     for (const l of runs) expect(l).toContain('bash ../../scripts/ci-swift-retry.sh ')
   })
-  it("the mobile job's swift test runs (job_mobile, scripts/ci-local/jobs-swift.sh)", () => {
+  it("the mobile job's swift test runs (job_mobile and mobile_swift_steps, where its Swift steps are: scripts/ci-local/jobs-swift.sh)", () => {
     const text = readFileSync(join(root, 'scripts/ci-local/jobs-swift.sh'), 'utf8')
-    const job = text.slice(text.indexOf('job_mobile() {'), text.indexOf('\n}\n', text.indexOf('job_mobile() {')))
+    const body = (name: string) => {
+      const from = text.indexOf(`${name}() {`)
+      expect(from, `${name} is in jobs-swift.sh`).toBeGreaterThan(-1)
+      return text.slice(from, text.indexOf('\n}\n', from))
+    }
+    // job_mobile calls the function that holds the Swift steps, under the desktop mutex
+    expect(body('job_mobile')).toContain('mobile_swift_steps')
+    const job = `${body('job_mobile')}\n${body('mobile_swift_steps')}`
     const swift = job.split('\n').filter((l) => /swift test|TalosShareCore\/test\.sh/.test(l))
     expect(swift.length).toBeGreaterThanOrEqual(2)
     for (const l of swift) expect(l).toContain('ci-swift-retry.sh')

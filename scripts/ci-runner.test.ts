@@ -4,6 +4,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -409,13 +410,14 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
     const real = git(clone, 'rev-parse', 'HEAD')
     const copy = join(clone, 'scripts/ci-runner.sh')
     writeFileSync(copy, readFileSync(script, 'utf8'))
+    cpSync(join(here, 'ci-runner'), join(clone, 'scripts/ci-runner'), { recursive: true }) // what the script sources: the scheduled run's skips
     mkdirSync(join(clone, '.github/workflows'), { recursive: true }) // the bun pin is read from ci.yml
     writeFileSync(join(clone, '.github/workflows/ci.yml'), ciYml)
     const fakeLocal = join(T, 'fake-ci-local.sh')
     writeFileSync(
       fakeLocal,
       `#!/bin/bash
-{ echo "args: $*"; echo "bun: $(bun --version) ($(command -v bun))"; for v in CI_REPO CI_STATUS_WHERE CI_WT_BASE TALOS_CI_CACHE CI_STATUS_URL TALOS_CI_FORCE_DESKTOP TALOS_CI_FORCE_MOBILE TALOS_FUZZ_MS CI_NIGHTLY; do echo "$v=\${!v}"; done; } > "$CALLS"\n`,
+{ echo "args: $*"; echo "bun: $(bun --version) ($(command -v bun))"; for v in CI_REPO CI_STATUS_WHERE CI_WT_BASE TALOS_CI_CACHE CI_STATUS_URL TALOS_CI_FORCE_DESKTOP TALOS_CI_FORCE_MOBILE TALOS_FUZZ_MS CI_NIGHTLY CI_SETTLE; do echo "$v=\${!v}"; done; } > "$CALLS"\n`,
     )
     // `gh` answers the one question a run asks (is the PR still open); never the real GitHub.
     const b = bin({
@@ -503,6 +505,7 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
         GITHUB_REF: 'refs/heads/main',
         GITHUB_SHA: s.real,
         INPUT_JOBS: 'desktop', // a dispatch input never narrows the nightly
+        TALOS_CI_SCHEDULE_QUIET_HOURS: 'off', // the time of day decides nothing here
         GH_TOKEN: 't',
         HOME: home(),
         CALLS: s.calls,
@@ -517,6 +520,170 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
     expect(readFileSync(s.calls, 'utf8')).toContain('TALOS_FUZZ_MS=60000\n')
     // and it posts under nightly-ci/ only: ci-local.sh (and its fallback) get CI_NIGHTLY=1
     expect(readFileSync(s.calls, 'utf8')).toContain('CI_NIGHTLY=1\n')
+  })
+
+  // A scheduled run (the nightly) must never get in the way of the pushes that matter, or test a commit that is no longer main's:
+  // it skips itself, with a "skipped:" line, no status posted (neither red nor green), when its sha is not main's head, when a push
+  // run of the workflow is queued or in progress, or in the daytime (TALOS_CI_SCHEDULE_QUIET_HOURS, local time, 07:00-22:00).
+  describe('a scheduled run skips itself', () => {
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const hhmm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`
+    // a window of two hours around now (the day), and one that does not hold now (the night), whatever the clock says
+    const around = (): string => {
+      const a = new Date(Date.now() - 3_600_000)
+      const b = new Date(Date.now() + 3_600_000)
+      return `${hhmm(a)}-${hhmm(b)}`
+    }
+    const elsewhere = (): string => {
+      const a = new Date(Date.now() + 3 * 3_600_000)
+      const b = new Date(Date.now() + 5 * 3_600_000)
+      return `${hhmm(a)}-${hhmm(b)}`
+    }
+    // gh answers the run list a push run is looked for in: $GH_PUSH_RUNS runs of the workflow, queued or going (a number)
+    const tools = () =>
+      bin({
+        caffeinate: 'exit 0',
+        gh: 'case "$*" in *actions/runs*) echo "${GH_PUSH_RUNS:-0}" ;; *) echo open ;; esac',
+        bun: `echo ${/bun-version: ([\d.]+)/.exec(ciYml)?.[1]}`,
+      })
+    const nightly = (s: ReturnType<typeof setup>, extra: Record<string, string> = {}) =>
+      run(
+        'run',
+        {
+          GITHUB_EVENT_NAME: 'schedule',
+          GITHUB_REPOSITORY: 'owner/talos-app',
+          GITHUB_REF: 'refs/heads/main',
+          GITHUB_SHA: s.real,
+          GH_TOKEN: 't',
+          HOME: home(),
+          CALLS: s.calls,
+          CI_LOCAL_SCRIPT: s.fakeLocal,
+          TALOS_CI_SCHEDULE_QUIET_HOURS: elsewhere(),
+          ...extra,
+        },
+        tools(),
+        s.copy,
+      )
+
+    it('at night, on main’s head, with no push run going: it runs', () => {
+      const s = setup()
+      const r = nightly(s)
+      expect(r.code, r.err).toBe(0)
+      expect(r.out).not.toContain('skipped')
+      expect(readFileSync(s.calls, 'utf8')).toContain(`args: --ref ${s.real} --full`)
+    })
+
+    it('in the daytime it skips: nothing tested, nothing posted', () => {
+      const s = setup()
+      const r = nightly(s, { TALOS_CI_SCHEDULE_QUIET_HOURS: around() })
+      expect(r.code, r.err).toBe(0)
+      expect(r.out).toContain('ci-runner: skipped: it is daytime')
+      expect(existsSync(s.calls)).toBe(false)
+    })
+
+    it('the daytime is a variable: the default is 07:00-22:00, and off turns the rule off', () => {
+      const code = (v: string, hhmm: string) =>
+        sh(
+          `. "${join(here, 'ci-runner', 'schedule.sh')}"; date() { echo "$FAKE_NOW"; }; ${v === 'default' ? 'unset TALOS_CI_SCHEDULE_QUIET_HOURS' : `TALOS_CI_SCHEDULE_QUIET_HOURS='${v}'`}; ci_quiet_hours_now; echo $?`,
+          { FAKE_NOW: hhmm },
+        ).out.trim()
+      expect(code('default', '06:59')).toBe('1')
+      expect(code('default', '07:00')).toBe('0')
+      expect(code('default', '21:59')).toBe('0')
+      expect(code('default', '22:00')).toBe('1')
+      expect(code('22:00-06:00', '23:30')).toBe('0') // a window across midnight
+      expect(code('22:00-06:00', '12:00')).toBe('1')
+      expect(code('off', '12:00')).toBe('1')
+      expect(code('nonsense', '12:00')).toBe('1') // not a window: no rule, it runs
+    })
+
+    it('on a sha that is not main’s head it skips (it would test a commit that is no longer main’s)', () => {
+      const s = setup()
+      const r = nightly(s, { GITHUB_SHA: 'b'.repeat(40) })
+      expect(r.code, r.err).toBe(0)
+      expect(r.out).toContain("is not main's head")
+      expect(r.out).toContain('skipped')
+      expect(existsSync(s.calls)).toBe(false)
+    })
+
+    it('while a push run is queued or in progress it skips', () => {
+      const s = setup()
+      const r = nightly(s, { GH_PUSH_RUNS: '1' })
+      expect(r.code, r.err).toBe(0)
+      expect(r.out).toContain('skipped: a push run is queued or in progress')
+      expect(existsSync(s.calls)).toBe(false)
+    })
+
+    it('the hostile nightly runs on whatever main is: a sha that is not main’s head is no reason for it to skip', () => {
+      const s = setup()
+      const r = nightly(s, { GITHUB_SHA: 'b'.repeat(40), CI_HOSTILE: '1' })
+      expect(r.code, r.err).toBe(0)
+      expect(r.out).not.toContain('skipped')
+      expect(readFileSync(s.calls, 'utf8')).toContain(`--ref ${'b'.repeat(40)} --full`)
+    })
+
+    it('the hostile nightly still skips in the daytime and while a push run goes', () => {
+      const s = setup()
+      expect(nightly(s, { CI_HOSTILE: '1', TALOS_CI_SCHEDULE_QUIET_HOURS: around() }).out).toContain(
+        'skipped: it is daytime',
+      )
+      expect(nightly(s, { CI_HOSTILE: '1', GH_PUSH_RUNS: '1' }).out).toContain('skipped: a push run is queued')
+    })
+
+    it('two nights skipped in a row are said: a warning line, and a message for the lead in alerts/', () => {
+      const s = setup()
+      const h = home()
+      const alerts = join(h, '.cache/talos-ci/alerts')
+      const first = nightly(s, { HOME: h, GH_PUSH_RUNS: '1' })
+      expect(first.out).toContain('skipped: a push run')
+      expect(first.out).not.toContain('two nights in a row') // one skip is a skip
+      expect(existsSync(alerts)).toBe(false)
+      const second = nightly(s, { HOME: h, GH_PUSH_RUNS: '2' })
+      expect(second.out).toContain('ci-runner: warning: the nightly run has skipped two nights in a row')
+      const files = readdirSync(alerts).filter((f) => f.endsWith('-schedule-skipped.txt'))
+      expect(files).toHaveLength(1)
+      expect(readFileSync(join(alerts, files[0]), 'utf8')).toContain('the nightly run has skipped two nights in a row')
+    })
+
+    it('a night it ran in between, or the hostile one skipping, makes no such warning for the nightly', () => {
+      const s = setup()
+      const h = home()
+      nightly(s, { HOME: h, GH_PUSH_RUNS: '1' }) // skipped
+      expect(nightly(s, { HOME: h }).code).toBe(0) // ran
+      const again = nightly(s, { HOME: h, GH_PUSH_RUNS: '1' }) // skipped, but not two in a row
+      expect(again.out).not.toContain('two nights in a row')
+      const hostile = nightly(s, { HOME: h, GH_PUSH_RUNS: '1', CI_HOSTILE: '1' }) // another kind: its own count
+      expect(hostile.out).not.toContain('two nights in a row')
+    })
+
+    it('a push, a PR and a dispatch never skip for any of this', () => {
+      const s = setup()
+      const r = run(
+        'run',
+        {
+          GITHUB_EVENT_NAME: 'workflow_dispatch',
+          GITHUB_REPOSITORY: 'owner/talos-app',
+          INPUT_REF: 'feat/x',
+          GH_TOKEN: 't',
+          HOME: home(),
+          CALLS: s.calls,
+          CI_LOCAL_SCRIPT: s.fakeLocal,
+          TALOS_CI_SCHEDULE_QUIET_HOURS: around(),
+          GH_PUSH_RUNS: '3',
+        },
+        tools(),
+        s.copy,
+      )
+      expect(r.code, r.err).toBe(0)
+      expect(readFileSync(s.calls, 'utf8')).toContain('args: --ref feat/x --full')
+    })
+
+    it('GitHub unreadable is no reason to skip: the nightly runs', () => {
+      const s = setup()
+      const r = nightly(s, { GH_PUSH_RUNS: 'unreadable' })
+      expect(r.code, r.err).toBe(0)
+      expect(readFileSync(s.calls, 'utf8')).toContain('--full')
+    })
   })
 
   it('a push run tests the pushed sha, not the branch name, and posts under the same repo and run link', () => {
@@ -751,6 +918,178 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
     )
     expect(r.code).toBe(1)
     expect(existsSync(s.calls)).toBe(false)
+  })
+
+  describe('the settle step (ci-local.sh waits for a quiet head): asked for by the main push run alone', () => {
+    const push = (s: { real: string }, more: Record<string, string> = {}) => ({
+      GITHUB_EVENT_NAME: 'push',
+      GITHUB_REPOSITORY: 'owner/talos-app',
+      GITHUB_REF: 'refs/heads/main',
+      GITHUB_SHA: s.real,
+      ...more,
+    })
+    const settleOf = (c: string) => /^CI_SETTLE=(.*)$/m.exec(c)?.[1]
+
+    it('a push run of main asks for it', () => {
+      const s = setup()
+      const r = run(
+        'run',
+        { ...push(s), GH_TOKEN: 't', HOME: home(), CALLS: s.calls, CI_LOCAL_SCRIPT: s.fakeLocal },
+        s.b,
+        s.copy,
+      )
+      expect(r.code, r.err).toBe(0)
+      expect(settleOf(readFileSync(s.calls, 'utf8'))).toBe('1')
+    })
+
+    it('a PR, a dispatch, the nightly, the hostile nightly and a part machine never do', () => {
+      const s = setup()
+      const common = { GH_TOKEN: 't', HOME: home(), CALLS: s.calls, CI_LOCAL_SCRIPT: s.fakeLocal }
+      const runs: [string, Record<string, string>][] = [
+        ['pull request', { ...prEnv, PR_HEAD_SHA: s.real }],
+        [
+          'dispatch',
+          { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REPOSITORY: 'owner/talos-app', INPUT_REF: 'feat/x' },
+        ],
+        ['nightly', push(s, { GITHUB_EVENT_NAME: 'schedule' })],
+        ['hostile nightly', push(s, { GITHUB_EVENT_NAME: 'schedule', CI_HOSTILE: '1' })],
+        [
+          'hostile dispatch',
+          {
+            GITHUB_EVENT_NAME: 'workflow_dispatch',
+            GITHUB_REPOSITORY: 'owner/talos-app',
+            INPUT_REF: 'feat/x',
+            CI_HOSTILE: '1',
+          },
+        ],
+        [
+          'a push on the other machines',
+          push(s, { CI_RUN_JOBS: 'check', CI_RUN_PREFIX: 'report-ci', CI_PLAN_SHA: s.real }),
+        ],
+      ]
+      for (const [what, e] of runs) {
+        expect(run('run', { ...e, ...common }, s.b, s.copy).code, what).toBe(0)
+        expect(settleOf(readFileSync(s.calls, 'utf8')), what).toBe('')
+      }
+    })
+
+    it('a re-run (attempt 2 or later of the same workflow run) tests the commit at once: "Re-run all jobs" on an old commit is a request to test it', () => {
+      const s = setup()
+      for (const [attempt, want] of [
+        ['1', '1'],
+        ['', '1'], // not given: the first
+        ['x', '1'], // not a number: the first
+        ['2', ''],
+        ['10', ''],
+      ] as const) {
+        const r = run(
+          'run',
+          {
+            ...push(s),
+            GITHUB_RUN_ATTEMPT: attempt,
+            GH_TOKEN: 't',
+            HOME: home(),
+            CALLS: s.calls,
+            CI_LOCAL_SCRIPT: s.fakeLocal,
+          },
+          s.b,
+          s.copy,
+        )
+        expect(r.code, r.err).toBe(0)
+        expect(settleOf(readFileSync(s.calls, 'utf8')), `attempt '${attempt}'`).toBe(want)
+        if (want === '') expect(r.out).toContain('a re-run')
+      }
+    })
+
+    it('a stray CI_SETTLE in the environment never reaches a run that is not a main push', () => {
+      const s = setup()
+      const r = run(
+        'run',
+        {
+          ...prEnv,
+          PR_HEAD_SHA: s.real,
+          GH_TOKEN: 't',
+          HOME: home(),
+          CALLS: s.calls,
+          CI_LOCAL_SCRIPT: s.fakeLocal,
+          CI_SETTLE: '1',
+        },
+        s.b,
+        s.copy,
+      )
+      expect(r.code, r.err).toBe(0)
+      expect(settleOf(readFileSync(s.calls, 'utf8'))).toBe('')
+    })
+
+    it('a push run while main is red goes at once: a fix for a red main is not made to wait', () => {
+      const s = setup()
+      const gh = bin({
+        gh: `case "$*" in *"commits?sha=main"*) echo ${s.real} ;; *"/status"*) printf 'local-ci/check\\tfailure\\tfailed on ci-runner\\n' ;; esac`,
+      })
+      const r = run(
+        'run',
+        { ...push(s), GH_TOKEN: 't', HOME: home(), CALLS: s.calls, CI_LOCAL_SCRIPT: s.fakeLocal },
+        `${gh}:${s.b}`,
+        s.copy,
+      )
+      expect(r.code, r.err).toBe(0)
+      expect(settleOf(readFileSync(s.calls, 'utf8'))).toBe('')
+      expect(r.out).toContain('main is red')
+    })
+
+    it('main green, or GitHub unreadable: it settles (a failed read is no reason to skip the wait)', () => {
+      const s = setup()
+      for (const body of [
+        `case "$*" in *"commits?sha=main"*) echo ${'b'.repeat(40)} ;; *"/status"*) for j in check mod browser image desktop mobile; do printf 'local-ci/%s\\tsuccess\\tpassed on ci-runner in 9s\\n' $j; done ;; esac`,
+        'exit 1',
+      ]) {
+        const gh = bin({ gh: body })
+        const r = run(
+          'run',
+          { ...push(s), GH_TOKEN: 't', HOME: home(), CALLS: s.calls, CI_LOCAL_SCRIPT: s.fakeLocal },
+          `${gh}:${s.b}`,
+          s.copy,
+        )
+        expect(r.code, r.err).toBe(0)
+        expect(settleOf(readFileSync(s.calls, 'utf8'))).toBe('1')
+      }
+    })
+  })
+
+  describe('ci-runner.sh settled: the later steps of a run that stood aside', () => {
+    it('says superseded=true when ci-local.sh left its note, false otherwise', () => {
+      const d = scratch()
+      const file = join(d, 'ci-sha')
+      const out = () => run('settled', { CI_SHA_FILE: file }).out
+      expect(out()).toBe('superseded=false\n')
+      writeFileSync(`${file}.superseded`, `${'c'.repeat(40)}\n`)
+      expect(out()).toBe('superseded=true\n')
+      expect(run('settled', {}).out).toBe('superseded=false\n') // no file given: nothing stood aside
+    })
+
+    it("the fallback takes nothing over for a run that stood aside: its machines' answers are for a commit nobody tests", () => {
+      const s = setup()
+      const d = scratch()
+      writeFileSync(join(d, 'ci-sha.superseded'), `${'c'.repeat(40)}\n`)
+      const r = run(
+        'fallback',
+        {
+          ...prEnv,
+          PR_HEAD_SHA: s.real,
+          GH_TOKEN: 't',
+          HOME: home(),
+          CALLS: s.calls,
+          CI_LOCAL_SCRIPT: s.fakeLocal,
+          CI_FALLBACK: 'titan:image',
+          CI_SHA_FILE: join(d, 'ci-sha'),
+        },
+        s.b,
+        s.copy,
+      )
+      expect(r.code, r.err).toBe(0)
+      expect(r.out).toContain('stood aside')
+      expect(existsSync(s.calls)).toBe(false)
+    })
   })
 })
 
@@ -1094,6 +1433,13 @@ describe('ci-runner.sh verdict: the last verdict on main, and why newer commits 
   describe('the grading of one commit (ci_classify)', () => {
     it('all six contexts, each "passed on ...", is green', () => {
       expect(classify(allPassed)[0]).toBe('green')
+    })
+    it('a commit a main run stood aside from (settle) has only report-ci/superseded: no verdict, neither red nor green', () => {
+      const mark = "report-ci/superseded\tsuccess\tnot tested: superseded by abc1234; CI tests main's newest commit"
+      expect(classify([mark])[0]).toBe('none')
+      // the mark never turns a commit's own results into something else, either way
+      expect(classify([mark, ...allPassed])[0]).toBe('green')
+      expect(classify([mark, ...allPassed.slice(0, 5), 'local-ci/mobile\tfailure\tfailed on ci-runner'])[0]).toBe('red')
     })
     it('"with warnings" in the description is still green: a warned step (personal data, audit, sleep) never changes a job status', () => {
       const warned = allPassed.map((l) => `${l}, with warnings (see its log)`)
@@ -1847,6 +2193,45 @@ describe('the workflows', () => {
     },
   )
 
+  itRunnerYml(
+    'a run that stood aside ends at once: ci says so, green has nothing to move, close cancels every remote job',
+    () => {
+      const j = jobs()
+      expect((j.ci as { outputs: Record<string, string> }).outputs.superseded).toBe(
+        '${{ steps.settled.outputs.superseded }}',
+      )
+      // the push's own time, for the settle step (a push only)
+      expect((j.ci as Job).env?.CI_PUSHED_AT).toBe(
+        "${{ github.event_name == 'push' && github.event.repository.pushed_at || '' }}",
+      )
+      expect(String((j.green as { if: string }).if)).toContain("needs.ci.outputs.superseded != 'true'")
+      expect((j.green as { needs: string[] }).needs).toContain('ci')
+      const step = (j.close as { steps: { env: Record<string, string> }[] }).steps[0]
+      expect(step?.env.SUPERSEDED).toBe('${{ needs.ci.outputs.superseded }}')
+      expect(String((j.close as { if: string }).if)).toContain('!cancelled()') // a skipped green does not stop it
+    },
+  )
+
+  itRunnerYml(
+    'a run that stood aside in the settle step (a newer push has its own run) waits on no Titan part and compares nothing',
+    () => {
+      const ci = (jobs().ci as { steps: { id?: string; name?: string; run?: string; if?: string }[] }).steps
+      const at = ci.findIndex((st) => st.id === 'settled')
+      expect(at).toBeGreaterThan(ci.findIndex((st) => st.run === 'exec bash scripts/ci-runner.sh fallback'))
+      // a push only: a PR's scripts are the base's, which may not have the subcommand yet
+      expect(ci[at]?.if).toContain("github.event_name == 'push'")
+      expect(ci[at]?.run).toBe('bash scripts/ci-runner.sh settled | tee -a "$GITHUB_OUTPUT"')
+      // every step that waits for, or compares with, a Titan part of this run is skipped by it (the fallback decides itself:
+      // ci_fallback reads the same note, tested above)
+      const waiting = ci.filter((st) => /ci-pair\.sh part|e2e-shadow|check-shadow/.test(st.run ?? ''))
+      expect(waiting).toHaveLength(4)
+      for (const st of waiting) {
+        expect(ci.indexOf(st), st.name).toBeGreaterThan(at)
+        expect(st.if, st.name).toContain("steps.settled.outputs.superseded != 'true'")
+      }
+    },
+  )
+
   type Step = {
     name?: string
     run?: string
@@ -1920,7 +2305,7 @@ describe('the workflows', () => {
       const ci = j.ci as Job
       const shadow = ci.steps.find((st) => st.run === 'bash scripts/ci-runner.sh e2e-shadow') as Step
       expect(shadow.if).toBe(
-        "${{ !cancelled() && needs.plan.outputs.browser_e2e == 'report-ci' && steps.dispatch.outputs.superseded != 'true' }}",
+        "${{ !cancelled() && needs.plan.outputs.browser_e2e == 'report-ci' && steps.dispatch.outputs.superseded != 'true' && steps.settled.outputs.superseded != 'true' }}",
       )
       expect((shadow as { 'continue-on-error'?: boolean })['continue-on-error']).toBe(true)
       // the shadow step names the part's job and run step as the API lists them (when Titan's run began, for its wait)
@@ -1932,7 +2317,7 @@ describe('the workflows', () => {
       // is report-only (run 43549764317: Titan's infra red failed Lemnos's job); and the script checks CI_BROWSER_E2E_PART,
       // which the job sets in e2e only, and it must not override it
       expect(ciPair.if).toBe(
-        "${{ !cancelled() && needs.plan.outputs.browser_e2e == 'ci-part' && steps.dispatch.outputs.superseded != 'true' }}",
+        "${{ !cancelled() && needs.plan.outputs.browser_e2e == 'ci-part' && steps.dispatch.outputs.superseded != 'true' && steps.settled.outputs.superseded != 'true' }}",
       )
       expect(ciPair.env?.CI_BROWSER_E2E_PART).toBeUndefined()
       expect((ciPair as { 'continue-on-error'?: boolean })['continue-on-error']).toBeUndefined()
@@ -1998,7 +2383,7 @@ describe('the workflows', () => {
       const ci = j.ci as Job
       const shadow = ci.steps.find((st) => st.run === 'bash scripts/ci-runner.sh check-shadow') as Step
       expect(shadow.if).toBe(
-        "${{ !cancelled() && needs.plan.outputs.check_titan == 'report-ci' && steps.dispatch.outputs.superseded != 'true' }}",
+        "${{ !cancelled() && needs.plan.outputs.check_titan == 'report-ci' && steps.dispatch.outputs.superseded != 'true' && steps.settled.outputs.superseded != 'true' }}",
       )
       expect((shadow as { 'continue-on-error'?: boolean })['continue-on-error']).toBe(true)
       expect(mins(shadow)).toBeGreaterThan(0)
@@ -2011,7 +2396,7 @@ describe('the workflows', () => {
       expect(pairs).toHaveLength(1)
       const pair = pairs[0] as Step
       expect(pair.if).toBe(
-        "${{ !cancelled() && needs.plan.outputs.check_titan == 'ci-part' && steps.dispatch.outputs.superseded != 'true' }}",
+        "${{ !cancelled() && needs.plan.outputs.check_titan == 'ci-part' && steps.dispatch.outputs.superseded != 'true' && steps.settled.outputs.superseded != 'true' }}",
       )
       expect((pair as { 'continue-on-error'?: boolean })['continue-on-error']).toBeUndefined()
       expect(mins(pair)).toBeGreaterThan(mins(part))
@@ -2073,14 +2458,14 @@ jq -r "$q" "$f"`,
       })
       const runs = (list: [string, string][]) =>
         JSON.stringify({ jobs: list.map(([name, status]) => ({ name, status })) })
-      const close = (files: Record<string, string>, flags: string[] = []) => {
+      const close = (files: Record<string, string>, flags: string[] = [], extra: Record<string, string> = {}) => {
         for (const f of ['n', 'posts', 'fail', 'postfail', 'jobs.json', 'jobs.0.json'])
           rmSync(join(T, f), { force: true })
         for (const [f, text] of Object.entries(files)) writeFileSync(join(T, f), text)
         for (const f of flags) writeFileSync(join(T, f), '')
         const r = spawnSync('bash', ['-eo', 'pipefail', '-c', step], {
           encoding: 'utf8',
-          env: env({ REPO: 'owner/talos-app', RUN_ID: '9', CLOSE_POLL: '0', GH_TOKEN: 't' }, b),
+          env: env({ REPO: 'owner/talos-app', RUN_ID: '9', CLOSE_POLL: '0', GH_TOKEN: 't', ...extra }, b),
         })
         const posts = existsSync(join(T, 'posts')) ? readFileSync(join(T, 'posts'), 'utf8') : ''
         return { code: r.status, out: r.stdout + r.stderr, posts }
@@ -2102,6 +2487,21 @@ jq -r "$q" "$f"`,
         close({ 'jobs.0.json': runs([['hestia', 'in_progress']]), 'jobs.json': runs([['hestia', 'completed']]) }).posts,
       ).toBe('')
       // the jobs cannot be read, or the cancel fails: close does not fail
+      // Lemnos stood aside for a newer push (settle): the whole run is cancelled at once, a remote job still working included, and the
+      // jobs are not even read: waiting for them held main's concurrency group up to 40 minutes and the cap never came
+      const gone = close(
+        { 'jobs.json': runs([...lemnos, ['titan', 'in_progress'], ['check-titan', 'in_progress']]) },
+        [],
+        {
+          SUPERSEDED: 'true',
+        },
+      )
+      expect(gone.code).toBe(0)
+      expect(gone.posts).toContain('repos/owner/talos-app/actions/runs/9/cancel')
+      expect(existsSync(join(T, 'n'))).toBe(false)
+      expect(close({ 'jobs.json': runs([['titan', 'in_progress']]) }, ['postfail'], { SUPERSEDED: 'true' }).code).toBe(
+        0,
+      )
       expect(close({ 'jobs.json': runs([]) }, ['fail']).code).toBe(0)
       expect(close({ 'jobs.json': runs([['titan', 'queued']]) }, ['postfail']).code).toBe(0)
     },
@@ -2510,5 +2910,19 @@ describe('artifact uploads: small, kept a day, never a red job', () => {
     expect(del).toBeGreaterThan(rel)
     expect(pub.steps[del]?.if).toBeUndefined() // only after a successful publish: a failed one can still be re-run
     expect(pub.steps[del]?.['continue-on-error']).toBe(true)
+  })
+})
+
+describe('ci-runner.sh main-queue part: what a main push run and a dispatch do about the run queue', () => {
+  const runner = readFileSync(script, 'utf8')
+  const part = readFileSync(join(here, 'ci-runner/main-queue.sh'), 'utf8')
+  it('ci_settle_want, ci_settled, ci_superseded_mark and ci_dispatch_wait live in main-queue.sh, sourced for the steps that need them', () => {
+    for (const f of ['ci_settle_want', 'ci_settled', 'ci_superseded_mark', 'ci_dispatch_wait'] as const) {
+      expect(part, f).toMatch(new RegExp(`^${f}\\(\\) \\{`, 'm'))
+      expect(runner, f).not.toMatch(new RegExp(`^${f}\\(\\) \\{`, 'm'))
+    }
+    for (const sub of ['run', 'fallback', 'settled', 'superseded', 'dispatch-wait'])
+      expect(runner, sub).toMatch(new RegExp(`^  ${sub}\\) \\. "\\$HERE/ci-runner/main-queue\\.sh" && `, 'm'))
+    expect(runner.split('\n').length).toBeLessThan(1000)
   })
 })

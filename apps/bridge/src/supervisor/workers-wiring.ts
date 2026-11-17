@@ -61,7 +61,7 @@ import {
   prepareSubThreadFolder,
   restricted,
   settingSources,
-  settingsFileDenyRules,
+  settingsFileRules,
   workerFolderProblem,
 } from './worker-policy.ts'
 import { workerPreamble } from './worker-preamble.ts'
@@ -126,16 +126,24 @@ export function dedicatedThreads(raw: unknown, agentDir: string): WorkerThread[]
     const sub = subLaunch(t as Record<string, unknown>, all)
     if (sub) {
       const eff = effectiveOpts(t as Record<string, unknown>, all)
+      // one that shares its parent's folder runs there (the agent folder when the parent has none), follows it when it moves, and
+      // has nothing of its own to check against it: no parent folder is handed on
       out.push({
         id: t.id,
-        cwd: ownOpts(t as Record<string, unknown>).cwd ?? agentDir,
+        cwd: sub.shares ? (sub.parentCwd ?? agentDir) : (ownOpts(t as Record<string, unknown>).cwd ?? agentDir),
         model: eff.model ?? 'inherit',
         effort: eff.effort ?? null,
-        parentCwd: sub.parentCwd,
+        parentCwd: sub.shares ? null : sub.parentCwd,
         name: typeof t.name === 'string' ? t.name : null,
         idleParkMin: opts.success ? opts.data.idle_park_min : ThreadSessionOpts.parse({}).idle_park_min,
         ...(eff.mcpAllow !== undefined ? { mcpAllow: eff.mcpAllow } : {}),
-        sub: { parentId: sub.parentId, ownCwd: sub.ownCwd, refusal: sub.refusal, unreadable: sub.unreadable },
+        sub: {
+          parentId: sub.parentId,
+          ownCwd: sub.ownCwd,
+          ...(sub.shares ? { shares: true } : {}),
+          refusal: sub.refusal,
+          unreadable: sub.unreadable,
+        },
       })
       continue
     }
@@ -459,12 +467,12 @@ export function workerPlanner(given: PlannerInputs) {
           mainRestricted: 'a CLAUDE_CONFIG_DIR that is not an absolute path',
         },
       }
-    // a sub-thread: its own folder, checked strictly inside its parent's and made when missing, before anything looks at it
+    // a sub-thread: its own folder, checked strictly inside its parent's and made when missing, before anything looks at it (one that shares its parent's folder skips this)
     let wanted = p.thread.cwd
     const parentCwd = p.thread.sub ? p.thread.parentCwd : null
     let ownOutside = false // its own folder outside the parent's (c24c01f8): the parent's rules come too (parentFolderRules)
-    if (p.thread.sub) {
-      if (p.thread.sub.refusal) return refuse(p.thread.sub.refusal)
+    if (p.thread.sub?.refusal) return refuse(p.thread.sub.refusal)
+    if (p.thread.sub && !p.thread.sub.shares) {
       if (!p.thread.sub.ownCwd || parentCwd === null)
         return refuse("sub-thread folder: it has none of its own inside its parent's")
       if (realOrNull(parentCwd) !== realOrNull(i.agentDir)) {
@@ -591,6 +599,7 @@ export function workerPlanner(given: PlannerInputs) {
     const threadFence = i.threadFence?.() !== false
     if (!threadFence && !p.dry) i.audit?.('worker_thread_fence_off', { thread: p.thread.id })
     try {
+      const sessionRules = sessionSettingsRules(i, read, [...fences, ...chain], !threadFence)
       const inputs: WorkerInputs = {
         rooted,
         threadFence,
@@ -619,10 +628,9 @@ export function workerPlanner(given: PlannerInputs) {
         userHome: i.userHome,
         // no file-tool edit of a settings file any session loads: every fenced folder's, ~/.claude and Main's config folder
         // outside the agent folder its own deny and ask rules, which it does not load, copied in (they only narrow)
-        settingsAsk: [...new Set([...parentRules.ask, ...narrowing.ask])],
-        settingsDeny: [
-          ...new Set([...parentRules.deny, ...narrowing.deny, ...sessionSettingsDeny(i, read, [...fences, ...chain])]),
-        ],
+        // with the thread fence off, a config folder's agents, skills, commands and the like ask the owner by card instead
+        settingsAsk: [...new Set([...parentRules.ask, ...narrowing.ask, ...sessionRules.ask])],
+        settingsDeny: [...new Set([...parentRules.deny, ...narrowing.deny, ...sessionRules.deny])],
       }
       const spec = buildWorkerSpec(inputs)
       validateSpec(spec, {
@@ -864,25 +872,31 @@ function realOrNull(p: string): string | null {
 
 /** The folder of Main's own .claude.json, from the environment Main runs under (as mainCeiling reads it). */
 /**
- * The edit-only deny every session gets on what other sessions load: the scripts the agent folder's own settings run (its hooks and
- * status line, kit/hooks and hooks: a PreToolUse hook can answer "allow", so no session may edit what one runs), and the settings
- * files of every fenced folder, ~/.claude, Main's config folder and each .claude.json (Main's own included).
+ * The edit-only rules every session gets on what other sessions load: the deny on the scripts the agent folder's own settings run
+ * (its hooks and status line, kit/hooks and hooks: a PreToolUse hook can answer "allow", so no session may edit what one runs), and
+ * on the settings files of every fenced folder, ~/.claude, Main's config folder and each .claude.json (Main's own included). With
+ * the thread fence off (`fenceOff`), a config folder's agents, skills, commands, CLAUDE.md, rules, output styles, workflows and
+ * routines are `ask` rules instead of denies: the owner answers on a card. Settings files, hooks, plugins and .claude.json stay denied.
  */
-function sessionSettingsDeny(i: PlannerInputs, read: MainRead, folders: readonly string[]): string[] {
-  return [
-    ...agentScriptDenyRules(i.agentDir),
-    ...settingsFileDenyRules(
-      [...new Set(folders)],
-      [...new Set([join(i.userHome, '.claude'), i.claudeDir, i.claudeDirOf?.(read.env) ?? i.claudeDir])],
-      [
-        ...new Set([
-          join(i.userHome, '.claude.json'),
-          join(i.configHome ?? i.userHome, '.claude.json'),
-          join(mainJsonHome(i, read), '.claude.json'),
-        ]),
-      ],
-    ),
-  ]
+function sessionSettingsRules(
+  i: PlannerInputs,
+  read: MainRead,
+  folders: readonly string[],
+  fenceOff: boolean,
+): { deny: string[]; ask: string[] } {
+  const rules = settingsFileRules(
+    [...new Set(folders)],
+    [...new Set([join(i.userHome, '.claude'), i.claudeDir, i.claudeDirOf?.(read.env) ?? i.claudeDir])],
+    [
+      ...new Set([
+        join(i.userHome, '.claude.json'),
+        join(i.configHome ?? i.userHome, '.claude.json'),
+        join(mainJsonHome(i, read), '.claude.json'),
+      ]),
+    ],
+    { fenceOff, home: i.userHome },
+  )
+  return { deny: [...agentScriptDenyRules(i.agentDir), ...rules.deny], ask: rules.ask }
 }
 
 function mainJsonHome(i: PlannerInputs, read: MainRead): string {

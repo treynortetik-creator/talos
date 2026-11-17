@@ -45,6 +45,7 @@ import {
 import { placeFilesInInbox } from '../worker/inbox.ts'
 import { type RouteRow, WorkerStore } from '../worker/store.ts'
 import { allowsStart, type GovernorReading, governorNow } from './governor.ts'
+import { tellOldSupervisor } from './old-supervisor-notice.ts'
 import { mainNeedsYou, statusLine } from './status-line.ts'
 import { WorkerContextFeed } from './worker-context.ts'
 
@@ -92,6 +93,8 @@ function runEnded(e: WorkerEntryT, at: number): boolean {
 export const GOVERNOR_PARK_RETRY_MS = 30_000
 
 export class ThreadRouter {
+  /** Threads already told their supervisor is older than their settings, this run (old-supervisor-notice.ts). */
+  private readonly oldSupervisorTold = new Set<string>()
   readonly store: WorkerStore
   readonly workers: WorkersReader
   readonly handoffs: HandoffLedger
@@ -641,6 +644,7 @@ export class ThreadRouter {
     ctx.usage?.readThreads(ctx.paths.home, file, now)
     const g = this.governor()
     this.noteSessionStarts(file)
+    tellOldSupervisor(ctx, file, this.oldSupervisorTold)
     this.releaseSwitchedOff()
     for (const lead of this.handoffs.openLeads())
       if (threadSessionMode(ctx.config.config, lead) !== 'dedicated') this.handoffs.closeLead(lead)

@@ -129,7 +129,7 @@ reader_pools() { # GUARDS, the guards over test files, and READERS_POOL, every t
   READERS_POOL="$(find $VITEST_ROOTS apps/bridge/test \( -name node_modules -prune \) -o \( -name '*.test.ts' -o -name '*.test.tsx' \) -type f -print 2>/dev/null)"
 }
 plan_suites() {
-  local f t d x base US=$'\037' _LO_LINES=() vit=() bun=() e2e=() vproj=() web=() webkit=() folder_tests=()
+  local f t d x base named US=$'\037' _LO_LINES=() vit=() bun=() e2e=() vproj=() web=() webkit=() folder_tests=()
   # the tests that list files at all, once (folder_readers runs in a subshell, so it cannot keep a cache of its own)
   # shellcheck disable=SC2086
   LISTERS="$(grep -rlE --include='*.test.ts' "$LISTS_FILES" $VITEST_ROOTS apps/bridge/test 2>/dev/null)"
@@ -155,17 +155,23 @@ plan_suites() {
     if [ ! -e "$f" ]; then
       case "$f" in apps/web/*) vproj+=(web) ;; apps/relay/*) vproj+=(relay) ;; apps/mobile/*) vproj+=(mobile) ;; esac
     fi
-    # words and assets (anything the suites below do not plan): the tests that name it, a deleted or renamed one too
+    # words and assets (anything the suites below do not plan), and the two code files a test opens by name: the tests that name
+    # it, a deleted or renamed one too. A changed test file is named by a doc test that cites its titles (bc69061a renamed relay
+    # tests and no gate ran the doc test); install.sh by the tests that run it (a deleted one is no .sh the loop below finds).
+    # Not any other source file: a source is read by a guard that says so (`// gate-reads:`, below), and a file like
+    # memory/cli.ts is named by 66 tests.
     case "$f" in
-      *.ts | *.tsx | *.mts | *.js | *.mjs | *.json | *.sh | *.py | e2e/*) ;;
-      *)
-        lines_of "$(file_readers "$f")"
-        for t in "${_LO_LINES[@]+"${_LO_LINES[@]}"}"; do
-          folder_tests+=("$t")
-          FOLDER_HITS+=("$t <- $f (names it)")
-        done
-        ;;
+      *.test.ts | *.test.tsx | *.spec.ts | install.sh) named=1 ;;
+      *.ts | *.tsx | *.mts | *.js | *.mjs | *.json | *.sh | *.py | e2e/*) named=0 ;;
+      *) named=1 ;;
     esac
+    if [ "$named" = 1 ]; then
+      lines_of "$(file_readers "$f")"
+      for t in "${_LO_LINES[@]+"${_LO_LINES[@]}"}"; do
+        folder_tests+=("$t")
+        FOLDER_HITS+=("$t <- $f (names it)")
+      done
+    fi
     # the guards that read this file by its folder or name, not by import; for a deletion too (a guard may name a file that
     # must exist)
     lines_of "$(guards_reading "$f")"
@@ -255,6 +261,15 @@ plan_suites() {
   fi
   return 0
 }
+# The installer's core tests also run with a corepack pnpm first on PATH (scripts/corepack-install-tests.sh, one more step of the
+# plan) whenever the plan runs the root installer's test: that is what an install.sh, kit/ or scripts/ change plans through the
+# guard lines on those tests, and a change to the test itself; not --full, whose every-project run has the tests once already and
+# which plans from no change. The second count (plan-check.cjs) says the same from its own list.
+plan_corepack() {
+  local t
+  COREPACK=0
+  for t in "${VIT[@]+"${VIT[@]}"}"; do [ "$t" != scripts/root-install.test.ts ] || COREPACK=1; done
+}
 plan_records() { # the plan as NUL-separated NAME<US>value records, for the second count
   local v
   for v in "${VIT[@]+"${VIT[@]}"}"; do printf 'VIT\037%s\0' "$v"; done
@@ -263,7 +278,7 @@ plan_records() { # the plan as NUL-separated NAME<US>value records, for the seco
   for v in "${VPROJ[@]+"${VPROJ[@]}"}"; do printf 'VPROJ\037%s\0' "$v"; done
   for v in "${WEB[@]+"${WEB[@]}"}"; do printf 'WEB\037%s\0' "$v"; done
   for v in "${WEBKIT[@]+"${WEBKIT[@]}"}"; do printf 'WEBKIT\037%s\0' "$v"; done
-  printf 'BUN_ALL\037%s\0E2E_ALL\037%s\0OLD\037%s\0FAST\037%s\0' "$BUN_ALL" "$E2E_ALL" "$OLD" "$FAST"
+  printf 'BUN_ALL\037%s\0E2E_ALL\037%s\0OLD\037%s\0FAST\037%s\0COREPACK\037%s\0' "$BUN_ALL" "$E2E_ALL" "$OLD" "$FAST" "$COREPACK"
 }
 plan_check() {
   local out

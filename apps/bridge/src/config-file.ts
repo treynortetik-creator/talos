@@ -78,6 +78,7 @@ export class ConfigFile {
   private readonly schema: ConfigSchema
   private readonly macSubThreads: () => boolean
   private readonly macOwnFolder: () => boolean
+  private readonly macSharedFolder: () => boolean
 
   constructor(
     private readonly path: string,
@@ -85,15 +86,18 @@ export class ConfigFile {
       roots?: WorkerRoots
       log?: Pick<Logger, 'warn'>
       schema?: ConfigSchema
-      /** Does the Mac app check a sub-thread's folder before every start (workers.json)? Absent = no: no thread gets a parent. */
+      /** Does the Mac app check a sub-thread's folder before every start (workers.json, while its heartbeat is fresh)? Absent = no: no thread gets a parent. */
       subthreadsSupported?: () => boolean
       /** Does it also start a dedicated sub-thread in its own folder outside the parent's? Absent = no (the old inside-only rule). */
       subthreadsOwnFolder?: () => boolean
+      /** Does it also start a dedicated sub-thread with no folder, or its parent's own, in the parent's folder? Absent = no (the old refusal). */
+      subthreadsSharedFolder?: () => boolean
     } = {},
   ) {
     this.roots = opts.roots ?? defaultWorkerRoots(path)
     this.macSubThreads = opts.subthreadsSupported ?? (() => false)
     this.macOwnFolder = opts.subthreadsOwnFolder ?? (() => false)
+    this.macSharedFolder = opts.subthreadsSharedFolder ?? (() => false)
     this.log = opts.log
     this.schema = opts.schema ?? AgentConfig
   }
@@ -177,9 +181,22 @@ export class ConfigFile {
     }
   }
 
+  /** The supervisor starts a dedicated sub-thread with no folder, or its parent's own, in its parent's folder. */
+  subthreadsSharedFolder(): boolean {
+    try {
+      return this.macSharedFolder()
+    } catch {
+      return false
+    }
+  }
+
   /** What the sub-thread rule is judged with. */
-  subThreadOpts(): { macSupports: boolean; ownFolder: boolean } {
-    return { macSupports: this.subthreadsSupported(), ownFolder: this.subthreadsOwnFolder() }
+  subThreadOpts(): { macSupports: boolean; ownFolder: boolean; sharedFolder: boolean } {
+    return {
+      macSupports: this.subthreadsSupported(),
+      ownFolder: this.subthreadsOwnFolder(),
+      sharedFolder: this.subthreadsSharedFolder(),
+    }
   }
 
   /** Writes `next` with rev bumped. */

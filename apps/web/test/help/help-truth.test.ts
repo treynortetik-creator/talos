@@ -8,6 +8,9 @@
 //  - A label is matched as a whole on-screen string (between quotes or tags), never as a fragment of a longer sentence.
 //  - A shortcut must be wired: the handler it names has to be passed in, or the menu action has to do something.
 //  - Every sentence in a note, a limit or a key's text needs an entry in CLAIMS with its evidence, and no entry may be stale.
+// gate-reads: docs/SETUP.md docs/ios.md apps/bridge/src/cli-main.ts apps/bridge/src/config.ts apps/relay/src/core/push.ts packages/protocol/src/http.ts packages/protocol/src/push.ts
+// gate-reads: apps/mobile/ios/App/App/AppPush.entitlements apps/desktop/scripts/install.sh apps/desktop/Sources/* apps/web/test/composer/enter-key.test.tsx
+// gate-reads: apps/web/src/*
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, posix, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'

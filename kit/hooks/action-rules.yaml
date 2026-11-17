@@ -63,6 +63,14 @@ rules:
     command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+[^\s=]+=\S*\s+|time\s+|exec\s+|command\s+|[A-Za-z_][A-Za-z0-9_]*=[^\s;&|(]*\s+)*gh\s+(?:repo\s+(?:edit\b[^\n;&|]{0,2000}--visibility[\s=]+public|create\b[^\n;&|]{0,2000}--public|delete)|api\b(?:[^\n;&|]{0,2000}(?:private=[''"]?false|visibility=[''"]?public)|(?=[^\n;&|]{0,2000}(?:-X|--method)[\s=]*[''"]?[Dd][Ee][Ll][Ee][Tt][Ee]\b)(?=[^\n;&|]{0,2000}repos/)))'
     why: "A public repository and a repository delete are one-way doors. Use the talos-go-public skill for the gate."
 
+  # the rule above looks at most 2000 characters past `gh` (a cap that keeps it linear); a gh repo or gh api command longer
+  # than that could hide its flag past the cap, so any such command asks
+  - id: github-long-command
+    decision: ask
+    tool: Bash
+    command: '\bgh\s+(?:repo|api)\b[^\n;&|]{2000}'
+    why: "A gh repo or gh api command this long cannot be checked for a public flag or a repository delete, so it asks."
+
   - id: github-account
     decision: ask
     tool: Bash

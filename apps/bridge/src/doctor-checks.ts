@@ -9,7 +9,7 @@ import type { BridgeEnv } from './config.ts'
 import { paths } from './config.ts'
 import { parseConfig } from './config-file.ts'
 import { DeviceStore } from './devices.ts'
-import { guardTimeoutsCheck } from './doctor-guards.ts'
+import { actionRulesUnreadableCheck, guardTimeoutsCheck } from './doctor-guards.ts'
 import { memorySearchCheck } from './doctor-memory.ts'
 import { modDoctorChecks } from './doctor-mods.ts'
 import { wslDoctorChecks } from './doctor-wsl.ts'
@@ -130,6 +130,8 @@ export async function runDoctorChecks(
   if (memory) checks.push(memory)
   const guards = guardTimeoutsCheck(agentDir)
   if (guards) checks.push(guards)
+  const ruleFiles = actionRulesUnreadableCheck(agentDir)
+  if (ruleFiles) checks.push(ruleFiles)
   if (entry && !(typeof entry.env?.TALOS_AGENT_DIR === 'string' && entry.env.TALOS_AGENT_DIR !== ''))
     add(
       'warn',

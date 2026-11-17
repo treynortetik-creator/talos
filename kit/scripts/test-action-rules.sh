@@ -239,6 +239,9 @@ while True:
         r = {"decision": d, "reason": "always" if mode == "always" else ("owner" if d != "none" else mode)}
     elif m["t"] == "rule_take":
         k = key(m); r = {"decision": "allow" if k in ok else "none", "reason": "owner"}; ok.discard(k)
+    elif m["t"] == "rule_notice":
+        if mode == "stall": __import__("time").sleep(5)
+        r = {"decision": "none", "reason": "told"}
     else:
         r = {"decision": "none", "reason": "?"}
     c.sendall((json.dumps(dict(r, t="rule_result", id=m["id"])) + "\n").encode()); c.close()
@@ -343,14 +346,9 @@ expect deny  "starter never still applies"          "$(run Bash /tmp 'rm -rf ~')
 ( cd "$A" && python3 hooks/action-rules.py list | grep 'my-never-tweets' >/dev/null ) && ok || no "list does not show the user rules"
 
 echo "action-rules: failure modes"
-printf 'rules:\n  - id: broken\n    decision: never\n    tool: Bash\n    command: "(unclosed"\n  - id: after-broken\n    decision: never\n    tool: Bash\n    command: "dangerous-thing"\n' > "$XDG_CONFIG_HOME/talos/action-rules.yaml"
-expect deny  "a bad regex in one rule does not disable the next" "$(run Bash /tmp 'dangerous-thing now')"
 printf 'rules:\n  this is not a rule\n' > "$XDG_CONFIG_HOME/talos/action-rules.yaml"
-out="$(python3 -c 'import json;print(json.dumps({"tool_name":"Bash","cwd":"/tmp","tool_input":{"command":"ls"}}))' | ( cd "$A" && python3 hooks/action-rules.py check 2>&1 ))"; rc=$?
-[ "$out" = "{}" ] && [ "$rc" = 0 ] && ok || no "an unreadable rules file did not fail open in a live session" "$out"
-out="$(python3 -c 'import json;print(json.dumps({"tool_name":"Bash","cwd":"/tmp","tool_input":{"command":"ls"}}))' | ( cd "$A" && CHRONOS_RUN=1 python3 hooks/action-rules.py check 2>&1 ))"
-case "$out" in *'"deny"'*) ok ;; *) no "an unreadable rules file did not fail CLOSED when unattended" "$out" ;; esac
 ( cd "$A" && python3 hooks/action-rules.py test >/dev/null 2>&1 ) && no "test accepted an unreadable rules file" || ok
+# (an unreadable file of yours, or the shipped one, ASKS live and DENIES unattended: see "an unreadable rule file" below)
 # never rules run before ask rules: your own ask rule on a call the starter set forbids does not turn the refusal into a question,
 # and your own allow still carves an exception out of a never
 printf 'rules:\n  - id: my-ask-rm\n    decision: ask\n    tool: Bash\n    command: "rm -rf"\n' > "$XDG_CONFIG_HOME/talos/action-rules.yaml"
@@ -365,6 +363,251 @@ un="$(sleep 4 | ( cd "$A" && CHRONOS_RUN=1 TALOS_GUARD_TIMEOUT_S=1 python3 hooks
 expect ask  "action-rules: a timeout asks in a live session" "$(verdict "$live")"
 grep -q 'timed out checking' <<<"$live" && ok || no "the timeout ask has no timeout reason" "$live"
 expect deny "action-rules: a timeout denies when unattended" "$(verdict "$un")"
+# an unreadable rule file (the SHIPPED one: missing, empty, rejected by either reader, a rule that is not valid; or YOURS: the same, plus
+# a bad regex) must never allow everything: it ASKS in a live session and DENIES when unattended, with the timeout's output and exit
+# code (0), naming the file and the error (and the line where there is one), never the command. One code path for both files.
+echo "action-rules: an unreadable rule file asks (live) or denies (unattended), never allows"
+cp "$A/hooks/action-rules.yaml" "$SB/shipped.keep"
+# a PyYAML stand-in: strict about a bare ' inside a single-quoted value (what real PyYAML refused on 2026-11-16), and it rejects
+# every other file too, so it only ever stands for "PyYAML says no"
+mkdir -p "$SB/fakeyaml"; cat > "$SB/fakeyaml/yaml.py" <<'PY'
+import re
+class YAMLError(Exception): pass
+def safe_load(text):
+    for n, line in enumerate(text.splitlines(), 1):
+        m = re.match(r"^\s*(?:-\s+)?[A-Za-z_][\w-]*:\s+'(.*)'\s*(?:#.*)?$", line)
+        if m and "'" in m.group(1).replace("''", ""):
+            raise YAMLError("while scanning a single-quoted scalar, line %d: a bare ' inside the quotes" % n)
+    raise YAMLError("the PyYAML stand-in rejects every file")
+PY
+# a PyYAML stand-in that SUCCEEDS: it agrees with the built-in reader on every file, except one with MARK-RETURN in it (it answers
+# the JSON in FAKEYAML_RETURN: a wrong shape, or rules that differ) or MARK-EXIT (it raises SystemExit(0), as a planted module could)
+mkdir -p "$SB/retyaml" "$SB/exitimport"; cat > "$SB/retyaml/yaml.py" <<'PY'
+import importlib.util, json, os
+class YAMLError(Exception): pass
+_ar = None
+def safe_load(text):
+    global _ar
+    if "MARK-RETURN" in text: return json.loads(os.environ["FAKEYAML_RETURN"])
+    if "MARK-EXIT" in text: raise SystemExit(0)
+    if _ar is None:
+        spec = importlib.util.spec_from_file_location("ar_for_stand_in", os.environ["FAKEYAML_HOOK"])
+        _ar = importlib.util.module_from_spec(spec); spec.loader.exec_module(_ar)
+    return {"rules": _ar._builtin(text)[0]}
+PY
+printf 'raise SystemExit(0)\n' > "$SB/exitimport/yaml.py"
+CALLJ='{"tool_name":"Bash","cwd":"/srv/app","tool_input":{"command":"npm publish"}}'
+chk(){ # $1 = env assignments (may be empty), the call on stdin of printf -> "<stdout>|<exit code>"
+  local out rc
+  out="$(printf '%s' "$CALLJ" | ( cd "$A" && env $1 python3 "$SB/acct.py" "$HOME" check 2>"$SB/err" ))"; rc=$?
+  printf '%s|%s' "$(printf '%s' "$out" | tr -d '\n')" "$rc"; }
+ULOG(){ cat "$XDG_STATE_HOME"/talos/*/action-rules-unreadable.jsonl 2>/dev/null; }
+UFILE="$XDG_CONFIG_HOME/talos/action-rules.yaml"
+unreadable_case() { # $1 label, $2 env for the hook, $3 a regex the reason must match, $4 which file (shipped|user, default shipped)
+  local live un rows which="${4:-shipped}" tail=hooks/action-rules.yaml
+  [ "$which" = user ] && tail=talos/action-rules.yaml
+  rm -f "$XDG_STATE_HOME"/talos/*/action-rules-unreadable.jsonl
+  live="$(chk "$2")"; un="$(chk "CHRONOS_RUN=1 $2")"
+  { [ "$(verdict "${live%|*}")" = ask ] && [ "${live##*|}" = 0 ]; } && ok || no "$1: live did not ASK with exit 0" "$live"
+  { [ "$(verdict "${un%|*}")" = deny ] && [ "${un##*|}" = 0 ]; } && ok || no "$1: unattended did not DENY with exit 0" "$un"
+  { grep -q "$tail" <<<"$live" && grep -qE "$3" <<<"$live" && ! grep -q 'npm publish' <<<"$live$un"; } && ok || no "$1: the reason must name the file ($tail) and match '$3', and never the command" "$live"
+  rows="$(ULOG | wc -l | tr -d ' ')"
+  { [ "$rows" = 2 ] && ULOG | python3 -c 'import json,sys
+which, tail = sys.argv[1], sys.argv[2]
+rs=[json.loads(l) for l in sys.stdin]
+assert all(r["file"]==which and r["path"].endswith(tail) and r["error"] and r["at"].endswith("Z") for r in rs), rs
+assert sorted(r["unattended"] for r in rs)==[False,True], rs
+assert not any("npm publish" in json.dumps(r) for r in rs), rs' "$which" "$tail"; } && ok || no "$1: want one action-rules-unreadable.jsonl line per call (file $which, path, error, no command text)" "$(ULOG)"
+}
+# the old broken line: a bare ' inside the single quotes, which the built-in reader reads and PyYAML refuses
+python3 - "$SB/shipped.keep" "$A/hooks/action-rules.yaml" <<'PY' || no "could not build the broken shipped file (the doubled-quote spot moved?)"
+import sys
+t = open(sys.argv[1]).read()
+assert "[''\"]" in t, "the shipped file no longer has the doubled-quote spot this test breaks"
+open(sys.argv[2], "w").write(t.replace("[''\"]", "['\"]"))
+PY
+unreadable_case "the old broken quote (PyYAML refuses, the built-in reader reads it)" "PYTHONPATH=$SB/fakeyaml" 'PyYAML'
+# PyYAML disagreeing with the built-in reader on a file the built-in one reads is unreadable too (no silent fallback)
+cp "$SB/shipped.keep" "$A/hooks/action-rules.yaml"
+unreadable_case "PyYAML rejects a file the built-in reader accepts" "PYTHONPATH=$SB/fakeyaml" 'must agree'
+# a PyYAML that raises SystemExit(0), on import or on parse, is an error, never an exit-0 allow
+unreadable_case "a yaml module that exits on import" "PYTHONPATH=$SB/exitimport" 'PyYAML'
+# the readers must agree when both succeed; the stand-in agrees on the real shipped file, so the guard works with it
+RY="PYTHONPATH=$SB/retyaml FAKEYAML_HOOK=$A/hooks/action-rules.py"
+r="$(chk "$RY")"; [ "$(verdict "${r%|*}")" = ask ] && grep -q 'deploy-or-publish' <<<"$r" && ok || no "a PyYAML that agrees with the built-in reader changed the answer" "$r"
+python3 - "$A/hooks" <<'PY' && ok || no "parse_rules: a wrong shape, a disagreement or a SystemExit from PyYAML was not an error (or an agreeing file was)"
+import importlib.util, sys, types
+spec = importlib.util.spec_from_file_location("ar", sys.argv[1] + "/action-rules.py")
+ar = importlib.util.module_from_spec(spec); spec.loader.exec_module(ar)
+def with_yaml(ret, text):
+    m = types.ModuleType("yaml")
+    def safe_load(t):
+        if isinstance(ret, BaseException): raise ret
+        return ret
+    m.safe_load = safe_load
+    sys.modules["yaml"] = m
+    try: return ar.parse_rules(text)
+    finally: del sys.modules["yaml"]
+def without_yaml(text):
+    sys.modules["yaml"] = None                  # `import yaml` raises ImportError
+    try: return ar.parse_rules(text)
+    finally: del sys.modules["yaml"]
+def fails(fn, *want):
+    try: fn()
+    except ValueError as e:
+        assert all(w in str(e) for w in want), (want, str(e))
+        return
+    raise AssertionError("no error: %r" % (want,))
+body = "rules:\n  - id: a\n    decision: ask\n    tool: Bash\n    why: %s\n"
+def rule(why): return {"rules": [{"id": "a", "decision": "ask", "tool": "Bash", "why": why}]}
+# a wrong shape that PyYAML reads without an error: every owner never would be off
+fails(lambda: with_yaml({}, body % "x"), "rules")
+fails(lambda: with_yaml({"rule": [{"id": "a"}]}, body % "x"), "rules", "rule")
+fails(lambda: with_yaml([{"id": "a", "decision": "never", "tool": "Bash"}], body % "x"), "rules")
+fails(lambda: with_yaml(None, body % "x"), "rules")
+fails(lambda: with_yaml({"rules": "nope"}, body % "x"), "list")
+fails(lambda: without_yaml("rule:\n  - id: a\n"), "line 1")
+fails(lambda: without_yaml("- id: a\n  decision: ask\n"), "line 1")
+assert without_yaml("# only a comment\n\n") == [] and with_yaml({}, "# only a comment\n") == []
+assert without_yaml("rules:\n") == [] and with_yaml({"rules": None}, "rules:\n") == []
+# the four seen cases where both succeed and differ
+fails(lambda: with_yaml(rule("x"), body % "'x' # c"), "must agree", "why")
+fails(lambda: with_yaml(rule(None), body % "~"), "must agree", "why")
+fails(lambda: with_yaml(rule(True), body % "yes"), "must agree", "why")
+fails(lambda: with_yaml(rule("A"), body % '"\\x41"'), "must agree", "why")
+assert with_yaml(rule("plain"), body % "plain")[0]["why"] == "plain"
+# a SystemExit or any other BaseException from the module is an error, never an exit; Ctrl-C still stops
+fails(lambda: with_yaml(SystemExit(0), body % "x"), "PyYAML")
+fails(lambda: with_yaml(GeneratorExit(), body % "x"), "PyYAML")
+try: with_yaml(KeyboardInterrupt(), body % "x"); raise AssertionError("swallowed Ctrl-C")
+except KeyboardInterrupt: pass
+PY
+# end to end: PyYAML succeeds with a wrong shape / different rules / exits, on YOUR file
+printf '# MARK-RETURN\nrules:\n  - id: my-never-x\n    decision: never\n    tool: Bash\n    command: "yyy"\n' > "$UFILE"
+unreadable_case "your file, PyYAML reads {} (no rules key)" "$RY FAKEYAML_RETURN={}" 'rules' user
+unreadable_case "your file, PyYAML reads rule: instead of rules:" "$RY FAKEYAML_RETURN={\"rule\":[{\"id\":\"a\"}]}" 'rules' user
+unreadable_case "your file, PyYAML reads a top-level list" "$RY FAKEYAML_RETURN=[{\"id\":\"a\"}]" 'rules' user
+unreadable_case "your file, PyYAML reads different rules" "$RY FAKEYAML_RETURN={\"rules\":[{\"id\":\"my-never-x\",\"decision\":\"never\",\"tool\":\"Bash\",\"command\":\"zzz\"}]}" 'must agree.*command|command.*must agree' user
+printf '# MARK-EXIT\nrules:\n  - id: my-never-x\n    decision: never\n    tool: Bash\n    command: "yyy"\n' > "$UFILE"
+unreadable_case "your file, PyYAML raises SystemExit(0) while parsing" "$RY" 'PyYAML' user
+# a missing, an empty and a garbled shipped file; a shipped file with one rule is fine; any rule that is not valid makes it unreadable
+rm -f "$UFILE"
+rm -f "$A/hooks/action-rules.yaml"
+unreadable_case "a missing shipped file" "" 'missing'
+: > "$A/hooks/action-rules.yaml"
+unreadable_case "an empty shipped file" "" 'no rules'
+printf 'rules:\n' > "$A/hooks/action-rules.yaml"
+unreadable_case "a shipped file with an empty rules list" "" 'no rules'
+printf 'rules:\n  this is not a rule\n' > "$A/hooks/action-rules.yaml"
+unreadable_case "a garbled shipped file" "" 'cannot read|must be a list'
+{ cat "$SB/shipped.keep"; printf '\n  - id: bad-one\n    tool: Bash\n    decision: maybe\n'; } > "$A/hooks/action-rules.yaml"
+unreadable_case "a shipped file with a decision that is not never, ask or allow" "" 'bad-one.*decision'
+{ cat "$SB/shipped.keep"; printf '\n  - id: bad-one\n    tool: Bash\n    decision: ask\n    colour: red\n'; } > "$A/hooks/action-rules.yaml"
+unreadable_case "a shipped file with an unknown field" "" 'unknown field.*colour'
+{ cat "$SB/shipped.keep"; printf '\n  - id: bad-one\n    decision: ask\n    command: "(unclosed"\n'; } > "$A/hooks/action-rules.yaml"
+unreadable_case "a shipped file with a bad regex" "" 'bad-one.*regex'
+printf 'rules:\n  - id: only-one\n    decision: never\n    tool: Bash\n    command: "x"\n' > "$A/hooks/action-rules.yaml"
+rm -f "$XDG_STATE_HOME"/talos/*/action-rules-unreadable.jsonl
+r="$(chk "")"; [ "$r" = "{}|0" ] && ok || no "a shipped file with one valid rule is readable (at least one rule, every rule valid)" "$r"
+[ -z "$(ULOG)" ] && ok || no "a readable shipped file wrote an unreadable line" "$(ULOG)"
+# a stdout that cannot be written still blocks: exit 2, like the timeout path
+rm -f "$A/hooks/action-rules.yaml"
+( cd "$A" && printf '%s' "$CALLJ" | CHRONOS_RUN=1 python3 hooks/action-rules.py check >&- 2>/dev/null ); [ $? = 2 ] && ok || no "an unreadable shipped file with a closed stdout did not exit 2"
+# list does not carry on with nothing
+out="$( cd "$A" && python3 hooks/action-rules.py list 2>&1 )"; [ $? -ne 0 ] && ok || no "list printed an empty table for an unreadable shipped file" "$out"
+cp "$SB/shipped.keep" "$A/hooks/action-rules.yaml"
+expect ask "the restored shipped file asks again on npm publish" "$(run Bash /srv/app 'npm publish')"
+# YOUR file unreadable: the same stop (a loud stop is safe; silently losing your never rules is the failure this prevents)
+printf 'rules:\n  this is not a rule\n' > "$UFILE"
+unreadable_case "a garbled file of yours" "" 'line 2' user
+printf 'rules:\n  - id: broken\n    decision: never\n    tool: Bash\n    command: "(unclosed"\n  - id: after-broken\n    decision: never\n    tool: Bash\n    command: "dangerous-thing"\n' > "$UFILE"
+unreadable_case "a bad regex in a rule of yours" "" 'broken.*regex' user
+printf 'rules:\n  - id: typo\n    decision: nevr\n    tool: Bash\n' > "$UFILE"
+unreadable_case "a rule of yours with a decision that is not never, ask or allow" "" 'typo.*decision' user
+out="$( cd "$A" && python3 hooks/action-rules.py list 2>&1 )"; [ $? -ne 0 ] && grep -q 'typo' <<<"$out" && ok || no "list did not refuse with an unreadable file of yours" "$out"
+printf 'rules:\n  - id: fine\n    decision: never\n    tool: Bash\n    command: "dangerous-thing"\n    cwd_note: "an unknown key is fine in your own file"\n' > "$UFILE"
+rm -f "$XDG_STATE_HOME"/talos/*/action-rules-unreadable.jsonl
+expect deny "a repaired file of yours works again" "$(run Bash /tmp 'dangerous-thing now')"
+[ -z "$(ULOG)" ] && ok || no "a readable file of yours wrote an unreadable line" "$(ULOG)"
+# the guard switched OFF (the kill switch file, or TALOS_ACTION_RULES_OFF=1; a machine that never registered the hook never runs `check`
+# at all) is not stopped by a file it never reads: today's answer, no log line, nothing sent to the owner
+printf 'rules:\n  this is not a rule\n' > "$UFILE"; rm -f "$XDG_STATE_HOME"/talos/*/action-rules-unreadable.jsonl
+SDOFF="$(cd "$A" && python3 -c 'import sys; sys.path.insert(0,"hooks"); import _talos_common as C; print(C.state_dir())')"; mkdir -p "$SDOFF"
+touch "$SDOFF/action-rules.off"
+off1="$(chk "")"; off2="$(chk "CHRONOS_RUN=1")"; rm -f "$A/hooks/action-rules.yaml"; off3="$(chk "")"; cp "$SB/shipped.keep" "$A/hooks/action-rules.yaml"
+rm -f "$SDOFF/action-rules.off"; off4="$(chk "TALOS_ACTION_RULES_OFF=1")"
+{ [ "$off1" = "{}|0" ] && [ "$off2" = "{}|0" ] && [ "$off3" = "{}|0" ] && [ "$off4" = "{}|0" ]; } && ok || no "guards off: an unreadable file changed the answer (want {}|0 each time)" "$off1 $off2 $off3 $off4"
+[ -z "$(ULOG)" ] && ok || no "guards off: an unreadable file was logged" "$(ULOG)"
+rm -f "$UFILE"
+rm -f "$XDG_STATE_HOME"/talos/*/action-rules-unreadable.jsonl
+# ONE notice to the owner's thread through the Talos app's hub (the way the hook already reaches it), the first time a bad file makes
+# the hook ask or deny; once per file and content, no command text, not at all with no app
+echo "action-rules: one notice to the owner per unreadable file and content"
+rm -f "$XDG_STATE_HOME"/talos/*/action-rules-notified.json
+hub 1
+APPENV="TALOS_APP_HOME=$TH"
+nn(){ grep -c '"rule_notice"' "$TH/got.jsonl" 2>/dev/null || true; }
+printf 'rules:\n  this is not a rule\n' > "$UFILE"
+chk "$APPENV" >/dev/null
+[ "$(nn)" = 1 ] && ok || no "the first bad call did not send exactly one notice" "$(cat "$TH/got.jsonl")"
+python3 - "$TH/got.jsonl" <<'PY' && ok || no "the notice has the wrong shape (file, line, content hash, unattended; no command text)"
+import json, re, sys
+m = [json.loads(l) for l in open(sys.argv[1]) if '"rule_notice"' in l][-1]
+assert m["file"] == "user" and m["line"] == 2 and re.fullmatch(r"[0-9a-f]{64}", m["hash"]) and m["unattended"] is False, m
+assert set(m) <= {"t", "id", "pid", "file", "line", "hash", "unattended"} and "npm publish" not in json.dumps(m), m
+PY
+chk "$APPENV" >/dev/null; chk "CHRONOS_RUN=1 $APPENV" >/dev/null
+[ "$(nn)" = 1 ] && ok || no "the same file, asked again (live and unattended), sent another notice" "$(nn)"
+printf 'rules:\n  still not a rule\n' > "$UFILE"
+chk "$APPENV" >/dev/null
+[ "$(nn)" = 2 ] && ok || no "a changed file did not send a new notice" "$(nn)"
+chk "CHRONOS_RUN=1 $APPENV" >/dev/null
+[ "$(nn)" = 2 ] && ok || no "an unattended call after the change sent a second notice for the same content" "$(nn)"
+rm -f "$UFILE"; rm -f "$A/hooks/action-rules.yaml"
+chk "$APPENV" >/dev/null
+tail -1 "$TH/got.jsonl" | grep -q '"file": "shipped"' && [ "$(nn)" = 3 ] && ok || no "a missing shipped file did not send its own notice" "$(tail -1 "$TH/got.jsonl")"
+cp "$SB/shipped.keep" "$A/hooks/action-rules.yaml"
+# a bridge that is slow to take the notice does not bring the timeout's own verdict after the real one (one verdict on stdout)
+echo stall > "$TH/mode"
+printf 'rules:\n  a slow bridge file\n' > "$UFILE"
+out="$(printf '%s' "$CALLJ" | ( cd "$A" && env $APPENV TALOS_GUARD_TIMEOUT_S=1 python3 "$SB/acct.py" "$HOME" check 2>/dev/null ))"
+[ "$(printf '%s\n' "$out" | grep -c permissionDecision)" = 1 ] && grep -q 'cannot read its rules' <<<"$out" && ok || no "a slow bridge made the hook print a second verdict (the timeout's)" "$out"
+echo allow > "$TH/mode"
+# a stalled state folder (the notice's state file is a pipe nobody writes: opening it never returns) ends the hook inside its short
+# notice budget with exit 0 and exactly one verdict: never a hang past Claude Code's own hook timeout, never a second answer
+printf 'rules:\n  a stalled state file\n' > "$UFILE"
+rm -f "$SDOFF/action-rules-notified.json"; mkfifo "$SDOFF/action-rules-notified.json"
+t0=$SECONDS
+out="$( cd "$A" && printf '%s' "$CALLJ" | perl -e '$t=shift; $p=fork; if(!$p){setpgrp(0,0); exec @ARGV} $SIG{ALRM}=sub{kill "TERM",-$p; sleep 5; kill "KILL",-$p; exit 142}; alarm $t; waitpid($p,0); exit($? & 127 ? 128+($? & 127) : $? >> 8)' 20 env $APPENV TALOS_GUARD_TIMEOUT_S=2 python3 "$SB/acct.py" "$HOME" check 2>/dev/null )"; rc=$?
+took=$((SECONDS - t0))
+{ [ "$rc" = 0 ] && [ "$took" -le 5 ] && [ "$(printf '%s\n' "$out" | grep -c permissionDecision)" = 1 ] && grep -q 'cannot read its rules' <<<"$out"; } && ok || no "a stalled state folder: want exit 0 within the budget and one verdict (rc=$rc, ${took}s)" "$out"
+rm -f "$SDOFF/action-rules-notified.json"
+# the same when the LOG write hangs (the log file is a pipe nobody reads: opening it never returns): after the verdict the main timeout
+# must not write a second one, for an unreadable file and for the timeout's own log: exit 0 within the budget, exactly one verdict
+lim(){ perl -e '$t=shift; $p=fork; if(!$p){setpgrp(0,0); exec @ARGV} $SIG{ALRM}=sub{kill "TERM",-$p; sleep 5; kill "KILL",-$p; exit 142}; alarm $t; waitpid($p,0); exit($? & 127 ? 128+($? & 127) : $? >> 8)' 20 "$@"; }
+printf 'rules:\n  a hanging log\n' > "$UFILE"
+rm -f "$SDOFF/action-rules-unreadable.jsonl"; mkfifo "$SDOFF/action-rules-unreadable.jsonl"
+out="$( cd "$A" && printf '%s' "$CALLJ" | lim env TALOS_GUARD_TIMEOUT_S=2 python3 "$SB/acct.py" "$HOME" check 2>/dev/null )"; rc=$?
+{ [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c permissionDecision)" = 1 ] && grep -q 'cannot read its rules' <<<"$out"; } && ok || no "a hanging unreadable-log write: want exit 0 and one verdict (rc=$rc)" "$out"
+rm -f "$SDOFF/action-rules-unreadable.jsonl" "$UFILE"
+rm -f "$SDOFF/guard-timeouts.jsonl"; mkfifo "$SDOFF/guard-timeouts.jsonl"
+out="$( cd "$A" && sleep 4 | lim env TALOS_GUARD_TIMEOUT_S=1 python3 "$SB/acct.py" "$HOME" check 2>/dev/null )"; rc=$?
+{ [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c permissionDecision)" = 1 ] && grep -q 'timed out checking' <<<"$out"; } && ok || no "a hanging timeout-log write: want exit 0 and one verdict (rc=$rc)" "$out"
+rm -f "$SDOFF/guard-timeouts.jsonl"
+# the bridge not reachable: the answer is the same and the notice is kept for later (not marked as sent)
+unhub
+printf 'rules:\n  a third bad file\n' > "$UFILE"
+out="$(chk "$APPENV")"; [ "$(verdict "${out%|*}")" = ask ] && ok || no "with no bridge the unreadable file did not ask" "$out"
+python3 - "$XDG_STATE_HOME" <<'PY' && ok || no "an unsent notice was marked as sent"
+import glob, json, sys
+d = json.load(open(glob.glob(sys.argv[1] + "/talos/*/action-rules-notified.json")[0]))
+assert d["user"]["sent"] is False, d
+PY
+# no app on the machine: nothing to tell, and the prompt itself reaches the owner
+rm -f "$XDG_STATE_HOME"/talos/*/action-rules-notified.json
+chk "" >/dev/null; ls "$XDG_STATE_HOME"/talos/*/action-rules-notified.json >/dev/null 2>&1 && no "a notice state was written with no Talos app" || ok
+rm -f "$UFILE"
+rm -f "$XDG_STATE_HOME"/talos/*/action-rules-unreadable.jsonl "$XDG_STATE_HOME"/talos/*/action-rules-notified.json
 # one pass in file order: an earlier ask beats a later allow (a starter allow, or one of your own); your allow before a never carves out
 printf 'rules:\n  - id: my-ask-reply\n    decision: ask\n    tool: "mcp__talos-app__reply"\n' > "$XDG_CONFIG_HOME/talos/action-rules.yaml"
 expect ask   "a user ask on the app's own reply still asks (the starter allow comes later)" "$(run mcp__talos-app__reply /tmp x)"

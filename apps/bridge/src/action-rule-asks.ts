@@ -15,6 +15,9 @@
 // Nothing a session sends can approve: an approval is made only in onResolved(), after inbound checked the owner's signature and
 // the ledger, or by an always-allow the owner set. A restart forgets every approval (fail closed: the action asks again).
 import { createHash } from 'node:crypto'
+import { readFileSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import {
   bindingFrom,
   Card,
@@ -31,7 +34,10 @@ import {
 import { addFromOwnerTap, allowWithoutCard, alwaysAllowedNow } from './always-allow.ts'
 import type { LedgerRow } from './cards-ledger.ts'
 import { type BridgeContext, defaultThreadRef } from './context.ts'
+import { liveRuleProblemsAsync } from './doctor-guards.ts'
 import { cardCreateFrame, cardUpdateFrame } from './frames-out.ts'
+import { agentDirFromEnv } from './last-good.ts'
+import { gazetteerPath } from './memory/reflex.ts'
 import { foldWhitespace } from './permission/hook-render.ts'
 import { assertFrameFits } from './transport.ts'
 
@@ -50,6 +56,96 @@ export const RULE_TEXT = {
   allowed: 'Allowed once. Your agent can run it now.',
   used: 'Allowed once. The bridge restarted before it was used, so your agent has to ask again.',
 } as const
+
+/**
+ * Where the kit's kill switch for the action rules is for the agent folder this bridge serves (TALOS_AGENT_DIR): the file
+ * `action-rules.off` in the kit's hook state folder (kit/hooks/_talos_common.py state_dir(), which names it from the REAL path).
+ * Worked out here, never taken from the hook. Undefined when the bridge does not know the agent folder.
+ */
+export function ruleKillSwitchPath(env: Record<string, string | undefined> = process.env): string | undefined {
+  const dir = agentDirFromEnv(env)
+  if (!dir) return undefined
+  let real = dir
+  try {
+    real = realpathSync(dir)
+  } catch {
+    // a folder that is gone: the kit names its state folder from the path it was started in
+  }
+  return join(dirname(gazetteerPath(real, env)), 'action-rules.off')
+}
+
+type RuleFileLook = { state: 'unknown' } | { state: 'fine' | 'broken'; hash: string; line?: number }
+/** What was found for a file's content, kept for 30 s (broken or fine), and the look still under way, so repeated asks run python once. */
+const RULE_LOOK_MS = 30_000
+const lookCache = new Map<string, { at: number; look: Promise<RuleFileLook> }>()
+
+/**
+ * What this bridge finds out for itself about one of the two rule files of the kit's action rules (never from the hook, whose
+ * word is only a request to look): the file's own content hash, and whether `action-rules.py test` (the run doctor uses) finds it
+ * broken, with the line to fix. Only the agent folder's starter file and the owner's own file are ever read. `unknown` when the
+ * bridge does not know the agent folder. The run is async (the bridge is never held still by it) and its answer is kept 30 s per
+ * file and content, however often asked, so a flood of requests runs python once. `opts` is for tests.
+ */
+export async function inspectRuleFile(
+  file: 'shipped' | 'user',
+  env: Record<string, string | undefined> = process.env,
+  opts: {
+    run?: (agentDir: string, env: Record<string, string | undefined>) => Promise<string[]>
+    now?: () => number
+  } = {},
+): Promise<RuleFileLook> {
+  const agentDir = agentDirFromEnv(env)
+  if (!agentDir) return { state: 'unknown' }
+  const path =
+    file === 'shipped'
+      ? join(agentDir, 'hooks', 'action-rules.yaml')
+      : join(env.XDG_CONFIG_HOME || join(env.HOME || homedir(), '.config'), 'talos', 'action-rules.yaml')
+  let bytes: Buffer
+  try {
+    bytes = readFileSync(path).subarray(0, 200_001)
+  } catch {
+    bytes = Buffer.from('missing')
+  }
+  const hash = createHash('sha256').update(bytes).digest('hex')
+  const now = (opts.now ?? Date.now)()
+  const key = `${agentDir}\0${file}\0${hash}`
+  const kept = lookCache.get(key)
+  if (kept && now - kept.at < RULE_LOOK_MS) return kept.look
+  if (lookCache.size >= 100) lookCache.clear()
+  const label = file === 'shipped' ? 'starter rules' : 'your rules'
+  const look = (opts.run ?? liveRuleProblemsAsync)(agentDir, env).then((problems): RuleFileLook => {
+    const found = problems.find((l) => l.startsWith(label))
+    if (!found) return { state: 'fine', hash }
+    const lines = [...found.matchAll(/line (\d+)/g)]
+    const line = lines.length > 0 ? Number(lines[lines.length - 1]?.[1]) : undefined
+    return { state: 'broken', hash, ...(line ? { line } : {}) }
+  })
+  lookCache.set(key, { at: now, look })
+  return look
+}
+
+/**
+ * The one line the owner gets when a rule file of the kit's action rules cannot be read (kit/hooks/action-rules.py `rule_notice`).
+ * Written here from structured fields only, never from text the hook sends: the hook is a session's, and what it sends may be
+ * forged. `line` is where the file needs fixing, when the hook knows it. `offPath` is the kill switch to create to turn the rules
+ * off, so the owner is never stuck (without it, the environment switch the kit also honours).
+ */
+export function ruleFileNotice(n: {
+  file: 'shipped' | 'user'
+  line?: number
+  unattended?: boolean
+  offPath?: string
+}): string {
+  const doing = n.unattended
+    ? 'refusing every action it checks (a run with nobody to answer)'
+    : 'asking before every action it checks'
+  const off = n.offPath
+    ? `create ${n.offPath} to turn these rules off`
+    : 'set TALOS_ACTION_RULES_OFF=1 to turn these rules off'
+  if (n.file === 'shipped')
+    return `The starter rules file that came with Talos (hooks/action-rules.yaml) cannot be read; Talos is ${doing} until you reinstall or upgrade the kit, or ${off}.`
+  return `Your rules file (~/.config/talos/action-rules.yaml) has an error${n.line ? ` on line ${n.line}` : ''}; Talos is ${doing} until it is fixed, or ${off}.`
+}
 
 /** Who asks: `thread` for a thread session the hub proved, absent for the main session. */
 export type RuleCall = {
@@ -78,6 +174,12 @@ export const SHIPPED_ASK_RULES: readonly {
     tool: 'Bash',
     command:
       '(?:^|[;&|(\\n`])\\s*(?:sudo\\s+|env\\s+[^\\s=]+=\\S*\\s+|time\\s+|exec\\s+|command\\s+|[A-Za-z_][A-Za-z0-9_]*=[^\\s;&|(]*\\s+)*gh\\s+(?:repo\\s+(?:edit\\b[^\\n;&|]{0,2000}--visibility[\\s=]+public|create\\b[^\\n;&|]{0,2000}--public|delete)|api\\b(?:[^\\n;&|]{0,2000}(?:private=[\'"]?false|visibility=[\'"]?public)|(?=[^\\n;&|]{0,2000}(?:-X|--method)[\\s=]*[\'"]?[Dd][Ee][Ll][Ee][Tt][Ee]\\b)(?=[^\\n;&|]{0,2000}repos/)))',
+  },
+  {
+    id: 'github-long-command',
+    kind: null,
+    tool: 'Bash',
+    command: '\\bgh\\s+(?:repo|api)\\b[^\\n;&|]{2000}',
   },
   {
     id: 'github-account',

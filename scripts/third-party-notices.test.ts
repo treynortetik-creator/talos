@@ -1,6 +1,7 @@
 // Every production dependency of the shipped apps (apps/web, and the Capacitor packages in apps/mobile) must be named in
 // THIRD_PARTY_NOTICES.md. Reads two files, builds nothing. The full list of what the web bundle really contains comes
 // from a build: `node scripts/third-party-web.ts --check` (see that script).
+// gate-reads: THIRD_PARTY_NOTICES.md apps/web/package.json apps/mobile/package.json
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

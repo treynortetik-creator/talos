@@ -30,7 +30,7 @@ cd "$(git rev-parse --show-toplevel)" || exit 2
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 
 [ "${1:-}" = --push ] && { shift; exec bash scripts/gate-push.sh "$@"; }
-FULL=0 PLAN=0 CHECKS_ONLY=0 BASE="" IN_LOCK=0 OLD=0 FAST=0 READERS=0 READ_FILES=()
+FULL=0 PLAN=0 CHECKS_ONLY=0 BASE="" IN_LOCK=0 OLD=0 COREPACK=0 FAST=0 READERS=0 READ_FILES=()
 ARGS=("$@") # as given: the suites run again under the heavy lock with the same options (see the suites, below)
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -87,6 +87,13 @@ if [ -f scripts/gate-excuse.sh ]; then
   . scripts/gate-excuse.sh
 else
   tstep() { step "$@"; }
+  rstep() { step "$@"; }
+fi
+# A test step that fails only on known flaky tests (scripts/known-flakes.txt: owner, expiry) reruns each alone; every one passing
+# alone passes the step (flake_rerun, scripts/gate-flakes.sh, reached through tstep and rstep). Without the file, a plain step.
+if [ -f scripts/gate-flakes.sh ]; then
+  # shellcheck source=scripts/gate-flakes.sh
+  . scripts/gate-flakes.sh
 fi
 trap 'say "stopped"; exit 130' INT TERM
 
@@ -168,13 +175,18 @@ LISTS_FILES='readdirSync|globSync|readdir\(|ls-files|ls-tree|write-tree'
 LISTERS=""
 # The tests that read a words or asset file (a doc, a markdown page, an image, a config the gate has no suite for): the ones
 # that name it, by its path or by its file name in quotes, in the Vitest projects and the bridge. The gate plans them, so a
-# docs-only change that breaks a test pinning that doc is caught at the push. A file no test names plans nothing.
+# docs-only change that breaks a test pinning that doc is caught at the push. A file no test names plans nothing. A changed test
+# file, and install.sh, are read by name too (a doc test cites the titles of the tests it opens; bc69061a), though they are code.
 READERS_POOL=""
 # The guards over test files (the ci-requires guard walks apps/bridge/test; the spec lint reads every *.spec.ts): they import
 # none of the files they read, so no list of importers finds them. Each says what it reads on a line of its own,
 # `// gate-reads: <pattern>...` (case patterns: * and ? match / too, no [ ]), and a changed or deleted file that matches one
 # runs that guard. Found by grep, like the folder readers: a new guard needs only its own line (a bridge test began to run
-# tmux without its header, and main went red, 2026-11-14).
+# tmux without its header, and main went red, 2026-11-14). The same line is how a test that reads a source, a doc or a whole
+# folder gets planned for it: a test is not planned for a source file because it names it (memory/cli.ts is named by 66 tests),
+# so any test that opens a file it does not import says so (real-file.test.ts walks apps/bridge/src, 90eda966). The core
+# installer tests read install.sh, kit/ and scripts/ this way: any change there runs them (root-install, install-bughunt,
+# uninstall-bughunt, kit-update; the other root-install* files are macOS-only or heavy, and CI's).
 GUARDS=""
 # The web app's browser specs (apps/web/test/**/*.spec.ts, Playwright; CI's browser job runs all of them on three browsers):
 # a change under apps/web/src/features/<x>/ runs apps/web/test/<x>/*.spec.ts, a changed spec runs itself, and a change to
@@ -211,6 +223,7 @@ ASK_FAST="$FAST"
 if [ "$FULL" = 1 ]; then VIT_ALL=1 BUN_ALL=1 E2E_ALL=1 OLD=1 WEB_ALL=1; else
   plan_suites || refuse "planning the suites failed (exit $?): nothing runs on a plan that did not finish"
   [ "$FAST" = 0 ] || fast_plan
+  plan_corepack
   plan_check
 fi
 if [ "$ASK_FAST" = 1 ]; then
@@ -221,7 +234,7 @@ if [ "$ASK_FAST" = 1 ]; then
     [ "$PLAN" = 0 ] && declare -F fast_fallback_log >/dev/null && fast_fallback_log # one line for the evidence (gate-fast.sh)
   fi
 fi
-if [ "$CHECKS_ONLY" = 1 ]; then VIT=() BUN=() E2E=() VPROJ=() WEB=() WEBKIT=() VIT_ALL=0 BUN_ALL=0 E2E_ALL=0 OLD=0 WEB_ALL=0; fi
+if [ "$CHECKS_ONLY" = 1 ]; then VIT=() BUN=() E2E=() VPROJ=() WEB=() WEBKIT=() VIT_ALL=0 BUN_ALL=0 E2E_ALL=0 OLD=0 WEB_ALL=0 COREPACK=0; fi
 [ -d e2e ] || E2E_ALL=0 # a checkout with no e2e package has no e2e to run (the hook's tests run in such a clone)
 [ -d e2e ] && [ -f scripts/old-client.sh ] || OLD=0 # nor the old-client step, nor one without its script
 [ -f apps/web/playwright.config.ts ] || { WEB_ALL=0; WEB=(); WEBKIT=(); } # nor web browser specs without the web app's Playwright config
@@ -248,6 +261,7 @@ if [ "$PLAN" = 1 ]; then
   printf '%s\n' typecheck lint personal size
   if [ "$VIT_ALL" = 1 ]; then echo vitest-all; elif [ "${#VIT[@]}" -gt 0 ]; then echo vitest; printf '\t%s\n' "${VIT[@]}"; fi
   if [ "$VIT_ALL" = 0 ] && [ "${#VPROJ[@]}" -gt 0 ]; then echo vitest-project; printf '\t%s\n' "${VPROJ[@]}"; fi
+  [ "$COREPACK" = 0 ] || echo corepack-install
   if [ "$BUN_ALL" = 1 ]; then echo bun-all; elif [ "${#BUN[@]}" -gt 0 ]; then echo bun; printf '\t%s\n' "${BUN[@]}"; fi
   if [ "$E2E_ALL" = 1 ]; then echo e2e-all; elif [ "${#E2E[@]}" -gt 0 ]; then echo e2e; printf '\t%s\n' "${E2E[@]}"; fi
   [ "$OLD" = 0 ] || echo old-client
@@ -331,7 +345,7 @@ if [ "$E2E_ALL" = 1 ] || [ "${#E2E[@]}" -gt 0 ] || [ "$OLD" = 1 ]; then
 fi
 
 # web_specs_run <limit s> <project...> -- <spec...>: playwright test in apps/web for those projects and specs, in a process group
-# of its own: at the limit TERM to the whole group (named in the message), and a stop stops it all
+# of its own: at the limit INT, TERM, KILL to the whole group (the limit named in the message), and a stop stops it all
 web_specs_run() {
   local lim="$1" proj=()
   shift
@@ -340,22 +354,16 @@ web_specs_run() {
     shift
   done
   [ "${1:-}" = -- ] && shift
-  bash -c 'cd apps/web && exec perl -MPOSIX=WNOHANG,EINTR -e '"'"'
-    my $lim = shift; my $pid = fork() // die "fork: $!\n";
-    if (!$pid) { setpgrp(0, 0); exec @ARGV or die "exec: $!\n" }
-    setpgrp($pid, $pid);
-    my ($timed, $reaped, $st) = (0, 0, 0);
-    my $stop = sub { kill "TERM", -$pid;
-      for (1 .. 50) { if (!$reaped && waitpid($pid, WNOHANG) == $pid) { $reaped = 1; $st = $? } last unless kill 0, -$pid; select(undef, undef, undef, 0.1) }
-      kill "KILL", -$pid };
-    $SIG{ALRM} = sub { $timed = 1; $stop->() };
-    $SIG{$_} = sub { $stop->(); exit 143 } for qw(TERM INT HUP);
-    alarm $lim;
-    until ($reaped) { my $r = waitpid($pid, 0); if ($r == $pid) { $reaped = 1; $st = $? } elsif ($r == -1 && $! != EINTR) { last } }
-    alarm 0; kill "KILL", -$pid if kill 0, -$pid;
-    if ($timed) { print STDERR "gate: the web browser specs were stopped after $lim s ($ENV{WEB_LIMIT_NAME})\n"; exit 142 }
-    exit($st & 127 ? 128 + ($st & 127) : $st >> 8);
-  '"'"' "$0" pnpm exec playwright test "$@"' "$lim" "${proj[@]}" --forbid-only --workers=2 "$@"
+  # Inside a heavy slot (scripts/heavy-lock.sh) the preview port is the slot's own (PW_PORT): taken, it is said here, naming who has
+  # it, not as a web spec that cannot reach its server
+  if [ -n "${TALOS_HEAVY_SLOT:-}" ] && command -v lsof >/dev/null 2>&1; then
+    local pp="${PW_PORT:-4173}" holder
+    holder="$(lsof -nP -iTCP:"$pp" -sTCP:LISTEN -Fpc 2>/dev/null | tr '\n' ' ')"
+    [ -z "$holder" ] || refuse "the web specs' preview port $pp (heavy slot $TALOS_HEAVY_SLOT's) is in use ($holder: pid, command): a server left by a stopped run, or a run by hand; stop it, or the specs cannot start"
+  fi
+  # scripts/gate/group-run.pl: the specs in a group of their own, stopped with INT, then TERM, then KILL (Playwright's web server goes
+  # down on INT only), at the limit or when the gate is stopped
+  bash -c 'cd apps/web && exec perl "$0" "$@"' "$PWD/scripts/gate/group-run.pl" "$lim" pnpm exec playwright test "${proj[@]}" --forbid-only --workers=2 "$@"
 }
 step() { # step <name> <command...>: runs it, refuses on failure
   local name="$1" t
@@ -409,11 +417,19 @@ if [ "$VIT_ALL" = 1 ]; then
   tstep "tests (every Vitest project)" pnpm exec vitest run
 elif [ "${#VIT[@]}" -gt 0 ]; then
   # never excused: vitest related picks a test because it imports a changed file (through any module), so it is this change's
-  step "tests (vitest related)" pnpm exec vitest related --run "${VIT[@]}"
+  # (a known flaky test that fails here is rerun alone, as in any test step)
+  rstep "tests (vitest related)" pnpm exec vitest related --run "${VIT[@]}"
 fi
 if [ "$VIT_ALL" = 0 ] && [ "${#VPROJ[@]}" -gt 0 ]; then
   # shellcheck disable=SC2046
   tstep "tests (whole Vitest project, for a deleted file: ${VPROJ[*]})" pnpm exec vitest run $(printf -- '--project %s ' "${VPROJ[@]}")
+fi
+# the installer's core tests once more with a corepack pnpm first on PATH (scripts/corepack-install-tests.sh), as a Mac set up
+# by SETUP.md has it: a harness fault that only a corepack pnpm shows reached main (KIT-8, 05676ca3)
+# (a Mac's step, as in CI: elsewhere it is said to be skipped, so a Linux gate does not need corepack)
+if [ "$COREPACK" = 1 ]; then
+  if [ "$(uname -s)" = Darwin ]; then tstep "tests (the installer tests, a corepack pnpm first on PATH)" bash scripts/corepack-install-tests.sh
+  else say "the installer tests with a corepack pnpm first on PATH: skipped, they run on a Mac only"; fi
 fi
 if [ "$BUN_ALL" = 1 ]; then
   tstep "tests (the whole bridge suite)" bash -c 'cd apps/bridge && exec bun run scripts/test-parallel.ts'
@@ -428,7 +444,8 @@ elif [ "$FAST" = 1 ] && [ "${#BUN[@]}" -gt 0 ]; then
     bash -c 'cd apps/bridge && exec bun run scripts/test-parallel.ts --jobs "$0" --files "$1"' "$FAST_JOBS" "$FAST_LIST"
 elif [ "${#BUN[@]}" -gt 0 ]; then
   # the paths are relative to the repository; bun runs in apps/bridge
-  tstep "tests (bridge files)" bash -c 'cd apps/bridge && exec bun test --timeout=$((5000 * TALOS_TEST_TIME_FACTOR)) "${@#apps/bridge/}"' bun-tests "${BUN[@]}"
+  # a known flake rerun alone gets this step's own per-test limit (flake_alone: test-parallel's 20 s x factor in the other steps)
+  FLAKE_BUN_TIMEOUT_MS=$((5000 * TALOS_TEST_TIME_FACTOR)) tstep "tests (bridge files)" bash -c 'cd apps/bridge && exec bun test --timeout=$((5000 * TALOS_TEST_TIME_FACTOR)) "${@#apps/bridge/}"' bun-tests "${BUN[@]}"
 fi
 # e2e: one worker (its relay runs inside the worker), Chromium (the config's one project)
 if [ "$E2E_ALL" = 1 ]; then

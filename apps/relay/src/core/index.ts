@@ -56,6 +56,7 @@ import type { AppEnv, RelayServices } from '../services.ts'
 import { VERSION } from '../version.ts'
 import { aasaDocument } from './aasa.ts'
 import { bodyTimeout, idleBodyTimeout, lateRequest, limitBody, readBodyWithDeadline } from './body-guard.ts'
+import { registerBugReports } from './bug-reports.ts'
 import { DEFAULT_AGENT_CONFIG } from './default-config.ts'
 import { type Conn, FrameRejected } from './hub.ts'
 import { cleanName, dispositionHeader, parseRange } from './media.ts'
@@ -83,6 +84,7 @@ export function register(services: RelayServices): void {
   // Services made by createRelayServices carry a runtime; the unit-test fakes do not, and need no timers.
   findRuntime(services)?.start()
   registerProblems(services)
+  registerBugReports(services) // the Mac's `consumed` for a report marks it filed
   registerShare(services) // docs/V2-FEATURES.md V4: share/1 is a relay feature (works with the Mac offline)
 }
 

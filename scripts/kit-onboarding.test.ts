@@ -1,6 +1,8 @@
 // The setup interview is an optional, latched offer: the session-start hook prints it from .agent-state/onboarding.json.
 // The shell test kit/scripts/test-onboarding.sh covers the flow (resume, decline, replay). This file covers what the hook
 // does with a hostile or missing file, the weekly re-offer, and what the hook costs. Fictional data only.
+// gate-reads: kit/hooks/session-start.py kit/hooks/_talos_session.py kit/CLAUDE.md kit/.claude/skills/talos-interview/SKILL.md kit/SETUP-INTERVIEW.md
+// gate-reads: packages/protocol/src/settings-table.ts
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
