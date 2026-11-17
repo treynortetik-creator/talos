@@ -137,7 +137,15 @@ export class HistoryStore {
       this.db.exec("ALTER TABLE cards ADD COLUMN actor TEXT NOT NULL DEFAULT 'agent'")
   }
 
+  private isClosed = false
+
+  /** True once `close()` ran: a late write from work that outlived a stop is skipped, not thrown (inbound.ts). */
+  get closed(): boolean {
+    return this.isClosed
+  }
+
   close() {
+    this.isClosed = true
     this.db.close()
   }
 
@@ -186,6 +194,11 @@ export class HistoryStore {
 
   markSeen(id: string, at: number, outcome = 'ok') {
     this.db.query('INSERT OR IGNORE INTO seen_ids (id, at, outcome) VALUES (?, ?, ?)').run(id, at, outcome)
+  }
+
+  /** Takes an id back out of the seen ids: for a hand-over that was refused before anything was delivered (stopping.ts). */
+  unmarkSeen(id: string) {
+    this.db.query('DELETE FROM seen_ids WHERE id = ?').run(id)
   }
 
   pruneSeen(now: number) {

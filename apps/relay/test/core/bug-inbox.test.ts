@@ -333,6 +333,26 @@ describe('a good delivery', () => {
   })
 })
 
+describe('the app and the screens visited', () => {
+  const one = async (report: Report, env: Record<string, string> = {}) => {
+    const { r, bridge } = await world(env)
+    expect((await deliver(r, delivery(report))).status).toBe(202)
+    await bridge.waitNotified('problem.item')
+    return items(bridge)[0]?.problem as ProblemT
+  }
+  it('the problem names the app and the routes', async () => {
+    const p = await one({ client: 'mac_app', routes: ['thread', 'memory'] })
+    expect(p).toMatchObject({ source: 'install', device: 'mac_app', routes: ['thread', 'memory'] })
+  })
+  it('an older sender: a browser, and its one screen', async () => {
+    expect(await one({})).toMatchObject({ device: 'browser', routes: ['thread'] })
+  })
+  it('flag:BUG_INBOX_NO_THREAD leaves the routes out', async () => {
+    const p = await one({ client: 'iphone_app', routes: ['thread', 'memory'] }, { BUG_INBOX_NO_THREAD: '1' })
+    expect(p).toMatchObject({ device: 'iphone_app', routes: [] })
+  })
+})
+
 describe('the switches (all off: everything she sent goes)', () => {
   const sent = async (env: Record<string, string>) => {
     const { r, bridge } = await world(env)

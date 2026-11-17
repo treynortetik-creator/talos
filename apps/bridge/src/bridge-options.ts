@@ -53,6 +53,12 @@ export type BridgeOptions = {
     agentDir?: string | undefined
     snapshot?: import('./undo/service.ts').UndoDeps['snapshot']
   }
+  /**
+   * Test seam: awaited inside stop(), after the work that was already under way settled and before the relay socket is closed
+   * (a hub that is slow to close, a disk that does not answer). A test holds it open to keep a bridge "stopping" for as long as
+   * it likes. Production passes nothing.
+   */
+  stopDelay?: () => Promise<void>
   /** Called once per process, the first time the relay says `ready`: this start is healthy (server.ts records the version for `talos-app rollback`). */
   onHealthyStart?: () => void
 }

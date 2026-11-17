@@ -2453,7 +2453,7 @@ describe('artifact uploads: small, kept a day, never a red job', () => {
         expect(s['continue-on-error'], `${f} ${job}`).toBe(true)
         expect((s.with as Record<string, unknown>)['retention-days'], `${f} ${job}`).toBe(1)
       }
-    expect(n).toBeGreaterThanOrEqual(hasRunnerYml ? 12 : 1)
+    expect(n).toBeGreaterThanOrEqual(hasRunnerYml ? 11 : 0) // web-bundle.yml no longer uploads an artifact
   })
 
   itRunnerYml('ci-runner.yml: full logs only when the logs step says full; the per-test results on every run', () => {
@@ -2477,18 +2477,38 @@ describe('artifact uploads: small, kept a day, never a red job', () => {
     expect(readFileSync(join(here, 'ci-runner/check-shadow.sh'), 'utf8')).toContain('-n "ci-tests-check-titan-$n"')
   })
 
-  it('web-bundle.yml: only build uploads, for a successful production deploy; publish deletes the artifact once released', () => {
+  it('web-bundle.yml: only build saves the cache, for a successful production deploy; publish restores it and deletes the entry once released', () => {
     const jobs = wf(join(root, '.github/workflows/web-bundle.yml'))
-    expect(uploads(jobs).map((u) => u.job)).toEqual(['build'])
+    const key = 'web-bundle-${{ github.event.deployment.sha }}-${{ github.run_id }}' // no run_attempt: a re-run of publish must still match
+    const usesOf = (job: string, prefix: string) =>
+      (jobs[job]?.steps ?? []).filter((s) => String(s.uses).startsWith(prefix))
+    const withOf = (s: Record<string, unknown> | undefined) => (s?.with ?? {}) as Record<string, unknown>
+    expect(uploads(jobs)).toEqual([]) // the artifact storage quota is account-wide and was full: no workflow artifact
+    expect(JSON.stringify(jobs)).not.toMatch(/upload-artifact|download-artifact|gh run download/)
     expect(jobs.build?.if).toBe(
       "github.event.deployment_status.state == 'success' && github.event.deployment.environment == 'talos-app / production'",
     )
+    const save = usesOf('build', 'actions/cache/save@')
+    expect(save.length).toBe(1)
+    expect(String(save[0]?.uses)).toMatch(/^actions\/cache\/save@[0-9a-f]{40}$/)
+    expect(save[0]?.['continue-on-error']).toBe(true)
+    expect(withOf(save[0]).key).toBe(key)
+    expect(usesOf('publish', 'actions/cache/save@')).toEqual([])
     const pub = jobs.publish as { steps: Record<string, unknown>[]; permissions?: Record<string, string> }
+    const restore = usesOf('publish', 'actions/cache/restore@')
+    expect(restore.length).toBe(1)
+    expect(String(restore[0]?.uses)).toMatch(/^actions\/cache\/restore@[0-9a-f]{40}$/)
+    expect(withOf(restore[0]).key).toBe(key)
+    expect(withOf(restore[0])['fail-on-cache-miss']).toBe(true)
     expect(pub.permissions?.actions).toBe('write')
     expect(JSON.stringify(pub.steps)).not.toMatch(/checkout|pnpm|bun /) // no repository code where the write token is
-    const del = pub.steps.findIndex((s) => String(s.run).includes('-X DELETE "repos/$GH_REPO/actions/artifacts/$id"'))
+    const del = pub.steps.findIndex((s) =>
+      String(s.run).includes('-X DELETE "repos/$GH_REPO/actions/caches?key=web-bundle-${SHA}-${RUN_ID}"'),
+    )
     const rel = pub.steps.findIndex((s) => String(s.run).includes('gh release create'))
+    expect(pub.steps.indexOf(restore[0] as never)).toBeLessThan(rel)
     expect(del).toBeGreaterThan(rel)
     expect(pub.steps[del]?.if).toBeUndefined() // only after a successful publish: a failed one can still be re-run
+    expect(pub.steps[del]?.['continue-on-error']).toBe(true)
   })
 })

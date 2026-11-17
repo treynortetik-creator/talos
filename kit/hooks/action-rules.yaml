@@ -13,7 +13,7 @@
 # match fields (all optional, but at least one required; all given = all must match):
 #   tool     regex, full match on the tool name: Bash, Write|Edit, mcp__.*__send_message
 #   command  Bash only: regex SEARCHED in "<working directory>\n<command>". The patterns below begin with the
-#            command-position prefix (?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*  so a phrase that is
+#            command-position prefix (?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+[^\s=]+=\S*\s+|time\s+|exec\s+)*  so a phrase that is
 #            only QUOTED (an echo, a log line, a commit message) does not trip them.
 #   path     Write/Edit tools: regex searched in the file path.
 # Write regexes in 'single quotes' (backslashes stay literal; a literal single quote is doubled: '').
@@ -32,25 +32,25 @@ rules:
   - id: rm-home-or-root
     decision: never
     tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*rm\s+(?:-[A-Za-z-]+\s+)*(?:-[A-Za-z]*[rR][A-Za-z]*|--recursive)\s+(?:-[A-Za-z-]+\s+)*(?:~|\$HOME|\$\{HOME\}|"\$HOME"|/)/?\*?(?=\s|$|[;&|)])'
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+[^\s=]+=\S*\s+|time\s+|exec\s+)*rm\s+(?:-[A-Za-z-]+\s+)*(?:-[A-Za-z]*[rR][A-Za-z]*|--recursive)\s+(?:-[A-Za-z-]+\s+)*(?:~|\$HOME|\$\{HOME\}|"\$HOME"|/)/?\*?(?=\s|$|[;&|)])'
     why: "Recursively deleting your home folder or the filesystem root is never the plan."
 
   - id: force-push-main
     decision: never
     tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*git\s+(?:-C\s+\S+\s+)?push\b(?:(?=[^;&|\n]*(?:\s-f\b|--force(?:-with-lease)?\b))(?=[^;&|\n]*(?<![\w/.-])(?:main|master)(?![\w.-]))|[^;&|\n]*\s\+\S*(?<![\w/.-])(?:main|master)(?![\w.-]))'
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+[^\s=]+=\S*\s+|time\s+|exec\s+)*git\s+(?:-C\s+\S+\s+)?push\b(?:(?=[^;&|\n]*(?:\s-f\b|--force(?:-with-lease)?\b))(?=[^;&|\n]*(?<![\w/.-])(?:main|master)(?![\w.-]))|[^;&|\n]*\s\+\S*(?<![\w/.-])(?:main|master)(?![\w.-]))'
     why: "A force-push to the main branch rewrites shared history."
 
   - id: kill-by-pattern
     decision: never
     tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*(pkill|killall)\b'
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+[^\s=]+=\S*\s+|time\s+|exec\s+)*(pkill|killall)\b'
     why: "Kill by process id only. A pattern kill takes out whatever else matches the name, including your own tools."
 
   - id: mcp-list
     decision: never
     tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*claude\s+mcp\s+list'
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+[^\s=]+=\S*\s+|time\s+|exec\s+)*claude\s+mcp\s+list'
     why: "Its health check starts every configured MCP server, including a second copy of a channel server. Use /mcp inside a session."
 
   # ---- ask ----
@@ -60,34 +60,34 @@ rules:
   - id: github-repo-public-or-delete
     decision: ask
     tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*gh\s+(?:repo\s+(?:edit\b[^\n;&|]*--visibility[\s=]+public|create\b[^\n;&|]*--public|delete)|api\b[^\n;&|]*(?:private=false|visibility=public))'
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+[^\s=]+=\S*\s+|time\s+|exec\s+|command\s+|[A-Za-z_][A-Za-z0-9_]*=[^\s;&|(]*\s+)*gh\s+(?:repo\s+(?:edit\b[^\n;&|]{0,2000}--visibility[\s=]+public|create\b[^\n;&|]{0,2000}--public|delete)|api\b(?:[^\n;&|]{0,2000}(?:private=[''"]?false|visibility=[''"]?public)|(?=[^\n;&|]{0,2000}(?:-X|--method)[\s=]*[''"]?[Dd][Ee][Ll][Ee][Tt][Ee]\b)(?=[^\n;&|]{0,2000}repos/)))'
     why: "A public repository and a repository delete are one-way doors. Use the talos-go-public skill for the gate."
 
   - id: github-account
     decision: ask
     tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*gh\s+auth\s+(?:switch|login|refresh|logout)\b'
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+[^\s=]+=\S*\s+|time\s+|exec\s+)*gh\s+auth\s+(?:switch|login|refresh|logout)\b'
     why: "gh keeps one account for the whole machine; switching it changes who every other repository pushes as."
 
   - id: push-to-main
     decision: ask
     kind: push
     tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*git\s+(?:-C\s+\S+\s+)?push\b[^;&|\n]*(?<![\w/.-])(?:main|master)(?![\w.-])'
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+[^\s=]+=\S*\s+|time\s+|exec\s+)*git\s+(?:-C\s+\S+\s+)?push\b[^;&|\n]*(?<![\w/.-])(?:main|master)(?![\w.-])'
     why: "Pushing to the main branch usually deploys or publishes."
 
   - id: deploy-or-publish
     decision: ask
     kind: deploy
     tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*(?:vercel\s+(?:deploy|--prod)|netlify\s+deploy|railway\s+(?:up|deploy|redeploy)|fly(?:ctl)?\s+deploy|wrangler\s+(?:deploy|publish)|firebase\s+deploy|heroku\s+(?:release|deploy)|terraform\s+apply|kubectl\s+(?:apply|delete)|(?:npm|pnpm|yarn)\s+publish|twine\s+upload|cargo\s+publish|gem\s+push|docker\s+push)\b'
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+[^\s=]+=\S*\s+|time\s+|exec\s+)*(?:vercel\s+(?:deploy|--prod)|netlify\s+deploy|railway\s+(?:up|deploy|redeploy)|fly(?:ctl)?\s+deploy|wrangler\s+(?:deploy|publish)|firebase\s+deploy|heroku\s+(?:release|deploy)|terraform\s+apply|kubectl\s+(?:apply|delete)|(?:npm|pnpm|yarn)\s+publish|twine\s+upload|cargo\s+publish|gem\s+push|docker\s+push)\b'
     why: "Deploys and package publishes reach other people and are hard to take back."
 
   - id: github-release-or-public
     decision: ask
     kind: publish
     tool: Bash
-    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+\S+=\S*\s+|time\s+|exec\s+)*gh\s+release\s+(?:create|delete|edit)'
+    command: '(?:^|[;&|(\n`])\s*(?:sudo\s+|env\s+[^\s=]+=\S*\s+|time\s+|exec\s+)*gh\s+release\s+(?:create|delete|edit)'
     why: "A release reaches everyone who watches the repository."
 
   # The Talos app's own reply and scheduling tools: exactly these five, nothing broader. Any other mcp__talos-app__ tool
@@ -97,8 +97,16 @@ rules:
     tool: 'mcp__talos-app__(reply|schedule_propose|schedule_run_start|schedule_run_done|schedules_list)'
     why: "The Talos app is the kit's own channel: replying on it and managing its schedules is not sending as you to other people."
 
+  # no kind on purpose (KIT-1): trash, delete, schedule, share and publish through a connector can't be taken back or reach
+  # other people, so "Always allow messages/email" never covers them; every one is a card. Listed ahead of the send rule
+  # (first match wins), after the app's own channel above.
+  - id: destructive-via-connector
+    decision: ask
+    tool: 'mcp__.*__[A-Za-z_]*(?:publish|share(?!d_drives?(?:_metadata)?$)|trash|delete|schedule)[A-Za-z_]*'
+    why: "Trashing, deleting, sharing, publishing or scheduling through a connected account acts as you and is hard to take back."
+
   - id: send-or-publish-via-connector
     decision: ask
     kind: send
-    tool: 'mcp__.*__[A-Za-z_]*(?:send|reply|forward|publish|share|trash|delete|schedule|post_)[A-Za-z_]*'
+    tool: 'mcp__.*__[A-Za-z_]*(?:send|reply|forward|post_)[A-Za-z_]*'
     why: "Sending, sharing, deleting or posting through a connected account acts as you and reaches other people."

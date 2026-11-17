@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   bindingMac,
@@ -12,7 +12,7 @@ import {
   newEnrollCode,
   newUlid,
 } from '@talos-app/protocol'
-import { fakeClock } from '@talos-app/testkit'
+import { fakeClock, t } from '@talos-app/testkit'
 import { runCli } from '../src/cli.ts'
 import { paths } from '../src/config.ts'
 import { EnrollFiles } from '../src/enroll-files.ts'
@@ -144,50 +144,78 @@ describe('enrollment (Mac side)', () => {
     await app2.close()
   })
 
-  test('after y the live bridge pins from the file watch, without a manual poll and before its 10 s fallback poll', async () => {
-    // The bridge has two ways to notice the owner's answer: a file watch on enroll-pending/ (200 ms debounce) and a 10 s
-    // fallback poll. Both run on the bridge's clock. This clock is only ever moved by the debounce's 200 ms steps, one per
-    // watcher event, so the fallback poll cannot come due and only the watcher can pin.
-    const clock = fakeClock(new Date().toISOString())
-    // The folder exists before the bridge starts, so its creation is not an event on the home-folder watch: on a Mac that
-    // late event could otherwise stand in for the answer's event and let a missing enroll-pending watch pass.
-    const home = tempHome()
-    mkdirSync(paths(home).enrollPending, { recursive: true })
-    h = await startHarness({ clock, home })
-    let pokes = 0
-    const b = h.bridge as unknown as { pokePoll(): void }
-    const realPoke = b.pokePoll
-    b.pokePoll = function (this: unknown) {
-      pokes++
-      return realPoke.call(this)
-    }
-    const c = cli()
-    const e = await startEnroll(h, c)
-    const { dev, frame } = await enrolled(e.code, e.codeId)
-    h.relay.sendToBridge(frame)
-    await e.done
-    // Each watcher event arms the debounce on the fake clock; moving the clock 200 ms is what lets that one poll run.
-    // Nothing here calls enrollment.poll(). The wait is a cap on a hang (a watcher that never fires), not a speed claim.
-    let stepped = 0
-    let advanced = 0
-    await waitFor(
-      () => {
-        if (pokes > stepped) {
-          stepped = pokes
-          clock.advance(200)
-          advanced += 200
-        }
-        return h.bridge.ctx.devices.pinnedKey(dev.deviceId) !== undefined
-      },
-      8000,
-      'the pin from the file watch',
-    )
-    expect(pokes).toBeGreaterThan(0)
-    // The owner's answer lands in enroll-pending/, which a watch on the home folder does not see on every platform (and
-    // on a Mac, late home-folder events for other files can stand in for it). Only that folder's own watch is the proof.
-    expect(h.bridge.watchHits[paths(h.home).enrollPending] ?? 0).toBeGreaterThan(0)
-    expect(advanced).toBeLessThan(10_000) // never reached POLL_MS: the pin did not come from the fallback poll
-  }, 30_000)
+  test(
+    'after y the live bridge pins from the file watch, without a manual poll and before its 10 s fallback poll',
+    async () => {
+      // The bridge has two ways to notice the owner's answer: a file watch on enroll-pending/ (200 ms debounce) and a 10 s
+      // fallback poll. Both run on the bridge's clock. This clock is only ever moved by the debounce's 200 ms steps, one per
+      // watcher event, so the fallback poll cannot come due and only the watcher can pin.
+      const clock = fakeClock(new Date().toISOString())
+      // The folder exists before the bridge starts, so its creation is not an event on the home-folder watch: on a Mac that
+      // late event could otherwise stand in for the answer's event and let a missing enroll-pending watch pass.
+      const home = tempHome()
+      mkdirSync(paths(home).enrollPending, { recursive: true })
+      h = await startHarness({ clock, home })
+      let pokes = 0
+      const b = h.bridge as unknown as { pokePoll(): void }
+      const realPoke = b.pokePoll
+      b.pokePoll = function (this: unknown) {
+        pokes++
+        return realPoke.call(this)
+      }
+      const c = cli()
+      const e = await startEnroll(h, c)
+      const { dev, frame } = await enrolled(e.code, e.codeId)
+      h.relay.sendToBridge(frame)
+      await e.done
+      // Each watcher event arms the debounce on the fake clock; moving the clock 200 ms is what lets that one poll run.
+      // Nothing here calls enrollment.poll(). The wait is a cap on a hang (a watcher that never fires), not a speed claim.
+      // On a loaded Mac fseventsd lags: a watch can still be settling when the answer lands (that write's event is then never
+      // seen) and the events of earlier writes can arrive in a late burst. So while nothing has pinned, the test touches
+      // the folder again now and then: a watch that is live reports that new change, and it is the bridge's own 10 s poll
+      // (which this clock never reaches) that would otherwise be the only way to the pin. The touch is a file the poll ignores.
+      const pending = paths(h.home).enrollPending
+      let touches = 0
+      let touchedAt = Date.now()
+      const touch = () => {
+        if (touches >= 20 || Date.now() - touchedAt < 500) return
+        touchedAt = Date.now()
+        writeFileSync(join(pending, 'touch.tmp'), String(++touches))
+      }
+      let stepped = 0
+      let advanced = 0
+      await waitFor(
+        () => {
+          if (pokes > stepped) {
+            stepped = pokes
+            clock.advance(200)
+            advanced += 200
+          }
+          if (h.bridge.ctx.devices.pinnedKey(dev.deviceId) !== undefined) return true
+          touch()
+          return false
+        },
+        8000,
+        'the pin from the file watch',
+      )
+      expect(pokes).toBeGreaterThan(0)
+      expect(advanced).toBeLessThan(10_000) // never reached POLL_MS: the pin did not come from the fallback poll
+      // The owner's answer lands in enroll-pending/, which a watch on the home folder does not see on every platform (and
+      // on a Mac, late home-folder events for other files can stand in for it). Only that folder's own watch is the proof:
+      // it must report too. It may be late (the pin can come from a home-folder event first), so wait for it; a bridge with
+      // no watch on enroll-pending/ never gets here.
+      touches = 0
+      await waitFor(
+        () => {
+          touch()
+          return (h.bridge.watchHits[pending] ?? 0) > 0
+        },
+        8000,
+        'the watch on enroll-pending/ to report a change in that folder',
+      )
+    },
+    t(60_000),
+  )
 
   test('N does not pin: device.pinned{ok:false, reason:declined}', async () => {
     h = await startHarness()

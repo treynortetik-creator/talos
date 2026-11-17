@@ -332,6 +332,8 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
   case keyNotInMenu(keys: String, app: String)
   /// The keyboard is somewhere else than the front app (a non-activating panel, say): nothing more is sent.
   case focusElsewhere(app: String)
+  /// An invisible window of `app` lies over the point and `app` is not on the allowed list: the click would go to it.
+  case coveredByInvisibleWindow(app: String)
   /// Another app came to the front after a key went to `app`; the rest was not sent.
   case frontChanged(app: String)
   /// The point is the menu bar, a menu bar extra or another window above normal ones (level 24 and up).
@@ -365,6 +367,8 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
       return "\(String(k.prefix(60))) isn't one of \(String(app.prefix(80)))'s own menu shortcuts, so Talos didn't press it. Plain keys and shift work anywhere; for anything else use the app's menus."
     case .focusElsewhere(let app):
       return "Another app has the keyboard, not \(String(app.prefix(80))), so Talos stopped there. Take a screenshot to see where things are."
+    case .coveredByInvisibleWindow(let app):
+      return "An invisible window of \(String(app.prefix(80))) covers that point, and \(String(app.prefix(80))) isn't allowed. Nothing was clicked: take a screenshot, or click another point."
     case .frontChanged(let app):
       return "Another app came to the front after \(String(app.prefix(80))) got the last key, so Talos stopped there. Take a screenshot to see where things are."
     case .systemArea: return "That spot is the menu bar or a system overlay, which Talos never clicks for an agent. Nothing was clicked."
@@ -394,6 +398,7 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
     case .keyNotAllowed: return "key_not_allowed"
     case .keyNotInMenu: return "key_not_in_menu"
     case .focusElsewhere: return "focus_elsewhere"
+    case .coveredByInvisibleWindow: return "covered_by_invisible_window"
     case .frontChanged: return "front_changed"
     case .systemArea: return "system_area"
     case .noFrontmostApp: return "no_frontmost_app"
@@ -444,6 +449,13 @@ public protocol ScreenAppsBackend: Sendable {
   func pointOwner(at point: CGPoint) -> ScreenPointOwner
   /// The pid that really has the keyboard (the system-wide focused element's, else the focused app's); nil when it can't be told.
   func keyboardFocusPID() -> Int32?
+  /// True only when the app really has the keyboard although the system-wide focus cannot be read (`LiveScreenApps` lists the checks).
+  func appOwnsKeyboard(pid: Int32) -> Bool
+  /// True when the app's focused window is a sheet or an open/save panel.
+  func frontHasPanel(pid: Int32) -> Bool
+  /// The system-wide focused element's text value, when that element belongs to `pid`; nil when it is not readable, not theirs,
+  /// or a secure (password) field.
+  func focusedValue(pid: Int32) -> String?
   /// The key equivalents of the app's own menus (cmd/ctrl/opt combinations); nil when they cannot be read.
   func menuShortcuts(pid: Int32) -> [ScreenKeyCombo]?
   /// Where the app macOS would open for an id is, nil when none is installed.

@@ -77,40 +77,45 @@ export const SHIPPED_ASK_RULES: readonly {
     kind: null,
     tool: 'Bash',
     command:
-      '(?:^|[;&|(\\n`])\\s*(?:sudo\\s+|env\\s+\\S+=\\S*\\s+|time\\s+|exec\\s+)*gh\\s+(?:repo\\s+(?:edit\\b[^\\n;&|]*--visibility[\\s=]+public|create\\b[^\\n;&|]*--public|delete)|api\\b[^\\n;&|]*(?:private=false|visibility=public))',
+      '(?:^|[;&|(\\n`])\\s*(?:sudo\\s+|env\\s+[^\\s=]+=\\S*\\s+|time\\s+|exec\\s+|command\\s+|[A-Za-z_][A-Za-z0-9_]*=[^\\s;&|(]*\\s+)*gh\\s+(?:repo\\s+(?:edit\\b[^\\n;&|]{0,2000}--visibility[\\s=]+public|create\\b[^\\n;&|]{0,2000}--public|delete)|api\\b(?:[^\\n;&|]{0,2000}(?:private=[\'"]?false|visibility=[\'"]?public)|(?=[^\\n;&|]{0,2000}(?:-X|--method)[\\s=]*[\'"]?[Dd][Ee][Ll][Ee][Tt][Ee]\\b)(?=[^\\n;&|]{0,2000}repos/)))',
   },
   {
     id: 'github-account',
     kind: null,
     tool: 'Bash',
     command:
-      '(?:^|[;&|(\\n`])\\s*(?:sudo\\s+|env\\s+\\S+=\\S*\\s+|time\\s+|exec\\s+)*gh\\s+auth\\s+(?:switch|login|refresh|logout)\\b',
+      '(?:^|[;&|(\\n`])\\s*(?:sudo\\s+|env\\s+[^\\s=]+=\\S*\\s+|time\\s+|exec\\s+)*gh\\s+auth\\s+(?:switch|login|refresh|logout)\\b',
   },
   {
     id: 'push-to-main',
     kind: 'push',
     tool: 'Bash',
     command:
-      '(?:^|[;&|(\\n`])\\s*(?:sudo\\s+|env\\s+\\S+=\\S*\\s+|time\\s+|exec\\s+)*git\\s+(?:-C\\s+\\S+\\s+)?push\\b[^;&|\\n]*(?<![\\w/.-])(?:main|master)(?![\\w.-])',
+      '(?:^|[;&|(\\n`])\\s*(?:sudo\\s+|env\\s+[^\\s=]+=\\S*\\s+|time\\s+|exec\\s+)*git\\s+(?:-C\\s+\\S+\\s+)?push\\b[^;&|\\n]*(?<![\\w/.-])(?:main|master)(?![\\w.-])',
   },
   {
     id: 'deploy-or-publish',
     kind: 'deploy',
     tool: 'Bash',
     command:
-      '(?:^|[;&|(\\n`])\\s*(?:sudo\\s+|env\\s+\\S+=\\S*\\s+|time\\s+|exec\\s+)*(?:vercel\\s+(?:deploy|--prod)|netlify\\s+deploy|railway\\s+(?:up|deploy|redeploy)|fly(?:ctl)?\\s+deploy|wrangler\\s+(?:deploy|publish)|firebase\\s+deploy|heroku\\s+(?:release|deploy)|terraform\\s+apply|kubectl\\s+(?:apply|delete)|(?:npm|pnpm|yarn)\\s+publish|twine\\s+upload|cargo\\s+publish|gem\\s+push|docker\\s+push)\\b',
+      '(?:^|[;&|(\\n`])\\s*(?:sudo\\s+|env\\s+[^\\s=]+=\\S*\\s+|time\\s+|exec\\s+)*(?:vercel\\s+(?:deploy|--prod)|netlify\\s+deploy|railway\\s+(?:up|deploy|redeploy)|fly(?:ctl)?\\s+deploy|wrangler\\s+(?:deploy|publish)|firebase\\s+deploy|heroku\\s+(?:release|deploy)|terraform\\s+apply|kubectl\\s+(?:apply|delete)|(?:npm|pnpm|yarn)\\s+publish|twine\\s+upload|cargo\\s+publish|gem\\s+push|docker\\s+push)\\b',
   },
   {
     id: 'github-release-or-public',
     kind: 'publish',
     tool: 'Bash',
     command:
-      '(?:^|[;&|(\\n`])\\s*(?:sudo\\s+|env\\s+\\S+=\\S*\\s+|time\\s+|exec\\s+)*gh\\s+release\\s+(?:create|delete|edit)',
+      '(?:^|[;&|(\\n`])\\s*(?:sudo\\s+|env\\s+[^\\s=]+=\\S*\\s+|time\\s+|exec\\s+)*gh\\s+release\\s+(?:create|delete|edit)',
+  },
+  {
+    id: 'destructive-via-connector',
+    kind: null,
+    tool: 'mcp__.*__[A-Za-z_]*(?:publish|share(?!d_drives?(?:_metadata)?$)|trash|delete|schedule)[A-Za-z_]*',
   },
   {
     id: 'send-or-publish-via-connector',
     kind: 'send',
-    tool: 'mcp__.*__[A-Za-z_]*(?:send|reply|forward|publish|share|trash|delete|schedule|post_)[A-Za-z_]*',
+    tool: 'mcp__.*__[A-Za-z_]*(?:send|reply|forward|post_)[A-Za-z_]*',
   },
 ]
 

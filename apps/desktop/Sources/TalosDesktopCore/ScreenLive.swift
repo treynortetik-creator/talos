@@ -201,8 +201,14 @@ public struct LiveScreenApps: ScreenAppsBackend {
   /// Every window the window server lists (`optionAll`, so menu bar extras too), front to back, with level and alpha; bounds and
   /// owner need no permission.
   public func pointOwner(at point: CGPoint) -> ScreenPointOwner {
-    guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return .nothing }
-    let windows: [ScreenPointWindow] = list.compactMap { w in
+    guard let windows = Self.windowList() else { return .nothing }
+    return ScreenPointWindow.owner(at: point, in: windows)
+  }
+
+  /// The window server's list, front to back; nil when it cannot be read.
+  static func windowList() -> [ScreenPointWindow]? {
+    guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return nil }
+    return list.compactMap { w in
       guard let b = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: b as CFDictionary),
         let pid = (w[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
       else { return nil }
@@ -213,7 +219,6 @@ public struct LiveScreenApps: ScreenAppsBackend {
         alpha: (w[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1,
         onScreen: (w[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false)
     }
-    return ScreenPointWindow.owner(at: point, in: windows)
   }
 
   /// The system-wide focused element's pid (where typing goes), else the focused application's. Needs Accessibility; nil
@@ -229,6 +234,67 @@ public struct LiveScreenApps: ScreenAppsBackend {
       if AXUIElementGetPid(v as! AXUIElement, &pid) == .success, pid > 0 { return pid }
     }
     return nil
+  }
+
+  /// Whether the app really has the keyboard, for when the system-wide focus cannot be read (an app with no window open). All of
+  /// these must hold, and any read that fails counts as false (it fails closed): (1) secure event input is off (a password or Touch
+  /// ID sheet turns it on); (2) the app's own AX element answers `kAXFocusedWindowAttribute` with a window of that same pid, and
+  /// that window reads focused or main (`kAXFocusedAttribute` / `kAXMainAttribute`, either true); (3) the topmost on-screen
+  /// window at layers 0-23 with alpha above 0 and at least 40 by 40 points (so not an invisible sliver such as a notification
+  /// helper's) belongs to the app (`ScreenPointWindow.topVisibleAppPID`).
+  public func appOwnsKeyboard(pid: Int32) -> Bool {
+    guard !IsSecureEventInputEnabled() else { return false }
+    func attr(_ e: AXUIElement, _ name: String) -> CFTypeRef? {
+      var v: CFTypeRef?
+      return AXUIElementCopyAttributeValue(e, name as CFString, &v) == .success ? v : nil
+    }
+    guard let w = attr(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute), CFGetTypeID(w) == AXUIElementGetTypeID() else {
+      return false
+    }
+    // swiftlint:disable:next force_cast
+    let win = w as! AXUIElement
+    var owner: pid_t = 0
+    guard AXUIElementGetPid(win, &owner) == .success, owner == pid else { return false }
+    let key = [kAXFocusedAttribute, kAXMainAttribute].contains { (attr(win, $0) as? Bool) == true }
+    guard key, let list = Self.windowList() else { return false }
+    return ScreenPointWindow.topVisibleAppPID(in: list) == pid
+  }
+
+  /// Whether the app's focused window is a sheet (role AXSheet, or it has an AXSheet child) or a dialog (subrole AXDialog or
+  /// AXSystemDialog), which is where an open or save panel is.
+  public func frontHasPanel(pid: Int32) -> Bool {
+    func attr(_ e: AXUIElement, _ name: String) -> CFTypeRef? {
+      var v: CFTypeRef?
+      return AXUIElementCopyAttributeValue(e, name as CFString, &v) == .success ? v : nil
+    }
+    guard let w = attr(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute), CFGetTypeID(w) == AXUIElementGetTypeID() else {
+      return false
+    }
+    // swiftlint:disable:next force_cast
+    let win = w as! AXUIElement
+    if attr(win, kAXRoleAttribute) as? String == kAXSheetRole { return true }
+    if let sub = attr(win, kAXSubroleAttribute) as? String, sub == kAXDialogSubrole || sub == kAXSystemDialogSubrole { return true }
+    let kids = attr(win, kAXChildrenAttribute) as? [AXUIElement] ?? []
+    return kids.contains { attr($0, kAXRoleAttribute) as? String == kAXSheetRole }
+  }
+
+  /// The system-wide focused element's `kAXValueAttribute` as text, when the element belongs to `pid`.
+  public func focusedValue(pid: Int32) -> String? {
+    var f: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &f) == .success,
+      let f, CFGetTypeID(f) == AXUIElementGetTypeID()
+    else { return nil }
+    // swiftlint:disable:next force_cast
+    let el = f as! AXUIElement
+    var owner: pid_t = 0
+    guard AXUIElementGetPid(el, &owner) == .success, owner == pid else { return nil }
+    var sub: CFTypeRef?
+    if AXUIElementCopyAttributeValue(el, kAXSubroleAttribute as CFString, &sub) == .success,
+      sub as? String == kAXSecureTextFieldSubrole as String
+    { return nil }
+    var v: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, kAXValueAttribute as CFString, &v) == .success else { return nil }
+    return v as? String
   }
 
   /// The key equivalents in the app's menu bar (`AXMenuItemCmdChar` / `CmdVirtualKey` / `CmdModifiers`), at most 4 menus deep and

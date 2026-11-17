@@ -522,22 +522,32 @@ hang() { # $1 = hook, $2 = extra env assignment; prints "<stdout, newlines remov
   sleep 4 | ( cd "$A" && t=$SECONDS; out="$(env TALOS_GUARD_TIMEOUT_S=1 $2 python3 "hooks/$1" 2>/dev/null)"; rc=$?; printf '%s|%s|%s' "$(printf '%s' "$out" | tr -d '\n')" "$rc" "$((SECONDS - t))" )
 }
 r="$(hang pre-tool-guard.py CHRONOS_RUN=1)"; rl="$(hang pre-tool-guard.py FOO=1)"
-{ <<<"$r" grep -q '^|2|' && <<<"$rl" grep -q '^|0|'; } && ok "pre-tool guard: a hang is refused (exit 2) when unattended and allowed (exit 0) in a live session, within the alarm, not after 4 seconds" || no "pre-tool guard hang handling wrong" "unattended=[$r] live=[$rl]"
+{ <<<"$r" grep -q '^|2|' && <<<"$rl" grep -q '"permissionDecision": "ask".*|0|'; } && ok "pre-tool guard: a hang is refused (exit 2) when unattended and ASKS (exit 0, never silent) in a live session, within the alarm, not after 4 seconds" || no "pre-tool guard hang handling wrong" "unattended=[$r] live=[$rl]"
+# pre-tool-guard.py has its own alarm (it stays standalone): slow stdin, 1 s alarm; live asks (never silent, never allows), unattended exits 2 with no verdict
+{ <<<"$rl" grep -q '"permissionDecision": "ask"' && <<<"$rl" grep -q 'timed out checking' && <<<"$r" grep -q '^|2|'; } && ok "pre-tool guard: a slow stdin asks when live and exits 2 when unattended" || no "pre-tool guard slow-stdin handling wrong" "unattended=[$r] live=[$rl]"
 { [ "${r##*|}" -le 2 ] && [ "${rl##*|}" -le 2 ]; } && ok "pre-tool guard: the alarm, not the end of the held-open pipe, ended it (${r##*|}s unattended, ${rl##*|}s live)" || no "pre-tool guard waited for stdin to close (${r##*|}s)"
 printf 'zebra-clinic\n' > "$V/_guard-terms.txt"; printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"
 for g in append-only-guard.py check-vault.py; do
   r="$(hang "$g" CHRONOS_RUN=1)"; rl="$(hang "$g" FOO=1)"
-  { denied "${r%%|*}" && <<<"$r" grep -q 'did not finish' && [ "${rl%%|*}" = "{}" ]; } && ok "$g: a hung run is DENIED when unattended and allowed in a live session (alarm, not the harness timeout)" || no "$g hang handling wrong" "unattended=[$r] live=[$rl]"
+  { denied "${r%%|*}" && <<<"$r" grep -q 'did not finish' && <<<"${rl%%|*}" grep -q '"permissionDecision": "ask"' && <<<"${rl%%|*}" grep -q 'timed out checking'; } && ok "$g: a hung run is DENIED when unattended and ASKS in a live session, never allowed (alarm, not the harness timeout)" || no "$g hang handling wrong" "unattended=[$r] live=[$rl]"
   secs="${r##*|}"; [ "$secs" -le 3 ] && ok "$g: the alarm fired inside the shortened window ($secs s), not at the end of the held-open pipe" || no "$g took $secs seconds"
 done
 rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
+# every timeout is logged for the doctor: hook, seconds, unattended, a UTC time, and no command text
+python3 - "$XDG_STATE_HOME" <<'PY' && ok "guard timeouts are logged to guard-timeouts.jsonl (hook, seconds, unattended, UTC time; no command text)" || no "guard-timeouts.jsonl is missing or wrong"
+import glob, json, sys
+rows = [json.loads(l) for f in glob.glob(sys.argv[1] + "/talos/*/guard-timeouts.jsonl") for l in open(f)]
+assert rows and {r["hook"] for r in rows} >= {"append-only-guard", "check-vault"}, rows
+assert any(r["unattended"] for r in rows) and any(not r["unattended"] for r in rows), rows
+assert all(r["at"].endswith("Z") and r["seconds"] == 1 and set(r) <= {"at", "hook", "seconds", "unattended", "ts"} for r in rows), rows
+PY
 # the alarm's deny must still BLOCK when it cannot be written (stdout closed): exit code 2, not a fall-through to 0
 for g in append-only-guard.py check-vault.py; do
   if [ "$g" = check-vault.py ]; then printf 'zebra-clinic\n' > "$V/_guard-terms.txt"; printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"; fi
   sleep 4 | ( cd "$A" && CHRONOS_RUN=1 TALOS_GUARD_TIMEOUT_S=1 python3 "hooks/$g" >&- 2>/dev/null ); ru=$?
   sleep 4 | ( cd "$A" && TALOS_GUARD_TIMEOUT_S=1 python3 "hooks/$g" >&- 2>/dev/null ); rl=$?
   rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
-  { [ "$ru" = 2 ] && [ "$rl" = 0 ]; } && ok "$g: if the alarm's deny cannot be written (stdout closed) an unattended run still exits 2 (block); a live session exits 0" || no "$g alarm with a closed stdout: unattended rc=$ru (want 2), live rc=$rl (want 0)"
+  { [ "$ru" = 2 ] && [ "$rl" = 2 ]; } && ok "$g: if the alarm's verdict cannot be written (stdout closed) both an unattended and a live run exit 2 (block)" || no "$g alarm with a closed stdout: unattended rc=$ru, live rc=$rl (want 2 and 2)"
 done
 # timeline-guard hung inside wiki-lint.py (it executes that file)
 mkdir -p "$A/wiki/people"; printf -- '---\ntitle: x\ntype: person\nupdated: 2026-10-01\ntags: [a]\n---\nbody\n\n<!-- TIMELINE:APPEND-ONLY -->\n' > "$A/wiki/people/tl2.md"
@@ -545,7 +555,7 @@ cp "$A/scripts/wiki-lint.py" "$SB/wiki-lint.keep" 2>/dev/null || true
 printf 'import time\ntime.sleep(30)\n' > "$A/scripts/wiki-lint.py"
 TLW2="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s","content":"x\\n\\n<!-- TIMELINE:APPEND-ONLY -->\\n- 2026-10-02 | a | src | high\\n"}}' "$A/wiki/people/tl2.md")"
 un="$(printf '%s' "$TLW2" | ( cd "$A" && TALOS_GUARD_TIMEOUT_S=1 CHRONOS_RUN=1 python3 hooks/timeline-guard.py 2>/dev/null ))"; live="$(printf '%s' "$TLW2" | ( cd "$A" && TALOS_GUARD_TIMEOUT_S=1 python3 hooks/timeline-guard.py 2>/dev/null ))"
-{ denied "$un" && [ "$live" = "{}" ]; } && ok "timeline guard: a hung wiki-lint.py is denied when unattended and allowed in a live session" || no "timeline guard hang handling wrong" "un=[$un] live=[$live]"
+{ denied "$un" && <<<"$live" grep -q '"permissionDecision": "ask"'; } && ok "timeline guard: a hung wiki-lint.py is denied when unattended and asks in a live session" || no "timeline guard hang handling wrong" "un=[$un] live=[$live]"
 cp "$SB/wiki-lint.keep" "$A/scripts/wiki-lint.py" 2>/dev/null || true
 
 # timeline-guard EXECUTES scripts/wiki-lint.py: not through a symlinked scripts/ folder

@@ -484,6 +484,13 @@ Relay frames are processed strictly one at a time, in arrival order. `ack` stage
 `consumed` only after the channel notification was written. After a crash the relay re-sends every frame that was not
 `consumed`, in order, and the bridge dedupes on id at the moment it notifies.
 
+A bridge that has begun to stop (`Bridge.stop()` sets `ctx.closing` before its first await) takes up and hands over nothing
+more: a frame that arrives is neither acked nor marked, every undo-point hold that waits ends at once without a row, and the
+agent's channel, a thread's route row and a restore wait that ends all refuse (`BridgeStopping`, `src/stopping.ts`). A hand-over
+that was already made finishes its books (seen, `consumed`) before the store closes, so the next bridge replays a held message
+once and never a delivered one. Without this, a stop that took longer than the 5 s undo hold delivered the held message into
+the dying session and acked it, and the restart skipped it.
+
 ## Tools
 
 `reply`, `attach`, `card`, `card_result`, `set_status`, `voice_progress`, `list_threads`, `create_thread`,

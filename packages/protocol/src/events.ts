@@ -88,8 +88,13 @@ export const EVENTS: readonly EventInfo[] = [
   },
   {
     name: BUG_REPORTED_EVENT,
-    // ids and enums only: never the words, the logs or the picture. `webhook`: whether a webhook call was started for it.
-    payload: z.strictObject({ report_id: Ulid, device_id: DeviceId, webhook: z.enum(['off', 'queued']) }),
+    // ids and enums only: never the words, the logs or the picture. `webhook`: whether a webhook call was started for it. `bridge`: whether it was queued to this relay's own bridge.
+    payload: z.strictObject({
+      report_id: Ulid,
+      device_id: DeviceId,
+      webhook: z.enum(['off', 'queued']),
+      bridge: z.enum(['queued', 'failed']),
+    }),
     emitter: 'relay',
     status: 'live',
   },

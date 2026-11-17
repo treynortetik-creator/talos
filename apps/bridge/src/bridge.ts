@@ -68,6 +68,7 @@ import { createSearchService, type SearchServiceHandle } from './search/install.
 import { SessionControls } from './session/controls.ts'
 import { SpeakService } from './speak/service.ts'
 import { StatusWriter } from './status-file.ts'
+import { BridgeStopping, PendingResults, within } from './stopping.ts'
 import { callTool, toolsFor } from './tools/index.ts'
 import { workerStoreOf } from './tools/read-inbound.ts'
 import { HttpTransport, LiveTransport } from './transport.ts'
@@ -96,6 +97,15 @@ export type { BridgeOptions }
 export const INSTRUCTIONS = INSTRUCTIONS_TEXT
 
 const PRUNE_EVERY_MS = 6 * 3600_000
+/**
+ * How long stop() waits for hand-overs already under way to finish their books before it closes the store. A hand-over still
+ * unresolved after this (an agent channel that answers slowly) is not lost: its seen and consumed writes are skipped cleanly
+ * once the store is closed (inbound.ts), so the relay's replay gives it to the next bridge, which redelivers it to its agent.
+ * That can be a duplicate of a message the old agent already has (nothing de-dupes it on the agent's side), never a loss.
+ */
+const INBOUND_SETTLE_CAP_MS = 1000
+/** How long stop() waits for a `read_inbound` response that is still being written (under lifecycle.ts's 4 s force-exit). */
+const RESULT_WRITE_CAP_MS = 1000
 
 export const POLL_MS = 10_000
 export const RELAY_RESTART_NOTICE =
@@ -168,7 +178,9 @@ export class Bridge {
   private unansweredChecked = false
   private relayRestartTold = false
   private healthyStartNoted = false
-  private readonly onHealthyStart: (() => void) | undefined
+  /** The two test seams and hooks the bridge reads after its constructor: the first healthy start, and a slow stop. */
+  private readonly after: Pick<BridgeOptions, 'onHealthyStart' | 'stopDelay'>
+  private readonly results = new PendingResults()
   private historyKeptAsideTold = false
   private readonly clock: Clock
   private readonly log: Logger
@@ -200,7 +212,7 @@ export class Bridge {
     for (const d of [p.home, p.media, p.approved, p.enrollPending]) ensureDir(d)
     this.log = opts.logger ?? createLogger(p.home, env.logLevel)
     this.keyRef = keyRef
-    this.onHealthyStart = opts.onHealthyStart
+    this.after = opts
     this.keyMtime = mtimeMs(p.bridgeKey)
     const live = !opts.headless && env.live
     const instance = opts.instance ?? `bi_${randomBytes(6).toString('hex')}`
@@ -318,7 +330,7 @@ export class Bridge {
       seen: new SeenTracker(live && !worker ? { store, clock: this.clock } : undefined),
       mod: modLink,
       ...(usage ? { usage } : {}),
-      emit: toAgent({ store, clock: this.clock }, config, (n) => this.emitFn(n)),
+      emit: toAgent({ store, clock: this.clock }, config, (n) => this.deliver(n)),
       permission: undefined as unknown as PermissionRelay,
       session: undefined as unknown as SessionControls,
       ...(worker ? { worker: { thread: worker, ...(hubClient ? { hub: hubClient } : {}) } } : {}),
@@ -327,7 +339,7 @@ export class Bridge {
     if (live) {
       // every notification for the main session passes the routing table first; a dedicated thread's owner message
       // may go to its own session instead (docs/OPTION-C.md "Routing")
-      const router = new ThreadRouter(this.ctx, (n) => this.emitFn(n), {
+      const router = new ThreadRouter(this.ctx, (n) => this.deliver(n), {
         store: workerStoreOf(this.ctx),
         onCardUndelivered: (id, told) => this.inbound?.cardNotDelivered(id, told),
         workerFeatures: (thread) => this.hub?.featuresOf(thread),
@@ -516,6 +528,34 @@ export class Bridge {
     this.emitFn = (n) => fn({ content: neutralizeControlTags(n.content), meta: n.meta })
   }
 
+  /**
+   * server.ts, for each `read_inbound` request: its response is not yet written to the agent's transport. `read_inbound` claims
+   * the messages it returns, so a session that is stopped between the claim and the write would strand them (a claimed message
+   * is neither replayed to a worker nor fallen back to main). stop() waits, within a cap, for these writes.
+   */
+  resultPending(requestId: string | number): void {
+    this.results.add(requestId)
+  }
+
+  /** server.ts: that request was cancelled, so no response will be written for it. */
+  resultCancelled(requestId: string | number): void {
+    this.results.cancelled(requestId)
+  }
+
+  /** server.ts: the response to that request was handed to the transport. */
+  resultWritten(requestId: string | number): void {
+    this.results.written(requestId)
+  }
+
+  /**
+   * Every hand-over to the agent's channel: refused once the bridge has started to stop, so a message that was held when stop
+   * began is neither delivered nor, with nothing delivered, marked seen or acked (stopping.ts). The relay keeps it.
+   */
+  private deliver(n: Notification): Promise<void> {
+    if (this.ctx.closing) return Promise.reject(new BridgeStopping())
+    return this.emitFn(n)
+  }
+
   /** Wires the relay's verdicts to the MCP connection (server.ts). */
   setPermissionSender(fn: VerdictSender) {
     this.ctx.permission.setSender(fn)
@@ -690,7 +730,7 @@ export class Bridge {
     if (!this.healthyStartNoted) {
       this.healthyStartNoted = true // `ready` repeats on every reconnect; a start is healthy once
       try {
-        this.onHealthyStart?.()
+        this.after.onHealthyStart?.()
       } catch (e) {
         this.log.warn('healthy start not recorded', { error: (e as Error).message })
       }
@@ -894,6 +934,14 @@ export class Bridge {
       .catch(() => {})
   }
 
+  private async inboundSettled(): Promise<void> {
+    if (this.inbound)
+      await within(
+        this.inbound.idle().catch(() => {}),
+        INBOUND_SETTLE_CAP_MS,
+      )
+  }
+
   private stopTimers(final = true) {
     this.stopped = true
     if (this.pollTimer) this.clock.clearTimeout(this.pollTimer)
@@ -911,6 +959,10 @@ export class Bridge {
   async stop(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    // Before anything is awaited: from here on nothing is handed to the agent, no frame is taken up or acked, and the undo
+    // holds that wait for a point end without a row, so a message that was held stays with the relay for the next bridge.
+    this.ctx.closing = true
+    this.ctx.undo?.abandon()
     this.statusWriter?.stop()
     this.ctx.permission.closeAll()
     this.stopTimers()
@@ -925,6 +977,12 @@ export class Bridge {
     this.hubClient?.close()
     await this.hub?.close().catch(() => {})
     ;(this.ctx.search as Partial<SearchServiceHandle> | undefined)?.stop?.()
+    // A hand-over that was already made when stop began finishes its books (seen, consumed) before the store closes, or the
+    // relay would replay a message the agent has. Work that was waiting is refused now, so this ends at once; a handler
+    // stuck on something else is not waited for past the cap (the process is exiting).
+    await this.inboundSettled()
+    await this.results.settled(RESULT_WRITE_CAP_MS)
+    await this.after.stopDelay?.()
     await this.client?.stop()
     // nothing may touch the store after it closes; a stuck write must not hang shutdown (the injected clock never fires its timeouts)
     await Promise.race([

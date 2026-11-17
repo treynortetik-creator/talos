@@ -89,12 +89,47 @@ struct ScreenInputPacingTests {
   @Test func typingPausesBetweenPiecesAndChecksTheFrontBeforeEach() throws {
     let input = FakeInput()
     let p = Pauses()
-    var c = Fx.core(input: input, apps: FakeApps(front: Fx.notes))
-    c.pause = { p.add($0) }
+    let a = FakeApps(front: Fx.notes)
+    var c = Fx.core(input: input, apps: a)
+    let log = Pauses()
+    a.focus = { log.add(-1); return Fx.notes.pid }  // -1: a gate
+    c.pause = { p.add($0); log.add($0) }
     let text = String(repeating: "abcdefgh", count: 10)  // five pieces
     #expect(try c.perform(.type(text), allowedBundleIDs: ["com.example.notes"]) == 5)
-    #expect(p.all == Array(repeating: ScreenCore.textPaceSeconds, count: 4), "between pieces, not after the last")
+    #expect(p.all == [ScreenCore.textSettleSeconds] + Array(repeating: ScreenCore.textPaceSeconds, count: 4), "one settle before the first, then between pieces, not after the last")
+    #expect(ScreenCore.textSettleSeconds == 0.05)
+    #expect(Array(log.all.prefix(2)) == [ScreenCore.textSettleSeconds, -1], "the settle comes before the first gate")
     #expect(ScreenCore.textPaceSeconds >= 0.005 && ScreenCore.textPaceSeconds * Double(ScreenCore.maxTypedCharacters / 16) < 15)
+  }
+
+  @Test func theFieldIsReadBackOnceAfterTyping() throws {
+    let a = FakeApps(front: Fx.notes)
+    let c = Fx.core(apps: a)
+    let all: ScreenAllowed = .ids(["com.example.notes"])
+    a.value = { $0 == Fx.notes.pid ? "before hello there" : nil }
+    #expect(try c.typeText("hello", allowed: all) == (1, .verified))
+    let long = String(repeating: "x", count: 100) + "END"
+    a.value = { _ in long }
+    #expect(try c.typeText("hello", allowed: all) == (1, .mismatch(suffix: String(long.suffix(40)))))
+    a.value = { _ in nil }
+    #expect(try c.typeText("hello", allowed: all) == (1, .unverified))
+  }
+
+  @Test func theReadBackNeverReadsAnAppThatWasNotGated() throws {
+    final class Reads: @unchecked Sendable {
+      private let lock = NSLock()
+      private var _pids: [Int32] = []
+      var pids: [Int32] { lock.withLock { _pids } }
+      func add(_ p: Int32) { lock.withLock { _pids.append(p) } }
+    }
+    let a = FakeApps(front: Fx.notes)
+    let reads = Reads()
+    a.value = { reads.add($0); return "hello" }
+    // call 1 is the gate, 2 the check after the last piece, 3 the read-back's own look: the front changes just before it
+    a.onFrontmost = { n in if n == 3 { a.front = Fx.secret } }
+    let c = Fx.core(apps: a)
+    #expect(try c.typeText("hello", allowed: .ids(["com.example.notes"])) == (1, .unverified))
+    #expect(reads.pids.isEmpty, "no read for any pid, Secret's least of all")
   }
 
   @Test func eachClickOfADoubleClickIsGatedOnItsOwn() throws {
@@ -167,8 +202,100 @@ struct ScreenKeyFocusTests {
       #expect(throws: ScreenRefusal.focusElsewhere(app: "Notes Example")) { try c.perform(r, allowedBundleIDs: allowed) }
     }
     a.focus = { nil }
+    a.ownsKeyboard = { _ in false }  // nothing reports focus and the app cannot show it owns the keyboard: still refused
     #expect(throws: ScreenRefusal.focusElsewhere(app: "Notes Example")) { try c.perform(.type("x"), allowedBundleIDs: allowed) }
     #expect(input.posted.isEmpty)
+  }
+
+  @Test func withNothingFocusedAnAppThatOwnsTheKeyboardStillGetsKeysAndText() throws {
+    let input = FakeInput()
+    let a = FakeApps(front: Fx.notes)
+    a.focus = { nil }
+    a.ownsKeyboard = { $0 == Fx.notes.pid }
+    let c = Fx.core(input: input, apps: a)
+    #expect(try c.perform(.key("return"), allowedBundleIDs: allowed) == 1)
+    #expect(try c.perform(.type("hi"), allowedBundleIDs: allowed) == 1)
+    #expect(input.posted == [.key(try ScreenKeyCombo.parse("return")), .text("hi")])
+  }
+
+  @Test func withNothingFocusedAndNoProofOfTheKeyboardKeysAndTextAreRefused() {
+    let input = FakeInput()
+    let a = FakeApps(front: Fx.notes)
+    a.focus = { nil }
+    a.ownsKeyboard = { _ in false }
+    let c = Fx.core(input: input, apps: a)
+    for r: ScreenInputRequest in [.key("return"), .type("x")] {
+      #expect(throws: ScreenRefusal.focusElsewhere(app: "Notes Example")) { try c.perform(r, allowedBundleIDs: allowed) }
+    }
+    #expect(input.posted.isEmpty)
+  }
+
+  @Test func anotherAppHoldingTheKeyboardIsRefusedWhateverTheFrontAppClaims() {
+    let input = FakeInput()
+    let a = FakeApps(front: Fx.notes)
+    a.focus = { 4242 }
+    a.ownsKeyboard = { _ in true }
+    let c = Fx.core(input: input, apps: a)
+    for r: ScreenInputRequest in [.key("return"), .type("x")] {
+      #expect(throws: ScreenRefusal.focusElsewhere(app: "Notes Example")) { try c.perform(r, allowedBundleIDs: allowed) }
+    }
+    #expect(input.posted.isEmpty)
+  }
+
+  @Test func theMenuAndPanelDecisionUsesTheOneFrontTheGateRead() throws {
+    final class Asked: @unchecked Sendable {
+      private let lock = NSLock()
+      private var _pids: [Int32] = []
+      var pids: [Int32] { lock.withLock { _pids } }
+      func add(_ p: Int32) { lock.withLock { _pids.append(p) } }
+    }
+    let input = FakeInput()
+    let a = FakeApps(front: Fx.notes)
+    let asked = Asked()
+    a.menu = []
+    a.hasPanel = { asked.add($0); return true }
+    // the front changes right after the gate's read (the second call): the decision was already made on Notes alone
+    a.onFrontmost = { n in if n == 2 { a.front = Fx.secret } }
+    let c = Fx.core(input: input, apps: a)
+    #expect(throws: ScreenRefusal.frontChanged(app: "Notes Example")) { try c.perform(.key("cmd+shift+g"), allowedBundleIDs: allowed) }
+    #expect(asked.pids == [Fx.notes.pid], "decided once, on the gate's own read")
+  }
+
+  @Test func aDisallowedFrontAppIsRefusedAsSuchBeforeTheMenuRule() {
+    let input = FakeInput()
+    let a = FakeApps(front: Fx.secret)
+    a.menu = []
+    let c = Fx.core(input: input, apps: a)
+    #expect(throws: ScreenRefusal.appNotAllowed(app: "com.example.secret", subject: .running(pid: 502))) {
+      try c.perform(.key("cmd+s"), allowedBundleIDs: allowed)
+    }
+    #expect(input.posted.isEmpty)
+  }
+
+  @Test func goToFolderOutsideAPanelNeedsTheMenu() throws {
+    let a = FakeApps(front: Fx.notes)
+    a.menu = []
+    let c = Fx.core(apps: a)
+    #expect(throws: ScreenRefusal.keyNotInMenu(keys: "cmd+shift+g", app: "Notes Example")) {
+      try c.perform(.key("cmd+shift+g"), allowedBundleIDs: allowed)
+    }
+    a.menu = [try ScreenKeyCombo.parse("cmd+shift+g")]
+    #expect(try c.perform(.key("cmd+shift+g"), allowedBundleIDs: allowed) == 1)
+  }
+
+  @Test func goToFolderIsPressedInAPanelWithNoMenuShortcutsButNeighboursAreNot() throws {
+    let input = FakeInput()
+    let a = FakeApps(front: Fx.notes)
+    a.menu = []
+    a.hasPanel = { $0 == Fx.notes.pid }
+    let c = Fx.core(input: input, apps: a)
+    #expect(try c.perform(.key("cmd+shift+g"), allowedBundleIDs: allowed) == 1)
+    #expect(try c.perform(.key("shift+Cmd+G"), allowedBundleIDs: allowed) == 1)
+    #expect(throws: ScreenRefusal.keyNotInMenu(keys: "cmd+shift+k", app: "Notes Example")) {
+      try c.perform(.key("cmd+shift+k"), allowedBundleIDs: allowed)
+    }
+    #expect(throws: ScreenRefusal.keyNotAllowed("cmd+shift+3")) { try c.perform(.key("cmd+shift+3"), allowedBundleIDs: allowed) }
+    #expect(input.posted.count == 2)
   }
 
   @Test func aPanelThatTakesTheKeyboardMidwayStopsTheTyping() {
@@ -262,13 +389,65 @@ struct ScreenPointOwnerTests {
   }
 
   @Test func anInvisibleWindowIsSkippedAndTheVisibleOneBelowOwnsThePoint() {
-    #expect(ScreenPointWindow.owner(at: CGPoint(x: 250, y: 250), in: Self.mac) == .app(ScreenApp(bundleID: "com.example.notes", pid: 501, name: "Notes Example")))
+    // (250, 250) lies under an invisible Chrome window above Notes: Chrome owns it, see anInvisibleWindowOfAnotherAppAboveTheTargetOwnsThePoint
+    #expect(ScreenPointWindow.owner(at: CGPoint(x: 250, y: 250), in: Self.mac) == .coveredBy(ScreenApp(bundleID: "com.google.Chrome", pid: 40, name: "Google Chrome")))
+    #expect(ScreenPointWindow.owner(at: CGPoint(x: 400, y: 400), in: Self.mac) == .app(ScreenApp(bundleID: "com.example.notes", pid: 501, name: "Notes Example")))
     #expect(ScreenPointWindow.owner(at: CGPoint(x: 900, y: 600), in: Self.mac) == .app(ScreenApp(bundleID: "com.google.Chrome", pid: 40, name: "Google Chrome")))
     #expect(ScreenPointWindow.owner(at: CGPoint(x: 5000, y: 5000), in: Self.mac) == .nothing)
     // a window off screen is not under anything
     var off = Self.mac
     off[5].onScreen = false
     #expect(ScreenPointWindow.owner(at: CGPoint(x: 160, y: 160), in: off) == .app(ScreenApp(bundleID: "com.google.Chrome", pid: 40, name: "Google Chrome")))
+  }
+
+  @Test func anInvisibleWindowOfAnotherAppAboveTheTargetOwnsThePoint() {
+    let p = CGPoint(x: 50, y: 50)
+    let r = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let notes = ScreenApp(bundleID: "com.example.notes", pid: 501, name: "Notes Example")
+    let visible = Self.w(501, "Notes Example", r, layer: 0, bundle: "com.example.notes")
+    let chrome = ScreenApp(bundleID: "com.google.Chrome", pid: 40, name: "Google Chrome")
+    for layer in [0, 3, 23] {
+      #expect(
+        ScreenPointWindow.owner(at: p, in: [Self.w(40, "Google Chrome", r, layer: layer, alpha: 0, bundle: "com.google.Chrome"), visible])
+          == .coveredBy(chrome), "layer \(layer)")
+    }
+    // the same app's own invisible window is no cover
+    #expect(ScreenPointWindow.owner(at: p, in: [Self.w(501, "Notes Example", r, layer: 0, alpha: 0), visible]) == .app(notes))
+    // an invisible window below the target is skipped as before
+    #expect(ScreenPointWindow.owner(at: p, in: [visible, Self.w(40, "Google Chrome", r, layer: 0, alpha: 0)]) == .app(notes))
+    // no invisible window: unchanged
+    #expect(ScreenPointWindow.owner(at: p, in: [visible, Self.w(40, "Google Chrome", r, layer: 0)]) == .app(notes))
+  }
+
+  @Test func theTopVisibleWindowSkipsInvisibleSlivers() {
+    let sliver = Self.w(61, "UserNotificationCenter", CGRect(x: 0, y: 0, width: 4, height: 4), layer: 8, alpha: 0)
+    let big = CGRect(x: 0, y: 0, width: 300, height: 300)
+    let mine = Self.w(501, "Notes Example", big, layer: 0)
+    let other = Self.w(40, "Google Chrome", big, layer: 0)
+    #expect(ScreenPointWindow.topVisibleAppPID(in: [sliver, mine, other]) == 501)
+    #expect(ScreenPointWindow.topVisibleAppPID(in: [sliver, other, mine]) == 40)
+    // small but visible, invisible but big, off screen, and system layers are all skipped too
+    let tiny = Self.w(70, "T", CGRect(x: 0, y: 0, width: 39, height: 300), layer: 0)
+    let ghost = Self.w(71, "G", big, layer: 0, alpha: 0)
+    var off = Self.w(72, "O", big, layer: 0)
+    off.onScreen = false
+    let menu = Self.w(73, "M", big, layer: 25)
+    #expect(ScreenPointWindow.topVisibleAppPID(in: [tiny, ghost, off, menu, mine]) == 501)
+    #expect(ScreenPointWindow.topVisibleAppPID(in: [sliver]) == nil)
+  }
+
+  @Test func aClickUnderAnotherAppsInvisibleWindowIsDecidedByThatAppsAllowListEntry() throws {
+    let input = FakeInput()
+    let a = FakeApps(front: Fx.notes)
+    let chrome = ScreenApp(bundleID: "com.google.Chrome", pid: 40, name: "Google Chrome")
+    a.owner = { _ in .coveredBy(chrome) }
+    let c = Fx.core(input: input, apps: a)
+    let want = ScreenRefusal.coveredByInvisibleWindow(app: "Google Chrome")
+    #expect(throws: want) { try c.perform(.click(CGPoint(x: 5, y: 5)), allowedBundleIDs: ["com.example.notes"]) }
+    #expect(want.reason == "An invisible window of Google Chrome covers that point, and Google Chrome isn't allowed. Nothing was clicked: take a screenshot, or click another point.")
+    #expect(input.posted.isEmpty)
+    // allowed: the click goes through
+    #expect(try c.perform(.click(CGPoint(x: 5, y: 5)), allowedBundleIDs: ["com.example.notes", "com.google.Chrome"]) == 1)
   }
 
   @Test func aClickOnTheMenuBarIsRefusedInWordsWithAnAllowedAppInFront() {

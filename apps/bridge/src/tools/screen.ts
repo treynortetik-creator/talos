@@ -109,7 +109,7 @@ function inputTool(
   properties: Record<string, unknown>,
   required: string[],
   build: (args: Record<string, unknown>) => Record<string, unknown> | string,
-  done: (args: Record<string, unknown>) => string,
+  done: (args: Record<string, unknown>, body: Record<string, unknown>) => string | ToolResult,
 ): ToolRecord {
   return {
     ...base,
@@ -121,7 +121,8 @@ function inputTool(
       if (typeof req === 'string') return fail(`${req} Nothing was done.`)
       const a = await send(ctx, req)
       if (!a.ok) return refused(ctx, a)
-      return ok(done(args))
+      const r = done(args, a.body)
+      return typeof r === 'string' ? ok(r) : r
     },
   }
 }
@@ -151,7 +152,16 @@ export const screenType = inputTool(
   { text: { type: 'string', maxLength: 10_000 } },
   ['text'],
   (a) => (typeof a.text === 'string' && a.text !== '' ? { op: 'type', text: a.text } : 'text is required.'),
-  (a) => `Typed ${[...String(a.text)].length} characters.`,
+  (a, body) => {
+    const n = [...String(a.text)].length
+    // an old Mac app sends no read_back: the same as a field that cannot be read
+    if (body.read_back === 'verified') return `Typed ${n} characters.`
+    if (body.read_back === 'mismatch' && typeof body.field_suffix === 'string')
+      return ok(
+        `The field doesn't show the text exactly as sent (autocorrect or formatting can change it, or only part landed). It now ends with "${body.field_suffix.slice(-80)}".`,
+      )
+    return `Sent ${n} characters (the field can't be read back to check them).`
+  },
 )
 
 export const screenKey = inputTool(

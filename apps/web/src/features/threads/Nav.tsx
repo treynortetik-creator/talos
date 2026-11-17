@@ -22,6 +22,7 @@ import {
 } from '../../ui/icons.tsx'
 import { Mascot } from '../../ui/Mascot.tsx'
 import { ThreadIcon } from '../../ui/ThreadIcon.tsx'
+import { Wordmark } from '../../ui/Wordmark.tsx'
 import { BUG_LABEL, bugPlacement } from '../bugreport/BugButton.tsx'
 import { openBugReport } from '../bugreport/store.ts'
 import { useAwaitingOwner } from '../cards/useAwaitingOwner.ts'
@@ -222,7 +223,10 @@ export function Sidebar() {
           animate={working}
         />
         {!collapsed && (
-          <span className="min-w-0 flex-1 truncate font-display text-xl font-semibold tracking-wide">{agent}</span>
+          <Wordmark
+            name={agent}
+            className={cn('min-w-0 flex-1 truncate text-xl', agent !== 'Talos' && 'font-semibold tracking-wide')}
+          />
         )}
         <button
           ref={toggleRef}

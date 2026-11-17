@@ -155,8 +155,20 @@ final class FakeApps: ScreenAppsBackend, @unchecked Sendable {
   var focus: (@Sendable () -> Int32?)?
   /// The front app's own menu key equivalents. Default: a few common ones (`Fx.menu`); nil: they cannot be read.
   var menu: [ScreenKeyCombo]? = Fx.menu
+  /// Whether the app provably owns the keyboard when no focus can be read (default true).
+  var ownsKeyboard: @Sendable (Int32) -> Bool = { _ in true }
+  /// Whether the app's focused window is a sheet or an open/save panel (default false).
+  var hasPanel: @Sendable (Int32) -> Bool = { _ in false }
+  /// Runs at the start of each `frontmost()` call with its number (1 for the first): the world changing between checks.
+  var onFrontmost: (@Sendable (Int) -> Void)?
+  private var _frontCalls = 0
+  /// The focused field's value (default nil: not readable).
+  var value: @Sendable (Int32) -> String? = { _ in nil }
   init(front: ScreenApp?) { _front = front }
   func keyboardFocusPID() -> Int32? { focus.map { $0() } ?? front?.pid }
+  func appOwnsKeyboard(pid: Int32) -> Bool { ownsKeyboard(pid) }
+  func frontHasPanel(pid: Int32) -> Bool { hasPanel(pid) }
+  func focusedValue(pid: Int32) -> String? { value(pid) }
   func menuShortcuts(pid: Int32) -> [ScreenKeyCombo]? { menu }
   var front: ScreenApp? {
     get { lock.withLock { _front } }
@@ -164,11 +176,21 @@ final class FakeApps: ScreenAppsBackend, @unchecked Sendable {
   }
   var opened: [String] { lock.withLock { _opened } }
   func runningApps() -> [ScreenApp] { running }
-  func frontmost() -> ScreenApp? { front }
+  func frontmost() -> ScreenApp? {
+    let n = lock.withLock { () -> Int in
+      _frontCalls += 1
+      return _frontCalls
+    }
+    onFrontmost?(n)
+    return front
+  }
   /// Points that are the menu bar or another system window.
   var systemArea: (@Sendable (CGPoint) -> Bool) = { _ in false }
+  /// A full answer for a point, when a test needs one `under` cannot give (a user-visible owner such as another app's invisible window).
+  var owner: (@Sendable (CGPoint) -> ScreenPointOwner)?
   func pointOwner(at point: CGPoint) -> ScreenPointOwner {
     if systemArea(point) { return .systemArea }
+    if let owner { return owner(point) }
     return under(point).map { .app($0) } ?? .nothing
   }
   /// Installed apps by id (default: every id is installed at `/Apps/<id>.app`). Set an id to nil for "not installed".

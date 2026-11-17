@@ -62,7 +62,9 @@ test('Settings > Bug reports: report a bug, and set, replace and turn off the we
 }, info) => {
   await open(page, '/settings/bug-reports')
   const s = page.getByRole('region', { name: 'Bug reports' }).or(page.locator('section[aria-labelledby="bug-reports"]'))
-  await expect(s.getByTestId('bug-webhook-state')).toHaveText('Off: reports are kept on your relay only.')
+  await expect(s.getByTestId('bug-webhook-state')).toHaveText(
+    'Off: reports go to your Mac (through your relay) and nowhere else.',
+  )
   const field = s.getByLabel('Send new reports to a webhook')
 
   // an address the relay would never call is refused here, in the relay's own words, and nothing is saved
@@ -71,7 +73,9 @@ test('Settings > Bug reports: report a bug, and set, replace and turn off the we
     await s.getByRole('button', { name: 'Save address' }).click()
     await expect(s.getByRole('alert')).toHaveText(BUG_WEBHOOK_URL_RULE)
   }
-  await expect(s.getByTestId('bug-webhook-state')).toHaveText('Off: reports are kept on your relay only.')
+  await expect(s.getByTestId('bug-webhook-state')).toHaveText(
+    'Off: reports go to your Mac (through your relay) and nowhere else.',
+  )
 
   // a good one: saved with the passkey step, then only its host is shown; the address (and its token) never comes back
   await field.fill('https://hooks.example.com/services/T0/B0/secret-part')
@@ -86,7 +90,9 @@ test('Settings > Bug reports: report a bug, and set, replace and turn off the we
   await page.screenshot({ path: info.outputPath('settings-bug-reports.png'), fullPage: true })
 
   await s.getByRole('button', { name: 'Turn off' }).click()
-  await expect(s.getByTestId('bug-webhook-state')).toHaveText('Off: reports are kept on your relay only.')
+  await expect(s.getByTestId('bug-webhook-state')).toHaveText(
+    'Off: reports go to your Mac (through your relay) and nowhere else.',
+  )
 
   // and the reporter itself, from here
   await s.getByRole('button', { name: 'Report a bug' }).click()

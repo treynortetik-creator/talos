@@ -4,11 +4,14 @@
 import { ThreadSessionOpts, type WorkerEntryT } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
 import type { Notification } from '../notify.ts'
+import { refuseWhenStopping } from '../stopping.ts'
 import type { UndoTurn } from './service.ts'
 
 /** What the live main bridge puts on the context. */
 export type UndoSeam = {
   before(t: UndoTurn): Promise<void>
+  /** The bridge is stopping: every hold that waits ends at once and records nothing (service.ts). */
+  abandon(): void
   /** Main's agent folder; undefined when it is not known. */
   mainFolder(): string | undefined
   /** Runs `fn` with no point taken, recorded or pruned for these threads meanwhile (a restore). */
@@ -52,8 +55,8 @@ export async function waitForRestore(
   folder: 'main' | { worker: string | undefined },
 ): Promise<void> {
   const undo = ctx.undo
-  if (!undo) return
-  await undo.restoring.waitFor(folder === 'main' ? undo.mainFolder() : folder.worker)
+  if (undo) await undo.restoring.waitFor(folder === 'main' ? undo.mainFolder() : folder.worker)
+  refuseWhenStopping(ctx) // a hand-over after this would go to a session that is going away
 }
 
 /** Marks a hand-over into `folder` as just made: its session counts as working until its turn shows (busy.ts). */
@@ -75,7 +78,7 @@ export async function pointBefore(
   opts: { replace?: boolean | 'elsewhere' } = {},
 ): Promise<void> {
   const undo = ctx.undo
-  if (!undo) return
+  if (!undo) return refuseWhenStopping(ctx) // no undo: no waits, but a stopping bridge still hands nothing over
   await waitForRestore(ctx, folder)
   const m = ownerMessage(n)
   if (m)
@@ -84,6 +87,6 @@ export async function pointBefore(
       folder: folder === 'main' ? undo.mainFolder() : folder.worker,
       ...(opts.replace ? { replace: opts.replace } : {}),
     })
-  await waitForRestore(ctx, folder)
+  await waitForRestore(ctx, folder) // refuses a bridge that is stopping, whether the hold ran out or was given up
   noteHandOver(ctx, folder) // the hand-over follows now: its session counts as working until its turn shows
 }

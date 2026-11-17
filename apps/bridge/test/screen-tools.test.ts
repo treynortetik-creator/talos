@@ -233,7 +233,7 @@ describe('the tools, through callTool', () => {
 
   test('each input tool sends its op and says what it did', async () => {
     const h = home()
-    const seen = await fakeSocket(h, () => JSON.stringify({ v: 1, ok: true, events: 1 }))
+    const seen = await fakeSocket(h, () => JSON.stringify({ v: 1, ok: true, events: 1, read_back: 'verified' }))
     const ctx = ctxFor(h)
     expect(textOf(await callTool(ctx, 'screen_click', { x: 10, y: 20, button: 'right', count: 2 }))).toBe(
       'Clicked at 10, 20.',
@@ -251,6 +251,29 @@ describe('the tools, through callTool', () => {
       { v: 1, op: 'scroll', x: 1, y: 2, dx: 0, dy: -40 },
       { v: 1, op: 'open_app', bundle_id: 'com.example.notes' },
     ])
+  })
+
+  test('screen_type words what the Mac read back from the field', async () => {
+    const h = home()
+    let answer: Record<string, unknown> = {}
+    await fakeSocket(h, () => JSON.stringify({ v: 1, ok: true, events: 2, ...answer }))
+    const ctx = ctxFor(h)
+    answer = { read_back: 'verified' }
+    let r = await callTool(ctx, 'screen_type', { text: 'héllo' })
+    expect(r.isError).toBeUndefined()
+    expect(textOf(r)).toBe('Typed 5 characters.')
+    for (const a of [{ read_back: 'unverified' }, {}]) {
+      answer = a
+      r = await callTool(ctx, 'screen_type', { text: 'héllo' })
+      expect(r.isError).toBeUndefined()
+      expect(textOf(r)).toBe("Sent 5 characters (the field can't be read back to check them).")
+    }
+    answer = { read_back: 'mismatch', field_suffix: 'llo' }
+    r = await callTool(ctx, 'screen_type', { text: 'héllo' })
+    expect(r.isError).toBeUndefined()
+    expect(textOf(r)).toBe(
+      'The field doesn\'t show the text exactly as sent (autocorrect or formatting can change it, or only part landed). It now ends with "llo".',
+    )
   })
 
   test('screen_apps lists the apps and which are allowed', async () => {

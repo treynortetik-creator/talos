@@ -14,6 +14,7 @@ import {
   BugInboxDelivery,
   type BugInboxDeliveryT,
   newUlid,
+  PROBLEM_LIMITS,
   Problem,
   type ProblemAttachedT,
   type ProblemT,
@@ -95,9 +96,15 @@ export function problemFromDelivery(
       ...(v.relay ? { relay: v.relay } : {}),
       ...(v.bridge ? { bridge: v.bridge } : {}),
     },
-    // the reporter is the web page, whichever shell (a browser, the iPhone app) holds it
-    device: 'browser',
-    routes: [],
+    // the app that sent it (a browser when an older sender did not say); the screens are withheld with the thread
+    device: r.client ?? 'browser',
+    routes: env.BUG_INBOX_NO_THREAD
+      ? []
+      : r.routes?.length
+        ? r.routes
+        : r.screen
+          ? [r.screen.slice(0, PROBLEM_LIMITS.routeChars)]
+          : [],
     truncated: false,
     ...(screenshot ? { screenshot } : {}),
     attached,

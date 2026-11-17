@@ -36,6 +36,7 @@ import { KeyedChain } from './keyed-chain.ts'
 import { systemNotification } from './notify.ts'
 import { say } from './owner-words.ts'
 import { onThreadSessionControl } from './router/controls.ts'
+import { isStopping } from './stopping.ts'
 import { LiveTransport } from './transport.ts'
 import { onUndoRequest, resendUndoRequest } from './undo/request.ts'
 
@@ -126,6 +127,7 @@ export class Inbound {
 
   /** After `ready` the relay re-sends every unconsumed frame in one burst; collect it so old owner items batch. */
   onReady() {
+    if (this.ctx.closing) return // stopping: nothing is collected, so nothing is taken up (stopping.ts)
     // A reconnect inside the previous burst's settle window: those items are acked `delivered` and held in `inflight`, so
     // the replay would skip them. Process them now instead of dropping them.
     this.flushCollected()
@@ -142,6 +144,7 @@ export class Inbound {
    */
   onBadFrame(raw: Record<string, unknown> | undefined, message: string) {
     const { ctx } = this
+    if (ctx.closing) return // stopping: not acked, not refused, so the relay keeps it for the next bridge (stopping.ts)
     const id = typeof raw?.id === 'string' && ULID.test(raw.id) ? raw.id : undefined
     const type = typeof raw?.type === 'string' ? raw.type : ''
     // history.request and media.fetch are signed owner reads too (they are not in OWNER_FRAME_TYPES: their handlers differ)
@@ -202,6 +205,7 @@ export class Inbound {
 
   onFrame(raw: Record<string, unknown>, frame: Frame) {
     const { ctx } = this
+    if (ctx.closing) return // stopping: not acked, not answered, not marked inflight, so the relay keeps it (stopping.ts)
     // Parsed, but with an error code this build does not list: handled below as 'internal' (protocol audit O5), and still
     // logged and noted like any part of a frame this build could not read, because it is the "update Talos" sign.
     const newer = newerInParsed(raw)
@@ -310,6 +314,7 @@ export class Inbound {
   }
 
   private async processBatch(items: Item[], fromReplay: boolean) {
+    if (this.ctx.closing) return this.letGo(items) // a settle timer or the queue got here after stop began
     let backlog: Item[] = []
     if (fromReplay) {
       for (const it of items) {
@@ -350,9 +355,18 @@ export class Inbound {
 
   /** One bad frame must not stop the queue; it stays unconsumed and the relay re-sends it on the next hello. */
   private async guard(_first: Item, fn: () => Promise<void>, all: Item[]) {
+    if (this.ctx.closing) return this.letGo(all) // a lane or the queue reached it after stop began: not started
     try {
       await fn()
     } catch (e) {
+      if (isStopping(e)) return this.letGo(all) // given up on purpose: still unconsumed, and the relay replays it
+      if (this.ctx.store.closed) {
+        // finished after stop closed the store: nothing was marked or acked, so the relay replays it (stopping.ts)
+        this.ctx.log.info('a hand-over finished after the store closed; the relay replays it', {
+          type: _first.frame.type,
+        })
+        return this.letGo(all)
+      }
       this.ctx.log.error('frame processing failed', {
         type: _first.frame.type,
         id: _first.frame.id,
@@ -360,6 +374,11 @@ export class Inbound {
       })
       for (const it of all) this.inflight.delete(it.frame.id)
     }
+  }
+
+  /** Items a stopping bridge will not start: they were only acked `delivered`, so the relay still holds them for the next bridge. */
+  private letGo(items: Item[]): void {
+    for (const it of items) this.inflight.delete(it.frame.id)
   }
 
   receivedAtOf(it: Item): number {
@@ -386,6 +405,7 @@ export class Inbound {
   /** Seen + consumed. Marking happens only after the notification went out, so a crash before it replays the frame. */
   done(it: Item, extraIds: string[] = [], outcome = 'ok') {
     const { ctx } = this
+    if (ctx.store.closed) return // a stop closed the store under this hand-over: not marked, not acked, so the relay replays it
     const now = ctx.clock.now()
     ctx.store.markSeen(it.frame.id, now, outcome)
     for (const id of extraIds) ctx.store.markSeen(id, now, outcome)

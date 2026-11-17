@@ -7,7 +7,7 @@
 // other end); otherwise nothing leaves this relay.
 import { createHmac } from 'node:crypto'
 import dns from 'node:dns'
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
 import { join } from 'node:path'
@@ -22,7 +22,12 @@ import {
   bugWebhookUrlOk,
   eventInfo,
   isBlockedAddress,
+  PROBLEM_LIMITS,
+  Problem,
+  type ProblemT,
+  problemFingerprint,
   redactReport,
+  scrubProblem,
   shownWebhookHost,
   verifyOwnerFrame,
 } from '@talos-app/protocol'
@@ -31,6 +36,7 @@ import { Hono } from 'hono'
 import { getSession, requireCsrf, requireSession, takeRate } from '../auth/contract.ts'
 import type { AppEnv, Clock, CryptoService, Logger, RelayServices } from '../services.ts'
 import { idleBodyTimeout, lateRequest, limitBody, readBodyWithDeadline } from './body-guard.ts'
+import { findRuntime } from './runtime.ts'
 import { sniffMime } from './sniff.ts'
 
 const DAY_MS = 86_400_000
@@ -117,6 +123,108 @@ export function sweepBugReports(d: Deps): number {
     }
   }
   return old.length
+}
+
+// ---- the owner's own Mac -------------------------------------------------------------------------------------------------
+
+type StoredPost = Omit<BugReportPostT, 'osig' | 'image_b64'>
+
+/** A stored report, decrypted: the JSON as stored (the post minus the signature and the picture) and the picture. Null when a file is gone or unreadable. */
+export function loadBugReport(d: Deps, id: string): { post: StoredPost; image: Buffer } | null {
+  try {
+    const json = d.crypto.decrypt(readFileSync(jsonPath(d, id)), `bug:${id}:json`)
+    const image = d.crypto.decrypt(readFileSync(imgPath(d, id)), `bug:${id}:img`)
+    return { post: JSON.parse(new TextDecoder().decode(json)) as StoredPost, image: Buffer.from(image) }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The problem the owner's own report becomes on his Mac: `source: 'web'` (the reporter is the web page), `device` the app that
+ * sent it (a browser when an older app did not say), no `install`, so it is not shown as another install's. Its id is the report id, so a retry or the startup backfill merges
+ * and never doubles. What he typed is the message (its start) and the steps (all of it, with what he expected).
+ */
+export async function ownReportProblem(services: RelayServices, post: StoredPost, image: Buffer): Promise<ProblemT> {
+  const r = post.report
+  const v = r.versions
+  const now = services.clock.now()
+  const at = Date.parse(post.ts)
+  const full = r.expected ? `${r.what_went_wrong}\n\nExpected: ${r.expected}` : r.what_went_wrong
+  const screenshot = await services.media.put({
+    bytes: image,
+    mime: post.image_type,
+    name: `bug-report.${post.image_type === 'image/png' ? 'png' : 'jpg'}`,
+  })
+  const draft: ProblemT = {
+    id: post.id,
+    source: 'web',
+    kind: 'owner',
+    fingerprint: '0'.repeat(32),
+    at: new Date(Number.isFinite(at) && at <= now ? at : now).toISOString(),
+    name: 'bug report',
+    message: r.what_went_wrong.slice(0, PROBLEM_LIMITS.messageChars),
+    frames: [],
+    versions: {
+      ...(v.app ? { app: v.app } : {}),
+      ...(v.relay ? { relay: v.relay } : {}),
+      ...(v.bridge ? { bridge: v.bridge } : {}),
+    },
+    device: r.client ?? 'browser',
+    // an older app sent only the one screen: better than none
+    routes: r.routes?.length ? r.routes : r.screen ? [r.screen.slice(0, PROBLEM_LIMITS.routeChars)] : [],
+    steps: full.slice(0, PROBLEM_LIMITS.stepsChars),
+    truncated: full.length > PROBLEM_LIMITS.stepsChars,
+    screenshot,
+  }
+  const clean = scrubProblem(draft)
+  return Problem.parse({ ...clean, fingerprint: problemFingerprint(clean) })
+}
+
+/**
+ * Queues one stored report to this relay's own bridge (a durable `problem.item`: sent at once if the Mac is online, else on its
+ * next hello) and marks the row. A failure leaves the mark empty, so the startup backfill tries again. Returns whether it was queued.
+ */
+export async function queueToBridge(services: RelayServices, post: StoredPost, image: Buffer): Promise<boolean> {
+  const rt = findRuntime(services)
+  if (!rt) {
+    services.log.info({ report_id: post.id }, 'bug report not queued to the bridge: no runtime')
+    return false
+  }
+  try {
+    const p = await ownReportProblem(services, post, image)
+    // `resume`: the same report queued twice (the mark failed, a backfill raced the route) finds its own frame and is not doubled
+    await rt.hub.toBridge({ type: 'problem.item', id: p.id, problem: p }, { durable: true, resume: true })
+    services.db
+      .prepare('update core_bug_reports set bridge_queued_at = ? where report_id = ?')
+      .run(services.clock.now(), post.id)
+    return true
+  } catch (e) {
+    services.log.warn(
+      { report_id: post.id, err: e instanceof Error ? e.message.slice(0, 60) : 'error' },
+      'bug report not queued to the bridge',
+    )
+    return false
+  }
+}
+
+/** Queues every stored report not yet queued, oldest first (reports from before this path existed, and any whose queueing failed). Run once at startup. */
+export async function backfillOwnReports(services: RelayServices): Promise<number> {
+  const deps = { db: services.db, crypto: services.crypto, clock: services.clock, dataDir: services.env.DATA_DIR }
+  const ids = services.db
+    .prepare('select report_id from core_bug_reports where bridge_queued_at is null order by created_at, report_id')
+    .all() as Array<{ report_id: string }>
+  let queued = 0
+  for (const { report_id: id } of ids) {
+    const got = loadBugReport(deps, id)
+    if (!got) {
+      services.log.warn({ report_id: id }, 'bug report backfill: files missing, skipped')
+      continue
+    }
+    if (await queueToBridge(services, got.post, got.image)) queued++
+  }
+  if (ids.length > 0) services.log.info({ found: ids.length, queued }, 'bug report backfill to the bridge')
+  return queued
 }
 
 // ---- the named event ----------------------------------------------------------------------------------------------------
@@ -373,11 +481,15 @@ bugReportRoutes.post(
       if (e instanceof Replayed) return c.json({ error: 'replay' }, 409)
       throw e
     }
+    // The owner's own Mac gets it whatever the webhook does.
+    const { osig: _sig, image_b64: _img, ...stored } = post
+    const bridge = (await queueToBridge(services, stored, image)) ? 'queued' : 'failed'
     const target = bugWebhookTarget(services)
     emitRelayEvent(services.log, BUG_REPORTED_EVENT, {
       report_id: post.id,
       device_id: post.device_id,
       webhook: target ? 'queued' : 'off',
+      bridge,
     })
     if (target) void sendWebhook(services, target, post, image.length)
     return c.json({ ok: true, id: post.id }, 201)

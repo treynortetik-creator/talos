@@ -5,11 +5,23 @@ import Foundation
 public protocol ScreenService: Sendable {
   func shot(area: ScreenArea, allowed: ScreenAllowed) async throws(ScreenRefusal) -> ScreenShot
   func input(_ request: ScreenInputRequest, allowed: ScreenAllowed) throws(ScreenRefusal) -> Int
+  /// Types text and reads the field back.
+  func type(_ text: String, allowed: ScreenAllowed) throws(ScreenRefusal) -> (events: Int, readBack: ScreenCore.ReadBack)
   func listApps() -> [ScreenApp]
   func open(bundleID: String, allowed: ScreenAllowed) async throws(ScreenRefusal)
 }
 
+extension ScreenService {
+  /// A service with no read-back: the text is sent, and nothing says it landed.
+  public func type(_ text: String, allowed: ScreenAllowed) throws(ScreenRefusal) -> (events: Int, readBack: ScreenCore.ReadBack) {
+    (try input(.type(text), allowed: allowed), .unverified)
+  }
+}
+
 extension ScreenCore: ScreenService {
+  public func type(_ text: String, allowed: ScreenAllowed) throws(ScreenRefusal) -> (events: Int, readBack: ReadBack) {
+    try typeText(text, allowed: allowed)
+  }
   public func shot(area: ScreenArea, allowed: ScreenAllowed) async throws(ScreenRefusal) -> ScreenShot {
     try await agentCapture(allowed: allowed, area: area)
   }
@@ -105,7 +117,14 @@ public struct ScreenProtocol: Sendable {
         return Self.ok(id: id, ["events": n])
       case "type":
         guard let text = obj["text"] as? String else { throw ScreenRefusal.badRequest("type needs text") }
-        return Self.ok(id: id, ["events": try service.input(.type(text), allowed: allowed)])
+        let t = try service.type(text, allowed: allowed)
+        var body: [String: Any] = ["events": t.events]
+        switch t.readBack {
+        case .verified: body["read_back"] = "verified"
+        case .mismatch(let suffix): body["read_back"] = "mismatch"; body["field_suffix"] = suffix
+        case .unverified: body["read_back"] = "unverified"
+        }
+        return Self.ok(id: id, body)
       case "key":
         guard let keys = obj["keys"] as? String else { throw ScreenRefusal.badRequest("key needs keys, like \"cmd+s\"") }
         return Self.ok(id: id, ["events": try service.input(.key(keys), allowed: allowed)])

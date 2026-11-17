@@ -138,6 +138,28 @@ extension ScreenCore {
   /// The wait between two pieces of typed text, so an app keeps up and the front-app check before each piece has something to see.
   /// The longest text (10,000 characters, 625 pieces) then takes about 5 s, inside the socket's 20 s.
   public static let textPaceSeconds = 0.008
+  /// The wait before the first piece of typed text.
+  public static let textSettleSeconds = 0.05
+  /// How many trailing characters of the field a failed read-back reports.
+  static let readBackSuffix = 40
+
+  /// What the field held after typing.
+  public enum ReadBack: Sendable, Equatable {
+    case verified
+    case mismatch(suffix: String)
+    /// The field could not be read.
+    case unverified
+  }
+
+  /// Types text (`perform`), then reads the focused field once and says whether the text is in it.
+  public func typeText(_ text: String, allowed: ScreenAllowed) throws(ScreenRefusal) -> (events: Int, readBack: ReadBack) {
+    let (n, gated) = try send(.type(text), allowed: allowed)
+    // only the app the text was gated for: if another app came to the front since, or it is no longer allowed, nothing is read
+    guard let gated, let now = apps.frontmost(), now.pid == gated.pid, allowed.allows(bundleID: now.bundleID, pid: now.pid),
+      let value = apps.focusedValue(pid: gated.pid)
+    else { return (n, .unverified) }
+    return (n, value.contains(text) ? .verified : .mismatch(suffix: String(value.suffix(Self.readBackSuffix))))
+  }
 
   /// Sends one request if every gate passes: Accessibility granted, an allowed app (not Talos) in front at each event, and
   /// for a click or scroll an allowed app's window under the pointer. Text is typed a few characters at a time and the
@@ -145,14 +167,26 @@ extension ScreenCore {
   /// Returns the number of events posted.
   @discardableResult
   public func perform(_ request: ScreenInputRequest, allowed: ScreenAllowed) throws(ScreenRefusal) -> Int {
+    try send(request, allowed: allowed).posted
+  }
+
+  /// `perform`, also saying which app the last event was gated for.
+  func send(_ request: ScreenInputRequest, allowed: ScreenAllowed) throws(ScreenRefusal) -> (posted: Int, front: ScreenApp?) {
     if case .key(let text) = request { try checkKey(text) }
     let events = try Self.events(for: request)
     var posted = 0
+    var gated: ScreenApp?
+    var keyText: String?
+    if case .key(let t) = request { keyText = t }
     for e in events {
       // the socket gave up on this request (it ran past its time): stop between pieces
       if Task.isCancelled { throw .inputFailed("stopped after \(posted) of \(events.count) events: the request ran out of time") }
       if posted > 0, case .text = e { pause(Self.textPaceSeconds) }
-      let front = try gate(e, allowed)
+      // the app needs a beat before the first piece, or its first characters are lost; waited before the gate, so nothing can
+      // change between the check and the post
+      if posted == 0, case .text = e { pause(Self.textSettleSeconds) }
+      let front = try gate(e, allowed, keyText: keyText)
+      gated = front
       do { try input.post(e) } catch let r as ScreenRefusal { throw r } catch {
         throw .inputFailed(ScreenRefusal.detail(error))
       }
@@ -162,8 +196,12 @@ extension ScreenCore {
       if case .scroll = e { continue }
       if apps.frontmost()?.pid != front.pid { throw .frontChanged(app: front.name) }
     }
-    return posted
+    return (posted, gated)
   }
+
+  /// Shortcuts of open and save panels, which are in no app's menu bar: they skip the menu-shortcut check only.
+  public static let panelShortcuts: Set<String> = ["cmd+shift+g"]  // Go to Folder
+  static let panelCombos: [ScreenKeyCombo] = panelShortcuts.compactMap(ScreenKeyGuard.combo)
 
   /// A key the whole Mac handles is never pressed (`ScreenKeyGuard`, the fn / globe key, F13-F20). Then the rule (review R2-2): a
   /// plain key or shift+key goes anywhere; a combination with cmd, ctrl or opt only when it is one of the front app's own menu
@@ -173,10 +211,15 @@ extension ScreenCore {
     if !parts.isDisjoint(with: ScreenKeyGuard.fnNames) || !parts.isDisjoint(with: ScreenKeyGuard.highFKeys) { throw .keyNotAllowed(text) }
     let combo = try ScreenKeyCombo.parse(text)
     if ScreenKeyGuard.isGlobal(combo, extra: refusedKeys()) { throw .keyNotAllowed(text) }
+  }
+
+  /// The menu rule, decided on the front app the gate read (one read, so the front cannot change between this and the gate).
+  func checkMenu(_ text: String, _ combo: ScreenKeyCombo, front: ScreenApp) throws(ScreenRefusal) {
     let mods = combo.flags & (ScreenKeyCombo.cmd | ScreenKeyCombo.ctrl | ScreenKeyCombo.opt | ScreenKeyCombo.shift)
     guard mods & (ScreenKeyCombo.cmd | ScreenKeyCombo.ctrl | ScreenKeyCombo.opt) != 0 else { return }
-    guard permissions.accessibility() else { throw .accessibilityNotGranted }
-    guard let front = apps.frontmost() else { throw .noFrontmostApp }
+    // a panel shortcut is in no menu bar: it skips the menu check only (the layers above already applied), and only while the
+    // front app's focused window is a sheet or an open/save panel
+    if Self.panelCombos.contains(where: { $0.keyCode == combo.keyCode && $0.flags == mods }), apps.frontHasPanel(pid: front.pid) { return }
     let menu = apps.menuShortcuts(pid: front.pid) ?? []
     guard menu.contains(where: { $0.keyCode == combo.keyCode && $0.flags == mods }) else {
       throw .keyNotInMenu(keys: text, app: front.name)
@@ -230,16 +273,24 @@ extension ScreenCore {
   }
 
   @discardableResult
-  func gate(_ e: ScreenInputEvent, _ allowed: ScreenAllowed) throws(ScreenRefusal) -> ScreenApp {
+  func gate(_ e: ScreenInputEvent, _ allowed: ScreenAllowed, keyText: String? = nil) throws(ScreenRefusal) -> ScreenApp {
     guard permissions.accessibility() else { throw .accessibilityNotGranted }
     guard let front = apps.frontmost() else { throw .noFrontmostApp }
     guard !isSelf(front) else { throw .talosItself }
     guard allowed.allows(bundleID: front.bundleID, pid: front.pid) else {
       throw .appNotAllowed(app: front.bundleID ?? front.name, subject: .running(pid: front.pid))
     }
+    // the menu rule, after the allow list (a disallowed app is refused as such), on the front the gate read
+    if case .key(let combo) = e, let keyText { try checkMenu(keyText, combo, front: front) }
     // a key or text goes where the keyboard really is: a panel that took it without coming to the front gets nothing
     switch e {
-    case .key, .text: guard apps.keyboardFocusPID() == front.pid else { throw .focusElsewhere(app: front.name) }
+    case .key, .text:
+      // nil: nothing reports focus. Then only an app that provably owns the keyboard passes (it fails closed); another pid never does.
+      switch apps.keyboardFocusPID() {
+      case front.pid: break
+      case nil: guard apps.appOwnsKeyboard(pid: front.pid) else { throw .focusElsewhere(app: front.name) }
+      default: throw .focusElsewhere(app: front.name)
+      }
     case .click, .scroll: break
     }
     let point: CGPoint?
@@ -249,13 +300,16 @@ extension ScreenCore {
     }
     if let point {
       let under: ScreenApp
+      var covering = false
       switch apps.pointOwner(at: point) {
       case .systemArea: throw .systemArea
       case .nothing: throw .nothingAtPoint
       case .app(let a): under = a
+      case .coveredBy(let a): (under, covering) = (a, true)
       }
       guard !isSelf(under) else { throw .talosItself }
       guard allowed.allows(bundleID: under.bundleID, pid: under.pid) else {
+        if covering { throw .coveredByInvisibleWindow(app: under.name) }
         throw .appNotAllowed(app: under.bundleID ?? under.name, subject: .running(pid: under.pid))
       }
     }
@@ -279,6 +333,8 @@ public enum ScreenPointOwner: Sendable, Equatable {
   /// The menu bar, a menu bar extra, or a window above normal ones: never clicked for an agent.
   case systemArea
   case nothing
+  /// An invisible window of another app lies above the visible owner at the point and owns the click: this app.
+  case coveredBy(ScreenApp)
 }
 
 /// One window as the window list gives it, for `owner(at:in:)`.
@@ -311,7 +367,25 @@ public struct ScreenPointWindow: Sendable, Equatable {
   public static func owner(at point: CGPoint, in windows: [ScreenPointWindow]) -> ScreenPointOwner {
     let here = windows.filter { $0.onScreen && $0.bounds.contains(point) }
     if here.contains(where: { $0.layer >= systemLayer }) { return .systemArea }
-    guard let w = here.first(where: { $0.alpha > 0 }) else { return .nothing }
+    guard let i = here.firstIndex(where: { $0.alpha > 0 }) else { return .nothing }
+    let w = here[i]
+    // the window server can still hand the click to an invisible window above the owner at an app layer: if it is another
+    // app's, that app owns the point, and the allow list decides
+    if let c = here[..<i].first(where: { (0..<systemLayer).contains($0.layer) && $0.alpha == 0 && $0.pid != w.pid }) {
+      return .coveredBy(ScreenApp(bundleID: c.bundleID, pid: c.pid, name: c.name))
+    }
     return .app(ScreenApp(bundleID: w.bundleID, pid: w.pid, name: w.name))
+  }
+
+  /// A window smaller than this (either side) is a sliver, not where a person sees an app.
+  static let minVisibleSide: CGFloat = 40
+
+  /// The pid of the topmost on-screen window at layers 0-23 that a person could see: alpha above 0 and at least
+  /// `minVisibleSide` on each side. Invisible slivers (a notification helper's 4x4 window at alpha 0) are skipped.
+  public static func topVisibleAppPID(in windows: [ScreenPointWindow]) -> Int32? {
+    windows.first {
+      $0.onScreen && (0..<systemLayer).contains($0.layer) && $0.alpha > 0 && $0.bounds.width >= minVisibleSide
+        && $0.bounds.height >= minVisibleSide
+    }?.pid
   }
 }

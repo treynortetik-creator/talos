@@ -398,6 +398,22 @@ struct ShellPaneGuiTests {
     out.cancel()
   }
 
+  @Test func aShellPaneCloseFromAPageThatIsNotSignedInIsIgnoredAndASignedInOneEndsTheShell() async throws {
+    let r = Rig()
+    defer { r.end() }
+    r.signIn()
+    r.page(r.slot("trip"))
+    await waitFor { r.up("trip") }
+    let pids = r.pids("trip")
+    r.page(#"{"type":"ready","shell_api":1,"features":[],"signed_in":false}"#)
+    r.page(r.close("trip"))
+    #expect(r.pane.openThreadsForTest == ["trip"] && pids.allSatisfy(alive), "signed out: the close is ignored")
+    r.signIn()
+    r.page(r.close("trip"))
+    await waitFor { pids.allSatisfy { !alive($0) } }
+    #expect(r.pane.openThreadsForTest.isEmpty && pids.allSatisfy { !alive($0) }, "signed in: the close ends the shell")
+  }
+
   @Test func forgettingThisMacEndsEveryShell() async throws {
     let r = Rig()
     defer { r.end() }

@@ -8,7 +8,7 @@ import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { type CardT, CONFIG_PROPOSE_FEATURE } from '@talos-app/protocol'
-import { ActionRuleAsks, RULE_TEXT, ruleCallKey, SHIPPED_ASK_RULES } from '../src/action-rule-asks.ts'
+import { ActionRuleAsks, RULE_TEXT, ruleCallKey, ruleKindOf, SHIPPED_ASK_RULES } from '../src/action-rule-asks.ts'
 import { pgidOf } from '../src/hub/server.ts'
 import { eventually, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
 
@@ -294,6 +294,74 @@ describe('Always allow, per kind', () => {
     expect((await nextCard(x, 0)).kind).toBe('publish')
   })
 
+  test('KIT-1: trash, delete, publish, share and schedule through a connector are no kind: always-allow messages never covers them', async () => {
+    const x = await start({
+      always_allow: [{ kind: 'message', destination: null, added_at: '2026-11-14T00:00:00.000Z' }],
+    })
+    // (b) send and reply pass as before
+    for (const tool_name of ['mcp__slack__send_message', 'mcp__slack__reply_to_thread', 'mcp__slack__post_update']) {
+      expect(await take(x, { rule: 'send-or-publish-via-connector', tool_name }, { text: 'hi' })).toBe('allow')
+    }
+    // (a) these still ask, under either rule id
+    for (const tool_name of [
+      'mcp__drive__trash_file',
+      'mcp__drive__delete_file',
+      'mcp__cms__publish_page',
+      'mcp__drive__share_file',
+      'mcp__cal__schedule_event',
+    ]) {
+      for (const rule of ['send-or-publish-via-connector', 'destructive-via-connector']) {
+        expect(await take(x, { rule, tool_name }, { id: '1' })).toBe('none')
+        // (c) no kind
+        expect(ruleKindOf({ rule, tool_name, tool_input: { id: '1' } })).toBeNull()
+      }
+    }
+    // BSEC-2: a repo delete through gh api is a no-kind ask; a GET is not
+    const gh = (command: string) => ({
+      rule: 'github-repo-public-or-delete',
+      tool_name: 'Bash',
+      tool_input: { command },
+    })
+    const hit = (command: string) =>
+      new RegExp(SHIPPED_ASK_RULES.find((r) => r.id === 'github-repo-public-or-delete')?.command ?? '').test(command)
+    expect(hit('gh api -X DELETE repos/o/r')).toBe(true)
+    expect(hit('gh api --method=DELETE repos/o/r/git/refs/heads/x')).toBe(true)
+    expect(hit('gh api repos/o/r --method delete')).toBe(true)
+    expect(hit('gh api repos/o/r')).toBe(false)
+    expect(hit(`gh api repos/o/r -f visibility='public'`)).toBe(true)
+    expect(hit('gh api repos/o/r -f private="false"')).toBe(true)
+    expect(hit('GH_TOKEN=x gh repo delete o/r --yes')).toBe(true)
+    expect(hit('command gh api -X DELETE repos/o/r')).toBe(true)
+    expect(ruleKindOf(gh('gh api -X DELETE repos/o/r'))).toBeNull()
+    expect(hit(`gh api -X 'DELETE' repos/o/r`)).toBe(true)
+    expect(hit('gh api --method="DELETE" repos/o/r')).toBe(true)
+    // review: a crafted run must match fast (a slow match times the guard out and lets the push through), and still hit push-to-main
+    const crafted = `${'(gh api repos/ '.repeat(1500)}; git push origin main`
+    const t0 = performance.now()
+    expect(hit(crafted)).toBe(false)
+    const ms = performance.now() - t0
+    console.log(`crafted line matched in ${ms.toFixed(0)} ms`)
+    expect(ms).toBeLessThan(1000)
+    expect(new RegExp(SHIPPED_ASK_RULES.find((r) => r.id === 'push-to-main')?.command ?? '').test(crafted)).toBe(true)
+    // read-only shared-drive tools are not destructive; share_file still is
+    const destructive = new RegExp(`^(?:${SHIPPED_ASK_RULES.find((r) => r.id === 'destructive-via-connector')?.tool})$`)
+    expect(destructive.test('mcp__drive__list_shared_drives')).toBe(false)
+    expect(destructive.test('mcp__drive__get_shared_drive_metadata')).toBe(false)
+    expect(destructive.test('mcp__drive__share_file')).toBe(true)
+    expect(destructive.test('mcp__drive__get_shared_drive')).toBe(false)
+    // real share tools with "shared" in the name still ask
+    for (const t of [
+      'create_shared_link',
+      'shared_link_create',
+      'add_shared_drive_member',
+      'shared_drive_add_permission',
+    ])
+      expect(destructive.test(`mcp__drive__${t}`)).toBe(true)
+    expect(
+      ruleKindOf({ rule: 'send-or-publish-via-connector', tool_name: 'mcp__slack__send_message', tool_input: {} }),
+    ).toBe('message')
+  })
+
   test('"Always allow" on the card adds the kind; a plain Allow once does not', async () => {
     const x = await start()
     const one = rawCall(x.home, askLine())
@@ -360,13 +428,17 @@ describe('Always allow, per kind', () => {
         }
       })
       .filter((r) => r.decision === 'ask')
-    expect(rules.length).toBe(6)
+    expect(rules.length).toBe(7)
     expect(rules.map(({ id, kind, tool, command }) => ({ id, kind, tool, ...(command ? { command } : {}) }))).toEqual(
       SHIPPED_ASK_RULES.map((r) => ({ ...r })),
     )
-    // the no-kind rules come before every rule with a kind (the hook stops at the first match)
-    const firstKind = rules.findIndex((r) => r.kind)
-    expect(rules.slice(firstKind).every((r) => r.kind)).toBe(true)
+    // the no-kind rules come before every rule with a kind (the hook stops at the first match), except the connector's
+    // destructive rule, which sits just ahead of the connector send rule (after the allow rule for the app's own tools)
+    const kindless = rules.filter((r) => !r.kind).map((r) => r.id)
+    expect(kindless).toEqual(['github-repo-public-or-delete', 'github-account', 'destructive-via-connector'])
+    expect(rules.findIndex((r) => r.id === 'destructive-via-connector')).toBe(
+      rules.findIndex((r) => r.id === 'send-or-publish-via-connector') - 1,
+    )
   })
 
   test('a chained command is a card when any rule it matches has no kind or another kind (Delphi 2026-11-15)', async () => {

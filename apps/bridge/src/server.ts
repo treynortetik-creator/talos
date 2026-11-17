@@ -24,6 +24,7 @@ import { installLifecycle, installRejectionLogger, removePidFileIfOurs, takeOver
 import { createLogger } from './log.ts'
 import { ancestorCommandLines, ancestorPids, otherChannelsFromLines } from './permission/doctor.ts'
 import { createExplainerFromEnv } from './permission/explainer.ts'
+import { trackWrites } from './stopping.ts'
 import { APP_INSTRUCTIONS } from './tools/apps.ts'
 import { toolTableProblems } from './tools/index.ts'
 import {
@@ -168,8 +169,13 @@ async function main() {
   mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: bridge.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
   }))
-  mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
+  mcp.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     const args = (req.params.arguments ?? {}) as Record<string, unknown>
+    // read_inbound claims what it returns: a stop that begins before the response is written waits for it (bridge.stop)
+    if (req.params.name === 'read_inbound') {
+      bridge.resultPending(extra.requestId)
+      extra.signal.addEventListener('abort', () => bridge.resultCancelled(extra.requestId), { once: true })
+    }
     return bridge.callTool(req.params.name, args)
   })
   bridge.setEmit(async (n) => {
@@ -198,7 +204,9 @@ async function main() {
     if (worker) void bridge.startWorker()
     log.info('mcp initialized', { mode: bridge.live ? 'live' : worker ? 'worker' : 'headless' })
   }
-  await mcp.connect(new StdioServerTransport())
+  const transport = new StdioServerTransport()
+  trackWrites(transport, (id) => bridge.resultWritten(id)) // a read_inbound response written: stop need not wait for it
+  await mcp.connect(transport)
   log.info('bridge up', { mode: bridge.live ? 'live' : worker ? 'worker' : 'headless', version: BRIDGE_VERSION })
 }
 

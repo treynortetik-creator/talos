@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   BUG_REPORT_LIMITS,
+  BugInboxDelivery,
   BugReportBody,
   BugReportPost,
   frameSchemas,
@@ -49,6 +50,33 @@ describe('BugReportBody', () => {
         messages: Array(BUG_REPORT_LIMITS.messages + 1).fill({ role: 'you', text: 'hi' }),
       }).success,
     ).toBe(false)
+  })
+})
+
+describe('BugReportBody client and routes', () => {
+  it('takes the app that sent it and the screens visited', () => {
+    expect(BugReportBody.safeParse({ ...body, client: 'iphone_app', routes: ['thread', 'memory'] }).success).toBe(true)
+  })
+  it('refuses an unknown client and more than 10 routes or a route over 60 characters', () => {
+    expect(BugReportBody.safeParse({ ...body, client: 'phone' }).success).toBe(false)
+    expect(BugReportBody.safeParse({ ...body, routes: Array(11).fill('thread') }).success).toBe(false)
+    expect(BugReportBody.safeParse({ ...body, routes: ['x'.repeat(61)] }).success).toBe(false)
+  })
+  it('still takes a body without either (an older app)', () => {
+    expect(BugReportBody.safeParse(body).success).toBe(true)
+  })
+  it('the inbox keeps them, and drops a bad value instead of the report', () => {
+    const d = (report: Record<string, unknown>) => ({
+      type: 'bug.reported',
+      timestamp: '2026-11-10T00:00:00.000Z',
+      data: { id: ulid, device_id: 'd_abcdefghijklmnopqrst', report: { ...body, ...report } },
+    })
+    const ok = BugInboxDelivery.parse(d({ client: 'mac_app', routes: ['home'] }))
+    expect(ok.data.report.client).toBe('mac_app')
+    expect(ok.data.report.routes).toEqual(['home'])
+    const bad = BugInboxDelivery.parse(d({ client: 'phone', routes: 'thread' }))
+    expect(bad.data.report.client).toBeUndefined()
+    expect(bad.data.report.routes).toBeUndefined()
   })
 })
 

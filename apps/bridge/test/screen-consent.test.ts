@@ -55,7 +55,7 @@ class FakeMac {
     const bundle = String(this.measured.bundle_id)
     switch (req.op) {
       case 'type':
-        if (this.allowed.has(bundle)) return { ok: true, body: { events: 1 } }
+        if (this.allowed.has(bundle)) return { ok: true, body: { events: 1, read_back: 'verified' } }
         return {
           ok: false,
           code: 'app_not_allowed',

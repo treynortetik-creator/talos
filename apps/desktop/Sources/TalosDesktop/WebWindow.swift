@@ -546,7 +546,9 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     case .terminalResume(let id): terminalResume(id)
     case .pickFolder(let req, let start): pickFolder(req: req, start: start)
     case .shellPane(let thread, let rect): shellPaneAsked(thread: thread, rect: rect)
-    case .shellPaneClose(let thread): shellPaneClosed(thread: thread)
+    case .shellPaneClose(let thread):
+      guard signedIn, !shellPaneBarred else { break }  // like `companionState`: a signed-out page, or one past a sign-out, closes nothing
+      shellPaneClosed(thread: thread)
     case .captureAck: break  // the screenshot hotkey (screen-helper lane 5) handles it; nothing sends capture_drop yet
     }
   }

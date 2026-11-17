@@ -1,7 +1,7 @@
 // The report, built in one place. The preview shows `JSON.stringify` of this same object, and `send` posts it, so the screen
 // cannot say one thing and the relay get another. The owner's own words are cleaned once more here (keys, tokens, home folder);
 // the Mac's log and error lines arrive already cleaned by its `redact`.
-import { BUG_REPORT_LIMITS, type BugReportBodyT, redact, scrubOwnerText } from '@talos-app/protocol'
+import { BUG_REPORT_LIMITS, type BugReportBodyT, PROBLEM_LIMITS, redact, scrubOwnerText } from '@talos-app/protocol'
 import type { BugContext } from '../../lib/v2Client.ts'
 
 export type ReportInputs = {
@@ -17,6 +17,10 @@ export type ReportInputs = {
   macMissing?: boolean
   threadId: string | null
   screen: string
+  /** Which app is sending: the shell's own marker. */
+  client: 'browser' | 'mac_app' | 'iphone_app'
+  /** The screens visited by name, newest last. */
+  routes: string[]
   /** Newest last. Only the last 5 are ever used, and only when `includeMessages`. */
   messages: ReadonlyArray<{ author: string; text: string }>
 }
@@ -63,6 +67,11 @@ export function buildReport(i: ReportInputs): BugReportBodyT {
       : { app: unknown, bridge: unknown, relay: unknown, claude_code: unknown },
     ...(on('thread') && i.threadId ? { thread_id: i.threadId.slice(0, 80) } : {}),
     ...(on('thread') ? { screen: i.screen.slice(0, 80) } : {}),
+    // the app is not private, so no toggle; the screens visited go with the thread part, like the screen
+    client: i.client,
+    ...(on('thread')
+      ? { routes: i.routes.slice(-PROBLEM_LIMITS.routes).map((r) => r.slice(0, PROBLEM_LIMITS.routeChars)) }
+      : {}),
     // the Mac cleaned these with the same redaction; once more here, so what leaves the app is held to one rule
     // (cut back to the limit: redaction can lengthen a text, and a field over it would get the whole report refused)
     recent_errors: on('errors')

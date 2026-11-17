@@ -9,13 +9,13 @@ run-name: Save the deployed web bundle
 # the newest one.
 #
 # Three jobs, so no code from the repository or its dependencies ever runs where the write token is:
-#   build    read-only token: checkout, install, build, manifest, personal-data scan, upload as a workflow artifact
-#   publish  contents: write, no checkout and no install: download the artifact, replace the release, keep 3, then delete
-#            the published artifact (actions: write): the release is the copy old-client.sh reads, and the repository's artifact
-#            storage is small (about 5 MB a deploy, one deploy a push, held a day, filled it on 2026-11-14)
+#   build    read-only token: checkout, install, build, manifest, personal-data scan, save the two files to the Actions cache
+#   publish  contents: write, no checkout and no install: restore the files from the cache, replace the release, keep 3, then
+#            delete the cache entry (actions: write): the release is the copy old-client.sh reads. The cache, not a workflow
+#            artifact, carries the files between the jobs: the artifact storage quota is account-wide and was full on 2026-11-14
 #   specs    read-only token: the old-client specs on the new bundle with its own relay (a red is about the specs)
-# Triggered by deployment_status only: never by a pull request. Only build uploads, and only for a successful production deploy
-# of a commit on main (its `if` and its main check come first): every other deployment_status event uploads nothing.
+# Triggered by deployment_status only: never by a pull request. Only build saves to the cache, and only for a successful
+# production deploy of a commit on main (its `if` and its main check come first): every other deployment_status event saves nothing.
 on:
   deployment_status:
 
@@ -83,16 +83,13 @@ jobs:
           git -C "$scan" init -q
           CHECK_EXTRA_RULES= bash scripts/check-no-personal.sh "$scan"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        continue-on-error: true # the artifact storage may be full: a warning here; publish then says it has no artifact
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        continue-on-error: true # a failed save is a warning here; publish then fails on its cache miss
         with:
-          name: web-bundle
           path: |
             out/web-bundle.tar.gz
             out/manifest.json
-          retention-days: 1
-          if-no-files-found: error
-          overwrite: true
+          key: web-bundle-${{ github.event.deployment.sha }}-${{ github.run_id }}
 
   publish:
     needs: build
@@ -100,21 +97,28 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write # create and delete the web-bundle-* prereleases
-      actions: write # download this run's artifact, then delete it (no code of the repository runs in this job)
+      actions: write # delete this run's cache entry (no code of the repository runs in this job)
     env:
       SHA: ${{ github.event.deployment.sha }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RUN_ID: ${{ github.run_id }}
     steps:
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            out/web-bundle.tar.gz
+            out/manifest.json
+          key: web-bundle-${{ github.event.deployment.sha }}-${{ github.run_id }}
+          fail-on-cache-miss: true
+
       - name: Publish the prerelease (a redeploy of a saved sha replaces it, so it is the newest again)
         shell: bash
         run: |
           set -euo pipefail
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "not a commit sha"; exit 1; }
           tag="web-bundle-${SHA:0:8}"
-          gh run download "$RUN_ID" --name web-bundle --dir out
-          jq -e --arg sha "$SHA" '.sha == $sha' out/manifest.json >/dev/null || { echo "the artifact is not this deploy's"; exit 1; }
+          jq -e --arg sha "$SHA" '.sha == $sha' out/manifest.json >/dev/null || { echo "the cached bundle is not this deploy's"; exit 1; }
           if gh release view "$tag" >/dev/null 2>&1; then gh release delete "$tag" --cleanup-tag --yes </dev/null; fi
           gh release create "$tag" out/web-bundle.tar.gz out/manifest.json --prerelease --latest=false --target "$SHA" \
             --title "web bundle ${SHA:0:8}" \
@@ -134,16 +138,14 @@ jobs:
                  | sort_by(.publishedAt) | reverse | .[3:] | .[].tagName' <<<"$list" |
             while read -r t; do gh release delete "$t" --cleanup-tag --yes </dev/null; done
 
-      # The release holds the files now: the artifact (about 5 MB) is deleted at once rather than kept a day. After a failed
-      # publish it stays (a day), so "Re-run failed jobs" can still publish it.
-      - name: Delete this run's artifact
+      # The release holds the files now: the cache entry (about 5 MB) is deleted at once. After a failed publish it stays, so
+      # "Re-run failed jobs" can still publish it: a re-run keeps the run_id (build is not re-run), so the key still matches.
+      - name: Delete this run's cache entry
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          for id in $(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[] | select(.name == "web-bundle") | .id'); do
-            gh api -X DELETE "repos/$GH_REPO/actions/artifacts/$id" </dev/null && echo "deleted artifact $id"
-          done
+          gh api -X DELETE "repos/$GH_REPO/actions/caches?key=web-bundle-${SHA}-${RUN_ID}" </dev/null && echo "deleted cache entry web-bundle-${SHA}-${RUN_ID}"
 
   specs:
     needs: build

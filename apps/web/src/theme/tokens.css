@@ -72,6 +72,7 @@
   --line: #d3bf9c;
   --text: var(--talos-black); /* 15.2:1 on bg, 17.2:1 on surface */
   --text-2: #5a4a3c; /* 6.9:1 on bg, 5.9:1 on surface-2 */
+  --wordmark-ink: #1c2a22; /* the wordmark on cream and surface */
   --accent-text: #9a3f12; /* links and accents as text on cream, 5.5:1 (terracotta itself is 2.8:1: never text) */
   --tint: #f1cfae; /* owner bubbles; text 12.8:1 */
   --ok: #2e6a3a;
@@ -108,6 +109,7 @@
     --line: #3a3128;
     --text: var(--talos-cream); /* 15.2:1 on bg, 14.3:1 on surface */
     --text-2: #b8a68e; /* 8.0:1 on bg, 6.7:1 on surface-2 */
+    --wordmark-ink: var(--text);
     --accent-text: var(--talos-terracotta); /* 5.37:1 on black */
     --tint: #3a2315; /* owner bubbles; text 11.9:1 */
     --ok: #6cc08e;
@@ -144,6 +146,7 @@
   --line: #3a3128;
   --text: var(--talos-cream);
   --text-2: #b8a68e;
+  --wordmark-ink: var(--text);
   --accent-text: var(--talos-terracotta);
   --tint: #3a2315;
   --ok: #6cc08e;

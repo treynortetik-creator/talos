@@ -63,7 +63,12 @@ describe('the events registry', () => {
       'thread.archived': { thread_id: 'trip', source: 'agent_trust' },
       'thread.unarchived': { thread_id: 'trip', source: 'agent_card' },
       'setting.changed': { setting: 'threads.topic', thread_id: 'trip', source: 'agent_card' },
-      'bug.reported': { report_id: '01HZX0000000000000000000AA', device_id: 'd_abcdefghijklmnopqrst', webhook: 'off' },
+      'bug.reported': {
+        report_id: '01HZX0000000000000000000AA',
+        device_id: 'd_abcdefghijklmnopqrst',
+        webhook: 'off',
+        bridge: 'queued',
+      },
     }
     for (const e of EVENTS) {
       const fields = good[e.name]

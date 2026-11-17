@@ -83,6 +83,16 @@ export class WorkerStore {
     return res.changes === 1
   }
 
+  /**
+   * Gives back a claim that `by` took and never acted on (the bridge began to stop between the claim and the hand-over), so
+   * the next start finds the route unclaimed and falls back to main once. Only that claimer's own row goes, and a worker's
+   * claim, which hands its message to a session, is never undone here.
+   */
+  release(messageId: string, by: 'main'): boolean {
+    const res = this.db.query('DELETE FROM inbound_claims WHERE message_id = ? AND claimed_by = ?').run(messageId, by)
+    return res.changes === 1
+  }
+
   claimedBy(messageId: string): Claimer | undefined {
     const r = this.db.query('SELECT claimed_by FROM inbound_claims WHERE message_id = ?').get(messageId) as {
       claimed_by: Claimer

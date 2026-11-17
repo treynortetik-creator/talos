@@ -8,6 +8,7 @@ import { bumpLastOwnerTs } from './inbound-messages.ts'
 import type { Item, Of } from './inbound-shared.ts'
 import { textNotification } from './notify.ts'
 import { runCheck } from './run.ts'
+import { isStopping } from './stopping.ts'
 
 export const runsFrames = {
   /**
@@ -28,16 +29,26 @@ export const runsFrames = {
     // the message and the frame, before the agent hears of it
     ctx.store.markSeen(f.client_msg_id, now, 'run')
     ctx.store.markSeen(it.frame.id, now, 'run')
-    await ctx.emit(
-      textNotification({
-        thread,
-        messageId: f.client_msg_id,
-        ts: f.ts,
-        text: f.text,
-        run: true,
-        clock: clockMeta(ctx, thread.id, f.ts, f.client_msg_id),
-      }),
-    )
+    try {
+      await ctx.emit(
+        textNotification({
+          thread,
+          messageId: f.client_msg_id,
+          ts: f.ts,
+          text: f.text,
+          run: true,
+          clock: clockMeta(ctx, thread.id, f.ts, f.client_msg_id),
+        }),
+      )
+    } catch (e) {
+      // A bridge that began to stop refused the hand-over: nothing ran and nothing was told, so the tap is not spent. It goes
+      // back to unseen and the relay's replay gives it to the next bridge once. Any other failure is the loss described above.
+      if (isStopping(e)) {
+        ctx.store.unmarkSeen(f.client_msg_id)
+        ctx.store.unmarkSeen(it.frame.id)
+      }
+      throw e
+    }
     bumpLastOwnerTs(ctx, f.ts)
     this.afterOwnerNotify(thread.id, f.client_msg_id)
     this.done(it, [f.client_msg_id])

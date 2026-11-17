@@ -6,6 +6,7 @@ import { expect, type Page, test } from '@playwright/test'
 type Hooks = {
   __clioGraphCamera?: () => number
   __clioGraphNodeScreen?: (i: number) => { x: number; y: number } | null
+  __clioGraphPointers?: () => number[]
 }
 
 async function openGraph(page: Page) {
@@ -159,4 +160,170 @@ test('a mouse press released where the graph never heard it does not break the n
   expect(errors.filter((m) => !/^NotFoundError|PointerCapture/.test(m))).toEqual([])
   // (zooming afterwards is not checked here: synthetic pointers make setPointerCapture throw inside OrbitControls' own handler,
   // which no real pointer does; the wheel test above covers zoom)
+})
+
+// The owner's second report (2026-11-16 13:48, a build with the fix above): the same OrbitControls release path, reached from
+// the graph library's own made-up touch release after a note drag. Each case holds a REAL mouse press on open canvas (so the
+// controls really hold a pointer: checked, never vacuous), sends one pointer event the controls never saw go down, then
+// releases: no TypeError, and the controls hold nothing afterwards.
+async function openCanvasSpot(page: Page) {
+  return page.evaluate(() => {
+    const c = document.querySelector('canvas') as HTMLCanvasElement
+    const r = c.getBoundingClientRect()
+    for (const [fx, fy] of [
+      [0.15, 0.85],
+      [0.85, 0.85],
+      [0.15, 0.5],
+      [0.5, 0.9],
+    ] as const) {
+      const x = r.left + r.width * fx
+      const y = r.top + r.height * fy
+      if (document.elementFromPoint(x, y) === c) return { x, y }
+    }
+    return null
+  })
+}
+
+const STRAYS: { name: string; send: string }[] = [
+  {
+    name: "the graph's own touch release after a note drag",
+    send: "document.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch' }))",
+  },
+  {
+    name: 'a pen release it never saw',
+    send: "document.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'pen', pointerId: 41 }))",
+  },
+  {
+    name: 'a touch release it never saw',
+    send: "canvas.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch', pointerId: 42, bubbles: true }))",
+  },
+  {
+    name: 'a cancel of a pointer it never saw',
+    send: "canvas.dispatchEvent(new PointerEvent('pointercancel', { pointerType: 'touch', pointerId: 43, bubbles: true }))",
+  },
+  {
+    name: 'a move of a pointer it never saw',
+    send: "document.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'touch', pointerId: 44, clientX: 5, clientY: 5 }))",
+  },
+  { name: 'the window losing focus mid-drag', send: "window.dispatchEvent(new Event('blur'))" },
+]
+
+for (const stray of STRAYS)
+  test(`a held press survives ${stray.name}`, async ({ page }) => {
+    const errors: string[] = []
+    page.on('pageerror', (e) => errors.push(`${e.name}: ${e.message}`))
+    await openGraph(page)
+    const spot = await openCanvasSpot(page)
+    expect(spot).not.toBeNull()
+    if (!spot) return
+    await page.mouse.move(spot.x, spot.y)
+    await page.mouse.down()
+    expect(await page.evaluate(() => (window as Hooks).__clioGraphPointers?.().length)).toBe(1)
+    await page.evaluate((code) => {
+      const canvas = document.querySelector('canvas') as HTMLCanvasElement
+      new Function('canvas', code)(canvas)
+    }, stray.send)
+    await page.mouse.move(spot.x + 30, spot.y - 20)
+    await page.mouse.up()
+    await page.waitForTimeout(200)
+    expect(errors).toEqual([])
+    expect(await page.evaluate(() => (window as Hooks).__clioGraphPointers?.())).toEqual([])
+  })
+
+test('a press whose release was missed, then a new press and release, leaves nothing held', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(`${e.name}: ${e.message}`))
+  await openGraph(page)
+  const spot = await openCanvasSpot(page)
+  if (!spot) throw new Error('no open canvas')
+  await page.mouse.move(spot.x, spot.y)
+  await page.mouse.down()
+  const held = await page.evaluate(() => (window as Hooks).__clioGraphPointers?.() ?? [])
+  expect(held.length).toBe(1)
+  // the release is lost (outside the window): the next press of that same mouse arrives while the controls still hold it
+  await page.evaluate((id) => {
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement
+    const r = canvas.getBoundingClientRect()
+    canvas.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        pointerId: id,
+        pointerType: 'mouse',
+        button: 0,
+        buttons: 1,
+        bubbles: true,
+        clientX: r.left + 9,
+        clientY: r.top + 9,
+      }),
+    )
+    document.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch' }))
+  }, held[0])
+  await page.mouse.up()
+  await page.waitForTimeout(200)
+  expect(errors).toEqual([])
+  expect(await page.evaluate(() => (window as Hooks).__clioGraphPointers?.())).toEqual([])
+})
+
+test('a second mouse button pressed during a drag, then both released, leaves nothing held', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(`${e.name}: ${e.message}`))
+  await openGraph(page)
+  const spot = await openCanvasSpot(page)
+  if (!spot) throw new Error('no open canvas')
+  await page.mouse.move(spot.x, spot.y)
+  await page.mouse.down()
+  await page.mouse.down({ button: 'right' })
+  await page.mouse.move(spot.x + 20, spot.y)
+  await page.mouse.up({ button: 'right' })
+  await page.mouse.up()
+  await page.waitForTimeout(200)
+  expect(errors).toEqual([])
+  expect(await page.evaluate(() => (window as Hooks).__clioGraphPointers?.())).toEqual([])
+})
+
+test('dragging a note throws nothing and leaves nothing held', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(`${e.name}: ${e.message}`))
+  await page.emulateMedia({ reducedMotion: 'reduce' }) // the note holds still to be grabbed
+  await openGraph(page)
+  const { at } = await clickableNode(page)
+  // a note drag: the graph library ends it with its own made-up touch release
+  await page.mouse.move(at.x, at.y)
+  await page.mouse.down()
+  await page.mouse.move(at.x + 40, at.y + 25, { steps: 5 })
+  await page.mouse.up()
+  await page.waitForTimeout(200)
+  expect(errors).toEqual([])
+  expect(await page.evaluate(() => (window as Hooks).__clioGraphPointers?.())).toEqual([])
+})
+
+test('a press on the open note panel released on the graph, and the other way round, throw nothing', async ({
+  page,
+}, info) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(`${e.name}: ${e.message}`))
+  // a phone's note panel covers the graph, so there is no graph beside it to release on
+  test.skip(
+    info.project.name.startsWith('iphone') || info.project.name === 'pixel',
+    'the panel shares the screen only when wide',
+  )
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await openGraph(page)
+  const { at } = await clickableNode(page)
+  await page.mouse.click(at.x, at.y)
+  const panel = page.getByRole('complementary', { name: 'Chosen note' })
+  await expect(panel).toBeInViewport()
+  const box = await panel.boundingBox()
+  const spot = await openCanvasSpot(page)
+  if (!box || !spot) throw new Error('no panel or no open canvas')
+  const mid = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  await page.mouse.move(mid.x, mid.y)
+  await page.mouse.down()
+  await page.mouse.move(spot.x, spot.y, { steps: 4 })
+  await page.mouse.up()
+  await page.mouse.down()
+  await page.mouse.move(mid.x, mid.y, { steps: 4 })
+  await page.mouse.up()
+  await page.waitForTimeout(200)
+  expect(errors).toEqual([])
+  expect(await page.evaluate(() => (window as Hooks).__clioGraphPointers?.())).toEqual([])
 })

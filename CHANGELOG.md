@@ -1,5 +1,9 @@
 # Changelog
 
+## The Mac app says version 0.1.3
+
+- The app's version (About, the self-test, the update check) now matches the release tag: 0.1.3, the release with the bridge stop and park message-loss fixes.
+
 ## The Mac app says version 0.1.2
 
 - The app's version (About, the self-test, the update check) now matches the release tag: 0.1.2. Earlier releases still said 0.1.0.

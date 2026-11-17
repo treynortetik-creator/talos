@@ -51,17 +51,17 @@ JSON v1 (additive; today's keys stay):
 
 ### B1. Named events that exist today
 
-| Event                  | Emitted at                                        | Payload                                                                                   |
-| ---------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `thread.folder_chosen` | `emitFolderEvents` in `apps/bridge/src/events.ts` | `thread_id`, `cleared` (never the path)                                                   |
-| `dialog.card_posted`   | `apps/bridge/src/dialog-card.ts`                  | `dialog_kind`, `thread_id`, `card_id`                                                     |
-| `dialog.card_answered` | `apps/bridge/src/dialog-card.ts`                  | `dialog_kind`, `thread_id`, `card_id`, `choice`                                           |
-| `thread.created`       | `emitConfigEvents` in `apps/bridge/src/events.ts` | `thread_id`, `source` (never the name)                                                    |
-| `thread.renamed`       | `emitConfigEvents`                                | `thread_id`, `source` (never the names)                                                   |
-| `thread.archived`      | `emitConfigEvents`                                | `thread_id`, `source`                                                                     |
-| `thread.unarchived`    | `emitConfigEvents`                                | `thread_id`, `source`                                                                     |
-| `setting.changed`      | `emitConfigEvents`                                | `setting` (a table path), `source`, `thread_id?` (never the value)                        |
-| `bug.reported`         | `apps/relay/src/core/bug-reports.ts` (the relay)  | `report_id`, `device_id`, `webhook` (`off` or `queued`; never the words, logs or picture) |
+| Event                  | Emitted at                                        | Payload                                                                                                                    |
+| ---------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `thread.folder_chosen` | `emitFolderEvents` in `apps/bridge/src/events.ts` | `thread_id`, `cleared` (never the path)                                                                                    |
+| `dialog.card_posted`   | `apps/bridge/src/dialog-card.ts`                  | `dialog_kind`, `thread_id`, `card_id`                                                                                      |
+| `dialog.card_answered` | `apps/bridge/src/dialog-card.ts`                  | `dialog_kind`, `thread_id`, `card_id`, `choice`                                                                            |
+| `thread.created`       | `emitConfigEvents` in `apps/bridge/src/events.ts` | `thread_id`, `source` (never the name)                                                                                     |
+| `thread.renamed`       | `emitConfigEvents`                                | `thread_id`, `source` (never the names)                                                                                    |
+| `thread.archived`      | `emitConfigEvents`                                | `thread_id`, `source`                                                                                                      |
+| `thread.unarchived`    | `emitConfigEvents`                                | `thread_id`, `source`                                                                                                      |
+| `setting.changed`      | `emitConfigEvents`                                | `setting` (a table path), `source`, `thread_id?` (never the value)                                                         |
+| `bug.reported`         | `apps/relay/src/core/bug-reports.ts` (the relay)  | `report_id`, `device_id`, `webhook` (`off` or `queued`), `bridge` (`queued` or `failed`; never the words, logs or picture) |
 
 `source` is `owner` (a signed `config.patch`), `agent_card` (an agent proposal the owner approved) or `agent_trust` (applied
 directly in trust mode).

@@ -268,28 +268,17 @@ function makeScene(el: HTMLDivElement, r: SceneRefs): () => void {
   // the wheel is the graph's: no page scroll or browser zoom may take it (OrbitControls does the zoom itself)
   const noScroll = (e: WheelEvent) => e.preventDefault()
   el.addEventListener('wheel', noScroll, { passive: false })
-  // A mouse has one pointer, but OrbitControls keeps every pointer it saw go down until it sees that one go up, and it records
-  // positions only for touch. A press released where the canvas never hears it (over the note panel, outside the window) left
-  // a stale mouse pointer, and the next release then read the position of a pointer it never recorded and threw (the owner,
-  // 2026-11-16). Each new mouse press first drops any other mouse pointer the controls still hold.
-  const pc = c as unknown as { _pointers: number[]; _pointerPositions: Record<number, unknown> }
-  const dropStale = (e: PointerEvent) => {
-    if (e.pointerType !== 'mouse' || !Array.isArray(pc._pointers)) return
-    for (const id of [...pc._pointers])
-      if (id !== e.pointerId) {
-        pc._pointers.splice(pc._pointers.indexOf(id), 1)
-        delete pc._pointerPositions[id]
-      }
-  }
-  el.addEventListener('pointerdown', dropStale, { capture: true })
+  const unguard = guardPointers(c, el)
 
   // test hooks for the fake client only (Playwright reads the camera and where a note is on screen)
   const hooks = window as unknown as {
     __clioGraphCamera?: () => number
     __clioGraphNodeScreen?: (i: number) => { x: number; y: number } | null
+    __clioGraphPointers?: () => number[]
   }
   if (import.meta.env.VITE_FAKE === '1') {
     hooks.__clioGraphCamera = () => g.camera().position.distanceTo(c.target)
+    hooks.__clioGraphPointers = () => [...(c as unknown as PointerState)._pointers]
     hooks.__clioGraphNodeScreen = (i) => {
       const n = (g.graphData().nodes as GNode[]).find((m) => m.id === i)
       if (!n || n.x === undefined) return null
@@ -305,7 +294,7 @@ function makeScene(el: HTMLDivElement, r: SceneRefs): () => void {
     ro.disconnect()
     c.removeEventListener('start', stop)
     el.removeEventListener('wheel', noScroll)
-    el.removeEventListener('pointerdown', dropStale, { capture: true })
+    unguard()
     if (import.meta.env.VITE_FAKE === '1') {
       hooks.__clioGraphCamera = undefined
       hooks.__clioGraphNodeScreen = undefined
@@ -687,4 +676,50 @@ export function ClioGraph() {
         )}
     </div>
   )
+}
+
+type PointerState = {
+  _pointers: number[]
+  _pointerPositions: Record<number, unknown>
+  _onPointerUp: (e: PointerEvent) => void
+  _onPointerMove: (e: PointerEvent) => void
+}
+
+/**
+ * OrbitControls keeps every pointer it saw go down until it sees that one go up, and records a position only for touch; a
+ * release that leaves exactly one pointer reads that pointer's position. Two ways that position is missing, both the owner's
+ * (2026-11-16 08:45 and 13:48): a press released where the canvas never heard it (over the note panel, outside the window)
+ * stays held, and after a note drag the graph library itself sends a made-up touch release (pointerId 0) that the controls
+ * never saw go down, so a held mouse pointer is left alone and read. So: a release, cancel or move of a pointer the controls
+ * do not hold is ignored, a release never leaves a lone pointer without a position, and every new press first drops the
+ * held pointers without one (a mouse or pen press whose release was missed: one device cannot press twice).
+ */
+function guardPointers(c: OrbitControls, el: HTMLElement): () => void {
+  const pc = c as unknown as PointerState
+  if (!Array.isArray(pc._pointers) || typeof pc._onPointerUp !== 'function' || typeof pc._onPointerMove !== 'function')
+    return () => {}
+  const held = (id: number) => pc._pointers.includes(id)
+  const drop = (id: number) => {
+    const i = pc._pointers.indexOf(id)
+    if (i >= 0) pc._pointers.splice(i, 1)
+    delete pc._pointerPositions[id]
+  }
+  const up = pc._onPointerUp
+  const move = pc._onPointerMove
+  c.disconnect() // the listeners hold the old functions: swap them while nothing listens
+  pc._onPointerUp = (e) => {
+    if (!held(e.pointerId)) return
+    const rest = pc._pointers.filter((id) => id !== e.pointerId)
+    if (rest.length === 1 && rest[0] !== undefined && pc._pointerPositions[rest[0]] === undefined) drop(rest[0])
+    up(e)
+  }
+  pc._onPointerMove = (e) => {
+    if (held(e.pointerId)) move(e)
+  }
+  c.connect(el)
+  const dropStale = () => {
+    for (const id of [...pc._pointers]) if (pc._pointerPositions[id] === undefined) drop(id)
+  }
+  el.addEventListener('pointerdown', dropStale, { capture: true })
+  return () => el.removeEventListener('pointerdown', dropStale, { capture: true })
 }

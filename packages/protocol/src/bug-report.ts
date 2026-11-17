@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import { isBlockedHost, isBlockedHostname } from './address.ts'
 import { DeviceId, IsoTs, Ulid } from './ids.ts'
+import { PROBLEM_LIMITS, ProblemDevice } from './problems.ts'
 import { redact } from './redact.ts'
 
 const KIB = 1024
@@ -73,6 +74,10 @@ export const BugReportBody = z.strictObject({
   /** Which thread and screen the owner was on (ids and route names, not titles). */
   thread_id: z.string().max(80).optional(),
   screen: z.string().max(80).optional(),
+  /** Which app sent it, from the shell's own marker (never the user agent text). Absent from an older app. */
+  client: ProblemDevice.extract(['browser', 'mac_app', 'iphone_app']).optional(),
+  /** The screens visited by name, oldest first, the last one being where it was sent from. Absent from an older app. */
+  routes: z.array(z.string().max(PROBLEM_LIMITS.routeChars)).max(PROBLEM_LIMITS.routes).optional(),
   recent_errors: z.array(z.string().max(BUG_REPORT_LIMITS.errorChars)).max(BUG_REPORT_LIMITS.errors),
   /** The last 200 log lines, already cleaned. */
   logs: z.string().max(BUG_REPORT_LIMITS.logChars),
@@ -195,6 +200,8 @@ export const BugInboxDelivery = z.object({
         .catch({}),
       thread_id: z.string().max(80).optional().catch(undefined),
       screen: z.string().max(80).optional().catch(undefined),
+      client: ProblemDevice.extract(['browser', 'mac_app', 'iphone_app']).optional().catch(undefined),
+      routes: z.array(z.string().max(PROBLEM_LIMITS.routeChars)).max(PROBLEM_LIMITS.routes).optional().catch(undefined),
       recent_errors: z.array(z.string().max(BUG_REPORT_LIMITS.errorChars)).max(BUG_REPORT_LIMITS.errors).catch([]),
       logs: z.string().max(BUG_REPORT_LIMITS.logChars).catch(''),
       messages: z

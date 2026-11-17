@@ -63,6 +63,31 @@ func errorOf(_ o: [String: Any]) -> (code: String?, text: String?, app: String?)
 struct ScreenProtocolTests {
   let allow = FixedAllowList(apps: [ScreenAllowedApp(bundleID: "com.example.notes", teamID: "ABCDE12345")])
 
+  @Test func aTypeAnswerCarriesWhatTheFieldReadBack() async throws {
+    final class Typing: ScreenService, @unchecked Sendable {
+      var readBack: ScreenCore.ReadBack = .verified
+      func shot(area: ScreenArea, allowed: ScreenAllowed) async throws(ScreenRefusal) -> ScreenShot { throw .noDisplay }
+      func input(_ request: ScreenInputRequest, allowed: ScreenAllowed) throws(ScreenRefusal) -> Int { 1 }
+      func type(_ text: String, allowed: ScreenAllowed) throws(ScreenRefusal) -> (events: Int, readBack: ScreenCore.ReadBack) { (3, readBack) }
+      func listApps() -> [ScreenApp] { [] }
+      func open(bundleID: String, allowed: ScreenAllowed) async throws(ScreenRefusal) {}
+    }
+    let t = Typing()
+    let p = ScreenProtocol(service: t, allowList: allow, signing: FakeSigning())
+    let line = #"{"op":"type","text":"hi"}"#
+    var o = try await answer(p, line)
+    #expect(o["events"] as? Int == 3 && o["read_back"] as? String == "verified" && o["field_suffix"] == nil)
+    t.readBack = .mismatch(suffix: "llo")
+    o = try await answer(p, line)
+    #expect(o["read_back"] as? String == "mismatch" && o["field_suffix"] as? String == "llo")
+    t.readBack = .unverified
+    o = try await answer(p, line)
+    #expect(o["read_back"] as? String == "unverified")
+    // a service with no read-back of its own says unverified
+    o = try await answer(ScreenProtocol(service: FakeScreenService(), allowList: allow, signing: FakeSigning()), line)
+    #expect(o["events"] as? Int == 1 && o["read_back"] as? String == "unverified")
+  }
+
   @Test func eachOpReachesTheServiceWithTheAllowListAndAnswersItsShape() async throws {
     let f = FakeScreenService()
     let p = ScreenProtocol(service: f, allowList: allow, signing: FakeSigning())

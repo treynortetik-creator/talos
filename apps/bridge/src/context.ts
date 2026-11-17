@@ -214,6 +214,11 @@ export type BridgeContext = {
   mode: 'live' | 'headless'
   /** Another bridge owns the key (4409) and this one has not rejoined: no tool prompts or live-only tools until it does. */
   superseded?: boolean
+  /**
+   * Set at the very start of Bridge.stop(), before anything is awaited: nothing more is handed to the agent or a thread's
+   * session, no frame is taken up or acked, and every pending undo-point hold is given up (stopping.ts).
+   */
+  closing?: boolean
   env: BridgeEnv
   paths: BridgePaths
   log: Logger

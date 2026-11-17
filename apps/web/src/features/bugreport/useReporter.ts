@@ -6,12 +6,20 @@ import { useLocation, useMatch } from 'react-router'
 import { type TalosClient, TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
 import type { BugContext } from '../../lib/v2Client.ts'
 import { fetchStatus } from '../health/useHealthStatus.ts'
-import { appVersion } from '../problems/environment.ts'
+import { appVersion, deviceKind } from '../problems/environment.ts'
+import { routeName, routeTrail } from '../problems/routes.ts'
 import { exportPicture } from './capture.ts'
 import type { Mark, Tool } from './ink.ts'
 import { buildReport, previewText, screenOf } from './payload.ts'
 import { useBugReport } from './store.ts'
 import { BUG_TEXT } from './text.ts'
+
+/** The screens visited, with the one the report is sent from always last. */
+function trailEndingHere(pathname: string): string[] {
+  const trail = routeTrail()
+  const here = routeName(pathname)
+  return trail[trail.length - 1] === here ? trail : [...trail, here]
+}
 
 export type Phase = { kind: 'idle' } | { kind: 'sending' } | { kind: 'sent' } | { kind: 'failed'; text: string }
 type Ctx = { state: 'loading' } | { state: 'ready'; ctx: BugContext } | { state: 'unavailable' }
@@ -134,6 +142,8 @@ export function useReporter() {
         macMissing: ctx.state === 'unavailable',
         threadId,
         screen: screenOf(loc.pathname),
+        client: deviceKind() as 'browser' | 'mac_app' | 'iphone_app',
+        routes: trailEndingHere(loc.pathname),
         messages,
       }),
     [wentWrong, expected, attach, relay, ctx, threadId, loc.pathname, messages],

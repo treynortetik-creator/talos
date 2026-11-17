@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3'
 import type { RelayEnv } from '../env.ts'
 import type { Clock, CryptoService, Logger, PushTransport, RelayServices } from '../services.ts'
 import { createNtfySink } from './alerts-ntfy.ts'
-import { bugReportBytes, sweepBugReports } from './bug-reports.ts'
+import { backfillOwnReports, bugReportBytes, sweepBugReports } from './bug-reports.ts'
 import { CardReminder } from './card-reminder.ts'
 import { createCryptoService } from './crypto.ts'
 import { openDatabase } from './db.ts'
@@ -248,6 +248,10 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
       cardReminder.start()
       sessionWait.start()
       quietSummary.start()
+      // reports stored before they were queued to the Mac (or whose queueing failed) go once now, the hub being up
+      void backfillOwnReports(services).catch((e) =>
+        log.warn({ err: e instanceof Error ? e.name : 'error' }, 'bug report backfill failed'),
+      )
       runSweep()
       armSweep()
     },

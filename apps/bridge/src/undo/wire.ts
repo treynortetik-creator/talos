@@ -24,6 +24,7 @@ export function wireUndo(ctx: BridgeContext, opts: BridgeOptions['undo']): void 
   const agentDir = given === undefined ? undefined : realFolder(given)
   ctx.undo = {
     before: (t) => undo.before(t),
+    abandon: () => undo.abandon(),
     mainFolder: () => agentDir,
     exclusive: (threads, fn) => undo.exclusive(threads, fn),
     restoring: new RestoringRoots(),

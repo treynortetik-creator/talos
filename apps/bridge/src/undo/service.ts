@@ -42,6 +42,9 @@ export type UndoTurn = {
 
 export class UndoService {
   private readonly chain = new KeyedChain()
+  /** Holds that are still waiting: `abandon` ends each of them. */
+  private readonly holds = new Set<() => void>()
+  private abandoned = false
 
   constructor(readonly deps: UndoDeps) {}
 
@@ -53,45 +56,67 @@ export class UndoService {
   }
 
   /**
+   * The bridge is stopping: every hold that is waiting ends now, its snapshot is stopped, and no row is written for it (a
+   * turn that never started has nothing to undo, and the next bridge takes the point when the message is replayed). A hold
+   * asked for after this ends at once, the same way. The caller tells a hold given up from one that ran out by looking at
+   * the bridge's `closing` flag (stopping.ts), because both resolve.
+   */
+  abandon(): void {
+    this.abandoned = true
+    for (const end of [...this.holds]) end()
+  }
+
+  /**
    * Resolves once the point is recorded, or after the hold; retention runs after that, off the delivery path. Never
    * rejects. With no folder there is nothing to wait for: it resolves at once and the rows say not_saved.
    */
   before(t: UndoTurn): Promise<void> {
     const last = t.messages.at(-1)
     if (!last) return Promise.resolve()
+    if (this.abandoned) return Promise.resolve()
     const ac = new AbortController()
     let late = false
+    let gaveUp = false
     let recorded = () => {}
     const held = new Promise<void>((res) => {
       recorded = res
     })
     const threads = [...new Set(t.messages.map((m) => m.thread))]
     const work = this.chain.run(threads, () =>
-      this.take(t, last, { signal: ac.signal, isLate: () => late, recorded }).catch((e) =>
+      this.take(t, last, { signal: ac.signal, isLate: () => late, isAbandoned: () => gaveUp, recorded }).catch((e) =>
         this.deps.log.warn('undo point not recorded', { error: (e as Error).message }),
       ),
     )
     void work.then(() => recorded())
     if (!t.folder) return Promise.resolve()
     return new Promise((resolve) => {
+      const giveUp = () => {
+        gaveUp = true
+        ac.abort()
+        end()
+      }
+      const end = () => {
+        this.holds.delete(giveUp)
+        this.deps.clock.clearTimeout(timer)
+        resolve()
+      }
       const timer = this.deps.clock.setTimeout(() => {
         late = true
         ac.abort()
-        resolve()
+        end()
       }, UNDO_HOLD_MS)
-      void held.then(() => {
-        this.deps.clock.clearTimeout(timer)
-        resolve()
-      })
+      this.holds.add(giveUp)
+      void held.then(end)
     })
   }
 
   private async take(
     t: UndoTurn,
     last: { id: string; thread: string },
-    o: { signal: AbortSignal; isLate: () => boolean; recorded: () => void },
+    o: { signal: AbortSignal; isLate: () => boolean; isAbandoned: () => boolean; recorded: () => void },
   ): Promise<void> {
     const { points, clock } = this.deps
+    if (o.isAbandoned()) return // the bridge started to stop while this waited its turn on the thread's chain
     const at = clock.now()
     const had = t.messages.map((m) => points.get(m.id))
     // a point is taken once per message: one that has a row was handed over before (a replay after a crash, a route
@@ -135,6 +160,13 @@ export class UndoService {
       } catch (e) {
         s = { state: 'not_saved', kind: 'copy', root: t.folder, why: (e as Error).message }
       }
+    }
+    if (o.isAbandoned()) {
+      // the bridge is stopping and this message was not handed over: no row, so the next bridge takes its own point when the
+      // message is replayed (a row here would make that one "handed over before"). What the snapshot made is left where it
+      // is, not released: the next bridge's point for this turn has the same name and takes its place, and a release from
+      // here could remove that one.
+      return
     }
     if (o.isLate()) {
       // delivery went ahead without it: the turn may already have changed the folder

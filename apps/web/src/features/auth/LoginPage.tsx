@@ -9,6 +9,7 @@ import { resetStockTheme } from '../../lib/theme.ts'
 import { countUnsent, discardUnsent } from '../../lib/unsent.ts'
 import { Button } from '../../ui/index.ts'
 import { Mascot } from '../../ui/Mascot.tsx'
+import { Wordmark } from '../../ui/Wordmark.tsx'
 import { HELP_PATH } from '../help/path.ts'
 import { signInWithPasskey } from './passkeys.ts'
 import { pendingWipe, retryPendingWipe } from './session.ts'
@@ -78,7 +79,9 @@ export function LoginPage() {
     <main className="grid min-h-dvh place-items-center bg-bg p-4">
       <div className="flex w-full max-w-[420px] flex-col items-center gap-4 incised rounded-card bg-surface p-7 text-center">
         <Mascot state={error ? 'worried' : 'pleased'} size={112} name={agent} decorative />
-        <h1 className="m-0 font-display text-2xl font-semibold">{agent}</h1>
+        <h1 className="m-0 text-2xl">
+          <Wordmark name={agent} className={agent === 'Talos' ? 'text-[color:var(--wordmark-ink)]' : 'font-semibold'} />
+        </h1>
         {shell ? (
           <>
             {host === 'windows' ? (

@@ -96,7 +96,74 @@ expect ask   "gh repo edit public"            "$(run Bash /tmp 'gh repo edit me/
 expect ask   "gh repo create public"          "$(run Bash /tmp 'gh repo create x --public')"
 expect allow "gh repo create private"         "$(run Bash /tmp 'gh repo create x --private')"
 why(){ python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","cwd":"/tmp","tool_input":{"command":sys.argv[1]}}))' "$1" | ( cd "$A" && acct check ); }
+why_tool(){ python3 -c 'import json,sys;print(json.dumps({"tool_name":sys.argv[1],"cwd":"/tmp","tool_input":{}}))' "$1" | ( cd "$A" && acct check ); }
 grep -q "'github-repo-public-or-delete'" <<<"$(why 'gh repo edit me/x --visibility public')" && ok || no "a public repo is not its own no-kind rule"
+expect ask   "gh api -X DELETE repos"         "$(run Bash /tmp 'gh api -X DELETE repos/o/r')"
+expect ask   "gh api --method=delete refs"    "$(run Bash /tmp 'gh api --method=delete repos/o/r/git/refs/heads/x')"
+expect ask   "gh api visibility='public'"     "$(run Bash /tmp "gh api repos/o/r -f visibility='public'")"
+expect ask   'gh api private="false"'         "$(run Bash /tmp 'gh api repos/o/r -f private="false"')"
+expect ask   "GH_TOKEN=x gh repo delete"      "$(run Bash /tmp 'GH_TOKEN=x gh repo delete o/r --yes')"
+expect ask   "command gh api -X DELETE repos" "$(run Bash /tmp 'command gh api -X DELETE repos/o/r')"
+expect ask   "gh api repos then -X DELETE"    "$(run Bash /tmp 'gh api repos/o/r -X DELETE')"
+expect ask   "gh api -X 'DELETE' repos"       "$(run Bash /tmp "gh api -X 'DELETE' repos/o/r")"
+expect ask   'gh api --method="DELETE" repos'  "$(run Bash /tmp 'gh api --method="DELETE" repos/o/r')"
+# BSEC-2 review: a crafted run of "(gh api repos/ " must match fast (no cubic backtracking: the 20 s guard timeout allows the call
+# through unchecked) and the push to main after it must still hit its rule
+python3 - "$A/hooks" <<'PY' && ok || no "the repo-delete match is slow on a crafted line, or the push after it is missed"
+import importlib.util, re, sys, time
+spec = importlib.util.spec_from_file_location("ar", sys.argv[1] + "/action-rules.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+rules = {r["id"]: r for r in m.load_rules()}
+text = "/tmp\n" + "(gh api repos/ " * 1500 + "; git push origin main"
+t = time.time(); hit = re.search(rules["github-repo-public-or-delete"]["command"], text); dt = time.time() - t
+assert not hit, "no delete in that line"
+F = float(__import__("os").environ.get("TALOS_TEST_TIME_FACTOR") or 1)
+assert dt < 1 * F, "took %.2fs" % dt
+assert re.search(rules["push-to-main"]["command"], text), "push-to-main missed"
+print("crafted line matched in %.3fs" % dt)
+PY
+# every shipped rule, run the way the hook runs it (tool: fullmatch, command/path: search), against pathological input: each match
+# must finish in under 0.5 s, so no rule can run the 20 s guard timeout out
+python3 - "$A/hooks" <<'PY' && ok "every shipped rule matches pathological input in under 0.5 s" || no "a shipped rule is slow on pathological input"
+import importlib.util, re, sys, time
+F = float(__import__("os").environ.get("TALOS_TEST_TIME_FACTOR") or 1)  # a loaded machine (the gate sets 3) scales the limits
+spec = importlib.util.spec_from_file_location("ar", sys.argv[1] + "/action-rules.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+rules = m.load_file(m.SHIPPED)
+assert len(rules) >= 10, len(rules)
+slow = []
+total = time.time()
+for r in rules:
+    pats = [r.get(k) for k in ("tool", "command", "path") if r.get(k)]
+    words = sorted({w for p in pats for w in re.findall(r"[A-Za-z][A-Za-z_]{2,}", re.sub(r"\\.", " ", p))})
+    own = " ".join(words)
+    inputs = {
+        "20KB": "a" * 20000,
+        "2000 x (gh api repos/ ": "(gh api repos/ " * 2000,
+        "nested quotes": "'\"'\"'" * 4000,
+        "5000 separators": ";&|" * 5000,
+        "2000 spaces then x": " " * 2000 + "x",
+        "own keywords x1000": (own + " ") * 1000,
+        "own keywords joined x1000": "".join(w + "_" for w in words) * 1000,
+        "keywords then push": (own + " ") * 1000 + "; git push origin main",
+        "quoted values": "gh api repos/o/r -f visibility=\"" * 1000,
+        "env prefixes": "A=b " * 5000 + "gh api",
+        "(a= runs": "(a=" * 20000,
+        "(env a=b= runs": "(env " + "a=b=" * 20000,
+        "(env a=b runs": "(env a=b " * 8000 + "gh api",
+    }
+    for label, text in inputs.items():
+        for kind, pat, fn in (("tool", r.get("tool"), re.fullmatch), ("command", r.get("command"), re.search),
+                              ("path", r.get("path"), re.search)):
+            if not pat:
+                continue
+            subject = text if kind != "command" else "/tmp\n" + text
+            t = time.time(); fn(pat, subject); dt = time.time() - t
+            if dt >= 0.5 * F:
+                slow.append("%s %s on %s: %.2fs" % (r["id"], kind, label, dt))
+assert not slow, slow
+assert time.time() - total < 20 * F, "the whole sweep took %.1fs" % (time.time() - total)
+print("every shipped rule: %d rules, whole sweep %.1fs" % (len(rules), time.time() - total))
+PY
+expect allow "gh api repos GET"               "$(run Bash /tmp 'gh api repos/o/r')"
 grep -q "'github-repo-public-or-delete'" <<<"$(why 'gh repo delete me/x --yes')" && ok || no "a repo delete is not its own no-kind rule"
 grep -q "'github-release-or-public'" <<<"$(why 'gh release create v1.0 --notes x')" && ok || no "a release is not under the publish rule"
 expect ask   "gh auth switch"                 "$(run Bash /tmp 'gh auth switch -u someone')"
@@ -104,6 +171,16 @@ expect allow "gh auth status"                 "$(run Bash /tmp 'gh auth status')
 expect ask   "connector send"                 "$(run mcp__claude_ai_Slack__slack_send_message /tmp '')"
 expect ask   "connector mail forward"         "$(run mcp__claude_ai_Gmail__forward /tmp '')"
 expect ask   "connector delete"               "$(run mcp__claude_ai_Google_Drive__trash_file /tmp '')"
+for t in delete_file publish_page share_file schedule_event; do
+  grep -q "'destructive-via-connector'" <<<"$(why_tool mcp__x__$t)" && ok || no "connector $t is not its own no-kind rule"
+done
+for t in create_shared_link shared_link_create add_shared_drive_member shared_drive_add_permission; do
+  grep -q "'destructive-via-connector'" <<<"$(why_tool mcp__x__$t)" && ok || no "connector $t (a real share) does not ask"
+done
+for t in list_shared_drives get_shared_drive get_shared_drive_metadata; do
+  grep -q "'destructive-via-connector'" <<<"$(why_tool mcp__x__$t)" && no "read-only $t asks as destructive" || ok
+done
+grep -q "'send-or-publish-via-connector'" <<<"$(why_tool mcp__x__send_message)" && ok || no "connector send lost its send rule"
 expect allow "connector read"                 "$(run mcp__claude_ai_Slack__slack_read_channel /tmp '')"
 expect allow "connector search"               "$(run mcp__claude_ai_Gmail__search_threads /tmp '')"
 expect ask   "discord reply (not the allowed channel)" "$(run mcp__plugin_discord_discord__reply /tmp '')"
@@ -274,6 +351,28 @@ out="$(python3 -c 'import json;print(json.dumps({"tool_name":"Bash","cwd":"/tmp"
 out="$(python3 -c 'import json;print(json.dumps({"tool_name":"Bash","cwd":"/tmp","tool_input":{"command":"ls"}}))' | ( cd "$A" && CHRONOS_RUN=1 python3 hooks/action-rules.py check 2>&1 ))"
 case "$out" in *'"deny"'*) ok ;; *) no "an unreadable rules file did not fail CLOSED when unattended" "$out" ;; esac
 ( cd "$A" && python3 hooks/action-rules.py test >/dev/null 2>&1 ) && no "test accepted an unreadable rules file" || ok
+# never rules run before ask rules: your own ask rule on a call the starter set forbids does not turn the refusal into a question,
+# and your own allow still carves an exception out of a never
+printf 'rules:\n  - id: my-ask-rm\n    decision: ask\n    tool: Bash\n    command: "rm -rf"\n' > "$XDG_CONFIG_HOME/talos/action-rules.yaml"
+expect deny  "a user ask rule does not beat a starter never rule" "$(run Bash /tmp 'rm -rf ~')"
+expect ask   "a user ask rule still asks where no never rule matches" "$(run Bash /tmp 'rm -rf build')"
+printf 'rules:\n  - id: my-allow-rm\n    decision: allow\n    tool: Bash\n    command: "rm -rf ~$"\n' > "$XDG_CONFIG_HOME/talos/action-rules.yaml"
+expect allow "a user allow still carves an exception out of a starter never" "$(run Bash /tmp 'rm -rf ~')"
+rm -f "$XDG_CONFIG_HOME/talos/action-rules.yaml"
+# a hung check (stdin held open past the alarm) ASKS in a live session and DENIES when unattended, and is never allowed
+live="$(sleep 4 | ( cd "$A" && TALOS_GUARD_TIMEOUT_S=1 python3 hooks/action-rules.py check 2>/dev/null ))"
+un="$(sleep 4 | ( cd "$A" && CHRONOS_RUN=1 TALOS_GUARD_TIMEOUT_S=1 python3 hooks/action-rules.py check 2>/dev/null ))"
+expect ask  "action-rules: a timeout asks in a live session" "$(verdict "$live")"
+grep -q 'timed out checking' <<<"$live" && ok || no "the timeout ask has no timeout reason" "$live"
+expect deny "action-rules: a timeout denies when unattended" "$(verdict "$un")"
+# one pass in file order: an earlier ask beats a later allow (a starter allow, or one of your own); your allow before a never carves out
+printf 'rules:\n  - id: my-ask-reply\n    decision: ask\n    tool: "mcp__talos-app__reply"\n' > "$XDG_CONFIG_HOME/talos/action-rules.yaml"
+expect ask   "a user ask on the app's own reply still asks (the starter allow comes later)" "$(run mcp__talos-app__reply /tmp x)"
+printf 'rules:\n  - id: my-ask-x\n    decision: ask\n    tool: Bash\n    command: "echo hi"\n  - id: my-allow-x\n    decision: allow\n    tool: Bash\n    command: "echo hi"\n' > "$XDG_CONFIG_HOME/talos/action-rules.yaml"
+expect ask   "a user ask beats a later user allow" "$(run Bash /tmp 'echo hi')"
+printf 'rules:\n  - id: my-allow-rm\n    decision: allow\n    tool: Bash\n    command: "rm -rf ~$"\n' > "$XDG_CONFIG_HOME/talos/action-rules.yaml"
+expect allow "your allow listed before a never still carves it out" "$(run Bash /tmp 'rm -rf ~')"
+rm -f "$XDG_CONFIG_HOME/talos/action-rules.yaml"
 rm -f "$XDG_CONFIG_HOME/talos/action-rules.yaml"
 out="$(python3 -c 'import json;print(json.dumps({"tool_name":"Bash","cwd":"/tmp","tool_input":{"command":"npm publish"}}))' | ( cd "$A" && CHRONOS_RUN=1 python3 hooks/action-rules.py check ))"
 case "$out" in *'"deny"'*) ok ;; *) no "an ask must become a deny when unattended" "$out" ;; esac

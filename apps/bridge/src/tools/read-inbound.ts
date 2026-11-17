@@ -33,6 +33,10 @@ const ownerWords = (meta: Notification['meta']) =>
   (meta.trust === 'owner' || meta.trust === 'owner_voice') && (meta.kind === 'text' || meta.kind === 'voice_note')
 
 export function readInbound(ctx: BridgeContext, thread: string): ReadInboundResult {
+  // A session that is being stopped (parked) may not read: the claims below are made at once, the answer reaches an agent that
+  // may already be gone, and a claimed message is neither replayed to a worker nor fallen back to main. Nothing is claimed here,
+  // so the route stays unclaimed and main's deadline falls it back, or the next session reads it.
+  if (ctx.closing) return { messages: [], already_handled_by_main: [] }
   // switched off: whatever was routed here is main's now (the hub hands it over); nothing more goes out
   ctx.config.refresh()
   if (threadSessionMode(ctx.config.config, thread) !== 'dedicated') return { messages: [], already_handled_by_main: [] }
@@ -81,6 +85,7 @@ export const readInboundTool: ToolRecord = {
     const thread = ctx.worker?.thread
     if (!thread) return ok(JSON.stringify({ messages: [], already_handled_by_main: [] }))
     const r = readInbound(ctx, thread)
+    if (ctx.closing) return ok(JSON.stringify({ ...r, note: 'this session is stopping: nothing was read' }))
     if (!r.messages.length && !r.already_handled_by_main.length)
       return ok(JSON.stringify({ ...r, note: 'nothing waiting' }))
     return ok(JSON.stringify(r))

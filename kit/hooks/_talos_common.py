@@ -160,27 +160,34 @@ def guard_failed(name, err):
 
 def arm_guard_timeout(name, seconds=None):
     """Call FIRST in a safety guard. A hook that outlives Claude Code's own hook timeout is a NON-blocking error, so a guard
-    that hangs (a stuck read, a runaway import) would let the action through. This alarm fires well before that: in a live
-    session it allows ({} and exit 0, as for any guard error); when unattended it DENIES. TALOS_GUARD_TIMEOUT_S overrides
-    the default of 20 seconds (the tests use 1)."""
+    that hangs (a stuck read, a runaway import) would let the action through. This alarm fires well before that: a timeout
+    ASKS in a live session and DENIES when unattended, and never allows (a guard that errors, as opposed to timing out, still
+    goes through guard_failed). Each timeout is logged to guard-timeouts.jsonl (no command text) for `talos-app doctor`.
+    TALOS_GUARD_TIMEOUT_S overrides the default of 20 seconds (the tests use 1)."""
     try:
         import signal
         secs = int(seconds or os.environ.get("TALOS_GUARD_TIMEOUT_S") or 20)
 
         def _fire(signum, frame):
-            code = 0
+            code = 2                # unless the verdict is written (closed or broken stdout), the exit code must block
             try:
                 if unattended():
-                    code = 2        # if the deny cannot be written (closed or broken stdout) the exit code must still block
-                    sys.stdout.write(pretool_json("deny", "Talos %s did not finish within %ds and this run is unattended, so the action is "
-                                                  "blocked rather than allowed unchecked." % (name, secs)) + "\n")
-                    sys.stdout.flush()
-                    code = 0
+                    msg = pretool_json("deny", "Talos %s did not finish within %ds and this run is unattended, so the action is "
+                                       "blocked rather than allowed unchecked." % (name, secs))
                 else:
-                    sys.stdout.write("{}\n")
-                    sys.stdout.flush()
+                    msg = pretool_json("ask", "Talos %s timed out checking this command after %ds, so it asks instead of "
+                                       "letting it through. A slow guard rule is a bug: it's logged for `talos-app doctor`."
+                                       % (name, secs))
+                sys.stdout.write(msg + "\n")
+                sys.stdout.flush()
+                code = 0
             except Exception:
-                pass                # unattended: code stays 2 (block); live: 0 (allow)
+                pass
+            try:                    # logged AFTER the verdict, so a hung state folder cannot delay it
+                log_jsonl("guard-timeouts.jsonl", {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "hook": name,
+                                                   "seconds": secs, "unattended": unattended()})
+            except Exception:
+                pass                # a logging failure never changes the answer
             os._exit(code)
         signal.signal(signal.SIGALRM, _fire)
         signal.alarm(max(1, secs))

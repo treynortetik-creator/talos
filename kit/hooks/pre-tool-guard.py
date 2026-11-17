@@ -83,19 +83,30 @@ def check(command):
 
 
 def arm_timeout(seconds=None):
-    """A hook that outlives Claude Code's hook timeout is a non-blocking error (the command would run unchecked). Fire first:
-    live session = allow, unattended = refuse (exit 2). TALOS_GUARD_TIMEOUT_S overrides the 20 seconds (tests use 1)."""
+    """A hook that outlives Claude Code's hook timeout is a non-blocking error (the command would run unchecked). Fire first: a
+    timeout ASKS in a live session and is refused (exit 2) when unattended, and never allows. If the verdict cannot be written,
+    exit 2. TALOS_GUARD_TIMEOUT_S overrides the 20 seconds (tests use 1)."""
     try:
         import signal
         secs = int(seconds or os.environ.get("TALOS_GUARD_TIMEOUT_S") or 20)
 
         def _fire(signum, frame):
-            if unattended():
-                sys.stderr.write("Talos guard did not finish within %ds in an unattended run, so this command is blocked rather "
-                                 "than allowed unchecked.\n" % secs)
-                sys.stderr.flush()
-                os._exit(2)
-            os._exit(0)
+            code = 2
+            try:
+                if unattended():
+                    sys.stderr.write("Talos guard did not finish within %ds in an unattended run, so this command is blocked rather "
+                                     "than allowed unchecked.\n" % secs)
+                    sys.stderr.flush()
+                else:
+                    sys.stdout.write(json.dumps({"hookSpecificOutput": {
+                        "hookEventName": "PreToolUse", "permissionDecision": "ask",
+                        "permissionDecisionReason": "Talos pre-tool-guard timed out checking this command after %ds, so it asks "
+                                                    "instead of letting it through." % secs}}) + "\n")
+                    sys.stdout.flush()
+                    code = 0
+            except Exception:
+                pass
+            os._exit(code)
         signal.signal(signal.SIGALRM, _fire)
         signal.alarm(max(1, secs))
     except Exception:

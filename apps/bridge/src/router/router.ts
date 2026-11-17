@@ -27,6 +27,7 @@ import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { statusFrame } from '../frames-out.ts'
 import type { Notification } from '../notify.ts'
 import { say } from '../owner-words.ts'
+import { isStopping } from '../stopping.ts'
 import { noteHandOver, pointBefore, waitForRestore, workerFolder } from '../undo/route-point.ts'
 import { dropWake } from '../wake-me/drop.ts'
 import { pendingOf } from '../wake-me/service.ts'
@@ -97,6 +98,12 @@ export class ThreadRouter {
   /** The agents' wake_me timers, read for `workers.status` (the Schedules service writes them). */
   private readonly wakes: WakeMeStore
   private timers = new Map<string, unknown>()
+  /**
+   * Messages main claimed for a fallback whose hand-over has not begun. `close()` (the first thing a stopping bridge does that
+   * reaches the router) gives these claims back, so the next start routes or falls them back once; a claim that stayed would
+   * make every later start skip a message nobody delivered. A claim leaves the set the moment its hand-over begins.
+   */
+  private readonly claiming = new Set<string>()
   private delivering: Promise<void> = Promise.resolve()
   private lastStatusKey = ''
   /**
@@ -164,6 +171,7 @@ export class ThreadRouter {
   private async deliverAllHandoffs(): Promise<void> {
     const { ctx } = this
     for (const row of this.handoffs.undelivered()) {
+      if (ctx.closing) return // the rest stay undelivered; the next start delivers each once
       const now = ctx.clock.now()
       try {
         await this.deliverHandoff(row, now)
@@ -339,8 +347,7 @@ export class ThreadRouter {
     const messageId = n.meta.message_id ?? ''
     if (d.to === 'fallback') {
       // claimed for main first, so a late read_inbound can't take it too
-      this.store.claim(messageId, 'main', this.ctx.clock.now())
-      await pointBefore(this.ctx, n, 'main')
+      await this.pointBeforeClaimed(n, messageId, this.claimForMain(messageId))
       return this.fallback(n, d.thread, d.reason)
     }
     // the thread's session reads files from its own inbox only: copy them there, or let main have the whole message
@@ -354,8 +361,7 @@ export class ThreadRouter {
       })
     } catch (e) {
       this.ctx.log.warn('files not placed in the thread inbox', { thread: d.thread, error: (e as Error).message })
-      this.store.claim(messageId, 'main', this.ctx.clock.now())
-      await pointBefore(this.ctx, n, 'main')
+      await this.pointBeforeClaimed(n, messageId, this.claimForMain(messageId))
       return this.fallback(n, d.thread, 'worker_unavailable')
     }
     await pointBefore(this.ctx, n, { worker: workerFolder(this.ctx, this.workers.read(), d.thread) })
@@ -431,18 +437,41 @@ export class ThreadRouter {
     const wait = Math.max(0, row.deadline_at - this.ctx.clock.now())
     const t = this.ctx.clock.setTimeout(() => {
       this.timers.delete(row.message_id)
-      void this.onDeadline(row).catch((e) =>
-        this.ctx.log.error('route deadline failed', { error: (e as Error).message }),
-      )
+      void this.onDeadline(row).catch((e) => {
+        if (!isStopping(e)) this.ctx.log.error('route deadline failed', { error: (e as Error).message })
+      })
     }, wait)
     this.timers.set(row.message_id, t)
   }
 
   private async onDeadline(row: RouteRow) {
-    if (!this.store.claim(row.message_id, 'main', this.ctx.clock.now())) return // the worker got it
+    if (!this.claimForMain(row.message_id)) return // the worker got it
     const entry = this.workers.read()?.threads[row.thread_id]
     const reason: ErrorCodeT = entry?.state === 'failed' ? failureReason(entry) : 'worker_unavailable'
-    await this.fallbackLate(row.notification, row.thread_id, reason)
+    await this.fallbackLate(row.notification, row.thread_id, reason, row.message_id)
+  }
+
+  /** Claims the message for main; true when this call took the claim, which is then given back if the bridge stops first. */
+  private claimForMain(messageId: string): boolean {
+    if (this.ctx.closing) return false // `close()` already gave the claims back; a new one would never be
+    const took = this.store.claim(messageId, 'main', this.ctx.clock.now())
+    if (took) this.claiming.add(messageId)
+    return took
+  }
+
+  /**
+   * main's point before a fallback hand-over, for a message this call may have claimed (`took`). The claim leaves `claiming`
+   * when the hand-over begins, or when the wait failed for a reason other than stopping (then it is as it always was); a
+   * refusal because the bridge is stopping leaves it for `close()` to give back.
+   */
+  private async pointBeforeClaimed(n: Notification, messageId: string, took: boolean): Promise<void> {
+    try {
+      await pointBefore(this.ctx, n, 'main')
+    } catch (e) {
+      if (took && !isStopping(e)) this.claiming.delete(messageId)
+      throw e
+    }
+    if (took) this.claiming.delete(messageId)
   }
 
   /**
@@ -450,13 +479,16 @@ export class ThreadRouter {
    * `route` hears a failed write and ends the card itself; here nobody does, so a card decision that main cannot be
    * told about ends the card and tells the owner. Anything else is logged by the caller.
    */
-  private async fallbackLate(n: Notification, thread: string, reason: ErrorCodeT) {
+  private async fallbackLate(n: Notification, thread: string, reason: ErrorCodeT, claimed: string) {
     try {
       // main runs it now, in its own folder: that point replaces the one taken of the worker's
       await waitForRestore(this.ctx, 'main')
       await pointBefore(this.ctx, n, 'main', { replace: true })
+      this.claiming.delete(claimed) // the hand-over begins: the claim stays
       await this.fallback(n, thread, reason)
     } catch (e) {
+      if (isStopping(e)) throw e // not delivered, and no failure to tell the owner of: `close()` gave the claim back
+      this.claiming.delete(claimed) // a failure of its own: the claim is as it always was
       const cardId = n.meta.kind === 'card_action' ? n.meta.card_id : undefined
       if (!cardId) throw e
       this.ctx.log.warn('card decision not delivered to main', { card_id: cardId, error: (e as Error).message })
@@ -525,10 +557,10 @@ export class ThreadRouter {
       const t = this.timers.get(row.message_id)
       if (t !== undefined) ctx.clock.clearTimeout(t)
       this.timers.delete(row.message_id)
-      if (!this.store.claim(row.message_id, 'main', ctx.clock.now())) continue
-      void this.fallbackLate(row.notification, row.thread_id, 'worker_unavailable').catch((e) =>
-        ctx.log.error('switch-off fallback failed', { error: (e as Error).message }),
-      )
+      if (!this.claimForMain(row.message_id)) continue
+      void this.fallbackLate(row.notification, row.thread_id, 'worker_unavailable', row.message_id).catch((e) => {
+        if (!isStopping(e)) ctx.log.error('switch-off fallback failed', { error: (e as Error).message })
+      })
     }
   }
 
@@ -740,5 +772,14 @@ export class ThreadRouter {
   close(): void {
     for (const t of this.timers.values()) this.ctx.clock.clearTimeout(t)
     this.timers.clear()
+    // synchronous, before the store can close: a claim whose hand-over never began goes back (see `claiming`)
+    for (const id of this.claiming) {
+      try {
+        this.store.release(id, 'main')
+      } catch (e) {
+        this.ctx.log.warn('claim not given back', { id, error: (e as Error).message })
+      }
+    }
+    this.claiming.clear()
   }
 }

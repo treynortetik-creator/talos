@@ -20,6 +20,7 @@ import {
 } from '../../ui/icons.tsx'
 import { Sheet, SheetClose, SheetContent, SheetTitle } from '../../ui/index.ts'
 import { ThreadIcon } from '../../ui/ThreadIcon.tsx'
+import { Wordmark } from '../../ui/Wordmark.tsx'
 import { openBugReport } from '../bugreport/store.ts'
 import { useSchedulesDot } from '../schedules/sync.ts'
 import { useMediaQuery } from '../settings/useMedia.ts'
@@ -220,7 +221,10 @@ function MenuBody({ onClose, onEditThread }: { onClose: () => void; onEditThread
     // the sheet scrolls as a whole: on a short landscape phone nothing collapses, the footer links simply sit below
     <div className="flex min-h-full flex-col">
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
-        <SheetTitle className="m-0 font-display text-xl font-semibold tracking-wide">{agent}</SheetTitle>
+        {/* the title element stays an h2 (the drawer dialog takes its name from it); the wordmark sits inside */}
+        <SheetTitle className="m-0 text-xl">
+          <Wordmark name={agent} className={cn(agent !== 'Talos' && 'font-semibold tracking-wide')} />
+        </SheetTitle>
         <SheetClose
           aria-label="Close menu"
           className="grid size-11 place-items-center rounded-pill hover:bg-chrome-hover"

@@ -11,8 +11,29 @@ const base = {
   context: { bridgeVersion: '3.0.0', claudeCode: '4.0.0', recentErrors: ['web: TypeError: x'], logs: 'a\nb' },
   threadId: 'trip',
   screen: 'thread',
+  client: 'iphone_app' as const,
+  routes: ['home', 'thread', 'memory'],
   messages: [] as Array<{ author: string; text: string }>,
 }
+
+describe('buildReport client and routes', () => {
+  it('always names the app, and sends the screens visited with the thread part', () => {
+    const r = buildReport(base)
+    expect(r.client).toBe('iphone_app')
+    expect(r.routes).toEqual(['home', 'thread', 'memory'])
+    expect(BugReportBody.safeParse(r).success).toBe(true)
+  })
+  it('leaves the routes out when the thread part is unticked, but still names the app', () => {
+    const r = buildReport({ ...base, attach: { thread: false } })
+    expect(r.routes).toBeUndefined()
+    expect(r.client).toBe('iphone_app')
+  })
+  it('keeps the newest routes within the limit, each cut to its length', () => {
+    const many = Array.from({ length: 14 }, (_, i) => `r${i}`)
+    expect(buildReport({ ...base, routes: many }).routes).toEqual(many.slice(-10))
+    expect(buildReport({ ...base, routes: ['x'.repeat(90)] }).routes).toEqual(['x'.repeat(60)])
+  })
+})
 
 describe('buildReport', () => {
   it('fills the four versions, the thread and screen, the errors and the logs, and parses as a BugReportBody', () => {
